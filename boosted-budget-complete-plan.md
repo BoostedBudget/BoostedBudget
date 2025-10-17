@@ -1,3 +1,55 @@
+<!-- DEVELOPER SETUP INSTRUCTIONS DIRECTIVE -->
+<!--
+IMPORTANT: When working with this project plan, Claude Code should automatically generate detailed, step-by-step instructions for ANY task that requires manual developer action. This includes but is not limited to:
+
+1. External service setup (domains, DNS, Auth0, Stripe, Plaid, etc.)
+2. Account creation and configuration
+3. CLI tool installation and authentication
+4. Environment variable configuration
+5. Secret/API key generation and storage
+6. Database creation and configuration
+7. Payment and billing setup
+8. Compliance and legal requirements
+9. Third-party integrations
+10. Production deployment prerequisites
+
+For EACH manual setup task, provide:
+- Clear numbered steps in order
+- Exact commands to run (with explanations)
+- Screenshots or UI navigation paths where applicable
+- Cost implications if any
+- Time estimates for completion
+- Validation steps to confirm successful setup
+- Troubleshooting tips for common issues
+- Links to official documentation
+- Security best practices
+- What values to save for later steps
+
+Format instructions as:
+### 📋 MANUAL SETUP REQUIRED: [Task Name]
+**Time Required:** X minutes
+**Cost:** $X/month (if applicable)
+**Prerequisites:** List any required prior steps
+
+#### Steps:
+1. **Step name**: Detailed instruction
+```bash
+   # Include any commands
+```
+   - Additional notes or warnings
+   - Expected output or result
+
+2. **Next step**: Continue...
+
+#### Verification:
+- How to verify this was completed successfully
+
+#### Save These Values:
+- List any IDs, keys, or values to record
+
+GENERATE THESE INSTRUCTIONS IMMEDIATELY when encountering any setup task in the plan.
+-->
+
 # BoostedBudget - Development Plan & Project Tracker
 
 ## Project Overview
