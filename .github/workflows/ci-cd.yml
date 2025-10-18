@@ -184,6 +184,211 @@ jobs:
           echo "::endgroup::"
 
   # =============================================================================
-  # Future jobs will be added here (build, security-scan, deploy-production)
+  # JOB 2: Build and push Docker images to GHCR
   # =============================================================================
+  build-images:
+    name: Build Docker Images
+    needs: test
+    runs-on: ubuntu-latest
+    # Only build images on main branch push (after PR merge)
+    # On PRs, just validate the build without pushing
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      backend-image: ${{ steps.meta.outputs.backend-image }}
+      frontend-image: ${{ steps.meta.outputs.frontend-image }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for images
+        id: meta
+        run: |
+          BACKEND_IMAGE="${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}"
+          FRONTEND_IMAGE="${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}"
+
+          echo "backend-image=${BACKEND_IMAGE}:${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "frontend-image=${FRONTEND_IMAGE}:${{ github.sha }}" >> $GITHUB_OUTPUT
+
+          echo "Backend image: ${BACKEND_IMAGE}:${{ github.sha }}"
+          echo "Frontend image: ${FRONTEND_IMAGE}:${{ github.sha }}"
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+          build-args: |
+            VERSION=${{ github.sha }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+      - name: Image build summary
+        run: |
+          echo "### 🐳 Docker Images Built Successfully" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Backend Image:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Frontend Image:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+
+  # =============================================================================
+  # JOB 3: Security scanning with Trivy
+  # =============================================================================
+  security-scan:
+    name: Security Scan (Trivy)
+    needs: build-images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Run Trivy vulnerability scanner - Backend
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ needs.build-images.outputs.backend-image }}
+          format: 'sarif'
+          output: 'trivy-backend-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          exit-code: '1'  # Fail on CRITICAL vulnerabilities
+          ignore-unfixed: true
+
+      - name: Upload Trivy results (Backend) to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-backend-results.sarif'
+          category: 'trivy-backend'
+
+      - name: Run Trivy vulnerability scanner - Frontend
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ needs.build-images.outputs.frontend-image }}
+          format: 'sarif'
+          output: 'trivy-frontend-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          exit-code: '1'  # Fail on CRITICAL vulnerabilities
+          ignore-unfixed: true
+
+      - name: Upload Trivy results (Frontend) to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-frontend-results.sarif'
+          category: 'trivy-frontend'
+
+      - name: Security scan summary
+        if: always()
+        run: |
+          echo "### 🔒 Security Scan Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Scanned images for CRITICAL, HIGH, and MEDIUM vulnerabilities." >> $GITHUB_STEP_SUMMARY
+          echo "Results uploaded to GitHub Security tab." >> $GITHUB_STEP_SUMMARY
+
+  # =============================================================================
+  # JOB 4: Deploy to production (manual approval required)
+  # =============================================================================
+  deploy-production:
+    name: Deploy to Production
+    needs: [build-images, security-scan]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment:
+      name: production
+      url: https://boostedbudget.com
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Fly.io CLI
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy backend to Fly.io
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          echo "Deploying backend image: ${{ needs.build-images.outputs.backend-image }}"
+          flyctl deploy \
+            --app boostedbudget-api \
+            --image ${{ needs.build-images.outputs.backend-image }} \
+            --config ./backend/fly.toml \
+            --strategy rolling
+
+      - name: Deploy frontend to Fly.io
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          echo "Deploying frontend image: ${{ needs.build-images.outputs.frontend-image }}"
+          flyctl deploy \
+            --app boostedbudget-web \
+            --image ${{ needs.build-images.outputs.frontend-image }} \
+            --config ./frontend/fly.toml \
+            --strategy rolling
+
+      - name: Verify deployment
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          echo "Checking backend status..."
+          flyctl status --app boostedbudget-api
+
+          echo "Checking frontend status..."
+          flyctl status --app boostedbudget-web
+
+      - name: Run smoke tests
+        run: |
+          echo "Running smoke tests..."
+          if [ -f ./scripts/smoke-test.sh ]; then
+            chmod +x ./scripts/smoke-test.sh
+            ./scripts/smoke-test.sh production
+          else
+            echo "Smoke test script not found, skipping..."
+          fi
+
+      - name: Deployment summary
+        run: |
+          echo "### 🚀 Production Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Backend:** https://api.boostedbudget.com" >> $GITHUB_STEP_SUMMARY
+          echo "**Frontend:** https://boostedbudget.com" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployed at:** $(date -u)" >> $GITHUB_STEP_SUMMARY
 

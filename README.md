@@ -2,6 +2,8 @@
 
 **Supercharge your finances with intelligent automation**
 
+[![CI/CD Pipeline](https://github.com/maxnussbaum/BoostedBudget/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/maxnussbaum/BoostedBudget/actions/workflows/ci-cd.yml)
+
 BoostedBudget is a global budgeting platform that helps users optimize their finances through customizable automation rules, GDPR-compliant data handling, and intelligent insights.
 
 ## 📋 Project Status
