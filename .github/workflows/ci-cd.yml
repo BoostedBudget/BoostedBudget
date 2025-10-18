@@ -16,8 +16,9 @@ env:
   GO_VERSION: '1.25'
   NODE_VERSION: '20'
   REGISTRY: ghcr.io
-  BACKEND_IMAGE_NAME: ${{ github.repository }}-backend
-  FRONTEND_IMAGE_NAME: ${{ github.repository }}-frontend
+  # Note: Image names must be lowercase for Docker registry
+  BACKEND_IMAGE_NAME: ${{ github.repository_owner }}/boostedbudget-backend
+  FRONTEND_IMAGE_NAME: ${{ github.repository_owner }}/boostedbudget-frontend
 
 jobs:
   # =============================================================================
