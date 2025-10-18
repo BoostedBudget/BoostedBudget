@@ -9,9 +9,10 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
+	echomiddleware "github.com/labstack/echo/v4/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/handlers"
+	"github.com/maxnussbaum/BoostedBudget/internal/middleware"
 )
 
 func main() {
@@ -24,10 +25,12 @@ func main() {
 	// Create Echo instance
 	e := echo.New()
 
-	// Middleware
-	e.Use(middleware.Logger())
-	e.Use(middleware.Recover())
-	e.Use(middleware.CORS())
+	// Middleware (order matters!)
+	e.Use(middleware.RequestID())                      // 1. Generate request IDs first
+	e.Use(middleware.StructuredLogging(os.Stdout))    // 2. Structured JSON logging
+	e.Use(middleware.MetricsMiddleware())             // 3. Prometheus metrics
+	e.Use(echomiddleware.Recover())                    // 4. Panic recovery
+	e.Use(echomiddleware.CORS())                       // 5. CORS handling
 
 	// Health check handler (no auth required)
 	healthHandler := &handlers.HealthHandler{
@@ -37,6 +40,10 @@ func main() {
 		Version:    cfg.Version,
 	}
 	e.GET("/health", healthHandler.GetHealth)
+
+	// Metrics endpoint (Prometheus format)
+	metricsHandler := &handlers.MetricsHandler{}
+	e.GET("/metrics", metricsHandler.GetMetrics)
 
 	// Future: Add authenticated routes here
 	// api := e.Group("/api/v1")
