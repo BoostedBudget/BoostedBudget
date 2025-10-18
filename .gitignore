@@ -305,3 +305,4 @@ backend/tmp/
 frontend/dist/
 in-memoria.db
 .claude/
+.serena
