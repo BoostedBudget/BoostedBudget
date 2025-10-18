@@ -1,0 +1,189 @@
+name: CI/CD Pipeline
+
+# Trigger on pull requests and pushes to main
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# Cancel in-progress runs for the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.25'
+  NODE_VERSION: '20'
+  REGISTRY: ghcr.io
+  BACKEND_IMAGE_NAME: ${{ github.repository }}-backend
+  FRONTEND_IMAGE_NAME: ${{ github.repository }}-frontend
+
+jobs:
+  # =============================================================================
+  # JOB 1: Run all tests with coverage enforcement
+  # =============================================================================
+  test:
+    name: Test (Backend + Frontend + E2E)
+    runs-on: ubuntu-latest
+
+    steps:
+      # -------------------------------------------------------------------------
+      # Checkout and Setup
+      # -------------------------------------------------------------------------
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # -------------------------------------------------------------------------
+      # Backend Tests (Go)
+      # -------------------------------------------------------------------------
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: backend/go.sum
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('backend/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Run Go tests with coverage
+        working-directory: ./backend
+        run: |
+          echo "::group::Running Go tests with race detection and coverage"
+          go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+          echo "::endgroup::"
+
+      - name: Check Go coverage threshold (≥80%)
+        working-directory: ./backend
+        run: |
+          echo "::group::Checking coverage threshold"
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+          echo "Current coverage: ${COVERAGE}%"
+
+          # Convert to integer for comparison
+          COVERAGE_INT=$(echo "$COVERAGE" | cut -d. -f1)
+
+          if [ "$COVERAGE_INT" -lt 80 ]; then
+            echo "::error::Coverage ${COVERAGE}% is below threshold 80%"
+            exit 1
+          else
+            echo "::notice::✅ Coverage ${COVERAGE}% meets threshold 80%"
+          fi
+          echo "::endgroup::"
+
+      - name: Generate Go coverage HTML report
+        working-directory: ./backend
+        run: go tool cover -html=coverage.out -o coverage.html
+
+      - name: Upload backend coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: |
+            backend/coverage.out
+            backend/coverage.html
+          retention-days: 30
+
+      # -------------------------------------------------------------------------
+      # Frontend Tests (Node/Vitest)
+      # -------------------------------------------------------------------------
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Run ESLint (fail on warnings)
+        working-directory: ./frontend
+        run: |
+          echo "::group::Running ESLint"
+          npm run lint
+          echo "::endgroup::"
+
+      - name: Run frontend unit tests with coverage
+        working-directory: ./frontend
+        run: |
+          echo "::group::Running Vitest with coverage"
+          npm run test:ci
+          echo "::endgroup::"
+
+      - name: Upload frontend coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage
+          path: |
+            frontend/coverage/
+          retention-days: 30
+
+      # -------------------------------------------------------------------------
+      # E2E Tests (Playwright)
+      # -------------------------------------------------------------------------
+      - name: Install Playwright browsers
+        working-directory: ./frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Build backend for E2E tests
+        working-directory: ./backend
+        run: |
+          echo "::group::Building backend binary"
+          go build -o bin/server ./cmd/server
+          echo "::endgroup::"
+
+      - name: Run E2E tests
+        working-directory: ./frontend
+        env:
+          CI: true
+        run: |
+          echo "::group::Running Playwright E2E tests"
+          npm run test:e2e
+          echo "::endgroup::"
+
+      - name: Upload E2E test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 30
+
+      - name: Upload E2E test videos (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-videos
+          path: frontend/test-results/
+          retention-days: 7
+
+      # -------------------------------------------------------------------------
+      # Coverage Summary for PR Comments (prepared for next step)
+      # -------------------------------------------------------------------------
+      - name: Generate coverage summary
+        if: always()
+        run: |
+          echo "::group::Coverage Summary"
+          echo "Backend coverage:"
+          if [ -f backend/coverage.out ]; then
+            go tool cover -func=backend/coverage.out | grep total
+          fi
+          echo "Frontend coverage:"
+          if [ -f frontend/coverage/coverage-summary.json ]; then
+            cat frontend/coverage/coverage-summary.json | jq '.total'
+          fi
+          echo "::endgroup::"
+
+  # =============================================================================
+  # Future jobs will be added here (build, security-scan, deploy-production)
+  # =============================================================================
+
