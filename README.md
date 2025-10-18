@@ -67,6 +67,9 @@ cp .env.example .env
 # Edit .env and add your Auth0, Plaid, and Stripe credentials
 ```
 
+**Setting up Auth0**: Follow the comprehensive guide in [docs/AUTH0_SETUP.md](./docs/AUTH0_SETUP.md)
+**GitHub Secrets**: For CI/CD, see [docs/GITHUB_SECRETS_SETUP.md](./docs/GITHUB_SECRETS_SETUP.md)
+
 ### 3. Start Development Environment
 
 ```bash
@@ -150,6 +153,8 @@ cd frontend && npm test
 - **[Complete Plan](./boosted-budget-complete-plan.md)** - Full project roadmap (Phases 0-7+)
 - **[Deployment Guide](./boosted-budget-fly-deployment.md)** - Fly.io deployment instructions
 - **[CLAUDE.md](./CLAUDE.md)** - Development guidelines and patterns
+- **[Auth0 Setup Guide](./docs/AUTH0_SETUP.md)** - Complete Auth0 configuration walkthrough
+- **[GitHub Secrets Setup](./docs/GITHUB_SECRETS_SETUP.md)** - CI/CD secrets configuration
 - **[OpenAPI Spec](./api/openapi.yaml)** - API documentation
 
 ## 🔧 Project Structure
