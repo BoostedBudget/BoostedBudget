@@ -24,6 +24,7 @@ help:
 	@echo "Database:"
 	@echo "  make migrate-up       - Run database migrations"
 	@echo "  make migrate-down     - Rollback database migrations"
+	@echo "  make migrate-status   - Check current database schema"
 	@echo ""
 	@echo "Tools:"
 	@echo "  make generate         - Generate code from OpenAPI spec"
@@ -70,11 +71,25 @@ frontend-test:
 # Database migrations
 migrate-up:
 	@echo "Running database migrations..."
-	@echo "TODO: Implement with golang-migrate"
+	@docker-compose exec -T postgres psql -U devuser -d boostedbudget -c "SELECT version();" > /dev/null 2>&1 || (echo "Error: Database not running. Run 'make dev' first." && exit 1)
+	@for file in backend/migrations/*up.sql; do \
+		echo "Applying migration: $$file"; \
+		docker-compose exec -T postgres psql -U devuser -d boostedbudget -f - < $$file; \
+	done
+	@echo "Migrations complete!"
 
 migrate-down:
 	@echo "Rolling back database migrations..."
-	@echo "TODO: Implement with golang-migrate"
+	@docker-compose exec -T postgres psql -U devuser -d boostedbudget -c "SELECT version();" > /dev/null 2>&1 || (echo "Error: Database not running. Run 'make dev' first." && exit 1)
+	@for file in $$(ls -r backend/migrations/*down.sql); do \
+		echo "Rolling back migration: $$file"; \
+		docker-compose exec -T postgres psql -U devuser -d boostedbudget -f - < $$file; \
+	done
+	@echo "Rollback complete!"
+
+migrate-status:
+	@echo "Checking database schema..."
+	@docker-compose exec -T postgres psql -U devuser -d boostedbudget -c "\dt" 2>/dev/null || echo "No tables found"
 
 # Code generation
 generate:
