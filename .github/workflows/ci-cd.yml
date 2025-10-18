@@ -243,6 +243,7 @@ jobs:
       - name: Upload backend dependency scan results
         uses: github/codeql-action/upload-sarif@v3
         if: always()
+        continue-on-error: true  # Don't fail if Code Scanning not enabled
         with:
           sarif_file: 'trivy-backend-deps.sarif'
           category: 'trivy-backend-dependencies'
@@ -262,6 +263,7 @@ jobs:
       - name: Upload frontend dependency scan results
         uses: github/codeql-action/upload-sarif@v3
         if: always()
+        continue-on-error: true  # Don't fail if Code Scanning not enabled
         with:
           sarif_file: 'trivy-frontend-deps.sarif'
           category: 'trivy-frontend-dependencies'
@@ -279,6 +281,7 @@ jobs:
       - name: Upload backend Dockerfile scan results
         uses: github/codeql-action/upload-sarif@v3
         if: always()
+        continue-on-error: true  # Don't fail if Code Scanning not enabled
         with:
           sarif_file: 'trivy-backend-dockerfile.sarif'
           category: 'trivy-backend-dockerfile'
@@ -296,6 +299,7 @@ jobs:
       - name: Upload frontend Dockerfile scan results
         uses: github/codeql-action/upload-sarif@v3
         if: always()
+        continue-on-error: true  # Don't fail if Code Scanning not enabled
         with:
           sarif_file: 'trivy-frontend-dockerfile.sarif'
           category: 'trivy-frontend-dockerfile'
@@ -438,6 +442,7 @@ jobs:
       - name: Upload Trivy results (Backend) to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
         if: always()
+        continue-on-error: true  # Don't fail if Code Scanning not enabled
         with:
           sarif_file: 'trivy-backend-results.sarif'
           category: 'trivy-backend'
@@ -455,6 +460,7 @@ jobs:
       - name: Upload Trivy results (Frontend) to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
         if: always()
+        continue-on-error: true  # Don't fail if Code Scanning not enabled
         with:
           sarif_file: 'trivy-frontend-results.sarif'
           category: 'trivy-frontend'
