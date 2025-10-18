@@ -9,7 +9,7 @@
 
 **Tiers**: Free (3 rules, 2 accounts, ads) | Premium $9.99 (unlimited, no ads) | Premium+ $19.99 (AI insights)
 
-**Stack**: React 18 + TS5 + Vite + Tailwind | Go 1.21+ Echo/Gin | PostgreSQL 15 + Redis 7 | Auth0 + Plaid + Stripe + AdSense | Docker → GHCR → Fly.io
+**Stack**: React 19 + TS5 + Vite 7 | Go 1.25+ Echo/Gin | PostgreSQL 15 + Redis 7 | Auth0 + Plaid + Stripe + AdSense | Docker → GHCR → Fly.io
 
 **Architecture**: Single region (iad) MVP, multi-region Phase 7+, no money movement (suggestions only), future-ready `*InRegion` abstractions
 
@@ -51,6 +51,14 @@ infrastructure/     # Configs
 4. Update issue during work (progress, blockers, decisions)
 5. Create PR: title with "(#N)", summary, testing, "Closes #N"
 6. Verify auto-close after merge
+
+**CRITICAL - Commit & PR Format**:
+- **ALL commits** MUST start with Issue ID: `#N: Your commit message`
+- **ALL PR titles** MUST start with Issue ID: `#N: Your PR title`
+- Examples:
+  - `#3: Implement Auth0 JWT validation middleware`
+  - `#7: Add database migration for users table`
+- This ensures proper tracking and linking in GitHub
 
 **Labels**: `feature|bug|enhancement|refactor|docs|devops`, `P0|P1|P2|P3`, `phase-N`, `backend|frontend|api|database|deployment`, `blocked|in-progress|needs-review`, `small|medium|large`
 
@@ -263,4 +271,4 @@ Keep synchronized:
 
 ---
 
-*Last updated: Mandatory TDD (Red-Green-Refactor), MCP servers, code search priority (Serena first), GitHub issue-driven development*
+*Last updated: Issue ID required in ALL commits/PRs (#N: format), mandatory TDD (Red-Green-Refactor), MCP servers, code search priority (Serena first)*
