@@ -1,0 +1,68 @@
+# Fly.io configuration for BoostedBudget Frontend Web App
+# Deploy with: fly deploy --config frontend/fly.toml
+
+app = "boostedbudget-web"
+primary_region = "iad"  # US East (Virginia) - Single region for MVP
+kill_signal = "SIGTERM"
+kill_timeout = 10
+
+[build]
+  # Build Docker image from frontend/Dockerfile
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "80"
+  ENVIRONMENT = "production"
+
+  # API endpoint
+  VITE_API_URL = "https://api.boostedbudget.com/v1"
+
+  # Auth0 configuration (non-sensitive, public client)
+  VITE_AUTH0_DOMAIN = "boostedbudget.us.auth0.com"
+  VITE_AUTH0_CLIENT_ID = "YOUR_AUTH0_CLIENT_ID"  # Set via fly secrets
+  VITE_AUTH0_AUDIENCE = "https://api.boostedbudget.com"
+
+  # NOTE: Other environment variables set via `fly secrets set`:
+  # - VITE_PLAID_PUBLIC_KEY
+  # - VITE_GOOGLE_ADSENSE_CLIENT (for free tier ads)
+
+[experimental]
+  auto_rollback = true
+
+[[services]]
+  internal_port = 80
+  protocol = "tcp"
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [services.concurrency]
+    type = "connections"
+    hard_limit = 1000
+    soft_limit = 800
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [[services.http_checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/"
+    protocol = "http"
+    tls_skip_verify = false
+
+[deploy]
+  strategy = "rolling"
+
+[[vm]]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1

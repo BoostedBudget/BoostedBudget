@@ -1,0 +1,83 @@
+# Fly.io configuration for BoostedBudget Backend API
+# Deploy with: fly deploy --config backend/fly.toml
+
+app = "boostedbudget-api"
+primary_region = "iad"  # US East (Virginia) - Single region for MVP
+kill_signal = "SIGTERM"
+kill_timeout = 30
+
+[build]
+  # Build Docker image from backend/Dockerfile
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  PRIMARY_REGION = "iad"
+  ENVIRONMENT = "production"
+  LOG_LEVEL = "info"
+  ENABLE_METRICS = "true"
+
+  # Auth0 configuration (non-sensitive)
+  AUTH0_DOMAIN = "boostedbudget.us.auth0.com"
+  AUTH0_AUDIENCE = "https://api.boostedbudget.com"
+
+  # Plaid configuration
+  PLAID_ENV = "production"
+
+  # NOTE: Sensitive values set via `fly secrets set`:
+  # - DATABASE_URL (PostgreSQL connection string)
+  # - AUTH0_CLIENT_SECRET
+  # - PLAID_CLIENT_ID
+  # - PLAID_SECRET
+  # - STRIPE_SECRET_KEY
+  # - STRIPE_WEBHOOK_SECRET
+
+[experimental]
+  auto_rollback = true
+
+[metrics]
+  port = 8080
+  path = "/metrics"
+
+[[services]]
+  internal_port = 8080
+  protocol = "tcp"
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [services.concurrency]
+    type = "connections"
+    hard_limit = 250
+    soft_limit = 200
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [[services.tcp_checks]]
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "5s"
+
+  [[services.http_checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/health"
+    protocol = "http"
+    tls_skip_verify = false
+
+[deploy]
+  strategy = "rolling"
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
