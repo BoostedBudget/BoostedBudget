@@ -54,12 +54,13 @@ GENERATE THESE INSTRUCTIONS IMMEDIATELY when encountering any setup task in the 
 
 ## Project Overview
 
-**Application Name:** BoostedBudget  
-**Domain:** boostedbudget.com  
-**Tagline:** "Supercharge your finances with intelligent automation"  
-**Vision:** A global budgeting platform that helps users optimize their finances through customizable automation rules  
-**Initial Market:** USA (with global accessibility and GDPR compliance from day one)  
-**Expansion:** EU and other markets  
+**Application Name:** BoostedBudget
+**Domain:** boostedbudget.com
+**Tagline:** "Supercharge your finances with intelligent automation"
+**Vision:** A global budgeting platform that helps users optimize their finances through customizable automation rules
+**Initial Market:** USA-only deployment with global accessibility
+**Deployment Strategy:** Single region (us-east-1) for MVP, multi-region expansion in Phase 7+
+**Compliance:** GDPR compliant from day one for all users worldwide  
 
 ### Business Model
 - **Free Tier:** 2-3 automation rules, basic budgeting, Google AdSense supported
@@ -133,31 +134,34 @@ Development:
 
 ---
 
-## Global Deployment & Compliance Strategy
+## Deployment & Compliance Strategy
 
-### Multi-Region Architecture
+### Single-Region Architecture (MVP)
 ```yaml
 Regions:
-  Primary: us-east-1 (Virginia)
-  Secondary: eu-west-1 (Ireland)
-  CDN: CloudFlare (200+ edge locations)
-  
+  Primary: us-east-1 (Virginia / Fly.io iad)
+  Future: eu-west-1, ap-southeast-1 (Phase 7+)
+  CDN: CloudFlare (200+ edge locations) - Future enhancement
+
 Data Residency:
-  USA Users: Data stored in us-east-1
-  EU Users: Data stored in eu-west-1
-  User Choice: Allow users to select data region
-  
+  All Users: Data stored in us-east-1 initially
+  User Choice: Available in Phase 7+ multi-region expansion
+  Transparency: Privacy policy clearly states USA data storage
+
 Compliance:
-  GDPR:
+  GDPR (All Users Worldwide):
     - Right to deletion
     - Data portability
     - Privacy by design
     - Data minimization
     - 30-day deletion policy
-  CCPA:
+  CCPA (California Users):
     - Opt-out of data sale
     - Access rights
     - Deletion rights
+
+Note: GDPR compliance maintained regardless of data location.
+EU users can access service with full rights, data stored in USA.
 ```
 
 ### Auth0 Configuration
@@ -165,7 +169,7 @@ Compliance:
 // Auth0 Tenant Configuration
 {
   "tenant": "boostedbudget",
-  "region": "US", // Primary tenant
+  "region": "US", // Single tenant for global users
   "custom_domain": "auth.boostedbudget.com",
   "universal_login": {
     "colors": {
@@ -180,8 +184,8 @@ Compliance:
   ],
   "rules": [
     "gdpr-consent-tracking",
-    "geo-location-routing",
     "progressive-profiling"
+    // Note: geo-location-routing added in Phase 7+ for multi-region
   ]
 }
 ```
@@ -315,23 +319,9 @@ function addUserMetadata(user, context, callback) {
   }
 }
 
-// rules/geo-location.js
-function geoLocation(user, context, callback) {
-  // Determine user's region for data residency
-  const eu_countries = ['DE', 'FR', 'IT', 'ES', 'NL', /* ... */];
-  
-  user.app_metadata = user.app_metadata || {};
-  
-  if (eu_countries.includes(context.request.geoip.country_code)) {
-    user.app_metadata.data_region = 'eu-west-1';
-  } else {
-    user.app_metadata.data_region = 'us-east-1';
-  }
-  
-  auth0.users.updateAppMetadata(user.user_id, user.app_metadata)
-    .then(() => callback(null, user, context))
-    .catch((err) => callback(err));
-}
+// Note: geo-location.js rule removed for single-region MVP
+// All users default to 'us-east-1' region
+// This rule will be re-added in Phase 7+ for multi-region support
 ```
 
 ### 0.3 OpenAPI Foundation with Auth0
@@ -352,9 +342,7 @@ servers:
   - url: http://localhost:8080/api/v1
     description: Local development
   - url: https://api.boostedbudget.com/v1
-    description: Production (Global)
-  - url: https://eu-api.boostedbudget.com/v1
-    description: Production (EU)
+    description: Production (USA - us-east-1)
     
 security:
   - auth0: []
@@ -455,9 +443,10 @@ components:
           type: string
         last_name:
           type: string
-        data_region:
+        primary_region:
           type: string
-          enum: [us-east-1, eu-west-1]
+          enum: [us-east-1]  # Future: eu-west-1, ap-southeast-1 (Phase 7+)
+          default: us-east-1
         subscription:
           $ref: '#/components/schemas/Subscription'
         created_at:
@@ -467,9 +456,11 @@ components:
     PrivacySettings:
       type: object
       properties:
-        data_region:
+        primary_region:
           type: string
-          enum: [us-east-1, eu-west-1]
+          enum: [us-east-1]  # Future: additional regions in Phase 7+
+          default: us-east-1
+          readOnly: true  # Not user-editable in MVP
         analytics_consent:
           type: boolean
         marketing_consent:
@@ -543,8 +534,9 @@ func NewAuth0Middleware(config Auth0Config) echo.MiddlewareFunc {
 
 type CustomClaims struct {
     Email      string `json:"email"`
-    DataRegion string `json:"https://boostedbudget.com/data_region"`
     Scope      string `json:"scope"`
+    // Note: primary_region stored in user record, not in JWT
+    // Always "us-east-1" for MVP, region routing added in Phase 7+
 }
 
 func (c CustomClaims) Validate(ctx context.Context) error {
@@ -574,44 +566,42 @@ func (s *UserService) GetOrCreateUser(ctx context.Context, auth0ID string) (*Use
     if err == nil {
         return user, nil
     }
-    
+
     // Get user from Auth0
     auth0User, err := s.auth0Client.User.Read(auth0ID)
     if err != nil {
         return nil, err
     }
-    
-    // Determine data region based on metadata
-    dataRegion := "us-east-1" // default
-    if auth0User.AppMetadata["data_region"] != nil {
-        dataRegion = auth0User.AppMetadata["data_region"].(string)
-    }
-    
-    // Create user in appropriate database region
+
+    // Single region for MVP - all users in us-east-1
+    const primaryRegion = "us-east-1"
+
+    // Create user in database
     user = &User{
-        ID:         generateUUID(),
-        Auth0ID:    auth0ID,
-        Email:      auth0User.Email,
-        DataRegion: dataRegion,
-        CreatedAt:  time.Now(),
+        ID:            generateUUID(),
+        Auth0ID:       auth0ID,
+        Email:         auth0User.Email,
+        PrimaryRegion: primaryRegion,
+        CreatedAt:     time.Now(),
     }
-    
-    if err := s.userRepo.CreateInRegion(ctx, user, dataRegion); err != nil {
+
+    // Currently single region, but keep *InRegion pattern for future expansion
+    if err := s.userRepo.CreateInRegion(ctx, user, primaryRegion); err != nil {
         return nil, err
     }
-    
+
     // Initialize privacy settings (GDPR)
     privacy := &PrivacySettings{
         UserID:                   user.ID,
-        DataRegion:              dataRegion,
-        AnalyticsConsent:        false, // Default opt-out
-        MarketingConsent:        false,
-        DataSharingConsent:      false,
+        PrimaryRegion:            primaryRegion,
+        AnalyticsConsent:         false, // Default opt-out
+        MarketingConsent:         false,
+        DataSharingConsent:       false,
         AdPersonalizationConsent: false,
     }
-    
+
     s.privacyRepo.Create(ctx, privacy)
-    
+
     return user, nil
 }
 
@@ -859,28 +849,18 @@ export const CookieConsent: React.FC = () => {
 version: '3.9'
 
 services:
-  # PostgreSQL Database (Multi-region simulation)
-  postgres-us:
+  # PostgreSQL Database (Single region for MVP)
+  postgres:
     image: postgres:15-alpine
     environment:
-      POSTGRES_DB: boostedbudget_us
+      POSTGRES_DB: boostedbudget
       POSTGRES_USER: devuser
       POSTGRES_PASSWORD: devpass
     ports:
       - "5432:5432"
     volumes:
-      - postgres_us_data:/var/lib/postgresql/data
-      
-  postgres-eu:
-    image: postgres:15-alpine
-    environment:
-      POSTGRES_DB: boostedbudget_eu
-      POSTGRES_USER: devuser
-      POSTGRES_PASSWORD: devpass
-    ports:
-      - "5433:5432"
-    volumes:
-      - postgres_eu_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
+    # Future: Add postgres-eu for multi-region (Phase 7+)
 
   # Redis Cache
   redis:
@@ -903,8 +883,7 @@ services:
     ports:
       - "8080:8080"
     environment:
-      DATABASE_URL_US: postgres://devuser:devpass@postgres-us:5432/boostedbudget_us
-      DATABASE_URL_EU: postgres://devuser:devpass@postgres-eu:5432/boostedbudget_eu
+      DATABASE_URL: postgres://devuser:devpass@postgres:5432/boostedbudget?sslmode=disable
       REDIS_URL: redis://redis:6379
       RABBITMQ_URL: amqp://devuser:devpass@rabbitmq:5672/
       AUTH0_DOMAIN: ${AUTH0_DOMAIN}
@@ -914,9 +893,9 @@ services:
       PLAID_CLIENT_ID: ${PLAID_CLIENT_ID}
       PLAID_SECRET: ${PLAID_SECRET}
       PLAID_ENV: sandbox
+      PRIMARY_REGION: us-east-1
     depends_on:
-      - postgres-us
-      - postgres-eu
+      - postgres
       - redis
       - rabbitmq
     volumes:
@@ -942,8 +921,7 @@ services:
       - node_modules:/app/node_modules
 
 volumes:
-  postgres_us_data:
-  postgres_eu_data:
+  postgres_data:
   go_modules:
   node_modules:
 ```
@@ -958,17 +936,18 @@ CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     auth0_id VARCHAR(255) UNIQUE NOT NULL,
     email VARCHAR(255) NOT NULL,
-    data_region VARCHAR(20) NOT NULL DEFAULT 'us-east-1',
+    primary_region VARCHAR(20) NOT NULL DEFAULT 'us-east-1',
+    -- Future: Will support 'eu-west-1', 'ap-southeast-1' in Phase 7+
     subscription_tier VARCHAR(20) DEFAULT 'free',
     subscription_expires_at TIMESTAMP,
-    
-    -- GDPR fields
+
+    -- GDPR fields (applicable to all users globally)
     gdpr_consent BOOLEAN DEFAULT FALSE,
     gdpr_consent_date TIMESTAMP,
     data_export_requested_at TIMESTAMP,
     deletion_requested_at TIMESTAMP,
     deletion_scheduled_for TIMESTAMP,
-    
+
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -1187,16 +1166,9 @@ export const ProfilePage: React.FC = () => {
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700">Data Region</label>
-            <select 
-              value={profile?.dataRegion}
-              onChange={handleRegionChange}
-              className="mt-1 block w-full border-gray-300 rounded-md"
-            >
-              <option value="us-east-1">United States</option>
-              <option value="eu-west-1">European Union</option>
-            </select>
+            <p className="mt-1 text-gray-900">United States (us-east-1)</p>
             <p className="text-xs text-gray-500 mt-1">
-              Your data will be stored in the selected region for compliance
+              All data is currently stored in the USA. Multi-region support coming in future updates.
             </p>
           </div>
         </div>
@@ -2204,9 +2176,433 @@ export default function App() {
 
 ---
 
+## Phase 7+: Multi-Region Expansion (Future)
+
+*Timeline: 6-10 weeks | Cost: +$100-200/month*
+
+### When to Implement
+
+Multi-region expansion should be considered when:
+- **User Base**: >10,000 active users
+- **International Traffic**: >20% of users from EU or APAC regions
+- **Latency Complaints**: Users reporting slow performance outside USA
+- **Data Residency Requirements**: Enterprise customers requesting regional data storage
+- **Revenue**: Monthly revenue supports additional infrastructure costs
+
+### Prerequisites
+
+Before implementing multi-region:
+- [ ] Stable single-region production deployment
+- [ ] Proven product-market fit
+- [ ] Understanding of user geographic distribution
+- [ ] Budget allocated for additional infrastructure
+- [ ] Legal review of multi-region compliance requirements
+
+### Migration Strategy
+
+#### 1. Database Setup (Week 1-2)
+
+```bash
+# Create regional Fly.io Postgres clusters
+fly postgres create --name boostedbudget-db-eu --region lhr
+fly postgres create --name boostedbudget-db-apac --region nrt
+
+# Set up replication from primary
+fly postgres attach boostedbudget-db --replica boostedbudget-db-eu
+fly postgres attach boostedbudget-db --replica boostedbudget-db-apac
+
+# Verify replication
+fly postgres connect -a boostedbudget-db-eu
+```
+
+#### 2. Code Changes Required (Week 3-4)
+
+**Database Router**:
+```go
+// backend/internal/infrastructure/region_router.go
+type RegionRouter struct {
+    dbs map[string]*sql.DB
+}
+
+func (r *RegionRouter) GetDB(region string) *sql.DB {
+    switch region {
+    case "us-east-1":
+        return r.dbs["us"]
+    case "eu-west-1":
+        return r.dbs["eu"]
+    case "ap-southeast-1":
+        return r.dbs["apac"]
+    default:
+        return r.dbs["us"] // fallback
+    }
+}
+
+func (r *RegionRouter) GetDBForUser(ctx context.Context, userID string) (*sql.DB, error) {
+    user, err := r.getUserRegion(ctx, userID)
+    if err != nil {
+        return nil, err
+    }
+    return r.GetDB(user.PrimaryRegion), nil
+}
+```
+
+**Repository Updates**:
+```go
+// Activate the existing *InRegion methods
+func (r *UserRepository) CreateInRegion(ctx context.Context, user *User, region string) error {
+    db := r.regionRouter.GetDB(region)
+    query := `INSERT INTO users (id, auth0_id, email, primary_region, ...) VALUES ($1, $2, $3, $4, ...)`
+    _, err := db.ExecContext(ctx, query, user.ID, user.Auth0ID, user.Email, user.PrimaryRegion, ...)
+    return err
+}
+```
+
+**Frontend Region Selection**:
+```typescript
+// frontend/src/features/auth/RegionSelector.tsx
+export const RegionSelector: React.FC = () => {
+  const regions = [
+    { code: 'us-east-1', name: '🇺🇸 United States', flag: '🇺🇸' },
+    { code: 'eu-west-1', name: '🇪🇺 European Union', flag: '🇪🇺' },
+    { code: 'ap-southeast-1', name: '🌏 Asia Pacific', flag: '🌏' }
+  ];
+
+  return (
+    <div className="region-selector">
+      <h3>Choose Your Data Region</h3>
+      <p>Your data will be stored in the selected region for compliance and performance.</p>
+      {regions.map(region => (
+        <button key={region.code} onClick={() => handleSelect(region.code)}>
+          {region.flag} {region.name}
+        </button>
+      ))}
+    </div>
+  );
+};
+```
+
+#### 3. Auth0 Rules Update (Week 3-4)
+
+Re-add geo-location rule:
+```javascript
+// rules/geo-location.js
+function geoLocation(user, context, callback) {
+  const eu_countries = ['DE', 'FR', 'IT', 'ES', 'NL', 'BE', 'AT', 'PT', 'IE', 'SE', 'DK', 'FI', 'NO', 'PL'];
+  const apac_countries = ['JP', 'KR', 'SG', 'AU', 'NZ', 'IN', 'CN', 'HK', 'TW'];
+
+  user.app_metadata = user.app_metadata || {};
+
+  // Only set region on first login (allow user override later)
+  if (!user.app_metadata.suggested_region) {
+    const country = context.request.geoip.country_code;
+
+    if (eu_countries.includes(country)) {
+      user.app_metadata.suggested_region = 'eu-west-1';
+    } else if (apac_countries.includes(country)) {
+      user.app_metadata.suggested_region = 'ap-southeast-1';
+    } else {
+      user.app_metadata.suggested_region = 'us-east-1';
+    }
+
+    auth0.users.updateAppMetadata(user.user_id, user.app_metadata)
+      .then(() => callback(null, user, context))
+      .catch((err) => callback(err));
+  } else {
+    callback(null, user, context);
+  }
+}
+```
+
+#### 4. Fly.io Configuration Update (Week 5-6)
+
+```toml
+# fly.toml - Multi-region configuration
+app = "boostedbudget-api"
+primary_region = "iad"
+
+[env]
+  PORT = "8080"
+  ENABLE_MULTI_REGION = "true"
+
+[[services]]
+  http_checks = []
+  internal_port = 8080
+  processes = ["app"]
+  protocol = "tcp"
+
+  # Enable multi-region
+  [[services.ports]]
+    force_https = true
+    handlers = ["http"]
+    port = 80
+
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = 443
+
+# Scale in multiple regions
+# fly regions add lhr fra ams nrt sin syd
+```
+
+Deploy to regions:
+```bash
+# Add regions
+fly regions add lhr --app boostedbudget-api    # London (EU)
+fly regions add fra --app boostedbudget-api    # Frankfurt (EU)
+fly regions add nrt --app boostedbudget-api    # Tokyo (APAC)
+
+# Scale instances per region
+fly scale count 2 --region iad --app boostedbudget-api
+fly scale count 2 --region lhr --app boostedbudget-api
+fly scale count 1 --region nrt --app boostedbudget-api
+
+# Deploy
+fly deploy --strategy rolling
+```
+
+#### 5. Data Migration Process (Week 7-8)
+
+**For Existing Users**:
+```go
+// Offer region migration tool
+func (s *MigrationService) MigrateUserRegion(ctx context.Context, userID string, targetRegion string) error {
+    // 1. Export user data from current region
+    sourceDB := s.regionRouter.GetDB(user.PrimaryRegion)
+    userData := s.exportUserData(ctx, sourceDB, userID)
+
+    // 2. Import to target region
+    targetDB := s.regionRouter.GetDB(targetRegion)
+    if err := s.importUserData(ctx, targetDB, userData); err != nil {
+        return err
+    }
+
+    // 3. Update user's primary_region
+    user.PrimaryRegion = targetRegion
+    s.userRepo.Update(ctx, user)
+
+    // 4. Verify data integrity
+    if err := s.verifyMigration(ctx, userID, targetRegion); err != nil {
+        s.rollbackMigration(ctx, userID)
+        return err
+    }
+
+    // 5. Delete from source region (after verification)
+    time.Sleep(7 * 24 * time.Hour) // 7-day grace period
+    s.deleteFromSource(ctx, sourceDB, userID)
+
+    return nil
+}
+```
+
+**Migration UI**:
+```typescript
+// frontend/src/features/settings/RegionMigration.tsx
+export const RegionMigrationTool: React.FC = () => {
+  const [selectedRegion, setSelectedRegion] = useState('');
+  const { data: user } = useQuery(['profile'], api.getProfile);
+
+  const handleMigrate = async () => {
+    // Confirm with user
+    const confirmed = await showConfirmation(
+      'Migrate Data Region',
+      `This will move your data to ${selectedRegion}. This process takes 1-2 hours.`
+    );
+
+    if (confirmed) {
+      await api.requestRegionMigration(selectedRegion);
+    }
+  };
+
+  return (
+    <div>
+      <h3>Data Region Migration</h3>
+      <p>Current region: {user?.primary_region}</p>
+      <RegionSelector value={selectedRegion} onChange={setSelectedRegion} />
+      <button onClick={handleMigrate}>Migrate Data</button>
+    </div>
+  );
+};
+```
+
+#### 6. Testing Strategy (Week 9)
+
+**Region-Specific Tests**:
+```go
+func TestMultiRegionUserCreation(t *testing.T) {
+    tests := []struct {
+        region string
+        userID string
+    }{
+        {"us-east-1", "user-us"},
+        {"eu-west-1", "user-eu"},
+        {"ap-southeast-1", "user-apac"},
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.region, func(t *testing.T) {
+            user := createTestUser(tt.userID, tt.region)
+            db := regionRouter.GetDB(tt.region)
+
+            // Verify user exists in correct region
+            var count int
+            err := db.QueryRow("SELECT COUNT(*) FROM users WHERE id = $1", user.ID).Scan(&count)
+            assert.NoError(t, err)
+            assert.Equal(t, 1, count)
+
+            // Verify user doesn't exist in other regions
+            for _, otherRegion := range getOtherRegions(tt.region) {
+                otherDB := regionRouter.GetDB(otherRegion)
+                err := otherDB.QueryRow("SELECT COUNT(*) FROM users WHERE id = $1", user.ID).Scan(&count)
+                assert.NoError(t, err)
+                assert.Equal(t, 0, count)
+            }
+        })
+    }
+}
+```
+
+**Cross-Region Consistency Tests**:
+```bash
+# Test regional replication lag
+./scripts/test-replication-lag.sh
+
+# Test failover scenarios
+./scripts/test-region-failover.sh
+
+# Load test multi-region
+k6 run tests/load/multi-region.js
+```
+
+#### 7. Monitoring & Observability (Week 10)
+
+**Regional Metrics**:
+```go
+// Track per-region metrics
+metrics := map[string]*RegionMetrics{
+    "us-east-1":       trackRegionMetrics("us-east-1"),
+    "eu-west-1":       trackRegionMetrics("eu-west-1"),
+    "ap-southeast-1":  trackRegionMetrics("ap-southeast-1"),
+}
+
+// Dashboard queries
+SELECT region, COUNT(*) as user_count FROM users GROUP BY region;
+SELECT region, AVG(response_time_ms) FROM api_logs GROUP BY region;
+SELECT region, COUNT(*) FROM errors GROUP BY region;
+```
+
+**Alerts**:
+- Regional latency > 200ms
+- Replication lag > 5 seconds
+- Regional error rate > 1%
+- Cross-region data inconsistency detected
+
+### Rollout Strategy
+
+**Phase 1: Internal Testing** (Week 1-3)
+- Deploy to staging with multi-region
+- Internal team tests all regions
+- Verify data isolation
+
+**Phase 2: Beta Users** (Week 4-6)
+- Invite 100 volunteer users per region
+- Monitor closely for issues
+- Gather feedback
+
+**Phase 3: Gradual Rollout** (Week 7-9)
+- 10% of new users get region selection
+- 50% of new users get region selection
+- 100% of new users get region selection
+- Offer migration tool to existing users
+
+**Phase 4: Complete Migration** (Week 10+)
+- All users can choose/migrate regions
+- Optimize based on usage patterns
+- Scale resources per region
+
+### Cost Analysis
+
+**Monthly Costs (Estimated)**:
+```yaml
+Databases:
+  US Database (existing): $0 (already running)
+  EU Database: $50-75/month
+  APAC Database: $50-75/month
+  Total Databases: ~$100-150/month
+
+Compute:
+  Additional Regional Instances: $30-50/month
+  Increased bandwidth: $20-30/month
+  Total Compute: ~$50-80/month
+
+Storage:
+  Cross-region replication: $10-20/month
+
+Monitoring:
+  Enhanced multi-region monitoring: $10-20/month
+
+Total Additional Cost: $170-270/month
+```
+
+**Break-Even Analysis**:
+- Need ~17-27 new paid users to offset costs
+- Improved performance may increase conversion
+- Compliance enablement for enterprise sales
+
+### Success Metrics
+
+**Performance**:
+- ✅ Regional latency < 50ms (current: varies 100-500ms internationally)
+- ✅ 99.95% uptime per region
+- ✅ Replication lag < 1 second
+
+**User Experience**:
+- ✅ 50%+ reduction in load times for international users
+- ✅ <5% of users request region change after initial selection
+- ✅ Net Promoter Score increase for international users
+
+**Business**:
+- ✅ 10%+ increase in international user signups
+- ✅ 15%+ increase in international paid conversions
+- ✅ Enable enterprise sales in EU market
+
+### Compliance Verification
+
+**GDPR (EU Region)**:
+- [ ] Data Processing Agreement updated
+- [ ] EU Data Protection Officer appointed (if required)
+- [ ] Data transfer mechanisms documented
+- [ ] Regional privacy policy published
+- [ ] Cookie consent geo-targeted
+
+**Other Regulations**:
+- [ ] Research APAC data protection laws
+- [ ] Verify compliance in each target region
+- [ ] Update Terms of Service
+- [ ] Legal review completed
+
+### Rollback Plan
+
+If critical issues arise:
+```bash
+# Disable new region selection
+fly secrets set ENABLE_MULTI_REGION=false
+
+# Migrate affected users back to US
+./scripts/emergency-migrate-to-us.sh
+
+# Scale down regional instances
+fly scale count 0 --region lhr
+fly scale count 0 --region nrt
+
+# Restore from backup if needed
+fly postgres backup restore
+```
+
+---
+
 ## Deployment & Infrastructure
 
-### Multi-Region Kubernetes Deployment
+### Single-Region Fly.io Deployment (Current)
 ```yaml
 # infrastructure/kubernetes/base/deployment.yaml
 apiVersion: apps/v1

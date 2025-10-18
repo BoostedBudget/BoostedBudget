@@ -3,6 +3,9 @@
 ## Core Deployment Philosophy
 Build once, deploy anywhere. Both frontend and backend are compiled into Docker images that can be deployed to Fly.io, AWS ECS, Google Cloud Run, or any container platform.
 
+**Initial Deployment**: USA-only (us-east-1/iad region) for MVP
+**Future Expansion**: Multi-region deployment path documented in "Future: Multi-Region Migration Plan" section
+
 ## Docker Build Strategy
 
 ### Backend Multi-Stage Dockerfile
@@ -391,28 +394,8 @@ jobs:
       env:
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
 
-  # Step 6: Multi-region deployment
-  deploy-regions:
-    needs: deploy-production
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        region: [ams, lhr, fra, syd, nrt, sin]
-    steps:
-    - name: Setup Fly.io
-      uses: superfly/flyctl-actions/setup-flyctl@master
-
-    - name: Scale in ${{ matrix.region }}
-      env:
-        FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-      run: |
-        # Scale backend in region
-        flyctl regions add ${{ matrix.region }} --app boostedbudget-api
-        flyctl scale count 2 --region ${{ matrix.region }} --app boostedbudget-api
-        
-        # Scale frontend in region
-        flyctl regions add ${{ matrix.region }} --app boostedbudget-web
-        flyctl scale count 2 --region ${{ matrix.region }} --app boostedbudget-web
+  # Note: Multi-region deployment (Step 6) removed for MVP
+  # See "Future: Multi-Region Migration Plan" section for expansion strategy
 ```
 
 ## Fly.io Application Configuration
@@ -422,7 +405,7 @@ jobs:
 ```toml
 # fly.toml
 app = "boostedbudget-api"
-primary_region = "iad"
+primary_region = "iad"  # Single region for MVP: USA East (Virginia)
 kill_signal = "SIGTERM"
 kill_timeout = 30
 
@@ -432,12 +415,14 @@ kill_timeout = 30
 
 [env]
   PORT = "8080"
+  PRIMARY_REGION = "iad"
   AUTH0_DOMAIN = "boostedbudget.auth0.com"
   AUTH0_AUDIENCE = "https://api.boostedbudget.com"
   PLAID_ENV = "production"
   ENVIRONMENT = "production"
   LOG_LEVEL = "info"
   ENABLE_METRICS = "true"
+  # Note: DATABASE_URL set via secrets (single database)
 
 [experimental]
   allowed_public_ports = []
@@ -575,6 +560,7 @@ services:
     environment:
       DATABASE_URL: postgres://devuser:devpass@postgres:5432/boostedbudget?sslmode=disable
       REDIS_URL: redis://redis:6379
+      PRIMARY_REGION: us-east-1
       AUTH0_DOMAIN: ${AUTH0_DOMAIN}
       AUTH0_AUDIENCE: ${AUTH0_AUDIENCE}
       AUTH0_CLIENT_ID: ${AUTH0_CLIENT_ID}
@@ -757,7 +743,7 @@ echo "Deployment complete!"
 ### GitHub Secrets Required
 
 ```yaml
-# Required GitHub Secrets:
+# Required GitHub Secrets (Single Region):
 FLY_API_TOKEN                # Fly.io API token for production
 FLY_API_TOKEN_STAGING        # Fly.io API token for staging
 GITHUB_TOKEN                 # Auto-generated for packages
@@ -766,7 +752,7 @@ AUTH0_CLIENT_ID             # Auth0 client ID
 AUTH0_CLIENT_SECRET         # Auth0 client secret
 AUTH0_AUDIENCE              # Auth0 API audience
 PLAID_CLIENT_ID             # Plaid client ID
-PLAID_SECRET                # Plaid secret
+PLAID_SECRET                # Plaid secret (sandbox/production)
 PLAID_PUBLIC_KEY            # Plaid public key
 STRIPE_SECRET_KEY           # Stripe secret key
 STRIPE_WEBHOOK_SECRET       # Stripe webhook secret
@@ -775,15 +761,17 @@ SLACK_WEBHOOK              # Slack notifications
 SONAR_TOKEN                # SonarCloud token
 CF_ZONE_ID                 # CloudFlare zone ID
 CF_API_TOKEN               # CloudFlare API token
+
+# Note: No EU_DATABASE_URL needed for single-region MVP
+# Multi-region secrets documented in "Future: Multi-Region Migration Plan"
 ```
 
 ### Fly.io Secrets Management
 
 ```bash
-# Set secrets in Fly.io
+# Set secrets in Fly.io (Single Region)
 fly secrets set \
   DATABASE_URL="postgres://..." \
-  EU_DATABASE_URL="postgres://..." \
   REDIS_URL="redis://..." \
   AUTH0_DOMAIN="boostedbudget.auth0.com" \
   AUTH0_CLIENT_ID="..." \
@@ -799,6 +787,9 @@ fly secrets list --app boostedbudget-api
 
 # Remove a secret
 fly secrets unset KEY_NAME --app boostedbudget-api
+
+# Note: Only single DATABASE_URL needed for MVP
+# Multi-region database secrets added in Phase 7+
 ```
 
 ## Monitoring and Observability
@@ -945,4 +936,466 @@ fly scale count 2 --region ams --app boostedbudget-api
 fly dashboard metrics --app boostedbudget-api
 ```
 
-This approach gives you complete control over your Docker images while leveraging Fly.io's excellent global infrastructure for deployment.
+---
+
+## Future: Multi-Region Migration Plan
+
+This section documents the path to expand from single-region (us-east-1) to multi-region deployment. Implement when user base and revenue justify the additional complexity and cost.
+
+### Phase 1: Enable Fly.io Edge Proxy (Quick Win)
+
+**Timeline**: 1-2 days
+**Cost**: Minimal (included in Fly.io pricing)
+**Complexity**: Low
+
+#### Benefits
+- 40-60% latency reduction for international users
+- No code changes required
+- Database remains in USA
+- Simple rollback if issues arise
+
+#### Implementation
+
+```bash
+# Enable automatic edge caching for frontend
+fly regions add ams lhr fra syd nrt sin --app boostedbudget-web
+
+# Frontend gets automatically cached at edge locations
+# Backend API still runs only in iad (single region)
+# Fly.io proxy routes requests to nearest edge, then to iad backend
+```
+
+#### Verification
+
+```bash
+# Check active regions
+fly regions list --app boostedbudget-web
+
+# Expected output:
+# Regions [boostedbudget-web]: iad(primary), ams, lhr, fra, syd, nrt, sin
+```
+
+#### Monitoring
+
+```bash
+# Monitor latency improvements
+fly metrics --app boostedbudget-web
+
+# Check for any edge caching issues
+fly logs --app boostedbudget-web
+```
+
+#### Rollback (if needed)
+
+```bash
+# Remove edge regions, keep only primary
+fly regions set iad --app boostedbudget-web
+```
+
+---
+
+### Phase 2: Add Read Replicas (Medium Effort)
+
+**Timeline**: 1-2 weeks
+**Cost**: ~$30-50/month per region
+**Complexity**: Medium
+
+#### Benefits
+- Faster reads for international users
+- Improved disaster recovery
+- Data sovereignty preparation
+- Write operations still centralized
+
+#### Implementation
+
+**Step 1: Create Replica Databases**
+
+```bash
+# Create EU read replica
+fly postgres create \
+  --name boostedbudget-db-eu \
+  --region lhr \
+  --initial-cluster-size 1
+
+# Create APAC read replica
+fly postgres create \
+  --name boostedbudget-db-apac \
+  --region nrt \
+  --initial-cluster-size 1
+```
+
+**Step 2: Set Up Replication**
+
+```bash
+# Attach replicas to primary database
+fly postgres attach boostedbudget-db \
+  --replica boostedbudget-db-eu
+
+fly postgres attach boostedbudget-db \
+  --replica boostedbudget-db-apac
+
+# Verify replication status
+fly postgres connect -a boostedbudget-db-eu
+# Run: SELECT pg_is_in_recovery(); -- Should return 't' for replica
+```
+
+**Step 3: Configure Backend for Read Replicas**
+
+```go
+// backend/internal/infrastructure/db_config.go
+type DatabaseConfig struct {
+    PrimaryURL  string // us-east-1 (writes)
+    ReplicaURLs map[string]string // Read replicas
+}
+
+func (cfg *DatabaseConfig) GetReadDB(region string) *sql.DB {
+    // Route reads to nearest replica
+    if replicaURL, exists := cfg.ReplicaURLs[region]; exists {
+        return openDB(replicaURL)
+    }
+    // Fallback to primary
+    return openDB(cfg.PrimaryURL)
+}
+
+func (cfg *DatabaseConfig) GetWriteDB() *sql.DB {
+    // All writes go to primary
+    return openDB(cfg.PrimaryURL)
+}
+```
+
+**Step 4: Update Fly.io Secrets**
+
+```bash
+fly secrets set \
+  DATABASE_URL="postgres://primary..." \
+  DATABASE_REPLICA_EU="postgres://replica-eu..." \
+  DATABASE_REPLICA_APAC="postgres://replica-apac..." \
+  --app boostedbudget-api
+```
+
+#### Monitoring Replication Lag
+
+```sql
+-- Run on primary database
+SELECT
+    client_addr,
+    state,
+    sent_lsn,
+    write_lsn,
+    flush_lsn,
+    replay_lsn,
+    sync_state,
+    pg_wal_lsn_diff(sent_lsn, replay_lsn) AS replication_lag_bytes
+FROM pg_stat_replication;
+```
+
+#### Rollback
+
+```bash
+# Remove read replicas
+fly postgres detach boostedbudget-db-eu
+fly postgres detach boostedbudget-db-apac
+
+# Delete replica databases
+fly postgres destroy boostedbudget-db-eu
+fly postgres destroy boostedbudget-db-apac
+
+# Remove replica URLs from secrets
+fly secrets unset DATABASE_REPLICA_EU DATABASE_REPLICA_APAC
+```
+
+---
+
+### Phase 3: Full Multi-Region (Major Feature)
+
+**Timeline**: 6-10 weeks
+**Cost**: ~$100-200/month additional
+**Complexity**: High
+
+This is the complete multi-region implementation as documented in `boosted-budget-complete-plan.md` Phase 7+.
+
+#### Key Components
+
+1. **Regional Databases** (Week 1-2)
+   - Independent database per region
+   - No replication (data isolated by region)
+   - Users explicitly choose data region
+
+2. **Code Changes** (Week 3-4)
+   - Implement `RegionRouter` pattern
+   - Activate existing `*InRegion` repository methods
+   - Add region selection UI
+   - Update Auth0 rules for geo-suggestion
+
+3. **Data Migration** (Week 5-6)
+   - User-initiated region migration tool
+   - Data export/import pipeline
+   - 7-day verification period
+   - Rollback capability
+
+4. **Deployment** (Week 7-8)
+   - Deploy backend to multiple regions
+   - Configure Fly.io for multi-region routing
+   - Set up regional secrets
+   - Scale instances per region
+
+5. **Testing & Verification** (Week 9-10)
+   - Region-specific test suites
+   - Cross-region consistency tests
+   - Load testing
+   - Compliance verification
+
+#### Fly.io Multi-Region Configuration
+
+```toml
+# fly.toml (Multi-region version)
+app = "boostedbudget-api"
+primary_region = "iad"
+
+[env]
+  PORT = "8080"
+  ENABLE_MULTI_REGION = "true"
+  PRIMARY_REGION = "iad"
+
+# Deploy to multiple regions
+[[services]]
+  internal_port = 8080
+  protocol = "tcp"
+
+  [[services.ports]]
+    handlers = ["http"]
+    port = 80
+    force_https = true
+
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = 443
+```
+
+Deploy script:
+```bash
+#!/bin/bash
+# scripts/deploy-multi-region.sh
+
+# Add regions
+fly regions add iad lhr nrt --app boostedbudget-api
+
+# Scale instances per region
+fly scale count 2 --region iad --app boostedbudget-api    # USA
+fly scale count 2 --region lhr --app boostedbudget-api    # EU
+fly scale count 1 --region nrt --app boostedbudget-api    # APAC
+
+# Deploy with rolling strategy
+fly deploy --strategy rolling
+
+# Verify all regions
+fly status --app boostedbudget-api
+fly regions list --app boostedbudget-api
+```
+
+#### Database Secrets Per Region
+
+```bash
+# Set regional database URLs
+fly secrets set \
+  DATABASE_URL_US="postgres://us..." \
+  DATABASE_URL_EU="postgres://eu..." \
+  DATABASE_URL_APAC="postgres://apac..." \
+  --app boostedbudget-api
+```
+
+#### Region Router Implementation
+
+```go
+// backend/internal/infrastructure/region_router.go
+package infrastructure
+
+import (
+    "database/sql"
+    "fmt"
+)
+
+type RegionRouter struct {
+    databases map[string]*sql.DB
+}
+
+func NewRegionRouter(config DatabaseConfig) (*RegionRouter, error) {
+    router := &RegionRouter{
+        databases: make(map[string]*sql.DB),
+    }
+
+    // Initialize database connections for each region
+    for region, url := range config.RegionalURLs {
+        db, err := sql.Open("postgres", url)
+        if err != nil {
+            return nil, fmt.Errorf("failed to connect to %s: %w", region, err)
+        }
+        router.databases[region] = db
+    }
+
+    return router, nil
+}
+
+func (r *RegionRouter) GetDB(region string) (*sql.DB, error) {
+    db, exists := r.databases[region]
+    if !exists {
+        // Fallback to primary region
+        return r.databases["us-east-1"], nil
+    }
+    return db, nil
+}
+
+func (r *RegionRouter) Close() error {
+    for _, db := range r.databases {
+        if err := db.Close(); err != nil {
+            return err
+        }
+    }
+    return nil
+}
+```
+
+#### Frontend Region Selection
+
+```typescript
+// frontend/src/features/onboarding/RegionSelector.tsx
+import { useState } from 'react';
+import { useAuth0 } from '@auth0/auth0-react';
+
+interface Region {
+  code: string;
+  name: string;
+  flag: string;
+  description: string;
+}
+
+const regions: Region[] = [
+  {
+    code: 'us-east-1',
+    name: 'United States',
+    flag: '🇺🇸',
+    description: 'Data stored in Virginia, USA'
+  },
+  {
+    code: 'eu-west-1',
+    name: 'European Union',
+    flag: '🇪🇺',
+    description: 'Data stored in London, UK'
+  },
+  {
+    code: 'ap-southeast-1',
+    name: 'Asia Pacific',
+    flag: '🌏',
+    description: 'Data stored in Tokyo, Japan'
+  }
+];
+
+export const RegionSelector: React.FC = () => {
+  const [selectedRegion, setSelectedRegion] = useState<string>('');
+  const { user } = useAuth0();
+
+  const handleSelectRegion = async (regionCode: string) => {
+    setSelectedRegion(regionCode);
+
+    // Store region preference
+    await api.updateUserRegion(regionCode);
+
+    // Proceed with onboarding
+    navigate('/dashboard');
+  };
+
+  return (
+    <div className="region-selector">
+      <h2>Choose Your Data Region</h2>
+      <p>Your data will be stored in the region you select for compliance and performance.</p>
+
+      <div className="regions-grid">
+        {regions.map(region => (
+          <button
+            key={region.code}
+            className={`region-card ${selectedRegion === region.code ? 'selected' : ''}`}
+            onClick={() => handleSelectRegion(region.code)}
+          >
+            <span className="flag">{region.flag}</span>
+            <h3>{region.name}</h3>
+            <p>{region.description}</p>
+          </button>
+        ))}
+      </div>
+
+      <p className="note">
+        You can change your data region later in settings. Migration takes 1-2 hours.
+      </p>
+    </div>
+  );
+};
+```
+
+#### Testing Multi-Region Setup
+
+```bash
+# Test regional deployment
+./scripts/test-multi-region.sh
+
+# Load test from different regions
+k6 run --env REGION=us tests/load/regional-test.js
+k6 run --env REGION=eu tests/load/regional-test.js
+k6 run --env REGION=apac tests/load/regional-test.js
+
+# Verify data isolation
+./scripts/verify-region-isolation.sh
+```
+
+#### Monitoring Multi-Region
+
+```bash
+# View metrics per region
+fly metrics --app boostedbudget-api --region iad
+fly metrics --app boostedbudget-api --region lhr
+fly metrics --app boostedbudget-api --region nrt
+
+# Check logs per region
+fly logs --app boostedbudget-api --region iad
+fly logs --app boostedbudget-api --region lhr
+
+# Monitor regional health
+fly status --all-regions --app boostedbudget-api
+```
+
+---
+
+### Cost Comparison
+
+| Deployment Strategy | Monthly Cost | Latency (Intl) | Complexity |
+|---------------------|--------------|----------------|------------|
+| **Current (Single Region)** | $50-100 | 200-500ms | Low |
+| **Phase 1 (Edge Proxy)** | $50-100 | 100-200ms | Low |
+| **Phase 2 (Read Replicas)** | $100-150 | 50-150ms | Medium |
+| **Phase 3 (Multi-Region)** | $200-300 | 20-50ms | High |
+
+### Decision Framework
+
+**Deploy Phase 1 (Edge Proxy) when:**
+- ✅ International traffic > 10%
+- ✅ MVP validated
+- ✅ No additional cost
+
+**Deploy Phase 2 (Read Replicas) when:**
+- ✅ International users complaining about speed
+- ✅ Revenue > $1,000/month
+- ✅ 2-3 weeks of dev time available
+
+**Deploy Phase 3 (Full Multi-Region) when:**
+- ✅ User base > 10,000
+- ✅ Revenue > $10,000/month
+- ✅ Enterprise customers requesting data residency
+- ✅ 6-10 weeks of dev time available
+- ✅ Legal review completed
+
+### Rollback Strategy
+
+All phases include rollback procedures to safely return to single-region deployment if issues arise. See individual phase sections for specific rollback commands.
+
+---
+
+This approach gives you complete control over your Docker images while leveraging Fly.io's excellent global infrastructure for deployment. The single-region MVP provides a stable foundation, with clear expansion paths when justified by business growth.
