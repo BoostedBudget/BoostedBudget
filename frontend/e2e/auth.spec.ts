@@ -158,7 +158,7 @@ test.describe('Auth0 Authentication', () => {
       expect(signupExists).toBeGreaterThan(0);
     });
 
-    test.skip('should successfully create account with valid details', async ({ page }) => {
+    test.skip('should successfully create account with valid details', async ({ page: _page }) => {
       /**
        * SKIPPED: This test would create actual Auth0 users
        * To enable:
@@ -177,7 +177,7 @@ test.describe('Auth0 Authentication', () => {
   });
 
   test.describe('Authenticated User', () => {
-    test.skip('should access protected routes when authenticated', async ({ page }) => {
+    test.skip('should access protected routes when authenticated', async ({ page: _page }) => {
       /**
        * SKIPPED: Requires actual authentication
        * To enable: Implement auth helper to log in first, then remove test.skip
@@ -190,7 +190,7 @@ test.describe('Auth0 Authentication', () => {
       // 4. Verify content loads
     });
 
-    test.skip('should display user profile information', async ({ page }) => {
+    test.skip('should display user profile information', async ({ page: _page }) => {
       /**
        * SKIPPED: Requires actual authentication
        */
@@ -204,7 +204,7 @@ test.describe('Auth0 Authentication', () => {
   });
 
   test.describe('Logout Flow', () => {
-    test.skip('should successfully log out', async ({ page }) => {
+    test.skip('should successfully log out', async ({ page: _page }) => {
       /**
        * SKIPPED: Requires actual authentication first
        */
@@ -217,7 +217,7 @@ test.describe('Auth0 Authentication', () => {
       // 5. Verify session is cleared
     });
 
-    test.skip('should redirect to home page after logout', async ({ page }) => {
+    test.skip('should redirect to home page after logout', async ({ page: _page }) => {
       /**
        * SKIPPED: Requires actual authentication first
        */
@@ -229,7 +229,7 @@ test.describe('Auth0 Authentication', () => {
       // 4. Verify redirected to home page
     });
 
-    test.skip('should not access protected routes after logout', async ({ page }) => {
+    test.skip('should not access protected routes after logout', async ({ page: _page }) => {
       /**
        * SKIPPED: Requires actual authentication first
        */
@@ -243,7 +243,7 @@ test.describe('Auth0 Authentication', () => {
   });
 
   test.describe('Session Persistence', () => {
-    test.skip('should maintain session across page reloads', async ({ page }) => {
+    test.skip('should maintain session across page reloads', async ({ page: _page }) => {
       /**
        * SKIPPED: Requires actual authentication first
        */
@@ -255,7 +255,7 @@ test.describe('Auth0 Authentication', () => {
       // 4. Verify Log Out button still visible
     });
 
-    test.skip('should maintain session across navigation', async ({ page }) => {
+    test.skip('should maintain session across navigation', async ({ page: _page }) => {
       /**
        * SKIPPED: Requires actual authentication first
        */
