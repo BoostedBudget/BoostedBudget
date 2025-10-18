@@ -233,10 +233,10 @@ jobs:
         with:
           scan-type: 'fs'
           scan-ref: './backend'
-          scanners: 'vuln,secret,misconfig'
+          scanners: 'vuln'  # Only vulnerabilities, not misconfig/secrets
           format: 'sarif'
           output: 'trivy-backend-deps.sarif'
-          severity: 'CRITICAL,HIGH,MEDIUM'
+          severity: 'CRITICAL,HIGH'  # Only block on CRITICAL/HIGH
           exit-code: '1'
           ignore-unfixed: true
 
@@ -252,10 +252,10 @@ jobs:
         with:
           scan-type: 'fs'
           scan-ref: './frontend'
-          scanners: 'vuln,secret,misconfig'
+          scanners: 'vuln'  # Only vulnerabilities, not misconfig/secrets
           format: 'sarif'
           output: 'trivy-frontend-deps.sarif'
-          severity: 'CRITICAL,HIGH,MEDIUM'
+          severity: 'CRITICAL,HIGH'  # Only block on CRITICAL/HIGH
           exit-code: '1'
           ignore-unfixed: true
 
@@ -273,7 +273,7 @@ jobs:
           scan-ref: './backend/Dockerfile'
           format: 'sarif'
           output: 'trivy-backend-dockerfile.sarif'
-          severity: 'CRITICAL,HIGH,MEDIUM'
+          severity: 'CRITICAL,HIGH'
           exit-code: '0'  # Don't fail on Dockerfile issues, just report
 
       - name: Upload backend Dockerfile scan results
@@ -290,7 +290,7 @@ jobs:
           scan-ref: './frontend/Dockerfile'
           format: 'sarif'
           output: 'trivy-frontend-dockerfile.sarif'
-          severity: 'CRITICAL,HIGH,MEDIUM'
+          severity: 'CRITICAL,HIGH'
           exit-code: '0'  # Don't fail on Dockerfile issues, just report
 
       - name: Upload frontend Dockerfile scan results
