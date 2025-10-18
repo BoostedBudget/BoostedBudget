@@ -296,9 +296,10 @@ jobs:
     needs: build-images
     runs-on: ubuntu-latest
     permissions:
+      actions: read  # Required for workflow run information
       contents: read
       packages: read  # Required to pull images from GHCR
-      security-events: write
+      security-events: write  # Required to upload SARIF results
 
     steps:
       - name: Log in to GitHub Container Registry
