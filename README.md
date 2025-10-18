@@ -27,8 +27,8 @@ BoostedBudget is a global budgeting platform that helps users optimize their fin
 - OpenAPI 3.1 specification
 
 **Frontend:**
-- React 18 + TypeScript 5
-- Vite build tool
+- React 19 + TypeScript 5
+- Vite 7 build tool
 - Redux Toolkit for state management
 - Auth0 React SDK
 
