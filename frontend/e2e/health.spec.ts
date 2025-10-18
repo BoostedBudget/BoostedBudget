@@ -1,0 +1,42 @@
+import { test, expect } from '@playwright/test';
+
+/**
+ * Health Endpoint E2E Tests
+ * Verifies the backend health check endpoint is accessible and returns correct status
+ */
+
+test.describe('Health Endpoint', () => {
+  test('should return healthy status from backend', async ({ page, request }) => {
+    // Test the API health endpoint directly
+    const response = await request.get('http://localhost:8080/health');
+
+    expect(response.status()).toBe(200);
+
+    const body = await response.json();
+    expect(body).toHaveProperty('status', 'healthy');
+    expect(body).toHaveProperty('timestamp');
+    expect(body).toHaveProperty('service', 'boostedbudget-backend');
+  });
+
+  test('should load application homepage successfully', async ({ page }) => {
+    // Navigate to the homepage
+    await page.goto('/');
+
+    // Wait for the page to load
+    await page.waitForLoadState('networkidle');
+
+    // Verify page loaded successfully (check for main content)
+    await expect(page).toHaveTitle(/BoostedBudget/i);
+  });
+
+  test('should have backend API accessible', async ({ request }) => {
+    // Verify backend is running and accessible
+    const response = await request.get('http://localhost:8080/health');
+
+    expect(response.ok()).toBeTruthy();
+
+    const responseTime = response.headers()['x-response-time'];
+    // Response time header might not exist yet, but we can check if response was fast
+    expect(response.status()).toBe(200);
+  });
+});
