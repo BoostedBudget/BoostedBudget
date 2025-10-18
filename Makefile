@@ -55,6 +55,15 @@ backend-build:
 backend-run:
 	cd backend && go run ./cmd/server
 
+# CI Testing
+test-ci:
+	@echo "Running CI tests with coverage enforcement..."
+	cd backend && go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+	@echo "Checking backend coverage threshold..."
+	./scripts/check-coverage.sh backend/coverage.out 80
+	cd frontend && npm run test:ci
+	@echo "All CI tests passed!"
+
 # Frontend
 frontend-install:
 	cd frontend && npm install
