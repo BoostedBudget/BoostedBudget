@@ -80,6 +80,16 @@ make dev
 docker-compose up
 ```
 
+### 4. Run Database Migrations
+
+```bash
+# Apply all migrations
+make migrate-up
+
+# Check migration status
+make migrate-status
+```
+
 This will start:
 - **Backend API** on http://localhost:8080
 - **Frontend** on http://localhost:3000
@@ -87,11 +97,14 @@ This will start:
 - **Redis** on localhost:6379
 - **RabbitMQ** on localhost:5672 (Management UI: http://localhost:15672)
 
-### 4. Verify Everything Works
+### 5. Verify Everything Works
 
 ```bash
 # Check backend health
 curl http://localhost:8080/health
+
+# Verify database schema
+make migrate-status
 
 # Open frontend in browser
 open http://localhost:3000
