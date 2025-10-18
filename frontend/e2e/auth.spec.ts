@@ -18,9 +18,10 @@ import { acceptCookieConsent } from './helpers/auth';
 // Skip all Auth0 tests if Auth0 is not configured
 const skipAuth0Tests = !process.env.VITE_AUTH0_DOMAIN || !process.env.VITE_AUTH0_CLIENT_ID;
 
-test.describe.configure({ mode: skipAuth0Tests ? 'skip' : 'parallel' });
+// Use conditional describe - if skipAuth0Tests is true, use test.describe.skip, otherwise test.describe
+const describeAuth0 = skipAuth0Tests ? test.describe.skip : test.describe;
 
-test.describe('Auth0 Authentication', () => {
+describeAuth0('Auth0 Authentication', () => {
   const testEmail = process.env.TEST_AUTH0_EMAIL || 'test@example.com';
   const testPassword = process.env.TEST_AUTH0_PASSWORD || 'TestPassword123!';
 
