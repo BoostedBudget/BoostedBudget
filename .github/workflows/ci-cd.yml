@@ -21,22 +21,16 @@ env:
 
 jobs:
   # =============================================================================
-  # JOB 1: Run all tests with coverage enforcement
+  # JOB 1: Backend Tests (runs in parallel with frontend)
   # =============================================================================
-  test:
-    name: Test (Backend + Frontend + E2E)
+  backend-test:
+    name: Backend Tests
     runs-on: ubuntu-latest
 
     steps:
-      # -------------------------------------------------------------------------
-      # Checkout and Setup
-      # -------------------------------------------------------------------------
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # -------------------------------------------------------------------------
-      # Backend Tests (Go)
-      # -------------------------------------------------------------------------
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -82,6 +76,20 @@ jobs:
         working-directory: ./backend
         run: go tool cover -html=coverage.out -o coverage.html
 
+      - name: Build backend binary (for E2E tests)
+        working-directory: ./backend
+        run: |
+          echo "::group::Building backend binary"
+          go build -o bin/server ./cmd/server
+          echo "::endgroup::"
+
+      - name: Upload backend binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-binary
+          path: backend/bin/server
+          retention-days: 1
+
       - name: Upload backend coverage report
         uses: actions/upload-artifact@v4
         with:
@@ -91,9 +99,17 @@ jobs:
             backend/coverage.html
           retention-days: 30
 
-      # -------------------------------------------------------------------------
-      # Frontend Tests (Node/Vitest)
-      # -------------------------------------------------------------------------
+  # =============================================================================
+  # JOB 2: Frontend Tests (runs in parallel with backend)
+  # =============================================================================
+  frontend-test:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -127,19 +143,41 @@ jobs:
             frontend/coverage/
           retention-days: 30
 
-      # -------------------------------------------------------------------------
-      # E2E Tests (Playwright)
-      # -------------------------------------------------------------------------
+  # =============================================================================
+  # JOB 3: E2E Tests (depends on backend-test for binary)
+  # =============================================================================
+  e2e-test:
+    name: E2E Tests
+    needs: backend-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: ./frontend
+        run: npm ci
+
       - name: Install Playwright browsers
         working-directory: ./frontend
         run: npx playwright install --with-deps chromium
 
-      - name: Build backend for E2E tests
-        working-directory: ./backend
-        run: |
-          echo "::group::Building backend binary"
-          go build -o bin/server ./cmd/server
-          echo "::endgroup::"
+      - name: Download backend binary
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-binary
+          path: backend/bin
+
+      - name: Make backend binary executable
+        run: chmod +x backend/bin/server
 
       - name: Run E2E tests
         working-directory: ./frontend
@@ -166,29 +204,12 @@ jobs:
           path: frontend/test-results/
           retention-days: 7
 
-      # -------------------------------------------------------------------------
-      # Coverage Summary for PR Comments (prepared for next step)
-      # -------------------------------------------------------------------------
-      - name: Generate coverage summary
-        if: always()
-        run: |
-          echo "::group::Coverage Summary"
-          echo "Backend coverage:"
-          if [ -f backend/coverage.out ]; then
-            cd backend && go tool cover -func=coverage.out | grep total
-          fi
-          echo "Frontend coverage:"
-          if [ -f frontend/coverage/coverage-summary.json ]; then
-            cat frontend/coverage/coverage-summary.json | jq '.total'
-          fi
-          echo "::endgroup::"
-
   # =============================================================================
-  # JOB 2: Build and push Docker images to GHCR
+  # JOB 4: Build and push Docker images to GHCR
   # =============================================================================
   build-images:
     name: Build Docker Images
-    needs: test
+    needs: [backend-test, frontend-test, e2e-test]
     runs-on: ubuntu-latest
     # Only build images on main branch push (after PR merge)
     # On PRs, just validate the build without pushing
@@ -267,7 +288,7 @@ jobs:
           echo "\`${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
 
   # =============================================================================
-  # JOB 3: Security scanning with Trivy
+  # JOB 5: Security scanning with Trivy
   # =============================================================================
   security-scan:
     name: Security Scan (Trivy)
@@ -321,7 +342,7 @@ jobs:
           echo "Results uploaded to GitHub Security tab." >> $GITHUB_STEP_SUMMARY
 
   # =============================================================================
-  # JOB 4: Deploy to production (manual approval required)
+  # JOB 6: Deploy to production (manual approval required)
   # =============================================================================
   deploy-production:
     name: Deploy to Production
