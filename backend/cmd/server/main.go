@@ -33,6 +33,7 @@ func main() {
 	healthHandler := &handlers.HealthHandler{
 		DBCheck:    createDBCheck(),
 		RedisCheck: createRedisCheck(),
+		Auth0Check: createAuth0Check(),
 		Version:    cfg.Version,
 	}
 	e.GET("/health", healthHandler.GetHealth)
@@ -85,6 +86,16 @@ func createRedisCheck() func() error {
 	return func() error {
 		// For now, always return healthy
 		// Will be replaced with actual Redis ping when we add Redis
+		return nil
+	}
+}
+
+// createAuth0Check creates an Auth0 health check function
+// TODO: Replace with real Auth0 connection check
+func createAuth0Check() func() error {
+	return func() error {
+		// For now, always return healthy
+		// Will be replaced with actual Auth0 JWKS endpoint check when we add Auth0
 		return nil
 	}
 }
