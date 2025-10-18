@@ -306,3 +306,7 @@ frontend/dist/
 in-memoria.db
 .claude/
 .serena
+
+# Fly.io
+.fly/
+fly.toml.bak
