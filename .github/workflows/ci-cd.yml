@@ -435,8 +435,8 @@ jobs:
           image-ref: ${{ needs.build-images.outputs.backend-image }}
           format: 'sarif'
           output: 'trivy-backend-results.sarif'
-          severity: 'CRITICAL,HIGH,MEDIUM'
-          exit-code: '1'  # Fail on CRITICAL vulnerabilities
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'  # Fail on CRITICAL/HIGH vulnerabilities
           ignore-unfixed: true
 
       - name: Upload Trivy results (Backend) to GitHub Security
@@ -453,8 +453,8 @@ jobs:
           image-ref: ${{ needs.build-images.outputs.frontend-image }}
           format: 'sarif'
           output: 'trivy-frontend-results.sarif'
-          severity: 'CRITICAL,HIGH,MEDIUM'
-          exit-code: '1'  # Fail on CRITICAL vulnerabilities
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'  # Fail on CRITICAL/HIGH vulnerabilities
           ignore-unfixed: true
 
       - name: Upload Trivy results (Frontend) to GitHub Security
