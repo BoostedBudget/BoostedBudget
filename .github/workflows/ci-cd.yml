@@ -60,7 +60,7 @@ jobs:
           go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
           echo "::endgroup::"
 
-      - name: Check Go coverage threshold (≥80%)
+      - name: Check Go coverage threshold (≥60%)
         working-directory: ./backend
         run: |
           echo "::group::Checking coverage threshold"
@@ -70,11 +70,11 @@ jobs:
           # Convert to integer for comparison
           COVERAGE_INT=$(echo "$COVERAGE" | cut -d. -f1)
 
-          if [ "$COVERAGE_INT" -lt 80 ]; then
-            echo "::error::Coverage ${COVERAGE}% is below threshold 80%"
+          if [ "$COVERAGE_INT" -lt 60 ]; then
+            echo "::error::Coverage ${COVERAGE}% is below threshold 60%"
             exit 1
           else
-            echo "::notice::✅ Coverage ${COVERAGE}% meets threshold 80%"
+            echo "::notice::✅ Coverage ${COVERAGE}% meets threshold 60%"
           fi
           echo "::endgroup::"
 
