@@ -175,7 +175,7 @@ jobs:
           echo "::group::Coverage Summary"
           echo "Backend coverage:"
           if [ -f backend/coverage.out ]; then
-            go tool cover -func=backend/coverage.out | grep total
+            cd backend && go tool cover -func=coverage.out | grep total
           fi
           echo "Frontend coverage:"
           if [ -f frontend/coverage/coverage-summary.json ]; then
