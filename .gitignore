@@ -296,3 +296,5 @@ buck-out/
 *.rdb
 
 # End of https://www.toptal.com/developers/gitignore/api/go,react,reactnative,redis
+.env
+.mcp.json
