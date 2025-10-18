@@ -56,9 +56,10 @@ This codebase is guided by two primary planning documents that should be consult
 
 ### Key Differentiators
 1. Automation rules engine with customizable triggers
-2. GDPR-compliant from day one with regional data storage
+2. GDPR-compliant from day one (all data stored in USA initially)
 3. Transfer suggestions only (no money movement initially)
-4. Global deployment via Fly.io
+4. USA deployment with global accessibility
+5. Multi-region expansion ready (Phase 7+)
 
 ## Architecture
 
@@ -67,9 +68,12 @@ Frontend (React + TypeScript + Vite)
     ↓
 Backend API (Go + Echo/Gin)
     ↓
-PostgreSQL (Multi-region) + Redis
+PostgreSQL (USA/iad) + Redis
     ↓
 External Services: Auth0, Plaid, Stripe, Google AdSense
+
+Note: Single region deployment (us-east-1/iad)
+Multi-region architecture available in Phase 7+
 ```
 
 ### Tech Stack Details
@@ -164,19 +168,21 @@ make migrate-down
 ## Security & Compliance
 
 ### GDPR Compliance Checklist
-- [ ] All user data includes `data_region` field
+- [ ] All user data includes `primary_region` field (defaults to 'us-east-1')
 - [ ] Privacy settings endpoint implemented
 - [ ] Data export functionality available
 - [ ] Account deletion respects 30-day grace period
 - [ ] Audit logs track all data access
 - [ ] Cookie consent banner displayed
-- [ ] Regional data storage (US vs EU)
+- [ ] Privacy policy clearly states USA data storage
+- [ ] EU users can access with full GDPR rights
 
 ### Auth0 Integration Points
 - Backend: JWT validation middleware on all protected routes
 - Frontend: Auth0Provider wraps entire app
 - User metadata stored in Auth0 includes subscription tier
 - GDPR consent tracked in Auth0 rules
+- No geo-location routing initially (added in Phase 7+)
 
 ### Sensitive Data Handling
 ```go
@@ -185,6 +191,10 @@ encryptedToken := s.encryption.Encrypt(plainTextToken)
 
 // Use context for user identification
 userID := auth.GetUserID(ctx)
+
+// Region parameter kept for future expansion
+// Currently always "us-east-1"
+err := s.userRepo.CreateInRegion(ctx, user, "us-east-1")
 
 // Log audit trail for GDPR
 s.auditLog.Log(ctx, action, resourceID)
@@ -238,20 +248,24 @@ npm run test:api
 
 ### Deploying to Fly.io
 ```bash
-# Deploy to staging
+# Deploy to staging (single region: iad)
 ./scripts/deploy-to-fly.sh staging
 
-# Deploy to production (requires approval)
+# Deploy to production (single region: iad)
 ./scripts/deploy-to-fly.sh production v1.2.3
 
 # Check deployment status
 fly status --app boostedbudget-api
+
+# View which region(s) are active
+fly regions list --app boostedbudget-api
 ```
 
 ### Environment-Specific Configurations
-- **Local**: Uses docker-compose, mock Plaid sandbox
-- **Staging**: Deploys to `boostedbudget-staging-*` apps
-- **Production**: Multi-region deployment with CloudFlare CDN
+- **Local**: Uses docker-compose with single PostgreSQL, mock Plaid sandbox
+- **Staging**: Deploys to `boostedbudget-staging-*` apps in iad region
+- **Production**: Single region deployment (iad) with CloudFlare CDN
+- **Future**: Multi-region support (see Phase 7+ in complete plan)
 
 ## Feature Implementation Guidelines
 
@@ -267,12 +281,24 @@ if (!canCreateRule) {
 }
 ```
 
-### Multi-Region Data Access
+### Multi-Region Data Access (Future-Ready Pattern)
 ```go
-// Route database based on user's data region
-db := s.regionRouter.GetDBForRegion(user.DataRegion)
-result, err := s.repo.CreateInRegion(ctx, data, user.DataRegion)
+// Current implementation (MVP):
+// Always uses us-east-1, but keeps region abstraction
+db := s.GetDB("us-east-1")
+result, err := s.repo.CreateInRegion(ctx, data, "us-east-1")
+
+// Future implementation (Phase 7+):
+// Will route based on user's chosen region
+db := s.regionRouter.GetDBForRegion(user.PrimaryRegion)
+result, err := s.repo.CreateInRegion(ctx, data, user.PrimaryRegion)
 ```
+
+**Why keep the abstraction now?**
+- Cleaner migration path to multi-region
+- No major refactoring needed later
+- Documents intent in code
+- Minimal overhead for MVP
 
 ### Ad Display Logic
 ```typescript
@@ -301,6 +327,41 @@ if (subscription?.tier === 'free' && hasAdConsent) {
 - Custom claims for user metadata
 - Rules for GDPR consent tracking
 - Machine-to-machine for backend
+
+## Multi-Region Expansion (Phase 7+)
+
+### Current State
+- **Single region**: All data in us-east-1 (iad)
+- **Global access**: Users worldwide can access, data stored in USA
+- **GDPR compliant**: Full rights for all users regardless of location
+- **Future-ready**: Code abstractions prepared for multi-region
+
+### When to Expand
+Implement multi-region when:
+- User base exceeds 10,000 active users
+- Significant international traffic (>20% EU or APAC)
+- Data residency requests from enterprise customers
+- Latency complaints from international users
+
+### Quick Wins Before Full Multi-Region
+```bash
+# Enable Fly.io edge proxy (1-2 days, minimal cost)
+fly regions add ams lhr fra syd nrt sin --app boostedbudget-web
+
+# Add read replicas (1-2 weeks, ~$50/month)
+fly postgres create --name boostedbudget-db-eu --region lhr --replica
+```
+
+### Full Multi-Region Checklist
+See `boosted-budget-complete-plan.md` Phase 7+ section for:
+- Detailed migration strategy
+- Code changes required
+- Database setup instructions
+- Testing approach
+- Estimated timeline (6-10 weeks)
+- Cost implications (~$100-200/month additional)
+
+---
 
 ## Performance Optimization
 
@@ -342,8 +403,8 @@ fly logs --app boostedbudget-api | grep auth0
 fly ssh console -a boostedbudget-api
 echo $DATABASE_URL
 
-# Test connection
-fly postgres connect -a boostedbudget-db-us
+# Test connection (single region)
+fly postgres connect -a boostedbudget-db
 ```
 
 ### Deployment Failures
@@ -360,11 +421,11 @@ fly deploy --image <previous-image>
 
 1. **No Money Movement**: The platform only suggests transfers, it doesn't actually move money (requires MTL licenses)
 
-2. **GDPR First**: Always consider data privacy and GDPR compliance in every feature
+2. **GDPR First**: Always consider data privacy and GDPR compliance in every feature. All users get GDPR rights regardless of location.
 
 3. **Subscription Tiers**: Free tier has strict limits (3 rules, 2 accounts, ads)
 
-4. **Multi-Region**: Data must stay in user's selected region (US or EU)
+4. **Single Region MVP**: Data currently stored in us-east-1 only. Multi-region abstractions kept for future expansion.
 
 5. **Auth0 Central**: All authentication flows through Auth0, never implement custom auth
 
@@ -378,24 +439,33 @@ fly deploy --image <previous-image>
 
 10. **Graceful Degradation**: Handle external service failures without breaking the app
 
+11. **Future-Ready Patterns**: Keep `*InRegion` method signatures even though region is currently constant
+
+12. **Primary Region Field**: Always set to 'us-east-1' initially, field prepared for Phase 7+ expansion
+
 ## Quick Command Reference
 
 ```bash
 # Development
-docker-compose up              # Start local environment
+docker-compose up              # Start local environment (single DB)
 make test                      # Run all tests
 make generate                  # Generate code from OpenAPI
 
-# Database
+# Database (single region)
 make migrate-up                # Run migrations
 make migrate-down              # Rollback migration
-fly postgres connect           # Connect to production DB
+fly postgres connect -a boostedbudget-db  # Connect to production DB
 
-# Deployment
+# Deployment (iad region)
 ./scripts/build-and-push.sh    # Build Docker images
-fly deploy                     # Deploy to Fly.io
+fly deploy                     # Deploy to Fly.io (iad)
 fly logs                       # View logs
 fly ssh console               # SSH into container
+fly regions list              # View active regions
+
+# Future: Multi-region commands
+# fly regions add <region>     # Add new region (Phase 7+)
+# fly scale count 2 --region <region>  # Scale in region (Phase 7+)
 
 # Monitoring
 fly status                     # Check app status
@@ -412,17 +482,21 @@ fly scale show                # View scaling config
 5. **Use structured logging** for debugging
 6. **Document API changes** in OpenAPI spec
 7. **Validate with Prism** before implementing
-8. **Check multi-region impact** for database changes
+8. **Single region for now**: All data in us-east-1, but keep region abstractions
 9. **Update migrations** for schema changes
 10. **Verify Auth0 integration** for new endpoints
+11. **Future-ready code**: Keep `*InRegion` patterns even with single implementation
+12. **Primary region default**: Always 'us-east-1' unless Phase 7+ is active
 
 ## Document Maintenance
 
 Keep these three documents synchronized:
-- **`boosted-budget-complete-plan.md`** - Update when adding new features or changing business logic
-- **`boosted-budget-fly-deployment.md`** - Update when modifying deployment processes or infrastructure
-- **`CLAUDE.md`** (this file) - Update with new patterns, common issues, or workflow changes
+- **`boosted-budget-complete-plan.md`** - Update when adding new features or changing business logic. Currently reflects single-region MVP with Phase 7+ multi-region expansion.
+- **`boosted-budget-fly-deployment.md`** - Update when modifying deployment processes or infrastructure. Currently configured for single region (iad) deployment.
+- **`CLAUDE.md`** (this file) - Update with new patterns, common issues, or workflow changes. Reflects current single-region architecture with future multi-region notes.
+
+**Current Architecture State**: Single region (us-east-1/iad) deployment with future-ready abstractions for multi-region expansion in Phase 7+.
 
 ---
 
-*This document should be updated as the codebase evolves. Last updated: Project inception*
+*This document should be updated as the codebase evolves. Last updated: Simplified to single-region deployment with multi-region expansion path documented.*
