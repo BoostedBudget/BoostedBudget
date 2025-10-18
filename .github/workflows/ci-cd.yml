@@ -216,11 +216,14 @@ jobs:
   # =============================================================================
   build-images:
     name: Build Docker Images
+    # Only depend on tests if they run (PRs), otherwise no dependencies (main)
     needs: [backend-test, frontend-test, e2e-test]
+    if: |
+      always() &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # Only build images on main branch push (after PR merge)
-    # On PRs, just validate the build without pushing
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
       packages: write
