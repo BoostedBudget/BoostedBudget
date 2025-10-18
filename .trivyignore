@@ -1,0 +1,46 @@
+# Trivy Vulnerability Ignore List
+# Last updated: 2025-10-18
+# Rationale: These CVEs have no fixed versions available in Debian 12 (Bookworm) repositories
+# All ignored CVEs have been risk-assessed and determined to be low-risk for our use case
+
+# ============================================================================
+# LibTIFF Vulnerabilities (CRITICAL)
+# ============================================================================
+# Affects: Debian 12 tiff package
+# Status: No fixed version available for Debian:12
+# Risk Assessment: LOW - We don't process TIFF images in our application
+# We're a budgeting app with no image processing functionality
+CVE-2025-8534  # Use after free in get_histogram (tools/tiffmedian.c)
+CVE-2025-7709  # LibTIFF up to 4.7.0 vulnerability
+CVE-2025-8176  # Use after free in setrow (tools/thumbnail.c)
+
+# ============================================================================
+# libxslt Vulnerability (CRITICAL)
+# ============================================================================
+# Affects: Debian 12 libxslt package
+# Status: No fixed version available for Debian:12
+# Risk Assessment: LOW - We don't use XSLT transformations
+# libxslt is a transitive dependency, not directly used by our application
+CVE-2025-9900  # Memory corruption in ID attribute cleanup
+
+# ============================================================================
+# linux-pam Vulnerability (HIGH)
+# ============================================================================
+# Affects: Debian 12 linux-pam package (pam_namespace module)
+# Status: No fixed version available for Debian:12
+# Risk Assessment: MEDIUM - Containers run as non-root user
+# We run containers with non-root users and don't use pam_namespace
+# Attack requires local user access with specific symlink race conditions
+CVE-2025-6020  # Privilege escalation via pam_namespace symlink attacks
+
+# ============================================================================
+# Review Policy
+# ============================================================================
+# This file should be reviewed and updated:
+# - Monthly: Check if fixed versions are available
+# - On new CVE discoveries: Assess risk and decide to add/remove
+# - Before production releases: Verify all ignored CVEs are still justified
+#
+# To check for updates:
+# docker pull debian:bookworm-slim && trivy image debian:bookworm-slim
+# docker pull nginx:stable && trivy image nginx:stable
