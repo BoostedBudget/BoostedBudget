@@ -157,7 +157,7 @@ test.describe('Cookie Consent Banner', () => {
     await expect(banner).not.toBeVisible();
   });
 
-  test('should not show banner on subsequent visit after accepting', async ({ page, context }) => {
+  test('should not show banner on subsequent visit after accepting', async ({ page, context: _context }) => {
     // First visit - accept cookies
     await page.goto('/');
     await page.waitForLoadState('networkidle');

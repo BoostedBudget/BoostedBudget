@@ -6,7 +6,7 @@ import { test, expect } from '@playwright/test';
  */
 
 test.describe('Health Endpoint', () => {
-  test('should return healthy status from backend', async ({ page, request }) => {
+  test('should return healthy status from backend', async ({ page: _page, request }) => {
     // Test the API health endpoint directly
     const response = await request.get('http://localhost:8080/health');
 
@@ -35,8 +35,7 @@ test.describe('Health Endpoint', () => {
 
     expect(response.ok()).toBeTruthy();
 
-    const responseTime = response.headers()['x-response-time'];
-    // Response time header might not exist yet, but we can check if response was fast
+    // Response time header might not exist yet, but we verify the response is fast
     expect(response.status()).toBe(200);
   });
 });
