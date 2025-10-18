@@ -22,18 +22,15 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -o server \
     ./cmd/server
 
-# Stage 2: Runtime
-FROM alpine:latest
+# Stage 2: Runtime (Debian Bookworm Slim - Minimal but stable)
+FROM debian:bookworm-slim
 
 # Install runtime dependencies
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    curl \
     tzdata \
-    curl
-
-# Create non-root user for security
-RUN addgroup -g 1000 appuser && \
-    adduser -D -u 1000 -G appuser appuser
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -43,8 +40,10 @@ COPY --from=builder /build/server /app/server
 # Copy migrations directory (if needed at runtime)
 COPY --from=builder /build/migrations /app/migrations
 
-# Set ownership to non-root user
-RUN chown -R appuser:appuser /app
+# Create non-root user for security
+RUN groupadd -g 1000 appuser && \
+    useradd -r -u 1000 -g appuser appuser && \
+    chown -R appuser:appuser /app
 
 # Switch to non-root user
 USER appuser
