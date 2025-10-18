@@ -212,7 +212,113 @@ jobs:
           retention-days: 7
 
   # =============================================================================
-  # JOB 4: Build and push Docker images to GHCR
+  # JOB 4: Security Scan - Dependencies & Dockerfiles (Fast - No Build Required)
+  # =============================================================================
+  pr-security-scan:
+    name: Security Scan (Dependencies & Config)
+    runs-on: ubuntu-latest
+    # Only run on PRs to catch vulnerabilities before merge
+    if: github.event_name == 'pull_request'
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Scan backend Go dependencies
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: './backend'
+          scanners: 'vuln'  # Only vulnerabilities, not misconfig/secrets
+          format: 'sarif'
+          output: 'trivy-backend-deps.sarif'
+          severity: 'CRITICAL,HIGH'  # Only block on CRITICAL/HIGH
+          exit-code: '1'
+          ignore-unfixed: true
+
+      - name: Upload backend dependency scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        continue-on-error: true  # Don't fail if Code Scanning not enabled
+        with:
+          sarif_file: 'trivy-backend-deps.sarif'
+          category: 'trivy-backend-dependencies'
+
+      - name: Scan frontend npm dependencies
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: './frontend'
+          scanners: 'vuln'  # Only vulnerabilities, not misconfig/secrets
+          format: 'sarif'
+          output: 'trivy-frontend-deps.sarif'
+          severity: 'CRITICAL,HIGH'  # Only block on CRITICAL/HIGH
+          exit-code: '1'
+          ignore-unfixed: true
+
+      - name: Upload frontend dependency scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        continue-on-error: true  # Don't fail if Code Scanning not enabled
+        with:
+          sarif_file: 'trivy-frontend-deps.sarif'
+          category: 'trivy-frontend-dependencies'
+
+      - name: Scan backend Dockerfile
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          scan-ref: './backend/Dockerfile'
+          format: 'sarif'
+          output: 'trivy-backend-dockerfile.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'  # Don't fail on Dockerfile issues, just report
+
+      - name: Upload backend Dockerfile scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        continue-on-error: true  # Don't fail if Code Scanning not enabled
+        with:
+          sarif_file: 'trivy-backend-dockerfile.sarif'
+          category: 'trivy-backend-dockerfile'
+
+      - name: Scan frontend Dockerfile
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          scan-ref: './frontend/Dockerfile'
+          format: 'sarif'
+          output: 'trivy-frontend-dockerfile.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'  # Don't fail on Dockerfile issues, just report
+
+      - name: Upload frontend Dockerfile scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        continue-on-error: true  # Don't fail if Code Scanning not enabled
+        with:
+          sarif_file: 'trivy-frontend-dockerfile.sarif'
+          category: 'trivy-frontend-dockerfile'
+
+      - name: Security scan summary
+        if: always()
+        run: |
+          echo "### 🔒 PR Security Scan Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Scanned:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Backend Go dependencies (go.mod/go.sum)" >> $GITHUB_STEP_SUMMARY
+          echo "- Frontend npm dependencies (package.json/package-lock.json)" >> $GITHUB_STEP_SUMMARY
+          echo "- Backend Dockerfile configuration" >> $GITHUB_STEP_SUMMARY
+          echo "- Frontend Dockerfile configuration" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Results uploaded to GitHub Security tab." >> $GITHUB_STEP_SUMMARY
+
+  # =============================================================================
+  # JOB 5: Build and push Docker images to GHCR
   # =============================================================================
   build-images:
     name: Build Docker Images
@@ -298,12 +404,17 @@ jobs:
           echo "\`${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
 
   # =============================================================================
-  # JOB 5: Security scanning with Trivy
+  # JOB 6: Security Scan - Docker Images (Comprehensive - After Build on Main)
   # =============================================================================
-  security-scan:
-    name: Security Scan (Trivy)
+  image-security-scan:
+    name: Security Scan (Docker Images)
     needs: build-images
     runs-on: ubuntu-latest
+    # Only run on main - PRs use faster filesystem scan
+    if: |
+      always() &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main'
     permissions:
       actions: read  # Required for workflow run information
       contents: read
@@ -331,6 +442,7 @@ jobs:
       - name: Upload Trivy results (Backend) to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
         if: always()
+        continue-on-error: true  # Don't fail if Code Scanning not enabled
         with:
           sarif_file: 'trivy-backend-results.sarif'
           category: 'trivy-backend'
@@ -348,6 +460,7 @@ jobs:
       - name: Upload Trivy results (Frontend) to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
         if: always()
+        continue-on-error: true  # Don't fail if Code Scanning not enabled
         with:
           sarif_file: 'trivy-frontend-results.sarif'
           category: 'trivy-frontend'
@@ -355,19 +468,28 @@ jobs:
       - name: Security scan summary
         if: always()
         run: |
-          echo "### 🔒 Security Scan Complete" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔒 Docker Image Security Scan Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Scanned images for CRITICAL, HIGH, and MEDIUM vulnerabilities." >> $GITHUB_STEP_SUMMARY
+          echo "**Scanned:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Complete backend Docker image" >> $GITHUB_STEP_SUMMARY
+          echo "- Complete frontend Docker image" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "This is the final comprehensive scan before deployment." >> $GITHUB_STEP_SUMMARY
           echo "Results uploaded to GitHub Security tab." >> $GITHUB_STEP_SUMMARY
 
   # =============================================================================
-  # JOB 6: Deploy to production (manual approval required)
+  # JOB 7: Deploy to production (manual approval required)
   # =============================================================================
   deploy-production:
     name: Deploy to Production
-    needs: [build-images, security-scan]
+    needs: [build-images, image-security-scan]
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: |
+      always() &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'push' &&
+      needs.build-images.result == 'success' &&
+      (needs.image-security-scan.result == 'success' || needs.image-security-scan.result == 'skipped')
     environment:
       name: production
       url: https://boostedbudget.com
