@@ -2,17 +2,31 @@ openapi: 3.1.0
 info:
   title: BoostedBudget API
   version: 0.1.0
-  description: Global budgeting platform with intelligent automation
+  description: |
+    BoostedBudget API - Global budgeting platform with intelligent automation rules and GDPR compliance.
+
+    **Authentication**: All protected endpoints require Auth0 JWT Bearer token.
+
+    **Subscription Tiers**:
+    - `free`: 3 automation rules, 2 accounts, ad-supported
+    - `premium`: Unlimited rules, no ads, priority execution ($9.99/mo)
+    - `premium_plus`: Everything + AI insights, API access ($19.99/mo)
+
+    **GDPR Compliance**: All endpoints respect user data residency and privacy settings.
   contact:
-    email: api@boostedbudget.com
+    name: BoostedBudget Support
+    email: support@boostedbudget.com
   license:
     name: Proprietary
+    url: https://boostedbudget.com/legal/terms
 
 servers:
+  - url: https://api.boostedbudget.com
+    description: Production server (iad/us-east-1)
+  - url: https://api-staging.boostedbudget.com
+    description: Staging server (iad/us-east-1)
   - url: http://localhost:8080
-    description: Local development
-  - url: https://api.boostedbudget.com/v1
-    description: Production (USA - us-east-1)
+    description: Local development server
 
 security:
   - auth0: []
@@ -20,47 +34,111 @@ security:
 paths:
   /health:
     get:
+      summary: Health Check
+      description: Public health check endpoint for monitoring system status
       operationId: getHealth
-      security: []  # Public endpoint - no auth required
-      tags: [System]
-      summary: Health check endpoint
-      description: Returns the health status of the API and its dependencies
+      tags:
+        - System
+      security: []  # Public endpoint, no auth required
       responses:
         '200':
-          description: Service is healthy or degraded
+          description: System is healthy or degraded
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
+              examples:
+                healthy:
+                  summary: All services healthy
+                  value:
+                    status: healthy
+                    version: "0.1.0"
+                    timestamp: "2025-10-18T14:30:00Z"
+                    checks:
+                      database:
+                        status: up
+                        response_time_ms: 5
+                      redis:
+                        status: up
+                        response_time_ms: 2
+                      auth0:
+                        status: up
+                        response_time_ms: 120
+                degraded:
+                  summary: Some services degraded
+                  value:
+                    status: degraded
+                    version: "0.1.0"
+                    timestamp: "2025-10-18T14:30:00Z"
+                    checks:
+                      database:
+                        status: up
+                        response_time_ms: 5
+                      redis:
+                        status: down
+                        message: "Connection timeout"
+                      auth0:
+                        status: up
+                        response_time_ms: 120
         '503':
-          description: Service is unhealthy
+          description: System is unhealthy
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
 
-  /api/v1/user/profile:
+  /user/profile:
     get:
+      summary: Get User Profile
+      description: Retrieve authenticated user's profile information
       operationId: getUserProfile
-      tags: [User]
-      summary: Get user profile
-      description: Retrieves the authenticated user's profile information
+      tags:
+        - User
       responses:
         '200':
-          description: User profile
+          description: User profile retrieved successfully
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/UserProfile'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
-  /api/v1/user/privacy:
+    put:
+      summary: Update User Profile
+      description: Update authenticated user's profile information
+      operationId: updateUserProfile
+      tags:
+        - User
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserProfile'
+      responses:
+        '200':
+          description: Profile updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /user/privacy:
     get:
+      summary: Get Privacy Settings
+      description: Retrieve user's GDPR privacy and consent settings
       operationId: getPrivacySettings
-      tags: [User]
-      summary: Get user privacy settings (GDPR)
-      description: Retrieves the user's privacy and consent settings
+      tags:
+        - Privacy
       responses:
         '200':
           description: Privacy settings
@@ -72,10 +150,11 @@ paths:
           $ref: '#/components/responses/Unauthorized'
 
     put:
+      summary: Update Privacy Settings
+      description: Update GDPR consent and privacy preferences
       operationId: updatePrivacySettings
-      tags: [User]
-      summary: Update privacy settings
-      description: Updates the user's privacy and consent settings
+      tags:
+        - Privacy
       requestBody:
         required: true
         content:
@@ -94,99 +173,315 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
-  /api/v1/user/data-export:
+  /user/data-export:
     post:
+      summary: Request Data Export
+      description: |
+        Request GDPR-compliant export of all user data.
+        Export will be processed asynchronously and download URL will be provided when ready.
       operationId: requestDataExport
-      tags: [User]
-      summary: Request GDPR data export
-      description: Initiates a data export request for GDPR compliance
+      tags:
+        - GDPR
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DataExportRequest'
       responses:
         '202':
-          description: Export request accepted
+          description: Export request accepted and being processed
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: Data export initiated
-                  export_id:
-                    type: string
-                    format: uuid
+                $ref: '#/components/schemas/DataExportResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '429':
+          description: Too many export requests (rate limited to 1 per day)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
-  /api/v1/user/delete:
-    delete:
-      operationId: deleteUserAccount
-      tags: [User]
-      summary: Delete user account (GDPR right to deletion)
-      description: Schedules user account for deletion (30-day grace period)
+  /user/data-export/{exportId}:
+    get:
+      summary: Get Data Export Status
+      description: Check status of data export request
+      operationId: getDataExportStatus
+      tags:
+        - GDPR
+      parameters:
+        - name: exportId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Export job ID from POST request
       responses:
-        '204':
-          description: Account deletion scheduled
+        '200':
+          description: Export status retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataExportResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Export not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /user/delete:
+    post:
+      summary: Request Account Deletion
+      description: |
+        Request permanent account deletion (GDPR Right to Erasure).
+        Account will be scheduled for deletion after 30-day grace period.
+        User can cancel deletion during grace period.
+      operationId: requestAccountDeletion
+      tags:
+        - GDPR
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountDeletionRequest'
+      responses:
+        '202':
+          description: Deletion request accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountDeletionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /user/delete/cancel:
+    post:
+      summary: Cancel Account Deletion
+      description: Cancel pending account deletion during 30-day grace period
+      operationId: cancelAccountDeletion
+      tags:
+        - GDPR
+      responses:
+        '200':
+          description: Deletion cancelled successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '400':
+          description: No pending deletion or grace period expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
 components:
   securitySchemes:
     auth0:
       type: oauth2
+      description: Auth0 OAuth2 authentication with JWT Bearer tokens
       flows:
-        implicit:
-          authorizationUrl: https://boostedbudget.auth0.com/authorize
+        authorizationCode:
+          authorizationUrl: https://{auth0Domain}/authorize
+          tokenUrl: https://{auth0Domain}/oauth/token
           scopes:
-            openid: OpenID
-            profile: User profile
-            email: User email
+            openid: OpenID Connect scope
+            profile: User profile information
+            email: User email address
 
   schemas:
     HealthResponse:
       type: object
-      required: [status, version, timestamp, checks]
+      required:
+        - status
+        - version
+        - timestamp
+        - checks
       properties:
         status:
           type: string
           enum: [healthy, degraded, unhealthy]
-          description: Overall system health status
+          description: Overall system health
         version:
           type: string
+          description: API version
           example: "0.1.0"
         timestamp:
           type: string
           format: date-time
+          description: Health check timestamp
         checks:
           type: object
           properties:
             database:
-              type: boolean
+              $ref: '#/components/schemas/ServiceCheck'
             redis:
-              type: boolean
+              $ref: '#/components/schemas/ServiceCheck'
+            auth0:
+              $ref: '#/components/schemas/ServiceCheck'
 
     UserProfile:
       type: object
-      required: [id, email, created_at, primary_region]
+      required:
+        - id
+        - auth0_user_id
+        - email
+        - subscription_tier
+        - subscription_status
+        - primary_region
+        - created_at
       properties:
         id:
           type: string
           format: uuid
-        auth0_id:
+          description: Unique user identifier
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        auth0_user_id:
           type: string
+          description: Auth0 user ID from JWT
+          example: "auth0|507f1f77bcf86cd799439011"
         email:
           type: string
           format: email
-        first_name:
+          description: User email address
+          example: "user@example.com"
+        email_verified:
+          type: boolean
+          description: Whether email has been verified
+          default: false
+        subscription_tier:
           type: string
-        last_name:
+          enum: [free, premium, premium_plus]
+          description: User subscription tier
+          example: "free"
+        subscription_status:
           type: string
+          enum: [active, cancelled, past_due, unpaid]
+          description: Subscription payment status
+          example: "active"
+        subscription_started_at:
+          type: string
+          format: date-time
+          description: When subscription started
+          example: "2025-10-18T14:30:00Z"
+        subscription_ends_at:
+          type: string
+          format: date-time
+          description: When subscription ends
+          example: "2026-10-18T14:30:00Z"
+        stripe_customer_id:
+          type: string
+          description: Stripe customer identifier
+          example: "cus_ABC123"
         primary_region:
           type: string
-          enum: [us-east-1]  # Future: eu-west-1, ap-southeast-1 (Phase 7+)
+          description: GDPR data residency region
+          enum: [us-east-1, eu-west-1, ap-southeast-1]
           default: us-east-1
-          description: Data residency region
-        subscription:
-          $ref: '#/components/schemas/Subscription'
+          example: "us-east-1"
+        is_active:
+          type: boolean
+          description: Whether user account is active
+          default: true
+        created_at:
+          type: string
+          format: date-time
+          description: Account creation timestamp
+          example: "2025-10-18T14:30:00Z"
+        updated_at:
+          type: string
+          format: date-time
+          description: Last update timestamp
+          example: "2025-10-18T15:45:00Z"
+        last_login_at:
+          type: string
+          format: date-time
+          description: Last successful login
+          example: "2025-10-18T16:20:00Z"
+
+    UpdateUserProfile:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          description: Update email address
+        primary_region:
+          type: string
+          description: Change data residency region (requires data migration)
+          enum: [us-east-1, eu-west-1, ap-southeast-1]
+
+    PrivacySettings:
+      type: object
+      required:
+        - id
+        - user_id
+        - gdpr_necessary_consent
+        - gdpr_analytics_consent
+        - gdpr_advertising_consent
+        - gdpr_consent_timestamp
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Privacy settings ID
+        user_id:
+          type: string
+          format: uuid
+          description: Associated user ID
+        gdpr_necessary_consent:
+          type: boolean
+          description: Necessary cookies (always true, required for app)
+          default: true
+        gdpr_analytics_consent:
+          type: boolean
+          description: Analytics cookies consent (Google Analytics)
+          default: false
+        gdpr_advertising_consent:
+          type: boolean
+          description: Advertising cookies consent (AdSense for free tier)
+          default: false
+        gdpr_consent_timestamp:
+          type: string
+          format: date-time
+          description: When consent was last updated
+        marketing_emails_enabled:
+          type: boolean
+          description: Marketing email opt-in
+          default: false
+        product_updates_enabled:
+          type: boolean
+          description: Product update emails
+          default: true
+        security_alerts_enabled:
+          type: boolean
+          description: Security alert emails
+          default: true
+        data_sharing_enabled:
+          type: boolean
+          description: Share anonymized data for product improvement
+          default: false
         created_at:
           type: string
           format: date-time
@@ -194,84 +489,213 @@ components:
           type: string
           format: date-time
 
-    Subscription:
+    UpdatePrivacySettings:
       type: object
       properties:
-        tier:
+        gdpr_analytics_consent:
+          type: boolean
+          description: Update analytics cookies consent
+        gdpr_advertising_consent:
+          type: boolean
+          description: Update advertising cookies consent
+        marketing_emails_enabled:
+          type: boolean
+          description: Update marketing email preference
+        product_updates_enabled:
+          type: boolean
+          description: Update product update email preference
+        security_alerts_enabled:
+          type: boolean
+          description: Update security alert email preference
+        data_sharing_enabled:
+          type: boolean
+          description: Update data sharing preference
+
+    DataExportRequest:
+      type: object
+      required:
+        - format
+      properties:
+        format:
           type: string
-          enum: [free, premium, premium_plus]
-          default: free
+          enum: [json, csv]
+          description: Export format
+          default: json
+        include_transactions:
+          type: boolean
+          description: Include transaction history
+          default: true
+        include_rules:
+          type: boolean
+          description: Include automation rules
+          default: true
+        include_audit_logs:
+          type: boolean
+          description: Include audit logs
+          default: false
+
+    DataExportResponse:
+      type: object
+      required:
+        - export_id
+        - status
+        - requested_at
+      properties:
+        export_id:
+          type: string
+          format: uuid
+          description: Export job ID
+        status:
+          type: string
+          enum: [pending, processing, completed, failed]
+          description: Export job status
+        requested_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        download_url:
+          type: string
+          format: uri
+          description: Temporary download URL (expires in 24h)
         expires_at:
           type: string
           format: date-time
+          description: When download URL expires
 
-    PrivacySettings:
+    AccountDeletionRequest:
       type: object
+      required:
+        - confirm
       properties:
-        user_id:
+        confirm:
+          type: boolean
+          description: Must be true to confirm deletion
+          example: true
+        reason:
           type: string
-          format: uuid
-        primary_region:
-          type: string
-          enum: [us-east-1]
-          default: us-east-1
-          readOnly: true  # Not user-editable in MVP
-        analytics_consent:
-          type: boolean
-          default: false
-        marketing_consent:
-          type: boolean
-          default: false
-        data_sharing_consent:
-          type: boolean
-          default: false
-        ad_personalization_consent:
-          type: boolean
-          default: false
-        consent_updated_at:
+          description: Optional reason for deletion
+          maxLength: 500
+
+    AccountDeletionResponse:
+      type: object
+      required:
+        - deletion_requested_at
+        - deletion_scheduled_at
+        - grace_period_days
+      properties:
+        deletion_requested_at:
           type: string
           format: date-time
+          description: When deletion was requested
+        deletion_scheduled_at:
+          type: string
+          format: date-time
+          description: When account will be permanently deleted
+        grace_period_days:
+          type: integer
+          description: Days until permanent deletion
+          example: 30
+        cancellation_url:
+          type: string
+          format: uri
+          description: URL to cancel deletion during grace period
 
-    PrivacySettingsUpdate:
+    ServiceCheck:
       type: object
+      required:
+        - status
       properties:
-        analytics_consent:
-          type: boolean
-        marketing_consent:
-          type: boolean
-        data_sharing_consent:
-          type: boolean
-        ad_personalization_consent:
-          type: boolean
+        status:
+          type: string
+          enum: [up, down, degraded]
+        message:
+          type: string
+          description: Additional status information
+        response_time_ms:
+          type: integer
+          description: Service response time in milliseconds
 
     Error:
       type: object
-      required: [error, message]
+      required:
+        - error
+        - message
       properties:
         error:
           type: string
+          description: Error code or type
+          example: "UNAUTHORIZED"
         message:
           type: string
+          description: Human-readable error message
+          example: "Missing or invalid authentication token"
         details:
           type: object
+          description: Additional error details
+        request_id:
+          type: string
+          format: uuid
+          description: Request correlation ID for debugging
 
   responses:
-    Unauthorized:
-      description: Unauthorized - invalid or missing authentication token
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-          example:
-            error: unauthorized
-            message: Invalid or missing authentication token
-
     BadRequest:
-      description: Bad Request - invalid input
+      description: Invalid request parameters
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
           example:
-            error: bad_request
-            message: Invalid request parameters
+            error: "BAD_REQUEST"
+            message: "Invalid email format"
+
+    Unauthorized:
+      description: Missing or invalid authentication token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "UNAUTHORIZED"
+            message: "Missing authorization header"
+
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "FORBIDDEN"
+            message: "Insufficient subscription tier for this operation"
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "NOT_FOUND"
+            message: "Resource not found"
+
+    InternalServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "INTERNAL_SERVER_ERROR"
+            message: "An unexpected error occurred"
+
+tags:
+  - name: System
+    description: System health and monitoring endpoints
+  - name: User
+    description: User profile management
+  - name: Privacy
+    description: Privacy settings and consent management
+  - name: GDPR
+    description: GDPR compliance endpoints (data export, account deletion)
