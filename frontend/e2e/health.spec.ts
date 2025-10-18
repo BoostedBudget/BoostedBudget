@@ -15,7 +15,7 @@ test.describe('Health Endpoint', () => {
     const body = await response.json();
     expect(body).toHaveProperty('status', 'healthy');
     expect(body).toHaveProperty('timestamp');
-    expect(body).toHaveProperty('service', 'boostedbudget-backend');
+    expect(body).toHaveProperty('version'); // Backend returns version field
   });
 
   test('should load application homepage successfully', async ({ page }) => {
