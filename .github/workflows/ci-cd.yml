@@ -27,6 +27,8 @@ jobs:
   backend-test:
     name: Backend Tests
     runs-on: ubuntu-latest
+    # Skip tests on main pushes (already tested in PR)
+    if: github.event_name == 'pull_request'
 
     steps:
       - name: Checkout code
@@ -106,6 +108,8 @@ jobs:
   frontend-test:
     name: Frontend Tests
     runs-on: ubuntu-latest
+    # Skip tests on main pushes (already tested in PR)
+    if: github.event_name == 'pull_request'
 
     steps:
       - name: Checkout code
@@ -151,6 +155,8 @@ jobs:
     name: E2E Tests
     needs: backend-test
     runs-on: ubuntu-latest
+    # Skip tests on main pushes (already tested in PR)
+    if: github.event_name == 'pull_request'
 
     steps:
       - name: Checkout code
