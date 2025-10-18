@@ -161,6 +161,20 @@ cd backend && go test ./... -cover
 cd frontend && npm test
 ```
 
+### API Testing
+
+```bash
+# Validate OpenAPI spec
+npx @redocly/cli lint api/openapi.yaml
+
+# Run Prism mock server (test API without backend)
+npx @stoplight/prism-cli mock api/openapi.yaml --port 4010
+
+# Test mock endpoints
+curl http://localhost:4010/health
+curl -H "Authorization: Bearer mock-token" http://localhost:4010/user/profile
+```
+
 ## 📚 Documentation
 
 - **[Complete Plan](./boosted-budget-complete-plan.md)** - Full project roadmap (Phases 0-7+)
