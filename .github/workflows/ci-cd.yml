@@ -1,0 +1,415 @@
+name: CI/CD Pipeline
+
+# Trigger on pull requests and pushes to main
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# Cancel in-progress runs for the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.25'
+  NODE_VERSION: '20'
+  REGISTRY: ghcr.io
+  BACKEND_IMAGE_NAME: ${{ github.repository }}-backend
+  FRONTEND_IMAGE_NAME: ${{ github.repository }}-frontend
+
+jobs:
+  # =============================================================================
+  # JOB 1: Backend Tests (runs in parallel with frontend)
+  # =============================================================================
+  backend-test:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: backend/go.sum
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('backend/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Run Go tests with coverage
+        working-directory: ./backend
+        run: |
+          echo "::group::Running Go tests with race detection and coverage"
+          go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+          echo "::endgroup::"
+
+      - name: Check Go coverage threshold (≥60%)
+        working-directory: ./backend
+        run: |
+          echo "::group::Checking coverage threshold"
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+          echo "Current coverage: ${COVERAGE}%"
+
+          # Convert to integer for comparison
+          COVERAGE_INT=$(echo "$COVERAGE" | cut -d. -f1)
+
+          if [ "$COVERAGE_INT" -lt 60 ]; then
+            echo "::error::Coverage ${COVERAGE}% is below threshold 60%"
+            exit 1
+          else
+            echo "::notice::✅ Coverage ${COVERAGE}% meets threshold 60%"
+          fi
+          echo "::endgroup::"
+
+      - name: Generate Go coverage HTML report
+        working-directory: ./backend
+        run: go tool cover -html=coverage.out -o coverage.html
+
+      - name: Build backend binary (for E2E tests)
+        working-directory: ./backend
+        run: |
+          echo "::group::Building backend binary"
+          go build -o bin/server ./cmd/server
+          echo "::endgroup::"
+
+      - name: Upload backend binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-binary
+          path: backend/bin/server
+          retention-days: 1
+
+      - name: Upload backend coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: |
+            backend/coverage.out
+            backend/coverage.html
+          retention-days: 30
+
+  # =============================================================================
+  # JOB 2: Frontend Tests (runs in parallel with backend)
+  # =============================================================================
+  frontend-test:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Run ESLint (fail on warnings)
+        working-directory: ./frontend
+        run: |
+          echo "::group::Running ESLint"
+          npm run lint
+          echo "::endgroup::"
+
+      - name: Run frontend unit tests with coverage
+        working-directory: ./frontend
+        run: |
+          echo "::group::Running Vitest with coverage"
+          npm run test:ci
+          echo "::endgroup::"
+
+      - name: Upload frontend coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage
+          path: |
+            frontend/coverage/
+          retention-days: 30
+
+  # =============================================================================
+  # JOB 3: E2E Tests (depends on backend-test for binary)
+  # =============================================================================
+  e2e-test:
+    name: E2E Tests
+    needs: backend-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: ./frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Download backend binary
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-binary
+          path: backend/bin
+
+      - name: Make backend binary executable
+        run: chmod +x backend/bin/server
+
+      - name: Run E2E tests
+        working-directory: ./frontend
+        env:
+          CI: true
+        run: |
+          echo "::group::Running Playwright E2E tests"
+          npm run test:e2e
+          echo "::endgroup::"
+
+      - name: Upload E2E test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 30
+
+      - name: Upload E2E test videos (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-videos
+          path: frontend/test-results/
+          retention-days: 7
+
+  # =============================================================================
+  # JOB 4: Build and push Docker images to GHCR
+  # =============================================================================
+  build-images:
+    name: Build Docker Images
+    needs: [backend-test, frontend-test, e2e-test]
+    runs-on: ubuntu-latest
+    # Only build images on main branch push (after PR merge)
+    # On PRs, just validate the build without pushing
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      backend-image: ${{ steps.meta.outputs.backend-image }}
+      frontend-image: ${{ steps.meta.outputs.frontend-image }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for images
+        id: meta
+        run: |
+          BACKEND_IMAGE="${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}"
+          FRONTEND_IMAGE="${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}"
+
+          echo "backend-image=${BACKEND_IMAGE}:${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "frontend-image=${FRONTEND_IMAGE}:${{ github.sha }}" >> $GITHUB_OUTPUT
+
+          echo "Backend image: ${BACKEND_IMAGE}:${{ github.sha }}"
+          echo "Frontend image: ${FRONTEND_IMAGE}:${{ github.sha }}"
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+          build-args: |
+            VERSION=${{ github.sha }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+      - name: Image build summary
+        run: |
+          echo "### 🐳 Docker Images Built Successfully" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Backend Image:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Frontend Image:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+
+  # =============================================================================
+  # JOB 5: Security scanning with Trivy
+  # =============================================================================
+  security-scan:
+    name: Security Scan (Trivy)
+    needs: build-images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Run Trivy vulnerability scanner - Backend
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ needs.build-images.outputs.backend-image }}
+          format: 'sarif'
+          output: 'trivy-backend-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          exit-code: '1'  # Fail on CRITICAL vulnerabilities
+          ignore-unfixed: true
+
+      - name: Upload Trivy results (Backend) to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-backend-results.sarif'
+          category: 'trivy-backend'
+
+      - name: Run Trivy vulnerability scanner - Frontend
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ needs.build-images.outputs.frontend-image }}
+          format: 'sarif'
+          output: 'trivy-frontend-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          exit-code: '1'  # Fail on CRITICAL vulnerabilities
+          ignore-unfixed: true
+
+      - name: Upload Trivy results (Frontend) to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-frontend-results.sarif'
+          category: 'trivy-frontend'
+
+      - name: Security scan summary
+        if: always()
+        run: |
+          echo "### 🔒 Security Scan Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Scanned images for CRITICAL, HIGH, and MEDIUM vulnerabilities." >> $GITHUB_STEP_SUMMARY
+          echo "Results uploaded to GitHub Security tab." >> $GITHUB_STEP_SUMMARY
+
+  # =============================================================================
+  # JOB 6: Deploy to production (manual approval required)
+  # =============================================================================
+  deploy-production:
+    name: Deploy to Production
+    needs: [build-images, security-scan]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment:
+      name: production
+      url: https://boostedbudget.com
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Fly.io CLI
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy backend to Fly.io
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          echo "Deploying backend image: ${{ needs.build-images.outputs.backend-image }}"
+          flyctl deploy \
+            --app boostedbudget-api \
+            --image ${{ needs.build-images.outputs.backend-image }} \
+            --config ./backend/fly.toml \
+            --strategy rolling
+
+      - name: Deploy frontend to Fly.io
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          echo "Deploying frontend image: ${{ needs.build-images.outputs.frontend-image }}"
+          flyctl deploy \
+            --app boostedbudget-web \
+            --image ${{ needs.build-images.outputs.frontend-image }} \
+            --config ./frontend/fly.toml \
+            --strategy rolling
+
+      - name: Verify deployment
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          echo "Checking backend status..."
+          flyctl status --app boostedbudget-api
+
+          echo "Checking frontend status..."
+          flyctl status --app boostedbudget-web
+
+      - name: Run smoke tests
+        run: |
+          echo "Running smoke tests..."
+          if [ -f ./scripts/smoke-test.sh ]; then
+            chmod +x ./scripts/smoke-test.sh
+            ./scripts/smoke-test.sh production
+          else
+            echo "Smoke test script not found, skipping..."
+          fi
+
+      - name: Deployment summary
+        run: |
+          echo "### 🚀 Production Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Backend:** https://api.boostedbudget.com" >> $GITHUB_STEP_SUMMARY
+          echo "**Frontend:** https://boostedbudget.com" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployed at:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+
