@@ -64,11 +64,23 @@ cd BoostedBudget
 
 ```bash
 cp .env.example .env
-# Edit .env and add your Auth0, Plaid, and Stripe credentials
+# Edit .env and add your credentials
 ```
 
-**Setting up Auth0**: Follow the comprehensive guide in [docs/AUTH0_SETUP.md](./docs/AUTH0_SETUP.md)
-**GitHub Secrets**: For CI/CD, see [docs/GITHUB_SECRETS_SETUP.md](./docs/GITHUB_SECRETS_SETUP.md)
+**Required Configuration**:
+- **Auth0**: Authentication (domain, client IDs, secrets) - See [docs/AUTH0_SETUP.md](./docs/AUTH0_SETUP.md)
+- **Database**: PostgreSQL connection string (auto-configured with Docker Compose)
+- **Redis**: Cache connection (auto-configured with Docker Compose)
+- **Plaid**: Financial account linking (client ID, secret) - [Get keys](https://dashboard.plaid.com/)
+- **Stripe**: Payment processing (publishable/secret keys, webhook secret) - [Get keys](https://dashboard.stripe.com/)
+- **AdSense**: Ad display for free tier (publisher ID) - [Sign up](https://www.google.com/adsense/)
+
+**Optional Configuration**:
+- **Email**: SMTP settings for notifications (SendGrid, Mailgun, AWS SES)
+- **Sentry**: Error tracking DSN
+- **Feature Flags**: Enable/disable features
+
+**For CI/CD**: See [docs/GITHUB_SECRETS_SETUP.md](./docs/GITHUB_SECRETS_SETUP.md)
 
 ### 3. Start Development Environment
 
