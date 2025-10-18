@@ -7,16 +7,34 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     setupFiles: './src/test/setup.ts',
+    // Only test files in src directory, exclude E2E tests
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    exclude: [
+      'node_modules/**',
+      'dist/**',
+      'e2e/**', // Exclude E2E tests - these run with Playwright
+      '**/*.config.*',
+    ],
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'json', 'html'],
+      reporter: ['text', 'json', 'html', 'lcov'],
       exclude: [
         'node_modules/',
         'src/test/',
         '**/*.d.ts',
         '**/*.config.*',
         '**/dist/',
+        '**/e2e/**',
+        '**/*.spec.ts',
       ],
+      // Coverage thresholds - CI will fail if below these values
+      // TODO: Gradually increase these thresholds as we add more tests
+      thresholds: {
+        lines: 25,
+        functions: 70,
+        branches: 80,
+        statements: 25,
+      },
     },
   },
 })
