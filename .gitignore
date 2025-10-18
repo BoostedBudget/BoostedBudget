@@ -298,3 +298,10 @@ buck-out/
 # End of https://www.toptal.com/developers/gitignore/api/go,react,reactnative,redis
 .env
 .mcp.json
+
+# BoostedBudget specific
+backend/bin/
+backend/tmp/
+frontend/dist/
+in-memoria.db
+.claude/
