@@ -10,7 +10,15 @@ import { acceptCookieConsent } from './helpers/auth';
  *
  * For CI/CD, these tests can be run against a dedicated test Auth0 tenant
  * with automated test user creation/cleanup.
+ *
+ * SKIPPED IN CI: These tests are skipped when Auth0 credentials are not configured.
+ * Configure VITE_AUTH0_DOMAIN, VITE_AUTH0_CLIENT_ID, and test credentials to enable.
  */
+
+// Skip all Auth0 tests if Auth0 is not configured
+const skipAuth0Tests = !process.env.VITE_AUTH0_DOMAIN || !process.env.VITE_AUTH0_CLIENT_ID;
+
+test.describe.configure({ mode: skipAuth0Tests ? 'skip' : 'parallel' });
 
 test.describe('Auth0 Authentication', () => {
   const testEmail = process.env.TEST_AUTH0_EMAIL || 'test@example.com';
