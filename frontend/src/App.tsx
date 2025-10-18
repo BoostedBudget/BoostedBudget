@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react'
+import { CookiesProvider } from 'react-cookie'
+import { CookieConsent, initializeAdSense, type CookieConsentSettings } from './privacy'
 import './App.css'
 
 interface HealthCheck {
@@ -28,50 +30,80 @@ function App() {
       })
   }, [])
 
+  // Handle cookie consent changes
+  const handleConsentChange = (consents: CookieConsentSettings) => {
+    console.log('Cookie consents updated:', consents)
+
+    // Initialize AdSense if advertising consent is given
+    // and user is on free tier (TODO: check subscription when auth is implemented)
+    if (consents.advertising) {
+      const adsenseClientId = import.meta.env.VITE_ADSENSE_CLIENT_ID
+      if (adsenseClientId) {
+        initializeAdSense({
+          clientId: adsenseClientId,
+          testMode: import.meta.env.DEV,
+        })
+      } else {
+        console.warn('AdSense client ID not configured')
+      }
+    }
+
+    // TODO: Initialize Google Analytics if analytics consent is given
+    // if (consents.analytics) {
+    //   initializeAnalytics()
+    // }
+  }
+
   return (
-    <div className="app">
-      <header className="app-header">
-        <h1>🚀 BoostedBudget</h1>
-        <p>Supercharge your finances with intelligent automation</p>
-      </header>
+    <CookiesProvider>
+      <div className="app">
+        <header className="app-header">
+          <h1>🚀 BoostedBudget</h1>
+          <p>Supercharge your finances with intelligent automation</p>
+        </header>
 
-      <main className="app-main">
-        <section className="health-check">
-          <h2>System Status</h2>
-          {loading ? (
-            <p>Loading...</p>
-          ) : health ? (
-            <div className="health-status">
-              <p className={`status status-${health.status}`}>
-                Status: {health.status.toUpperCase()}
-              </p>
-              <p>Version: {health.version}</p>
-              <p>Region: us-east-1 (MVP)</p>
-              <div className="checks">
-                <p>Database: {health.checks.database ? '✅' : '❌'}</p>
-                <p>Redis: {health.checks.redis ? '✅' : '❌'}</p>
+        <main className="app-main">
+          <section className="health-check">
+            <h2>System Status</h2>
+            {loading ? (
+              <p>Loading...</p>
+            ) : health ? (
+              <div className="health-status">
+                <p className={`status status-${health.status}`}>
+                  Status: {health.status.toUpperCase()}
+                </p>
+                <p>Version: {health.version}</p>
+                <p>Region: us-east-1 (MVP)</p>
+                <div className="checks">
+                  <p>Database: {health.checks.database ? '✅' : '❌'}</p>
+                  <p>Redis: {health.checks.redis ? '✅' : '❌'}</p>
+                </div>
               </div>
-            </div>
-          ) : (
-            <p className="error">Failed to load system status</p>
-          )}
-        </section>
+            ) : (
+              <p className="error">Failed to load system status</p>
+            )}
+          </section>
 
-        <section className="info">
-          <h2>Phase 0: Foundation</h2>
-          <p>✅ Backend API with health endpoint</p>
-          <p>✅ OpenAPI specification</p>
-          <p>✅ Frontend skeleton (React + TypeScript + Vite)</p>
-          <p>⏳ Auth0 integration (coming next)</p>
-          <p>⏳ Database & migrations (coming next)</p>
-          <p>⏳ Docker development environment (coming next)</p>
-        </section>
-      </main>
+          <section className="info">
+            <h2>Phase 0: Foundation</h2>
+            <p>✅ Backend API with health endpoint</p>
+            <p>✅ OpenAPI specification</p>
+            <p>✅ Frontend skeleton (React + TypeScript + Vite)</p>
+            <p>✅ GDPR Cookie Consent</p>
+            <p>⏳ Auth0 integration (coming next)</p>
+            <p>⏳ Database & migrations (coming next)</p>
+            <p>⏳ Docker development environment (coming next)</p>
+          </section>
+        </main>
 
-      <footer className="app-footer">
-        <p>BoostedBudget © 2025 | GDPR Compliant | Single Region MVP (us-east-1)</p>
-      </footer>
-    </div>
+        <footer className="app-footer">
+          <p>BoostedBudget © 2025 | GDPR Compliant | Single Region MVP (us-east-1)</p>
+        </footer>
+
+        {/* Cookie Consent Banner */}
+        <CookieConsent onConsentChange={handleConsentChange} />
+      </div>
+    </CookiesProvider>
   )
 }
 
