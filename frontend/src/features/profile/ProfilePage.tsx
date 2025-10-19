@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { SubscriptionCard } from './components/SubscriptionCard'
 import { fetchProfile, updateProfile } from './api/profileApi'
 import { VALID_REGIONS } from './types'
-import { getRegionDisplay, REGIONS } from '../../config/regions'
+import { getRegionDisplay } from '../../config/regions'
 import type { User, UpdateProfileRequest } from './types'
 import './ProfilePage.css'
 
