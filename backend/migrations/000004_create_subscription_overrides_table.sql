@@ -1,7 +1,3 @@
--- Create user_subscription_overrides table for custom tier limits
--- Used for: enterprise deals, add-on purchases, promotional upgrades
--- Allows per-user custom limits that override base tier limits
-
 CREATE TABLE IF NOT EXISTS user_subscription_overrides (
     id BIGSERIAL PRIMARY KEY,
     user_id UUID NOT NULL,
@@ -20,15 +16,12 @@ CREATE TABLE IF NOT EXISTS user_subscription_overrides (
     CONSTRAINT unique_user_resource_override
         UNIQUE (user_id, resource_type)
 );
-
 -- Indexes for performance
 CREATE INDEX idx_user_subscription_overrides_user_id
     ON user_subscription_overrides(user_id);
-
 CREATE INDEX idx_user_subscription_overrides_expires_at
     ON user_subscription_overrides(expires_at)
     WHERE expires_at IS NOT NULL;
-
 -- Comments for documentation
 COMMENT ON TABLE user_subscription_overrides IS 'Custom subscription limits per user for enterprise deals, add-ons, and promotions';
 COMMENT ON COLUMN user_subscription_overrides.resource_type IS 'Type of resource: accounts, rules, executions_per_day, api_calls_per_month, data_export_requests_per_month';

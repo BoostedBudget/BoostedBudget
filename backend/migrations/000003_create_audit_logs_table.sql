@@ -1,6 +1,3 @@
--- Create audit_logs table for GDPR compliance and security
--- Migration: 000003_create_audit_logs_table.up.sql
-
 CREATE TABLE IF NOT EXISTS audit_logs (
     -- Primary key
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -42,7 +39,6 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     -- Constraints
     CONSTRAINT valid_status CHECK (status IN ('success', 'failure', 'error'))
 );
-
 -- Indexes for common queries
 CREATE INDEX idx_audit_logs_user_id ON audit_logs(user_id);
 CREATE INDEX idx_audit_logs_action ON audit_logs(action);
@@ -50,13 +46,10 @@ CREATE INDEX idx_audit_logs_resource_type ON audit_logs(resource_type);
 CREATE INDEX idx_audit_logs_resource_id ON audit_logs(resource_id);
 CREATE INDEX idx_audit_logs_created_at ON audit_logs(created_at DESC);
 CREATE INDEX idx_audit_logs_status ON audit_logs(status) WHERE status != 'success';
-
 -- Composite index for user activity timeline
 CREATE INDEX idx_audit_logs_user_timeline ON audit_logs(user_id, created_at DESC);
-
 -- Composite index for resource history
 CREATE INDEX idx_audit_logs_resource_history ON audit_logs(resource_type, resource_id, created_at DESC);
-
 -- Comments
 COMMENT ON TABLE audit_logs IS 'GDPR-compliant audit trail of all data access and modifications';
 COMMENT ON COLUMN audit_logs.action IS 'Action performed (e.g., user.created, data.exported)';
