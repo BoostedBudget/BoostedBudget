@@ -33,9 +33,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Atlas for database migrations
-RUN ATLAS_VERSION=v0.37.1 && \
-    ATLAS_ARCH=linux-amd64 && \
-    curl -sSfL "https://release.ariga.io/atlas/atlas-${ATLAS_ARCH}-${ATLAS_VERSION}" -o /usr/local/bin/atlas && \
+# Using -latest to get the most recent stable version
+RUN curl -sSfL "https://release.ariga.io/atlas/atlas-linux-amd64-latest" -o /usr/local/bin/atlas && \
     chmod +x /usr/local/bin/atlas
 
 WORKDIR /app
