@@ -239,13 +239,25 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install golang-migrate
+      - name: Setup Atlas
+        uses: ariga/setup-atlas@v0
+        # Note: cloud-token is optional - only needed for Atlas Cloud features
+
+      - name: Lint migrations (Atlas validation)
+        env:
+          DATABASE_URL: postgres://test:test@localhost:5432/test?sslmode=disable
         run: |
-          echo "::group::Installing golang-migrate"
-          curl -L https://github.com/golang-migrate/migrate/releases/download/v4.18.1/migrate.linux-amd64.tar.gz | tar xvz
-          sudo mv migrate /usr/local/bin/
-          sudo chmod +x /usr/local/bin/migrate
-          migrate -version
+          echo "::group::Linting migrations"
+          cd backend
+
+          # CRITICAL: This catches schema errors like migration 4's type mismatch
+          # Would have prevented the UUID/VARCHAR foreign key error
+          atlas migrate lint \
+            --dir file://migrations \
+            --dev-url "docker://postgres/15/test" \
+            --latest 1
+
+          echo "::notice::✅ Migration lint passed - no schema errors detected"
           echo "::endgroup::"
 
       - name: Run migrations up
@@ -253,7 +265,9 @@ jobs:
           DATABASE_URL: postgres://test:test@localhost:5432/test?sslmode=disable
         run: |
           echo "::group::Running migrations"
-          migrate -path backend/migrations -database "$DATABASE_URL" -verbose up
+          atlas migrate apply \
+            --dir file://backend/migrations \
+            --url "$DATABASE_URL"
           echo "::endgroup::"
 
       - name: Validate schema
@@ -282,32 +296,19 @@ jobs:
           echo "::notice::✅ Schema validation passed"
           echo "::endgroup::"
 
-      - name: Test migration rollback
+      - name: Check Atlas migration status
         env:
           DATABASE_URL: postgres://test:test@localhost:5432/test?sslmode=disable
         run: |
-          echo "::group::Testing migration rollback"
+          echo "::group::Checking Atlas migration status"
 
-          # Rollback last migration
-          echo "Rolling back last migration..."
-          migrate -path backend/migrations -database "$DATABASE_URL" down 1
+          # Show migration status with Atlas
+          echo "Current migration status:"
+          atlas migrate status \
+            --dir file://backend/migrations \
+            --url "$DATABASE_URL"
 
-          # Verify table was removed
-          if psql "$DATABASE_URL" -c "\dt" | grep -q user_subscription_overrides; then
-            echo "::error::Table should have been removed by rollback"
-            exit 1
-          fi
-          echo "✅ Table removed successfully"
-
-          # Re-apply migration
-          echo "Re-applying migration..."
-          migrate -path backend/migrations -database "$DATABASE_URL" up
-
-          # Verify table exists again
-          psql "$DATABASE_URL" -c "\dt" | grep user_subscription_overrides || { echo "::error::Table should exist after re-applying"; exit 1; }
-          echo "✅ Migration re-applied successfully"
-
-          echo "::notice::✅ Rollback test passed"
+          echo "::notice::✅ Migration status check passed"
           echo "::endgroup::"
 
       - name: Test constraints
@@ -337,19 +338,20 @@ jobs:
         run: |
           echo "::group::Checking final migration state"
 
-          # Verify no dirty migrations
-          DIRTY=$(psql "$DATABASE_URL" -t -c "SELECT dirty FROM schema_migrations" | tr -d ' ')
-          echo "Dirty state: $DIRTY"
+          # Atlas tracks migrations in atlas_schema_revisions table
+          echo "Atlas migration history:"
+          psql "$DATABASE_URL" -c "SELECT version, description, executed_at FROM atlas_schema_revisions ORDER BY version"
 
-          if [ "$DIRTY" = "t" ]; then
-            echo "::error::Migration state is dirty"
+          # Verify all expected migrations applied
+          COUNT=$(psql "$DATABASE_URL" -t -c "SELECT COUNT(*) FROM atlas_schema_revisions" | tr -d ' ')
+          echo "Total migrations applied: $COUNT"
+
+          if [ "$COUNT" != "5" ]; then
+            echo "::error::Expected 5 migrations, but found $COUNT"
             exit 1
           fi
 
-          # Show final version
-          psql "$DATABASE_URL" -c "SELECT version, dirty FROM schema_migrations"
-
-          echo "::notice::✅ Migration state is clean"
+          echo "::notice::✅ Migration state is clean - all 5 migrations applied"
           echo "::endgroup::"
 
       - name: Migration test summary

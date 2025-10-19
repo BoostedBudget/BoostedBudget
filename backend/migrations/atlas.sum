@@ -1,0 +1,11 @@
+h1:cMTuzkXudFV4yJnro5FbZlu9F+WnDcrB4Rske0z/gxE=
+000001_create_users_table.down.sql h1:vH0SPVuqhvBVhF5P6rRN/feJCCWHqiM/w/cG7NvODvQ=
+000001_create_users_table.up.sql h1:CoTpKoF23/iPQmGkC9CUYVEXxH+J0PYVKMfIYeqfv1M=
+000002_create_privacy_settings_table.down.sql h1:Q32pVcT+BGbF4IpSYNGed4GjWzVLs1HRRc5z4XiI/Bs=
+000002_create_privacy_settings_table.up.sql h1:pv0MxlpAO6mKekw4diABmdd1Enfd+irZxIBrnHVQoP8=
+000003_create_audit_logs_table.down.sql h1:ehO11v/cE8JI+PybmYLiRM74eTQ5vtq0yvieEGihjM0=
+000003_create_audit_logs_table.up.sql h1:p35DqJoOHbG0cDrqhldXicPaCyC1uIG1ylnrfe4GUQg=
+000004_create_subscription_overrides_table.down.sql h1:cqu33jeK+QZ49xO+J63meqaPa5zZ2aFnNRcbuDdxINU=
+000004_create_subscription_overrides_table.up.sql h1:sSX1Sq1g4Gvjz8AwSDGY7uXBZiOkkJxI/aQqKbpJqHU=
+000005_migrate_region_codes.down.sql h1:ZoPp3Eys+MC5Da2yaJQargbTPsOZZN/pA0CMOEDxork=
+000005_migrate_region_codes.up.sql h1:buQdYA63c9y8loZ1MzwSh4XA8V2l3Za69/8zi75RWf4=
