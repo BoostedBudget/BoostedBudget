@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom'
+import { Routes, Route, Link } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
 import { CookiesProvider } from 'react-cookie'
 import { CookieConsent, initializeAdSense, type CookieConsentSettings } from './privacy'
@@ -99,61 +99,59 @@ function App() {
 
   return (
     <CookiesProvider>
-      <Router>
-        <div className="app">
-          <header className="app-header">
-            <div>
-              <h1>🚀 BoostedBudget</h1>
-              <p>Supercharge your finances with intelligent automation</p>
-            </div>
-            <nav className="main-nav">
-              <Link to="/">Home</Link>
-              {isAuthenticated && <Link to="/profile">Profile</Link>}
-            </nav>
-            <div className="auth-section">
-              {isAuthenticated ? (
-                <div className="user-profile">
-                  {user?.picture && (
-                    <img
-                      src={user.picture}
-                      alt={user.name || 'User'}
-                      className="user-avatar"
-                    />
-                  )}
-                  <div className="user-info">
-                    <p className="user-name">{user?.name}</p>
-                    <p className="user-email">{user?.email}</p>
-                  </div>
-                  <LogoutButton className="btn-auth" />
+      <div className="app">
+        <header className="app-header">
+          <div>
+            <h1>🚀 BoostedBudget</h1>
+            <p>Supercharge your finances with intelligent automation</p>
+          </div>
+          <nav className="main-nav">
+            <Link to="/">Home</Link>
+            {isAuthenticated && <Link to="/profile">Profile</Link>}
+          </nav>
+          <div className="auth-section">
+            {isAuthenticated ? (
+              <div className="user-profile">
+                {user?.picture && (
+                  <img
+                    src={user.picture}
+                    alt={user.name || 'User'}
+                    className="user-avatar"
+                  />
+                )}
+                <div className="user-info">
+                  <p className="user-name">{user?.name}</p>
+                  <p className="user-email">{user?.email}</p>
                 </div>
-              ) : (
-                <LoginButton className="btn-auth" />
-              )}
-            </div>
-          </header>
+                <LogoutButton className="btn-auth" />
+              </div>
+            ) : (
+              <LoginButton className="btn-auth" />
+            )}
+          </div>
+        </header>
 
-          <main className="app-main">
-            <Routes>
-              <Route path="/" element={<HomePage />} />
-              <Route
-                path="/profile"
-                element={
-                  <ProtectedRoute>
-                    <ProfilePage />
-                  </ProtectedRoute>
-                }
-              />
-            </Routes>
-          </main>
+        <main className="app-main">
+          <Routes>
+            <Route path="/" element={<HomePage />} />
+            <Route
+              path="/profile"
+              element={
+                <ProtectedRoute>
+                  <ProfilePage />
+                </ProtectedRoute>
+              }
+            />
+          </Routes>
+        </main>
 
-          <footer className="app-footer">
-            <p>BoostedBudget © 2025 | GDPR Compliant | Single Region MVP (us-east-1)</p>
-          </footer>
+        <footer className="app-footer">
+          <p>BoostedBudget © 2025 | GDPR Compliant | Single Region MVP (us-east-1)</p>
+        </footer>
+      </div>
 
-          {/* Cookie Consent Banner */}
-          <CookieConsent onConsentChange={handleConsentChange} />
-        </div>
-      </Router>
+      {/* Cookie Consent Banner */}
+      <CookieConsent onConsentChange={handleConsentChange} />
     </CookiesProvider>
   )
 }
