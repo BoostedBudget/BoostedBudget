@@ -151,7 +151,7 @@ fi
 
 # Test 5: Frontend serves HTML
 response=$(curl -s "$WEB_URL" --max-time 10 || echo "")
-if echo "$response" | grep -q "<!DOCTYPE html"; then
+if echo "$response" | grep -iFq "<!doctype html"; then
   print_test "pass" "Frontend serves valid HTML"
 else
   print_test "fail" "Frontend does not serve valid HTML"
