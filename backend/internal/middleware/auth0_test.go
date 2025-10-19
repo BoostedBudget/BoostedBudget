@@ -1,6 +1,11 @@
 package middleware
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"encoding/base64"
+	"encoding/json"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,21 +15,79 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+// Test RSA key pair - generated once for all tests
+var (
+	testPrivateKey *rsa.PrivateKey
+	testPublicKey  *rsa.PublicKey
+	testKid        = "test-key-id-123"
+)
+
+func init() {
+	// Generate test RSA key pair
+	var err error
+	testPrivateKey, err = rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		panic("Failed to generate test RSA key: " + err.Error())
+	}
+	testPublicKey = &testPrivateKey.PublicKey
+}
+
+// setupMockJWKS creates a mock JWKS HTTP server for testing
+func setupMockJWKS(t *testing.T) *httptest.Server {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/.well-known/jwks.json" {
+			http.NotFound(w, r)
+			return
+		}
+
+		// Convert public key to JWK format
+		n := base64.RawURLEncoding.EncodeToString(testPublicKey.N.Bytes())
+		e := base64.RawURLEncoding.EncodeToString(big.NewInt(int64(testPublicKey.E)).Bytes())
+
+		jwks := JWKS{
+			Keys: []JSONWebKey{
+				{
+					Kty: "RSA",
+					Use: "sig",
+					Kid: testKid,
+					N:   n,
+					E:   e,
+				},
+			},
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(jwks)
+	}))
+
+	// Clear cache before each test to ensure fresh JWKS fetch
+	cache.mu.Lock()
+	cache.keys = make(map[string]*rsa.PublicKey)
+	cache.expiresAt = time.Time{}
+	cache.mu.Unlock()
+
+	return server
+}
+
 // TestAuth0Middleware_ValidToken tests that a valid JWT token is accepted
 // RED: This test will fail until we implement the middleware
 func TestAuth0Middleware_ValidToken(t *testing.T) {
+	// Setup mock JWKS server
+	jwksServer := setupMockJWKS(t)
+	defer jwksServer.Close()
+
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 
 	// Create a valid test JWT token
-	token := createTestToken(t, "auth0|123456", "user@example.com")
+	token := createTestToken(t, "auth0|123456", "user@example.com", jwksServer.URL)
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	// Create middleware
-	middleware := Auth0Middleware("https://test-tenant.auth0.com/", "https://api.test.com")
+	// Create middleware with mock issuer
+	middleware := Auth0Middleware(jwksServer.URL+"/", "https://api.test.com")
 
 	// Define a test handler that checks if user_id is in context
 	handler := func(c echo.Context) error {
@@ -86,17 +149,21 @@ func TestAuth0Middleware_InvalidToken(t *testing.T) {
 // TestAuth0Middleware_ExpiredToken tests that an expired JWT token is rejected
 // RED: This test will fail until we implement the middleware
 func TestAuth0Middleware_ExpiredToken(t *testing.T) {
+	// Setup mock JWKS server (needed to verify signature even though token is expired)
+	jwksServer := setupMockJWKS(t)
+	defer jwksServer.Close()
+
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 
 	// Create an expired token (expired 1 hour ago)
-	token := createExpiredTestToken(t, "auth0|123456", "user@example.com")
+	token := createExpiredTestToken(t, "auth0|123456", "user@example.com", jwksServer.URL)
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	middleware := Auth0Middleware("https://test-tenant.auth0.com/", "https://api.test.com")
+	middleware := Auth0Middleware(jwksServer.URL+"/", "https://api.test.com")
 
 	handler := func(c echo.Context) error {
 		t.Error("Handler should not be called with expired token")
@@ -148,6 +215,10 @@ func TestAuth0Middleware_MissingAuthHeader(t *testing.T) {
 // TestAuth0Middleware_CustomClaimsExtraction tests that custom claims are extracted correctly
 // RED: This test will fail until we implement the middleware
 func TestAuth0Middleware_CustomClaimsExtraction(t *testing.T) {
+	// Setup mock JWKS server
+	jwksServer := setupMockJWKS(t)
+	defer jwksServer.Close()
+
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 
@@ -155,13 +226,13 @@ func TestAuth0Middleware_CustomClaimsExtraction(t *testing.T) {
 	token := createTestTokenWithClaims(t, "auth0|123456", map[string]interface{}{
 		"https://boostedbudget.com/subscription_tier": "premium",
 		"https://boostedbudget.com/primary_region":    "us-east-1",
-	})
+	}, jwksServer.URL)
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	middleware := Auth0Middleware("https://test-tenant.auth0.com/", "https://api.test.com")
+	middleware := Auth0Middleware(jwksServer.URL+"/", "https://api.test.com")
 
 	handler := func(c echo.Context) error {
 		// Check if custom claims are available in context
@@ -193,18 +264,21 @@ func TestAuth0Middleware_CustomClaimsExtraction(t *testing.T) {
 }
 
 // Helper function to create a valid test JWT token
-func createTestToken(t *testing.T, userID, email string) string {
+func createTestToken(t *testing.T, userID, email, issuer string) string {
 	claims := jwt.MapClaims{
 		"sub":   userID,
 		"email": email,
-		"iss":   "https://test-tenant.auth0.com/",
+		"iss":   issuer + "/",
 		"aud":   "https://api.test.com",
 		"iat":   time.Now().Unix(),
 		"exp":   time.Now().Add(24 * time.Hour).Unix(),
 	}
 
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, err := token.SignedString([]byte("test-secret-key"))
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	// Set kid header
+	token.Header["kid"] = testKid
+
+	tokenString, err := token.SignedString(testPrivateKey)
 	if err != nil {
 		t.Fatalf("Failed to create test token: %v", err)
 	}
@@ -213,10 +287,10 @@ func createTestToken(t *testing.T, userID, email string) string {
 }
 
 // Helper function to create a test JWT token with custom claims
-func createTestTokenWithClaims(t *testing.T, userID string, customClaims map[string]interface{}) string {
+func createTestTokenWithClaims(t *testing.T, userID string, customClaims map[string]interface{}, issuer string) string {
 	claims := jwt.MapClaims{
 		"sub": userID,
-		"iss": "https://test-tenant.auth0.com/",
+		"iss": issuer + "/",
 		"aud": "https://api.test.com",
 		"iat": time.Now().Unix(),
 		"exp": time.Now().Add(24 * time.Hour).Unix(),
@@ -227,8 +301,11 @@ func createTestTokenWithClaims(t *testing.T, userID string, customClaims map[str
 		claims[key] = value
 	}
 
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, err := token.SignedString([]byte("test-secret-key"))
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	// Set kid header
+	token.Header["kid"] = testKid
+
+	tokenString, err := token.SignedString(testPrivateKey)
 	if err != nil {
 		t.Fatalf("Failed to create test token: %v", err)
 	}
@@ -237,18 +314,21 @@ func createTestTokenWithClaims(t *testing.T, userID string, customClaims map[str
 }
 
 // Helper function to create an expired test JWT token
-func createExpiredTestToken(t *testing.T, userID, email string) string {
+func createExpiredTestToken(t *testing.T, userID, email, issuer string) string {
 	claims := jwt.MapClaims{
 		"sub":   userID,
 		"email": email,
-		"iss":   "https://test-tenant.auth0.com/",
+		"iss":   issuer + "/",
 		"aud":   "https://api.test.com",
 		"iat":   time.Now().Add(-2 * time.Hour).Unix(),
 		"exp":   time.Now().Add(-1 * time.Hour).Unix(), // Expired 1 hour ago
 	}
 
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, err := token.SignedString([]byte("test-secret-key"))
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	// Set kid header
+	token.Header["kid"] = testKid
+
+	tokenString, err := token.SignedString(testPrivateKey)
 	if err != nil {
 		t.Fatalf("Failed to create expired token: %v", err)
 	}
