@@ -1,11 +1,6 @@
-h1:cMTuzkXudFV4yJnro5FbZlu9F+WnDcrB4Rske0z/gxE=
-000001_create_users_table.down.sql h1:vH0SPVuqhvBVhF5P6rRN/feJCCWHqiM/w/cG7NvODvQ=
-000001_create_users_table.up.sql h1:CoTpKoF23/iPQmGkC9CUYVEXxH+J0PYVKMfIYeqfv1M=
-000002_create_privacy_settings_table.down.sql h1:Q32pVcT+BGbF4IpSYNGed4GjWzVLs1HRRc5z4XiI/Bs=
-000002_create_privacy_settings_table.up.sql h1:pv0MxlpAO6mKekw4diABmdd1Enfd+irZxIBrnHVQoP8=
-000003_create_audit_logs_table.down.sql h1:ehO11v/cE8JI+PybmYLiRM74eTQ5vtq0yvieEGihjM0=
-000003_create_audit_logs_table.up.sql h1:p35DqJoOHbG0cDrqhldXicPaCyC1uIG1ylnrfe4GUQg=
-000004_create_subscription_overrides_table.down.sql h1:cqu33jeK+QZ49xO+J63meqaPa5zZ2aFnNRcbuDdxINU=
-000004_create_subscription_overrides_table.up.sql h1:sSX1Sq1g4Gvjz8AwSDGY7uXBZiOkkJxI/aQqKbpJqHU=
-000005_migrate_region_codes.down.sql h1:ZoPp3Eys+MC5Da2yaJQargbTPsOZZN/pA0CMOEDxork=
-000005_migrate_region_codes.up.sql h1:buQdYA63c9y8loZ1MzwSh4XA8V2l3Za69/8zi75RWf4=
+h1:NW1s5Y0EfS9H5P7B+lIwYj725d06GqAw9j2q+X4N8iI=
+000001_create_users_table.sql h1:0VjQyC14oyN9Kny/2ciS6P8NdrFlPvxB2a6NITGdu4M=
+000002_create_privacy_settings_table.sql h1:VbKbyVwZpVa23vIERVxrXeOBbLRbmIrqbyCnos/dN9E=
+000003_create_audit_logs_table.sql h1:LKmdHLVQH81RbVmDfQyhQh9PruT9T6Tgs3yPLeGjaIk=
+000004_create_subscription_overrides_table.sql h1:SuugVp0hvo3/V/gXmiizzr8p++6IJyqwpRYq6gU+C/s=
+000005_migrate_region_codes.sql h1:C4e0CReTMflkOTDyIfH7CrB0SNLGBw4Hlv2U4vsalvQ=
