@@ -9,7 +9,9 @@
 
 **Tiers**: Free (2 rules, 8 accounts, 1x/day, ads) | Premium Lite $4.99 (5 rules, 15 accounts, 2x/day) | Premium $9.99 (15 rules, 30 accounts, 6x/day) | Premium+ $19.99 (unlimited, every 10min, AI + API)
 
-**Stack**: React 19 + TS5 + Vite 7 | Go 1.25+ Echo/Gin | PostgreSQL 15 + Redis 7 | Auth0 + Plaid + Stripe + AdSense | Docker → GHCR → Fly.io
+**Stack**: React 19 + TS5 + Vite 7 | Go 1.25+ Echo/Gin | PostgreSQL 15 + Redis 7 | Atlas (migrations) | Auth0 + Plaid + Stripe + AdSense | Docker → GHCR → Fly.io
+
+**Database Migrations**: Atlas (versioned migrations) with schema linting, drift detection, and validation in CI/CD. See `backend/docs/atlas-migration-guide.md`
 
 **Architecture**: Single region (iad) MVP, multi-region Phase 7+, no money movement (suggestions only), future-ready `*InRegion` abstractions
 
@@ -214,8 +216,19 @@ npm run test:api
 
 **New migration**:
 ```bash
-migrate create -ext sql -dir backend/migrations -seq <name>
-make migrate-up
+# Manual approach (create SQL files)
+cd backend/migrations
+touch 000006_<name>.up.sql 000006_<name>.down.sql
+# Write SQL, then:
+cd .. && atlas migrate hash
+
+# ALWAYS lint before committing:
+atlas migrate lint --dir file://migrations --dev-url "docker://postgres/15/test" --latest 1
+
+# Test locally:
+atlas migrate apply --dir file://migrations --url "$DATABASE_URL"
+
+# See backend/docs/atlas-migration-guide.md for details
 ```
 
 **New rule type**:

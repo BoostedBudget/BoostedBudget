@@ -11,24 +11,27 @@ fi
 
 echo "Database URL configured"
 
-# Verify migrate tool is available
-if ! command -v migrate &> /dev/null; then
-  echo "ERROR: migrate tool not found in PATH"
+# Verify atlas tool is available
+if ! command -v atlas &> /dev/null; then
+  echo "ERROR: atlas tool not found in PATH"
   exit 1
 fi
 
-echo "Running database migrations..."
+echo "Running database migrations with Atlas..."
 
-# Run migrations
-# The -path flag specifies the directory containing migration files
-# The -database flag uses the DATABASE_URL environment variable
-# -verbose shows detailed output
-migrate -path /app/migrations -database "$DATABASE_URL" -verbose up
+# Run migrations using Atlas
+# --dir specifies the directory containing migration files
+# --url uses the DATABASE_URL environment variable
+# Atlas automatically detects and applies pending migrations
+atlas migrate apply \
+  --dir file:///app/migrations \
+  --url "$DATABASE_URL"
 
 if [ $? -eq 0 ]; then
   echo "✓ Migrations completed successfully"
 else
   echo "✗ Migration failed"
+  echo "Run 'atlas migrate status' for details"
   exit 1
 fi
 
