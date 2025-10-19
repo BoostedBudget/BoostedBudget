@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
+import { useAuth0 } from '@auth0/auth0-react'
 import { CookiesProvider } from 'react-cookie'
 import { CookieConsent, initializeAdSense, type CookieConsentSettings } from './privacy'
+import { LoginButton, LogoutButton } from './auth'
 import './App.css'
 
 interface HealthCheck {
@@ -14,6 +16,7 @@ interface HealthCheck {
 }
 
 function App() {
+  const { isAuthenticated, user } = useAuth0()
   const [health, setHealth] = useState<HealthCheck | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -58,8 +61,30 @@ function App() {
     <CookiesProvider>
       <div className="app">
         <header className="app-header">
-          <h1>🚀 BoostedBudget</h1>
-          <p>Supercharge your finances with intelligent automation</p>
+          <div>
+            <h1>🚀 BoostedBudget</h1>
+            <p>Supercharge your finances with intelligent automation</p>
+          </div>
+          <div className="auth-section">
+            {isAuthenticated ? (
+              <div className="user-profile">
+                {user?.picture && (
+                  <img
+                    src={user.picture}
+                    alt={user.name || 'User'}
+                    className="user-avatar"
+                  />
+                )}
+                <div className="user-info">
+                  <p className="user-name">{user?.name}</p>
+                  <p className="user-email">{user?.email}</p>
+                </div>
+                <LogoutButton className="btn-auth" />
+              </div>
+            ) : (
+              <LoginButton className="btn-auth" />
+            )}
+          </div>
         </header>
 
         <main className="app-main">
@@ -90,7 +115,7 @@ function App() {
             <p>✅ OpenAPI specification</p>
             <p>✅ Frontend skeleton (React + TypeScript + Vite)</p>
             <p>✅ GDPR Cookie Consent</p>
-            <p>⏳ Auth0 integration (coming next)</p>
+            <p>✅ Auth0 integration</p>
             <p>⏳ Database & migrations (coming next)</p>
             <p>⏳ Docker development environment (coming next)</p>
           </section>
