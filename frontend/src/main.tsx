@@ -42,7 +42,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       domain={auth0Domain || 'placeholder.auth0.com'}
       clientId={auth0ClientId || 'placeholder-client-id'}
       authorizationParams={{
-        redirect_uri: window.location.origin,
+        redirect_uri: `${window.location.origin}/callback`,
         audience: auth0Audience,
       }}
       useRefreshTokens={true}
