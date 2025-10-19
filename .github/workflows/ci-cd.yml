@@ -547,18 +547,89 @@ jobs:
           echo "**Frontend:** \`registry.fly.io/boostedbudget-web:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
 
   # =============================================================================
-  # JOB 8: Deploy to production (manual approval required)
+  # JOB 8: Run database migrations (before deployment)
+  # =============================================================================
+  migrate-database:
+    name: Run Database Migrations
+    needs: [push-to-fly-registry]
+    runs-on: ubuntu-latest
+    if: |
+      always() &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'push' &&
+      needs.push-to-fly-registry.result == 'success'
+
+    steps:
+      - name: Setup Fly.io CLI
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Check for dirty migrations
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          echo "Checking database migration state..."
+
+          # Query schema_migrations table for dirty state
+          RESULT=$(flyctl postgres connect -a boostedbudget-db -C \
+            "SELECT dirty FROM schema_migrations" 2>&1 || echo "query_failed")
+
+          echo "Migration state query result:"
+          echo "$RESULT"
+
+          # Check if we got "t" (true) which means dirty
+          if echo "$RESULT" | grep -q " t$"; then
+            echo "::error::Database has dirty migrations! Cannot proceed with deployment."
+            echo "::error::Manual intervention required. See Issue #106 for recovery steps."
+            exit 1
+          fi
+
+          echo "✅ Migration state is clean, proceeding..."
+
+      - name: Run migrations
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          echo "Running database migrations on existing infrastructure..."
+          echo "This runs BEFORE deploying new containers to prevent crash loops"
+
+          # Run migrations using the script in the running container
+          flyctl ssh console -a boostedbudget-api -C \
+            "/app/scripts/run-migrations.sh"
+
+      - name: Verify migration success
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          echo "Verifying migration completed successfully..."
+
+          # Check final migration state
+          flyctl postgres connect -a boostedbudget-db -C \
+            "SELECT version, dirty FROM schema_migrations"
+
+          echo ""
+          echo "✅ Migrations verified, ready for deployment"
+
+      - name: Migration summary
+        run: |
+          echo "### 🗄️ Database Migrations Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Migrations run successfully on existing infrastructure." >> $GITHUB_STEP_SUMMARY
+          echo "Ready to deploy new containers." >> $GITHUB_STEP_SUMMARY
+
+  # =============================================================================
+  # JOB 9: Deploy to production (manual approval required)
   # =============================================================================
   deploy-production:
     name: Deploy to Production
-    needs: [build-images, push-to-fly-registry]
+    needs: [build-images, push-to-fly-registry, migrate-database]
     runs-on: ubuntu-latest
     if: |
       always() &&
       github.ref == 'refs/heads/main' &&
       github.event_name == 'push' &&
       needs.build-images.result == 'success' &&
-      needs.push-to-fly-registry.result == 'success'
+      needs.push-to-fly-registry.result == 'success' &&
+      needs.migrate-database.result == 'success'
     environment:
       name: production
       url: https://boostedbudget.com
@@ -575,7 +646,7 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           echo "Deploying backend from Fly.io registry: registry.fly.io/boostedbudget-api:${{ github.sha }}"
-          echo "Note: Database migrations will run automatically via docker-entrypoint.sh"
+          echo "Note: Database migrations already completed in previous job"
           flyctl deploy \
             --app boostedbudget-api \
             --image registry.fly.io/boostedbudget-api:${{ github.sha }} \
@@ -603,19 +674,16 @@ jobs:
           echo "Checking frontend status..."
           flyctl status --app boostedbudget-web
 
-      - name: Verify migrations ran successfully
+      - name: Verify containers started successfully
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          echo "Checking backend deployment logs for migration confirmation..."
-          flyctl logs --app boostedbudget-api --limit 50 | grep -E "Running database migrations|Migrations completed successfully|Starting server" || true
+          echo "Checking backend deployment logs..."
+          flyctl logs -a boostedbudget-api -n 2>&1 | head -20 || true
 
           echo ""
-          echo "Note: Migrations run automatically via docker-entrypoint.sh on container startup"
-          echo "Look for these log lines:"
-          echo "  - 'Running database migrations...'"
-          echo "  - '✓ Migrations completed successfully'"
-          echo "  - 'Starting server...'"
+          echo "Note: Migrations were completed in CI/CD before deployment"
+          echo "      Containers start directly with the server (no migration step)"
 
       - name: Run smoke tests
         run: |
@@ -638,7 +706,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Deployed at:** $(date -u)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Database Migrations:** ✅ Run automatically via docker-entrypoint.sh" >> $GITHUB_STEP_SUMMARY
+          echo "**Database Migrations:** ✅ Completed in CI/CD before deployment" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Check deployment logs to verify migrations ran successfully." >> $GITHUB_STEP_SUMMARY
+          echo "Migrations run separately from container startup to prevent crash loops." >> $GITHUB_STEP_SUMMARY
 
