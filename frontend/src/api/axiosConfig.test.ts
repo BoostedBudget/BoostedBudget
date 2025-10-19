@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import axios from 'axios'
 import MockAdapter from 'axios-mock-adapter'
 import { setupAuthInterceptor, apiClient, getApiUrl } from './axiosConfig'
 
@@ -8,14 +7,14 @@ describe('Axios Auth Interceptor', () => {
 
   beforeEach(() => {
     // Clear all interceptors before each test
-    axios.interceptors.request.clear()
-    mock = new MockAdapter(axios)
+    apiClient.interceptors.request.clear()
+    mock = new MockAdapter(apiClient)
   })
 
   afterEach(() => {
     mock.restore()
     // Clear interceptors after each test
-    axios.interceptors.request.clear()
+    apiClient.interceptors.request.clear()
   })
 
   it('should add Authorization header when token is provided', async () => {
@@ -27,7 +26,7 @@ describe('Axios Auth Interceptor', () => {
       return [200, { success: true }]
     })
 
-    await axios.get('/api/test')
+    await apiClient.get('/api/test')
     expect(mockGetToken).toHaveBeenCalled()
   })
 
@@ -40,7 +39,7 @@ describe('Axios Auth Interceptor', () => {
       return [200, { success: true }]
     })
 
-    await axios.get('/api/test')
+    await apiClient.get('/api/test')
     expect(mockGetToken).toHaveBeenCalled()
   })
 
@@ -55,7 +54,7 @@ describe('Axios Auth Interceptor', () => {
       return [200, { success: true }]
     })
 
-    await axios.get('/api/test')
+    await apiClient.get('/api/test')
 
     expect(consoleSpy).toHaveBeenCalledWith(
       'Error getting access token:',
@@ -72,8 +71,8 @@ describe('Axios Auth Interceptor', () => {
     mock.onGet('/api/test1').reply(200, {})
     mock.onGet('/api/test2').reply(200, {})
 
-    await axios.get('/api/test1')
-    await axios.get('/api/test2')
+    await apiClient.get('/api/test1')
+    await apiClient.get('/api/test2')
 
     expect(mockGetToken).toHaveBeenCalledTimes(2)
   })
@@ -88,7 +87,7 @@ describe('Axios Auth Interceptor', () => {
       return [200, {}]
     })
 
-    await axios.get('/api/test', {
+    await apiClient.get('/api/test', {
       headers: {
         'X-Custom-Header': 'custom-value',
       },

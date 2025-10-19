@@ -25,12 +25,19 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # Stage 2: Runtime (Debian Bookworm Slim - Minimal but stable)
 FROM debian:bookworm-slim
 
-# Install runtime dependencies
+# Install runtime dependencies including golang-migrate
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     tzdata \
     && rm -rf /var/lib/apt/lists/*
+
+# Install golang-migrate
+RUN MIGRATE_VERSION=v4.18.1 && \
+    MIGRATE_ARCH=linux-amd64 && \
+    curl -L "https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.${MIGRATE_ARCH}.tar.gz" \
+    | tar xvz -C /usr/local/bin && \
+    chmod +x /usr/local/bin/migrate
 
 WORKDIR /app
 
@@ -40,8 +47,13 @@ COPY --from=builder /build/server /app/server
 # Copy migrations directory (if needed at runtime)
 COPY --from=builder /build/migrations /app/migrations
 
+# Copy startup script
+COPY --from=builder /build/scripts/docker-entrypoint.sh /app/docker-entrypoint.sh
+
 # Create non-root user for security
-RUN groupadd -g 1000 appuser && \
+# Note: We need curl access for the startup script, so install it before switching users
+RUN chmod +x /app/docker-entrypoint.sh && \
+    groupadd -g 1000 appuser && \
     useradd -r -u 1000 -g appuser appuser && \
     chown -R appuser:appuser /app
 
@@ -55,5 +67,5 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-# Run the application
-CMD ["/app/server"]
+# Run the application via startup script (handles migrations automatically)
+CMD ["/app/docker-entrypoint.sh"]

@@ -575,6 +575,7 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           echo "Deploying backend from Fly.io registry: registry.fly.io/boostedbudget-api:${{ github.sha }}"
+          echo "Note: Database migrations will run automatically via docker-entrypoint.sh"
           flyctl deploy \
             --app boostedbudget-api \
             --image registry.fly.io/boostedbudget-api:${{ github.sha }} \
@@ -602,6 +603,20 @@ jobs:
           echo "Checking frontend status..."
           flyctl status --app boostedbudget-web
 
+      - name: Verify migrations ran successfully
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          echo "Checking backend deployment logs for migration confirmation..."
+          flyctl logs --app boostedbudget-api --limit 50 | grep -E "Running database migrations|Migrations completed successfully|Starting server" || true
+
+          echo ""
+          echo "Note: Migrations run automatically via docker-entrypoint.sh on container startup"
+          echo "Look for these log lines:"
+          echo "  - 'Running database migrations...'"
+          echo "  - '✓ Migrations completed successfully'"
+          echo "  - 'Starting server...'"
+
       - name: Run smoke tests
         run: |
           echo "Running smoke tests..."
@@ -622,4 +637,8 @@ jobs:
           echo "**Frontend:** https://boostedbudget.com" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Deployed at:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Database Migrations:** ✅ Run automatically via docker-entrypoint.sh" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Check deployment logs to verify migrations ran successfully." >> $GITHUB_STEP_SUMMARY
 

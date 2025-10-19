@@ -14,11 +14,49 @@ Migrations are numbered sequentially with the format: `NNNNNN_description.{up|do
 
 ## Running Migrations
 
-### Prerequisites
+### Production (Fly.io) - Automated
+
+**Migrations run automatically on every deployment!**
+
+When you deploy to Fly.io, the `docker-entrypoint.sh` script:
+1. Checks for `DATABASE_URL` environment variable
+2. Runs `migrate -path /app/migrations -database "$DATABASE_URL" up`
+3. Applies any pending migrations
+4. Starts the backend server
+
+**Deployment flow:**
+```bash
+# Deploy backend (migrations run automatically)
+flyctl deploy --app boostedbudget-api
+
+# Check deployment logs to verify migrations
+flyctl logs --app boostedbudget-api
+
+# You should see:
+# Starting BoostedBudget Backend...
+# Database URL configured
+# Running database migrations...
+# ✓ Migrations completed successfully
+# Starting server...
+```
+
+**Manual migration on Fly.io (if needed):**
+```bash
+# Option 1: Via proxy
+flyctl mpg proxy  # Terminal 1
+DATABASE_URL="postgresql://fly-user:PASSWORD@localhost:16380/fly-db" make migrate-up  # Terminal 2
+
+# Option 2: Check migration status
+flyctl ssh console --app boostedbudget-api -C "migrate -path /app/migrations -database \$DATABASE_URL version"
+```
+
+### Local Development
+
+#### Prerequisites
 - Docker Compose must be running (`docker-compose up` or `make dev`)
 - PostgreSQL service must be healthy
 
-### Commands
+#### Commands
 
 ```bash
 # Apply all pending migrations

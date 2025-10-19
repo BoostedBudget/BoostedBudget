@@ -2,26 +2,6 @@ import axios from 'axios'
 
 type GetTokenFunction = () => Promise<string | null>
 
-export const setupAuthInterceptor = (getToken: GetTokenFunction) => {
-  // Add a request interceptor to add the Authorization header
-  axios.interceptors.request.use(
-    async (config) => {
-      try {
-        const token = await getToken()
-        if (token) {
-          config.headers.Authorization = `Bearer ${token}`
-        }
-      } catch (error) {
-        console.error('Error getting access token:', error)
-      }
-      return config
-    },
-    (error) => {
-      return Promise.reject(error)
-    }
-  )
-}
-
 /**
  * Get the API URL from runtime or build-time configuration
  * Priority: window.ENV (runtime) > import.meta.env (build-time) > '/api' (fallback)
@@ -49,3 +29,23 @@ export const apiClient = axios.create({
     'Content-Type': 'application/json',
   },
 })
+
+export const setupAuthInterceptor = (getToken: GetTokenFunction) => {
+  // Add a request interceptor to apiClient (not global axios)
+  apiClient.interceptors.request.use(
+    async (config) => {
+      try {
+        const token = await getToken()
+        if (token) {
+          config.headers.Authorization = `Bearer ${token}`
+        }
+      } catch (error) {
+        console.error('Error getting access token:', error)
+      }
+      return config
+    },
+    (error) => {
+      return Promise.reject(error)
+    }
+  )
+}

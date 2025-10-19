@@ -18,7 +18,8 @@ kill_timeout = 30
   ENABLE_METRICS = "true"
 
   # Auth0 configuration (non-sensitive)
-  AUTH0_DOMAIN = "boostedbudget.us.auth0.com"
+  # Using dev tenant for MVP - will migrate to production tenant later
+  AUTH0_DOMAIN = "dev-evuy37ow1xcidsmw.us.auth0.com"
   AUTH0_AUDIENCE = "https://api.boostedbudget.com"
 
   # Plaid configuration
