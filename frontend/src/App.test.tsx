@@ -11,13 +11,13 @@ vi.mock('@auth0/auth0-react', () => ({
 }))
 
 // Mock fetch globally
-global.fetch = vi.fn()
+globalThis.fetch = vi.fn() as typeof fetch
 
 describe('App', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     // Default mock for fetch (health check)
-    ;(global.fetch as any).mockResolvedValue({
+    ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
       json: async () => ({
         status: 'healthy',
         version: '1.0.0',
