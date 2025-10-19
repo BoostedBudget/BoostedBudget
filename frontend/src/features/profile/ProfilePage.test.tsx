@@ -58,7 +58,8 @@ describe('ProfilePage', () => {
         expect(screen.getByText('test@example.com')).toBeInTheDocument()
       })
 
-      expect(screen.getByText(/USA - us-east-1/i)).toBeInTheDocument()
+      // Check for new geographic display format
+      expect(screen.getByText(/USA \(Virginia\)/i)).toBeInTheDocument()
     })
 
     it('should display user email from profile', async () => {
@@ -77,7 +78,8 @@ describe('ProfilePage', () => {
       render(<ProfilePage />)
 
       await waitFor(() => {
-        expect(screen.getByText(/usa.*us-east-1/i)).toBeInTheDocument()
+        // Check for new geographic display format (us-east-1 maps to "USA (Virginia)")
+        expect(screen.getByText(/USA \(Virginia\)/i)).toBeInTheDocument()
       })
     })
 
