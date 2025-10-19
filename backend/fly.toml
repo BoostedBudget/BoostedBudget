@@ -79,7 +79,7 @@ kill_timeout = 30
   strategy = "rolling"
   # Run database migrations before deploying new containers
   # This prevents crash loops from failed migrations
-  release_command = 'migrate -path /app/migrations -database "$DATABASE_URL" up'
+  release_command = "/app/scripts/run-migrations.sh"
 
 [[vm]]
   memory = "512mb"
