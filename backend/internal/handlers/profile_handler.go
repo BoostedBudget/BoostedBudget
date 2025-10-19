@@ -30,7 +30,7 @@ func (h *ProfileHandler) GetProfile(c echo.Context) error {
 	}
 
 	// Extract email from JWT claims
-	email, err := getEmailFromClaims(c)
+	email, err := middleware.GetEmail(c)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusUnauthorized, "Email not found in token")
 	}
@@ -74,19 +74,4 @@ func (h *ProfileHandler) UpdateProfile(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, user)
-}
-
-// getEmailFromClaims extracts the email address from JWT claims
-func getEmailFromClaims(c echo.Context) (string, error) {
-	claims, err := middleware.GetClaims(c)
-	if err != nil {
-		return "", err
-	}
-
-	email, ok := claims["email"].(string)
-	if !ok {
-		return "", errors.New("email not found in claims")
-	}
-
-	return email, nil
 }

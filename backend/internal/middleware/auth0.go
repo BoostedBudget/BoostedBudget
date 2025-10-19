@@ -2,24 +2,192 @@ package middleware
 
 import (
 	"context"
+	"crypto/rsa"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
 )
 
-// Auth0Middleware creates an Echo middleware function that validates Auth0 JWT tokens
+// JWKS represents the JSON Web Key Set from Auth0
+type JWKS struct {
+	Keys []JSONWebKey `json:"keys"`
+}
+
+// JSONWebKey represents a single key in the JWKS
+type JSONWebKey struct {
+	Kty string   `json:"kty"`
+	Use string   `json:"use"`
+	Kid string   `json:"kid"`
+	N   string   `json:"n"`
+	E   string   `json:"e"`
+	X5c []string `json:"x5c"`
+}
+
+// jwksCache caches the fetched JWKS to avoid repeated network calls
+type jwksCache struct {
+	mu        sync.RWMutex
+	keys      map[string]*rsa.PublicKey
+	expiresAt time.Time
+	issuer    string
+}
+
+var cache = &jwksCache{
+	keys: make(map[string]*rsa.PublicKey),
+}
+
+// fetchJWKS fetches the JWKS from Auth0's well-known endpoint
+func fetchJWKS(issuer string) (*JWKS, error) {
+	// Ensure issuer ends with /
+	if !strings.HasSuffix(issuer, "/") {
+		issuer += "/"
+	}
+
+	jwksURL := issuer + ".well-known/jwks.json"
+
+	resp, err := http.Get(jwksURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch JWKS: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("JWKS endpoint returned status %d", resp.StatusCode)
+	}
+
+	var jwks JWKS
+	if err := json.NewDecoder(resp.Body).Decode(&jwks); err != nil {
+		return nil, fmt.Errorf("failed to decode JWKS: %w", err)
+	}
+
+	return &jwks, nil
+}
+
+// convertJWKToPublicKey converts a JSON Web Key to an RSA public key
+func convertJWKToPublicKey(jwk JSONWebKey) (*rsa.PublicKey, error) {
+	// Decode the modulus
+	nBytes, err := base64.RawURLEncoding.DecodeString(jwk.N)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode modulus: %w", err)
+	}
+
+	// Decode the exponent
+	eBytes, err := base64.RawURLEncoding.DecodeString(jwk.E)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode exponent: %w", err)
+	}
+
+	// Convert bytes to big integers
+	n := new(big.Int).SetBytes(nBytes)
+
+	// Convert exponent bytes to int
+	var e int
+	for _, b := range eBytes {
+		e = e<<8 + int(b)
+	}
+
+	return &rsa.PublicKey{
+		N: n,
+		E: e,
+	}, nil
+}
+
+// getPublicKey retrieves the public key for the given kid, using cache when possible
+func getPublicKey(kid string, issuer string) (*rsa.PublicKey, error) {
+	cache.mu.RLock()
+	// Check if we have a valid cached key
+	if time.Now().Before(cache.expiresAt) && cache.issuer == issuer {
+		if key, ok := cache.keys[kid]; ok {
+			cache.mu.RUnlock()
+			return key, nil
+		}
+	}
+	cache.mu.RUnlock()
+
+	// Fetch fresh JWKS
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+
+	// Double-check after acquiring write lock
+	if time.Now().Before(cache.expiresAt) && cache.issuer == issuer {
+		if key, ok := cache.keys[kid]; ok {
+			return key, nil
+		}
+	}
+
+	// Fetch and cache keys
+	jwks, err := fetchJWKS(issuer)
+	if err != nil {
+		return nil, err
+	}
+
+	newKeys := make(map[string]*rsa.PublicKey)
+	for _, jwk := range jwks.Keys {
+		if jwk.Kty != "RSA" || jwk.Use != "sig" {
+			continue
+		}
+
+		pubKey, err := convertJWKToPublicKey(jwk)
+		if err != nil {
+			continue // Skip invalid keys
+		}
+
+		newKeys[jwk.Kid] = pubKey
+	}
+
+	// Update cache
+	cache.keys = newKeys
+	cache.issuer = issuer
+	cache.expiresAt = time.Now().Add(24 * time.Hour) // Cache for 24 hours
+
+	key, ok := newKeys[kid]
+	if !ok {
+		return nil, fmt.Errorf("public key with kid %s not found in JWKS", kid)
+	}
+
+	return key, nil
+}
+
+// validateAudience checks if the expected audience is in the token's audience claim
+// Handles both string and array formats
+func validateAudience(claims jwt.MapClaims, expectedAudience string) bool {
+	aud := claims["aud"]
+
+	// Handle string audience
+	if audStr, ok := aud.(string); ok {
+		return audStr == expectedAudience
+	}
+
+	// Handle array audience
+	if audArray, ok := aud.([]interface{}); ok {
+		for _, a := range audArray {
+			if audStr, ok := a.(string); ok && audStr == expectedAudience {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// Auth0Middleware creates an Echo middleware function that validates Auth0 JWT tokens using JWKS
 //
 // Parameters:
-//   - issuer: The Auth0 issuer URL (e.g., "https://your-tenant.auth0.com/")
+//   - issuer: The Auth0 issuer URL (e.g., "https://dev-evuy37ow1xcidsmw.us.auth0.com/")
 //   - audience: The API audience/identifier (e.g., "https://api.boostedbudget.com")
 //
 // The middleware:
 //   - Extracts the JWT token from the Authorization header
-//   - Validates the token signature, expiration, issuer, and audience
+//   - Validates the token signature using Auth0's public keys (RS256)
+//   - Validates expiration, issuer, and audience
 //   - Extracts the user_id (sub claim) and stores it in the context as "user_id"
 //   - Extracts all claims and stores them in the context as "claims"
 //   - Returns 401 Unauthorized if validation fails
@@ -35,6 +203,14 @@ import (
 //	    return c.JSON(200, map[string]interface{}{"user_id": userID})
 //	})
 func Auth0Middleware(issuer, audience string) echo.MiddlewareFunc {
+	// Ensure issuer has https:// prefix and trailing slash
+	if !strings.HasPrefix(issuer, "http") {
+		issuer = "https://" + issuer
+	}
+	if !strings.HasSuffix(issuer, "/") {
+		issuer += "/"
+	}
+
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			// Extract token from Authorization header
@@ -51,21 +227,30 @@ func Auth0Middleware(issuer, audience string) echo.MiddlewareFunc {
 
 			tokenString := parts[1]
 
-			// Parse and validate the JWT token
+			// Parse the JWT token (without validation yet)
 			token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-				// Verify the signing method
-				if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				// Verify the signing method is RSA
+				if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
 					return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 				}
 
-				// For testing purposes, we use a simple secret
-				// In production with Auth0 RS256, you would fetch the JWKS and verify with public key
-				// TODO: Implement JWKS-based verification for RS256 tokens
-				return []byte("test-secret-key"), nil
+				// Get the kid from token header
+				kid, ok := token.Header["kid"].(string)
+				if !ok {
+					return nil, errors.New("missing kid in token header")
+				}
+
+				// Fetch the public key for this kid
+				publicKey, err := getPublicKey(kid, issuer)
+				if err != nil {
+					return nil, fmt.Errorf("failed to get public key: %w", err)
+				}
+
+				return publicKey, nil
 			})
 
 			if err != nil {
-				return echo.NewHTTPError(http.StatusUnauthorized, "Invalid or expired token")
+				return echo.NewHTTPError(http.StatusUnauthorized, fmt.Sprintf("Invalid or expired token: %v", err))
 			}
 
 			if !token.Valid {
@@ -81,13 +266,12 @@ func Auth0Middleware(issuer, audience string) echo.MiddlewareFunc {
 			// Validate issuer
 			iss, ok := claims["iss"].(string)
 			if !ok || iss != issuer {
-				return echo.NewHTTPError(http.StatusUnauthorized, "Invalid token issuer")
+				return echo.NewHTTPError(http.StatusUnauthorized, fmt.Sprintf("Invalid token issuer: expected %s, got %s", issuer, iss))
 			}
 
-			// Validate audience
-			aud, ok := claims["aud"].(string)
-			if !ok || aud != audience {
-				return echo.NewHTTPError(http.StatusUnauthorized, "Invalid token audience")
+			// Validate audience (handles both string and array)
+			if !validateAudience(claims, audience) {
+				return echo.NewHTTPError(http.StatusUnauthorized, fmt.Sprintf("Invalid token audience: %v does not contain %s", claims["aud"], audience))
 			}
 
 			// Extract user_id from sub claim
@@ -106,16 +290,9 @@ func Auth0Middleware(issuer, audience string) echo.MiddlewareFunc {
 	}
 }
 
-// Auth0MiddlewareWithJWKS creates an Echo middleware that validates Auth0 JWT tokens using JWKS
-// This is the production-ready version that fetches Auth0's public keys
-//
-// TODO: Implement this for production use with RS256 tokens
-// For now, we use the simpler HS256 version for testing
+// Auth0MiddlewareWithJWKS is now an alias to Auth0Middleware since we implemented JWKS
 func Auth0MiddlewareWithJWKS(ctx context.Context, issuer, audience string) (echo.MiddlewareFunc, error) {
-	// TODO: Fetch JWKS from issuer's .well-known/jwks.json endpoint
-	// TODO: Cache the public keys
-	// TODO: Verify RS256 signatures using the public key
-	return nil, errors.New("not implemented yet - use Auth0Middleware for testing")
+	return Auth0Middleware(issuer, audience), nil
 }
 
 // GetUserID is a helper function to extract the user_id from the Echo context
@@ -148,6 +325,27 @@ func GetClaims(c echo.Context) (jwt.MapClaims, error) {
 	}
 
 	return claimsMap, nil
+}
+
+// GetEmail extracts the email from JWT claims
+// Tries custom claim first, then standard email claim
+func GetEmail(c echo.Context) (string, error) {
+	claims, err := GetClaims(c)
+	if err != nil {
+		return "", err
+	}
+
+	// Try custom namespaced claim first
+	if email, ok := claims["https://boostedbudget.com/email"].(string); ok && email != "" {
+		return email, nil
+	}
+
+	// Try standard email claim
+	if email, ok := claims["email"].(string); ok && email != "" {
+		return email, nil
+	}
+
+	return "", errors.New("email not found in token claims")
 }
 
 // GetSubscriptionTier extracts the subscription tier from JWT claims

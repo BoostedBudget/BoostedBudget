@@ -96,7 +96,7 @@ infrastructure/     # Configs
 8. **TDD REFACTOR**: Clean up
 9. **PRE-PR TEST**: Run ALL tests locally before PR
    - Backend: `cd backend && go test ./... -v`
-   - Frontend: `npm test -- --run`
+   - Frontend: `npm test -- --run` + `npm run lint`
    - E2E: `npm run test:e2e -- --reporter=line 2>&1`
    - Security: `trivy fs . --scanners vuln --severity CRITICAL,HIGH`
 10. GitHub: Create PR with `Closes #N`
