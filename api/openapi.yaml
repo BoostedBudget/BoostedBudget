@@ -396,10 +396,10 @@ components:
           example: "cus_ABC123"
         primary_region:
           type: string
-          description: GDPR data residency region
-          enum: [us-east-1, eu-west-1, ap-southeast-1]
-          default: us-east-1
-          example: "us-east-1"
+          description: GDPR data residency region (Fly.io IATA codes)
+          enum: [iad, lhr, syd]
+          default: iad
+          example: "iad"
         is_active:
           type: boolean
           description: Whether user account is active
@@ -429,8 +429,8 @@ components:
           description: Update email address
         primary_region:
           type: string
-          description: Change data residency region (requires data migration)
-          enum: [us-east-1, eu-west-1, ap-southeast-1]
+          description: Change data residency region (Fly.io IATA codes - iad, lhr, syd)
+          enum: [iad, lhr, syd]
 
     PrivacySettings:
       type: object

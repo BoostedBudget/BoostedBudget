@@ -25,8 +25,8 @@ type User struct {
 	// Stripe customer ID (for payments)
 	StripeCustomerID *string `json:"stripe_customer_id,omitempty" db:"stripe_customer_id"`
 
-	// GDPR: Primary region for data residency
-	PrimaryRegion string `json:"primary_region" db:"primary_region"` // us-east-1, eu-west-1, ap-southeast-1
+	// GDPR: Primary region for data residency (Fly.io IATA codes)
+	PrimaryRegion string `json:"primary_region" db:"primary_region"` // iad, lhr, syd
 
 	// Account status
 	IsActive  bool `json:"is_active" db:"is_active"`
@@ -50,7 +50,7 @@ type UpdateProfileRequest struct {
 	PrimaryRegion *string `json:"primary_region,omitempty"`
 }
 
-// NewUser creates a new user with default values (free tier, us-east-1 region)
+// NewUser creates a new user with default values (free tier, iad region)
 // Used when a user logs in for the first time via Auth0
 func NewUser(auth0UserID, email string) *User {
 	now := time.Now()
@@ -60,7 +60,7 @@ func NewUser(auth0UserID, email string) *User {
 		EmailVerified:      false,
 		SubscriptionTier:   "free",
 		SubscriptionStatus: "active",
-		PrimaryRegion:      "us-east-1",
+		PrimaryRegion:      DefaultRegion, // iad - uses constant from regions.go
 		IsActive:           true,
 		IsDeleted:          false,
 		CreatedAt:          now,

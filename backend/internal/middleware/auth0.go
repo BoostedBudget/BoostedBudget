@@ -365,16 +365,16 @@ func GetSubscriptionTier(c echo.Context) string {
 }
 
 // GetPrimaryRegion extracts the primary region from JWT claims
-// Returns "us-east-1" if not found (default region for MVP)
+// Returns "iad" if not found (default region for MVP)
 func GetPrimaryRegion(c echo.Context) string {
 	claims, err := GetClaims(c)
 	if err != nil {
-		return "us-east-1"
+		return "iad"
 	}
 
 	region, ok := claims["https://boostedbudget.com/primary_region"].(string)
 	if !ok {
-		return "us-east-1"
+		return "iad"
 	}
 
 	return region
