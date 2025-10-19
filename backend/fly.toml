@@ -64,12 +64,12 @@ kill_timeout = 30
   [[services.tcp_checks]]
     interval = "15s"
     timeout = "2s"
-    grace_period = "30s"  # Allow time for container startup and initialization
+    grace_period = "30s"  # Increased to allow time for database migrations
 
   [[services.http_checks]]
     interval = "30s"
     timeout = "5s"
-    grace_period = "45s"  # Allow time for container startup and health check readiness
+    grace_period = "45s"  # Increased to allow time for database migrations on startup
     method = "GET"
     path = "/health"
     protocol = "http"
@@ -77,9 +77,6 @@ kill_timeout = 30
 
 [deploy]
   strategy = "rolling"
-  # Run database migrations before deploying new containers
-  # This prevents crash loops from failed migrations
-  release_command = "/app/scripts/run-migrations.sh"
 
 [[vm]]
   memory = "512mb"
