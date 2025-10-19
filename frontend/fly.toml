@@ -17,12 +17,12 @@ kill_timeout = 10
   # API endpoint
   VITE_API_URL = "https://api.boostedbudget.com/v1"
 
-  # Auth0 configuration (non-sensitive, public client)
-  VITE_AUTH0_DOMAIN = "boostedbudget.us.auth0.com"
-  VITE_AUTH0_CLIENT_ID = "YOUR_AUTH0_CLIENT_ID"  # Set via fly secrets
+  # Auth0 configuration (public client - CLIENT_ID set via fly secrets)
+  VITE_AUTH0_DOMAIN = "dev-evuy37ow1xcidsmw.us.auth0.com"
   VITE_AUTH0_AUDIENCE = "https://api.boostedbudget.com"
 
   # NOTE: Other environment variables set via `fly secrets set`:
+  # - VITE_AUTH0_CLIENT_ID (Auth0 SPA client ID)
   # - VITE_PLAID_PUBLIC_KEY
   # - VITE_GOOGLE_ADSENSE_CLIENT (for free tier ads)
 
