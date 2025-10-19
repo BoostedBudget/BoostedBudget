@@ -15,16 +15,16 @@ kill_timeout = 10
   ENVIRONMENT = "production"
 
   # API endpoint
-  VITE_API_URL = "https://api.boostedbudget.com/v1"
+  API_URL = "https://api.boostedbudget.com/v1"
 
-  # Auth0 configuration (public client - CLIENT_ID set via fly secrets)
-  VITE_AUTH0_DOMAIN = "dev-evuy37ow1xcidsmw.us.auth0.com"
-  VITE_AUTH0_AUDIENCE = "https://api.boostedbudget.com"
+  # Auth0 configuration (runtime injection via docker-entrypoint.sh)
+  AUTH0_DOMAIN = "dev-evuy37ow1xcidsmw.us.auth0.com"
+  AUTH0_AUDIENCE = "https://api.boostedbudget.com"
 
-  # NOTE: Other environment variables set via `fly secrets set`:
-  # - VITE_AUTH0_CLIENT_ID (Auth0 SPA client ID)
-  # - VITE_PLAID_PUBLIC_KEY
-  # - VITE_GOOGLE_ADSENSE_CLIENT (for free tier ads)
+  # NOTE: Sensitive environment variables set via `fly secrets set`:
+  # - AUTH0_CLIENT_ID (Auth0 SPA client ID)
+  # - PLAID_PUBLIC_KEY
+  # - GOOGLE_ADSENSE_CLIENT (for free tier ads)
 
 [experimental]
   auto_rollback = true

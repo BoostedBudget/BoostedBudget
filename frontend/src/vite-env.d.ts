@@ -12,3 +12,16 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv
 }
+
+// Runtime configuration injected by docker-entrypoint.sh
+interface RuntimeEnv {
+  API_URL?: string
+  AUTH0_DOMAIN?: string
+  AUTH0_CLIENT_ID?: string
+  AUTH0_AUDIENCE?: string
+  ENVIRONMENT?: string
+}
+
+interface Window {
+  ENV?: RuntimeEnv
+}
