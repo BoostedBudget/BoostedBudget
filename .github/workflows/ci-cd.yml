@@ -484,10 +484,10 @@ jobs:
           echo "Results uploaded to GitHub Security tab." >> $GITHUB_STEP_SUMMARY
 
   # =============================================================================
-  # JOB 7: Deploy to production (manual approval required)
+  # JOB 7: Push images to Fly.io registry
   # =============================================================================
-  deploy-production:
-    name: Deploy to Production
+  push-to-fly-registry:
+    name: Push Images to Fly.io Registry
     needs: [build-images, image-security-scan]
     runs-on: ubuntu-latest
     if: |
@@ -496,6 +496,69 @@ jobs:
       github.event_name == 'push' &&
       needs.build-images.result == 'success' &&
       (needs.image-security-scan.result == 'success' || needs.image-security-scan.result == 'skipped')
+
+    steps:
+      - name: Setup Fly.io CLI
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Authenticate with Fly.io Docker Registry
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl auth docker
+
+      - name: Pull and push backend image to Fly.io registry
+        run: |
+          # Pull from GHCR
+          docker pull ${{ needs.build-images.outputs.backend-image }}
+
+          # Tag for Fly.io registry
+          docker tag ${{ needs.build-images.outputs.backend-image }} registry.fly.io/boostedbudget-api:${{ github.sha }}
+          docker tag ${{ needs.build-images.outputs.backend-image }} registry.fly.io/boostedbudget-api:latest
+
+          # Push to Fly.io
+          docker push registry.fly.io/boostedbudget-api:${{ github.sha }}
+          docker push registry.fly.io/boostedbudget-api:latest
+
+      - name: Pull and push frontend image to Fly.io registry
+        run: |
+          # Pull from GHCR
+          docker pull ${{ needs.build-images.outputs.frontend-image }}
+
+          # Tag for Fly.io registry
+          docker tag ${{ needs.build-images.outputs.frontend-image }} registry.fly.io/boostedbudget-web:${{ github.sha }}
+          docker tag ${{ needs.build-images.outputs.frontend-image }} registry.fly.io/boostedbudget-web:latest
+
+          # Push to Fly.io
+          docker push registry.fly.io/boostedbudget-web:${{ github.sha }}
+          docker push registry.fly.io/boostedbudget-web:latest
+
+      - name: Summary
+        run: |
+          echo "### 📦 Images Pushed to Fly.io Registry" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Backend:** \`registry.fly.io/boostedbudget-api:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Frontend:** \`registry.fly.io/boostedbudget-web:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+
+  # =============================================================================
+  # JOB 8: Deploy to production (manual approval required)
+  # =============================================================================
+  deploy-production:
+    name: Deploy to Production
+    needs: [build-images, push-to-fly-registry]
+    runs-on: ubuntu-latest
+    if: |
+      always() &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'push' &&
+      needs.build-images.result == 'success' &&
+      needs.push-to-fly-registry.result == 'success'
     environment:
       name: production
       url: https://boostedbudget.com
@@ -511,10 +574,10 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          echo "Deploying backend image: ${{ needs.build-images.outputs.backend-image }}"
+          echo "Deploying backend from Fly.io registry: registry.fly.io/boostedbudget-api:${{ github.sha }}"
           flyctl deploy \
             --app boostedbudget-api \
-            --image ${{ needs.build-images.outputs.backend-image }} \
+            --image registry.fly.io/boostedbudget-api:${{ github.sha }} \
             --config ./backend/fly.toml \
             --strategy rolling
 
@@ -522,10 +585,10 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          echo "Deploying frontend image: ${{ needs.build-images.outputs.frontend-image }}"
+          echo "Deploying frontend from Fly.io registry: registry.fly.io/boostedbudget-web:${{ github.sha }}"
           flyctl deploy \
             --app boostedbudget-web \
-            --image ${{ needs.build-images.outputs.frontend-image }} \
+            --image registry.fly.io/boostedbudget-web:${{ github.sha }} \
             --config ./frontend/fly.toml \
             --strategy rolling
 
