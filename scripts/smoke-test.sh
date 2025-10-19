@@ -203,11 +203,11 @@ echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━�
 
 # Test 9: API Response Time
 api_time=$(curl -s -o /dev/null -w "%{time_total}" "$API_URL/health" --max-time 10 || echo "10")
-api_time_ms=$(echo "$api_time * 1000" | bc)
+api_time_ms=$(awk "BEGIN {printf \"%.0f\", $api_time * 1000}")
 
-if (( $(echo "$api_time < 2.0" | bc -l) )); then
+if awk "BEGIN {exit !($api_time < 2.0)}"; then
   print_test "pass" "API response time: ${api_time_ms}ms (< 2000ms)"
-elif (( $(echo "$api_time < 5.0" | bc -l) )); then
+elif awk "BEGIN {exit !($api_time < 5.0)}"; then
   print_test "warn" "API response time: ${api_time_ms}ms (acceptable but slow)"
 else
   print_test "fail" "API response time: ${api_time_ms}ms (too slow)"
@@ -216,11 +216,11 @@ fi
 
 # Test 10: Frontend Response Time
 web_time=$(curl -s -o /dev/null -w "%{time_total}" "$WEB_URL" --max-time 10 || echo "10")
-web_time_ms=$(echo "$web_time * 1000" | bc)
+web_time_ms=$(awk "BEGIN {printf \"%.0f\", $web_time * 1000}")
 
-if (( $(echo "$web_time < 3.0" | bc -l) )); then
+if awk "BEGIN {exit !($web_time < 3.0)}"; then
   print_test "pass" "Frontend response time: ${web_time_ms}ms (< 3000ms)"
-elif (( $(echo "$web_time < 5.0" | bc -l) )); then
+elif awk "BEGIN {exit !($web_time < 5.0)}"; then
   print_test "warn" "Frontend response time: ${web_time_ms}ms (acceptable but slow)"
 else
   print_test "fail" "Frontend response time: ${web_time_ms}ms (too slow)"
