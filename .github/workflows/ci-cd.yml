@@ -560,8 +560,19 @@ jobs:
       needs.push-to-fly-registry.result == 'success'
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Setup Fly.io CLI
         uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Install golang-migrate
+        run: |
+          echo "Installing golang-migrate..."
+          curl -L https://github.com/golang-migrate/migrate/releases/download/v4.18.1/migrate.linux-amd64.tar.gz | tar xvz
+          sudo mv migrate /usr/local/bin/
+          sudo chmod +x /usr/local/bin/migrate
+          migrate -version
 
       - name: Check for dirty migrations
         env:
@@ -592,9 +603,19 @@ jobs:
           echo "Running database migrations on existing infrastructure..."
           echo "This runs BEFORE deploying new containers to prevent crash loops"
 
-          # Run migrations using the script in the running container
-          flyctl ssh console -a boostedbudget-api -C \
-            "/app/scripts/run-migrations.sh"
+          # Get DATABASE_URL from Fly.io secrets
+          echo "Retrieving database connection string..."
+          DATABASE_URL=$(flyctl secrets list -a boostedbudget-api | grep DATABASE_URL | awk '{print $3}')
+
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::Could not retrieve DATABASE_URL from Fly.io secrets"
+            exit 1
+          fi
+
+          echo "Running migrations..."
+          migrate -path backend/migrations -database "$DATABASE_URL" -verbose up
+
+          echo "✅ Migrations completed successfully"
 
       - name: Verify migration success
         env:
