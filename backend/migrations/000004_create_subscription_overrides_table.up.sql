@@ -4,7 +4,7 @@
 
 CREATE TABLE IF NOT EXISTS user_subscription_overrides (
     id BIGSERIAL PRIMARY KEY,
-    user_id VARCHAR(255) NOT NULL,
+    user_id UUID NOT NULL,
     resource_type VARCHAR(100) NOT NULL,  -- 'accounts', 'rules', 'executions_per_day', etc.
     limit_value INTEGER NOT NULL,          -- -1 for unlimited
     reason TEXT,                           -- 'enterprise_deal', 'addon_purchase', 'promo_code_XYZ'
