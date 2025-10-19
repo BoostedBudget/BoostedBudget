@@ -5,8 +5,8 @@
 -- us-east-1        -> iad (Virginia)
 -- eu-west-1        -> lhr (London)
 -- ap-southeast-1   -> syd (Sydney)
-
-BEGIN;
+--
+-- Note: Atlas handles transaction management, no explicit BEGIN/COMMIT needed
 
 -- Step 1: Update existing user data
 -- Convert AWS-style region codes to Fly.io IATA codes
@@ -37,5 +37,3 @@ ALTER COLUMN primary_region SET DEFAULT 'iad';
 
 -- Step 5: Update column comment to reflect new codes
 COMMENT ON COLUMN users.primary_region IS 'GDPR data residency region (Fly.io IATA codes: iad, lhr, syd)';
-
-COMMIT;

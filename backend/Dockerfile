@@ -25,27 +25,27 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # Stage 2: Runtime (Debian Bookworm Slim - Minimal but stable)
 FROM debian:bookworm-slim
 
-# Install runtime dependencies including golang-migrate
+# Install runtime dependencies including Atlas
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     tzdata \
     && rm -rf /var/lib/apt/lists/*
 
-# Install golang-migrate
-RUN MIGRATE_VERSION=v4.18.1 && \
-    MIGRATE_ARCH=linux-amd64 && \
-    curl -L "https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.${MIGRATE_ARCH}.tar.gz" \
-    | tar xvz -C /usr/local/bin && \
-    chmod +x /usr/local/bin/migrate
+# Install Atlas for database migrations
+RUN ATLAS_VERSION=v0.37.1 && \
+    ATLAS_ARCH=linux-amd64 && \
+    curl -sSfL "https://release.ariga.io/atlas/atlas-${ATLAS_ARCH}-${ATLAS_VERSION}" -o /usr/local/bin/atlas && \
+    chmod +x /usr/local/bin/atlas
 
 WORKDIR /app
 
 # Copy binary from builder
 COPY --from=builder /build/server /app/server
 
-# Copy migrations directory (if needed at runtime)
+# Copy migrations directory and Atlas config (needed at runtime)
 COPY --from=builder /build/migrations /app/migrations
+COPY --from=builder /build/atlas.hcl /app/atlas.hcl
 
 # Copy startup script
 COPY --from=builder /build/scripts/docker-entrypoint.sh /app/docker-entrypoint.sh
