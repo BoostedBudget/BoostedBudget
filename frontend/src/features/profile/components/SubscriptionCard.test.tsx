@@ -120,13 +120,13 @@ describe('SubscriptionCard', () => {
       // This test will FAIL with current implementation
       // Current code tries to call .replace() on undefined at line 15
       expect(() => {
-        render(<SubscriptionCard tier={undefined as any} status="active" />)
+        render(<SubscriptionCard tier={undefined as unknown as string} status="active" />)
       }).not.toThrow()
     })
 
     it('should show loading state when tier is undefined', () => {
       // This test will FAIL - current implementation crashes
-      render(<SubscriptionCard tier={undefined as any} status="active" />)
+      render(<SubscriptionCard tier={undefined as unknown as string} status="active" />)
 
       expect(screen.getByText(/loading/i)).toBeInTheDocument()
     })
@@ -134,21 +134,21 @@ describe('SubscriptionCard', () => {
     it('should handle undefined status gracefully', () => {
       // Should not crash when status is undefined
       expect(() => {
-        render(<SubscriptionCard tier="free" status={undefined as any} />)
+        render(<SubscriptionCard tier="free" status={undefined as unknown as string} />)
       }).not.toThrow()
     })
 
     it('should handle null tier gracefully', () => {
       // Should not crash when tier is null
       expect(() => {
-        render(<SubscriptionCard tier={null as any} status="active" />)
+        render(<SubscriptionCard tier={null as unknown as string} status="active" />)
       }).not.toThrow()
     })
 
     it('should handle both tier and status being undefined', () => {
       // Should not crash when both are undefined
       expect(() => {
-        render(<SubscriptionCard tier={undefined as any} status={undefined as any} />)
+        render(<SubscriptionCard tier={undefined as unknown as string} status={undefined as unknown as string} />)
       }).not.toThrow()
 
       expect(screen.getByText(/loading/i)).toBeInTheDocument()
@@ -157,7 +157,7 @@ describe('SubscriptionCard', () => {
     it('should handle empty string tier', () => {
       // Should handle empty string gracefully
       expect(() => {
-        render(<SubscriptionCard tier={'' as any} status="active" />)
+        render(<SubscriptionCard tier={'' as unknown as string} status="active" />)
       }).not.toThrow()
     })
   })
