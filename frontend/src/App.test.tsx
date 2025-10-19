@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
+import { BrowserRouter } from 'react-router-dom'
 import { CookiesProvider } from 'react-cookie'
 import App from './App'
 
@@ -41,9 +42,11 @@ describe('App', () => {
 
     it('should render login button', async () => {
       render(
-        <CookiesProvider>
-          <App />
-        </CookiesProvider>
+        <BrowserRouter>
+          <CookiesProvider>
+            <App />
+          </CookiesProvider>
+        </BrowserRouter>
       )
 
       await waitFor(() => {
@@ -53,9 +56,11 @@ describe('App', () => {
 
     it('should not render logout button', async () => {
       render(
-        <CookiesProvider>
-          <App />
-        </CookiesProvider>
+        <BrowserRouter>
+          <CookiesProvider>
+            <App />
+          </CookiesProvider>
+        </BrowserRouter>
       )
 
       await waitFor(() => {
@@ -65,9 +70,11 @@ describe('App', () => {
 
     it('should not display user profile', async () => {
       render(
-        <CookiesProvider>
-          <App />
-        </CookiesProvider>
+        <BrowserRouter>
+          <CookiesProvider>
+            <App />
+          </CookiesProvider>
+        </BrowserRouter>
       )
 
       await waitFor(() => {
@@ -93,9 +100,11 @@ describe('App', () => {
 
     it('should render logout button', async () => {
       render(
-        <CookiesProvider>
-          <App />
-        </CookiesProvider>
+        <BrowserRouter>
+          <CookiesProvider>
+            <App />
+          </CookiesProvider>
+        </BrowserRouter>
       )
 
       await waitFor(() => {
@@ -105,9 +114,11 @@ describe('App', () => {
 
     it('should not render login button', async () => {
       render(
-        <CookiesProvider>
-          <App />
-        </CookiesProvider>
+        <BrowserRouter>
+          <CookiesProvider>
+            <App />
+          </CookiesProvider>
+        </BrowserRouter>
       )
 
       await waitFor(() => {
@@ -117,9 +128,11 @@ describe('App', () => {
 
     it('should display user name', async () => {
       render(
-        <CookiesProvider>
-          <App />
-        </CookiesProvider>
+        <BrowserRouter>
+          <CookiesProvider>
+            <App />
+          </CookiesProvider>
+        </BrowserRouter>
       )
 
       await waitFor(() => {
@@ -129,9 +142,11 @@ describe('App', () => {
 
     it('should display user email', async () => {
       render(
-        <CookiesProvider>
-          <App />
-        </CookiesProvider>
+        <BrowserRouter>
+          <CookiesProvider>
+            <App />
+          </CookiesProvider>
+        </BrowserRouter>
       )
 
       await waitFor(() => {
@@ -150,9 +165,11 @@ describe('App', () => {
 
     it('should show Auth0 integration as complete', async () => {
       render(
-        <CookiesProvider>
-          <App />
-        </CookiesProvider>
+        <BrowserRouter>
+          <CookiesProvider>
+            <App />
+          </CookiesProvider>
+        </BrowserRouter>
       )
 
       await waitFor(() => {
@@ -162,9 +179,11 @@ describe('App', () => {
 
     it('should not show Auth0 as coming next', async () => {
       render(
-        <CookiesProvider>
-          <App />
-        </CookiesProvider>
+        <BrowserRouter>
+          <CookiesProvider>
+            <App />
+          </CookiesProvider>
+        </BrowserRouter>
       )
 
       await waitFor(() => {
@@ -183,9 +202,11 @@ describe('App', () => {
 
     it('should still display system status section', async () => {
       render(
-        <CookiesProvider>
-          <App />
-        </CookiesProvider>
+        <BrowserRouter>
+          <CookiesProvider>
+            <App />
+          </CookiesProvider>
+        </BrowserRouter>
       )
 
       await waitFor(() => {
@@ -195,9 +216,11 @@ describe('App', () => {
 
     it('should display health check data', async () => {
       render(
-        <CookiesProvider>
-          <App />
-        </CookiesProvider>
+        <BrowserRouter>
+          <CookiesProvider>
+            <App />
+          </CookiesProvider>
+        </BrowserRouter>
       )
 
       await waitFor(() => {
