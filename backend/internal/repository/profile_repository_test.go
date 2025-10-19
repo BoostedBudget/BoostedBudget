@@ -44,7 +44,7 @@ func TestGetUserByAuth0ID_Success(t *testing.T) {
 	}).AddRow(
 		userID, auth0UserID, "test@example.com", true,
 		"free", "active", nil, nil,
-		nil, "us-east-1", true, false,
+		nil, "iad", true, false,
 		nil, nil,
 		now, now, &now,
 	)
@@ -63,7 +63,7 @@ func TestGetUserByAuth0ID_Success(t *testing.T) {
 	assert.Equal(t, auth0UserID, user.Auth0UserID)
 	assert.Equal(t, "test@example.com", user.Email)
 	assert.Equal(t, "free", user.SubscriptionTier)
-	assert.Equal(t, "us-east-1", user.PrimaryRegion)
+	assert.Equal(t, "iad", user.PrimaryRegion)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -108,7 +108,7 @@ func TestGetUserByID_Success(t *testing.T) {
 	}).AddRow(
 		userID, auth0UserID, "test@example.com", true,
 		"premium", "active", &now, nil,
-		stringPtr("cus_ABC123"), "us-east-1", true, false,
+		stringPtr("cus_ABC123"), "iad", true, false,
 		nil, nil,
 		now, now, &now,
 	)
@@ -280,7 +280,7 @@ func TestUpdateUser_NotFound(t *testing.T) {
 		ID:            uuid.New().String(),
 		Auth0UserID:   "auth0|nonexistent",
 		Email:         "test@example.com",
-		PrimaryRegion: "us-east-1",
+		PrimaryRegion: "iad",
 	}
 
 	// Expect UPDATE query that affects 0 rows

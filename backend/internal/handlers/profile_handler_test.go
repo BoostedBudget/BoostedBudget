@@ -83,7 +83,7 @@ func TestGetProfile_Success(t *testing.T) {
 		EmailVerified:      true,
 		SubscriptionTier:   "premium",
 		SubscriptionStatus: "active",
-		PrimaryRegion:      "us-east-1",
+		PrimaryRegion:      "iad",
 		IsActive:           true,
 		IsDeleted:          false,
 		CreatedAt:          now,
@@ -133,7 +133,7 @@ func TestGetProfile_FirstLogin(t *testing.T) {
 		EmailVerified:      false,
 		SubscriptionTier:   "free",
 		SubscriptionStatus: "active",
-		PrimaryRegion:      "us-east-1",
+		PrimaryRegion:      "iad",
 		IsActive:           true,
 		IsDeleted:          false,
 		CreatedAt:          now,
@@ -157,7 +157,7 @@ func TestGetProfile_FirstLogin(t *testing.T) {
 	err = json.Unmarshal(rec.Body.Bytes(), &response)
 	assert.NoError(t, err)
 	assert.Equal(t, "free", response.SubscriptionTier)
-	assert.Equal(t, "us-east-1", response.PrimaryRegion)
+	assert.Equal(t, "iad", response.PrimaryRegion)
 
 	mockService.AssertExpectations(t)
 }
@@ -231,7 +231,7 @@ func TestUpdateProfile_Success(t *testing.T) {
 		EmailVerified:      true,
 		SubscriptionTier:   "premium",
 		SubscriptionStatus: "active",
-		PrimaryRegion:      "us-east-1",
+		PrimaryRegion:      "iad",
 		IsActive:           true,
 		IsDeleted:          false,
 		CreatedAt:          now,
@@ -269,11 +269,11 @@ func TestUpdateProfile_UpdateRegion(t *testing.T) {
 
 	auth0UserID := "auth0|507f1f77bcf86cd799439011"
 	email := "test@example.com"
-	newRegion := "eu-west-1"
+	newRegion := "lhr"
 	userID := uuid.New().String()
 	now := time.Now()
 
-	requestBody := `{"primary_region":"eu-west-1"}`
+	requestBody := `{"primary_region":"lhr"}`
 
 	updatedUser := &domain.User{
 		ID:                 userID,
@@ -470,7 +470,7 @@ func TestUpdateProfile_EmptyBody(t *testing.T) {
 		Email:              email,
 		SubscriptionTier:   "premium",
 		SubscriptionStatus: "active",
-		PrimaryRegion:      "us-east-1",
+		PrimaryRegion:      "iad",
 		IsActive:           true,
 		IsDeleted:          false,
 		CreatedAt:          now,

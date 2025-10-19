@@ -60,7 +60,7 @@ services:
       PORT: "8080"
       ENVIRONMENT: "development"
       VERSION: "0.1.0"
-      PRIMARY_REGION: "us-east-1"
+      PRIMARY_REGION: "iad"
       DATABASE_URL: "postgres://devuser:devpass@postgres:5432/boostedbudget?sslmode=disable"
       REDIS_URL: "redis://redis:6379"
       RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
