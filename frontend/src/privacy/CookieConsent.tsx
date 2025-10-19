@@ -34,7 +34,8 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
       // Apply existing consents
       onConsentChange?.(existingConsent.consents);
     }
-  }, [cookies, onConsentChange]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const saveConsent = (consents: CookieConsentSettings) => {
     const consentData: CookieConsentData = {
