@@ -7,7 +7,7 @@
 ## Project Context
 **BoostedBudget**: Global budgeting platform, automation rules, GDPR-compliant, USA-based (iad/us-east-1)
 
-**Tiers**: Free (3 rules, 2 accounts, ads) | Premium $9.99 (unlimited, no ads) | Premium+ $19.99 (AI insights)
+**Tiers**: Free (2 rules, 8 accounts, 1x/day, ads) | Premium Lite $4.99 (5 rules, 15 accounts, 2x/day) | Premium $9.99 (15 rules, 30 accounts, 6x/day) | Premium+ $19.99 (unlimited, every 10min, AI + API)
 
 **Stack**: React 19 + TS5 + Vite 7 | Go 1.25+ Echo/Gin | PostgreSQL 15 + Redis 7 | Auth0 + Plaid + Stripe + AdSense | Docker → GHCR → Fly.io
 
@@ -148,7 +148,7 @@ infrastructure/     # Configs
 - Server Memory to persist learnings
 - No money movement (suggestions only, no MTL)
 - GDPR compliance (all users get rights)
-- Free tier limits (3 rules, 2 accounts, ads)
+- Free tier limits (2 rules, 8 accounts, 1x/day execution, ads enabled)
 - Single region us-east-1 (multi-region Phase 7+)
 - Auth0 for all auth (never custom auth)
 - Build Docker images (don't build on Fly)
@@ -249,7 +249,7 @@ s.auditLog.Log(ctx, action, resourceID)
 
 **Free tier check**:
 ```typescript
-const canCreateRule = subscription.tier === 'free' ? currentRules.length < 3 : true;
+const canCreateRule = subscription.tier === 'free' ? currentRules.length < 2 : true;
 if (!canCreateRule) return <UpgradePrompt />;
 ```
 
@@ -257,6 +257,65 @@ if (!canCreateRule) return <UpgradePrompt />;
 ```typescript
 if (subscription?.tier === 'free' && hasAdConsent) return <AdBanner slot={adSlotId} />;
 ```
+
+## Subscription Tiers
+
+**Configuration**: `backend/config/subscription_tiers.yaml` (easily modifiable)
+
+**Tier Structure**:
+```
+FREE ($0/mo)
+├─ 8 accounts (full budgeting capability)
+├─ 2 rules (taste of automation)
+├─ Rules run: 1x per day
+└─ Ads: Enabled
+
+PREMIUM LITE ($4.99/mo)
+├─ 15 accounts (couples, families)
+├─ 5 rules
+├─ Rules run: 2x per day (every 12 hours)
+└─ Ads: Disabled
+
+PREMIUM ($9.99/mo)
+├─ 30 accounts (power users)
+├─ 15 rules
+├─ Rules run: 6x per day (every 4 hours)
+├─ Priority support
+└─ Advanced reports
+
+PREMIUM+ ($19.99/mo)
+├─ Unlimited accounts
+├─ Unlimited rules
+├─ Rules run: Every 10 minutes (144x/day)
+├─ AI insights (future)
+└─ API access (future)
+```
+
+**Implementation**:
+- Config-driven: Change `backend/config/subscription_tiers.yaml` without code changes
+- Database overrides: Per-user custom limits for enterprise deals
+- Service: `internal/services/subscription_service.go`
+- Domain models: `internal/domain/subscription.go`
+- Migration: `000004_create_subscription_overrides_table.up.sql`
+
+**Usage in code**:
+```go
+// Check if user can create a rule
+result, err := subscriptionService.CheckLimit(ctx, user, domain.ResourceRules, currentRuleCount)
+if !result.Allowed {
+    return errors.New("rule limit reached, upgrade to premium")
+}
+
+// Get effective subscription (base tier + overrides)
+effective, err := subscriptionService.GetEffectiveSubscription(ctx, user)
+fmt.Printf("User has %d rules available\n", effective.Limits.Rules)
+```
+
+**Future extensibility**:
+- Add-ons: "Buy 5 more rules for $2/month"
+- Custom enterprise limits via database overrides
+- Promotional tier upgrades
+- A/B testing different tier structures
 
 ## External Services
 

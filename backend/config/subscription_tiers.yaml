@@ -1,0 +1,125 @@
+# BoostedBudget Subscription Tiers Configuration
+# Last updated: 2025-10-19
+#
+# This file defines the subscription tiers and their limits.
+# Changing values here will affect tier behavior without code deployment.
+#
+# Resource Types:
+#   - accounts: Number of linked bank accounts
+#   - rules: Number of automation rules
+#   - executions_per_day: Maximum rule executions per day
+#   - min_execution_interval_minutes: Minimum time between rule executions
+#
+# Special Values:
+#   - Use -1 or 999999 for "unlimited" resources
+#
+# Future Extensibility:
+#   - Add new tiers by creating new top-level entries
+#   - Add new limit types under the "limits" section
+#   - Per-user overrides are stored in database (user_subscription_overrides table)
+
+tiers:
+  free:
+    display_name: "Free"
+    description: "Full budgeting with basic automation"
+    price_monthly: 0.00
+    price_yearly: 0.00
+    stripe_price_id_monthly: null
+    stripe_price_id_yearly: null
+
+    limits:
+      accounts: 8
+      rules: 2
+      executions_per_day: 1
+      min_execution_interval_minutes: 1440  # 24 hours
+      api_calls_per_month: 0
+      data_export_requests_per_month: 1
+
+    features:
+      ads_enabled: true
+      ai_insights: false
+      api_access: false
+      priority_support: false
+      custom_categories: false
+      advanced_reports: false
+
+  premium_lite:
+    display_name: "Premium Lite"
+    description: "Perfect for couples and light automation"
+    price_monthly: 4.99
+    price_yearly: 49.99  # ~2 months free
+    stripe_price_id_monthly: null  # Set when Stripe configured
+    stripe_price_id_yearly: null
+
+    limits:
+      accounts: 15
+      rules: 5
+      executions_per_day: 2
+      min_execution_interval_minutes: 720  # 12 hours
+      api_calls_per_month: 0
+      data_export_requests_per_month: 5
+
+    features:
+      ads_enabled: false
+      ai_insights: false
+      api_access: false
+      priority_support: false
+      custom_categories: true
+      advanced_reports: false
+
+  premium:
+    display_name: "Premium"
+    description: "Power users with complex finances"
+    price_monthly: 9.99
+    price_yearly: 99.99  # ~2 months free
+    stripe_price_id_monthly: null  # Set when Stripe configured
+    stripe_price_id_yearly: null
+
+    limits:
+      accounts: 30
+      rules: 15
+      executions_per_day: 6
+      min_execution_interval_minutes: 240  # 4 hours
+      api_calls_per_month: 0
+      data_export_requests_per_month: 10
+
+    features:
+      ads_enabled: false
+      ai_insights: false
+      api_access: false
+      priority_support: true
+      custom_categories: true
+      advanced_reports: true
+
+  premium_plus:
+    display_name: "Premium+"
+    description: "Unlimited everything with AI and API access"
+    price_monthly: 19.99
+    price_yearly: 199.99  # ~2 months free
+    stripe_price_id_monthly: null  # Set when Stripe configured
+    stripe_price_id_yearly: null
+
+    limits:
+      accounts: -1  # Unlimited (represented as -1)
+      rules: -1     # Unlimited
+      executions_per_day: 144  # Every 10 minutes
+      min_execution_interval_minutes: 10
+      api_calls_per_month: 100000
+      data_export_requests_per_month: -1  # Unlimited
+
+    features:
+      ads_enabled: false
+      ai_insights: true
+      api_access: true
+      priority_support: true
+      custom_categories: true
+      advanced_reports: true
+
+# Default tier for new users
+default_tier: "free"
+
+# Trial configuration (optional - for future use)
+trial:
+  enabled: false
+  duration_days: 14
+  tier: "premium"  # Which tier trial users get
