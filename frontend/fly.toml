@@ -14,8 +14,8 @@ kill_timeout = 10
   PORT = "80"
   ENVIRONMENT = "production"
 
-  # API endpoint
-  API_URL = "https://api.boostedbudget.com/v1"
+  # API endpoint (no /v1 suffix - endpoints include full path like /api/v1/user/profile)
+  API_URL = "https://api.boostedbudget.com"
 
   # Auth0 configuration (runtime injection via docker-entrypoint.sh)
   AUTH0_DOMAIN = "dev-evuy37ow1xcidsmw.us.auth0.com"

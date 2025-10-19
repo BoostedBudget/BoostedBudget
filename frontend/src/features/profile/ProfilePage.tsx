@@ -5,6 +5,13 @@ import { VALID_REGIONS } from './types'
 import type { User, UpdateProfileRequest } from './types'
 import './ProfilePage.css'
 
+// Region name mapping for proper geographic display
+const REGION_NAMES: Record<string, string> = {
+  'us-east-1': 'USA (Virginia)',
+  'eu-west-1': 'Europe (Ireland)',
+  'ap-southeast-1': 'Asia Pacific (Singapore)',
+}
+
 export function ProfilePage() {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
@@ -128,12 +135,23 @@ export function ProfilePage() {
     )
   }
 
+  // If we get here, user should exist (TypeScript knows this from the loading/error guards above)
+  // But add a safety check just in case
   if (!user) {
-    return null
+    return (
+      <div className="profile-page responsive">
+        <div className="error-state">
+          <p className="error-message">Failed to load profile data</p>
+          <button onClick={loadProfile} className="btn-retry">
+            Retry
+          </button>
+        </div>
+      </div>
+    )
   }
 
-  // Get region display name
-  const regionDisplay = `USA - ${user.primary_region}`
+  // Get region display name with proper geographic labels
+  const regionDisplay = REGION_NAMES[user.primary_region] || user.primary_region
 
   return (
     <div className="profile-page responsive">

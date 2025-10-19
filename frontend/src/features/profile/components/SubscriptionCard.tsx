@@ -8,10 +8,29 @@ interface SubscriptionCardProps {
 }
 
 export function SubscriptionCard({ tier, status }: SubscriptionCardProps) {
+  // Handle undefined/null tier or status gracefully
+  if (!tier || !status) {
+    return (
+      <div className="subscription-card loading">
+        <p>Loading subscription details...</p>
+      </div>
+    )
+  }
+
   const tierInfo = SUBSCRIPTION_TIERS[tier]
+
+  // Handle invalid tier (shouldn't happen, but safety check)
+  if (!tierInfo) {
+    return (
+      <div className="subscription-card error">
+        <p>Invalid subscription tier</p>
+      </div>
+    )
+  }
+
   const isPaidTier = tier !== 'free'
 
-  // Generate CSS class name for tier
+  // Generate CSS class name for tier (safe now since tier is validated)
   const tierClassName = tier.replace('+', '-plus')
 
   return (
