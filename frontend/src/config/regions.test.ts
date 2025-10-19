@@ -33,11 +33,11 @@ describe('Region Configuration', () => {
     })
 
     it('should not include old AWS-style region codes', () => {
-      // @ts-expect-error - Testing that old codes don't exist
+      // @ts-expect-error - Testing that old AWS codes don't exist in REGIONS object
       expect(REGIONS['us-east-1']).toBeUndefined()
-      // @ts-expect-error
+      // @ts-expect-error - Testing that old AWS codes don't exist in REGIONS object
       expect(REGIONS['eu-west-1']).toBeUndefined()
-      // @ts-expect-error
+      // @ts-expect-error - Testing that old AWS codes don't exist in REGIONS object
       expect(REGIONS['ap-southeast-1']).toBeUndefined()
     })
   })
