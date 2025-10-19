@@ -22,9 +22,29 @@ export const setupAuthInterceptor = (getToken: GetTokenFunction) => {
   )
 }
 
+/**
+ * Get the API URL from runtime or build-time configuration
+ * Priority: window.ENV (runtime) > import.meta.env (build-time) > '/api' (fallback)
+ * Exported for testing purposes
+ */
+export function getApiUrl(): string {
+  // Runtime config (production) - injected by docker-entrypoint.sh
+  if (window.ENV?.API_URL) {
+    return window.ENV.API_URL
+  }
+
+  // Build-time config (development)
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL
+  }
+
+  // Fallback for local dev with Vite proxy
+  return '/api'
+}
+
 // Create axios instance with base configuration
 export const apiClient = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || '/api',
+  baseURL: getApiUrl(),
   headers: {
     'Content-Type': 'application/json',
   },
