@@ -1,0 +1,270 @@
+package repository
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+)
+
+var (
+	// ErrUserNotFound is returned when a user is not found in the database
+	ErrUserNotFound = errors.New("user not found")
+	// ErrDuplicateEmail is returned when attempting to create/update a user with an email that already exists
+	ErrDuplicateEmail = errors.New("email already exists")
+)
+
+// ProfileRepository defines the interface for user profile data access
+type ProfileRepository interface {
+	// GetUserByAuth0ID retrieves a user by their Auth0 user ID
+	GetUserByAuth0ID(ctx context.Context, auth0UserID string) (*domain.User, error)
+
+	// GetUserByID retrieves a user by their internal UUID
+	GetUserByID(ctx context.Context, id string) (*domain.User, error)
+
+	// CreateUser creates a new user in the database
+	CreateUser(ctx context.Context, user *domain.User) error
+
+	// UpdateUser updates an existing user's information
+	UpdateUser(ctx context.Context, user *domain.User) error
+
+	// UpdateLastLogin updates the last_login_at timestamp for a user
+	UpdateLastLogin(ctx context.Context, auth0UserID string) error
+}
+
+// profileRepository implements ProfileRepository using PostgreSQL
+type profileRepository struct {
+	db *sql.DB
+}
+
+// NewProfileRepository creates a new ProfileRepository instance
+func NewProfileRepository(db *sql.DB) ProfileRepository {
+	return &profileRepository{db: db}
+}
+
+// GetUserByAuth0ID retrieves a user by their Auth0 user ID
+func (r *profileRepository) GetUserByAuth0ID(ctx context.Context, auth0UserID string) (*domain.User, error) {
+	query := `
+		SELECT id, auth0_user_id, email, email_verified,
+		       subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
+		       stripe_customer_id, primary_region, is_active, is_deleted,
+		       deletion_requested_at, deletion_scheduled_at,
+		       created_at, updated_at, last_login_at
+		FROM users
+		WHERE auth0_user_id = $1 AND is_deleted = FALSE
+	`
+
+	var user domain.User
+	err := r.db.QueryRowContext(ctx, query, auth0UserID).Scan(
+		&user.ID,
+		&user.Auth0UserID,
+		&user.Email,
+		&user.EmailVerified,
+		&user.SubscriptionTier,
+		&user.SubscriptionStatus,
+		&user.SubscriptionStartedAt,
+		&user.SubscriptionEndsAt,
+		&user.StripeCustomerID,
+		&user.PrimaryRegion,
+		&user.IsActive,
+		&user.IsDeleted,
+		&user.DeletionRequestedAt,
+		&user.DeletionScheduledAt,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+		&user.LastLoginAt,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, ErrUserNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return &user, nil
+}
+
+// GetUserByID retrieves a user by their internal UUID
+func (r *profileRepository) GetUserByID(ctx context.Context, id string) (*domain.User, error) {
+	query := `
+		SELECT id, auth0_user_id, email, email_verified,
+		       subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
+		       stripe_customer_id, primary_region, is_active, is_deleted,
+		       deletion_requested_at, deletion_scheduled_at,
+		       created_at, updated_at, last_login_at
+		FROM users
+		WHERE id = $1 AND is_deleted = FALSE
+	`
+
+	var user domain.User
+	err := r.db.QueryRowContext(ctx, query, id).Scan(
+		&user.ID,
+		&user.Auth0UserID,
+		&user.Email,
+		&user.EmailVerified,
+		&user.SubscriptionTier,
+		&user.SubscriptionStatus,
+		&user.SubscriptionStartedAt,
+		&user.SubscriptionEndsAt,
+		&user.StripeCustomerID,
+		&user.PrimaryRegion,
+		&user.IsActive,
+		&user.IsDeleted,
+		&user.DeletionRequestedAt,
+		&user.DeletionScheduledAt,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+		&user.LastLoginAt,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, ErrUserNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return &user, nil
+}
+
+// CreateUser creates a new user in the database
+func (r *profileRepository) CreateUser(ctx context.Context, user *domain.User) error {
+	// Generate UUID if not already set
+	if user.ID == "" {
+		user.ID = uuid.New().String()
+	}
+
+	// Set timestamps
+	now := time.Now()
+	user.CreatedAt = now
+	user.UpdatedAt = now
+
+	query := `
+		INSERT INTO users (
+			id, auth0_user_id, email, email_verified,
+			subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
+			stripe_customer_id, primary_region, is_active, is_deleted,
+			deletion_requested_at, deletion_scheduled_at,
+			created_at, updated_at, last_login_at
+		) VALUES (
+			$1, $2, $3, $4,
+			$5, $6, $7, $8,
+			$9, $10, $11, $12,
+			$13, $14,
+			$15, $16, $17
+		)
+	`
+
+	_, err := r.db.ExecContext(ctx, query,
+		user.ID,
+		user.Auth0UserID,
+		user.Email,
+		user.EmailVerified,
+		user.SubscriptionTier,
+		user.SubscriptionStatus,
+		user.SubscriptionStartedAt,
+		user.SubscriptionEndsAt,
+		user.StripeCustomerID,
+		user.PrimaryRegion,
+		user.IsActive,
+		user.IsDeleted,
+		user.DeletionRequestedAt,
+		user.DeletionScheduledAt,
+		user.CreatedAt,
+		user.UpdatedAt,
+		user.LastLoginAt,
+	)
+
+	if err != nil {
+		// Check for unique constraint violations
+		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
+			if strings.Contains(err.Error(), "email") {
+				return ErrDuplicateEmail
+			}
+		}
+		return err
+	}
+
+	return nil
+}
+
+// UpdateUser updates an existing user's information
+// Only updates allowed fields: email, email_verified, primary_region
+// Subscription fields are managed separately through payment webhooks
+func (r *profileRepository) UpdateUser(ctx context.Context, user *domain.User) error {
+	// Update timestamp
+	user.UpdatedAt = time.Now()
+
+	query := `
+		UPDATE users
+		SET email = $1,
+		    email_verified = $2,
+		    primary_region = $3,
+		    updated_at = $4
+		WHERE id = $5
+	`
+
+	result, err := r.db.ExecContext(ctx, query,
+		user.Email,
+		user.EmailVerified,
+		user.PrimaryRegion,
+		user.UpdatedAt,
+		user.ID,
+	)
+
+	if err != nil {
+		// Check for unique constraint violations
+		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
+			if strings.Contains(err.Error(), "email") {
+				return ErrDuplicateEmail
+			}
+		}
+		return err
+	}
+
+	// Check if any rows were affected
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return ErrUserNotFound
+	}
+
+	return nil
+}
+
+// UpdateLastLogin updates the last_login_at timestamp for a user
+func (r *profileRepository) UpdateLastLogin(ctx context.Context, auth0UserID string) error {
+	now := time.Now()
+
+	query := `
+		UPDATE users
+		SET last_login_at = $1,
+		    updated_at = $2
+		WHERE auth0_user_id = $3
+	`
+
+	result, err := r.db.ExecContext(ctx, query, now, now, auth0UserID)
+	if err != nil {
+		return err
+	}
+
+	// Check if any rows were affected
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return ErrUserNotFound
+	}
+
+	return nil
+}
