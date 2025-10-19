@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
+import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
 import { CookiesProvider } from 'react-cookie'
 import { CookieConsent, initializeAdSense, type CookieConsentSettings } from './privacy'
-import { LoginButton, LogoutButton } from './auth'
+import { LoginButton, LogoutButton, ProtectedRoute } from './auth'
+import { ProfilePage } from './features/profile/ProfilePage'
 import './App.css'
 
 interface HealthCheck {
@@ -57,77 +59,101 @@ function App() {
     // }
   }
 
+  // Home page content
+  const HomePage = () => (
+    <>
+      <section className="health-check">
+        <h2>System Status</h2>
+        {loading ? (
+          <p>Loading...</p>
+        ) : health ? (
+          <div className="health-status">
+            <p className={`status status-${health.status}`}>
+              Status: {health.status.toUpperCase()}
+            </p>
+            <p>Version: {health.version}</p>
+            <p>Region: us-east-1 (MVP)</p>
+            <div className="checks">
+              <p>Database: {health.checks.database ? '✅' : '❌'}</p>
+              <p>Redis: {health.checks.redis ? '✅' : '❌'}</p>
+            </div>
+          </div>
+        ) : (
+          <p className="error">Failed to load system status</p>
+        )}
+      </section>
+
+      <section className="info">
+        <h2>Phase 0: Foundation</h2>
+        <p>✅ Backend API with health endpoint</p>
+        <p>✅ OpenAPI specification</p>
+        <p>✅ Frontend skeleton (React + TypeScript + Vite)</p>
+        <p>✅ GDPR Cookie Consent</p>
+        <p>✅ Auth0 integration</p>
+        <p>✅ User Profile Management</p>
+        <p>⏳ Database & migrations (coming next)</p>
+        <p>⏳ Docker development environment (coming next)</p>
+      </section>
+    </>
+  )
+
   return (
     <CookiesProvider>
-      <div className="app">
-        <header className="app-header">
-          <div>
-            <h1>🚀 BoostedBudget</h1>
-            <p>Supercharge your finances with intelligent automation</p>
-          </div>
-          <div className="auth-section">
-            {isAuthenticated ? (
-              <div className="user-profile">
-                {user?.picture && (
-                  <img
-                    src={user.picture}
-                    alt={user.name || 'User'}
-                    className="user-avatar"
-                  />
-                )}
-                <div className="user-info">
-                  <p className="user-name">{user?.name}</p>
-                  <p className="user-email">{user?.email}</p>
+      <Router>
+        <div className="app">
+          <header className="app-header">
+            <div>
+              <h1>🚀 BoostedBudget</h1>
+              <p>Supercharge your finances with intelligent automation</p>
+            </div>
+            <nav className="main-nav">
+              <Link to="/">Home</Link>
+              {isAuthenticated && <Link to="/profile">Profile</Link>}
+            </nav>
+            <div className="auth-section">
+              {isAuthenticated ? (
+                <div className="user-profile">
+                  {user?.picture && (
+                    <img
+                      src={user.picture}
+                      alt={user.name || 'User'}
+                      className="user-avatar"
+                    />
+                  )}
+                  <div className="user-info">
+                    <p className="user-name">{user?.name}</p>
+                    <p className="user-email">{user?.email}</p>
+                  </div>
+                  <LogoutButton className="btn-auth" />
                 </div>
-                <LogoutButton className="btn-auth" />
-              </div>
-            ) : (
-              <LoginButton className="btn-auth" />
-            )}
-          </div>
-        </header>
+              ) : (
+                <LoginButton className="btn-auth" />
+              )}
+            </div>
+          </header>
 
-        <main className="app-main">
-          <section className="health-check">
-            <h2>System Status</h2>
-            {loading ? (
-              <p>Loading...</p>
-            ) : health ? (
-              <div className="health-status">
-                <p className={`status status-${health.status}`}>
-                  Status: {health.status.toUpperCase()}
-                </p>
-                <p>Version: {health.version}</p>
-                <p>Region: us-east-1 (MVP)</p>
-                <div className="checks">
-                  <p>Database: {health.checks.database ? '✅' : '❌'}</p>
-                  <p>Redis: {health.checks.redis ? '✅' : '❌'}</p>
-                </div>
-              </div>
-            ) : (
-              <p className="error">Failed to load system status</p>
-            )}
-          </section>
+          <main className="app-main">
+            <Routes>
+              <Route path="/" element={<HomePage />} />
+              <Route
+                path="/profile"
+                element={
+                  <ProtectedRoute>
+                    <ProfilePage />
+                  </ProtectedRoute>
+                }
+              />
+            </Routes>
+          </main>
 
-          <section className="info">
-            <h2>Phase 0: Foundation</h2>
-            <p>✅ Backend API with health endpoint</p>
-            <p>✅ OpenAPI specification</p>
-            <p>✅ Frontend skeleton (React + TypeScript + Vite)</p>
-            <p>✅ GDPR Cookie Consent</p>
-            <p>✅ Auth0 integration</p>
-            <p>⏳ Database & migrations (coming next)</p>
-            <p>⏳ Docker development environment (coming next)</p>
-          </section>
-        </main>
+          <footer className="app-footer">
+            <p>BoostedBudget © 2025 | GDPR Compliant | Single Region MVP (us-east-1)</p>
+          </footer>
 
-        <footer className="app-footer">
-          <p>BoostedBudget © 2025 | GDPR Compliant | Single Region MVP (us-east-1)</p>
-        </footer>
-
-        {/* Cookie Consent Banner */}
-        <CookieConsent onConsentChange={handleConsentChange} />
-      </div>
+          {/* Cookie Consent Banner */}
+          <CookieConsent onConsentChange={handleConsentChange} />
+        </div>
+      </Router>
     </CookiesProvider>
   )
 }
