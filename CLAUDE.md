@@ -65,69 +65,87 @@ infrastructure/     # Configs
 
 **Skip issues for**: Trivial typos, formatting-only, local experiments
 
-### 3. Code Search Priority
-1. **Serena** (local semantic search - FIRST)
-2. **in-memoria** (codebase intelligence)
-3. **Grep/Glob** (regex/patterns)
-4. **GitHub MCP** (ONLY for OTHER repos, NOT local code)
+### 3. MCP Usage (MANDATORY)
 
-## MCP Servers
+**Code Search (ALWAYS use MCP first)**:
+1. **Serena** - REQUIRED for any code search/nav (NOT Grep/Glob)
+2. **in-memoria** - REQUIRED for semantic queries, architecture questions
+3. Grep/Glob - ONLY when Serena fails or exact regex needed
+4. GitHub MCP - ONLY external repos, NEVER local code
 
-**Sequential Thinking** (`@modelcontextprotocol/server-sequential-thinking`): Complex decisions, architecture, debugging, trade-off analysis, Phase 7+ planning
+**MUST use Serena when**:
+- "Find where X is implemented"
+- "How does Y work?"
+- "What files handle Z?"
+- "Show me examples of..."
+- ANY code exploration/understanding
 
-**Playwright** (`@playwright/mcp`): E2E testing, browser automation, Auth0/Plaid flows, GDPR consent, subscription testing
+**MUST use Sequential Thinking when**:
+- Architecture decisions (>3 options)
+- Complex debugging (>2 systems)
+- Trade-off analysis
+- Phase 7+ planning
+- Design patterns selection
 
-**GitHub** (HTTP MCP): **EXTERNAL repos only**, issue/PR management, **NOT for local code search**
+**MUST use in-memoria when**:
+- "Why did we decide X?"
+- GDPR implementation questions
+- Complex multi-file logic flows
+- Recurring patterns/conventions
+- Historical context needed
 
-**Serena** (Custom `/home/max/coding/BoostedBudget`): **LOCAL code search**, semantic navigation, architecture understanding, symbol search, data flow
+**MUST use Server Memory when**:
+- Store config values (API keys format, env vars)
+- Cache decisions (auth flow, data model)
+- Persist credentials/secrets patterns
+- Remember user preferences
 
-**Server Memory** (`@modelcontextprotocol/server-memory`): Simple key-value persistence, configs, credentials, decisions
-
-**In-Memoria** (`in-memoria`): Semantic memory search, hierarchical knowledge, complex queries, GDPR decisions, architectural patterns
-
-**Typical feature workflow**:
-1. GitHub: Create issue
-2. Serena: Search codebase
-3. in-memoria: Semantic insights
-4. Sequential Thinking: Plan
-5. GitHub: Create branch
-6. **TDD RED**: Write failing tests
-7. **TDD GREEN**: Implement
-8. **TDD REFACTOR**: Clean up
-9. **PRE-PR TEST**: Run ALL tests locally before PR
-   - Backend: `cd backend && go test ./... -v`
-   - Frontend: `npm test -- --run` + `npm run lint`
-   - E2E: `npm run test:e2e -- --reporter=line 2>&1`
-   - Security: `trivy fs . --scanners vuln --severity CRITICAL,HIGH`
-10. GitHub: Create PR with `Closes #N`
-11. Server Memory: Store decisions
-12. GitHub: Merge, verify auto-close
+**Feature workflow**:
+1. Serena: Find relevant code
+2. in-memoria: Check past decisions/patterns
+3. Sequential Thinking: Plan approach
+4. Server Memory: Store key decisions
+5. **TDD RED**: Write failing tests
+6. **TDD GREEN**: Implement
+7. **TDD REFACTOR**: Clean
+8. **RUN ALL TESTS** (MANDATORY - NO PR without):
+   - `cd backend && go test ./... -v` (MUST pass)
+   - `npm test -- --run && npm run lint` (MUST pass)
+   - `npm run test:e2e -- --reporter=line 2>&1` (MUST pass)
+9. Server Memory: Update learnings
+10. PR ONLY after all tests pass
 
 ## Dev Workflow Checklist
 
-1. Create GitHub issue FIRST
-2. Create branch `feature/<issue#>-<desc>`
-3. **TDD: Red-Green-Refactor** (mandatory)
-4. OpenAPI spec for new APIs
-5. Check subscription limits (free vs premium)
-6. GDPR implications check
-7. Structured logging
-8. Document API changes in OpenAPI
-9. Validate with Prism
-10. Single region (us-east-1), keep `*InRegion` abstractions
-11. Migrations for schema changes
-12. Auth0 integration verification
-13. Future-ready patterns (`*InRegion`)
-14. `primary_region` default: 'us-east-1'
-15. PR with "Closes #N"
-16. Update issue with progress
+1. **MCPs FIRST**: Serena search → in-memoria context → Sequential plan
+2. GitHub issue FIRST
+3. Branch `feature/<issue#>-<desc>`
+4. **TDD**: Red-Green-Refactor (mandatory)
+5. OpenAPI spec for new APIs
+6. Check subscription limits (free vs premium)
+7. GDPR implications check
+8. Migrations for schema changes
+9. Auth0 integration verification
+10. `*InRegion` abstractions, `primary_region`='us-east-1'
+11. **RUN ALL TESTS** (MANDATORY before PR):
+    - Backend: `cd backend && go test ./... -v`
+    - Frontend: `npm test -- --run && npm run lint`
+    - E2E: `npm run test:e2e -- --reporter=line 2>&1`
+    - **NO PR until ALL pass**
+12. PR with "Closes #N"
+13. **Server Memory**: Store key decisions
 
 ## Critical Implementation Notes
 
 **ALWAYS**:
+- **MCPs FIRST**: Serena→in-memoria→Sequential before any code work
 - TDD Red-Green-Refactor (no exceptions for business logic)
+- **ALL TESTS PASS BEFORE PR** (backend+frontend+e2e+lint) - NO EXCEPTIONS
 - Issue → Branch → PR for all logical work
-- Serena/in-memoria for local search, GitHub only for external repos
+- Serena for ALL code search (NEVER Grep first)
+- in-memoria for "why/how" questions
+- Sequential Thinking for complex decisions
+- Server Memory to persist learnings
 - No money movement (suggestions only, no MTL)
 - GDPR compliance (all users get rights)
 - Free tier limits (3 rules, 2 accounts, ads)
@@ -276,4 +294,4 @@ Keep synchronized:
 
 ---
 
-*Last updated: Issue ID required in ALL commits/PRs (#N: format), mandatory TDD (Red-Green-Refactor), MCP servers, code search priority (Serena first)*
+*Last updated: **MCPs MANDATORY** (Serena→in-memoria→Sequential FIRST always), Issue ID in ALL commits/PRs (#N:), TDD Red-Green-Refactor non-negotiable*
