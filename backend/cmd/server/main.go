@@ -2,17 +2,21 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"time"
 
+	_ "github.com/lib/pq"
 	"github.com/labstack/echo/v4"
 	echomiddleware "github.com/labstack/echo/v4/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/handlers"
 	"github.com/maxnussbaum/BoostedBudget/internal/middleware"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
 func main() {
@@ -20,6 +24,24 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatal("Failed to load config:", err)
+	}
+
+	// Initialize database connection (optional for local dev)
+	var db *sql.DB
+	if cfg.DatabaseURL != "" {
+		db, err = sql.Open("postgres", cfg.DatabaseURL)
+		if err != nil {
+			log.Fatal("Failed to connect to database:", err)
+		}
+		defer db.Close()
+
+		// Ping database to verify connection
+		if err := db.Ping(); err != nil {
+			log.Fatal("Failed to ping database:", err)
+		}
+		log.Println("✅ Database connection established")
+	} else {
+		log.Println("⚠️  Running without database (set DATABASE_URL to enable)")
 	}
 
 	// Create Echo instance
@@ -45,10 +67,33 @@ func main() {
 	metricsHandler := &handlers.MetricsHandler{}
 	e.GET("/metrics", metricsHandler.GetMetrics)
 
-	// Future: Add authenticated routes here
-	// api := e.Group("/api/v1")
-	// api.Use(auth0Middleware)
-	// api.GET("/user/profile", profileHandler.GetProfile)
+	// Authenticated routes (requires database and Auth0)
+	if db != nil && cfg.Auth0Domain != "" && cfg.Auth0Audience != "" {
+		// Create repositories
+		profileRepo := repository.NewProfileRepository(db)
+
+		// Create services
+		profileService := services.NewProfileService(profileRepo)
+
+		// Create handlers
+		profileHandler := handlers.NewProfileHandler(profileService)
+
+		// Create Auth0 middleware
+		auth0Middleware := middleware.Auth0Middleware(
+			"https://"+cfg.Auth0Domain+"/",
+			cfg.Auth0Audience,
+		)
+
+		// API v1 routes
+		api := e.Group("/api/v1")
+		api.Use(auth0Middleware)
+		api.GET("/user/profile", profileHandler.GetProfile)
+		api.PUT("/user/profile", profileHandler.UpdateProfile)
+
+		log.Println("✅ Authenticated routes enabled (Auth0 + Database)")
+	} else {
+		log.Println("⚠️  Authenticated routes disabled (requires DATABASE_URL, AUTH0_DOMAIN, AUTH0_AUDIENCE)")
+	}
 
 	// Start server
 	address := fmt.Sprintf(":%s", cfg.Port)
