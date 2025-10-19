@@ -55,6 +55,7 @@ infrastructure/     # Configs
 **CRITICAL - Commit & PR Format**:
 - **ALL commits** MUST start with Issue ID: `#N: Your commit message`
 - **ALL PR titles** MUST start with Issue ID: `#N: Your PR title`
+- **ALL PRs** MUST include `Closes #N` in description (auto-close on merge)
 - Examples:
   - `#3: Implement Auth0 JWT validation middleware`
   - `#7: Add database migration for users table`
@@ -93,10 +94,14 @@ infrastructure/     # Configs
 6. **TDD RED**: Write failing tests
 7. **TDD GREEN**: Implement
 8. **TDD REFACTOR**: Clean up
-9. Playwright: E2E test
-10. GitHub: Create PR
+9. **PRE-PR TEST**: Run ALL tests locally before PR
+   - Backend: `cd backend && go test ./... -v`
+   - Frontend: `npm test -- --run`
+   - E2E: `npm run test:e2e -- --reporter=line 2>&1`
+   - Security: `trivy fs . --scanners vuln --severity CRITICAL,HIGH`
+10. GitHub: Create PR with `Closes #N`
 11. Server Memory: Store decisions
-12. GitHub: Merge, verify close
+12. GitHub: Merge, verify auto-close
 
 ## Dev Workflow Checklist
 
