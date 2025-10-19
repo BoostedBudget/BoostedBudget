@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { SubscriptionCard } from './SubscriptionCard'
+import type { User } from '../types'
 
 describe('SubscriptionCard', () => {
   describe('Free tier', () => {
@@ -120,13 +121,13 @@ describe('SubscriptionCard', () => {
       // This test will FAIL with current implementation
       // Current code tries to call .replace() on undefined at line 15
       expect(() => {
-        render(<SubscriptionCard tier={undefined as unknown as string} status="active" />)
+        render(<SubscriptionCard tier={undefined as unknown as User['subscription_tier']} status="active" />)
       }).not.toThrow()
     })
 
     it('should show loading state when tier is undefined', () => {
       // This test will FAIL - current implementation crashes
-      render(<SubscriptionCard tier={undefined as unknown as string} status="active" />)
+      render(<SubscriptionCard tier={undefined as unknown as User['subscription_tier']} status="active" />)
 
       expect(screen.getByText(/loading/i)).toBeInTheDocument()
     })
@@ -134,21 +135,21 @@ describe('SubscriptionCard', () => {
     it('should handle undefined status gracefully', () => {
       // Should not crash when status is undefined
       expect(() => {
-        render(<SubscriptionCard tier="free" status={undefined as unknown as string} />)
+        render(<SubscriptionCard tier="free" status={undefined as unknown as User['subscription_status']} />)
       }).not.toThrow()
     })
 
     it('should handle null tier gracefully', () => {
       // Should not crash when tier is null
       expect(() => {
-        render(<SubscriptionCard tier={null as unknown as string} status="active" />)
+        render(<SubscriptionCard tier={null as unknown as User['subscription_tier']} status="active" />)
       }).not.toThrow()
     })
 
     it('should handle both tier and status being undefined', () => {
       // Should not crash when both are undefined
       expect(() => {
-        render(<SubscriptionCard tier={undefined as unknown as string} status={undefined as unknown as string} />)
+        render(<SubscriptionCard tier={undefined as unknown as User['subscription_tier']} status={undefined as unknown as User['subscription_status']} />)
       }).not.toThrow()
 
       expect(screen.getByText(/loading/i)).toBeInTheDocument()
@@ -157,7 +158,7 @@ describe('SubscriptionCard', () => {
     it('should handle empty string tier', () => {
       // Should handle empty string gracefully
       expect(() => {
-        render(<SubscriptionCard tier={'' as unknown as string} status="active" />)
+        render(<SubscriptionCard tier={'' as unknown as User['subscription_tier']} status="active" />)
       }).not.toThrow()
     })
   })
