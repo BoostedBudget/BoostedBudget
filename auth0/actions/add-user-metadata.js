@@ -6,7 +6,7 @@
  *
  * This Action adds custom claims to JWT tokens including:
  * - Subscription tier (free, premium, premium_plus)
- * - Primary region (us-east-1 for MVP)
+ * - Primary region (iad for MVP)
  * - GDPR consent tracking
  * - User ID
  *
@@ -49,9 +49,9 @@ exports.onExecutePostLogin = async (event, api) => {
   // ============================================
   // Primary Region (GDPR Data Residency)
   // ============================================
-  // Default to 'us-east-1' (MVP single region)
+  // Default to 'iad' (MVP single region)
   // Future: 'eu-west-1', 'ap-southeast-1', etc.
-  const primaryRegion = userMetadata.primary_region || 'us-east-1';
+  const primaryRegion = userMetadata.primary_region || 'iad';
 
   // ============================================
   // GDPR Consent Tracking
@@ -108,7 +108,7 @@ exports.onExecutePostLogin = async (event, api) => {
  *   "exp": 1234654290,
  *   "scope": "read:profile write:profile",
  *   "https://boostedbudget.com/subscription_tier": "free",
- *   "https://boostedbudget.com/primary_region": "us-east-1",
+ *   "https://boostedbudget.com/primary_region": "iad",
  *   "https://boostedbudget.com/gdpr_consent": {
  *     "necessary": true,
  *     "analytics": false,

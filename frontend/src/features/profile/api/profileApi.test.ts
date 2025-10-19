@@ -25,7 +25,7 @@ describe('profileApi', () => {
         email_verified: true,
         subscription_tier: 'premium',
         subscription_status: 'active',
-        primary_region: 'us-east-1',
+        primary_region: 'iad',
         is_active: true,
         is_deleted: false,
         created_at: '2025-01-01T00:00:00Z',
@@ -50,7 +50,7 @@ describe('profileApi', () => {
         email_verified: true,
         subscription_tier: 'free',
         subscription_status: 'active',
-        primary_region: 'us-east-1',
+        primary_region: 'iad',
         is_active: true,
         is_deleted: false,
         created_at: '2025-01-01T00:00:00Z',
@@ -99,7 +99,7 @@ describe('profileApi', () => {
         email_verified: false,
         subscription_tier: 'premium',
         subscription_status: 'active',
-        primary_region: 'us-east-1',
+        primary_region: 'iad',
         is_active: true,
         is_deleted: false,
         created_at: '2025-01-01T00:00:00Z',
@@ -119,7 +119,7 @@ describe('profileApi', () => {
 
     it('should update primary region', async () => {
       const updateRequest: UpdateProfileRequest = {
-        primary_region: 'eu-west-1',
+        primary_region: 'lhr',
       }
 
       const updatedUser: User = {
@@ -129,7 +129,7 @@ describe('profileApi', () => {
         email_verified: true,
         subscription_tier: 'premium',
         subscription_status: 'active',
-        primary_region: 'eu-west-1',
+        primary_region: 'lhr',
         is_active: true,
         is_deleted: false,
         created_at: '2025-01-01T00:00:00Z',
@@ -141,7 +141,7 @@ describe('profileApi', () => {
 
       const user = await updateProfile(updateRequest)
 
-      expect(user.primary_region).toBe('eu-west-1')
+      expect(user.primary_region).toBe('lhr')
     })
 
     it('should handle validation errors (400)', async () => {

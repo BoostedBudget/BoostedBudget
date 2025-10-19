@@ -2,15 +2,9 @@ import { useState, useEffect } from 'react'
 import { SubscriptionCard } from './components/SubscriptionCard'
 import { fetchProfile, updateProfile } from './api/profileApi'
 import { VALID_REGIONS } from './types'
+import { getRegionDisplay, REGIONS } from '../../config/regions'
 import type { User, UpdateProfileRequest } from './types'
 import './ProfilePage.css'
-
-// Region name mapping for proper geographic display
-const REGION_NAMES: Record<string, string> = {
-  'us-east-1': 'USA (Virginia)',
-  'eu-west-1': 'Europe (Ireland)',
-  'ap-southeast-1': 'Asia Pacific (Singapore)',
-}
 
 export function ProfilePage() {
   const [user, setUser] = useState<User | null>(null)
@@ -151,7 +145,7 @@ export function ProfilePage() {
   }
 
   // Get region display name with proper geographic labels
-  const regionDisplay = REGION_NAMES[user.primary_region] || user.primary_region
+  const regionDisplay = getRegionDisplay(user.primary_region)
 
   return (
     <div className="profile-page responsive">

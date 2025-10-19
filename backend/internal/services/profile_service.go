@@ -18,11 +18,12 @@ var (
 	ErrForbiddenUpdate = errors.New("cannot update subscription fields")
 )
 
-// Valid regions for data residency
+// Valid regions for data residency (Fly.io IATA codes)
+// Uses the region validation from domain.Regions
 var validRegions = map[string]bool{
-	"us-east-1":      true,
-	"eu-west-1":      true,
-	"ap-southeast-1": true,
+	domain.RegionIAD: true, // iad - US East (Virginia)
+	domain.RegionLHR: true, // lhr - UK (London)
+	domain.RegionSYD: true, // syd - Australia (Sydney)
 }
 
 // ProfileService defines the interface for user profile business logic

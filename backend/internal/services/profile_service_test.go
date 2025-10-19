@@ -64,7 +64,7 @@ func TestGetProfile_ExistingUser(t *testing.T) {
 		Email:              email,
 		SubscriptionTier:   "free",
 		SubscriptionStatus: "active",
-		PrimaryRegion:      "us-east-1",
+		PrimaryRegion:      "iad",
 		CreatedAt:          time.Now(),
 		UpdatedAt:          time.Now(),
 	}
@@ -100,7 +100,7 @@ func TestGetProfile_FirstLogin(t *testing.T) {
 		return u.Auth0UserID == auth0UserID &&
 			u.Email == email &&
 			u.SubscriptionTier == "free" &&
-			u.PrimaryRegion == "us-east-1"
+			u.PrimaryRegion == "iad"
 	})).Return(nil)
 
 	// Execute
@@ -112,7 +112,7 @@ func TestGetProfile_FirstLogin(t *testing.T) {
 	assert.Equal(t, auth0UserID, user.Auth0UserID)
 	assert.Equal(t, email, user.Email)
 	assert.Equal(t, "free", user.SubscriptionTier)
-	assert.Equal(t, "us-east-1", user.PrimaryRegion)
+	assert.Equal(t, "iad", user.PrimaryRegion)
 	mockRepo.AssertExpectations(t)
 }
 
@@ -176,7 +176,7 @@ func TestUpdateProfile_Success(t *testing.T) {
 		Email:              "old@example.com",
 		SubscriptionTier:   "free",
 		SubscriptionStatus: "active",
-		PrimaryRegion:      "us-east-1",
+		PrimaryRegion:      "iad",
 	}
 
 	newEmail := "new@example.com"
@@ -187,7 +187,7 @@ func TestUpdateProfile_Success(t *testing.T) {
 	// Mock expectations
 	mockRepo.On("GetUserByAuth0ID", ctx, auth0UserID).Return(existingUser, nil)
 	mockRepo.On("UpdateUser", ctx, mock.MatchedBy(func(u *domain.User) bool {
-		return u.Email == newEmail && u.PrimaryRegion == "us-east-1"
+		return u.Email == newEmail && u.PrimaryRegion == "iad"
 	})).Return(nil)
 
 	// Execute
@@ -212,7 +212,7 @@ func TestUpdateProfile_InvalidEmail(t *testing.T) {
 		ID:            uuid.New().String(),
 		Auth0UserID:   auth0UserID,
 		Email:         "valid@example.com",
-		PrimaryRegion: "us-east-1",
+		PrimaryRegion: "iad",
 	}
 
 	invalidEmail := "not-an-email"
@@ -245,7 +245,7 @@ func TestUpdateProfile_InvalidRegion(t *testing.T) {
 		ID:            uuid.New().String(),
 		Auth0UserID:   auth0UserID,
 		Email:         "test@example.com",
-		PrimaryRegion: "us-east-1",
+		PrimaryRegion: "iad",
 	}
 
 	invalidRegion := "invalid-region"
@@ -278,10 +278,10 @@ func TestUpdateProfile_ValidRegion(t *testing.T) {
 		ID:            uuid.New().String(),
 		Auth0UserID:   auth0UserID,
 		Email:         "test@example.com",
-		PrimaryRegion: "us-east-1",
+		PrimaryRegion: "iad",
 	}
 
-	newRegion := "eu-west-1"
+	newRegion := "lhr"
 	req := &domain.UpdateProfileRequest{
 		PrimaryRegion: &newRegion,
 	}
@@ -340,7 +340,7 @@ func TestUpdateProfile_UpdateError(t *testing.T) {
 		ID:            uuid.New().String(),
 		Auth0UserID:   auth0UserID,
 		Email:         "test@example.com",
-		PrimaryRegion: "us-east-1",
+		PrimaryRegion: "iad",
 	}
 
 	newEmail := "new@example.com"
@@ -397,9 +397,9 @@ func TestValidateRegion(t *testing.T) {
 		region  string
 		wantErr bool
 	}{
-		{"valid us-east-1", "us-east-1", false},
-		{"valid eu-west-1", "eu-west-1", false},
-		{"valid ap-southeast-1", "ap-southeast-1", false},
+		{"valid iad", "iad", false},
+		{"valid lhr", "lhr", false},
+		{"valid syd", "syd", false},
 		{"invalid region", "invalid-region", true},
 		{"invalid empty", "", true},
 		{"invalid us-west-1", "us-west-1", true},

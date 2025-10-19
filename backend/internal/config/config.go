@@ -46,7 +46,7 @@ func Load() (*Config, error) {
 		Port:         getEnv("PORT", "8080"),
 		Environment:  getEnv("ENVIRONMENT", "development"),
 		Version:      getEnv("VERSION", "0.1.0"),
-		PrimaryRegion: getEnv("PRIMARY_REGION", "us-east-1"),
+		PrimaryRegion: getEnv("PRIMARY_REGION", "iad"),
 
 		// Database
 		DatabaseURL: getEnv("DATABASE_URL", ""),
