@@ -19,13 +19,21 @@ fi
 
 echo "Running database migrations with Atlas..."
 
-# Run migrations using Atlas
-# --dir specifies the directory containing migration files
-# --url uses the DATABASE_URL environment variable
-# Atlas automatically detects and applies pending migrations
+# Construct direct PostgreSQL connection for Atlas (bypass PgBouncer)
+# PgBouncer URL pattern: postgresql://user:pass@pgbouncer.<cluster-id>.flympg.net/fly-db
+# Direct URL pattern:    postgresql://user:pass@boostedbudget-db.flycast:5432/fly-db
+#
+# Atlas is incompatible with PgBouncer transaction pooling mode because it tries
+# to set connection parameters (like search_path) that PgBouncer blocks.
+# Solution: Use direct PostgreSQL connection for migrations only.
+MIGRATION_URL=$(echo "$DATABASE_URL" | sed 's/pgbouncer\.[a-z0-9]*\.flympg\.net/boostedbudget-db.flycast:5432/')
+
+echo "Using direct PostgreSQL connection for migrations (bypassing PgBouncer)"
+
+# Run migrations using Atlas with direct connection
 atlas migrate apply \
   --dir file:///app/migrations \
-  --url "$DATABASE_URL"
+  --url "$MIGRATION_URL"
 
 if [ $? -eq 0 ]; then
   echo "✓ Migrations completed successfully"
