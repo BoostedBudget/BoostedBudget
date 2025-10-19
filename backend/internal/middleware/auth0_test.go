@@ -225,7 +225,7 @@ func TestAuth0Middleware_CustomClaimsExtraction(t *testing.T) {
 	// Create token with custom claims
 	token := createTestTokenWithClaims(t, "auth0|123456", map[string]interface{}{
 		"https://boostedbudget.com/subscription_tier": "premium",
-		"https://boostedbudget.com/primary_region":    "us-east-1",
+		"https://boostedbudget.com/primary_region":    "iad",
 	}, jwksServer.URL)
 	req.Header.Set("Authorization", "Bearer "+token)
 
@@ -249,8 +249,8 @@ func TestAuth0Middleware_CustomClaimsExtraction(t *testing.T) {
 			}
 
 			region := claimsMap["https://boostedbudget.com/primary_region"]
-			if region != "us-east-1" {
-				t.Errorf("Expected primary_region 'us-east-1', got '%v'", region)
+			if region != "iad" {
+				t.Errorf("Expected primary_region 'iad', got '%v'", region)
 			}
 		}
 
@@ -421,19 +421,19 @@ func TestGetPrimaryRegion(t *testing.T) {
 
 	// Test with region in claims
 	testClaims := jwt.MapClaims{
-		"https://boostedbudget.com/primary_region": "eu-west-1",
+		"https://boostedbudget.com/primary_region": "lhr",
 	}
 	c.Set("claims", testClaims)
 	region := GetPrimaryRegion(c)
-	if region != "eu-west-1" {
-		t.Errorf("Expected 'eu-west-1', got '%s'", region)
+	if region != "lhr" {
+		t.Errorf("Expected 'lhr', got '%s'", region)
 	}
 
-	// Test without region in claims (should default to "us-east-1")
+	// Test without region in claims (should default to "iad")
 	c2 := e.NewContext(req, rec)
 	region = GetPrimaryRegion(c2)
-	if region != "us-east-1" {
-		t.Errorf("Expected default 'us-east-1', got '%s'", region)
+	if region != "iad" {
+		t.Errorf("Expected default 'iad', got '%s'", region)
 	}
 }
 

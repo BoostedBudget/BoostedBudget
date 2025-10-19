@@ -22,7 +22,7 @@ describe('ProfilePage', () => {
     email_verified: true,
     subscription_tier: 'premium',
     subscription_status: 'active',
-    primary_region: 'us-east-1',
+    primary_region: 'iad',
     is_active: true,
     is_deleted: false,
     created_at: '2025-01-01T00:00:00Z',
@@ -78,7 +78,7 @@ describe('ProfilePage', () => {
       render(<ProfilePage />)
 
       await waitFor(() => {
-        // Check for new geographic display format (us-east-1 maps to "USA (Virginia)")
+        // Check for new geographic display format (iad maps to "USA (Virginia)")
         expect(screen.getByText(/USA \(Virginia\)/i)).toBeInTheDocument()
       })
     })
@@ -234,7 +234,7 @@ describe('ProfilePage', () => {
       vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
       vi.mocked(profileApi.updateProfile).mockResolvedValue({
         ...mockUser,
-        primary_region: 'eu-west-1',
+        primary_region: 'lhr',
       })
 
       render(<ProfilePage />)
@@ -246,7 +246,7 @@ describe('ProfilePage', () => {
       const user = userEvent.setup()
       const regionSelect = screen.getByLabelText(/region/i)
 
-      await user.selectOptions(regionSelect, 'eu-west-1')
+      await user.selectOptions(regionSelect, 'lhr')
 
       const saveButton = screen.getByRole('button', { name: /save/i })
       await user.click(saveButton)
@@ -254,7 +254,7 @@ describe('ProfilePage', () => {
       await waitFor(() => {
         expect(profileApi.updateProfile).toHaveBeenCalledWith({
           email: 'test@example.com',
-          primary_region: 'eu-west-1',
+          primary_region: 'lhr',
         })
       })
     })
