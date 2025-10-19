@@ -599,16 +599,15 @@ jobs:
       - name: Run migrations
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           echo "Running database migrations on existing infrastructure..."
           echo "This runs BEFORE deploying new containers to prevent crash loops"
 
-          # Get DATABASE_URL from Fly.io secrets
-          echo "Retrieving database connection string..."
-          DATABASE_URL=$(flyctl secrets list -a boostedbudget-api | grep DATABASE_URL | awk '{print $3}')
-
           if [ -z "$DATABASE_URL" ]; then
-            echo "::error::Could not retrieve DATABASE_URL from Fly.io secrets"
+            echo "::error::DATABASE_URL secret not set in GitHub Actions"
+            echo "::error::Please add DATABASE_URL to repository secrets"
+            echo "::error::Get it from: fly postgres connect -a boostedbudget-db"
             exit 1
           fi
 
