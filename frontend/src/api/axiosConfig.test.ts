@@ -110,9 +110,9 @@ describe('API URL Configuration (getApiUrl function)', () => {
     // Restore original values
     window.ENV = originalWindowENV
     if (originalViteApiUrl !== undefined) {
-      import.meta.env.VITE_API_URL = originalViteApiUrl
+      ;(import.meta.env as any).VITE_API_URL = originalViteApiUrl
     } else {
-      delete import.meta.env.VITE_API_URL
+      delete (import.meta.env as any).VITE_API_URL
     }
   })
 
@@ -131,8 +131,8 @@ describe('API URL Configuration (getApiUrl function)', () => {
     // Clear runtime config
     window.ENV = undefined
 
-    // Set build-time config
-    import.meta.env.VITE_API_URL = 'http://localhost:8080'
+    // Set build-time config (use type assertion for readonly property)
+    ;(import.meta.env as any).VITE_API_URL = 'http://localhost:8080'
 
     const apiUrl = getApiUrl()
 
@@ -142,7 +142,7 @@ describe('API URL Configuration (getApiUrl function)', () => {
   it('should default to /api when no config found', () => {
     // Clear all config
     window.ENV = undefined
-    delete import.meta.env.VITE_API_URL
+    delete (import.meta.env as any).VITE_API_URL
 
     const apiUrl = getApiUrl()
 
@@ -154,7 +154,7 @@ describe('API URL Configuration (getApiUrl function)', () => {
     window.ENV = {
       API_URL: 'https://api.boostedbudget.com',
     }
-    import.meta.env.VITE_API_URL = 'http://localhost:8080'
+    ;(import.meta.env as any).VITE_API_URL = 'http://localhost:8080'
 
     const apiUrl = getApiUrl()
 
@@ -167,7 +167,7 @@ describe('API URL Configuration (getApiUrl function)', () => {
     window.ENV = {
       API_URL: '',
     }
-    import.meta.env.VITE_API_URL = 'http://localhost:8080'
+    ;(import.meta.env as any).VITE_API_URL = 'http://localhost:8080'
 
     const apiUrl = getApiUrl()
 
@@ -178,7 +178,7 @@ describe('API URL Configuration (getApiUrl function)', () => {
   it('should handle window.ENV being defined but API_URL being undefined', () => {
     // Set window.ENV but without API_URL
     window.ENV = {}
-    import.meta.env.VITE_API_URL = 'http://localhost:8080'
+    ;(import.meta.env as any).VITE_API_URL = 'http://localhost:8080'
 
     const apiUrl = getApiUrl()
 
