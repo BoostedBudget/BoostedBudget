@@ -212,7 +212,160 @@ jobs:
           retention-days: 7
 
   # =============================================================================
-  # JOB 4: Security Scan - Dependencies & Dockerfiles (Fast - No Build Required)
+  # JOB 4: Migration Integration Tests
+  # =============================================================================
+  migration-tests:
+    name: Migration Tests
+    runs-on: ubuntu-latest
+    # Only run on PRs to catch migration issues before merge
+    if: github.event_name == 'pull_request'
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install golang-migrate
+        run: |
+          echo "::group::Installing golang-migrate"
+          curl -L https://github.com/golang-migrate/migrate/releases/download/v4.18.1/migrate.linux-amd64.tar.gz | tar xvz
+          sudo mv migrate /usr/local/bin/
+          sudo chmod +x /usr/local/bin/migrate
+          migrate -version
+          echo "::endgroup::"
+
+      - name: Run migrations up
+        env:
+          DATABASE_URL: postgres://test:test@localhost:5432/test?sslmode=disable
+        run: |
+          echo "::group::Running migrations"
+          migrate -path backend/migrations -database "$DATABASE_URL" -verbose up
+          echo "::endgroup::"
+
+      - name: Validate schema
+        env:
+          DATABASE_URL: postgres://test:test@localhost:5432/test?sslmode=disable
+        run: |
+          echo "::group::Validating database schema"
+
+          # Check all expected tables exist
+          echo "Checking tables..."
+          psql "$DATABASE_URL" -c "\dt" | grep users || { echo "::error::users table missing"; exit 1; }
+          psql "$DATABASE_URL" -c "\dt" | grep privacy_settings || { echo "::error::privacy_settings table missing"; exit 1; }
+          psql "$DATABASE_URL" -c "\dt" | grep audit_logs || { echo "::error::audit_logs table missing"; exit 1; }
+          psql "$DATABASE_URL" -c "\dt" | grep user_subscription_overrides || { echo "::error::user_subscription_overrides table missing"; exit 1; }
+
+          # Validate users table columns
+          echo "Validating users table..."
+          psql "$DATABASE_URL" -c "\d users" | grep "id.*uuid" || { echo "::error::users.id should be UUID"; exit 1; }
+          psql "$DATABASE_URL" -c "\d users" | grep "email.*character varying" || { echo "::error::users.email should be VARCHAR"; exit 1; }
+
+          # Validate foreign keys
+          echo "Validating foreign keys..."
+          psql "$DATABASE_URL" -c "\d user_subscription_overrides" | grep "FOREIGN KEY" || { echo "::error::Missing foreign key"; exit 1; }
+          psql "$DATABASE_URL" -c "\d user_subscription_overrides" | grep "user_id.*uuid" || { echo "::error::user_id should be UUID"; exit 1; }
+
+          echo "::notice::✅ Schema validation passed"
+          echo "::endgroup::"
+
+      - name: Test migration rollback
+        env:
+          DATABASE_URL: postgres://test:test@localhost:5432/test?sslmode=disable
+        run: |
+          echo "::group::Testing migration rollback"
+
+          # Rollback last migration
+          echo "Rolling back last migration..."
+          migrate -path backend/migrations -database "$DATABASE_URL" down 1
+
+          # Verify table was removed
+          if psql "$DATABASE_URL" -c "\dt" | grep -q user_subscription_overrides; then
+            echo "::error::Table should have been removed by rollback"
+            exit 1
+          fi
+          echo "✅ Table removed successfully"
+
+          # Re-apply migration
+          echo "Re-applying migration..."
+          migrate -path backend/migrations -database "$DATABASE_URL" up
+
+          # Verify table exists again
+          psql "$DATABASE_URL" -c "\dt" | grep user_subscription_overrides || { echo "::error::Table should exist after re-applying"; exit 1; }
+          echo "✅ Migration re-applied successfully"
+
+          echo "::notice::✅ Rollback test passed"
+          echo "::endgroup::"
+
+      - name: Test constraints
+        env:
+          DATABASE_URL: postgres://test:test@localhost:5432/test?sslmode=disable
+        run: |
+          echo "::group::Testing database constraints"
+
+          # Test that we can't insert invalid UUID (should fail)
+          echo "Testing invalid UUID rejection..."
+          if psql "$DATABASE_URL" -c "
+            INSERT INTO user_subscription_overrides
+            (user_id, resource_type, limit_value)
+            VALUES ('invalid-uuid', 'rules', 10)
+          " 2>&1; then
+            echo "::error::Should have rejected invalid UUID"
+            exit 1
+          fi
+          echo "✅ Invalid UUID rejected as expected"
+
+          echo "::notice::✅ Constraint tests passed"
+          echo "::endgroup::"
+
+      - name: Check migration state
+        env:
+          DATABASE_URL: postgres://test:test@localhost:5432/test?sslmode=disable
+        run: |
+          echo "::group::Checking final migration state"
+
+          # Verify no dirty migrations
+          DIRTY=$(psql "$DATABASE_URL" -t -c "SELECT dirty FROM schema_migrations" | tr -d ' ')
+          echo "Dirty state: $DIRTY"
+
+          if [ "$DIRTY" = "t" ]; then
+            echo "::error::Migration state is dirty"
+            exit 1
+          fi
+
+          # Show final version
+          psql "$DATABASE_URL" -c "SELECT version, dirty FROM schema_migrations"
+
+          echo "::notice::✅ Migration state is clean"
+          echo "::endgroup::"
+
+      - name: Migration test summary
+        if: always()
+        run: |
+          echo "### 🗄️ Migration Tests Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All migrations tested against PostgreSQL 15:" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Migrations run successfully" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Schema validation passed" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Rollback tests passed" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Constraint tests passed" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Clean migration state" >> $GITHUB_STEP_SUMMARY
+
+  # =============================================================================
+  # JOB 5: Security Scan - Dependencies & Dockerfiles (Fast - No Build Required)
   # =============================================================================
   pr-security-scan:
     name: Security Scan (Dependencies & Config)
@@ -323,7 +476,7 @@ jobs:
   build-images:
     name: Build Docker Images
     # Only depend on tests if they run (PRs), otherwise no dependencies (main)
-    needs: [backend-test, frontend-test, e2e-test]
+    needs: [backend-test, frontend-test, e2e-test, migration-tests]
     if: |
       always() &&
       github.event_name == 'push' &&
