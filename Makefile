@@ -1,4 +1,4 @@
-.PHONY: help dev build test clean migrate-up migrate-down generate docker-up docker-down docker-rebuild
+.PHONY: help dev build test clean migrate-up migrate-down generate docker-up docker-down docker-rebuild test-all
 
 # Default target
 help:
@@ -10,8 +10,13 @@ help:
 	@echo "  make docker-down      - Stop all services"
 	@echo "  make docker-rebuild   - Rebuild and restart all services"
 	@echo ""
+	@echo "Testing:"
+	@echo "  make test-all         - Run ALL tests (backend, frontend, e2e) with coverage reports"
+	@echo "  make test-ci          - Run CI tests with coverage enforcement"
+	@echo "  make backend-test     - Run backend tests only"
+	@echo "  make frontend-test    - Run frontend tests only"
+	@echo ""
 	@echo "Backend:"
-	@echo "  make backend-test     - Run backend tests"
 	@echo "  make backend-build    - Build backend binary"
 	@echo "  make backend-run      - Run backend locally (without Docker)"
 	@echo ""
@@ -19,7 +24,6 @@ help:
 	@echo "  make frontend-install - Install frontend dependencies"
 	@echo "  make frontend-dev     - Run frontend dev server locally"
 	@echo "  make frontend-build   - Build frontend for production"
-	@echo "  make frontend-test    - Run frontend tests"
 	@echo ""
 	@echo "Database:"
 	@echo "  make migrate-up       - Run database migrations"
@@ -65,6 +69,37 @@ test-ci:
 	./scripts/check-coverage.sh backend/coverage.out 60
 	cd frontend && npm run test:ci
 	@echo "All CI tests passed!"
+
+# All Tests + Coverage Reports
+test-all:
+	@echo "========================================"
+	@echo "Running ALL tests with coverage reports"
+	@echo "========================================"
+	@echo ""
+	@echo "1️⃣  Backend Tests..."
+	@cd backend && go test ./... -v -race -coverprofile=coverage.out -covermode=atomic
+	@echo ""
+	@echo "📊 Generating backend HTML coverage report..."
+	@cd backend && go tool cover -html=coverage.out -o coverage.html
+	@echo "✅ Backend coverage: backend/coverage.html"
+	@echo ""
+	@echo "2️⃣  Frontend Tests..."
+	@cd frontend && npm run test:ci
+	@echo "✅ Frontend coverage: frontend/coverage/index.html"
+	@echo ""
+	@echo "3️⃣  E2E Tests..."
+	@cd frontend && npm run test:e2e -- --reporter=line
+	@echo ""
+	@echo "========================================"
+	@echo "✅ All tests complete!"
+	@echo "========================================"
+	@echo ""
+	@echo "📄 Coverage Reports:"
+	@echo "  Backend:  backend/coverage.html (open in browser)"
+	@echo "  Frontend: frontend/coverage/index.html (open in browser)"
+	@echo ""
+	@echo "📊 Test Results:"
+	@echo "  Frontend: frontend/test-results.json"
 
 # Frontend
 frontend-install:
