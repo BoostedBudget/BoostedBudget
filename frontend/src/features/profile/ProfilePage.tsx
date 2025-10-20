@@ -8,8 +8,6 @@ import { useTabState } from '../../shared/hooks'
 import type { User, PrivacySettings as PrivacySettingsType } from './types'
 import './ProfilePage.css'
 
-type TabType = 'profile' | 'privacy'
-
 interface ProfilePageProps {
   onPrivacySettingsChange?: (settings: PrivacySettingsType) => void
 }
