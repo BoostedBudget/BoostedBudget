@@ -72,20 +72,56 @@ func main() {
 		// Create repositories
 		profileRepo := repository.NewProfileRepository(db)
 		privacyRepo := repository.NewPrivacyRepository(db)
+		linkedItemRepo := repository.NewLinkedItemRepository(db)
+		accountRepo := repository.NewAccountRepository(db)
+
+		// Load tier configuration
+		tierConfig, err := config.LoadTierConfig()
+		if err != nil {
+			log.Printf("⚠️  Failed to load tier config: %v", err)
+			log.Fatal("Tier configuration is required for account linking")
+		}
 
 		// Create services
 		profileService := services.NewProfileService(profileRepo)
 		privacyService := services.NewPrivacyService(privacyRepo)
+		// Note: Passing nil for override repo - not yet implemented
+		subscriptionService := services.NewSubscriptionService(tierConfig, nil)
 
-		// Create Plaid service (if configured)
+		// Create encryption service (if configured)
+		var encryptionService services.EncryptionService
+		if cfg.EncryptionKey != "" {
+			encryptionService, err = services.NewEncryptionService(cfg)
+			if err != nil {
+				log.Printf("⚠️  Failed to initialize encryption service: %v", err)
+				log.Fatal("Encryption service is required for account linking")
+			}
+			log.Println("✅ Encryption service initialized")
+		} else {
+			log.Fatal("ENCRYPTION_KEY environment variable is required")
+		}
+
+		// Create Plaid service and account linking (if configured)
 		var plaidHandler *handlers.PlaidHandler
 		if cfg.PlaidClientID != "" && cfg.PlaidSecret != "" {
 			plaidService, err := services.NewPlaidService(cfg)
 			if err != nil {
 				log.Printf("⚠️  Failed to initialize Plaid service: %v", err)
 			} else {
-				plaidHandler = handlers.NewPlaidHandler(plaidService)
+				// Create account service with all dependencies
+				accountService := services.NewAccountService(
+					plaidService,
+					subscriptionService,
+					encryptionService,
+					linkedItemRepo,
+					accountRepo,
+					profileRepo,
+					db,
+				)
+
+				plaidHandler = handlers.NewPlaidHandler(plaidService, accountService)
 				log.Println("✅ Plaid service initialized")
+				log.Println("✅ Account linking service initialized")
 			}
 		}
 
@@ -110,6 +146,7 @@ func main() {
 		// Plaid routes (if enabled)
 		if plaidHandler != nil {
 			api.POST("/plaid/link-token", plaidHandler.CreateLinkToken)
+			api.POST("/plaid/exchange-token", plaidHandler.ExchangePublicToken)
 		}
 
 		log.Println("✅ Authenticated routes enabled (Auth0 + Database)")
