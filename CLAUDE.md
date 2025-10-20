@@ -95,59 +95,101 @@ infrastructure/     # Configs
 - Complex multi-file logic flows
 - Recurring patterns/conventions
 - Historical context needed
+- **DURING implementation**: Track architectural decisions, pattern choices, trade-offs considered
+- **CONTINUOUS**: Document reasoning for why specific approaches were chosen over alternatives
 
 **MUST use Server Memory when**:
 - Store config values (API keys format, env vars)
 - Cache decisions (auth flow, data model)
 - Persist credentials/secrets patterns
 - Remember user preferences
+- **DURING implementation**: Log all key decisions, design choices, and reasoning AS YOU MAKE THEM
+- **CONTINUOUS**: Track why certain patterns/libraries/approaches were selected
+- **AFTER each major step**: Update with lessons learned, gotchas discovered, patterns established
 
 **Feature workflow**:
 1. Serena: Find relevant code
 2. in-memoria: Check past decisions/patterns
 3. Sequential Thinking: Plan approach
-4. Server Memory: Store key decisions
-5. **TDD RED**: Write failing tests
-6. **TDD GREEN**: Implement
-7. **TDD REFACTOR**: Clean
+4. **Server Memory: Store initial decisions** (approach chosen, alternatives considered, reasoning)
+5. **TDD RED**: Write failing tests → **Server Memory: Track test design decisions**
+6. **TDD GREEN**: Implement → **Server Memory: Document implementation choices as you code**
+7. **TDD REFACTOR**: Clean → **Server Memory: Note refactoring patterns applied**
 8. **RUN ALL TESTS** (MANDATORY - NO PR without):
    - `cd backend && go test ./... -v` (MUST pass)
    - `npm test -- --run && npm run lint` (MUST pass)
    - `npm run test:e2e -- --reporter=line 2>&1` (MUST pass)
-9. Server Memory: Update learnings
+9. **Server Memory: Final update** (learnings, gotchas, future considerations)
 10. PR ONLY after all tests pass
+
+### 4. Decision Tracking (MANDATORY)
+**CONTINUOUSLY track ALL decisions and reasoning using in-memoria and server-memory**
+
+**Track DURING implementation, NOT just at the end**:
+- **Why** a specific approach was chosen over alternatives
+- **What** trade-offs were considered and accepted
+- **How** the implementation satisfies requirements
+- **Where** patterns were established or deviated from
+- **When** assumptions were made and validated
+
+**Memory types**:
+- **in-memoria**: Semantic understanding, architectural context, complex logic flows
+- **server-memory**: Explicit decisions, configuration choices, lessons learned, gotchas
+
+**Examples of what to track**:
+```
+GOOD ✓
+"Chose JWT middleware over session-based auth because:
+ 1. Stateless design aligns with multi-region Phase 7+ goals
+ 2. Auth0 provides built-in JWT support
+ 3. Avoids Redis dependency for auth state
+ Trade-off: Slightly larger request size, but acceptable for our use case"
+
+"Implemented subscription limits check in middleware instead of service layer:
+ 1. Centralized enforcement point
+ 2. Fails fast before hitting business logic
+ 3. Easier to audit and test
+ Considered: Service layer check, but would require duplicating across all endpoints"
+
+BAD ✗
+"Added JWT middleware"
+"Implemented subscription check"
+```
+
+**Frequency**: After EVERY significant decision, not in batches at the end
 
 ## Dev Workflow Checklist
 
-1. **MCPs FIRST**: Serena search → in-memoria context → Sequential plan
+1. **MCPs FIRST**: Serena search → in-memoria context → Sequential plan → **Server Memory: Log planning decisions**
 2. GitHub issue FIRST
 3. Branch `feature/<issue#>-<desc>`
-4. **TDD**: Red-Green-Refactor (mandatory)
-5. OpenAPI spec for new APIs
-6. Check subscription limits (free vs premium)
-7. GDPR implications check
-8. Migrations for schema changes
-9. Auth0 integration verification
-10. `*InRegion` abstractions, `primary_region`='us-east-1'
+4. **TDD**: Red-Green-Refactor (mandatory) → **Server Memory: Track decisions at EACH step (RED/GREEN/REFACTOR)**
+5. OpenAPI spec for new APIs → **Server Memory: Document API design choices**
+6. Check subscription limits (free vs premium) → **Server Memory: Note tier-specific logic added**
+7. GDPR implications check → **Server Memory: Log GDPR considerations and compliance approach**
+8. Migrations for schema changes → **Server Memory: Document migration reasoning and rollback strategy**
+9. Auth0 integration verification → **Server Memory: Note auth flow decisions**
+10. `*InRegion` abstractions, `primary_region`='us-east-1' → **Server Memory: Track region-related decisions**
 11. **RUN ALL TESTS** (MANDATORY before PR):
     - Backend: `cd backend && go test ./... -v`
     - Frontend: `npm test -- --run && npm run lint`
     - E2E: `npm run test:e2e -- --reporter=line 2>&1`
     - **NO PR until ALL pass**
 12. PR with "Closes #N"
-13. **Server Memory**: Store key decisions
+13. **Server Memory: FINAL update** - consolidate all decisions, learnings, patterns, gotchas for future reference
 
 ## Critical Implementation Notes
 
 **ALWAYS**:
 - **MCPs FIRST**: Serena→in-memoria→Sequential before any code work
+- **TRACK CONTINUOUSLY**: in-memoria + server-memory for ALL decisions and reasoning AS YOU IMPLEMENT
 - TDD Red-Green-Refactor (no exceptions for business logic)
 - **ALL TESTS PASS BEFORE PR** (backend+frontend+e2e+lint) - NO EXCEPTIONS
 - Issue → Branch → PR for all logical work
 - Serena for ALL code search (NEVER Grep first)
-- in-memoria for "why/how" questions
+- in-memoria for "why/how" questions AND to document architectural decisions during implementation
 - Sequential Thinking for complex decisions
-- Server Memory to persist learnings
+- Server Memory to persist learnings, decisions, trade-offs, patterns (CONTINUOUSLY, not just at end)
 - No money movement (suggestions only, no MTL)
 - GDPR compliance (all users get rights)
 - Free tier limits (2 rules, 8 accounts, 1x/day execution, ads enabled)
@@ -366,4 +408,4 @@ Keep synchronized:
 
 ---
 
-*Last updated: **MCPs MANDATORY** (Serena→in-memoria→Sequential FIRST always), Issue ID in ALL commits/PRs (#N:), TDD Red-Green-Refactor non-negotiable*
+*Last updated: **MCPs MANDATORY** (Serena→in-memoria→Sequential FIRST always), **TRACK ALL DECISIONS CONTINUOUSLY** (in-memoria + server-memory AS YOU IMPLEMENT), Issue ID in ALL commits/PRs (#N:), TDD Red-Green-Refactor non-negotiable*
