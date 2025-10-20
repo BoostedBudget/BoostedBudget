@@ -12,3 +12,4 @@ export {
   COOKIE_CONSENT_VERSION,
   COOKIE_CONSENT_EXPIRES_DAYS,
 } from './types';
+export { cookieToPrivacySettings, privacySettingsToCookie } from './utils';
