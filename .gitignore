@@ -301,6 +301,7 @@ buck-out/
 
 # BoostedBudget specific
 backend/bin/
+backend/server
 backend/tmp/
 frontend/dist/
 in-memoria.db
@@ -310,6 +311,7 @@ in-memoria.db
 # Test artifacts and coverage reports
 backend/test-output.json
 backend/test-results.json
+backend/coverage.html
 frontend/test-results.json
 
 # Playwright E2E Tests
