@@ -46,8 +46,8 @@ test.describe('Privacy Settings', () => {
     await expect(page.locator('h2:has-text("Your Privacy Rights")')).toBeVisible()
     await expect(page.locator('h2:has-text("Cookie Policy")')).toBeVisible()
 
-    // Verify US region mentioned
-    await expect(page.getByText(/us-east-1|Virginia, USA/i)).toBeVisible()
+    // Verify US region mentioned (get first match to avoid strict mode violation)
+    await expect(page.getByText(/us-east-1|Virginia, USA/i).first()).toBeVisible()
   })
 
   // ============================================================================
