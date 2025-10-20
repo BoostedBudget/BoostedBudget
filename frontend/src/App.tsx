@@ -2,9 +2,10 @@ import { useState, useEffect } from 'react'
 import { Routes, Route, Link } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
 import { CookiesProvider } from 'react-cookie'
-import { CookieConsent, initializeAdSense, type CookieConsentSettings } from './privacy'
+import { CookieConsent, initializeAdSense, type CookieConsentSettings, cookieToPrivacySettings } from './privacy'
 import { LoginButton, LogoutButton, ProtectedRoute } from './auth'
 import { ProfilePage } from './features/profile/ProfilePage'
+import { updatePrivacySettings } from './features/profile/api/privacyApi'
 import './App.css'
 
 interface HealthCheck {
@@ -36,8 +37,20 @@ function App() {
   }, [])
 
   // Handle cookie consent changes
-  const handleConsentChange = (consents: CookieConsentSettings) => {
+  const handleConsentChange = async (consents: CookieConsentSettings) => {
     console.log('Cookie consents updated:', consents)
+
+    // Sync cookie consent to backend if user is authenticated
+    if (isAuthenticated) {
+      try {
+        const privacyUpdate = cookieToPrivacySettings(consents)
+        await updatePrivacySettings(privacyUpdate)
+        console.log('Cookie consent synced to backend')
+      } catch (error) {
+        console.error('Failed to sync cookie consent to backend:', error)
+        // Non-blocking error - cookie is still saved locally
+      }
+    }
 
     // Initialize AdSense if advertising consent is given
     // and user is on free tier (TODO: check subscription when auth is implemented)
