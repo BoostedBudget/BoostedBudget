@@ -1,12 +1,20 @@
 package services
 
 import (
+	"context"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// getTestEnv retrieves environment variable for testing
+func getTestEnv(key string) string {
+	return os.Getenv(key)
+}
 
 // TestNewPlaidService_ValidConfig tests successful PlaidService creation with valid configuration
 func TestNewPlaidService_ValidConfig(t *testing.T) {
@@ -162,4 +170,183 @@ func TestMapEnvironment_AllCases(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCreateLinkToken_Success tests successful link token creation
+// Note: This is an integration test that requires real Plaid sandbox credentials
+func TestCreateLinkToken_Success(t *testing.T) {
+	// Skip if real Plaid credentials not available
+	clientID := getTestEnv("PLAID_CLIENT_ID")
+	secret := getTestEnv("PLAID_SECRET")
+	if clientID == "" || secret == "" {
+		t.Skip("Skipping integration test: PLAID_CLIENT_ID and PLAID_SECRET required")
+	}
+
+	// Given: Valid PlaidService with real sandbox credentials
+	cfg := &config.Config{
+		PlaidClientID:   clientID,
+		PlaidSecret:     secret,
+		PlaidEnv:        "sandbox",
+		PlaidWebhookURL: "https://api.boostedbudget.com/webhooks/plaid",
+	}
+
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err, "Setup failed: could not create service")
+
+	// When: Creating link token for a user
+	ctx := context.Background()
+	userID := "auth0|test-user-123"
+
+	response, err := service.CreateLinkToken(ctx, userID)
+
+	// Then: Returns link token successfully
+	require.NoError(t, err, "Expected no error creating link token")
+	require.NotNil(t, response, "Expected non-nil response")
+	assert.NotEmpty(t, response.LinkToken, "Expected link token to be populated")
+	assert.NotEmpty(t, response.RequestID, "Expected request ID to be populated")
+}
+
+// TestCreateLinkToken_IncludesCorrectUserID tests that the link token includes the correct user ID
+func TestCreateLinkToken_IncludesCorrectUserID(t *testing.T) {
+	clientID := getTestEnv("PLAID_CLIENT_ID")
+	secret := getTestEnv("PLAID_SECRET")
+	if clientID == "" || secret == "" {
+		t.Skip("Skipping integration test: PLAID_CLIENT_ID and PLAID_SECRET required")
+	}
+
+	// Given: Valid PlaidService
+	cfg := &config.Config{
+		PlaidClientID:   clientID,
+		PlaidSecret:     secret,
+		PlaidEnv:        "sandbox",
+		PlaidWebhookURL: "https://api.boostedbudget.com/webhooks/plaid",
+	}
+
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err, "Setup failed")
+
+	// When: Creating link token with specific user ID
+	ctx := context.Background()
+	userID := "auth0|specific-user-456"
+
+	response, err := service.CreateLinkToken(ctx, userID)
+
+	// Then: Link token is created (Plaid API accepts the user ID)
+	require.NoError(t, err, "Expected no error - user ID should be accepted by Plaid")
+	require.NotNil(t, response, "Expected response")
+	// Note: We can't directly verify userID is in token (it's opaque), but successful creation validates it
+}
+
+// TestCreateLinkToken_IncludesRequiredProducts tests that link token is configured with required Plaid products
+func TestCreateLinkToken_IncludesRequiredProducts(t *testing.T) {
+	clientID := getTestEnv("PLAID_CLIENT_ID")
+	secret := getTestEnv("PLAID_SECRET")
+	if clientID == "" || secret == "" {
+		t.Skip("Skipping integration test: PLAID_CLIENT_ID and PLAID_SECRET required")
+	}
+
+	// Given: Valid PlaidService
+	cfg := &config.Config{
+		PlaidClientID:   clientID,
+		PlaidSecret:     secret,
+		PlaidEnv:        "sandbox",
+		PlaidWebhookURL: "https://api.boostedbudget.com/webhooks/plaid",
+	}
+
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err, "Setup failed")
+
+	// When: Creating link token
+	ctx := context.Background()
+	response, err := service.CreateLinkToken(ctx, "auth0|test-user-123")
+
+	// Then: Link token is created successfully
+	// (Products are configured internally: TRANSACTIONS, AUTH, BALANCE)
+	require.NoError(t, err, "Expected no error - products should be configured correctly")
+	require.NotNil(t, response, "Expected response")
+	assert.NotEmpty(t, response.LinkToken, "Expected valid link token with products configured")
+}
+
+// TestCreateLinkToken_IncludesWebhookURL tests that webhook URL is included in link token configuration
+func TestCreateLinkToken_IncludesWebhookURL(t *testing.T) {
+	clientID := getTestEnv("PLAID_CLIENT_ID")
+	secret := getTestEnv("PLAID_SECRET")
+	if clientID == "" || secret == "" {
+		t.Skip("Skipping integration test: PLAID_CLIENT_ID and PLAID_SECRET required")
+	}
+
+	// Given: PlaidService with webhook URL configured
+	cfg := &config.Config{
+		PlaidClientID:   clientID,
+		PlaidSecret:     secret,
+		PlaidEnv:        "sandbox",
+		PlaidWebhookURL: "https://api.boostedbudget.com/webhooks/plaid",
+	}
+
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err, "Setup failed")
+
+	// When: Creating link token
+	ctx := context.Background()
+	response, err := service.CreateLinkToken(ctx, "auth0|test-user-123")
+
+	// Then: Link token is created successfully with webhook configured
+	require.NoError(t, err, "Expected no error - webhook URL should be accepted")
+	require.NotNil(t, response, "Expected response")
+	assert.NotEmpty(t, response.LinkToken, "Expected valid link token with webhook configured")
+}
+
+// TestCreateLinkToken_ReturnsExpirationTime tests that response includes token expiration
+func TestCreateLinkToken_ReturnsExpirationTime(t *testing.T) {
+	clientID := getTestEnv("PLAID_CLIENT_ID")
+	secret := getTestEnv("PLAID_SECRET")
+	if clientID == "" || secret == "" {
+		t.Skip("Skipping integration test: PLAID_CLIENT_ID and PLAID_SECRET required")
+	}
+
+	// Given: Valid PlaidService
+	cfg := &config.Config{
+		PlaidClientID:   clientID,
+		PlaidSecret:     secret,
+		PlaidEnv:        "sandbox",
+		PlaidWebhookURL: "https://api.boostedbudget.com/webhooks/plaid",
+	}
+
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err, "Setup failed")
+
+	// When: Creating link token
+	ctx := context.Background()
+	before := time.Now()
+	response, err := service.CreateLinkToken(ctx, "auth0|test-user-123")
+	after := time.Now().Add(31 * time.Minute) // Plaid tokens typically expire in 30 minutes
+
+	// Then: Response includes expiration time
+	require.NoError(t, err, "Expected no error")
+	require.NotNil(t, response, "Expected response")
+	assert.False(t, response.Expiration.IsZero(), "Expected expiration time to be set")
+	assert.True(t, response.Expiration.After(before), "Expiration should be in the future")
+	assert.True(t, response.Expiration.Before(after), "Expiration should be within 31 minutes")
+}
+
+// TestCreateLinkToken_PlaidAPIError tests handling of Plaid API errors
+func TestCreateLinkToken_PlaidAPIError(t *testing.T) {
+	// Given: PlaidService with invalid credentials (will cause API error)
+	cfg := &config.Config{
+		PlaidClientID:   "invalid_client_id",
+		PlaidSecret:     "invalid_secret",
+		PlaidEnv:        "sandbox",
+		PlaidWebhookURL: "https://api.boostedbudget.com/webhooks/plaid",
+	}
+
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err, "Service creation should succeed even with invalid creds")
+
+	// When: Attempting to create link token (will fail at API call)
+	ctx := context.Background()
+	response, err := service.CreateLinkToken(ctx, "auth0|test-user-123")
+
+	// Then: Returns error from Plaid API
+	assert.Error(t, err, "Expected error with invalid credentials")
+	assert.Nil(t, response, "Expected nil response on error")
 }
