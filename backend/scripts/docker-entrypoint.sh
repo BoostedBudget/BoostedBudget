@@ -38,9 +38,11 @@ else
 fi
 
 # Run migrations using Atlas with direct connection
+# Use --schema public to avoid "database not clean" error from pgbouncer schema
 atlas migrate apply \
   --dir file:///app/migrations \
-  --url "$MIGRATION_URL"
+  --url "$MIGRATION_URL" \
+  --schema public
 
 if [ $? -eq 0 ]; then
   echo "✓ Migrations completed successfully"
