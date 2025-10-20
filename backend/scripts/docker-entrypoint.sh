@@ -37,12 +37,18 @@ else
   echo "Using transformed DATABASE_URL for direct PostgreSQL connection (bypassing PgBouncer)"
 fi
 
+# Add search_path=public to connection URL to avoid "database not clean" error from pgbouncer schema
+# This tells Atlas to only manage the public schema and ignore system schemas like pgbouncer
+if [[ "$MIGRATION_URL" == *"?"* ]]; then
+  MIGRATION_URL="${MIGRATION_URL}&search_path=public"
+else
+  MIGRATION_URL="${MIGRATION_URL}?search_path=public"
+fi
+
 # Run migrations using Atlas with direct connection
-# Use --schema public to avoid "database not clean" error from pgbouncer schema
 atlas migrate apply \
   --dir file:///app/migrations \
-  --url "$MIGRATION_URL" \
-  --schema public
+  --url "$MIGRATION_URL"
 
 if [ $? -eq 0 ]; then
   echo "✓ Migrations completed successfully"
