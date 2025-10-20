@@ -2,10 +2,7 @@ package services
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -121,12 +118,35 @@ type MockUserRepository struct {
 	mock.Mock
 }
 
-func (m *MockUserRepository) GetByID(ctx context.Context, id string) (*domain.User, error) {
+func (m *MockUserRepository) GetUserByAuth0ID(ctx context.Context, auth0UserID string) (*domain.User, error) {
+	args := m.Called(ctx, auth0UserID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.User), args.Error(1)
+}
+
+func (m *MockUserRepository) GetUserByID(ctx context.Context, id string) (*domain.User, error) {
 	args := m.Called(ctx, id)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*domain.User), args.Error(1)
+}
+
+func (m *MockUserRepository) CreateUser(ctx context.Context, user *domain.User) error {
+	args := m.Called(ctx, user)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) UpdateUser(ctx context.Context, user *domain.User) error {
+	args := m.Called(ctx, user)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) UpdateLastLogin(ctx context.Context, auth0UserID string) error {
+	args := m.Called(ctx, auth0UserID)
+	return args.Error(0)
 }
 
 // TestAccountService_LinkAccounts_Success tests successful account linking flow
@@ -141,8 +161,8 @@ func TestAccountService_LinkAccounts_Success(t *testing.T) {
 
 	ctx := context.Background()
 	userID := uuid.New().String()
-	publicToken := "public-sandbox-token"
-	institutionID := "ins_109508"
+	// publicToken := "public-sandbox-token" // TODO: Use in GREEN phase for Plaid mock
+	// institutionID := "ins_109508"         // TODO: Use in GREEN phase for Plaid mock
 	institutionName := "Chase"
 
 	// Mock user with free tier
@@ -151,7 +171,7 @@ func TestAccountService_LinkAccounts_Success(t *testing.T) {
 		SubscriptionTier: "free",
 		PrimaryRegion:    "us-east-1",
 	}
-	mockUserRepo.On("GetByID", ctx, userID).Return(user, nil)
+	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
 
 	// Mock current account count (user has 2 accounts, limit is 8)
 	mockAccountRepo.On("CountByUserID", ctx, userID).Return(2, nil)
@@ -174,7 +194,8 @@ func TestAccountService_LinkAccounts_Success(t *testing.T) {
 			accounts[0].UserID == userID
 	})).Return(nil)
 
-	service := NewAccountService(
+	// TODO: Create service in GREEN phase when implementing actual Plaid integration
+	_ = NewAccountService(
 		mockPlaid,
 		mockSubscription,
 		mockEncryption,
@@ -206,7 +227,7 @@ func TestAccountService_LinkAccounts_LimitExceeded(t *testing.T) {
 		ID:               userID,
 		SubscriptionTier: "free",
 	}
-	mockUserRepo.On("GetByID", ctx, userID).Return(user, nil)
+	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
 
 	// Mock current account count (user already has 8 accounts - at limit)
 	mockAccountRepo.On("CountByUserID", ctx, userID).Return(8, nil)
@@ -289,10 +310,10 @@ func TestAccountService_LinkAccounts_RegionStorage(t *testing.T) {
 		ID:            userID,
 		PrimaryRegion: "us-east-1",
 	}
-	mockUserRepo.On("GetByID", ctx, userID).Return(user, nil)
+	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
 
 	// When: User retrieved
-	result, err := mockUserRepo.GetByID(ctx, userID)
+	result, err := mockUserRepo.GetUserByID(ctx, userID)
 
 	// Then: User region should be available for data storage
 	require.NoError(t, err)
