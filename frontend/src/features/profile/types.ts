@@ -42,3 +42,30 @@ export const SUBSCRIPTION_TIERS = {
     features: ['Everything in Premium', 'AI-powered insights', 'Priority support'],
   },
 } as const
+
+// Privacy settings types matching backend domain/privacy.go
+
+export interface PrivacySettings {
+  id: string
+  user_id: string
+  gdpr_necessary_consent: boolean
+  gdpr_analytics_consent: boolean
+  gdpr_advertising_consent: boolean
+  gdpr_consent_timestamp: string
+  marketing_emails_enabled: boolean
+  product_updates_enabled: boolean
+  security_alerts_enabled: boolean
+  data_sharing_enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface UpdatePrivacySettingsRequest {
+  gdpr_necessary_consent?: boolean
+  gdpr_analytics_consent?: boolean
+  gdpr_advertising_consent?: boolean
+  marketing_emails_enabled?: boolean
+  product_updates_enabled?: boolean
+  security_alerts_enabled?: boolean
+  data_sharing_enabled?: boolean
+}
