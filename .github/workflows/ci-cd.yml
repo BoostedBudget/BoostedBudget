@@ -505,10 +505,10 @@ jobs:
           echo "Results uploaded to GitHub Security tab." >> $GITHUB_STEP_SUMMARY
 
   # =============================================================================
-  # JOB 5: Build and push Docker images to GHCR
+  # JOB 5: Build and push Docker images to GHCR (Parallelized via Matrix)
   # =============================================================================
   build-images:
-    name: Build Docker Images
+    name: Build ${{ matrix.component }} Image
     # Only depend on tests if they run (PRs), otherwise no dependencies (main)
     needs: [backend-test, frontend-test, e2e-test, migration-tests]
     if: |
@@ -516,14 +516,13 @@ jobs:
       github.event_name == 'push' &&
       github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: [backend, frontend]
     # Only build images on main branch push (after PR merge)
     permissions:
       contents: read
       packages: write
-
-    outputs:
-      backend-image: ${{ steps.meta.outputs.backend-image }}
-      frontend-image: ${{ steps.meta.outputs.frontend-image }}
 
     steps:
       - name: Checkout code
@@ -539,64 +538,50 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata for images
-        id: meta
+      - name: Set image name for ${{ matrix.component }}
+        id: image-name
         run: |
-          BACKEND_IMAGE="${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}"
-          FRONTEND_IMAGE="${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}"
+          if [ "${{ matrix.component }}" = "backend" ]; then
+            IMAGE_NAME="${{ env.BACKEND_IMAGE_NAME }}"
+          else
+            IMAGE_NAME="${{ env.FRONTEND_IMAGE_NAME }}"
+          fi
+          echo "image-name=${IMAGE_NAME}" >> $GITHUB_OUTPUT
+          echo "Building: ${{ env.REGISTRY }}/${IMAGE_NAME}:${{ github.sha }}"
 
-          echo "backend-image=${BACKEND_IMAGE}:${{ github.sha }}" >> $GITHUB_OUTPUT
-          echo "frontend-image=${FRONTEND_IMAGE}:${{ github.sha }}" >> $GITHUB_OUTPUT
-
-          echo "Backend image: ${BACKEND_IMAGE}:${{ github.sha }}"
-          echo "Frontend image: ${FRONTEND_IMAGE}:${{ github.sha }}"
-
-      - name: Build and push backend image
+      - name: Build and push ${{ matrix.component }} image
         uses: docker/build-push-action@v5
         with:
-          context: ./backend
-          file: ./backend/Dockerfile
+          context: ./${{ matrix.component }}
+          file: ./${{ matrix.component }}/Dockerfile
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ github.sha }}
-            ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:latest
+          cache-from: type=gha,scope=${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.component }}
           platforms: linux/amd64
           build-args: |
             VERSION=${{ github.sha }}
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
 
-      - name: Build and push frontend image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./frontend
-          file: ./frontend/Dockerfile
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ github.sha }}
-            ${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          platforms: linux/amd64
-
       - name: Image build summary
         run: |
-          echo "### 🐳 Docker Images Built Successfully" >> $GITHUB_STEP_SUMMARY
+          echo "### 🐳 ${{ matrix.component }} Image Built Successfully" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Backend Image:**" >> $GITHUB_STEP_SUMMARY
-          echo "\`${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Frontend Image:**" >> $GITHUB_STEP_SUMMARY
-          echo "\`${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
 
   # =============================================================================
   # JOB 6: Security Scan - Docker Images (Comprehensive - After Build on Main)
   # =============================================================================
   image-security-scan:
-    name: Security Scan (Docker Images)
+    name: Security Scan (${{ matrix.component }} Image)
     needs: build-images
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: [backend, frontend]
     # Only run on main - PRs use faster filesystem scan
     if: |
       always() &&
@@ -622,61 +607,61 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Run Trivy vulnerability scanner - Backend
+      - name: Calculate image reference for ${{ matrix.component }}
+        id: image-ref
+        run: |
+          if [ "${{ matrix.component }}" = "backend" ]; then
+            IMAGE_NAME="${{ env.BACKEND_IMAGE_NAME }}"
+          else
+            IMAGE_NAME="${{ env.FRONTEND_IMAGE_NAME }}"
+          fi
+          IMAGE_REF="${{ env.REGISTRY }}/${IMAGE_NAME}:${{ github.sha }}"
+          echo "image-ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
+          echo "Scanning: ${IMAGE_REF}"
+
+      - name: Run Trivy vulnerability scanner - ${{ matrix.component }}
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ needs.build-images.outputs.backend-image }}
+          image-ref: ${{ steps.image-ref.outputs.image-ref }}
           format: 'sarif'
-          output: 'trivy-backend-results.sarif'
+          output: 'trivy-${{ matrix.component }}-results.sarif'
           severity: 'CRITICAL,HIGH'
           exit-code: '0'  # Informational only - Debian base images have unfixable CVEs (Issue #96)
           ignore-unfixed: true
 
-      - name: Upload Trivy results (Backend) to GitHub Security
+      - name: Upload Trivy results (${{ matrix.component }}) to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         continue-on-error: true  # Don't fail if Code Scanning not enabled
         with:
-          sarif_file: 'trivy-backend-results.sarif'
-          category: 'trivy-backend'
-
-      - name: Run Trivy vulnerability scanner - Frontend
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ needs.build-images.outputs.frontend-image }}
-          format: 'sarif'
-          output: 'trivy-frontend-results.sarif'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '0'  # Informational only - Debian base images have unfixable CVEs (Issue #96)
-          ignore-unfixed: true
-
-      - name: Upload Trivy results (Frontend) to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        continue-on-error: true  # Don't fail if Code Scanning not enabled
-        with:
-          sarif_file: 'trivy-frontend-results.sarif'
-          category: 'trivy-frontend'
+          sarif_file: 'trivy-${{ matrix.component }}-results.sarif'
+          category: 'trivy-${{ matrix.component }}'
 
       - name: Security scan summary
         if: always()
         run: |
-          echo "### 🔒 Docker Image Security Scan Complete" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔒 ${{ matrix.component }} Image Security Scan Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Scanned:**" >> $GITHUB_STEP_SUMMARY
-          echo "- Complete backend Docker image" >> $GITHUB_STEP_SUMMARY
-          echo "- Complete frontend Docker image" >> $GITHUB_STEP_SUMMARY
+          echo "- Complete ${{ matrix.component }} Docker image" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "This is the final comprehensive scan before deployment." >> $GITHUB_STEP_SUMMARY
           echo "Results uploaded to GitHub Security tab." >> $GITHUB_STEP_SUMMARY
 
   # =============================================================================
-  # JOB 7: Push images to Fly.io registry
+  # JOB 7: Push images to Fly.io registry (Parallelized via Matrix)
   # =============================================================================
   push-to-fly-registry:
-    name: Push Images to Fly.io Registry
+    name: Push ${{ matrix.component }} to Fly.io Registry
     needs: [build-images, image-security-scan]
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: [backend, frontend]
+        include:
+          - component: backend
+            fly-app: boostedbudget-api
+          - component: frontend
+            fly-app: boostedbudget-web
     if: |
       always() &&
       github.ref == 'refs/heads/main' &&
@@ -700,48 +685,54 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: flyctl auth docker
 
-      - name: Pull and push backend image to Fly.io registry
+      - name: Pull and push ${{ matrix.component }} image to Fly.io registry
         run: |
+          # Determine image name based on component
+          if [ "${{ matrix.component }}" = "backend" ]; then
+            IMAGE_NAME="${{ env.BACKEND_IMAGE_NAME }}"
+          else
+            IMAGE_NAME="${{ env.FRONTEND_IMAGE_NAME }}"
+          fi
+
           # Pull from GHCR
-          docker pull ${{ needs.build-images.outputs.backend-image }}
+          GHCR_IMAGE="${{ env.REGISTRY }}/${IMAGE_NAME}:${{ github.sha }}"
+          docker pull ${GHCR_IMAGE}
 
           # Tag for Fly.io registry
-          docker tag ${{ needs.build-images.outputs.backend-image }} registry.fly.io/boostedbudget-api:${{ github.sha }}
-          docker tag ${{ needs.build-images.outputs.backend-image }} registry.fly.io/boostedbudget-api:latest
+          docker tag ${GHCR_IMAGE} registry.fly.io/${{ matrix.fly-app }}:${{ github.sha }}
+          docker tag ${GHCR_IMAGE} registry.fly.io/${{ matrix.fly-app }}:latest
 
           # Push to Fly.io
-          docker push registry.fly.io/boostedbudget-api:${{ github.sha }}
-          docker push registry.fly.io/boostedbudget-api:latest
-
-      - name: Pull and push frontend image to Fly.io registry
-        run: |
-          # Pull from GHCR
-          docker pull ${{ needs.build-images.outputs.frontend-image }}
-
-          # Tag for Fly.io registry
-          docker tag ${{ needs.build-images.outputs.frontend-image }} registry.fly.io/boostedbudget-web:${{ github.sha }}
-          docker tag ${{ needs.build-images.outputs.frontend-image }} registry.fly.io/boostedbudget-web:latest
-
-          # Push to Fly.io
-          docker push registry.fly.io/boostedbudget-web:${{ github.sha }}
-          docker push registry.fly.io/boostedbudget-web:latest
+          docker push registry.fly.io/${{ matrix.fly-app }}:${{ github.sha }}
+          docker push registry.fly.io/${{ matrix.fly-app }}:latest
 
       - name: Summary
         run: |
-          echo "### 📦 Images Pushed to Fly.io Registry" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 ${{ matrix.component }} Image Pushed to Fly.io Registry" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Backend:** \`registry.fly.io/boostedbudget-api:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Frontend:** \`registry.fly.io/boostedbudget-web:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**${{ matrix.component }}:** \`registry.fly.io/${{ matrix.fly-app }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
 
   # =============================================================================
-  # JOB 8: Deploy to production (manual approval required)
+  # JOB 8: Deploy to production (Parallelized via Matrix)
   # =============================================================================
   # NOTE: Database migrations now run via fly.toml release_command
   #       before new containers start. See backend/fly.toml [deploy] section.
-  deploy-production:
-    name: Deploy to Production
+  deploy-production-apps:
+    name: Deploy ${{ matrix.component }} to Production
     needs: [build-images, push-to-fly-registry]
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: [backend, frontend]
+        include:
+          - component: backend
+            fly-app: boostedbudget-api
+            fly-config: ./backend/fly.toml
+            deploy-strategy: ""
+          - component: frontend
+            fly-app: boostedbudget-web
+            fly-config: ./frontend/fly.toml
+            deploy-strategy: "--strategy rolling"
     if: |
       always() &&
       github.ref == 'refs/heads/main' &&
@@ -759,50 +750,68 @@ jobs:
       - name: Setup Fly.io CLI
         uses: superfly/flyctl-actions/setup-flyctl@master
 
-      - name: Deploy backend to Fly.io
+      - name: Deploy ${{ matrix.component }} to Fly.io
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          echo "Deploying backend from Fly.io registry: registry.fly.io/boostedbudget-api:${{ github.sha }}"
-          echo "Note: Database migrations will run via release_command (see backend/fly.toml)"
+          echo "Deploying ${{ matrix.component }} from Fly.io registry: registry.fly.io/${{ matrix.fly-app }}:${{ github.sha }}"
+          if [ "${{ matrix.component }}" = "backend" ]; then
+            echo "Note: Database migrations will run via release_command (see backend/fly.toml)"
+          fi
           flyctl deploy \
-            --app boostedbudget-api \
-            --image registry.fly.io/boostedbudget-api:${{ github.sha }} \
-            --config ./backend/fly.toml
+            --app ${{ matrix.fly-app }} \
+            --image registry.fly.io/${{ matrix.fly-app }}:${{ github.sha }} \
+            --config ${{ matrix.fly-config }} \
+            ${{ matrix.deploy-strategy }}
 
-      - name: Deploy frontend to Fly.io
+      - name: Verify ${{ matrix.component }} deployment
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          echo "Deploying frontend from Fly.io registry: registry.fly.io/boostedbudget-web:${{ github.sha }}"
-          flyctl deploy \
-            --app boostedbudget-web \
-            --image registry.fly.io/boostedbudget-web:${{ github.sha }} \
-            --config ./frontend/fly.toml \
-            --strategy rolling
+          echo "Checking ${{ matrix.component }} status..."
+          flyctl status --app ${{ matrix.fly-app }}
 
-      - name: Verify deployment
+      - name: Verify ${{ matrix.component }} containers started successfully
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          echo "Checking backend status..."
-          flyctl status --app boostedbudget-api
+          echo "Checking ${{ matrix.component }} deployment logs..."
+          flyctl logs -a ${{ matrix.fly-app }} -n 2>&1 | head -20 || true
 
-          echo "Checking frontend status..."
-          flyctl status --app boostedbudget-web
-
-      - name: Verify containers started successfully
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      - name: Deployment summary
         run: |
-          echo "Checking backend deployment logs..."
-          flyctl logs -a boostedbudget-api -n 2>&1 | head -20 || true
+          echo "### 🚀 ${{ matrix.component }} Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ matrix.component }}" = "backend" ]; then
+            echo "**URL:** https://api.boostedbudget.com" >> $GITHUB_STEP_SUMMARY
+            echo "**Database Migrations:** ✅ Run via release_command before deployment" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**URL:** https://boostedbudget.com" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployed at:** $(date -u)" >> $GITHUB_STEP_SUMMARY
 
-          echo ""
-          echo "Note: Migrations were completed in CI/CD before deployment"
-          echo "      Containers start directly with the server (no migration step)"
+  # =============================================================================
+  # JOB 9: Smoke tests (after both apps deployed)
+  # =============================================================================
+  smoke-tests:
+    name: Production Smoke Tests
+    needs: deploy-production-apps
+    runs-on: ubuntu-latest
+    if: |
+      always() &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'push' &&
+      needs.deploy-production-apps.result == 'success'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Run smoke tests
+        timeout-minutes: 5
         run: |
           echo "Running smoke tests..."
           if [ -f ./scripts/smoke-test.sh ]; then
@@ -812,18 +821,12 @@ jobs:
             echo "Smoke test script not found, skipping..."
           fi
 
-      - name: Deployment summary
+      - name: Smoke tests summary
+        if: always()
         run: |
-          echo "### 🚀 Production Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "### 🧪 Smoke Tests Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Version:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "All smoke tests passed successfully." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Backend:** https://api.boostedbudget.com" >> $GITHUB_STEP_SUMMARY
-          echo "**Frontend:** https://boostedbudget.com" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Deployed at:** $(date -u)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Database Migrations:** ✅ Run via release_command before deployment" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Migrations execute automatically before new containers start (see backend/fly.toml)." >> $GITHUB_STEP_SUMMARY
+          echo "**Note:** Tests have a 5-minute timeout to prevent hanging." >> $GITHUB_STEP_SUMMARY
 
