@@ -4,12 +4,49 @@ This directory contains deployment and utility scripts for building and deployin
 
 ## Overview
 
+This directory contains:
+- **Git Hooks**: Pre-push hooks to run tests before pushing
+- **Deployment Scripts**: Build, deploy, verify, and rollback utilities
+
 The deployment process follows this workflow:
 
 1. **Build** Docker images and push to GitHub Container Registry (GHCR)
 2. **Deploy** pre-built images to Fly.io
 3. **Verify** deployment health
 4. **Rollback** if needed
+
+## Git Hooks
+
+### install-hooks.sh
+
+Installs git hooks to ensure code quality before pushing.
+
+**Usage:**
+```bash
+# One-time setup per developer
+./scripts/install-hooks.sh
+```
+
+**What it does:**
+- Installs pre-push hook that runs `make test-all` before every push
+- Blocks push if any tests fail (backend, frontend, or e2e)
+- Prevents pushing broken code to remote branches
+
+**Bypass in emergencies:**
+```bash
+# Use sparingly - only when you're certain the failures are acceptable
+git push --no-verify
+```
+
+**Benefits:**
+- ✅ Catches failing tests before they reach CI/CD
+- ✅ Saves time by preventing failed CI builds
+- ✅ Ensures consistent code quality across the team
+- ✅ Integrates with existing `make test-all` workflow
+
+**Note:** Each developer needs to run `./scripts/install-hooks.sh` once after cloning the repository.
+
+## Deployment Scripts
 
 ## Prerequisites
 
