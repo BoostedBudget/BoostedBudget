@@ -1,6 +1,10 @@
-h1:x+YjKWd6WSSmmBKRGxbjDsjtunElWSJoZZ3iBlMYMII=
+h1:db4psryWD+W//zblpNHbSuAQKdgNrmyJfnJXIzCiGvk=
 000001_create_users_table.sql h1:0VjQyC14oyN9Kny/2ciS6P8NdrFlPvxB2a6NITGdu4M=
 000002_create_privacy_settings_table.sql h1:VbKbyVwZpVa23vIERVxrXeOBbLRbmIrqbyCnos/dN9E=
 000003_create_audit_logs_table.sql h1:LKmdHLVQH81RbVmDfQyhQh9PruT9T6Tgs3yPLeGjaIk=
 000004_create_subscription_overrides_table.sql h1:SuugVp0hvo3/V/gXmiizzr8p++6IJyqwpRYq6gU+C/s=
 000005_migrate_region_codes.sql h1:tk7C+EhUuO7tS2hJAo1k90T9p+qrrq5thbcd6AodwvQ=
+000006_create_linked_items_table.down.sql h1:lkrpK/Pu0nnMtisnzhb0T0CiZphXRdowHx471LU4bK0=
+000006_create_linked_items_table.up.sql h1:IMf4mnHfWVBI8T+3445qrvN6eXpJVNOZRd58w5mVV3c=
+000007_create_accounts_table.down.sql h1:w/Pj5me1GInCBHql72Onq+EA7zHt9axto9vouWBCBGU=
+000007_create_accounts_table.up.sql h1:ieliO9ypXweUnaHVhlLy9Dt9c4pMEwM3qAxFBxLhwwo=
