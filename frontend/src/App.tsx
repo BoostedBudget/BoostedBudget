@@ -1,11 +1,23 @@
 import { useState, useEffect } from 'react'
 import { Routes, Route, Link } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
-import { CookiesProvider } from 'react-cookie'
-import { CookieConsent, initializeAdSense, type CookieConsentSettings, cookieToPrivacySettings } from './privacy'
+import { CookiesProvider, useCookies } from 'react-cookie'
+import {
+  CookieConsent,
+  initializeAdSense,
+  type CookieConsentSettings,
+  cookieToPrivacySettings,
+  privacySettingsToCookie,
+  COOKIE_CONSENT_NAME,
+  COOKIE_CONSENT_VERSION,
+  COOKIE_CONSENT_EXPIRES_DAYS,
+  type CookieConsentData
+} from './privacy'
 import { LoginButton, LogoutButton, ProtectedRoute } from './auth'
 import { ProfilePage } from './features/profile/ProfilePage'
 import { updatePrivacySettings } from './features/profile/api/privacyApi'
+import type { PrivacySettings as PrivacySettingsType } from './features/profile/types'
+import { PrivacyPolicy } from './legal/PrivacyPolicy'
 import './App.css'
 
 interface HealthCheck {
@@ -20,6 +32,7 @@ interface HealthCheck {
 
 function App() {
   const { isAuthenticated, user } = useAuth0()
+  const [, setCookie] = useCookies([COOKIE_CONSENT_NAME])
   const [health, setHealth] = useState<HealthCheck | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -36,7 +49,26 @@ function App() {
       })
   }, [])
 
-  // Handle cookie consent changes
+  // Helper function to update cookie consent data
+  const updateConsentCookie = (consents: CookieConsentSettings) => {
+    const consentData: CookieConsentData = {
+      consents,
+      timestamp: new Date().toISOString(),
+      version: COOKIE_CONSENT_VERSION,
+    }
+
+    const expires = new Date()
+    expires.setDate(expires.getDate() + COOKIE_CONSENT_EXPIRES_DAYS)
+
+    setCookie(COOKIE_CONSENT_NAME, consentData, {
+      path: '/',
+      expires,
+      sameSite: 'strict',
+      secure: window.location.protocol === 'https:',
+    })
+  }
+
+  // Handle cookie consent changes (Cookie → Backend sync)
   const handleConsentChange = async (consents: CookieConsentSettings) => {
     console.log('Cookie consents updated:', consents)
 
@@ -70,6 +102,19 @@ function App() {
     // if (consents.analytics) {
     //   initializeAnalytics()
     // }
+  }
+
+  // Handle privacy settings changes (Backend → Cookie sync)
+  const handlePrivacySettingsChange = (settings: PrivacySettingsType) => {
+    console.log('Privacy settings updated:', settings)
+
+    // Convert backend privacy settings to cookie format
+    const cookieSettings = privacySettingsToCookie(settings)
+
+    // Update cookie to match backend settings
+    updateConsentCookie(cookieSettings)
+
+    console.log('Privacy settings synced to cookie')
   }
 
   // Home page content
@@ -151,10 +196,11 @@ function App() {
               path="/profile"
               element={
                 <ProtectedRoute>
-                  <ProfilePage />
+                  <ProfilePage onPrivacySettingsChange={handlePrivacySettingsChange} />
                 </ProtectedRoute>
               }
             />
+            <Route path="/legal/privacy-policy" element={<PrivacyPolicy />} />
           </Routes>
         </main>
 

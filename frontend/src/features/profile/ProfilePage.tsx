@@ -4,12 +4,16 @@ import { ProfileForm } from './ProfileForm'
 import { PrivacySettings } from './PrivacySettings'
 import { fetchProfile } from './api/profileApi'
 import { getRegionDisplay } from '../../config/regions'
-import type { User } from './types'
+import type { User, PrivacySettings as PrivacySettingsType } from './types'
 import './ProfilePage.css'
 
 type TabType = 'profile' | 'privacy'
 
-export function ProfilePage() {
+interface ProfilePageProps {
+  onPrivacySettingsChange?: (settings: PrivacySettingsType) => void
+}
+
+export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -139,7 +143,7 @@ export function ProfilePage() {
       )}
 
       {/* Privacy Settings Tab Content */}
-      {activeTab === 'privacy' && <PrivacySettings />}
+      {activeTab === 'privacy' && <PrivacySettings onSettingsChange={onPrivacySettingsChange} />}
     </div>
   )
 }

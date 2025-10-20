@@ -357,4 +357,62 @@ describe('PrivacySettings', () => {
       )
     })
   })
+
+  describe('Callback notifications', () => {
+    it('should call onSettingsChange callback with updated settings after successful save', async () => {
+      const onSettingsChange = vi.fn()
+      vi.mocked(privacyApi.fetchPrivacySettings).mockResolvedValue(mockSettings)
+
+      const updatedSettings: PrivacySettingsType = {
+        ...mockSettings,
+        gdpr_analytics_consent: false,
+        updated_at: '2025-01-20T12:00:00Z',
+      }
+      vi.mocked(privacyApi.updatePrivacySettings).mockResolvedValue(updatedSettings)
+
+      render(<PrivacySettings onSettingsChange={onSettingsChange} />)
+
+      await waitFor(() => {
+        expect(screen.getByLabelText(/analytics cookies/i)).toBeInTheDocument()
+      })
+
+      // Toggle analytics
+      const analyticsCheckbox = screen.getByLabelText(/analytics cookies/i)
+      await userEvent.click(analyticsCheckbox)
+
+      // Save
+      const saveButton = screen.getByRole('button', { name: /save privacy settings/i })
+      await userEvent.click(saveButton)
+
+      await waitFor(() => {
+        expect(onSettingsChange).toHaveBeenCalledWith(updatedSettings)
+      })
+    })
+
+    it('should not call onSettingsChange if save fails', async () => {
+      const onSettingsChange = vi.fn()
+      vi.mocked(privacyApi.fetchPrivacySettings).mockResolvedValue(mockSettings)
+      vi.mocked(privacyApi.updatePrivacySettings).mockRejectedValue(new Error('Save failed'))
+
+      render(<PrivacySettings onSettingsChange={onSettingsChange} />)
+
+      await waitFor(() => {
+        expect(screen.getByLabelText(/analytics cookies/i)).toBeInTheDocument()
+      })
+
+      // Toggle analytics
+      const analyticsCheckbox = screen.getByLabelText(/analytics cookies/i)
+      await userEvent.click(analyticsCheckbox)
+
+      // Save
+      const saveButton = screen.getByRole('button', { name: /save privacy settings/i })
+      await userEvent.click(saveButton)
+
+      await waitFor(() => {
+        expect(screen.getByText(/failed to save/i)).toBeInTheDocument()
+      })
+
+      expect(onSettingsChange).not.toHaveBeenCalled()
+    })
+  })
 })
