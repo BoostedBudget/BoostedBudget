@@ -1,0 +1,156 @@
+/* Privacy Settings Component */
+.privacy-settings {
+  max-width: 800px;
+}
+
+.privacy-settings h2 {
+  font-size: 1.75rem;
+  margin-top: 0;
+  margin-bottom: 1.5rem;
+  color: #212121;
+}
+
+.privacy-section {
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.privacy-section h3 {
+  font-size: 1.25rem;
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+  color: #424242;
+}
+
+.section-description {
+  color: #616161;
+  margin-bottom: 1.5rem;
+  line-height: 1.5;
+}
+
+.privacy-option {
+  margin-bottom: 1.5rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.privacy-option:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.privacy-option label {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-weight: 500;
+  color: #212121;
+}
+
+.privacy-option input[type='checkbox'] {
+  width: 20px;
+  height: 20px;
+  margin-right: 0.75rem;
+  cursor: pointer;
+}
+
+.privacy-option input[type='checkbox']:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.option-label {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.option-description {
+  margin-top: 0.5rem;
+  margin-left: 2rem;
+  color: #616161;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+/* Success and Error Messages */
+.success-message {
+  color: #388e3c;
+  background: #e8f5e9;
+  padding: 1rem;
+  border-radius: 4px;
+  margin-bottom: 1rem;
+  font-weight: 500;
+}
+
+.error-message {
+  color: #d32f2f;
+  background: #ffebee;
+  padding: 1rem;
+  border-radius: 4px;
+  margin-bottom: 1rem;
+  font-weight: 500;
+}
+
+/* Privacy Actions */
+.privacy-actions {
+  margin-top: 2rem;
+}
+
+.btn-save {
+  background: #4caf50;
+  color: white;
+  border: none;
+  padding: 0.75rem 2rem;
+  border-radius: 4px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.btn-save:hover:not(:disabled) {
+  background: #388e3c;
+}
+
+.btn-save:disabled {
+  background: #9e9e9e;
+  cursor: not-allowed;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .privacy-settings h2 {
+    font-size: 1.5rem;
+  }
+
+  .privacy-section {
+    padding: 1rem;
+  }
+
+  .privacy-section h3 {
+    font-size: 1.125rem;
+  }
+
+  .option-description {
+    margin-left: 1.5rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .privacy-settings h2 {
+    font-size: 1.25rem;
+  }
+
+  .btn-save {
+    width: 100%;
+  }
+
+  .option-description {
+    margin-left: 0;
+    margin-top: 0.25rem;
+  }
+}
