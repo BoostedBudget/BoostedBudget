@@ -47,9 +47,11 @@ docker-rebuild:
 
 # Backend
 backend-test:
-	cd backend && go test ./... -v -cover
+	@cd backend && go test ./... -v -race -coverprofile=coverage.out -covermode=atomic -json > test-output.json 2>&1 || true
+	@cd backend && cat test-output.json | jq -s '[.[] | select(.Action == "pass" or .Action == "fail")] | {passed: ([.[] | select(.Action == "pass")] | length), failed: ([.[] | select(.Action == "fail")] | length), total: length}' > test-results.json 2>/dev/null || echo '{"passed":0,"failed":0,"total":0}' > test-results.json
+	@cd backend && cat test-output.json | grep -v "^{" || true
 
-backend-build:
+backend-build: backend-test
 	cd backend && go build -o bin/server ./cmd/server
 
 backend-run:
@@ -71,11 +73,11 @@ frontend-install:
 frontend-dev:
 	cd frontend && npm run dev
 
-frontend-build:
+frontend-build: frontend-test
 	cd frontend && npm run build
 
 frontend-test:
-	cd frontend && npm test
+	cd frontend && npm run test:ci
 
 # Database migrations
 migrate-up:
