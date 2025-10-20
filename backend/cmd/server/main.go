@@ -77,6 +77,18 @@ func main() {
 		profileService := services.NewProfileService(profileRepo)
 		privacyService := services.NewPrivacyService(privacyRepo)
 
+		// Create Plaid service (if configured)
+		var plaidHandler *handlers.PlaidHandler
+		if cfg.PlaidClientID != "" && cfg.PlaidSecret != "" {
+			plaidService, err := services.NewPlaidService(cfg)
+			if err != nil {
+				log.Printf("⚠️  Failed to initialize Plaid service: %v", err)
+			} else {
+				plaidHandler = handlers.NewPlaidHandler(plaidService)
+				log.Println("✅ Plaid service initialized")
+			}
+		}
+
 		// Create handlers
 		profileHandler := handlers.NewProfileHandler(profileService)
 		privacyHandler := handlers.NewPrivacyHandler(privacyService, profileService)
@@ -94,6 +106,11 @@ func main() {
 		api.PUT("/user/profile", profileHandler.UpdateProfile)
 		api.GET("/user/privacy", privacyHandler.GetPrivacySettings)
 		api.PUT("/user/privacy", privacyHandler.UpdatePrivacySettings)
+
+		// Plaid routes (if enabled)
+		if plaidHandler != nil {
+			api.POST("/plaid/link-token", plaidHandler.CreateLinkToken)
+		}
 
 		log.Println("✅ Authenticated routes enabled (Auth0 + Database)")
 	} else {

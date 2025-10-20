@@ -173,6 +173,36 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
+  /api/v1/plaid/link-token:
+    post:
+      summary: Create Plaid Link Token
+      description: |
+        Generate a Plaid Link token for initiating bank account connection flow.
+        The link token is used by the frontend to initialize Plaid Link.
+
+        **Token Configuration**:
+        - Products: TRANSACTIONS, AUTH, BALANCE
+        - Expiration: 30 minutes from creation
+        - User ID: Extracted from Auth0 JWT
+      operationId: createPlaidLinkToken
+      tags:
+        - Plaid
+      responses:
+        '200':
+          description: Link token created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LinkTokenResponse'
+              example:
+                link_token: "link-sandbox-abc123-def456"
+                expiration: "2025-10-20T18:30:00Z"
+                request_id: "plaid-request-xyz789"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
   /user/data-export:
     post:
       summary: Request Data Export
@@ -638,6 +668,27 @@ components:
           type: string
           format: uuid
           description: Request correlation ID for debugging
+
+    LinkTokenResponse:
+      type: object
+      required:
+        - link_token
+        - expiration
+        - request_id
+      properties:
+        link_token:
+          type: string
+          description: Plaid Link token for initializing Plaid Link in the frontend
+          example: "link-sandbox-abc123-def456"
+        expiration:
+          type: string
+          format: date-time
+          description: When the link token expires (typically 30 minutes from creation)
+          example: "2025-10-20T18:30:00Z"
+        request_id:
+          type: string
+          description: Plaid request ID for debugging and support
+          example: "plaid-request-xyz789"
 
   responses:
     BadRequest:
