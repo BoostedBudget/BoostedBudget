@@ -76,20 +76,38 @@ test-all:
 	@echo "Running ALL tests with coverage reports"
 	@echo "========================================"
 	@echo ""
-	@echo "1️⃣  Backend Tests..."
+	@echo "1️⃣  Linting Migrations..."
+	@cd backend && atlas migrate lint \
+		--dir file://migrations \
+		--dev-url "docker://postgres/15/test" \
+		--latest 1
+	@echo "✅ Migration lint passed"
+	@echo ""
+	@echo "2️⃣  Backend Tests..."
 	@cd backend && go test ./... -v -race -coverprofile=coverage.out -covermode=atomic -json > test-output.json 2>&1 || true
 	@cd backend && cat test-output.json | jq -s '[.[] | select(.Action == "pass" or .Action == "fail")] | {passed: ([.[] | select(.Action == "pass")] | length), failed: ([.[] | select(.Action == "fail")] | length), total: length}' > test-results.json 2>/dev/null || echo '{"passed":0,"failed":0,"total":0}' > test-results.json
 	@cd backend && cat test-output.json | grep -v "^{" || true
+	@echo ""
+	@echo "📊 Checking backend coverage threshold (≥60%)..."
+	@cd backend && COVERAGE=$$(go tool cover -func=coverage.out | grep total | awk '{print $$3}' | sed 's/%//'); \
+		COVERAGE_INT=$$(echo "$$COVERAGE" | cut -d. -f1); \
+		echo "Current coverage: $${COVERAGE}%"; \
+		if [ "$$COVERAGE_INT" -lt 60 ]; then \
+			echo "❌ Coverage $${COVERAGE}% is below threshold 60%"; \
+			exit 1; \
+		else \
+			echo "✅ Coverage $${COVERAGE}% meets threshold 60%"; \
+		fi
 	@echo ""
 	@echo "📊 Generating backend HTML coverage report..."
 	@cd backend && go tool cover -html=coverage.out -o coverage.html
 	@echo "✅ Backend coverage: backend/coverage.html"
 	@echo ""
-	@echo "2️⃣  Frontend Tests..."
+	@echo "3️⃣  Frontend Tests..."
 	@cd frontend && npm run test:ci
 	@echo "✅ Frontend coverage: frontend/coverage/index.html"
 	@echo ""
-	@echo "3️⃣  E2E Tests..."
+	@echo "4️⃣  E2E Tests..."
 	@cd frontend && npm run test:e2e -- --reporter=line
 	@echo ""
 	@echo "========================================"
