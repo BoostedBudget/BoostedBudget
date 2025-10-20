@@ -1,22 +1,19 @@
 import { useState, useEffect } from 'react'
 import { SubscriptionCard } from './components/SubscriptionCard'
-import { fetchProfile, updateProfile } from './api/profileApi'
-import { VALID_REGIONS } from './types'
+import { ProfileForm } from './ProfileForm'
+import { PrivacySettings } from './PrivacySettings'
+import { fetchProfile } from './api/profileApi'
 import { getRegionDisplay } from '../../config/regions'
-import type { User, UpdateProfileRequest } from './types'
+import type { User } from './types'
 import './ProfilePage.css'
+
+type TabType = 'profile' | 'privacy'
 
 export function ProfilePage() {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [submitting, setSubmitting] = useState(false)
-  const [successMessage, setSuccessMessage] = useState<string | null>(null)
-
-  // Form state
-  const [email, setEmail] = useState('')
-  const [primaryRegion, setPrimaryRegion] = useState('')
-  const [validationError, setValidationError] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<TabType>('profile')
 
   // Load user profile on mount
   useEffect(() => {
@@ -29,8 +26,6 @@ export function ProfilePage() {
       setError(null)
       const profileData = await fetchProfile()
       setUser(profileData)
-      setEmail(profileData.email)
-      setPrimaryRegion(profileData.primary_region)
     } catch (err) {
       console.error('Failed to load profile:', err)
       setError('Failed to load profile. Please try again.')
@@ -39,73 +34,8 @@ export function ProfilePage() {
     }
   }
 
-  function validateEmail(email: string): boolean {
-    if (!email || email.trim() === '') {
-      setValidationError('Email is required')
-      return false
-    }
-
-    // Basic email validation regex
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-    if (!emailRegex.test(email)) {
-      setValidationError('Invalid email address')
-      return false
-    }
-
-    setValidationError(null)
-    return true
-  }
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-
-    // Validate email - this sets validation error if invalid
-    if (!validateEmail(email)) {
-      return
-    }
-
-    // Clear any previous messages since validation passed
-    setValidationError(null)
-    setSuccessMessage(null)
-
-    try {
-      setSubmitting(true)
-
-      // Build update data - only send changed fields
-      const updateData: UpdateProfileRequest = {}
-      let hasChanges = false
-
-      if (user && email !== user.email) {
-        updateData.email = email
-        hasChanges = true
-      }
-
-      if (user && primaryRegion !== user.primary_region) {
-        // When updating region, include email as well
-        updateData.email = email
-        updateData.primary_region = primaryRegion
-        hasChanges = true
-      }
-
-      // If no changes detected, don't submit
-      if (!hasChanges) {
-        return
-      }
-
-      const updatedUser = await updateProfile(updateData)
-      setUser(updatedUser)
-      setEmail(updatedUser.email)
-      setPrimaryRegion(updatedUser.primary_region)
-      setSuccessMessage('Profile updated successfully!')
-
-      // Clear success message after 3 seconds
-      setTimeout(() => setSuccessMessage(null), 3000)
-    } catch (err) {
-      console.error('Failed to update profile:', err)
-      setValidationError('Failed to update profile. Please try again.')
-    } finally {
-      setSubmitting(false)
-    }
+  function handleProfileUpdate(updatedUser: User) {
+    setUser(updatedUser)
   }
 
   if (loading) {
@@ -151,78 +81,65 @@ export function ProfilePage() {
     <div className="profile-page responsive">
       <h1>My Profile</h1>
 
-      {/* User Info Section */}
-      <section className="profile-section">
-        <h2>Account Information</h2>
-        <div className="info-grid">
-          <div className="info-item">
-            <label>User ID:</label>
-            <span>{user.id}</span>
-          </div>
-          <div className="info-item">
-            <label>Email:</label>
-            <span>{user.email}</span>
-          </div>
-          <div className="info-item">
-            <label>Email Verified:</label>
-            <span>{user.email_verified ? '✅ Yes' : '❌ No'}</span>
-          </div>
-          <div className="info-item">
-            <label>Data Region:</label>
-            <span>{regionDisplay}</span>
-          </div>
-          <div className="info-item">
-            <label>Account Status:</label>
-            <span>{user.is_active ? '✅ Active' : '❌ Inactive'}</span>
-          </div>
-        </div>
-      </section>
+      {/* Tab Navigation */}
+      <div className="profile-tabs">
+        <button
+          className={`tab-button ${activeTab === 'profile' ? 'active' : ''}`}
+          onClick={() => setActiveTab('profile')}
+        >
+          Profile
+        </button>
+        <button
+          className={`tab-button ${activeTab === 'privacy' ? 'active' : ''}`}
+          onClick={() => setActiveTab('privacy')}
+        >
+          Privacy Settings
+        </button>
+      </div>
 
-      {/* Subscription Section */}
-      <section className="profile-section">
-        <h2>Subscription</h2>
-        <SubscriptionCard tier={user.subscription_tier} status={user.subscription_status} />
-      </section>
+      {/* Profile Tab Content */}
+      {activeTab === 'profile' && (
+        <>
+          {/* User Info Section */}
+          <section className="profile-section">
+            <h2>Account Information</h2>
+            <div className="info-grid">
+              <div className="info-item">
+                <label>User ID:</label>
+                <span>{user.id}</span>
+              </div>
+              <div className="info-item">
+                <label>Email:</label>
+                <span>{user.email}</span>
+              </div>
+              <div className="info-item">
+                <label>Email Verified:</label>
+                <span>{user.email_verified ? '✅ Yes' : '❌ No'}</span>
+              </div>
+              <div className="info-item">
+                <label>Data Region:</label>
+                <span>{regionDisplay}</span>
+              </div>
+              <div className="info-item">
+                <label>Account Status:</label>
+                <span>{user.is_active ? '✅ Active' : '❌ Inactive'}</span>
+              </div>
+            </div>
+          </section>
 
-      {/* Edit Profile Form */}
-      <section className="profile-section">
-        <h2>Update Profile</h2>
-        <form onSubmit={handleSubmit} className="profile-form">
-          {successMessage && <div className="success-message">{successMessage}</div>}
-          {validationError && <div className="error-message">{validationError}</div>}
+          {/* Subscription Section */}
+          <section className="profile-section">
+            <h2>Subscription</h2>
+            <SubscriptionCard tier={user.subscription_tier} status={user.subscription_status} />
+          </section>
 
-          <div className="form-group">
-            <label htmlFor="email">Email</label>
-            <input
-              type="text"
-              id="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              disabled={submitting}
-            />
-          </div>
+          {/* Edit Profile Form */}
+          <ProfileForm user={user} onProfileUpdate={handleProfileUpdate} />
+        </>
+      )}
 
-          <div className="form-group">
-            <label htmlFor="region">Primary Region</label>
-            <select
-              id="region"
-              value={primaryRegion}
-              onChange={(e) => setPrimaryRegion(e.target.value)}
-              disabled={submitting}
-            >
-              {VALID_REGIONS.map((region) => (
-                <option key={region} value={region}>
-                  {region}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <button type="submit" disabled={submitting} className="btn-save">
-            {submitting ? 'Saving...' : 'Save Changes'}
-          </button>
-        </form>
-      </section>
+      {/* Privacy Settings Tab Content */}
+      {activeTab === 'privacy' && <PrivacySettings />}
     </div>
   )
 }

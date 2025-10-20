@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { fetchPrivacySettings, updatePrivacySettings } from './api/privacyApi'
 import type { PrivacySettings as PrivacySettingsType, UpdatePrivacySettingsRequest } from './types'
+import './PrivacySettings.css'
 
 interface PrivacySettingsProps {
   onSettingsChange?: (settings: PrivacySettingsType) => void
