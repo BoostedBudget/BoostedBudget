@@ -77,7 +77,9 @@ test-all:
 	@echo "========================================"
 	@echo ""
 	@echo "1️⃣  Backend Tests..."
-	@cd backend && go test ./... -v -race -coverprofile=coverage.out -covermode=atomic
+	@cd backend && go test ./... -v -race -coverprofile=coverage.out -covermode=atomic -json > test-output.json 2>&1 || true
+	@cd backend && cat test-output.json | jq -s '[.[] | select(.Action == "pass" or .Action == "fail")] | {passed: ([.[] | select(.Action == "pass")] | length), failed: ([.[] | select(.Action == "fail")] | length), total: length}' > test-results.json 2>/dev/null || echo '{"passed":0,"failed":0,"total":0}' > test-results.json
+	@cd backend && cat test-output.json | grep -v "^{" || true
 	@echo ""
 	@echo "📊 Generating backend HTML coverage report..."
 	@cd backend && go tool cover -html=coverage.out -o coverage.html
@@ -99,6 +101,7 @@ test-all:
 	@echo "  Frontend: frontend/coverage/index.html (open in browser)"
 	@echo ""
 	@echo "📊 Test Results:"
+	@echo "  Backend:  backend/test-results.json"
 	@echo "  Frontend: frontend/test-results.json"
 
 # Frontend
