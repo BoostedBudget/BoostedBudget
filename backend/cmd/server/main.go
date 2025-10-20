@@ -71,12 +71,15 @@ func main() {
 	if db != nil && cfg.Auth0Domain != "" && cfg.Auth0Audience != "" {
 		// Create repositories
 		profileRepo := repository.NewProfileRepository(db)
+		privacyRepo := repository.NewPrivacyRepository(db)
 
 		// Create services
 		profileService := services.NewProfileService(profileRepo)
+		privacyService := services.NewPrivacyService(privacyRepo)
 
 		// Create handlers
 		profileHandler := handlers.NewProfileHandler(profileService)
+		privacyHandler := handlers.NewPrivacyHandler(privacyService, profileService)
 
 		// Create Auth0 middleware
 		auth0Middleware := middleware.Auth0Middleware(
@@ -89,6 +92,8 @@ func main() {
 		api.Use(auth0Middleware)
 		api.GET("/user/profile", profileHandler.GetProfile)
 		api.PUT("/user/profile", profileHandler.UpdateProfile)
+		api.GET("/user/privacy", privacyHandler.GetPrivacySettings)
+		api.PUT("/user/privacy", privacyHandler.UpdatePrivacySettings)
 
 		log.Println("✅ Authenticated routes enabled (Auth0 + Database)")
 	} else {
