@@ -4,6 +4,7 @@ import { ProfileForm } from './ProfileForm'
 import { PrivacySettings } from './PrivacySettings'
 import { fetchProfile } from './api/profileApi'
 import { getRegionDisplay } from '../../config/regions'
+import { useTabState } from '../../shared/hooks'
 import type { User, PrivacySettings as PrivacySettingsType } from './types'
 import './ProfilePage.css'
 
@@ -17,7 +18,7 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<TabType>('profile')
+  const [activeTab, setActiveTab] = useTabState('tab', 'profile', ['profile', 'privacy'] as const)
 
   // Load user profile on mount
   useEffect(() => {

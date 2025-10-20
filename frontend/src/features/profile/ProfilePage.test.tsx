@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { ProfilePage } from './ProfilePage'
 import * as profileApi from './api/profileApi'
 import type { User } from './types'
@@ -13,6 +14,20 @@ const mockUseAuth0 = vi.hoisted(() => vi.fn())
 vi.mock('@auth0/auth0-react', () => ({
   useAuth0: mockUseAuth0,
 }))
+
+/**
+ * Test wrapper component that provides React Router context
+ * Required for components using useSearchParams
+ */
+function renderWithRouter(ui: React.ReactElement, { initialUrl = '/profile' } = {}) {
+  return render(
+    <MemoryRouter initialEntries={[initialUrl]}>
+      <Routes>
+        <Route path="/profile" element={ui} />
+      </Routes>
+    </MemoryRouter>
+  )
+}
 
 describe('ProfilePage', () => {
   const mockUser: User = {
@@ -44,7 +59,7 @@ describe('ProfilePage', () => {
         () => new Promise(() => {}) // Never resolves
       )
 
-      render(<ProfilePage />)
+      renderWithRouter(<ProfilePage />)
 
       expect(screen.getByText(/loading/i)).toBeInTheDocument()
     })
@@ -52,7 +67,7 @@ describe('ProfilePage', () => {
     it('should render user profile data after loading', async () => {
       vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
 
-      render(<ProfilePage />)
+      renderWithRouter(<ProfilePage />)
 
       await waitFor(() => {
         expect(screen.getByText('test@example.com')).toBeInTheDocument()
@@ -65,7 +80,7 @@ describe('ProfilePage', () => {
     it('should display user email from profile', async () => {
       vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
 
-      render(<ProfilePage />)
+      renderWithRouter(<ProfilePage />)
 
       await waitFor(() => {
         expect(screen.getByDisplayValue('test@example.com')).toBeInTheDocument()
@@ -75,7 +90,7 @@ describe('ProfilePage', () => {
     it('should show data region correctly', async () => {
       vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
 
-      render(<ProfilePage />)
+      renderWithRouter(<ProfilePage />)
 
       await waitFor(() => {
         // Check for new geographic display format (iad maps to "USA (Virginia)")
@@ -86,7 +101,7 @@ describe('ProfilePage', () => {
     it('should show current subscription tier', async () => {
       vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
 
-      render(<ProfilePage />)
+      renderWithRouter(<ProfilePage />)
 
       await waitFor(() => {
         expect(screen.getByText(/premium/i)).toBeInTheDocument()
@@ -98,7 +113,7 @@ describe('ProfilePage', () => {
     it('should show error message when API fails', async () => {
       vi.mocked(profileApi.fetchProfile).mockRejectedValue(new Error('API Error'))
 
-      render(<ProfilePage />)
+      renderWithRouter(<ProfilePage />)
 
       await waitFor(() => {
         expect(screen.getByText(/failed to load profile/i)).toBeInTheDocument()
@@ -108,7 +123,7 @@ describe('ProfilePage', () => {
     it('should show retry button on error', async () => {
       vi.mocked(profileApi.fetchProfile).mockRejectedValue(new Error('API Error'))
 
-      render(<ProfilePage />)
+      renderWithRouter(<ProfilePage />)
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
@@ -120,7 +135,7 @@ describe('ProfilePage', () => {
       fetchProfileMock.mockRejectedValueOnce(new Error('API Error'))
       fetchProfileMock.mockResolvedValueOnce(mockUser)
 
-      render(<ProfilePage />)
+      renderWithRouter(<ProfilePage />)
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
@@ -142,7 +157,7 @@ describe('ProfilePage', () => {
     it('should validate email format', async () => {
       vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
 
-      render(<ProfilePage />)
+      renderWithRouter(<ProfilePage />)
 
       await waitFor(() => {
         expect(screen.getByDisplayValue('test@example.com')).toBeInTheDocument()
@@ -165,7 +180,7 @@ describe('ProfilePage', () => {
     it('should require valid region selection', async () => {
       vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
 
-      render(<ProfilePage />)
+      renderWithRouter(<ProfilePage />)
 
       await waitFor(() => {
         expect(screen.getByDisplayValue('test@example.com')).toBeInTheDocument()
@@ -180,7 +195,7 @@ describe('ProfilePage', () => {
     it('should show validation error for empty email', async () => {
       vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
 
-      render(<ProfilePage />)
+      renderWithRouter(<ProfilePage />)
 
       await waitFor(() => {
         expect(screen.getByDisplayValue('test@example.com')).toBeInTheDocument()
@@ -208,7 +223,7 @@ describe('ProfilePage', () => {
         email: 'newemail@example.com',
       })
 
-      render(<ProfilePage />)
+      renderWithRouter(<ProfilePage />)
 
       await waitFor(() => {
         expect(screen.getByDisplayValue('test@example.com')).toBeInTheDocument()
@@ -237,7 +252,7 @@ describe('ProfilePage', () => {
         primary_region: 'lhr',
       })
 
-      render(<ProfilePage />)
+      renderWithRouter(<ProfilePage />)
 
       await waitFor(() => {
         expect(screen.getByDisplayValue('test@example.com')).toBeInTheDocument()
@@ -266,7 +281,7 @@ describe('ProfilePage', () => {
         email: 'newemail@example.com',
       })
 
-      render(<ProfilePage />)
+      renderWithRouter(<ProfilePage />)
 
       await waitFor(() => {
         expect(screen.getByDisplayValue('test@example.com')).toBeInTheDocument()
@@ -290,7 +305,7 @@ describe('ProfilePage', () => {
       vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
       vi.mocked(profileApi.updateProfile).mockRejectedValue(new Error('Update failed'))
 
-      render(<ProfilePage />)
+      renderWithRouter(<ProfilePage />)
 
       await waitFor(() => {
         expect(screen.getByDisplayValue('test@example.com')).toBeInTheDocument()
@@ -316,7 +331,7 @@ describe('ProfilePage', () => {
         () => new Promise(() => {}) // Never resolves
       )
 
-      render(<ProfilePage />)
+      renderWithRouter(<ProfilePage />)
 
       await waitFor(() => {
         expect(screen.getByDisplayValue('test@example.com')).toBeInTheDocument()
@@ -341,7 +356,7 @@ describe('ProfilePage', () => {
     it('should render mobile layout on small screens', async () => {
       vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
 
-      const { container } = render(<ProfilePage />)
+      const { container } = renderWithRouter(<ProfilePage />)
 
       await waitFor(() => {
         expect(screen.getByText('test@example.com')).toBeInTheDocument()
@@ -349,6 +364,90 @@ describe('ProfilePage', () => {
 
       const profilePage = container.querySelector('.profile-page')
       expect(profilePage).toHaveClass('responsive')
+    })
+  })
+
+  describe('Tab state persistence', () => {
+    it('should default to Profile tab when no URL param is present', async () => {
+      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
+
+      renderWithRouter(<ProfilePage />, { initialUrl: '/profile' })
+
+      await waitFor(() => {
+        expect(screen.getByText('test@example.com')).toBeInTheDocument()
+      })
+
+      // Profile tab should be active (has active class)
+      const profileTabButton = screen.getByRole('button', { name: /^Profile$/i })
+      expect(profileTabButton).toHaveClass('active')
+
+      // Privacy tab should not be active
+      const privacyTabButton = screen.getByRole('button', { name: /Privacy Settings/i })
+      expect(privacyTabButton).not.toHaveClass('active')
+
+      // Profile content should be visible
+      expect(screen.getByText('Account Information')).toBeInTheDocument()
+    })
+
+    it('should activate Privacy tab when URL has ?tab=privacy', async () => {
+      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
+
+      renderWithRouter(<ProfilePage />, { initialUrl: '/profile?tab=privacy' })
+
+      await waitFor(() => {
+        expect(screen.getByText('My Profile')).toBeInTheDocument()
+      })
+
+      // Privacy tab should be active
+      const privacyTabButton = screen.getByRole('button', { name: /Privacy Settings/i })
+      expect(privacyTabButton).toHaveClass('active')
+
+      // Profile tab should not be active
+      const profileTabButton = screen.getByRole('button', { name: /^Profile$/i })
+      expect(profileTabButton).not.toHaveClass('active')
+
+      // Privacy Settings content should be visible
+      expect(screen.getByText('Privacy Settings')).toBeInTheDocument()
+    })
+
+    it('should fallback to Profile tab for invalid URL tab param', async () => {
+      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
+
+      renderWithRouter(<ProfilePage />, { initialUrl: '/profile?tab=invalid' })
+
+      await waitFor(() => {
+        expect(screen.getByText('test@example.com')).toBeInTheDocument()
+      })
+
+      // Profile tab should be active (fallback to default)
+      const profileTabButton = screen.getByRole('button', { name: /^Profile$/i })
+      expect(profileTabButton).toHaveClass('active')
+
+      // Profile content should be visible
+      expect(screen.getByText('Account Information')).toBeInTheDocument()
+    })
+
+    it('should update URL when switching tabs', async () => {
+      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
+
+      renderWithRouter(<ProfilePage />, { initialUrl: '/profile' })
+
+      await waitFor(() => {
+        expect(screen.getByText('test@example.com')).toBeInTheDocument()
+      })
+
+      // Click Privacy Settings tab
+      const user = userEvent.setup()
+      const privacyTabButton = screen.getByRole('button', { name: /Privacy Settings/i })
+      await user.click(privacyTabButton)
+
+      // Privacy tab should now be active
+      await waitFor(() => {
+        expect(privacyTabButton).toHaveClass('active')
+      })
+
+      // Privacy content should be visible
+      expect(screen.getByText('Privacy Settings')).toBeInTheDocument()
     })
   })
 })
