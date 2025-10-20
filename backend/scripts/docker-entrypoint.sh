@@ -20,15 +20,22 @@ fi
 echo "Running database migrations with Atlas..."
 
 # Construct direct PostgreSQL connection for Atlas (bypass PgBouncer)
-# PgBouncer URL pattern: postgresql://user:pass@pgbouncer.<cluster-id>.flympg.net/fly-db
-# Direct URL pattern:    postgresql://user:pass@boostedbudget-db.internal:5432/fly-db
-#
 # Atlas is incompatible with PgBouncer transaction pooling mode because it tries
 # to set connection parameters (like search_path) that PgBouncer blocks.
 # Solution: Use direct PostgreSQL connection for migrations only.
-MIGRATION_URL=$(echo "$DATABASE_URL" | sed 's/pgbouncer\.[a-z0-9]*\.flympg\.net/boostedbudget-db.internal:5432/')
-
-echo "Using direct PostgreSQL connection for migrations (bypassing PgBouncer)"
+#
+# Preferred: Use MIGRATION_DATABASE_URL env var if set (cleaner, explicit)
+# Fallback: Transform DATABASE_URL from PgBouncer to direct connection
+if [ -n "${MIGRATION_DATABASE_URL:-}" ]; then
+  MIGRATION_URL="$MIGRATION_DATABASE_URL"
+  echo "Using MIGRATION_DATABASE_URL for direct PostgreSQL connection"
+else
+  # Transform PgBouncer URL to direct connection
+  # PgBouncer pattern: postgresql://user:pass@pgbouncer.<cluster-id>.flympg.net/fly-db
+  # Direct pattern:    postgresql://user:pass@boostedbudget-db.internal:5432/fly-db
+  MIGRATION_URL=$(echo "$DATABASE_URL" | sed 's/pgbouncer\.[a-z0-9]*\.flympg\.net/boostedbudget-db.internal:5432/')
+  echo "Using transformed DATABASE_URL for direct PostgreSQL connection (bypassing PgBouncer)"
+fi
 
 # Run migrations using Atlas with direct connection
 atlas migrate apply \
