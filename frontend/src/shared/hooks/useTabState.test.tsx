@@ -82,7 +82,7 @@ describe('useTabState', () => {
   describe('State updates', () => {
     it('should update tab state when setter is called', () => {
       const wrapper = createWrapper('/')
-      const { result } = renderHook(() => useTabState('tab', 'profile'), { wrapper })
+      const { result } = renderHook(() => useTabState<string>('tab', 'profile'), { wrapper })
 
       act(() => {
         const [, setTab] = result.current
@@ -95,7 +95,7 @@ describe('useTabState', () => {
 
     it('should update URL query param when tab changes', async () => {
       const wrapper = createWrapper('/')
-      const { result } = renderHook(() => useTabState('tab', 'profile'), { wrapper })
+      const { result } = renderHook(() => useTabState<string>('tab', 'profile'), { wrapper })
 
       act(() => {
         const [, setTab] = result.current
@@ -114,7 +114,7 @@ describe('useTabState', () => {
 
     it('should preserve other query params when updating tab', async () => {
       const wrapper = createWrapper('/?other=value&tab=profile')
-      const { result } = renderHook(() => useTabState('tab', 'profile'), { wrapper })
+      const { result } = renderHook(() => useTabState<string>('tab', 'profile'), { wrapper })
 
       // Verify initial state includes other param
       const [initialTab] = result.current
