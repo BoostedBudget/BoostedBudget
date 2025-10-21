@@ -47,7 +47,7 @@ func TestCreateLinkToken_Success(t *testing.T) {
 		},
 	}
 
-	handler := NewPlaidHandler(mockService)
+	handler := NewPlaidHandler(mockService, nil) // nil AccountService - not needed for this test
 
 	// When: Making POST request with authenticated user
 	e := echo.New()
@@ -73,7 +73,7 @@ func TestCreateLinkToken_Success(t *testing.T) {
 func TestCreateLinkToken_Unauthorized(t *testing.T) {
 	// Given: Handler with mock service
 	mockService := &mockPlaidService{}
-	handler := NewPlaidHandler(mockService)
+	handler := NewPlaidHandler(mockService, nil) // nil AccountService - not needed for this test
 
 	// When: Making POST request WITHOUT user_id in context (not authenticated)
 	e := echo.New()
@@ -100,7 +100,7 @@ func TestCreateLinkToken_ServiceError(t *testing.T) {
 		},
 	}
 
-	handler := NewPlaidHandler(mockService)
+	handler := NewPlaidHandler(mockService, nil) // nil AccountService - not needed for this test
 
 	// When: Making POST request with authenticated user
 	e := echo.New()

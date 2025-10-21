@@ -38,6 +38,9 @@ type Config struct {
 	StripeSecretKey      string
 	StripePublishableKey string
 	StripeWebhookSecret  string
+
+	// Encryption
+	EncryptionKey string
 }
 
 // Load loads configuration from environment variables
@@ -74,6 +77,9 @@ func Load() (*Config, error) {
 		StripeSecretKey:      getEnv("STRIPE_SECRET_KEY", ""),
 		StripePublishableKey: getEnv("STRIPE_PUBLISHABLE_KEY", ""),
 		StripeWebhookSecret:  getEnv("STRIPE_WEBHOOK_SECRET", ""),
+
+		// Encryption
+		EncryptionKey: getEnv("ENCRYPTION_KEY", ""),
 	}
 
 	// Validate required fields for production
