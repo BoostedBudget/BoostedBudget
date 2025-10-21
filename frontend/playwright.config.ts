@@ -21,7 +21,9 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
 
   // Opt out of parallel tests on CI
-  workers: process.env.CI ? 1 : undefined,
+  // Limit to 2 workers locally to prevent memory exhaustion (was 8 on 8-core system)
+  // See: Memory leak investigation Oct 2025 - saves 1.5GB vs unlimited workers
+  workers: process.env.CI ? 1 : 2,
 
   // Reporter to use
   reporter: [
@@ -39,13 +41,16 @@ export default defineConfig({
     apiURL: process.env.PLAYWRIGHT_API_URL || 'http://localhost:8080',
 
     // Collect trace when retrying the failed test
-    trace: 'on-first-retry',
+    // Disable locally to save memory (video buffering ~200MB), enable in CI for debugging
+    trace: process.env.CI ? 'on-first-retry' : 'off',
 
     // Screenshot on failure
-    screenshot: 'only-on-failure',
+    // Disable locally to save memory, enable in CI for debugging
+    screenshot: process.env.CI ? 'only-on-failure' : 'off',
 
     // Video on failure
-    video: 'retain-on-failure',
+    // Disable locally to save memory, enable in CI for debugging
+    video: process.env.CI ? 'retain-on-failure' : 'off',
   },
 
   // Configure projects for major browsers

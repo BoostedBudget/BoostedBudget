@@ -6,15 +6,50 @@
 
 set -e
 
-echo "🧪 Pre-push hook: Running all tests..."
+# Cleanup function to kill orphaned processes and containers
+# Critical for preventing memory leaks in WSL2 environment
+# See: Memory leak investigation Oct 2025
+cleanup() {
+    echo ""
+    echo "🧹 Cleaning up test processes and containers..."
+
+    # Kill any orphaned Vite dev server processes
+    pkill -f "vite.*dev" 2>/dev/null || true
+    pkill -f "npm run dev" 2>/dev/null || true
+
+    # Kill any orphaned Playwright/Chromium processes
+    pkill -f "playwright" 2>/dev/null || true
+    pkill -f "chromium" 2>/dev/null || true
+
+    # Kill any orphaned backend server processes
+    pkill -f "bin/server" 2>/dev/null || true
+    pkill -f "cmd/server" 2>/dev/null || true
+
+    # Kill any processes on test ports
+    lsof -ti :3000 2>/dev/null | xargs -r kill -9 2>/dev/null || true
+    lsof -ti :8080 2>/dev/null | xargs -r kill -9 2>/dev/null || true
+
+    # Clean up any Atlas Docker containers (postgres:15)
+    docker ps -a --filter "ancestor=postgres:15" --format "{{.ID}}" 2>/dev/null | xargs -r docker rm -f 2>/dev/null || true
+
+    echo "✅ Cleanup complete"
+}
+
+# Register cleanup function to run on EXIT, INT (Ctrl+C), and TERM signals
+trap cleanup EXIT INT TERM
+
+echo "🧪 Pre-push hook: Running fast tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# Run all tests via the Makefile
-if make test-all; then
+# Run fast tests (no E2E) for quick feedback
+# Run 'make test-all' manually before creating PRs to include E2E tests
+if make test-fast; then
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "✅ All tests passed! Proceeding with push..."
+    echo "✅ Fast tests passed! Proceeding with push..."
+    echo ""
+    echo "💡 Reminder: Run 'make test-all' before creating PRs (includes E2E tests)"
     echo ""
     exit 0
 else
