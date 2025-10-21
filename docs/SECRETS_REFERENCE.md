@@ -38,9 +38,9 @@ Set via: `flyctl secrets set KEY=value --app boostedbudget-api`
 
 | Secret | Description | How to Generate | Required |
 |--------|-------------|-----------------|----------|
-| `ENCRYPTION_KEY` | 32-byte AES-256 encryption key for sensitive data (Plaid tokens, etc.) | `openssl rand -hex 32` | ✅ Yes |
+| `ENCRYPTION_KEY` | 32-byte AES-256 encryption key for sensitive data (Plaid tokens, etc.) | `openssl rand -base64 24 \| tr -d '=' \| head -c 32` | ✅ Yes |
 
-**Important**: This key is used to encrypt Plaid access tokens and other sensitive data before storing in the database. Loss of this key means permanent loss of encrypted data.
+**Important**: This key is used to encrypt Plaid access tokens and other sensitive data before storing in the database. Loss of this key means permanent loss of encrypted data. The key must be exactly 32 characters/bytes.
 
 ### Backend Environment Variables (Non-Secret)
 
