@@ -1,4 +1,4 @@
-.PHONY: help dev build test clean migrate-up migrate-down generate docker-up docker-down docker-rebuild test-all
+.PHONY: help dev build test clean migrate-up migrate-down generate docker-up docker-down docker-rebuild test-fast test-all
 
 # Default target
 help:
@@ -11,7 +11,8 @@ help:
 	@echo "  make docker-rebuild   - Rebuild and restart all services"
 	@echo ""
 	@echo "Testing:"
-	@echo "  make test-all         - Run ALL tests (backend, frontend, e2e) with coverage reports"
+	@echo "  make test-fast        - Run FAST tests (backend, frontend) - NO E2E (1-2 min, ~700MB)"
+	@echo "  make test-all         - Run ALL tests (backend, frontend, e2e) with coverage reports (2-4 min, ~1.5GB)"
 	@echo "  make test-ci          - Run CI tests with coverage enforcement"
 	@echo "  make backend-test     - Run backend tests only"
 	@echo "  make frontend-test    - Run frontend tests only"
@@ -70,21 +71,33 @@ test-ci:
 	cd frontend && npm run test:ci
 	@echo "All CI tests passed!"
 
-# All Tests + Coverage Reports
-test-all:
+# Fast Tests (No E2E) - For rapid iteration during development
+# Use this in pre-push hook for fast feedback (1-2 minutes, ~700MB)
+# Run test-all manually before creating PRs
+test-fast:
 	@echo "========================================"
-	@echo "Running ALL tests with coverage reports"
+	@echo "Running FAST tests (no E2E)"
 	@echo "========================================"
+	@echo ""
+	@echo "⚠️  E2E tests skipped for speed. Run 'make test-all' before creating PRs."
 	@echo ""
 	@echo "1️⃣  Linting Migrations..."
-	@cd backend && atlas migrate lint \
-		--dir file://migrations \
-		--dev-url "docker://postgres/15/test" \
-		--latest 1 2>/dev/null || \
-		(echo "⚠️  Migration lint skipped (Docker not available)" && true)
+	@# Try using docker-compose postgres first (no ephemeral containers), fallback to skip
+	@# See: Memory leak investigation Oct 2025 - prevents dangling Docker image accumulation
+	@if docker compose ps postgres 2>/dev/null | grep -q "running"; then \
+		cd backend && atlas migrate lint \
+			--dir file://migrations \
+			--dev-url "postgres://devuser:devpass@localhost:5432/boostedbudget?sslmode=disable" \
+			--latest 1; \
+	else \
+		echo "⚠️  Migration lint skipped (docker-compose not running)"; \
+		echo "   Run 'make docker-up' or 'docker compose up -d postgres' to enable migration linting"; \
+	fi
 	@echo ""
 	@echo "2️⃣  Backend Tests..."
-	@cd backend && go test ./... -v -race -coverprofile=coverage.out -covermode=atomic -json > test-output.json 2>&1 || true
+	@# Limit parallelism to prevent memory exhaustion: -p=2 (max 2 packages), -parallel=4 (max 4 tests/pkg)
+	@# See: Memory leak investigation Oct 2025 - saves 1.2GB vs unlimited (was 8 packages on 8-core system)
+	@cd backend && go test ./... -v -race -p=2 -parallel=4 -coverprofile=coverage.out -covermode=atomic -json > test-output.json 2>&1 || true
 	@cd backend && cat test-output.json | jq -s '[.[] | select(.Action == "pass" or .Action == "fail")] | {passed: ([.[] | select(.Action == "pass")] | length), failed: ([.[] | select(.Action == "fail")] | length), total: length}' > test-results.json 2>/dev/null || echo '{"passed":0,"failed":0,"total":0}' > test-results.json
 	@cd backend && cat test-output.json | grep -v "^{" || true
 	@echo ""
@@ -107,7 +120,67 @@ test-all:
 	@cd frontend && npm run test:ci
 	@echo "✅ Frontend coverage: frontend/coverage/index.html"
 	@echo ""
-	@echo "4️⃣  E2E Tests..."
+	@echo "========================================"
+	@echo "✅ Fast tests complete!"
+	@echo "========================================"
+	@echo ""
+	@echo "📄 Coverage Reports:"
+	@echo "  Backend:  backend/coverage.html (open in browser)"
+	@echo "  Frontend: frontend/coverage/index.html (open in browser)"
+	@echo ""
+	@echo "⚠️  Remember: Run 'make test-all' to include E2E tests before creating PRs!"
+
+# All Tests + Coverage Reports (including E2E)
+# Use this before creating PRs to ensure full validation (2-4 minutes, ~1.5GB)
+test-all:
+	@echo "========================================"
+	@echo "Running ALL tests with coverage reports"
+	@echo "========================================"
+	@echo ""
+	@echo "1️⃣  Linting Migrations..."
+	@# Try using docker-compose postgres first (no ephemeral containers), fallback to skip
+	@# See: Memory leak investigation Oct 2025 - prevents dangling Docker image accumulation
+	@if docker compose ps postgres 2>/dev/null | grep -q "running"; then \
+		cd backend && atlas migrate lint \
+			--dir file://migrations \
+			--dev-url "postgres://devuser:devpass@localhost:5432/boostedbudget?sslmode=disable" \
+			--latest 1; \
+	else \
+		echo "⚠️  Migration lint skipped (docker-compose not running)"; \
+		echo "   Run 'make docker-up' or 'docker compose up -d postgres' to enable migration linting"; \
+	fi
+	@echo ""
+	@echo "2️⃣  Backend Tests..."
+	@# Limit parallelism to prevent memory exhaustion: -p=2 (max 2 packages), -parallel=4 (max 4 tests/pkg)
+	@# See: Memory leak investigation Oct 2025 - saves 1.2GB vs unlimited (was 8 packages on 8-core system)
+	@cd backend && go test ./... -v -race -p=2 -parallel=4 -coverprofile=coverage.out -covermode=atomic -json > test-output.json 2>&1 || true
+	@cd backend && cat test-output.json | jq -s '[.[] | select(.Action == "pass" or .Action == "fail")] | {passed: ([.[] | select(.Action == "pass")] | length), failed: ([.[] | select(.Action == "fail")] | length), total: length}' > test-results.json 2>/dev/null || echo '{"passed":0,"failed":0,"total":0}' > test-results.json
+	@cd backend && cat test-output.json | grep -v "^{" || true
+	@echo ""
+	@echo "📊 Checking backend coverage threshold (≥60%)..."
+	@cd backend && COVERAGE=$$(go tool cover -func=coverage.out | grep total | awk '{print $$3}' | sed 's/%//'); \
+		COVERAGE_INT=$$(echo "$$COVERAGE" | cut -d. -f1); \
+		echo "Current coverage: $${COVERAGE}%"; \
+		if [ "$$COVERAGE_INT" -lt 60 ]; then \
+			echo "❌ Coverage $${COVERAGE}% is below threshold 60%"; \
+			exit 1; \
+		else \
+			echo "✅ Coverage $${COVERAGE}% meets threshold 60%"; \
+		fi
+	@echo ""
+	@echo "📊 Generating backend HTML coverage report..."
+	@cd backend && go tool cover -html=coverage.out -o coverage.html
+	@echo "✅ Backend coverage: backend/coverage.html"
+	@echo ""
+	@echo "3️⃣  Frontend Tests..."
+	@cd frontend && npm run test:ci
+	@echo "✅ Frontend coverage: frontend/coverage/index.html"
+	@echo ""
+	@echo "4️⃣  Building Backend Binary for E2E Tests..."
+	@cd backend && go build -o bin/server ./cmd/server
+	@echo "✅ Backend binary: backend/bin/server"
+	@echo ""
+	@echo "5️⃣  E2E Tests..."
 	@cd frontend && npm run test:e2e -- --reporter=line
 	@echo ""
 	@echo "========================================"
