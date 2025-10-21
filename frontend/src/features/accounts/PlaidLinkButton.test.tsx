@@ -2,10 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { usePlaidLink } from 'react-plaid-link'
+import { usePlaidLink, PlaidLinkOnSuccessMetadata } from 'react-plaid-link'
 import { PlaidLinkButton } from './PlaidLinkButton'
 import * as plaidApi from './api/plaidApi'
-import type { LinkTokenResponse, ExchangePublicTokenResponse, PlaidLinkMetadata } from './types'
+import type { LinkTokenResponse, ExchangePublicTokenResponse } from './types'
 
 // Mock the Plaid API
 vi.mock('./api/plaidApi')
@@ -53,7 +53,7 @@ describe('PlaidLinkButton', () => {
     accounts_linked: 3,
   }
 
-  const mockMetadata: PlaidLinkMetadata = {
+  const mockMetadata: PlaidLinkOnSuccessMetadata = {
     institution: {
       name: 'Chase',
       institution_id: 'ins_109508',
@@ -62,20 +62,24 @@ describe('PlaidLinkButton', () => {
       {
         id: 'acc-123',
         name: 'Checking',
+        mask: '1234',
         type: 'depository',
         subtype: 'checking',
+        verification_status: 'verified',
       },
     ],
     link_session_id: 'session-123',
-    public_token: 'public-sandbox-abc123-def456',
   }
 
   beforeEach(() => {
     vi.clearAllMocks()
-    // Default mock for usePlaidLink - ready state
+    // Default mock for usePlaidLink - ready state with all required properties
     vi.mocked(usePlaidLink).mockReturnValue({
       open: mockOpen,
       ready: true,
+      error: null,
+      exit: vi.fn(),
+      submit: vi.fn(),
     })
   })
 
@@ -154,6 +158,9 @@ describe('PlaidLinkButton', () => {
       vi.mocked(usePlaidLink).mockReturnValue({
         open: mockOpen,
         ready: false, // SDK not ready
+        error: null,
+        exit: vi.fn(),
+        submit: vi.fn(),
       })
 
       renderWithRouter(<PlaidLinkButton />)
@@ -168,10 +175,11 @@ describe('PlaidLinkButton', () => {
       vi.mocked(plaidApi.fetchLinkToken).mockResolvedValue(mockLinkToken)
       vi.mocked(plaidApi.exchangePublicToken).mockResolvedValue(mockExchangeResponse)
 
-      let capturedOnSuccess: ((public_token: string, metadata: PlaidLinkMetadata) => void) | null = null
+      const publicToken = 'public-sandbox-abc123-def456'
+      let capturedOnSuccess: ((public_token: string, metadata: PlaidLinkOnSuccessMetadata) => void) | null = null
       vi.mocked(usePlaidLink).mockImplementation((config) => {
         capturedOnSuccess = config.onSuccess
-        return { open: mockOpen, ready: true }
+        return { open: mockOpen, ready: true, error: null, exit: vi.fn(), submit: vi.fn() }
       })
 
       renderWithRouter(<PlaidLinkButton />)
@@ -181,13 +189,13 @@ describe('PlaidLinkButton', () => {
       })
 
       // Simulate Plaid Link success
-      capturedOnSuccess!(mockMetadata.public_token, mockMetadata)
+      capturedOnSuccess!(publicToken, mockMetadata)
 
       await waitFor(() => {
         expect(plaidApi.exchangePublicToken).toHaveBeenCalledWith({
-          public_token: mockMetadata.public_token,
-          institution_id: mockMetadata.institution.institution_id,
-          institution_name: mockMetadata.institution.name,
+          public_token: publicToken,
+          institution_id: mockMetadata.institution?.institution_id || '',
+          institution_name: mockMetadata.institution?.name || '',
         })
       })
     })
@@ -198,10 +206,11 @@ describe('PlaidLinkButton', () => {
         () => new Promise(() => {}) // Never resolves
       )
 
-      let capturedOnSuccess: ((public_token: string, metadata: PlaidLinkMetadata) => void) | null = null
+      const publicToken = 'public-sandbox-abc123-def456'
+      let capturedOnSuccess: ((public_token: string, metadata: PlaidLinkOnSuccessMetadata) => void) | null = null
       vi.mocked(usePlaidLink).mockImplementation((config) => {
         capturedOnSuccess = config.onSuccess
-        return { open: mockOpen, ready: true }
+        return { open: mockOpen, ready: true, error: null, exit: vi.fn(), submit: vi.fn() }
       })
 
       renderWithRouter(<PlaidLinkButton />)
@@ -211,7 +220,7 @@ describe('PlaidLinkButton', () => {
       })
 
       // Simulate Plaid Link success
-      capturedOnSuccess!(mockMetadata.public_token, mockMetadata)
+      capturedOnSuccess!(publicToken, mockMetadata)
 
       await waitFor(() => {
         expect(screen.getByText(/connecting/i)).toBeInTheDocument()
@@ -222,10 +231,11 @@ describe('PlaidLinkButton', () => {
       vi.mocked(plaidApi.fetchLinkToken).mockResolvedValue(mockLinkToken)
       vi.mocked(plaidApi.exchangePublicToken).mockResolvedValue(mockExchangeResponse)
 
-      let capturedOnSuccess: ((public_token: string, metadata: PlaidLinkMetadata) => void) | null = null
+      const publicToken = 'public-sandbox-abc123-def456'
+      let capturedOnSuccess: ((public_token: string, metadata: PlaidLinkOnSuccessMetadata) => void) | null = null
       vi.mocked(usePlaidLink).mockImplementation((config) => {
         capturedOnSuccess = config.onSuccess
-        return { open: mockOpen, ready: true }
+        return { open: mockOpen, ready: true, error: null, exit: vi.fn(), submit: vi.fn() }
       })
 
       renderWithRouter(<PlaidLinkButton />)
@@ -235,7 +245,7 @@ describe('PlaidLinkButton', () => {
       })
 
       // Simulate Plaid Link success
-      capturedOnSuccess!(mockMetadata.public_token, mockMetadata)
+      capturedOnSuccess!(publicToken, mockMetadata)
 
       await waitFor(() => {
         expect(mockNavigate).toHaveBeenCalledWith('/accounts')
@@ -250,10 +260,11 @@ describe('PlaidLinkButton', () => {
         response: { status: 400 },
       })
 
-      let capturedOnSuccess: ((public_token: string, metadata: PlaidLinkMetadata) => void) | null = null
+      const publicToken = 'public-sandbox-abc123-def456'
+      let capturedOnSuccess: ((public_token: string, metadata: PlaidLinkOnSuccessMetadata) => void) | null = null
       vi.mocked(usePlaidLink).mockImplementation((config) => {
         capturedOnSuccess = config.onSuccess
-        return { open: mockOpen, ready: true }
+        return { open: mockOpen, ready: true, error: null, exit: vi.fn(), submit: vi.fn() }
       })
 
       renderWithRouter(<PlaidLinkButton />)
@@ -263,7 +274,7 @@ describe('PlaidLinkButton', () => {
       })
 
       // Simulate Plaid Link success
-      capturedOnSuccess!(mockMetadata.public_token, mockMetadata)
+      capturedOnSuccess!(publicToken, mockMetadata)
 
       await waitFor(() => {
         expect(screen.getByText(/invalid or expired connection/i)).toBeInTheDocument()
@@ -276,10 +287,11 @@ describe('PlaidLinkButton', () => {
         response: { status: 403 },
       })
 
-      let capturedOnSuccess: ((public_token: string, metadata: PlaidLinkMetadata) => void) | null = null
+      const publicToken = 'public-sandbox-abc123-def456'
+      let capturedOnSuccess: ((public_token: string, metadata: PlaidLinkOnSuccessMetadata) => void) | null = null
       vi.mocked(usePlaidLink).mockImplementation((config) => {
         capturedOnSuccess = config.onSuccess
-        return { open: mockOpen, ready: true }
+        return { open: mockOpen, ready: true, error: null, exit: vi.fn(), submit: vi.fn() }
       })
 
       renderWithRouter(<PlaidLinkButton />)
@@ -289,7 +301,7 @@ describe('PlaidLinkButton', () => {
       })
 
       // Simulate Plaid Link success
-      capturedOnSuccess!(mockMetadata.public_token, mockMetadata)
+      capturedOnSuccess!(publicToken, mockMetadata)
 
       await waitFor(() => {
         expect(screen.getByText(/account limit reached.*upgrade/i)).toBeInTheDocument()
@@ -303,10 +315,11 @@ describe('PlaidLinkButton', () => {
       vi.mocked(plaidApi.fetchLinkToken).mockResolvedValue(mockLinkToken)
       vi.mocked(plaidApi.exchangePublicToken).mockResolvedValue(mockExchangeResponse)
 
-      let capturedOnSuccess: ((public_token: string, metadata: PlaidLinkMetadata) => void) | null = null
+      const publicToken = 'public-sandbox-abc123-def456'
+      let capturedOnSuccess: ((public_token: string, metadata: PlaidLinkOnSuccessMetadata) => void) | null = null
       vi.mocked(usePlaidLink).mockImplementation((config) => {
         capturedOnSuccess = config.onSuccess
-        return { open: mockOpen, ready: true }
+        return { open: mockOpen, ready: true, error: null, exit: vi.fn(), submit: vi.fn() }
       })
 
       renderWithRouter(<PlaidLinkButton onSuccess={onSuccess} />)
@@ -316,7 +329,7 @@ describe('PlaidLinkButton', () => {
       })
 
       // Simulate Plaid Link success
-      capturedOnSuccess!(mockMetadata.public_token, mockMetadata)
+      capturedOnSuccess!(publicToken, mockMetadata)
 
       await waitFor(() => {
         expect(onSuccess).toHaveBeenCalledWith(mockExchangeResponse)
@@ -327,10 +340,11 @@ describe('PlaidLinkButton', () => {
       const onExit = vi.fn()
       vi.mocked(plaidApi.fetchLinkToken).mockResolvedValue(mockLinkToken)
 
-      let capturedOnExit: (() => void) | null = null
+      // Type assertion: we know config.onExit is the PlaidLink's internal onExit handler
+      let capturedOnExit: any
       vi.mocked(usePlaidLink).mockImplementation((config) => {
         capturedOnExit = config.onExit
-        return { open: mockOpen, ready: true }
+        return { open: mockOpen, ready: true, error: null, exit: vi.fn(), submit: vi.fn() }
       })
 
       renderWithRouter(<PlaidLinkButton onExit={onExit} />)
@@ -339,8 +353,8 @@ describe('PlaidLinkButton', () => {
         expect(capturedOnExit).toBeDefined()
       })
 
-      // Simulate user exiting Plaid Link
-      capturedOnExit!()
+      // Simulate user exiting Plaid Link (PlaidLinkOnExit has different signature internally)
+      capturedOnExit()
 
       expect(onExit).toHaveBeenCalledTimes(1)
     })
