@@ -34,6 +34,14 @@ Set via: `flyctl secrets set KEY=value --app boostedbudget-api`
 | `STRIPE_SECRET_KEY` | Stripe secret key | Stripe Dashboard → Developers → API Keys | ✅ Yes |
 | `STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret | Stripe Dashboard → Developers → Webhooks | ✅ Yes |
 
+### Encryption
+
+| Secret | Description | How to Generate | Required |
+|--------|-------------|-----------------|----------|
+| `ENCRYPTION_KEY` | 32-byte AES-256 encryption key for sensitive data (Plaid tokens, etc.) | `openssl rand -hex 32` | ✅ Yes |
+
+**Important**: This key is used to encrypt Plaid access tokens and other sensitive data before storing in the database. Loss of this key means permanent loss of encrypted data.
+
 ### Backend Environment Variables (Non-Secret)
 
 Set in `backend/fly.toml`:
