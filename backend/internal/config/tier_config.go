@@ -11,7 +11,7 @@ import (
 )
 
 // TierConfig holds the subscription tier configuration
-// Loaded from backend/config/subscription_tiers.yaml
+// Loaded from config/subscription_tiers.yaml (centralized config directory)
 type TierConfig struct {
 	Tiers       map[domain.TierName]domain.SubscriptionTier `yaml:"tiers"`
 	DefaultTier domain.TierName                              `yaml:"default_tier"`
