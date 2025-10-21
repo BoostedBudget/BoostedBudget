@@ -7,7 +7,31 @@ import tsparser from '@typescript-eslint/parser'
 
 export default [
   {
-    ignores: ['dist', 'node_modules', 'coverage', 'playwright-report', 'test-results', '*.config.*']
+    ignores: ['dist', 'node_modules', 'coverage', 'playwright-report', 'test-results', '*.config.*', 'src/types/generated/**']
+  },
+  // Build scripts configuration
+  {
+    files: ['scripts/**/*.{ts,tsx}'],
+    languageOptions: {
+      ecmaVersion: 2020,
+      globals: {
+        ...globals.node, // Node.js scripts
+      },
+      parser: tsparser,
+      parserOptions: {
+        ecmaVersion: 'latest',
+        sourceType: 'module',
+      }
+    },
+    plugins: {
+      '@typescript-eslint': tseslint,
+    },
+    rules: {
+      ...js.configs.recommended.rules,
+      ...tseslint.configs.recommended.rules,
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+      '@typescript-eslint/no-explicit-any': 'off', // Allow any in build scripts (parsing YAML)
+    },
   },
   // E2E test files configuration
   {

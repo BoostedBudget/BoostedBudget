@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { readFileSync, writeFileSync, unlinkSync, existsSync } from 'fs'
+import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import yaml from 'js-yaml'
 
@@ -29,7 +29,7 @@ describe('generate-tier-types', () => {
   beforeEach(() => {
     // Create fixtures directory if it doesn't exist
     if (!existsSync(FIXTURES_DIR)) {
-      require('fs').mkdirSync(FIXTURES_DIR, { recursive: true })
+      mkdirSync(FIXTURES_DIR, { recursive: true })
     }
 
     // Create valid YAML fixture
