@@ -46,6 +46,9 @@ COPY --from=builder /build/server /app/server
 COPY --from=builder /build/migrations /app/migrations
 COPY --from=builder /build/atlas.hcl /app/atlas.hcl
 
+# Copy config directory (subscription tiers, etc.)
+COPY --from=builder /build/config /app/config
+
 # Copy startup script
 COPY --from=builder /build/scripts/docker-entrypoint.sh /app/docker-entrypoint.sh
 
