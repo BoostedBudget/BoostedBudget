@@ -203,6 +203,78 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
 
+  /api/v1/plaid/exchange-token:
+    post:
+      summary: Exchange Plaid Public Token
+      description: |
+        Exchange a Plaid public token for an access token and link bank accounts.
+        This endpoint completes the Plaid Link flow initiated with the link token.
+
+        **Process**:
+        1. Validates subscription tier account limits
+        2. Exchanges public token for access token via Plaid API
+        3. Fetches account information from Plaid
+        4. Encrypts and stores access token (AES-256-GCM)
+        5. Creates linked item and account records in database
+
+        **Subscription Limits** (checked before Plaid API call):
+        - Free tier: 8 accounts maximum
+        - Premium Lite: 15 accounts maximum
+        - Premium: 30 accounts maximum
+        - Premium+: Unlimited accounts
+      operationId: exchangePlaidPublicToken
+      tags:
+        - Plaid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExchangePublicTokenRequest'
+            example:
+              public_token: "public-sandbox-abc123-def456"
+              institution_id: "ins_109508"
+              institution_name: "Chase"
+      responses:
+        '200':
+          description: Accounts linked successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExchangePublicTokenResponse'
+              example:
+                success: true
+                item_id: "item-xyz123"
+                accounts_linked: 3
+        '400':
+          description: Invalid or expired public token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: "Invalid or expired public token"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Account limit exceeded for subscription tier
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: "Account limit exceeded for your subscription tier"
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '503':
+          description: Plaid service temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: "Bank service temporarily unavailable"
+
   /user/data-export:
     post:
       summary: Request Data Export
@@ -689,6 +761,47 @@ components:
           type: string
           description: Plaid request ID for debugging and support
           example: "plaid-request-xyz789"
+
+    ExchangePublicTokenRequest:
+      type: object
+      required:
+        - public_token
+        - institution_id
+        - institution_name
+      properties:
+        public_token:
+          type: string
+          description: Public token returned by Plaid Link after successful connection
+          example: "public-sandbox-abc123-def456"
+        institution_id:
+          type: string
+          description: Plaid institution ID for the connected bank
+          example: "ins_109508"
+        institution_name:
+          type: string
+          description: Human-readable name of the connected institution
+          example: "Chase"
+
+    ExchangePublicTokenResponse:
+      type: object
+      required:
+        - success
+        - item_id
+        - accounts_linked
+      properties:
+        success:
+          type: boolean
+          description: Whether the account linking succeeded
+          example: true
+        item_id:
+          type: string
+          description: Plaid item ID for the linked institution connection
+          example: "item-xyz123"
+        accounts_linked:
+          type: integer
+          description: Number of accounts successfully linked from this institution
+          example: 3
+          minimum: 0
 
   responses:
     BadRequest:
