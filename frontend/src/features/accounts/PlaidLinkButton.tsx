@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { usePlaidLink } from 'react-plaid-link'
+import { usePlaidLink, PlaidLinkOnSuccessMetadata } from 'react-plaid-link'
 import { fetchLinkToken, exchangePublicToken } from './api/plaidApi'
-import type { PlaidLinkMetadata, ExchangePublicTokenResponse } from './types'
+import type { ExchangePublicTokenResponse } from './types'
 import './PlaidLinkButton.css'
 
 interface PlaidLinkButtonProps {
@@ -80,15 +80,15 @@ export function PlaidLinkButton({ onSuccess, onExit, className }: PlaidLinkButto
   }, [])
 
   // Handle successful Plaid Link flow
-  const handleOnSuccess = async (public_token: string, metadata: PlaidLinkMetadata) => {
+  const handleOnSuccess = async (public_token: string, metadata: PlaidLinkOnSuccessMetadata) => {
     try {
       setExchanging(true)
       setError(null)
 
       const response = await exchangePublicToken({
         public_token,
-        institution_id: metadata.institution.institution_id,
-        institution_name: metadata.institution.name,
+        institution_id: metadata.institution?.institution_id || '',
+        institution_name: metadata.institution?.name || '',
       })
 
       // Notify parent component if callback provided

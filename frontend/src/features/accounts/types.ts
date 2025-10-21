@@ -29,22 +29,3 @@ export interface ExchangePublicTokenResponse {
   item_id: string
   accounts_linked: number
 }
-
-/**
- * Metadata returned by Plaid Link onSuccess callback
- * Provides information about the linked institution and accounts
- */
-export interface PlaidLinkMetadata {
-  institution: {
-    name: string
-    institution_id: string
-  }
-  accounts: Array<{
-    id: string
-    name: string
-    type: string
-    subtype: string
-  }>
-  link_session_id: string
-  public_token: string
-}
