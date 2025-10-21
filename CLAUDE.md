@@ -192,7 +192,7 @@ BAD ✗
 - Server Memory to persist learnings, decisions, trade-offs, patterns (CONTINUOUSLY, not just at end)
 - No money movement (suggestions only, no MTL)
 - GDPR compliance (all users get rights)
-- Free tier limits (2 rules, 8 accounts, 1x/day execution, ads enabled)
+- Tier limits in `config/subscription_tiers.yaml` (free: 2 rules, 8 accounts, 1x/day, ads)
 - Single region us-east-1 (multi-region Phase 7+)
 - Auth0 for all auth (never custom auth)
 - Build Docker images (don't build on Fly)
@@ -315,62 +315,40 @@ if (subscription?.tier === 'free' && hasAdConsent) return <AdBanner slot={adSlot
 
 ## Subscription Tiers
 
-**Configuration**: `backend/config/subscription_tiers.yaml` (easily modifiable)
+**Single Source of Truth**: `config/subscription_tiers.yaml` (centralized, version-controlled)
 
-**Tier Structure**:
-```
-FREE ($0/mo)
-├─ 8 accounts (full budgeting capability)
-├─ 2 rules (taste of automation)
-├─ Rules run: 1x per day
-└─ Ads: Enabled
+**Tiers**: Free (2 rules, 8 accounts) | Premium Lite (5 rules, 15 accounts) | Premium (15 rules, 30 accounts) | Premium+ (unlimited)
 
-PREMIUM LITE ($4.99/mo)
-├─ 15 accounts (couples, families)
-├─ 5 rules
-├─ Rules run: 2x per day (every 12 hours)
-└─ Ads: Disabled
-
-PREMIUM ($9.99/mo)
-├─ 30 accounts (power users)
-├─ 15 rules
-├─ Rules run: 6x per day (every 4 hours)
-├─ Priority support
-└─ Advanced reports
-
-PREMIUM+ ($19.99/mo)
-├─ Unlimited accounts
-├─ Unlimited rules
-├─ Rules run: Every 10 minutes (144x/day)
-├─ AI insights (future)
-└─ API access (future)
-```
+For detailed tier structure, limits, pricing, and features, see:
+- **Config file**: `config/subscription_tiers.yaml` (edit here to change tiers)
+- **Documentation**: `config/README.md` (explains centralized config approach)
 
 **Implementation**:
-- Config-driven: Change `backend/config/subscription_tiers.yaml` without code changes
-- Database overrides: Per-user custom limits for enterprise deals
-- Service: `internal/services/subscription_service.go`
-- Domain models: `internal/domain/subscription.go`
-- Migration: `000004_create_subscription_overrides_table.up.sql`
+- **Backend**: Loads YAML at runtime (`internal/config/tier_config.go`)
+- **Frontend**: Generates TypeScript types at build time (`scripts/generate-tier-types.ts`)
+- **Database overrides**: Per-user custom limits (`000004_create_subscription_overrides_table.up.sql`)
+- **Service**: `internal/services/subscription_service.go`
+- **Domain models**: `internal/domain/subscription.go`
 
-**Usage in code**:
+**Usage**:
 ```go
-// Check if user can create a rule
+// Backend: Check tier limits
 result, err := subscriptionService.CheckLimit(ctx, user, domain.ResourceRules, currentRuleCount)
 if !result.Allowed {
-    return errors.New("rule limit reached, upgrade to premium")
+    return errors.New("rule limit reached, upgrade required")
 }
-
-// Get effective subscription (base tier + overrides)
-effective, err := subscriptionService.GetEffectiveSubscription(ctx, user)
-fmt.Printf("User has %d rules available\n", effective.Limits.Rules)
 ```
 
-**Future extensibility**:
-- Add-ons: "Buy 5 more rules for $2/month"
-- Custom enterprise limits via database overrides
-- Promotional tier upgrades
-- A/B testing different tier structures
+```typescript
+// Frontend: Display tier info (auto-generated from YAML)
+import { SUBSCRIPTION_TIERS } from './types/generated/subscriptionTiers'
+const tierInfo = SUBSCRIPTION_TIERS[user.subscription_tier]
+```
+
+**Editing tiers**:
+1. Edit `config/subscription_tiers.yaml`
+2. Frontend types auto-regenerate on `npm run dev|build|test`
+3. Backend auto-loads (singleton cache with validation)
 
 ## External Services
 
