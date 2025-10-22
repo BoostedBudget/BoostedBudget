@@ -28,13 +28,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy custom nginx configuration
-COPY nginx.conf /etc/nginx/nginx.conf
+COPY frontend/nginx.conf /etc/nginx/nginx.conf
 
 # Copy built assets from builder
 COPY --from=builder /build/dist /usr/share/nginx/html
 
 # Copy runtime config injection script
-COPY docker-entrypoint.sh /docker-entrypoint.sh
+COPY frontend/docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 
 # Health check
