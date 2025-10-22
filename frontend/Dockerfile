@@ -5,13 +5,16 @@ FROM node:20-alpine AS builder
 WORKDIR /build
 
 # Copy package files
-COPY package*.json ./
+COPY frontend/package*.json ./
 
 # Install ALL dependencies (including devDependencies for build)
 RUN npm ci
 
-# Copy source code
-COPY . .
+# Copy config directory (needed for type generation)
+COPY config/ /config/
+
+# Copy frontend source code
+COPY frontend/ .
 
 # Build the application
 RUN npm run build
