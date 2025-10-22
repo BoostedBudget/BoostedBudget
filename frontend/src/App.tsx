@@ -211,6 +211,7 @@ function App() {
               }
             />
             <Route path="/legal/privacy-policy" element={<PrivacyPolicy />} />
+            <Route path="/privacy" element={<PrivacyPolicy />} />
           </Routes>
         </main>
 
