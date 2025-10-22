@@ -18,7 +18,7 @@ const (
 const Unlimited = -1
 
 // SubscriptionTier represents the full definition of a subscription tier
-// Loaded from backend/config/subscription_tiers.yaml
+// Loaded from config/subscription_tiers.yaml (centralized config directory)
 type SubscriptionTier struct {
 	Name        TierName                   `yaml:"-" json:"name"`
 	DisplayName string                     `yaml:"display_name" json:"display_name"`
