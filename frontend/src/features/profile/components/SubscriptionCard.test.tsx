@@ -10,8 +10,8 @@ describe('SubscriptionCard', () => {
 
       expect(screen.getByText(/free/i)).toBeInTheDocument()
       expect(screen.getByText(/\$0/i)).toBeInTheDocument()
-      expect(screen.getByText(/3 automation rules/i)).toBeInTheDocument()
-      expect(screen.getByText(/2 linked accounts/i)).toBeInTheDocument()
+      expect(screen.getByText(/2 automation rules/i)).toBeInTheDocument()
+      expect(screen.getByText(/8 bank accounts/i)).toBeInTheDocument()
       expect(screen.getByText(/ad-supported/i)).toBeInTheDocument()
     })
 
@@ -29,14 +29,39 @@ describe('SubscriptionCard', () => {
     })
   })
 
+  describe('Premium Lite tier', () => {
+    it('should display premium lite tier name and features', () => {
+      render(<SubscriptionCard tier="premium_lite" status="active" />)
+
+      expect(screen.getByText(/premium lite/i)).toBeInTheDocument()
+      expect(screen.getByText(/\$4\.99/i)).toBeInTheDocument()
+      expect(screen.getByText(/5 automation rules/i)).toBeInTheDocument()
+      expect(screen.getByText(/15 bank accounts/i)).toBeInTheDocument()
+      expect(screen.getByText(/no ads/i)).toBeInTheDocument()
+    })
+
+    it('should show manage button for premium lite tier', () => {
+      render(<SubscriptionCard tier="premium_lite" status="active" />)
+
+      const manageButton = screen.getByRole('button', { name: /manage/i })
+      expect(manageButton).toBeInTheDocument()
+    })
+
+    it('should not show upgrade button for premium lite tier', () => {
+      render(<SubscriptionCard tier="premium_lite" status="active" />)
+
+      expect(screen.queryByRole('button', { name: /upgrade/i })).not.toBeInTheDocument()
+    })
+  })
+
   describe('Premium tier', () => {
     it('should display premium tier name and features', () => {
       render(<SubscriptionCard tier="premium" status="active" />)
 
       expect(screen.getByText(/premium/i)).toBeInTheDocument()
       expect(screen.getByText(/\$9\.99/i)).toBeInTheDocument()
-      expect(screen.getByText(/unlimited rules/i)).toBeInTheDocument()
-      expect(screen.getByText(/unlimited accounts/i)).toBeInTheDocument()
+      expect(screen.getByText(/15 automation rules/i)).toBeInTheDocument()
+      expect(screen.getByText(/30 bank accounts/i)).toBeInTheDocument()
       expect(screen.getByText(/no ads/i)).toBeInTheDocument()
     })
 
@@ -56,17 +81,18 @@ describe('SubscriptionCard', () => {
 
   describe('Premium+ tier', () => {
     it('should display premium+ tier name and features', () => {
-      render(<SubscriptionCard tier="premium+" status="active" />)
+      render(<SubscriptionCard tier="premium_plus" status="active" />)
 
       expect(screen.getByText(/premium\+/i)).toBeInTheDocument()
       expect(screen.getByText(/\$19\.99/i)).toBeInTheDocument()
-      expect(screen.getByText(/everything in premium/i)).toBeInTheDocument()
+      expect(screen.getByText(/unlimited bank accounts/i)).toBeInTheDocument()
+      expect(screen.getByText(/unlimited automation rules/i)).toBeInTheDocument()
       expect(screen.getByText(/ai-powered insights/i)).toBeInTheDocument()
       expect(screen.getByText(/priority support/i)).toBeInTheDocument()
     })
 
     it('should show manage button for premium+ tier', () => {
-      render(<SubscriptionCard tier="premium+" status="active" />)
+      render(<SubscriptionCard tier="premium_plus" status="active" />)
 
       const manageButton = screen.getByRole('button', { name: /manage/i })
       expect(manageButton).toBeInTheDocument()
@@ -101,6 +127,13 @@ describe('SubscriptionCard', () => {
       expect(card).toHaveClass('tier-free')
     })
 
+    it('should have distinct styling for premium lite tier', () => {
+      const { container } = render(<SubscriptionCard tier="premium_lite" status="active" />)
+
+      const card = container.querySelector('.subscription-card')
+      expect(card).toHaveClass('tier-premium_lite')
+    })
+
     it('should have distinct styling for premium tier', () => {
       const { container } = render(<SubscriptionCard tier="premium" status="active" />)
 
@@ -109,10 +142,10 @@ describe('SubscriptionCard', () => {
     })
 
     it('should have distinct styling for premium+ tier', () => {
-      const { container } = render(<SubscriptionCard tier="premium+" status="active" />)
+      const { container } = render(<SubscriptionCard tier="premium_plus" status="active" />)
 
       const card = container.querySelector('.subscription-card')
-      expect(card).toHaveClass('tier-premium-plus')
+      expect(card).toHaveClass('tier-premium_plus')
     })
   })
 

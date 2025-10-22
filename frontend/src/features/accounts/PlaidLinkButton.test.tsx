@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { usePlaidLink, PlaidLinkOnSuccessMetadata } from 'react-plaid-link'
+import { usePlaidLink, PlaidLinkOnSuccessMetadata, PlaidLinkOnExit } from 'react-plaid-link'
 import { PlaidLinkButton } from './PlaidLinkButton'
 import * as plaidApi from './api/plaidApi'
 import type { LinkTokenResponse, ExchangePublicTokenResponse } from './types'
@@ -340,8 +340,8 @@ describe('PlaidLinkButton', () => {
       const onExit = vi.fn()
       vi.mocked(plaidApi.fetchLinkToken).mockResolvedValue(mockLinkToken)
 
-      // Type assertion: we know config.onExit is the PlaidLink's internal onExit handler
-      let capturedOnExit: any
+      // Capture the onExit handler for testing
+      let capturedOnExit: PlaidLinkOnExit | undefined
       vi.mocked(usePlaidLink).mockImplementation((config) => {
         capturedOnExit = config.onExit
         return { open: mockOpen, ready: true, error: null, exit: vi.fn(), submit: vi.fn() }
@@ -353,8 +353,8 @@ describe('PlaidLinkButton', () => {
         expect(capturedOnExit).toBeDefined()
       })
 
-      // Simulate user exiting Plaid Link (PlaidLinkOnExit has different signature internally)
-      capturedOnExit()
+      // Simulate user exiting Plaid Link (provides error and metadata per Plaid API)
+      capturedOnExit!(null, { institution: null, status: 'user_exit', link_session_id: 'test-session', request_id: 'test-request' })
 
       expect(onExit).toHaveBeenCalledTimes(1)
     })

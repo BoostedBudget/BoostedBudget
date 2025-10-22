@@ -30,14 +30,14 @@ export function SubscriptionCard({ tier, status }: SubscriptionCardProps) {
 
   const isPaidTier = tier !== 'free'
 
-  // Generate CSS class name for tier (safe now since tier is validated)
-  const tierClassName = tier.replace('+', '-plus')
+  // Generate CSS class name for tier (tier names now use underscores: premium_plus)
+  const tierClassName = tier
 
   return (
     <div className={`subscription-card tier-${tierClassName}`}>
       <div className="subscription-header">
         <h3 className="tier-name">{tierInfo.name}</h3>
-        <p className="tier-price">{tierInfo.price}</p>
+        <p className="tier-price">{tierInfo.priceMonthly}</p>
         <span className={`status-badge status-${status}`}>{status}</span>
       </div>
 

@@ -120,6 +120,10 @@ test-fast:
 	@cd frontend && npm run test:ci
 	@echo "✅ Frontend coverage: frontend/coverage/index.html"
 	@echo ""
+	@echo "4️⃣  Linting..."
+	@cd frontend && npm run lint
+	@echo "✅ Linting passed"
+	@echo ""
 	@echo "========================================"
 	@echo "✅ Fast tests complete!"
 	@echo "========================================"
