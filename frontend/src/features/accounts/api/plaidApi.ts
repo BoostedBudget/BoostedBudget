@@ -3,6 +3,7 @@ import type {
   LinkTokenResponse,
   ExchangePublicTokenRequest,
   ExchangePublicTokenResponse,
+  GetAccountsResponse,
 } from '../types'
 
 /**
@@ -42,5 +43,20 @@ export async function exchangePublicToken(
     '/api/v1/plaid/exchange-token',
     data
   )
+  return response.data
+}
+
+/**
+ * Fetch all linked bank accounts for the authenticated user
+ * GET /api/v1/accounts
+ *
+ * Returns all accounts with institution information from linked_items.
+ * Includes account details like balances, type, name, and institution.
+ *
+ * @returns List of accounts with total count
+ * @throws Error if request fails (401 unauthorized, 500 server error)
+ */
+export async function fetchAccounts(): Promise<GetAccountsResponse> {
+  const response = await apiClient.get<GetAccountsResponse>('/api/v1/accounts')
   return response.data
 }

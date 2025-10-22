@@ -32,6 +32,10 @@ type AccountRepository interface {
 	// GetByUserID retrieves all accounts for a specific user
 	GetByUserID(ctx context.Context, userID string) ([]domain.Account, error)
 
+	// GetAccountsWithInstitution retrieves all accounts for a user with institution names
+	// This method performs a LEFT JOIN with linked_items to include institution_name
+	GetAccountsWithInstitution(ctx context.Context, userID string) ([]domain.Account, error)
+
 	// CountByUserID counts the total number of accounts for a user
 	CountByUserID(ctx context.Context, userID string) (int, error)
 }
@@ -254,6 +258,63 @@ func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]d
 			&account.CurrencyCode,
 			&account.CreatedAt,
 			&account.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		accounts = append(accounts, account)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Return empty slice instead of nil if no accounts found
+	if accounts == nil {
+		accounts = []domain.Account{}
+	}
+
+	return accounts, nil
+}
+
+// GetAccountsWithInstitution retrieves all accounts for a user with institution names from linked_items
+func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, userID string) ([]domain.Account, error) {
+	query := `
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       a.current_balance, a.available_balance, a.currency_code,
+		       a.created_at, a.updated_at, l.institution_name
+		FROM accounts a
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id
+		WHERE a.user_id = $1
+		ORDER BY a.created_at ASC
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var accounts []domain.Account
+	for rows.Next() {
+		var account domain.Account
+		err := rows.Scan(
+			&account.ID,
+			&account.LinkedItemID,
+			&account.UserID,
+			&account.PlaidAccountID,
+			&account.Name,
+			&account.OfficialName,
+			&account.Type,
+			&account.Subtype,
+			&account.Mask,
+			&account.CurrentBalance,
+			&account.AvailableBalance,
+			&account.CurrencyCode,
+			&account.CreatedAt,
+			&account.UpdatedAt,
+			&account.InstitutionName,
 		)
 		if err != nil {
 			return nil, err
