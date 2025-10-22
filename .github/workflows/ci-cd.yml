@@ -552,7 +552,7 @@ jobs:
       - name: Build and push ${{ matrix.component }} image
         uses: docker/build-push-action@v5
         with:
-          context: ./${{ matrix.component }}
+          context: .
           file: ./${{ matrix.component }}/Dockerfile
           push: true
           tags: |
