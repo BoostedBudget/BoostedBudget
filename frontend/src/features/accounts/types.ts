@@ -29,3 +29,34 @@ export interface ExchangePublicTokenResponse {
   item_id: string
   accounts_linked: number
 }
+
+/**
+ * Bank account with details and institution information
+ * Returned from GET /api/v1/accounts
+ */
+export interface Account {
+  id: string
+  linked_item_id: string
+  user_id: string
+  plaid_account_id: string
+  name: string
+  official_name?: string // Optional field from Plaid
+  type: 'depository' | 'credit' | 'loan' | 'investment' | 'other'
+  subtype?: string // checking, savings, credit card, etc.
+  mask?: string // Last 4 digits
+  current_balance?: number
+  available_balance?: number
+  currency_code: string
+  institution_name?: string // From linked_items JOIN (optional)
+  created_at: string // ISO 8601 date-time
+  updated_at: string // ISO 8601 date-time
+}
+
+/**
+ * Response from GET /api/v1/accounts
+ * List of all linked accounts for the authenticated user
+ */
+export interface GetAccountsResponse {
+  accounts: Account[]
+  total_count: number
+}

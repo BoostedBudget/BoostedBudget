@@ -296,6 +296,124 @@ func TestAccountRepository_UniqueConstraint(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestAccountRepository_GetAccountsWithInstitution tests retrieval of accounts with institution names
+func TestAccountRepository_GetAccountsWithInstitution(t *testing.T) {
+	db, mock, repo := setupAccountMockDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	linkedItemID1 := uuid.New().String()
+	linkedItemID2 := uuid.New().String()
+
+	// Mock the LEFT JOIN query
+	rows := sqlmock.NewRows([]string{
+		"id", "linked_item_id", "user_id", "plaid_account_id",
+		"name", "official_name", "type", "subtype", "mask",
+		"current_balance", "available_balance", "currency_code",
+		"created_at", "updated_at", "institution_name",
+	}).
+		AddRow(
+			uuid.New().String(), linkedItemID1, userID, "plaid-acc-1",
+			"Chase Checking", "Chase Total Checking®", "depository", "checking", "1234",
+			1500.50, 1450.25, "USD",
+			time.Now(), time.Now(), "Chase",
+		).
+		AddRow(
+			uuid.New().String(), linkedItemID1, userID, "plaid-acc-2",
+			"Chase Savings", "Chase Savings℠", "depository", "savings", "5678",
+			5000.00, 5000.00, "USD",
+			time.Now(), time.Now(), "Chase",
+		).
+		AddRow(
+			uuid.New().String(), linkedItemID2, userID, "plaid-acc-3",
+			"Wells Fargo Checking", nil, "depository", "checking", "9012",
+			750.00, 700.00, "USD",
+			time.Now(), time.Now(), "Wells Fargo",
+		)
+
+	expectedQuery := `
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       a.current_balance, a.available_balance, a.currency_code,
+		       a.created_at, a.updated_at, l.institution_name
+		FROM accounts a
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id
+		WHERE a.user_id = $1
+		ORDER BY a.created_at ASC
+	`
+
+	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
+		WithArgs(userID).
+		WillReturnRows(rows)
+
+	// Execute
+	accounts, err := repo.GetAccountsWithInstitution(ctx, userID)
+
+	// Assert
+	require.NoError(t, err)
+	assert.Len(t, accounts, 3)
+
+	// Verify first account (Chase Checking)
+	assert.Equal(t, "Chase Checking", accounts[0].Name)
+	assert.Equal(t, "Chase", accounts[0].InstitutionName)
+	assert.NotNil(t, accounts[0].OfficialName)
+	assert.Equal(t, "Chase Total Checking®", *accounts[0].OfficialName)
+
+	// Verify second account (Chase Savings)
+	assert.Equal(t, "Chase Savings", accounts[1].Name)
+	assert.Equal(t, "Chase", accounts[1].InstitutionName)
+
+	// Verify third account (Wells Fargo)
+	assert.Equal(t, "Wells Fargo Checking", accounts[2].Name)
+	assert.Equal(t, "Wells Fargo", accounts[2].InstitutionName)
+	assert.Nil(t, accounts[2].OfficialName)
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_GetAccountsWithInstitution_Empty tests when user has no accounts
+func TestAccountRepository_GetAccountsWithInstitution_Empty(t *testing.T) {
+	db, mock, repo := setupAccountMockDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	// Mock empty result
+	rows := sqlmock.NewRows([]string{
+		"id", "linked_item_id", "user_id", "plaid_account_id",
+		"name", "official_name", "type", "subtype", "mask",
+		"current_balance", "available_balance", "currency_code",
+		"created_at", "updated_at", "institution_name",
+	})
+
+	expectedQuery := `
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       a.current_balance, a.available_balance, a.currency_code,
+		       a.created_at, a.updated_at, l.institution_name
+		FROM accounts a
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id
+		WHERE a.user_id = $1
+		ORDER BY a.created_at ASC
+	`
+
+	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
+		WithArgs(userID).
+		WillReturnRows(rows)
+
+	// Execute
+	accounts, err := repo.GetAccountsWithInstitution(ctx, userID)
+
+	// Assert
+	require.NoError(t, err)
+	assert.Empty(t, accounts)
+	assert.NotNil(t, accounts) // Should return empty slice, not nil
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // Helper function to create string pointers
 func strPtr(s string) *string {
 	return &s

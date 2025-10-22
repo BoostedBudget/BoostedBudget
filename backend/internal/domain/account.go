@@ -20,6 +20,7 @@ type Account struct {
 	CurrentBalance   *float64   `json:"current_balance,omitempty" db:"current_balance"`
 	AvailableBalance *float64   `json:"available_balance,omitempty" db:"available_balance"`
 	CurrencyCode     string     `json:"currency_code" db:"currency_code"` // ISO 4217 currency code
+	InstitutionName  string     `json:"institution_name,omitempty" db:"institution_name"` // From linked_items JOIN (optional)
 	CreatedAt        time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt        time.Time  `json:"updated_at" db:"updated_at"`
 }
