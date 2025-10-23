@@ -325,9 +325,10 @@ For detailed tier structure, limits, pricing, and features, see:
 
 **Implementation**:
 - **Backend**: Loads YAML at runtime (`internal/config/tier_config.go`)
-- **Frontend**: Generated TypeScript types (`src/types/generated/subscriptionTiers.ts`) - **COMMITTED for CI reliability**
-- **Generation**: Run `npm run generate:types` after editing YAML, commit the updated file
-- **CI Check**: Automatically verifies generated file stays in sync with YAML
+- **Frontend**: Generated TypeScript types (`src/types/generated/subscriptionTiers.ts`) - **GIT-IGNORED, auto-generated**
+- **Generation**: Automatic via npm hooks (pretest, prebuild) and Vite plugin
+- **Robust writing**: Uses fsync and verification to prevent timing issues on macOS APFS
+- **CI Check**: Verifies file is properly gitignored and auto-generates correctly
 - **Database overrides**: Per-user custom limits (`000004_create_subscription_overrides_table.up.sql`)
 - **Service**: `internal/services/subscription_service.go`
 - **Domain models**: `internal/domain/subscription.go`
@@ -349,12 +350,12 @@ const tierInfo = SUBSCRIPTION_TIERS[user.subscription_tier]
 
 **Editing tiers**:
 1. Edit `config/subscription_tiers.yaml`
-2. Run `npm run generate:types` to update `frontend/src/types/generated/subscriptionTiers.ts`
-3. **IMPORTANT**: Commit the updated generated file
-4. CI will verify the file stays in sync with YAML
+2. Types auto-regenerate on next `npm test`, `npm run dev`, or `npm run build`
+3. **DO NOT commit** the generated file (it's git-ignored)
+4. CI auto-generates and verifies the file on every run
 5. Backend auto-loads (singleton cache with validation)
 
-**Note**: Generated file is committed (not git-ignored) for CI reliability after multiple generation timing issues in test environment.
+**Note**: Generated file is git-ignored and auto-regenerated. Robust file writing with fsync and verification prevents timing issues.
 
 ## External Services
 
