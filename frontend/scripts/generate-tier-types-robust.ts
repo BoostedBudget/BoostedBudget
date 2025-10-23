@@ -174,7 +174,7 @@ export function ensureDirectorySync(dirPath: string): void {
       } finally {
         closeSync(fd)
       }
-    } catch (error) {
+    } catch {
       // Non-fatal: directory fsync not supported on this platform
       // Most platforms don't need this anyway
     }
@@ -223,6 +223,7 @@ export function verifyFile(
 
     return true
   } catch {
+    // File doesn't exist or is invalid
     return false
   }
 }

@@ -226,7 +226,7 @@ export async function generateOutputFile(config: TierConfig, outputPath: string)
       const dirFd = openSync(outputDir, 'r')
       fsyncSync(dirFd)
       closeSync(dirFd)
-    } catch (e) {
+    } catch {
       // Non-fatal: directory fsync not supported on all platforms
       // Most platforms handle this automatically
     }
