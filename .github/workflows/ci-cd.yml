@@ -147,6 +147,21 @@ jobs:
           sleep 1
           echo "::endgroup::"
 
+      - name: Verify generated types are in sync with YAML
+        working-directory: ./frontend
+        run: |
+          echo "::group::Verifying subscriptionTiers.ts is up-to-date"
+          # Generate types and check if they differ from committed version
+          npm run generate:types
+          if ! git diff --quiet src/types/generated/subscriptionTiers.ts; then
+            echo "::error::Generated types are out of sync with config/subscription_tiers.yaml"
+            echo "::error::Run 'npm run generate:types' and commit the changes"
+            git diff src/types/generated/subscriptionTiers.ts
+            exit 1
+          fi
+          echo "::notice::✅ Generated types are in sync"
+          echo "::endgroup::"
+
       - name: Run ESLint (fail on warnings)
         working-directory: ./frontend
         run: |
