@@ -2,7 +2,7 @@ import { defineConfig, Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 import { existsSync } from 'fs'
-import { execSync } from 'child_process'
+import { readYamlConfig, generateOutputFile } from './scripts/generate-tier-types.js'
 
 /**
  * Vite plugin to generate subscription tier types before build
@@ -11,14 +11,18 @@ import { execSync } from 'child_process'
  * This prevents timing issues where imports fail because the file doesn't
  * exist yet.
  *
- * The plugin checks if the generated file exists and generates it if missing.
+ * The plugin directly imports and calls generation functions synchronously,
+ * ensuring each Vite worker (in parallel test execution) has the file
+ * available before any module resolution happens.
+ *
  * Generation only happens once per Vite server lifetime.
  */
 function tierTypesGeneratorPlugin(): Plugin {
   const GENERATED_FILE = path.join(__dirname, 'src/types/generated/subscriptionTiers.ts')
+  const YAML_PATH = path.join(__dirname, '../config/subscription_tiers.yaml')
   let hasGenerated = false
 
-  const ensureGenerated = () => {
+  const ensureGenerated = async () => {
     if (hasGenerated) {
       return
     }
@@ -26,13 +30,13 @@ function tierTypesGeneratorPlugin(): Plugin {
     console.log('🔍 [tier-types] Checking generated types...')
 
     if (!existsSync(GENERATED_FILE)) {
-      console.log('🔄 [tier-types] File not found, generating types...')
+      console.log('🔄 [tier-types] File not found, generating inline...')
       try {
-        execSync('npm run generate:types', {
-          cwd: __dirname,
-          stdio: 'inherit'
-        })
-        console.log('✅ [tier-types] Types generated successfully')
+        const startTime = Date.now()
+        const config = readYamlConfig(YAML_PATH)
+        await generateOutputFile(config, GENERATED_FILE)
+        const duration = Date.now() - startTime
+        console.log(`✅ [tier-types] Types generated successfully (${duration}ms)`)
       } catch (error) {
         console.error('❌ [tier-types] Generation failed:', error)
         throw new Error('Failed to generate subscription tier types')
@@ -49,13 +53,13 @@ function tierTypesGeneratorPlugin(): Plugin {
     enforce: 'pre', // Run before other plugins
 
     // Run when Vite config is resolved (earliest possible hook)
-    configResolved() {
-      ensureGenerated()
+    async configResolved() {
+      await ensureGenerated()
     },
 
     // Also run when build starts (redundant but ensures coverage)
-    buildStart() {
-      ensureGenerated()
+    async buildStart() {
+      await ensureGenerated()
     }
   }
 }
