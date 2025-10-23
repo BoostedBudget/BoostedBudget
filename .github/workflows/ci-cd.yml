@@ -160,7 +160,7 @@ jobs:
           echo "::group::Running Vitest with coverage"
           # Clear all possible Vite caches to force fresh module resolution
           rm -rf node_modules/.vite ~/.vite
-          npm run test:ci:run
+          npm run test:ci
           echo "::endgroup::"
 
       - name: Upload frontend coverage report
