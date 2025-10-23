@@ -308,13 +308,6 @@ in-memoria.db
 .claude/
 .serena
 
-# Generated TypeScript from YAML
-# NOTE: subscriptionTiers.ts is force-committed for CI reliability despite this ignore rule
-# Vitest worker threads fail to resolve generated files during module transformation,
-# causing "Cannot find module" errors even when file exists. Committing the file
-# ensures it's available before any module resolution happens.
-frontend/src/types/generated/
-
 # Test artifacts and coverage reports
 backend/test-output.json
 backend/test-results.json
