@@ -325,10 +325,10 @@ For detailed tier structure, limits, pricing, and features, see:
 
 **Implementation**:
 - **Backend**: Loads YAML at runtime (`internal/config/tier_config.go`)
-- **Frontend**: Generated TypeScript types (`src/types/generated/subscriptionTiers.ts`) - **GIT-IGNORED, auto-generated**
-- **Generation**: Automatic via npm hooks (pretest, prebuild) and Vite plugin
-- **Robust writing**: Uses fsync and verification to prevent timing issues on macOS APFS
-- **CI Check**: Verifies file is properly gitignored and auto-generates correctly
+- **Frontend**: Generated TypeScript types (`src/types/generated/subscriptionTiers.ts`) - **COMMITTED to git**
+- **Generation**: Manual via `npm run generate:types` (NOT automatic)
+- **Validation**: Test ensures generated file matches YAML (`frontend/scripts/validate-generated-types.test.ts`)
+- **CI Check**: Validation test fails if YAML and generated file are out of sync
 - **Database overrides**: Per-user custom limits (`000004_create_subscription_overrides_table.up.sql`)
 - **Service**: `internal/services/subscription_service.go`
 - **Domain models**: `internal/domain/subscription.go`
@@ -350,12 +350,12 @@ const tierInfo = SUBSCRIPTION_TIERS[user.subscription_tier]
 
 **Editing tiers**:
 1. Edit `config/subscription_tiers.yaml`
-2. Types auto-regenerate on next `npm test`, `npm run dev`, or `npm run build`
-3. **DO NOT commit** the generated file (it's git-ignored)
-4. CI auto-generates and verifies the file on every run
-5. Backend auto-loads (singleton cache with validation)
+2. **Manually** run `npm run generate:types` in frontend directory
+3. **Commit both files** (YAML and generated TypeScript)
+4. Tests will fail in CI if files are out of sync
+5. Backend auto-loads YAML at runtime (singleton cache with validation)
 
-**Note**: Generated file is git-ignored and auto-regenerated. Robust file writing with fsync and verification prevents timing issues.
+**Note**: Generated file is statically committed to git. Validation test ensures it stays in sync with YAML.
 
 ## External Services
 

@@ -1,10 +1,11 @@
 /**
- * DO NOT EDIT - This file is auto-generated
+ * COMMITTED FILE - Edit YAML, not this file
  *
  * Generated from: config/subscription_tiers.yaml
+ * To regenerate: npm run generate:types
  *
- * This file is force-committed for CI reliability (see .gitignore comments).
- * To regenerate manually: npm run generate:types
+ * This file is committed to git and validated by tests.
+ * If YAML changes without regeneration, CI will fail.
  */
 
 export type SubscriptionTier = 'free' | 'premium_lite' | 'premium' | 'premium_plus'
@@ -51,10 +52,10 @@ export const SUBSCRIPTION_TIERS = {
     description: 'Full budgeting with basic automation',
     priceMonthly: '$0',
     priceYearly: '$0',
-    features: ['3 bank accounts', '1 automation rules', 'Rules run 1x per day', 'Ad-supported'],
+    features: ['8 bank accounts', '2 automation rules', 'Rules run 1x per day', 'Ad-supported'],
     limits: {
-      accounts: 3,
-      rules: 1,
+      accounts: 8,
+      rules: 2,
       executionsPerDay: 1,
       minExecutionIntervalMinutes: 1440,
     },
@@ -77,7 +78,7 @@ export const SUBSCRIPTION_TIERS = {
     description: 'Power users with complex finances',
     priceMonthly: '$9.99',
     priceYearly: '$99.99',
-    features: ['30 bank accounts', '15 automation rules', 'Rules run every 4 hours', 'No ads', 'Priority support', 'Advanced reports'],
+    features: ['30 bank accounts', '15 automation rules', 'Rules run every 4 hours', 'No ads'],
     limits: {
       accounts: 30,
       rules: 15,
@@ -90,7 +91,7 @@ export const SUBSCRIPTION_TIERS = {
     description: 'Unlimited everything with AI and API access',
     priceMonthly: '$19.99',
     priceYearly: '$199.99',
-    features: ['Unlimited bank accounts', 'Unlimited automation rules', 'Rules run every 10 minutes', 'No ads', 'AI-powered insights', 'Priority support', 'Advanced reports', 'API access'],
+    features: ['Unlimited bank accounts', 'Unlimited automation rules', 'Rules run every 10 minutes', 'No ads', 'AI-powered insights'],
     limits: {
       accounts: -1,
       rules: -1,
