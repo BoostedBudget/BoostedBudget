@@ -203,9 +203,8 @@ export async function generateOutputFile(config: TierConfig, outputPath: string)
  * DO NOT EDIT - This file is auto-generated
  *
  * Generated from: config/subscription_tiers.yaml
- * Generated at: ${new Date().toISOString()}
  *
- * This file is git-ignored and regenerated on every build.
+ * This file is force-committed for CI reliability (see .gitignore comments).
  * To regenerate manually: npm run generate:types
  */
 `

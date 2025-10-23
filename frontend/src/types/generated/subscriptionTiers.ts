@@ -2,9 +2,8 @@
  * DO NOT EDIT - This file is auto-generated
  *
  * Generated from: config/subscription_tiers.yaml
- * Generated at: 2025-10-23T18:20:21.549Z
  *
- * This file is git-ignored and regenerated on every build.
+ * This file is force-committed for CI reliability (see .gitignore comments).
  * To regenerate manually: npm run generate:types
  */
 
