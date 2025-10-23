@@ -132,6 +132,21 @@ jobs:
         working-directory: ./frontend
         run: npm ci
 
+      - name: Generate subscription tier types
+        working-directory: ./frontend
+        run: |
+          echo "::group::Generating TypeScript types from YAML config"
+          npm run generate:types
+          # Verify file was created successfully
+          ls -la src/types/generated/subscriptionTiers.ts || {
+            echo "::error::Generated file not found!"
+            exit 1
+          }
+          echo "::notice::✅ Generated file verified"
+          # Give filesystem time to sync (important on macOS APFS)
+          sleep 1
+          echo "::endgroup::"
+
       - name: Run ESLint (fail on warnings)
         working-directory: ./frontend
         run: |
@@ -143,7 +158,9 @@ jobs:
         working-directory: ./frontend
         run: |
           echo "::group::Running Vitest with coverage"
-          npm run test:ci
+          # Clear all possible Vite caches to force fresh module resolution
+          rm -rf node_modules/.vite ~/.vite
+          npm run test:ci:run
           echo "::endgroup::"
 
       - name: Upload frontend coverage report
@@ -250,14 +267,25 @@ jobs:
             --health-retries 5 \
             postgres:15
 
-          # Wait for postgres to be ready
+          # Wait for postgres to be ready (portable - works on macOS and Linux)
           echo "Waiting for PostgreSQL to be ready..."
-          timeout 30 bash -c 'until docker exec test-postgres pg_isready -U test; do sleep 1; done'
-          echo "PostgreSQL is ready!"
+          for i in {1..30}; do
+            if docker exec test-postgres pg_isready -U test > /dev/null 2>&1; then
+              echo "PostgreSQL is ready!"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "::error::Timeout waiting for PostgreSQL to start"
+              exit 1
+            fi
+            sleep 1
+          done
 
-      - name: Setup Atlas
-        uses: ariga/setup-atlas@v0
-        # Note: cloud-token is optional - only needed for Atlas Cloud features
+      # Atlas is pre-installed on self-hosted runner at /usr/local/bin/atlas
+      # No need for ariga/setup-atlas@v0 which requires sudo and fails
+      # - name: Setup Atlas
+      #   uses: ariga/setup-atlas@v0
+      #   # Note: cloud-token is optional - only needed for Atlas Cloud features
 
       - name: Lint migrations (Atlas validation)
         env:
@@ -294,20 +322,20 @@ jobs:
 
           # Check all expected tables exist
           echo "Checking tables..."
-          psql "$DATABASE_URL" -c "\dt" | grep users || { echo "::error::users table missing"; exit 1; }
-          psql "$DATABASE_URL" -c "\dt" | grep privacy_settings || { echo "::error::privacy_settings table missing"; exit 1; }
-          psql "$DATABASE_URL" -c "\dt" | grep audit_logs || { echo "::error::audit_logs table missing"; exit 1; }
-          psql "$DATABASE_URL" -c "\dt" | grep user_subscription_overrides || { echo "::error::user_subscription_overrides table missing"; exit 1; }
+          docker exec test-postgres psql -U test -d test -c "\dt" | grep users || { echo "::error::users table missing"; exit 1; }
+          docker exec test-postgres psql -U test -d test -c "\dt" | grep privacy_settings || { echo "::error::privacy_settings table missing"; exit 1; }
+          docker exec test-postgres psql -U test -d test -c "\dt" | grep audit_logs || { echo "::error::audit_logs table missing"; exit 1; }
+          docker exec test-postgres psql -U test -d test -c "\dt" | grep user_subscription_overrides || { echo "::error::user_subscription_overrides table missing"; exit 1; }
 
           # Validate users table columns
           echo "Validating users table..."
-          psql "$DATABASE_URL" -c "\d users" | grep "id.*uuid" || { echo "::error::users.id should be UUID"; exit 1; }
-          psql "$DATABASE_URL" -c "\d users" | grep "email.*character varying" || { echo "::error::users.email should be VARCHAR"; exit 1; }
+          docker exec test-postgres psql -U test -d test -c "\d users" | grep "id.*uuid" || { echo "::error::users.id should be UUID"; exit 1; }
+          docker exec test-postgres psql -U test -d test -c "\d users" | grep "email.*character varying" || { echo "::error::users.email should be VARCHAR"; exit 1; }
 
           # Validate foreign keys
           echo "Validating foreign keys..."
-          psql "$DATABASE_URL" -c "\d user_subscription_overrides" | grep "FOREIGN KEY" || { echo "::error::Missing foreign key"; exit 1; }
-          psql "$DATABASE_URL" -c "\d user_subscription_overrides" | grep "user_id.*uuid" || { echo "::error::user_id should be UUID"; exit 1; }
+          docker exec test-postgres psql -U test -d test -c "\d user_subscription_overrides" | grep "FOREIGN KEY" || { echo "::error::Missing foreign key"; exit 1; }
+          docker exec test-postgres psql -U test -d test -c "\d user_subscription_overrides" | grep "user_id.*uuid" || { echo "::error::user_id should be UUID"; exit 1; }
 
           echo "::notice::✅ Schema validation passed"
           echo "::endgroup::"
@@ -335,7 +363,7 @@ jobs:
 
           # Test that we can't insert invalid UUID (should fail)
           echo "Testing invalid UUID rejection..."
-          if psql "$DATABASE_URL" -c "
+          if docker exec test-postgres psql -U test -d test -c "
             INSERT INTO user_subscription_overrides
             (user_id, resource_type, limit_value)
             VALUES ('invalid-uuid', 'rules', 10)
@@ -356,7 +384,7 @@ jobs:
 
           # Show all tables to verify what Atlas created
           echo "All database tables:"
-          psql "$DATABASE_URL" -c "\dt"
+          docker exec test-postgres psql -U test -d test -c "\dt"
 
           # Atlas tracks migrations - check what tables exist
           echo ""
@@ -364,17 +392,17 @@ jobs:
 
           # Atlas may use different table names depending on version/config
           # Try atlas_schema_revisions first, fallback to other common names
-          if psql "$DATABASE_URL" -c "\d atlas_schema_revisions" &>/dev/null; then
+          if docker exec test-postgres psql -U test -d test -c "\d atlas_schema_revisions" &>/dev/null; then
             ATLAS_TABLE="atlas_schema_revisions"
-          elif psql "$DATABASE_URL" -c "\d atlas_migrations" &>/dev/null; then
+          elif docker exec test-postgres psql -U test -d test -c "\d atlas_migrations" &>/dev/null; then
             ATLAS_TABLE="atlas_migrations"
           else
             echo "::warning::No Atlas tracking table found, checking if migrations applied via schema"
             # Verify migrations applied by checking if all tables exist
-            psql "$DATABASE_URL" -c "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
+            docker exec test-postgres psql -U test -d test -c "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
 
             # If we have all expected tables, migrations succeeded
-            TABLES_COUNT=$(psql "$DATABASE_URL" -t -c "SELECT COUNT(*) FROM pg_tables WHERE schemaname = 'public' AND tablename IN ('users', 'privacy_settings', 'audit_logs', 'user_subscription_overrides')" | tr -d ' ')
+            TABLES_COUNT=$(docker exec test-postgres psql -U test -d test -t -c "SELECT COUNT(*) FROM pg_tables WHERE schemaname = 'public' AND tablename IN ('users', 'privacy_settings', 'audit_logs', 'user_subscription_overrides')" | tr -d ' ')
 
             if [ "$TABLES_COUNT" = "4" ]; then
               echo "::notice::✅ All 4 expected tables exist - migrations applied successfully"
@@ -389,9 +417,9 @@ jobs:
 
           # If we found an Atlas table, check migration count
           echo "Atlas tracking table: $ATLAS_TABLE"
-          psql "$DATABASE_URL" -c "SELECT * FROM $ATLAS_TABLE ORDER BY version"
+          docker exec test-postgres psql -U test -d test -c "SELECT * FROM $ATLAS_TABLE ORDER BY version"
 
-          COUNT=$(psql "$DATABASE_URL" -t -c "SELECT COUNT(*) FROM $ATLAS_TABLE" | tr -d ' ')
+          COUNT=$(docker exec test-postgres psql -U test -d test -t -c "SELECT COUNT(*) FROM $ATLAS_TABLE" | tr -d ' ')
           echo "Total migrations applied: $COUNT"
 
           if [ "$COUNT" != "5" ]; then

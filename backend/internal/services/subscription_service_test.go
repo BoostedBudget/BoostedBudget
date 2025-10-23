@@ -34,8 +34,8 @@ func TestGetTierLimits_FreeTier(t *testing.T) {
 	require.NoError(t, err)
 
 	// Assert free tier limits match configuration
-	assert.Equal(t, 8, tier.Limits.Accounts, "Free tier should have 8 accounts")
-	assert.Equal(t, 2, tier.Limits.Rules, "Free tier should have 2 rules")
+	assert.Equal(t, 3, tier.Limits.Accounts, "Free tier should have 3 accounts")
+	assert.Equal(t, 1, tier.Limits.Rules, "Free tier should have 1 rule")
 	assert.Equal(t, 1, tier.Limits.ExecutionsPerDay, "Free tier should have 1 execution per day")
 	assert.Equal(t, 1440, tier.Limits.MinExecutionIntervalMinutes, "Free tier should have 24-hour interval")
 	assert.True(t, tier.Features.AdsEnabled, "Free tier should have ads enabled")
@@ -114,12 +114,12 @@ func TestCheckLimit_UnderLimit(t *testing.T) {
 		SubscriptionTier: string(domain.TierFree),
 	}
 
-	// Check if user can create 1st rule (under limit of 2)
-	result, err := service.CheckLimit(ctx, user, domain.ResourceRules, 1)
+	// Check if user can create 1st rule (under limit of 1 - at 0 currently)
+	result, err := service.CheckLimit(ctx, user, domain.ResourceRules, 0)
 	require.NoError(t, err)
 	assert.True(t, result.Allowed, "Should allow creation under limit")
-	assert.Equal(t, 2, result.Limit, "Free tier limit should be 2")
-	assert.Equal(t, 1, result.CurrentUsage, "Current usage should be 1")
+	assert.Equal(t, 1, result.Limit, "Free tier limit should be 1")
+	assert.Equal(t, 0, result.CurrentUsage, "Current usage should be 0")
 	assert.Equal(t, 1, result.RemainingUsage, "Should have 1 remaining")
 }
 
@@ -136,12 +136,12 @@ func TestCheckLimit_AtLimit(t *testing.T) {
 		SubscriptionTier: string(domain.TierFree),
 	}
 
-	// Check if user can create 3rd rule (at limit of 2, should fail)
-	result, err := service.CheckLimit(ctx, user, domain.ResourceRules, 2)
+	// Check if user can create 2nd rule (at limit of 1, should fail)
+	result, err := service.CheckLimit(ctx, user, domain.ResourceRules, 1)
 	require.NoError(t, err)
 	assert.False(t, result.Allowed, "Should NOT allow creation at limit")
-	assert.Equal(t, 2, result.Limit, "Free tier limit should be 2")
-	assert.Equal(t, 2, result.CurrentUsage, "Current usage should be 2")
+	assert.Equal(t, 1, result.Limit, "Free tier limit should be 1")
+	assert.Equal(t, 1, result.CurrentUsage, "Current usage should be 1")
 	assert.Equal(t, 0, result.RemainingUsage, "Should have 0 remaining")
 }
 
@@ -158,11 +158,11 @@ func TestCheckLimit_OverLimit(t *testing.T) {
 		SubscriptionTier: string(domain.TierFree),
 	}
 
-	// Try to check with 10 accounts (over limit of 8)
+	// Try to check with 10 accounts (over limit of 3)
 	result, err := service.CheckLimit(ctx, user, domain.ResourceAccounts, 10)
 	require.NoError(t, err)
 	assert.False(t, result.Allowed, "Should NOT allow over limit")
-	assert.Equal(t, 8, result.Limit, "Free tier account limit should be 8")
+	assert.Equal(t, 3, result.Limit, "Free tier account limit should be 3")
 }
 
 // TestCheckLimit_Unlimited tests limit checking for unlimited tier
@@ -289,8 +289,8 @@ func TestCheckLimit_AllResourceTypes(t *testing.T) {
 		resourceType domain.ResourceType
 		expectedLimit int
 	}{
-		{"accounts", domain.ResourceAccounts, 8},
-		{"rules", domain.ResourceRules, 2},
+		{"accounts", domain.ResourceAccounts, 3},
+		{"rules", domain.ResourceRules, 1},
 		{"executions_per_day", domain.ResourceExecutionsPerDay, 1},
 		{"api_calls_per_month", domain.ResourceAPICallsPerMonth, 0},
 		{"data_export_per_month", domain.ResourceDataExportPerMonth, 1},
