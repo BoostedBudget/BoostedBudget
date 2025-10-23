@@ -308,8 +308,8 @@ in-memoria.db
 .claude/
 .serena
 
-# Generated TypeScript from YAML
-frontend/src/types/generated/
+# Generated TypeScript from YAML (now committed for CI reliability)
+# frontend/src/types/generated/
 
 # Test artifacts and coverage reports
 backend/test-output.json
