@@ -143,28 +143,43 @@ jobs:
           echo "::notice::✅ Generated types verified"
           echo "::endgroup::"
 
-      - name: Verify generated types are properly gitignored
+      - name: Verify generated types are in sync
         run: |
           echo "::group::Verifying generated types configuration"
 
-          # Check gitignore includes the generated directory
+          # Note: subscriptionTiers.ts is force-committed to git for CI reliability
+          # despite the directory being gitignored. This is necessary because Vitest
+          # worker threads cannot resolve generated files during module transformation.
+          # See commit 1389726 and .gitignore comments for full context.
+
+          # Check gitignore includes the generated directory (with documented exception)
           if ! grep -q "frontend/src/types/generated/" .gitignore; then
             echo "::error::Generated types path not found in .gitignore!"
             echo "::error::Add 'frontend/src/types/generated/' to .gitignore"
             exit 1
           fi
-          echo "::notice::✅ Gitignore rule found"
+          echo "::notice::✅ Gitignore rule found (with force-commit exception for subscriptionTiers.ts)"
 
-          # Check file is not tracked by git
+          # Verify file exists in repository (should be force-committed)
           cd frontend
-          if git ls-files --error-unmatch src/types/generated/subscriptionTiers.ts 2>/dev/null; then
-            echo "::error::Generated file should not be tracked by git!"
-            echo "::error::The file is currently committed, but should be git-ignored."
-            echo "::error::Run: git rm --cached src/types/generated/subscriptionTiers.ts"
-            echo "::error::Then commit the removal."
+          if ! git ls-files --error-unmatch src/types/generated/subscriptionTiers.ts 2>/dev/null; then
+            echo "::error::subscriptionTiers.ts is not tracked by git!"
+            echo "::error::This file must be force-committed for CI reliability."
+            echo "::error::Run: git add -f frontend/src/types/generated/subscriptionTiers.ts"
+            echo "::error::Then commit the file."
             exit 1
           fi
-          echo "::notice::✅ Generated file correctly not tracked by git"
+          echo "::notice::✅ Generated file is committed to git (required for CI)"
+
+          # Verify file content is in sync with YAML (generate and compare)
+          npm run generate:types --silent
+          if ! git diff --quiet src/types/generated/subscriptionTiers.ts; then
+            echo "::error::Generated file is out of sync with YAML config!"
+            echo "::error::Run 'npm run generate:types' and commit the updated file."
+            git diff src/types/generated/subscriptionTiers.ts
+            exit 1
+          fi
+          echo "::notice::✅ Generated file is in sync with YAML config"
 
           echo "::endgroup::"
 
