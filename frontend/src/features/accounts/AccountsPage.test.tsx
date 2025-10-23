@@ -30,6 +30,10 @@ function renderWithRouter(ui: React.ReactElement) {
 }
 
 describe('AccountsPage', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
   const mockAccounts: Account[] = [
     {
       id: '550e8400-e29b-41d4-a716-446655440000',

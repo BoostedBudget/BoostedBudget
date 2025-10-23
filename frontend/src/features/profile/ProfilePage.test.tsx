@@ -46,7 +46,7 @@ describe('ProfilePage', () => {
   }
 
   beforeEach(() => {
-    vi.clearAllMocks()
+    vi.restoreAllMocks()
     mockUseAuth0.mockReturnValue({
       isAuthenticated: true,
       user: { email: 'test@example.com' },

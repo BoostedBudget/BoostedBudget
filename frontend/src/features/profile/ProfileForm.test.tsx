@@ -25,7 +25,7 @@ describe('ProfileForm', () => {
   }
 
   beforeEach(() => {
-    vi.clearAllMocks()
+    vi.restoreAllMocks()
   })
 
   describe('Form rendering', () => {
@@ -245,10 +245,11 @@ describe('ProfileForm', () => {
       const user = userEvent.setup()
       render(<ProfileForm user={mockUser} />)
 
-      const emailInput = screen.getByLabelText(/email/i)
+      const emailInput = screen.getByLabelText(/email/i) as HTMLInputElement
 
-      await user.clear(emailInput)
-      await user.type(emailInput, 'new@example.com')
+      // Triple-click to select all, then type to replace
+      await user.tripleClick(emailInput)
+      await user.keyboard('new@example.com')
 
       expect(emailInput).toHaveValue('new@example.com')
     })
