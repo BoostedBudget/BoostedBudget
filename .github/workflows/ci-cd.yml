@@ -132,55 +132,23 @@ jobs:
         working-directory: ./frontend
         run: npm ci
 
-      - name: Generate and verify subscription tier types
+      - name: Verify subscription tier types are in sync
         working-directory: ./frontend
         run: |
-          echo "::group::Generating TypeScript types from YAML config"
+          echo "::group::Verifying subscription tier types"
 
-          # Generate types with robust fsync and verification
-          npm run generate:types:verify
-
-          echo "::notice::✅ Generated types verified"
-          echo "::endgroup::"
-
-      - name: Verify generated types are in sync
-        run: |
-          echo "::group::Verifying generated types configuration"
-
-          # Note: subscriptionTiers.ts is force-committed to git for CI reliability
-          # despite the directory being gitignored. This is necessary because Vitest
-          # worker threads cannot resolve generated files during module transformation.
-          # See commit 1389726 and .gitignore comments for full context.
-
-          # Check gitignore includes the generated directory (with documented exception)
-          if ! grep -q "frontend/src/types/generated/" .gitignore; then
-            echo "::error::Generated types path not found in .gitignore!"
-            echo "::error::Add 'frontend/src/types/generated/' to .gitignore"
-            exit 1
-          fi
-          echo "::notice::✅ Gitignore rule found (with force-commit exception for subscriptionTiers.ts)"
-
-          # Verify file exists in repository (should be force-committed)
-          cd frontend
+          # Verify file exists in repository (committed to git)
           if ! git ls-files --error-unmatch src/types/generated/subscriptionTiers.ts 2>/dev/null; then
             echo "::error::subscriptionTiers.ts is not tracked by git!"
-            echo "::error::This file must be force-committed for CI reliability."
-            echo "::error::Run: git add -f frontend/src/types/generated/subscriptionTiers.ts"
-            echo "::error::Then commit the file."
+            echo "::error::This file must be committed after running 'npm run generate:types'"
             exit 1
           fi
-          echo "::notice::✅ Generated file is committed to git (required for CI)"
+          echo "::notice::✅ Generated file is committed to git"
 
-          # Verify file content is in sync with YAML (generate and compare)
-          npm run generate:types --silent
-          if ! git diff --quiet src/types/generated/subscriptionTiers.ts; then
-            echo "::error::Generated file is out of sync with YAML config!"
-            echo "::error::Run 'npm run generate:types' and commit the updated file."
-            git diff src/types/generated/subscriptionTiers.ts
-            exit 1
-          fi
+          # Run validation test to ensure YAML and generated file match
+          npm test -- validate-generated-types --run
+
           echo "::notice::✅ Generated file is in sync with YAML config"
-
           echo "::endgroup::"
 
       - name: Run ESLint (fail on warnings)
