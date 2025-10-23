@@ -275,6 +275,66 @@ paths:
               example:
                 error: "Bank service temporarily unavailable"
 
+  /api/v1/accounts:
+    get:
+      summary: Get Linked Accounts
+      description: |
+        Retrieve all linked bank accounts for the authenticated user.
+        Includes account details and institution information from the linked_items table.
+
+        **Account Information Included**:
+        - Account name, type, and subtype
+        - Current and available balances
+        - Institution name
+        - Last 4 digits of account number (mask)
+        - Currency code
+
+        **Authentication Required**: Valid Auth0 JWT token
+      operationId: getAccounts
+      tags:
+        - Plaid
+      responses:
+        '200':
+          description: Accounts retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetAccountsResponse'
+              example:
+                accounts:
+                  - id: "550e8400-e29b-41d4-a716-446655440000"
+                    user_id: "auth0|507f1f77bcf86cd799439011"
+                    plaid_account_id: "plaid-acc-1"
+                    name: "Chase Checking"
+                    official_name: "Chase Total Checking"
+                    type: "depository"
+                    subtype: "checking"
+                    mask: "0000"
+                    current_balance: 2500.50
+                    available_balance: 2300.50
+                    currency_code: "USD"
+                    institution_name: "Chase"
+                    created_at: "2025-10-18T14:30:00Z"
+                    updated_at: "2025-10-20T10:15:00Z"
+                  - id: "660f9511-f3ac-52e5-b827-557766551111"
+                    user_id: "auth0|507f1f77bcf86cd799439011"
+                    plaid_account_id: "plaid-acc-2"
+                    name: "Wells Fargo Savings"
+                    type: "depository"
+                    subtype: "savings"
+                    mask: "1234"
+                    current_balance: 10000.00
+                    available_balance: 10000.00
+                    currency_code: "USD"
+                    institution_name: "Wells Fargo"
+                    created_at: "2025-10-19T09:20:00Z"
+                    updated_at: "2025-10-20T10:15:00Z"
+                total_count: 2
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
   /user/data-export:
     post:
       summary: Request Data Export
@@ -802,6 +862,106 @@ components:
           description: Number of accounts successfully linked from this institution
           example: 3
           minimum: 0
+
+    GetAccountsResponse:
+      type: object
+      required:
+        - accounts
+        - total_count
+      properties:
+        accounts:
+          type: array
+          description: List of linked bank accounts
+          items:
+            $ref: '#/components/schemas/Account'
+        total_count:
+          type: integer
+          description: Total number of accounts
+          example: 2
+          minimum: 0
+
+    Account:
+      type: object
+      required:
+        - id
+        - linked_item_id
+        - user_id
+        - plaid_account_id
+        - name
+        - type
+        - currency_code
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique account identifier
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        linked_item_id:
+          type: string
+          format: uuid
+          description: Associated linked item ID (Plaid connection)
+          example: "770e9511-f3ac-52e5-b827-557766551112"
+        user_id:
+          type: string
+          description: User who owns this account (Auth0 user ID)
+          example: "auth0|507f1f77bcf86cd799439011"
+        plaid_account_id:
+          type: string
+          description: Plaid's unique identifier for this account
+          example: "plaid-acc-1"
+        name:
+          type: string
+          description: Account name from the institution
+          example: "Chase Checking"
+        official_name:
+          type: string
+          description: Official account name from Plaid (optional)
+          example: "Chase Total Checking"
+        type:
+          type: string
+          description: Account type (depository, credit, loan, investment, other)
+          enum: [depository, credit, loan, investment, other]
+          example: "depository"
+        subtype:
+          type: string
+          description: Account subtype (checking, savings, credit card, etc.)
+          example: "checking"
+        mask:
+          type: string
+          description: Last 4 digits of account number
+          example: "0000"
+          pattern: "^\\d{4}$"
+        current_balance:
+          type: number
+          format: double
+          description: Current balance in account
+          example: 2500.50
+        available_balance:
+          type: number
+          format: double
+          description: Available balance (may differ from current for credit accounts)
+          example: 2300.50
+        currency_code:
+          type: string
+          description: ISO 4217 currency code
+          example: "USD"
+          pattern: "^[A-Z]{3}$"
+        institution_name:
+          type: string
+          description: Human-readable institution name from linked_items (optional, populated via JOIN)
+          example: "Chase"
+        created_at:
+          type: string
+          format: date-time
+          description: When account was linked
+          example: "2025-10-18T14:30:00Z"
+        updated_at:
+          type: string
+          format: date-time
+          description: Last update timestamp
+          example: "2025-10-20T10:15:00Z"
 
   responses:
     BadRequest:

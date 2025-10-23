@@ -24,6 +24,9 @@ var (
 type AccountService interface {
 	// LinkAccounts exchanges a Plaid public token for an access token and links bank accounts
 	LinkAccounts(ctx context.Context, userID, publicToken, institutionID, institutionName string) (*LinkAccountsResult, error)
+
+	// GetAccounts retrieves all linked bank accounts for a user with institution information
+	GetAccounts(ctx context.Context, userID string) ([]domain.Account, error)
 }
 
 // LinkAccountsResult contains the results of linking bank accounts
@@ -231,4 +234,15 @@ func convertPlaidAccount(plaidAccount plaid.AccountBase, linkedItemID, userID st
 	}
 
 	return account
+}
+
+// GetAccounts retrieves all linked bank accounts for a user with institution information
+func (s *accountService) GetAccounts(ctx context.Context, userID string) ([]domain.Account, error) {
+	// Delegate to repository which performs LEFT JOIN with linked_items
+	accounts, err := s.accountRepo.GetAccountsWithInstitution(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get accounts: %w", err)
+	}
+
+	return accounts, nil
 }
