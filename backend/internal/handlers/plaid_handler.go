@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/labstack/echo/v4"
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
@@ -105,6 +106,38 @@ func (h *PlaidHandler) ExchangePublicToken(c echo.Context) error {
 		Success:  true,
 		ItemID:   result.LinkedItem.ItemID,
 		Accounts: len(result.Accounts),
+	}
+
+	return c.JSON(http.StatusOK, response)
+}
+
+// GetAccountsResponse represents the response when retrieving user's linked accounts
+type GetAccountsResponse struct {
+	Accounts   []domain.Account `json:"accounts"`
+	TotalCount int              `json:"total_count"`
+}
+
+// GetAccounts handles GET /accounts
+// Retrieves all linked bank accounts for the authenticated user with institution information
+func (h *PlaidHandler) GetAccounts(c echo.Context) error {
+	// Extract user_id from context (set by Auth0 middleware)
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "User not authenticated")
+	}
+
+	// Get accounts via service
+	accounts, err := h.accountService.GetAccounts(c.Request().Context(), userID)
+	if err != nil {
+		// Log error details server-side (don't expose internals to client)
+		c.Logger().Errorf("Failed to get accounts for user %s: %v", userID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve accounts")
+	}
+
+	// Build response
+	response := GetAccountsResponse{
+		Accounts:   accounts,
+		TotalCount: len(accounts),
 	}
 
 	return c.JSON(http.StatusOK, response)
