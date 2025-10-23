@@ -137,6 +137,14 @@ jobs:
         run: |
           echo "::group::Generating TypeScript types from YAML config"
           npm run generate:types
+          # Verify file was created successfully
+          ls -la src/types/generated/subscriptionTiers.ts || {
+            echo "::error::Generated file not found!"
+            exit 1
+          }
+          echo "::notice::✅ Generated file verified"
+          # Give filesystem time to sync (important on macOS APFS)
+          sleep 1
           echo "::endgroup::"
 
       - name: Run ESLint (fail on warnings)
@@ -150,9 +158,7 @@ jobs:
         working-directory: ./frontend
         run: |
           echo "::group::Running Vitest with coverage"
-          # Clear Vite cache to ensure generated files are recognized
-          rm -rf node_modules/.vite
-          npm run test:ci
+          npm run test:ci:run
           echo "::endgroup::"
 
       - name: Upload frontend coverage report
