@@ -200,12 +200,13 @@ export async function generateOutputFile(config: TierConfig, outputPath: string)
   validateTierConfig(config)
 
   const header = `/**
- * DO NOT EDIT - This file is auto-generated
+ * COMMITTED FILE - Edit YAML, not this file
  *
  * Generated from: config/subscription_tiers.yaml
+ * To regenerate: npm run generate:types
  *
- * This file is force-committed for CI reliability (see .gitignore comments).
- * To regenerate manually: npm run generate:types
+ * This file is committed to git and validated by tests.
+ * If YAML changes without regeneration, CI will fail.
  */
 `
 
