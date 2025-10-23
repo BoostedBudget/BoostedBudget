@@ -67,6 +67,18 @@ func main() {
 	metricsHandler := &handlers.MetricsHandler{}
 	e.GET("/metrics", metricsHandler.GetMetrics)
 
+	// Load tier configuration (used by both public and authenticated endpoints)
+	tierConfig, err := config.LoadTierConfig()
+	if err != nil {
+		log.Printf("⚠️  Failed to load tier config: %v", err)
+		log.Fatal("Tier configuration is required")
+	}
+	log.Println("✅ Tier configuration loaded")
+
+	// Subscription tiers endpoint (public - needed for pricing page)
+	subscriptionTiersHandler := handlers.NewSubscriptionTiersHandler(tierConfig)
+	e.GET("/api/v1/subscription/tiers", subscriptionTiersHandler.GetSubscriptionTiers)
+
 	// Authenticated routes (requires database and Auth0)
 	if db != nil && cfg.Auth0Domain != "" && cfg.Auth0Audience != "" {
 		// Create repositories
@@ -74,13 +86,6 @@ func main() {
 		privacyRepo := repository.NewPrivacyRepository(db)
 		linkedItemRepo := repository.NewLinkedItemRepository(db)
 		accountRepo := repository.NewAccountRepository(db)
-
-		// Load tier configuration
-		tierConfig, err := config.LoadTierConfig()
-		if err != nil {
-			log.Printf("⚠️  Failed to load tier config: %v", err)
-			log.Fatal("Tier configuration is required for account linking")
-		}
 
 		// Create services
 		profileService := services.NewProfileService(profileRepo)
