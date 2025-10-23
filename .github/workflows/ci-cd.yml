@@ -39,17 +39,21 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: backend/go.sum
+          # Disabled for self-hosted runner - local caches persist naturally
+          # cache-dependency-path: backend/go.sum
 
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('backend/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
+      # Commented out - self-hosted runner has persistent local cache
+      # Local Go cache persists at: ~/Library/Caches/go-build & ~/go/pkg/mod
+      # No need for slow 900MB uploads to GitHub cache servers
+      # - name: Cache Go modules
+      #   uses: actions/cache@v4
+      #   with:
+      #     path: |
+      #       ~/.cache/go-build
+      #       ~/go/pkg/mod
+      #     key: ${{ runner.os }}-go-${{ hashFiles('backend/go.sum') }}
+      #     restore-keys: |
+      #       ${{ runner.os }}-go-
 
       - name: Run Go tests with coverage
         working-directory: ./backend
@@ -120,8 +124,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
+          # Disabled for self-hosted runner - local npm cache (~/.npm) persists naturally
+          # cache: 'npm'
+          # cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
         working-directory: ./frontend
@@ -167,8 +172,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
+          # Disabled for self-hosted runner - local npm cache (~/.npm) persists naturally
+          # cache: 'npm'
+          # cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
         working-directory: ./frontend
@@ -553,6 +559,7 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+          logout: false  # Self-hosted runner - credentials persist in macOS Keychain
 
       - name: Set image name for ${{ matrix.component }}
         id: image-name
@@ -619,6 +626,7 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+          logout: false  # Self-hosted runner - credentials persist in macOS Keychain
 
       - name: Calculate image reference for ${{ matrix.component }}
         id: image-ref
@@ -692,6 +700,7 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+          logout: false  # Self-hosted runner - credentials persist in macOS Keychain
 
       - name: Authenticate with Fly.io Docker Registry
         env:
