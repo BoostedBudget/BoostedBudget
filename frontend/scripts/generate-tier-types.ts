@@ -5,7 +5,7 @@
  * This is a build-time code generation tool.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
+import { readFileSync, existsSync, mkdirSync, openSync, fsyncSync, closeSync } from 'fs'
 import { dirname } from 'path'
 import yaml from 'js-yaml'
 
@@ -196,16 +196,17 @@ export function validateTierConfig(config: TierConfig): void {
 /**
  * Generate complete output file with header and all type definitions
  */
-export function generateOutputFile(config: TierConfig, outputPath: string): void {
+export async function generateOutputFile(config: TierConfig, outputPath: string): Promise<void> {
   validateTierConfig(config)
 
   const header = `/**
  * DO NOT EDIT - This file is auto-generated
  *
  * Generated from: config/subscription_tiers.yaml
+ * Generated at: ${new Date().toISOString()}
  *
- * To modify subscription tiers, edit the YAML file and run:
- *   npm run generate:types
+ * This file is git-ignored and regenerated on every build.
+ * To regenerate manually: npm run generate:types
  */
 `
 
@@ -218,7 +219,25 @@ export function generateOutputFile(config: TierConfig, outputPath: string): void
   const outputDir = dirname(outputPath)
   if (!existsSync(outputDir)) {
     mkdirSync(outputDir, { recursive: true })
+
+    // Sync directory metadata (important on some filesystems)
+    // This is best-effort as not all platforms support directory fsync
+    try {
+      const dirFd = openSync(outputDir, 'r')
+      fsyncSync(dirFd)
+      closeSync(dirFd)
+    } catch (e) {
+      // Non-fatal: directory fsync not supported on all platforms
+      // Most platforms handle this automatically
+    }
   }
 
-  writeFileSync(outputPath, output, 'utf-8')
+  // Write with verification and retry using robust utilities
+  const { writeFileWithVerification } = await import('./generate-tier-types-robust.js')
+  await writeFileWithVerification(outputPath, output, {
+    maxRetries: 10,
+    verificationPattern: 'SUBSCRIPTION_TIERS',
+    minSize: 1000,  // Generated file should be at least 1KB
+    maxSize: 50000  // But less than 50KB
+  })
 }

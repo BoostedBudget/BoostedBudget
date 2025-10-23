@@ -132,34 +132,40 @@ jobs:
         working-directory: ./frontend
         run: npm ci
 
-      - name: Generate subscription tier types
+      - name: Generate and verify subscription tier types
         working-directory: ./frontend
         run: |
           echo "::group::Generating TypeScript types from YAML config"
-          npm run generate:types
-          # Verify file was created successfully
-          ls -la src/types/generated/subscriptionTiers.ts || {
-            echo "::error::Generated file not found!"
-            exit 1
-          }
-          echo "::notice::✅ Generated file verified"
-          # Give filesystem time to sync (important on macOS APFS)
-          sleep 1
+
+          # Generate types with robust fsync and verification
+          npm run generate:types:verify
+
+          echo "::notice::✅ Generated types verified"
           echo "::endgroup::"
 
-      - name: Verify generated types are in sync with YAML
-        working-directory: ./frontend
+      - name: Verify generated types are properly gitignored
         run: |
-          echo "::group::Verifying subscriptionTiers.ts is up-to-date"
-          # Generate types and check if they differ from committed version
-          npm run generate:types
-          if ! git diff --quiet src/types/generated/subscriptionTiers.ts; then
-            echo "::error::Generated types are out of sync with config/subscription_tiers.yaml"
-            echo "::error::Run 'npm run generate:types' and commit the changes"
-            git diff src/types/generated/subscriptionTiers.ts
+          echo "::group::Verifying generated types configuration"
+
+          # Check gitignore includes the generated directory
+          if ! grep -q "frontend/src/types/generated/" .gitignore; then
+            echo "::error::Generated types path not found in .gitignore!"
+            echo "::error::Add 'frontend/src/types/generated/' to .gitignore"
             exit 1
           fi
-          echo "::notice::✅ Generated types are in sync"
+          echo "::notice::✅ Gitignore rule found"
+
+          # Check file is not tracked by git
+          cd frontend
+          if git ls-files --error-unmatch src/types/generated/subscriptionTiers.ts 2>/dev/null; then
+            echo "::error::Generated file should not be tracked by git!"
+            echo "::error::The file is currently committed, but should be git-ignored."
+            echo "::error::Run: git rm --cached src/types/generated/subscriptionTiers.ts"
+            echo "::error::Then commit the removal."
+            exit 1
+          fi
+          echo "::notice::✅ Generated file correctly not tracked by git"
+
           echo "::endgroup::"
 
       - name: Run ESLint (fail on warnings)

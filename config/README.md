@@ -111,14 +111,22 @@ trial:
 
 **Alternatives considered**:
 1. **Runtime API fetch** - Extra network call, slower, requires backend
-2. **Duplicate config** - Sync issues (we had bugs from this!)
-3. **Build-time generation** ✅ - Type-safe, zero runtime cost, always in sync
+2. **Runtime YAML loading** - Bundle size increase, loss of type safety
+3. **Duplicate config** - Sync issues (we had bugs from this!)
+4. **Build-time generation** ✅ - Type-safe, zero runtime cost, always in sync
 
 **Benefits**:
-- TypeScript compiler catches tier name typos at build time
-- Autocomplete for tier names in IDE
-- No runtime fetch needed (embedded in bundle)
-- Generated file gitignored (never commit generated code)
+- ✅ TypeScript compiler catches tier name typos at compile time
+- ✅ IDE autocomplete for tier names
+- ✅ Zero runtime performance cost (types compiled away)
+- ✅ Clean git history (generated file is git-ignored)
+- ✅ Automatic generation (no manual steps required)
+
+**Implementation**:
+- Robust file writing with fsync and verification prevents timing issues
+- Vite plugin ensures generation before module resolution
+- npm hooks (pretest, prebuild) auto-generate when needed
+- CI verifies gitignore configuration is correct
 
 ## Future Extensions
 
@@ -137,10 +145,22 @@ Example future configs:
 ## Troubleshooting
 
 **Frontend: "Cannot find module '../../types/generated/subscriptionTiers'"**
+
+This error means the generated TypeScript file doesn't exist yet. This is normal on a fresh clone.
+
+**Fix**:
 ```bash
 cd frontend
 npm run generate:types
+
+# Or just run any npm command that triggers generation:
+npm test    # pretest hook generates
+npm run dev # Vite plugin generates
+npm run build # prebuild hook generates
 ```
+
+**Why this happens**:
+The generated file is git-ignored (not committed to the repository). It's automatically created when you run dev/test/build commands. If you see this error, it means you haven't run any of these commands yet since cloning.
 
 **Backend: "config file not found"**
 ```bash
