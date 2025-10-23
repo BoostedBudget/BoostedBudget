@@ -218,7 +218,7 @@ paths:
         5. Creates linked item and account records in database
 
         **Subscription Limits** (checked before Plaid API call):
-        - Free tier: 8 accounts maximum
+        - Free tier: 3 accounts maximum
         - Premium Lite: 15 accounts maximum
         - Premium: 30 accounts maximum
         - Premium+: Unlimited accounts

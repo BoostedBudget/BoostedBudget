@@ -91,8 +91,8 @@ trial:
 ### Why Centralized?
 
 **Before** (duplicated):
-- `backend/config/subscription_tiers.yaml` (8 accounts)
-- `frontend/src/features/profile/types.ts` SUBSCRIPTION_TIERS constant (2 accounts - BUG!)
+- `backend/config/subscription_tiers.yaml` (3 accounts)
+- `frontend/src/features/profile/types.ts` SUBSCRIPTION_TIERS constant (1 rule - BUG!)
 - `CLAUDE.md` documentation (third copy)
 
 **After** (single source):
