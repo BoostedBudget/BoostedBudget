@@ -237,9 +237,7 @@ tiers:
       // Should have warning comment
       expect(output).toMatch(/DO NOT EDIT.*auto-generated/i)
       expect(output).toMatch(/config\/subscription_tiers\.yaml/i)
-
-      // Should have timestamp
-      expect(output).toMatch(/generated on/i)
+      expect(output).toMatch(/npm run generate:types/i)
 
       // Clean up
       if (existsSync(OUTPUT_PATH)) unlinkSync(OUTPUT_PATH)
