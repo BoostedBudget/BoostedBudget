@@ -449,13 +449,16 @@ jobs:
           echo "- ✅ Clean migration state" >> $GITHUB_STEP_SUMMARY
 
   # =============================================================================
-  # JOB 5: Security Scan - Dependencies & Dockerfiles (Fast - No Build Required)
+  # JOB 4: Security Scan - Dependencies & Dockerfiles (Parallelized)
   # =============================================================================
   pr-security-scan:
-    name: Security Scan (Dependencies & Config)
+    name: Security Scan (${{ matrix.component }})
     runs-on: [self-hosted, macOS, mac-mini]
     # Only run on PRs to catch vulnerabilities before merge
     if: github.event_name == 'pull_request'
+    strategy:
+      matrix:
+        component: [backend, frontend]
     permissions:
       actions: read
       contents: read
@@ -465,92 +468,54 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Scan backend Go dependencies
+      - name: Scan ${{ matrix.component }} dependencies
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
-          scan-ref: './backend'
+          scan-ref: './${{ matrix.component }}'
           scanners: 'vuln'  # Only vulnerabilities, not misconfig/secrets
           format: 'sarif'
-          output: 'trivy-backend-deps.sarif'
+          output: 'trivy-${{ matrix.component }}-deps.sarif'
           severity: 'CRITICAL,HIGH'  # Only block on CRITICAL/HIGH
           exit-code: '1'
           ignore-unfixed: true
+          cache: false  # Skip GitHub Actions cache for self-hosted runners
 
-      - name: Upload backend dependency scan results
+      - name: Upload ${{ matrix.component }} dependency scan results
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         continue-on-error: true  # Don't fail if Code Scanning not enabled
         with:
-          sarif_file: 'trivy-backend-deps.sarif'
-          category: 'trivy-backend-dependencies'
+          sarif_file: 'trivy-${{ matrix.component }}-deps.sarif'
+          category: 'trivy-${{ matrix.component }}-dependencies'
 
-      - name: Scan frontend npm dependencies
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'fs'
-          scan-ref: './frontend'
-          scanners: 'vuln'  # Only vulnerabilities, not misconfig/secrets
-          format: 'sarif'
-          output: 'trivy-frontend-deps.sarif'
-          severity: 'CRITICAL,HIGH'  # Only block on CRITICAL/HIGH
-          exit-code: '1'
-          ignore-unfixed: true
-
-      - name: Upload frontend dependency scan results
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        continue-on-error: true  # Don't fail if Code Scanning not enabled
-        with:
-          sarif_file: 'trivy-frontend-deps.sarif'
-          category: 'trivy-frontend-dependencies'
-
-      - name: Scan backend Dockerfile
+      - name: Scan ${{ matrix.component }} Dockerfile
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'config'
-          scan-ref: './backend/Dockerfile'
+          scan-ref: './${{ matrix.component }}/Dockerfile'
           format: 'sarif'
-          output: 'trivy-backend-dockerfile.sarif'
+          output: 'trivy-${{ matrix.component }}-dockerfile.sarif'
           severity: 'CRITICAL,HIGH'
           exit-code: '0'  # Don't fail on Dockerfile issues, just report
+          cache: false  # Skip GitHub Actions cache for self-hosted runners
 
-      - name: Upload backend Dockerfile scan results
+      - name: Upload ${{ matrix.component }} Dockerfile scan results
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         continue-on-error: true  # Don't fail if Code Scanning not enabled
         with:
-          sarif_file: 'trivy-backend-dockerfile.sarif'
-          category: 'trivy-backend-dockerfile'
-
-      - name: Scan frontend Dockerfile
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'config'
-          scan-ref: './frontend/Dockerfile'
-          format: 'sarif'
-          output: 'trivy-frontend-dockerfile.sarif'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '0'  # Don't fail on Dockerfile issues, just report
-
-      - name: Upload frontend Dockerfile scan results
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        continue-on-error: true  # Don't fail if Code Scanning not enabled
-        with:
-          sarif_file: 'trivy-frontend-dockerfile.sarif'
-          category: 'trivy-frontend-dockerfile'
+          sarif_file: 'trivy-${{ matrix.component }}-dockerfile.sarif'
+          category: 'trivy-${{ matrix.component }}-dockerfile'
 
       - name: Security scan summary
         if: always()
         run: |
-          echo "### 🔒 PR Security Scan Complete" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔒 ${{ matrix.component }} Security Scan Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Scanned:**" >> $GITHUB_STEP_SUMMARY
-          echo "- Backend Go dependencies (go.mod/go.sum)" >> $GITHUB_STEP_SUMMARY
-          echo "- Frontend npm dependencies (package.json/package-lock.json)" >> $GITHUB_STEP_SUMMARY
-          echo "- Backend Dockerfile configuration" >> $GITHUB_STEP_SUMMARY
-          echo "- Frontend Dockerfile configuration" >> $GITHUB_STEP_SUMMARY
+          echo "- ${{ matrix.component }} dependencies" >> $GITHUB_STEP_SUMMARY
+          echo "- ${{ matrix.component }} Dockerfile configuration" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Results uploaded to GitHub Security tab." >> $GITHUB_STEP_SUMMARY
 
