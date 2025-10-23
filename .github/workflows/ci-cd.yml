@@ -193,9 +193,19 @@ jobs:
       - name: Run frontend unit tests with coverage
         working-directory: ./frontend
         run: |
-          echo "::group::Running Vitest with coverage"
+          echo "::group::Running Unit Tests"
           # --no-cache flag in test:ci handles fresh module resolution
+          # Integration tests excluded - run separately below
           npm run test:ci
+          echo "::endgroup::"
+
+      - name: Run integration tests (file generation)
+        working-directory: ./frontend
+        run: |
+          echo "::group::Running Integration Tests"
+          # Integration tests run in isolation to prevent file generation
+          # from interfering with main unit tests in parallel workers
+          npm run test:integration
           echo "::endgroup::"
 
       - name: Upload frontend coverage report

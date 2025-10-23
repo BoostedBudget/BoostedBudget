@@ -13,6 +13,8 @@
     "test": "vitest",
     "test:ci": "npm run generate:types:verify && tsc --noEmit && vitest run --no-cache --coverage --reporter=verbose --reporter=json --outputFile=test-results.json",
     "test:ci:run": "tsc --noEmit && vitest run --no-cache --coverage --reporter=verbose --reporter=json --outputFile=test-results.json",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:integration:watch": "vitest watch --config vitest.integration.config.ts",
     "test:ui": "vitest --ui",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",

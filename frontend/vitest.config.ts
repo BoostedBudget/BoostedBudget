@@ -16,6 +16,7 @@ export default mergeConfig(
         'dist/**',
         'e2e/**', // Exclude E2E tests - these run with Playwright
         '**/*.config.*',
+        'scripts/integration/**', // Exclude integration tests - these run separately with vitest.integration.config.ts
       ],
       coverage: {
         provider: 'v8',
