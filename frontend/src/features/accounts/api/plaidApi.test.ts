@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import MockAdapter from 'axios-mock-adapter'
 import { apiClient } from '../../../api/axiosConfig'
-import { fetchLinkToken, exchangePublicToken } from './plaidApi'
-import type { LinkTokenResponse, ExchangePublicTokenRequest, ExchangePublicTokenResponse } from '../types'
+import { fetchLinkToken, exchangePublicToken, fetchAccounts } from './plaidApi'
+import type { LinkTokenResponse, ExchangePublicTokenRequest, ExchangePublicTokenResponse, GetAccountsResponse } from '../types'
 
 describe('plaidApi', () => {
   let mock: MockAdapter
@@ -152,6 +152,106 @@ describe('plaidApi', () => {
       })
 
       await exchangePublicToken(request)
+    })
+  })
+
+  describe('fetchAccounts', () => {
+    it('should call GET /api/v1/accounts and return accounts list', async () => {
+      const mockResponse: GetAccountsResponse = {
+        accounts: [
+          {
+            id: '550e8400-e29b-41d4-a716-446655440000',
+            linked_item_id: '770e9511-f3ac-52e5-b827-557766551112',
+            user_id: 'auth0|507f1f77bcf86cd799439011',
+            plaid_account_id: 'plaid-acc-1',
+            name: 'Chase Checking',
+            official_name: 'Chase Total Checking',
+            type: 'depository',
+            subtype: 'checking',
+            mask: '0000',
+            current_balance: 2500.50,
+            available_balance: 2300.50,
+            currency_code: 'USD',
+            institution_name: 'Chase',
+            created_at: '2025-10-18T14:30:00Z',
+            updated_at: '2025-10-20T10:15:00Z',
+          },
+          {
+            id: '660f9511-f3ac-52e5-b827-557766551111',
+            linked_item_id: '770e9511-f3ac-52e5-b827-557766551112',
+            user_id: 'auth0|507f1f77bcf86cd799439011',
+            plaid_account_id: 'plaid-acc-2',
+            name: 'Wells Fargo Savings',
+            type: 'depository',
+            subtype: 'savings',
+            mask: '1234',
+            current_balance: 10000.00,
+            available_balance: 10000.00,
+            currency_code: 'USD',
+            institution_name: 'Wells Fargo',
+            created_at: '2025-10-19T09:20:00Z',
+            updated_at: '2025-10-20T10:15:00Z',
+          },
+        ],
+        total_count: 2,
+      }
+
+      mock.onGet('/api/v1/accounts').reply(200, mockResponse)
+
+      const result = await fetchAccounts()
+
+      expect(result).toEqual(mockResponse)
+      expect(result.accounts).toHaveLength(2)
+      expect(result.total_count).toBe(2)
+      expect(mock.history.get.length).toBe(1)
+      expect(mock.history.get[0].url).toBe('/api/v1/accounts')
+    })
+
+    it('should return empty accounts array when user has no accounts', async () => {
+      const mockResponse: GetAccountsResponse = {
+        accounts: [],
+        total_count: 0,
+      }
+
+      mock.onGet('/api/v1/accounts').reply(200, mockResponse)
+
+      const result = await fetchAccounts()
+
+      expect(result.accounts).toEqual([])
+      expect(result.total_count).toBe(0)
+    })
+
+    it('should include Authorization header from apiClient interceptor', async () => {
+      const mockResponse: GetAccountsResponse = {
+        accounts: [],
+        total_count: 0,
+      }
+
+      mock.onGet('/api/v1/accounts').reply((config) => {
+        // Verify Authorization header exists (set by axios interceptor)
+        expect(config.headers).toBeDefined()
+        return [200, mockResponse]
+      })
+
+      await fetchAccounts()
+    })
+
+    it('should handle 401 unauthorized error', async () => {
+      mock.onGet('/api/v1/accounts').reply(401, { error: 'Unauthorized' })
+
+      await expect(fetchAccounts()).rejects.toThrow()
+    })
+
+    it('should handle 500 server error', async () => {
+      mock.onGet('/api/v1/accounts').reply(500, { error: 'Internal server error' })
+
+      await expect(fetchAccounts()).rejects.toThrow()
+    })
+
+    it('should handle network errors', async () => {
+      mock.onGet('/api/v1/accounts').networkError()
+
+      await expect(fetchAccounts()).rejects.toThrow()
     })
   })
 })

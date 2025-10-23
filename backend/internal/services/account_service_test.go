@@ -109,6 +109,14 @@ func (m *MockAccountRepository) GetByUserID(ctx context.Context, userID string) 
 	return args.Get(0).([]domain.Account), args.Error(1)
 }
 
+func (m *MockAccountRepository) GetAccountsWithInstitution(ctx context.Context, userID string) ([]domain.Account, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.Account), args.Error(1)
+}
+
 func (m *MockAccountRepository) CountByUserID(ctx context.Context, userID string) (int, error) {
 	args := m.Called(ctx, userID)
 	return args.Int(0), args.Error(1)
@@ -322,4 +330,98 @@ func TestAccountService_LinkAccounts_RegionStorage(t *testing.T) {
 
 	// Note: Actual region-based storage implementation in GREEN phase
 	// This test documents that we have access to user's region
+}
+
+// TestAccountService_GetAccounts tests retrieval of accounts with institution information
+func TestAccountService_GetAccounts(t *testing.T) {
+	// Setup mocks
+	mockAccountRepo := new(MockAccountRepository)
+	mockPlaidService := new(MockPlaidService)
+	mockEncryptionService := new(MockEncryptionService)
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockUserRepo := new(MockUserRepository)
+
+	// Create service
+	service := NewAccountService(
+		mockPlaidService,
+		nil, // SubscriptionService not needed for GetAccounts
+		mockEncryptionService,
+		mockLinkedItemRepo,
+		mockAccountRepo,
+		mockUserRepo,
+		nil, // DB not needed for GetAccounts
+	)
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	// Mock accounts with institution names
+	expectedAccounts := []domain.Account{
+		{
+			ID:              uuid.New().String(),
+			UserID:          userID,
+			PlaidAccountID:  "plaid-acc-1",
+			Name:            "Chase Checking",
+			Type:            "depository",
+			CurrencyCode:    "USD",
+			InstitutionName: "Chase",
+		},
+		{
+			ID:              uuid.New().String(),
+			UserID:          userID,
+			PlaidAccountID:  "plaid-acc-2",
+			Name:            "Wells Fargo Savings",
+			Type:            "depository",
+			CurrencyCode:    "USD",
+			InstitutionName: "Wells Fargo",
+		},
+	}
+
+	mockAccountRepo.On("GetAccountsWithInstitution", ctx, userID).Return(expectedAccounts, nil)
+
+	// Execute
+	accounts, err := service.GetAccounts(ctx, userID)
+
+	// Assert
+	require.NoError(t, err)
+	assert.Len(t, accounts, 2)
+	assert.Equal(t, "Chase", accounts[0].InstitutionName)
+	assert.Equal(t, "Wells Fargo", accounts[1].InstitutionName)
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestAccountService_GetAccounts_Empty tests when user has no linked accounts
+func TestAccountService_GetAccounts_Empty(t *testing.T) {
+	// Setup mocks
+	mockAccountRepo := new(MockAccountRepository)
+	mockPlaidService := new(MockPlaidService)
+	mockEncryptionService := new(MockEncryptionService)
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockUserRepo := new(MockUserRepository)
+
+	// Create service
+	service := NewAccountService(
+		mockPlaidService,
+		nil,
+		mockEncryptionService,
+		mockLinkedItemRepo,
+		mockAccountRepo,
+		mockUserRepo,
+		nil,
+	)
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	// Mock empty result
+	mockAccountRepo.On("GetAccountsWithInstitution", ctx, userID).Return([]domain.Account{}, nil)
+
+	// Execute
+	accounts, err := service.GetAccounts(ctx, userID)
+
+	// Assert
+	require.NoError(t, err)
+	assert.Empty(t, accounts)
+	assert.NotNil(t, accounts)
+	mockAccountRepo.AssertExpectations(t)
 }
