@@ -8,6 +8,7 @@ export default mergeConfig(
     test: {
       globals: true,
       environment: 'jsdom',
+      globalSetup: './vitest.global-setup.ts',
       setupFiles: './src/test/setup.ts',
       // Test files in src directory and scripts directory, exclude E2E tests
       include: ['src/**/*.{test,spec}.{ts,tsx}', 'scripts/**/*.test.ts'],
