@@ -1,5 +1,6 @@
-import { SUBSCRIPTION_TIERS } from '../types'
+import { useSubscriptionTiers } from '../../subscription/hooks/useSubscriptionTiers'
 import type { User } from '../types'
+import type { SubscriptionTier } from '../../subscription/types'
 import './SubscriptionCard.css'
 
 interface SubscriptionCardProps {
@@ -7,9 +8,76 @@ interface SubscriptionCardProps {
   status: User['subscription_status']
 }
 
+/**
+ * Format price for display
+ */
+function formatPrice(price: number): string {
+  return price === 0 ? '$0' : `$${price.toFixed(2)}`
+}
+
+/**
+ * Build human-readable feature list from tier config
+ */
+function buildFeatureList(tierData: SubscriptionTier): string[] {
+  const features: string[] = []
+  const { limits, features: featureFlags } = tierData
+
+  // Add account limit
+  if (limits.accounts === -1) {
+    features.push('Unlimited bank accounts')
+  } else {
+    features.push(`${limits.accounts} bank accounts`)
+  }
+
+  // Add rules limit
+  if (limits.rules === -1) {
+    features.push('Unlimited automation rules')
+  } else {
+    features.push(`${limits.rules} automation rules`)
+  }
+
+  // Add execution frequency
+  const execsPerDay = limits.executions_per_day
+  if (execsPerDay === 1) {
+    features.push('Rules run 1x per day')
+  } else if (execsPerDay >= 144) {
+    features.push('Rules run every 10 minutes')
+  } else {
+    const hours = Math.round(24 / execsPerDay)
+    features.push(`Rules run every ${hours} hours`)
+  }
+
+  // Add feature flags
+  if (featureFlags.ads_enabled) {
+    features.push('Ad-supported')
+  } else {
+    features.push('No ads')
+  }
+
+  if (featureFlags.ai_insights) {
+    features.push('AI-powered insights')
+  }
+
+  if (featureFlags.priority_support) {
+    features.push('Priority support')
+  }
+
+  if (featureFlags.advanced_reports) {
+    features.push('Advanced reports')
+  }
+
+  if (featureFlags.api_access) {
+    features.push('API access')
+  }
+
+  return features
+}
+
 export function SubscriptionCard({ tier, status }: SubscriptionCardProps) {
-  // Handle undefined/null tier or status gracefully
-  if (!tier || !status) {
+  const { tiers, loading, error } = useSubscriptionTiers()
+
+  // Handle loading state
+  if (loading || !tier || !status) {
     return (
       <div className="subscription-card loading">
         <p>Loading subscription details...</p>
@@ -17,7 +85,17 @@ export function SubscriptionCard({ tier, status }: SubscriptionCardProps) {
     )
   }
 
-  const tierInfo = SUBSCRIPTION_TIERS[tier]
+  // Handle error state
+  if (error) {
+    return (
+      <div className="subscription-card error">
+        <p>Error loading subscription: {error.message}</p>
+      </div>
+    )
+  }
+
+  // Get tier info from API response
+  const tierInfo = tiers?.tiers[tier]
 
   // Handle invalid tier (shouldn't happen, but safety check)
   if (!tierInfo) {
@@ -30,21 +108,26 @@ export function SubscriptionCard({ tier, status }: SubscriptionCardProps) {
 
   const isPaidTier = tier !== 'free'
 
-  // Generate CSS class name for tier (tier names now use underscores: premium_plus)
+  // Generate CSS class name for tier (tier names use underscores: premium_plus)
   const tierClassName = tier
+
+  // Format data for display
+  const displayName = tierInfo.display_name
+  const displayPrice = formatPrice(tierInfo.price_monthly)
+  const features = buildFeatureList(tierInfo)
 
   return (
     <div className={`subscription-card tier-${tierClassName}`}>
       <div className="subscription-header">
-        <h3 className="tier-name">{tierInfo.name}</h3>
-        <p className="tier-price">{tierInfo.priceMonthly}</p>
+        <h3 className="tier-name">{displayName}</h3>
+        <p className="tier-price">{displayPrice}</p>
         <span className={`status-badge status-${status}`}>{status}</span>
       </div>
 
       <div className="subscription-features">
         <h4>Features:</h4>
         <ul>
-          {tierInfo.features.map((feature, index) => (
+          {features.map((feature, index) => (
             <li key={index}>{feature}</li>
           ))}
         </ul>
