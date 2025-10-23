@@ -28,8 +28,8 @@ tiers:
     stripe_price_id_yearly: null
 
     limits:
-      accounts: 8
-      rules: 2
+      accounts: 3  # One checking, one savings, one investment
+      rules: 1
       executions_per_day: 1
       min_execution_interval_minutes: 1440  # 24 hours
       api_calls_per_month: 0

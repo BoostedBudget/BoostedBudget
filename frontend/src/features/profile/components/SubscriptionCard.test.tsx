@@ -10,8 +10,8 @@ describe('SubscriptionCard', () => {
 
       expect(screen.getByText(/free/i)).toBeInTheDocument()
       expect(screen.getByText(/\$0/i)).toBeInTheDocument()
-      expect(screen.getByText(/2 automation rules/i)).toBeInTheDocument()
-      expect(screen.getByText(/8 bank accounts/i)).toBeInTheDocument()
+      expect(screen.getByText(/1 automation rule/i)).toBeInTheDocument()
+      expect(screen.getByText(/3 bank accounts/i)).toBeInTheDocument()
       expect(screen.getByText(/ad-supported/i)).toBeInTheDocument()
     })
 

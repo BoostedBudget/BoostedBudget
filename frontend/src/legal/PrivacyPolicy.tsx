@@ -234,7 +234,7 @@ export function PrivacyPolicy() {
           <h2>14. Subscription Tiers and Data Usage</h2>
           <p>Different subscription tiers have varying features and data processing needs:</p>
           <ul>
-            <li><strong>Free Tier:</strong> Basic budgeting, 2 automation rules, ads enabled (with consent)</li>
+            <li><strong>Free Tier:</strong> Basic budgeting, 3 accounts, 1 automation rule, ads enabled (with consent)</li>
             <li><strong>Premium Lite ($4.99/mo):</strong> Enhanced limits, no ads</li>
             <li><strong>Premium ($9.99/mo):</strong> Advanced features, priority support</li>
             <li><strong>Premium+ ($19.99/mo):</strong> Unlimited automation, AI insights (future), API access (future)</li>

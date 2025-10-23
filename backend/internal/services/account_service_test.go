@@ -229,8 +229,8 @@ func TestAccountService_LinkAccounts_LimitExceeded(t *testing.T) {
 	}
 	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
 
-	// Mock current account count (user already has 8 accounts - at limit)
-	mockAccountRepo.On("CountByUserID", ctx, userID).Return(8, nil)
+	// Mock current account count (user already has 3 accounts - at limit)
+	mockAccountRepo.On("CountByUserID", ctx, userID).Return(3, nil)
 
 	// Service will check limit before calling Plaid
 	// Expected: Should return error without calling Plaid API

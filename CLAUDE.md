@@ -7,7 +7,7 @@
 ## Project Context
 **BoostedBudget**: Global budgeting platform, automation rules, GDPR-compliant, USA-based (iad/us-east-1)
 
-**Tiers**: Free (2 rules, 8 accounts, 1x/day, ads) | Premium Lite $4.99 (5 rules, 15 accounts, 2x/day) | Premium $9.99 (15 rules, 30 accounts, 6x/day) | Premium+ $19.99 (unlimited, every 10min, AI + API)
+**Tiers**: Free (1 rule, 3 accounts, 1x/day, ads) | Premium Lite $4.99 (5 rules, 15 accounts, 2x/day) | Premium $9.99 (15 rules, 30 accounts, 6x/day) | Premium+ $19.99 (unlimited, every 10min, AI + API)
 
 **Stack**: React 19 + TS5 + Vite 7 | Go 1.25+ Echo/Gin | PostgreSQL 15 + Redis 7 | Atlas (migrations) | Auth0 + Plaid + Stripe + AdSense | Docker → GHCR → Fly.io
 
@@ -192,7 +192,7 @@ BAD ✗
 - Server Memory to persist learnings, decisions, trade-offs, patterns (CONTINUOUSLY, not just at end)
 - No money movement (suggestions only, no MTL)
 - GDPR compliance (all users get rights)
-- Tier limits in `config/subscription_tiers.yaml` (free: 2 rules, 8 accounts, 1x/day, ads)
+- Tier limits in `config/subscription_tiers.yaml` (free: 1 rule, 3 accounts, 1x/day, ads)
 - Single region us-east-1 (multi-region Phase 7+)
 - Auth0 for all auth (never custom auth)
 - Build Docker images (don't build on Fly)
@@ -317,7 +317,7 @@ if (subscription?.tier === 'free' && hasAdConsent) return <AdBanner slot={adSlot
 
 **Single Source of Truth**: `config/subscription_tiers.yaml` (centralized, version-controlled)
 
-**Tiers**: Free (2 rules, 8 accounts) | Premium Lite (5 rules, 15 accounts) | Premium (15 rules, 30 accounts) | Premium+ (unlimited)
+**Tiers**: Free (1 rule, 3 accounts) | Premium Lite (5 rules, 15 accounts) | Premium (15 rules, 30 accounts) | Premium+ (unlimited)
 
 For detailed tier structure, limits, pricing, and features, see:
 - **Config file**: `config/subscription_tiers.yaml` (edit here to change tiers)
