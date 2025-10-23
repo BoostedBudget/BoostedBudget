@@ -126,6 +126,13 @@ jobs:
         working-directory: ./frontend
         run: npm ci
 
+      - name: Generate subscription tier types
+        working-directory: ./frontend
+        run: |
+          echo "::group::Generating TypeScript types from YAML config"
+          npm run generate:types
+          echo "::endgroup::"
+
       - name: Run ESLint (fail on warnings)
         working-directory: ./frontend
         run: |
