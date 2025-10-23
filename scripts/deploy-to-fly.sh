@@ -18,7 +18,9 @@ NC='\033[0m' # No Color
 
 # Configuration
 REGISTRY="ghcr.io"
-GITHUB_USER="${GITHUB_REPOSITORY_OWNER:-maxnussbaum}"
+# Force lowercase for Docker registry compatibility
+GITHUB_USER_RAW="${GITHUB_REPOSITORY_OWNER:-maxnussbaum}"
+GITHUB_USER=$(echo "$GITHUB_USER_RAW" | tr '[:upper:]' '[:lower:]')
 
 # Parse arguments
 if [ $# -lt 1 ]; then

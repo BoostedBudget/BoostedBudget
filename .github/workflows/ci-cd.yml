@@ -17,8 +17,9 @@ env:
   NODE_VERSION: '20'
   REGISTRY: ghcr.io
   # Note: Image names must be lowercase for Docker registry
-  BACKEND_IMAGE_NAME: ${{ github.repository_owner }}/boostedbudget-backend
-  FRONTEND_IMAGE_NAME: ${{ github.repository_owner }}/boostedbudget-frontend
+  # Hardcode lowercase organization name to avoid case sensitivity issues
+  BACKEND_IMAGE_NAME: boostedbudget/boostedbudget-backend
+  FRONTEND_IMAGE_NAME: boostedbudget/boostedbudget-frontend
 
 jobs:
   # =============================================================================
@@ -26,7 +27,7 @@ jobs:
   # =============================================================================
   backend-test:
     name: Backend Tests
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, mac-mini]
     # Skip tests on main pushes (already tested in PR)
     if: github.event_name == 'pull_request'
 
@@ -107,7 +108,7 @@ jobs:
   # =============================================================================
   frontend-test:
     name: Frontend Tests
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, mac-mini]
     # Skip tests on main pushes (already tested in PR)
     if: github.event_name == 'pull_request'
 
@@ -154,7 +155,7 @@ jobs:
   e2e-test:
     name: E2E Tests
     needs: backend-test
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, mac-mini]
     # Skip tests on main pushes (already tested in PR)
     if: github.event_name == 'pull_request'
 
@@ -216,28 +217,37 @@ jobs:
   # =============================================================================
   migration-tests:
     name: Migration Tests
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, mac-mini]
     # Only run on PRs to catch migration issues before merge
     if: github.event_name == 'pull_request'
-
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_USER: test
-          POSTGRES_PASSWORD: test
-          POSTGRES_DB: test
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Start PostgreSQL container
+        run: |
+          # Stop and remove any existing test postgres container
+          docker stop test-postgres 2>/dev/null || true
+          docker rm test-postgres 2>/dev/null || true
+
+          # Start fresh postgres container
+          docker run -d \
+            --name test-postgres \
+            -e POSTGRES_USER=test \
+            -e POSTGRES_PASSWORD=test \
+            -e POSTGRES_DB=test \
+            -p 5432:5432 \
+            --health-cmd pg_isready \
+            --health-interval 10s \
+            --health-timeout 5s \
+            --health-retries 5 \
+            postgres:15
+
+          # Wait for postgres to be ready
+          echo "Waiting for PostgreSQL to be ready..."
+          timeout 30 bash -c 'until docker exec test-postgres pg_isready -U test; do sleep 1; done'
+          echo "PostgreSQL is ready!"
 
       - name: Setup Atlas
         uses: ariga/setup-atlas@v0
@@ -386,6 +396,12 @@ jobs:
           echo "::notice::✅ Migration state is clean - all 5 migrations applied"
           echo "::endgroup::"
 
+      - name: Cleanup PostgreSQL container
+        if: always()
+        run: |
+          docker stop test-postgres 2>/dev/null || true
+          docker rm test-postgres 2>/dev/null || true
+
       - name: Migration test summary
         if: always()
         run: |
@@ -403,7 +419,7 @@ jobs:
   # =============================================================================
   pr-security-scan:
     name: Security Scan (Dependencies & Config)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, mac-mini]
     # Only run on PRs to catch vulnerabilities before merge
     if: github.event_name == 'pull_request'
     permissions:
@@ -515,7 +531,7 @@ jobs:
       always() &&
       github.event_name == 'push' &&
       github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, mac-mini]
     strategy:
       matrix:
         component: [backend, frontend]
@@ -578,7 +594,7 @@ jobs:
   image-security-scan:
     name: Security Scan (${{ matrix.component }} Image)
     needs: build-images
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, mac-mini]
     strategy:
       matrix:
         component: [backend, frontend]
@@ -653,7 +669,7 @@ jobs:
   push-to-fly-registry:
     name: Push ${{ matrix.component }} to Fly.io Registry
     needs: [build-images, image-security-scan]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, mac-mini]
     strategy:
       matrix:
         component: [backend, frontend]
@@ -720,7 +736,7 @@ jobs:
   deploy-production-apps:
     name: Deploy ${{ matrix.component }} to Production
     needs: [build-images, push-to-fly-registry]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, mac-mini]
     strategy:
       matrix:
         component: [backend, frontend]
@@ -799,7 +815,7 @@ jobs:
   smoke-tests:
     name: Production Smoke Tests
     needs: deploy-production-apps
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, mac-mini]
     if: |
       always() &&
       github.ref == 'refs/heads/main' &&
