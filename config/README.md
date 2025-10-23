@@ -27,15 +27,14 @@ All configuration in this directory is:
 # 1. Edit the YAML file
 vim config/subscription_tiers.yaml
 
-# 2. Frontend types auto-regenerate on:
-npm run dev        # Before dev server starts
-npm run build      # Before production build
-npm test           # Before tests run
+# 2. Manually regenerate frontend types
+cd frontend && npm run generate:types
 
-# Or manually:
-npm run generate:types
+# 3. Commit BOTH files (YAML + generated TypeScript)
+git add config/subscription_tiers.yaml frontend/src/types/generated/subscriptionTiers.ts
+git commit -m "#N: Update subscription tiers"
 
-# 3. Backend auto-loads changes via hot-reload (or restart server)
+# 4. Backend auto-loads changes via hot-reload (or restart server)
 cd backend && go run cmd/server/main.go
 ```
 
@@ -107,18 +106,27 @@ trial:
 - No naming mismatches (had: `premium+` vs `premium_plus`)
 - Change once, update everywhere automatically
 
-### Why Build-Time Generation (Frontend)?
+### Why Static Type Generation (Frontend)?
 
 **Alternatives considered**:
 1. **Runtime API fetch** - Extra network call, slower, requires backend
-2. **Duplicate config** - Sync issues (we had bugs from this!)
-3. **Build-time generation** ✅ - Type-safe, zero runtime cost, always in sync
+2. **Runtime YAML loading** - Bundle size increase, loss of type safety
+3. **Duplicate config** - Sync issues (we had bugs from this!)
+4. **Static type generation** ✅ - Type-safe, zero runtime cost, validated in CI
 
 **Benefits**:
-- TypeScript compiler catches tier name typos at build time
-- Autocomplete for tier names in IDE
-- No runtime fetch needed (embedded in bundle)
-- Generated file gitignored (never commit generated code)
+- ✅ TypeScript compiler catches tier name typos at compile time
+- ✅ IDE autocomplete for tier names
+- ✅ Zero runtime performance cost (types compiled away)
+- ✅ Clean git history (both YAML and generated file committed together)
+- ✅ No build-time surprises (file always present and validated)
+- ✅ CI validation ensures YAML and types stay in sync
+
+**Implementation**:
+- Generated file is committed to git (not auto-generated)
+- Validation test compares generated file to YAML (`frontend/scripts/validate-generated-types.test.ts`)
+- CI fails if YAML changes without regenerating types
+- Manual regeneration via `npm run generate:types`
 
 ## Future Extensions
 
@@ -137,10 +145,20 @@ Example future configs:
 ## Troubleshooting
 
 **Frontend: "Cannot find module '../../types/generated/subscriptionTiers'"**
+
+This error should NOT occur since the generated file is committed to git.
+
+**If you see this error**:
 ```bash
+# The file should be present after git clone
+# If missing, regenerate it:
 cd frontend
 npm run generate:types
 ```
+
+**Why this might happen**:
+- You're on an old branch that used the git-ignored approach (checkout latest main)
+- Someone edited YAML without regenerating types (run validation tests to catch this)
 
 **Backend: "config file not found"**
 ```bash
@@ -166,10 +184,10 @@ cd backend
 go test ./internal/config/... -v
 ```
 
-**Frontend generator**:
+**Frontend validation** (ensures YAML and generated types match):
 ```bash
 cd frontend
-npm test -- scripts/generate-tier-types.test.ts --run
+npm test -- validate-generated-types --run
 ```
 
 **Integration** (ensure frontend matches backend):

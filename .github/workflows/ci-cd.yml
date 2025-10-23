@@ -119,6 +119,21 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 1
+
+      - name: Force fresh checkout of generated file
+        run: |
+          # Remove any cached/stale generated files
+          rm -f frontend/src/types/generated/subscriptionTiers.ts
+          # Force git to restore from repo
+          git checkout HEAD -- frontend/src/types/generated/subscriptionTiers.ts
+
+      - name: Debug - Show subscription tiers file
+        run: |
+          echo "Checking subscriptionTiers.ts file (should have 3 accounts, 1 rule):"
+          grep -A 8 "free: {" frontend/src/types/generated/subscriptionTiers.ts
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -132,19 +147,23 @@ jobs:
         working-directory: ./frontend
         run: npm ci
 
-      - name: Generate subscription tier types
+      - name: Verify subscription tier types are in sync
         working-directory: ./frontend
         run: |
-          echo "::group::Generating TypeScript types from YAML config"
-          npm run generate:types
-          # Verify file was created successfully
-          ls -la src/types/generated/subscriptionTiers.ts || {
-            echo "::error::Generated file not found!"
+          echo "::group::Verifying subscription tier types"
+
+          # Verify file exists in repository (committed to git)
+          if ! git ls-files --error-unmatch src/types/generated/subscriptionTiers.ts 2>/dev/null; then
+            echo "::error::subscriptionTiers.ts is not tracked by git!"
+            echo "::error::This file must be committed after running 'npm run generate:types'"
             exit 1
-          }
-          echo "::notice::✅ Generated file verified"
-          # Give filesystem time to sync (important on macOS APFS)
-          sleep 1
+          fi
+          echo "::notice::✅ Generated file is committed to git"
+
+          # Run validation test to ensure YAML and generated file match
+          npm test -- validate-generated-types --run
+
+          echo "::notice::✅ Generated file is in sync with YAML config"
           echo "::endgroup::"
 
       - name: Run ESLint (fail on warnings)
@@ -157,10 +176,19 @@ jobs:
       - name: Run frontend unit tests with coverage
         working-directory: ./frontend
         run: |
-          echo "::group::Running Vitest with coverage"
-          # Clear all possible Vite caches to force fresh module resolution
-          rm -rf node_modules/.vite ~/.vite
-          npm run test:ci:run
+          echo "::group::Running Unit Tests"
+          # --no-cache flag in test:ci handles fresh module resolution
+          # Integration tests excluded - run separately below
+          npm run test:ci
+          echo "::endgroup::"
+
+      - name: Run integration tests (file generation)
+        working-directory: ./frontend
+        run: |
+          echo "::group::Running Integration Tests"
+          # Integration tests run in isolation to prevent file generation
+          # from interfering with main unit tests in parallel workers
+          npm run test:integration
           echo "::endgroup::"
 
       - name: Upload frontend coverage report
@@ -449,13 +477,16 @@ jobs:
           echo "- ✅ Clean migration state" >> $GITHUB_STEP_SUMMARY
 
   # =============================================================================
-  # JOB 5: Security Scan - Dependencies & Dockerfiles (Fast - No Build Required)
+  # JOB 4: Security Scan - Dependencies & Dockerfiles (Parallelized)
   # =============================================================================
   pr-security-scan:
-    name: Security Scan (Dependencies & Config)
+    name: Security Scan (${{ matrix.component }})
     runs-on: [self-hosted, macOS, mac-mini]
     # Only run on PRs to catch vulnerabilities before merge
     if: github.event_name == 'pull_request'
+    strategy:
+      matrix:
+        component: [backend, frontend]
     permissions:
       actions: read
       contents: read
@@ -465,92 +496,54 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Scan backend Go dependencies
+      - name: Scan ${{ matrix.component }} dependencies
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
-          scan-ref: './backend'
+          scan-ref: './${{ matrix.component }}'
           scanners: 'vuln'  # Only vulnerabilities, not misconfig/secrets
           format: 'sarif'
-          output: 'trivy-backend-deps.sarif'
+          output: 'trivy-${{ matrix.component }}-deps.sarif'
           severity: 'CRITICAL,HIGH'  # Only block on CRITICAL/HIGH
           exit-code: '1'
           ignore-unfixed: true
+          cache: false  # Skip GitHub Actions cache for self-hosted runners
 
-      - name: Upload backend dependency scan results
+      - name: Upload ${{ matrix.component }} dependency scan results
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         continue-on-error: true  # Don't fail if Code Scanning not enabled
         with:
-          sarif_file: 'trivy-backend-deps.sarif'
-          category: 'trivy-backend-dependencies'
+          sarif_file: 'trivy-${{ matrix.component }}-deps.sarif'
+          category: 'trivy-${{ matrix.component }}-dependencies'
 
-      - name: Scan frontend npm dependencies
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'fs'
-          scan-ref: './frontend'
-          scanners: 'vuln'  # Only vulnerabilities, not misconfig/secrets
-          format: 'sarif'
-          output: 'trivy-frontend-deps.sarif'
-          severity: 'CRITICAL,HIGH'  # Only block on CRITICAL/HIGH
-          exit-code: '1'
-          ignore-unfixed: true
-
-      - name: Upload frontend dependency scan results
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        continue-on-error: true  # Don't fail if Code Scanning not enabled
-        with:
-          sarif_file: 'trivy-frontend-deps.sarif'
-          category: 'trivy-frontend-dependencies'
-
-      - name: Scan backend Dockerfile
+      - name: Scan ${{ matrix.component }} Dockerfile
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'config'
-          scan-ref: './backend/Dockerfile'
+          scan-ref: './${{ matrix.component }}/Dockerfile'
           format: 'sarif'
-          output: 'trivy-backend-dockerfile.sarif'
+          output: 'trivy-${{ matrix.component }}-dockerfile.sarif'
           severity: 'CRITICAL,HIGH'
           exit-code: '0'  # Don't fail on Dockerfile issues, just report
+          cache: false  # Skip GitHub Actions cache for self-hosted runners
 
-      - name: Upload backend Dockerfile scan results
+      - name: Upload ${{ matrix.component }} Dockerfile scan results
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         continue-on-error: true  # Don't fail if Code Scanning not enabled
         with:
-          sarif_file: 'trivy-backend-dockerfile.sarif'
-          category: 'trivy-backend-dockerfile'
-
-      - name: Scan frontend Dockerfile
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'config'
-          scan-ref: './frontend/Dockerfile'
-          format: 'sarif'
-          output: 'trivy-frontend-dockerfile.sarif'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '0'  # Don't fail on Dockerfile issues, just report
-
-      - name: Upload frontend Dockerfile scan results
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        continue-on-error: true  # Don't fail if Code Scanning not enabled
-        with:
-          sarif_file: 'trivy-frontend-dockerfile.sarif'
-          category: 'trivy-frontend-dockerfile'
+          sarif_file: 'trivy-${{ matrix.component }}-dockerfile.sarif'
+          category: 'trivy-${{ matrix.component }}-dockerfile'
 
       - name: Security scan summary
         if: always()
         run: |
-          echo "### 🔒 PR Security Scan Complete" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔒 ${{ matrix.component }} Security Scan Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Scanned:**" >> $GITHUB_STEP_SUMMARY
-          echo "- Backend Go dependencies (go.mod/go.sum)" >> $GITHUB_STEP_SUMMARY
-          echo "- Frontend npm dependencies (package.json/package-lock.json)" >> $GITHUB_STEP_SUMMARY
-          echo "- Backend Dockerfile configuration" >> $GITHUB_STEP_SUMMARY
-          echo "- Frontend Dockerfile configuration" >> $GITHUB_STEP_SUMMARY
+          echo "- ${{ matrix.component }} dependencies" >> $GITHUB_STEP_SUMMARY
+          echo "- ${{ matrix.component }} Dockerfile configuration" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Results uploaded to GitHub Security tab." >> $GITHUB_STEP_SUMMARY
 
@@ -618,8 +611,8 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ github.sha }}
             ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:latest
-          cache-from: type=gha,scope=${{ matrix.component }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.component }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache,mode=max
           platforms: linux/amd64
           build-args: |
             VERSION=${{ github.sha }}
@@ -694,6 +687,7 @@ jobs:
           severity: 'CRITICAL,HIGH'
           exit-code: '0'  # Informational only - Debian base images have unfixable CVEs (Issue #96)
           ignore-unfixed: true
+          cache: false  # Skip GitHub Actions cache for self-hosted runners
 
       - name: Upload Trivy results (${{ matrix.component }}) to GitHub Security
         uses: github/codeql-action/upload-sarif@v3

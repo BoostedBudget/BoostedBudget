@@ -235,11 +235,9 @@ tiers:
       const output = readFileSync(OUTPUT_PATH, 'utf-8')
 
       // Should have warning comment
-      expect(output).toMatch(/DO NOT EDIT.*auto-generated/i)
+      expect(output).toMatch(/COMMITTED FILE.*Edit YAML/i)
       expect(output).toMatch(/config\/subscription_tiers\.yaml/i)
-
-      // Should have timestamp
-      expect(output).toMatch(/generated on/i)
+      expect(output).toMatch(/npm run generate:types/i)
 
       // Clean up
       if (existsSync(OUTPUT_PATH)) unlinkSync(OUTPUT_PATH)

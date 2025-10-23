@@ -5,6 +5,9 @@
  *
  * Reads config/subscription_tiers.yaml and generates
  * frontend/src/types/generated/subscriptionTiers.ts
+ *
+ * Uses robust file writing with fsync and verification to prevent
+ * timing issues on macOS APFS and other delayed-write filesystems.
  */
 
 import { join, dirname } from 'path'
@@ -18,17 +21,38 @@ const PROJECT_ROOT = join(__dirname, '../..')
 const YAML_PATH = join(PROJECT_ROOT, 'config/subscription_tiers.yaml')
 const OUTPUT_PATH = join(__dirname, '../src/types/generated/subscriptionTiers.ts')
 
-try {
-  console.log('🔄 Generating subscription tier types...')
-  console.log(`📖 Reading: ${YAML_PATH}`)
+async function main() {
+  const startTime = Date.now()
 
-  const config = readYamlConfig(YAML_PATH)
+  try {
+    console.log('🔄 Generating subscription tier types...')
+    console.log(`📖 Reading: ${YAML_PATH}`)
 
-  console.log(`✍️  Writing: ${OUTPUT_PATH}`)
-  generateOutputFile(config, OUTPUT_PATH)
+    const config = readYamlConfig(YAML_PATH)
+    const tierCount = Object.keys(config.tiers).length
+    console.log(`   Found ${tierCount} tiers: ${Object.keys(config.tiers).join(', ')}`)
 
-  console.log('✅ Successfully generated subscription tier types!')
-} catch (error) {
-  console.error('❌ Failed to generate subscription tier types:', error)
-  process.exit(1)
+    console.log(`✍️  Writing: ${OUTPUT_PATH}`)
+    console.log('   Using robust write with fsync and verification...')
+
+    await generateOutputFile(config, OUTPUT_PATH)
+
+    const duration = Date.now() - startTime
+    console.log(`✅ Successfully generated and verified subscription tier types (${duration}ms)`)
+
+  } catch (error) {
+    const duration = Date.now() - startTime
+    console.error(`❌ Failed to generate subscription tier types after ${duration}ms:`)
+    if (error instanceof Error) {
+      console.error(`   Error: ${error.message}`)
+      if (error.stack) {
+        console.error(`   Stack: ${error.stack}`)
+      }
+    } else {
+      console.error(error)
+    }
+    process.exit(1)
+  }
 }
+
+main()
