@@ -199,12 +199,10 @@ export function validateTierConfig(config: TierConfig): void {
 export function generateOutputFile(config: TierConfig, outputPath: string): void {
   validateTierConfig(config)
 
-  const timestamp = new Date().toISOString()
   const header = `/**
  * DO NOT EDIT - This file is auto-generated
  *
  * Generated from: config/subscription_tiers.yaml
- * Generated on: ${timestamp}
  *
  * To modify subscription tiers, edit the YAML file and run:
  *   npm run generate:types

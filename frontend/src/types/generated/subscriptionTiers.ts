@@ -2,7 +2,6 @@
  * DO NOT EDIT - This file is auto-generated
  *
  * Generated from: config/subscription_tiers.yaml
- * Generated on: 2025-10-23T11:24:44.181Z
  *
  * To modify subscription tiers, edit the YAML file and run:
  *   npm run generate:types
