@@ -458,6 +458,68 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
 
+  /api/v1/subscription/tiers:
+    get:
+      summary: Get Subscription Tiers
+      description: |
+        Public endpoint that returns all available subscription tiers with their limits, features, and pricing.
+        Used by the pricing page and subscription management interface.
+
+        **No authentication required** - this is public pricing information.
+
+        **Caching**: Response is cached for 24 hours (Cache-Control: public, max-age=86400).
+
+        **Tiers Returned**:
+        - `free`: 3 accounts, 1 rule, 1x/day execution, ads
+        - `premium_lite`: 15 accounts, 5 rules, 2x/day execution, no ads
+        - `premium`: 30 accounts, 15 rules, 6x/day execution, priority support
+        - `premium_plus`: Unlimited accounts/rules, every 10min execution, AI + API access
+      operationId: getSubscriptionTiers
+      tags:
+        - Subscription
+      security: []  # Public endpoint, no auth required
+      responses:
+        '200':
+          description: Subscription tiers retrieved successfully
+          headers:
+            Cache-Control:
+              description: HTTP cache control header
+              schema:
+                type: string
+                example: "public, max-age=86400"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionTiersResponse'
+              example:
+                default_tier: "free"
+                tiers:
+                  free:
+                    name: "free"
+                    display_name: "Free"
+                    description: "Full budgeting with basic automation"
+                    limits:
+                      accounts: 3
+                      rules: 1
+                      executions_per_day: 1
+                      min_execution_interval_minutes: 1440
+                      api_calls_per_month: 0
+                      data_export_requests_per_month: 1
+                    features:
+                      ads_enabled: true
+                      ai_insights: false
+                      api_access: false
+                      priority_support: false
+                      custom_categories: false
+                      advanced_reports: false
+                    pricing:
+                      price_monthly: 0.00
+                      price_yearly: 0.00
+                      stripe_price_id_monthly: null
+                      stripe_price_id_yearly: null
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
 components:
   securitySchemes:
     auth0:
@@ -963,6 +1025,158 @@ components:
           description: Last update timestamp
           example: "2025-10-20T10:15:00Z"
 
+    SubscriptionTiersResponse:
+      type: object
+      required:
+        - tiers
+        - default_tier
+      properties:
+        tiers:
+          type: object
+          description: Map of tier names to tier configurations
+          additionalProperties:
+            $ref: '#/components/schemas/SubscriptionTier'
+        default_tier:
+          type: string
+          description: Default tier for new users
+          enum: [free, premium_lite, premium, premium_plus]
+          example: "free"
+
+    SubscriptionTier:
+      type: object
+      required:
+        - name
+        - display_name
+        - description
+        - limits
+        - features
+        - pricing
+      properties:
+        name:
+          type: string
+          description: Tier identifier (lowercase with underscores)
+          enum: [free, premium_lite, premium, premium_plus]
+          example: "free"
+        display_name:
+          type: string
+          description: Human-readable tier name for display
+          example: "Free"
+        description:
+          type: string
+          description: Brief description of the tier
+          example: "Full budgeting with basic automation"
+        limits:
+          $ref: '#/components/schemas/SubscriptionLimits'
+        features:
+          $ref: '#/components/schemas/SubscriptionFeatures'
+        pricing:
+          $ref: '#/components/schemas/SubscriptionPricing'
+
+    SubscriptionLimits:
+      type: object
+      required:
+        - accounts
+        - rules
+        - executions_per_day
+        - min_execution_interval_minutes
+        - api_calls_per_month
+        - data_export_requests_per_month
+      properties:
+        accounts:
+          type: integer
+          description: Maximum number of linked bank accounts (-1 = unlimited)
+          example: 3
+          minimum: -1
+        rules:
+          type: integer
+          description: Maximum number of automation rules (-1 = unlimited)
+          example: 1
+          minimum: -1
+        executions_per_day:
+          type: integer
+          description: Maximum rule executions per day
+          example: 1
+          minimum: 0
+        min_execution_interval_minutes:
+          type: integer
+          description: Minimum interval between rule executions in minutes
+          example: 1440
+          minimum: 0
+        api_calls_per_month:
+          type: integer
+          description: Maximum API calls per month (0 = no API access, -1 = unlimited)
+          example: 0
+          minimum: -1
+        data_export_requests_per_month:
+          type: integer
+          description: Maximum data export requests per month (-1 = unlimited)
+          example: 1
+          minimum: -1
+
+    SubscriptionFeatures:
+      type: object
+      required:
+        - ads_enabled
+        - ai_insights
+        - api_access
+        - priority_support
+        - custom_categories
+        - advanced_reports
+      properties:
+        ads_enabled:
+          type: boolean
+          description: Whether ads are shown (free tier only)
+          example: true
+        ai_insights:
+          type: boolean
+          description: Access to AI-powered financial insights
+          example: false
+        api_access:
+          type: boolean
+          description: Access to BoostedBudget API for third-party integrations
+          example: false
+        priority_support:
+          type: boolean
+          description: Priority customer support
+          example: false
+        custom_categories:
+          type: boolean
+          description: Ability to create custom budget categories
+          example: false
+        advanced_reports:
+          type: boolean
+          description: Access to advanced financial reports and analytics
+          example: false
+
+    SubscriptionPricing:
+      type: object
+      required:
+        - price_monthly
+        - price_yearly
+      properties:
+        price_monthly:
+          type: number
+          format: double
+          description: Monthly subscription price in USD
+          example: 0.00
+          minimum: 0
+        price_yearly:
+          type: number
+          format: double
+          description: Yearly subscription price in USD (typically ~2 months free)
+          example: 0.00
+          minimum: 0
+        stripe_price_id_monthly:
+          type: string
+          nullable: true
+          description: Stripe price ID for monthly subscription (null if not configured)
+          example: null
+        stripe_price_id_yearly:
+          type: string
+          nullable: true
+          description: Stripe price ID for yearly subscription (null if not configured)
+          example: null
+
   responses:
     BadRequest:
       description: Invalid request parameters
@@ -1023,3 +1237,7 @@ tags:
     description: Privacy settings and consent management
   - name: GDPR
     description: GDPR compliance endpoints (data export, account deletion)
+  - name: Subscription
+    description: Subscription tier information and configuration
+  - name: Plaid
+    description: Plaid bank account linking and integration
