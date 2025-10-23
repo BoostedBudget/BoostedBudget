@@ -264,9 +264,11 @@ jobs:
             sleep 1
           done
 
-      - name: Setup Atlas
-        uses: ariga/setup-atlas@v0
-        # Note: cloud-token is optional - only needed for Atlas Cloud features
+      # Atlas is pre-installed on self-hosted runner at /usr/local/bin/atlas
+      # No need for ariga/setup-atlas@v0 which requires sudo and fails
+      # - name: Setup Atlas
+      #   uses: ariga/setup-atlas@v0
+      #   # Note: cloud-token is optional - only needed for Atlas Cloud features
 
       - name: Lint migrations (Atlas validation)
         env:
