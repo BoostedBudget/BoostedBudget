@@ -1,51 +1,53 @@
 import { defineConfig, Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
-import { existsSync } from 'fs'
 import { readYamlConfig, generateOutputFile } from './scripts/generate-tier-types.js'
+import { verifyFile } from './scripts/generate-tier-types-robust.js'
 
 /**
  * Vite plugin to generate subscription tier types before build
  *
- * Ensures generated types are available before module resolution starts.
+ * Ensures generated types are available AND VALID before module resolution starts.
  * This prevents timing issues where imports fail because the file doesn't
- * exist yet.
+ * exist yet or isn't fully synced on macOS APFS.
  *
- * The plugin directly imports and calls generation functions synchronously,
- * ensuring each Vite worker (in parallel test execution) has the file
- * available before any module resolution happens.
+ * Key improvements:
+ * - Uses verifyFile() instead of existsSync() to check file validity
+ * - Each Vite worker independently verifies the file (no shared state)
+ * - Always regenerates if file is missing or invalid
  *
- * Generation only happens once per Vite server lifetime.
+ * This addresses macOS APFS timing issues where a file may exist but not
+ * be fully visible to all processes yet.
  */
 function tierTypesGeneratorPlugin(): Plugin {
   const GENERATED_FILE = path.join(__dirname, 'src/types/generated/subscriptionTiers.ts')
   const YAML_PATH = path.join(__dirname, '../config/subscription_tiers.yaml')
-  let hasGenerated = false
 
-  const ensureGenerated = async () => {
-    if (hasGenerated) {
-      return
-    }
+  const ensureValidFile = async () => {
+    console.log('🔍 [tier-types] Verifying generated types...')
 
-    console.log('🔍 [tier-types] Checking generated types...')
+    // Check if file is valid (not just exists)
+    const isValid = verifyFile(GENERATED_FILE, {
+      verificationPattern: 'SUBSCRIPTION_TIERS',
+      minSize: 1000,
+      maxSize: 50000
+    })
 
-    if (!existsSync(GENERATED_FILE)) {
-      console.log('🔄 [tier-types] File not found, generating inline...')
+    if (!isValid) {
+      console.log('🔄 [tier-types] File invalid or missing, regenerating...')
       try {
         const startTime = Date.now()
         const config = readYamlConfig(YAML_PATH)
         await generateOutputFile(config, GENERATED_FILE)
         const duration = Date.now() - startTime
-        console.log(`✅ [tier-types] Types generated successfully (${duration}ms)`)
+        console.log(`✅ [tier-types] Types generated and verified (${duration}ms)`)
       } catch (error) {
         console.error('❌ [tier-types] Generation failed:', error)
         throw new Error('Failed to generate subscription tier types')
       }
     } else {
-      console.log('✅ [tier-types] Types already exist')
+      console.log('✅ [tier-types] Types valid and ready')
     }
-
-    hasGenerated = true
   }
 
   return {
@@ -54,12 +56,12 @@ function tierTypesGeneratorPlugin(): Plugin {
 
     // Run when Vite config is resolved (earliest possible hook)
     async configResolved() {
-      await ensureGenerated()
+      await ensureValidFile()
     },
 
     // Also run when build starts (redundant but ensures coverage)
     async buildStart() {
-      await ensureGenerated()
+      await ensureValidFile()
     }
   }
 }
