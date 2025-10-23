@@ -158,6 +158,8 @@ jobs:
         working-directory: ./frontend
         run: |
           echo "::group::Running Vitest with coverage"
+          # Clear all possible Vite caches to force fresh module resolution
+          rm -rf node_modules/.vite ~/.vite
           npm run test:ci:run
           echo "::endgroup::"
 

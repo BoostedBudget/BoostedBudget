@@ -11,7 +11,7 @@
     "pretest": "npm run generate:types",
     "test": "vitest",
     "test:ci": "npm run generate:types && tsc --noEmit && vitest run --coverage --reporter=verbose --reporter=json --outputFile=test-results.json",
-    "test:ci:run": "tsc --noEmit && vitest run --coverage --reporter=verbose --reporter=json --outputFile=test-results.json",
+    "test:ci:run": "tsc --noEmit && vitest run --no-cache --coverage --reporter=verbose --reporter=json --outputFile=test-results.json",
     "test:ui": "vitest --ui",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
