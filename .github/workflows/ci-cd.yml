@@ -17,8 +17,9 @@ env:
   NODE_VERSION: '20'
   REGISTRY: ghcr.io
   # Note: Image names must be lowercase for Docker registry
-  BACKEND_IMAGE_NAME: ${{ github.repository_owner }}/boostedbudget-backend
-  FRONTEND_IMAGE_NAME: ${{ github.repository_owner }}/boostedbudget-frontend
+  # Hardcode lowercase organization name to avoid case sensitivity issues
+  BACKEND_IMAGE_NAME: boostedbudget/boostedbudget-backend
+  FRONTEND_IMAGE_NAME: boostedbudget/boostedbudget-frontend
 
 jobs:
   # =============================================================================
@@ -26,7 +27,7 @@ jobs:
   # =============================================================================
   backend-test:
     name: Backend Tests
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, mac-mini]
     # Skip tests on main pushes (already tested in PR)
     if: github.event_name == 'pull_request'
 
@@ -38,17 +39,21 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: backend/go.sum
+          # Disabled for self-hosted runner - local caches persist naturally
+          # cache-dependency-path: backend/go.sum
 
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('backend/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
+      # Commented out - self-hosted runner has persistent local cache
+      # Local Go cache persists at: ~/Library/Caches/go-build & ~/go/pkg/mod
+      # No need for slow 900MB uploads to GitHub cache servers
+      # - name: Cache Go modules
+      #   uses: actions/cache@v4
+      #   with:
+      #     path: |
+      #       ~/.cache/go-build
+      #       ~/go/pkg/mod
+      #     key: ${{ runner.os }}-go-${{ hashFiles('backend/go.sum') }}
+      #     restore-keys: |
+      #       ${{ runner.os }}-go-
 
       - name: Run Go tests with coverage
         working-directory: ./backend
@@ -107,7 +112,7 @@ jobs:
   # =============================================================================
   frontend-test:
     name: Frontend Tests
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, mac-mini]
     # Skip tests on main pushes (already tested in PR)
     if: github.event_name == 'pull_request'
 
@@ -119,8 +124,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
+          # Disabled for self-hosted runner - local npm cache (~/.npm) persists naturally
+          # cache: 'npm'
+          # cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
         working-directory: ./frontend
@@ -161,7 +167,7 @@ jobs:
   e2e-test:
     name: E2E Tests
     needs: backend-test
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, mac-mini]
     # Skip tests on main pushes (already tested in PR)
     if: github.event_name == 'pull_request'
 
@@ -173,8 +179,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
+          # Disabled for self-hosted runner - local npm cache (~/.npm) persists naturally
+          # cache: 'npm'
+          # cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
         working-directory: ./frontend
@@ -413,6 +420,12 @@ jobs:
           echo "::notice::✅ Migration state is clean - all 5 migrations applied"
           echo "::endgroup::"
 
+      - name: Cleanup PostgreSQL container
+        if: always()
+        run: |
+          docker stop test-postgres 2>/dev/null || true
+          docker rm test-postgres 2>/dev/null || true
+
       - name: Migration test summary
         if: always()
         run: |
@@ -430,7 +443,7 @@ jobs:
   # =============================================================================
   pr-security-scan:
     name: Security Scan (Dependencies & Config)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, mac-mini]
     # Only run on PRs to catch vulnerabilities before merge
     if: github.event_name == 'pull_request'
     permissions:
@@ -542,7 +555,7 @@ jobs:
       always() &&
       github.event_name == 'push' &&
       github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, mac-mini]
     strategy:
       matrix:
         component: [backend, frontend]
@@ -558,12 +571,22 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Configure Docker to avoid keychain conflicts
+        run: |
+          # Self-hosted runner fix: Remove credsStore to avoid macOS Keychain conflicts
+          # This allows credentials to be stored in ~/.docker/config.json instead
+          mkdir -p ~/.docker
+          if [ -f ~/.docker/config.json ]; then
+            jq 'del(.credsStore)' ~/.docker/config.json > ~/.docker/config.json.tmp && mv ~/.docker/config.json.tmp ~/.docker/config.json
+          fi
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+          logout: false  # Self-hosted runner - credentials persist in config.json
 
       - name: Set image name for ${{ matrix.component }}
         id: image-name
@@ -605,7 +628,7 @@ jobs:
   image-security-scan:
     name: Security Scan (${{ matrix.component }} Image)
     needs: build-images
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, mac-mini]
     strategy:
       matrix:
         component: [backend, frontend]
@@ -623,9 +646,14 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          sparse-checkout: |
-            .trivyignore
+
+      - name: Configure Docker to avoid keychain conflicts
+        run: |
+          # Self-hosted runner fix: Remove credsStore to avoid macOS Keychain conflicts
+          mkdir -p ~/.docker
+          if [ -f ~/.docker/config.json ]; then
+            jq 'del(.credsStore)' ~/.docker/config.json > ~/.docker/config.json.tmp && mv ~/.docker/config.json.tmp ~/.docker/config.json
+          fi
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -633,6 +661,7 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+          logout: false  # Self-hosted runner - credentials persist in config.json
 
       - name: Calculate image reference for ${{ matrix.component }}
         id: image-ref
@@ -680,7 +709,7 @@ jobs:
   push-to-fly-registry:
     name: Push ${{ matrix.component }} to Fly.io Registry
     needs: [build-images, image-security-scan]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, mac-mini]
     strategy:
       matrix:
         component: [backend, frontend]
@@ -700,12 +729,21 @@ jobs:
       - name: Setup Fly.io CLI
         uses: superfly/flyctl-actions/setup-flyctl@master
 
+      - name: Configure Docker to avoid keychain conflicts
+        run: |
+          # Self-hosted runner fix: Remove credsStore to avoid macOS Keychain conflicts
+          mkdir -p ~/.docker
+          if [ -f ~/.docker/config.json ]; then
+            jq 'del(.credsStore)' ~/.docker/config.json > ~/.docker/config.json.tmp && mv ~/.docker/config.json.tmp ~/.docker/config.json
+          fi
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+          logout: false  # Self-hosted runner - credentials persist in config.json
 
       - name: Authenticate with Fly.io Docker Registry
         env:
@@ -721,9 +759,9 @@ jobs:
             IMAGE_NAME="${{ env.FRONTEND_IMAGE_NAME }}"
           fi
 
-          # Pull from GHCR
+          # Pull from GHCR (force amd64 platform for Fly.io deployment)
           GHCR_IMAGE="${{ env.REGISTRY }}/${IMAGE_NAME}:${{ github.sha }}"
-          docker pull ${GHCR_IMAGE}
+          docker pull --platform linux/amd64 ${GHCR_IMAGE}
 
           # Tag for Fly.io registry
           docker tag ${GHCR_IMAGE} registry.fly.io/${{ matrix.fly-app }}:${{ github.sha }}
@@ -747,7 +785,7 @@ jobs:
   deploy-production-apps:
     name: Deploy ${{ matrix.component }} to Production
     needs: [build-images, push-to-fly-registry]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, mac-mini]
     strategy:
       matrix:
         component: [backend, frontend]
@@ -826,7 +864,7 @@ jobs:
   smoke-tests:
     name: Production Smoke Tests
     needs: deploy-production-apps
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, mac-mini]
     if: |
       always() &&
       github.ref == 'refs/heads/main' &&

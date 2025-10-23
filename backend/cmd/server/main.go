@@ -147,6 +147,7 @@ func main() {
 		if plaidHandler != nil {
 			api.POST("/plaid/link-token", plaidHandler.CreateLinkToken)
 			api.POST("/plaid/exchange-token", plaidHandler.ExchangePublicToken)
+			api.GET("/accounts", plaidHandler.GetAccounts)
 		}
 
 		log.Println("✅ Authenticated routes enabled (Auth0 + Database)")
