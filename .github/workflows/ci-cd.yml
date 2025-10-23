@@ -741,9 +741,9 @@ jobs:
             IMAGE_NAME="${{ env.FRONTEND_IMAGE_NAME }}"
           fi
 
-          # Pull from GHCR
+          # Pull from GHCR (force amd64 platform for Fly.io deployment)
           GHCR_IMAGE="${{ env.REGISTRY }}/${IMAGE_NAME}:${{ github.sha }}"
-          docker pull ${GHCR_IMAGE}
+          docker pull --platform linux/amd64 ${GHCR_IMAGE}
 
           # Tag for Fly.io registry
           docker tag ${GHCR_IMAGE} registry.fly.io/${{ matrix.fly-app }}:${{ github.sha }}
