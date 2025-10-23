@@ -553,13 +553,22 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Configure Docker to avoid keychain conflicts
+        run: |
+          # Self-hosted runner fix: Remove credsStore to avoid macOS Keychain conflicts
+          # This allows credentials to be stored in ~/.docker/config.json instead
+          mkdir -p ~/.docker
+          if [ -f ~/.docker/config.json ]; then
+            jq 'del(.credsStore)' ~/.docker/config.json > ~/.docker/config.json.tmp && mv ~/.docker/config.json.tmp ~/.docker/config.json
+          fi
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-          logout: false  # Self-hosted runner - credentials persist in macOS Keychain
+          logout: false  # Self-hosted runner - credentials persist in config.json
 
       - name: Set image name for ${{ matrix.component }}
         id: image-name
@@ -620,13 +629,21 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Configure Docker to avoid keychain conflicts
+        run: |
+          # Self-hosted runner fix: Remove credsStore to avoid macOS Keychain conflicts
+          mkdir -p ~/.docker
+          if [ -f ~/.docker/config.json ]; then
+            jq 'del(.credsStore)' ~/.docker/config.json > ~/.docker/config.json.tmp && mv ~/.docker/config.json.tmp ~/.docker/config.json
+          fi
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-          logout: false  # Self-hosted runner - credentials persist in macOS Keychain
+          logout: false  # Self-hosted runner - credentials persist in config.json
 
       - name: Calculate image reference for ${{ matrix.component }}
         id: image-ref
@@ -694,13 +711,21 @@ jobs:
       - name: Setup Fly.io CLI
         uses: superfly/flyctl-actions/setup-flyctl@master
 
+      - name: Configure Docker to avoid keychain conflicts
+        run: |
+          # Self-hosted runner fix: Remove credsStore to avoid macOS Keychain conflicts
+          mkdir -p ~/.docker
+          if [ -f ~/.docker/config.json ]; then
+            jq 'del(.credsStore)' ~/.docker/config.json > ~/.docker/config.json.tmp && mv ~/.docker/config.json.tmp ~/.docker/config.json
+          fi
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-          logout: false  # Self-hosted runner - credentials persist in macOS Keychain
+          logout: false  # Self-hosted runner - credentials persist in config.json
 
       - name: Authenticate with Fly.io Docker Registry
         env:
