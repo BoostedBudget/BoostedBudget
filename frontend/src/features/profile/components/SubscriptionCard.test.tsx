@@ -1,9 +1,100 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { SubscriptionCard } from './SubscriptionCard'
 import type { User } from '../types'
+import * as useSubscriptionTiersHook from '../../subscription/hooks/useSubscriptionTiers'
+import type { SubscriptionTiersResponse } from '../../subscription/types'
+
+// Mock the hook
+vi.mock('../../subscription/hooks/useSubscriptionTiers')
+
+// Mock tier data matching backend response
+const mockTiersResponse: SubscriptionTiersResponse = {
+  tiers: {
+    free: {
+      display_name: 'Free',
+      description: 'Full budgeting with basic automation',
+      price_monthly: 0,
+      price_yearly: 0,
+      limits: {
+        accounts: 3,
+        rules: 1,
+        executions_per_day: 1,
+        min_execution_interval_minutes: 1440,
+      },
+      features: {
+        ads_enabled: true,
+        ai_insights: false,
+      },
+    },
+    premium_lite: {
+      display_name: 'Premium Lite',
+      description: 'Perfect for couples and light automation',
+      price_monthly: 4.99,
+      price_yearly: 49.99,
+      limits: {
+        accounts: 15,
+        rules: 5,
+        executions_per_day: 2,
+        min_execution_interval_minutes: 720,
+      },
+      features: {
+        ads_enabled: false,
+        ai_insights: false,
+      },
+    },
+    premium: {
+      display_name: 'Premium',
+      description: 'Power users with complex finances',
+      price_monthly: 9.99,
+      price_yearly: 99.99,
+      limits: {
+        accounts: 30,
+        rules: 15,
+        executions_per_day: 6,
+        min_execution_interval_minutes: 240,
+      },
+      features: {
+        ads_enabled: false,
+        ai_insights: false,
+      },
+    },
+    premium_plus: {
+      display_name: 'Premium+',
+      description: 'Unlimited everything with AI and API access',
+      price_monthly: 19.99,
+      price_yearly: 199.99,
+      limits: {
+        accounts: -1,
+        rules: -1,
+        executions_per_day: 144,
+        min_execution_interval_minutes: 10,
+      },
+      features: {
+        ads_enabled: false,
+        ai_insights: true,
+        api_access: true,
+        priority_support: true,
+      },
+    },
+  },
+  default_tier: 'free',
+}
 
 describe('SubscriptionCard', () => {
+  beforeEach(() => {
+    // Mock successful hook response by default
+    vi.mocked(useSubscriptionTiersHook.useSubscriptionTiers).mockReturnValue({
+      tiers: mockTiersResponse,
+      loading: false,
+      error: null,
+      refetch: vi.fn(),
+    })
+  })
+
+  afterEach(() => {
+    vi.clearAllMocks()
+  })
   describe('Free tier', () => {
     it('should display free tier name and features', () => {
       render(<SubscriptionCard tier="free" status="active" />)
@@ -194,6 +285,47 @@ describe('SubscriptionCard', () => {
       expect(() => {
         render(<SubscriptionCard tier={'' as unknown as User['subscription_tier']} status="active" />)
       }).not.toThrow()
+    })
+  })
+
+  describe('Hook states', () => {
+    it('should show loading state when hook is loading', () => {
+      // Mock loading state
+      vi.mocked(useSubscriptionTiersHook.useSubscriptionTiers).mockReturnValue({
+        tiers: null,
+        loading: true,
+        error: null,
+        refetch: vi.fn(),
+      })
+
+      render(<SubscriptionCard tier="free" status="active" />)
+
+      expect(screen.getByText(/loading subscription details/i)).toBeInTheDocument()
+    })
+
+    it('should show error state when hook has error', () => {
+      // Mock error state
+      const error = new Error('Failed to fetch tiers')
+      vi.mocked(useSubscriptionTiersHook.useSubscriptionTiers).mockReturnValue({
+        tiers: null,
+        loading: false,
+        error,
+        refetch: vi.fn(),
+      })
+
+      render(<SubscriptionCard tier="free" status="active" />)
+
+      expect(screen.getByText(/error loading subscription/i)).toBeInTheDocument()
+      expect(screen.getByText(/failed to fetch tiers/i)).toBeInTheDocument()
+    })
+
+    it('should render normally when hook succeeds', () => {
+      // Default mock is already successful state
+      render(<SubscriptionCard tier="free" status="active" />)
+
+      expect(screen.getByText(/free/i)).toBeInTheDocument()
+      expect(screen.queryByText(/loading/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(/error/i)).not.toBeInTheDocument()
     })
   })
 })
