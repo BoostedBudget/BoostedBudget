@@ -1,7 +1,8 @@
 // User profile types matching backend domain/user.go
 
 import type { SubscriptionTier } from '../../types/generated/subscriptionTiers'
-export { SUBSCRIPTION_TIERS } from '../../types/generated/subscriptionTiers'
+import { SUBSCRIPTION_TIERS } from '../../types/generated/subscriptionTiers'
+export { SUBSCRIPTION_TIERS }
 export type { SubscriptionTier } from '../../types/generated/subscriptionTiers'
 
 export interface User {
