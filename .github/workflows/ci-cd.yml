@@ -123,10 +123,17 @@ jobs:
           clean: true
           fetch-depth: 1
 
+      - name: Force fresh checkout of generated file
+        run: |
+          # Remove any cached/stale generated files
+          rm -f frontend/src/types/generated/subscriptionTiers.ts
+          # Force git to restore from repo
+          git checkout HEAD -- frontend/src/types/generated/subscriptionTiers.ts
+
       - name: Debug - Show subscription tiers file
         run: |
-          echo "Checking subscriptionTiers.ts file:"
-          head -60 frontend/src/types/generated/subscriptionTiers.ts | tail -15
+          echo "Checking subscriptionTiers.ts file (should have 3 accounts, 1 rule):"
+          grep -A 8 "free: {" frontend/src/types/generated/subscriptionTiers.ts
 
       - name: Set up Node
         uses: actions/setup-node@v4
