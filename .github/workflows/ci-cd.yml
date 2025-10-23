@@ -150,6 +150,8 @@ jobs:
         working-directory: ./frontend
         run: |
           echo "::group::Running Vitest with coverage"
+          # Clear Vite cache to ensure generated files are recognized
+          rm -rf node_modules/.vite
           npm run test:ci
           echo "::endgroup::"
 
