@@ -126,8 +126,7 @@ describe('Generation Timing Integration Tests', () => {
     // Check metadata is present
     expect(content).toContain('DO NOT EDIT - This file is auto-generated')
     expect(content).toContain('Generated from: config/subscription_tiers.yaml')
-    expect(content).toContain('Generated at:')
-    expect(content).toContain('git-ignored and regenerated on every build')
+    expect(content).toContain('force-committed for CI reliability')
   })
 
   it('should handle concurrent generation attempts gracefully', async () => {
