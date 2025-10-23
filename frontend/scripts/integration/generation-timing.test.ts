@@ -17,17 +17,18 @@ const YAML_PATH = join(PROJECT_ROOT, 'config/subscription_tiers.yaml')
 const OUTPUT_PATH = join(__dirname, '../../src/types/generated/subscriptionTiers.ts')
 
 describe('Generation Timing Integration Tests', () => {
-  beforeEach(async () => {
-    // Start with fresh generated file for test isolation
-    const config = readYamlConfig(YAML_PATH)
-    await generateOutputFile(config, OUTPUT_PATH)
+  beforeEach(() => {
+    // Clean up generated file before each test
+    if (existsSync(OUTPUT_PATH)) {
+      unlinkSync(OUTPUT_PATH)
+    }
   })
 
-  afterEach(async () => {
-    // Restore generated file for other tests that depend on it
-    // This prevents "Cannot find module" errors in SubscriptionCard.test.tsx and similar tests
-    const config = readYamlConfig(YAML_PATH)
-    await generateOutputFile(config, OUTPUT_PATH)
+  afterEach(() => {
+    // Clean up after tests
+    if (existsSync(OUTPUT_PATH)) {
+      unlinkSync(OUTPUT_PATH)
+    }
   })
 
   it('should generate file that is immediately readable', async () => {
