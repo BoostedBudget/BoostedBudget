@@ -86,6 +86,7 @@ func main() {
 		privacyRepo := repository.NewPrivacyRepository(db)
 		linkedItemRepo := repository.NewLinkedItemRepository(db)
 		accountRepo := repository.NewAccountRepository(db)
+		identityRepo := repository.NewUserIdentityRepository(db) // Maps Auth0 IDs to user UUIDs
 
 		// Create services
 		profileService := services.NewProfileService(profileRepo)
@@ -134,10 +135,11 @@ func main() {
 		profileHandler := handlers.NewProfileHandler(profileService)
 		privacyHandler := handlers.NewPrivacyHandler(privacyService, profileService)
 
-		// Create Auth0 middleware
+		// Create Auth0 middleware with identity resolution
 		auth0Middleware := middleware.Auth0Middleware(
 			"https://"+cfg.Auth0Domain+"/",
 			cfg.Auth0Audience,
+			identityRepo, // Resolves Auth0 IDs to internal user UUIDs
 		)
 
 		// API v1 routes
