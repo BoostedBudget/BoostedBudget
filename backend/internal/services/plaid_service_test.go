@@ -404,3 +404,46 @@ func TestCreateLinkToken_MissingRedirectURI(t *testing.T) {
 	assert.Contains(t, err.Error(), "PLAID_REDIRECT_URI", "Error should mention missing redirect URI")
 	assert.Nil(t, response, "Expected nil response on error")
 }
+
+// TestCreateLinkTokenMinimal tests link token creation with ONLY required parameters.
+// This replicates the exact pattern from plaid-go v23 official tests to debug issue #200.
+//
+// Pattern: clientName + language + countryCodes + user + AUTH product ONLY
+// NO webhook, NO redirect_uri, NO optional parameters
+//
+// Purpose: Isolate the 400 error by testing the absolute minimum implementation.
+// If this test passes, the issue is in one of our optional parameters.
+// If this test fails, the issue is credentials, account access, or userID format.
+func TestCreateLinkTokenMinimal(t *testing.T) {
+	// Skip if Plaid credentials not available in environment
+	if getTestEnv("PLAID_CLIENT_ID") == "" || getTestEnv("PLAID_SECRET") == "" {
+		t.Skip("Plaid credentials not configured - set PLAID_CLIENT_ID and PLAID_SECRET")
+	}
+
+	// Given: Minimal config - only credentials and environment (NO webhook, NO redirect_uri)
+	cfg := &config.Config{
+		PlaidClientID: getTestEnv("PLAID_CLIENT_ID"),
+		PlaidSecret:   getTestEnv("PLAID_SECRET"),
+		PlaidEnv:      "sandbox",
+		// Intentionally NO PlaidWebhookURL
+		// Intentionally NO PlaidRedirectURI
+	}
+
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err, "should create plaid service successfully")
+
+	// When: Creating link token with time-based user ID (exactly like official v23 tests)
+	ctx := context.Background()
+	userID := time.Now().String()
+
+	response, err := service.CreateLinkToken(ctx, userID)
+
+	// Then: Should create link token successfully with minimal implementation
+	// If this fails with 400, check: credentials validity, Plaid account product access, userID format
+	require.NoError(t, err, "should create link token with minimal params")
+	assert.NotEmpty(t, response.LinkToken, "link token should not be empty")
+	assert.NotEmpty(t, response.Expiration, "expiration should not be empty")
+	assert.NotEmpty(t, response.RequestID, "request ID should not be empty")
+
+	t.Logf("✅ Minimal link token created successfully: %s (RequestID: %s)", response.LinkToken, response.RequestID)
+}
