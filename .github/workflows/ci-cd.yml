@@ -539,7 +539,19 @@ jobs:
           # This allows credentials to be stored in ~/.docker/config.json instead
           mkdir -p ~/.docker
           if [ -f ~/.docker/config.json ]; then
-            jq 'del(.credsStore)' ~/.docker/config.json > ~/.docker/config.json.tmp && mv ~/.docker/config.json.tmp ~/.docker/config.json
+            # Remove credsStore entry if jq is available
+            if command -v jq &> /dev/null; then
+              if jq 'del(.credsStore)' ~/.docker/config.json > ~/.docker/config.json.tmp 2>/dev/null; then
+                mv ~/.docker/config.json.tmp ~/.docker/config.json
+              else
+                echo "⚠️  Warning: jq failed to parse config.json, skipping credsStore removal"
+                rm -f ~/.docker/config.json.tmp
+              fi
+            else
+              echo "⚠️  Warning: jq not found, skipping credsStore removal"
+            fi
+          else
+            echo "{}" > ~/.docker/config.json
           fi
 
       - name: Log in to GitHub Container Registry (with retry)
@@ -644,7 +656,19 @@ jobs:
           # Self-hosted runner fix: Remove credsStore to avoid macOS Keychain conflicts
           mkdir -p ~/.docker
           if [ -f ~/.docker/config.json ]; then
-            jq 'del(.credsStore)' ~/.docker/config.json > ~/.docker/config.json.tmp && mv ~/.docker/config.json.tmp ~/.docker/config.json
+            # Remove credsStore entry if jq is available
+            if command -v jq &> /dev/null; then
+              if jq 'del(.credsStore)' ~/.docker/config.json > ~/.docker/config.json.tmp 2>/dev/null; then
+                mv ~/.docker/config.json.tmp ~/.docker/config.json
+              else
+                echo "⚠️  Warning: jq failed to parse config.json, skipping credsStore removal"
+                rm -f ~/.docker/config.json.tmp
+              fi
+            else
+              echo "⚠️  Warning: jq not found, skipping credsStore removal"
+            fi
+          else
+            echo "{}" > ~/.docker/config.json
           fi
 
       - name: Log in to GitHub Container Registry
@@ -733,7 +757,19 @@ jobs:
           # Self-hosted runner fix: Remove credsStore to avoid macOS Keychain conflicts
           mkdir -p ~/.docker
           if [ -f ~/.docker/config.json ]; then
-            jq 'del(.credsStore)' ~/.docker/config.json > ~/.docker/config.json.tmp && mv ~/.docker/config.json.tmp ~/.docker/config.json
+            # Remove credsStore entry if jq is available
+            if command -v jq &> /dev/null; then
+              if jq 'del(.credsStore)' ~/.docker/config.json > ~/.docker/config.json.tmp 2>/dev/null; then
+                mv ~/.docker/config.json.tmp ~/.docker/config.json
+              else
+                echo "⚠️  Warning: jq failed to parse config.json, skipping credsStore removal"
+                rm -f ~/.docker/config.json.tmp
+              fi
+            else
+              echo "⚠️  Warning: jq not found, skipping credsStore removal"
+            fi
+          else
+            echo "{}" > ~/.docker/config.json
           fi
 
       - name: Log in to GitHub Container Registry
