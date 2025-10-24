@@ -537,43 +537,58 @@ jobs:
         run: |
           # Self-hosted runner fix: Remove credsStore to avoid macOS Keychain conflicts
           # This allows credentials to be stored in ~/.docker/config.json instead
-          mkdir -p ~/.docker
-          if [ -f ~/.docker/config.json ]; then
-            # Remove credsStore entry if jq is available
-            if command -v jq &> /dev/null; then
-              if jq 'del(.credsStore)' ~/.docker/config.json > ~/.docker/config.json.tmp 2>/dev/null; then
-                mv ~/.docker/config.json.tmp ~/.docker/config.json
+          #
+          # CRITICAL: Use flock to prevent race conditions when parallel matrix jobs
+          # (backend + frontend) both try to modify config.json simultaneously
+          (
+            flock -x 200  # Exclusive lock to prevent concurrent modifications
+
+            mkdir -p ~/.docker
+            if [ -f ~/.docker/config.json ]; then
+              # Remove credsStore entry if jq is available
+              if command -v jq &> /dev/null; then
+                # Use component-specific temp file to avoid collisions
+                TEMP_FILE=~/.docker/config.json.tmp.${{ matrix.component }}
+                if jq 'del(.credsStore)' ~/.docker/config.json > "$TEMP_FILE" 2>/dev/null; then
+                  mv "$TEMP_FILE" ~/.docker/config.json
+                else
+                  echo "⚠️  Warning: jq failed to parse config.json, skipping credsStore removal"
+                  rm -f "$TEMP_FILE"
+                fi
               else
-                echo "⚠️  Warning: jq failed to parse config.json, skipping credsStore removal"
-                rm -f ~/.docker/config.json.tmp
+                echo "⚠️  Warning: jq not found, skipping credsStore removal"
               fi
             else
-              echo "⚠️  Warning: jq not found, skipping credsStore removal"
+              echo "{}" > ~/.docker/config.json
             fi
-          else
-            echo "{}" > ~/.docker/config.json
-          fi
+          ) 200>~/.docker/config.json.lock
 
       - name: Log in to GitHub Container Registry (with retry)
         run: |
-          MAX_ATTEMPTS=3
-          RETRY_WAIT=10
+          # CRITICAL: Use flock to prevent race conditions when parallel matrix jobs
+          # both try to docker login simultaneously (can cause auth token conflicts)
+          (
+            flock -x 200  # Exclusive lock to serialize docker login
 
-          for i in $(seq 1 $MAX_ATTEMPTS); do
-            echo "Attempt $i of $MAX_ATTEMPTS..."
-            if echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin; then
-              echo "✅ Login successful"
-              exit 0
-            else
-              if [ $i -lt $MAX_ATTEMPTS ]; then
-                echo "⚠️ Login failed, retrying in ${RETRY_WAIT}s..."
-                sleep $RETRY_WAIT
+            MAX_ATTEMPTS=3
+            RETRY_WAIT=10
+
+            for i in $(seq 1 $MAX_ATTEMPTS); do
+              echo "[${{ matrix.component }}] Attempt $i of $MAX_ATTEMPTS..."
+              if echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin; then
+                echo "✅ [${{ matrix.component }}] Login successful"
+                exit 0
               else
-                echo "❌ Login failed after $MAX_ATTEMPTS attempts"
-                exit 1
+                if [ $i -lt $MAX_ATTEMPTS ]; then
+                  echo "⚠️ [${{ matrix.component }}] Login failed, retrying in ${RETRY_WAIT}s..."
+                  sleep $RETRY_WAIT
+                else
+                  echo "❌ [${{ matrix.component }}] Login failed after $MAX_ATTEMPTS attempts"
+                  exit 1
+                fi
               fi
-            fi
-          done
+            done
+          ) 200>~/.docker/login.lock
 
       - name: Set image name for ${{ matrix.component }}
         id: image-name
