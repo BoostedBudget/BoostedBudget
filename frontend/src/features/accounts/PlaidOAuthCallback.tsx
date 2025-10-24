@@ -38,7 +38,7 @@ export function PlaidOAuthCallback() {
   const { open, ready } = usePlaidLink({
     token: linkToken,
     receivedRedirectUri, // Critical: tells Plaid Link to continue OAuth flow
-    onSuccess: (publicToken, metadata) => {
+    onSuccess: (_publicToken, metadata) => {
       console.log('OAuth flow completed successfully:', metadata)
       // Public token exchange will be handled by the main PlaidLink component
       // For now, redirect back to accounts page
