@@ -158,6 +158,16 @@ func main() {
 		}
 
 		log.Println("✅ Authenticated routes enabled (Auth0 + Database)")
+	}
+
+	// Plaid webhook endpoint (public - no auth required)
+	// Plaid servers need to POST to this endpoint without authentication
+	// Note: In production, should verify webhook signatures for security
+	// See: https://plaid.com/docs/api/webhooks/#webhook-verification
+	if db != nil {
+		webhookHandler := handlers.NewPlaidWebhookHandler()
+		e.POST("/webhooks/plaid", webhookHandler.HandlePlaidWebhook)
+		log.Println("✅ Plaid webhook endpoint registered at POST /webhooks/plaid")
 	} else {
 		log.Println("⚠️  Authenticated routes disabled (requires DATABASE_URL, AUTH0_DOMAIN, AUTH0_AUDIENCE)")
 	}
