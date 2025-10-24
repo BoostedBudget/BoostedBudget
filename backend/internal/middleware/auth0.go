@@ -15,6 +15,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
 // JWKS represents the JSON Web Key Set from Auth0
@@ -179,30 +180,38 @@ func validateAudience(claims jwt.MapClaims, expectedAudience string) bool {
 }
 
 // Auth0Middleware creates an Echo middleware function that validates Auth0 JWT tokens using JWKS
+// and resolves Auth0 identities to internal user UUIDs
 //
 // Parameters:
 //   - issuer: The Auth0 issuer URL (e.g., "https://dev-evuy37ow1xcidsmw.us.auth0.com/")
 //   - audience: The API audience/identifier (e.g., "https://api.boostedbudget.com")
+//   - identityRepo: Repository for looking up user identities (maps Auth0 ID -> user UUID)
 //
 // The middleware:
 //   - Extracts the JWT token from the Authorization header
 //   - Validates the token signature using Auth0's public keys (RS256)
 //   - Validates expiration, issuer, and audience
-//   - Extracts the user_id (sub claim) and stores it in the context as "user_id"
+//   - Looks up the user identity from user_identities table
+//   - Stores the internal user UUID in context as "user_id" (NOT the Auth0 ID)
+//   - Stores the Auth0 user ID in context as "auth0_user_id" for reference
 //   - Extracts all claims and stores them in the context as "claims"
-//   - Returns 401 Unauthorized if validation fails
+//   - Updates last_used_at timestamp for the identity
+//   - Returns 401 Unauthorized if validation fails or identity not found
+//
+// BREAKING CHANGE: GetUserID() now returns the internal user UUID, not the Auth0 user ID
 //
 // Usage:
 //
 //	e := echo.New()
-//	e.Use(Auth0Middleware(os.Getenv("AUTH0_DOMAIN"), os.Getenv("AUTH0_AUDIENCE")))
+//	identityRepo := repository.NewUserIdentityRepository(db)
+//	e.Use(Auth0Middleware(os.Getenv("AUTH0_DOMAIN"), os.Getenv("AUTH0_AUDIENCE"), identityRepo))
 //
 //	e.GET("/protected", func(c echo.Context) error {
-//	    userID := c.Get("user_id").(string)
+//	    userID := c.Get("user_id").(string)  // Internal UUID, NOT Auth0 ID
 //	    claims := c.Get("claims").(jwt.MapClaims)
 //	    return c.JSON(200, map[string]interface{}{"user_id": userID})
 //	})
-func Auth0Middleware(issuer, audience string) echo.MiddlewareFunc {
+func Auth0Middleware(issuer, audience string, identityRepo repository.UserIdentityRepository) echo.MiddlewareFunc {
 	// Ensure issuer has https:// prefix and trailing slash
 	if !strings.HasPrefix(issuer, "http") {
 		issuer = "https://" + issuer
@@ -274,15 +283,37 @@ func Auth0Middleware(issuer, audience string) echo.MiddlewareFunc {
 				return echo.NewHTTPError(http.StatusUnauthorized, fmt.Sprintf("Invalid token audience: %v does not contain %s", claims["aud"], audience))
 			}
 
-			// Extract user_id from sub claim
-			sub, ok := claims["sub"].(string)
+			// Extract Auth0 user ID from sub claim
+			auth0UserID, ok := claims["sub"].(string)
 			if !ok {
 				return echo.NewHTTPError(http.StatusUnauthorized, "Missing user ID in token")
 			}
 
-			// Store user_id and claims in context for downstream handlers
-			c.Set("user_id", sub)
+			// Look up user identity to get internal user UUID
+			identity, err := identityRepo.GetByAuth0ID(c.Request().Context(), auth0UserID)
+			if err != nil {
+				if err == repository.ErrIdentityNotFound {
+					return echo.NewHTTPError(http.StatusUnauthorized, "User identity not found - please contact support")
+				}
+				c.Logger().Errorf("Failed to lookup user identity for %s: %v", auth0UserID, err)
+				return echo.NewHTTPError(http.StatusInternalServerError, "Failed to authenticate user")
+			}
+
+			// Store internal user UUID (NOT Auth0 ID) in context for downstream handlers
+			// BREAKING CHANGE: GetUserID() now returns UUID instead of Auth0 user ID
+			c.Set("user_id", identity.UserID)
+			c.Set("auth0_user_id", auth0UserID) // Store Auth0 ID for reference if needed
 			c.Set("claims", claims)
+
+			// Update last_used_at timestamp asynchronously (non-blocking)
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := identityRepo.UpdateLastUsed(ctx, auth0UserID); err != nil {
+					// Log error but don't fail the request
+					c.Logger().Warnf("Failed to update last_used_at for %s: %v", auth0UserID, err)
+				}
+			}()
 
 			// Continue to next handler
 			return next(c)
@@ -291,11 +322,13 @@ func Auth0Middleware(issuer, audience string) echo.MiddlewareFunc {
 }
 
 // Auth0MiddlewareWithJWKS is now an alias to Auth0Middleware since we implemented JWKS
-func Auth0MiddlewareWithJWKS(ctx context.Context, issuer, audience string) (echo.MiddlewareFunc, error) {
-	return Auth0Middleware(issuer, audience), nil
+// Deprecated: Use Auth0Middleware directly instead
+func Auth0MiddlewareWithJWKS(ctx context.Context, issuer, audience string, identityRepo repository.UserIdentityRepository) (echo.MiddlewareFunc, error) {
+	return Auth0Middleware(issuer, audience, identityRepo), nil
 }
 
 // GetUserID is a helper function to extract the user_id from the Echo context
+// BREAKING CHANGE: Now returns the internal user UUID instead of Auth0 user ID
 // Returns an error if the user_id is not found (user not authenticated)
 func GetUserID(c echo.Context) (string, error) {
 	userID := c.Get("user_id")
@@ -309,6 +342,24 @@ func GetUserID(c echo.Context) (string, error) {
 	}
 
 	return userIDStr, nil
+}
+
+// GetAuth0UserID is a helper function to extract the Auth0 user ID from the Echo context
+// Returns the original Auth0 user ID (e.g., "google-oauth2|123456")
+// Use this only when you specifically need the Auth0 ID (rare)
+// For most use cases, use GetUserID() which returns the internal user UUID
+func GetAuth0UserID(c echo.Context) (string, error) {
+	auth0UserID := c.Get("auth0_user_id")
+	if auth0UserID == nil {
+		return "", errors.New("auth0_user_id not found in context")
+	}
+
+	auth0UserIDStr, ok := auth0UserID.(string)
+	if !ok {
+		return "", errors.New("invalid auth0_user_id type in context")
+	}
+
+	return auth0UserIDStr, nil
 }
 
 // GetClaims is a helper function to extract JWT claims from the Echo context
