@@ -39,7 +39,7 @@ describe('PrivacySettings', () => {
       expect(screen.getByText(/loading/i)).toBeInTheDocument()
     })
 
-    it('should render privacy settings after loading', { timeout: 10000 }, async () => {
+    it('should render privacy settings after loading', async () => {
       vi.mocked(privacyApi.fetchPrivacySettings).mockResolvedValue(mockSettings)
 
       render(<PrivacySettings />)
@@ -323,7 +323,7 @@ describe('PrivacySettings', () => {
       })
     })
 
-    it('should only send changed fields in update request', { timeout: 10000 }, async () => {
+    it('should only send changed fields in update request', async () => {
       vi.mocked(privacyApi.fetchPrivacySettings).mockResolvedValue(mockSettings)
       vi.mocked(privacyApi.updatePrivacySettings).mockResolvedValue(mockSettings)
 
@@ -359,7 +359,7 @@ describe('PrivacySettings', () => {
   })
 
   describe('Callback notifications', () => {
-    it('should call onSettingsChange callback with updated settings after successful save', { timeout: 10000 }, async () => {
+    it('should call onSettingsChange callback with updated settings after successful save', async () => {
       const onSettingsChange = vi.fn()
       vi.mocked(privacyApi.fetchPrivacySettings).mockResolvedValue(mockSettings)
 
@@ -389,7 +389,7 @@ describe('PrivacySettings', () => {
       })
     })
 
-    it('should not call onSettingsChange if save fails', { timeout: 10000 }, async () => {
+    it('should not call onSettingsChange if save fails', async () => {
       const onSettingsChange = vi.fn()
       vi.mocked(privacyApi.fetchPrivacySettings).mockResolvedValue(mockSettings)
       vi.mocked(privacyApi.updatePrivacySettings).mockRejectedValue(new Error('Save failed'))

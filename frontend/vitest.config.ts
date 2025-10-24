@@ -9,6 +9,9 @@ export default mergeConfig(
       globals: true,
       environment: 'jsdom',
       setupFiles: './src/test/setup.ts',
+      // Increase timeout for slower CI environments (GitHub Actions can be slow)
+      // CI is 10x+ slower than local - some tests timing out even at 10000ms
+      testTimeout: 20000,
       // Test files in src directory and scripts directory, exclude E2E tests
       include: ['src/**/*.{test,spec}.{ts,tsx}', 'scripts/**/*.test.ts'],
       exclude: [
