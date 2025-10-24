@@ -23,9 +23,11 @@ var (
 // AccountService handles account linking and management
 type AccountService interface {
 	// LinkAccounts exchanges a Plaid public token for an access token and links bank accounts
+	// NOTE: After PR #197, this accepts internal user UUID, not Auth0 ID
 	LinkAccounts(ctx context.Context, userID, publicToken, institutionID, institutionName string) (*LinkAccountsResult, error)
 
 	// GetAccounts retrieves all linked bank accounts for a user with institution information
+	// NOTE: After PR #197, this accepts internal user UUID, not Auth0 ID
 	GetAccounts(ctx context.Context, userID string) ([]domain.Account, error)
 }
 
@@ -68,27 +70,26 @@ func NewAccountService(
 }
 
 // LinkAccounts exchanges a Plaid public token for an access token and links bank accounts
+// NOTE: After PR #197, this method receives internal user UUID, not Auth0 ID
 //
 // Flow:
-// 1. Lookup user by Auth0 ID to get internal UUID
-// 2. Fetch user to get subscription tier
-// 3. Check current account count against subscription limit (fail fast)
-// 4. Exchange public token for access token via Plaid API
-// 5. Fetch accounts from Plaid
-// 6. Verify combined count doesn't exceed limit
-// 7. Encrypt access token
-// 8. Store linked item and accounts atomically in database
+// 1. Fetch user by internal UUID to get subscription tier
+// 2. Check current account count against subscription limit (fail fast)
+// 3. Exchange public token for access token via Plaid API
+// 4. Fetch accounts from Plaid
+// 5. Verify combined count doesn't exceed limit
+// 6. Encrypt access token
+// 7. Store linked item and accounts atomically in database
 //
 // Returns ErrAccountLimitExceeded if user is at or over their account limit
 // Returns ErrInvalidPublicToken if Plaid rejects the token
 // Returns ErrPlaidAPIFailure if other Plaid API errors occur
 func (s *accountService) LinkAccounts(
 	ctx context.Context,
-	auth0UserID, publicToken, institutionID, institutionName string,
+	userID, publicToken, institutionID, institutionName string,
 ) (*LinkAccountsResult, error) {
-	// Step 1: Lookup user by Auth0 ID to get internal UUID
-	// The database stores user_id as UUID (users.id), not auth0_user_id
-	user, err := s.userRepo.GetUserByAuth0ID(ctx, auth0UserID)
+	// Step 1: Fetch user by internal UUID to get subscription tier
+	user, err := s.userRepo.GetUserByID(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch user: %w", err)
 	}
@@ -239,11 +240,10 @@ func convertPlaidAccount(plaidAccount plaid.AccountBase, linkedItemID, userID st
 }
 
 // GetAccounts retrieves all linked bank accounts for a user with institution information
-// Accepts Auth0 user ID and looks up the internal UUID before querying accounts
-func (s *accountService) GetAccounts(ctx context.Context, auth0UserID string) ([]domain.Account, error) {
-	// Lookup user by Auth0 ID to get internal UUID
-	// The accounts table stores user_id as UUID (FK to users.id), not auth0_user_id
-	user, err := s.userRepo.GetUserByAuth0ID(ctx, auth0UserID)
+// NOTE: After PR #197, this method receives internal user UUID, not Auth0 ID
+func (s *accountService) GetAccounts(ctx context.Context, userID string) ([]domain.Account, error) {
+	// Fetch user by internal UUID to verify user exists
+	user, err := s.userRepo.GetUserByID(ctx, userID)
 	if err != nil {
 		if err == repository.ErrUserNotFound {
 			// User authenticated via Auth0 but not yet in our database
