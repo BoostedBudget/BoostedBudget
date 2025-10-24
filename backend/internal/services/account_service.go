@@ -70,29 +70,31 @@ func NewAccountService(
 // LinkAccounts exchanges a Plaid public token for an access token and links bank accounts
 //
 // Flow:
-// 1. Fetch user to get subscription tier
-// 2. Check current account count against subscription limit (fail fast)
-// 3. Exchange public token for access token via Plaid API
-// 4. Fetch accounts from Plaid
-// 5. Verify combined count doesn't exceed limit
-// 6. Encrypt access token
-// 7. Store linked item and accounts atomically in database
+// 1. Lookup user by Auth0 ID to get internal UUID
+// 2. Fetch user to get subscription tier
+// 3. Check current account count against subscription limit (fail fast)
+// 4. Exchange public token for access token via Plaid API
+// 5. Fetch accounts from Plaid
+// 6. Verify combined count doesn't exceed limit
+// 7. Encrypt access token
+// 8. Store linked item and accounts atomically in database
 //
 // Returns ErrAccountLimitExceeded if user is at or over their account limit
 // Returns ErrInvalidPublicToken if Plaid rejects the token
 // Returns ErrPlaidAPIFailure if other Plaid API errors occur
 func (s *accountService) LinkAccounts(
 	ctx context.Context,
-	userID, publicToken, institutionID, institutionName string,
+	auth0UserID, publicToken, institutionID, institutionName string,
 ) (*LinkAccountsResult, error) {
-	// Step 1: Fetch user to get subscription tier
-	user, err := s.userRepo.GetUserByID(ctx, userID)
+	// Step 1: Lookup user by Auth0 ID to get internal UUID
+	// The database stores user_id as UUID (users.id), not auth0_user_id
+	user, err := s.userRepo.GetUserByAuth0ID(ctx, auth0UserID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch user: %w", err)
 	}
 
 	// Step 2: Check current account count against subscription limit (fail fast)
-	currentAccountCount, err := s.accountRepo.CountByUserID(ctx, userID)
+	currentAccountCount, err := s.accountRepo.CountByUserID(ctx, user.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to count user accounts: %w", err)
 	}
@@ -159,7 +161,7 @@ func (s *accountService) LinkAccounts(
 
 	// Step 7: Store linked item and accounts atomically in database
 	linkedItem := &domain.LinkedItem{
-		UserID:               userID,
+		UserID:               user.ID,
 		ItemID:               itemID,
 		AccessTokenEncrypted: encryptedToken,
 		InstitutionID:        institutionID,
@@ -174,7 +176,7 @@ func (s *accountService) LinkAccounts(
 	// Convert Plaid accounts to domain accounts
 	accounts := make([]domain.Account, len(plaidAccounts))
 	for i, plaidAccount := range plaidAccounts {
-		account := convertPlaidAccount(plaidAccount, linkedItem.ID, userID)
+		account := convertPlaidAccount(plaidAccount, linkedItem.ID, user.ID)
 		accounts[i] = account
 	}
 
@@ -237,9 +239,22 @@ func convertPlaidAccount(plaidAccount plaid.AccountBase, linkedItemID, userID st
 }
 
 // GetAccounts retrieves all linked bank accounts for a user with institution information
-func (s *accountService) GetAccounts(ctx context.Context, userID string) ([]domain.Account, error) {
-	// Delegate to repository which performs LEFT JOIN with linked_items
-	accounts, err := s.accountRepo.GetAccountsWithInstitution(ctx, userID)
+// Accepts Auth0 user ID and looks up the internal UUID before querying accounts
+func (s *accountService) GetAccounts(ctx context.Context, auth0UserID string) ([]domain.Account, error) {
+	// Lookup user by Auth0 ID to get internal UUID
+	// The accounts table stores user_id as UUID (FK to users.id), not auth0_user_id
+	user, err := s.userRepo.GetUserByAuth0ID(ctx, auth0UserID)
+	if err != nil {
+		if err == repository.ErrUserNotFound {
+			// User authenticated via Auth0 but not yet in our database
+			// Return empty list instead of error (user hasn't linked any accounts yet)
+			return []domain.Account{}, nil
+		}
+		return nil, fmt.Errorf("failed to get user: %w", err)
+	}
+
+	// Query accounts using internal UUID
+	accounts, err := s.accountRepo.GetAccountsWithInstitution(ctx, user.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get accounts: %w", err)
 	}
