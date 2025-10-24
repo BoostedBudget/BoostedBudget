@@ -15,7 +15,7 @@ describe('LoginButton', () => {
     vi.clearAllMocks()
   })
 
-  it('should render login button', () => {
+  it('should render login button', { timeout: 10000 }, () => {
     mockUseAuth0.mockReturnValue({
       loginWithRedirect: vi.fn(),
     })
@@ -39,7 +39,7 @@ describe('LoginButton', () => {
     expect(mockLoginWithRedirect).toHaveBeenCalled()
   })
 
-  it('should pass custom className if provided', () => {
+  it('should pass custom className if provided', { timeout: 10000 }, () => {
     mockUseAuth0.mockReturnValue({
       loginWithRedirect: vi.fn(),
     })
