@@ -4,6 +4,9 @@
 --   1. Multiple Auth0 identities per user (Google + Microsoft + Apple, etc.)
 --   2. Clean UUID-based user_id for external APIs (fixes Plaid pipe character bug)
 --   3. Provider-agnostic identity management
+--
+-- IMPORTANT: This migration has no automated rollback.
+-- Manual rollback procedure documented in 000008_ROLLBACK.md
 
 -- Create user_identities table
 CREATE TABLE user_identities (
