@@ -315,7 +315,7 @@ if (subscription?.tier === 'free' && hasAdConsent) return <AdBanner slot={adSlot
 
 ## Subscription Tiers
 
-**Single Source of Truth**: `config/subscription_tiers.yaml` (centralized, version-controlled)
+**Single Source of Truth**: `config/subscription_tiers.yaml` (backend)
 
 **Tiers**: Free (1 rule, 3 accounts) | Premium Lite (5 rules, 15 accounts) | Premium (15 rules, 30 accounts) | Premium+ (unlimited)
 
@@ -323,39 +323,41 @@ For detailed tier structure, limits, pricing, and features, see:
 - **Config file**: `config/subscription_tiers.yaml` (edit here to change tiers)
 - **Documentation**: `config/README.md` (explains centralized config approach)
 
-**Implementation**:
-- **Backend**: Loads YAML at runtime (`internal/config/tier_config.go`)
-- **Frontend**: Generated TypeScript types (`src/types/generated/subscriptionTiers.ts`) - **COMMITTED to git**
-- **Generation**: Manual via `npm run generate:types` (NOT automatic)
-- **Validation**: Test ensures generated file matches YAML (`frontend/scripts/validate-generated-types.test.ts`)
-- **CI Check**: Validation test fails if YAML and generated file are out of sync
-- **Database overrides**: Per-user custom limits (`000004_create_subscription_overrides_table.up.sql`)
+**Architecture**:
+- **Backend**: Loads YAML at runtime, serves via `GET /api/v1/subscription/tiers` (public endpoint)
+- **Frontend**: Fetches from API via `useSubscriptionTiers()` hook with 24hr caching
+- **Database overrides**: Per-user custom limits (`subscription_overrides` table)
 - **Service**: `internal/services/subscription_service.go`
 - **Domain models**: `internal/domain/subscription.go`
 
-**Usage**:
+**Frontend Usage**:
+```typescript
+import { useSubscriptionTiers } from '@/features/subscription/hooks/useSubscriptionTiers'
+
+function MyComponent() {
+  const { tiers, loading, error, refetch } = useSubscriptionTiers()
+
+  if (loading) return <LoadingSpinner />
+  if (error) return <ErrorMessage onRetry={refetch} />
+
+  const tierInfo = tiers.tiers['premium']
+  return <TierCard data={tierInfo} />
+}
+```
+
+**Backend Usage**:
 ```go
-// Backend: Check tier limits
+// Check tier limits
 result, err := subscriptionService.CheckLimit(ctx, user, domain.ResourceRules, currentRuleCount)
 if !result.Allowed {
     return errors.New("rule limit reached, upgrade required")
 }
 ```
 
-```typescript
-// Frontend: Display tier info (auto-generated from YAML)
-import { SUBSCRIPTION_TIERS } from './types/generated/subscriptionTiers'
-const tierInfo = SUBSCRIPTION_TIERS[user.subscription_tier]
-```
-
 **Editing tiers**:
 1. Edit `config/subscription_tiers.yaml`
-2. **Manually** run `npm run generate:types` in frontend directory
-3. **Commit both files** (YAML and generated TypeScript)
-4. Tests will fail in CI if files are out of sync
-5. Backend auto-loads YAML at runtime (singleton cache with validation)
-
-**Note**: Generated file is statically committed to git. Validation test ensures it stays in sync with YAML.
+2. Backend auto-reloads on next request (singleton cache)
+3. Frontend refreshes after 24hr cache expiry or manual refetch
 
 ## External Services
 

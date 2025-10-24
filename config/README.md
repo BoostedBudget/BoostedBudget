@@ -9,7 +9,7 @@ This directory contains configuration files shared across both frontend and back
 All configuration in this directory is:
 - Version controlled
 - Environment-independent (environment-specific values use env vars)
-- Type-safe (backend: Go structs, frontend: auto-generated TypeScript)
+- Type-safe (backend: Go structs, frontend: TypeScript via API response)
 - Validated at load time
 
 ## Files
@@ -19,23 +19,19 @@ All configuration in this directory is:
 **Primary configuration** for all subscription tier definitions, limits, pricing, and features.
 
 **Used by**:
-- **Backend** (`backend/internal/config/tier_config.go`): Loaded at runtime, validated, cached as singleton
-- **Frontend** (`frontend/scripts/generate-tier-types.ts`): Build-time TypeScript generation
+- **Backend** (`backend/internal/config/tier_config.go`): Loaded at runtime, validated, cached as singleton, served via API
+- **Frontend** (`frontend/src/features/subscription/hooks/useSubscriptionTiers.ts`): Fetched from `GET /api/v1/subscription/tiers` with 24hr caching
 
 **Editing**:
 ```bash
 # 1. Edit the YAML file
 vim config/subscription_tiers.yaml
 
-# 2. Manually regenerate frontend types
-cd frontend && npm run generate:types
-
-# 3. Commit BOTH files (YAML + generated TypeScript)
-git add config/subscription_tiers.yaml frontend/src/types/generated/subscriptionTiers.ts
-git commit -m "#N: Update subscription tiers"
-
-# 4. Backend auto-loads changes via hot-reload (or restart server)
+# 2. Backend auto-reloads on next API request (singleton cache)
 cd backend && go run cmd/server/main.go
+
+# 3. Frontend auto-refreshes after 24hr cache expiry
+# Or manually refresh: call refetch() from useSubscriptionTiers hook
 ```
 
 **Structure**:
@@ -75,8 +71,8 @@ trial:
 
 **Validation**:
 - Backend validates on load (see `tier_config.go:validate()`)
-- Frontend validates during type generation (see `generate-tier-types.ts:validateTierConfig()`)
-- Both reject invalid configs before deployment
+- Invalid configs prevent server startup
+- Frontend receives validated data via API
 
 ## Design Decisions
 
@@ -96,8 +92,8 @@ trial:
 
 **After** (single source):
 - `config/subscription_tiers.yaml` (single source of truth)
-- Backend loads directly
-- Frontend generates TypeScript at build time
+- Backend loads directly, serves via API
+- Frontend fetches from API with 24hr caching
 - Documentation references YAML
 
 **Benefits**:
@@ -106,35 +102,28 @@ trial:
 - No naming mismatches (had: `premium+` vs `premium_plus`)
 - Change once, update everywhere automatically
 
-### Why Static Type Generation (Frontend)?
+### Why API-Based (Frontend)?
 
 **Alternatives considered**:
-1. **Runtime API fetch** - Extra network call, slower, requires backend
-2. **Runtime YAML loading** - Bundle size increase, loss of type safety
-3. **Duplicate config** - Sync issues (we had bugs from this!)
-4. **Static type generation** ✅ - Type-safe, zero runtime cost, validated in CI
+1. **Build-time generation** - Sync issues, git conflicts, manual regeneration
+2. **Duplicate config** - Sync issues (we had bugs from this!)
+3. **Runtime API fetch** ✅ - Type-safe, always in sync, no generation complexity
 
 **Benefits**:
-- ✅ TypeScript compiler catches tier name typos at compile time
-- ✅ IDE autocomplete for tier names
-- ✅ Zero runtime performance cost (types compiled away)
-- ✅ Clean git history (both YAML and generated file committed together)
-- ✅ No build-time surprises (file always present and validated)
-- ✅ CI validation ensures YAML and types stay in sync
-
-**Implementation**:
-- Generated file is committed to git (not auto-generated)
-- Validation test compares generated file to YAML (`frontend/scripts/validate-generated-types.test.ts`)
-- CI fails if YAML changes without regenerating types
-- Manual regeneration via `npm run generate:types`
+- No generated files to maintain or commit
+- No git conflicts from generated code
+- No manual regeneration step
+- Backend YAML is truly single source of truth
+- 24hr client-side caching minimizes network overhead
+- Hook-based pattern (useSubscriptionTiers) follows React best practices
 
 ## Future Extensions
 
 When adding new config files:
 
 1. **Create**: `config/new_config.yaml`
-2. **Backend**: Load in `internal/config/` package
-3. **Frontend**: Add generator script if needed
+2. **Backend**: Load in `internal/config/` package, expose via API if needed
+3. **Frontend**: Create hook to fetch from API if needed
 4. **Document**: Add section to this README
 
 Example future configs:
@@ -144,21 +133,14 @@ Example future configs:
 
 ## Troubleshooting
 
-**Frontend: "Cannot find module '../../types/generated/subscriptionTiers'"**
-
-This error should NOT occur since the generated file is committed to git.
-
-**If you see this error**:
+**Frontend: "Failed to fetch subscription tiers"**
 ```bash
-# The file should be present after git clone
-# If missing, regenerate it:
-cd frontend
-npm run generate:types
-```
+# Ensure backend is running and serving API
+cd backend && go run cmd/server/main.go
 
-**Why this might happen**:
-- You're on an old branch that used the git-ignored approach (checkout latest main)
-- Someone edited YAML without regenerating types (run validation tests to catch this)
+# Check API endpoint
+curl http://localhost:8080/api/v1/subscription/tiers
+```
 
 **Backend: "config file not found"**
 ```bash
@@ -167,13 +149,12 @@ export SUBSCRIPTION_TIERS_CONFIG=/path/to/config/subscription_tiers.yaml
 cd backend && go run cmd/server/main.go
 ```
 
-**Generated types out of sync**
+**Frontend: Stale tier data after YAML update**
 ```bash
-# Frontend
-npm run generate:types
-
-# Check changes
-git diff frontend/src/types/generated/subscriptionTiers.ts
+# Option 1: Wait 24 hours for cache to expire
+# Option 2: Call refetch() from useSubscriptionTiers hook
+# Option 3: Clear localStorage in browser DevTools
+localStorage.removeItem('subscription_tiers_cache_timestamp')
 ```
 
 ## Testing
@@ -184,19 +165,22 @@ cd backend
 go test ./internal/config/... -v
 ```
 
-**Frontend validation** (ensures YAML and generated types match):
+**Frontend API integration**:
 ```bash
 cd frontend
-npm test -- validate-generated-types --run
+npm test -- src/features/subscription/api/subscriptionApi.test.ts --run
+npm test -- src/features/subscription/hooks/useSubscriptionTiers.test.tsx --run
 ```
 
-**Integration** (ensure frontend matches backend):
+**Integration** (ensure API returns valid data):
 ```bash
-# Check tier names match
-cd backend && go test ./internal/config/... -v | grep "premium_plus"
-cd frontend && npm run generate:types && grep "premium_plus" src/types/generated/subscriptionTiers.ts
+# Start backend
+cd backend && go run cmd/server/main.go
+
+# Test API endpoint
+curl http://localhost:8080/api/v1/subscription/tiers | jq '.tiers.premium_plus'
 ```
 
 ---
 
-Last updated: 2025-10-21 (Issue #158)
+Last updated: 2025-10-23 (Issue #188 - Migration to API-based architecture)
