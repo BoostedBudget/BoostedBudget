@@ -187,7 +187,8 @@ func TestCreateLinkToken_Success(t *testing.T) {
 		PlaidClientID:   clientID,
 		PlaidSecret:     secret,
 		PlaidEnv:        "sandbox",
-		PlaidWebhookURL: "https://api.boostedbudget.com/webhooks/plaid",
+		PlaidWebhookURL:  "https://api.boostedbudget.com/webhooks/plaid",
+		PlaidRedirectURI: "https://boostedbudget.com/oauth-callback",
 	}
 
 	service, err := NewPlaidService(cfg)
@@ -219,7 +220,8 @@ func TestCreateLinkToken_IncludesCorrectUserID(t *testing.T) {
 		PlaidClientID:   clientID,
 		PlaidSecret:     secret,
 		PlaidEnv:        "sandbox",
-		PlaidWebhookURL: "https://api.boostedbudget.com/webhooks/plaid",
+		PlaidWebhookURL:  "https://api.boostedbudget.com/webhooks/plaid",
+		PlaidRedirectURI: "https://boostedbudget.com/oauth-callback",
 	}
 
 	service, err := NewPlaidService(cfg)
@@ -250,7 +252,8 @@ func TestCreateLinkToken_IncludesRequiredProducts(t *testing.T) {
 		PlaidClientID:   clientID,
 		PlaidSecret:     secret,
 		PlaidEnv:        "sandbox",
-		PlaidWebhookURL: "https://api.boostedbudget.com/webhooks/plaid",
+		PlaidWebhookURL:  "https://api.boostedbudget.com/webhooks/plaid",
+		PlaidRedirectURI: "https://boostedbudget.com/oauth-callback",
 	}
 
 	service, err := NewPlaidService(cfg)
@@ -280,7 +283,8 @@ func TestCreateLinkToken_IncludesWebhookURL(t *testing.T) {
 		PlaidClientID:   clientID,
 		PlaidSecret:     secret,
 		PlaidEnv:        "sandbox",
-		PlaidWebhookURL: "https://api.boostedbudget.com/webhooks/plaid",
+		PlaidWebhookURL:  "https://api.boostedbudget.com/webhooks/plaid",
+		PlaidRedirectURI: "https://boostedbudget.com/oauth-callback",
 	}
 
 	service, err := NewPlaidService(cfg)
@@ -309,7 +313,8 @@ func TestCreateLinkToken_ReturnsExpirationTime(t *testing.T) {
 		PlaidClientID:   clientID,
 		PlaidSecret:     secret,
 		PlaidEnv:        "sandbox",
-		PlaidWebhookURL: "https://api.boostedbudget.com/webhooks/plaid",
+		PlaidWebhookURL:  "https://api.boostedbudget.com/webhooks/plaid",
+		PlaidRedirectURI: "https://boostedbudget.com/oauth-callback",
 	}
 
 	service, err := NewPlaidService(cfg)
@@ -336,7 +341,8 @@ func TestCreateLinkToken_PlaidAPIError(t *testing.T) {
 		PlaidClientID:   "invalid_client_id",
 		PlaidSecret:     "invalid_secret",
 		PlaidEnv:        "sandbox",
-		PlaidWebhookURL: "https://api.boostedbudget.com/webhooks/plaid",
+		PlaidWebhookURL:  "https://api.boostedbudget.com/webhooks/plaid",
+		PlaidRedirectURI: "https://boostedbudget.com/oauth-callback",
 	}
 
 	service, err := NewPlaidService(cfg)
@@ -348,5 +354,53 @@ func TestCreateLinkToken_PlaidAPIError(t *testing.T) {
 
 	// Then: Returns error from Plaid API
 	assert.Error(t, err, "Expected error with invalid credentials")
+	assert.Nil(t, response, "Expected nil response on error")
+}
+
+// TestCreateLinkToken_MissingWebhookURL tests error handling when webhook URL is not configured
+func TestCreateLinkToken_MissingWebhookURL(t *testing.T) {
+	// Given: PlaidService with missing webhook URL
+	cfg := &config.Config{
+		PlaidClientID:    "test_client_id",
+		PlaidSecret:      "test_secret",
+		PlaidEnv:         "sandbox",
+		PlaidWebhookURL:  "", // Missing!
+		PlaidRedirectURI: "https://boostedbudget.com/oauth-callback",
+	}
+
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err, "Service creation should succeed")
+
+	// When: Attempting to create link token
+	ctx := context.Background()
+	response, err := service.CreateLinkToken(ctx, "auth0|test-user-123")
+
+	// Then: Returns error about missing webhook URL
+	assert.Error(t, err, "Expected error when webhook URL is missing")
+	assert.Contains(t, err.Error(), "PLAID_WEBHOOK_URL", "Error should mention missing webhook URL")
+	assert.Nil(t, response, "Expected nil response on error")
+}
+
+// TestCreateLinkToken_MissingRedirectURI tests error handling when redirect URI is not configured
+func TestCreateLinkToken_MissingRedirectURI(t *testing.T) {
+	// Given: PlaidService with missing redirect URI
+	cfg := &config.Config{
+		PlaidClientID:    "test_client_id",
+		PlaidSecret:      "test_secret",
+		PlaidEnv:         "sandbox",
+		PlaidWebhookURL:  "https://api.boostedbudget.com/webhooks/plaid",
+		PlaidRedirectURI: "", // Missing!
+	}
+
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err, "Service creation should succeed")
+
+	// When: Attempting to create link token
+	ctx := context.Background()
+	response, err := service.CreateLinkToken(ctx, "auth0|test-user-123")
+
+	// Then: Returns error about missing redirect URI
+	assert.Error(t, err, "Expected error when redirect URI is missing")
+	assert.Contains(t, err.Error(), "PLAID_REDIRECT_URI", "Error should mention missing redirect URI")
 	assert.Nil(t, response, "Expected nil response on error")
 }
