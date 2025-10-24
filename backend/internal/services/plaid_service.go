@@ -101,13 +101,17 @@ func (s *plaidService) GetClient() *plaid.APIClient {
 //   - User identification (client_user_id from Auth0)
 //   - Required products: TRANSACTIONS, AUTH, BALANCE
 //   - Webhook URL for receiving async updates
+//   - Redirect URI for OAuth institution support
 //   - Country codes and language settings
 //
-// Returns an error if the Plaid API call fails or if webhook URL is not configured.
+// Returns an error if the Plaid API call fails or if required configuration is missing.
 func (s *plaidService) CreateLinkToken(ctx context.Context, userID string) (*domain.LinkTokenResponse, error) {
-	// Validate webhook URL is configured
+	// Validate required configuration
 	if s.config.PlaidWebhookURL == "" {
 		return nil, fmt.Errorf("plaid webhook URL not configured (PLAID_WEBHOOK_URL required)")
+	}
+	if s.config.PlaidRedirectURI == "" {
+		return nil, fmt.Errorf("plaid redirect URI not configured (PLAID_REDIRECT_URI required)")
 	}
 
 	// Build the link token request
@@ -127,6 +131,10 @@ func (s *plaidService) CreateLinkToken(ctx context.Context, userID string) (*dom
 
 	// Set webhook URL for async notifications
 	request.SetWebhook(s.config.PlaidWebhookURL)
+
+	// Set redirect URI for OAuth institution support (required for web apps)
+	// Without this, OAuth institutions won't appear in Plaid Link
+	request.SetRedirectUri(s.config.PlaidRedirectURI)
 
 	// Call Plaid API to create link token
 	resp, _, err := s.client.PlaidApi.LinkTokenCreate(ctx).LinkTokenCreateRequest(*request).Execute()

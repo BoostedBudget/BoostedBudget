@@ -29,10 +29,11 @@ type Config struct {
 	Auth0ClientSecret string
 
 	// Plaid
-	PlaidClientID   string
-	PlaidSecret     string
-	PlaidEnv        string
-	PlaidWebhookURL string
+	PlaidClientID    string
+	PlaidSecret      string
+	PlaidEnv         string
+	PlaidWebhookURL  string
+	PlaidRedirectURI string
 
 	// Stripe
 	StripeSecretKey      string
@@ -68,10 +69,11 @@ func Load() (*Config, error) {
 		Auth0ClientSecret: getEnv("AUTH0_CLIENT_SECRET", ""),
 
 		// Plaid
-		PlaidClientID:   getEnv("PLAID_CLIENT_ID", ""),
-		PlaidSecret:     getEnv("PLAID_SECRET", ""),
-		PlaidEnv:        getEnv("PLAID_ENV", "sandbox"),
-		PlaidWebhookURL: getEnv("PLAID_WEBHOOK_URL", ""),
+		PlaidClientID:    getEnv("PLAID_CLIENT_ID", ""),
+		PlaidSecret:      getEnv("PLAID_SECRET", ""),
+		PlaidEnv:         getEnv("PLAID_ENV", "sandbox"),
+		PlaidWebhookURL:  getEnv("PLAID_WEBHOOK_URL", ""),
+		PlaidRedirectURI: getEnv("PLAID_REDIRECT_URI", ""),
 
 		// Stripe
 		StripeSecretKey:      getEnv("STRIPE_SECRET_KEY", ""),
