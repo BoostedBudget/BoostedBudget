@@ -375,8 +375,8 @@ describe('ProfilePage', () => {
       const user = userEvent.setup()
       const emailInput = screen.getByLabelText(/email/i)
 
-      await user.clear(emailInput)
-      await user.type(emailInput, 'newemail@example.com')
+      await user.tripleClick(emailInput)
+      await user.keyboard('newemail@example.com')
 
       const saveButton = screen.getByRole('button', { name: /save/i })
       await user.click(saveButton)
