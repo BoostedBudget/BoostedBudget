@@ -689,6 +689,12 @@ jobs:
       (needs.image-security-scan.result == 'success' || needs.image-security-scan.result == 'skipped')
 
     steps:
+      - name: Cleanup Docker storage (prevent containerd corruption)
+        run: |
+          echo "Cleaning dangling images and build cache to prevent containerd issues..."
+          docker system prune -f --filter "until=24h"
+          echo "Docker cleanup complete"
+
       - name: Setup Fly.io CLI
         uses: superfly/flyctl-actions/setup-flyctl@master
 
@@ -722,9 +728,29 @@ jobs:
             IMAGE_NAME="${{ env.FRONTEND_IMAGE_NAME }}"
           fi
 
-          # Pull from GHCR (force amd64 platform for Fly.io deployment)
+          # Pull from GHCR with retry logic (handle containerd transient errors)
           GHCR_IMAGE="${{ env.REGISTRY }}/${IMAGE_NAME}:${{ github.sha }}"
-          docker pull --platform linux/amd64 ${GHCR_IMAGE}
+
+          echo "Pulling image: ${GHCR_IMAGE}"
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if docker pull --platform linux/amd64 ${GHCR_IMAGE}; then
+              echo "Successfully pulled image on attempt $((RETRY_COUNT + 1))"
+              break
+            else
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                echo "Pull failed, cleaning up and retrying ($RETRY_COUNT/$MAX_RETRIES)..."
+                docker system prune -f
+                sleep 5
+              else
+                echo "Failed to pull image after $MAX_RETRIES attempts"
+                exit 1
+              fi
+            fi
+          done
 
           # Tag for Fly.io registry
           docker tag ${GHCR_IMAGE} registry.fly.io/${{ matrix.fly-app }}:${{ github.sha }}
@@ -733,6 +759,14 @@ jobs:
           # Push to Fly.io
           docker push registry.fly.io/${{ matrix.fly-app }}:${{ github.sha }}
           docker push registry.fly.io/${{ matrix.fly-app }}:latest
+
+      - name: Cleanup images after push
+        if: always()
+        run: |
+          echo "Cleaning up pulled images to free space..."
+          # Remove the specific images we just pulled to prevent accumulation
+          docker image prune -f --filter "label=org.opencontainers.image.source=https://github.com/${{ github.repository }}"
+          echo "Cleanup complete"
 
       - name: Summary
         run: |
