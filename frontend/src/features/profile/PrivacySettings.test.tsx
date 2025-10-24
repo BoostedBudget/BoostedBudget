@@ -25,7 +25,7 @@ describe('PrivacySettings', () => {
   }
 
   beforeEach(() => {
-    vi.restoreAllMocks()
+    vi.clearAllMocks()
   })
 
   describe('Loading and data display', () => {
