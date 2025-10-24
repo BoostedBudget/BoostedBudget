@@ -543,13 +543,25 @@ jobs:
           fi
 
       - name: Log in to GitHub Container Registry (with retry)
-        uses: nick-fields/retry-action@v3
-        with:
-          timeout_minutes: 2
-          max_attempts: 3
-          retry_wait_seconds: 10
-          command: |
-            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+        run: |
+          MAX_ATTEMPTS=3
+          RETRY_WAIT=10
+
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            echo "Attempt $i of $MAX_ATTEMPTS..."
+            if echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin; then
+              echo "✅ Login successful"
+              exit 0
+            else
+              if [ $i -lt $MAX_ATTEMPTS ]; then
+                echo "⚠️ Login failed, retrying in ${RETRY_WAIT}s..."
+                sleep $RETRY_WAIT
+              else
+                echo "❌ Login failed after $MAX_ATTEMPTS attempts"
+                exit 1
+              fi
+            fi
+          done
 
       - name: Set image name for ${{ matrix.component }}
         id: image-name
@@ -563,13 +575,13 @@ jobs:
           echo "Building: ${{ env.REGISTRY }}/${IMAGE_NAME}:${{ github.sha }}"
 
       - name: Build and push ${{ matrix.component }} image (with retry)
-        uses: nick-fields/retry-action@v3
-        with:
-          timeout_minutes: 20
-          max_attempts: 3
-          retry_wait_seconds: 30
-          command: |
-            docker buildx build \
+        run: |
+          MAX_ATTEMPTS=3
+          RETRY_WAIT=30
+
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            echo "Attempt $i of $MAX_ATTEMPTS..."
+            if docker buildx build \
               --file ./${{ matrix.component }}/Dockerfile \
               --push \
               --tag ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ github.sha }} \
@@ -580,7 +592,19 @@ jobs:
               --build-arg VERSION=${{ github.sha }} \
               --build-arg BUILD_DATE=${{ github.event.head_commit.timestamp }} \
               --provenance=false \
-              .
+              .; then
+              echo "✅ Build and push successful"
+              exit 0
+            else
+              if [ $i -lt $MAX_ATTEMPTS ]; then
+                echo "⚠️ Build/push failed, retrying in ${RETRY_WAIT}s..."
+                sleep $RETRY_WAIT
+              else
+                echo "❌ Build/push failed after $MAX_ATTEMPTS attempts"
+                exit 1
+              fi
+            fi
+          done
 
       - name: Image build summary
         run: |
