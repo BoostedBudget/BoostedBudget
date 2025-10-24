@@ -353,13 +353,21 @@ func TestAccountService_GetAccounts(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	userID := uuid.New().String()
+	auth0UserID := "auth0|123456"
+	internalUUID := uuid.New().String()
+
+	// Mock user lookup
+	user := &domain.User{
+		ID:          internalUUID,
+		Auth0UserID: auth0UserID,
+	}
+	mockUserRepo.On("GetUserByAuth0ID", ctx, auth0UserID).Return(user, nil)
 
 	// Mock accounts with institution names
 	expectedAccounts := []domain.Account{
 		{
 			ID:              uuid.New().String(),
-			UserID:          userID,
+			UserID:          internalUUID,
 			PlaidAccountID:  "plaid-acc-1",
 			Name:            "Chase Checking",
 			Type:            "depository",
@@ -368,7 +376,7 @@ func TestAccountService_GetAccounts(t *testing.T) {
 		},
 		{
 			ID:              uuid.New().String(),
-			UserID:          userID,
+			UserID:          internalUUID,
 			PlaidAccountID:  "plaid-acc-2",
 			Name:            "Wells Fargo Savings",
 			Type:            "depository",
@@ -377,16 +385,17 @@ func TestAccountService_GetAccounts(t *testing.T) {
 		},
 	}
 
-	mockAccountRepo.On("GetAccountsWithInstitution", ctx, userID).Return(expectedAccounts, nil)
+	mockAccountRepo.On("GetAccountsWithInstitution", ctx, internalUUID).Return(expectedAccounts, nil)
 
-	// Execute
-	accounts, err := service.GetAccounts(ctx, userID)
+	// Execute - pass Auth0 ID
+	accounts, err := service.GetAccounts(ctx, auth0UserID)
 
 	// Assert
 	require.NoError(t, err)
 	assert.Len(t, accounts, 2)
 	assert.Equal(t, "Chase", accounts[0].InstitutionName)
 	assert.Equal(t, "Wells Fargo", accounts[1].InstitutionName)
+	mockUserRepo.AssertExpectations(t)
 	mockAccountRepo.AssertExpectations(t)
 }
 
@@ -411,17 +420,93 @@ func TestAccountService_GetAccounts_Empty(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	userID := uuid.New().String()
+	auth0UserID := "auth0|empty-user"
+	internalUUID := uuid.New().String()
+
+	// Mock user lookup
+	user := &domain.User{
+		ID:          internalUUID,
+		Auth0UserID: auth0UserID,
+	}
+	mockUserRepo.On("GetUserByAuth0ID", ctx, auth0UserID).Return(user, nil)
 
 	// Mock empty result
-	mockAccountRepo.On("GetAccountsWithInstitution", ctx, userID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetAccountsWithInstitution", ctx, internalUUID).Return([]domain.Account{}, nil)
 
-	// Execute
-	accounts, err := service.GetAccounts(ctx, userID)
+	// Execute - pass Auth0 ID
+	accounts, err := service.GetAccounts(ctx, auth0UserID)
 
 	// Assert
 	require.NoError(t, err)
 	assert.Empty(t, accounts)
 	assert.NotNil(t, accounts)
+	mockUserRepo.AssertExpectations(t)
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestAccountService_GetAccounts_WithAuth0UserID tests the production scenario
+// where GetAccounts is called with Auth0 user ID instead of internal UUID
+// This is the RED phase test demonstrating the bug
+func TestAccountService_GetAccounts_WithAuth0UserID(t *testing.T) {
+	// Setup mocks
+	mockAccountRepo := new(MockAccountRepository)
+	mockPlaidService := new(MockPlaidService)
+	mockEncryptionService := new(MockEncryptionService)
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockUserRepo := new(MockUserRepository)
+
+	// Create service
+	service := NewAccountService(
+		mockPlaidService,
+		nil,
+		mockEncryptionService,
+		mockLinkedItemRepo,
+		mockAccountRepo,
+		mockUserRepo,
+		nil,
+	)
+
+	ctx := context.Background()
+
+	// Production scenario: Handler passes Auth0 ID from JWT
+	auth0UserID := "auth0|507f1f77bcf86cd799439011"
+	internalUUID := uuid.New().String()
+
+	// Mock user lookup by Auth0 ID
+	user := &domain.User{
+		ID:            internalUUID,
+		Auth0UserID:   auth0UserID,
+		Email:         "user@example.com",
+		PrimaryRegion: "us-east-1",
+	}
+	mockUserRepo.On("GetUserByAuth0ID", ctx, auth0UserID).Return(user, nil)
+
+	// Mock accounts with institution names (using internal UUID)
+	expectedAccounts := []domain.Account{
+		{
+			ID:              uuid.New().String(),
+			UserID:          internalUUID, // Database stores internal UUID, not Auth0 ID
+			PlaidAccountID:  "plaid-acc-1",
+			Name:            "Chase Checking",
+			Type:            "depository",
+			CurrencyCode:    "USD",
+			InstitutionName: "Chase",
+		},
+	}
+
+	// The repository should be called with internal UUID, not Auth0 ID
+	mockAccountRepo.On("GetAccountsWithInstitution", ctx, internalUUID).Return(expectedAccounts, nil)
+
+	// Execute: Pass Auth0 ID (as the handler does in production)
+	accounts, err := service.GetAccounts(ctx, auth0UserID)
+
+	// Assert
+	require.NoError(t, err, "GetAccounts should handle Auth0 user ID correctly")
+	assert.Len(t, accounts, 1)
+	assert.Equal(t, "Chase", accounts[0].InstitutionName)
+	assert.Equal(t, internalUUID, accounts[0].UserID, "Account should have internal UUID, not Auth0 ID")
+
+	// Verify mocks were called correctly
+	mockUserRepo.AssertExpectations(t)
 	mockAccountRepo.AssertExpectations(t)
 }
