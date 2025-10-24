@@ -542,13 +542,14 @@ jobs:
             jq 'del(.credsStore)' ~/.docker/config.json > ~/.docker/config.json.tmp && mv ~/.docker/config.json.tmp ~/.docker/config.json
           fi
 
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+      - name: Log in to GitHub Container Registry (with retry)
+        uses: nick-fields/retry-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-          logout: false  # Self-hosted runner - credentials persist in config.json
+          timeout_minutes: 2
+          max_attempts: 3
+          retry_wait_seconds: 10
+          command: |
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
 
       - name: Set image name for ${{ matrix.component }}
         id: image-name
@@ -561,21 +562,25 @@ jobs:
           echo "image-name=${IMAGE_NAME}" >> $GITHUB_OUTPUT
           echo "Building: ${{ env.REGISTRY }}/${IMAGE_NAME}:${{ github.sha }}"
 
-      - name: Build and push ${{ matrix.component }} image
-        uses: docker/build-push-action@v5
+      - name: Build and push ${{ matrix.component }} image (with retry)
+        uses: nick-fields/retry-action@v3
         with:
-          context: .
-          file: ./${{ matrix.component }}/Dockerfile
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ github.sha }}
-            ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:latest
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache,mode=max
-          platforms: linux/amd64
-          build-args: |
-            VERSION=${{ github.sha }}
-            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+          timeout_minutes: 20
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: |
+            docker buildx build \
+              --file ./${{ matrix.component }}/Dockerfile \
+              --push \
+              --tag ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ github.sha }} \
+              --tag ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:latest \
+              --cache-from type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache \
+              --cache-to type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache,mode=max \
+              --platform linux/amd64 \
+              --build-arg VERSION=${{ github.sha }} \
+              --build-arg BUILD_DATE=${{ github.event.head_commit.timestamp }} \
+              --provenance=false \
+              .
 
       - name: Image build summary
         run: |
