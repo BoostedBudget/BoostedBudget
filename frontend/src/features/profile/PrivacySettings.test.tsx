@@ -30,7 +30,7 @@ describe('PrivacySettings', () => {
 
   describe('Loading and data display', () => {
     it('should show loading state initially', () => {
-      vi.mocked(privacyApi.fetchPrivacySettings).mockImplementation(
+      vi.mocked(privacyApi.fetchPrivacySettings).mockImplementationOnce(
         () => new Promise(() => {}) // Never resolves
       )
 
@@ -298,7 +298,7 @@ describe('PrivacySettings', () => {
 
     it('should disable save button when submitting', async () => {
       vi.mocked(privacyApi.fetchPrivacySettings).mockResolvedValue(mockSettings)
-      vi.mocked(privacyApi.updatePrivacySettings).mockImplementation(
+      vi.mocked(privacyApi.updatePrivacySettings).mockImplementationOnce(
         () => new Promise(() => {}) // Never resolves
       )
 

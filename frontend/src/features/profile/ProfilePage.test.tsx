@@ -123,7 +123,7 @@ describe('ProfilePage', () => {
   }
 
   beforeEach(() => {
-    vi.restoreAllMocks()
+    vi.clearAllMocks()
     mockUseAuth0.mockReturnValue({
       isAuthenticated: true,
       user: { email: 'test@example.com' },
@@ -140,7 +140,7 @@ describe('ProfilePage', () => {
 
   describe('Loading and data display', () => {
     it('should show loading state initially', () => {
-      vi.mocked(profileApi.fetchProfile).mockImplementation(
+      vi.mocked(profileApi.fetchProfile).mockImplementationOnce(
         () => new Promise(() => {}) // Never resolves
       )
 
@@ -412,7 +412,7 @@ describe('ProfilePage', () => {
 
     it('should disable save button while submitting', async () => {
       vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
-      vi.mocked(profileApi.updateProfile).mockImplementation(
+      vi.mocked(profileApi.updateProfile).mockImplementationOnce(
         () => new Promise(() => {}) // Never resolves
       )
 

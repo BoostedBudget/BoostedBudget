@@ -11,7 +11,10 @@ interface SubscriptionCardProps {
 /**
  * Format price for display
  */
-function formatPrice(price: number): string {
+function formatPrice(price: number | undefined): string {
+  if (price === undefined || price === null) {
+    return '$0'
+  }
   return price === 0 ? '$0' : `$${price.toFixed(2)}`
 }
 

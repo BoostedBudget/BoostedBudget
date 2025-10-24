@@ -25,7 +25,7 @@ describe('ProfileForm', () => {
   }
 
   beforeEach(() => {
-    vi.restoreAllMocks()
+    vi.clearAllMocks()
   })
 
   describe('Form rendering', () => {
@@ -197,7 +197,7 @@ describe('ProfileForm', () => {
     })
 
     it('should disable form while submitting', async () => {
-      vi.mocked(profileApi.updateProfile).mockImplementation(
+      vi.mocked(profileApi.updateProfile).mockImplementationOnce(
         () => new Promise(() => {}) // Never resolves
       )
 
