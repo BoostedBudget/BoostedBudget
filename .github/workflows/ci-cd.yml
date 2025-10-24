@@ -538,57 +538,92 @@ jobs:
           # Self-hosted runner fix: Remove credsStore to avoid macOS Keychain conflicts
           # This allows credentials to be stored in ~/.docker/config.json instead
           #
-          # CRITICAL: Use flock to prevent race conditions when parallel matrix jobs
-          # (backend + frontend) both try to modify config.json simultaneously
-          (
-            flock -x 200  # Exclusive lock to prevent concurrent modifications
+          # CRITICAL: Use directory-based locking to prevent race conditions when parallel
+          # matrix jobs (backend + frontend) both try to modify config.json simultaneously
+          # Using mkdir (atomic operation) instead of flock (not available on macOS by default)
 
-            mkdir -p ~/.docker
-            if [ -f ~/.docker/config.json ]; then
-              # Remove credsStore entry if jq is available
-              if command -v jq &> /dev/null; then
-                # Use component-specific temp file to avoid collisions
-                TEMP_FILE=~/.docker/config.json.tmp.${{ matrix.component }}
-                if jq 'del(.credsStore)' ~/.docker/config.json > "$TEMP_FILE" 2>/dev/null; then
-                  mv "$TEMP_FILE" ~/.docker/config.json
-                else
-                  echo "⚠️  Warning: jq failed to parse config.json, skipping credsStore removal"
-                  rm -f "$TEMP_FILE"
-                fi
+          LOCKDIR=~/.docker/config.lock
+          TIMEOUT=30
+          ELAPSED=0
+
+          # Acquire lock (mkdir is atomic)
+          while ! mkdir "$LOCKDIR" 2>/dev/null; do
+            echo "[${{ matrix.component }}] Waiting for config.json lock..."
+            sleep 1
+            ELAPSED=$((ELAPSED + 1))
+            if [ $ELAPSED -ge $TIMEOUT ]; then
+              echo "❌ Timeout waiting for lock"
+              exit 1
+            fi
+          done
+
+          # Ensure lock is released on exit (success or failure)
+          trap "rmdir '$LOCKDIR' 2>/dev/null || true" EXIT
+
+          echo "[${{ matrix.component }}] Lock acquired, configuring Docker..."
+
+          mkdir -p ~/.docker
+          if [ -f ~/.docker/config.json ]; then
+            # Remove credsStore entry if jq is available
+            if command -v jq &> /dev/null; then
+              # Use component-specific temp file to avoid collisions
+              TEMP_FILE=~/.docker/config.json.tmp.${{ matrix.component }}
+              if jq 'del(.credsStore)' ~/.docker/config.json > "$TEMP_FILE" 2>/dev/null; then
+                mv "$TEMP_FILE" ~/.docker/config.json
               else
-                echo "⚠️  Warning: jq not found, skipping credsStore removal"
+                echo "⚠️  Warning: jq failed to parse config.json, skipping credsStore removal"
+                rm -f "$TEMP_FILE"
               fi
             else
-              echo "{}" > ~/.docker/config.json
+              echo "⚠️  Warning: jq not found, skipping credsStore removal"
             fi
-          ) 200>~/.docker/config.json.lock
+          else
+            echo "{}" > ~/.docker/config.json
+          fi
+
+          echo "[${{ matrix.component }}] Docker config complete"
 
       - name: Log in to GitHub Container Registry (with retry)
         run: |
-          # CRITICAL: Use flock to prevent race conditions when parallel matrix jobs
-          # both try to docker login simultaneously (can cause auth token conflicts)
-          (
-            flock -x 200  # Exclusive lock to serialize docker login
+          # CRITICAL: Use directory-based locking to prevent race conditions when parallel
+          # matrix jobs both try to docker login simultaneously (can cause auth token conflicts)
 
-            MAX_ATTEMPTS=3
-            RETRY_WAIT=10
+          LOCKDIR=~/.docker/login.lock
+          TIMEOUT=30
+          ELAPSED=0
 
-            for i in $(seq 1 $MAX_ATTEMPTS); do
-              echo "[${{ matrix.component }}] Attempt $i of $MAX_ATTEMPTS..."
-              if echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin; then
-                echo "✅ [${{ matrix.component }}] Login successful"
-                exit 0
+          # Acquire lock (mkdir is atomic)
+          while ! mkdir "$LOCKDIR" 2>/dev/null; do
+            echo "[${{ matrix.component }}] Waiting for docker login lock..."
+            sleep 1
+            ELAPSED=$((ELAPSED + 1))
+            if [ $ELAPSED -ge $TIMEOUT ]; then
+              echo "❌ Timeout waiting for lock"
+              exit 1
+            fi
+          done
+
+          # Ensure lock is released on exit
+          trap "rmdir '$LOCKDIR' 2>/dev/null || true" EXIT
+
+          MAX_ATTEMPTS=3
+          RETRY_WAIT=10
+
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            echo "[${{ matrix.component }}] Login attempt $i of $MAX_ATTEMPTS..."
+            if echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin; then
+              echo "✅ [${{ matrix.component }}] Login successful"
+              exit 0
+            else
+              if [ $i -lt $MAX_ATTEMPTS ]; then
+                echo "⚠️ [${{ matrix.component }}] Login failed, retrying in ${RETRY_WAIT}s..."
+                sleep $RETRY_WAIT
               else
-                if [ $i -lt $MAX_ATTEMPTS ]; then
-                  echo "⚠️ [${{ matrix.component }}] Login failed, retrying in ${RETRY_WAIT}s..."
-                  sleep $RETRY_WAIT
-                else
-                  echo "❌ [${{ matrix.component }}] Login failed after $MAX_ATTEMPTS attempts"
-                  exit 1
-                fi
+                echo "❌ [${{ matrix.component }}] Login failed after $MAX_ATTEMPTS attempts"
+                exit 1
               fi
-            done
-          ) 200>~/.docker/login.lock
+            fi
+          done
 
       - name: Set image name for ${{ matrix.component }}
         id: image-name
@@ -669,41 +704,63 @@ jobs:
       - name: Configure Docker to avoid keychain conflicts
         run: |
           # Self-hosted runner fix: Remove credsStore to avoid macOS Keychain conflicts
-          #
-          # CRITICAL: Use flock to prevent race conditions when parallel matrix jobs
-          # (backend + frontend) both try to modify config.json simultaneously
-          (
-            flock -x 200  # Exclusive lock to prevent concurrent modifications
+          # Using mkdir-based locking (atomic, works on all Unix systems)
 
-            mkdir -p ~/.docker
-            if [ -f ~/.docker/config.json ]; then
-              # Remove credsStore entry if jq is available
-              if command -v jq &> /dev/null; then
-                # Use component-specific temp file to avoid collisions
-                TEMP_FILE=~/.docker/config.json.tmp.${{ matrix.component }}
-                if jq 'del(.credsStore)' ~/.docker/config.json > "$TEMP_FILE" 2>/dev/null; then
-                  mv "$TEMP_FILE" ~/.docker/config.json
-                else
-                  echo "⚠️  Warning: jq failed to parse config.json, skipping credsStore removal"
-                  rm -f "$TEMP_FILE"
-                fi
+          LOCKDIR=~/.docker/config.lock
+          TIMEOUT=30
+          ELAPSED=0
+
+          while ! mkdir "$LOCKDIR" 2>/dev/null; do
+            echo "[${{ matrix.component }}] Waiting for config.json lock..."
+            sleep 1
+            ELAPSED=$((ELAPSED + 1))
+            if [ $ELAPSED -ge $TIMEOUT ]; then
+              echo "❌ Timeout waiting for lock"
+              exit 1
+            fi
+          done
+
+          trap "rmdir '$LOCKDIR' 2>/dev/null || true" EXIT
+
+          mkdir -p ~/.docker
+          if [ -f ~/.docker/config.json ]; then
+            if command -v jq &> /dev/null; then
+              TEMP_FILE=~/.docker/config.json.tmp.${{ matrix.component }}
+              if jq 'del(.credsStore)' ~/.docker/config.json > "$TEMP_FILE" 2>/dev/null; then
+                mv "$TEMP_FILE" ~/.docker/config.json
               else
-                echo "⚠️  Warning: jq not found, skipping credsStore removal"
+                echo "⚠️  Warning: jq failed to parse config.json"
+                rm -f "$TEMP_FILE"
               fi
             else
-              echo "{}" > ~/.docker/config.json
+              echo "⚠️  Warning: jq not found"
             fi
-          ) 200>~/.docker/config.json.lock
+          else
+            echo "{}" > ~/.docker/config.json
+          fi
 
       - name: Log in to GitHub Container Registry
         run: |
-          # CRITICAL: Use flock to serialize docker login across parallel jobs
-          # docker/login-action doesn't provide built-in locking for parallel usage
-          (
-            flock -x 200
-            echo "[${{ matrix.component }}] Logging in to GHCR..."
-            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
-          ) 200>~/.docker/login.lock
+          # Directory-based locking to serialize docker login
+
+          LOCKDIR=~/.docker/login.lock
+          TIMEOUT=30
+          ELAPSED=0
+
+          while ! mkdir "$LOCKDIR" 2>/dev/null; do
+            echo "[${{ matrix.component }}] Waiting for docker login lock..."
+            sleep 1
+            ELAPSED=$((ELAPSED + 1))
+            if [ $ELAPSED -ge $TIMEOUT ]; then
+              echo "❌ Timeout waiting for lock"
+              exit 1
+            fi
+          done
+
+          trap "rmdir '$LOCKDIR' 2>/dev/null || true" EXIT
+
+          echo "[${{ matrix.component }}] Logging in to GHCR..."
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
 
       - name: Calculate image reference for ${{ matrix.component }}
         id: image-ref
@@ -781,52 +838,89 @@ jobs:
       - name: Configure Docker to avoid keychain conflicts
         run: |
           # Self-hosted runner fix: Remove credsStore to avoid macOS Keychain conflicts
-          #
-          # CRITICAL: Use flock to prevent race conditions when parallel matrix jobs
-          # (backend + frontend) both try to modify config.json simultaneously
-          (
-            flock -x 200  # Exclusive lock to prevent concurrent modifications
+          # Using mkdir-based locking (atomic, works on all Unix systems)
 
-            mkdir -p ~/.docker
-            if [ -f ~/.docker/config.json ]; then
-              # Remove credsStore entry if jq is available
-              if command -v jq &> /dev/null; then
-                # Use component-specific temp file to avoid collisions
-                TEMP_FILE=~/.docker/config.json.tmp.${{ matrix.component }}
-                if jq 'del(.credsStore)' ~/.docker/config.json > "$TEMP_FILE" 2>/dev/null; then
-                  mv "$TEMP_FILE" ~/.docker/config.json
-                else
-                  echo "⚠️  Warning: jq failed to parse config.json, skipping credsStore removal"
-                  rm -f "$TEMP_FILE"
-                fi
+          LOCKDIR=~/.docker/config.lock
+          TIMEOUT=30
+          ELAPSED=0
+
+          while ! mkdir "$LOCKDIR" 2>/dev/null; do
+            echo "[${{ matrix.component }}] Waiting for config.json lock..."
+            sleep 1
+            ELAPSED=$((ELAPSED + 1))
+            if [ $ELAPSED -ge $TIMEOUT ]; then
+              echo "❌ Timeout waiting for lock"
+              exit 1
+            fi
+          done
+
+          trap "rmdir '$LOCKDIR' 2>/dev/null || true" EXIT
+
+          mkdir -p ~/.docker
+          if [ -f ~/.docker/config.json ]; then
+            if command -v jq &> /dev/null; then
+              TEMP_FILE=~/.docker/config.json.tmp.${{ matrix.component }}
+              if jq 'del(.credsStore)' ~/.docker/config.json > "$TEMP_FILE" 2>/dev/null; then
+                mv "$TEMP_FILE" ~/.docker/config.json
               else
-                echo "⚠️  Warning: jq not found, skipping credsStore removal"
+                echo "⚠️  Warning: jq failed to parse config.json"
+                rm -f "$TEMP_FILE"
               fi
             else
-              echo "{}" > ~/.docker/config.json
+              echo "⚠️  Warning: jq not found"
             fi
-          ) 200>~/.docker/config.json.lock
+          else
+            echo "{}" > ~/.docker/config.json
+          fi
 
       - name: Log in to GitHub Container Registry
         run: |
-          # CRITICAL: Use flock to serialize docker login across parallel jobs
-          (
-            flock -x 200
-            echo "[${{ matrix.component }}] Logging in to GHCR..."
-            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
-          ) 200>~/.docker/login.lock
+          # Directory-based locking to serialize docker login
+
+          LOCKDIR=~/.docker/login.lock
+          TIMEOUT=30
+          ELAPSED=0
+
+          while ! mkdir "$LOCKDIR" 2>/dev/null; do
+            echo "[${{ matrix.component }}] Waiting for GHCR login lock..."
+            sleep 1
+            ELAPSED=$((ELAPSED + 1))
+            if [ $ELAPSED -ge $TIMEOUT ]; then
+              echo "❌ Timeout waiting for lock"
+              exit 1
+            fi
+          done
+
+          trap "rmdir '$LOCKDIR' 2>/dev/null || true" EXIT
+
+          echo "[${{ matrix.component }}] Logging in to GHCR..."
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
 
       - name: Authenticate with Fly.io Docker Registry
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          # CRITICAL: Use flock to serialize Fly.io Docker auth across parallel jobs
+          # Directory-based locking to serialize Fly.io Docker auth
           # flyctl auth docker modifies ~/.docker/config.json
-          (
-            flock -x 200
-            echo "[${{ matrix.component }}] Authenticating with Fly.io Docker registry..."
-            flyctl auth docker
-          ) 200>~/.docker/login.lock
+
+          LOCKDIR=~/.docker/flyauth.lock
+          TIMEOUT=30
+          ELAPSED=0
+
+          while ! mkdir "$LOCKDIR" 2>/dev/null; do
+            echo "[${{ matrix.component }}] Waiting for Fly.io auth lock..."
+            sleep 1
+            ELAPSED=$((ELAPSED + 1))
+            if [ $ELAPSED -ge $TIMEOUT ]; then
+              echo "❌ Timeout waiting for lock"
+              exit 1
+            fi
+          done
+
+          trap "rmdir '$LOCKDIR' 2>/dev/null || true" EXIT
+
+          echo "[${{ matrix.component }}] Authenticating with Fly.io Docker registry..."
+          flyctl auth docker
 
       - name: Pull and push ${{ matrix.component }} image to Fly.io registry
         run: |
