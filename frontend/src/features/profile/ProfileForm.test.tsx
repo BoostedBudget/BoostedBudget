@@ -220,9 +220,6 @@ describe('ProfileForm', () => {
     })
 
     it('should call onProfileUpdate callback after successful update', async () => {
-      // Explicitly reset any previous mock state before setting up this test
-      vi.mocked(profileApi.updateProfile).mockReset()
-
       const updatedUser = { ...mockUser, email: 'updated@example.com' }
       vi.mocked(profileApi.updateProfile).mockResolvedValue(updatedUser)
 

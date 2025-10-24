@@ -150,8 +150,6 @@ describe('ProfilePage', () => {
     })
 
     it('should render user profile data after loading', async () => {
-      // Explicitly reset any previous mock state before setting up this test
-      vi.mocked(profileApi.fetchProfile).mockReset()
       vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
 
       renderWithRouter(<ProfilePage />)
