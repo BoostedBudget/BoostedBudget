@@ -207,7 +207,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Upload E2E test results
-        if: always()
+        if: success() || failure()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
@@ -424,7 +424,7 @@ jobs:
           docker rm test-postgres 2>/dev/null || true
 
       - name: Migration test summary
-        if: always()
+        if: success() || failure()
         run: |
           echo "### 🗄️ Migration Tests Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -470,7 +470,7 @@ jobs:
 
       - name: Upload ${{ matrix.component }} dependency scan results
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        if: success() || failure()
         continue-on-error: true  # Don't fail if Code Scanning not enabled
         with:
           sarif_file: 'trivy-${{ matrix.component }}-deps.sarif'
@@ -489,14 +489,14 @@ jobs:
 
       - name: Upload ${{ matrix.component }} Dockerfile scan results
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        if: success() || failure()
         continue-on-error: true  # Don't fail if Code Scanning not enabled
         with:
           sarif_file: 'trivy-${{ matrix.component }}-dockerfile.sarif'
           category: 'trivy-${{ matrix.component }}-dockerfile'
 
       - name: Security scan summary
-        if: always()
+        if: success() || failure()
         run: |
           echo "### 🔒 ${{ matrix.component }} Security Scan Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -514,9 +514,9 @@ jobs:
     # Only depend on tests if they run (PRs), otherwise no dependencies (main)
     needs: [backend-test, frontend-test, e2e-test, migration-tests]
     if: |
-      always() &&
       github.event_name == 'push' &&
-      github.ref == 'refs/heads/main'
+      github.ref == 'refs/heads/main' &&
+      !cancelled()
     runs-on: [self-hosted, macOS, mac-mini]
     strategy:
       matrix:
@@ -601,9 +601,10 @@ jobs:
         component: [backend, frontend]
     # Only run on main - PRs use faster filesystem scan
     if: |
-      always() &&
       github.event_name == 'push' &&
-      github.ref == 'refs/heads/main'
+      github.ref == 'refs/heads/main' &&
+      !cancelled() &&
+      (needs.build-images.result == 'success' || needs.build-images.result == 'failure')
     permissions:
       actions: read  # Required for workflow run information
       contents: read
@@ -655,14 +656,14 @@ jobs:
 
       - name: Upload Trivy results (${{ matrix.component }}) to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        if: success() || failure()
         continue-on-error: true  # Don't fail if Code Scanning not enabled
         with:
           sarif_file: 'trivy-${{ matrix.component }}-results.sarif'
           category: 'trivy-${{ matrix.component }}'
 
       - name: Security scan summary
-        if: always()
+        if: success() || failure()
         run: |
           echo "### 🔒 ${{ matrix.component }} Image Security Scan Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -687,9 +688,9 @@ jobs:
           - component: frontend
             fly-app: boostedbudget-web
     if: |
-      always() &&
       github.ref == 'refs/heads/main' &&
       github.event_name == 'push' &&
+      !cancelled() &&
       needs.build-images.result == 'success' &&
       (needs.image-security-scan.result == 'success' || needs.image-security-scan.result == 'skipped')
 
@@ -801,9 +802,9 @@ jobs:
             fly-config: ./frontend/fly.toml
             deploy-strategy: "--strategy rolling"
     if: |
-      always() &&
       github.ref == 'refs/heads/main' &&
       github.event_name == 'push' &&
+      !cancelled() &&
       needs.build-images.result == 'success' &&
       needs.push-to-fly-registry.result == 'success'
     environment:
@@ -868,9 +869,9 @@ jobs:
     needs: deploy-production-apps
     runs-on: [self-hosted, macOS, mac-mini]
     if: |
-      always() &&
       github.ref == 'refs/heads/main' &&
       github.event_name == 'push' &&
+      !cancelled() &&
       needs.deploy-production-apps.result == 'success'
 
     steps:
@@ -889,7 +890,7 @@ jobs:
           fi
 
       - name: Smoke tests summary
-        if: always()
+        if: success() || failure()
         run: |
           echo "### 🧪 Smoke Tests Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
