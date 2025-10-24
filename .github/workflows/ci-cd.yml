@@ -828,9 +828,28 @@ jobs:
     steps:
       - name: Cleanup Docker storage (prevent containerd corruption)
         run: |
-          echo "Cleaning dangling images and build cache to prevent containerd issues..."
+          # Directory-based locking to prevent race condition:
+          # "Error: a prune operation is already running"
+
+          LOCKDIR=~/.docker/prune.lock
+          TIMEOUT=60  # Prune can take longer than other operations
+          ELAPSED=0
+
+          while ! mkdir "$LOCKDIR" 2>/dev/null; do
+            echo "[${{ matrix.component }}] Waiting for Docker prune lock..."
+            sleep 2
+            ELAPSED=$((ELAPSED + 2))
+            if [ $ELAPSED -ge $TIMEOUT ]; then
+              echo "❌ Timeout waiting for prune lock"
+              exit 1
+            fi
+          done
+
+          trap "rmdir '$LOCKDIR' 2>/dev/null || true" EXIT
+
+          echo "[${{ matrix.component }}] Cleaning dangling images and build cache..."
           docker system prune -f --filter "until=24h"
-          echo "Docker cleanup complete"
+          echo "[${{ matrix.component }}] Docker cleanup complete"
 
       - name: Setup Fly.io CLI
         uses: superfly/flyctl-actions/setup-flyctl@master
