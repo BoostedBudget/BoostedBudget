@@ -24,7 +24,8 @@ func NewProfileHandler(service services.ProfileService) *ProfileHandler {
 // Retrieves the authenticated user's profile, creating one if it's their first login
 func (h *ProfileHandler) GetProfile(c echo.Context) error {
 	// Extract user_id from context (set by auth middleware)
-	auth0UserID, err := middleware.GetUserID(c)
+	// NOTE: After PR #197, GetUserID() returns the internal UUID, not Auth0 ID
+	userID, err := middleware.GetUserID(c)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusUnauthorized, "User not authenticated")
 	}
@@ -35,8 +36,8 @@ func (h *ProfileHandler) GetProfile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusUnauthorized, "Email not found in token")
 	}
 
-	// Get or create user profile
-	user, err := h.service.GetProfile(c.Request().Context(), auth0UserID, email)
+	// Get or create user profile using internal user UUID
+	user, err := h.service.GetProfile(c.Request().Context(), userID, email)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve profile")
 	}
@@ -48,7 +49,8 @@ func (h *ProfileHandler) GetProfile(c echo.Context) error {
 // Updates the authenticated user's profile with validated data
 func (h *ProfileHandler) UpdateProfile(c echo.Context) error {
 	// Extract user_id from context (set by auth middleware)
-	auth0UserID, err := middleware.GetUserID(c)
+	// NOTE: After PR #197, GetUserID() returns the internal UUID, not Auth0 ID
+	userID, err := middleware.GetUserID(c)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusUnauthorized, "User not authenticated")
 	}
@@ -59,8 +61,8 @@ func (h *ProfileHandler) UpdateProfile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
 	}
 
-	// Update profile
-	user, err := h.service.UpdateProfile(c.Request().Context(), auth0UserID, &req)
+	// Update profile using internal user UUID
+	user, err := h.service.UpdateProfile(c.Request().Context(), userID, &req)
 	if err != nil {
 		// Handle specific validation errors
 		if errors.Is(err, services.ErrInvalidEmail) {

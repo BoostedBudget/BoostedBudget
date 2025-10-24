@@ -50,16 +50,18 @@ func (m *MockProfileRepository) UpdateLastLogin(ctx context.Context, auth0UserID
 }
 
 // TestGetProfile_ExistingUser tests retrieving an existing user
+// NOTE: After PR #197, GetProfile now receives internal user UUID, not Auth0 ID
 func TestGetProfile_ExistingUser(t *testing.T) {
 	// Setup
 	mockRepo := new(MockProfileRepository)
 	service := NewProfileService(mockRepo)
 	ctx := context.Background()
 
+	userID := uuid.New().String()
 	auth0UserID := "auth0|507f1f77bcf86cd799439011"
 	email := "test@example.com"
 	existingUser := &domain.User{
-		ID:                 uuid.New().String(),
+		ID:                 userID,
 		Auth0UserID:        auth0UserID,
 		Email:              email,
 		SubscriptionTier:   "free",
@@ -69,12 +71,12 @@ func TestGetProfile_ExistingUser(t *testing.T) {
 		UpdatedAt:          time.Now(),
 	}
 
-	// Mock expectations
-	mockRepo.On("GetUserByAuth0ID", ctx, auth0UserID).Return(existingUser, nil)
+	// Mock expectations - now using GetUserByID with internal UUID
+	mockRepo.On("GetUserByID", ctx, userID).Return(existingUser, nil)
 	mockRepo.On("UpdateLastLogin", ctx, auth0UserID).Return(nil)
 
-	// Execute
-	user, err := service.GetProfile(ctx, auth0UserID, email)
+	// Execute - pass internal UUID, not Auth0 ID
+	user, err := service.GetProfile(ctx, userID, email)
 
 	// Assert
 	assert.NoError(t, err)
@@ -84,35 +86,28 @@ func TestGetProfile_ExistingUser(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 }
 
-// TestGetProfile_FirstLogin tests creating a new user on first login
-func TestGetProfile_FirstLogin(t *testing.T) {
+// TestGetProfile_UserNotFound tests handling when user doesn't exist
+// NOTE: After PR #197, GetProfile no longer creates users (handled by Auth0 middleware)
+// It now returns ErrUserNotFound if user doesn't exist
+func TestGetProfile_UserNotFound(t *testing.T) {
 	// Setup
 	mockRepo := new(MockProfileRepository)
 	service := NewProfileService(mockRepo)
 	ctx := context.Background()
 
-	auth0UserID := "auth0|newuser123"
+	userID := uuid.New().String()
 	email := "newuser@example.com"
 
-	// Mock expectations
-	mockRepo.On("GetUserByAuth0ID", ctx, auth0UserID).Return(nil, repository.ErrUserNotFound)
-	mockRepo.On("CreateUser", ctx, mock.MatchedBy(func(u *domain.User) bool {
-		return u.Auth0UserID == auth0UserID &&
-			u.Email == email &&
-			u.SubscriptionTier == "free" &&
-			u.PrimaryRegion == "iad"
-	})).Return(nil)
+	// Mock expectations - user not found
+	mockRepo.On("GetUserByID", ctx, userID).Return(nil, repository.ErrUserNotFound)
 
 	// Execute
-	user, err := service.GetProfile(ctx, auth0UserID, email)
+	user, err := service.GetProfile(ctx, userID, email)
 
-	// Assert
-	assert.NoError(t, err)
-	assert.NotNil(t, user)
-	assert.Equal(t, auth0UserID, user.Auth0UserID)
-	assert.Equal(t, email, user.Email)
-	assert.Equal(t, "free", user.SubscriptionTier)
-	assert.Equal(t, "iad", user.PrimaryRegion)
+	// Assert - should return error, not create user
+	assert.Error(t, err)
+	assert.Equal(t, repository.ErrUserNotFound, err)
+	assert.Nil(t, user)
 	mockRepo.AssertExpectations(t)
 }
 
@@ -123,14 +118,14 @@ func TestGetProfile_RepositoryError(t *testing.T) {
 	service := NewProfileService(mockRepo)
 	ctx := context.Background()
 
-	auth0UserID := "auth0|507f1f77bcf86cd799439011"
+	userID := uuid.New().String()
 	email := "test@example.com"
 
-	// Mock expectations
-	mockRepo.On("GetUserByAuth0ID", ctx, auth0UserID).Return(nil, errors.New("database error"))
+	// Mock expectations - database error
+	mockRepo.On("GetUserByID", ctx, userID).Return(nil, errors.New("database error"))
 
 	// Execute
-	user, err := service.GetProfile(ctx, auth0UserID, email)
+	user, err := service.GetProfile(ctx, userID, email)
 
 	// Assert
 	assert.Error(t, err)
@@ -138,38 +133,48 @@ func TestGetProfile_RepositoryError(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 }
 
-// TestGetProfile_CreateUserError tests handling of create user errors
-func TestGetProfile_CreateUserError(t *testing.T) {
+// TestGetProfile_UpdateLastLoginError tests that UpdateLastLogin errors don't fail the request
+func TestGetProfile_UpdateLastLoginError(t *testing.T) {
 	// Setup
 	mockRepo := new(MockProfileRepository)
 	service := NewProfileService(mockRepo)
 	ctx := context.Background()
 
-	auth0UserID := "auth0|newuser123"
-	email := "newuser@example.com"
+	userID := uuid.New().String()
+	auth0UserID := "auth0|507f1f77bcf86cd799439011"
+	email := "test@example.com"
+	existingUser := &domain.User{
+		ID:                 userID,
+		Auth0UserID:        auth0UserID,
+		Email:              email,
+		SubscriptionTier:   "free",
+		SubscriptionStatus: "active",
+		PrimaryRegion:      "iad",
+	}
 
-	// Mock expectations
-	mockRepo.On("GetUserByAuth0ID", ctx, auth0UserID).Return(nil, repository.ErrUserNotFound)
-	mockRepo.On("CreateUser", ctx, mock.Anything).Return(errors.New("create failed"))
+	// Mock expectations - UpdateLastLogin fails but shouldn't affect response
+	mockRepo.On("GetUserByID", ctx, userID).Return(existingUser, nil)
+	mockRepo.On("UpdateLastLogin", ctx, auth0UserID).Return(errors.New("update failed"))
 
 	// Execute
-	user, err := service.GetProfile(ctx, auth0UserID, email)
+	user, err := service.GetProfile(ctx, userID, email)
 
-	// Assert
-	assert.Error(t, err)
-	assert.Nil(t, user)
+	// Assert - should still succeed despite UpdateLastLogin error
+	assert.NoError(t, err)
+	assert.NotNil(t, user)
 	mockRepo.AssertExpectations(t)
 }
 
 // TestUpdateProfile_Success tests successful profile update
+// NOTE: After PR #197, UpdateProfile now receives internal user UUID, not Auth0 ID
 func TestUpdateProfile_Success(t *testing.T) {
 	// Setup
 	mockRepo := new(MockProfileRepository)
 	service := NewProfileService(mockRepo)
 	ctx := context.Background()
 
-	auth0UserID := "auth0|507f1f77bcf86cd799439011"
 	userID := uuid.New().String()
+	auth0UserID := "auth0|507f1f77bcf86cd799439011"
 	existingUser := &domain.User{
 		ID:                 userID,
 		Auth0UserID:        auth0UserID,
@@ -184,14 +189,14 @@ func TestUpdateProfile_Success(t *testing.T) {
 		Email: &newEmail,
 	}
 
-	// Mock expectations
-	mockRepo.On("GetUserByAuth0ID", ctx, auth0UserID).Return(existingUser, nil)
+	// Mock expectations - now using GetUserByID with internal UUID
+	mockRepo.On("GetUserByID", ctx, userID).Return(existingUser, nil)
 	mockRepo.On("UpdateUser", ctx, mock.MatchedBy(func(u *domain.User) bool {
 		return u.Email == newEmail && u.PrimaryRegion == "iad"
 	})).Return(nil)
 
-	// Execute
-	user, err := service.UpdateProfile(ctx, auth0UserID, req)
+	// Execute - pass internal UUID, not Auth0 ID
+	user, err := service.UpdateProfile(ctx, userID, req)
 
 	// Assert
 	assert.NoError(t, err)
@@ -201,15 +206,17 @@ func TestUpdateProfile_Success(t *testing.T) {
 }
 
 // TestUpdateProfile_InvalidEmail tests email validation
+// NOTE: After PR #197, UpdateProfile now receives internal user UUID, not Auth0 ID
 func TestUpdateProfile_InvalidEmail(t *testing.T) {
 	// Setup
 	mockRepo := new(MockProfileRepository)
 	service := NewProfileService(mockRepo)
 	ctx := context.Background()
 
+	userID := uuid.New().String()
 	auth0UserID := "auth0|507f1f77bcf86cd799439011"
 	existingUser := &domain.User{
-		ID:            uuid.New().String(),
+		ID:            userID,
 		Auth0UserID:   auth0UserID,
 		Email:         "valid@example.com",
 		PrimaryRegion: "iad",
@@ -220,11 +227,11 @@ func TestUpdateProfile_InvalidEmail(t *testing.T) {
 		Email: &invalidEmail,
 	}
 
-	// Mock expectations
-	mockRepo.On("GetUserByAuth0ID", ctx, auth0UserID).Return(existingUser, nil)
+	// Mock expectations - now using GetUserByID with internal UUID
+	mockRepo.On("GetUserByID", ctx, userID).Return(existingUser, nil)
 
-	// Execute
-	user, err := service.UpdateProfile(ctx, auth0UserID, req)
+	// Execute - pass internal UUID, not Auth0 ID
+	user, err := service.UpdateProfile(ctx, userID, req)
 
 	// Assert
 	assert.Error(t, err)
@@ -234,15 +241,17 @@ func TestUpdateProfile_InvalidEmail(t *testing.T) {
 }
 
 // TestUpdateProfile_InvalidRegion tests region validation
+// NOTE: After PR #197, UpdateProfile now receives internal user UUID, not Auth0 ID
 func TestUpdateProfile_InvalidRegion(t *testing.T) {
 	// Setup
 	mockRepo := new(MockProfileRepository)
 	service := NewProfileService(mockRepo)
 	ctx := context.Background()
 
+	userID := uuid.New().String()
 	auth0UserID := "auth0|507f1f77bcf86cd799439011"
 	existingUser := &domain.User{
-		ID:            uuid.New().String(),
+		ID:            userID,
 		Auth0UserID:   auth0UserID,
 		Email:         "test@example.com",
 		PrimaryRegion: "iad",
@@ -253,11 +262,11 @@ func TestUpdateProfile_InvalidRegion(t *testing.T) {
 		PrimaryRegion: &invalidRegion,
 	}
 
-	// Mock expectations
-	mockRepo.On("GetUserByAuth0ID", ctx, auth0UserID).Return(existingUser, nil)
+	// Mock expectations - now using GetUserByID with internal UUID
+	mockRepo.On("GetUserByID", ctx, userID).Return(existingUser, nil)
 
-	// Execute
-	user, err := service.UpdateProfile(ctx, auth0UserID, req)
+	// Execute - pass internal UUID, not Auth0 ID
+	user, err := service.UpdateProfile(ctx, userID, req)
 
 	// Assert
 	assert.Error(t, err)
@@ -267,15 +276,17 @@ func TestUpdateProfile_InvalidRegion(t *testing.T) {
 }
 
 // TestUpdateProfile_ValidRegion tests updating to a valid region
+// NOTE: After PR #197, UpdateProfile now receives internal user UUID, not Auth0 ID
 func TestUpdateProfile_ValidRegion(t *testing.T) {
 	// Setup
 	mockRepo := new(MockProfileRepository)
 	service := NewProfileService(mockRepo)
 	ctx := context.Background()
 
+	userID := uuid.New().String()
 	auth0UserID := "auth0|507f1f77bcf86cd799439011"
 	existingUser := &domain.User{
-		ID:            uuid.New().String(),
+		ID:            userID,
 		Auth0UserID:   auth0UserID,
 		Email:         "test@example.com",
 		PrimaryRegion: "iad",
@@ -286,14 +297,14 @@ func TestUpdateProfile_ValidRegion(t *testing.T) {
 		PrimaryRegion: &newRegion,
 	}
 
-	// Mock expectations
-	mockRepo.On("GetUserByAuth0ID", ctx, auth0UserID).Return(existingUser, nil)
+	// Mock expectations - now using GetUserByID with internal UUID
+	mockRepo.On("GetUserByID", ctx, userID).Return(existingUser, nil)
 	mockRepo.On("UpdateUser", ctx, mock.MatchedBy(func(u *domain.User) bool {
 		return u.PrimaryRegion == newRegion
 	})).Return(nil)
 
-	// Execute
-	user, err := service.UpdateProfile(ctx, auth0UserID, req)
+	// Execute - pass internal UUID, not Auth0 ID
+	user, err := service.UpdateProfile(ctx, userID, req)
 
 	// Assert
 	assert.NoError(t, err)
@@ -303,23 +314,24 @@ func TestUpdateProfile_ValidRegion(t *testing.T) {
 }
 
 // TestUpdateProfile_UserNotFound tests updating non-existent user
+// NOTE: After PR #197, UpdateProfile now receives internal user UUID, not Auth0 ID
 func TestUpdateProfile_UserNotFound(t *testing.T) {
 	// Setup
 	mockRepo := new(MockProfileRepository)
 	service := NewProfileService(mockRepo)
 	ctx := context.Background()
 
-	auth0UserID := "auth0|nonexistent"
+	userID := uuid.New().String()
 	newEmail := "new@example.com"
 	req := &domain.UpdateProfileRequest{
 		Email: &newEmail,
 	}
 
-	// Mock expectations
-	mockRepo.On("GetUserByAuth0ID", ctx, auth0UserID).Return(nil, repository.ErrUserNotFound)
+	// Mock expectations - now using GetUserByID with internal UUID
+	mockRepo.On("GetUserByID", ctx, userID).Return(nil, repository.ErrUserNotFound)
 
-	// Execute
-	user, err := service.UpdateProfile(ctx, auth0UserID, req)
+	// Execute - pass internal UUID, not Auth0 ID
+	user, err := service.UpdateProfile(ctx, userID, req)
 
 	// Assert
 	assert.Error(t, err)
@@ -329,15 +341,17 @@ func TestUpdateProfile_UserNotFound(t *testing.T) {
 }
 
 // TestUpdateProfile_UpdateError tests handling of update errors
+// NOTE: After PR #197, UpdateProfile now receives internal user UUID, not Auth0 ID
 func TestUpdateProfile_UpdateError(t *testing.T) {
 	// Setup
 	mockRepo := new(MockProfileRepository)
 	service := NewProfileService(mockRepo)
 	ctx := context.Background()
 
+	userID := uuid.New().String()
 	auth0UserID := "auth0|507f1f77bcf86cd799439011"
 	existingUser := &domain.User{
-		ID:            uuid.New().String(),
+		ID:            userID,
 		Auth0UserID:   auth0UserID,
 		Email:         "test@example.com",
 		PrimaryRegion: "iad",
@@ -348,12 +362,12 @@ func TestUpdateProfile_UpdateError(t *testing.T) {
 		Email: &newEmail,
 	}
 
-	// Mock expectations
-	mockRepo.On("GetUserByAuth0ID", ctx, auth0UserID).Return(existingUser, nil)
+	// Mock expectations - now using GetUserByID with internal UUID
+	mockRepo.On("GetUserByID", ctx, userID).Return(existingUser, nil)
 	mockRepo.On("UpdateUser", ctx, mock.Anything).Return(errors.New("update failed"))
 
-	// Execute
-	user, err := service.UpdateProfile(ctx, auth0UserID, req)
+	// Execute - pass internal UUID, not Auth0 ID
+	user, err := service.UpdateProfile(ctx, userID, req)
 
 	// Assert
 	assert.Error(t, err)
