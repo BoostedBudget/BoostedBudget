@@ -194,6 +194,7 @@ function App() {
         <main className="app-main">
           <Routes>
             <Route path="/" element={<HomePage />} />
+            <Route path="/callback" element={<HomePage />} />
             <Route
               path="/accounts"
               element={

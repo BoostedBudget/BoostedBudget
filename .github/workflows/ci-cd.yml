@@ -207,7 +207,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Upload E2E test results
-        if: always()
+        if: success() || failure()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
@@ -424,7 +424,7 @@ jobs:
           docker rm test-postgres 2>/dev/null || true
 
       - name: Migration test summary
-        if: always()
+        if: success() || failure()
         run: |
           echo "### 🗄️ Migration Tests Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -470,7 +470,7 @@ jobs:
 
       - name: Upload ${{ matrix.component }} dependency scan results
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        if: success() || failure()
         continue-on-error: true  # Don't fail if Code Scanning not enabled
         with:
           sarif_file: 'trivy-${{ matrix.component }}-deps.sarif'
@@ -489,14 +489,14 @@ jobs:
 
       - name: Upload ${{ matrix.component }} Dockerfile scan results
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        if: success() || failure()
         continue-on-error: true  # Don't fail if Code Scanning not enabled
         with:
           sarif_file: 'trivy-${{ matrix.component }}-dockerfile.sarif'
           category: 'trivy-${{ matrix.component }}-dockerfile'
 
       - name: Security scan summary
-        if: always()
+        if: success() || failure()
         run: |
           echo "### 🔒 ${{ matrix.component }} Security Scan Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -514,9 +514,9 @@ jobs:
     # Only depend on tests if they run (PRs), otherwise no dependencies (main)
     needs: [backend-test, frontend-test, e2e-test, migration-tests]
     if: |
-      always() &&
       github.event_name == 'push' &&
-      github.ref == 'refs/heads/main'
+      github.ref == 'refs/heads/main' &&
+      !cancelled()
     runs-on: [self-hosted, macOS, mac-mini]
     strategy:
       matrix:
@@ -542,13 +542,14 @@ jobs:
             jq 'del(.credsStore)' ~/.docker/config.json > ~/.docker/config.json.tmp && mv ~/.docker/config.json.tmp ~/.docker/config.json
           fi
 
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+      - name: Log in to GitHub Container Registry (with retry)
+        uses: nick-fields/retry-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-          logout: false  # Self-hosted runner - credentials persist in config.json
+          timeout_minutes: 2
+          max_attempts: 3
+          retry_wait_seconds: 10
+          command: |
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
 
       - name: Set image name for ${{ matrix.component }}
         id: image-name
@@ -561,21 +562,25 @@ jobs:
           echo "image-name=${IMAGE_NAME}" >> $GITHUB_OUTPUT
           echo "Building: ${{ env.REGISTRY }}/${IMAGE_NAME}:${{ github.sha }}"
 
-      - name: Build and push ${{ matrix.component }} image
-        uses: docker/build-push-action@v5
+      - name: Build and push ${{ matrix.component }} image (with retry)
+        uses: nick-fields/retry-action@v3
         with:
-          context: .
-          file: ./${{ matrix.component }}/Dockerfile
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ github.sha }}
-            ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:latest
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache,mode=max
-          platforms: linux/amd64
-          build-args: |
-            VERSION=${{ github.sha }}
-            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+          timeout_minutes: 20
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: |
+            docker buildx build \
+              --file ./${{ matrix.component }}/Dockerfile \
+              --push \
+              --tag ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ github.sha }} \
+              --tag ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:latest \
+              --cache-from type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache \
+              --cache-to type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache,mode=max \
+              --platform linux/amd64 \
+              --build-arg VERSION=${{ github.sha }} \
+              --build-arg BUILD_DATE=${{ github.event.head_commit.timestamp }} \
+              --provenance=false \
+              .
 
       - name: Image build summary
         run: |
@@ -596,9 +601,10 @@ jobs:
         component: [backend, frontend]
     # Only run on main - PRs use faster filesystem scan
     if: |
-      always() &&
       github.event_name == 'push' &&
-      github.ref == 'refs/heads/main'
+      github.ref == 'refs/heads/main' &&
+      !cancelled() &&
+      (needs.build-images.result == 'success' || needs.build-images.result == 'failure')
     permissions:
       actions: read  # Required for workflow run information
       contents: read
@@ -650,14 +656,14 @@ jobs:
 
       - name: Upload Trivy results (${{ matrix.component }}) to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        if: success() || failure()
         continue-on-error: true  # Don't fail if Code Scanning not enabled
         with:
           sarif_file: 'trivy-${{ matrix.component }}-results.sarif'
           category: 'trivy-${{ matrix.component }}'
 
       - name: Security scan summary
-        if: always()
+        if: success() || failure()
         run: |
           echo "### 🔒 ${{ matrix.component }} Image Security Scan Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -682,9 +688,9 @@ jobs:
           - component: frontend
             fly-app: boostedbudget-web
     if: |
-      always() &&
       github.ref == 'refs/heads/main' &&
       github.event_name == 'push' &&
+      !cancelled() &&
       needs.build-images.result == 'success' &&
       (needs.image-security-scan.result == 'success' || needs.image-security-scan.result == 'skipped')
 
@@ -796,9 +802,9 @@ jobs:
             fly-config: ./frontend/fly.toml
             deploy-strategy: "--strategy rolling"
     if: |
-      always() &&
       github.ref == 'refs/heads/main' &&
       github.event_name == 'push' &&
+      !cancelled() &&
       needs.build-images.result == 'success' &&
       needs.push-to-fly-registry.result == 'success'
     environment:
@@ -863,9 +869,9 @@ jobs:
     needs: deploy-production-apps
     runs-on: [self-hosted, macOS, mac-mini]
     if: |
-      always() &&
       github.ref == 'refs/heads/main' &&
       github.event_name == 'push' &&
+      !cancelled() &&
       needs.deploy-production-apps.result == 'success'
 
     steps:
@@ -884,7 +890,7 @@ jobs:
           fi
 
       - name: Smoke tests summary
-        if: always()
+        if: success() || failure()
         run: |
           echo "### 🧪 Smoke Tests Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
