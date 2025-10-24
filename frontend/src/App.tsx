@@ -16,6 +16,7 @@ import {
 import { LoginButton, LogoutButton, ProtectedRoute } from './auth'
 import { ProfilePage } from './features/profile/ProfilePage'
 import { AccountsPage } from './features/accounts/AccountsPage'
+import { PlaidOAuthCallback } from './features/accounts/PlaidOAuthCallback'
 import { updatePrivacySettings } from './features/profile/api/privacyApi'
 import type { PrivacySettings as PrivacySettingsType } from './features/profile/types'
 import { PrivacyPolicy } from './legal/PrivacyPolicy'
@@ -195,6 +196,14 @@ function App() {
           <Routes>
             <Route path="/" element={<HomePage />} />
             <Route path="/callback" element={<HomePage />} />
+            <Route
+              path="/oauth-callback"
+              element={
+                <ProtectedRoute>
+                  <PlaidOAuthCallback />
+                </ProtectedRoute>
+              }
+            />
             <Route
               path="/accounts"
               element={
