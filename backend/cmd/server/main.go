@@ -47,6 +47,9 @@ func main() {
 	// Create Echo instance
 	e := echo.New()
 
+	// Register request validator (required for c.Validate() in handlers)
+	e.Validator = middleware.NewValidator()
+
 	// Middleware (order matters!)
 	e.Use(middleware.RequestID())                      // 1. Generate request IDs first
 	e.Use(middleware.StructuredLogging(os.Stdout))    // 2. Structured JSON logging
