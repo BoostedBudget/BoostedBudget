@@ -1,0 +1,140 @@
+# Dependabot configuration for BoostedBudget
+# Monitors dependencies and creates automated PRs for updates
+# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  # =============================================================================
+  # Backend - Go Modules
+  # =============================================================================
+  - package-ecosystem: "gomod"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/New_York"
+    labels:
+      - "dependencies"
+      - "backend"
+      - "go"
+    reviewers:
+      - "maxnussbaum"
+    open-pull-requests-limit: 10
+    # Group minor and patch updates together
+    groups:
+      go-dependencies:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # =============================================================================
+  # Frontend - npm
+  # =============================================================================
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/New_York"
+    labels:
+      - "dependencies"
+      - "frontend"
+      - "javascript"
+    reviewers:
+      - "maxnussbaum"
+    open-pull-requests-limit: 10
+    # Ignore major version updates for React (manual review needed)
+    ignore:
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major"]
+    # Group dependencies by type
+    groups:
+      # Production dependencies (minor + patch only)
+      production-dependencies:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "@types/*"
+          - "@testing-library/*"
+          - "vitest"
+          - "eslint*"
+          - "@typescript-eslint/*"
+        update-types:
+          - "minor"
+          - "patch"
+      # Dev dependencies (minor + patch only)
+      dev-dependencies:
+        patterns:
+          - "@types/*"
+          - "@testing-library/*"
+          - "vitest"
+          - "eslint*"
+          - "@typescript-eslint/*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # =============================================================================
+  # GitHub Actions
+  # =============================================================================
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/New_York"
+    labels:
+      - "dependencies"
+      - "github-actions"
+      - "devops"
+    reviewers:
+      - "maxnussbaum"
+    open-pull-requests-limit: 5
+    # Group all actions updates together
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  # =============================================================================
+  # Docker - Backend
+  # =============================================================================
+  - package-ecosystem: "docker"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "09:00"
+      timezone: "America/New_York"
+    labels:
+      - "dependencies"
+      - "docker"
+      - "backend"
+    reviewers:
+      - "maxnussbaum"
+    open-pull-requests-limit: 5
+
+  # =============================================================================
+  # Docker - Frontend
+  # =============================================================================
+  - package-ecosystem: "docker"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "09:00"
+      timezone: "America/New_York"
+    labels:
+      - "dependencies"
+      - "docker"
+      - "frontend"
+    reviewers:
+      - "maxnussbaum"
+    open-pull-requests-limit: 5
