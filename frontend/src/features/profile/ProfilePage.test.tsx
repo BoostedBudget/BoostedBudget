@@ -123,7 +123,7 @@ describe('ProfilePage', () => {
   }
 
   beforeEach(() => {
-    vi.restoreAllMocks()
+    vi.clearAllMocks()
     mockUseAuth0.mockReturnValue({
       isAuthenticated: true,
       user: { email: 'test@example.com' },
@@ -147,6 +147,9 @@ describe('ProfilePage', () => {
       renderWithRouter(<ProfilePage />)
 
       expect(screen.getByText(/loading/i)).toBeInTheDocument()
+
+      // Clean up the never-resolving mock for subsequent tests
+      vi.mocked(profileApi.fetchProfile).mockReset()
     })
 
     it('should render user profile data after loading', async () => {

@@ -25,7 +25,7 @@ describe('ProfileForm', () => {
   }
 
   beforeEach(() => {
-    vi.restoreAllMocks()
+    vi.clearAllMocks()
   })
 
   describe('Form rendering', () => {
