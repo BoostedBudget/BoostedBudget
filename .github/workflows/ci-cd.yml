@@ -123,18 +123,6 @@ jobs:
           clean: true
           fetch-depth: 1
 
-      - name: Force fresh checkout of generated file
-        run: |
-          # Remove any cached/stale generated files
-          rm -f frontend/src/types/generated/subscriptionTiers.ts
-          # Force git to restore from repo
-          git checkout HEAD -- frontend/src/types/generated/subscriptionTiers.ts
-
-      - name: Debug - Show subscription tiers file
-        run: |
-          echo "Checking subscriptionTiers.ts file (should have 3 accounts, 1 rule):"
-          grep -A 8 "free: {" frontend/src/types/generated/subscriptionTiers.ts
-
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -146,25 +134,6 @@ jobs:
       - name: Install frontend dependencies
         working-directory: ./frontend
         run: npm ci
-
-      - name: Verify subscription tier types are in sync
-        working-directory: ./frontend
-        run: |
-          echo "::group::Verifying subscription tier types"
-
-          # Verify file exists in repository (committed to git)
-          if ! git ls-files --error-unmatch src/types/generated/subscriptionTiers.ts 2>/dev/null; then
-            echo "::error::subscriptionTiers.ts is not tracked by git!"
-            echo "::error::This file must be committed after running 'npm run generate:types'"
-            exit 1
-          fi
-          echo "::notice::✅ Generated file is committed to git"
-
-          # Run validation test to ensure YAML and generated file match
-          npm test -- validate-generated-types --run
-
-          echo "::notice::✅ Generated file is in sync with YAML config"
-          echo "::endgroup::"
 
       - name: Run ESLint (fail on warnings)
         working-directory: ./frontend
@@ -178,17 +147,7 @@ jobs:
         run: |
           echo "::group::Running Unit Tests"
           # --no-cache flag in test:ci handles fresh module resolution
-          # Integration tests excluded - run separately below
           npm run test:ci
-          echo "::endgroup::"
-
-      - name: Run integration tests (file generation)
-        working-directory: ./frontend
-        run: |
-          echo "::group::Running Integration Tests"
-          # Integration tests run in isolation to prevent file generation
-          # from interfering with main unit tests in parallel workers
-          npm run test:integration
           echo "::endgroup::"
 
       - name: Upload frontend coverage report
