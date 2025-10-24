@@ -28,13 +28,15 @@ var validRegions = map[string]bool{
 
 // ProfileService defines the interface for user profile business logic
 type ProfileService interface {
-	// GetProfile retrieves a user's profile by their Auth0 user ID
+	// GetProfile retrieves a user's profile by their internal user UUID
 	// If the user doesn't exist, creates a new user (first login scenario)
-	GetProfile(ctx context.Context, auth0UserID string, email string) (*domain.User, error)
+	// NOTE: After PR #197, this accepts internal UUID, not Auth0 ID
+	GetProfile(ctx context.Context, userID string, email string) (*domain.User, error)
 
 	// UpdateProfile updates a user's profile with validated data
 	// Only allows updating email and primary_region fields
-	UpdateProfile(ctx context.Context, auth0UserID string, req *domain.UpdateProfileRequest) (*domain.User, error)
+	// NOTE: After PR #197, this accepts internal UUID, not Auth0 ID
+	UpdateProfile(ctx context.Context, userID string, req *domain.UpdateProfileRequest) (*domain.User, error)
 }
 
 // profileService implements ProfileService
@@ -48,25 +50,24 @@ func NewProfileService(repo repository.ProfileRepository) ProfileService {
 }
 
 // GetProfile retrieves a user's profile or creates one if it doesn't exist
-func (s *profileService) GetProfile(ctx context.Context, auth0UserID string, email string) (*domain.User, error) {
-	// Try to get existing user
-	user, err := s.repo.GetUserByAuth0ID(ctx, auth0UserID)
+// NOTE: After PR #197, this method receives internal user UUID, not Auth0 ID
+func (s *profileService) GetProfile(ctx context.Context, userID string, email string) (*domain.User, error) {
+	// Try to get existing user by internal UUID
+	user, err := s.repo.GetUserByID(ctx, userID)
 
 	if err == repository.ErrUserNotFound {
-		// First login - create new user with defaults
-		newUser := domain.NewUser(auth0UserID, email)
-		if err := s.repo.CreateUser(ctx, newUser); err != nil {
-			return nil, err
-		}
-		return newUser, nil
+		// User doesn't exist - this shouldn't happen since Auth0 middleware
+		// already validated the user exists in user_identities table
+		// Return error instead of creating (creation handled during first Auth0 login)
+		return nil, repository.ErrUserNotFound
 	}
 
 	if err != nil {
 		return nil, err
 	}
 
-	// Update last login timestamp
-	if err := s.repo.UpdateLastLogin(ctx, auth0UserID); err != nil {
+	// Update last login timestamp (use Auth0 ID from user record)
+	if err := s.repo.UpdateLastLogin(ctx, user.Auth0UserID); err != nil {
 		// Log error but don't fail the request
 		// In production, you'd use a proper logger here
 	}
@@ -75,9 +76,10 @@ func (s *profileService) GetProfile(ctx context.Context, auth0UserID string, ema
 }
 
 // UpdateProfile updates a user's profile with validation
-func (s *profileService) UpdateProfile(ctx context.Context, auth0UserID string, req *domain.UpdateProfileRequest) (*domain.User, error) {
-	// Get existing user
-	user, err := s.repo.GetUserByAuth0ID(ctx, auth0UserID)
+// NOTE: After PR #197, this method receives internal user UUID, not Auth0 ID
+func (s *profileService) UpdateProfile(ctx context.Context, userID string, req *domain.UpdateProfileRequest) (*domain.User, error) {
+	// Get existing user by internal UUID
+	user, err := s.repo.GetUserByID(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
