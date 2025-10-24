@@ -669,30 +669,41 @@ jobs:
       - name: Configure Docker to avoid keychain conflicts
         run: |
           # Self-hosted runner fix: Remove credsStore to avoid macOS Keychain conflicts
-          mkdir -p ~/.docker
-          if [ -f ~/.docker/config.json ]; then
-            # Remove credsStore entry if jq is available
-            if command -v jq &> /dev/null; then
-              if jq 'del(.credsStore)' ~/.docker/config.json > ~/.docker/config.json.tmp 2>/dev/null; then
-                mv ~/.docker/config.json.tmp ~/.docker/config.json
+          #
+          # CRITICAL: Use flock to prevent race conditions when parallel matrix jobs
+          # (backend + frontend) both try to modify config.json simultaneously
+          (
+            flock -x 200  # Exclusive lock to prevent concurrent modifications
+
+            mkdir -p ~/.docker
+            if [ -f ~/.docker/config.json ]; then
+              # Remove credsStore entry if jq is available
+              if command -v jq &> /dev/null; then
+                # Use component-specific temp file to avoid collisions
+                TEMP_FILE=~/.docker/config.json.tmp.${{ matrix.component }}
+                if jq 'del(.credsStore)' ~/.docker/config.json > "$TEMP_FILE" 2>/dev/null; then
+                  mv "$TEMP_FILE" ~/.docker/config.json
+                else
+                  echo "⚠️  Warning: jq failed to parse config.json, skipping credsStore removal"
+                  rm -f "$TEMP_FILE"
+                fi
               else
-                echo "⚠️  Warning: jq failed to parse config.json, skipping credsStore removal"
-                rm -f ~/.docker/config.json.tmp
+                echo "⚠️  Warning: jq not found, skipping credsStore removal"
               fi
             else
-              echo "⚠️  Warning: jq not found, skipping credsStore removal"
+              echo "{}" > ~/.docker/config.json
             fi
-          else
-            echo "{}" > ~/.docker/config.json
-          fi
+          ) 200>~/.docker/config.json.lock
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-          logout: false  # Self-hosted runner - credentials persist in config.json
+        run: |
+          # CRITICAL: Use flock to serialize docker login across parallel jobs
+          # docker/login-action doesn't provide built-in locking for parallel usage
+          (
+            flock -x 200
+            echo "[${{ matrix.component }}] Logging in to GHCR..."
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+          ) 200>~/.docker/login.lock
 
       - name: Calculate image reference for ${{ matrix.component }}
         id: image-ref
@@ -770,35 +781,52 @@ jobs:
       - name: Configure Docker to avoid keychain conflicts
         run: |
           # Self-hosted runner fix: Remove credsStore to avoid macOS Keychain conflicts
-          mkdir -p ~/.docker
-          if [ -f ~/.docker/config.json ]; then
-            # Remove credsStore entry if jq is available
-            if command -v jq &> /dev/null; then
-              if jq 'del(.credsStore)' ~/.docker/config.json > ~/.docker/config.json.tmp 2>/dev/null; then
-                mv ~/.docker/config.json.tmp ~/.docker/config.json
+          #
+          # CRITICAL: Use flock to prevent race conditions when parallel matrix jobs
+          # (backend + frontend) both try to modify config.json simultaneously
+          (
+            flock -x 200  # Exclusive lock to prevent concurrent modifications
+
+            mkdir -p ~/.docker
+            if [ -f ~/.docker/config.json ]; then
+              # Remove credsStore entry if jq is available
+              if command -v jq &> /dev/null; then
+                # Use component-specific temp file to avoid collisions
+                TEMP_FILE=~/.docker/config.json.tmp.${{ matrix.component }}
+                if jq 'del(.credsStore)' ~/.docker/config.json > "$TEMP_FILE" 2>/dev/null; then
+                  mv "$TEMP_FILE" ~/.docker/config.json
+                else
+                  echo "⚠️  Warning: jq failed to parse config.json, skipping credsStore removal"
+                  rm -f "$TEMP_FILE"
+                fi
               else
-                echo "⚠️  Warning: jq failed to parse config.json, skipping credsStore removal"
-                rm -f ~/.docker/config.json.tmp
+                echo "⚠️  Warning: jq not found, skipping credsStore removal"
               fi
             else
-              echo "⚠️  Warning: jq not found, skipping credsStore removal"
+              echo "{}" > ~/.docker/config.json
             fi
-          else
-            echo "{}" > ~/.docker/config.json
-          fi
+          ) 200>~/.docker/config.json.lock
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-          logout: false  # Self-hosted runner - credentials persist in config.json
+        run: |
+          # CRITICAL: Use flock to serialize docker login across parallel jobs
+          (
+            flock -x 200
+            echo "[${{ matrix.component }}] Logging in to GHCR..."
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+          ) 200>~/.docker/login.lock
 
       - name: Authenticate with Fly.io Docker Registry
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: flyctl auth docker
+        run: |
+          # CRITICAL: Use flock to serialize Fly.io Docker auth across parallel jobs
+          # flyctl auth docker modifies ~/.docker/config.json
+          (
+            flock -x 200
+            echo "[${{ matrix.component }}] Authenticating with Fly.io Docker registry..."
+            flyctl auth docker
+          ) 200>~/.docker/login.lock
 
       - name: Pull and push ${{ matrix.component }} image to Fly.io registry
         run: |
