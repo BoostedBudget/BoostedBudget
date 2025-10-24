@@ -30,19 +30,18 @@ describe('PrivacySettings', () => {
 
   describe('Loading and data display', () => {
     it('should show loading state initially', () => {
-      vi.mocked(privacyApi.fetchPrivacySettings).mockImplementation(
+      vi.mocked(privacyApi.fetchPrivacySettings).mockImplementationOnce(
         () => new Promise(() => {}) // Never resolves
       )
 
       render(<PrivacySettings />)
 
       expect(screen.getByText(/loading/i)).toBeInTheDocument()
-
-      // Clean up the never-resolving mock for subsequent tests
-      vi.mocked(privacyApi.fetchPrivacySettings).mockReset()
     })
 
     it('should render privacy settings after loading', async () => {
+      // Explicitly reset any previous mock state before setting up this test
+      vi.mocked(privacyApi.fetchPrivacySettings).mockReset()
       vi.mocked(privacyApi.fetchPrivacySettings).mockResolvedValue(mockSettings)
 
       render(<PrivacySettings />)
@@ -301,7 +300,7 @@ describe('PrivacySettings', () => {
 
     it('should disable save button when submitting', async () => {
       vi.mocked(privacyApi.fetchPrivacySettings).mockResolvedValue(mockSettings)
-      vi.mocked(privacyApi.updatePrivacySettings).mockImplementation(
+      vi.mocked(privacyApi.updatePrivacySettings).mockImplementationOnce(
         () => new Promise(() => {}) // Never resolves
       )
 
@@ -327,6 +326,9 @@ describe('PrivacySettings', () => {
     })
 
     it('should only send changed fields in update request', async () => {
+      // Explicitly reset any previous mock state before setting up this test
+      vi.mocked(privacyApi.updatePrivacySettings).mockReset()
+
       vi.mocked(privacyApi.fetchPrivacySettings).mockResolvedValue(mockSettings)
       vi.mocked(privacyApi.updatePrivacySettings).mockResolvedValue(mockSettings)
 
