@@ -140,19 +140,18 @@ describe('ProfilePage', () => {
 
   describe('Loading and data display', () => {
     it('should show loading state initially', () => {
-      vi.mocked(profileApi.fetchProfile).mockImplementation(
+      vi.mocked(profileApi.fetchProfile).mockImplementationOnce(
         () => new Promise(() => {}) // Never resolves
       )
 
       renderWithRouter(<ProfilePage />)
 
       expect(screen.getByText(/loading/i)).toBeInTheDocument()
-
-      // Clean up the never-resolving mock for subsequent tests
-      vi.mocked(profileApi.fetchProfile).mockReset()
     })
 
     it('should render user profile data after loading', async () => {
+      // Explicitly reset any previous mock state before setting up this test
+      vi.mocked(profileApi.fetchProfile).mockReset()
       vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
 
       renderWithRouter(<ProfilePage />)
@@ -415,7 +414,7 @@ describe('ProfilePage', () => {
 
     it('should disable save button while submitting', async () => {
       vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
-      vi.mocked(profileApi.updateProfile).mockImplementation(
+      vi.mocked(profileApi.updateProfile).mockImplementationOnce(
         () => new Promise(() => {}) // Never resolves
       )
 
