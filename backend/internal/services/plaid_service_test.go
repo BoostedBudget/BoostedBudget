@@ -357,8 +357,15 @@ func TestCreateLinkToken_PlaidAPIError(t *testing.T) {
 	assert.Nil(t, response, "Expected nil response on error")
 }
 
-// TestCreateLinkToken_MissingWebhookURL tests error handling when webhook URL is not configured
+// TestCreateLinkToken_MissingWebhookURL - DISABLED for issue #200 minimal implementation
+// This test is intentionally skipped because the minimal implementation (issue #200)
+// does NOT require webhook URL. This will be re-enabled in issue #202 when webhook
+// support is added back.
+//
+// TODO(#202): Re-enable this test when webhook URL validation is added back
 func TestCreateLinkToken_MissingWebhookURL(t *testing.T) {
+	t.Skip("SKIPPED: Minimal implementation (issue #200) doesn't use webhook URL. Will re-enable in issue #202")
+
 	// Given: PlaidService with missing webhook URL
 	cfg := &config.Config{
 		PlaidClientID:    "test_client_id",
@@ -381,8 +388,15 @@ func TestCreateLinkToken_MissingWebhookURL(t *testing.T) {
 	assert.Nil(t, response, "Expected nil response on error")
 }
 
-// TestCreateLinkToken_MissingRedirectURI tests error handling when redirect URI is not configured
+// TestCreateLinkToken_MissingRedirectURI - DISABLED for issue #200 minimal implementation
+// This test is intentionally skipped because the minimal implementation (issue #200)
+// does NOT require redirect URI. This will be re-enabled in issue #201 when OAuth
+// redirect support is added back.
+//
+// TODO(#201): Re-enable this test when redirect_uri validation is added back
 func TestCreateLinkToken_MissingRedirectURI(t *testing.T) {
+	t.Skip("SKIPPED: Minimal implementation (issue #200) doesn't use redirect URI. Will re-enable in issue #201")
+
 	// Given: PlaidService with missing redirect URI
 	cfg := &config.Config{
 		PlaidClientID:    "test_client_id",
