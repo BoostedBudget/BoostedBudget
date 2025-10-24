@@ -965,7 +965,27 @@ jobs:
               RETRY_COUNT=$((RETRY_COUNT + 1))
               if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
                 echo "Pull failed, cleaning up and retrying ($RETRY_COUNT/$MAX_RETRIES)..."
-                docker system prune -f
+
+                # Directory-based locking to prevent race with other prune operations
+                LOCKDIR=~/.docker/prune.lock
+                TIMEOUT=60
+                ELAPSED=0
+
+                while ! mkdir "$LOCKDIR" 2>/dev/null; do
+                  echo "[${{ matrix.component }}] Waiting for Docker prune lock (retry cleanup)..."
+                  sleep 2
+                  ELAPSED=$((ELAPSED + 2))
+                  if [ $ELAPSED -ge $TIMEOUT ]; then
+                    echo "⚠️  Timeout waiting for prune lock, skipping cleanup"
+                    break
+                  fi
+                done
+
+                if [ -d "$LOCKDIR" ]; then
+                  trap "rmdir '$LOCKDIR' 2>/dev/null || true" EXIT
+                  docker system prune -f
+                fi
+
                 sleep 5
               else
                 echo "Failed to pull image after $MAX_RETRIES attempts"
@@ -986,9 +1006,28 @@ jobs:
         if: always()
         run: |
           echo "Cleaning up pulled images to free space..."
+
+          # Directory-based locking to prevent race condition with other prune operations
+          # (Docker daemon only allows one prune operation at a time)
+          LOCKDIR=~/.docker/prune.lock
+          TIMEOUT=60
+          ELAPSED=0
+
+          while ! mkdir "$LOCKDIR" 2>/dev/null; do
+            echo "[${{ matrix.component }}] Waiting for Docker prune lock (cleanup)..."
+            sleep 2
+            ELAPSED=$((ELAPSED + 2))
+            if [ $ELAPSED -ge $TIMEOUT ]; then
+              echo "⚠️  Timeout waiting for prune lock, skipping cleanup"
+              exit 0  # Don't fail the job if cleanup times out
+            fi
+          done
+
+          trap "rmdir '$LOCKDIR' 2>/dev/null || true" EXIT
+
           # Remove the specific images we just pulled to prevent accumulation
           docker image prune -f --filter "label=org.opencontainers.image.source=https://github.com/${{ github.repository }}"
-          echo "Cleanup complete"
+          echo "[${{ matrix.component }}] Cleanup complete"
 
       - name: Summary
         run: |
