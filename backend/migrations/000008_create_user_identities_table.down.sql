@@ -10,6 +10,8 @@ DROP TABLE IF EXISTS user_identities;
 
 -- Restore UNIQUE constraint on users.auth0_user_id
 -- This reverts to single-identity-per-user model
+-- Drop first to make idempotent, then add back
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_auth0_user_id_key;
 ALTER TABLE users ADD CONSTRAINT users_auth0_user_id_key UNIQUE (auth0_user_id);
 
 -- Note: users.auth0_user_id field is never removed during up migration,
