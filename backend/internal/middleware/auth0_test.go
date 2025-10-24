@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
@@ -12,7 +13,10 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
 // Test RSA key pair - generated once for all tests
@@ -30,6 +34,70 @@ func init() {
 		panic("Failed to generate test RSA key: " + err.Error())
 	}
 	testPublicKey = &testPrivateKey.PublicKey
+}
+
+// mockIdentityRepository is a mock implementation of UserIdentityRepository for testing
+type mockIdentityRepository struct {
+	identities map[string]*domain.UserIdentity // Map: auth0_user_id -> UserIdentity
+}
+
+func newMockIdentityRepository() *mockIdentityRepository {
+	return &mockIdentityRepository{
+		identities: make(map[string]*domain.UserIdentity),
+	}
+}
+
+func (m *mockIdentityRepository) GetByAuth0ID(ctx context.Context, auth0UserID string) (*domain.UserIdentity, error) {
+	identity, ok := m.identities[auth0UserID]
+	if !ok {
+		return nil, repository.ErrIdentityNotFound
+	}
+	return identity, nil
+}
+
+func (m *mockIdentityRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.UserIdentity, error) {
+	var result []*domain.UserIdentity
+	for _, identity := range m.identities {
+		if identity.UserID == userID {
+			result = append(result, identity)
+		}
+	}
+	return result, nil
+}
+
+func (m *mockIdentityRepository) Create(ctx context.Context, identity *domain.UserIdentity) error {
+	if _, exists := m.identities[identity.Auth0UserID]; exists {
+		return repository.ErrDuplicateIdentity
+	}
+	m.identities[identity.Auth0UserID] = identity
+	return nil
+}
+
+func (m *mockIdentityRepository) UpdateLastUsed(ctx context.Context, auth0UserID string) error {
+	identity, ok := m.identities[auth0UserID]
+	if !ok {
+		return repository.ErrIdentityNotFound
+	}
+	now := time.Now()
+	identity.LastUsedAt = &now
+	return nil
+}
+
+// Helper to add a test identity to the mock repository
+func (m *mockIdentityRepository) addTestIdentity(auth0UserID, userID string) {
+	now := time.Now()
+	m.identities[auth0UserID] = &domain.UserIdentity{
+		ID:             uuid.New().String(),
+		UserID:         userID,
+		Auth0UserID:    auth0UserID,
+		Provider:       "auth0",
+		ProviderUserID: "123456",
+		Email:          "test@example.com",
+		EmailVerified:  true,
+		IsPrimary:      true,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
 }
 
 // setupMockJWKS creates a mock JWKS HTTP server for testing
@@ -70,11 +138,16 @@ func setupMockJWKS(t *testing.T) *httptest.Server {
 }
 
 // TestAuth0Middleware_ValidToken tests that a valid JWT token is accepted
-// RED: This test will fail until we implement the middleware
+// and resolves to internal user UUID
 func TestAuth0Middleware_ValidToken(t *testing.T) {
 	// Setup mock JWKS server
 	jwksServer := setupMockJWKS(t)
 	defer jwksServer.Close()
+
+	// Setup mock identity repository
+	mockRepo := newMockIdentityRepository()
+	testUserID := uuid.New().String()
+	mockRepo.addTestIdentity("auth0|123456", testUserID)
 
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
@@ -86,17 +159,23 @@ func TestAuth0Middleware_ValidToken(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	// Create middleware with mock issuer
-	middleware := Auth0Middleware(jwksServer.URL+"/", "https://api.test.com")
+	// Create middleware with mock issuer and identity repository
+	middleware := Auth0Middleware(jwksServer.URL+"/", "https://api.test.com", mockRepo)
 
-	// Define a test handler that checks if user_id is in context
+	// Define a test handler that checks if user_id (UUID) is in context
 	handler := func(c echo.Context) error {
 		userID := c.Get("user_id")
 		if userID == nil {
 			t.Error("Expected user_id in context, got nil")
 		}
-		if userID != "auth0|123456" {
-			t.Errorf("Expected user_id 'auth0|123456', got '%v'", userID)
+		// Should be the internal UUID, NOT the Auth0 ID
+		if userID != testUserID {
+			t.Errorf("Expected user_id '%s' (UUID), got '%v'", testUserID, userID)
+		}
+		// Auth0 ID should also be available in context
+		auth0ID := c.Get("auth0_user_id")
+		if auth0ID != "auth0|123456" {
+			t.Errorf("Expected auth0_user_id 'auth0|123456', got '%v'", auth0ID)
 		}
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	}
@@ -114,15 +193,16 @@ func TestAuth0Middleware_ValidToken(t *testing.T) {
 }
 
 // TestAuth0Middleware_InvalidToken tests that an invalid JWT token is rejected
-// RED: This test will fail until we implement the middleware
 func TestAuth0Middleware_InvalidToken(t *testing.T) {
+	mockRepo := newMockIdentityRepository()
+
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	req.Header.Set("Authorization", "Bearer invalid.token.here")
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	middleware := Auth0Middleware("https://test-tenant.auth0.com/", "https://api.test.com")
+	middleware := Auth0Middleware("https://test-tenant.auth0.com/", "https://api.test.com", mockRepo)
 
 	handler := func(c echo.Context) error {
 		t.Error("Handler should not be called with invalid token")
@@ -147,11 +227,14 @@ func TestAuth0Middleware_InvalidToken(t *testing.T) {
 }
 
 // TestAuth0Middleware_ExpiredToken tests that an expired JWT token is rejected
-// RED: This test will fail until we implement the middleware
 func TestAuth0Middleware_ExpiredToken(t *testing.T) {
 	// Setup mock JWKS server (needed to verify signature even though token is expired)
 	jwksServer := setupMockJWKS(t)
 	defer jwksServer.Close()
+
+	mockRepo := newMockIdentityRepository()
+	testUserID := uuid.New().String()
+	mockRepo.addTestIdentity("auth0|123456", testUserID)
 
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
@@ -163,7 +246,7 @@ func TestAuth0Middleware_ExpiredToken(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	middleware := Auth0Middleware(jwksServer.URL+"/", "https://api.test.com")
+	middleware := Auth0Middleware(jwksServer.URL+"/", "https://api.test.com", mockRepo)
 
 	handler := func(c echo.Context) error {
 		t.Error("Handler should not be called with expired token")
@@ -184,15 +267,16 @@ func TestAuth0Middleware_ExpiredToken(t *testing.T) {
 }
 
 // TestAuth0Middleware_MissingAuthHeader tests that requests without Authorization header are rejected
-// RED: This test will fail until we implement the middleware
 func TestAuth0Middleware_MissingAuthHeader(t *testing.T) {
+	mockRepo := newMockIdentityRepository()
+
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	// No Authorization header
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	middleware := Auth0Middleware("https://test-tenant.auth0.com/", "https://api.test.com")
+	middleware := Auth0Middleware("https://test-tenant.auth0.com/", "https://api.test.com", mockRepo)
 
 	handler := func(c echo.Context) error {
 		t.Error("Handler should not be called without auth header")
@@ -213,11 +297,14 @@ func TestAuth0Middleware_MissingAuthHeader(t *testing.T) {
 }
 
 // TestAuth0Middleware_CustomClaimsExtraction tests that custom claims are extracted correctly
-// RED: This test will fail until we implement the middleware
 func TestAuth0Middleware_CustomClaimsExtraction(t *testing.T) {
 	// Setup mock JWKS server
 	jwksServer := setupMockJWKS(t)
 	defer jwksServer.Close()
+
+	mockRepo := newMockIdentityRepository()
+	testUserID := uuid.New().String()
+	mockRepo.addTestIdentity("auth0|123456", testUserID)
 
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
@@ -232,7 +319,7 @@ func TestAuth0Middleware_CustomClaimsExtraction(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	middleware := Auth0Middleware(jwksServer.URL+"/", "https://api.test.com")
+	middleware := Auth0Middleware(jwksServer.URL+"/", "https://api.test.com", mockRepo)
 
 	handler := func(c echo.Context) error {
 		// Check if custom claims are available in context
@@ -337,20 +424,22 @@ func createExpiredTestToken(t *testing.T, userID, email, issuer string) string {
 }
 
 // TestGetUserID tests the GetUserID helper function
+// BREAKING CHANGE: Now expects UUID instead of Auth0 ID
 func TestGetUserID(t *testing.T) {
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	// Test with user_id in context
-	c.Set("user_id", "auth0|123456")
+	// Test with user_id (UUID) in context
+	testUUID := uuid.New().String()
+	c.Set("user_id", testUUID)
 	userID, err := GetUserID(c)
 	if err != nil {
 		t.Errorf("Expected no error, got: %v", err)
 	}
-	if userID != "auth0|123456" {
-		t.Errorf("Expected 'auth0|123456', got '%s'", userID)
+	if userID != testUUID {
+		t.Errorf("Expected UUID '%s', got '%s'", testUUID, userID)
 	}
 
 	// Test without user_id in context
@@ -439,6 +528,8 @@ func TestGetPrimaryRegion(t *testing.T) {
 
 // TestAuth0Middleware_InvalidIssuer tests that tokens with wrong issuer are rejected
 func TestAuth0Middleware_InvalidIssuer(t *testing.T) {
+	mockRepo := newMockIdentityRepository()
+
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 
@@ -457,7 +548,7 @@ func TestAuth0Middleware_InvalidIssuer(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	middleware := Auth0Middleware("https://test-tenant.auth0.com/", "https://api.test.com")
+	middleware := Auth0Middleware("https://test-tenant.auth0.com/", "https://api.test.com", mockRepo)
 
 	handler := func(c echo.Context) error {
 		t.Error("Handler should not be called with invalid issuer")
@@ -472,6 +563,8 @@ func TestAuth0Middleware_InvalidIssuer(t *testing.T) {
 
 // TestAuth0Middleware_InvalidAudience tests that tokens with wrong audience are rejected
 func TestAuth0Middleware_InvalidAudience(t *testing.T) {
+	mockRepo := newMockIdentityRepository()
+
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 
@@ -490,7 +583,7 @@ func TestAuth0Middleware_InvalidAudience(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	middleware := Auth0Middleware("https://test-tenant.auth0.com/", "https://api.test.com")
+	middleware := Auth0Middleware("https://test-tenant.auth0.com/", "https://api.test.com", mockRepo)
 
 	handler := func(c echo.Context) error {
 		t.Error("Handler should not be called with invalid audience")
