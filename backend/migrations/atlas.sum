@@ -1,4 +1,4 @@
-h1:QTUo1bOaXnCQGtcSEk4qB1putvVSa8eNE+4T9wq/ppQ=
+h1:zYxV7W+zOA9jpzmkocMOl2OG9Jj1jUNiRZYW/AbDyzc=
 000001_create_users_table.sql h1:0VjQyC14oyN9Kny/2ciS6P8NdrFlPvxB2a6NITGdu4M=
 000002_create_privacy_settings_table.sql h1:VbKbyVwZpVa23vIERVxrXeOBbLRbmIrqbyCnos/dN9E=
 000003_create_audit_logs_table.sql h1:LKmdHLVQH81RbVmDfQyhQh9PruT9T6Tgs3yPLeGjaIk=
@@ -6,5 +6,4 @@ h1:QTUo1bOaXnCQGtcSEk4qB1putvVSa8eNE+4T9wq/ppQ=
 000005_migrate_region_codes.sql h1:tk7C+EhUuO7tS2hJAo1k90T9p+qrrq5thbcd6AodwvQ=
 000006_create_linked_items_table.sql h1:gMDwBoDJV1yD+/eKisKKBFbxUs+u8ngsvPoQPXD/XNk=
 000007_create_accounts_table.sql h1:uPuDViKsQj3PEHBRncogfSLmoYdNNScRLObPxyzub04=
-000008_create_user_identities_table.down.sql h1:F/tZvBBzRy/36rIVZtGRK2HYmMR2pDKV4Fh+a5mH400=
-000008_create_user_identities_table.up.sql h1:nQHT7WY+I16NQHiIn22MQOoxEogJHwPi53nPZvbxPkQ=
+000008_create_user_identities_table.sql h1:7mlVMY/pi7+qrjJqCvId6BoePlgLymX6LYsyexqCgk4=
