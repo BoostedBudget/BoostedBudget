@@ -25,7 +25,7 @@ describe('PrivacySettings', () => {
   }
 
   beforeEach(() => {
-    vi.resetAllMocks()
+    vi.clearAllMocks()
   })
 
   describe('Loading and data display', () => {
@@ -37,6 +37,9 @@ describe('PrivacySettings', () => {
       render(<PrivacySettings />)
 
       expect(screen.getByText(/loading/i)).toBeInTheDocument()
+
+      // Clean up the never-resolving mock for subsequent tests
+      vi.mocked(privacyApi.fetchPrivacySettings).mockReset()
     })
 
     it('should render privacy settings after loading', async () => {
