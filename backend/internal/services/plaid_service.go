@@ -106,35 +106,27 @@ func (s *plaidService) GetClient() *plaid.APIClient {
 //
 // Returns an error if the Plaid API call fails or if required configuration is missing.
 func (s *plaidService) CreateLinkToken(ctx context.Context, userID string) (*domain.LinkTokenResponse, error) {
-	// Validate required configuration
-	if s.config.PlaidWebhookURL == "" {
-		return nil, fmt.Errorf("plaid webhook URL not configured (PLAID_WEBHOOK_URL required)")
-	}
-	if s.config.PlaidRedirectURI == "" {
-		return nil, fmt.Errorf("plaid redirect URI not configured (PLAID_REDIRECT_URI required)")
-	}
+	// MINIMAL IMPLEMENTATION for debugging issue #200
+	// This matches the exact pattern from plaid-go v23 official tests
+	// to isolate the 400 error by testing with only required parameters
 
-	// Build the link token request
+	// Build the link token request with ONLY required parameters
 	request := plaid.NewLinkTokenCreateRequest(
-		"BoostedBudget",                 // Client name displayed in Plaid Link
-		"en",                             // Language
-		[]plaid.CountryCode{plaid.COUNTRYCODE_US}, // Country codes
-		*plaid.NewLinkTokenCreateRequestUser(userID), // User identifier
+		"BoostedBudget",                              // Client name displayed in Plaid Link
+		"en",                                          // Language
+		[]plaid.CountryCode{plaid.COUNTRYCODE_US},    // Country codes
+		*plaid.NewLinkTokenCreateRequestUser(userID), // User identifier (dereferenced from pointer)
 	)
 
-	// Configure products: transactions, auth (account/routing), balance
+	// Set ONLY AUTH product (simplest, most compatible)
+	// Removed TRANSACTIONS and BALANCE to match minimal v23 test pattern
 	request.SetProducts([]plaid.Products{
-		plaid.PRODUCTS_TRANSACTIONS,
 		plaid.PRODUCTS_AUTH,
-		plaid.PRODUCTS_BALANCE,
 	})
 
-	// Set webhook URL for async notifications
-	request.SetWebhook(s.config.PlaidWebhookURL)
-
-	// Set redirect URI for OAuth institution support (required for web apps)
-	// Without this, OAuth institutions won't appear in Plaid Link
-	request.SetRedirectUri(s.config.PlaidRedirectURI)
+	// REMOVED: Webhook URL validation and SetWebhook()
+	// REMOVED: Redirect URI validation and SetRedirectUri()
+	// These will be added back incrementally once minimal version works
 
 	// Call Plaid API to create link token
 	resp, _, err := s.client.PlaidApi.LinkTokenCreate(ctx).LinkTokenCreateRequest(*request).Execute()
