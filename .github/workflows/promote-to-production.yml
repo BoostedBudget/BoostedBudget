@@ -118,14 +118,7 @@ jobs:
 
           # Check if tests are stale (> 24 hours)
           if command -v python3 &> /dev/null; then
-            HOURS_AGO=$(python3 -c "
-from datetime import datetime, timezone
-import sys
-created = datetime.fromisoformat('${CREATED_AT}'.replace('Z', '+00:00'))
-now = datetime.now(timezone.utc)
-hours = (now - created).total_seconds() / 3600
-print(int(hours))
-            ")
+            HOURS_AGO=$(python3 -c "from datetime import datetime, timezone; created = datetime.fromisoformat('${CREATED_AT}'.replace('Z', '+00:00')); now = datetime.now(timezone.utc); hours = (now - created).total_seconds() / 3600; print(int(hours))")
             echo "test-hours-ago=$HOURS_AGO" >> $GITHUB_OUTPUT
 
             if [ "$HOURS_AGO" -gt 24 ]; then
