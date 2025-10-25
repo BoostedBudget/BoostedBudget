@@ -32,6 +32,46 @@ interface HealthCheck {
   }
 }
 
+// Home page content component
+function HomePage({ health, loading }: { health: HealthCheck | null; loading: boolean }) {
+  return (
+    <>
+      <section className="health-check">
+        <h2>System Status</h2>
+        {loading ? (
+          <p>Loading...</p>
+        ) : health ? (
+          <div className="health-status">
+            <p className={`status status-${health.status}`}>
+              Status: {health.status.toUpperCase()}
+            </p>
+            <p>Version: {health.version}</p>
+            <p>Region: us-east-1 (MVP)</p>
+            <div className="checks">
+              <p>Database: {health.checks.database ? '✅' : '❌'}</p>
+              <p>Redis: {health.checks.redis ? '✅' : '❌'}</p>
+            </div>
+          </div>
+        ) : (
+          <p className="error">Failed to load system status</p>
+        )}
+      </section>
+
+      <section className="info">
+        <h2>Phase 0: Foundation</h2>
+        <p>✅ Backend API with health endpoint</p>
+        <p>✅ OpenAPI specification</p>
+        <p>✅ Frontend skeleton (React + TypeScript + Vite)</p>
+        <p>✅ GDPR Cookie Consent</p>
+        <p>✅ Auth0 integration</p>
+        <p>✅ User Profile Management</p>
+        <p>⏳ Database & migrations (coming next)</p>
+        <p>⏳ Docker development environment (coming next)</p>
+      </section>
+    </>
+  )
+}
+
 function App() {
   const { isAuthenticated, user } = useAuth0()
   const [, setCookie] = useCookies([COOKIE_CONSENT_NAME])
@@ -119,44 +159,6 @@ function App() {
     console.log('Privacy settings synced to cookie')
   }
 
-  // Home page content
-  const HomePage = () => (
-    <>
-      <section className="health-check">
-        <h2>System Status</h2>
-        {loading ? (
-          <p>Loading...</p>
-        ) : health ? (
-          <div className="health-status">
-            <p className={`status status-${health.status}`}>
-              Status: {health.status.toUpperCase()}
-            </p>
-            <p>Version: {health.version}</p>
-            <p>Region: us-east-1 (MVP)</p>
-            <div className="checks">
-              <p>Database: {health.checks.database ? '✅' : '❌'}</p>
-              <p>Redis: {health.checks.redis ? '✅' : '❌'}</p>
-            </div>
-          </div>
-        ) : (
-          <p className="error">Failed to load system status</p>
-        )}
-      </section>
-
-      <section className="info">
-        <h2>Phase 0: Foundation</h2>
-        <p>✅ Backend API with health endpoint</p>
-        <p>✅ OpenAPI specification</p>
-        <p>✅ Frontend skeleton (React + TypeScript + Vite)</p>
-        <p>✅ GDPR Cookie Consent</p>
-        <p>✅ Auth0 integration</p>
-        <p>✅ User Profile Management</p>
-        <p>⏳ Database & migrations (coming next)</p>
-        <p>⏳ Docker development environment (coming next)</p>
-      </section>
-    </>
-  )
-
   return (
     <CookiesProvider>
       <div className="app">
@@ -194,8 +196,8 @@ function App() {
 
         <main className="app-main">
           <Routes>
-            <Route path="/" element={<HomePage />} />
-            <Route path="/callback" element={<HomePage />} />
+            <Route path="/" element={<HomePage health={health} loading={loading} />} />
+            <Route path="/callback" element={<HomePage health={health} loading={loading} />} />
             <Route
               path="/oauth-callback"
               element={
