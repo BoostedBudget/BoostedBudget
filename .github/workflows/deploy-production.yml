@@ -1,0 +1,397 @@
+name: Deploy to Production
+
+# Trigger on pushes to main branch (after PR merge or staging→main merge)
+on:
+  push:
+    branches: [main]
+
+# Only allow one production deployment at a time
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  GO_VERSION: '1.25'
+  NODE_VERSION: '20'
+  REGISTRY: ghcr.io
+  BACKEND_IMAGE_NAME: boostedbudget/boostedbudget-backend
+  FRONTEND_IMAGE_NAME: boostedbudget/boostedbudget-frontend
+
+jobs:
+  # =============================================================================
+  # Build and Push Images to GHCR (Parallelized via Matrix)
+  # =============================================================================
+  build-images:
+    name: Build ${{ matrix.component }} Image
+    runs-on: [self-hosted, macOS, mac-mini]
+    strategy:
+      matrix:
+        component: [backend, frontend]
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure Docker to avoid keychain conflicts
+        run: |
+          LOCKDIR=~/.docker/config.lock
+          TIMEOUT=30
+          ELAPSED=0
+
+          while ! mkdir "$LOCKDIR" 2>/dev/null; do
+            echo "[${{ matrix.component }}] Waiting for config.json lock..."
+            sleep 1
+            ELAPSED=$((ELAPSED + 1))
+            if [ $ELAPSED -ge $TIMEOUT ]; then
+              echo "❌ Timeout waiting for lock"
+              exit 1
+            fi
+          done
+
+          trap "rmdir '$LOCKDIR' 2>/dev/null || true" EXIT
+
+          mkdir -p ~/.docker
+          if [ -f ~/.docker/config.json ]; then
+            if command -v jq &> /dev/null; then
+              TEMP_FILE=~/.docker/config.json.tmp.${{ matrix.component }}
+              if jq 'del(.credsStore)' ~/.docker/config.json > "$TEMP_FILE" 2>/dev/null; then
+                mv "$TEMP_FILE" ~/.docker/config.json
+              else
+                rm -f "$TEMP_FILE"
+              fi
+            fi
+          else
+            echo "{}" > ~/.docker/config.json
+          fi
+
+      - name: Log in to GitHub Container Registry (with retry)
+        run: |
+          LOCKDIR=~/.docker/login.lock
+          TIMEOUT=30
+          ELAPSED=0
+
+          while ! mkdir "$LOCKDIR" 2>/dev/null; do
+            echo "[${{ matrix.component }}] Waiting for docker login lock..."
+            sleep 1
+            ELAPSED=$((ELAPSED + 1))
+            if [ $ELAPSED -ge $TIMEOUT ]; then
+              echo "❌ Timeout waiting for lock"
+              exit 1
+            fi
+          done
+
+          trap "rmdir '$LOCKDIR' 2>/dev/null || true" EXIT
+
+          MAX_ATTEMPTS=3
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            if echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin; then
+              echo "✅ Login successful"
+              exit 0
+            else
+              if [ $i -lt $MAX_ATTEMPTS ]; then
+                sleep 10
+              else
+                exit 1
+              fi
+            fi
+          done
+
+      - name: Set image name for ${{ matrix.component }}
+        id: image-name
+        run: |
+          if [ "${{ matrix.component }}" = "backend" ]; then
+            IMAGE_NAME="${{ env.BACKEND_IMAGE_NAME }}"
+          else
+            IMAGE_NAME="${{ env.FRONTEND_IMAGE_NAME }}"
+          fi
+          echo "image-name=${IMAGE_NAME}" >> $GITHUB_OUTPUT
+          echo "Building: ${{ env.REGISTRY }}/${IMAGE_NAME}:${{ github.sha }}"
+
+      - name: Build and push ${{ matrix.component }} image
+        run: |
+          docker buildx build \
+            --file ./${{ matrix.component }}/Dockerfile \
+            --push \
+            --tag ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ github.sha }} \
+            --tag ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:latest \
+            --cache-from type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache \
+            --cache-to type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache,mode=max \
+            --platform linux/amd64 \
+            --build-arg VERSION=${{ github.sha }} \
+            --build-arg BUILD_DATE=${{ github.event.head_commit.timestamp }} \
+            --provenance=false \
+            .
+
+      - name: Image build summary
+        run: |
+          echo "### 🐳 ${{ matrix.component }} Image Built" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+
+  # =============================================================================
+  # Security Scan - Docker Images (Parallelized)
+  # =============================================================================
+  image-security-scan:
+    name: Security Scan (${{ matrix.component }} Image)
+    needs: build-images
+    runs-on: [self-hosted, macOS, mac-mini]
+    strategy:
+      matrix:
+        component: [backend, frontend]
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      security-events: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure Docker
+        run: |
+          LOCKDIR=~/.docker/config.lock
+          TIMEOUT=30
+          ELAPSED=0
+
+          while ! mkdir "$LOCKDIR" 2>/dev/null; do
+            sleep 1
+            ELAPSED=$((ELAPSED + 1))
+            [ $ELAPSED -ge $TIMEOUT ] && exit 1
+          done
+
+          trap "rmdir '$LOCKDIR' 2>/dev/null || true" EXIT
+
+          mkdir -p ~/.docker
+          if [ -f ~/.docker/config.json ] && command -v jq &> /dev/null; then
+            TEMP_FILE=~/.docker/config.json.tmp.${{ matrix.component }}
+            if jq 'del(.credsStore)' ~/.docker/config.json > "$TEMP_FILE" 2>/dev/null; then
+              mv "$TEMP_FILE" ~/.docker/config.json
+            else
+              rm -f "$TEMP_FILE"
+            fi
+          else
+            echo "{}" > ~/.docker/config.json
+          fi
+
+      - name: Log in to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+
+      - name: Calculate image reference
+        id: image-ref
+        run: |
+          if [ "${{ matrix.component }}" = "backend" ]; then
+            IMAGE_NAME="${{ env.BACKEND_IMAGE_NAME }}"
+          else
+            IMAGE_NAME="${{ env.FRONTEND_IMAGE_NAME }}"
+          fi
+          IMAGE_REF="${{ env.REGISTRY }}/${IMAGE_NAME}:${{ github.sha }}"
+          echo "image-ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.image-ref.outputs.image-ref }}
+          format: 'sarif'
+          output: 'trivy-${{ matrix.component }}-production.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+          ignore-unfixed: true
+          cache: false
+
+      - name: Upload scan results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: success() || failure()
+        continue-on-error: true
+        with:
+          sarif_file: 'trivy-${{ matrix.component }}-production.sarif'
+          category: 'trivy-production-${{ matrix.component }}'
+
+  # =============================================================================
+  # Push Images to Fly.io Registry (Parallelized)
+  # =============================================================================
+  push-to-fly-registry:
+    name: Push ${{ matrix.component }} to Fly.io
+    needs: [build-images, image-security-scan]
+    runs-on: [self-hosted, macOS, mac-mini]
+    strategy:
+      matrix:
+        component: [backend, frontend]
+        include:
+          - component: backend
+            fly-app: boostedbudget-api
+          - component: frontend
+            fly-app: boostedbudget-web
+
+    steps:
+      - name: Cleanup Docker storage
+        run: |
+          LOCKDIR=~/.docker/prune.lock
+          TIMEOUT=60
+          ELAPSED=0
+
+          while ! mkdir "$LOCKDIR" 2>/dev/null; do
+            sleep 2
+            ELAPSED=$((ELAPSED + 2))
+            [ $ELAPSED -ge $TIMEOUT ] && exit 1
+          done
+
+          trap "rmdir '$LOCKDIR' 2>/dev/null || true" EXIT
+
+          docker system prune -f --filter "until=24h"
+
+      - name: Setup Fly.io CLI
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Configure Docker
+        run: |
+          LOCKDIR=~/.docker/config.lock
+          TIMEOUT=30
+          ELAPSED=0
+
+          while ! mkdir "$LOCKDIR" 2>/dev/null; do
+            sleep 1
+            ELAPSED=$((ELAPSED + 1))
+            [ $ELAPSED -ge $TIMEOUT ] && exit 1
+          done
+
+          trap "rmdir '$LOCKDIR' 2>/dev/null || true" EXIT
+
+          mkdir -p ~/.docker
+          [ -f ~/.docker/config.json ] || echo "{}" > ~/.docker/config.json
+
+      - name: Log in to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+
+      - name: Authenticate with Fly.io
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl auth docker
+
+      - name: Pull and push to Fly.io registry
+        run: |
+          if [ "${{ matrix.component }}" = "backend" ]; then
+            IMAGE_NAME="${{ env.BACKEND_IMAGE_NAME }}"
+          else
+            IMAGE_NAME="${{ env.FRONTEND_IMAGE_NAME }}"
+          fi
+
+          GHCR_IMAGE="${{ env.REGISTRY }}/${IMAGE_NAME}:${{ github.sha }}"
+          docker pull --platform linux/amd64 ${GHCR_IMAGE}
+
+          docker tag ${GHCR_IMAGE} registry.fly.io/${{ matrix.fly-app }}:${{ github.sha }}
+          docker tag ${GHCR_IMAGE} registry.fly.io/${{ matrix.fly-app }}:latest
+
+          docker push registry.fly.io/${{ matrix.fly-app }}:${{ github.sha }}
+          docker push registry.fly.io/${{ matrix.fly-app }}:latest
+
+      - name: Cleanup images
+        if: always()
+        run: |
+          docker image prune -f --filter "label=org.opencontainers.image.source=https://github.com/${{ github.repository }}"
+
+  # =============================================================================
+  # Deploy to Fly.io Production (Parallelized)
+  # =============================================================================
+  deploy-to-fly:
+    name: Deploy ${{ matrix.component }} to Fly.io
+    needs: [build-images, push-to-fly-registry]
+    runs-on: [self-hosted, macOS, mac-mini]
+    strategy:
+      matrix:
+        component: [backend, frontend]
+        include:
+          - component: backend
+            fly-app: boostedbudget-api
+            fly-config: ./backend/fly.toml
+            deploy-strategy: ""
+          - component: frontend
+            fly-app: boostedbudget-web
+            fly-config: ./frontend/fly.toml
+            deploy-strategy: "--strategy rolling"
+    environment:
+      name: production
+      url: https://boostedbudget.com
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Fly.io CLI
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy to Fly.io
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          echo "Deploying ${{ matrix.component }}: registry.fly.io/${{ matrix.fly-app }}:${{ github.sha }}"
+          if [ "${{ matrix.component }}" = "backend" ]; then
+            echo "Note: Database migrations run via release_command"
+          fi
+          flyctl deploy \
+            --app ${{ matrix.fly-app }} \
+            --image registry.fly.io/${{ matrix.fly-app }}:${{ github.sha }} \
+            --config ${{ matrix.fly-config }} \
+            ${{ matrix.deploy-strategy }}
+
+      - name: Verify deployment
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl status --app ${{ matrix.fly-app }}
+          flyctl logs -a ${{ matrix.fly-app }} -n 2>&1 | head -20 || true
+
+      - name: Deployment summary
+        run: |
+          echo "### 🚀 ${{ matrix.component }} Production Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ matrix.component }}" = "backend" ]; then
+            echo "**URL:** https://api.boostedbudget.com" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**URL:** https://boostedbudget.com" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployed at:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+
+  # =============================================================================
+  # Production Smoke Tests
+  # =============================================================================
+  smoke-tests:
+    name: Production Smoke Tests
+    needs: deploy-to-fly
+    runs-on: [self-hosted, macOS, mac-mini]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run smoke tests
+        timeout-minutes: 5
+        run: |
+          if [ -f ./scripts/smoke-test.sh ]; then
+            chmod +x ./scripts/smoke-test.sh
+            ./scripts/smoke-test.sh production
+          else
+            echo "Running basic smoke tests..."
+            curl -f https://api.boostedbudget.com/health || exit 1
+            curl -f https://boostedbudget.com || exit 1
+          fi
+
+      - name: Smoke tests summary
+        if: success()
+        run: |
+          echo "### ✅ Production Smoke Tests Passed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Backend health check" >> $GITHUB_STEP_SUMMARY
+          echo "- Frontend accessibility" >> $GITHUB_STEP_SUMMARY
