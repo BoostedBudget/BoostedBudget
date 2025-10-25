@@ -461,3 +461,44 @@ func TestCreateLinkTokenMinimal(t *testing.T) {
 
 	t.Logf("✅ Minimal link token created successfully: %s (RequestID: %s)", response.LinkToken, response.RequestID)
 }
+
+// TestCreateLinkTokenWithTransactions tests link token creation with AUTH + TRANSACTIONS products.
+// This is Phase 1 of issue #201 - incrementally adding TRANSACTIONS product to identify
+// if it causes the 400 error that was resolved in issue #200.
+//
+// TRANSACTIONS product provides access to:
+// - Historical transaction data (up to 24 months)
+// - Transaction categories and merchant information
+// - Pending and posted transactions
+//
+// Hypothesis: TRANSACTIONS product will NOT cause 400 error when added to AUTH product.
+func TestCreateLinkTokenWithTransactions(t *testing.T) {
+	// Skip if Plaid credentials not available in environment
+	if getTestEnv("PLAID_CLIENT_ID") == "" || getTestEnv("PLAID_SECRET") == "" {
+		t.Skip("Plaid credentials not configured - set PLAID_CLIENT_ID and PLAID_SECRET")
+	}
+
+	// Given: Config with credentials (no redirect_uri yet, testing products only)
+	cfg := &config.Config{
+		PlaidClientID: getTestEnv("PLAID_CLIENT_ID"),
+		PlaidSecret:   getTestEnv("PLAID_SECRET"),
+		PlaidEnv:      "sandbox",
+	}
+
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err, "should create plaid service successfully")
+
+	// When: Creating link token (implementation should use AUTH + TRANSACTIONS products)
+	ctx := context.Background()
+	userID := time.Now().String()
+
+	response, err := service.CreateLinkToken(ctx, userID)
+
+	// Then: Should succeed - TRANSACTIONS product should not cause 400 error
+	require.NoError(t, err, "TRANSACTIONS product should not cause 400 error")
+	assert.NotEmpty(t, response.LinkToken, "link token should not be empty")
+	assert.NotEmpty(t, response.Expiration, "expiration should not be empty")
+	assert.NotEmpty(t, response.RequestID, "request ID should not be empty")
+
+	t.Logf("✅ Link token with TRANSACTIONS product: %s (RequestID: %s)", response.LinkToken, response.RequestID)
+}
