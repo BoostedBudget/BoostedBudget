@@ -3,7 +3,17 @@ import { defineConfig, devices } from '@playwright/test';
 /**
  * Playwright E2E Test Configuration
  * See https://playwright.dev/docs/test-configuration
+ *
+ * Dynamic Port Allocation:
+ * - E2E_FRONTEND_PORT: Override frontend port (default: 3000)
+ * - E2E_BACKEND_PORT: Override backend port (default: 8080)
+ * - Use scripts/find-available-ports.js in CI to avoid port conflicts
  */
+
+// Get dynamic ports from environment, fallback to defaults
+const frontendPort = process.env.E2E_FRONTEND_PORT || '3000';
+const backendPort = process.env.E2E_BACKEND_PORT || '8080';
+
 export default defineConfig({
   // Test directory
   testDir: './e2e',
@@ -35,10 +45,10 @@ export default defineConfig({
   // Shared settings for all the projects below
   use: {
     // Base URL to use in actions like `await page.goto('/')`
-    baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3000',
+    baseURL: process.env.PLAYWRIGHT_BASE_URL || `http://localhost:${frontendPort}`,
 
     // Backend API URL
-    apiURL: process.env.PLAYWRIGHT_API_URL || 'http://localhost:8080',
+    apiURL: process.env.PLAYWRIGHT_API_URL || `http://localhost:${backendPort}`,
 
     // Collect trace when retrying the failed test
     // Disable locally to save memory (video buffering ~200MB), enable in CI for debugging
@@ -65,14 +75,16 @@ export default defineConfig({
   // Comment this out if you want to run tests against already running servers
   webServer: [
     {
-      command: 'npm run dev',
-      url: 'http://localhost:3000',
+      // Pass PORT env var to Vite for dynamic port allocation
+      command: `PORT=${frontendPort} npm run dev`,
+      url: `http://localhost:${frontendPort}`,
       reuseExistingServer: !process.env.CI,
       timeout: 120 * 1000,
     },
     {
-      command: 'cd ../backend && ./bin/server',
-      url: 'http://localhost:8080/health',
+      // Pass PORT env var to backend for dynamic port allocation
+      command: `cd ../backend && PORT=${backendPort} ./bin/server`,
+      url: `http://localhost:${backendPort}/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 120 * 1000,
     },
