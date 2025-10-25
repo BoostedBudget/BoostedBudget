@@ -99,15 +99,24 @@ func (s *plaidService) GetClient() *plaid.APIClient {
 // The link token is a short-lived (30 minute) credential that enables the frontend
 // to initialize Plaid Link for connecting bank accounts. Configured with:
 //   - User identification (client_user_id from Auth0)
-//   - Products: AUTH (account/routing), TRANSACTIONS (history)
+//   - Products: TRANSACTIONS only (account data + transaction history)
 //   - OAuth redirect URI for institutions like Chase, Capital One, Wells Fargo
 //   - Country codes (US) and language (English)
 //
 // Note: Balance data is retrieved automatically via /accounts/get endpoint (FREE).
 // BALANCE is not a valid Link initialization product per Plaid docs and should not be included.
 //
-// Issue #201 implementation: AUTH + TRANSACTIONS products + OAuth redirect_uri support.
+// Issue #201 implementation: Initially AUTH + TRANSACTIONS products + OAuth redirect_uri support.
 // Issue #232 fix: Removed PRODUCTS_BALANCE (causes 400 Bad Request from Plaid API).
+// Issue #237 fix: Removed PRODUCTS_AUTH (causes NO_AUTH_ACCOUNTS error for credit cards/CDs).
+//
+// Why AUTH was removed:
+// - AUTH only supports checking/savings/cash management (NOT credit cards or CDs)
+// - BoostedBudget has "no money movement" - doesn't need account/routing numbers
+// - Current code only uses /accounts/get (FREE, doesn't require AUTH)
+// - TRANSACTIONS product supports: credit cards, all depository types (checking, savings, CDs,
+//   money market), and student loans - sufficient for budgeting app needs
+//
 // The redirect URI must be configured via PLAID_REDIRECT_URI environment variable and
 // registered in Plaid Dashboard (Team Settings → API → Allowed redirect URIs).
 //
@@ -127,14 +136,15 @@ func (s *plaidService) CreateLinkToken(ctx context.Context, userID string) (*dom
 		*plaid.NewLinkTokenCreateRequestUser(userID), // User identifier (dereferenced from pointer)
 	)
 
-	// Set products: AUTH + TRANSACTIONS
-	// Issue #201 Phase 1-2 - adding products for account linking and transaction history
-	// AUTH: Account and routing numbers for ACH transfers
-	// TRANSACTIONS: Historical transaction data (up to 24 months), categories, merchant info
-	// NOTE: BALANCE is NOT a valid Link initialization product (per Plaid docs)
+	// Set products: TRANSACTIONS only
+	// Issue #237 - Removed AUTH to fix NO_AUTH_ACCOUNTS error for credit cards and CDs
+	// TRANSACTIONS product supports:
+	//   - All depository accounts: checking, savings, CDs, money market
+	//   - Credit cards: balances, transactions, credit limit
+	//   - Student loans: balances and transaction history
 	// Balance data is automatically included in /accounts/get response (FREE)
+	// NOTE: BALANCE is NOT a valid Link initialization product (per Plaid docs)
 	request.SetProducts([]plaid.Products{
-		plaid.PRODUCTS_AUTH,
 		plaid.PRODUCTS_TRANSACTIONS,
 	})
 
