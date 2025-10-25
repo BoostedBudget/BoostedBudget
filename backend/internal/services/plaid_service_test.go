@@ -502,16 +502,15 @@ func TestCreateLinkTokenWithTransactions(t *testing.T) {
 	t.Logf("✅ Link token with TRANSACTIONS product: %s (RequestID: %s)", response.LinkToken, response.RequestID)
 }
 
-// TestCreateLinkTokenWithBalance tests link token creation with AUTH + TRANSACTIONS + BALANCE products.
-// This is Phase 2 of issue #201 - incrementally adding BALANCE product to identify
-// if it causes the 400 error that was resolved in issue #200.
+// TestCreateLinkTokenWithBalance tests link token creation with AUTH + TRANSACTIONS products.
+// NOTE: BALANCE product is NOT included because it's not a valid Link initialization product.
+// Per Plaid docs: "Balance itself is not a product that can be used to initialize Link."
 //
-// BALANCE product provides access to:
-// - Real-time account balances (current and available)
-// - Account limits and credit information
-// - Balance updates via webhook or polling
+// Issue #232: PRODUCTS_BALANCE was causing 400 Bad Request from Plaid API in production.
+// Balance data is automatically included in /accounts/get endpoint response (FREE).
 //
-// Hypothesis: BALANCE product will NOT cause 400 error when added to AUTH + TRANSACTIONS.
+// This test verifies that link tokens can be created successfully WITHOUT BALANCE product,
+// and that balance data will still be available via the /accounts/get endpoint.
 func TestCreateLinkTokenWithBalance(t *testing.T) {
 	// Skip if Plaid credentials not available in environment
 	if getTestEnv("PLAID_CLIENT_ID") == "" || getTestEnv("PLAID_SECRET") == "" {
@@ -529,19 +528,20 @@ func TestCreateLinkTokenWithBalance(t *testing.T) {
 	service, err := NewPlaidService(cfg)
 	require.NoError(t, err, "should create plaid service successfully")
 
-	// When: Creating link token (implementation should use AUTH + TRANSACTIONS + BALANCE + redirect_uri)
+	// When: Creating link token (implementation uses AUTH + TRANSACTIONS + redirect_uri, NO BALANCE)
 	ctx := context.Background()
 	userID := time.Now().String()
 
 	response, err := service.CreateLinkToken(ctx, userID)
 
-	// Then: Should succeed - BALANCE product should not cause 400 error
-	require.NoError(t, err, "BALANCE product should not cause 400 error")
+	// Then: Should succeed - link token created without BALANCE product
+	require.NoError(t, err, "link token creation should succeed without BALANCE product")
 	assert.NotEmpty(t, response.LinkToken, "link token should not be empty")
 	assert.NotEmpty(t, response.Expiration, "expiration should not be empty")
 	assert.NotEmpty(t, response.RequestID, "request ID should not be empty")
 
-	t.Logf("✅ Link token with BALANCE product: %s (RequestID: %s)", response.LinkToken, response.RequestID)
+	t.Logf("✅ Link token without BALANCE product: %s (RequestID: %s)", response.LinkToken, response.RequestID)
+	t.Logf("   Balance data will be available via /accounts/get endpoint")
 }
 
 // TestCreateLinkTokenWithRedirectURI tests link token creation with full configuration including OAuth support.
