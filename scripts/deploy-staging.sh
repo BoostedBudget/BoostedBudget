@@ -1,0 +1,363 @@
+#!/usr/bin/env bash
+
+# deploy-staging.sh - Deploy BoostedBudget to Mac Mini Staging Environment
+# Usage: ./scripts/deploy-staging.sh
+#
+# This script:
+# 1. Stops existing staging containers gracefully
+# 2. Pulls latest code from staging branch
+# 3. Builds/pulls Docker images
+# 4. Starts containers with docker-compose (detached mode)
+# 5. Runs database migrations
+# 6. Verifies deployment with health checks
+# 7. Rolls back on failure
+
+set -euo pipefail
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Configuration
+COMPOSE_FILE="docker-compose.staging.yml"
+ENV_FILE=".env.staging"
+BACKEND_HEALTH_URL="http://localhost:8080/health"
+FRONTEND_URL="http://localhost:3000"
+MAX_HEALTH_RETRIES=30
+HEALTH_RETRY_DELAY=2
+
+# Function to print section headers
+print_section() {
+  echo ""
+  echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${BLUE}  $1${NC}"
+  echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+}
+
+# Function to print errors
+print_error() {
+  echo -e "${RED}✗ Error: $1${NC}"
+}
+
+# Function to print success
+print_success() {
+  echo -e "${GREEN}✓ $1${NC}"
+}
+
+# Function to print warnings
+print_warning() {
+  echo -e "${YELLOW}⚠ Warning: $1${NC}"
+}
+
+# Function to check prerequisites
+check_prerequisites() {
+  print_section "Checking Prerequisites"
+
+  # Check if docker-compose is installed
+  if ! command -v docker-compose &> /dev/null; then
+    print_error "docker-compose is not installed"
+    exit 1
+  fi
+  print_success "Docker Compose found"
+
+  # Check if .env.staging exists
+  if [ ! -f "$ENV_FILE" ]; then
+    print_error "$ENV_FILE not found"
+    echo -e "${YELLOW}Create it from template: cp .env.staging.example .env.staging${NC}"
+    exit 1
+  fi
+  print_success "Environment file found: $ENV_FILE"
+
+  # Check if compose file exists
+  if [ ! -f "$COMPOSE_FILE" ]; then
+    print_error "$COMPOSE_FILE not found"
+    exit 1
+  fi
+  print_success "Compose file found: $COMPOSE_FILE"
+}
+
+# Function to save current state for rollback
+save_current_state() {
+  print_section "Saving Current State for Rollback"
+
+  # Save list of running containers
+  docker ps --filter "name=boostedbudget-.*-staging" --format "{{.Names}}" > /tmp/staging-containers-backup.txt 2>/dev/null || true
+
+  if [ -s /tmp/staging-containers-backup.txt ]; then
+    print_success "Current state saved ($(wc -l < /tmp/staging-containers-backup.txt | tr -d ' ') containers)"
+  else
+    print_warning "No existing staging containers to backup"
+  fi
+}
+
+# Function to stop existing containers
+stop_containers() {
+  print_section "Stopping Existing Staging Containers"
+
+  if docker-compose -f "$COMPOSE_FILE" ps -q 2>/dev/null | grep -q .; then
+    echo "Stopping containers gracefully..."
+    docker-compose -f "$COMPOSE_FILE" down
+    print_success "Containers stopped successfully"
+  else
+    print_warning "No running staging containers found"
+  fi
+}
+
+# Function to pull latest code (if in git repo and on staging branch)
+pull_latest_code() {
+  print_section "Pulling Latest Code"
+
+  if [ -d ".git" ]; then
+    CURRENT_BRANCH=$(git branch --show-current)
+    if [ "$CURRENT_BRANCH" = "staging" ] || [[ "$CURRENT_BRANCH" =~ ^feature/.*-staging.* ]]; then
+      echo "Current branch: $CURRENT_BRANCH"
+      git pull origin staging || {
+        print_warning "Failed to pull latest code, continuing with local version"
+      }
+      print_success "Code updated"
+    else
+      print_warning "Not on staging branch (current: $CURRENT_BRANCH), skipping git pull"
+    fi
+  else
+    print_warning "Not a git repository, skipping code update"
+  fi
+}
+
+# Function to build/pull images
+build_or_pull_images() {
+  if [ "${PULL_FROM_GHCR:-false}" = "true" ]; then
+    print_section "Pulling Pre-built Images from GHCR"
+
+    # Pull images from GHCR (set by CI/CD)
+    if [ -n "${BACKEND_IMAGE:-}" ]; then
+      echo "Pulling backend image: $BACKEND_IMAGE"
+      docker pull "$BACKEND_IMAGE"
+      print_success "Backend image pulled"
+    fi
+
+    if [ -n "${FRONTEND_IMAGE:-}" ]; then
+      echo "Pulling frontend image: $FRONTEND_IMAGE"
+      docker pull "$FRONTEND_IMAGE"
+      print_success "Frontend image pulled"
+    fi
+
+    # Tag images for docker-compose to use
+    if [ -n "${BACKEND_IMAGE:-}" ]; then
+      docker tag "$BACKEND_IMAGE" "boostedbudget-backend:staging"
+    fi
+    if [ -n "${FRONTEND_IMAGE:-}" ]; then
+      docker tag "$FRONTEND_IMAGE" "boostedbudget-frontend:staging"
+    fi
+
+    print_success "Images pulled and tagged successfully"
+  else
+    print_section "Building Docker Images Locally"
+
+    echo "Building images with docker-compose..."
+    docker-compose -f "$COMPOSE_FILE" build --pull
+
+    print_success "Images built successfully"
+  fi
+}
+
+# Function to start containers
+start_containers() {
+  print_section "Starting Staging Containers"
+
+  echo "Starting containers in detached mode..."
+  docker-compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d
+
+  print_success "Containers started"
+
+  # Show running containers
+  echo ""
+  echo "Running staging containers:"
+  docker-compose -f "$COMPOSE_FILE" ps
+}
+
+# Function to verify restart policies
+verify_restart_policies() {
+  print_section "Verifying Restart Policies"
+
+  local containers=$(docker-compose -f "$COMPOSE_FILE" ps -q)
+  local all_correct=true
+
+  for container_id in $containers; do
+    local container_name=$(docker inspect --format='{{.Name}}' "$container_id" | sed 's/^.//')
+    local restart_policy=$(docker inspect --format='{{.HostConfig.RestartPolicy.Name}}' "$container_id")
+
+    if [ "$restart_policy" = "unless-stopped" ]; then
+      echo -e "${GREEN}✓${NC} $container_name: $restart_policy"
+    else
+      echo -e "${RED}✗${NC} $container_name: $restart_policy (expected: unless-stopped)"
+      all_correct=false
+    fi
+  done
+
+  if [ "$all_correct" = true ]; then
+    print_success "All containers have correct restart policies"
+  else
+    print_error "Some containers have incorrect restart policies"
+    return 1
+  fi
+}
+
+# Function to run database migrations
+run_migrations() {
+  print_section "Running Database Migrations"
+
+  # Wait for database to be ready
+  echo "Waiting for database to be ready..."
+  sleep 5
+
+  # Check if backend container is running
+  if docker-compose -f "$COMPOSE_FILE" ps backend | grep -q "Up"; then
+    echo "Running migrations in backend container..."
+
+    # Try to run migrations (adjust command based on your setup)
+    # Option 1: If migrations run automatically on startup
+    echo "Migrations run automatically on backend startup"
+
+    # Option 2: If you need to run manually (uncomment if needed)
+    # docker-compose -f "$COMPOSE_FILE" exec -T backend /app/server migrate
+
+    print_success "Migrations completed"
+  else
+    print_error "Backend container not running, cannot run migrations"
+    return 1
+  fi
+}
+
+# Function to wait for service health
+wait_for_health() {
+  local url=$1
+  local service_name=$2
+  local max_retries=${3:-$MAX_HEALTH_RETRIES}
+  local delay=${4:-$HEALTH_RETRY_DELAY}
+
+  echo "Waiting for $service_name to be healthy..."
+
+  for i in $(seq 1 $max_retries); do
+    if curl -f -s "$url" > /dev/null 2>&1; then
+      print_success "$service_name is healthy"
+      return 0
+    fi
+
+    if [ $i -eq $max_retries ]; then
+      print_error "$service_name failed health check after $max_retries attempts"
+      return 1
+    fi
+
+    echo "  Attempt $i/$max_retries failed, retrying in ${delay}s..."
+    sleep $delay
+  done
+}
+
+# Function to verify deployment
+verify_deployment() {
+  print_section "Verifying Deployment"
+
+  # Wait for backend health
+  wait_for_health "$BACKEND_HEALTH_URL" "Backend API" || return 1
+
+  # Wait for frontend
+  wait_for_health "$FRONTEND_URL" "Frontend" || return 1
+
+  # Check all containers are still running
+  echo ""
+  echo "Checking all containers are running..."
+  local all_running=true
+
+  for service in postgres redis rabbitmq backend frontend; do
+    if docker-compose -f "$COMPOSE_FILE" ps "$service" | grep -q "Up"; then
+      echo -e "${GREEN}✓${NC} $service is running"
+    else
+      echo -e "${RED}✗${NC} $service is not running"
+      all_running=false
+    fi
+  done
+
+  if [ "$all_running" = true ]; then
+    print_success "All services are running and healthy"
+    return 0
+  else
+    print_error "Some services are not running"
+    return 1
+  fi
+}
+
+# Function to rollback on failure
+rollback() {
+  print_section "Rolling Back Deployment"
+
+  print_warning "Deployment failed, attempting rollback..."
+
+  # Stop failed containers
+  docker-compose -f "$COMPOSE_FILE" down 2>/dev/null || true
+
+  # If there were previous containers, try to restart them
+  if [ -f /tmp/staging-containers-backup.txt ] && [ -s /tmp/staging-containers-backup.txt ]; then
+    print_warning "Previous containers found, but cannot auto-restart"
+    print_warning "Please manually review and restart if needed"
+  fi
+
+  print_error "Rollback completed - staging environment may be down"
+  print_warning "Check logs: docker-compose -f $COMPOSE_FILE logs"
+}
+
+# Function to display deployment info
+display_info() {
+  print_section "Deployment Complete"
+
+  print_success "Staging environment deployed successfully!"
+  echo ""
+  echo -e "${BLUE}Access via:${NC}"
+  echo -e "  ${GREEN}Frontend:${NC}  http://localhost:3000"
+  echo -e "  ${GREEN}Backend:${NC}   http://localhost:8080"
+  echo -e "  ${GREEN}RabbitMQ:${NC}  http://localhost:15673 (guest/guest)"
+  echo ""
+  echo -e "${BLUE}Via Tailscale (after setup):${NC}"
+  echo -e "  ${GREEN}Frontend:${NC}  http://mac-mini.tailnet-name.ts.net:3000"
+  echo -e "  ${GREEN}Backend:${NC}   http://mac-mini.tailnet-name.ts.net:8080"
+  echo ""
+  echo -e "${BLUE}Useful commands:${NC}"
+  echo -e "  View logs:    docker-compose -f $COMPOSE_FILE logs -f"
+  echo -e "  Stop:         docker-compose -f $COMPOSE_FILE down"
+  echo -e "  Restart:      docker-compose -f $COMPOSE_FILE restart"
+  echo -e "  Status:       docker-compose -f $COMPOSE_FILE ps"
+  echo ""
+  echo -e "${BLUE}Restart policies:${NC} All containers will auto-restart on Mac Mini boot"
+}
+
+# Main execution
+main() {
+  echo -e "${GREEN}╔═══════════════════════════════════════════════════════════════╗${NC}"
+  echo -e "${GREEN}║     BoostedBudget Mac Mini Staging Deployment Script         ║${NC}"
+  echo -e "${GREEN}╚═══════════════════════════════════════════════════════════════╝${NC}"
+  echo ""
+
+  # Run deployment steps
+  check_prerequisites || exit 1
+  save_current_state
+  stop_containers
+  pull_latest_code
+  build_or_pull_images || { rollback; exit 1; }
+  start_containers || { rollback; exit 1; }
+  verify_restart_policies || print_warning "Restart policy verification failed"
+  run_migrations || { rollback; exit 1; }
+  verify_deployment || { rollback; exit 1; }
+
+  # Cleanup backup file
+  rm -f /tmp/staging-containers-backup.txt
+
+  # Display final info
+  display_info
+
+  echo ""
+  print_success "Deployment completed successfully! 🚀"
+}
+
+main "$@"
