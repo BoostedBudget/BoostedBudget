@@ -99,11 +99,15 @@ func (s *plaidService) GetClient() *plaid.APIClient {
 // The link token is a short-lived (30 minute) credential that enables the frontend
 // to initialize Plaid Link for connecting bank accounts. Configured with:
 //   - User identification (client_user_id from Auth0)
-//   - Products: AUTH (account/routing), TRANSACTIONS (history), BALANCE (real-time)
+//   - Products: AUTH (account/routing), TRANSACTIONS (history)
 //   - OAuth redirect URI for institutions like Chase, Capital One, Wells Fargo
 //   - Country codes (US) and language (English)
 //
-// Issue #201 implementation complete: All products and OAuth redirect_uri support added.
+// Note: Balance data is retrieved automatically via /accounts/get endpoint (FREE).
+// BALANCE is not a valid Link initialization product per Plaid docs and should not be included.
+//
+// Issue #201 implementation: AUTH + TRANSACTIONS products + OAuth redirect_uri support.
+// Issue #232 fix: Removed PRODUCTS_BALANCE (causes 400 Bad Request from Plaid API).
 // The redirect URI must be configured via PLAID_REDIRECT_URI environment variable and
 // registered in Plaid Dashboard (Team Settings → API → Allowed redirect URIs).
 //
@@ -123,15 +127,15 @@ func (s *plaidService) CreateLinkToken(ctx context.Context, userID string) (*dom
 		*plaid.NewLinkTokenCreateRequestUser(userID), // User identifier (dereferenced from pointer)
 	)
 
-	// Set products: AUTH + TRANSACTIONS + BALANCE
-	// Phase 1-2 of issue #201 - adding products incrementally
+	// Set products: AUTH + TRANSACTIONS
+	// Issue #201 Phase 1-2 - adding products for account linking and transaction history
 	// AUTH: Account and routing numbers for ACH transfers
 	// TRANSACTIONS: Historical transaction data (up to 24 months), categories, merchant info
-	// BALANCE: Real-time account balances (current and available), account limits
+	// NOTE: BALANCE is NOT a valid Link initialization product (per Plaid docs)
+	// Balance data is automatically included in /accounts/get response (FREE)
 	request.SetProducts([]plaid.Products{
 		plaid.PRODUCTS_AUTH,
 		plaid.PRODUCTS_TRANSACTIONS,
-		plaid.PRODUCTS_BALANCE,
 	})
 
 	// Set redirect URI for OAuth institution support (Chase, Capital One, Wells Fargo, etc.)
