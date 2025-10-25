@@ -17,6 +17,7 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
   const [cookies, setCookie] = useCookies([COOKIE_CONSENT_NAME]);
   const [showBanner, setShowBanner] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
+  const [hasCheckedCookie, setHasCheckedCookie] = useState(false);
   const [customConsents, setCustomConsents] = useState<CookieConsentSettings>({
     necessary: true,
     analytics: false,
@@ -24,6 +25,9 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
   });
 
   useEffect(() => {
+    // Only check once when cookies are available
+    if (hasCheckedCookie) return;
+
     // Check if user has already provided consent
     const existingConsent = cookies[COOKIE_CONSENT_NAME] as CookieConsentData | undefined;
 
@@ -34,8 +38,10 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
       // Apply existing consents
       onConsentChange?.(existingConsent.consents);
     }
+
+    setHasCheckedCookie(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [cookies[COOKIE_CONSENT_NAME]]);
 
   const saveConsent = (consents: CookieConsentSettings) => {
     const consentData: CookieConsentData = {
