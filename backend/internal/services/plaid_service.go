@@ -99,11 +99,11 @@ func (s *plaidService) GetClient() *plaid.APIClient {
 // The link token is a short-lived (30 minute) credential that enables the frontend
 // to initialize Plaid Link for connecting bank accounts. Currently configured with:
 //   - User identification (client_user_id from Auth0)
-//   - Products: AUTH (account/routing numbers), TRANSACTIONS (transaction history)
+//   - Products: AUTH (account/routing), TRANSACTIONS (history), BALANCE (real-time)
 //   - Country codes (US) and language (English)
 //
-// Phase 1 of issue #201: TRANSACTIONS product added for transaction history access.
-// Future phases will add BALANCE product and OAuth redirect_uri support.
+// Phase 1-2 of issue #201: TRANSACTIONS and BALANCE products added.
+// Future phase will add OAuth redirect_uri support.
 //
 // Returns an error if the Plaid API call fails.
 func (s *plaidService) CreateLinkToken(ctx context.Context, userID string) (*domain.LinkTokenResponse, error) {
@@ -115,13 +115,15 @@ func (s *plaidService) CreateLinkToken(ctx context.Context, userID string) (*dom
 		*plaid.NewLinkTokenCreateRequestUser(userID), // User identifier (dereferenced from pointer)
 	)
 
-	// Set products: AUTH + TRANSACTIONS
-	// Phase 1 of issue #201 - adding TRANSACTIONS product for transaction history access
+	// Set products: AUTH + TRANSACTIONS + BALANCE
+	// Phase 1-2 of issue #201 - adding products incrementally
 	// AUTH: Account and routing numbers for ACH transfers
 	// TRANSACTIONS: Historical transaction data (up to 24 months), categories, merchant info
+	// BALANCE: Real-time account balances (current and available), account limits
 	request.SetProducts([]plaid.Products{
 		plaid.PRODUCTS_AUTH,
 		plaid.PRODUCTS_TRANSACTIONS,
+		plaid.PRODUCTS_BALANCE,
 	})
 
 	// REMOVED: Webhook URL validation and SetWebhook()
