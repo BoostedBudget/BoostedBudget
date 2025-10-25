@@ -11,15 +11,18 @@ export default defineConfig({
     },
   },
   server: {
-    port: 3000,
+    // Support dynamic port allocation via PORT or E2E_FRONTEND_PORT env var
+    port: parseInt(process.env.PORT || process.env.E2E_FRONTEND_PORT || '3000'),
     host: true,
     proxy: {
       '/api': {
-        target: 'http://localhost:8080',
+        // Support dynamic backend port via E2E_BACKEND_PORT env var
+        target: `http://localhost:${process.env.E2E_BACKEND_PORT || '8080'}`,
         changeOrigin: true,
       },
       '/health': {
-        target: 'http://localhost:8080',
+        // Support dynamic backend port via E2E_BACKEND_PORT env var
+        target: `http://localhost:${process.env.E2E_BACKEND_PORT || '8080'}`,
         changeOrigin: true,
       },
     },
