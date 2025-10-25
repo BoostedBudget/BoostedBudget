@@ -97,20 +97,17 @@ func (s *plaidService) GetClient() *plaid.APIClient {
 // CreateLinkToken generates a Plaid Link token for the specified user.
 //
 // The link token is a short-lived (30 minute) credential that enables the frontend
-// to initialize Plaid Link for connecting bank accounts. It's pre-configured with:
+// to initialize Plaid Link for connecting bank accounts. Currently configured with:
 //   - User identification (client_user_id from Auth0)
-//   - Required products: TRANSACTIONS, AUTH, BALANCE
-//   - Webhook URL for receiving async updates
-//   - Redirect URI for OAuth institution support
-//   - Country codes and language settings
+//   - Products: AUTH (account/routing numbers), TRANSACTIONS (transaction history)
+//   - Country codes (US) and language (English)
 //
-// Returns an error if the Plaid API call fails or if required configuration is missing.
+// Phase 1 of issue #201: TRANSACTIONS product added for transaction history access.
+// Future phases will add BALANCE product and OAuth redirect_uri support.
+//
+// Returns an error if the Plaid API call fails.
 func (s *plaidService) CreateLinkToken(ctx context.Context, userID string) (*domain.LinkTokenResponse, error) {
-	// MINIMAL IMPLEMENTATION for debugging issue #200
-	// This matches the exact pattern from plaid-go v23 official tests
-	// to isolate the 400 error by testing with only required parameters
-
-	// Build the link token request with ONLY required parameters
+	// Build the link token request with required parameters
 	request := plaid.NewLinkTokenCreateRequest(
 		"BoostedBudget",                              // Client name displayed in Plaid Link
 		"en",                                          // Language
@@ -118,10 +115,13 @@ func (s *plaidService) CreateLinkToken(ctx context.Context, userID string) (*dom
 		*plaid.NewLinkTokenCreateRequestUser(userID), // User identifier (dereferenced from pointer)
 	)
 
-	// Set ONLY AUTH product (simplest, most compatible)
-	// Removed TRANSACTIONS and BALANCE to match minimal v23 test pattern
+	// Set products: AUTH + TRANSACTIONS
+	// Phase 1 of issue #201 - adding TRANSACTIONS product for transaction history access
+	// AUTH: Account and routing numbers for ACH transfers
+	// TRANSACTIONS: Historical transaction data (up to 24 months), categories, merchant info
 	request.SetProducts([]plaid.Products{
 		plaid.PRODUCTS_AUTH,
+		plaid.PRODUCTS_TRANSACTIONS,
 	})
 
 	// REMOVED: Webhook URL validation and SetWebhook()
