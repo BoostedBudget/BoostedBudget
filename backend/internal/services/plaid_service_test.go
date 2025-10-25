@@ -502,14 +502,15 @@ func TestCreateLinkTokenWithTransactions(t *testing.T) {
 	t.Logf("✅ Link token with TRANSACTIONS product: %s (RequestID: %s)", response.LinkToken, response.RequestID)
 }
 
-// TestCreateLinkTokenWithBalance tests link token creation with AUTH + TRANSACTIONS products.
+// TestCreateLinkTokenWithBalance tests link token creation with TRANSACTIONS product only.
 // NOTE: BALANCE product is NOT included because it's not a valid Link initialization product.
 // Per Plaid docs: "Balance itself is not a product that can be used to initialize Link."
 //
 // Issue #232: PRODUCTS_BALANCE was causing 400 Bad Request from Plaid API in production.
+// Issue #237: PRODUCTS_AUTH removed - only supports checking/savings, caused NO_AUTH_ACCOUNTS for credit cards/CDs.
 // Balance data is automatically included in /accounts/get endpoint response (FREE).
 //
-// This test verifies that link tokens can be created successfully WITHOUT BALANCE product,
+// This test verifies that link tokens can be created successfully with TRANSACTIONS only,
 // and that balance data will still be available via the /accounts/get endpoint.
 func TestCreateLinkTokenWithBalance(t *testing.T) {
 	// Skip if Plaid credentials not available in environment
@@ -528,7 +529,7 @@ func TestCreateLinkTokenWithBalance(t *testing.T) {
 	service, err := NewPlaidService(cfg)
 	require.NoError(t, err, "should create plaid service successfully")
 
-	// When: Creating link token (implementation uses AUTH + TRANSACTIONS + redirect_uri, NO BALANCE)
+	// When: Creating link token (implementation uses TRANSACTIONS + redirect_uri, NO AUTH/BALANCE)
 	ctx := context.Background()
 	userID := time.Now().String()
 
