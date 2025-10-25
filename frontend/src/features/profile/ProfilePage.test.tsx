@@ -289,7 +289,9 @@ describe('ProfilePage', () => {
       const user = userEvent.setup()
       const emailInput = screen.getByLabelText(/email/i)
 
-      await user.clear(emailInput)
+      // Use tripleClick + Backspace to reliably clear controlled input
+      await user.tripleClick(emailInput)
+      await user.keyboard('{Backspace}')
 
       const saveButton = screen.getByRole('button', { name: /save/i })
       await user.click(saveButton)
