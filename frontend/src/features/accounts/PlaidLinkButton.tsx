@@ -9,6 +9,7 @@ interface PlaidLinkButtonProps {
   onSuccess?: (response: ExchangePublicTokenResponse) => void
   onExit?: () => void
   className?: string
+  disabled?: boolean
 }
 
 /**
@@ -53,7 +54,7 @@ function mapErrorToMessage(error: unknown): string {
   return 'Failed to load bank connection. Please try again.'
 }
 
-export function PlaidLinkButton({ onSuccess, onExit, className }: PlaidLinkButtonProps) {
+export function PlaidLinkButton({ onSuccess, onExit, className, disabled = false }: PlaidLinkButtonProps) {
   const navigate = useNavigate()
   const [linkToken, setLinkToken] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -152,7 +153,7 @@ export function PlaidLinkButton({ onSuccess, onExit, className }: PlaidLinkButto
       {error && <p className="plaid-link-button__error">{error}</p>}
       <button
         onClick={() => open()}
-        disabled={!ready || exchanging}
+        disabled={disabled || !ready || exchanging}
         className="plaid-link-button__submit"
       >
         Connect Bank Account
