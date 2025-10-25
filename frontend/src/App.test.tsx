@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { BrowserRouter } from 'react-router-dom'
-import { CookiesProvider } from 'react-cookie'
 import App from './App'
 
 // Mock Auth0
@@ -43,9 +42,7 @@ describe('App', () => {
     it('should render login button', async () => {
       render(
         <BrowserRouter>
-          <CookiesProvider>
-            <App />
-          </CookiesProvider>
+          <App />
         </BrowserRouter>
       )
 
@@ -57,9 +54,7 @@ describe('App', () => {
     it('should not render logout button', async () => {
       render(
         <BrowserRouter>
-          <CookiesProvider>
-            <App />
-          </CookiesProvider>
+          <App />
         </BrowserRouter>
       )
 
@@ -71,9 +66,7 @@ describe('App', () => {
     it('should not display user profile', async () => {
       render(
         <BrowserRouter>
-          <CookiesProvider>
-            <App />
-          </CookiesProvider>
+          <App />
         </BrowserRouter>
       )
 
@@ -101,9 +94,7 @@ describe('App', () => {
     it('should render logout button', async () => {
       render(
         <BrowserRouter>
-          <CookiesProvider>
-            <App />
-          </CookiesProvider>
+          <App />
         </BrowserRouter>
       )
 
@@ -115,9 +106,7 @@ describe('App', () => {
     it('should not render login button', async () => {
       render(
         <BrowserRouter>
-          <CookiesProvider>
-            <App />
-          </CookiesProvider>
+          <App />
         </BrowserRouter>
       )
 
@@ -129,9 +118,7 @@ describe('App', () => {
     it('should display user name', async () => {
       render(
         <BrowserRouter>
-          <CookiesProvider>
-            <App />
-          </CookiesProvider>
+          <App />
         </BrowserRouter>
       )
 
@@ -143,9 +130,7 @@ describe('App', () => {
     it('should display user email', async () => {
       render(
         <BrowserRouter>
-          <CookiesProvider>
-            <App />
-          </CookiesProvider>
+          <App />
         </BrowserRouter>
       )
 
@@ -166,9 +151,7 @@ describe('App', () => {
     it('should show Auth0 integration as complete', async () => {
       render(
         <BrowserRouter>
-          <CookiesProvider>
-            <App />
-          </CookiesProvider>
+          <App />
         </BrowserRouter>
       )
 
@@ -180,9 +163,7 @@ describe('App', () => {
     it('should not show Auth0 as coming next', async () => {
       render(
         <BrowserRouter>
-          <CookiesProvider>
-            <App />
-          </CookiesProvider>
+          <App />
         </BrowserRouter>
       )
 
@@ -203,9 +184,7 @@ describe('App', () => {
     it('should still display system status section', async () => {
       render(
         <BrowserRouter>
-          <CookiesProvider>
-            <App />
-          </CookiesProvider>
+          <App />
         </BrowserRouter>
       )
 
@@ -217,9 +196,7 @@ describe('App', () => {
     it('should display health check data', async () => {
       render(
         <BrowserRouter>
-          <CookiesProvider>
-            <App />
-          </CookiesProvider>
+          <App />
         </BrowserRouter>
       )
 

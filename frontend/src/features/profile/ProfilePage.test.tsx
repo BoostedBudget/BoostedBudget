@@ -249,10 +249,11 @@ describe('ProfilePage', () => {
       })
 
       const user = userEvent.setup()
-      const emailInput = screen.getByLabelText(/email/i)
+      const emailInput = screen.getByLabelText(/email/i) as HTMLInputElement
 
-      await user.clear(emailInput)
-      await user.type(emailInput, 'invalid-email')
+      // Triple-click to select all, then type to replace (more reliable than clear() in vitest 4.x)
+      await user.tripleClick(emailInput)
+      await user.keyboard('invalid-email')
 
       const saveButton = screen.getByRole('button', { name: /save/i })
       await user.click(saveButton)
@@ -289,7 +290,9 @@ describe('ProfilePage', () => {
       const user = userEvent.setup()
       const emailInput = screen.getByLabelText(/email/i)
 
-      await user.clear(emailInput)
+      // Use tripleClick + Backspace to reliably clear controlled input
+      await user.tripleClick(emailInput)
+      await user.keyboard('{Backspace}')
 
       const saveButton = screen.getByRole('button', { name: /save/i })
       await user.click(saveButton)
@@ -315,10 +318,11 @@ describe('ProfilePage', () => {
       })
 
       const user = userEvent.setup()
-      const emailInput = screen.getByLabelText(/email/i)
+      const emailInput = screen.getByLabelText(/email/i) as HTMLInputElement
 
-      await user.clear(emailInput)
-      await user.type(emailInput, 'newemail@example.com')
+      // Triple-click to select all, then type to replace (more reliable than clear() in vitest 4.x)
+      await user.tripleClick(emailInput)
+      await user.keyboard('newemail@example.com')
 
       const saveButton = screen.getByRole('button', { name: /save/i })
       await user.click(saveButton)
@@ -375,8 +379,8 @@ describe('ProfilePage', () => {
       const user = userEvent.setup()
       const emailInput = screen.getByLabelText(/email/i)
 
-      await user.clear(emailInput)
-      await user.type(emailInput, 'newemail@example.com')
+      await user.tripleClick(emailInput)
+      await user.keyboard('newemail@example.com')
 
       const saveButton = screen.getByRole('button', { name: /save/i })
       await user.click(saveButton)
@@ -397,10 +401,11 @@ describe('ProfilePage', () => {
       })
 
       const user = userEvent.setup()
-      const emailInput = screen.getByLabelText(/email/i)
+      const emailInput = screen.getByLabelText(/email/i) as HTMLInputElement
 
-      await user.clear(emailInput)
-      await user.type(emailInput, 'newemail@example.com')
+      // Triple-click to select all, then type to replace (more reliable than clear() in vitest 4.x)
+      await user.tripleClick(emailInput)
+      await user.keyboard('newemail@example.com')
 
       const saveButton = screen.getByRole('button', { name: /save/i })
       await user.click(saveButton)
@@ -423,10 +428,11 @@ describe('ProfilePage', () => {
       })
 
       const user = userEvent.setup()
-      const emailInput = screen.getByLabelText(/email/i)
+      const emailInput = screen.getByLabelText(/email/i) as HTMLInputElement
 
-      await user.clear(emailInput)
-      await user.type(emailInput, 'newemail@example.com')
+      // Triple-click to select all, then type to replace (more reliable than clear() in vitest 4.x)
+      await user.tripleClick(emailInput)
+      await user.keyboard('newemail@example.com')
 
       const saveButton = screen.getByRole('button', { name: /save/i })
       await user.click(saveButton)

@@ -1,0 +1,336 @@
+name: Test Suite
+
+# Trigger on pull requests only - quality gates before merge
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# Cancel in-progress runs for the same PR
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.25'
+  NODE_VERSION: '20'
+
+jobs:
+  # =============================================================================
+  # Backend Tests (runs in parallel with frontend)
+  # =============================================================================
+  backend-test:
+    name: Backend Tests
+    runs-on: [self-hosted, macOS, mac-mini]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Run Go tests with coverage
+        working-directory: ./backend
+        run: |
+          echo "::group::Running Go tests with race detection and coverage"
+          go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+          echo "::endgroup::"
+
+      - name: Check Go coverage threshold (≥60%)
+        working-directory: ./backend
+        run: |
+          echo "::group::Checking coverage threshold"
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+          echo "Current coverage: ${COVERAGE}%"
+
+          COVERAGE_INT=$(echo "$COVERAGE" | cut -d. -f1)
+
+          if [ "$COVERAGE_INT" -lt 60 ]; then
+            echo "::error::Coverage ${COVERAGE}% is below threshold 60%"
+            exit 1
+          else
+            echo "::notice::✅ Coverage ${COVERAGE}% meets threshold 60%"
+          fi
+          echo "::endgroup::"
+
+      - name: Generate Go coverage HTML report
+        working-directory: ./backend
+        run: go tool cover -html=coverage.out -o coverage.html
+
+      - name: Build backend binary (for E2E tests)
+        working-directory: ./backend
+        run: |
+          echo "::group::Building backend binary"
+          go build -o bin/server ./cmd/server
+          echo "::endgroup::"
+
+      - name: Upload backend binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-binary
+          path: backend/bin/server
+          retention-days: 1
+
+      - name: Upload backend coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: |
+            backend/coverage.out
+            backend/coverage.html
+          retention-days: 30
+
+  # =============================================================================
+  # Frontend Tests (runs in parallel with backend)
+  # =============================================================================
+  frontend-test:
+    name: Frontend Tests
+    runs-on: [self-hosted, macOS, mac-mini]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 1
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install frontend dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Run ESLint (fail on warnings)
+        working-directory: ./frontend
+        run: |
+          echo "::group::Running ESLint"
+          npm run lint
+          echo "::endgroup::"
+
+      - name: Run frontend unit tests with coverage
+        working-directory: ./frontend
+        run: |
+          echo "::group::Running Unit Tests"
+          npm run test:ci
+          echo "::endgroup::"
+
+      - name: Upload frontend coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage
+          path: |
+            frontend/coverage/
+          retention-days: 30
+
+  # =============================================================================
+  # E2E Tests (depends on backend-test for binary)
+  # =============================================================================
+  e2e-test:
+    name: E2E Tests
+    needs: backend-test
+    runs-on: [self-hosted, macOS, mac-mini]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install frontend dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: ./frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Download backend binary
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-binary
+          path: backend/bin
+
+      - name: Make backend binary executable
+        run: chmod +x backend/bin/server
+
+      - name: Run E2E tests
+        working-directory: ./frontend
+        env:
+          CI: true
+        run: |
+          echo "::group::Running Playwright E2E tests"
+          npm run test:e2e
+          echo "::endgroup::"
+
+      - name: Upload E2E test results
+        if: success() || failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 30
+
+      - name: Upload E2E test videos (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-videos
+          path: frontend/test-results/
+          retention-days: 7
+
+  # =============================================================================
+  # Migration Integration Tests
+  # =============================================================================
+  migration-tests:
+    name: Migration Tests
+    runs-on: [self-hosted, macOS, mac-mini]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Start PostgreSQL container
+        run: |
+          docker stop test-postgres 2>/dev/null || true
+          docker rm test-postgres 2>/dev/null || true
+
+          docker run -d \
+            --name test-postgres \
+            -e POSTGRES_USER=test \
+            -e POSTGRES_PASSWORD=test \
+            -e POSTGRES_DB=test \
+            -p 5432:5432 \
+            --health-cmd pg_isready \
+            --health-interval 10s \
+            --health-timeout 5s \
+            --health-retries 5 \
+            postgres:15
+
+          echo "Waiting for PostgreSQL to be ready..."
+          for i in {1..30}; do
+            if docker exec test-postgres pg_isready -U test > /dev/null 2>&1; then
+              echo "PostgreSQL is ready!"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "::error::Timeout waiting for PostgreSQL to start"
+              exit 1
+            fi
+            sleep 1
+          done
+
+      - name: Lint migrations (Atlas validation)
+        env:
+          DATABASE_URL: postgres://test:test@localhost:5432/test?sslmode=disable
+        run: |
+          echo "::group::Linting migrations"
+          cd backend
+          atlas migrate lint \
+            --dir file://migrations \
+            --dev-url "docker://postgres/15/test" \
+            --latest 1
+          echo "::notice::✅ Migration lint passed"
+          echo "::endgroup::"
+
+      - name: Run migrations up
+        env:
+          DATABASE_URL: postgres://test:test@localhost:5432/test?sslmode=disable
+        run: |
+          echo "::group::Running migrations"
+          atlas migrate apply \
+            --dir file://backend/migrations \
+            --url "$DATABASE_URL"
+          echo "::endgroup::"
+
+      - name: Validate schema
+        env:
+          DATABASE_URL: postgres://test:test@localhost:5432/test?sslmode=disable
+        run: |
+          echo "::group::Validating database schema"
+
+          echo "Checking tables..."
+          docker exec test-postgres psql -U test -d test -c "\dt" | grep users || { echo "::error::users table missing"; exit 1; }
+          docker exec test-postgres psql -U test -d test -c "\dt" | grep privacy_settings || { echo "::error::privacy_settings table missing"; exit 1; }
+
+          echo "::notice::✅ Schema validation passed"
+          echo "::endgroup::"
+
+      - name: Cleanup PostgreSQL container
+        if: always()
+        run: |
+          docker stop test-postgres 2>/dev/null || true
+          docker rm test-postgres 2>/dev/null || true
+
+  # =============================================================================
+  # Security Scan - Dependencies & Dockerfiles (Parallelized)
+  # =============================================================================
+  security-scan:
+    name: Security Scan (${{ matrix.component }})
+    runs-on: [self-hosted, macOS, mac-mini]
+    strategy:
+      matrix:
+        component: [backend, frontend]
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Trivy
+        uses: aquasecurity/setup-trivy@v0.2.0
+        with:
+          version: v0.65.0
+
+      - name: Fix Trivy permissions on macOS
+        run: chmod +x $(which trivy) || true
+
+      - name: Scan ${{ matrix.component }} dependencies
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: './${{ matrix.component }}'
+          scanners: 'vuln'
+          format: 'sarif'
+          output: 'trivy-${{ matrix.component }}-deps.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+          ignore-unfixed: true
+          cache: false
+
+      - name: Upload ${{ matrix.component }} dependency scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: success() || failure()
+        continue-on-error: true
+        with:
+          sarif_file: 'trivy-${{ matrix.component }}-deps.sarif'
+          category: 'trivy-${{ matrix.component }}-dependencies'
+
+      - name: Scan ${{ matrix.component }} Dockerfile
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          scan-ref: './${{ matrix.component }}/Dockerfile'
+          format: 'sarif'
+          output: 'trivy-${{ matrix.component }}-dockerfile.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+          cache: false
+
+      - name: Upload ${{ matrix.component }} Dockerfile scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: success() || failure()
+        continue-on-error: true
+        with:
+          sarif_file: 'trivy-${{ matrix.component }}-dockerfile.sarif'
+          category: 'trivy-${{ matrix.component }}-dockerfile'

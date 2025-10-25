@@ -158,6 +158,25 @@ BAD ✗
 
 **Frequency**: After EVERY significant decision, not in batches at the end
 
+## Branching Strategy
+
+**Branches:**
+- `staging` - Integration branch, all feature PRs merge here first → deploys to Mac Mini staging
+- `main` - Production branch, only updated via staging→main PRs → deploys to Fly.io production
+- `feature/<issue#>-<desc>` - Feature branches, created from staging, merge to staging
+
+**Workflow:**
+1. Create feature branch from `staging`: `git checkout staging && git pull && git checkout -b feature/123-description`
+2. Develop and commit changes with issue ID: `git commit -m "#123: Your commit message"`
+3. Push and create PR to `staging`: All feature PRs target staging by default
+4. After merge to staging, staging auto-deploys to Mac Mini for QA/testing
+5. Once validated in staging, create PR from `staging` → `main`
+6. After merge to main, main deploys to Fly.io production
+
+**Branch Protection:**
+- For private repos: Manual reviews and approvals
+- For public repos: Configure protection rules for main and staging
+
 ## Dev Workflow Checklist
 
 1. **MCPs FIRST**: Serena search → in-memoria context → Sequential plan → **Server Memory: Log planning decisions**
