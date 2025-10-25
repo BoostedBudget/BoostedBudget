@@ -1,6 +1,6 @@
 # Multi-stage production Dockerfile for Frontend
 # Stage 1: Builder
-FROM node:20-alpine AS builder
+FROM node:25-alpine AS builder
 
 WORKDIR /build
 
