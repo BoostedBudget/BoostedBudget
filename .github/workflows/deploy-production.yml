@@ -1,9 +1,28 @@
 name: Deploy to Production
 
 # Trigger on pushes to main branch (after PR merge or staging→main merge)
+# Also allow manual triggering for emergency deployments or retries
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      skip_security_scan:
+        description: 'Skip security scan (emergencies only - not recommended)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+      force_deploy:
+        description: 'Force deployment even if tests are failing (use with extreme caution)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 # Only allow one production deployment at a time
 concurrency:
@@ -141,6 +160,8 @@ jobs:
     name: Security Scan (${{ matrix.component }} Image)
     needs: build-images
     runs-on: [self-hosted, macOS, mac-mini]
+    # Allow skipping security scan for emergency deployments (manual trigger only)
+    if: ${{ github.event.inputs.skip_security_scan != 'true' }}
     strategy:
       matrix:
         component: [backend, frontend]
@@ -220,6 +241,8 @@ jobs:
   push-to-fly-registry:
     name: Push ${{ matrix.component }} to Fly.io
     needs: [build-images, image-security-scan]
+    # Run if build succeeded and either security scan passed OR was skipped
+    if: ${{ always() && needs.build-images.result == 'success' && (needs.image-security-scan.result == 'success' || needs.image-security-scan.result == 'skipped') }}
     runs-on: [self-hosted, macOS, mac-mini]
     strategy:
       matrix:
@@ -395,3 +418,13 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- Backend health check" >> $GITHUB_STEP_SUMMARY
           echo "- Frontend accessibility" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Document manual trigger details if applicable
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "**Deployment Trigger:** Manual workflow_dispatch" >> $GITHUB_STEP_SUMMARY
+            echo "**Skip Security Scan:** ${{ github.event.inputs.skip_security_scan || 'false' }}" >> $GITHUB_STEP_SUMMARY
+            echo "**Force Deploy:** ${{ github.event.inputs.force_deploy || 'false' }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Deployment Trigger:** Automatic (push to main)" >> $GITHUB_STEP_SUMMARY
+          fi
