@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useCookies } from 'react-cookie';
+import { useCookieState } from '../shared/hooks/useCookieState';
 import {
   CookieConsentSettings,
   CookieConsentData,
@@ -14,7 +14,7 @@ interface CookieConsentProps {
 }
 
 export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange }) => {
-  const [cookies, setCookie] = useCookies([COOKIE_CONSENT_NAME]);
+  const [consentData, setConsentData] = useCookieState<CookieConsentData>(COOKIE_CONSENT_NAME);
   const [showBanner, setShowBanner] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [customConsents, setCustomConsents] = useState<CookieConsentSettings>({
@@ -25,20 +25,18 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
 
   useEffect(() => {
     // Check if user has already provided consent
-    const existingConsent = cookies[COOKIE_CONSENT_NAME] as CookieConsentData | undefined;
-
-    if (!existingConsent || existingConsent.version !== COOKIE_CONSENT_VERSION) {
+    if (!consentData || consentData.version !== COOKIE_CONSENT_VERSION) {
       // Show banner if no consent or version mismatch
       setShowBanner(true);
     } else {
       // Apply existing consents
-      onConsentChange?.(existingConsent.consents);
+      onConsentChange?.(consentData.consents);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const saveConsent = (consents: CookieConsentSettings) => {
-    const consentData: CookieConsentData = {
+    const newConsentData: CookieConsentData = {
       consents,
       timestamp: new Date().toISOString(),
       version: COOKIE_CONSENT_VERSION,
@@ -48,7 +46,7 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
     const expires = new Date();
     expires.setDate(expires.getDate() + COOKIE_CONSENT_EXPIRES_DAYS);
 
-    setCookie(COOKIE_CONSENT_NAME, consentData, {
+    setConsentData(newConsentData, {
       path: '/',
       expires,
       sameSite: 'strict',

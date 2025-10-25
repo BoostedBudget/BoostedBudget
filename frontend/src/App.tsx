@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Routes, Route, Link } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
-import { CookiesProvider, useCookies } from 'react-cookie'
+import { useCookieState } from './shared/hooks/useCookieState'
 import {
   CookieConsent,
   initializeAdSense,
@@ -74,7 +74,7 @@ function HomePage({ health, loading }: { health: HealthCheck | null; loading: bo
 
 function App() {
   const { isAuthenticated, user } = useAuth0()
-  const [, setCookie] = useCookies([COOKIE_CONSENT_NAME])
+  const [, setConsentCookie] = useCookieState<CookieConsentData>(COOKIE_CONSENT_NAME)
   const [health, setHealth] = useState<HealthCheck | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -102,7 +102,7 @@ function App() {
     const expires = new Date()
     expires.setDate(expires.getDate() + COOKIE_CONSENT_EXPIRES_DAYS)
 
-    setCookie(COOKIE_CONSENT_NAME, consentData, {
+    setConsentCookie(consentData, {
       path: '/',
       expires,
       sameSite: 'strict',
@@ -160,8 +160,7 @@ function App() {
   }
 
   return (
-    <CookiesProvider>
-      <div className="app">
+    <div className="app">
         <header className="app-header">
           <div>
             <h1>🚀 BoostedBudget</h1>
@@ -230,11 +229,10 @@ function App() {
         <footer className="app-footer">
           <p>BoostedBudget © 2025 | GDPR Compliant | Single Region MVP (us-east-1)</p>
         </footer>
-      </div>
 
-      {/* Cookie Consent Banner */}
-      <CookieConsent onConsentChange={handleConsentChange} />
-    </CookiesProvider>
+        {/* Cookie Consent Banner */}
+        <CookieConsent onConsentChange={handleConsentChange} />
+      </div>
   )
 }
 
