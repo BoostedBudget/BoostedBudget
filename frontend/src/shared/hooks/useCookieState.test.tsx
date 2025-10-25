@@ -12,6 +12,13 @@ vi.mock('js-cookie', () => ({
   },
 }));
 
+// Typed mocks for better TypeScript support
+const mockCookies = Cookies as unknown as {
+  get: ReturnType<typeof vi.fn<(name: string) => string | undefined>>;
+  set: ReturnType<typeof vi.fn<(name: string, value: string, options?: Cookies.CookieAttributes) => string | undefined>>;
+  remove: ReturnType<typeof vi.fn<(name: string) => void>>;
+};
+
 describe('useCookieState', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -19,7 +26,7 @@ describe('useCookieState', () => {
 
   describe('Basic functionality', () => {
     it('should return undefined for non-existent cookie', () => {
-      vi.mocked(Cookies.get).mockReturnValue(undefined);
+      mockCookies.get.mockReturnValue(undefined);
 
       const { result } = renderHook(() => useCookieState('test-cookie'));
 
@@ -29,7 +36,7 @@ describe('useCookieState', () => {
 
     it('should return parsed JSON object when cookie contains JSON', () => {
       const testData = { foo: 'bar', count: 42 };
-      vi.mocked(Cookies.get).mockReturnValue(JSON.stringify(testData));
+      mockCookies.get.mockReturnValue(JSON.stringify(testData));
 
       const { result } = renderHook(() => useCookieState('test-cookie'));
 
@@ -37,7 +44,7 @@ describe('useCookieState', () => {
     });
 
     it('should return string when cookie contains non-JSON', () => {
-      vi.mocked(Cookies.get).mockReturnValue('simple-string');
+      mockCookies.get.mockReturnValue('simple-string');
 
       const { result } = renderHook(() => useCookieState('test-cookie'));
 
@@ -45,7 +52,7 @@ describe('useCookieState', () => {
     });
 
     it('should update cookie and state when setValue is called with object', () => {
-      vi.mocked(Cookies.get).mockReturnValue(undefined);
+      mockCookies.get.mockReturnValue(undefined);
 
       const { result } = renderHook(() => useCookieState('test-cookie'));
 
@@ -54,12 +61,12 @@ describe('useCookieState', () => {
         result.current[1](newValue);
       });
 
-      expect(Cookies.set).toHaveBeenCalledWith('test-cookie', JSON.stringify(newValue), undefined);
+      expect(mockCookies.set).toHaveBeenCalledWith('test-cookie', JSON.stringify(newValue), undefined);
       expect(result.current[0]).toEqual(newValue);
     });
 
     it('should update cookie and state when setValue is called with string', () => {
-      vi.mocked(Cookies.get).mockReturnValue(undefined);
+      mockCookies.get.mockReturnValue(undefined);
 
       const { result } = renderHook(() => useCookieState('test-cookie'));
 
@@ -67,13 +74,13 @@ describe('useCookieState', () => {
         result.current[1]('test-value');
       });
 
-      expect(Cookies.set).toHaveBeenCalledWith('test-cookie', 'test-value', undefined);
+      expect(mockCookies.set).toHaveBeenCalledWith('test-cookie', 'test-value', undefined);
       expect(result.current[0]).toBe('test-value');
     });
 
     it('should remove cookie and clear state when removeCookie is called', () => {
       const testData = { foo: 'bar' };
-      vi.mocked(Cookies.get).mockReturnValue(JSON.stringify(testData));
+      mockCookies.get.mockReturnValue(JSON.stringify(testData));
 
       const { result } = renderHook(() => useCookieState('test-cookie'));
 
@@ -83,14 +90,14 @@ describe('useCookieState', () => {
         result.current[2](); // removeCookie
       });
 
-      expect(Cookies.remove).toHaveBeenCalledWith('test-cookie');
+      expect(mockCookies.remove).toHaveBeenCalledWith('test-cookie');
       expect(result.current[0]).toBeUndefined();
     });
   });
 
   describe('Cookie options', () => {
-    it('should pass expires option to Cookies.set', () => {
-      vi.mocked(Cookies.get).mockReturnValue(undefined);
+    it('should pass expires option to mockCookies.set', () => {
+      mockCookies.get.mockReturnValue(undefined);
 
       const { result } = renderHook(() => useCookieState('test-cookie'));
 
@@ -99,15 +106,15 @@ describe('useCookieState', () => {
         result.current[1]({ data: 'test' }, { expires });
       });
 
-      expect(Cookies.set).toHaveBeenCalledWith(
+      expect(mockCookies.set).toHaveBeenCalledWith(
         'test-cookie',
         JSON.stringify({ data: 'test' }),
         { expires }
       );
     });
 
-    it('should pass path option to Cookies.set', () => {
-      vi.mocked(Cookies.get).mockReturnValue(undefined);
+    it('should pass path option to mockCookies.set', () => {
+      mockCookies.get.mockReturnValue(undefined);
 
       const { result } = renderHook(() => useCookieState('test-cookie'));
 
@@ -115,11 +122,11 @@ describe('useCookieState', () => {
         result.current[1]('value', { path: '/custom-path' });
       });
 
-      expect(Cookies.set).toHaveBeenCalledWith('test-cookie', 'value', { path: '/custom-path' });
+      expect(mockCookies.set).toHaveBeenCalledWith('test-cookie', 'value', { path: '/custom-path' });
     });
 
-    it('should pass sameSite option to Cookies.set', () => {
-      vi.mocked(Cookies.get).mockReturnValue(undefined);
+    it('should pass sameSite option to mockCookies.set', () => {
+      mockCookies.get.mockReturnValue(undefined);
 
       const { result } = renderHook(() => useCookieState('test-cookie'));
 
@@ -127,11 +134,11 @@ describe('useCookieState', () => {
         result.current[1]('value', { sameSite: 'strict' });
       });
 
-      expect(Cookies.set).toHaveBeenCalledWith('test-cookie', 'value', { sameSite: 'strict' });
+      expect(mockCookies.set).toHaveBeenCalledWith('test-cookie', 'value', { sameSite: 'strict' });
     });
 
-    it('should pass secure option to Cookies.set', () => {
-      vi.mocked(Cookies.get).mockReturnValue(undefined);
+    it('should pass secure option to mockCookies.set', () => {
+      mockCookies.get.mockReturnValue(undefined);
 
       const { result } = renderHook(() => useCookieState('test-cookie'));
 
@@ -139,11 +146,11 @@ describe('useCookieState', () => {
         result.current[1]('value', { secure: true });
       });
 
-      expect(Cookies.set).toHaveBeenCalledWith('test-cookie', 'value', { secure: true });
+      expect(mockCookies.set).toHaveBeenCalledWith('test-cookie', 'value', { secure: true });
     });
 
-    it('should pass combined options to Cookies.set', () => {
-      vi.mocked(Cookies.get).mockReturnValue(undefined);
+    it('should pass combined options to mockCookies.set', () => {
+      mockCookies.get.mockReturnValue(undefined);
 
       const { result } = renderHook(() => useCookieState('test-cookie'));
 
@@ -159,7 +166,7 @@ describe('useCookieState', () => {
         result.current[1]({ data: 'test' }, options);
       });
 
-      expect(Cookies.set).toHaveBeenCalledWith(
+      expect(mockCookies.set).toHaveBeenCalledWith(
         'test-cookie',
         JSON.stringify({ data: 'test' }),
         options
@@ -174,7 +181,7 @@ describe('useCookieState', () => {
         settings: { theme: 'dark', notifications: true },
         array: [1, 2, 3],
       };
-      vi.mocked(Cookies.get).mockReturnValue(JSON.stringify(complexObject));
+      mockCookies.get.mockReturnValue(JSON.stringify(complexObject));
 
       const { result } = renderHook(() => useCookieState('test-cookie'));
 
@@ -183,7 +190,7 @@ describe('useCookieState', () => {
 
     it('should handle arrays', () => {
       const arrayData = ['item1', 'item2', 'item3'];
-      vi.mocked(Cookies.get).mockReturnValue(JSON.stringify(arrayData));
+      mockCookies.get.mockReturnValue(JSON.stringify(arrayData));
 
       const { result } = renderHook(() => useCookieState('test-cookie'));
 
@@ -192,7 +199,7 @@ describe('useCookieState', () => {
 
     it('should handle Unicode characters in JSON', () => {
       const unicodeData = { message: 'Hello 世界 🌍' };
-      vi.mocked(Cookies.get).mockReturnValue(JSON.stringify(unicodeData));
+      mockCookies.get.mockReturnValue(JSON.stringify(unicodeData));
 
       const { result } = renderHook(() => useCookieState('test-cookie'));
 
@@ -200,7 +207,7 @@ describe('useCookieState', () => {
     });
 
     it('should serialize complex objects when setting', () => {
-      vi.mocked(Cookies.get).mockReturnValue(undefined);
+      mockCookies.get.mockReturnValue(undefined);
 
       const { result } = renderHook(() => useCookieState('test-cookie'));
 
@@ -213,7 +220,7 @@ describe('useCookieState', () => {
         result.current[1](complexData);
       });
 
-      expect(Cookies.set).toHaveBeenCalledWith(
+      expect(mockCookies.set).toHaveBeenCalledWith(
         'test-cookie',
         JSON.stringify(complexData),
         undefined
@@ -223,7 +230,7 @@ describe('useCookieState', () => {
 
   describe('Edge cases', () => {
     it('should handle empty string value', () => {
-      vi.mocked(Cookies.get).mockReturnValue('');
+      mockCookies.get.mockReturnValue('');
 
       const { result } = renderHook(() => useCookieState('test-cookie'));
 
@@ -231,7 +238,7 @@ describe('useCookieState', () => {
     });
 
     it('should handle cookie that exists but has malformed JSON', () => {
-      vi.mocked(Cookies.get).mockReturnValue('{invalid json}');
+      mockCookies.get.mockReturnValue('{invalid json}');
 
       const { result } = renderHook(() => useCookieState('test-cookie'));
 
@@ -240,7 +247,7 @@ describe('useCookieState', () => {
     });
 
     it('should handle boolean values', () => {
-      vi.mocked(Cookies.get).mockReturnValue(undefined);
+      mockCookies.get.mockReturnValue(undefined);
 
       const { result } = renderHook(() => useCookieState('test-cookie'));
 
@@ -248,11 +255,11 @@ describe('useCookieState', () => {
         result.current[1](true);
       });
 
-      expect(Cookies.set).toHaveBeenCalledWith('test-cookie', 'true', undefined);
+      expect(mockCookies.set).toHaveBeenCalledWith('test-cookie', 'true', undefined);
     });
 
     it('should handle number values', () => {
-      vi.mocked(Cookies.get).mockReturnValue(undefined);
+      mockCookies.get.mockReturnValue(undefined);
 
       const { result } = renderHook(() => useCookieState('test-cookie'));
 
@@ -260,11 +267,11 @@ describe('useCookieState', () => {
         result.current[1](42);
       });
 
-      expect(Cookies.set).toHaveBeenCalledWith('test-cookie', '42', undefined);
+      expect(mockCookies.set).toHaveBeenCalledWith('test-cookie', '42', undefined);
     });
 
     it('should handle null values', () => {
-      vi.mocked(Cookies.get).mockReturnValue(undefined);
+      mockCookies.get.mockReturnValue(undefined);
 
       const { result } = renderHook(() => useCookieState('test-cookie'));
 
@@ -272,7 +279,7 @@ describe('useCookieState', () => {
         result.current[1](null);
       });
 
-      expect(Cookies.set).toHaveBeenCalledWith('test-cookie', 'null', undefined);
+      expect(mockCookies.set).toHaveBeenCalledWith('test-cookie', 'null', undefined);
     });
   });
 
@@ -284,7 +291,7 @@ describe('useCookieState', () => {
       }
 
       const testData: TestData = { id: '123', name: 'Test' };
-      vi.mocked(Cookies.get).mockReturnValue(JSON.stringify(testData));
+      mockCookies.get.mockReturnValue(JSON.stringify(testData));
 
       const { result } = renderHook(() => useCookieState<TestData>('test-cookie'));
 
@@ -300,7 +307,7 @@ describe('useCookieState', () => {
 
   describe('React state updates', () => {
     it('should trigger re-render when cookie value changes', () => {
-      vi.mocked(Cookies.get).mockReturnValue(undefined);
+      mockCookies.get.mockReturnValue(undefined);
 
       const { result } = renderHook(() => useCookieState('test-cookie'));
 

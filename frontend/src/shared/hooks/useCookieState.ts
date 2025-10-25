@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import Cookies, { CookieAttributes } from 'js-cookie';
+import Cookies from 'js-cookie';
 
 /**
  * Custom React hook for managing cookie state
@@ -27,9 +27,9 @@ import Cookies, { CookieAttributes } from 'js-cookie';
  * removeUserData();
  * ```
  */
-export function useCookieState<T = any>(
+export function useCookieState<T = unknown>(
   cookieName: string
-): [T | undefined, (value: T, options?: CookieAttributes) => void, () => void] {
+): [T | undefined, (value: T, options?: Cookies.CookieAttributes) => void, () => void] {
   /**
    * Read and parse cookie value
    * Attempts to parse as JSON, falls back to raw string if parsing fails
@@ -57,7 +57,7 @@ export function useCookieState<T = any>(
    * Automatically serializes objects to JSON
    */
   const updateCookie = useCallback(
-    (value: T, options?: CookieAttributes) => {
+    (value: T, options?: Cookies.CookieAttributes) => {
       // Serialize value - objects become JSON, primitives become strings
       const serialized = typeof value === 'object' && value !== null
         ? JSON.stringify(value)
