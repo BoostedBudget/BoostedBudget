@@ -235,6 +235,11 @@ describe('PrivacySettings', () => {
       const analyticsCheckbox = screen.getByRole('checkbox', { name: /analytics/i })
       await user.click(analyticsCheckbox)
 
+      // Wait for checkbox state to update before saving (prevents race condition)
+      await waitFor(() => {
+        expect(analyticsCheckbox).not.toBeChecked()
+      })
+
       // Save
       const saveButton = screen.getByRole('button', { name: /save/i })
       await user.click(saveButton)

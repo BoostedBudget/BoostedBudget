@@ -55,11 +55,12 @@ describe('ProfileForm', () => {
       const user = userEvent.setup()
       render(<ProfileForm user={mockUser} />)
 
-      const emailInput = screen.getByLabelText(/email/i)
+      const emailInput = screen.getByLabelText(/email/i) as HTMLInputElement
       const saveButton = screen.getByRole('button', { name: /save changes/i })
 
-      // Clear email
-      await user.clear(emailInput)
+      // Clear email by selecting all and deleting (more reliable than clear() in vitest 4.x)
+      await user.tripleClick(emailInput)
+      await user.keyboard('{Backspace}')
       await user.click(saveButton)
 
       await waitFor(() => {
@@ -75,8 +76,9 @@ describe('ProfileForm', () => {
       const saveButton = screen.getByRole('button', { name: /save changes/i })
 
       // Enter invalid email
-      await user.clear(emailInput)
-      await user.type(emailInput, 'invalid-email')
+      // Triple-click to select all, then type to replace (more reliable than clear() in vitest 4.x)
+      await user.tripleClick(emailInput)
+      await user.keyboard( 'invalid-email')
       await user.click(saveButton)
 
       await waitFor(() => {
@@ -96,8 +98,9 @@ describe('ProfileForm', () => {
       const emailInput = screen.getByLabelText(/email/i)
       const saveButton = screen.getByRole('button', { name: /save changes/i })
 
-      await user.clear(emailInput)
-      await user.type(emailInput, 'newemail@example.com')
+      // Triple-click to select all, then type to replace (more reliable than clear() in vitest 4.x)
+      await user.tripleClick(emailInput)
+      await user.keyboard( 'newemail@example.com')
       await user.click(saveButton)
 
       await waitFor(() => {
@@ -117,8 +120,9 @@ describe('ProfileForm', () => {
       const emailInput = screen.getByLabelText(/email/i)
       const saveButton = screen.getByRole('button', { name: /save changes/i })
 
-      await user.clear(emailInput)
-      await user.type(emailInput, 'updated@example.com')
+      // Triple-click to select all, then type to replace (more reliable than clear() in vitest 4.x)
+      await user.tripleClick(emailInput)
+      await user.keyboard( 'updated@example.com')
       await user.click(saveButton)
 
       await waitFor(() => {
@@ -169,8 +173,9 @@ describe('ProfileForm', () => {
       const emailInput = screen.getByLabelText(/email/i)
       const saveButton = screen.getByRole('button', { name: /save changes/i })
 
-      await user.clear(emailInput)
-      await user.type(emailInput, 'updated@example.com')
+      // Triple-click to select all, then type to replace (more reliable than clear() in vitest 4.x)
+      await user.tripleClick(emailInput)
+      await user.keyboard( 'updated@example.com')
       await user.click(saveButton)
 
       await waitFor(() => {
@@ -187,8 +192,9 @@ describe('ProfileForm', () => {
       const emailInput = screen.getByLabelText(/email/i)
       const saveButton = screen.getByRole('button', { name: /save changes/i })
 
-      await user.clear(emailInput)
-      await user.type(emailInput, 'updated@example.com')
+      // Triple-click to select all, then type to replace (more reliable than clear() in vitest 4.x)
+      await user.tripleClick(emailInput)
+      await user.keyboard( 'updated@example.com')
       await user.click(saveButton)
 
       await waitFor(() => {
@@ -208,8 +214,9 @@ describe('ProfileForm', () => {
       const regionSelect = screen.getByLabelText(/primary region/i)
       const saveButton = screen.getByRole('button', { name: /save changes/i })
 
-      await user.clear(emailInput)
-      await user.type(emailInput, 'updated@example.com')
+      // Triple-click to select all, then type to replace (more reliable than clear() in vitest 4.x)
+      await user.tripleClick(emailInput)
+      await user.keyboard( 'updated@example.com')
       await user.click(saveButton)
 
       await waitFor(() => {
@@ -230,8 +237,9 @@ describe('ProfileForm', () => {
       const emailInput = screen.getByLabelText(/email/i)
       const saveButton = screen.getByRole('button', { name: /save changes/i })
 
-      await user.clear(emailInput)
-      await user.type(emailInput, 'updated@example.com')
+      // Triple-click to select all, then type to replace (more reliable than clear() in vitest 4.x)
+      await user.tripleClick(emailInput)
+      await user.keyboard( 'updated@example.com')
       await user.click(saveButton)
 
       await waitFor(() => {
@@ -275,8 +283,9 @@ describe('ProfileForm', () => {
       const emailInput = screen.getByLabelText(/email/i)
       const saveButton = screen.getByRole('button', { name: /save changes/i })
 
-      await user.clear(emailInput)
-      await user.type(emailInput, 'final@example.com')
+      // Triple-click to select all, then type to replace (more reliable than clear() in vitest 4.x)
+      await user.tripleClick(emailInput)
+      await user.keyboard( 'final@example.com')
       await user.click(saveButton)
 
       await waitFor(() => {
