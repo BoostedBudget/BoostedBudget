@@ -287,6 +287,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Setup Trivy
+        uses: aquasecurity/setup-trivy@v0.2.0
+        with:
+          version: v0.65.0
+
+      - name: Fix Trivy permissions on macOS
+        run: chmod +x $(which trivy) || true
+
       - name: Scan ${{ matrix.component }} dependencies
         uses: aquasecurity/trivy-action@master
         with:

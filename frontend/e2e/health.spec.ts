@@ -7,8 +7,8 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Health Endpoint', () => {
   test('should return healthy status from backend', async ({ page: _page, request }) => {
-    // Test the API health endpoint directly
-    const response = await request.get('http://localhost:8080/health');
+    // Test the API health endpoint directly (uses apiURL from playwright.config.ts)
+    const response = await request.get('/health');
 
     expect(response.status()).toBe(200);
 
@@ -30,8 +30,8 @@ test.describe('Health Endpoint', () => {
   });
 
   test('should have backend API accessible', async ({ request }) => {
-    // Verify backend is running and accessible
-    const response = await request.get('http://localhost:8080/health');
+    // Verify backend is running and accessible (uses apiURL from playwright.config.ts)
+    const response = await request.get('/health');
 
     expect(response.ok()).toBeTruthy();
 
