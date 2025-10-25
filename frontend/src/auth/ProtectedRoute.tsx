@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useAuth0 } from '@auth0/auth0-react'
-import { useLocation } from 'react-router-dom'
+import { useLocation, Navigate } from 'react-router-dom'
 
 interface ProtectedRouteProps {
   children: React.ReactNode
@@ -27,7 +27,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
   }
 
   if (!isAuthenticated) {
-    return null
+    return <Navigate to="/" replace />
   }
 
   return <>{children}</>
