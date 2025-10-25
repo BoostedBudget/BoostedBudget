@@ -1,26 +1,42 @@
 import { useState, useEffect } from 'react'
 import { PlaidLinkButton } from './PlaidLinkButton'
 import { AccountCard } from './AccountCard'
+import { UpgradeBanner } from './UpgradeBanner'
 import { fetchAccounts } from './api/plaidApi'
+import { fetchProfile } from '../profile/api/profileApi'
+import { useSubscriptionTiers } from '../subscription/hooks/useSubscriptionTiers'
+import { useTierLimits } from '../subscription/hooks/useTierLimits'
 import type { Account } from './types'
+import type { User } from '../profile/types'
 import './AccountsPage.css'
 
 export function AccountsPage() {
   const [accounts, setAccounts] = useState<Account[]>([])
+  const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // Load accounts on mount
+  // Fetch subscription tiers for limit enforcement
+  const { tiers, loading: tiersLoading } = useSubscriptionTiers()
+
+  // Load accounts and user profile on mount
   useEffect(() => {
-    loadAccounts()
+    loadAccountsAndProfile()
   }, [])
 
-  async function loadAccounts() {
+  async function loadAccountsAndProfile() {
     try {
       setLoading(true)
       setError(null)
-      const response = await fetchAccounts()
-      setAccounts(response.accounts)
+
+      // Fetch both accounts and user profile in parallel
+      const [accountsResponse, userProfile] = await Promise.all([
+        fetchAccounts(),
+        fetchProfile(),
+      ])
+
+      setAccounts(accountsResponse.accounts)
+      setUser(userProfile)
     } catch (err) {
       console.error('Failed to load accounts:', err)
       setError('Failed to load accounts. Please try again.')
@@ -29,12 +45,19 @@ export function AccountsPage() {
     }
   }
 
-  // Handle successful account linking - reload accounts
+  // Handle successful account linking - reload accounts and profile
   function handleAccountsLinked() {
-    loadAccounts()
+    loadAccountsAndProfile()
   }
 
-  if (loading) {
+  // Calculate tier limits using hook
+  const { isAtLimit, shouldShowUpgradeBanner, accountCountDisplay } = useTierLimits({
+    user,
+    tiers,
+    currentAccountCount: accounts.length,
+  })
+
+  if (loading || tiersLoading) {
     return (
       <div className="accounts-page responsive">
         <div className="loading">Loading your accounts...</div>
@@ -47,7 +70,7 @@ export function AccountsPage() {
       <div className="accounts-page responsive">
         <div className="error-state">
           <p className="error-message">{error}</p>
-          <button onClick={loadAccounts} className="btn-retry">
+          <button onClick={loadAccountsAndProfile} className="btn-retry">
             Retry
           </button>
         </div>
@@ -59,8 +82,13 @@ export function AccountsPage() {
     <div className="accounts-page responsive">
       <div className="accounts-header">
         <h1>My Accounts</h1>
-        <PlaidLinkButton onSuccess={handleAccountsLinked} />
+        <PlaidLinkButton
+          onSuccess={handleAccountsLinked}
+          disabled={isAtLimit}
+        />
       </div>
+
+      {shouldShowUpgradeBanner && <UpgradeBanner />}
 
       {accounts.length === 0 ? (
         <div className="empty-state">
@@ -71,7 +99,7 @@ export function AccountsPage() {
       ) : (
         <div className="accounts-list">
           <p className="accounts-count">
-            {accounts.length} {accounts.length === 1 ? 'account' : 'accounts'} connected
+            {accountCountDisplay}
           </p>
           <div className="accounts-grid">
             {accounts.map((account) => (
