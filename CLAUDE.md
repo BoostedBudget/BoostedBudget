@@ -172,6 +172,20 @@ BAD ✗
 4. After merge to staging, staging auto-deploys to Mac Mini for QA/testing
 5. Once validated in staging, create PR from `staging` → `main`
 6. After merge to main, main deploys to Fly.io production
+7. **Auto-sync:** After production deployment completes, GitHub Action automatically syncs staging with main
+
+**Auto-Sync Behavior:**
+- After `staging→main` merge and successful production deployment, the "Sync Staging with Main" workflow runs automatically
+- Workflow merges `main→staging` to eliminate merge commit divergence
+- Both `staging` and `main` remain in sync, preventing perpetual "out of sync" status
+- If auto-sync fails, manual sync instructions provided in workflow summary
+- **Manual sync** (if needed):
+  ```bash
+  git checkout staging
+  git pull origin staging
+  git merge origin/main --no-edit
+  git push origin staging
+  ```
 
 **Branch Protection:**
 - For private repos: Manual reviews and approvals
