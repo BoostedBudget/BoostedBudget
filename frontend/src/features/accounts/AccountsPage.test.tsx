@@ -4,15 +4,28 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { AccountsPage } from './AccountsPage'
 import * as plaidApi from './api/plaidApi'
+import * as profileApi from '../profile/api/profileApi'
 import type { GetAccountsResponse, Account } from './types'
+import type { User } from '../profile/types'
+import type { SubscriptionTiersResponse } from '../subscription/types'
 
 // Mock the Plaid API
 vi.mock('./api/plaidApi')
 
+// Mock the Profile API
+vi.mock('../profile/api/profileApi')
+
+// Mock the subscription tiers hook
+vi.mock('../subscription/hooks/useSubscriptionTiers')
+
 // Mock PlaidLinkButton component to simplify testing
 vi.mock('./PlaidLinkButton', () => ({
-  PlaidLinkButton: ({ onSuccess }: { onSuccess?: () => void }) => (
-    <button onClick={() => onSuccess?.()} data-testid="plaid-link-button">
+  PlaidLinkButton: ({ onSuccess, disabled }: { onSuccess?: () => void; disabled?: boolean }) => (
+    <button
+      onClick={() => onSuccess?.()}
+      data-testid="plaid-link-button"
+      disabled={disabled}
+    >
       Connect Bank Account
     </button>
   ),
@@ -231,5 +244,307 @@ describe('AccountsPage', () => {
 
     // PlaidLinkButton should be visible even with existing accounts
     expect(screen.getByTestId('plaid-link-button')).toBeInTheDocument()
+  })
+
+  // TDD RED: Account Limit Enforcement Tests (Issue #174)
+  describe('Account Limit Enforcement', () => {
+    const mockFreeUser: User = {
+      id: '550e8400-e29b-41d4-a716-446655440000',
+      auth0_user_id: 'auth0|507f1f77bcf86cd799439011',
+      email: 'user@example.com',
+      email_verified: true,
+      subscription_tier: 'free',
+      subscription_status: 'active',
+      primary_region: 'iad',
+      is_active: true,
+      is_deleted: false,
+      created_at: '2025-10-18T14:30:00Z',
+      updated_at: '2025-10-20T10:15:00Z',
+      last_login_at: '2025-10-25T08:00:00Z',
+    }
+
+    const mockPremiumUser: User = {
+      ...mockFreeUser,
+      subscription_tier: 'premium',
+    }
+
+    const mockPremiumPlusUser: User = {
+      ...mockFreeUser,
+      subscription_tier: 'premium_plus',
+    }
+
+    const mockTiersResponse: SubscriptionTiersResponse = {
+      tiers: {
+        free: {
+          display_name: 'Free',
+          description: 'Full budgeting with basic automation',
+          price_monthly: 0,
+          price_yearly: 0,
+          stripe_price_id_monthly: null,
+          stripe_price_id_yearly: null,
+          limits: {
+            accounts: 3,
+            rules: 1,
+            executions_per_day: 1,
+            min_execution_interval_minutes: 1440,
+          },
+          features: {
+            ads_enabled: true,
+            ai_insights: false,
+          },
+        },
+        premium_lite: {
+          display_name: 'Premium Lite',
+          description: 'Perfect for couples and light automation',
+          price_monthly: 4.99,
+          price_yearly: 49.99,
+          stripe_price_id_monthly: 'price_premium_lite_monthly',
+          stripe_price_id_yearly: 'price_premium_lite_yearly',
+          limits: {
+            accounts: 15,
+            rules: 5,
+            executions_per_day: 2,
+            min_execution_interval_minutes: 720,
+          },
+          features: {
+            ads_enabled: false,
+            ai_insights: false,
+          },
+        },
+        premium: {
+          display_name: 'Premium',
+          description: 'Power users with complex finances',
+          price_monthly: 9.99,
+          price_yearly: 99.99,
+          stripe_price_id_monthly: 'price_premium_monthly',
+          stripe_price_id_yearly: 'price_premium_yearly',
+          limits: {
+            accounts: 30,
+            rules: 15,
+            executions_per_day: 6,
+            min_execution_interval_minutes: 240,
+          },
+          features: {
+            ads_enabled: false,
+            ai_insights: false,
+          },
+        },
+        premium_plus: {
+          display_name: 'Premium+',
+          description: 'Unlimited everything with AI and API access',
+          price_monthly: 19.99,
+          price_yearly: 199.99,
+          stripe_price_id_monthly: 'price_premium_plus_monthly',
+          stripe_price_id_yearly: 'price_premium_plus_yearly',
+          limits: {
+            accounts: -1, // Unlimited
+            rules: -1,
+            executions_per_day: 144,
+            min_execution_interval_minutes: 10,
+          },
+          features: {
+            ads_enabled: false,
+            ai_insights: true,
+            api_access: true,
+            priority_support: true,
+          },
+        },
+      },
+      default_tier: 'free',
+    }
+
+    it('should show account usage (X/Y accounts used) for free tier', async () => {
+      const { useSubscriptionTiers } = await import('../subscription/hooks/useSubscriptionTiers')
+
+      vi.mocked(useSubscriptionTiers).mockReturnValue({
+        tiers: mockTiersResponse,
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      })
+
+      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockFreeUser)
+      vi.mocked(plaidApi.fetchAccounts).mockResolvedValue({
+        accounts: mockAccounts,
+        total_count: 2,
+      })
+
+      renderWithRouter(<AccountsPage />)
+
+      await waitFor(() => {
+        expect(screen.queryByText('Loading your accounts...')).not.toBeInTheDocument()
+      })
+
+      // Should show "2/3 accounts used" for free tier
+      expect(screen.getByText(/2\/3 accounts used/i)).toBeInTheDocument()
+    })
+
+    it('should disable PlaidLinkButton when at account limit', async () => {
+      const { useSubscriptionTiers } = await import('../subscription/hooks/useSubscriptionTiers')
+
+      vi.mocked(useSubscriptionTiers).mockReturnValue({
+        tiers: mockTiersResponse,
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      })
+
+      // User has 3 accounts (at limit for free tier)
+      const threeAccounts = [...mockAccounts, { ...mockAccounts[0], id: 'third-account' }]
+
+      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockFreeUser)
+      vi.mocked(plaidApi.fetchAccounts).mockResolvedValue({
+        accounts: threeAccounts,
+        total_count: 3,
+      })
+
+      renderWithRouter(<AccountsPage />)
+
+      await waitFor(() => {
+        expect(screen.queryByText('Loading your accounts...')).not.toBeInTheDocument()
+      })
+
+      // PlaidLinkButton should be disabled
+      const plaidButton = screen.getByTestId('plaid-link-button')
+      expect(plaidButton).toBeDisabled()
+    })
+
+    it('should show upgrade banner when at account limit', async () => {
+      const { useSubscriptionTiers } = await import('../subscription/hooks/useSubscriptionTiers')
+
+      vi.mocked(useSubscriptionTiers).mockReturnValue({
+        tiers: mockTiersResponse,
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      })
+
+      // User has 3 accounts (at limit for free tier)
+      const threeAccounts = [...mockAccounts, { ...mockAccounts[0], id: 'third-account' }]
+
+      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockFreeUser)
+      vi.mocked(plaidApi.fetchAccounts).mockResolvedValue({
+        accounts: threeAccounts,
+        total_count: 3,
+      })
+
+      renderWithRouter(<AccountsPage />)
+
+      await waitFor(() => {
+        expect(screen.queryByText('Loading your accounts...')).not.toBeInTheDocument()
+      })
+
+      // Upgrade banner should be shown
+      expect(screen.getByText(/account limit reached/i)).toBeInTheDocument()
+      expect(screen.getByText(/upgrade/i)).toBeInTheDocument()
+    })
+
+    it('should enable PlaidLinkButton when under account limit', async () => {
+      const { useSubscriptionTiers } = await import('../subscription/hooks/useSubscriptionTiers')
+
+      vi.mocked(useSubscriptionTiers).mockReturnValue({
+        tiers: mockTiersResponse,
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      })
+
+      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockFreeUser)
+      vi.mocked(plaidApi.fetchAccounts).mockResolvedValue({
+        accounts: mockAccounts, // 2 accounts, under limit of 3
+        total_count: 2,
+      })
+
+      renderWithRouter(<AccountsPage />)
+
+      await waitFor(() => {
+        expect(screen.queryByText('Loading your accounts...')).not.toBeInTheDocument()
+      })
+
+      // PlaidLinkButton should be enabled
+      const plaidButton = screen.getByTestId('plaid-link-button')
+      expect(plaidButton).not.toBeDisabled()
+    })
+
+    it('should show "X accounts" for unlimited tier (no limit display)', async () => {
+      const { useSubscriptionTiers } = await import('../subscription/hooks/useSubscriptionTiers')
+
+      vi.mocked(useSubscriptionTiers).mockReturnValue({
+        tiers: mockTiersResponse,
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      })
+
+      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockPremiumPlusUser)
+      vi.mocked(plaidApi.fetchAccounts).mockResolvedValue({
+        accounts: mockAccounts,
+        total_count: 2,
+      })
+
+      renderWithRouter(<AccountsPage />)
+
+      await waitFor(() => {
+        expect(screen.queryByText('Loading your accounts...')).not.toBeInTheDocument()
+      })
+
+      // Should show "2 accounts" (no limit display)
+      expect(screen.getByText(/^2 accounts$/i)).toBeInTheDocument()
+      // Should NOT show usage like "2/X"
+      expect(screen.queryByText(/\//)).not.toBeInTheDocument()
+    })
+
+    it('should not show upgrade banner for premium_plus tier even with many accounts', async () => {
+      const { useSubscriptionTiers } = await import('../subscription/hooks/useSubscriptionTiers')
+
+      vi.mocked(useSubscriptionTiers).mockReturnValue({
+        tiers: mockTiersResponse,
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      })
+
+      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockPremiumPlusUser)
+      vi.mocked(plaidApi.fetchAccounts).mockResolvedValue({
+        accounts: mockAccounts,
+        total_count: 2,
+      })
+
+      renderWithRouter(<AccountsPage />)
+
+      await waitFor(() => {
+        expect(screen.queryByText('Loading your accounts...')).not.toBeInTheDocument()
+      })
+
+      // No upgrade banner for unlimited tier
+      expect(screen.queryByText(/account limit reached/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(/upgrade/i)).not.toBeInTheDocument()
+    })
+
+    it('should show correct limit for premium tier (30 accounts)', async () => {
+      const { useSubscriptionTiers } = await import('../subscription/hooks/useSubscriptionTiers')
+
+      vi.mocked(useSubscriptionTiers).mockReturnValue({
+        tiers: mockTiersResponse,
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      })
+
+      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockPremiumUser)
+      vi.mocked(plaidApi.fetchAccounts).mockResolvedValue({
+        accounts: mockAccounts,
+        total_count: 2,
+      })
+
+      renderWithRouter(<AccountsPage />)
+
+      await waitFor(() => {
+        expect(screen.queryByText('Loading your accounts...')).not.toBeInTheDocument()
+      })
+
+      // Should show "2/30 accounts used" for premium tier
+      expect(screen.getByText(/2\/30 accounts used/i)).toBeInTheDocument()
+    })
   })
 })
