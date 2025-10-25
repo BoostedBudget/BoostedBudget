@@ -1247,11 +1247,15 @@ func (s *PlaidService) CreateLinkToken(ctx context.Context, userID string, regio
     
     request.SetProducts([]plaid.Products{
         plaid.PRODUCTS_TRANSACTIONS,
-        plaid.PRODUCTS_ACCOUNTS,
-        plaid.PRODUCTS_BALANCE,
     })
-    
-    // Enable Transfer product for future ACH capabilities
+
+    // Issue #237: AUTH removed (only supports checking/savings, caused NO_AUTH_ACCOUNTS for credit cards/CDs)
+    // PRODUCTS_ACCOUNTS doesn't exist in Plaid API
+    // PRODUCTS_BALANCE is not a valid Link initialization product (Issue #232)
+    // Balance data automatically included in /accounts/get (FREE)
+
+    // Future: Consider adding LIABILITIES (enhanced credit card data) and INVESTMENTS (401k/IRA) products
+    // Enable Transfer product for future ACH capabilities (when money movement is implemented)
     // request.SetProducts(append(request.GetProducts(), plaid.PRODUCTS_TRANSFER))
     
     request.SetWebhook(s.config.WebhookURL)
