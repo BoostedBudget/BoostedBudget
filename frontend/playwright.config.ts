@@ -75,8 +75,9 @@ export default defineConfig({
   // Comment this out if you want to run tests against already running servers
   webServer: [
     {
-      // Pass PORT env var to Vite for dynamic port allocation
-      command: `PORT=${frontendPort} npm run dev`,
+      // Pass PORT and E2E_BACKEND_PORT env vars to Vite for dynamic port allocation
+      // E2E_BACKEND_PORT is needed for the Vite proxy configuration
+      command: `PORT=${frontendPort} E2E_BACKEND_PORT=${backendPort} npm run dev`,
       url: `http://localhost:${frontendPort}`,
       reuseExistingServer: !process.env.CI,
       timeout: 120 * 1000,
