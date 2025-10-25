@@ -229,11 +229,10 @@ function App() {
         <footer className="app-footer">
           <p>BoostedBudget © 2025 | GDPR Compliant | Single Region MVP (us-east-1)</p>
         </footer>
-      </div>
 
-    {/* Cookie Consent Banner */}
-    <CookieConsent onConsentChange={handleConsentChange} />
-    </div>
+        {/* Cookie Consent Banner */}
+        <CookieConsent onConsentChange={handleConsentChange} />
+      </div>
   )
 }
 
