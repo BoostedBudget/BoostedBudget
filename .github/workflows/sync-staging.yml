@@ -1,0 +1,82 @@
+name: Sync Staging with Main
+
+# Trigger after production deployment completes
+# This prevents staging and main from staying "out of sync" due to merge commits
+on:
+  workflow_run:
+    workflows: ["Deploy to Production"]
+    types: [completed]
+    branches: [main]
+
+# Prevent concurrent syncs (queue them instead)
+concurrency:
+  group: sync-staging
+  cancel-in-progress: false
+
+jobs:
+  sync-staging:
+    name: Sync staging branch with main
+    # Only run if production deployment succeeded
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: [self-hosted, macOS, mac-mini]
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0  # Full history needed for merge
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch and merge main into staging
+        run: |
+          echo "📥 Fetching latest staging..."
+          git fetch origin staging
+
+          echo "🔄 Checking out staging..."
+          git checkout staging
+
+          echo "🔀 Merging main into staging..."
+          git merge origin/main --no-edit -m "chore: Sync staging with main after production deployment"
+
+          echo "📤 Pushing to staging..."
+          git push origin staging
+
+      - name: Verify sync
+        run: |
+          DIVERGENCE=$(git rev-list --left-right --count staging...origin/main)
+          echo "Branch divergence: $DIVERGENCE"
+          if [[ "$DIVERGENCE" == "0	0" ]]; then
+            echo "✅ Branches are in sync"
+          else
+            echo "⚠️  Branches still divergent (may be expected if new commits arrived)"
+          fi
+
+      - name: Summary
+        run: |
+          echo "### ✅ Staging Synced with Main" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Trigger:** Production deployment completed successfully" >> $GITHUB_STEP_SUMMARY
+          echo "**Result:** Staging branch updated to match main" >> $GITHUB_STEP_SUMMARY
+          echo "**Time:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Both branches are now at the same commit. New feature branches from staging will be up-to-date." >> $GITHUB_STEP_SUMMARY
+
+      - name: Failure notification
+        if: failure()
+        run: |
+          echo "### ❌ Staging Sync Failed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Manual sync required:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "git checkout staging" >> $GITHUB_STEP_SUMMARY
+          echo "git pull origin staging" >> $GITHUB_STEP_SUMMARY
+          echo "git merge origin/main --no-edit" >> $GITHUB_STEP_SUMMARY
+          echo "git push origin staging" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
