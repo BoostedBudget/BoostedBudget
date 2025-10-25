@@ -1,12 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { CookiesProvider } from 'react-cookie'
 import { ProfileForm } from './ProfileForm'
 import * as profileApi from './api/profileApi'
 import type { User } from './types'
 
 // Mock the profile API
 vi.mock('./api/profileApi')
+
+/**
+ * Test wrapper component that provides Cookies context
+ */
+function renderWithProviders(ui: React.ReactElement) {
+  return render(<CookiesProvider>{ui}</CookiesProvider>)
+}
 
 describe('ProfileForm', () => {
   const mockUser: User = {
@@ -30,7 +38,7 @@ describe('ProfileForm', () => {
 
   describe('Form rendering', () => {
     it('should render profile form with user data', () => {
-      render(<ProfileForm user={mockUser} />)
+      renderWithProviders(<ProfileForm user={mockUser} />)
 
       expect(screen.getByText(/Update Profile/i)).toBeInTheDocument()
       expect(screen.getByLabelText(/email/i)).toHaveValue('test@example.com')
@@ -39,7 +47,7 @@ describe('ProfileForm', () => {
     })
 
     it('should render all valid region options', () => {
-      render(<ProfileForm user={mockUser} />)
+      renderWithProviders(<ProfileForm user={mockUser} />)
 
       const regionSelect = screen.getByLabelText(/primary region/i) as HTMLSelectElement
       const options = Array.from(regionSelect.options).map((o) => o.value)
@@ -53,7 +61,7 @@ describe('ProfileForm', () => {
   describe('Email validation', () => {
     it('should show error for empty email', async () => {
       const user = userEvent.setup()
-      render(<ProfileForm user={mockUser} />)
+      renderWithProviders(<ProfileForm user={mockUser} />)
 
       const emailInput = screen.getByLabelText(/email/i) as HTMLInputElement
       const saveButton = screen.getByRole('button', { name: /save changes/i })
@@ -70,7 +78,7 @@ describe('ProfileForm', () => {
 
     it('should show error for invalid email format', async () => {
       const user = userEvent.setup()
-      render(<ProfileForm user={mockUser} />)
+      renderWithProviders(<ProfileForm user={mockUser} />)
 
       const emailInput = screen.getByLabelText(/email/i)
       const saveButton = screen.getByRole('button', { name: /save changes/i })
@@ -93,7 +101,7 @@ describe('ProfileForm', () => {
       })
 
       const user = userEvent.setup()
-      render(<ProfileForm user={mockUser} />)
+      renderWithProviders(<ProfileForm user={mockUser} />)
 
       const emailInput = screen.getByLabelText(/email/i)
       const saveButton = screen.getByRole('button', { name: /save changes/i })
@@ -115,7 +123,7 @@ describe('ProfileForm', () => {
       vi.mocked(profileApi.updateProfile).mockResolvedValue(updatedUser)
 
       const user = userEvent.setup()
-      render(<ProfileForm user={mockUser} />)
+      renderWithProviders(<ProfileForm user={mockUser} />)
 
       const emailInput = screen.getByLabelText(/email/i)
       const saveButton = screen.getByRole('button', { name: /save changes/i })
@@ -137,7 +145,7 @@ describe('ProfileForm', () => {
       vi.mocked(profileApi.updateProfile).mockResolvedValue(updatedUser)
 
       const user = userEvent.setup()
-      render(<ProfileForm user={mockUser} />)
+      renderWithProviders(<ProfileForm user={mockUser} />)
 
       const regionSelect = screen.getByLabelText(/primary region/i)
       const saveButton = screen.getByRole('button', { name: /save changes/i })
@@ -155,7 +163,7 @@ describe('ProfileForm', () => {
 
     it('should not submit if no changes', async () => {
       const user = userEvent.setup()
-      render(<ProfileForm user={mockUser} />)
+      renderWithProviders(<ProfileForm user={mockUser} />)
 
       const saveButton = screen.getByRole('button', { name: /save changes/i })
       await user.click(saveButton)
@@ -168,7 +176,7 @@ describe('ProfileForm', () => {
       vi.mocked(profileApi.updateProfile).mockResolvedValue(updatedUser)
 
       const user = userEvent.setup()
-      render(<ProfileForm user={mockUser} />)
+      renderWithProviders(<ProfileForm user={mockUser} />)
 
       const emailInput = screen.getByLabelText(/email/i)
       const saveButton = screen.getByRole('button', { name: /save changes/i })
@@ -187,7 +195,7 @@ describe('ProfileForm', () => {
       vi.mocked(profileApi.updateProfile).mockRejectedValue(new Error('Update failed'))
 
       const user = userEvent.setup()
-      render(<ProfileForm user={mockUser} />)
+      renderWithProviders(<ProfileForm user={mockUser} />)
 
       const emailInput = screen.getByLabelText(/email/i)
       const saveButton = screen.getByRole('button', { name: /save changes/i })
@@ -208,7 +216,7 @@ describe('ProfileForm', () => {
       )
 
       const user = userEvent.setup()
-      render(<ProfileForm user={mockUser} />)
+      renderWithProviders(<ProfileForm user={mockUser} />)
 
       const emailInput = screen.getByLabelText(/email/i)
       const regionSelect = screen.getByLabelText(/primary region/i)
@@ -232,7 +240,7 @@ describe('ProfileForm', () => {
 
       const onProfileUpdate = vi.fn()
       const user = userEvent.setup()
-      render(<ProfileForm user={mockUser} onProfileUpdate={onProfileUpdate} />)
+      renderWithProviders(<ProfileForm user={mockUser} onProfileUpdate={onProfileUpdate} />)
 
       const emailInput = screen.getByLabelText(/email/i)
       const saveButton = screen.getByRole('button', { name: /save changes/i })
@@ -251,7 +259,7 @@ describe('ProfileForm', () => {
   describe('Form state management', () => {
     it('should update local state when editing email', async () => {
       const user = userEvent.setup()
-      render(<ProfileForm user={mockUser} />)
+      renderWithProviders(<ProfileForm user={mockUser} />)
 
       const emailInput = screen.getByLabelText(/email/i) as HTMLInputElement
 
@@ -264,7 +272,7 @@ describe('ProfileForm', () => {
 
     it('should update local state when selecting region', async () => {
       const user = userEvent.setup()
-      render(<ProfileForm user={mockUser} />)
+      renderWithProviders(<ProfileForm user={mockUser} />)
 
       const regionSelect = screen.getByLabelText(/primary region/i)
 
@@ -278,7 +286,7 @@ describe('ProfileForm', () => {
       vi.mocked(profileApi.updateProfile).mockResolvedValue(updatedUser)
 
       const user = userEvent.setup()
-      render(<ProfileForm user={mockUser} />)
+      renderWithProviders(<ProfileForm user={mockUser} />)
 
       const emailInput = screen.getByLabelText(/email/i)
       const saveButton = screen.getByRole('button', { name: /save changes/i })

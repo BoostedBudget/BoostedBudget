@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
+import { CookiesProvider } from 'react-cookie'
 import { AccountsPage } from './AccountsPage'
 import * as plaidApi from './api/plaidApi'
 import type { GetAccountsResponse, Account } from './types'
@@ -19,13 +20,15 @@ vi.mock('./PlaidLinkButton', () => ({
 }))
 
 /**
- * Test wrapper component that provides React Router context
+ * Test wrapper component that provides React Router and Cookies context
  */
 function renderWithRouter(ui: React.ReactElement) {
   return render(
-    <MemoryRouter>
-      {ui}
-    </MemoryRouter>
+    <CookiesProvider>
+      <MemoryRouter>
+        {ui}
+      </MemoryRouter>
+    </CookiesProvider>
   )
 }
 

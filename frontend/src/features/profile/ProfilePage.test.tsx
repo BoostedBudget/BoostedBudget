@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { CookiesProvider } from 'react-cookie'
 import { ProfilePage } from './ProfilePage'
 import * as profileApi from './api/profileApi'
 import type { User } from './types'
@@ -21,16 +22,18 @@ vi.mock('@auth0/auth0-react', () => ({
 }))
 
 /**
- * Test wrapper component that provides React Router context
+ * Test wrapper component that provides React Router and Cookies context
  * Required for components using useSearchParams
  */
 function renderWithRouter(ui: React.ReactElement, { initialUrl = '/profile' } = {}) {
   return render(
-    <MemoryRouter initialEntries={[initialUrl]}>
-      <Routes>
-        <Route path="/profile" element={ui} />
-      </Routes>
-    </MemoryRouter>
+    <CookiesProvider>
+      <MemoryRouter initialEntries={[initialUrl]}>
+        <Routes>
+          <Route path="/profile" element={ui} />
+        </Routes>
+      </MemoryRouter>
+    </CookiesProvider>
   )
 }
 

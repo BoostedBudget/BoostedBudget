@@ -1,12 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { CookiesProvider } from 'react-cookie'
 import { PrivacySettings } from './PrivacySettings'
 import * as privacyApi from './api/privacyApi'
 import type { PrivacySettings as PrivacySettingsType } from './types'
 
 // Mock the privacy API
 vi.mock('./api/privacyApi')
+
+/**
+ * Test wrapper component that provides Cookies context
+ */
+function renderWithProviders(ui: React.ReactElement) {
+  return render(<CookiesProvider>{ui}</CookiesProvider>)
+}
 
 describe('PrivacySettings', () => {
   const mockSettings: PrivacySettingsType = {
@@ -34,7 +42,7 @@ describe('PrivacySettings', () => {
         () => new Promise(() => {}) // Never resolves
       )
 
-      render(<PrivacySettings />)
+      renderWithProviders(<PrivacySettings />)
 
       expect(screen.getByText(/loading/i)).toBeInTheDocument()
     })
@@ -42,7 +50,7 @@ describe('PrivacySettings', () => {
     it('should render privacy settings after loading', async () => {
       vi.mocked(privacyApi.fetchPrivacySettings).mockResolvedValue(mockSettings)
 
-      render(<PrivacySettings />)
+      renderWithProviders(<PrivacySettings />)
 
       await waitFor(() => {
         expect(screen.queryByText(/loading/i)).not.toBeInTheDocument()
@@ -67,7 +75,7 @@ describe('PrivacySettings', () => {
     it('should display correct toggle states', async () => {
       vi.mocked(privacyApi.fetchPrivacySettings).mockResolvedValue(mockSettings)
 
-      render(<PrivacySettings />)
+      renderWithProviders(<PrivacySettings />)
 
       await waitFor(() => {
         expect(screen.queryByText(/loading/i)).not.toBeInTheDocument()
@@ -91,7 +99,7 @@ describe('PrivacySettings', () => {
     it('should show necessary consent as disabled', async () => {
       vi.mocked(privacyApi.fetchPrivacySettings).mockResolvedValue(mockSettings)
 
-      render(<PrivacySettings />)
+      renderWithProviders(<PrivacySettings />)
 
       await waitFor(() => {
         expect(screen.queryByText(/loading/i)).not.toBeInTheDocument()
@@ -105,7 +113,7 @@ describe('PrivacySettings', () => {
     it('should handle loading error', async () => {
       vi.mocked(privacyApi.fetchPrivacySettings).mockRejectedValue(new Error('Failed to load'))
 
-      render(<PrivacySettings />)
+      renderWithProviders(<PrivacySettings />)
 
       await waitFor(() => {
         expect(screen.getByText(/failed to load privacy settings/i)).toBeInTheDocument()
@@ -118,7 +126,7 @@ describe('PrivacySettings', () => {
       vi.mocked(privacyApi.fetchPrivacySettings).mockResolvedValue(mockSettings)
       const user = userEvent.setup()
 
-      render(<PrivacySettings />)
+      renderWithProviders(<PrivacySettings />)
 
       await waitFor(() => {
         expect(screen.queryByText(/loading/i)).not.toBeInTheDocument()
@@ -136,7 +144,7 @@ describe('PrivacySettings', () => {
       vi.mocked(privacyApi.fetchPrivacySettings).mockResolvedValue(mockSettings)
       const user = userEvent.setup()
 
-      render(<PrivacySettings />)
+      renderWithProviders(<PrivacySettings />)
 
       await waitFor(() => {
         expect(screen.queryByText(/loading/i)).not.toBeInTheDocument()
@@ -154,7 +162,7 @@ describe('PrivacySettings', () => {
       vi.mocked(privacyApi.fetchPrivacySettings).mockResolvedValue(mockSettings)
       const user = userEvent.setup()
 
-      render(<PrivacySettings />)
+      renderWithProviders(<PrivacySettings />)
 
       await waitFor(() => {
         expect(screen.queryByText(/loading/i)).not.toBeInTheDocument()
@@ -172,7 +180,7 @@ describe('PrivacySettings', () => {
       vi.mocked(privacyApi.fetchPrivacySettings).mockResolvedValue(mockSettings)
       const user = userEvent.setup()
 
-      render(<PrivacySettings />)
+      renderWithProviders(<PrivacySettings />)
 
       await waitFor(() => {
         expect(screen.queryByText(/loading/i)).not.toBeInTheDocument()
@@ -197,7 +205,7 @@ describe('PrivacySettings', () => {
 
       const user = userEvent.setup()
 
-      render(<PrivacySettings />)
+      renderWithProviders(<PrivacySettings />)
 
       await waitFor(() => {
         expect(screen.queryByText(/loading/i)).not.toBeInTheDocument()
@@ -225,7 +233,7 @@ describe('PrivacySettings', () => {
 
       const user = userEvent.setup()
 
-      render(<PrivacySettings />)
+      renderWithProviders(<PrivacySettings />)
 
       await waitFor(() => {
         expect(screen.queryByText(/loading/i)).not.toBeInTheDocument()
@@ -257,7 +265,7 @@ describe('PrivacySettings', () => {
       const onSettingsChange = vi.fn()
       const user = userEvent.setup()
 
-      render(<PrivacySettings onSettingsChange={onSettingsChange} />)
+      renderWithProviders(<PrivacySettings onSettingsChange={onSettingsChange} />)
 
       await waitFor(() => {
         expect(screen.queryByText(/loading/i)).not.toBeInTheDocument()
@@ -282,7 +290,7 @@ describe('PrivacySettings', () => {
 
       const user = userEvent.setup()
 
-      render(<PrivacySettings />)
+      renderWithProviders(<PrivacySettings />)
 
       await waitFor(() => {
         expect(screen.queryByText(/loading/i)).not.toBeInTheDocument()
@@ -309,7 +317,7 @@ describe('PrivacySettings', () => {
 
       const user = userEvent.setup()
 
-      render(<PrivacySettings />)
+      renderWithProviders(<PrivacySettings />)
 
       await waitFor(() => {
         expect(screen.queryByText(/loading/i)).not.toBeInTheDocument()
@@ -334,7 +342,7 @@ describe('PrivacySettings', () => {
 
       const user = userEvent.setup()
 
-      render(<PrivacySettings />)
+      renderWithProviders(<PrivacySettings />)
 
       await waitFor(() => {
         expect(screen.queryByText(/loading/i)).not.toBeInTheDocument()
@@ -375,7 +383,7 @@ describe('PrivacySettings', () => {
       }
       vi.mocked(privacyApi.updatePrivacySettings).mockResolvedValue(updatedSettings)
 
-      render(<PrivacySettings onSettingsChange={onSettingsChange} />)
+      renderWithProviders(<PrivacySettings onSettingsChange={onSettingsChange} />)
 
       await waitFor(() => {
         expect(screen.getByLabelText(/analytics cookies/i)).toBeInTheDocument()
@@ -399,7 +407,7 @@ describe('PrivacySettings', () => {
       vi.mocked(privacyApi.fetchPrivacySettings).mockResolvedValue(mockSettings)
       vi.mocked(privacyApi.updatePrivacySettings).mockRejectedValue(new Error('Save failed'))
 
-      render(<PrivacySettings onSettingsChange={onSettingsChange} />)
+      renderWithProviders(<PrivacySettings onSettingsChange={onSettingsChange} />)
 
       await waitFor(() => {
         expect(screen.getByLabelText(/analytics cookies/i)).toBeInTheDocument()
