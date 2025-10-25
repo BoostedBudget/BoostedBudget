@@ -388,21 +388,18 @@ func TestCreateLinkToken_MissingWebhookURL(t *testing.T) {
 	assert.Nil(t, response, "Expected nil response on error")
 }
 
-// TestCreateLinkToken_MissingRedirectURI - DISABLED for issue #200 minimal implementation
-// This test is intentionally skipped because the minimal implementation (issue #200)
-// does NOT require redirect URI. This will be re-enabled in issue #201 when OAuth
-// redirect support is added back.
+// TestCreateLinkToken_MissingRedirectURI tests error handling when redirect URI is not configured.
+// Re-enabled in Phase 3 of issue #201 - redirect_uri is now REQUIRED for OAuth institution support.
 //
-// TODO(#201): Re-enable this test when redirect_uri validation is added back
+// This ensures we fail fast with a clear error message if the redirect URI is not configured,
+// rather than allowing a link token to be created that will fail when users try to connect
+// OAuth-based institutions like Chase or Capital One.
 func TestCreateLinkToken_MissingRedirectURI(t *testing.T) {
-	t.Skip("SKIPPED: Minimal implementation (issue #200) doesn't use redirect URI. Will re-enable in issue #201")
-
 	// Given: PlaidService with missing redirect URI
 	cfg := &config.Config{
 		PlaidClientID:    "test_client_id",
 		PlaidSecret:      "test_secret",
 		PlaidEnv:         "sandbox",
-		PlaidWebhookURL:  "https://api.boostedbudget.com/webhooks/plaid",
 		PlaidRedirectURI: "", // Missing!
 	}
 
@@ -460,4 +457,136 @@ func TestCreateLinkTokenMinimal(t *testing.T) {
 	assert.NotEmpty(t, response.RequestID, "request ID should not be empty")
 
 	t.Logf("✅ Minimal link token created successfully: %s (RequestID: %s)", response.LinkToken, response.RequestID)
+}
+
+// TestCreateLinkTokenWithTransactions tests link token creation with AUTH + TRANSACTIONS products.
+// This is Phase 1 of issue #201 - incrementally adding TRANSACTIONS product to identify
+// if it causes the 400 error that was resolved in issue #200.
+//
+// TRANSACTIONS product provides access to:
+// - Historical transaction data (up to 24 months)
+// - Transaction categories and merchant information
+// - Pending and posted transactions
+//
+// Hypothesis: TRANSACTIONS product will NOT cause 400 error when added to AUTH product.
+// Note: Updated in Phase 3 to include redirect_uri (now required).
+func TestCreateLinkTokenWithTransactions(t *testing.T) {
+	// Skip if Plaid credentials not available in environment
+	if getTestEnv("PLAID_CLIENT_ID") == "" || getTestEnv("PLAID_SECRET") == "" {
+		t.Skip("Plaid credentials not configured - set PLAID_CLIENT_ID and PLAID_SECRET")
+	}
+
+	// Given: Config with credentials and redirect_uri (now required in Phase 3)
+	cfg := &config.Config{
+		PlaidClientID:    getTestEnv("PLAID_CLIENT_ID"),
+		PlaidSecret:      getTestEnv("PLAID_SECRET"),
+		PlaidEnv:         "sandbox",
+		PlaidRedirectURI: "https://boostedbudget.com/plaid/oauth-callback",
+	}
+
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err, "should create plaid service successfully")
+
+	// When: Creating link token (implementation uses AUTH + TRANSACTIONS + redirect_uri)
+	ctx := context.Background()
+	userID := time.Now().String()
+
+	response, err := service.CreateLinkToken(ctx, userID)
+
+	// Then: Should succeed - TRANSACTIONS product should not cause 400 error
+	require.NoError(t, err, "TRANSACTIONS product should not cause 400 error")
+	assert.NotEmpty(t, response.LinkToken, "link token should not be empty")
+	assert.NotEmpty(t, response.Expiration, "expiration should not be empty")
+	assert.NotEmpty(t, response.RequestID, "request ID should not be empty")
+
+	t.Logf("✅ Link token with TRANSACTIONS product: %s (RequestID: %s)", response.LinkToken, response.RequestID)
+}
+
+// TestCreateLinkTokenWithBalance tests link token creation with AUTH + TRANSACTIONS + BALANCE products.
+// This is Phase 2 of issue #201 - incrementally adding BALANCE product to identify
+// if it causes the 400 error that was resolved in issue #200.
+//
+// BALANCE product provides access to:
+// - Real-time account balances (current and available)
+// - Account limits and credit information
+// - Balance updates via webhook or polling
+//
+// Hypothesis: BALANCE product will NOT cause 400 error when added to AUTH + TRANSACTIONS.
+func TestCreateLinkTokenWithBalance(t *testing.T) {
+	// Skip if Plaid credentials not available in environment
+	if getTestEnv("PLAID_CLIENT_ID") == "" || getTestEnv("PLAID_SECRET") == "" {
+		t.Skip("Plaid credentials not configured - set PLAID_CLIENT_ID and PLAID_SECRET")
+	}
+
+	// Given: Config with credentials and redirect_uri (now required in Phase 3)
+	cfg := &config.Config{
+		PlaidClientID:    getTestEnv("PLAID_CLIENT_ID"),
+		PlaidSecret:      getTestEnv("PLAID_SECRET"),
+		PlaidEnv:         "sandbox",
+		PlaidRedirectURI: "https://boostedbudget.com/plaid/oauth-callback",
+	}
+
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err, "should create plaid service successfully")
+
+	// When: Creating link token (implementation should use AUTH + TRANSACTIONS + BALANCE + redirect_uri)
+	ctx := context.Background()
+	userID := time.Now().String()
+
+	response, err := service.CreateLinkToken(ctx, userID)
+
+	// Then: Should succeed - BALANCE product should not cause 400 error
+	require.NoError(t, err, "BALANCE product should not cause 400 error")
+	assert.NotEmpty(t, response.LinkToken, "link token should not be empty")
+	assert.NotEmpty(t, response.Expiration, "expiration should not be empty")
+	assert.NotEmpty(t, response.RequestID, "request ID should not be empty")
+
+	t.Logf("✅ Link token with BALANCE product: %s (RequestID: %s)", response.LinkToken, response.RequestID)
+}
+
+// TestCreateLinkTokenWithRedirectURI tests link token creation with full configuration including OAuth support.
+// This is Phase 3 of issue #201 - adding redirect_uri for OAuth institution support.
+//
+// redirect_uri is required for OAuth-based institutions such as:
+// - Chase
+// - Capital One
+// - Wells Fargo
+// - US Bank
+//
+// The redirect URI must be:
+// 1. Registered in the Plaid Dashboard (Team Settings → API → Allowed redirect URIs)
+// 2. Set in the PLAID_REDIRECT_URI environment variable
+// 3. Included in the link token request via SetRedirectUri()
+//
+// Hypothesis: redirect_uri will NOT cause 400 error when properly configured.
+func TestCreateLinkTokenWithRedirectURI(t *testing.T) {
+	// Skip if Plaid credentials not available
+	if getTestEnv("PLAID_CLIENT_ID") == "" || getTestEnv("PLAID_SECRET") == "" {
+		t.Skip("Plaid credentials not configured - set PLAID_CLIENT_ID and PLAID_SECRET")
+	}
+
+	// Given: Full config with redirect_uri for OAuth support
+	cfg := &config.Config{
+		PlaidClientID:    getTestEnv("PLAID_CLIENT_ID"),
+		PlaidSecret:      getTestEnv("PLAID_SECRET"),
+		PlaidEnv:         "sandbox",
+		PlaidRedirectURI: "https://boostedbudget.com/plaid/oauth-callback",
+	}
+
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err, "should create plaid service successfully")
+
+	// When: Creating link token with full configuration (AUTH + TRANSACTIONS + BALANCE + redirect_uri)
+	ctx := context.Background()
+	userID := time.Now().String()
+
+	response, err := service.CreateLinkToken(ctx, userID)
+
+	// Then: Should succeed - full configuration should work
+	require.NoError(t, err, "redirect_uri should not cause 400 error")
+	assert.NotEmpty(t, response.LinkToken, "link token should not be empty")
+	assert.NotEmpty(t, response.Expiration, "expiration should not be empty")
+	assert.NotEmpty(t, response.RequestID, "request ID should not be empty")
+
+	t.Logf("✅ Full link token with redirect_uri: %s (RequestID: %s)", response.LinkToken, response.RequestID)
 }

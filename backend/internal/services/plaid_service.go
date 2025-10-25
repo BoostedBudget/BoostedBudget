@@ -97,20 +97,25 @@ func (s *plaidService) GetClient() *plaid.APIClient {
 // CreateLinkToken generates a Plaid Link token for the specified user.
 //
 // The link token is a short-lived (30 minute) credential that enables the frontend
-// to initialize Plaid Link for connecting bank accounts. It's pre-configured with:
+// to initialize Plaid Link for connecting bank accounts. Configured with:
 //   - User identification (client_user_id from Auth0)
-//   - Required products: TRANSACTIONS, AUTH, BALANCE
-//   - Webhook URL for receiving async updates
-//   - Redirect URI for OAuth institution support
-//   - Country codes and language settings
+//   - Products: AUTH (account/routing), TRANSACTIONS (history), BALANCE (real-time)
+//   - OAuth redirect URI for institutions like Chase, Capital One, Wells Fargo
+//   - Country codes (US) and language (English)
 //
-// Returns an error if the Plaid API call fails or if required configuration is missing.
+// Issue #201 implementation complete: All products and OAuth redirect_uri support added.
+// The redirect URI must be configured via PLAID_REDIRECT_URI environment variable and
+// registered in Plaid Dashboard (Team Settings → API → Allowed redirect URIs).
+//
+// Returns an error if the Plaid API call fails or if redirect URI is not configured.
 func (s *plaidService) CreateLinkToken(ctx context.Context, userID string) (*domain.LinkTokenResponse, error) {
-	// MINIMAL IMPLEMENTATION for debugging issue #200
-	// This matches the exact pattern from plaid-go v23 official tests
-	// to isolate the 400 error by testing with only required parameters
+	// Validate redirect URI is configured (required for OAuth institutions)
+	// Phase 3 of issue #201 - OAuth institutions like Chase, Capital One require redirect_uri
+	if s.config.PlaidRedirectURI == "" {
+		return nil, fmt.Errorf("plaid redirect URI not configured (PLAID_REDIRECT_URI required)")
+	}
 
-	// Build the link token request with ONLY required parameters
+	// Build the link token request with required parameters
 	request := plaid.NewLinkTokenCreateRequest(
 		"BoostedBudget",                              // Client name displayed in Plaid Link
 		"en",                                          // Language
@@ -118,15 +123,23 @@ func (s *plaidService) CreateLinkToken(ctx context.Context, userID string) (*dom
 		*plaid.NewLinkTokenCreateRequestUser(userID), // User identifier (dereferenced from pointer)
 	)
 
-	// Set ONLY AUTH product (simplest, most compatible)
-	// Removed TRANSACTIONS and BALANCE to match minimal v23 test pattern
+	// Set products: AUTH + TRANSACTIONS + BALANCE
+	// Phase 1-2 of issue #201 - adding products incrementally
+	// AUTH: Account and routing numbers for ACH transfers
+	// TRANSACTIONS: Historical transaction data (up to 24 months), categories, merchant info
+	// BALANCE: Real-time account balances (current and available), account limits
 	request.SetProducts([]plaid.Products{
 		plaid.PRODUCTS_AUTH,
+		plaid.PRODUCTS_TRANSACTIONS,
+		plaid.PRODUCTS_BALANCE,
 	})
 
-	// REMOVED: Webhook URL validation and SetWebhook()
-	// REMOVED: Redirect URI validation and SetRedirectUri()
-	// These will be added back incrementally once minimal version works
+	// Set redirect URI for OAuth institution support (Chase, Capital One, Wells Fargo, etc.)
+	// Phase 3 of issue #201 - OAuth flow requires redirect_uri
+	// Must be registered in Plaid Dashboard: Team Settings → API → Allowed redirect URIs
+	request.SetRedirectUri(s.config.PlaidRedirectURI)
+
+	// REMOVED: Webhook URL validation and SetWebhook() - will be added in issue #202
 
 	// Call Plaid API to create link token
 	resp, _, err := s.client.PlaidApi.LinkTokenCreate(ctx).LinkTokenCreateRequest(*request).Execute()
