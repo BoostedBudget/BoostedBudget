@@ -15,5 +15,5 @@ echo "Using ports:"
 echo "  Frontend: $E2E_FRONTEND_PORT"
 echo "  Backend: $E2E_BACKEND_PORT"
 
-# Run Playwright tests
-npm run test:e2e "$@"
+# Run Playwright tests directly (not via npm to avoid circular dependency)
+npx playwright test "$@"
