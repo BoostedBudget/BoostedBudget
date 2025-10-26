@@ -162,6 +162,8 @@ func main() {
 			api.POST("/plaid/link-token", plaidHandler.CreateLinkToken)
 			api.POST("/plaid/exchange-token", plaidHandler.ExchangePublicToken)
 			api.GET("/accounts", plaidHandler.GetAccounts)
+			api.DELETE("/accounts/:id", plaidHandler.DeleteAccount)
+			api.DELETE("/linked-items/:id", plaidHandler.DisconnectInstitution)
 		}
 
 		log.Println("✅ Authenticated routes enabled (Auth0 + Database)")

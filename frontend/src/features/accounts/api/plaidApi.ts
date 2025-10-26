@@ -60,3 +60,35 @@ export async function fetchAccounts(): Promise<GetAccountsResponse> {
   const response = await apiClient.get<GetAccountsResponse>('/api/v1/accounts')
   return response.data
 }
+
+/**
+ * Delete a single bank account
+ * DELETE /api/v1/accounts/:id
+ *
+ * Deletes the specified account with ownership validation.
+ * Only the account owner can delete their account.
+ * Other accounts from the same institution remain linked.
+ *
+ * @param accountId - UUID of the account to delete
+ * @throws Error if request fails (401 unauthorized, 404 not found, 500 server error)
+ */
+export async function deleteAccount(accountId: string): Promise<void> {
+  await apiClient.delete(`/api/v1/accounts/${accountId}`)
+}
+
+/**
+ * Disconnect an institution and delete all associated accounts
+ * DELETE /api/v1/linked-items/:id
+ *
+ * This endpoint:
+ * 1. Validates ownership of the linked item
+ * 2. Calls Plaid /item/remove to stop monthly billing
+ * 3. Deletes the linked item from database
+ * 4. CASCADE deletes all associated accounts
+ *
+ * @param linkedItemId - UUID of the linked item (institution) to disconnect
+ * @throws Error if request fails (401 unauthorized, 404 not found, 500 server error)
+ */
+export async function disconnectInstitution(linkedItemId: string): Promise<void> {
+  await apiClient.delete(`/api/v1/linked-items/${linkedItemId}`)
+}

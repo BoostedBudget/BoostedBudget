@@ -59,6 +59,19 @@ func (m *MockLinkedItemRepository) Delete(ctx context.Context, id string) error 
 	return args.Error(0)
 }
 
+func (m *MockLinkedItemRepository) GetByIDAndUser(ctx context.Context, id, userID string) (*domain.LinkedItem, error) {
+	args := m.Called(ctx, id, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.LinkedItem), args.Error(1)
+}
+
+func (m *MockLinkedItemRepository) DeleteByUser(ctx context.Context, id, userID string) error {
+	args := m.Called(ctx, id, userID)
+	return args.Error(0)
+}
+
 // MockTransactionRepository is a mock for TransactionRepository
 type MockTransactionRepository struct {
 	mock.Mock

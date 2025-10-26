@@ -38,6 +38,15 @@ type AccountRepository interface {
 
 	// CountByUserID counts the total number of accounts for a user
 	CountByUserID(ctx context.Context, userID string) (int, error)
+
+	// Delete removes an account from the database with ownership validation.
+	// The account is only deleted if both the account ID and user ID match (WHERE id = $1 AND user_id = $2).
+	// This prevents users from deleting accounts they don't own.
+	//
+	// Returns ErrAccountNotFound if:
+	//   - The account doesn't exist
+	//   - The account exists but belongs to a different user (ownership check fails)
+	Delete(ctx context.Context, accountID, userID string) error
 }
 
 // accountRepository implements AccountRepository using PostgreSQL
@@ -349,4 +358,37 @@ func (r *accountRepository) CountByUserID(ctx context.Context, userID string) (i
 	}
 
 	return count, nil
+}
+
+// Delete removes an account from the database with ownership validation.
+//
+// Security: This method validates ownership via the WHERE clause (id AND user_id must match).
+// A user can only delete accounts they own. If the account doesn't exist or belongs to
+// a different user, the DELETE will affect 0 rows and ErrAccountNotFound is returned.
+//
+// Use case: Called when a user manually deletes an individual account from the UI.
+// Note: For institution-level deletion, use LinkedItemRepository.Delete which CASCADE deletes all accounts.
+func (r *accountRepository) Delete(ctx context.Context, accountID, userID string) error {
+	query := `
+		DELETE FROM accounts
+		WHERE id = $1 AND user_id = $2
+	`
+
+	result, err := r.db.ExecContext(ctx, query, accountID, userID)
+	if err != nil {
+		return err
+	}
+
+	// Check if any rows were affected (validates ownership and existence)
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		// Account not found OR user doesn't own it (both cases return same error for security)
+		return ErrAccountNotFound
+	}
+
+	return nil
 }
