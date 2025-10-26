@@ -5,15 +5,16 @@ import (
 	"time"
 )
 
-// LinkedItem represents a Plaid item (connection to a financial institution)
-// that has been linked to a user's account.
+// LinkedItem represents a connection to a financial institution from any provider.
+// Supports Plaid (current), Teller, Finicity, Yodlee (future), and manual accounts (future).
 type LinkedItem struct {
 	ID                   string     `json:"id" db:"id"`
 	UserID               string     `json:"user_id" db:"user_id"`
-	ItemID               string     `json:"item_id" db:"item_id"` // Plaid's item_id
+	ItemID               string     `json:"item_id" db:"item_id"` // Provider's item/connection ID
 	AccessTokenEncrypted string     `json:"-" db:"access_token_encrypted"` // Never expose in JSON
 	InstitutionID        string     `json:"institution_id,omitempty" db:"institution_id"`
 	InstitutionName      string     `json:"institution_name,omitempty" db:"institution_name"`
+	Provider             string     `json:"provider" db:"provider"` // plaid, teller, finicity, yodlee, manual
 	Cursor               *string    `json:"cursor,omitempty" db:"cursor"` // For transaction sync pagination
 	LastSyncedAt         *time.Time `json:"last_synced_at,omitempty" db:"last_synced_at"`
 	CreatedAt            time.Time  `json:"created_at" db:"created_at"`
