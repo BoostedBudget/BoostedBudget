@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { PlaidLinkButton } from './PlaidLinkButton'
 import { AccountCard } from './AccountCard'
 import { UpgradeBanner } from './UpgradeBanner'
-import { fetchAccounts } from './api/plaidApi'
+import { fetchAccounts, deleteAccount } from './api/plaidApi'
 import { fetchProfile } from '../profile/api/profileApi'
 import { useSubscriptionTiers } from '../subscription/hooks/useSubscriptionTiers'
 import { useTierLimits } from '../subscription/hooks/useTierLimits'
@@ -48,6 +48,18 @@ export function AccountsPage() {
   // Handle successful account linking - reload accounts and profile
   function handleAccountsLinked() {
     loadAccountsAndProfile()
+  }
+
+  // Handle account deletion
+  async function handleDeleteAccount(accountId: string) {
+    try {
+      await deleteAccount(accountId)
+      // Reload accounts after successful deletion
+      await loadAccountsAndProfile()
+    } catch (err) {
+      console.error('Failed to delete account:', err)
+      setError('Failed to delete account. Please try again.')
+    }
   }
 
   // Calculate tier limits using hook
@@ -103,7 +115,11 @@ export function AccountsPage() {
           </p>
           <div className="accounts-grid">
             {accounts.map((account) => (
-              <AccountCard key={account.id} account={account} />
+              <AccountCard
+                key={account.id}
+                account={account}
+                onDelete={handleDeleteAccount}
+              />
             ))}
           </div>
         </div>
