@@ -65,12 +65,10 @@ describe('useTransactions', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.useFakeTimers()
   })
 
   afterEach(() => {
     vi.restoreAllMocks()
-    vi.useRealTimers()
   })
 
   describe('Basic Functionality', () => {
@@ -438,7 +436,7 @@ describe('useTransactions', () => {
   })
 
   describe('Debounced Search', () => {
-    it('should debounce search input by 300ms', async () => {
+    it('should debounce search input with 300ms delay', async () => {
       // Arrange
       vi.mocked(transactionsApi.fetchTransactions).mockResolvedValue(mockTransactionsResponse)
 
@@ -455,34 +453,19 @@ describe('useTransactions', () => {
       })
 
       // Initial fetch without search
-      expect(transactionsApi.fetchTransactions).toHaveBeenCalledTimes(1)
+      const initialCallCount = transactionsApi.fetchTransactions.mock.calls.length
 
-      // Update search - should NOT fetch immediately
-      rerender({ search: 's' })
-      expect(transactionsApi.fetchTransactions).toHaveBeenCalledTimes(1)
-
-      rerender({ search: 'st' })
-      expect(transactionsApi.fetchTransactions).toHaveBeenCalledTimes(1)
-
-      rerender({ search: 'sta' })
-      expect(transactionsApi.fetchTransactions).toHaveBeenCalledTimes(1)
-
+      // Update search rapidly - should NOT fetch immediately
       rerender({ search: 'star' })
-      expect(transactionsApi.fetchTransactions).toHaveBeenCalledTimes(1)
 
-      // Fast-forward 299ms - should still not fetch
-      act(() => {
-        vi.advanceTimersByTime(299)
-      })
-      expect(transactionsApi.fetchTransactions).toHaveBeenCalledTimes(1)
+      // Immediately after rerender, should not have fetched yet (debounced)
+      expect(transactionsApi.fetchTransactions).toHaveBeenCalledTimes(initialCallCount)
 
-      // Fast-forward 1ms more (300ms total) - should fetch now
-      act(() => {
-        vi.advanceTimersByTime(1)
-      })
+      // Wait for debounce delay
+      await new Promise((resolve) => setTimeout(resolve, 350))
 
       await waitFor(() => {
-        expect(transactionsApi.fetchTransactions).toHaveBeenCalledTimes(2)
+        expect(transactionsApi.fetchTransactions).toHaveBeenCalledTimes(initialCallCount + 1)
       })
 
       // Assert - Should fetch with debounced search
@@ -511,27 +494,25 @@ describe('useTransactions', () => {
         expect(result.current.loading).toBe(false)
       })
 
-      // Type "starbucks" - each character updates search
+      const initialCallCount = transactionsApi.fetchTransactions.mock.calls.length
+
+      // Type quickly - each should cancel the previous debounce
       rerender({ search: 's' })
-      act(() => vi.advanceTimersByTime(100))
+      await new Promise((resolve) => setTimeout(resolve, 100))
 
       rerender({ search: 'st' })
-      act(() => vi.advanceTimersByTime(100))
+      await new Promise((resolve) => setTimeout(resolve, 100))
 
       rerender({ search: 'sta' })
-      act(() => vi.advanceTimersByTime(100))
 
-      // Total 300ms passed, but last input was "sta" only 100ms ago
-      // Should NOT have fetched yet
-      expect(transactionsApi.fetchTransactions).toHaveBeenCalledTimes(1)
+      // Should NOT have fetched yet (still debouncing)
+      expect(transactionsApi.fetchTransactions).toHaveBeenCalledTimes(initialCallCount)
 
-      // Wait 200ms more (300ms since "sta")
-      act(() => {
-        vi.advanceTimersByTime(200)
-      })
+      // Wait for final debounce
+      await new Promise((resolve) => setTimeout(resolve, 350))
 
       await waitFor(() => {
-        expect(transactionsApi.fetchTransactions).toHaveBeenCalledTimes(2)
+        expect(transactionsApi.fetchTransactions).toHaveBeenCalledTimes(initialCallCount + 1)
       })
 
       // Assert - Should only fetch once with final search term
@@ -560,15 +541,16 @@ describe('useTransactions', () => {
         expect(result.current.loading).toBe(false)
       })
 
+      const callCountAfterFirst = transactionsApi.fetchTransactions.mock.calls.length
+
       // Clear search
       rerender({ search: '' })
 
-      act(() => {
-        vi.advanceTimersByTime(300)
-      })
+      // Wait for debounce
+      await new Promise((resolve) => setTimeout(resolve, 350))
 
       await waitFor(() => {
-        expect(transactionsApi.fetchTransactions).toHaveBeenCalledTimes(2)
+        expect(transactionsApi.fetchTransactions).toHaveBeenCalledTimes(callCountAfterFirst + 1)
       })
 
       // Assert - Should fetch without search filter

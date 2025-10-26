@@ -29,23 +29,23 @@ export async function fetchTransactions(
     queryParams.offset = params.offset
   }
 
-  // Filter parameters - only include if defined
+  // Filter parameters - only include if defined and non-empty
   if (params?.filters) {
     const { filters } = params
 
-    if (filters.account_id !== undefined) {
+    if (filters.account_id !== undefined && filters.account_id !== '') {
       queryParams.account_id = filters.account_id
     }
-    if (filters.start_date !== undefined) {
+    if (filters.start_date !== undefined && filters.start_date !== '') {
       queryParams.start_date = filters.start_date
     }
-    if (filters.end_date !== undefined) {
+    if (filters.end_date !== undefined && filters.end_date !== '') {
       queryParams.end_date = filters.end_date
     }
-    if (filters.category !== undefined) {
+    if (filters.category !== undefined && filters.category !== '') {
       queryParams.category = filters.category
     }
-    if (filters.search !== undefined) {
+    if (filters.search !== undefined && filters.search !== '') {
       queryParams.search = filters.search
     }
     if (filters.pending !== undefined) {
