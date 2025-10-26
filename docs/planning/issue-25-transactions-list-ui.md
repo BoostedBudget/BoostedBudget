@@ -573,14 +573,15 @@ frontend/src/features/transactions/
 
 ### Overall Status
 - [x] Research & Planning (100%)
-- [ ] Backend Implementation (30%)
+- [x] Backend Implementation (100%) ✅ **COMPLETE**
   - [x] RED phase - Repository tests (100%)
   - [x] GREEN phase - Repository implementation (100%)
-  - [ ] RED phase - Service tests (0%)
-  - [ ] GREEN phase - Service implementation (0%)
-  - [ ] RED phase - Handler tests (0%)
-  - [ ] GREEN phase - Handler implementation (0%)
-  - [ ] REFACTOR phase (0%)
+  - [x] RED phase - Service tests (100%)
+  - [x] GREEN phase - Service implementation (100%)
+  - [x] RED phase - Handler tests (100%)
+  - [x] GREEN phase - Handler implementation (100%)
+  - [x] Route wiring in main.go (100%)
+  - [ ] REFACTOR phase (deferred - optional)
 - [ ] Frontend Implementation (0%)
   - [ ] RED phase (0%)
   - [ ] GREEN phase (0%)
@@ -589,23 +590,53 @@ frontend/src/features/transactions/
 - [ ] Code Review & PR (0%)
 
 ### Current Phase
-**Phase**: Backend GREEN (Repository) → Backend RED (Service Layer)
+**Phase**: Backend COMPLETE → Frontend Implementation
 
-**Completed**:
+**Backend Completed** ✅:
 ✅ Created feature branch `feature/25-transactions-list-ui`
-✅ Added TransactionFilters struct to domain layer
-✅ Extended TransactionRepository interface with GetByUserIDWithFilters and CountByUserID
-✅ Wrote 10 comprehensive failing tests for repository filtering (RED phase)
-✅ Implemented GetByUserIDWithFilters with dynamic SQL WHERE clause (GREEN phase)
-✅ Implemented CountByUserID for pagination metadata (GREEN phase)
-✅ Fixed search filter SQL argument handling (pattern added twice for OR condition)
-✅ All 16 repository tests passing (7 original + 9 new filtering tests)
-✅ Committed GREEN phase work (commit 4e19881)
+✅ **Repository Layer** (16 tests passing):
+  - Added TransactionFilters struct to domain layer
+  - Extended TransactionRepository interface with GetByUserIDWithFilters and CountByUserID
+  - Implemented dynamic SQL WHERE clause building (buildWhereClause helper)
+  - Support for 6 optional filters: account_id, start_date, end_date, category, search, pending
+  - PostgreSQL ILIKE for case-insensitive search
+  - Fixed SQL argument indexing for OR conditions in search filter
+  - Commits: 87582c7 (RED), 4e19881 (GREEN)
+
+✅ **Service Layer** (10 tests passing):
+  - Created TransactionService interface with ListTransactions method
+  - Input validation: limit (1-100, default 50), offset (non-negative), date range (start <= end)
+  - SQL injection sanitization: removes dangerous keywords (DROP, DELETE, INSERT, UPDATE, UNION, OR 1=1)
+  - Pagination metadata calculation (total_count, has_more flag)
+  - Defense-in-depth security approach
+  - Commits: 2fcb2d3 (RED), 2f1aebe (GREEN)
+
+✅ **Handler Layer** (11 tests passing):
+  - Created TransactionHandler with GetTransactions method
+  - Query parameter parsing: limit, offset, dates (YYYY-MM-DD), all filters
+  - Auth0 authentication via middleware.GetUserID()
+  - Error mapping: ErrInvalidLimit/Offset/DateRange → 400, service errors → 500
+  - JSON response with pagination metadata
+  - Commits: 18cefea (RED), 1f968aa (GREEN)
+
+✅ **Route Wiring**:
+  - Registered GET /api/v1/transactions endpoint in main.go
+  - Created TransactionRepository, TransactionService, TransactionHandler instances
+  - Route protected by Auth0 middleware
+  - Server compiles successfully
+
+**Test Results**: All 37 backend tests passing (100% pass rate)
+- Repository: 16/16 ✅
+- Service: 10/10 ✅
+- Handler: 11/11 ✅
 
 **Next Steps**:
-1. Create TransactionService interface and implementation
-2. Write failing tests for TransactionService.ListTransactions() (RED phase)
-3. Implement service layer logic (GREEN phase)
+1. Frontend RED phase: Write API and hook tests
+2. Frontend GREEN phase: Implement transactions API and hooks
+3. Frontend RED phase: Write component tests
+4. Frontend GREEN phase: Implement TransactionsList components
+5. Run all tests (backend + frontend + E2E + lint)
+6. Create PR with 'Closes #25'
 
 ---
 
