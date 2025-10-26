@@ -453,7 +453,7 @@ describe('useTransactions', () => {
       })
 
       // Initial fetch without search
-      const initialCallCount = transactionsApi.fetchTransactions.mock.calls.length
+      const initialCallCount = vi.mocked(transactionsApi.fetchTransactions).mock.calls.length
 
       // Update search rapidly - should NOT fetch immediately
       rerender({ search: 'star' })
@@ -494,7 +494,7 @@ describe('useTransactions', () => {
         expect(result.current.loading).toBe(false)
       })
 
-      const initialCallCount = transactionsApi.fetchTransactions.mock.calls.length
+      const initialCallCount = vi.mocked(transactionsApi.fetchTransactions).mock.calls.length
 
       // Type quickly - each should cancel the previous debounce
       rerender({ search: 's' })
@@ -541,7 +541,7 @@ describe('useTransactions', () => {
         expect(result.current.loading).toBe(false)
       })
 
-      const callCountAfterFirst = transactionsApi.fetchTransactions.mock.calls.length
+      const callCountAfterFirst = vi.mocked(transactionsApi.fetchTransactions).mock.calls.length
 
       // Clear search
       rerender({ search: '' })

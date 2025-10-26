@@ -25,7 +25,7 @@ function formatAmount(amount: number): string {
 /**
  * Parse category from JSON string
  */
-function parseCategory(categoryJson: string | null): string {
+function parseCategory(categoryJson: string | null | undefined): string {
   if (!categoryJson) return 'Uncategorized'
 
   try {
