@@ -6,6 +6,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/middleware"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
@@ -141,4 +142,61 @@ func (h *PlaidHandler) GetAccounts(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, response)
+}
+
+// DeleteAccount handles DELETE /accounts/:id
+// Deletes a single account with ownership validation
+func (h *PlaidHandler) DeleteAccount(c echo.Context) error {
+	// Extract user_id from context (set by Auth0 middleware)
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "User not authenticated")
+	}
+
+	// Get account ID from URL parameter
+	accountID := c.Param("id")
+
+	// Delete account via service (validates ownership)
+	err = h.accountService.DeleteAccount(c.Request().Context(), accountID, userID)
+	if err != nil {
+		// Handle specific error types
+		if err == repository.ErrAccountNotFound {
+			return echo.NewHTTPError(http.StatusNotFound, "Account not found")
+		}
+		// Log error details server-side (don't expose internals to client)
+		c.Logger().Errorf("Failed to delete account %s for user %s: %v", accountID, userID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete account")
+	}
+
+	// Return 204 No Content on success
+	return c.NoContent(http.StatusNoContent)
+}
+
+// DisconnectInstitution handles DELETE /linked-items/:id
+// Disconnects an institution (linked item) and all associated accounts
+// Also calls Plaid /item/remove to stop monthly billing
+func (h *PlaidHandler) DisconnectInstitution(c echo.Context) error {
+	// Extract user_id from context (set by Auth0 middleware)
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "User not authenticated")
+	}
+
+	// Get linked item ID from URL parameter
+	linkedItemID := c.Param("id")
+
+	// Disconnect institution via service (validates ownership, calls Plaid, deletes from DB)
+	err = h.accountService.DisconnectInstitution(c.Request().Context(), linkedItemID, userID)
+	if err != nil {
+		// Handle specific error types
+		if err == repository.ErrLinkedItemNotFound {
+			return echo.NewHTTPError(http.StatusNotFound, "Institution not found")
+		}
+		// Log error details server-side (don't expose internals to client)
+		c.Logger().Errorf("Failed to disconnect institution %s for user %s: %v", linkedItemID, userID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to disconnect institution")
+	}
+
+	// Return 204 No Content on success
+	return c.NoContent(http.StatusNoContent)
 }

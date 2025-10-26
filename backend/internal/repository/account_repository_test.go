@@ -414,6 +414,106 @@ func TestAccountRepository_GetAccountsWithInstitution_Empty(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestAccountRepository_Delete_Success tests successful account deletion with ownership validation
+func TestAccountRepository_Delete_Success(t *testing.T) {
+	// Given: Mock DB and account repository
+	db, mock, repo := setupAccountMockDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+
+	// Expect: DELETE query with ownership validation (WHERE id = $1 AND user_id = $2)
+	expectedQuery := `DELETE FROM accounts WHERE id = $1 AND user_id = $2`
+	mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
+		WithArgs(accountID, userID).
+		WillReturnResult(sqlmock.NewResult(0, 1)) // 1 row affected
+
+	// When: Deleting account
+	err := repo.Delete(ctx, accountID, userID)
+
+	// Then: No error, deletion successful
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_Delete_NotFound tests deletion when account doesn't exist
+func TestAccountRepository_Delete_NotFound(t *testing.T) {
+	// Given: Mock DB and account repository
+	db, mock, repo := setupAccountMockDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+
+	// Expect: DELETE query returns 0 rows affected (account not found)
+	expectedQuery := `DELETE FROM accounts WHERE id = $1 AND user_id = $2`
+	mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
+		WithArgs(accountID, userID).
+		WillReturnResult(sqlmock.NewResult(0, 0)) // 0 rows affected
+
+	// When: Attempting to delete non-existent account
+	err := repo.Delete(ctx, accountID, userID)
+
+	// Then: Returns ErrAccountNotFound
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrAccountNotFound)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_Delete_NotOwner tests deletion when user doesn't own the account
+// This validates ownership via the WHERE clause (id AND user_id must match)
+func TestAccountRepository_Delete_NotOwner(t *testing.T) {
+	// Given: Mock DB and account repository
+	db, mock, repo := setupAccountMockDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	wrongUserID := uuid.New().String() // Different user
+
+	// Expect: DELETE query with wrong user_id returns 0 rows affected
+	expectedQuery := `DELETE FROM accounts WHERE id = $1 AND user_id = $2`
+	mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
+		WithArgs(accountID, wrongUserID).
+		WillReturnResult(sqlmock.NewResult(0, 0)) // 0 rows affected (ownership check fails)
+
+	// When: Attempting to delete account owned by different user
+	err := repo.Delete(ctx, accountID, wrongUserID)
+
+	// Then: Returns ErrAccountNotFound (account not found for this user)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrAccountNotFound)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_Delete_DatabaseError tests handling of database errors during deletion
+func TestAccountRepository_Delete_DatabaseError(t *testing.T) {
+	// Given: Mock DB and account repository
+	db, mock, repo := setupAccountMockDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+
+	// Expect: DELETE query returns database error
+	expectedQuery := `DELETE FROM accounts WHERE id = $1 AND user_id = $2`
+	mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
+		WithArgs(accountID, userID).
+		WillReturnError(sql.ErrConnDone) // Database connection error
+
+	// When: Attempting to delete account with DB error
+	err := repo.Delete(ctx, accountID, userID)
+
+	// Then: Returns database error
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, sql.ErrConnDone)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // Helper function to create string pointers
 func strPtr(s string) *string {
 	return &s
