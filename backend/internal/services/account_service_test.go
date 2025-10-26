@@ -92,6 +92,19 @@ func (m *MockLinkedItemRepository) Delete(ctx context.Context, id string) error 
 	return args.Error(0)
 }
 
+func (m *MockLinkedItemRepository) GetByIDAndUser(ctx context.Context, id, userID string) (*domain.LinkedItem, error) {
+	args := m.Called(ctx, id, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.LinkedItem), args.Error(1)
+}
+
+func (m *MockLinkedItemRepository) DeleteByUser(ctx context.Context, id, userID string) error {
+	args := m.Called(ctx, id, userID)
+	return args.Error(0)
+}
+
 type MockAccountRepository struct {
 	mock.Mock
 }
@@ -133,6 +146,11 @@ func (m *MockAccountRepository) GetAccountsWithInstitution(ctx context.Context, 
 func (m *MockAccountRepository) CountByUserID(ctx context.Context, userID string) (int, error) {
 	args := m.Called(ctx, userID)
 	return args.Int(0), args.Error(1)
+}
+
+func (m *MockAccountRepository) Delete(ctx context.Context, accountID, userID string) error {
+	args := m.Called(ctx, accountID, userID)
+	return args.Error(0)
 }
 
 type MockUserRepository struct {
@@ -524,4 +542,247 @@ func TestAccountService_GetAccounts_WithInternalUUID(t *testing.T) {
 	// Verify mocks were called correctly
 	mockUserRepo.AssertExpectations(t)
 	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestDeleteAccount_Success tests successful account deletion
+func TestDeleteAccount_Success(t *testing.T) {
+	// Setup mocks
+	mockAccountRepo := &MockAccountRepository{}
+
+	service := &accountService{
+		accountRepo: mockAccountRepo,
+	}
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+
+	// Mock successful deletion
+	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+
+	// Execute
+	err := service.DeleteAccount(ctx, accountID, userID)
+
+	// Assert
+	require.NoError(t, err, "DeleteAccount should succeed")
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestDeleteAccount_RepositoryError tests account deletion when repository returns error
+func TestDeleteAccount_RepositoryError(t *testing.T) {
+	// Setup mocks
+	mockAccountRepo := &MockAccountRepository{}
+
+	service := &accountService{
+		accountRepo: mockAccountRepo,
+	}
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+
+	// Mock repository error
+	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(assert.AnError)
+
+	// Execute
+	err := service.DeleteAccount(ctx, accountID, userID)
+
+	// Assert
+	require.Error(t, err, "DeleteAccount should return repository error")
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestDisconnectInstitution_Success tests successful institution disconnection
+func TestDisconnectInstitution_Success(t *testing.T) {
+	// Setup mocks
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockEncryptionSvc := &MockEncryptionService{}
+	mockPlaidService := &MockPlaidService{}
+
+	service := &accountService{
+		linkedItemRepo: mockLinkedItemRepo,
+		encryptionSvc:  mockEncryptionSvc,
+		plaidService:   mockPlaidService,
+	}
+
+	ctx := context.Background()
+	linkedItemID := uuid.New().String()
+	userID := uuid.New().String()
+	encryptedToken := "encrypted-token-123"
+	accessToken := "access-sandbox-test-token"
+
+	linkedItem := &domain.LinkedItem{
+		ID:                   linkedItemID,
+		UserID:               userID,
+		ItemID:               "plaid-item-123",
+		AccessTokenEncrypted: encryptedToken,
+		InstitutionID:        "ins_123",
+		InstitutionName:      "Chase",
+	}
+
+	// Mock all steps
+	mockLinkedItemRepo.On("GetByIDAndUser", ctx, linkedItemID, userID).Return(linkedItem, nil)
+	mockEncryptionSvc.On("Decrypt", encryptedToken).Return(accessToken, nil)
+	mockPlaidService.On("RemoveItem", ctx, accessToken).Return(nil)
+	mockLinkedItemRepo.On("DeleteByUser", ctx, linkedItemID, userID).Return(nil)
+
+	// Execute
+	err := service.DisconnectInstitution(ctx, linkedItemID, userID)
+
+	// Assert
+	require.NoError(t, err, "DisconnectInstitution should succeed")
+	mockLinkedItemRepo.AssertExpectations(t)
+	mockEncryptionSvc.AssertExpectations(t)
+	mockPlaidService.AssertExpectations(t)
+}
+
+// TestDisconnectInstitution_LinkedItemNotFound tests when linked item doesn't exist
+func TestDisconnectInstitution_LinkedItemNotFound(t *testing.T) {
+	// Setup mocks
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+
+	service := &accountService{
+		linkedItemRepo: mockLinkedItemRepo,
+	}
+
+	ctx := context.Background()
+	linkedItemID := uuid.New().String()
+	userID := uuid.New().String()
+
+	// Mock linked item not found
+	mockLinkedItemRepo.On("GetByIDAndUser", ctx, linkedItemID, userID).Return(nil, assert.AnError)
+
+	// Execute
+	err := service.DisconnectInstitution(ctx, linkedItemID, userID)
+
+	// Assert
+	require.Error(t, err, "DisconnectInstitution should return error for missing item")
+	mockLinkedItemRepo.AssertExpectations(t)
+}
+
+// TestDisconnectInstitution_DecryptionError tests when decryption fails
+func TestDisconnectInstitution_DecryptionError(t *testing.T) {
+	// Setup mocks
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockEncryptionSvc := &MockEncryptionService{}
+
+	service := &accountService{
+		linkedItemRepo: mockLinkedItemRepo,
+		encryptionSvc:  mockEncryptionSvc,
+	}
+
+	ctx := context.Background()
+	linkedItemID := uuid.New().String()
+	userID := uuid.New().String()
+	encryptedToken := "encrypted-token-123"
+
+	linkedItem := &domain.LinkedItem{
+		ID:                   linkedItemID,
+		UserID:               userID,
+		ItemID:               "plaid-item-123",
+		AccessTokenEncrypted: encryptedToken,
+		InstitutionID:        "ins_123",
+		InstitutionName:      "Chase",
+	}
+
+	// Mock linked item found but decryption fails
+	mockLinkedItemRepo.On("GetByIDAndUser", ctx, linkedItemID, userID).Return(linkedItem, nil)
+	mockEncryptionSvc.On("Decrypt", encryptedToken).Return("", assert.AnError)
+
+	// Execute
+	err := service.DisconnectInstitution(ctx, linkedItemID, userID)
+
+	// Assert
+	require.Error(t, err, "DisconnectInstitution should return decryption error")
+	assert.Contains(t, err.Error(), "failed to decrypt access token")
+	mockLinkedItemRepo.AssertExpectations(t)
+	mockEncryptionSvc.AssertExpectations(t)
+}
+
+// TestDisconnectInstitution_PlaidFailureButDatabaseSucceeds tests when Plaid fails but DB deletion succeeds
+func TestDisconnectInstitution_PlaidFailureButDatabaseSucceeds(t *testing.T) {
+	// Setup mocks
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockEncryptionSvc := &MockEncryptionService{}
+	mockPlaidService := &MockPlaidService{}
+
+	service := &accountService{
+		linkedItemRepo: mockLinkedItemRepo,
+		encryptionSvc:  mockEncryptionSvc,
+		plaidService:   mockPlaidService,
+	}
+
+	ctx := context.Background()
+	linkedItemID := uuid.New().String()
+	userID := uuid.New().String()
+	encryptedToken := "encrypted-token-123"
+	accessToken := "access-sandbox-test-token"
+
+	linkedItem := &domain.LinkedItem{
+		ID:                   linkedItemID,
+		UserID:               userID,
+		ItemID:               "plaid-item-123",
+		AccessTokenEncrypted: encryptedToken,
+		InstitutionID:        "ins_123",
+		InstitutionName:      "Chase",
+	}
+
+	// Mock Plaid removal fails but database deletion succeeds
+	mockLinkedItemRepo.On("GetByIDAndUser", ctx, linkedItemID, userID).Return(linkedItem, nil)
+	mockEncryptionSvc.On("Decrypt", encryptedToken).Return(accessToken, nil)
+	mockPlaidService.On("RemoveItem", ctx, accessToken).Return(assert.AnError)
+	mockLinkedItemRepo.On("DeleteByUser", ctx, linkedItemID, userID).Return(nil)
+
+	// Execute
+	err := service.DisconnectInstitution(ctx, linkedItemID, userID)
+
+	// Assert - Should succeed even if Plaid fails (we still clean up database)
+	require.NoError(t, err, "DisconnectInstitution should succeed even if Plaid fails")
+	mockLinkedItemRepo.AssertExpectations(t)
+	mockEncryptionSvc.AssertExpectations(t)
+	mockPlaidService.AssertExpectations(t)
+}
+
+// TestDisconnectInstitution_DatabaseDeletionError tests when database deletion fails
+func TestDisconnectInstitution_DatabaseDeletionError(t *testing.T) {
+	// Setup mocks
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockEncryptionSvc := &MockEncryptionService{}
+	mockPlaidService := &MockPlaidService{}
+
+	service := &accountService{
+		linkedItemRepo: mockLinkedItemRepo,
+		encryptionSvc:  mockEncryptionSvc,
+		plaidService:   mockPlaidService,
+	}
+
+	ctx := context.Background()
+	linkedItemID := uuid.New().String()
+	userID := uuid.New().String()
+	encryptedToken := "encrypted-token-123"
+	accessToken := "access-sandbox-test-token"
+
+	linkedItem := &domain.LinkedItem{
+		ID:                   linkedItemID,
+		UserID:               userID,
+		ItemID:               "plaid-item-123",
+		AccessTokenEncrypted: encryptedToken,
+		InstitutionID:        "ins_123",
+		InstitutionName:      "Chase",
+	}
+
+	// Mock database deletion fails
+	mockLinkedItemRepo.On("GetByIDAndUser", ctx, linkedItemID, userID).Return(linkedItem, nil)
+	mockEncryptionSvc.On("Decrypt", encryptedToken).Return(accessToken, nil)
+	mockPlaidService.On("RemoveItem", ctx, accessToken).Return(nil)
+	mockLinkedItemRepo.On("DeleteByUser", ctx, linkedItemID, userID).Return(assert.AnError)
+
+	// Execute
+	err := service.DisconnectInstitution(ctx, linkedItemID, userID)
+
+	// Assert
+	require.Error(t, err, "DisconnectInstitution should return database deletion error")
+	mockLinkedItemRepo.AssertExpectations(t)
+	mockEncryptionSvc.AssertExpectations(t)
+	mockPlaidService.AssertExpectations(t)
 }
