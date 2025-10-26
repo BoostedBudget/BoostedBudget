@@ -31,7 +31,8 @@ describe('TransactionCard', () => {
   describe('Basic Rendering', () => {
     it('should render transaction name', () => {
       render(<TransactionCard transaction={mockTransaction} />)
-      expect(screen.getByText('Starbucks')).toBeInTheDocument()
+      // Displays merchant_name when available, otherwise name
+      expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
     })
 
     it('should render transaction amount as debit (negative)', () => {
@@ -51,9 +52,15 @@ describe('TransactionCard', () => {
     })
 
     it('should render transaction date in readable format', () => {
-      render(<TransactionCard transaction={mockTransaction} />)
-      // Should show "Oct 25, 2025" or similar human-readable format
-      expect(screen.getByText(/Oct.*25.*2025/i)).toBeInTheDocument()
+      // Use a date in the past to get formatted output instead of "Today"
+      const pastTransaction: Transaction = {
+        ...mockTransaction,
+        date: '2025-09-15',
+        authorized_date: null,
+      }
+      render(<TransactionCard transaction={pastTransaction} />)
+      // Should show "Sep 15, 2025" or similar human-readable format
+      expect(screen.getByText(/Sep.*15.*2025/i)).toBeInTheDocument()
     })
 
     it('should show merchant name when available', () => {
@@ -203,24 +210,24 @@ describe('TransactionCard', () => {
     it('should use authorized_date when available', () => {
       const transactionWithAuthDate: Transaction = {
         ...mockTransaction,
-        date: '2025-10-25',
-        authorized_date: '2025-10-24',
+        date: '2025-09-20',
+        authorized_date: '2025-09-19',
       }
 
       render(<TransactionCard transaction={transactionWithAuthDate} />)
-      // Should show authorized date (Oct 24) instead of date (Oct 25)
-      expect(screen.getByText(/Oct.*24.*2025/i)).toBeInTheDocument()
+      // Should show authorized date (Sep 19) instead of date (Sep 20)
+      expect(screen.getByText(/Sep.*19.*2025/i)).toBeInTheDocument()
     })
 
     it('should fallback to date when authorized_date is null', () => {
       const transactionWithoutAuthDate: Transaction = {
         ...mockTransaction,
-        date: '2025-10-25',
+        date: '2025-09-15',
         authorized_date: null,
       }
 
       render(<TransactionCard transaction={transactionWithoutAuthDate} />)
-      expect(screen.getByText(/Oct.*25.*2025/i)).toBeInTheDocument()
+      expect(screen.getByText(/Sep.*15.*2025/i)).toBeInTheDocument()
     })
 
     it('should show today for current date transactions', () => {
@@ -272,6 +279,7 @@ describe('TransactionCard', () => {
       const longNameTransaction: Transaction = {
         ...mockTransaction,
         name: 'A'.repeat(200),
+        merchant_name: null, // Remove merchant_name so name is displayed
       }
 
       render(<TransactionCard transaction={longNameTransaction} />)
