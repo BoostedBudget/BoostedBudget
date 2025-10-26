@@ -29,6 +29,17 @@ type AccountService interface {
 	// GetAccounts retrieves all linked bank accounts for a user with institution information
 	// NOTE: After PR #197, this accepts internal user UUID, not Auth0 ID
 	GetAccounts(ctx context.Context, userID string) ([]domain.Account, error)
+
+	// DeleteAccount deletes a single account with ownership validation.
+	// Only the account owner can delete their account.
+	// Returns repository.ErrAccountNotFound if account doesn't exist or user doesn't own it.
+	DeleteAccount(ctx context.Context, accountID, userID string) error
+
+	// DisconnectInstitution disconnects an institution (linked item) and all associated accounts.
+	// This also calls Plaid /item/remove to stop monthly billing.
+	// Only the institution owner can disconnect it.
+	// Returns repository.ErrLinkedItemNotFound if item doesn't exist or user doesn't own it.
+	DisconnectInstitution(ctx context.Context, linkedItemID, userID string) error
 }
 
 // LinkAccountsResult contains the results of linking bank accounts
@@ -260,4 +271,61 @@ func (s *accountService) GetAccounts(ctx context.Context, userID string) ([]doma
 	}
 
 	return accounts, nil
+}
+
+// DeleteAccount deletes a single account with ownership validation.
+//
+// This method delegates to the repository layer which validates ownership via
+// WHERE id = $1 AND user_id = $2. Only the account owner can delete their account.
+//
+// Use case: User wants to remove a single account (e.g., closed credit card) while
+// keeping other accounts from the same institution.
+//
+// Returns repository.ErrAccountNotFound if account doesn't exist or user doesn't own it.
+func (s *accountService) DeleteAccount(ctx context.Context, accountID, userID string) error {
+	// Delegate to repository - it handles ownership validation
+	return s.accountRepo.Delete(ctx, accountID, userID)
+}
+
+// DisconnectInstitution disconnects an institution (linked item) and all associated accounts.
+//
+// This method performs the following steps:
+// 1. Retrieve the linked item with ownership validation
+// 2. Decrypt the Plaid access token
+// 3. Call Plaid /item/remove to stop monthly billing (critical for cost control - Issue #226)
+// 4. Delete the linked item from database (CASCADE deletes all associated accounts)
+//
+// Note: If Plaid removal fails, we still delete from database since the access token
+// is likely already invalid. This prevents orphaned database records.
+//
+// Returns repository.ErrLinkedItemNotFound if item doesn't exist or user doesn't own it.
+func (s *accountService) DisconnectInstitution(ctx context.Context, linkedItemID, userID string) error {
+	// Step 1: Get linked item with ownership validation
+	linkedItem, err := s.linkedItemRepo.GetByIDAndUser(ctx, linkedItemID, userID)
+	if err != nil {
+		return err // Returns ErrLinkedItemNotFound if not found or not owned
+	}
+
+	// Step 2: Decrypt the Plaid access token
+	accessToken, err := s.encryptionSvc.Decrypt(linkedItem.AccessTokenEncrypted)
+	if err != nil {
+		return fmt.Errorf("failed to decrypt access token: %w", err)
+	}
+
+	// Step 3: Call Plaid to remove the item (stops monthly billing)
+	// This is critical for cost control per Issue #226
+	err = s.plaidService.RemoveItem(ctx, accessToken)
+	if err != nil {
+		// Log the error but continue - access token may already be invalid
+		// We still want to clean up our database even if Plaid call fails
+		fmt.Printf("Warning: Plaid RemoveItem failed for item %s: %v\n", linkedItemID, err)
+	}
+
+	// Step 4: Delete from database (CASCADE deletes all accounts)
+	err = s.linkedItemRepo.DeleteByUser(ctx, linkedItemID, userID)
+	if err != nil {
+		return err // Returns ErrLinkedItemNotFound if deletion fails
+	}
+
+	return nil
 }
