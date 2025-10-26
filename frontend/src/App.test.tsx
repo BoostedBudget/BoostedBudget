@@ -206,4 +206,59 @@ describe('App', () => {
       })
     })
   })
+
+  describe('transactions navigation', () => {
+    describe('when user is authenticated', () => {
+      const mockUser = {
+        name: 'Test User',
+        email: 'test@example.com',
+        picture: 'https://example.com/avatar.jpg',
+      }
+
+      beforeEach(() => {
+        mockUseAuth0.mockReturnValue({
+          isAuthenticated: true,
+          user: mockUser,
+          logout: vi.fn(),
+        })
+      })
+
+      it('should display transactions link in navigation', async () => {
+        render(
+          <BrowserRouter>
+            <App />
+          </BrowserRouter>
+        )
+
+        await waitFor(() => {
+          const transactionsLink = screen.getByRole('link', { name: /transactions/i })
+          expect(transactionsLink).toBeInTheDocument()
+          expect(transactionsLink).toHaveAttribute('href', '/transactions')
+        })
+      })
+    })
+
+    describe('when user is not authenticated', () => {
+      beforeEach(() => {
+        mockUseAuth0.mockReturnValue({
+          isAuthenticated: false,
+          user: null,
+          loginWithRedirect: vi.fn(),
+        })
+      })
+
+      it('should not display transactions link in navigation', async () => {
+        render(
+          <BrowserRouter>
+            <App />
+          </BrowserRouter>
+        )
+
+        await waitFor(() => {
+          const transactionsLink = screen.queryByRole('link', { name: /transactions/i })
+          expect(transactionsLink).not.toBeInTheDocument()
+        })
+      })
+    })
+  })
 })
