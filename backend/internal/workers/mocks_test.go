@@ -99,6 +99,24 @@ func (m *MockTransactionRepository) GetBySource(ctx context.Context, source doma
 	return args.Get(0).([]domain.Transaction), args.Error(1)
 }
 
+func (m *MockTransactionRepository) GetByUserIDWithFilters(ctx context.Context, userID string, filters domain.TransactionFilters, limit, offset int) ([]domain.Transaction, error) {
+	args := m.Called(ctx, userID, filters, limit, offset)
+	return args.Get(0).([]domain.Transaction), args.Error(1)
+}
+
+func (m *MockTransactionRepository) CountByUserID(ctx context.Context, userID string, filters domain.TransactionFilters) (int, error) {
+	args := m.Called(ctx, userID, filters)
+	return args.Int(0), args.Error(1)
+}
+
+func (m *MockTransactionRepository) GetByExternalID(ctx context.Context, source domain.TransactionSource, externalID string, userID string) (*domain.Transaction, error) {
+	args := m.Called(ctx, source, externalID, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.Transaction), args.Error(1)
+}
+
 // MockPlaidClient is a mock for Plaid API client
 type MockPlaidClient struct {
 	mock.Mock

@@ -54,6 +54,11 @@ type TransactionRepository interface {
 	// CountByUserID returns the total count of transactions for a user with optional filters
 	// Used for pagination metadata (total_count, has_more)
 	CountByUserID(ctx context.Context, userID string, filters domain.TransactionFilters) (int, error)
+
+	// GetByExternalID retrieves a transaction by its provider-specific external ID
+	// Used during transaction sync to lookup existing transactions for updates
+	// Returns ErrTransactionNotFound if transaction doesn't exist
+	GetByExternalID(ctx context.Context, source domain.TransactionSource, externalID string, userID string) (*domain.Transaction, error)
 }
 
 // transactionRepository implements TransactionRepository using PostgreSQL
@@ -374,6 +379,55 @@ func (r *transactionRepository) CountByUserID(ctx context.Context, userID string
 	}
 
 	return count, nil
+}
+
+// GetByExternalID retrieves a transaction by its provider-specific external ID
+// Used during transaction sync to lookup existing transactions for updates
+func (r *transactionRepository) GetByExternalID(ctx context.Context, source domain.TransactionSource, externalID string, userID string) (*domain.Transaction, error) {
+	query := `
+		SELECT id, user_id, account_id, linked_item_id, source,
+		       external_transaction_id, external_metadata, amount, date,
+		       authorized_date, name, merchant_name, category,
+		       personal_finance_category, payment_channel, pending,
+		       user_notes, created_at, updated_at
+		FROM transactions
+		WHERE source = $1 AND external_transaction_id = $2 AND user_id = $3
+	`
+
+	var tx domain.Transaction
+	var sourceStr string
+
+	err := r.db.QueryRowContext(ctx, query, string(source), externalID, userID).Scan(
+		&tx.ID,
+		&tx.UserID,
+		&tx.AccountID,
+		&tx.LinkedItemID,
+		&sourceStr,
+		&tx.ExternalTransactionID,
+		&tx.ExternalMetadata,
+		&tx.Amount,
+		&tx.Date,
+		&tx.AuthorizedDate,
+		&tx.Name,
+		&tx.MerchantName,
+		&tx.Category,
+		&tx.PersonalFinanceCategory,
+		&tx.PaymentChannel,
+		&tx.Pending,
+		&tx.UserNotes,
+		&tx.CreatedAt,
+		&tx.UpdatedAt,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, ErrTransactionNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get transaction by external ID: %w", err)
+	}
+
+	tx.Source = domain.TransactionSource(sourceStr)
+	return &tx, nil
 }
 
 // buildWhereClause constructs a dynamic WHERE clause based on filters
