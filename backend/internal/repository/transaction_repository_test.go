@@ -492,6 +492,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_Search(t *testing.T) {
 		)
 
 	// Expect SELECT query with ILIKE search (case-insensitive)
+	// Note: Search pattern added twice for both name and merchant_name ILIKE conditions
 	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE user_id(.+)AND \\(name ILIKE (.+)OR merchant_name ILIKE").
 		WithArgs(userID, "%"+searchQuery+"%", "%"+searchQuery+"%", limit, offset).
 		WillReturnRows(rows)
