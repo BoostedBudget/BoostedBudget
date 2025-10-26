@@ -44,6 +44,21 @@ type TransactionRepository interface {
 
 	// GetBySource retrieves all transactions from a specific source for a user
 	GetBySource(ctx context.Context, source domain.TransactionSource, userID string) ([]domain.Transaction, error)
+
+	// GetByUserIDWithFilters retrieves transactions for a specific user with optional filters and pagination
+	// Filters: account_id, date range, category, search, pending status
+	// All filters are optional (nil = not applied)
+	// Returns transactions ordered by date DESC
+	GetByUserIDWithFilters(ctx context.Context, userID string, filters domain.TransactionFilters, limit, offset int) ([]domain.Transaction, error)
+
+	// CountByUserID returns the total count of transactions for a user with optional filters
+	// Used for pagination metadata (total_count, has_more)
+	CountByUserID(ctx context.Context, userID string, filters domain.TransactionFilters) (int, error)
+
+	// GetByExternalID retrieves a transaction by its provider-specific external ID
+	// Used during transaction sync to lookup existing transactions for updates
+	// Returns ErrTransactionNotFound if transaction doesn't exist
+	GetByExternalID(ctx context.Context, source domain.TransactionSource, externalID string, userID string) (*domain.Transaction, error)
 }
 
 // transactionRepository implements TransactionRepository using PostgreSQL
@@ -314,6 +329,167 @@ func (r *transactionRepository) GetBySource(ctx context.Context, source domain.T
 	defer rows.Close()
 
 	return r.scanTransactions(rows)
+}
+
+// GetByUserIDWithFilters retrieves transactions for a user with optional filters and pagination
+func (r *transactionRepository) GetByUserIDWithFilters(ctx context.Context, userID string, filters domain.TransactionFilters, limit, offset int) ([]domain.Transaction, error) {
+	// Build dynamic WHERE clause based on filters
+	whereClause, args := buildWhereClause(userID, filters)
+
+	// Add limit and offset to args
+	args = append(args, limit, offset)
+
+	// Build complete query with dynamic WHERE clause
+	query := fmt.Sprintf(`
+		SELECT id, user_id, account_id, linked_item_id, source, external_transaction_id,
+		       external_metadata, amount, date, authorized_date, name, merchant_name,
+		       category, personal_finance_category, payment_channel, pending,
+		       user_notes, created_at, updated_at
+		FROM transactions
+		%s
+		ORDER BY date DESC, created_at DESC
+		LIMIT $%d OFFSET $%d
+	`, whereClause, len(args)-1, len(args))
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query transactions: %w", err)
+	}
+	defer rows.Close()
+
+	return r.scanTransactions(rows)
+}
+
+// CountByUserID returns the total count of transactions for a user with optional filters
+func (r *transactionRepository) CountByUserID(ctx context.Context, userID string, filters domain.TransactionFilters) (int, error) {
+	// Build dynamic WHERE clause (same logic as GetByUserIDWithFilters)
+	whereClause, args := buildWhereClause(userID, filters)
+
+	// Build COUNT query
+	query := fmt.Sprintf(`
+		SELECT COUNT(*)
+		FROM transactions
+		%s
+	`, whereClause)
+
+	var count int
+	err := r.db.QueryRowContext(ctx, query, args...).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count transactions: %w", err)
+	}
+
+	return count, nil
+}
+
+// GetByExternalID retrieves a transaction by its provider-specific external ID
+// Used during transaction sync to lookup existing transactions for updates
+func (r *transactionRepository) GetByExternalID(ctx context.Context, source domain.TransactionSource, externalID string, userID string) (*domain.Transaction, error) {
+	query := `
+		SELECT id, user_id, account_id, linked_item_id, source,
+		       external_transaction_id, external_metadata, amount, date,
+		       authorized_date, name, merchant_name, category,
+		       personal_finance_category, payment_channel, pending,
+		       user_notes, created_at, updated_at
+		FROM transactions
+		WHERE source = $1 AND external_transaction_id = $2 AND user_id = $3
+	`
+
+	var tx domain.Transaction
+	var sourceStr string
+
+	err := r.db.QueryRowContext(ctx, query, string(source), externalID, userID).Scan(
+		&tx.ID,
+		&tx.UserID,
+		&tx.AccountID,
+		&tx.LinkedItemID,
+		&sourceStr,
+		&tx.ExternalTransactionID,
+		&tx.ExternalMetadata,
+		&tx.Amount,
+		&tx.Date,
+		&tx.AuthorizedDate,
+		&tx.Name,
+		&tx.MerchantName,
+		&tx.Category,
+		&tx.PersonalFinanceCategory,
+		&tx.PaymentChannel,
+		&tx.Pending,
+		&tx.UserNotes,
+		&tx.CreatedAt,
+		&tx.UpdatedAt,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, ErrTransactionNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get transaction by external ID: %w", err)
+	}
+
+	tx.Source = domain.TransactionSource(sourceStr)
+	return &tx, nil
+}
+
+// buildWhereClause constructs a dynamic WHERE clause based on filters
+// Returns the WHERE clause string and the corresponding query arguments
+func buildWhereClause(userID string, filters domain.TransactionFilters) (string, []interface{}) {
+	var conditions []string
+	var args []interface{}
+	argIndex := 1
+
+	// Always filter by user_id
+	conditions = append(conditions, fmt.Sprintf("user_id = $%d", argIndex))
+	args = append(args, userID)
+	argIndex++
+
+	// Optional filter: account_id
+	if filters.AccountID != nil {
+		conditions = append(conditions, fmt.Sprintf("account_id = $%d", argIndex))
+		args = append(args, *filters.AccountID)
+		argIndex++
+	}
+
+	// Optional filter: start_date
+	if filters.StartDate != nil {
+		conditions = append(conditions, fmt.Sprintf("date >= $%d", argIndex))
+		args = append(args, *filters.StartDate)
+		argIndex++
+	}
+
+	// Optional filter: end_date
+	if filters.EndDate != nil {
+		conditions = append(conditions, fmt.Sprintf("date <= $%d", argIndex))
+		args = append(args, *filters.EndDate)
+		argIndex++
+	}
+
+	// Optional filter: category (JSONB text search)
+	if filters.Category != nil {
+		conditions = append(conditions, fmt.Sprintf("category::text ILIKE $%d", argIndex))
+		args = append(args, "%"+*filters.Category+"%")
+		argIndex++
+	}
+
+	// Optional filter: search (name OR merchant_name)
+	if filters.Search != nil {
+		searchCondition := fmt.Sprintf("(name ILIKE $%d OR merchant_name ILIKE $%d)", argIndex, argIndex+1)
+		conditions = append(conditions, searchCondition)
+		searchPattern := "%" + *filters.Search + "%"
+		args = append(args, searchPattern, searchPattern) // Add pattern twice for both ILIKE conditions
+		argIndex += 2
+	}
+
+	// Optional filter: pending status
+	if filters.Pending != nil {
+		conditions = append(conditions, fmt.Sprintf("pending = $%d", argIndex))
+		args = append(args, *filters.Pending)
+		argIndex++
+	}
+
+	// Combine all conditions with AND
+	whereClause := "WHERE " + strings.Join(conditions, " AND ")
+
+	return whereClause, args
 }
 
 // scanTransactions scans SQL rows into Transaction structs

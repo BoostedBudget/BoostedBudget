@@ -121,3 +121,29 @@ func (t *Transaction) Validate() error {
 
 	return nil
 }
+
+// TransactionFilters represents optional filters for querying transactions.
+// All fields are optional pointers - nil means no filter applied for that field.
+// Used by repository layer to build dynamic WHERE clauses.
+type TransactionFilters struct {
+	// AccountID filters transactions by specific account
+	AccountID *string
+
+	// StartDate filters transactions on or after this date (inclusive)
+	StartDate *time.Time
+
+	// EndDate filters transactions on or before this date (inclusive)
+	EndDate *time.Time
+
+	// Category filters transactions containing this category string
+	// Uses ILIKE for case-insensitive partial matching against JSONB category field
+	Category *string
+
+	// Search filters transactions by merchant name or transaction name
+	// Uses ILIKE for case-insensitive partial matching
+	Search *string
+
+	// Pending filters transactions by pending status
+	// True = only pending, False = only settled, nil = both
+	Pending *bool
+}

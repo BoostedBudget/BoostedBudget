@@ -89,11 +89,13 @@ func main() {
 		privacyRepo := repository.NewPrivacyRepository(db)
 		linkedItemRepo := repository.NewLinkedItemRepository(db)
 		accountRepo := repository.NewAccountRepository(db)
+		transactionRepo := repository.NewTransactionRepository(db)
 		identityRepo := repository.NewUserIdentityRepository(db) // Maps Auth0 IDs to user UUIDs
 
 		// Create services
 		profileService := services.NewProfileService(profileRepo)
 		privacyService := services.NewPrivacyService(privacyRepo)
+		transactionService := services.NewTransactionService(transactionRepo)
 		// Note: Passing nil for override repo - not yet implemented
 		subscriptionService := services.NewSubscriptionService(tierConfig, nil)
 
@@ -137,6 +139,7 @@ func main() {
 		// Create handlers
 		profileHandler := handlers.NewProfileHandler(profileService)
 		privacyHandler := handlers.NewPrivacyHandler(privacyService, profileService)
+		transactionHandler := handlers.NewTransactionHandler(transactionService)
 
 		// Create Auth0 middleware with identity resolution
 		auth0Middleware := middleware.Auth0Middleware(
@@ -152,6 +155,7 @@ func main() {
 		api.PUT("/user/profile", profileHandler.UpdateProfile)
 		api.GET("/user/privacy", privacyHandler.GetPrivacySettings)
 		api.PUT("/user/privacy", privacyHandler.UpdatePrivacySettings)
+		api.GET("/transactions", transactionHandler.GetTransactions)
 
 		// Plaid routes (if enabled)
 		if plaidHandler != nil {
