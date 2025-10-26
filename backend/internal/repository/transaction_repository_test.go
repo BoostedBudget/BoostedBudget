@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -708,6 +709,81 @@ func TestTransactionRepository_CountByUserID_WithFilters(t *testing.T) {
 	count, err := repo.CountByUserID(ctx, userID, filters)
 	assert.NoError(t, err)
 	assert.Equal(t, 5, count)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetByExternalID_Success tests retrieving a transaction by external ID
+func TestTransactionRepository_GetByExternalID_Success(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	externalID := "plaid_tx_123"
+	userID := "user-123"
+	source := domain.SourcePlaid
+
+	merchantName := "Starbucks Coffee"
+	categoryJSON := `["Food and Drink", "Coffee"]`
+	// Mock result row
+	rows := sqlmock.NewRows([]string{
+		"id", "user_id", "account_id", "linked_item_id",
+		"source", "external_transaction_id", "external_metadata",
+		"amount", "date", "authorized_date", "name", "merchant_name",
+		"category", "personal_finance_category", "payment_channel",
+		"pending", "user_notes", "created_at", "updated_at",
+	}).
+		AddRow(
+			"tx-uuid-123", userID, "account-456", "item-789",
+			"plaid", externalID, nil,
+			-25.50, time.Now(), nil, "Starbucks", &merchantName,
+			&categoryJSON, nil, nil,
+			false, nil, time.Now(), time.Now(),
+		)
+
+	// Expect SELECT query with WHERE source = $1 AND external_transaction_id = $2 AND user_id = $3
+	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE source (.+) AND external_transaction_id (.+) AND user_id").
+		WithArgs(string(source), externalID, userID).
+		WillReturnRows(rows)
+
+	transaction, err := repo.GetByExternalID(ctx, source, externalID, userID)
+	assert.NoError(t, err)
+	assert.NotNil(t, transaction)
+	assert.Equal(t, "tx-uuid-123", transaction.ID)
+	assert.Equal(t, externalID, *transaction.ExternalTransactionID)
+	assert.Equal(t, userID, transaction.UserID)
+	assert.Equal(t, source, transaction.Source)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetByExternalID_NotFound tests when transaction doesn't exist
+func TestTransactionRepository_GetByExternalID_NotFound(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	externalID := "nonexistent_tx"
+	userID := "user-123"
+	source := domain.SourcePlaid
+
+	// Expect SELECT query to return sql.ErrNoRows (which gets converted to ErrTransactionNotFound)
+	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE source (.+) AND external_transaction_id (.+) AND user_id").
+		WithArgs(string(source), externalID, userID).
+		WillReturnError(sql.ErrNoRows)
+
+	transaction, err := repo.GetByExternalID(ctx, source, externalID, userID)
+	assert.Error(t, err)
+	assert.Equal(t, ErrTransactionNotFound, err)
+	assert.Nil(t, transaction)
 
 	err = mock.ExpectationsWereMet()
 	assert.NoError(t, err)
