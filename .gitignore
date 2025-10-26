@@ -303,6 +303,7 @@ buck-out/
 # BoostedBudget specific
 backend/bin/
 backend/server
+backend/cmd/server/server
 backend/tmp/
 frontend/dist/
 in-memoria.db
