@@ -38,14 +38,15 @@ func TestLinkedItemRepository_Create(t *testing.T) {
 		AccessTokenEncrypted: "encrypted-base64-token",
 		InstitutionID:        "ins_109508",
 		InstitutionName:      "Chase",
+		Provider:             "plaid",
 		CreatedAt:            now,
 		UpdatedAt:            now,
 	}
 
 	mock.ExpectExec(regexp.QuoteMeta(`
 		INSERT INTO linked_items
-		(id, user_id, item_id, access_token_encrypted, institution_id, institution_name, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		(id, user_id, item_id, access_token_encrypted, institution_id, institution_name, provider, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`)).WithArgs(
 		linkedItem.ID,
 		linkedItem.UserID,
@@ -53,6 +54,7 @@ func TestLinkedItemRepository_Create(t *testing.T) {
 		linkedItem.AccessTokenEncrypted,
 		linkedItem.InstitutionID,
 		linkedItem.InstitutionName,
+		linkedItem.Provider,
 		sqlmock.AnyArg(),
 		sqlmock.AnyArg(),
 	).WillReturnResult(sqlmock.NewResult(1, 1))
@@ -76,23 +78,24 @@ func TestLinkedItemRepository_GetByUserID(t *testing.T) {
 
 	rows := sqlmock.NewRows([]string{
 		"id", "user_id", "item_id", "access_token_encrypted",
-		"institution_id", "institution_name", "cursor", "last_synced_at",
+		"institution_id", "institution_name", "provider", "cursor", "last_synced_at",
 		"created_at", "updated_at",
 	}).
 		AddRow(
 			uuid.New().String(), userID, "item-1", "encrypted-token-1",
-			"ins_1", "Chase", nil, nil,
+			"ins_1", "Chase", "plaid", nil, nil,
 			now, now,
 		).
 		AddRow(
 			uuid.New().String(), userID, "item-2", "encrypted-token-2",
-			"ins_2", "Wells Fargo", "cursor-abc", &now,
+			"ins_2", "Wells Fargo", "plaid", "cursor-abc", &now,
 			now, now,
 		)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, item_id, access_token_encrypted,
-		       institution_id, institution_name, cursor, last_synced_at,
+		       institution_id, institution_name, provider,
+		       cursor, last_synced_at,
 		       created_at, updated_at
 		FROM linked_items
 		WHERE user_id = $1
@@ -125,17 +128,18 @@ func TestLinkedItemRepository_GetByItemID(t *testing.T) {
 
 	rows := sqlmock.NewRows([]string{
 		"id", "user_id", "item_id", "access_token_encrypted",
-		"institution_id", "institution_name", "cursor", "last_synced_at",
+		"institution_id", "institution_name", "provider", "cursor", "last_synced_at",
 		"created_at", "updated_at",
 	}).AddRow(
 		linkedItemID, userID, itemID, "encrypted-token",
-		"ins_123", "Chase", nil, nil,
+		"ins_123", "Chase", "plaid", nil, nil,
 		now, now,
 	)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, item_id, access_token_encrypted,
-		       institution_id, institution_name, cursor, last_synced_at,
+		       institution_id, institution_name, provider,
+		       cursor, last_synced_at,
 		       created_at, updated_at
 		FROM linked_items
 		WHERE item_id = $1
@@ -163,7 +167,8 @@ func TestLinkedItemRepository_GetByItemID_NotFound(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, item_id, access_token_encrypted,
-		       institution_id, institution_name, cursor, last_synced_at,
+		       institution_id, institution_name, provider,
+		       cursor, last_synced_at,
 		       created_at, updated_at
 		FROM linked_items
 		WHERE item_id = $1
