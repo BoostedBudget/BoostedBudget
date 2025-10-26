@@ -17,6 +17,7 @@ import { LoginButton, LogoutButton, ProtectedRoute } from './auth'
 import { ProfilePage } from './features/profile/ProfilePage'
 import { AccountsPage } from './features/accounts/AccountsPage'
 import { PlaidOAuthCallback } from './features/accounts/PlaidOAuthCallback'
+import { TransactionsPage } from './features/transactions/TransactionsPage'
 import { updatePrivacySettings } from './features/profile/api/privacyApi'
 import type { PrivacySettings as PrivacySettingsType } from './features/profile/types'
 import { PrivacyPolicy } from './legal/PrivacyPolicy'
@@ -169,6 +170,7 @@ function App() {
           <nav className="main-nav">
             <Link to="/">Home</Link>
             {isAuthenticated && <Link to="/accounts">Accounts</Link>}
+            {isAuthenticated && <Link to="/transactions">Transactions</Link>}
             {isAuthenticated && <Link to="/profile">Profile</Link>}
           </nav>
           <div className="auth-section">
@@ -210,6 +212,14 @@ function App() {
               element={
                 <ProtectedRoute>
                   <AccountsPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/transactions"
+              element={
+                <ProtectedRoute>
+                  <TransactionsPage />
                 </ProtectedRoute>
               }
             />
