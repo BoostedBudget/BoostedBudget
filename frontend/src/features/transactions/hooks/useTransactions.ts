@@ -91,7 +91,7 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
   const [offset, setOffset] = useState<number>(initialOffset)
 
   // Refs for debouncing search
-  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const previousFiltersRef = useRef<TransactionFilters>(filters)
   const isFirstRenderRef = useRef<boolean>(true)
 
