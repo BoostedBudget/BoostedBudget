@@ -44,6 +44,16 @@ type TransactionRepository interface {
 
 	// GetBySource retrieves all transactions from a specific source for a user
 	GetBySource(ctx context.Context, source domain.TransactionSource, userID string) ([]domain.Transaction, error)
+
+	// GetByUserIDWithFilters retrieves transactions for a specific user with optional filters and pagination
+	// Filters: account_id, date range, category, search, pending status
+	// All filters are optional (nil = not applied)
+	// Returns transactions ordered by date DESC
+	GetByUserIDWithFilters(ctx context.Context, userID string, filters domain.TransactionFilters, limit, offset int) ([]domain.Transaction, error)
+
+	// CountByUserID returns the total count of transactions for a user with optional filters
+	// Used for pagination metadata (total_count, has_more)
+	CountByUserID(ctx context.Context, userID string, filters domain.TransactionFilters) (int, error)
 }
 
 // transactionRepository implements TransactionRepository using PostgreSQL
