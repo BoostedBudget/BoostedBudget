@@ -41,6 +41,19 @@ type PlaidService interface {
 	// CreateLinkToken generates a Plaid Link token for initiating bank account connections.
 	// The link token is used by the frontend to initialize Plaid Link for the specified user.
 	CreateLinkToken(ctx context.Context, userID string) (*domain.LinkTokenResponse, error)
+
+	// RemoveItem invalidates a Plaid Item's access token and removes it from Plaid.
+	// This stops monthly billing for the Item and prevents further API calls with the access token.
+	// Should be called when a user disconnects an institution from BoostedBudget.
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation and timeout
+	//   - accessToken: The Plaid access token for the Item to remove
+	//
+	// Returns error if the Plaid API call fails, nil on success.
+	// Note: If this fails, the Item should still be deleted from the database as the
+	// access token is likely already invalid.
+	RemoveItem(ctx context.Context, accessToken string) error
 }
 
 // plaidService implements PlaidService with a configured Plaid API client
@@ -167,6 +180,41 @@ func (s *plaidService) CreateLinkToken(ctx context.Context, userID string) (*dom
 		Expiration: resp.GetExpiration(),
 		RequestID:  resp.GetRequestId(),
 	}, nil
+}
+
+// RemoveItem removes a Plaid Item by invalidating its access token.
+//
+// This method calls the Plaid /item/remove API endpoint to permanently invalidate
+// the access token for an Item. Once removed:
+//   - The access token can no longer be used for any Plaid API calls
+//   - Monthly billing for this Item stops (cost control - Issue #226)
+//   - All accounts associated with this Item are disconnected
+//
+// This method should be called when a user disconnects an institution from BoostedBudget.
+// Even if this call fails (e.g., token already invalid), the Item should still be deleted
+// from the database since the access token cannot be used anyway.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout control
+//   - accessToken: The Plaid access token for the Item to remove
+//
+// Returns error if the Plaid API call fails, nil on success.
+func (s *plaidService) RemoveItem(ctx context.Context, accessToken string) error {
+	// Validate access token is not empty
+	if accessToken == "" {
+		return fmt.Errorf("access token cannot be empty")
+	}
+
+	// Build the item remove request
+	request := plaid.NewItemRemoveRequest(accessToken)
+
+	// Call Plaid API to remove the item
+	_, _, err := s.client.PlaidApi.ItemRemove(ctx).ItemRemoveRequest(*request).Execute()
+	if err != nil {
+		return fmt.Errorf("failed to remove item: %w", err)
+	}
+
+	return nil
 }
 
 // mapEnvironment maps environment string to Plaid environment constant.

@@ -30,6 +30,11 @@ func (m *MockPlaidService) CreateLinkToken(ctx context.Context, userID string) (
 	return args.Get(0).(*domain.LinkTokenResponse), args.Error(1)
 }
 
+func (m *MockPlaidService) RemoveItem(ctx context.Context, accessToken string) error {
+	args := m.Called(ctx, accessToken)
+	return args.Error(0)
+}
+
 type MockEncryptionService struct {
 	mock.Mock
 }
