@@ -176,6 +176,13 @@ func (p *plaidSyncProvider) processModified(ctx context.Context, linkedItem *dom
 			return 0, fmt.Errorf("failed to convert transaction: %w", err)
 		}
 
+		// Lookup existing transaction to get its ID
+		existingTxn, err := p.txnRepo.GetByExternalID(ctx, domain.SourcePlaid, *domainTxn.ExternalTransactionID, linkedItem.UserID)
+		if err != nil {
+			return 0, fmt.Errorf("failed to find existing transaction: %w", err)
+		}
+		domainTxn.ID = existingTxn.ID
+
 		// Update existing transaction
 		if err := p.txnRepo.Update(ctx, domainTxn); err != nil {
 			return 0, fmt.Errorf("failed to update transaction: %w", err)
