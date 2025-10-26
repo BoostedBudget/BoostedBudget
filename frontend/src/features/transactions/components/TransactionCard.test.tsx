@@ -174,7 +174,7 @@ describe('TransactionCard', () => {
     })
 
     it('should apply debit styling to negative amounts', () => {
-      const { container } = render(<TransactionCard transaction={mockTransaction} />)
+      render(<TransactionCard transaction={mockTransaction} />)
       const amountElement = screen.getByText('-$25.50')
       expect(
         amountElement.classList.contains('debit') ||
@@ -189,7 +189,7 @@ describe('TransactionCard', () => {
         amount: 100.00,
       }
 
-      const { container } = render(<TransactionCard transaction={creditTransaction} />)
+      render(<TransactionCard transaction={creditTransaction} />)
       const amountElement = screen.getByText('+$100.00')
       expect(
         amountElement.classList.contains('credit') ||
