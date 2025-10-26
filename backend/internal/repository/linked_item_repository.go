@@ -23,6 +23,9 @@ type LinkedItemRepository interface {
 	// Create creates a new linked item in the database
 	Create(ctx context.Context, item *domain.LinkedItem) error
 
+	// GetByID retrieves a linked item by its UUID
+	GetByID(ctx context.Context, id string) (*domain.LinkedItem, error)
+
 	// GetByUserID retrieves all linked items for a specific user
 	GetByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error)
 
@@ -60,8 +63,8 @@ func (r *linkedItemRepository) Create(ctx context.Context, item *domain.LinkedIt
 
 	query := `
 		INSERT INTO linked_items
-		(id, user_id, item_id, access_token_encrypted, institution_id, institution_name, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		(id, user_id, item_id, access_token_encrypted, institution_id, institution_name, provider, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`
 
 	_, err := r.db.ExecContext(ctx, query,
@@ -71,6 +74,7 @@ func (r *linkedItemRepository) Create(ctx context.Context, item *domain.LinkedIt
 		item.AccessTokenEncrypted,
 		item.InstitutionID,
 		item.InstitutionName,
+		item.Provider,
 		item.CreatedAt,
 		item.UpdatedAt,
 	)
@@ -88,11 +92,47 @@ func (r *linkedItemRepository) Create(ctx context.Context, item *domain.LinkedIt
 	return nil
 }
 
+// GetByID retrieves a linked item by its UUID
+func (r *linkedItemRepository) GetByID(ctx context.Context, id string) (*domain.LinkedItem, error) {
+	query := `
+		SELECT id, user_id, item_id, access_token_encrypted,
+		       institution_id, institution_name, provider,
+		       cursor, last_synced_at,
+		       created_at, updated_at
+		FROM linked_items
+		WHERE id = $1
+	`
+
+	var item domain.LinkedItem
+	err := r.db.QueryRowContext(ctx, query, id).Scan(
+		&item.ID,
+		&item.UserID,
+		&item.ItemID,
+		&item.AccessTokenEncrypted,
+		&item.InstitutionID,
+		&item.InstitutionName,
+		&item.Provider,
+		&item.Cursor,
+		&item.LastSyncedAt,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, ErrLinkedItemNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return &item, nil
+}
+
 // GetByUserID retrieves all linked items for a specific user
 func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error) {
 	query := `
 		SELECT id, user_id, item_id, access_token_encrypted,
-		       institution_id, institution_name,
+		       institution_id, institution_name, provider,
 		       cursor, last_synced_at,
 		       created_at, updated_at
 		FROM linked_items
@@ -116,6 +156,7 @@ func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) (
 			&item.AccessTokenEncrypted,
 			&item.InstitutionID,
 			&item.InstitutionName,
+			&item.Provider,
 			&item.Cursor,
 			&item.LastSyncedAt,
 			&item.CreatedAt,
@@ -143,7 +184,7 @@ func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) (
 func (r *linkedItemRepository) GetByItemID(ctx context.Context, itemID string) (*domain.LinkedItem, error) {
 	query := `
 		SELECT id, user_id, item_id, access_token_encrypted,
-		       institution_id, institution_name,
+		       institution_id, institution_name, provider,
 		       cursor, last_synced_at,
 		       created_at, updated_at
 		FROM linked_items
@@ -158,6 +199,7 @@ func (r *linkedItemRepository) GetByItemID(ctx context.Context, itemID string) (
 		&item.AccessTokenEncrypted,
 		&item.InstitutionID,
 		&item.InstitutionName,
+		&item.Provider,
 		&item.Cursor,
 		&item.LastSyncedAt,
 		&item.CreatedAt,

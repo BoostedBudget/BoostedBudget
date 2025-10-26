@@ -1,4 +1,4 @@
-h1:zYxV7W+zOA9jpzmkocMOl2OG9Jj1jUNiRZYW/AbDyzc=
+h1:TyGXI7trp6t3RNApG4/wQvPiidasUoVAsCpI35YU82s=
 000001_create_users_table.sql h1:0VjQyC14oyN9Kny/2ciS6P8NdrFlPvxB2a6NITGdu4M=
 000002_create_privacy_settings_table.sql h1:VbKbyVwZpVa23vIERVxrXeOBbLRbmIrqbyCnos/dN9E=
 000003_create_audit_logs_table.sql h1:LKmdHLVQH81RbVmDfQyhQh9PruT9T6Tgs3yPLeGjaIk=
@@ -7,3 +7,5 @@ h1:zYxV7W+zOA9jpzmkocMOl2OG9Jj1jUNiRZYW/AbDyzc=
 000006_create_linked_items_table.sql h1:gMDwBoDJV1yD+/eKisKKBFbxUs+u8ngsvPoQPXD/XNk=
 000007_create_accounts_table.sql h1:uPuDViKsQj3PEHBRncogfSLmoYdNNScRLObPxyzub04=
 000008_create_user_identities_table.sql h1:7mlVMY/pi7+qrjJqCvId6BoePlgLymX6LYsyexqCgk4=
+000009_add_provider_to_linked_items.sql h1:c7riYmP7SaFKpN47c27Yi2e2O7uR46Gs1vRWJk6CBFQ=
+000010_create_transactions_table.sql h1:1MycI20wF9LsZX+rISeXf4NIot0EKAU9wRRu+g9oDnc=
