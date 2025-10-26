@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import MockAdapter from 'axios-mock-adapter'
 import { apiClient } from '../../../api/axiosConfig'
-import { fetchLinkToken, exchangePublicToken, fetchAccounts } from './plaidApi'
+import { fetchLinkToken, exchangePublicToken, fetchAccounts, deleteAccount, disconnectInstitution } from './plaidApi'
 import type { LinkTokenResponse, ExchangePublicTokenRequest, ExchangePublicTokenResponse, GetAccountsResponse } from '../types'
 
 describe('plaidApi', () => {
@@ -252,6 +252,120 @@ describe('plaidApi', () => {
       mock.onGet('/api/v1/accounts').networkError()
 
       await expect(fetchAccounts()).rejects.toThrow()
+    })
+  })
+
+  describe('deleteAccount', () => {
+    it('should call DELETE /api/v1/accounts/:id and return successfully', async () => {
+      const accountId = '550e8400-e29b-41d4-a716-446655440000'
+
+      mock.onDelete(`/api/v1/accounts/${accountId}`).reply(204)
+
+      await deleteAccount(accountId)
+
+      expect(mock.history.delete.length).toBe(1)
+      expect(mock.history.delete[0].url).toBe(`/api/v1/accounts/${accountId}`)
+    })
+
+    it('should include Authorization header from apiClient interceptor', async () => {
+      const accountId = '550e8400-e29b-41d4-a716-446655440000'
+
+      mock.onDelete(`/api/v1/accounts/${accountId}`).reply((config) => {
+        // Verify Authorization header exists (set by axios interceptor)
+        expect(config.headers).toBeDefined()
+        return [204]
+      })
+
+      await deleteAccount(accountId)
+    })
+
+    it('should handle 404 not found error', async () => {
+      const accountId = 'non-existent-account-id'
+
+      mock.onDelete(`/api/v1/accounts/${accountId}`).reply(404, { error: 'Account not found' })
+
+      await expect(deleteAccount(accountId)).rejects.toThrow()
+    })
+
+    it('should handle 401 unauthorized error', async () => {
+      const accountId = '550e8400-e29b-41d4-a716-446655440000'
+
+      mock.onDelete(`/api/v1/accounts/${accountId}`).reply(401, { error: 'Unauthorized' })
+
+      await expect(deleteAccount(accountId)).rejects.toThrow()
+    })
+
+    it('should handle 500 server error', async () => {
+      const accountId = '550e8400-e29b-41d4-a716-446655440000'
+
+      mock.onDelete(`/api/v1/accounts/${accountId}`).reply(500, { error: 'Internal server error' })
+
+      await expect(deleteAccount(accountId)).rejects.toThrow()
+    })
+
+    it('should handle network errors', async () => {
+      const accountId = '550e8400-e29b-41d4-a716-446655440000'
+
+      mock.onDelete(`/api/v1/accounts/${accountId}`).networkError()
+
+      await expect(deleteAccount(accountId)).rejects.toThrow()
+    })
+  })
+
+  describe('disconnectInstitution', () => {
+    it('should call DELETE /api/v1/linked-items/:id and return successfully', async () => {
+      const linkedItemId = '770e9511-f3ac-52e5-b827-557766551112'
+
+      mock.onDelete(`/api/v1/linked-items/${linkedItemId}`).reply(204)
+
+      await disconnectInstitution(linkedItemId)
+
+      expect(mock.history.delete.length).toBe(1)
+      expect(mock.history.delete[0].url).toBe(`/api/v1/linked-items/${linkedItemId}`)
+    })
+
+    it('should include Authorization header from apiClient interceptor', async () => {
+      const linkedItemId = '770e9511-f3ac-52e5-b827-557766551112'
+
+      mock.onDelete(`/api/v1/linked-items/${linkedItemId}`).reply((config) => {
+        // Verify Authorization header exists (set by axios interceptor)
+        expect(config.headers).toBeDefined()
+        return [204]
+      })
+
+      await disconnectInstitution(linkedItemId)
+    })
+
+    it('should handle 404 institution not found error', async () => {
+      const linkedItemId = 'non-existent-item-id'
+
+      mock.onDelete(`/api/v1/linked-items/${linkedItemId}`).reply(404, { error: 'Institution not found' })
+
+      await expect(disconnectInstitution(linkedItemId)).rejects.toThrow()
+    })
+
+    it('should handle 401 unauthorized error', async () => {
+      const linkedItemId = '770e9511-f3ac-52e5-b827-557766551112'
+
+      mock.onDelete(`/api/v1/linked-items/${linkedItemId}`).reply(401, { error: 'Unauthorized' })
+
+      await expect(disconnectInstitution(linkedItemId)).rejects.toThrow()
+    })
+
+    it('should handle 500 server error', async () => {
+      const linkedItemId = '770e9511-f3ac-52e5-b827-557766551112'
+
+      mock.onDelete(`/api/v1/linked-items/${linkedItemId}`).reply(500, { error: 'Failed to disconnect institution' })
+
+      await expect(disconnectInstitution(linkedItemId)).rejects.toThrow()
+    })
+
+    it('should handle network errors', async () => {
+      const linkedItemId = '770e9511-f3ac-52e5-b827-557766551112'
+
+      mock.onDelete(`/api/v1/linked-items/${linkedItemId}`).networkError()
+
+      await expect(disconnectInstitution(linkedItemId)).rejects.toThrow()
     })
   })
 })

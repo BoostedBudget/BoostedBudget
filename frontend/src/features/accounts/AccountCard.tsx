@@ -3,6 +3,7 @@ import './AccountCard.css'
 
 interface AccountCardProps {
   account: Account
+  onDelete?: (accountId: string) => void
 }
 
 /**
@@ -48,8 +49,9 @@ function getAccountTypeLabel(type: string, subtype?: string): string {
   return baseLabel
 }
 
-export function AccountCard({ account }: AccountCardProps) {
+export function AccountCard({ account, onDelete }: AccountCardProps) {
   const {
+    id,
     name,
     official_name,
     type,
@@ -64,6 +66,19 @@ export function AccountCard({ account }: AccountCardProps) {
   const typeLabel = getAccountTypeLabel(type, subtype)
   const currentBalanceFormatted = formatCurrency(current_balance, currency_code)
   const availableBalanceFormatted = formatCurrency(available_balance, currency_code)
+
+  function handleDelete() {
+    if (!onDelete) return
+
+    const accountName = official_name || name
+    const confirmed = window.confirm(
+      `Are you sure you want to delete "${accountName}"?\n\nThis action cannot be undone. Other accounts from ${institution_name} will remain connected.`
+    )
+
+    if (confirmed) {
+      onDelete(id)
+    }
+  }
 
   return (
     <div className="account-card">
@@ -96,6 +111,16 @@ export function AccountCard({ account }: AccountCardProps) {
             </div>
           )}
         </div>
+
+        {onDelete && (
+          <button
+            className="account-card__delete-btn"
+            onClick={handleDelete}
+            title="Delete this account"
+          >
+            Delete Account
+          </button>
+        )}
       </div>
     </div>
   )

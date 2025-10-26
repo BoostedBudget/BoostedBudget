@@ -37,6 +37,19 @@ type LinkedItemRepository interface {
 
 	// Delete removes a linked item from the database
 	Delete(ctx context.Context, id string) error
+
+	// GetByIDAndUser retrieves a linked item by ID with ownership validation.
+	// Returns ErrLinkedItemNotFound if the item doesn't exist or belongs to a different user.
+	GetByIDAndUser(ctx context.Context, id, userID string) (*domain.LinkedItem, error)
+
+	// DeleteByUser removes a linked item with ownership validation.
+	// The item is only deleted if both the item ID and user ID match (WHERE id = $1 AND user_id = $2).
+	// This prevents users from deleting items they don't own.
+	//
+	// Returns ErrLinkedItemNotFound if:
+	//   - The item doesn't exist
+	//   - The item exists but belongs to a different user (ownership check fails)
+	DeleteByUser(ctx context.Context, id, userID string) error
 }
 
 // linkedItemRepository implements LinkedItemRepository using PostgreSQL
@@ -265,6 +278,81 @@ func (r *linkedItemRepository) Delete(ctx context.Context, id string) error {
 	}
 
 	if rowsAffected == 0 {
+		return ErrLinkedItemNotFound
+	}
+
+	return nil
+}
+
+// GetByIDAndUser retrieves a linked item by ID with ownership validation.
+//
+// Security: This method validates ownership via the WHERE clause (id AND user_id must match).
+// A user can only retrieve items they own. If the item doesn't exist or belongs to
+// a different user, sql.ErrNoRows is returned and mapped to ErrLinkedItemNotFound.
+//
+// This is used by handlers to ensure users can only access their own linked items.
+func (r *linkedItemRepository) GetByIDAndUser(ctx context.Context, id, userID string) (*domain.LinkedItem, error) {
+	query := `
+		SELECT id, user_id, item_id, access_token_encrypted,
+		       institution_id, institution_name, provider,
+		       cursor, last_synced_at,
+		       created_at, updated_at
+		FROM linked_items
+		WHERE id = $1 AND user_id = $2
+	`
+
+	var item domain.LinkedItem
+	err := r.db.QueryRowContext(ctx, query, id, userID).Scan(
+		&item.ID,
+		&item.UserID,
+		&item.ItemID,
+		&item.AccessTokenEncrypted,
+		&item.InstitutionID,
+		&item.InstitutionName,
+		&item.Provider,
+		&item.Cursor,
+		&item.LastSyncedAt,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, ErrLinkedItemNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return &item, nil
+}
+
+// DeleteByUser removes a linked item with ownership validation.
+//
+// Security: This method validates ownership via the WHERE clause (id AND user_id must match).
+// A user can only delete items they own. If the item doesn't exist or belongs to
+// a different user, the DELETE will affect 0 rows and ErrLinkedItemNotFound is returned.
+//
+// Use case: Called when a user disconnects an institution from the UI.
+// Note: CASCADE DELETE automatically removes all associated accounts.
+func (r *linkedItemRepository) DeleteByUser(ctx context.Context, id, userID string) error {
+	query := `
+		DELETE FROM linked_items
+		WHERE id = $1 AND user_id = $2
+	`
+
+	result, err := r.db.ExecContext(ctx, query, id, userID)
+	if err != nil {
+		return err
+	}
+
+	// Check if any rows were affected (validates ownership and existence)
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		// Item not found OR user doesn't own it (both cases return same error for security)
 		return ErrLinkedItemNotFound
 	}
 
