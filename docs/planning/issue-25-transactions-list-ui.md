@@ -573,9 +573,13 @@ frontend/src/features/transactions/
 
 ### Overall Status
 - [x] Research & Planning (100%)
-- [ ] Backend Implementation (15%)
+- [ ] Backend Implementation (30%)
   - [x] RED phase - Repository tests (100%)
-  - [ ] GREEN phase (0%)
+  - [x] GREEN phase - Repository implementation (100%)
+  - [ ] RED phase - Service tests (0%)
+  - [ ] GREEN phase - Service implementation (0%)
+  - [ ] RED phase - Handler tests (0%)
+  - [ ] GREEN phase - Handler implementation (0%)
   - [ ] REFACTOR phase (0%)
 - [ ] Frontend Implementation (0%)
   - [ ] RED phase (0%)
@@ -585,18 +589,23 @@ frontend/src/features/transactions/
 - [ ] Code Review & PR (0%)
 
 ### Current Phase
-**Phase**: Backend RED → Backend GREEN
+**Phase**: Backend GREEN (Repository) → Backend RED (Service Layer)
 
 **Completed**:
 ✅ Created feature branch `feature/25-transactions-list-ui`
 ✅ Added TransactionFilters struct to domain layer
 ✅ Extended TransactionRepository interface with GetByUserIDWithFilters and CountByUserID
-✅ Wrote 10 comprehensive failing tests for repository filtering
+✅ Wrote 10 comprehensive failing tests for repository filtering (RED phase)
+✅ Implemented GetByUserIDWithFilters with dynamic SQL WHERE clause (GREEN phase)
+✅ Implemented CountByUserID for pagination metadata (GREEN phase)
+✅ Fixed search filter SQL argument handling (pattern added twice for OR condition)
+✅ All 16 repository tests passing (7 original + 9 new filtering tests)
+✅ Committed GREEN phase work (commit 4e19881)
 
 **Next Steps**:
-1. Implement GetByUserIDWithFilters method (dynamic SQL WHERE clause)
-2. Implement CountByUserID method
-3. Verify all repository tests pass
+1. Create TransactionService interface and implementation
+2. Write failing tests for TransactionService.ListTransactions() (RED phase)
+3. Implement service layer logic (GREEN phase)
 
 ---
 
