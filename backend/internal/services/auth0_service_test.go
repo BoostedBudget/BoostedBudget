@@ -2,6 +2,11 @@ package services
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,18 +17,38 @@ import (
 func TestAuth0DeleteUser_Success(t *testing.T) {
 	ctx := context.Background()
 
-	domain := "test.auth0.com"
-	clientID := "test-client-id"
-	clientSecret := "test-client-secret"
+	// Create mock token server
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/oauth/token" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"access_token": "mock-access-token",
+				"token_type":   "Bearer",
+				"expires_in":   3600,
+			})
+			return
+		}
 
-	service := NewAuth0Service(domain, clientID, clientSecret)
+		// Delete user endpoint
+		if strings.Contains(r.URL.Path, "/api/v2/users/") {
+			assert.Equal(t, "DELETE", r.Method)
+			assert.Contains(t, r.Header.Get("Authorization"), "Bearer mock-access-token")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 
-	auth0UserID := "auth0|123456"
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer tokenServer.Close()
 
-	err := service.DeleteUser(ctx, auth0UserID)
+	// Extract host from server URL (without scheme)
+	serverURL, _ := url.Parse(tokenServer.URL)
 
-	// This will fail until we implement Auth0Service
-	// In a real test environment, we'd mock the HTTP client
+	service := NewAuth0Service(serverURL.Host, "test-client-id", "test-client-secret")
+
+	err := service.DeleteUser(ctx, "auth0|123456")
+
 	assert.NoError(t, err)
 }
 
@@ -31,18 +56,33 @@ func TestAuth0DeleteUser_Success(t *testing.T) {
 func TestAuth0DeleteUser_NotFound(t *testing.T) {
 	ctx := context.Background()
 
-	domain := "test.auth0.com"
-	clientID := "test-client-id"
-	clientSecret := "test-client-secret"
+	// Create mock server that returns 404
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/oauth/token" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"access_token": "mock-token",
+				"token_type":   "Bearer",
+				"expires_in":   3600,
+			})
+			return
+		}
 
-	service := NewAuth0Service(domain, clientID, clientSecret)
+		// Return 404 for user deletion
+		if strings.Contains(r.URL.Path, "/api/v2/users/") {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"error": "user not found"}`))
+			return
+		}
+	}))
+	defer server.Close()
 
-	nonExistentUserID := "auth0|nonexistent"
+	serverURL, _ := url.Parse(server.URL)
+	service := NewAuth0Service(serverURL.Host, "test-client-id", "test-client-secret")
 
-	err := service.DeleteUser(ctx, nonExistentUserID)
+	err := service.DeleteUser(ctx, "auth0|nonexistent")
 
-	// Should handle 404 gracefully (user already gone)
-	// In implementation, we'll treat 404 as success
+	// Should handle 404 gracefully (treat as success)
 	assert.NoError(t, err)
 }
 
@@ -50,67 +90,111 @@ func TestAuth0DeleteUser_NotFound(t *testing.T) {
 func TestAuth0DeleteUser_APIError(t *testing.T) {
 	ctx := context.Background()
 
-	domain := "test.auth0.com"
-	clientID := "invalid-client-id"
-	clientSecret := "invalid-secret"
+	// Create mock server that returns 500 error
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/oauth/token" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"access_token": "mock-token",
+				"token_type":   "Bearer",
+				"expires_in":   3600,
+			})
+			return
+		}
 
-	service := NewAuth0Service(domain, clientID, clientSecret)
+		// Return 500 for user deletion
+		if strings.Contains(r.URL.Path, "/api/v2/users/") {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error": "internal server error"}`))
+			return
+		}
+	}))
+	defer server.Close()
 
-	auth0UserID := "auth0|123456"
+	serverURL, _ := url.Parse(server.URL)
+	service := NewAuth0Service(serverURL.Host, "test-client-id", "test-client-secret")
 
-	err := service.DeleteUser(ctx, auth0UserID)
+	err := service.DeleteUser(ctx, "auth0|123456")
 
-	// With invalid credentials, should return error
-	// In production, this would be logged but not fail the deletion
-	// For tests, we verify it returns an error
-	if err != nil {
-		assert.Error(t, err)
-	}
+	// Should return error for non-success, non-404 responses
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "delete user failed with status 500")
 }
 
 // TestAuth0GetManagementToken_Success tests M2M token retrieval
 func TestAuth0GetManagementToken_Success(t *testing.T) {
 	ctx := context.Background()
 
-	domain := "test.auth0.com"
-	clientID := "test-client-id"
-	clientSecret := "test-client-secret"
+	// Create mock token server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/oauth/token" {
+			assert.Equal(t, "POST", r.Method)
+			assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
 
-	service := NewAuth0Service(domain, clientID, clientSecret)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"access_token": "test-access-token-123",
+				"token_type":   "Bearer",
+				"expires_in":   3600,
+			})
+			return
+		}
+	}))
+	defer server.Close()
+
+	serverURL, _ := url.Parse(server.URL)
+	service := NewAuth0Service(serverURL.Host, "test-client-id", "test-client-secret")
 
 	token, err := service.GetManagementToken(ctx)
 
-	// Will fail until implemented
 	assert.NoError(t, err)
-	assert.NotEmpty(t, token)
+	assert.Equal(t, "test-access-token-123", token)
 }
 
 // TestAuth0GetManagementToken_CachesToken tests token caching
 func TestAuth0GetManagementToken_CachesToken(t *testing.T) {
 	ctx := context.Background()
 
-	domain := "test.auth0.com"
-	clientID := "test-client-id"
-	clientSecret := "test-client-secret"
+	callCount := 0
 
-	service := NewAuth0Service(domain, clientID, clientSecret)
+	// Create mock server that tracks call count
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/oauth/token" {
+			callCount++
+
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"access_token": "cached-token",
+				"token_type":   "Bearer",
+				"expires_in":   3600, // 1 hour expiry
+			})
+			return
+		}
+	}))
+	defer server.Close()
+
+	serverURL, _ := url.Parse(server.URL)
+	service := NewAuth0Service(serverURL.Host, "test-client-id", "test-client-secret")
 
 	// First call should fetch token
 	token1, err1 := service.GetManagementToken(ctx)
 	assert.NoError(t, err1)
+	assert.Equal(t, "cached-token", token1)
+	assert.Equal(t, 1, callCount, "First call should hit server")
 
 	// Second call should use cached token
 	token2, err2 := service.GetManagementToken(ctx)
 	assert.NoError(t, err2)
-
-	// Tokens should be the same (cached)
 	assert.Equal(t, token1, token2)
+	assert.Equal(t, 1, callCount, "Second call should use cache, not hit server")
 
-	// Wait for potential expiration (in real implementation, cache has TTL)
+	// Brief wait, but token shouldn't expire yet
 	time.Sleep(100 * time.Millisecond)
 
-	// Third call should potentially refresh (implementation-dependent)
+	// Third call should still use cached token
 	token3, err3 := service.GetManagementToken(ctx)
 	assert.NoError(t, err3)
-	assert.NotEmpty(t, token3)
+	assert.Equal(t, token1, token3)
+	assert.Equal(t, 1, callCount, "Third call should still use cache")
 }
