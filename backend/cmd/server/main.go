@@ -82,6 +82,9 @@ func main() {
 	subscriptionTiersHandler := handlers.NewSubscriptionTiersHandler(tierConfig)
 	e.GET("/api/v1/subscription/tiers", subscriptionTiersHandler.GetSubscriptionTiers)
 
+	// Declare plaidService at package scope for use in both authenticated routes and webhook endpoint
+	var plaidService services.PlaidService
+
 	// Authenticated routes (requires database and Auth0)
 	if db != nil && cfg.Auth0Domain != "" && cfg.Auth0Audience != "" {
 		// Create repositories
@@ -115,7 +118,8 @@ func main() {
 		// Create Plaid service and account linking (if configured)
 		var plaidHandler *handlers.PlaidHandler
 		if cfg.PlaidClientID != "" && cfg.PlaidSecret != "" {
-			plaidService, err := services.NewPlaidService(cfg)
+			var err error
+			plaidService, err = services.NewPlaidService(cfg)
 			if err != nil {
 				log.Printf("⚠️  Failed to initialize Plaid service: %v", err)
 			} else {
@@ -171,14 +175,30 @@ func main() {
 
 	// Plaid webhook endpoint (public - no auth required)
 	// Plaid servers need to POST to this endpoint without authentication
-	// Note: In production, should verify webhook signatures for security
-	// See: https://plaid.com/docs/api/webhooks/#webhook-verification
-	if db != nil {
+	// Issue #202: Enhanced with JWT signature verification and database storage
+	if db != nil && plaidService != nil {
+		// Initialize webhook repository for audit trail storage
+		webhookRepo := repository.NewWebhookRepository(db)
+
+		// Initialize webhook service for JWT signature verification
+		webhookService := services.NewWebhookService(plaidService.GetClient())
+
+		// Create webhook handler with full dependencies
+		webhookHandler := handlers.NewPlaidWebhookHandlerWithDeps(webhookService, webhookRepo)
+		e.POST("/webhooks/plaid", webhookHandler.HandlePlaidWebhook)
+
+		log.Println("✅ Plaid webhook endpoint registered at POST /webhooks/plaid")
+		log.Println("✅ Webhook signature verification enabled (ES256 JWT)")
+		log.Println("✅ Webhook audit trail enabled (database storage)")
+	} else if db != nil {
+		// Fallback: Basic webhook handler without signature verification
+		// Used when Plaid credentials are not configured (e.g., local development)
 		webhookHandler := handlers.NewPlaidWebhookHandler()
 		e.POST("/webhooks/plaid", webhookHandler.HandlePlaidWebhook)
-		log.Println("✅ Plaid webhook endpoint registered at POST /webhooks/plaid")
+		log.Println("✅ Plaid webhook endpoint registered at POST /webhooks/plaid (verification disabled)")
+		log.Println("⚠️  Webhook signature verification disabled (Plaid credentials not configured)")
 	} else {
-		log.Println("⚠️  Authenticated routes disabled (requires DATABASE_URL, AUTH0_DOMAIN, AUTH0_AUDIENCE)")
+		log.Println("⚠️  Webhook endpoint disabled (requires DATABASE_URL)")
 	}
 
 	// Start server

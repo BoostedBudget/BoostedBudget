@@ -47,7 +47,7 @@
     "@typescript-eslint/eslint-plugin": "^8.46.2",
     "@typescript-eslint/parser": "^8.0.0",
     "@vitejs/plugin-react": "^5.1.0",
-    "@vitest/coverage-v8": "^4.0.3",
+    "@vitest/coverage-v8": "^4.0.4",
     "axios-mock-adapter": "^2.1.0",
     "eslint": "^9.0.0",
     "eslint-plugin-react-hooks": "^7.0.1",
