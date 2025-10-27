@@ -17,6 +17,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
+	"github.com/maxnussbaum/BoostedBudget/internal/workers"
 )
 
 func main() {
@@ -86,6 +87,10 @@ func main() {
 	var plaidService services.PlaidService
 
 	// Authenticated routes (requires database and Auth0)
+	// Declare deletion components at package scope for graceful shutdown
+	var deletionHandler *handlers.DeletionHandler
+	var deletionWorker *workers.DeletionWorker
+
 	if db != nil && cfg.Auth0Domain != "" && cfg.Auth0Audience != "" {
 		// Create repositories
 		profileRepo := repository.NewProfileRepository(db)
@@ -101,6 +106,55 @@ func main() {
 		transactionService := services.NewTransactionService(transactionRepo)
 		// Note: Passing nil for override repo - not yet implemented
 		subscriptionService := services.NewSubscriptionService(tierConfig, nil)
+
+		// Create deletion services (if Auth0 Management API configured)
+		if cfg.Auth0ManagementClientID != "" && cfg.Auth0ManagementClientSecret != "" && cfg.DeletionTokenSecret != "" {
+			// Initialize Auth0 Management API service
+			auth0Service := services.NewAuth0Service(
+				cfg.Auth0Domain,
+				cfg.Auth0ManagementClientID,
+				cfg.Auth0ManagementClientSecret,
+			)
+			log.Println("✅ Auth0 Management API service initialized")
+
+			// Initialize Email service (optional - uses no-op if not configured)
+			var emailService services.EmailService
+			if cfg.SendGridAPIKey != "" && cfg.SendGridFromEmail != "" {
+				emailService = services.NewEmailService(cfg.SendGridAPIKey, cfg.SendGridFromEmail, cfg.FrontendURL)
+				log.Println("✅ Email service (SendGrid) initialized")
+			} else {
+				emailService = services.NewEmailServiceMock("", "", cfg.FrontendURL)
+				log.Println("⚠️  Email service disabled - cancellation links shown in UI instead (see GitHub issue for SendGrid integration)")
+			}
+
+			// Create mock audit logger (will be replaced with real implementation later)
+			auditLogger := &mockAuditLogger{}
+
+			// Initialize Deletion service
+			deletionService := services.NewDeletionService(
+				profileRepo,
+				emailService,
+				auth0Service,
+				auditLogger,
+				cfg.DeletionGracePeriodDays,
+				cfg.DeletionTokenSecret,
+			)
+			log.Println("✅ Deletion service initialized (30-day grace period)")
+
+			// Create deletion handler
+			deletionHandler = handlers.NewDeletionHandler(deletionService)
+
+			// Create deletion worker with configured interval
+			workerInterval, err := time.ParseDuration(cfg.DeletionWorkerInterval)
+			if err != nil {
+				log.Printf("⚠️  Invalid deletion worker interval '%s', using default 1h", cfg.DeletionWorkerInterval)
+				workerInterval = 1 * time.Hour
+			}
+			deletionWorker = workers.NewDeletionWorker(deletionService, profileRepo, workerInterval)
+			log.Printf("✅ Deletion worker initialized (interval: %s)", workerInterval)
+		} else {
+			log.Println("⚠️  Deletion services disabled (requires AUTH0_MANAGEMENT_CLIENT_ID, AUTH0_MANAGEMENT_CLIENT_SECRET, DELETION_TOKEN_SECRET)")
+		}
 
 		// Create encryption service (if configured)
 		var encryptionService services.EncryptionService
@@ -170,6 +224,12 @@ func main() {
 			api.DELETE("/linked-items/:id", plaidHandler.DisconnectInstitution)
 		}
 
+		// Deletion routes (if enabled)
+		if deletionHandler != nil {
+			api.POST("/user/delete", deletionHandler.RequestDeletion)
+			api.GET("/user/delete/cancel/:token", deletionHandler.CancelDeletion)
+		}
+
 		log.Println("✅ Authenticated routes enabled (Auth0 + Database)")
 	}
 
@@ -201,6 +261,15 @@ func main() {
 		log.Println("⚠️  Webhook endpoint disabled (requires DATABASE_URL)")
 	}
 
+	// Start deletion worker (if enabled)
+	var workerCtx context.Context
+	var workerCancel context.CancelFunc
+	if deletionWorker != nil {
+		workerCtx, workerCancel = context.WithCancel(context.Background())
+		go deletionWorker.Start(workerCtx)
+		log.Println("✅ Deletion worker started")
+	}
+
 	// Start server
 	// Bind to 0.0.0.0 to be accessible from outside the container (required for Fly.io)
 	address := fmt.Sprintf("0.0.0.0:%s", cfg.Port)
@@ -219,6 +288,14 @@ func main() {
 	<-quit
 
 	log.Println("Shutting down server...")
+
+	// Stop deletion worker first (if running)
+	if workerCancel != nil {
+		log.Println("Stopping deletion worker...")
+		workerCancel()
+	}
+
+	// Shutdown HTTP server
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -227,6 +304,15 @@ func main() {
 	}
 
 	log.Println("Server stopped gracefully")
+}
+
+// mockAuditLogger is a placeholder audit logger for deletion operations
+// TODO: Replace with real audit logging implementation
+type mockAuditLogger struct{}
+
+func (m *mockAuditLogger) Log(ctx context.Context, action, resourceType, resourceID string) error {
+	log.Printf("AUDIT: %s - %s - %s", action, resourceType, resourceID)
+	return nil
 }
 
 // createDBCheck creates a database health check function
