@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -185,6 +186,29 @@ func (m *MockUserRepository) UpdateUser(ctx context.Context, user *domain.User) 
 
 func (m *MockUserRepository) UpdateLastLogin(ctx context.Context, auth0UserID string) error {
 	args := m.Called(ctx, auth0UserID)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) MarkForDeletion(ctx context.Context, userID string, scheduledAt time.Time) error {
+	args := m.Called(ctx, userID, scheduledAt)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) CancelDeletion(ctx context.Context, userID string) error {
+	args := m.Called(ctx, userID)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) GetUsersScheduledForDeletion(ctx context.Context) ([]*domain.User, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
+}
+
+func (m *MockUserRepository) DeleteUserCascade(ctx context.Context, userID string) error {
+	args := m.Called(ctx, userID)
 	return args.Error(0)
 }
 
