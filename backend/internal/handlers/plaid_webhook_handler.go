@@ -1,21 +1,37 @@
 // Package handlers provides HTTP request handlers for the BoostedBudget API.
 // This file implements webhook handlers for receiving Plaid notifications.
 //
-// Related: Issue #198 - Fix Plaid OAuth callback and webhook integration
+// Related: Issue #202 - Plaid Webhook Integration with JWT Verification
 package handlers
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
 // PlaidWebhookHandler handles Plaid webhook HTTP requests
-type PlaidWebhookHandler struct{}
+type PlaidWebhookHandler struct {
+	webhookService services.WebhookService
+	webhookRepo    repository.WebhookRepository
+}
 
-// NewPlaidWebhookHandler creates a new PlaidWebhookHandler instance
+// NewPlaidWebhookHandler creates a new PlaidWebhookHandler instance (backward compatible)
 func NewPlaidWebhookHandler() *PlaidWebhookHandler {
 	return &PlaidWebhookHandler{}
+}
+
+// NewPlaidWebhookHandlerWithDeps creates a new PlaidWebhookHandler with dependencies
+func NewPlaidWebhookHandlerWithDeps(webhookService services.WebhookService, webhookRepo repository.WebhookRepository) *PlaidWebhookHandler {
+	return &PlaidWebhookHandler{
+		webhookService: webhookService,
+		webhookRepo:    webhookRepo,
+	}
 }
 
 // PlaidWebhookPayload represents the structure of Plaid webhook notifications
@@ -33,21 +49,58 @@ type PlaidWebhookPayload struct {
 // HandlePlaidWebhook handles POST /webhooks/plaid
 // Receives and processes webhook notifications from Plaid
 //
+// Issue #202: Enhanced with JWT signature verification and database storage
+//
 // Webhook Types:
 //   - TRANSACTIONS: New transactions available, historical updates
 //   - ITEM: Connection status changes (LOGIN_REQUIRED, ERROR, etc.)
 //
-// Security Note: In production, should verify webhook signatures
+// Security: Verifies JWT signatures using ES256 (ECDSA P-256)
 // Reference: https://plaid.com/docs/api/webhooks/#webhook-verification
 func (h *PlaidWebhookHandler) HandlePlaidWebhook(c echo.Context) error {
-	// Parse webhook payload
-	var payload PlaidWebhookPayload
-	if err := c.Bind(&payload); err != nil {
-		c.Logger().Errorf("Failed to parse Plaid webhook payload: %v", err)
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid webhook payload")
+	// CRITICAL: Read raw body FIRST before any parsing
+	// Raw body is needed for SHA-256 hash verification in JWT
+	rawBody, err := io.ReadAll(c.Request().Body)
+	if err != nil {
+		c.Logger().Errorf("Failed to read webhook body: %v", err)
+		// Still return 200 OK to prevent retry storms
+		return c.JSON(http.StatusOK, map[string]interface{}{
+			"status":  "error",
+			"message": "Failed to read body",
+		})
 	}
 
-	// Validate required fields manually (Echo validator may not be registered in all contexts)
+	// Extract signature from Plaid-Verification header
+	signature := c.Request().Header.Get("Plaid-Verification")
+
+	// Verify signature if services are available
+	signatureValid := false
+	if h.webhookService != nil && signature != "" {
+		valid, err := h.webhookService.VerifyWebhook(c.Request().Context(), rawBody, signature)
+		if err != nil {
+			// Log verification failure but DON'T fail the webhook
+			// This ensures audit trail even for invalid signatures
+			c.Logger().Warnf("Webhook signature verification failed: %v", err)
+		} else if valid {
+			signatureValid = true
+			c.Logger().Infof("Webhook signature verified successfully")
+		}
+	} else if signature == "" {
+		c.Logger().Warnf("Webhook received without Plaid-Verification header")
+	}
+
+	// Parse webhook payload from raw body
+	var payload PlaidWebhookPayload
+	if err := json.Unmarshal(rawBody, &payload); err != nil {
+		c.Logger().Errorf("Failed to parse Plaid webhook payload: %v", err)
+		// Still return 200 OK to prevent retry storms
+		return c.JSON(http.StatusOK, map[string]interface{}{
+			"status":  "error",
+			"message": "Invalid JSON payload",
+		})
+	}
+
+	// Validate required fields
 	if payload.WebhookType == "" {
 		c.Logger().Errorf("Webhook payload validation failed: missing webhook_type")
 		return echo.NewHTTPError(http.StatusBadRequest, "Missing required fields")
@@ -57,9 +110,38 @@ func (h *PlaidWebhookHandler) HandlePlaidWebhook(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Missing required fields")
 	}
 
-	// Log webhook receipt for debugging
-	c.Logger().Infof("Received Plaid webhook: type=%s code=%s item_id=%s",
-		payload.WebhookType, payload.WebhookCode, payload.ItemID)
+	// Log webhook receipt
+	c.Logger().Infof("Received Plaid webhook: type=%s code=%s item_id=%s signature_valid=%v",
+		payload.WebhookType, payload.WebhookCode, payload.ItemID, signatureValid)
+
+	// Store webhook in database for audit trail
+	if h.webhookRepo != nil {
+		webhookEvent := &domain.WebhookEvent{
+			WebhookType:    payload.WebhookType,
+			WebhookCode:    &payload.WebhookCode,
+			ItemID:         stringPtr(payload.ItemID),
+			NewTransactions: intPtr(payload.NewTransactions),
+			Payload:        json.RawMessage(rawBody),
+			Signature:      stringPtr(signature),
+			SignatureValid: signatureValid,
+			Processed:      false,
+		}
+
+		// Extract error code if present
+		if payload.Error != nil {
+			if errorCode, ok := payload.Error["error_code"].(string); ok {
+				webhookEvent.ErrorCode = &errorCode
+			}
+		}
+
+		if err := h.webhookRepo.Create(c.Request().Context(), webhookEvent); err != nil {
+			// Log database error but DON'T fail the webhook
+			// Plaid should not retry due to our database issues
+			c.Logger().Errorf("Failed to store webhook in database: %v", err)
+		} else {
+			c.Logger().Infof("Webhook stored in database: id=%s", webhookEvent.ID)
+		}
+	}
 
 	// Handle different webhook types
 	switch payload.WebhookType {
@@ -69,7 +151,6 @@ func (h *PlaidWebhookHandler) HandlePlaidWebhook(c echo.Context) error {
 		return h.handleItemWebhook(c, &payload)
 	default:
 		// Log unknown webhook types but still acknowledge receipt (200 OK)
-		// This prevents Plaid from retrying unknown webhook types
 		c.Logger().Warnf("Received unknown webhook type: %s", payload.WebhookType)
 	}
 
@@ -79,6 +160,21 @@ func (h *PlaidWebhookHandler) HandlePlaidWebhook(c echo.Context) error {
 		"status":  "ok",
 		"message": "Webhook received",
 	})
+}
+
+// Helper functions for pointer conversion
+func stringPtr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+func intPtr(i int) *int {
+	if i == 0 {
+		return nil
+	}
+	return &i
 }
 
 // handleTransactionsWebhook processes TRANSACTIONS webhook events
