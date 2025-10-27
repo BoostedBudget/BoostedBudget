@@ -166,7 +166,16 @@ func (s *plaidService) CreateLinkToken(ctx context.Context, userID string) (*dom
 	// Must be registered in Plaid Dashboard: Team Settings → API → Allowed redirect URIs
 	request.SetRedirectUri(s.config.PlaidRedirectURI)
 
-	// REMOVED: Webhook URL validation and SetWebhook() - will be added in issue #202
+	// Issue #202: Set webhook URL if configured
+	// Webhook URL enables real-time notifications from Plaid for:
+	//   - New transactions available (TRANSACTIONS webhook)
+	//   - Item errors requiring user re-authentication (ITEM webhook)
+	//   - Account updates and institution changes
+	// Must be publicly accessible HTTPS endpoint registered in Plaid Dashboard
+	// If not configured, webhooks are disabled (polling-based sync required)
+	if s.config.PlaidWebhookURL != "" {
+		request.SetWebhook(s.config.PlaidWebhookURL)
+	}
 
 	// Call Plaid API to create link token
 	resp, _, err := s.client.PlaidApi.LinkTokenCreate(ctx).LinkTokenCreateRequest(*request).Execute()
