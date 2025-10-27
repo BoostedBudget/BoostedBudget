@@ -42,6 +42,23 @@ type Config struct {
 
 	// Encryption
 	EncryptionKey string
+
+	// Email (SendGrid)
+	SendGridAPIKey    string
+	SendGridFromEmail string
+	SendGridFromName  string
+
+	// Deletion Configuration
+	DeletionGracePeriodDays int
+	DeletionWorkerInterval  string
+	DeletionTokenSecret     string
+
+	// Auth0 Management API (M2M)
+	Auth0ManagementClientID     string
+	Auth0ManagementClientSecret string
+
+	// Frontend URL (for cancellation links)
+	FrontendURL string
 }
 
 // Load loads configuration from environment variables
@@ -82,6 +99,23 @@ func Load() (*Config, error) {
 
 		// Encryption
 		EncryptionKey: getEnv("ENCRYPTION_KEY", ""),
+
+		// Email (SendGrid)
+		SendGridAPIKey:    getEnv("SENDGRID_API_KEY", ""),
+		SendGridFromEmail: getEnv("SENDGRID_FROM_EMAIL", "noreply@boostedbudget.com"),
+		SendGridFromName:  getEnv("SENDGRID_FROM_NAME", "BoostedBudget"),
+
+		// Deletion Configuration
+		DeletionGracePeriodDays: getEnvAsInt("DELETION_GRACE_PERIOD_DAYS", 30),
+		DeletionWorkerInterval:  getEnv("DELETION_WORKER_INTERVAL", "1h"),
+		DeletionTokenSecret:     getEnv("DELETION_TOKEN_SECRET", ""),
+
+		// Auth0 Management API (M2M)
+		Auth0ManagementClientID:     getEnv("AUTH0_MANAGEMENT_CLIENT_ID", ""),
+		Auth0ManagementClientSecret: getEnv("AUTH0_MANAGEMENT_CLIENT_SECRET", ""),
+
+		// Frontend URL
+		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
 	}
 
 	// Validate required fields for production
@@ -112,6 +146,18 @@ func (c *Config) validate() error {
 func getEnv(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
+	}
+	return defaultValue
+}
+
+// getEnvAsInt retrieves an environment variable as an integer or returns a default value
+func getEnvAsInt(key string, defaultValue int) int {
+	if value := os.Getenv(key); value != "" {
+		var intValue int
+		_, err := fmt.Sscanf(value, "%d", &intValue)
+		if err == nil {
+			return intValue
+		}
 	}
 	return defaultValue
 }

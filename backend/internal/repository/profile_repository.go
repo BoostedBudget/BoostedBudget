@@ -34,6 +34,20 @@ type ProfileRepository interface {
 
 	// UpdateLastLogin updates the last_login_at timestamp for a user
 	UpdateLastLogin(ctx context.Context, auth0UserID string) error
+
+	// Deletion-related methods
+
+	// MarkForDeletion marks a user for deletion with a scheduled date
+	MarkForDeletion(ctx context.Context, userID string, scheduledAt time.Time) error
+
+	// CancelDeletion cancels a pending deletion request
+	CancelDeletion(ctx context.Context, userID string) error
+
+	// GetUsersScheduledForDeletion returns users whose deletion date has passed
+	GetUsersScheduledForDeletion(ctx context.Context) ([]*domain.User, error)
+
+	// DeleteUserCascade performs application-level cascade deletion of all user data
+	DeleteUserCascade(ctx context.Context, userID string) error
 }
 
 // profileRepository implements ProfileRepository using PostgreSQL
@@ -264,6 +278,221 @@ func (r *profileRepository) UpdateLastLogin(ctx context.Context, auth0UserID str
 
 	if rowsAffected == 0 {
 		return ErrUserNotFound
+	}
+
+	return nil
+}
+
+// MarkForDeletion marks a user for deletion with a scheduled date
+func (r *profileRepository) MarkForDeletion(ctx context.Context, userID string, scheduledAt time.Time) error {
+	now := time.Now()
+
+	query := `
+		UPDATE users
+		SET deletion_requested_at = $1,
+		    deletion_scheduled_at = $2,
+		    updated_at = $3
+		WHERE id = $4 AND is_deleted = FALSE
+	`
+
+	result, err := r.db.ExecContext(ctx, query, now, scheduledAt, now, userID)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return ErrUserNotFound
+	}
+
+	return nil
+}
+
+// CancelDeletion cancels a pending deletion request
+func (r *profileRepository) CancelDeletion(ctx context.Context, userID string) error {
+	now := time.Now()
+
+	query := `
+		UPDATE users
+		SET deletion_requested_at = NULL,
+		    deletion_scheduled_at = NULL,
+		    updated_at = $1
+		WHERE id = $2 AND is_deleted = FALSE
+	`
+
+	result, err := r.db.ExecContext(ctx, query, now, userID)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return ErrUserNotFound
+	}
+
+	return nil
+}
+
+// GetUsersScheduledForDeletion returns users whose deletion date has passed
+func (r *profileRepository) GetUsersScheduledForDeletion(ctx context.Context) ([]*domain.User, error) {
+	now := time.Now()
+
+	query := `
+		SELECT id, auth0_user_id, email, email_verified,
+		       subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
+		       stripe_customer_id, primary_region, is_active, is_deleted,
+		       deletion_requested_at, deletion_scheduled_at,
+		       created_at, updated_at, last_login_at
+		FROM users
+		WHERE deletion_scheduled_at IS NOT NULL
+		  AND deletion_scheduled_at <= $1
+		  AND is_deleted = FALSE
+		ORDER BY deletion_scheduled_at ASC
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []*domain.User
+	for rows.Next() {
+		var user domain.User
+		err := rows.Scan(
+			&user.ID,
+			&user.Auth0UserID,
+			&user.Email,
+			&user.EmailVerified,
+			&user.SubscriptionTier,
+			&user.SubscriptionStatus,
+			&user.SubscriptionStartedAt,
+			&user.SubscriptionEndsAt,
+			&user.StripeCustomerID,
+			&user.PrimaryRegion,
+			&user.IsActive,
+			&user.IsDeleted,
+			&user.DeletionRequestedAt,
+			&user.DeletionScheduledAt,
+			&user.CreatedAt,
+			&user.UpdatedAt,
+			&user.LastLoginAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, &user)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return users, nil
+}
+
+// DeleteUserCascade performs application-level cascade deletion of all user data
+// This implements the 10-step deletion process to maintain audit trail
+func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string) error {
+	// Start a transaction for atomicity
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	now := time.Now()
+
+	// Step 1: Delete all budget rules
+	_, err = tx.ExecContext(ctx, `DELETE FROM rules WHERE user_id = $1`, userID)
+	if err != nil {
+		return err
+	}
+
+	// Step 2: Delete all transactions
+	_, err = tx.ExecContext(ctx, `DELETE FROM transactions WHERE user_id = $1`, userID)
+	if err != nil {
+		return err
+	}
+
+	// Step 3: Delete all Plaid items (bank connections)
+	_, err = tx.ExecContext(ctx, `DELETE FROM plaid_items WHERE user_id = $1`, userID)
+	if err != nil {
+		return err
+	}
+
+	// Step 4: Delete all accounts
+	_, err = tx.ExecContext(ctx, `DELETE FROM accounts WHERE user_id = $1`, userID)
+	if err != nil {
+		return err
+	}
+
+	// Step 5: Delete all recurring patterns
+	_, err = tx.ExecContext(ctx, `DELETE FROM recurring_patterns WHERE user_id = $1`, userID)
+	if err != nil {
+		return err
+	}
+
+	// Step 6: Delete all user preferences
+	_, err = tx.ExecContext(ctx, `DELETE FROM user_preferences WHERE user_id = $1`, userID)
+	if err != nil {
+		return err
+	}
+
+	// Step 7: Delete all notifications
+	_, err = tx.ExecContext(ctx, `DELETE FROM notifications WHERE user_id = $1`, userID)
+	if err != nil {
+		return err
+	}
+
+	// Step 8: Anonymize audit logs (keep for legal/compliance, but remove PII)
+	_, err = tx.ExecContext(ctx, `
+		UPDATE audit_logs
+		SET metadata = jsonb_set(
+			COALESCE(metadata, '{}'::jsonb),
+			'{anonymized}',
+			'true'::jsonb
+		)
+		WHERE user_id = $1
+	`, userID)
+	if err != nil {
+		return err
+	}
+
+	// Step 9: Delete user sessions
+	_, err = tx.ExecContext(ctx, `DELETE FROM user_sessions WHERE user_id = $1`, userID)
+	if err != nil {
+		return err
+	}
+
+	// Step 10: Mark user as deleted
+	_, err = tx.ExecContext(ctx, `
+		UPDATE users
+		SET is_deleted = TRUE,
+		    is_active = FALSE,
+		    email = CONCAT('deleted_', id, '@deleted.local'),
+		    auth0_user_id = CONCAT('deleted_', id),
+		    stripe_customer_id = NULL,
+		    deletion_requested_at = NULL,
+		    deletion_scheduled_at = NULL,
+		    updated_at = $1
+		WHERE id = $2
+	`, now, userID)
+	if err != nil {
+		return err
+	}
+
+	// Commit the transaction
+	if err = tx.Commit(); err != nil {
+		return err
 	}
 
 	return nil
