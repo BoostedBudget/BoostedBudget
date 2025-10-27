@@ -21,6 +21,7 @@ import { TransactionsPage } from './features/transactions/TransactionsPage'
 import { updatePrivacySettings } from './features/profile/api/privacyApi'
 import type { PrivacySettings as PrivacySettingsType } from './features/profile/types'
 import { PrivacyPolicy } from './legal/PrivacyPolicy'
+import { CancelDeletionPage } from './features/deletion/components/CancelDeletionPage'
 import './App.css'
 
 interface HealthCheck {
@@ -233,6 +234,8 @@ function App() {
             />
             <Route path="/legal/privacy-policy" element={<PrivacyPolicy />} />
             <Route path="/privacy" element={<PrivacyPolicy />} />
+            {/* Public route - JWT token validation handled by backend API */}
+            <Route path="/cancel-deletion/:token?" element={<CancelDeletionPage />} />
           </Routes>
         </main>
 
