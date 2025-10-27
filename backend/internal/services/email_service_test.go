@@ -13,8 +13,8 @@ import (
 func TestSendDeletionConfirmation_Success(t *testing.T) {
 	ctx := context.Background()
 
-	// This will fail until we implement EmailService
-	service := NewEmailService("test-api-key", "test@boostedbudget.com", "https://boostedbudget.com")
+	// Use mock mode for testing without real API calls
+	service := NewEmailServiceMock("test-api-key", "test@boostedbudget.com", "https://boostedbudget.com")
 
 	email := "user@example.com"
 	token := "test-cancellation-token-123"
@@ -29,7 +29,7 @@ func TestSendDeletionConfirmation_Success(t *testing.T) {
 func TestSendDeletionConfirmation_InvalidEmail(t *testing.T) {
 	ctx := context.Background()
 
-	service := NewEmailService("test-api-key", "test@boostedbudget.com", "https://boostedbudget.com")
+	service := NewEmailServiceMock("test-api-key", "test@boostedbudget.com", "https://boostedbudget.com")
 
 	invalidEmail := "not-an-email"
 	token := "test-token"
@@ -65,7 +65,7 @@ func TestSendDeletionConfirmation_SMTPError(t *testing.T) {
 func TestEmailTemplate_ContainsRequiredFields(t *testing.T) {
 	ctx := context.Background()
 
-	service := NewEmailService("test-api-key", "test@boostedbudget.com", "https://boostedbudget.com")
+	service := NewEmailServiceMock("test-api-key", "test@boostedbudget.com", "https://boostedbudget.com")
 
 	email := "user@example.com"
 	token := "test-cancellation-token-123"
@@ -73,7 +73,7 @@ func TestEmailTemplate_ContainsRequiredFields(t *testing.T) {
 
 	// This test verifies that the email template contains required fields
 	// We'll check this by ensuring the service constructs the message correctly
-	err := service.SendDeletionConfirmation(ctx, email, token, scheduledDate)
+	_ = service.SendDeletionConfirmation(ctx, email, token, scheduledDate)
 
 	// Even if sending fails, we want to verify the template is constructed
 	// The implementation should validate that:
