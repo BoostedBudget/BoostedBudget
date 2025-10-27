@@ -235,7 +235,7 @@ function App() {
             <Route path="/legal/privacy-policy" element={<PrivacyPolicy />} />
             <Route path="/privacy" element={<PrivacyPolicy />} />
             {/* Public route - JWT token validation handled by backend API */}
-            <Route path="/cancel-deletion/:token" element={<CancelDeletionPage />} />
+            <Route path="/cancel-deletion/:token?" element={<CancelDeletionPage />} />
           </Routes>
         </main>
 
