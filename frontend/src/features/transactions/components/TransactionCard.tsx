@@ -41,16 +41,20 @@ function parseCategory(categoryJson: string | null | undefined): string {
 
 /**
  * Format date with relative labels (Today, Yesterday) or readable format
+ * Uses local timezone for consistent comparison across environments
  */
 function formatDate(dateStr: string): string {
-  const date = new Date(dateStr + 'T00:00:00') // Parse as midnight UTC
+  // Parse date components to avoid timezone issues
+  const [year, month, day] = dateStr.split('-').map(Number)
+  const transactionDate = new Date(year, month - 1, day) // month is 0-indexed
+
   const today = new Date()
   today.setHours(0, 0, 0, 0)
 
   const yesterday = new Date(today)
   yesterday.setDate(yesterday.getDate() - 1)
 
-  const transactionDate = new Date(date)
+  // Normalize transaction date to midnight local time
   transactionDate.setHours(0, 0, 0, 0)
 
   if (transactionDate.getTime() === today.getTime()) {
@@ -66,7 +70,7 @@ function formatDate(dateStr: string): string {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
-  }).format(date)
+  }).format(transactionDate)
 }
 
 export function TransactionCard({ transaction }: TransactionCardProps) {
