@@ -32,6 +32,15 @@ jobs:
       packages: write
 
     steps:
+      - name: Clean up Docker-created files (sudo)
+        run: |
+          # Remove any root-owned files created by Docker volumes
+          # This prevents "permission denied" errors during checkout cleanup
+          if [ -d "${{ github.workspace }}" ]; then
+            sudo rm -rf "${{ github.workspace }}/backend/config" || true
+            sudo rm -rf "${{ github.workspace }}/.git/index.lock" || true
+          fi
+
       - name: Checkout staging branch
         uses: actions/checkout@v5
         with:
@@ -153,6 +162,13 @@ jobs:
       security-events: write
 
     steps:
+      - name: Clean up Docker-created files (sudo)
+        run: |
+          if [ -d "${{ github.workspace }}" ]; then
+            sudo rm -rf "${{ github.workspace }}/backend/config" || true
+            sudo rm -rf "${{ github.workspace }}/.git/index.lock" || true
+          fi
+
       - name: Checkout code
         uses: actions/checkout@v5
 
@@ -228,6 +244,13 @@ jobs:
       url: http://localhost:3000
 
     steps:
+      - name: Clean up Docker-created files (sudo)
+        run: |
+          if [ -d "${{ github.workspace }}" ]; then
+            sudo rm -rf "${{ github.workspace }}/backend/config" || true
+            sudo rm -rf "${{ github.workspace }}/.git/index.lock" || true
+          fi
+
       - name: Checkout staging branch
         uses: actions/checkout@v5
         with:
@@ -319,6 +342,13 @@ jobs:
           docker-compose -f docker-compose.staging.yml logs --tail=50 backend
           echo "::endgroup::"
 
+      - name: Clean up Docker-created files after deployment
+        if: always()
+        run: |
+          # Clean up any root-owned files created during deployment
+          # This ensures the workspace is ready for the next run
+          sudo rm -rf "${{ github.workspace }}/backend/config" || true
+
   # =============================================================================
   # Smoke Tests
   # =============================================================================
@@ -328,6 +358,13 @@ jobs:
     runs-on: [self-hosted, macOS, mac-mini]
 
     steps:
+      - name: Clean up Docker-created files (sudo)
+        run: |
+          if [ -d "${{ github.workspace }}" ]; then
+            sudo rm -rf "${{ github.workspace }}/backend/config" || true
+            sudo rm -rf "${{ github.workspace }}/.git/index.lock" || true
+          fi
+
       - name: Checkout code
         uses: actions/checkout@v5
 
