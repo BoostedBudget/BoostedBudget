@@ -1,4 +1,4 @@
-h1:KAqfuV3HlmkHILPIQr2b1DPQLb7kTLt4UVL+B7yOZl8=
+h1:4/fZHmaYRsmU2JSi+vJ9S8iUqrUaFncd8kFyPlLwKOw=
 000001_create_users_table.sql h1:0VjQyC14oyN9Kny/2ciS6P8NdrFlPvxB2a6NITGdu4M=
 000002_create_privacy_settings_table.sql h1:VbKbyVwZpVa23vIERVxrXeOBbLRbmIrqbyCnos/dN9E=
 000003_create_audit_logs_table.sql h1:LKmdHLVQH81RbVmDfQyhQh9PruT9T6Tgs3yPLeGjaIk=
@@ -10,3 +10,5 @@ h1:KAqfuV3HlmkHILPIQr2b1DPQLb7kTLt4UVL+B7yOZl8=
 000009_add_provider_to_linked_items.sql h1:c7riYmP7SaFKpN47c27Yi2e2O7uR46Gs1vRWJk6CBFQ=
 000010_create_transactions_table.sql h1:1MycI20wF9LsZX+rISeXf4NIot0EKAU9wRRu+g9oDnc=
 000011_create_webhook_events_table.sql h1:AkYMAl1JSKfZPlF+mN8EWjIumkkxAQVmykkilPKL0sY=
+000012_add_webhook_processing_metadata.down.sql h1:2WrqSMf+Ny3fe0nkRjEzuOl+MzyBTZ3TsJKTN/w9YJQ=
+000012_add_webhook_processing_metadata.up.sql h1:LitlhdtsDn0W3ptU8j4Naiks5NQDUgkpUPrsbO4ZXeQ=

@@ -91,6 +91,9 @@ func main() {
 	var deletionHandler *handlers.DeletionHandler
 	var deletionWorker *workers.DeletionWorker
 
+	// Declare webhook processor at package scope for graceful shutdown
+	var webhookProcessor *workers.WebhookProcessor
+
 	if db != nil && cfg.Auth0Domain != "" && cfg.Auth0Audience != "" {
 		// Create repositories
 		profileRepo := repository.NewProfileRepository(db)
@@ -98,6 +101,7 @@ func main() {
 		linkedItemRepo := repository.NewLinkedItemRepository(db)
 		accountRepo := repository.NewAccountRepository(db)
 		transactionRepo := repository.NewTransactionRepository(db)
+		webhookRepo := repository.NewWebhookRepository(db)
 		identityRepo := repository.NewUserIdentityRepository(db) // Maps Auth0 IDs to user UUIDs
 
 		// Create services
@@ -191,6 +195,27 @@ func main() {
 				plaidHandler = handlers.NewPlaidHandler(plaidService, accountService)
 				log.Println("✅ Plaid service initialized")
 				log.Println("✅ Account linking service initialized")
+
+				// Initialize Transaction Sync Service for webhook processing
+				// Issue #256: Transaction Sync Service
+				transactionSyncService := services.NewTransactionSyncService(
+					webhookRepo,
+					linkedItemRepo,
+					transactionRepo,
+					plaidService,
+				)
+
+				// Initialize Webhook Processor background worker
+				// Polls for unprocessed TRANSACTIONS webhooks every 30 seconds
+				// Processes up to 10 webhooks per batch
+				webhookProcessor = workers.NewWebhookProcessor(
+					transactionSyncService,
+					webhookRepo,
+					30*time.Second, // Poll interval
+					10,             // Batch size
+				)
+				log.Println("✅ Transaction sync service initialized")
+				log.Println("✅ Webhook processor initialized (interval: 30s, batch: 10)")
 			}
 		}
 
@@ -236,15 +261,25 @@ func main() {
 	// Plaid webhook endpoint (public - no auth required)
 	// Plaid servers need to POST to this endpoint without authentication
 	// Issue #202: Enhanced with JWT signature verification and database storage
+	// Issue #256: Webhook repository created in auth block above for webhook processor
 	if db != nil && plaidService != nil {
-		// Initialize webhook repository for audit trail storage
-		webhookRepo := repository.NewWebhookRepository(db)
+		// Webhook repository already created in auth block (used by webhook processor)
+		// Re-create if not available (shouldn't happen since plaidService requires auth block)
+		var webhookRepoForHandler repository.WebhookRepository
+		if webhookProcessor != nil {
+			// Webhook repo already created in auth block - reuse from there
+			// Create a new instance to avoid coupling
+			webhookRepoForHandler = repository.NewWebhookRepository(db)
+		} else {
+			// Fallback: create webhook repo if processor not initialized
+			webhookRepoForHandler = repository.NewWebhookRepository(db)
+		}
 
 		// Initialize webhook service for JWT signature verification
 		webhookService := services.NewWebhookService(plaidService.GetClient())
 
 		// Create webhook handler with full dependencies
-		webhookHandler := handlers.NewPlaidWebhookHandlerWithDeps(webhookService, webhookRepo)
+		webhookHandler := handlers.NewPlaidWebhookHandlerWithDeps(webhookService, webhookRepoForHandler)
 		e.POST("/webhooks/plaid", webhookHandler.HandlePlaidWebhook)
 
 		log.Println("✅ Plaid webhook endpoint registered at POST /webhooks/plaid")
@@ -261,13 +296,26 @@ func main() {
 		log.Println("⚠️  Webhook endpoint disabled (requires DATABASE_URL)")
 	}
 
-	// Start deletion worker (if enabled)
+	// Start background workers (if enabled)
 	var workerCtx context.Context
 	var workerCancel context.CancelFunc
+
+	// Start deletion worker
 	if deletionWorker != nil {
-		workerCtx, workerCancel = context.WithCancel(context.Background())
+		if workerCtx == nil {
+			workerCtx, workerCancel = context.WithCancel(context.Background())
+		}
 		go deletionWorker.Start(workerCtx)
 		log.Println("✅ Deletion worker started")
+	}
+
+	// Start webhook processor
+	if webhookProcessor != nil {
+		if workerCtx == nil {
+			workerCtx, workerCancel = context.WithCancel(context.Background())
+		}
+		go webhookProcessor.Start(workerCtx)
+		log.Println("✅ Webhook processor started")
 	}
 
 	// Start server
@@ -289,9 +337,9 @@ func main() {
 
 	log.Println("Shutting down server...")
 
-	// Stop deletion worker first (if running)
+	// Stop background workers first (if running)
 	if workerCancel != nil {
-		log.Println("Stopping deletion worker...")
+		log.Println("Stopping background workers...")
 		workerCancel()
 	}
 

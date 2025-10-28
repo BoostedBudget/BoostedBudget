@@ -52,6 +52,14 @@ func (m *mockWebhookRepository) GetByItemID(ctx context.Context, itemID string, 
 	return nil, nil
 }
 
+func (m *mockWebhookRepository) Update(ctx context.Context, event *domain.WebhookEvent) error {
+	return nil
+}
+
+func (m *mockWebhookRepository) GetUnprocessedByType(ctx context.Context, webhookType string, limit int) ([]domain.WebhookEvent, error) {
+	return nil, nil
+}
+
 // TestHandlePlaidWebhook_TransactionsDefaultUpdate tests handling of transaction update webhooks
 func TestHandlePlaidWebhook_TransactionsDefaultUpdate(t *testing.T) {
 	// Given: A webhook handler
