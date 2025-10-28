@@ -215,16 +215,38 @@ run_migrations() {
 
   # Check if backend container is running
   if docker-compose -f "$COMPOSE_FILE" ps backend | grep -q "Up"; then
-    echo "Running migrations in backend container..."
+    echo "Running Atlas migrations..."
 
-    # Try to run migrations (adjust command based on your setup)
-    # Option 1: If migrations run automatically on startup
-    echo "Migrations run automatically on backend startup"
+    # Check if Atlas CLI is available
+    if command -v atlas &> /dev/null; then
+      # Run migrations from host using Atlas CLI
+      echo "Running migrations via host Atlas CLI..."
+      cd backend || {
+        print_error "Failed to change to backend directory"
+        return 1
+      }
 
-    # Option 2: If you need to run manually (uncomment if needed)
-    # docker-compose -f "$COMPOSE_FILE" exec -T backend /app/server migrate
+      # Get database credentials from .env.staging
+      if [ -f "../.env.staging" ]; then
+        source ../.env.staging
+        STAGING_DB_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5433/${POSTGRES_DB:-boostedbudget_staging}?sslmode=disable"
+      else
+        STAGING_DB_URL="postgresql://staginguser:VIcsIdkHNkjmVGVd8XC8adddZsvwm7zu@localhost:5433/boostedbudget_staging?sslmode=disable"
+      fi
 
-    print_success "Migrations completed"
+      atlas migrate apply --dir file://migrations --url "$STAGING_DB_URL" || {
+        cd ..
+        print_error "Failed to apply migrations"
+        return 1
+      }
+      cd ..
+      print_success "Migrations applied via Atlas CLI"
+    else
+      # Atlas not installed on host - migrations should run automatically via backend docker-entrypoint.sh
+      echo "Atlas CLI not found on host, relying on backend automatic migrations..."
+      echo "Migrations run automatically by backend container on startup"
+      print_success "Migrations handled by backend container"
+    fi
   else
     print_error "Backend container not running, cannot run migrations"
     return 1

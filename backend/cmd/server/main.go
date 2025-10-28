@@ -108,6 +108,7 @@ func main() {
 		profileService := services.NewProfileService(profileRepo)
 		privacyService := services.NewPrivacyService(privacyRepo)
 		transactionService := services.NewTransactionService(transactionRepo)
+		registrationService := services.NewRegistrationService(profileRepo, identityRepo, privacyRepo)
 		// Note: Passing nil for override repo - not yet implemented
 		subscriptionService := services.NewSubscriptionService(tierConfig, nil)
 
@@ -224,11 +225,12 @@ func main() {
 		privacyHandler := handlers.NewPrivacyHandler(privacyService, profileService)
 		transactionHandler := handlers.NewTransactionHandler(transactionService)
 
-		// Create Auth0 middleware with identity resolution
+		// Create Auth0 middleware with identity resolution and auto-registration
 		auth0Middleware := middleware.Auth0Middleware(
 			"https://"+cfg.Auth0Domain+"/",
 			cfg.Auth0Audience,
-			identityRepo, // Resolves Auth0 IDs to internal user UUIDs
+			identityRepo,         // Resolves Auth0 IDs to internal user UUIDs
+			registrationService,  // Auto-registers new users on first login
 		)
 
 		// API v1 routes

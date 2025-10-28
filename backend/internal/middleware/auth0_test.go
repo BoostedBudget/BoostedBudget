@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -100,6 +101,27 @@ func (m *mockIdentityRepository) addTestIdentity(auth0UserID, userID string) {
 	}
 }
 
+// mockRegistrationService is a mock implementation of RegistrationService for testing
+type mockRegistrationService struct {
+	shouldFail bool
+}
+
+func newMockRegistrationService() *mockRegistrationService {
+	return &mockRegistrationService{
+		shouldFail: false,
+	}
+}
+
+func (m *mockRegistrationService) RegisterUser(ctx context.Context, auth0UserID, email string) (*domain.User, error) {
+	if m.shouldFail {
+		return nil, errors.New("registration failed")
+	}
+
+	// Create a mock user
+	user := domain.NewUser(auth0UserID, email)
+	return user, nil
+}
+
 // setupMockJWKS creates a mock JWKS HTTP server for testing
 func setupMockJWKS(t *testing.T) *httptest.Server {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -160,7 +182,7 @@ func TestAuth0Middleware_ValidToken(t *testing.T) {
 	c := e.NewContext(req, rec)
 
 	// Create middleware with mock issuer and identity repository
-	middleware := Auth0Middleware(jwksServer.URL+"/", "https://api.test.com", mockRepo)
+	middleware := Auth0Middleware(jwksServer.URL+"/", "https://api.test.com", mockRepo, newMockRegistrationService())
 
 	// Define a test handler that checks if user_id (UUID) is in context
 	handler := func(c echo.Context) error {
@@ -202,7 +224,7 @@ func TestAuth0Middleware_InvalidToken(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	middleware := Auth0Middleware("https://test-tenant.auth0.com/", "https://api.test.com", mockRepo)
+	middleware := Auth0Middleware("https://test-tenant.auth0.com/", "https://api.test.com", mockRepo, newMockRegistrationService())
 
 	handler := func(c echo.Context) error {
 		t.Error("Handler should not be called with invalid token")
@@ -246,7 +268,7 @@ func TestAuth0Middleware_ExpiredToken(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	middleware := Auth0Middleware(jwksServer.URL+"/", "https://api.test.com", mockRepo)
+	middleware := Auth0Middleware(jwksServer.URL+"/", "https://api.test.com", mockRepo, newMockRegistrationService())
 
 	handler := func(c echo.Context) error {
 		t.Error("Handler should not be called with expired token")
@@ -276,7 +298,7 @@ func TestAuth0Middleware_MissingAuthHeader(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	middleware := Auth0Middleware("https://test-tenant.auth0.com/", "https://api.test.com", mockRepo)
+	middleware := Auth0Middleware("https://test-tenant.auth0.com/", "https://api.test.com", mockRepo, newMockRegistrationService())
 
 	handler := func(c echo.Context) error {
 		t.Error("Handler should not be called without auth header")
@@ -319,7 +341,7 @@ func TestAuth0Middleware_CustomClaimsExtraction(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	middleware := Auth0Middleware(jwksServer.URL+"/", "https://api.test.com", mockRepo)
+	middleware := Auth0Middleware(jwksServer.URL+"/", "https://api.test.com", mockRepo, newMockRegistrationService())
 
 	handler := func(c echo.Context) error {
 		// Check if custom claims are available in context
@@ -548,7 +570,7 @@ func TestAuth0Middleware_InvalidIssuer(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	middleware := Auth0Middleware("https://test-tenant.auth0.com/", "https://api.test.com", mockRepo)
+	middleware := Auth0Middleware("https://test-tenant.auth0.com/", "https://api.test.com", mockRepo, newMockRegistrationService())
 
 	handler := func(c echo.Context) error {
 		t.Error("Handler should not be called with invalid issuer")
@@ -583,7 +605,7 @@ func TestAuth0Middleware_InvalidAudience(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	middleware := Auth0Middleware("https://test-tenant.auth0.com/", "https://api.test.com", mockRepo)
+	middleware := Auth0Middleware("https://test-tenant.auth0.com/", "https://api.test.com", mockRepo, newMockRegistrationService())
 
 	handler := func(c echo.Context) error {
 		t.Error("Handler should not be called with invalid audience")
