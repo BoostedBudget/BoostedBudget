@@ -49,6 +49,30 @@ type WebhookEvent struct {
 	// ProcessedAt is when the webhook was successfully processed
 	ProcessedAt *time.Time `db:"processed_at" json:"processed_at,omitempty"`
 
+	// Processing metadata (Issue #256 - Transaction Sync Service)
+	// Used to track webhook processing status, retries, and errors
+
+	// ProcessingStartedAt is when webhook processing began
+	// Used for debugging stuck webhooks and monitoring processing duration
+	ProcessingStartedAt *time.Time `db:"processing_started_at" json:"processing_started_at,omitempty"`
+
+	// ProcessingCompletedAt is when webhook processing finished successfully
+	// Should match ProcessedAt when processing succeeds
+	ProcessingCompletedAt *time.Time `db:"processing_completed_at" json:"processing_completed_at,omitempty"`
+
+	// ProcessingError contains error message if processing failed
+	// Used for debugging and manual investigation of failed webhooks
+	ProcessingError *string `db:"processing_error" json:"processing_error,omitempty"`
+
+	// RetryCount tracks number of processing attempts (0-5)
+	// Incremented after each failed attempt, used with exponential backoff
+	RetryCount int `db:"retry_count" json:"retry_count"`
+
+	// NextRetryAt is scheduled timestamp for next retry attempt
+	// Calculated using exponential backoff: 1m, 5m, 15m, 1h, 6h
+	// NULL if no retry scheduled or max retries (5) exceeded
+	NextRetryAt *time.Time `db:"next_retry_at" json:"next_retry_at,omitempty"`
+
 	// CreatedAt is when this webhook event was received
 	CreatedAt time.Time `db:"created_at" json:"created_at"`
 

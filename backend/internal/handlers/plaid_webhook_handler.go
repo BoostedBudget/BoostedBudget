@@ -183,11 +183,23 @@ func (h *PlaidWebhookHandler) handleTransactionsWebhook(c echo.Context, payload 
 	c.Logger().Infof("Processing TRANSACTIONS webhook: code=%s item_id=%s new_count=%d",
 		payload.WebhookCode, payload.ItemID, payload.NewTransactions)
 
-	// TODO: Implement transaction sync logic
-	// 1. Fetch new transactions using /transactions/get endpoint
-	// 2. Store in database
-	// 3. Trigger automation rules based on new transactions
-	// 4. Notify user if configured
+	// Issue #256: Transaction Sync Service - Background Processing Flow
+	//
+	// This handler stores the webhook in webhook_events table (see HandlePlaidWebhook above).
+	// Background processing occurs asynchronously via WebhookProcessor worker:
+	//
+	// 1. WebhookProcessor polls webhook_events every 30 seconds for unprocessed TRANSACTIONS webhooks
+	// 2. For each webhook, TransactionSyncService.ProcessWebhook() is called:
+	//    a. Fetches linked item by item_id (to get access token and cursor)
+	//    b. TODO: Call Plaid TransactionsSync API with cursor-based pagination
+	//    c. TODO: Store Added/Modified transactions, delete Removed transactions
+	//    d. Updates cursor after successful sync
+	//    e. Marks webhook as processed (or retries on error with exponential backoff)
+	// 3. This approach ensures webhook responses are fast (<200ms) while expensive Plaid API
+	//    calls happen in background, with automatic retries on transient failures
+	//
+	// See: backend/internal/workers/webhook_processor.go
+	// See: backend/internal/services/transaction_sync_service.go
 
 	switch payload.WebhookCode {
 	case "DEFAULT_UPDATE":
