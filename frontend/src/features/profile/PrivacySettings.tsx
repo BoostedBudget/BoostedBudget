@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { fetchPrivacySettings, updatePrivacySettings } from './api/privacyApi'
 import type { PrivacySettings as PrivacySettingsType, UpdatePrivacySettingsRequest } from './types'
+import { DeleteAccountSection } from '../deletion/components/DeleteAccountSection'
 import './PrivacySettings.css'
 
 interface PrivacySettingsProps {
@@ -275,6 +276,9 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
           {submitting ? 'Saving...' : 'Save Privacy Settings'}
         </button>
       </div>
+
+      {/* Account Deletion Section - Issue #18 */}
+      <DeleteAccountSection />
     </div>
   )
 }
