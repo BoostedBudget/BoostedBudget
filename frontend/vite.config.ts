@@ -14,6 +14,12 @@ export default defineConfig({
     // Support dynamic port allocation via PORT or E2E_FRONTEND_PORT env var
     port: parseInt(process.env.PORT || process.env.E2E_FRONTEND_PORT || '3000'),
     host: true,
+    // Allow Tailscale and local network hostnames
+    allowedHosts: [
+      'localhost',
+      '.ts.net',  // Allow all Tailscale hostnames
+      '.local',   // Allow .local mDNS names
+    ],
     proxy: {
       '/api': {
         // Support dynamic backend port via E2E_BACKEND_PORT env var

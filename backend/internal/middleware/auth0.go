@@ -16,6 +16,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
 // JWKS represents the JSON Web Key Set from Auth0
@@ -211,7 +212,7 @@ func validateAudience(claims jwt.MapClaims, expectedAudience string) bool {
 //	    claims := c.Get("claims").(jwt.MapClaims)
 //	    return c.JSON(200, map[string]interface{}{"user_id": userID})
 //	})
-func Auth0Middleware(issuer, audience string, identityRepo repository.UserIdentityRepository) echo.MiddlewareFunc {
+func Auth0Middleware(issuer, audience string, identityRepo repository.UserIdentityRepository, registrationService services.RegistrationService) echo.MiddlewareFunc {
 	// Ensure issuer has https:// prefix and trailing slash
 	if !strings.HasPrefix(issuer, "http") {
 		issuer = "https://" + issuer
@@ -293,10 +294,35 @@ func Auth0Middleware(issuer, audience string, identityRepo repository.UserIdenti
 			identity, err := identityRepo.GetByAuth0ID(c.Request().Context(), auth0UserID)
 			if err != nil {
 				if err == repository.ErrIdentityNotFound {
-					return echo.NewHTTPError(http.StatusUnauthorized, "User identity not found - please contact support")
+					// New user - auto-register them
+					c.Logger().Infof("New user detected, auto-registering: %s", auth0UserID)
+
+					// Extract email from JWT claims (Auth0 always includes email in token)
+					email, ok := claims["email"].(string)
+					if !ok || email == "" {
+						c.Logger().Errorf("Missing email in token claims for %s", auth0UserID)
+						return echo.NewHTTPError(http.StatusUnauthorized, "Missing email in authentication token")
+					}
+
+					// Register the new user
+					_, err := registrationService.RegisterUser(c.Request().Context(), auth0UserID, email)
+					if err != nil {
+						c.Logger().Errorf("Failed to register new user %s: %v", auth0UserID, err)
+						return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create user account")
+					}
+
+					// Lookup the identity again after registration
+					identity, err = identityRepo.GetByAuth0ID(c.Request().Context(), auth0UserID)
+					if err != nil {
+						c.Logger().Errorf("Failed to lookup newly registered identity for %s: %v", auth0UserID, err)
+						return echo.NewHTTPError(http.StatusInternalServerError, "Failed to complete registration")
+					}
+
+					c.Logger().Infof("Successfully registered new user: %s", auth0UserID)
+				} else {
+					c.Logger().Errorf("Failed to lookup user identity for %s: %v", auth0UserID, err)
+					return echo.NewHTTPError(http.StatusInternalServerError, "Failed to authenticate user")
 				}
-				c.Logger().Errorf("Failed to lookup user identity for %s: %v", auth0UserID, err)
-				return echo.NewHTTPError(http.StatusInternalServerError, "Failed to authenticate user")
 			}
 
 			// Store internal user UUID (NOT Auth0 ID) in context for downstream handlers
@@ -323,8 +349,8 @@ func Auth0Middleware(issuer, audience string, identityRepo repository.UserIdenti
 
 // Auth0MiddlewareWithJWKS is now an alias to Auth0Middleware since we implemented JWKS
 // Deprecated: Use Auth0Middleware directly instead
-func Auth0MiddlewareWithJWKS(ctx context.Context, issuer, audience string, identityRepo repository.UserIdentityRepository) (echo.MiddlewareFunc, error) {
-	return Auth0Middleware(issuer, audience, identityRepo), nil
+func Auth0MiddlewareWithJWKS(ctx context.Context, issuer, audience string, identityRepo repository.UserIdentityRepository, registrationService services.RegistrationService) (echo.MiddlewareFunc, error) {
+	return Auth0Middleware(issuer, audience, identityRepo, registrationService), nil
 }
 
 // GetUserID is a helper function to extract the user_id from the Echo context
