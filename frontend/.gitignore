@@ -1,1 +1,4 @@
 test-results.json
+
+# Self-signed certificates (regenerate locally)
+*.pem
