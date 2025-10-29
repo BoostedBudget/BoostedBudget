@@ -4,7 +4,6 @@ services:
   # PostgreSQL Database (Staging)
   postgres:
     image: postgres:15-alpine
-    container_name: boostedbudget-db-staging
     restart: unless-stopped  # Auto-restart on Mac Mini boot
     environment:
       POSTGRES_DB: boostedbudget_staging
@@ -23,7 +22,6 @@ services:
   # Redis Cache (Staging)
   redis:
     image: redis:7-alpine
-    container_name: boostedbudget-redis-staging
     restart: unless-stopped  # Auto-restart on Mac Mini boot
     ports:
       - "6380:6379"  # Different port to avoid conflict with dev
@@ -38,7 +36,6 @@ services:
   # RabbitMQ Message Queue (Staging)
   rabbitmq:
     image: rabbitmq:3-management-alpine
-    container_name: boostedbudget-rabbitmq-staging
     restart: unless-stopped  # Auto-restart on Mac Mini boot
     ports:
       - "5673:5672"   # AMQP - different port
@@ -52,11 +49,10 @@ services:
       retries: 5
 
   # Backend API (Staging)
+  # Uses pre-built image from GHCR (GitHub Container Registry)
+  # Image is built in CI/CD and pulled by deploy script
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile.dev
-    container_name: boostedbudget-api-staging
+    image: ${BACKEND_IMAGE:-ghcr.io/boostedbudget/boostedbudget-backend:staging-latest}
     restart: unless-stopped  # Auto-restart on Mac Mini boot
     ports:
       - "8080:8080"  # Staging backend port
@@ -64,7 +60,7 @@ services:
       PORT: "8080"
       ENVIRONMENT: "staging"
       VERSION: "${VERSION:-staging-dev}"
-      PRIMARY_REGION: "iad"
+      PRIMARY_REGION: "${PRIMARY_REGION:-iad}"
       DATABASE_URL: "postgres://${POSTGRES_USER:-staginguser}:${POSTGRES_PASSWORD:-stagingpass}@postgres:5432/boostedbudget_staging?sslmode=disable"
       REDIS_URL: "redis://redis:6379"
       RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
@@ -84,7 +80,6 @@ services:
       rabbitmq:
         condition: service_healthy
     volumes:
-      - ./backend:/app
       - ./config:/app/config  # Mount config directory from project root
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
@@ -92,12 +87,11 @@ services:
       timeout: 5s
       retries: 5
 
-  # Frontend (Staging - Vite Dev Server)
+  # Frontend (Staging)
+  # Uses pre-built image from GHCR (GitHub Container Registry)
+  # Image is built in CI/CD and pulled by deploy script
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile.dev
-    container_name: boostedbudget-web-staging
+    image: ${FRONTEND_IMAGE:-ghcr.io/boostedbudget/boostedbudget-frontend:staging-latest}
     restart: unless-stopped  # Auto-restart on Mac Mini boot
     ports:
       - "3000:3000"  # Staging frontend port
@@ -111,9 +105,6 @@ services:
     depends_on:
       backend:
         condition: service_healthy
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules  # Don't overwrite node_modules
 
 volumes:
   postgres_staging_data:
