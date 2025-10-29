@@ -54,6 +54,27 @@ type PlaidService interface {
 	// Note: If this fails, the Item should still be deleted from the database as the
 	// access token is likely already invalid.
 	RemoveItem(ctx context.Context, accessToken string) error
+
+	// TransactionsSync calls Plaid /transactions/sync API for a single page of transactions.
+	// This is the preferred method for fetching transaction data (cursor-based pagination).
+	//
+	// The caller is responsible for pagination loop (checking HasMore and calling again with cursor).
+	// TransactionSyncService handles the pagination logic and cursor updates.
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation and timeout
+	//   - accessToken: The Plaid access token (decrypted) for the Item
+	//   - cursor: Cursor for pagination (empty string for first sync)
+	//
+	// Returns the Plaid API response containing Added, Modified, Removed transactions,
+	// NextCursor, and HasMore flag. Returns error if the Plaid API call fails.
+	//
+	// Issue #260: Plaid TransactionsSync API Integration
+	TransactionsSync(
+		ctx context.Context,
+		accessToken string,
+		cursor string,
+	) (*plaid.TransactionsSyncResponse, error)
 }
 
 // plaidService implements PlaidService with a configured Plaid API client
@@ -224,6 +245,53 @@ func (s *plaidService) RemoveItem(ctx context.Context, accessToken string) error
 	}
 
 	return nil
+}
+
+// TransactionsSync calls Plaid /transactions/sync API for a single page.
+//
+// This is a thin wrapper around the Plaid API client that handles request construction
+// and response extraction. The caller (TransactionSyncService) is responsible for:
+//   - Decrypting the access token
+//   - Pagination loop (calling until has_more=false)
+//   - Updating cursor after each successful page
+//   - Error classification and retry strategy
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout control
+//   - accessToken: The Plaid access token (already decrypted)
+//   - cursor: Cursor from previous sync (empty string for first sync)
+//
+// Returns the Plaid API response or error.
+//
+// Issue #260: Plaid TransactionsSync API Integration - thin PlaidService wrapper
+func (s *plaidService) TransactionsSync(
+	ctx context.Context,
+	accessToken string,
+	cursor string,
+) (*plaid.TransactionsSyncResponse, error) {
+	// Validate access token
+	if accessToken == "" {
+		return nil, fmt.Errorf("access token cannot be empty")
+	}
+
+	// Build TransactionsSync request
+	request := plaid.NewTransactionsSyncRequest(accessToken)
+
+	// Set cursor if provided (empty for first sync)
+	if cursor != "" {
+		request.SetCursor(cursor)
+	}
+
+	// Call Plaid API
+	resp, _, err := s.client.PlaidApi.TransactionsSync(ctx).
+		TransactionsSyncRequest(*request).
+		Execute()
+
+	if err != nil {
+		return nil, fmt.Errorf("plaid TransactionsSync failed: %w", err)
+	}
+
+	return &resp, nil
 }
 
 // mapEnvironment maps environment string to Plaid environment constant.
