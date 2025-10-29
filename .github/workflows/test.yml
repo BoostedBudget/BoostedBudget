@@ -222,24 +222,33 @@ jobs:
 
       - name: Start PostgreSQL container
         run: |
-          docker stop test-postgres 2>/dev/null || true
-          docker rm test-postgres 2>/dev/null || true
+          docker stop test-postgres-${{ github.run_id }} 2>/dev/null || true
+          docker rm test-postgres-${{ github.run_id }} 2>/dev/null || true
 
           docker run -d \
-            --name test-postgres \
+            --name test-postgres-${{ github.run_id }} \
             -e POSTGRES_USER=test \
             -e POSTGRES_PASSWORD=test \
             -e POSTGRES_DB=test \
-            -p 5433:5432 \
+            -p 5432 \
             --health-cmd pg_isready \
             --health-interval 10s \
             --health-timeout 5s \
             --health-retries 5 \
             postgres:15
 
+          # Get the dynamically assigned port
+          sleep 2
+          POSTGRES_PORT=$(docker port test-postgres-${{ github.run_id }} 5432 | cut -d: -f2)
+          echo "PostgreSQL running on dynamically assigned port: $POSTGRES_PORT"
+
+          # Export for use in subsequent steps
+          echo "POSTGRES_PORT=$POSTGRES_PORT" >> $GITHUB_ENV
+          echo "DATABASE_URL=postgres://test:test@localhost:$POSTGRES_PORT/test?sslmode=disable" >> $GITHUB_ENV
+
           echo "Waiting for PostgreSQL to be ready..."
           for i in {1..30}; do
-            if docker exec test-postgres pg_isready -U test > /dev/null 2>&1; then
+            if docker exec test-postgres-${{ github.run_id }} pg_isready -U test > /dev/null 2>&1; then
               echo "PostgreSQL is ready!"
               break
             fi
@@ -252,7 +261,7 @@ jobs:
 
       - name: Lint migrations (Atlas validation)
         env:
-          DATABASE_URL: postgres://test:test@localhost:5433/test?sslmode=disable
+          DATABASE_URL: ${{ env.DATABASE_URL }}
         run: |
           echo "::group::Linting migrations"
           cd backend
@@ -265,7 +274,7 @@ jobs:
 
       - name: Run migrations up
         env:
-          DATABASE_URL: postgres://test:test@localhost:5433/test?sslmode=disable
+          DATABASE_URL: ${{ env.DATABASE_URL }}
         run: |
           echo "::group::Running migrations"
           atlas migrate apply \
@@ -275,13 +284,13 @@ jobs:
 
       - name: Validate schema
         env:
-          DATABASE_URL: postgres://test:test@localhost:5433/test?sslmode=disable
+          DATABASE_URL: ${{ env.DATABASE_URL }}
         run: |
           echo "::group::Validating database schema"
 
           echo "Checking tables..."
-          docker exec test-postgres psql -U test -d test -c "\dt" | grep users || { echo "::error::users table missing"; exit 1; }
-          docker exec test-postgres psql -U test -d test -c "\dt" | grep privacy_settings || { echo "::error::privacy_settings table missing"; exit 1; }
+          docker exec test-postgres-${{ github.run_id }} psql -U test -d test -c "\dt" | grep users || { echo "::error::users table missing"; exit 1; }
+          docker exec test-postgres-${{ github.run_id }} psql -U test -d test -c "\dt" | grep privacy_settings || { echo "::error::privacy_settings table missing"; exit 1; }
 
           echo "::notice::✅ Schema validation passed"
           echo "::endgroup::"
@@ -289,8 +298,8 @@ jobs:
       - name: Cleanup PostgreSQL container
         if: always()
         run: |
-          docker stop test-postgres 2>/dev/null || true
-          docker rm test-postgres 2>/dev/null || true
+          docker stop test-postgres-${{ github.run_id }} 2>/dev/null || true
+          docker rm test-postgres-${{ github.run_id }} 2>/dev/null || true
 
   # =============================================================================
   # Security Scan - Dependencies & Dockerfiles (Parallelized)
