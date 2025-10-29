@@ -42,6 +42,10 @@ func (m *mockPlaidService) RemoveItem(ctx context.Context, accessToken string) e
 	return errors.New("not implemented")
 }
 
+func (m *mockPlaidService) TransactionsSync(ctx context.Context, accessToken string, cursor string) (*plaid.TransactionsSyncResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
 // mockAccountService is a mock implementation of AccountService for testing
 type mockAccountService struct {
 	getAccountsFunc          func(ctx context.Context, userID string) ([]domain.Account, error)
