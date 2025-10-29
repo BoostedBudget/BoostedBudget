@@ -347,6 +347,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
 
       - name: Setup Trivy
