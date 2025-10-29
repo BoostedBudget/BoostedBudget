@@ -37,8 +37,7 @@ jobs:
           # Remove any root-owned files created by Docker volumes
           # This prevents "permission denied" errors during checkout cleanup
           if [ -d "${{ github.workspace }}" ]; then
-            sudo rm -rf "${{ github.workspace }}/backend/config" || true
-            sudo rm -rf "${{ github.workspace }}/.git/index.lock" || true
+            sudo rm -rf "${{ github.workspace }}"/* || true
           fi
 
       - name: Checkout staging branch
@@ -347,7 +346,7 @@ jobs:
         run: |
           # Clean up any root-owned files created during deployment
           # This ensures the workspace is ready for the next run
-          sudo rm -rf "${{ github.workspace }}/backend/config" || true
+          sudo rm -rf "${{ github.workspace }}"/* || true
 
   # =============================================================================
   # Smoke Tests
