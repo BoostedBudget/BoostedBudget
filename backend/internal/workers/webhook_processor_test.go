@@ -26,6 +26,14 @@ func (m *MockTransactionSyncServiceForWorker) ProcessWebhook(ctx context.Context
 	return args.Error(0)
 }
 
+func (m *MockTransactionSyncServiceForWorker) SyncTransactions(ctx context.Context, linkedItem *domain.LinkedItem) (*domain.TransactionSyncResult, error) {
+	args := m.Called(ctx, linkedItem)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.TransactionSyncResult), args.Error(1)
+}
+
 // MockWebhookRepoForWorker for testing
 type MockWebhookRepoForWorker struct {
 	mock.Mock

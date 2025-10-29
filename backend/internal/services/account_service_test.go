@@ -36,6 +36,14 @@ func (m *MockPlaidService) RemoveItem(ctx context.Context, accessToken string) e
 	return args.Error(0)
 }
 
+func (m *MockPlaidService) TransactionsSync(ctx context.Context, accessToken string, cursor string) (*plaid.TransactionsSyncResponse, error) {
+	args := m.Called(ctx, accessToken, cursor)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*plaid.TransactionsSyncResponse), args.Error(1)
+}
+
 type MockEncryptionService struct {
 	mock.Mock
 }
