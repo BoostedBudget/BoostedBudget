@@ -255,6 +255,14 @@ jobs:
         with:
           ref: staging
 
+      - name: Restore SSL certificates from secrets
+        run: |
+          mkdir -p frontend
+          echo "${{ secrets.STAGING_SSL_CERT }}" | base64 -d > frontend/cert.pem
+          echo "${{ secrets.STAGING_SSL_KEY }}" | base64 -d > frontend/key.pem
+          chmod 600 frontend/*.pem
+          echo "✓ SSL certificates restored for HTTPS staging access"
+
       - name: Create .env.staging from secrets
         run: |
           cat > .env.staging << EOF
