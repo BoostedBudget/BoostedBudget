@@ -25,11 +25,14 @@ jobs:
     steps:
       - name: Clean workspace (fix permission issues)
         run: |
+          sudo chmod -R 777 ${{ github.workspace }} 2>/dev/null || true
           sudo rm -rf ${{ github.workspace }}/* 2>/dev/null || true
           sudo rm -rf ${{ github.workspace }}/.* 2>/dev/null || true
 
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          clean: false
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -97,12 +100,14 @@ jobs:
     steps:
       - name: Clean workspace (fix permission issues)
         run: |
+          sudo chmod -R 777 ${{ github.workspace }} 2>/dev/null || true
           sudo rm -rf ${{ github.workspace }}/* 2>/dev/null || true
           sudo rm -rf ${{ github.workspace }}/.* 2>/dev/null || true
 
       - name: Checkout code
         uses: actions/checkout@v5
         with:
+          clean: false
           fetch-depth: 1
 
       - name: Set up Node
@@ -147,11 +152,14 @@ jobs:
     steps:
       - name: Clean workspace (fix permission issues)
         run: |
+          sudo chmod -R 777 ${{ github.workspace }} 2>/dev/null || true
           sudo rm -rf ${{ github.workspace }}/* 2>/dev/null || true
           sudo rm -rf ${{ github.workspace }}/.* 2>/dev/null || true
 
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          clean: false
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -210,11 +218,14 @@ jobs:
     steps:
       - name: Clean workspace (fix permission issues)
         run: |
+          sudo chmod -R 777 ${{ github.workspace }} 2>/dev/null || true
           sudo rm -rf ${{ github.workspace }}/* 2>/dev/null || true
           sudo rm -rf ${{ github.workspace }}/.* 2>/dev/null || true
 
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          clean: false
 
       - name: Start PostgreSQL container
         run: |
@@ -305,11 +316,14 @@ jobs:
     steps:
       - name: Clean workspace (fix permission issues)
         run: |
+          sudo chmod -R 777 ${{ github.workspace }} 2>/dev/null || true
           sudo rm -rf ${{ github.workspace }}/* 2>/dev/null || true
           sudo rm -rf ${{ github.workspace }}/.* 2>/dev/null || true
 
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          clean: false
 
       - name: Setup Trivy
         uses: aquasecurity/setup-trivy@v0.2.4
