@@ -26,6 +26,14 @@ func (m *MockTransactionSyncServiceForWorker) ProcessWebhook(ctx context.Context
 	return args.Error(0)
 }
 
+func (m *MockTransactionSyncServiceForWorker) SyncTransactions(ctx context.Context, linkedItem *domain.LinkedItem) (*domain.TransactionSyncResult, error) {
+	args := m.Called(ctx, linkedItem)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.TransactionSyncResult), args.Error(1)
+}
+
 // MockWebhookRepoForWorker for testing
 type MockWebhookRepoForWorker struct {
 	mock.Mock
@@ -243,8 +251,8 @@ func TestWebhookProcessor_Start_ProcessesOnStartup(t *testing.T) {
 
 	processor := NewWebhookProcessor(mockSyncService, mockWebhookRepo, 1*time.Hour, 10)
 
-	// Create context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	// Create context with timeout (1s to allow processing to complete)
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
 	itemID := "item-1"

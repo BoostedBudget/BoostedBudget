@@ -204,6 +204,7 @@ func main() {
 					linkedItemRepo,
 					transactionRepo,
 					plaidService,
+					encryptionService,
 				)
 
 				// Initialize Webhook Processor background worker

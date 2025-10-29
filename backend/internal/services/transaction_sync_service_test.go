@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/plaid/plaid-go/v23/plaid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -63,6 +64,8 @@ func (m *MockWebhookRepository) GetUnprocessedByType(ctx context.Context, webhoo
 	return args.Get(0).([]domain.WebhookEvent), args.Error(1)
 }
 
+// Note: MockEncryptionService is defined in account_service_test.go and reused here
+
 // ============================================================================
 // PHASE 4 RED: Failing Tests for TransactionSyncService
 // Issue #256: Transaction Sync Service
@@ -76,12 +79,14 @@ func TestProcessWebhook_Success(t *testing.T) {
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
 	mockTransactionRepo := new(MockTransactionRepository)
 	mockPlaidService := new(MockPlaidService)
+	mockEncryptionService := new(MockEncryptionService)
 
 	service := NewTransactionSyncService(
 		mockWebhookRepo,
 		mockLinkedItemRepo,
 		mockTransactionRepo,
 		mockPlaidService,
+		mockEncryptionService,
 	)
 
 	ctx := context.Background()
@@ -125,9 +130,21 @@ func TestProcessWebhook_Success(t *testing.T) {
 	// Mock getting linked item
 	mockLinkedItemRepo.On("GetByItemID", ctx, itemID).Return(linkedItem, nil)
 
-	// Mock Plaid API call will be tested separately, for now assume success
-	// Mock update cursor (after sync completes) - UpdateCursor automatically sets last_synced_at
-	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, mock.AnythingOfType("string")).Return(nil)
+	// Mock decryption of access token
+	mockEncryptionService.On("Decrypt", "encrypted-access-token").Return("decrypted-access-token", nil)
+
+	// Mock Plaid API call for TransactionsSync
+	plaidResp := &plaid.TransactionsSyncResponse{
+		Added:      []plaid.Transaction{{TransactionId: "txn-1"}},
+		Modified:   []plaid.Transaction{},
+		Removed:    []plaid.RemovedTransaction{},
+		NextCursor: "new-cursor-from-plaid",
+		HasMore:    false,
+	}
+	mockPlaidService.On("TransactionsSync", ctx, "decrypted-access-token", "old-cursor").Return(plaidResp, nil)
+
+	// Mock cursor update (after sync completes)
+	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "new-cursor-from-plaid").Return(nil)
 
 	// Mock marking webhook as processed
 	mockWebhookRepo.On("Update", ctx, mock.MatchedBy(func(e *domain.WebhookEvent) bool {
@@ -149,12 +166,14 @@ func TestProcessWebhook_WebhookNotFound(t *testing.T) {
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
 	mockTransactionRepo := new(MockTransactionRepository)
 	mockPlaidService := new(MockPlaidService)
+	mockEncryptionService := new(MockEncryptionService)
 
 	service := NewTransactionSyncService(
 		mockWebhookRepo,
 		mockLinkedItemRepo,
 		mockTransactionRepo,
 		mockPlaidService,
+		mockEncryptionService,
 	)
 
 	ctx := context.Background()
@@ -173,12 +192,14 @@ func TestProcessWebhook_ItemIDMissing(t *testing.T) {
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
 	mockTransactionRepo := new(MockTransactionRepository)
 	mockPlaidService := new(MockPlaidService)
+	mockEncryptionService := new(MockEncryptionService)
 
 	service := NewTransactionSyncService(
 		mockWebhookRepo,
 		mockLinkedItemRepo,
 		mockTransactionRepo,
 		mockPlaidService,
+		mockEncryptionService,
 	)
 
 	ctx := context.Background()
@@ -213,12 +234,14 @@ func TestProcessWebhook_LinkedItemNotFound(t *testing.T) {
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
 	mockTransactionRepo := new(MockTransactionRepository)
 	mockPlaidService := new(MockPlaidService)
+	mockEncryptionService := new(MockEncryptionService)
 
 	service := NewTransactionSyncService(
 		mockWebhookRepo,
 		mockLinkedItemRepo,
 		mockTransactionRepo,
 		mockPlaidService,
+		mockEncryptionService,
 	)
 
 	ctx := context.Background()
@@ -256,24 +279,345 @@ func TestProcessWebhook_LinkedItemNotFound(t *testing.T) {
 	mockLinkedItemRepo.AssertExpectations(t)
 }
 
-// TestSyncTransactions_SuccessWithPagination tests successful transaction sync with pagination
-// This tests the core Plaid TransactionsSync API integration
-func TestSyncTransactions_SuccessWithPagination(t *testing.T) {
-	t.Skip("Skipping Plaid API integration test - requires PlaidClient mock setup")
-	// This test will be implemented in GREEN phase with proper Plaid API client mocking
-	// Testing pagination: HasMore=true scenario with multiple API calls
+// ============================================================================
+// PHASE 7: Unit Tests for SyncTransactions
+// Issue #260: Plaid TransactionsSync API Integration
+// ============================================================================
+
+// TestSyncTransactions_SuccessSinglePage tests successful sync with single page (has_more=false)
+func TestSyncTransactions_SuccessSinglePage(t *testing.T) {
+	// Setup mocks
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockPlaidService := new(MockPlaidService)
+	mockEncryptionService := new(MockEncryptionService)
+
+	service := NewTransactionSyncService(
+		nil, // webhookRepo not needed for SyncTransactions
+		mockLinkedItemRepo,
+		nil, // transactionRepo not needed yet (issue #261)
+		mockPlaidService,
+		mockEncryptionService,
+	)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{
+		ID:                   "linked-item-123",
+		UserID:               "user-123",
+		ItemID:               "item-abc",
+		AccessTokenEncrypted: "encrypted-token",
+		Cursor:               stringPtr("cursor-before"),
+	}
+
+	// Mock decryption
+	mockEncryptionService.On("Decrypt", "encrypted-token").Return("decrypted-token", nil)
+
+	// Mock Plaid API response (single page, has_more=false)
+	plaidResp := &plaid.TransactionsSyncResponse{
+		Added: []plaid.Transaction{
+			{TransactionId: "txn-1", Amount: 10.0},
+			{TransactionId: "txn-2", Amount: 20.0},
+		},
+		Modified:   []plaid.Transaction{},
+		Removed:    []plaid.RemovedTransaction{},
+		NextCursor: "cursor-after",
+		HasMore:    false,
+	}
+	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-before").Return(plaidResp, nil)
+
+	// Mock cursor update
+	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-after").Return(nil)
+
+	// Execute
+	result, err := service.SyncTransactions(ctx, linkedItem)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Len(t, result.Added, 2)
+	assert.Len(t, result.Modified, 0)
+	assert.Len(t, result.Removed, 0)
+	assert.Equal(t, "cursor-after", result.NewCursor)
+
+	mockEncryptionService.AssertExpectations(t)
+	mockPlaidService.AssertExpectations(t)
+	mockLinkedItemRepo.AssertExpectations(t)
 }
 
-// TestSyncTransactions_HandlesModifiedTransactions tests updating existing transactions
-func TestSyncTransactions_HandlesModifiedTransactions(t *testing.T) {
-	t.Skip("Skipping modified transactions test - implementation pending")
-	// This test will verify that Modified[] transactions are properly updated in database
+// TestSyncTransactions_SuccessMultiplePages tests pagination with has_more=true
+func TestSyncTransactions_SuccessMultiplePages(t *testing.T) {
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockPlaidService := new(MockPlaidService)
+	mockEncryptionService := new(MockEncryptionService)
+
+	service := NewTransactionSyncService(
+		nil,
+		mockLinkedItemRepo,
+		nil,
+		mockPlaidService,
+		mockEncryptionService,
+	)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{
+		ID:                   "linked-item-123",
+		AccessTokenEncrypted: "encrypted-token",
+		Cursor:               stringPtr("cursor-page0"),
+	}
+
+	// Mock decryption
+	mockEncryptionService.On("Decrypt", "encrypted-token").Return("decrypted-token", nil)
+
+	// Page 1: has_more=true
+	plaidResp1 := &plaid.TransactionsSyncResponse{
+		Added:      []plaid.Transaction{{TransactionId: "txn-1"}},
+		Modified:   []plaid.Transaction{{TransactionId: "txn-mod-1"}},
+		Removed:    []plaid.RemovedTransaction{{TransactionId: stringPtr("txn-rem-1")}},
+		NextCursor: "cursor-page1",
+		HasMore:    true,
+	}
+	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-page0").Return(plaidResp1, nil)
+	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-page1").Return(nil).Once()
+
+	// Page 2: has_more=false
+	plaidResp2 := &plaid.TransactionsSyncResponse{
+		Added:      []plaid.Transaction{{TransactionId: "txn-2"}},
+		Modified:   []plaid.Transaction{},
+		Removed:    []plaid.RemovedTransaction{},
+		NextCursor: "cursor-page2",
+		HasMore:    false,
+	}
+	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-page1").Return(plaidResp2, nil)
+	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-page2").Return(nil).Once()
+
+	// Execute
+	result, err := service.SyncTransactions(ctx, linkedItem)
+
+	// Assert - aggregated results from both pages
+	assert.NoError(t, err)
+	assert.Len(t, result.Added, 2) // txn-1 + txn-2
+	assert.Len(t, result.Modified, 1) // txn-mod-1
+	assert.Len(t, result.Removed, 1) // txn-rem-1
+	assert.Equal(t, "cursor-page2", result.NewCursor)
+
+	mockEncryptionService.AssertExpectations(t)
+	mockPlaidService.AssertExpectations(t)
+	mockLinkedItemRepo.AssertExpectations(t)
 }
 
-// TestSyncTransactions_HandlesRemovedTransactions tests deleting removed transactions
-func TestSyncTransactions_HandlesRemovedTransactions(t *testing.T) {
-	t.Skip("Skipping removed transactions test - implementation pending")
-	// This test will verify that Removed[] transactions are properly deleted from database
+// TestSyncTransactions_DecryptionError tests handling of access token decryption failure
+func TestSyncTransactions_DecryptionError(t *testing.T) {
+	mockEncryptionService := new(MockEncryptionService)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		nil,
+		nil,
+		mockEncryptionService,
+	)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{
+		ID:                   "linked-item-123",
+		AccessTokenEncrypted: "bad-encrypted-token",
+	}
+
+	// Mock decryption failure
+	mockEncryptionService.On("Decrypt", "bad-encrypted-token").Return("", errors.New("decryption failed"))
+
+	// Execute
+	result, err := service.SyncTransactions(ctx, linkedItem)
+
+	// Assert
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "failed to decrypt access token")
+
+	mockEncryptionService.AssertExpectations(t)
+}
+
+// TestSyncTransactions_PlaidErrorFirstPage tests Plaid API error on first page
+func TestSyncTransactions_PlaidErrorFirstPage(t *testing.T) {
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockPlaidService := new(MockPlaidService)
+	mockEncryptionService := new(MockEncryptionService)
+
+	service := NewTransactionSyncService(
+		nil,
+		mockLinkedItemRepo,
+		nil,
+		mockPlaidService,
+		mockEncryptionService,
+	)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{
+		ID:                   "linked-item-123",
+		AccessTokenEncrypted: "encrypted-token",
+		Cursor:               nil, // First sync
+	}
+
+	// Mock decryption
+	mockEncryptionService.On("Decrypt", "encrypted-token").Return("decrypted-token", nil)
+
+	// Mock Plaid API error
+	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "").
+		Return(nil, errors.New("INVALID_ACCESS_TOKEN"))
+
+	// Execute
+	result, err := service.SyncTransactions(ctx, linkedItem)
+
+	// Assert - returns empty result with error
+	assert.Error(t, err)
+	assert.NotNil(t, result) // Partial results returned
+	assert.Len(t, result.Added, 0)
+	assert.Contains(t, err.Error(), "sync failed on page 1")
+
+	mockEncryptionService.AssertExpectations(t)
+	mockPlaidService.AssertExpectations(t)
+}
+
+// TestSyncTransactions_PlaidErrorSubsequentPage tests Plaid API error on page 2 (resumability)
+func TestSyncTransactions_PlaidErrorSubsequentPage(t *testing.T) {
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockPlaidService := new(MockPlaidService)
+	mockEncryptionService := new(MockEncryptionService)
+
+	service := NewTransactionSyncService(
+		nil,
+		mockLinkedItemRepo,
+		nil,
+		mockPlaidService,
+		mockEncryptionService,
+	)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{
+		ID:                   "linked-item-123",
+		AccessTokenEncrypted: "encrypted-token",
+		Cursor:               stringPtr("cursor-start"),
+	}
+
+	// Mock decryption
+	mockEncryptionService.On("Decrypt", "encrypted-token").Return("decrypted-token", nil)
+
+	// Page 1 succeeds
+	plaidResp1 := &plaid.TransactionsSyncResponse{
+		Added:      []plaid.Transaction{{TransactionId: "txn-1"}},
+		NextCursor: "cursor-page1",
+		HasMore:    true,
+	}
+	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-start").Return(plaidResp1, nil)
+	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-page1").Return(nil).Once()
+
+	// Page 2 fails
+	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-page1").
+		Return(nil, errors.New("RATE_LIMIT_EXCEEDED"))
+
+	// Execute
+	result, err := service.SyncTransactions(ctx, linkedItem)
+
+	// Assert - returns partial results from page 1
+	assert.Error(t, err)
+	assert.NotNil(t, result)
+	assert.Len(t, result.Added, 1) // Got page 1 data
+	assert.Contains(t, err.Error(), "sync failed on page 2")
+
+	// Cursor was updated after page 1, so retry can resume from page 2
+	mockLinkedItemRepo.AssertExpectations(t)
+}
+
+// TestSyncTransactions_CursorUpdateError tests cursor update failure
+func TestSyncTransactions_CursorUpdateError(t *testing.T) {
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockPlaidService := new(MockPlaidService)
+	mockEncryptionService := new(MockEncryptionService)
+
+	service := NewTransactionSyncService(
+		nil,
+		mockLinkedItemRepo,
+		nil,
+		mockPlaidService,
+		mockEncryptionService,
+	)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{
+		ID:                   "linked-item-123",
+		AccessTokenEncrypted: "encrypted-token",
+		Cursor:               nil,
+	}
+
+	// Mock decryption
+	mockEncryptionService.On("Decrypt", "encrypted-token").Return("decrypted-token", nil)
+
+	// Plaid API succeeds
+	plaidResp := &plaid.TransactionsSyncResponse{
+		Added:      []plaid.Transaction{{TransactionId: "txn-1"}},
+		NextCursor: "cursor-new",
+		HasMore:    false,
+	}
+	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "").Return(plaidResp, nil)
+
+	// Cursor update fails
+	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-new").
+		Return(errors.New("database connection error"))
+
+	// Execute
+	result, err := service.SyncTransactions(ctx, linkedItem)
+
+	// Assert - returns partial results with error
+	assert.Error(t, err)
+	assert.NotNil(t, result)
+	assert.Len(t, result.Added, 1) // Got transaction data
+	assert.Contains(t, err.Error(), "failed to update cursor on page 1")
+
+	mockLinkedItemRepo.AssertExpectations(t)
+}
+
+// TestSyncTransactions_EmptyCursor tests first sync with no cursor
+func TestSyncTransactions_EmptyCursor(t *testing.T) {
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockPlaidService := new(MockPlaidService)
+	mockEncryptionService := new(MockEncryptionService)
+
+	service := NewTransactionSyncService(
+		nil,
+		mockLinkedItemRepo,
+		nil,
+		mockPlaidService,
+		mockEncryptionService,
+	)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{
+		ID:                   "linked-item-123",
+		AccessTokenEncrypted: "encrypted-token",
+		Cursor:               nil, // First sync - no cursor
+	}
+
+	// Mock decryption
+	mockEncryptionService.On("Decrypt", "encrypted-token").Return("decrypted-token", nil)
+
+	// Mock Plaid API with empty cursor (empty string passed)
+	plaidResp := &plaid.TransactionsSyncResponse{
+		Added:      []plaid.Transaction{{TransactionId: "txn-1"}},
+		NextCursor: "cursor-initial",
+		HasMore:    false,
+	}
+	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "").Return(plaidResp, nil)
+	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-initial").Return(nil)
+
+	// Execute
+	result, err := service.SyncTransactions(ctx, linkedItem)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Len(t, result.Added, 1)
+	assert.Equal(t, "cursor-initial", result.NewCursor)
+
+	mockPlaidService.AssertExpectations(t)
 }
 
 // Helper function to create string pointers
