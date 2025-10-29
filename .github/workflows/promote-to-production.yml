@@ -35,20 +35,28 @@ jobs:
     permissions:
       contents: write
       actions: read
+    env:
+      UNIQUE_WORKSPACE: workspace-promote-${{ github.run_id }}
 
     steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
           ref: staging
           fetch-depth: 0  # Full history needed for validation and merge
 
       - name: Configure git
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Validate staging branch state
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         id: validate
         run: |
           echo "🔍 Validating staging branch..."
@@ -82,6 +90,7 @@ jobs:
           fi
 
       - name: Check staging test status
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         id: test-status
         continue-on-error: true
         run: |
@@ -132,6 +141,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
       - name: Validate test results
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         if: steps.test-status.outputs.test-found == 'true'
         run: |
           CONCLUSION="${{ steps.test-status.outputs.test-conclusion }}"
@@ -154,6 +164,7 @@ jobs:
           echo "✅ Staging tests passed"
 
       - name: Run lightweight smoke tests
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         if: inputs.skip_smoke_tests != 'true'
         run: |
           echo "🧪 Running pre-promotion smoke tests..."
@@ -169,6 +180,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Merge staging into main
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: |
           echo "🔀 Merging staging into main..."
 
@@ -188,6 +200,7 @@ jobs:
           echo "✅ Merge successful"
 
       - name: Push to main
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: |
           echo "📤 Pushing to main..."
           git push origin main
@@ -237,3 +250,7 @@ jobs:
           echo "git merge origin/staging --no-ff" >> $GITHUB_STEP_SUMMARY
           echo "git push origin main" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
