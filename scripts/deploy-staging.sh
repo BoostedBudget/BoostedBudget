@@ -25,7 +25,7 @@ NC='\033[0m' # No Color
 COMPOSE_FILE="docker-compose.staging.yml"
 ENV_FILE=".env.staging"
 BACKEND_HEALTH_URL="http://localhost:8080/health"
-FRONTEND_URL="http://localhost:3000"
+FRONTEND_URL="https://localhost:3000"  # HTTPS with self-signed cert
 MAX_HEALTH_RETRIES=30
 HEALTH_RETRY_DELAY=2
 
@@ -263,7 +263,7 @@ wait_for_health() {
   echo "Waiting for $service_name to be healthy..."
 
   for i in $(seq 1 $max_retries); do
-    if curl -f -s "$url" > /dev/null 2>&1; then
+    if curl -k -f -s "$url" > /dev/null 2>&1; then
       print_success "$service_name is healthy"
       return 0
     fi
