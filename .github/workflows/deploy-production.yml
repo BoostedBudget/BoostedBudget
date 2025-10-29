@@ -49,10 +49,17 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      UNIQUE_WORKSPACE: workspace-build-images-${{ matrix.component }}-${{ github.run_id }}
 
     steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
       - name: Checkout main branch
         uses: actions/checkout@v5
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -135,7 +142,7 @@ jobs:
       - name: Build and push ${{ matrix.component }} image
         run: |
           docker buildx build \
-            --file ./${{ matrix.component }}/Dockerfile \
+            --file ${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile \
             --push \
             --tag ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ github.sha }} \
             --tag ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:latest \
@@ -145,13 +152,17 @@ jobs:
             --build-arg VERSION=${{ github.sha }} \
             --build-arg BUILD_DATE=${{ github.event.head_commit.timestamp }} \
             --provenance=false \
-            .
+            ${{ env.UNIQUE_WORKSPACE }}
 
       - name: Image build summary
         run: |
           echo "### 🐳 ${{ matrix.component }} Image Built" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Image:** \`${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
   # Security Scan - Docker Images (Parallelized)
@@ -170,10 +181,17 @@ jobs:
       contents: read
       packages: read
       security-events: write
+    env:
+      UNIQUE_WORKSPACE: workspace-security-scan-${{ matrix.component }}-${{ github.run_id }}
 
     steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
 
       - name: Configure Docker
         run: |
@@ -234,6 +252,10 @@ jobs:
         with:
           sarif_file: 'trivy-${{ matrix.component }}-production.sarif'
           category: 'trivy-production-${{ matrix.component }}'
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
   # Push Images to Fly.io Registry (Parallelized)
@@ -335,24 +357,32 @@ jobs:
         include:
           - component: backend
             fly-app: boostedbudget-api
-            fly-config: ./backend/fly.toml
+            fly-config: backend/fly.toml
             deploy-strategy: ""
           - component: frontend
             fly-app: boostedbudget-web
-            fly-config: ./frontend/fly.toml
+            fly-config: frontend/fly.toml
             deploy-strategy: "--strategy rolling"
     environment:
       name: production
       url: https://boostedbudget.com
+    env:
+      UNIQUE_WORKSPACE: workspace-deploy-fly-${{ matrix.component }}-${{ github.run_id }}
 
     steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
 
       - name: Setup Fly.io CLI
         uses: superfly/flyctl-actions/setup-flyctl@master
 
       - name: Deploy to Fly.io
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
@@ -387,6 +417,10 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Deployed at:** $(date -u)" >> $GITHUB_STEP_SUMMARY
 
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
   # =============================================================================
   # Production Smoke Tests
   # =============================================================================
@@ -394,12 +428,20 @@ jobs:
     name: Production Smoke Tests
     needs: deploy-to-fly
     runs-on: [self-hosted, macOS, mac-mini]
+    env:
+      UNIQUE_WORKSPACE: workspace-smoke-tests-${{ github.run_id }}
 
     steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
 
       - name: Run smoke tests
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         timeout-minutes: 5
         run: |
           if [ -f ./scripts/smoke-test.sh ]; then
@@ -428,3 +470,7 @@ jobs:
           else
             echo "**Deployment Trigger:** Automatic (push to main)" >> $GITHUB_STEP_SUMMARY
           fi
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
