@@ -27,10 +27,11 @@ jobs:
         run: |
           cd $(dirname ${{ github.workspace }})
           sudo rm -rf $(basename ${{ github.workspace }}) 2>/dev/null || true
-          mkdir -p $(basename ${{ github.workspace }})
 
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          clean: false
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -100,11 +101,11 @@ jobs:
         run: |
           cd $(dirname ${{ github.workspace }})
           sudo rm -rf $(basename ${{ github.workspace }}) 2>/dev/null || true
-          mkdir -p $(basename ${{ github.workspace }})
 
       - name: Checkout code
         uses: actions/checkout@v5
         with:
+          clean: false
           fetch-depth: 1
 
       - name: Set up Node
@@ -151,10 +152,11 @@ jobs:
         run: |
           cd $(dirname ${{ github.workspace }})
           sudo rm -rf $(basename ${{ github.workspace }}) 2>/dev/null || true
-          mkdir -p $(basename ${{ github.workspace }})
 
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          clean: false
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -215,10 +217,11 @@ jobs:
         run: |
           cd $(dirname ${{ github.workspace }})
           sudo rm -rf $(basename ${{ github.workspace }}) 2>/dev/null || true
-          mkdir -p $(basename ${{ github.workspace }})
 
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          clean: false
 
       - name: Start PostgreSQL container
         run: |
@@ -320,10 +323,11 @@ jobs:
         run: |
           cd $(dirname ${{ github.workspace }})
           sudo rm -rf $(basename ${{ github.workspace }}) 2>/dev/null || true
-          mkdir -p $(basename ${{ github.workspace }})
 
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          clean: false
 
       - name: Setup Trivy
         uses: aquasecurity/setup-trivy@v0.2.4
