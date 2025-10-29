@@ -22,11 +22,11 @@ jobs:
     name: Backend Tests
     runs-on: [self-hosted, macOS, mac-mini]
     env:
-      UNIQUE_WORKSPACE: /Users/max/actions-runner/_work/BoostedBudget/workspace-backend-test-${{ github.run_id }}
+      UNIQUE_WORKSPACE: workspace-backend-test-${{ github.run_id }}
 
     steps:
       - name: Clean workspace (fix permission issues)
-        run: sudo rm -rf "${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
         uses: actions/checkout@v5
@@ -92,7 +92,7 @@ jobs:
 
       - name: Final workspace cleanup
         if: always()
-        run: sudo rm -rf "${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
   # Frontend Tests (runs in parallel with backend)
@@ -101,11 +101,11 @@ jobs:
     name: Frontend Tests
     runs-on: [self-hosted, macOS, mac-mini]
     env:
-      UNIQUE_WORKSPACE: /Users/max/actions-runner/_work/BoostedBudget/workspace-frontend-test-${{ github.run_id }}
+      UNIQUE_WORKSPACE: workspace-frontend-test-${{ github.run_id }}
 
     steps:
       - name: Clean workspace (fix permission issues)
-        run: sudo rm -rf "${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
         uses: actions/checkout@v5
@@ -147,7 +147,7 @@ jobs:
 
       - name: Final workspace cleanup
         if: always()
-        run: sudo rm -rf "${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
   # E2E Tests (depends on backend-test for binary)
@@ -157,11 +157,11 @@ jobs:
     needs: backend-test
     runs-on: [self-hosted, macOS, mac-mini]
     env:
-      UNIQUE_WORKSPACE: /Users/max/actions-runner/_work/BoostedBudget/workspace-e2e-test-${{ github.run_id }}
+      UNIQUE_WORKSPACE: workspace-e2e-test-${{ github.run_id }}
 
     steps:
       - name: Clean workspace (fix permission issues)
-        run: sudo rm -rf "${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
         uses: actions/checkout@v5
@@ -189,7 +189,7 @@ jobs:
           path: ${{ env.UNIQUE_WORKSPACE }}/backend/bin
 
       - name: Make backend binary executable
-        run: chmod +x ${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
+        run: chmod +x $GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
 
       - name: Run E2E tests
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
@@ -218,7 +218,7 @@ jobs:
 
       - name: Final workspace cleanup
         if: always()
-        run: sudo rm -rf "${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
   # Migration Integration Tests
@@ -227,11 +227,11 @@ jobs:
     name: Migration Tests
     runs-on: [self-hosted, macOS, mac-mini]
     env:
-      UNIQUE_WORKSPACE: /Users/max/actions-runner/_work/BoostedBudget/workspace-migration-tests-${{ github.run_id }}
+      UNIQUE_WORKSPACE: workspace-migration-tests-${{ github.run_id }}
 
     steps:
       - name: Clean workspace (fix permission issues)
-        run: sudo rm -rf "${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
         uses: actions/checkout@v5
@@ -322,7 +322,7 @@ jobs:
 
       - name: Final workspace cleanup
         if: always()
-        run: sudo rm -rf "${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
   # Security Scan - Dependencies & Dockerfiles (Parallelized)
@@ -338,11 +338,11 @@ jobs:
       contents: read
       security-events: write
     env:
-      UNIQUE_WORKSPACE: /Users/max/actions-runner/_work/BoostedBudget/workspace-security-scan-${{ matrix.component }}-${{ github.run_id }}
+      UNIQUE_WORKSPACE: workspace-security-scan-${{ matrix.component }}-${{ github.run_id }}
 
     steps:
       - name: Clean workspace (fix permission issues)
-        run: sudo rm -rf "${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
         uses: actions/checkout@v5
@@ -399,4 +399,4 @@ jobs:
 
       - name: Final workspace cleanup
         if: always()
-        run: sudo rm -rf "${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
