@@ -52,6 +52,78 @@ print_warning() {
   echo -e "${YELLOW}⚠ Warning: $1${NC}"
 }
 
+# Function to validate critical environment variables
+validate_environment() {
+  print_section "Validating Environment Variables"
+
+  # Source the env file and export all variables
+  set +u  # Temporarily allow unset variables
+  set -a  # Automatically export all variables
+  source "$ENV_FILE"
+  set +a  # Stop auto-export
+  set -u
+
+  echo "Loaded environment from: $(pwd)/$ENV_FILE"
+  echo ""
+
+  local missing_vars=()
+  local has_errors=false
+
+  # Critical variables that MUST be set
+  local critical_vars=(
+    "ENCRYPTION_KEY"
+    "AUTH0_DOMAIN"
+    "AUTH0_AUDIENCE"
+    "AUTH0_CLIENT_ID"
+    "AUTH0_CLIENT_SECRET"
+    "PLAID_CLIENT_ID"
+    "PLAID_SECRET"
+    "POSTGRES_USER"
+    "POSTGRES_PASSWORD"
+  )
+
+  # Check each critical variable
+  for var in "${critical_vars[@]}"; do
+    if [ -z "${!var:-}" ]; then
+      missing_vars+=("$var")
+      echo -e "${RED}✗${NC} $var: NOT SET"
+      has_errors=true
+    else
+      # Show first 4 chars for debugging (don't expose full secrets)
+      local value="${!var}"
+      local preview="${value:0:4}***"
+      echo -e "${GREEN}✓${NC} $var: $preview (${#value} chars)"
+    fi
+  done
+
+  echo ""
+
+  # Show deployment mode
+  if [ "${PULL_FROM_GHCR:-false}" = "true" ]; then
+    echo -e "${BLUE}Deployment Mode:${NC} Pull from GHCR (pre-built images)"
+    if [ -n "${BACKEND_IMAGE:-}" ]; then
+      echo -e "${BLUE}Backend Image:${NC} ${BACKEND_IMAGE:0:60}..."
+    fi
+    if [ -n "${FRONTEND_IMAGE:-}" ]; then
+      echo -e "${BLUE}Frontend Image:${NC} ${FRONTEND_IMAGE:0:60}..."
+    fi
+  else
+    echo -e "${BLUE}Deployment Mode:${NC} Build locally from source"
+  fi
+  echo ""
+
+  if [ "$has_errors" = true ]; then
+    print_error "Missing required environment variables: ${missing_vars[*]}"
+    echo ""
+    echo -e "${YELLOW}These variables must be set in $ENV_FILE${NC}"
+    echo -e "${YELLOW}Check that GitHub secrets are properly configured and passed to the workflow${NC}"
+    return 1
+  fi
+
+  print_success "All critical environment variables are set"
+  return 0
+}
+
 # Function to check prerequisites
 check_prerequisites() {
   print_section "Checking Prerequisites"
@@ -93,17 +165,38 @@ save_current_state() {
   fi
 }
 
-# Function to stop existing containers
-stop_containers() {
-  print_section "Stopping Existing Staging Containers"
+# Function to aggressively cleanup existing containers
+cleanup_containers() {
+  print_section "Cleaning Up Existing Staging Containers"
 
-  if docker-compose -f "$COMPOSE_FILE" ps -q 2>/dev/null | grep -q .; then
-    echo "Stopping containers gracefully..."
-    docker-compose -f "$COMPOSE_FILE" down
-    print_success "Containers stopped successfully"
-  else
-    print_warning "No running staging containers found"
+  echo "Stopping and removing all staging containers, networks, and orphans..."
+
+  # Stop and remove containers, networks, volumes, and orphans
+  docker-compose -f "$COMPOSE_FILE" down -v --remove-orphans 2>/dev/null || {
+    print_warning "docker-compose down failed or no containers exist"
+  }
+
+  # Extra safety: manually remove any lingering staging containers
+  local lingering=$(docker ps -a --filter "name=boostedbudget-.*-staging" --format "{{.Names}}" 2>/dev/null || true)
+  if [ -n "$lingering" ]; then
+    echo "Found lingering staging containers, removing forcefully..."
+    echo "$lingering" | xargs -r docker rm -f 2>/dev/null || true
+    print_success "Lingering containers removed"
   fi
+
+  # Remove any dangling volumes with staging prefix
+  local staging_volumes=$(docker volume ls --filter "name=.*staging.*" -q 2>/dev/null || true)
+  if [ -n "$staging_volumes" ]; then
+    print_warning "Found $(echo "$staging_volumes" | wc -l) staging volumes (keeping for data persistence)"
+    # Don't delete volumes by default to preserve database data
+  fi
+
+  print_success "Cleanup completed"
+}
+
+# Legacy function for backwards compatibility
+stop_containers() {
+  cleanup_containers
 }
 
 # Function to pull latest code (if in git repo and on staging branch)
@@ -134,25 +227,31 @@ build_or_pull_images() {
     # Pull images from GHCR (set by CI/CD)
     if [ -n "${BACKEND_IMAGE:-}" ]; then
       echo "Pulling backend image: $BACKEND_IMAGE"
-      docker pull "$BACKEND_IMAGE"
+      docker pull "$BACKEND_IMAGE" || {
+        print_error "Failed to pull backend image"
+        return 1
+      }
       print_success "Backend image pulled"
+    else
+      print_warning "BACKEND_IMAGE not set, will use default from docker-compose"
     fi
 
     if [ -n "${FRONTEND_IMAGE:-}" ]; then
       echo "Pulling frontend image: $FRONTEND_IMAGE"
-      docker pull "$FRONTEND_IMAGE"
+      docker pull "$FRONTEND_IMAGE" || {
+        print_error "Failed to pull frontend image"
+        return 1
+      }
       print_success "Frontend image pulled"
+    else
+      print_warning "FRONTEND_IMAGE not set, will use default from docker-compose"
     fi
 
-    # Tag images for docker-compose to use
-    if [ -n "${BACKEND_IMAGE:-}" ]; then
-      docker tag "$BACKEND_IMAGE" "boostedbudget-backend:staging"
-    fi
-    if [ -n "${FRONTEND_IMAGE:-}" ]; then
-      docker tag "$FRONTEND_IMAGE" "boostedbudget-frontend:staging"
-    fi
-
-    print_success "Images pulled and tagged successfully"
+    print_success "Images pulled successfully"
+    echo ""
+    echo "Images will be used via docker-compose environment variables:"
+    echo "  BACKEND_IMAGE=${BACKEND_IMAGE:-<default>}"
+    echo "  FRONTEND_IMAGE=${FRONTEND_IMAGE:-<default>}"
   else
     print_section "Building Docker Images Locally"
 
@@ -168,7 +267,30 @@ start_containers() {
   print_section "Starting Staging Containers"
 
   echo "Starting containers in detached mode..."
-  docker-compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d
+  echo "Using environment file: $ENV_FILE"
+  echo "Using compose file: $COMPOSE_FILE"
+  echo ""
+
+  # Verify image variables are exported (they should be from validate_environment)
+  if [ -n "${BACKEND_IMAGE:-}" ]; then
+    echo "Backend image: $BACKEND_IMAGE"
+  else
+    echo "Backend image: <default from docker-compose>"
+  fi
+  if [ -n "${FRONTEND_IMAGE:-}" ]; then
+    echo "Frontend image: $FRONTEND_IMAGE"
+  else
+    echo "Frontend image: <default from docker-compose>"
+  fi
+  echo ""
+
+  docker-compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d || {
+    print_error "Failed to start containers"
+    echo ""
+    echo "Recent container logs:"
+    docker-compose -f "$COMPOSE_FILE" logs --tail=50
+    return 1
+  }
 
   print_success "Containers started"
 
@@ -176,6 +298,11 @@ start_containers() {
   echo ""
   echo "Running staging containers:"
   docker-compose -f "$COMPOSE_FILE" ps
+
+  # Give containers a moment to stabilize
+  echo ""
+  echo "Waiting for containers to stabilize..."
+  sleep 3
 }
 
 # Function to verify restart policies
@@ -317,8 +444,15 @@ rollback() {
 
   print_warning "Deployment failed, attempting rollback..."
 
-  # Stop failed containers
-  docker-compose -f "$COMPOSE_FILE" down 2>/dev/null || true
+  # Show logs from failed containers
+  echo ""
+  echo "=== Recent logs from failed deployment ==="
+  docker-compose -f "$COMPOSE_FILE" logs --tail=100 || true
+  echo "=========================================="
+  echo ""
+
+  # Stop failed containers with aggressive cleanup
+  docker-compose -f "$COMPOSE_FILE" down -v --remove-orphans 2>/dev/null || true
 
   # If there were previous containers, try to restart them
   if [ -f /tmp/staging-containers-backup.txt ] && [ -s /tmp/staging-containers-backup.txt ]; then
@@ -328,6 +462,7 @@ rollback() {
 
   print_error "Rollback completed - staging environment may be down"
   print_warning "Check logs: docker-compose -f $COMPOSE_FILE logs"
+  print_warning "Verify environment variables: cat $ENV_FILE"
 }
 
 # Function to display deployment info
@@ -363,8 +498,9 @@ main() {
 
   # Run deployment steps
   check_prerequisites || exit 1
+  validate_environment || exit 1
   save_current_state
-  stop_containers
+  cleanup_containers
   pull_latest_code
   build_or_pull_images || { rollback; exit 1; }
   start_containers || { rollback; exit 1; }
