@@ -240,7 +240,7 @@ jobs:
     runs-on: [self-hosted, macOS, mac-mini]
     environment:
       name: staging
-      url: http://localhost:3000
+      url: https://localhost:3000
 
     steps:
       - name: Clean up Docker-created files (sudo)
@@ -279,7 +279,7 @@ jobs:
 
           # URLs
           BACKEND_URL=http://localhost:8080
-          FRONTEND_URL=http://localhost:3000
+          FRONTEND_URL=https://localhost:3000
 
           # Database (Staging)
           POSTGRES_USER=staginguser
@@ -389,7 +389,7 @@ jobs:
           fi
 
           # Frontend accessibility
-          if curl -f http://localhost:3000; then
+          if curl -k -f https://localhost:3000; then
             echo "✅ Frontend is accessible"
           else
             echo "::error::Frontend is not accessible"
@@ -433,7 +433,7 @@ jobs:
           echo "- Frontend: \`${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:staging-${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Access (Local Network):**" >> $GITHUB_STEP_SUMMARY
-          echo "- Frontend: http://localhost:3000" >> $GITHUB_STEP_SUMMARY
+          echo "- Frontend: https://localhost:3000" >> $GITHUB_STEP_SUMMARY
           echo "- Backend API: http://localhost:8080" >> $GITHUB_STEP_SUMMARY
           echo "- RabbitMQ UI: http://localhost:15673" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
