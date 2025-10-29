@@ -30,19 +30,20 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      UNIQUE_WORKSPACE: workspace-build-images-${{ matrix.component }}-${{ github.run_id }}
 
     steps:
       - name: Clean up Docker-created files (sudo)
         run: |
           # Remove any root-owned files created by Docker volumes
           # This prevents "permission denied" errors during checkout cleanup
-          if [ -d "${{ github.workspace }}" ]; then
-            sudo rm -rf "${{ github.workspace }}"/* || true
-          fi
+          sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout staging branch
         uses: actions/checkout@v5
         with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
           ref: staging
 
       - name: Set up Docker Buildx
@@ -126,7 +127,7 @@ jobs:
       - name: Build and push ${{ matrix.component }} image
         run: |
           docker buildx build \
-            --file ./${{ matrix.component }}/Dockerfile \
+            --file ${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile \
             --push \
             --tag ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:staging-${{ github.sha }} \
             --tag ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:staging-latest \
@@ -136,13 +137,17 @@ jobs:
             --build-arg VERSION=staging-${{ github.sha }} \
             --build-arg BUILD_DATE=${{ github.event.head_commit.timestamp }} \
             --provenance=false \
-            .
+            ${{ env.UNIQUE_WORKSPACE }}
 
       - name: Image build summary
         run: |
           echo "### 🐳 ${{ matrix.component }} Image Built" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Image:** \`${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:staging-${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
   # Security Scan - Docker Images (Parallelized)
@@ -159,17 +164,18 @@ jobs:
       contents: read
       packages: read
       security-events: write
+    env:
+      UNIQUE_WORKSPACE: workspace-security-scan-${{ matrix.component }}-${{ github.run_id }}
 
     steps:
       - name: Clean up Docker-created files (sudo)
         run: |
-          if [ -d "${{ github.workspace }}" ]; then
-            sudo rm -rf "${{ github.workspace }}/backend/config" || true
-            sudo rm -rf "${{ github.workspace }}/.git/index.lock" || true
-          fi
+          sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
 
       - name: Configure Docker
         run: |
@@ -231,6 +237,10 @@ jobs:
           sarif_file: 'trivy-${{ matrix.component }}-staging.sarif'
           category: 'trivy-staging-${{ matrix.component }}'
 
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
   # =============================================================================
   # Deploy to Mac Mini Staging
   # =============================================================================
@@ -241,31 +251,31 @@ jobs:
     environment:
       name: staging
       url: https://localhost:3000
+    env:
+      UNIQUE_WORKSPACE: workspace-deploy-mac-mini-${{ github.run_id }}
 
     steps:
       - name: Clean up Docker-created files (sudo)
         run: |
-          if [ -d "${{ github.workspace }}" ]; then
-            sudo rm -rf "${{ github.workspace }}/backend/config" || true
-            sudo rm -rf "${{ github.workspace }}/.git/index.lock" || true
-          fi
+          sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout staging branch
         uses: actions/checkout@v5
         with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
           ref: staging
 
       - name: Restore SSL certificates from secrets
         run: |
-          mkdir -p frontend
-          echo "${{ secrets.STAGING_SSL_CERT }}" | base64 -d > frontend/cert.pem
-          echo "${{ secrets.STAGING_SSL_KEY }}" | base64 -d > frontend/key.pem
-          chmod 600 frontend/*.pem
+          mkdir -p ${{ env.UNIQUE_WORKSPACE }}/frontend
+          echo "${{ secrets.STAGING_SSL_CERT }}" | base64 -d > ${{ env.UNIQUE_WORKSPACE }}/frontend/cert.pem
+          echo "${{ secrets.STAGING_SSL_KEY }}" | base64 -d > ${{ env.UNIQUE_WORKSPACE }}/frontend/key.pem
+          chmod 600 ${{ env.UNIQUE_WORKSPACE }}/frontend/*.pem
           echo "✓ SSL certificates restored for HTTPS staging access"
 
       - name: Create .env.staging from secrets
         run: |
-          cat > .env.staging << EOF
+          cat > ${{ env.UNIQUE_WORKSPACE }}/.env.staging << EOF
           # Application Settings
           NODE_ENV=staging
           GO_ENV=staging
@@ -329,6 +339,7 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
 
       - name: Deploy to staging (pull from GHCR)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: |
           chmod +x ./scripts/deploy-staging.sh
           # Set environment variable to tell script to pull from GHCR
@@ -338,23 +349,22 @@ jobs:
           ./scripts/deploy-staging.sh
 
       - name: Show container status
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         if: always()
         run: |
           docker-compose -f docker-compose.staging.yml ps
 
       - name: Show logs on failure
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         if: failure()
         run: |
           echo "::group::Backend Logs"
           docker-compose -f docker-compose.staging.yml logs --tail=50 backend
           echo "::endgroup::"
 
-      - name: Clean up Docker-created files after deployment
+      - name: Final workspace cleanup
         if: always()
-        run: |
-          # Clean up any root-owned files created during deployment
-          # This ensures the workspace is ready for the next run
-          sudo rm -rf "${{ github.workspace }}"/* || true
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
   # Smoke Tests
@@ -363,17 +373,18 @@ jobs:
     name: Staging Smoke Tests
     needs: deploy-to-mac-mini
     runs-on: [self-hosted, macOS, mac-mini]
+    env:
+      UNIQUE_WORKSPACE: workspace-smoke-tests-${{ github.run_id }}
 
     steps:
       - name: Clean up Docker-created files (sudo)
         run: |
-          if [ -d "${{ github.workspace }}" ]; then
-            sudo rm -rf "${{ github.workspace }}/backend/config" || true
-            sudo rm -rf "${{ github.workspace }}/.git/index.lock" || true
-          fi
+          sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
 
       - name: Run smoke tests
         timeout-minutes: 5
@@ -409,6 +420,10 @@ jobs:
           echo "- Backend health check" >> $GITHUB_STEP_SUMMARY
           echo "- Frontend accessibility" >> $GITHUB_STEP_SUMMARY
           echo "- Database connectivity" >> $GITHUB_STEP_SUMMARY
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
   # Deployment Summary
