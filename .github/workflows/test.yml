@@ -23,6 +23,11 @@ jobs:
     runs-on: [self-hosted, macOS, mac-mini]
 
     steps:
+      - name: Clean workspace (fix permission issues)
+        run: |
+          sudo rm -rf ${{ github.workspace }}/* 2>/dev/null || true
+          sudo rm -rf ${{ github.workspace }}/.* 2>/dev/null || true
+
       - name: Checkout code
         uses: actions/checkout@v5
 
@@ -90,10 +95,14 @@ jobs:
     runs-on: [self-hosted, macOS, mac-mini]
 
     steps:
+      - name: Clean workspace (fix permission issues)
+        run: |
+          sudo rm -rf ${{ github.workspace }}/* 2>/dev/null || true
+          sudo rm -rf ${{ github.workspace }}/.* 2>/dev/null || true
+
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          clean: true
           fetch-depth: 1
 
       - name: Set up Node
@@ -136,6 +145,11 @@ jobs:
     runs-on: [self-hosted, macOS, mac-mini]
 
     steps:
+      - name: Clean workspace (fix permission issues)
+        run: |
+          sudo rm -rf ${{ github.workspace }}/* 2>/dev/null || true
+          sudo rm -rf ${{ github.workspace }}/.* 2>/dev/null || true
+
       - name: Checkout code
         uses: actions/checkout@v5
 
@@ -194,6 +208,11 @@ jobs:
     runs-on: [self-hosted, macOS, mac-mini]
 
     steps:
+      - name: Clean workspace (fix permission issues)
+        run: |
+          sudo rm -rf ${{ github.workspace }}/* 2>/dev/null || true
+          sudo rm -rf ${{ github.workspace }}/.* 2>/dev/null || true
+
       - name: Checkout code
         uses: actions/checkout@v5
 
@@ -207,7 +226,7 @@ jobs:
             -e POSTGRES_USER=test \
             -e POSTGRES_PASSWORD=test \
             -e POSTGRES_DB=test \
-            -p 5432:5432 \
+            -p 5433:5432 \
             --health-cmd pg_isready \
             --health-interval 10s \
             --health-timeout 5s \
@@ -229,7 +248,7 @@ jobs:
 
       - name: Lint migrations (Atlas validation)
         env:
-          DATABASE_URL: postgres://test:test@localhost:5432/test?sslmode=disable
+          DATABASE_URL: postgres://test:test@localhost:5433/test?sslmode=disable
         run: |
           echo "::group::Linting migrations"
           cd backend
@@ -242,7 +261,7 @@ jobs:
 
       - name: Run migrations up
         env:
-          DATABASE_URL: postgres://test:test@localhost:5432/test?sslmode=disable
+          DATABASE_URL: postgres://test:test@localhost:5433/test?sslmode=disable
         run: |
           echo "::group::Running migrations"
           atlas migrate apply \
@@ -252,7 +271,7 @@ jobs:
 
       - name: Validate schema
         env:
-          DATABASE_URL: postgres://test:test@localhost:5432/test?sslmode=disable
+          DATABASE_URL: postgres://test:test@localhost:5433/test?sslmode=disable
         run: |
           echo "::group::Validating database schema"
 
@@ -284,6 +303,11 @@ jobs:
       security-events: write
 
     steps:
+      - name: Clean workspace (fix permission issues)
+        run: |
+          sudo rm -rf ${{ github.workspace }}/* 2>/dev/null || true
+          sudo rm -rf ${{ github.workspace }}/.* 2>/dev/null || true
+
       - name: Checkout code
         uses: actions/checkout@v5
 
