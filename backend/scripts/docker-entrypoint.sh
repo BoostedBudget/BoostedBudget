@@ -46,6 +46,24 @@ MAX_ATTEMPTS=5
 for i in $(seq 1 $MAX_ATTEMPTS); do
   echo "Migration attempt $i/$MAX_ATTEMPTS..."
 
+  # Check if baseline is needed (database exists but no Atlas tracking)
+  echo "Checking migration status..."
+  if atlas migrate status --dir file:///app/migrations --url "$MIGRATION_URL" --revisions-schema public 2>&1 | grep -q "No migration applied yet"; then
+    echo "Fresh database detected, establishing baseline at version 000012..."
+    atlas migrate set 000012 --dir file:///app/migrations --url "$MIGRATION_URL" --revisions-schema public || {
+      if [ $i -eq $MAX_ATTEMPTS ]; then
+        echo "✗ Baseline setup failed after $MAX_ATTEMPTS attempts"
+        exit 1
+      else
+        echo "⚠ Baseline setup failed, retrying in 10s..."
+        sleep 10
+        continue
+      fi
+    }
+    echo "✓ Baseline established successfully"
+  fi
+
+  # Apply migrations
   atlas migrate apply \
     --dir file:///app/migrations \
     --url "$MIGRATION_URL" \
