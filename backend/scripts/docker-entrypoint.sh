@@ -41,18 +41,28 @@ fi
 # Use --revisions-schema public to store revisions table in public schema
 # This prevents Atlas from creating a separate atlas_schema_revisions schema
 # and avoids conflicts with the pgbouncer schema
-atlas migrate apply \
-  --dir file:///app/migrations \
-  --url "$MIGRATION_URL" \
-  --revisions-schema public
+echo "🗄️  Running database migrations..."
+MAX_ATTEMPTS=5
+for i in $(seq 1 $MAX_ATTEMPTS); do
+  echo "Migration attempt $i/$MAX_ATTEMPTS..."
 
-if [ $? -eq 0 ]; then
-  echo "✓ Migrations completed successfully"
-else
-  echo "✗ Migration failed"
-  echo "Run 'atlas migrate status' for details"
-  exit 1
-fi
+  atlas migrate apply \
+    --dir file:///app/migrations \
+    --url "$MIGRATION_URL" \
+    --revisions-schema public && {
+    echo "✓ Migrations completed successfully"
+    break
+  } || {
+    if [ $i -eq $MAX_ATTEMPTS ]; then
+      echo "✗ Migration failed after $MAX_ATTEMPTS attempts"
+      echo "Run 'atlas migrate status' for details"
+      exit 1
+    else
+      echo "⚠ Migration attempt $i failed, retrying in 10s..."
+      sleep 10
+    fi
+  }
+done
 
 echo "Starting server..."
 exec /app/server
