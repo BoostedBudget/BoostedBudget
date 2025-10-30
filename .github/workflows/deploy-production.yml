@@ -141,34 +141,21 @@ jobs:
 
       - name: Build and push ${{ matrix.component }} image
         id: build
-        run: |
-          echo "🏗️ Building ${{ matrix.component }} for multiple platforms..."
-
-          for attempt in 1 2 3; do
-            docker buildx build \
-              --file ${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile \
-              --push \
-              --tag ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ github.sha }} \
-              --tag ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:latest \
-              --cache-from type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache \
-              --platform linux/amd64,linux/arm64 \
-              --build-arg VERSION=${{ github.sha }} \
-              --build-arg BUILD_DATE=${{ github.event.head_commit.timestamp }} \
-              --provenance=false \
-              ${{ env.UNIQUE_WORKSPACE }} && {
-              echo "✅ Build successful on attempt $attempt"
-              echo "build-attempts=$attempt" >> $GITHUB_OUTPUT
-              break
-            } || {
-              if [ $attempt -eq 3 ]; then
-                echo "❌ Build failed after 3 attempts"
-                exit 1
-              else
-                echo "⚠️ Build attempt $attempt/3 failed, retrying in 30s..."
-                sleep 30
-              fi
-            }
-          done
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ env.UNIQUE_WORKSPACE }}
+          file: ${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:latest
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache,mode=max
+          build-args: |
+            VERSION=${{ github.sha }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+          provenance: false
 
       - name: Image build summary
         run: |
