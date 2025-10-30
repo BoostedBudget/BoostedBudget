@@ -226,23 +226,43 @@ build_or_pull_images() {
 
     # Pull images from GHCR (set by CI/CD)
     if [ -n "${BACKEND_IMAGE:-}" ]; then
-      echo "Pulling backend image: $BACKEND_IMAGE"
-      docker pull "$BACKEND_IMAGE" || {
-        print_error "Failed to pull backend image"
-        return 1
-      }
-      print_success "Backend image pulled"
+      echo "🐳 Pulling backend image: $BACKEND_IMAGE"
+      for i in 1 2 3 4; do
+        echo "Pull attempt $i/4..."
+        docker pull "$BACKEND_IMAGE" && {
+          print_success "Backend image pulled"
+          break
+        } || {
+          if [ $i -eq 4 ]; then
+            print_error "Failed to pull backend image after 4 attempts"
+            return 1
+          else
+            echo "⚠ Pull attempt $i/4 failed, retrying in 15s..."
+            sleep 15
+          fi
+        }
+      done
     else
       print_warning "BACKEND_IMAGE not set, will use default from docker-compose"
     fi
 
     if [ -n "${FRONTEND_IMAGE:-}" ]; then
-      echo "Pulling frontend image: $FRONTEND_IMAGE"
-      docker pull "$FRONTEND_IMAGE" || {
-        print_error "Failed to pull frontend image"
-        return 1
-      }
-      print_success "Frontend image pulled"
+      echo "🐳 Pulling frontend image: $FRONTEND_IMAGE"
+      for i in 1 2 3 4; do
+        echo "Pull attempt $i/4..."
+        docker pull "$FRONTEND_IMAGE" && {
+          print_success "Frontend image pulled"
+          break
+        } || {
+          if [ $i -eq 4 ]; then
+            print_error "Failed to pull frontend image after 4 attempts"
+            return 1
+          else
+            echo "⚠ Pull attempt $i/4 failed, retrying in 15s..."
+            sleep 15
+          fi
+        }
+      done
     else
       print_warning "FRONTEND_IMAGE not set, will use default from docker-compose"
     fi

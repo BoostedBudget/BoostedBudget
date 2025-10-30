@@ -8,7 +8,15 @@ WORKDIR /build
 COPY frontend/package*.json ./
 
 # Install ALL dependencies (including devDependencies for build)
-RUN npm ci
+RUN echo "📦 Installing production dependencies..." && \
+    for i in 1 2 3 4; do \
+      echo "npm ci attempt $i/4..." && \
+      npm ci --prefer-offline --no-audit && \
+      echo "✓ Dependencies installed" && break || \
+      { echo "⚠ npm ci attempt $i/4 failed"; \
+        npm cache clean --force; \
+        [ $i -lt 4 ] && sleep 10; }; \
+    done
 
 # Copy config directory (needed for type generation)
 COPY config/ /config/
@@ -23,9 +31,15 @@ RUN npm run build
 FROM nginx:stable
 
 # Install runtime dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+RUN echo "📦 Installing runtime dependencies..." && \
+    for i in 1 2 3; do \
+      echo "Attempt $i/3..." && \
+      apt-get update && apt-get install -y --no-install-recommends curl && \
+      rm -rf /var/lib/apt/lists/* && \
+      echo "✓ Dependencies installed" && break || \
+      { echo "⚠ apt-get attempt $i/3 failed"; \
+        [ $i -lt 3 ] && sleep 5; }; \
+    done
 
 # Copy custom nginx configuration
 COPY frontend/nginx.conf /etc/nginx/nginx.conf
