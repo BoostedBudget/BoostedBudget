@@ -413,6 +413,19 @@ run_migrations() {
         STAGING_DB_URL="postgresql://staginguser:VIcsIdkHNkjmVGVd8XC8adddZsvwm7zu@localhost:5433/boostedbudget_staging?sslmode=disable"
       fi
 
+      # Check if baseline is needed (database exists but no Atlas tracking)
+      echo "Checking migration status..."
+      if atlas migrate status --dir file://migrations --url "$STAGING_DB_URL" 2>&1 | grep -q "No migration applied yet"; then
+        echo "Fresh database detected, establishing baseline at version 000012..."
+        atlas migrate set 000012 --dir file://migrations --url "$STAGING_DB_URL" || {
+          cd ..
+          print_error "Failed to set baseline version"
+          return 1
+        }
+        echo "✓ Baseline established successfully"
+      fi
+
+      # Apply any new migrations
       atlas migrate apply --dir file://migrations --url "$STAGING_DB_URL" || {
         cd ..
         print_error "Failed to apply migrations"
