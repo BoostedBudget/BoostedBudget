@@ -37,7 +37,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Atlas for database migrations
 # Using -latest to get the most recent stable version
-RUN curl -sSfL "https://release.ariga.io/atlas/atlas-linux-amd64-latest" -o /usr/local/bin/atlas && \
+# TARGETARCH is automatically set by Docker Buildx (amd64 or arm64)
+ARG TARGETARCH
+RUN curl -sSfL "https://release.ariga.io/atlas/atlas-linux-${TARGETARCH}-latest" -o /usr/local/bin/atlas && \
     chmod +x /usr/local/bin/atlas
 
 WORKDIR /app
