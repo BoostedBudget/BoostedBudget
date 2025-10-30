@@ -5,7 +5,7 @@
  * Tests the transaction card display component.
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { TransactionCard } from './TransactionCard'
 import type { Transaction } from '../types'
@@ -207,6 +207,16 @@ describe('TransactionCard', () => {
   })
 
   describe('Date Formatting', () => {
+    // Mock system time to Oct 29, 2025, 12:00 PM local time for consistent date testing
+    beforeEach(() => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date(2025, 9, 29, 12, 0, 0)) // Oct 29, 2025, 12:00 PM (month is 0-indexed)
+    })
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
     it('should use authorized_date when available', () => {
       const transactionWithAuthDate: Transaction = {
         ...mockTransaction,
@@ -231,10 +241,10 @@ describe('TransactionCard', () => {
     })
 
     it('should show today for current date transactions', () => {
-      const today = new Date().toISOString().split('T')[0]
+      // System time mocked to Oct 29, 2025
       const todayTransaction: Transaction = {
         ...mockTransaction,
-        date: today,
+        date: '2025-10-29', // Today in mocked system time
       }
 
       render(<TransactionCard transaction={todayTransaction} />)
@@ -242,10 +252,10 @@ describe('TransactionCard', () => {
     })
 
     it('should show yesterday for yesterday transactions', () => {
-      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+      // System time mocked to Oct 29, 2025, so yesterday is Oct 28
       const yesterdayTransaction: Transaction = {
         ...mockTransaction,
-        date: yesterday,
+        date: '2025-10-28', // Yesterday in mocked system time
       }
 
       render(<TransactionCard transaction={yesterdayTransaction} />)

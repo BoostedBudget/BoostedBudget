@@ -3,13 +3,24 @@
 FROM golang:1.25-alpine AS builder
 
 # Install build dependencies
-RUN apk add --no-cache git ca-certificates tzdata
+RUN echo "📦 Installing build dependencies..." && \
+    for i in 1 2 3; do \
+      apk add --no-cache git ca-certificates tzdata && break || \
+      { echo "⚠ apk add attempt $i/3 failed"; [ $i -lt 3 ] && sleep 5; }; \
+    done
 
 WORKDIR /build
 
 # Copy go mod files and download dependencies
 COPY backend/go.mod backend/go.sum ./
-RUN go mod download
+RUN echo "📦 Downloading Go modules..." && \
+    for i in 1 2 3; do \
+      echo "Attempt $i/3..." && \
+      go mod download && \
+      echo "✓ Modules downloaded" && break || \
+      { echo "⚠ Download attempt $i/3 failed"; \
+        [ $i -lt 3 ] && sleep 10; }; \
+    done
 
 # Copy config directory (needed for runtime)
 COPY config/ ./config/
@@ -29,18 +40,33 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 FROM debian:bookworm-slim
 
 # Install runtime dependencies including Atlas
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    curl \
-    tzdata \
-    && rm -rf /var/lib/apt/lists/*
+RUN echo "📦 Installing runtime dependencies..." && \
+    for i in 1 2 3; do \
+      echo "Attempt $i/3..." && \
+      apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl tzdata && \
+      rm -rf /var/lib/apt/lists/* && \
+      echo "✓ Dependencies installed" && break || \
+      { echo "⚠ apt-get attempt $i/3 failed"; \
+        [ $i -lt 3 ] && sleep 5; }; \
+    done
 
 # Install Atlas for database migrations
 # Using -latest to get the most recent stable version
 # TARGETARCH is automatically set by Docker Buildx (amd64 or arm64)
 ARG TARGETARCH
-RUN curl -sSfL "https://release.ariga.io/atlas/atlas-linux-${TARGETARCH}-latest" -o /usr/local/bin/atlas && \
-    chmod +x /usr/local/bin/atlas
+RUN echo "📦 Downloading Atlas CLI for ${TARGETARCH}..." && \
+    for i in 1 2 3 4 5; do \
+      echo "Attempt $i/5..." && \
+      curl -sSfL --retry 3 --retry-delay 5 --connect-timeout 10 \
+        "https://release.ariga.io/atlas/atlas-linux-${TARGETARCH}-latest" \
+        -o /usr/local/bin/atlas && \
+      chmod +x /usr/local/bin/atlas && \
+      echo "✓ Atlas downloaded successfully" && break || \
+      { echo "⚠ Download attempt $i/5 failed"; \
+        [ $i -lt 5 ] && sleep 10; }; \
+    done && \
+    test -x /usr/local/bin/atlas || { echo "✗ Atlas installation failed"; exit 1; }
 
 WORKDIR /app
 

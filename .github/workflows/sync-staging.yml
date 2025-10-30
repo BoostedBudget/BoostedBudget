@@ -45,7 +45,12 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: |
           echo "📥 Fetching latest staging..."
-          git fetch origin staging
+          for i in 1 2 3; do
+            git fetch origin staging && break || {
+              echo "⚠️ Fetch attempt $i/3 failed"
+              [ $i -lt 3 ] && sleep 5
+            }
+          done
 
           echo "🔄 Checking out staging..."
           git checkout staging
@@ -54,7 +59,12 @@ jobs:
           git merge origin/main --no-edit -m "chore: Sync staging with main after production deployment"
 
           echo "📤 Pushing to staging..."
-          git push origin staging
+          for i in 1 2 3; do
+            git push origin staging && break || {
+              echo "⚠️ Push attempt $i/3 failed"
+              [ $i -lt 3 ] && sleep 5
+            }
+          done
 
       - name: Verify sync
         working-directory: ${{ env.UNIQUE_WORKSPACE }}

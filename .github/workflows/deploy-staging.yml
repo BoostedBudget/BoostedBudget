@@ -125,18 +125,35 @@ jobs:
           echo "Building: ${{ env.REGISTRY }}/${IMAGE_NAME}:staging-${{ github.sha }}"
 
       - name: Build and push ${{ matrix.component }} image
+        id: build
         run: |
-          docker buildx build \
-            --file ${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile \
-            --push \
-            --tag ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:staging-${{ github.sha }} \
-            --tag ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:staging-latest \
-            --cache-from type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache \
-            --platform linux/amd64,linux/arm64 \
-            --build-arg VERSION=staging-${{ github.sha }} \
-            --build-arg BUILD_DATE=${{ github.event.head_commit.timestamp }} \
-            --provenance=false \
-            ${{ env.UNIQUE_WORKSPACE }}
+          echo "🏗️ Building ${{ matrix.component }} for multiple platforms..."
+
+          for attempt in 1 2 3; do
+            docker buildx build \
+              --file ${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile \
+              --push \
+              --tag ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:staging-${{ github.sha }} \
+              --tag ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:staging-latest \
+              --cache-from type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache \
+              --platform linux/amd64,linux/arm64 \
+              --build-arg VERSION=staging-${{ github.sha }} \
+              --build-arg BUILD_DATE=${{ github.event.head_commit.timestamp }} \
+              --provenance=false \
+              ${{ env.UNIQUE_WORKSPACE }} && {
+              echo "✅ Build successful on attempt $attempt"
+              echo "build-attempts=$attempt" >> $GITHUB_OUTPUT
+              break
+            } || {
+              if [ $attempt -eq 3 ]; then
+                echo "❌ Build failed after 3 attempts"
+                exit 1
+              else
+                echo "⚠️ Build attempt $attempt/3 failed, retrying in 30s..."
+                sleep 30
+              fi
+            }
+          done
 
       - name: Image build summary
         run: |

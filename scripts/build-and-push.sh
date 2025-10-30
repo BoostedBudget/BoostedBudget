@@ -91,24 +91,29 @@ build_image() {
 
   cd "$context"
 
-  # Build with multiple tags
-  docker build \
-    --tag "${image}:${version}" \
-    --tag "${image}:latest" \
-    --build-arg BUILD_DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
-    --build-arg VERSION="${version}" \
-    --build-arg VCS_REF="$(git rev-parse HEAD)" \
-    .
-
-  local exit_code=$?
-  cd - > /dev/null
-
-  if [ $exit_code -eq 0 ]; then
-    echo -e "${GREEN}✓ Successfully built ${image}:${version}${NC}"
-  else
-    echo -e "${RED}✗ Failed to build ${image}:${version}${NC}"
-    exit $exit_code
-  fi
+  # Build with multiple tags (with retry)
+  for attempt in 1 2 3; do
+    docker build \
+      --tag "${image}:${version}" \
+      --tag "${image}:latest" \
+      --build-arg BUILD_DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+      --build-arg VERSION="${version}" \
+      --build-arg VCS_REF="$(git rev-parse HEAD)" \
+      . && {
+      echo -e "${GREEN}✓ Successfully built ${image}:${version}${NC}"
+      cd - > /dev/null
+      return 0
+    } || {
+      if [ $attempt -eq 3 ]; then
+        echo -e "${RED}✗ Failed to build ${image}:${version} after 3 attempts${NC}"
+        cd - > /dev/null
+        exit 1
+      else
+        echo -e "${YELLOW}⚠ Build attempt $attempt/3 failed, retrying in 20s...${NC}"
+        sleep 20
+      fi
+    }
+  done
 }
 
 # Function to push an image
@@ -118,16 +123,37 @@ push_image() {
 
   print_section "Pushing $image:$version"
 
-  docker push "${image}:${version}"
-  docker push "${image}:latest"
+  # Push version tag with retry
+  for i in 1 2 3; do
+    docker push "${image}:${version}" && {
+      echo -e "${GREEN}✓ Successfully pushed ${image}:${version}${NC}"
+      break
+    } || {
+      if [ $i -eq 3 ]; then
+        echo -e "${RED}✗ Failed to push ${image}:${version} after 3 attempts${NC}"
+        exit 1
+      else
+        echo -e "${YELLOW}⚠ Push attempt $i/3 failed, retrying in 15s...${NC}"
+        sleep 15
+      fi
+    }
+  done
 
-  if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✓ Successfully pushed ${image}:${version}${NC}"
-    echo -e "${GREEN}✓ Successfully pushed ${image}:latest${NC}"
-  else
-    echo -e "${RED}✗ Failed to push ${image}${NC}"
-    exit 1
-  fi
+  # Push latest tag with retry
+  for i in 1 2 3; do
+    docker push "${image}:latest" && {
+      echo -e "${GREEN}✓ Successfully pushed ${image}:latest${NC}"
+      break
+    } || {
+      if [ $i -eq 3 ]; then
+        echo -e "${RED}✗ Failed to push ${image}:latest after 3 attempts${NC}"
+        exit 1
+      else
+        echo -e "${YELLOW}⚠ Push attempt $i/3 failed, retrying in 15s...${NC}"
+        sleep 15
+      fi
+    }
+  done
 }
 
 # Function to display image info

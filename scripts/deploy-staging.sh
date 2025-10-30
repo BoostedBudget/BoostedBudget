@@ -207,10 +207,22 @@ pull_latest_code() {
     CURRENT_BRANCH=$(git branch --show-current)
     if [ "$CURRENT_BRANCH" = "staging" ] || [[ "$CURRENT_BRANCH" =~ ^feature/.*-staging.* ]]; then
       echo "Current branch: $CURRENT_BRANCH"
-      git pull origin staging || {
-        print_warning "Failed to pull latest code, continuing with local version"
-      }
-      print_success "Code updated"
+
+      # Pull latest code with retry
+      echo "📥 Pulling latest staging code..."
+      for i in 1 2 3; do
+        git pull origin staging && {
+          print_success "Code updated"
+          break
+        } || {
+          if [ $i -eq 3 ]; then
+            print_warning "Failed to pull latest code after 3 attempts, continuing with local version"
+          else
+            echo "⚠️ Pull attempt $i/3 failed, retrying in 5s..."
+            sleep 5
+          fi
+        }
+      done
     else
       print_warning "Not on staging branch (current: $CURRENT_BRANCH), skipping git pull"
     fi
@@ -226,23 +238,43 @@ build_or_pull_images() {
 
     # Pull images from GHCR (set by CI/CD)
     if [ -n "${BACKEND_IMAGE:-}" ]; then
-      echo "Pulling backend image: $BACKEND_IMAGE"
-      docker pull "$BACKEND_IMAGE" || {
-        print_error "Failed to pull backend image"
-        return 1
-      }
-      print_success "Backend image pulled"
+      echo "🐳 Pulling backend image: $BACKEND_IMAGE"
+      for i in 1 2 3 4; do
+        echo "Pull attempt $i/4..."
+        docker pull "$BACKEND_IMAGE" && {
+          print_success "Backend image pulled"
+          break
+        } || {
+          if [ $i -eq 4 ]; then
+            print_error "Failed to pull backend image after 4 attempts"
+            return 1
+          else
+            echo "⚠ Pull attempt $i/4 failed, retrying in 15s..."
+            sleep 15
+          fi
+        }
+      done
     else
       print_warning "BACKEND_IMAGE not set, will use default from docker-compose"
     fi
 
     if [ -n "${FRONTEND_IMAGE:-}" ]; then
-      echo "Pulling frontend image: $FRONTEND_IMAGE"
-      docker pull "$FRONTEND_IMAGE" || {
-        print_error "Failed to pull frontend image"
-        return 1
-      }
-      print_success "Frontend image pulled"
+      echo "🐳 Pulling frontend image: $FRONTEND_IMAGE"
+      for i in 1 2 3 4; do
+        echo "Pull attempt $i/4..."
+        docker pull "$FRONTEND_IMAGE" && {
+          print_success "Frontend image pulled"
+          break
+        } || {
+          if [ $i -eq 4 ]; then
+            print_error "Failed to pull frontend image after 4 attempts"
+            return 1
+          else
+            echo "⚠ Pull attempt $i/4 failed, retrying in 15s..."
+            sleep 15
+          fi
+        }
+      done
     else
       print_warning "FRONTEND_IMAGE not set, will use default from docker-compose"
     fi
@@ -256,9 +288,20 @@ build_or_pull_images() {
     print_section "Building Docker Images Locally"
 
     echo "Building images with docker-compose..."
-    docker-compose -f "$COMPOSE_FILE" build --pull
-
-    print_success "Images built successfully"
+    for i in 1 2 3; do
+      docker-compose -f "$COMPOSE_FILE" build --pull && {
+        print_success "Images built successfully"
+        break
+      } || {
+        if [ $i -eq 3 ]; then
+          print_error "Failed to build images after 3 attempts"
+          return 1
+        else
+          echo "⚠ Build attempt $i/3 failed, retrying in 20s..."
+          sleep 20
+        fi
+      }
+    done
   fi
 }
 
@@ -284,15 +327,24 @@ start_containers() {
   fi
   echo ""
 
-  docker-compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d || {
-    print_error "Failed to start containers"
-    echo ""
-    echo "Recent container logs:"
-    docker-compose -f "$COMPOSE_FILE" logs --tail=50
-    return 1
-  }
-
-  print_success "Containers started"
+  for i in 1 2; do
+    docker-compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d && {
+      print_success "Containers started"
+      break
+    } || {
+      if [ $i -eq 2 ]; then
+        print_error "Failed to start containers after 2 attempts"
+        echo ""
+        echo "Recent container logs:"
+        docker-compose -f "$COMPOSE_FILE" logs --tail=50
+        return 1
+      else
+        echo "⚠ Start attempt failed, retrying in 10s..."
+        docker-compose -f "$COMPOSE_FILE" down 2>/dev/null || true
+        sleep 10
+      fi
+    }
+  done
 
   # Show running containers
   echo ""
