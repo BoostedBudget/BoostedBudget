@@ -140,18 +140,35 @@ jobs:
           echo "Building: ${{ env.REGISTRY }}/${IMAGE_NAME}:${{ github.sha }}"
 
       - name: Build and push ${{ matrix.component }} image
+        id: build
         run: |
-          docker buildx build \
-            --file ${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile \
-            --push \
-            --tag ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ github.sha }} \
-            --tag ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:latest \
-            --cache-from type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache \
-            --platform linux/amd64,linux/arm64 \
-            --build-arg VERSION=${{ github.sha }} \
-            --build-arg BUILD_DATE=${{ github.event.head_commit.timestamp }} \
-            --provenance=false \
-            ${{ env.UNIQUE_WORKSPACE }}
+          echo "🏗️ Building ${{ matrix.component }} for multiple platforms..."
+
+          for attempt in 1 2 3; do
+            docker buildx build \
+              --file ${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile \
+              --push \
+              --tag ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ github.sha }} \
+              --tag ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:latest \
+              --cache-from type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache \
+              --platform linux/amd64,linux/arm64 \
+              --build-arg VERSION=${{ github.sha }} \
+              --build-arg BUILD_DATE=${{ github.event.head_commit.timestamp }} \
+              --provenance=false \
+              ${{ env.UNIQUE_WORKSPACE }} && {
+              echo "✅ Build successful on attempt $attempt"
+              echo "build-attempts=$attempt" >> $GITHUB_OUTPUT
+              break
+            } || {
+              if [ $attempt -eq 3 ]; then
+                echo "❌ Build failed after 3 attempts"
+                exit 1
+              else
+                echo "⚠️ Build attempt $attempt/3 failed, retrying in 30s..."
+                sleep 30
+              fi
+            }
+          done
 
       - name: Image build summary
         run: |
@@ -330,13 +347,38 @@ jobs:
           fi
 
           GHCR_IMAGE="${{ env.REGISTRY }}/${IMAGE_NAME}:${{ github.sha }}"
-          docker pull --platform linux/amd64 ${GHCR_IMAGE}
+
+          echo "🐳 Pulling from GHCR..."
+          for i in 1 2 3; do
+            docker pull --platform linux/amd64 ${GHCR_IMAGE} && {
+              echo "✅ Pull successful"
+              break
+            } || {
+              [ $i -lt 3 ] && echo "⚠️ Pull attempt $i/3 failed, retrying..." && sleep 15
+            }
+          done
 
           docker tag ${GHCR_IMAGE} registry.fly.io/${{ matrix.fly-app }}:${{ github.sha }}
           docker tag ${GHCR_IMAGE} registry.fly.io/${{ matrix.fly-app }}:latest
 
-          docker push registry.fly.io/${{ matrix.fly-app }}:${{ github.sha }}
-          docker push registry.fly.io/${{ matrix.fly-app }}:latest
+          echo "📤 Pushing to Fly.io registry..."
+          for i in 1 2 3; do
+            docker push registry.fly.io/${{ matrix.fly-app }}:${{ github.sha }} && {
+              echo "✅ SHA push successful"
+              break
+            } || {
+              [ $i -lt 3 ] && echo "⚠️ SHA push attempt $i/3 failed, retrying..." && sleep 15
+            }
+          done
+
+          for i in 1 2 3; do
+            docker push registry.fly.io/${{ matrix.fly-app }}:latest && {
+              echo "✅ Latest push successful"
+              break
+            } || {
+              [ $i -lt 3 ] && echo "⚠️ Latest push attempt $i/3 failed, retrying..." && sleep 15
+            }
+          done
 
       - name: Cleanup images
         if: always()
@@ -381,19 +423,35 @@ jobs:
         uses: superfly/flyctl-actions/setup-flyctl@master
 
       - name: Deploy to Fly.io
+        id: deploy
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          echo "Deploying ${{ matrix.component }}: registry.fly.io/${{ matrix.fly-app }}:${{ github.sha }}"
+          echo "🚀 Deploying ${{ matrix.component }}: registry.fly.io/${{ matrix.fly-app }}:${{ github.sha }}"
           if [ "${{ matrix.component }}" = "backend" ]; then
             echo "Note: Database migrations run via release_command"
           fi
-          flyctl deploy \
-            --app ${{ matrix.fly-app }} \
-            --image registry.fly.io/${{ matrix.fly-app }}:${{ github.sha }} \
-            --config ${{ matrix.fly-config }} \
-            ${{ matrix.deploy-strategy }}
+
+          for attempt in 1 2 3; do
+            flyctl deploy \
+              --app ${{ matrix.fly-app }} \
+              --image registry.fly.io/${{ matrix.fly-app }}:${{ github.sha }} \
+              --config ${{ matrix.fly-config }} \
+              ${{ matrix.deploy-strategy }} && {
+              echo "✅ Deployment successful on attempt $attempt"
+              echo "deploy-attempts=$attempt" >> $GITHUB_OUTPUT
+              break
+            } || {
+              if [ $attempt -eq 3 ]; then
+                echo "❌ Deployment failed after 3 attempts"
+                exit 1
+              else
+                echo "⚠️ Deploy attempt $attempt/3 failed, retrying in 30s..."
+                sleep 30
+              fi
+            }
+          done
 
       - name: Verify deployment
         env:

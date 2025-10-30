@@ -128,22 +128,27 @@ deploy_backend() {
   echo -e "${BLUE}App:${NC}   ${BACKEND_APP}"
   echo ""
 
-  # Deploy using pre-built image
-  flyctl deploy \
-    --app "${BACKEND_APP}" \
-    --image "${BACKEND_IMAGE}" \
-    --strategy rolling
-
-  local exit_code=$?
-  cd - > /dev/null
-
-  if [ $exit_code -eq 0 ]; then
-    echo -e "${GREEN}✓ Backend deployed successfully${NC}"
-    return 0
-  else
-    echo -e "${RED}✗ Backend deployment failed${NC}"
-    return $exit_code
-  fi
+  # Deploy using pre-built image with retry
+  for i in 1 2 3; do
+    echo -e "${BLUE}Deployment attempt $i/3...${NC}"
+    flyctl deploy \
+      --app "${BACKEND_APP}" \
+      --image "${BACKEND_IMAGE}" \
+      --strategy rolling && {
+      echo -e "${GREEN}✓ Backend deployed successfully${NC}"
+      cd - > /dev/null
+      return 0
+    } || {
+      if [ $i -eq 3 ]; then
+        echo -e "${RED}✗ Backend deployment failed after 3 attempts${NC}"
+        cd - > /dev/null
+        return 1
+      else
+        echo -e "${YELLOW}⚠ Deployment attempt $i/3 failed, retrying in 30s...${NC}"
+        sleep 30
+      fi
+    }
+  done
 }
 
 # Function to run database migrations
@@ -179,22 +184,27 @@ deploy_frontend() {
   echo -e "${BLUE}App:${NC}   ${FRONTEND_APP}"
   echo ""
 
-  # Deploy using pre-built image
-  flyctl deploy \
-    --app "${FRONTEND_APP}" \
-    --image "${FRONTEND_IMAGE}" \
-    --strategy rolling
-
-  local exit_code=$?
-  cd - > /dev/null
-
-  if [ $exit_code -eq 0 ]; then
-    echo -e "${GREEN}✓ Frontend deployed successfully${NC}"
-    return 0
-  else
-    echo -e "${RED}✗ Frontend deployment failed${NC}"
-    return $exit_code
-  fi
+  # Deploy using pre-built image with retry
+  for i in 1 2 3; do
+    echo -e "${BLUE}Deployment attempt $i/3...${NC}"
+    flyctl deploy \
+      --app "${FRONTEND_APP}" \
+      --image "${FRONTEND_IMAGE}" \
+      --strategy rolling && {
+      echo -e "${GREEN}✓ Frontend deployed successfully${NC}"
+      cd - > /dev/null
+      return 0
+    } || {
+      if [ $i -eq 3 ]; then
+        echo -e "${RED}✗ Frontend deployment failed after 3 attempts${NC}"
+        cd - > /dev/null
+        return 1
+      else
+        echo -e "${YELLOW}⚠ Deployment attempt $i/3 failed, retrying in 30s...${NC}"
+        sleep 30
+      fi
+    }
+  done
 }
 
 # Function to verify deployment
@@ -220,20 +230,36 @@ verify_deployment() {
     fi
 
     echo -e "${BLUE}Testing backend health endpoint...${NC}"
-    if curl -f -s "${backend_url}" > /dev/null; then
-      echo -e "${GREEN}✓ Backend health check passed${NC}"
-    else
-      echo -e "${RED}✗ Backend health check failed${NC}"
-      return 1
-    fi
+    for i in 1 2 3; do
+      curl -f -s "${backend_url}" > /dev/null && {
+        echo -e "${GREEN}✓ Backend health check passed${NC}"
+        break
+      } || {
+        if [ $i -eq 3 ]; then
+          echo -e "${RED}✗ Backend health check failed after 3 attempts${NC}"
+          return 1
+        else
+          echo -e "${YELLOW}⚠ Health check attempt $i/3 failed, retrying in 10s...${NC}"
+          sleep 10
+        fi
+      }
+    done
 
     echo -e "${BLUE}Testing frontend...${NC}"
-    if curl -f -s "${frontend_url}" > /dev/null; then
-      echo -e "${GREEN}✓ Frontend is accessible${NC}"
-    else
-      echo -e "${RED}✗ Frontend is not accessible${NC}"
-      return 1
-    fi
+    for i in 1 2 3; do
+      curl -f -s "${frontend_url}" > /dev/null && {
+        echo -e "${GREEN}✓ Frontend is accessible${NC}"
+        break
+      } || {
+        if [ $i -eq 3 ]; then
+          echo -e "${RED}✗ Frontend is not accessible after 3 attempts${NC}"
+          return 1
+        else
+          echo -e "${YELLOW}⚠ Frontend check attempt $i/3 failed, retrying in 10s...${NC}"
+          sleep 10
+        fi
+      }
+    done
   fi
 
   echo -e "${GREEN}✓ Deployment verified${NC}"
