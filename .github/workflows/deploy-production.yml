@@ -147,7 +147,6 @@ jobs:
             --tag ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ github.sha }} \
             --tag ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:latest \
             --cache-from type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache \
-            --cache-to type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache,mode=max \
             --platform linux/amd64,linux/arm64 \
             --build-arg VERSION=${{ github.sha }} \
             --build-arg BUILD_DATE=${{ github.event.head_commit.timestamp }} \
