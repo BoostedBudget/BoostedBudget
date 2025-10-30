@@ -381,6 +381,9 @@ jobs:
       security-events: write
     env:
       UNIQUE_WORKSPACE: workspace-security-scan-${{ matrix.component }}-${{ github.run_id }}
+      # Isolated Trivy installation per component (fixes race condition)
+      TRIVY_TEMP_DIR: /tmp/trivy-${{ matrix.component }}-${{ github.run_id }}
+      TRIVY_CACHE_DIR: /tmp/trivy-cache-${{ matrix.component }}-${{ github.run_id }}
 
     steps:
       - name: Clean workspace (fix permission issues)
@@ -392,15 +395,50 @@ jobs:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
 
-      - name: Setup Trivy
+      - name: Setup Trivy with isolated installation
         uses: aquasecurity/setup-trivy@v0.2.4
         with:
           version: v0.65.0
+          cache-dir: ${{ env.TRIVY_CACHE_DIR }}
 
-      - name: Fix Trivy permissions on macOS
-        run: chmod +x $(which trivy) || true
+      - name: Health check - Verify Trivy installation
+        id: trivy-health-check
+        run: |
+          echo "::group::Trivy Health Check"
+          echo "Component: ${{ matrix.component }}"
+          echo "TRIVY_TEMP_DIR: ${{ env.TRIVY_TEMP_DIR }}"
+          echo "TRIVY_CACHE_DIR: ${{ env.TRIVY_CACHE_DIR }}"
 
-      - name: Scan ${{ matrix.component }} dependencies
+          # Find Trivy binary
+          TRIVY_PATH=$(which trivy || echo "")
+          if [ -z "$TRIVY_PATH" ]; then
+            echo "::error::Trivy binary not found in PATH"
+            exit 1
+          fi
+          echo "Trivy binary: $TRIVY_PATH"
+
+          # Check permissions
+          if [ ! -x "$TRIVY_PATH" ]; then
+            echo "::warning::Trivy binary not executable, fixing permissions..."
+            chmod +x "$TRIVY_PATH" || {
+              echo "::error::Failed to set executable permissions on Trivy"
+              exit 1
+            }
+          fi
+          echo "Permissions: $(ls -l $TRIVY_PATH | awk '{print $1}')"
+
+          # Verify version
+          trivy --version || {
+            echo "::error::Trivy version check failed"
+            exit 1
+          }
+
+          echo "::notice::✅ Trivy health check passed for ${{ matrix.component }}"
+          echo "::endgroup::"
+
+      - name: Scan ${{ matrix.component }} dependencies (with retry)
+        id: scan-deps
+        continue-on-error: true
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
@@ -412,6 +450,77 @@ jobs:
           exit-code: '1'
           ignore-unfixed: true
           cache: false
+        env:
+          TRIVY_TEMP_DIR: ${{ env.TRIVY_TEMP_DIR }}
+          TRIVY_CACHE_DIR: ${{ env.TRIVY_CACHE_DIR }}
+
+      - name: Wait before retry (exponential backoff)
+        if: steps.scan-deps.outcome == 'failure'
+        run: |
+          echo "::warning::First scan attempt failed, waiting 10s before retry..."
+          sleep 10
+
+      - name: Retry dependency scan (attempt 2)
+        if: steps.scan-deps.outcome == 'failure'
+        id: scan-deps-retry1
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}'
+          scanners: 'vuln'
+          format: 'sarif'
+          output: 'trivy-${{ matrix.component }}-deps.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+          ignore-unfixed: true
+          cache: false
+        env:
+          TRIVY_TEMP_DIR: ${{ env.TRIVY_TEMP_DIR }}
+          TRIVY_CACHE_DIR: ${{ env.TRIVY_CACHE_DIR }}
+
+      - name: Wait before final retry (exponential backoff)
+        if: steps.scan-deps-retry1.outcome == 'failure'
+        run: |
+          echo "::warning::Second scan attempt failed, waiting 20s before final retry..."
+          sleep 20
+
+      - name: Retry dependency scan (attempt 3)
+        if: steps.scan-deps-retry1.outcome == 'failure'
+        id: scan-deps-retry2
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}'
+          scanners: 'vuln'
+          format: 'sarif'
+          output: 'trivy-${{ matrix.component }}-deps.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+          ignore-unfixed: true
+          cache: false
+        env:
+          TRIVY_TEMP_DIR: ${{ env.TRIVY_TEMP_DIR }}
+          TRIVY_CACHE_DIR: ${{ env.TRIVY_CACHE_DIR }}
+
+      - name: Dependency scan error diagnostics
+        if: failure()
+        run: |
+          echo "::group::Scan Diagnostics"
+          echo "::error::All dependency scan attempts failed for ${{ matrix.component }}"
+          echo "Troubleshooting steps:"
+          echo "1. Check if Trivy cache is corrupted: rm -rf ${{ env.TRIVY_CACHE_DIR }}"
+          echo "2. Verify network connectivity to vulnerability databases"
+          echo "3. Check Mac Mini disk space: df -h"
+          echo "4. Review Trivy logs above for specific errors"
+
+          # Show system info
+          echo ""
+          echo "System diagnostics:"
+          echo "Disk space: $(df -h / | tail -1)"
+          echo "Temp dir: $(ls -la ${{ env.TRIVY_TEMP_DIR }} 2>&1 || echo 'not created')"
+          echo "Cache dir: $(ls -la ${{ env.TRIVY_CACHE_DIR }} 2>&1 || echo 'not created')"
+          echo "::endgroup::"
 
       - name: Upload ${{ matrix.component }} dependency scan results
         uses: github/codeql-action/upload-sarif@v4
@@ -421,7 +530,9 @@ jobs:
           sarif_file: 'trivy-${{ matrix.component }}-deps.sarif'
           category: 'trivy-${{ matrix.component }}-dependencies'
 
-      - name: Scan ${{ matrix.component }} Dockerfile
+      - name: Scan ${{ matrix.component }} Dockerfile (with retry)
+        id: scan-dockerfile
+        continue-on-error: true
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'config'
@@ -431,6 +542,53 @@ jobs:
           severity: 'CRITICAL,HIGH'
           exit-code: '0'
           cache: false
+        env:
+          TRIVY_TEMP_DIR: ${{ env.TRIVY_TEMP_DIR }}
+          TRIVY_CACHE_DIR: ${{ env.TRIVY_CACHE_DIR }}
+
+      - name: Wait before Dockerfile retry (exponential backoff)
+        if: steps.scan-dockerfile.outcome == 'failure'
+        run: |
+          echo "::warning::First Dockerfile scan failed, waiting 10s before retry..."
+          sleep 10
+
+      - name: Retry Dockerfile scan (attempt 2)
+        if: steps.scan-dockerfile.outcome == 'failure'
+        id: scan-dockerfile-retry1
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          scan-ref: '${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile'
+          format: 'sarif'
+          output: 'trivy-${{ matrix.component }}-dockerfile.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+          cache: false
+        env:
+          TRIVY_TEMP_DIR: ${{ env.TRIVY_TEMP_DIR }}
+          TRIVY_CACHE_DIR: ${{ env.TRIVY_CACHE_DIR }}
+
+      - name: Wait before final Dockerfile retry (exponential backoff)
+        if: steps.scan-dockerfile-retry1.outcome == 'failure'
+        run: |
+          echo "::warning::Second Dockerfile scan failed, waiting 20s before final retry..."
+          sleep 20
+
+      - name: Retry Dockerfile scan (attempt 3)
+        if: steps.scan-dockerfile-retry1.outcome == 'failure'
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          scan-ref: '${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile'
+          format: 'sarif'
+          output: 'trivy-${{ matrix.component }}-dockerfile.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+          cache: false
+        env:
+          TRIVY_TEMP_DIR: ${{ env.TRIVY_TEMP_DIR }}
+          TRIVY_CACHE_DIR: ${{ env.TRIVY_CACHE_DIR }}
 
       - name: Upload ${{ matrix.component }} Dockerfile scan results
         uses: github/codeql-action/upload-sarif@v4
@@ -439,6 +597,16 @@ jobs:
         with:
           sarif_file: 'trivy-${{ matrix.component }}-dockerfile.sarif'
           category: 'trivy-${{ matrix.component }}-dockerfile'
+
+      - name: Cleanup Trivy temporary files
+        if: always()
+        run: |
+          echo "::group::Cleanup Trivy Files"
+          echo "Removing temporary Trivy directories for ${{ matrix.component }}..."
+          rm -rf "${{ env.TRIVY_TEMP_DIR }}" 2>/dev/null || true
+          rm -rf "${{ env.TRIVY_CACHE_DIR }}" 2>/dev/null || true
+          echo "::notice::✅ Cleanup complete"
+          echo "::endgroup::"
 
       - name: Final workspace cleanup
         if: always()

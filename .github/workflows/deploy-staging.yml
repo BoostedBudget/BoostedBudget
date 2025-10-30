@@ -182,6 +182,9 @@ jobs:
       security-events: write
     env:
       UNIQUE_WORKSPACE: workspace-security-scan-${{ matrix.component }}-${{ github.run_id }}
+      # Isolated Trivy installation per component (fixes race condition)
+      TRIVY_TEMP_DIR: /tmp/trivy-${{ matrix.component }}-${{ github.run_id }}
+      TRIVY_CACHE_DIR: /tmp/trivy-cache-${{ matrix.component }}-${{ github.run_id }}
 
     steps:
       - name: Clean up Docker-created files (sudo)
@@ -233,8 +236,11 @@ jobs:
           fi
           IMAGE_REF="${{ env.REGISTRY }}/${IMAGE_NAME}:staging-${{ github.sha }}"
           echo "image-ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
+          echo "Scanning image: ${IMAGE_REF}"
 
-      - name: Run Trivy vulnerability scanner
+      - name: Run Trivy vulnerability scanner (with retry)
+        id: trivy-scan
+        continue-on-error: true
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ steps.image-ref.outputs.image-ref }}
@@ -244,6 +250,73 @@ jobs:
           exit-code: '0'
           ignore-unfixed: true
           cache: false
+        env:
+          TRIVY_TEMP_DIR: ${{ env.TRIVY_TEMP_DIR }}
+          TRIVY_CACHE_DIR: ${{ env.TRIVY_CACHE_DIR }}
+
+      - name: Wait before retry (exponential backoff)
+        if: steps.trivy-scan.outcome == 'failure'
+        run: |
+          echo "::warning::First scan attempt failed, waiting 10s before retry..."
+          sleep 10
+
+      - name: Retry Trivy scan (attempt 2)
+        if: steps.trivy-scan.outcome == 'failure'
+        id: trivy-scan-retry1
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.image-ref.outputs.image-ref }}
+          format: 'sarif'
+          output: 'trivy-${{ matrix.component }}-staging.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+          ignore-unfixed: true
+          cache: false
+        env:
+          TRIVY_TEMP_DIR: ${{ env.TRIVY_TEMP_DIR }}
+          TRIVY_CACHE_DIR: ${{ env.TRIVY_CACHE_DIR }}
+
+      - name: Wait before final retry (exponential backoff)
+        if: steps.trivy-scan-retry1.outcome == 'failure'
+        run: |
+          echo "::warning::Second scan attempt failed, waiting 20s before final retry..."
+          sleep 20
+
+      - name: Retry Trivy scan (attempt 3)
+        if: steps.trivy-scan-retry1.outcome == 'failure'
+        id: trivy-scan-retry2
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.image-ref.outputs.image-ref }}
+          format: 'sarif'
+          output: 'trivy-${{ matrix.component }}-staging.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+          ignore-unfixed: true
+          cache: false
+        env:
+          TRIVY_TEMP_DIR: ${{ env.TRIVY_TEMP_DIR }}
+          TRIVY_CACHE_DIR: ${{ env.TRIVY_CACHE_DIR }}
+
+      - name: Scan error diagnostics
+        if: failure()
+        run: |
+          echo "::group::Scan Diagnostics"
+          echo "::error::All image scan attempts failed for ${{ matrix.component }}"
+          echo "Image: ${{ steps.image-ref.outputs.image-ref }}"
+          echo ""
+          echo "Troubleshooting steps:"
+          echo "1. Verify image exists in registry: docker pull ${{ steps.image-ref.outputs.image-ref }}"
+          echo "2. Check Trivy cache: rm -rf ${{ env.TRIVY_CACHE_DIR }}"
+          echo "3. Verify network connectivity to vulnerability databases"
+          echo "4. Check Mac Mini disk space: df -h"
+          echo ""
+          echo "System diagnostics:"
+          echo "Disk space: $(df -h / | tail -1)"
+          echo "Temp dir: $(ls -la ${{ env.TRIVY_TEMP_DIR }} 2>&1 || echo 'not created')"
+          echo "Cache dir: $(ls -la ${{ env.TRIVY_CACHE_DIR }} 2>&1 || echo 'not created')"
+          echo "::endgroup::"
 
       - name: Upload scan results to GitHub Security
         uses: github/codeql-action/upload-sarif@v4
@@ -252,6 +325,16 @@ jobs:
         with:
           sarif_file: 'trivy-${{ matrix.component }}-staging.sarif'
           category: 'trivy-staging-${{ matrix.component }}'
+
+      - name: Cleanup Trivy temporary files
+        if: always()
+        run: |
+          echo "::group::Cleanup Trivy Files"
+          echo "Removing temporary Trivy directories for ${{ matrix.component }}..."
+          rm -rf "${{ env.TRIVY_TEMP_DIR }}" 2>/dev/null || true
+          rm -rf "${{ env.TRIVY_CACHE_DIR }}" 2>/dev/null || true
+          echo "::notice::✅ Cleanup complete"
+          echo "::endgroup::"
 
       - name: Final workspace cleanup
         if: always()
