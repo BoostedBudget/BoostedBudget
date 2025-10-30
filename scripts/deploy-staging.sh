@@ -207,10 +207,22 @@ pull_latest_code() {
     CURRENT_BRANCH=$(git branch --show-current)
     if [ "$CURRENT_BRANCH" = "staging" ] || [[ "$CURRENT_BRANCH" =~ ^feature/.*-staging.* ]]; then
       echo "Current branch: $CURRENT_BRANCH"
-      git pull origin staging || {
-        print_warning "Failed to pull latest code, continuing with local version"
-      }
-      print_success "Code updated"
+
+      # Pull latest code with retry
+      echo "📥 Pulling latest staging code..."
+      for i in 1 2 3; do
+        git pull origin staging && {
+          print_success "Code updated"
+          break
+        } || {
+          if [ $i -eq 3 ]; then
+            print_warning "Failed to pull latest code after 3 attempts, continuing with local version"
+          else
+            echo "⚠️ Pull attempt $i/3 failed, retrying in 5s..."
+            sleep 5
+          fi
+        }
+      done
     else
       print_warning "Not on staging branch (current: $CURRENT_BRANCH), skipping git pull"
     fi

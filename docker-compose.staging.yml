@@ -4,6 +4,7 @@ services:
   # PostgreSQL Database (Staging)
   postgres:
     image: postgres:15-alpine
+    pull_policy: always  # Always pull latest patches
     restart: unless-stopped  # Auto-restart on Mac Mini boot
     environment:
       POSTGRES_DB: boostedbudget_staging
@@ -22,6 +23,7 @@ services:
   # Redis Cache (Staging)
   redis:
     image: redis:7-alpine
+    pull_policy: always  # Always pull latest patches
     restart: unless-stopped  # Auto-restart on Mac Mini boot
     ports:
       - "6380:6379"  # Different port to avoid conflict with dev
@@ -36,6 +38,7 @@ services:
   # RabbitMQ Message Queue (Staging)
   rabbitmq:
     image: rabbitmq:3-management-alpine
+    pull_policy: always  # Always pull latest patches
     restart: unless-stopped  # Auto-restart on Mac Mini boot
     ports:
       - "5673:5672"   # AMQP - different port
@@ -53,6 +56,7 @@ services:
   # Image is built in CI/CD and pulled by deploy script
   backend:
     image: ${BACKEND_IMAGE:-ghcr.io/boostedbudget/boostedbudget-backend:staging-latest}
+    pull_policy: always  # Always pull latest image to ensure we have newest version
     restart: unless-stopped  # Auto-restart on Mac Mini boot
     ports:
       - "8080:8080"  # Staging backend port
@@ -92,6 +96,7 @@ services:
   # Image is built in CI/CD and pulled by deploy script
   frontend:
     image: ${FRONTEND_IMAGE:-ghcr.io/boostedbudget/boostedbudget-frontend:staging-latest}
+    pull_policy: always  # Always pull latest image to ensure we have newest version
     restart: unless-stopped  # Auto-restart on Mac Mini boot
     ports:
       - "3000:3000"  # Staging frontend port
