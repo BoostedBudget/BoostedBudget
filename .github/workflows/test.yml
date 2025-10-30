@@ -204,7 +204,17 @@ jobs:
 
       - name: Install Playwright browsers
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
-        run: npx playwright install --with-deps chromium
+        run: |
+          echo "🎭 Installing Playwright browsers..."
+          for i in 1 2 3; do
+            npx playwright install --with-deps chromium && {
+              echo "✅ Browsers installed"
+              break
+            } || {
+              echo "⚠️ Install attempt $i/3 failed"
+              [ $i -lt 3 ] && sleep 15
+            }
+          done
 
       - name: Download backend binary
         uses: actions/download-artifact@v6
@@ -267,6 +277,14 @@ jobs:
         run: |
           docker stop test-postgres-${{ github.run_id }} 2>/dev/null || true
           docker rm test-postgres-${{ github.run_id }} 2>/dev/null || true
+
+          echo "🐘 Pulling PostgreSQL image..."
+          for i in 1 2 3; do
+            docker pull postgres:15 && break || {
+              echo "⚠️ Pull attempt $i/3 failed"
+              [ $i -lt 3 ] && sleep 10
+            }
+          done
 
           docker run -d \
             --name test-postgres-${{ github.run_id }} \

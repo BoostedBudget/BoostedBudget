@@ -276,9 +276,20 @@ build_or_pull_images() {
     print_section "Building Docker Images Locally"
 
     echo "Building images with docker-compose..."
-    docker-compose -f "$COMPOSE_FILE" build --pull
-
-    print_success "Images built successfully"
+    for i in 1 2 3; do
+      docker-compose -f "$COMPOSE_FILE" build --pull && {
+        print_success "Images built successfully"
+        break
+      } || {
+        if [ $i -eq 3 ]; then
+          print_error "Failed to build images after 3 attempts"
+          return 1
+        else
+          echo "⚠ Build attempt $i/3 failed, retrying in 20s..."
+          sleep 20
+        fi
+      }
+    done
   fi
 }
 
@@ -304,15 +315,24 @@ start_containers() {
   fi
   echo ""
 
-  docker-compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d || {
-    print_error "Failed to start containers"
-    echo ""
-    echo "Recent container logs:"
-    docker-compose -f "$COMPOSE_FILE" logs --tail=50
-    return 1
-  }
-
-  print_success "Containers started"
+  for i in 1 2; do
+    docker-compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d && {
+      print_success "Containers started"
+      break
+    } || {
+      if [ $i -eq 2 ]; then
+        print_error "Failed to start containers after 2 attempts"
+        echo ""
+        echo "Recent container logs:"
+        docker-compose -f "$COMPOSE_FILE" logs --tail=50
+        return 1
+      else
+        echo "⚠ Start attempt failed, retrying in 10s..."
+        docker-compose -f "$COMPOSE_FILE" down 2>/dev/null || true
+        sleep 10
+      fi
+    }
+  done
 
   # Show running containers
   echo ""
