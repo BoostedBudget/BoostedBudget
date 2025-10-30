@@ -3,7 +3,11 @@
 FROM golang:1.25-alpine AS builder
 
 # Install build dependencies
-RUN apk add --no-cache git ca-certificates tzdata
+RUN echo "📦 Installing build dependencies..." && \
+    for i in 1 2 3; do \
+      apk add --no-cache git ca-certificates tzdata && break || \
+      { echo "⚠ apk add attempt $i/3 failed"; [ $i -lt 3 ] && sleep 5; }; \
+    done
 
 WORKDIR /build
 

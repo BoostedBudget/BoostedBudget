@@ -2,7 +2,11 @@
 FROM node:25-alpine
 
 # Install curl for health checks
-RUN apk add --no-cache curl
+RUN echo "📦 Installing curl..." && \
+    for i in 1 2 3; do \
+      apk add --no-cache curl && break || \
+      { echo "⚠ apk add attempt $i/3 failed"; [ $i -lt 3 ] && sleep 5; }; \
+    done
 
 WORKDIR /app
 
