@@ -121,7 +121,19 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
-        run: npm ci
+        run: |
+          echo "📦 Installing frontend dependencies..."
+          for i in 1 2 3 4; do
+            echo "npm ci attempt $i/4..."
+            npm ci --prefer-offline --no-audit && {
+              echo "✅ Dependencies installed"
+              break
+            } || {
+              echo "⚠️ npm ci attempt $i/4 failed"
+              npm cache clean --force
+              [ $i -lt 4 ] && sleep 10
+            }
+          done
 
       - name: Run ESLint (fail on warnings)
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
@@ -176,7 +188,19 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
-        run: npm ci
+        run: |
+          echo "📦 Installing frontend dependencies..."
+          for i in 1 2 3 4; do
+            echo "npm ci attempt $i/4..."
+            npm ci --prefer-offline --no-audit && {
+              echo "✅ Dependencies installed"
+              break
+            } || {
+              echo "⚠️ npm ci attempt $i/4 failed"
+              npm cache clean --force
+              [ $i -lt 4 ] && sleep 10
+            }
+          done
 
       - name: Install Playwright browsers
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
