@@ -90,6 +90,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s  # Grace period for migrations and service initialization
 
   # Frontend (Staging)
   # Uses pre-built image from GHCR (GitHub Container Registry)
