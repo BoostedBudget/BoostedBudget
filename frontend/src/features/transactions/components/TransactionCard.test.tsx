@@ -231,7 +231,9 @@ describe('TransactionCard', () => {
     })
 
     it('should show today for current date transactions', () => {
-      const today = new Date().toISOString().split('T')[0]
+      // Use local date to match formatDate's local time logic
+      const now = new Date()
+      const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
       const todayTransaction: Transaction = {
         ...mockTransaction,
         date: today,
@@ -242,7 +244,10 @@ describe('TransactionCard', () => {
     })
 
     it('should show yesterday for yesterday transactions', () => {
-      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+      // Use local date to match formatDate's local time logic
+      const yesterdayDate = new Date()
+      yesterdayDate.setDate(yesterdayDate.getDate() - 1)
+      const yesterday = `${yesterdayDate.getFullYear()}-${String(yesterdayDate.getMonth() + 1).padStart(2, '0')}-${String(yesterdayDate.getDate()).padStart(2, '0')}`
       const yesterdayTransaction: Transaction = {
         ...mockTransaction,
         date: yesterday,
