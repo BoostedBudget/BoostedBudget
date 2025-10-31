@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
@@ -616,4 +617,307 @@ func TestRegisterUser_EmailVerifiedFalse(t *testing.T) {
 	mockIdentityRepo.AssertExpectations(t)
 	mockProfileRepo.AssertExpectations(t)
 	mockPrivacyRepo.AssertExpectations(t)
+}
+
+// TestRegisterUser_WithTransaction tests the production transaction path
+// This test covers the `if s.db != nil` branch for proper coverage
+func TestRegisterUser_WithTransaction(t *testing.T) {
+	// Arrange
+	ctx := context.Background()
+	auth0UserID := "google-oauth2|123456789"
+	email := "newuser@example.com"
+	emailVerified := true
+
+	// Create sqlmock DB
+	db, mockDB, err := sqlmock.New()
+	assert.NoError(t, err)
+	defer db.Close()
+
+	mockProfileRepo := new(MockProfileRepository)
+	mockIdentityRepo := new(MockUserIdentityRepository)
+	mockPrivacyRepo := new(MockPrivacyRepository)
+
+	// Identity doesn't exist (new user)
+	mockIdentityRepo.On("GetByAuth0ID", ctx, auth0UserID).Return(nil, repository.ErrIdentityNotFound)
+
+	// Expect transaction to begin
+	mockDB.ExpectBegin()
+
+	// Expect user creation within transaction
+	mockProfileRepo.On("CreateUserTx", ctx, mock.AnythingOfType("*sql.Tx"), mock.MatchedBy(func(u *domain.User) bool {
+		return u.Auth0UserID == auth0UserID &&
+			u.Email == email &&
+			u.EmailVerified == emailVerified
+	})).Return(nil)
+
+	// Expect identity creation within transaction
+	mockIdentityRepo.On("CreateTx", ctx, mock.AnythingOfType("*sql.Tx"), mock.MatchedBy(func(i *domain.UserIdentity) bool {
+		return i.Auth0UserID == auth0UserID &&
+			i.Email == email &&
+			i.EmailVerified == emailVerified &&
+			i.IsPrimary == true
+	})).Return(nil)
+
+	// Expect privacy settings creation within transaction
+	mockPrivacyRepo.On("CreateTx", ctx, mock.AnythingOfType("*sql.Tx"), mock.Anything).Return(nil)
+
+	// Expect transaction to commit
+	mockDB.ExpectCommit()
+
+	// Service with database (triggers transaction path)
+	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, db)
+
+	// Act
+	user, err := service.RegisterUser(ctx, auth0UserID, email, emailVerified)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.NotNil(t, user)
+	assert.Equal(t, auth0UserID, user.Auth0UserID)
+	assert.Equal(t, email, user.Email)
+	assert.Equal(t, emailVerified, user.EmailVerified)
+
+	// Verify all expectations met
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+	mockIdentityRepo.AssertExpectations(t)
+	mockProfileRepo.AssertExpectations(t)
+	mockPrivacyRepo.AssertExpectations(t)
+}
+
+// TestRegisterUser_TransactionBeginError tests transaction begin failure
+func TestRegisterUser_TransactionBeginError(t *testing.T) {
+	// Arrange
+	ctx := context.Background()
+	auth0UserID := "google-oauth2|123456789"
+	email := "newuser@example.com"
+	emailVerified := true
+
+	// Create sqlmock DB
+	db, mockDB, err := sqlmock.New()
+	assert.NoError(t, err)
+	defer db.Close()
+
+	mockProfileRepo := new(MockProfileRepository)
+	mockIdentityRepo := new(MockUserIdentityRepository)
+	mockPrivacyRepo := new(MockPrivacyRepository)
+
+	// Identity doesn't exist (new user)
+	mockIdentityRepo.On("GetByAuth0ID", ctx, auth0UserID).Return(nil, repository.ErrIdentityNotFound)
+
+	// Expect transaction begin to fail
+	mockDB.ExpectBegin().WillReturnError(errors.New("database connection failed"))
+
+	// Service with database
+	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, db)
+
+	// Act
+	user, err := service.RegisterUser(ctx, auth0UserID, email, emailVerified)
+
+	// Assert
+	assert.Error(t, err)
+	assert.Nil(t, user)
+	assert.Contains(t, err.Error(), "failed to start transaction")
+
+	// Verify no CreateTx methods were called
+	mockProfileRepo.AssertNotCalled(t, "CreateUserTx")
+	mockIdentityRepo.AssertNotCalled(t, "CreateTx")
+	mockPrivacyRepo.AssertNotCalled(t, "CreateTx")
+}
+
+// TestRegisterUser_TransactionCommitError tests transaction commit failure
+func TestRegisterUser_TransactionCommitError(t *testing.T) {
+	// Arrange
+	ctx := context.Background()
+	auth0UserID := "google-oauth2|123456789"
+	email := "newuser@example.com"
+	emailVerified := true
+
+	// Create sqlmock DB
+	db, mockDB, err := sqlmock.New()
+	assert.NoError(t, err)
+	defer db.Close()
+
+	mockProfileRepo := new(MockProfileRepository)
+	mockIdentityRepo := new(MockUserIdentityRepository)
+	mockPrivacyRepo := new(MockPrivacyRepository)
+
+	// Identity doesn't exist (new user)
+	mockIdentityRepo.On("GetByAuth0ID", ctx, auth0UserID).Return(nil, repository.ErrIdentityNotFound)
+
+	// Expect transaction to begin
+	mockDB.ExpectBegin()
+
+	// Expect all creations to succeed
+	mockProfileRepo.On("CreateUserTx", ctx, mock.AnythingOfType("*sql.Tx"), mock.Anything).Return(nil)
+	mockIdentityRepo.On("CreateTx", ctx, mock.AnythingOfType("*sql.Tx"), mock.Anything).Return(nil)
+	mockPrivacyRepo.On("CreateTx", ctx, mock.AnythingOfType("*sql.Tx"), mock.Anything).Return(nil)
+
+	// Expect transaction commit to fail
+	mockDB.ExpectCommit().WillReturnError(errors.New("commit failed"))
+
+	// Service with database
+	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, db)
+
+	// Act
+	user, err := service.RegisterUser(ctx, auth0UserID, email, emailVerified)
+
+	// Assert
+	assert.Error(t, err)
+	assert.Nil(t, user)
+	assert.Contains(t, err.Error(), "failed to commit transaction")
+
+	// Verify all expectations met
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+	mockProfileRepo.AssertExpectations(t)
+	mockIdentityRepo.AssertExpectations(t)
+	mockPrivacyRepo.AssertExpectations(t)
+}
+
+// TestRegisterUser_TransactionUserCreationError tests user creation failure in transaction
+func TestRegisterUser_TransactionUserCreationError(t *testing.T) {
+	// Arrange
+	ctx := context.Background()
+	auth0UserID := "google-oauth2|123456789"
+	email := "newuser@example.com"
+	emailVerified := true
+
+	// Create sqlmock DB
+	db, mockDB, err := sqlmock.New()
+	assert.NoError(t, err)
+	defer db.Close()
+
+	mockProfileRepo := new(MockProfileRepository)
+	mockIdentityRepo := new(MockUserIdentityRepository)
+	mockPrivacyRepo := new(MockPrivacyRepository)
+
+	// Identity doesn't exist (new user)
+	mockIdentityRepo.On("GetByAuth0ID", ctx, auth0UserID).Return(nil, repository.ErrIdentityNotFound)
+
+	// Expect transaction to begin
+	mockDB.ExpectBegin()
+
+	// User creation fails
+	mockProfileRepo.On("CreateUserTx", ctx, mock.AnythingOfType("*sql.Tx"), mock.Anything).
+		Return(errors.New("database error during user creation"))
+
+	// Expect rollback due to user creation error
+	mockDB.ExpectRollback()
+
+	// Service with database
+	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, db)
+
+	// Act
+	user, err := service.RegisterUser(ctx, auth0UserID, email, emailVerified)
+
+	// Assert
+	assert.Error(t, err)
+	assert.Nil(t, user)
+	assert.Contains(t, err.Error(), "failed to create user")
+
+	// Verify identity and privacy were NOT created
+	mockIdentityRepo.AssertNotCalled(t, "CreateTx")
+	mockPrivacyRepo.AssertNotCalled(t, "CreateTx")
+
+	// Verify rollback happened
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+// TestRegisterUser_TransactionIdentityCreationError tests identity creation failure in transaction
+func TestRegisterUser_TransactionIdentityCreationError(t *testing.T) {
+	// Arrange
+	ctx := context.Background()
+	auth0UserID := "google-oauth2|123456789"
+	email := "newuser@example.com"
+	emailVerified := true
+
+	// Create sqlmock DB
+	db, mockDB, err := sqlmock.New()
+	assert.NoError(t, err)
+	defer db.Close()
+
+	mockProfileRepo := new(MockProfileRepository)
+	mockIdentityRepo := new(MockUserIdentityRepository)
+	mockPrivacyRepo := new(MockPrivacyRepository)
+
+	// Identity doesn't exist (new user)
+	mockIdentityRepo.On("GetByAuth0ID", ctx, auth0UserID).Return(nil, repository.ErrIdentityNotFound)
+
+	// Expect transaction to begin
+	mockDB.ExpectBegin()
+
+	// User creation succeeds
+	mockProfileRepo.On("CreateUserTx", ctx, mock.AnythingOfType("*sql.Tx"), mock.Anything).Return(nil)
+
+	// Identity creation fails
+	mockIdentityRepo.On("CreateTx", ctx, mock.AnythingOfType("*sql.Tx"), mock.Anything).
+		Return(repository.ErrDuplicateIdentity)
+
+	// Expect rollback due to identity creation error
+	mockDB.ExpectRollback()
+
+	// Service with database
+	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, db)
+
+	// Act
+	user, err := service.RegisterUser(ctx, auth0UserID, email, emailVerified)
+
+	// Assert
+	assert.Error(t, err)
+	assert.Nil(t, user)
+	assert.Contains(t, err.Error(), "failed to create identity")
+
+	// Verify privacy was NOT created
+	mockPrivacyRepo.AssertNotCalled(t, "CreateTx")
+
+	// Verify rollback happened
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+// TestRegisterUser_TransactionPrivacyCreationError tests privacy creation failure in transaction
+func TestRegisterUser_TransactionPrivacyCreationError(t *testing.T) {
+	// Arrange
+	ctx := context.Background()
+	auth0UserID := "google-oauth2|123456789"
+	email := "newuser@example.com"
+	emailVerified := true
+
+	// Create sqlmock DB
+	db, mockDB, err := sqlmock.New()
+	assert.NoError(t, err)
+	defer db.Close()
+
+	mockProfileRepo := new(MockProfileRepository)
+	mockIdentityRepo := new(MockUserIdentityRepository)
+	mockPrivacyRepo := new(MockPrivacyRepository)
+
+	// Identity doesn't exist (new user)
+	mockIdentityRepo.On("GetByAuth0ID", ctx, auth0UserID).Return(nil, repository.ErrIdentityNotFound)
+
+	// Expect transaction to begin
+	mockDB.ExpectBegin()
+
+	// User and identity creation succeed
+	mockProfileRepo.On("CreateUserTx", ctx, mock.AnythingOfType("*sql.Tx"), mock.Anything).Return(nil)
+	mockIdentityRepo.On("CreateTx", ctx, mock.AnythingOfType("*sql.Tx"), mock.Anything).Return(nil)
+
+	// Privacy creation fails
+	mockPrivacyRepo.On("CreateTx", ctx, mock.AnythingOfType("*sql.Tx"), mock.Anything).
+		Return(errors.New("database error during privacy creation"))
+
+	// Expect rollback due to privacy creation error
+	mockDB.ExpectRollback()
+
+	// Service with database
+	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, db)
+
+	// Act
+	user, err := service.RegisterUser(ctx, auth0UserID, email, emailVerified)
+
+	// Assert
+	assert.Error(t, err)
+	assert.Nil(t, user)
+	assert.Contains(t, err.Error(), "failed to create privacy settings")
+
+	// Verify rollback happened
+	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
