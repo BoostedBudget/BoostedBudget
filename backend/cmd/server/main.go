@@ -104,11 +104,14 @@ func main() {
 		webhookRepo := repository.NewWebhookRepository(db)
 		identityRepo := repository.NewUserIdentityRepository(db) // Maps Auth0 IDs to user UUIDs
 
+		// Create mock audit logger (will be replaced with real implementation later)
+		auditLogger := &mockAuditLogger{}
+
 		// Create services
 		profileService := services.NewProfileService(profileRepo)
 		privacyService := services.NewPrivacyService(privacyRepo)
 		transactionService := services.NewTransactionService(transactionRepo)
-		registrationService := services.NewRegistrationService(profileRepo, identityRepo, privacyRepo)
+		registrationService := services.NewRegistrationService(profileRepo, identityRepo, privacyRepo, auditLogger, db)
 		// Note: Passing nil for override repo - not yet implemented
 		subscriptionService := services.NewSubscriptionService(tierConfig, nil)
 
@@ -132,10 +135,7 @@ func main() {
 				log.Println("⚠️  Email service disabled - cancellation links shown in UI instead (see GitHub issue for SendGrid integration)")
 			}
 
-			// Create mock audit logger (will be replaced with real implementation later)
-			auditLogger := &mockAuditLogger{}
-
-			// Initialize Deletion service
+			// Initialize Deletion service (reuses auditLogger created earlier)
 			deletionService := services.NewDeletionService(
 				profileRepo,
 				emailService,

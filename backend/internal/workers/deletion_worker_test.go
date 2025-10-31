@@ -2,6 +2,7 @@ package workers
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -62,6 +63,11 @@ func (m *MockProfileRepoForWorker) GetUserByAuth0ID(ctx context.Context, auth0Us
 
 func (m *MockProfileRepoForWorker) CreateUser(ctx context.Context, user *domain.User) error {
 	args := m.Called(ctx, user)
+	return args.Error(0)
+}
+
+func (m *MockProfileRepoForWorker) CreateUserTx(ctx context.Context, tx *sql.Tx, user *domain.User) error {
+	args := m.Called(ctx, tx, user)
 	return args.Error(0)
 }
 
