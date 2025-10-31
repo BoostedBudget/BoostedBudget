@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -28,6 +29,11 @@ func (m *MockPrivacyRepository) GetByUserID(ctx context.Context, userID string) 
 
 func (m *MockPrivacyRepository) Create(ctx context.Context, settings *domain.PrivacySettings) error {
 	args := m.Called(ctx, settings)
+	return args.Error(0)
+}
+
+func (m *MockPrivacyRepository) CreateTx(ctx context.Context, tx *sql.Tx, settings *domain.PrivacySettings) error {
+	args := m.Called(ctx, tx, settings)
 	return args.Error(0)
 }
 

@@ -23,6 +23,10 @@ type PrivacyRepository interface {
 	// Create creates new privacy settings for a user
 	Create(ctx context.Context, settings *domain.PrivacySettings) error
 
+	// CreateTx creates new privacy settings for a user within a transaction
+	// Generates UUID if not already set, and sets timestamps
+	CreateTx(ctx context.Context, tx *sql.Tx, settings *domain.PrivacySettings) error
+
 	// Update updates existing privacy settings for a user
 	Update(ctx context.Context, settings *domain.PrivacySettings) error
 }
@@ -105,6 +109,57 @@ func (r *privacyRepository) Create(ctx context.Context, settings *domain.Privacy
 	`
 
 	_, err := r.db.ExecContext(ctx, query,
+		settings.ID,
+		settings.UserID,
+		settings.GDPRNecessaryConsent,
+		settings.GDPRAnalyticsConsent,
+		settings.GDPRAdvertisingConsent,
+		settings.GDPRConsentTimestamp,
+		settings.MarketingEmailsEnabled,
+		settings.ProductUpdatesEnabled,
+		settings.SecurityAlertsEnabled,
+		settings.DataSharingEnabled,
+		settings.CreatedAt,
+		settings.UpdatedAt,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// CreateTx creates new privacy settings for a user within a transaction
+// Generates UUID if not already set, and sets timestamps
+func (r *privacyRepository) CreateTx(ctx context.Context, tx *sql.Tx, settings *domain.PrivacySettings) error {
+	// Generate UUID if not already set
+	if settings.ID == "" {
+		settings.ID = uuid.New().String()
+	}
+
+	// Set timestamps
+	now := time.Now()
+	settings.CreatedAt = now
+	settings.UpdatedAt = now
+
+	query := `
+		INSERT INTO privacy_settings (
+			id, user_id, gdpr_necessary_consent, gdpr_analytics_consent,
+			gdpr_advertising_consent, gdpr_consent_timestamp,
+			marketing_emails_enabled, product_updates_enabled,
+			security_alerts_enabled, data_sharing_enabled,
+			created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4,
+			$5, $6,
+			$7, $8,
+			$9, $10,
+			$11, $12
+		)
+	`
+
+	_, err := tx.ExecContext(ctx, query,
 		settings.ID,
 		settings.UserID,
 		settings.GDPRNecessaryConsent,

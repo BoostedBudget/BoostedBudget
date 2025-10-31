@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -35,6 +36,11 @@ func (m *MockProfileRepositoryForDeletion) GetUserByAuth0ID(ctx context.Context,
 
 func (m *MockProfileRepositoryForDeletion) CreateUser(ctx context.Context, user *domain.User) error {
 	args := m.Called(ctx, user)
+	return args.Error(0)
+}
+
+func (m *MockProfileRepositoryForDeletion) CreateUserTx(ctx context.Context, tx *sql.Tx, user *domain.User) error {
+	args := m.Called(ctx, tx, user)
 	return args.Error(0)
 }
 

@@ -29,6 +29,9 @@ type ProfileRepository interface {
 	// CreateUser creates a new user in the database
 	CreateUser(ctx context.Context, user *domain.User) error
 
+	// CreateUserTx creates a new user in the database within a transaction
+	CreateUserTx(ctx context.Context, tx *sql.Tx, user *domain.User) error
+
 	// UpdateUser updates an existing user's information
 	UpdateUser(ctx context.Context, user *domain.User) error
 
@@ -175,6 +178,67 @@ func (r *profileRepository) CreateUser(ctx context.Context, user *domain.User) e
 	`
 
 	_, err := r.db.ExecContext(ctx, query,
+		user.ID,
+		user.Auth0UserID,
+		user.Email,
+		user.EmailVerified,
+		user.SubscriptionTier,
+		user.SubscriptionStatus,
+		user.SubscriptionStartedAt,
+		user.SubscriptionEndsAt,
+		user.StripeCustomerID,
+		user.PrimaryRegion,
+		user.IsActive,
+		user.IsDeleted,
+		user.DeletionRequestedAt,
+		user.DeletionScheduledAt,
+		user.CreatedAt,
+		user.UpdatedAt,
+		user.LastLoginAt,
+	)
+
+	if err != nil {
+		// Check for unique constraint violations
+		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
+			if strings.Contains(err.Error(), "email") {
+				return ErrDuplicateEmail
+			}
+		}
+		return err
+	}
+
+	return nil
+}
+
+// CreateUserTx creates a new user in the database within a transaction
+func (r *profileRepository) CreateUserTx(ctx context.Context, tx *sql.Tx, user *domain.User) error {
+	// Generate UUID if not already set
+	if user.ID == "" {
+		user.ID = uuid.New().String()
+	}
+
+	// Set timestamps
+	now := time.Now()
+	user.CreatedAt = now
+	user.UpdatedAt = now
+
+	query := `
+		INSERT INTO users (
+			id, auth0_user_id, email, email_verified,
+			subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
+			stripe_customer_id, primary_region, is_active, is_deleted,
+			deletion_requested_at, deletion_scheduled_at,
+			created_at, updated_at, last_login_at
+		) VALUES (
+			$1, $2, $3, $4,
+			$5, $6, $7, $8,
+			$9, $10, $11, $12,
+			$13, $14,
+			$15, $16, $17
+		)
+	`
+
+	_, err := tx.ExecContext(ctx, query,
 		user.ID,
 		user.Auth0UserID,
 		user.Email,

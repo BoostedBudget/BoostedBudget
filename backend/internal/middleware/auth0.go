@@ -304,8 +304,17 @@ func Auth0Middleware(issuer, audience string, identityRepo repository.UserIdenti
 						return echo.NewHTTPError(http.StatusUnauthorized, "Missing email in authentication token")
 					}
 
+					// Extract email_verified from JWT claims (Auth0 standard claim)
+					// - Auth0 sets email_verified=true after user clicks verification link in email
+					// - For social logins (Google, GitHub), Auth0 trusts the provider's verification
+					// - Type assertion with blank identifier safely defaults to false if:
+					//   * Claim is missing from token
+					//   * Claim value is not a boolean
+					//   * This provides a safe default for unverified emails
+					emailVerified, _ := claims["email_verified"].(bool)
+
 					// Register the new user
-					_, err := registrationService.RegisterUser(c.Request().Context(), auth0UserID, email)
+					_, err := registrationService.RegisterUser(c.Request().Context(), auth0UserID, email, emailVerified)
 					if err != nil {
 						c.Logger().Errorf("Failed to register new user %s: %v", auth0UserID, err)
 						return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create user account")

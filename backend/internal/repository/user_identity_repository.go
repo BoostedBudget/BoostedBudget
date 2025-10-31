@@ -35,6 +35,11 @@ type UserIdentityRepository interface {
 	// Returns ErrDuplicateIdentity if auth0_user_id already exists
 	Create(ctx context.Context, identity *domain.UserIdentity) error
 
+	// CreateTx creates a new identity in the database within a transaction
+	// Generates UUID if not set, sets timestamps
+	// Returns ErrDuplicateIdentity if auth0_user_id already exists
+	CreateTx(ctx context.Context, tx *sql.Tx, identity *domain.UserIdentity) error
+
 	// UpdateLastUsed updates the last_used_at and updated_at timestamps for an identity
 	// Called during login to track when each identity was last used
 	// Returns ErrIdentityNotFound if the identity doesn't exist
@@ -159,6 +164,57 @@ func (r *userIdentityRepository) Create(ctx context.Context, identity *domain.Us
 	`
 
 	_, err := r.db.ExecContext(ctx, query,
+		identity.ID,
+		identity.UserID,
+		identity.Auth0UserID,
+		identity.Provider,
+		identity.ProviderUserID,
+		identity.Email,
+		identity.EmailVerified,
+		identity.IsPrimary,
+		identity.CreatedAt,
+		identity.UpdatedAt,
+		identity.LastUsedAt,
+	)
+
+	if err != nil {
+		// Check for unique constraint violations
+		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
+			if strings.Contains(err.Error(), "auth0_user_id") {
+				return ErrDuplicateIdentity
+			}
+		}
+		return err
+	}
+
+	return nil
+}
+
+// CreateTx creates a new identity in the database within a transaction
+func (r *userIdentityRepository) CreateTx(ctx context.Context, tx *sql.Tx, identity *domain.UserIdentity) error {
+	// Generate UUID if not already set
+	if identity.ID == "" {
+		identity.ID = uuid.New().String()
+	}
+
+	// Set timestamps
+	now := time.Now()
+	identity.CreatedAt = now
+	identity.UpdatedAt = now
+
+	query := `
+		INSERT INTO user_identities (
+			id, user_id, auth0_user_id, provider, provider_user_id,
+			email, email_verified, is_primary,
+			created_at, updated_at, last_used_at
+		) VALUES (
+			$1, $2, $3, $4, $5,
+			$6, $7, $8,
+			$9, $10, $11
+		)
+	`
+
+	_, err := tx.ExecContext(ctx, query,
 		identity.ID,
 		identity.UserID,
 		identity.Auth0UserID,

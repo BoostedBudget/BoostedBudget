@@ -52,12 +52,12 @@ type UpdateProfileRequest struct {
 
 // NewUser creates a new user with default values (free tier, iad region)
 // Used when a user logs in for the first time via Auth0
-func NewUser(auth0UserID, email string) *User {
+func NewUser(auth0UserID, email string, emailVerified bool) *User {
 	now := time.Now()
 	return &User{
 		Auth0UserID:        auth0UserID,
 		Email:              email,
-		EmailVerified:      false,
+		EmailVerified:      emailVerified,
 		SubscriptionTier:   "free",
 		SubscriptionStatus: "active",
 		PrimaryRegion:      DefaultRegion, // iad - uses constant from regions.go
