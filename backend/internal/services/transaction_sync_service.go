@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -250,4 +251,130 @@ func (s *transactionSyncService) buildAccountMap(ctx context.Context, linkedItem
 	}
 
 	return accountMap, nil
+}
+
+// mapPlaidTransaction converts a Plaid transaction to domain.Transaction.
+// Performs account ID mapping using the provided accountMap.
+//
+// Returns error if:
+//   - Account not found in accountMap
+//   - Date parsing fails
+//   - JSON serialization fails
+func (s *transactionSyncService) mapPlaidTransaction(
+	ctx context.Context,
+	plaidTxn plaid.Transaction,
+	linkedItemID string,
+	userID string,
+	accountMap map[string]string,
+) (*domain.Transaction, error) {
+	// Map Plaid account_id to internal account UUID
+	internalAccountID, found := accountMap[plaidTxn.AccountId]
+	if !found {
+		return nil, fmt.Errorf("account not found for plaid_account_id %s", plaidTxn.AccountId)
+	}
+
+	// Parse transaction date (required)
+	date, err := time.Parse("2006-01-02", plaidTxn.Date)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse transaction date %s: %w", plaidTxn.Date, err)
+	}
+
+	// Parse authorized_date (optional)
+	var authorizedDate *time.Time
+	if plaidTxn.AuthorizedDate.Get() != nil {
+		ad, err := time.Parse("2006-01-02", *plaidTxn.AuthorizedDate.Get())
+		if err == nil { // Ignore parse errors for optional field
+			authorizedDate = &ad
+		}
+	}
+
+	// Serialize external metadata (Plaid-specific fields)
+	externalMetadata, err := s.buildExternalMetadata(plaidTxn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize external metadata: %w", err)
+	}
+
+	// Serialize category array as JSON
+	var categoryJSON *string
+	if len(plaidTxn.Category) > 0 {
+		catBytes, _ := json.Marshal(plaidTxn.Category)
+		catStr := string(catBytes)
+		categoryJSON = &catStr
+	}
+
+	// Serialize personal finance category as JSON
+	var pfCategoryJSON *string
+	if plaidTxn.PersonalFinanceCategory.IsSet() {
+		pfBytes, _ := json.Marshal(plaidTxn.PersonalFinanceCategory.Get())
+		pfStr := string(pfBytes)
+		pfCategoryJSON = &pfStr
+	}
+
+	// Extract optional fields
+	var paymentChannel *string
+	if plaidTxn.PaymentChannel != "" {
+		paymentChannel = &plaidTxn.PaymentChannel
+	}
+
+	var merchantName *string
+	if plaidTxn.MerchantName.Get() != nil {
+		merchantName = plaidTxn.MerchantName.Get()
+	}
+
+	externalID := plaidTxn.GetTransactionId()
+
+	return &domain.Transaction{
+		UserID:                  userID,
+		AccountID:               internalAccountID, // Correctly mapped!
+		LinkedItemID:            linkedItemID,
+		Source:                  domain.SourcePlaid,
+		ExternalTransactionID:   &externalID,
+		ExternalMetadata:        externalMetadata,
+		Amount:                  plaidTxn.Amount,
+		Date:                    date,
+		AuthorizedDate:          authorizedDate,
+		Name:                    plaidTxn.Name,
+		MerchantName:            merchantName,
+		Category:                categoryJSON,
+		PersonalFinanceCategory: pfCategoryJSON,
+		PaymentChannel:          paymentChannel,
+		Pending:                 plaidTxn.GetPending(),
+		UserNotes:               nil, // Always nil for new/modified transactions from Plaid
+	}, nil
+}
+
+// buildExternalMetadata creates JSON metadata from Plaid-specific fields
+// that don't have direct domain equivalents.
+func (s *transactionSyncService) buildExternalMetadata(plaidTxn plaid.Transaction) (*string, error) {
+	metadata := make(map[string]interface{})
+
+	// Include Plaid-specific fields
+	if plaidTxn.Website.Get() != nil {
+		metadata["website"] = *plaidTxn.Website.Get()
+	}
+
+	// Location data
+	location := plaidTxn.Location
+	if location.City.Get() != nil || location.Region.Get() != nil {
+		metadata["location"] = location
+	}
+
+	// Payment metadata
+	paymentMeta := plaidTxn.PaymentMeta
+	if paymentMeta.ReferenceNumber.Get() != nil || paymentMeta.PpdId.Get() != nil {
+		metadata["payment_meta"] = paymentMeta
+	}
+
+	// Only serialize if we have data
+	if len(metadata) == 0 {
+		return nil, nil
+	}
+
+	bytes, err := json.Marshal(metadata)
+	if err != nil {
+		return nil, err
+	}
+
+	metadataStr := string(bytes)
+	return &metadataStr, nil
 }
