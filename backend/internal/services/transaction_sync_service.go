@@ -378,3 +378,50 @@ func (s *transactionSyncService) buildExternalMetadata(plaidTxn plaid.Transactio
 	metadataStr := string(bytes)
 	return &metadataStr, nil
 }
+
+// processAddedTransactions stores newly added transactions in the database.
+// Maps Plaid transactions to domain.Transaction and calls CreateBatch.
+//
+// Graceful error handling:
+//   - Skips transactions with unmapped accounts (logs warning)
+//   - Continues processing even if some transactions fail mapping
+//   - Returns error only if database CreateBatch fails
+//
+// Deduplication: CreateBatch uses ON CONFLICT DO NOTHING, so duplicates are ignored.
+func (s *transactionSyncService) processAddedTransactions(
+	ctx context.Context,
+	added []plaid.Transaction,
+	linkedItem *domain.LinkedItem,
+	accountMap map[string]string,
+) error {
+	// Optimization: Skip DB call if no transactions
+	if len(added) == 0 {
+		return nil
+	}
+
+	// Map Plaid transactions to domain.Transaction
+	transactions := make([]domain.Transaction, 0, len(added))
+	for _, plaidTxn := range added {
+		domainTxn, err := s.mapPlaidTransaction(ctx, plaidTxn, linkedItem.ID, linkedItem.UserID, accountMap)
+		if err != nil {
+			// Log warning but continue processing other transactions
+			log.Printf("Warning: Skipping transaction %s: %v", plaidTxn.TransactionId, err)
+			continue
+		}
+		transactions = append(transactions, *domainTxn)
+	}
+
+	// Skip DB call if all transactions were skipped
+	if len(transactions) == 0 {
+		log.Printf("Warning: All %d added transactions skipped due to mapping errors", len(added))
+		return nil
+	}
+
+	// Store in database (ON CONFLICT DO NOTHING handles deduplication)
+	if err := s.transactionRepo.CreateBatch(ctx, transactions); err != nil {
+		return fmt.Errorf("failed to create batch of %d transactions: %w", len(transactions), err)
+	}
+
+	log.Printf("Successfully stored %d added transactions (skipped %d)", len(transactions), len(added)-len(transactions))
+	return nil
+}

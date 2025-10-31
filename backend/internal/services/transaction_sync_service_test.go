@@ -757,3 +757,265 @@ func TestBuildAccountMap_RepositoryError(t *testing.T) {
 
 	mockAccountRepo.AssertExpectations(t)
 }
+
+// ============================================================================
+// Issue #261: processAddedTransactions Tests (TDD RED Phase)
+// ============================================================================
+
+// TestProcessAddedTransactions_Success tests processing added transactions with all accounts mapped
+func TestProcessAddedTransactions_Success(t *testing.T) {
+	// Setup
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		mockTransactionRepo,
+		mockAccountRepo,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItemID := "linked-item-123"
+	userID := "user-456"
+
+	// Account map: Plaid account_id -> Internal UUID
+	accountMap := map[string]string{
+		"plaid-acc-1": "account-uuid-1",
+		"plaid-acc-2": "account-uuid-2",
+		"plaid-acc-3": "account-uuid-3",
+	}
+
+	// Mock linked item
+	linkedItem := &domain.LinkedItem{
+		ID:     linkedItemID,
+		UserID: userID,
+	}
+
+	// 3 Plaid transactions to add
+	added := []plaid.Transaction{
+		{
+			TransactionId: "plaid-txn-1",
+			AccountId:     "plaid-acc-1",
+			Amount:        100.00,
+			Date:          "2024-01-15",
+			Name:          "Transaction 1",
+			Pending:       false,
+		},
+		{
+			TransactionId: "plaid-txn-2",
+			AccountId:     "plaid-acc-2",
+			Amount:        50.00,
+			Date:          "2024-01-16",
+			Name:          "Transaction 2",
+			Pending:       false,
+		},
+		{
+			TransactionId: "plaid-txn-3",
+			AccountId:     "plaid-acc-3",
+			Amount:        25.00,
+			Date:          "2024-01-17",
+			Name:          "Transaction 3",
+			Pending:       true,
+		},
+	}
+
+	// Mock: CreateBatch should be called with 3 transactions
+	mockTransactionRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
+		// Verify all 3 transactions are mapped correctly
+		if len(txns) != 3 {
+			return false
+		}
+		// Check first transaction
+		if txns[0].ExternalTransactionID == nil || *txns[0].ExternalTransactionID != "plaid-txn-1" {
+			return false
+		}
+		if txns[0].AccountID != "account-uuid-1" {
+			return false
+		}
+		if txns[0].Amount != 100.00 {
+			return false
+		}
+		// Check second transaction
+		if txns[1].AccountID != "account-uuid-2" {
+			return false
+		}
+		// Check third transaction is pending
+		if !txns[2].Pending {
+			return false
+		}
+		return true
+	})).Return(nil)
+
+	// Execute
+	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap)
+
+	// Assert
+	assert.NoError(t, err)
+	mockTransactionRepo.AssertExpectations(t)
+}
+
+// TestProcessAddedTransactions_Deduplication tests that duplicate transactions are handled by DB constraint
+func TestProcessAddedTransactions_Deduplication(t *testing.T) {
+	// Setup
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		mockTransactionRepo,
+		nil,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItemID := "linked-item-123"
+	userID := "user-456"
+
+	accountMap := map[string]string{
+		"plaid-acc-1": "account-uuid-1",
+	}
+
+	linkedItem := &domain.LinkedItem{
+		ID:     linkedItemID,
+		UserID: userID,
+	}
+
+	// Same transaction_id twice (Plaid API shouldn't do this, but if it does...)
+	added := []plaid.Transaction{
+		{
+			TransactionId: "plaid-txn-duplicate",
+			AccountId:     "plaid-acc-1",
+			Amount:        100.00,
+			Date:          "2024-01-15",
+			Name:          "Transaction 1",
+		},
+		{
+			TransactionId: "plaid-txn-duplicate", // DUPLICATE
+			AccountId:     "plaid-acc-1",
+			Amount:        100.00,
+			Date:          "2024-01-15",
+			Name:          "Transaction 1",
+		},
+	}
+
+	// Mock: CreateBatch with ON CONFLICT DO NOTHING handles deduplication
+	// Both transactions will be passed, database constraint handles it
+	mockTransactionRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
+		return len(txns) == 2 // Both passed to DB, constraint handles dedup
+	})).Return(nil)
+
+	// Execute
+	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap)
+
+	// Assert
+	assert.NoError(t, err)
+	mockTransactionRepo.AssertExpectations(t)
+}
+
+// TestProcessAddedTransactions_PartialFailure tests graceful error handling when some accounts missing
+func TestProcessAddedTransactions_PartialFailure(t *testing.T) {
+	// Setup
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		mockTransactionRepo,
+		nil,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItemID := "linked-item-123"
+	userID := "user-456"
+
+	// Account map missing plaid-acc-3
+	accountMap := map[string]string{
+		"plaid-acc-1": "account-uuid-1",
+		"plaid-acc-2": "account-uuid-2",
+		// plaid-acc-3 NOT in map
+	}
+
+	linkedItem := &domain.LinkedItem{
+		ID:     linkedItemID,
+		UserID: userID,
+	}
+
+	// 3 transactions, but 3rd has unmapped account
+	added := []plaid.Transaction{
+		{
+			TransactionId: "plaid-txn-1",
+			AccountId:     "plaid-acc-1",
+			Amount:        100.00,
+			Date:          "2024-01-15",
+			Name:          "Transaction 1",
+		},
+		{
+			TransactionId: "plaid-txn-2",
+			AccountId:     "plaid-acc-2",
+			Amount:        50.00,
+			Date:          "2024-01-16",
+			Name:          "Transaction 2",
+		},
+		{
+			TransactionId: "plaid-txn-3",
+			AccountId:     "plaid-acc-3", // MISSING FROM MAP
+			Amount:        25.00,
+			Date:          "2024-01-17",
+			Name:          "Transaction 3",
+		},
+	}
+
+	// Mock: CreateBatch should only receive 2 transactions (3rd skipped due to missing account)
+	mockTransactionRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
+		return len(txns) == 2 // Only first 2 transactions
+	})).Return(nil)
+
+	// Execute
+	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap)
+
+	// Assert - should succeed but log warning for skipped transaction
+	assert.NoError(t, err) // Continue processing despite skipping one
+	mockTransactionRepo.AssertExpectations(t)
+}
+
+// TestProcessAddedTransactions_EmptySlice tests handling of empty input
+func TestProcessAddedTransactions_EmptySlice(t *testing.T) {
+	// Setup
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		mockTransactionRepo,
+		nil,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{
+		ID:     "linked-item-123",
+		UserID: "user-456",
+	}
+	accountMap := map[string]string{}
+
+	// Empty slice
+	added := []plaid.Transaction{}
+
+	// Mock: CreateBatch should NOT be called for empty slice
+	// (We'll optimize to skip DB call if no transactions)
+
+	// Execute
+	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap)
+
+	// Assert
+	assert.NoError(t, err)
+	// CreateBatch should NOT have been called
+	mockTransactionRepo.AssertNotCalled(t, "CreateBatch")
+}
