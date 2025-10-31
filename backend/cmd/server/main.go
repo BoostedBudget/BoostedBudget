@@ -203,6 +203,7 @@ func main() {
 					webhookRepo,
 					linkedItemRepo,
 					transactionRepo,
+					accountRepo,
 					plaidService,
 					encryptionService,
 				)

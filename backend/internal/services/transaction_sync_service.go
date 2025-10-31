@@ -59,6 +59,7 @@ type transactionSyncService struct {
 	webhookRepo       repository.WebhookRepository
 	linkedItemRepo    repository.LinkedItemRepository
 	transactionRepo   repository.TransactionRepository
+	accountRepo       repository.AccountRepository // Issue #261: For account mapping (Plaid account_id -> internal UUID)
 	plaidService      PlaidService
 	encryptionService EncryptionService
 }
@@ -68,6 +69,7 @@ func NewTransactionSyncService(
 	webhookRepo repository.WebhookRepository,
 	linkedItemRepo repository.LinkedItemRepository,
 	transactionRepo repository.TransactionRepository,
+	accountRepo repository.AccountRepository,
 	plaidService PlaidService,
 	encryptionService EncryptionService,
 ) TransactionSyncService {
@@ -75,6 +77,7 @@ func NewTransactionSyncService(
 		webhookRepo:       webhookRepo,
 		linkedItemRepo:    linkedItemRepo,
 		transactionRepo:   transactionRepo,
+		accountRepo:       accountRepo,
 		plaidService:      plaidService,
 		encryptionService: encryptionService,
 	}
