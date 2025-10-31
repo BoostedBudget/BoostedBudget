@@ -78,6 +78,7 @@ func TestProcessWebhook_Success(t *testing.T) {
 	mockWebhookRepo := new(MockWebhookRepository)
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
 	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 
@@ -85,6 +86,7 @@ func TestProcessWebhook_Success(t *testing.T) {
 		mockWebhookRepo,
 		mockLinkedItemRepo,
 		mockTransactionRepo,
+		mockAccountRepo,
 		mockPlaidService,
 		mockEncryptionService,
 	)
@@ -165,6 +167,7 @@ func TestProcessWebhook_WebhookNotFound(t *testing.T) {
 	mockWebhookRepo := new(MockWebhookRepository)
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
 	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 
@@ -172,6 +175,7 @@ func TestProcessWebhook_WebhookNotFound(t *testing.T) {
 		mockWebhookRepo,
 		mockLinkedItemRepo,
 		mockTransactionRepo,
+		mockAccountRepo,
 		mockPlaidService,
 		mockEncryptionService,
 	)
@@ -191,6 +195,7 @@ func TestProcessWebhook_ItemIDMissing(t *testing.T) {
 	mockWebhookRepo := new(MockWebhookRepository)
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
 	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 
@@ -198,6 +203,7 @@ func TestProcessWebhook_ItemIDMissing(t *testing.T) {
 		mockWebhookRepo,
 		mockLinkedItemRepo,
 		mockTransactionRepo,
+		mockAccountRepo,
 		mockPlaidService,
 		mockEncryptionService,
 	)
@@ -233,6 +239,7 @@ func TestProcessWebhook_LinkedItemNotFound(t *testing.T) {
 	mockWebhookRepo := new(MockWebhookRepository)
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
 	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 
@@ -240,6 +247,7 @@ func TestProcessWebhook_LinkedItemNotFound(t *testing.T) {
 		mockWebhookRepo,
 		mockLinkedItemRepo,
 		mockTransactionRepo,
+		mockAccountRepo,
 		mockPlaidService,
 		mockEncryptionService,
 	)
@@ -295,6 +303,7 @@ func TestSyncTransactions_SuccessSinglePage(t *testing.T) {
 		nil, // webhookRepo not needed for SyncTransactions
 		mockLinkedItemRepo,
 		nil, // transactionRepo not needed yet (issue #261)
+		nil, // accountRepo not needed yet (issue #261)
 		mockPlaidService,
 		mockEncryptionService,
 	)
@@ -352,6 +361,7 @@ func TestSyncTransactions_SuccessMultiplePages(t *testing.T) {
 	service := NewTransactionSyncService(
 		nil,
 		mockLinkedItemRepo,
+		nil,
 		nil,
 		mockPlaidService,
 		mockEncryptionService,
@@ -413,6 +423,7 @@ func TestSyncTransactions_DecryptionError(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 		mockEncryptionService,
 	)
 
@@ -445,6 +456,7 @@ func TestSyncTransactions_PlaidErrorFirstPage(t *testing.T) {
 	service := NewTransactionSyncService(
 		nil,
 		mockLinkedItemRepo,
+		nil,
 		nil,
 		mockPlaidService,
 		mockEncryptionService,
@@ -486,6 +498,7 @@ func TestSyncTransactions_PlaidErrorSubsequentPage(t *testing.T) {
 	service := NewTransactionSyncService(
 		nil,
 		mockLinkedItemRepo,
+		nil,
 		nil,
 		mockPlaidService,
 		mockEncryptionService,
@@ -537,6 +550,7 @@ func TestSyncTransactions_CursorUpdateError(t *testing.T) {
 		nil,
 		mockLinkedItemRepo,
 		nil,
+		nil,
 		mockPlaidService,
 		mockEncryptionService,
 	)
@@ -584,6 +598,7 @@ func TestSyncTransactions_EmptyCursor(t *testing.T) {
 	service := NewTransactionSyncService(
 		nil,
 		mockLinkedItemRepo,
+		nil,
 		nil,
 		mockPlaidService,
 		mockEncryptionService,
