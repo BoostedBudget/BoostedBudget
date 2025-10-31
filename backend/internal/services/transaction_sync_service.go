@@ -222,3 +222,32 @@ func (s *transactionSyncService) SyncTransactions(
 
 	return result, nil
 }
+
+// ============================================================================
+// Issue #261: Transaction Storage Logic - Helper Methods
+// ============================================================================
+
+// buildAccountMap loads all accounts for a linked item and creates a map
+// from Plaid account_id to internal account UUID for efficient lookups.
+//
+// This allows O(1) account mapping when processing transactions, avoiding
+// N database queries for N transactions.
+//
+// Returns:
+//   - map[plaidAccountID]internalAccountUUID
+//   - error if accounts cannot be loaded
+func (s *transactionSyncService) buildAccountMap(ctx context.Context, linkedItemID string) (map[string]string, error) {
+	// Load all accounts for this linked item
+	accounts, err := s.accountRepo.GetByLinkedItemID(ctx, linkedItemID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load accounts for linked item %s: %w", linkedItemID, err)
+	}
+
+	// Build map: Plaid account_id -> Internal account UUID
+	accountMap := make(map[string]string, len(accounts))
+	for _, account := range accounts {
+		accountMap[account.PlaidAccountID] = account.ID
+	}
+
+	return accountMap, nil
+}

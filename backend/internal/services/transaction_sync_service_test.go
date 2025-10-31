@@ -639,3 +639,121 @@ func TestSyncTransactions_EmptyCursor(t *testing.T) {
 func stringPtr(s string) *string {
 	return &s
 }
+
+// ============================================================================
+// Issue #261: Transaction Storage Logic Tests
+// ============================================================================
+
+// TestBuildAccountMap_Success tests building account map with multiple accounts
+func TestBuildAccountMap_Success(t *testing.T) {
+	// Setup
+	mockAccountRepo := new(MockAccountRepository)
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		mockLinkedItemRepo,
+		nil,
+		mockAccountRepo,
+		nil,
+		nil,
+	).(*transactionSyncService) // Type assert to access private method
+
+	ctx := context.Background()
+	linkedItemID := "linked-item-123"
+
+	// Mock: GetByLinkedItemID returns 3 accounts
+	accounts := []domain.Account{
+		{
+			ID:             "account-uuid-1",
+			PlaidAccountID: "plaid-acc-1",
+			Name:           "Checking",
+		},
+		{
+			ID:             "account-uuid-2",
+			PlaidAccountID: "plaid-acc-2",
+			Name:           "Savings",
+		},
+		{
+			ID:             "account-uuid-3",
+			PlaidAccountID: "plaid-acc-3",
+			Name:           "Credit Card",
+		},
+	}
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItemID).Return(accounts, nil)
+
+	// Execute
+	accountMap, err := service.buildAccountMap(ctx, linkedItemID)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.NotNil(t, accountMap)
+	assert.Len(t, accountMap, 3)
+	assert.Equal(t, "account-uuid-1", accountMap["plaid-acc-1"])
+	assert.Equal(t, "account-uuid-2", accountMap["plaid-acc-2"])
+	assert.Equal(t, "account-uuid-3", accountMap["plaid-acc-3"])
+
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestBuildAccountMap_EmptyAccounts tests handling when no accounts exist
+func TestBuildAccountMap_EmptyAccounts(t *testing.T) {
+	// Setup
+	mockAccountRepo := new(MockAccountRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		nil,
+		mockAccountRepo,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItemID := "linked-item-123"
+
+	// Mock: GetByLinkedItemID returns empty slice
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItemID).Return([]domain.Account{}, nil)
+
+	// Execute
+	accountMap, err := service.buildAccountMap(ctx, linkedItemID)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.NotNil(t, accountMap)
+	assert.Len(t, accountMap, 0) // Empty map, not nil
+
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestBuildAccountMap_RepositoryError tests error handling
+func TestBuildAccountMap_RepositoryError(t *testing.T) {
+	// Setup
+	mockAccountRepo := new(MockAccountRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		nil,
+		mockAccountRepo,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItemID := "linked-item-123"
+
+	// Mock: GetByLinkedItemID returns error
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItemID).Return(nil, errors.New("database error"))
+
+	// Execute
+	accountMap, err := service.buildAccountMap(ctx, linkedItemID)
+
+	// Assert
+	assert.Error(t, err)
+	assert.Nil(t, accountMap)
+	assert.Contains(t, err.Error(), "failed to load accounts")
+
+	mockAccountRepo.AssertExpectations(t)
+}
