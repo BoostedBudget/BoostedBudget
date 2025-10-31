@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -74,6 +75,11 @@ func (m *mockIdentityRepository) Create(ctx context.Context, identity *domain.Us
 	return nil
 }
 
+func (m *mockIdentityRepository) CreateTx(ctx context.Context, tx *sql.Tx, identity *domain.UserIdentity) error {
+	// For mock, just delegate to Create (ignore transaction)
+	return m.Create(ctx, identity)
+}
+
 func (m *mockIdentityRepository) UpdateLastUsed(ctx context.Context, auth0UserID string) error {
 	identity, ok := m.identities[auth0UserID]
 	if !ok {
@@ -103,22 +109,46 @@ func (m *mockIdentityRepository) addTestIdentity(auth0UserID, userID string) {
 
 // mockRegistrationService is a mock implementation of RegistrationService for testing
 type mockRegistrationService struct {
-	shouldFail bool
+	shouldFail     bool
+	callCount      int
+	lastAuth0ID    string
+	lastEmail      string
+	identityRepo   *mockIdentityRepository // To create identity after registration
 }
 
 func newMockRegistrationService() *mockRegistrationService {
 	return &mockRegistrationService{
 		shouldFail: false,
+		callCount:  0,
 	}
 }
 
-func (m *mockRegistrationService) RegisterUser(ctx context.Context, auth0UserID, email string) (*domain.User, error) {
+func newMockRegistrationServiceWithRepo(repo *mockIdentityRepository) *mockRegistrationService {
+	return &mockRegistrationService{
+		shouldFail:   false,
+		callCount:    0,
+		identityRepo: repo,
+	}
+}
+
+func (m *mockRegistrationService) RegisterUser(ctx context.Context, auth0UserID, email string, emailVerified bool) (*domain.User, error) {
+	m.callCount++
+	m.lastAuth0ID = auth0UserID
+	m.lastEmail = email
+
 	if m.shouldFail {
 		return nil, errors.New("registration failed")
 	}
 
 	// Create a mock user
-	user := domain.NewUser(auth0UserID, email)
+	user := domain.NewUser(auth0UserID, email, emailVerified)
+	user.ID = uuid.New().String()
+
+	// If we have identity repo, add identity for this user (simulates real registration)
+	if m.identityRepo != nil {
+		m.identityRepo.addTestIdentity(auth0UserID, user.ID)
+	}
+
 	return user, nil
 }
 
@@ -615,5 +645,304 @@ func TestAuth0Middleware_InvalidAudience(t *testing.T) {
 	err := middleware(handler)(c)
 	if err == nil {
 		t.Error("Expected error for invalid audience")
+	}
+}
+
+// TestAuth0Middleware_AutoRegisterNewUser tests that first-time users are auto-registered
+func TestAuth0Middleware_AutoRegisterNewUser(t *testing.T) {
+	// Setup mock JWKS server
+	jwksServer := setupMockJWKS(t)
+	defer jwksServer.Close()
+
+	// Setup mock identity repository (empty - no existing users)
+	mockRepo := newMockIdentityRepository()
+
+	// Setup mock registration service that will create identity
+	mockRegService := newMockRegistrationServiceWithRepo(mockRepo)
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+
+	// Create a valid test JWT token for NEW user
+	testAuth0ID := "auth0|new-user-789"
+	testEmail := "newuser@example.com"
+	token := createTestToken(t, testAuth0ID, testEmail, jwksServer.URL)
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	// Create middleware with mock services
+	middleware := Auth0Middleware(jwksServer.URL+"/", "https://api.test.com", mockRepo, mockRegService)
+
+	// Define handler that verifies user was registered and UUID is in context
+	handler := func(c echo.Context) error {
+		userID := c.Get("user_id")
+		if userID == nil {
+			t.Error("Expected user_id in context after auto-registration, got nil")
+		}
+
+		// Verify it's a valid UUID (not Auth0 ID)
+		userIDStr, ok := userID.(string)
+		if !ok {
+			t.Error("Expected user_id to be string")
+		}
+		if _, err := uuid.Parse(userIDStr); err != nil {
+			t.Errorf("Expected user_id to be valid UUID, got: %s", userIDStr)
+		}
+
+		// Verify auth0_user_id is also in context
+		auth0ID := c.Get("auth0_user_id")
+		if auth0ID != testAuth0ID {
+			t.Errorf("Expected auth0_user_id '%s', got '%v'", testAuth0ID, auth0ID)
+		}
+
+		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	}
+
+	// Execute middleware
+	err := middleware(handler)(c)
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	// Verify RegisterUser was called with correct parameters
+	if mockRegService.callCount != 1 {
+		t.Errorf("Expected RegisterUser called once, got %d calls", mockRegService.callCount)
+	}
+	if mockRegService.lastAuth0ID != testAuth0ID {
+		t.Errorf("Expected RegisterUser called with auth0_user_id '%s', got '%s'", testAuth0ID, mockRegService.lastAuth0ID)
+	}
+	if mockRegService.lastEmail != testEmail {
+		t.Errorf("Expected RegisterUser called with email '%s', got '%s'", testEmail, mockRegService.lastEmail)
+	}
+
+	// Verify identity was created
+	identity, err := mockRepo.GetByAuth0ID(context.Background(), testAuth0ID)
+	if err != nil {
+		t.Fatalf("Expected identity to be created, got error: %v", err)
+	}
+	if identity.Auth0UserID != testAuth0ID {
+		t.Errorf("Expected identity auth0_user_id '%s', got '%s'", testAuth0ID, identity.Auth0UserID)
+	}
+
+	// Verify response
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", rec.Code)
+	}
+}
+
+// TestAuth0Middleware_AutoRegisterMissingEmail tests that tokens without email claim are rejected
+func TestAuth0Middleware_AutoRegisterMissingEmail(t *testing.T) {
+	// Setup mock JWKS server
+	jwksServer := setupMockJWKS(t)
+	defer jwksServer.Close()
+
+	// Setup mock identity repository (empty - no existing users)
+	mockRepo := newMockIdentityRepository()
+
+	// Setup mock registration service
+	mockRegService := newMockRegistrationServiceWithRepo(mockRepo)
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+
+	// Create token WITHOUT email claim
+	testAuth0ID := "auth0|new-user-no-email"
+	token := createTestTokenWithClaims(t, testAuth0ID, map[string]interface{}{
+		// No email claim
+	}, jwksServer.URL)
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	// Create middleware
+	middleware := Auth0Middleware(jwksServer.URL+"/", "https://api.test.com", mockRepo, mockRegService)
+
+	handler := func(c echo.Context) error {
+		t.Error("Handler should not be called when email is missing")
+		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	}
+
+	// Execute middleware
+	err := middleware(handler)(c)
+
+	// Should return error
+	if err == nil {
+		t.Error("Expected error for missing email claim, got nil")
+	}
+
+	// Should be 401 Unauthorized
+	if he, ok := err.(*echo.HTTPError); ok {
+		if he.Code != http.StatusUnauthorized {
+			t.Errorf("Expected status 401, got %d", he.Code)
+		}
+		// Verify error message mentions email
+		if msg, ok := he.Message.(string); ok {
+			if msg != "Missing email in authentication token" {
+				t.Errorf("Expected error message about missing email, got: %s", msg)
+			}
+		}
+	} else {
+		t.Error("Expected echo.HTTPError")
+	}
+
+	// Verify RegisterUser was NOT called
+	if mockRegService.callCount != 0 {
+		t.Errorf("Expected RegisterUser NOT called, but was called %d times", mockRegService.callCount)
+	}
+}
+
+// TestAuth0Middleware_AutoRegisterServiceFailure tests handling when registration service fails
+func TestAuth0Middleware_AutoRegisterServiceFailure(t *testing.T) {
+	// Setup mock JWKS server
+	jwksServer := setupMockJWKS(t)
+	defer jwksServer.Close()
+
+	// Setup mock identity repository (empty - no existing users)
+	mockRepo := newMockIdentityRepository()
+
+	// Setup mock registration service that FAILS
+	mockRegService := newMockRegistrationServiceWithRepo(mockRepo)
+	mockRegService.shouldFail = true
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+
+	// Create a valid test JWT token
+	testAuth0ID := "auth0|failing-registration"
+	testEmail := "fail@example.com"
+	token := createTestToken(t, testAuth0ID, testEmail, jwksServer.URL)
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	// Create middleware
+	middleware := Auth0Middleware(jwksServer.URL+"/", "https://api.test.com", mockRepo, mockRegService)
+
+	handler := func(c echo.Context) error {
+		t.Error("Handler should not be called when registration fails")
+		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	}
+
+	// Execute middleware
+	err := middleware(handler)(c)
+
+	// Should return error
+	if err == nil {
+		t.Error("Expected error when registration service fails, got nil")
+	}
+
+	// Should be 500 Internal Server Error
+	if he, ok := err.(*echo.HTTPError); ok {
+		if he.Code != http.StatusInternalServerError {
+			t.Errorf("Expected status 500, got %d", he.Code)
+		}
+		// Verify error message mentions account creation
+		if msg, ok := he.Message.(string); ok {
+			if msg != "Failed to create user account" {
+				t.Errorf("Expected error message about account creation, got: %s", msg)
+			}
+		}
+	} else {
+		t.Error("Expected echo.HTTPError")
+	}
+
+	// Verify RegisterUser was called
+	if mockRegService.callCount != 1 {
+		t.Errorf("Expected RegisterUser called once, got %d calls", mockRegService.callCount)
+	}
+
+	// Verify user ID NOT stored in context
+	userID := c.Get("user_id")
+	if userID != nil {
+		t.Errorf("Expected user_id NOT in context when registration fails, got: %v", userID)
+	}
+}
+
+// TestAuth0Middleware_AutoRegisterIdempotent tests that concurrent registrations are handled gracefully
+func TestAuth0Middleware_AutoRegisterIdempotent(t *testing.T) {
+	// Setup mock JWKS server
+	jwksServer := setupMockJWKS(t)
+	defer jwksServer.Close()
+
+	// Setup mock identity repository (empty initially)
+	mockRepo := newMockIdentityRepository()
+
+	// Setup mock registration service
+	mockRegService := newMockRegistrationServiceWithRepo(mockRepo)
+
+	testAuth0ID := "auth0|concurrent-user"
+	testEmail := "concurrent@example.com"
+
+	// First request - should trigger registration
+	{
+		e := echo.New()
+		req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+		token := createTestToken(t, testAuth0ID, testEmail, jwksServer.URL)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+
+		middleware := Auth0Middleware(jwksServer.URL+"/", "https://api.test.com", mockRepo, mockRegService)
+
+		handler := func(c echo.Context) error {
+			return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+		}
+
+		err := middleware(handler)(c)
+		if err != nil {
+			t.Fatalf("First request failed: %v", err)
+		}
+
+		if rec.Code != http.StatusOK {
+			t.Errorf("First request: expected status 200, got %d", rec.Code)
+		}
+	}
+
+	// Verify RegisterUser was called once
+	if mockRegService.callCount != 1 {
+		t.Errorf("Expected RegisterUser called once after first request, got %d", mockRegService.callCount)
+	}
+
+	// Second request with SAME auth0_user_id - should NOT trigger registration again
+	{
+		e := echo.New()
+		req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+		token := createTestToken(t, testAuth0ID, testEmail, jwksServer.URL)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+
+		middleware := Auth0Middleware(jwksServer.URL+"/", "https://api.test.com", mockRepo, mockRegService)
+
+		handler := func(c echo.Context) error {
+			return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+		}
+
+		err := middleware(handler)(c)
+		if err != nil {
+			t.Fatalf("Second request failed: %v", err)
+		}
+
+		if rec.Code != http.StatusOK {
+			t.Errorf("Second request: expected status 200, got %d", rec.Code)
+		}
+	}
+
+	// Verify RegisterUser was STILL only called once (idempotent)
+	if mockRegService.callCount != 1 {
+		t.Errorf("Expected RegisterUser called once total, got %d calls (should be idempotent)", mockRegService.callCount)
+	}
+
+	// Verify identity exists in repo
+	identity, err := mockRepo.GetByAuth0ID(context.Background(), testAuth0ID)
+	if err != nil {
+		t.Fatalf("Expected identity to exist, got error: %v", err)
+	}
+	if identity.Auth0UserID != testAuth0ID {
+		t.Errorf("Expected identity auth0_user_id '%s', got '%s'", testAuth0ID, identity.Auth0UserID)
 	}
 }

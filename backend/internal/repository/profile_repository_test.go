@@ -158,7 +158,7 @@ func TestCreateUser_Success(t *testing.T) {
 	defer db.Close()
 
 	ctx := context.Background()
-	user := domain.NewUser("auth0|newuser", "newuser@example.com")
+	user := domain.NewUser("auth0|newuser", "newuser@example.com", true)
 
 	// Expect INSERT query (match full query for consistency)
 	mock.ExpectExec(`INSERT INTO users \( id, auth0_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, stripe_customer_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at \) VALUES`).
@@ -198,7 +198,7 @@ func TestCreateUser_DuplicateEmail(t *testing.T) {
 	defer db.Close()
 
 	ctx := context.Background()
-	user := domain.NewUser("auth0|newuser", "existing@example.com")
+	user := domain.NewUser("auth0|newuser", "existing@example.com", true)
 
 	// Simulate unique constraint violation on email
 	mock.ExpectExec(`INSERT INTO users`).
