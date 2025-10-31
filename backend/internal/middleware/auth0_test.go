@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -40,6 +41,7 @@ func init() {
 
 // mockIdentityRepository is a mock implementation of UserIdentityRepository for testing
 type mockIdentityRepository struct {
+	mu         sync.RWMutex
 	identities map[string]*domain.UserIdentity // Map: auth0_user_id -> UserIdentity
 }
 
@@ -50,6 +52,8 @@ func newMockIdentityRepository() *mockIdentityRepository {
 }
 
 func (m *mockIdentityRepository) GetByAuth0ID(ctx context.Context, auth0UserID string) (*domain.UserIdentity, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	identity, ok := m.identities[auth0UserID]
 	if !ok {
 		return nil, repository.ErrIdentityNotFound
@@ -58,6 +62,8 @@ func (m *mockIdentityRepository) GetByAuth0ID(ctx context.Context, auth0UserID s
 }
 
 func (m *mockIdentityRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.UserIdentity, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	var result []*domain.UserIdentity
 	for _, identity := range m.identities {
 		if identity.UserID == userID {
@@ -68,6 +74,8 @@ func (m *mockIdentityRepository) GetByUserID(ctx context.Context, userID string)
 }
 
 func (m *mockIdentityRepository) Create(ctx context.Context, identity *domain.UserIdentity) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if _, exists := m.identities[identity.Auth0UserID]; exists {
 		return repository.ErrDuplicateIdentity
 	}
@@ -81,6 +89,8 @@ func (m *mockIdentityRepository) CreateTx(ctx context.Context, tx *sql.Tx, ident
 }
 
 func (m *mockIdentityRepository) UpdateLastUsed(ctx context.Context, auth0UserID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	identity, ok := m.identities[auth0UserID]
 	if !ok {
 		return repository.ErrIdentityNotFound
@@ -92,6 +102,8 @@ func (m *mockIdentityRepository) UpdateLastUsed(ctx context.Context, auth0UserID
 
 // Helper to add a test identity to the mock repository
 func (m *mockIdentityRepository) addTestIdentity(auth0UserID, userID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	now := time.Now()
 	m.identities[auth0UserID] = &domain.UserIdentity{
 		ID:             uuid.New().String(),
