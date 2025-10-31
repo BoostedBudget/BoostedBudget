@@ -1019,3 +1019,262 @@ func TestProcessAddedTransactions_EmptySlice(t *testing.T) {
 	// CreateBatch should NOT have been called
 	mockTransactionRepo.AssertNotCalled(t, "CreateBatch")
 }
+
+// ============================================================================
+// Issue #261: processModifiedTransactions Tests (TDD RED Phase)
+// ============================================================================
+
+// TestProcessModifiedTransactions_Success tests updating existing transactions while preserving user_notes
+func TestProcessModifiedTransactions_Success(t *testing.T) {
+	// Setup
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		mockTransactionRepo,
+		nil,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItemID := "linked-item-123"
+	userID := "user-456"
+
+	accountMap := map[string]string{
+		"plaid-acc-1": "account-uuid-1",
+		"plaid-acc-2": "account-uuid-2",
+	}
+
+	linkedItem := &domain.LinkedItem{
+		ID:     linkedItemID,
+		UserID: userID,
+	}
+
+	// 2 modified transactions from Plaid
+	modified := []plaid.Transaction{
+		{
+			TransactionId: "plaid-txn-1",
+			AccountId:     "plaid-acc-1",
+			Amount:        150.00, // Amount changed from 100 to 150
+			Date:          "2024-01-15",
+			Name:          "Transaction 1 Updated",
+			Pending:       false,
+		},
+		{
+			TransactionId: "plaid-txn-2",
+			AccountId:     "plaid-acc-2",
+			Amount:        75.00, // Amount changed
+			Date:          "2024-01-16",
+			Name:          "Transaction 2 Updated",
+			Pending:       true, // Now pending
+		},
+	}
+
+	// Mock: GetByExternalID returns existing transactions WITH user_notes
+	existingUserNotes1 := "My custom note 1"
+	existingUserNotes2 := "My custom note 2"
+	externalID1 := "plaid-txn-1"
+	externalID2 := "plaid-txn-2"
+
+	existingTxn1 := &domain.Transaction{
+		ID:                    "txn-uuid-1",
+		UserID:                userID,
+		AccountID:             "account-uuid-1",
+		ExternalTransactionID: &externalID1,
+		Amount:                100.00, // Old amount
+		Name:                  "Transaction 1",
+		UserNotes:             &existingUserNotes1, // USER'S CUSTOM NOTE
+	}
+	existingTxn2 := &domain.Transaction{
+		ID:                    "txn-uuid-2",
+		UserID:                userID,
+		AccountID:             "account-uuid-2",
+		ExternalTransactionID: &externalID2,
+		Amount:                50.00, // Old amount
+		Name:                  "Transaction 2",
+		UserNotes:             &existingUserNotes2, // USER'S CUSTOM NOTE
+	}
+
+	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "plaid-txn-1", userID).Return(existingTxn1, nil)
+	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "plaid-txn-2", userID).Return(existingTxn2, nil)
+
+	// Mock: Update should be called with new data BUT old user_notes preserved
+	mockTransactionRepo.On("Update", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
+		// Transaction 1: Amount updated, user_notes preserved
+		if txn.ID == "txn-uuid-1" {
+			return txn.Amount == 150.00 &&
+				txn.Name == "Transaction 1 Updated" &&
+				txn.UserNotes != nil &&
+				*txn.UserNotes == "My custom note 1" // PRESERVED!
+		}
+		return false
+	})).Return(nil).Once()
+
+	mockTransactionRepo.On("Update", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
+		// Transaction 2: Amount updated, user_notes preserved
+		if txn.ID == "txn-uuid-2" {
+			return txn.Amount == 75.00 &&
+				txn.Pending == true &&
+				txn.UserNotes != nil &&
+				*txn.UserNotes == "My custom note 2" // PRESERVED!
+		}
+		return false
+	})).Return(nil).Once()
+
+	// Execute
+	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap)
+
+	// Assert
+	assert.NoError(t, err)
+	mockTransactionRepo.AssertExpectations(t)
+}
+
+// TestProcessModifiedTransactions_NewTransactionNoUserNotes tests transaction with nil user_notes
+func TestProcessModifiedTransactions_NewTransactionNoUserNotes(t *testing.T) {
+	// Setup
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		mockTransactionRepo,
+		nil,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItemID := "linked-item-123"
+	userID := "user-456"
+
+	accountMap := map[string]string{
+		"plaid-acc-1": "account-uuid-1",
+	}
+
+	linkedItem := &domain.LinkedItem{
+		ID:     linkedItemID,
+		UserID: userID,
+	}
+
+	modified := []plaid.Transaction{
+		{
+			TransactionId: "plaid-txn-1",
+			AccountId:     "plaid-acc-1",
+			Amount:        150.00,
+			Date:          "2024-01-15",
+			Name:          "Transaction 1",
+		},
+	}
+
+	// Existing transaction has NO user_notes
+	externalID := "plaid-txn-1"
+	existingTxn := &domain.Transaction{
+		ID:                    "txn-uuid-1",
+		UserID:                userID,
+		AccountID:             "account-uuid-1",
+		ExternalTransactionID: &externalID,
+		Amount:                100.00,
+		Name:                  "Transaction 1",
+		UserNotes:             nil, // NO user notes
+	}
+
+	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "plaid-txn-1", userID).Return(existingTxn, nil)
+
+	// Mock: Update with nil user_notes (unchanged)
+	mockTransactionRepo.On("Update", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
+		return txn.ID == "txn-uuid-1" && txn.UserNotes == nil
+	})).Return(nil)
+
+	// Execute
+	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap)
+
+	// Assert
+	assert.NoError(t, err)
+	mockTransactionRepo.AssertExpectations(t)
+}
+
+// TestProcessModifiedTransactions_TransactionNotFound tests handling when transaction doesn't exist yet
+func TestProcessModifiedTransactions_TransactionNotFound(t *testing.T) {
+	// Setup
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		mockTransactionRepo,
+		nil,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItemID := "linked-item-123"
+	userID := "user-456"
+
+	accountMap := map[string]string{
+		"plaid-acc-1": "account-uuid-1",
+	}
+
+	linkedItem := &domain.LinkedItem{
+		ID:     linkedItemID,
+		UserID: userID,
+	}
+
+	modified := []plaid.Transaction{
+		{
+			TransactionId: "plaid-txn-new",
+			AccountId:     "plaid-acc-1",
+			Amount:        150.00,
+			Date:          "2024-01-15",
+			Name:          "New Transaction",
+		},
+	}
+
+	// GetByExternalID returns error (not found)
+	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "plaid-txn-new", userID).
+		Return(nil, errors.New("transaction not found"))
+
+	// Execute
+	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap)
+
+	// Assert - should continue despite not finding transaction (log warning)
+	assert.NoError(t, err) // Gracefully skip
+	// Update should NOT be called for not-found transaction
+	mockTransactionRepo.AssertNotCalled(t, "Update")
+}
+
+// TestProcessModifiedTransactions_EmptySlice tests handling of empty input
+func TestProcessModifiedTransactions_EmptySlice(t *testing.T) {
+	// Setup
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		mockTransactionRepo,
+		nil,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{
+		ID:     "linked-item-123",
+		UserID: "user-456",
+	}
+	accountMap := map[string]string{}
+
+	// Empty slice
+	modified := []plaid.Transaction{}
+
+	// Execute
+	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap)
+
+	// Assert
+	assert.NoError(t, err)
+	// No repository methods should be called
+	mockTransactionRepo.AssertNotCalled(t, "GetByExternalID")
+	mockTransactionRepo.AssertNotCalled(t, "Update")
+}

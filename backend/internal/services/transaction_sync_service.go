@@ -425,3 +425,66 @@ func (s *transactionSyncService) processAddedTransactions(
 	log.Printf("Successfully stored %d added transactions (skipped %d)", len(transactions), len(added)-len(transactions))
 	return nil
 }
+
+// processModifiedTransactions updates existing transactions in the database.
+// CRITICAL: Preserves user_notes field from existing transaction.
+//
+// Process:
+//   1. Map Plaid transaction to domain.Transaction
+//   2. Fetch existing transaction by external_transaction_id
+//   3. Preserve user_notes from existing transaction
+//   4. Call Update with new data + preserved user_notes + existing ID
+//
+// Graceful error handling:
+//   - Skips transactions with unmapped accounts (logs warning)
+//   - Skips transactions not found in database (logs warning)
+//   - Continues processing even if some transactions fail
+//   - Returns error only if Update call fails
+func (s *transactionSyncService) processModifiedTransactions(
+	ctx context.Context,
+	modified []plaid.Transaction,
+	linkedItem *domain.LinkedItem,
+	accountMap map[string]string,
+) error {
+	// Optimization: Skip processing if no transactions
+	if len(modified) == 0 {
+		return nil
+	}
+
+	successCount := 0
+	skippedCount := 0
+
+	for _, plaidTxn := range modified {
+		// Map Plaid transaction to domain.Transaction (new data from Plaid)
+		newTxn, err := s.mapPlaidTransaction(ctx, plaidTxn, linkedItem.ID, linkedItem.UserID, accountMap)
+		if err != nil {
+			log.Printf("Warning: Skipping modified transaction %s: %v", plaidTxn.TransactionId, err)
+			skippedCount++
+			continue
+		}
+
+		// Fetch existing transaction to preserve user_notes
+		existingTxn, err := s.transactionRepo.GetByExternalID(ctx, domain.SourcePlaid, plaidTxn.TransactionId, linkedItem.UserID)
+		if err != nil {
+			log.Printf("Warning: Modified transaction %s not found in database (may not be synced yet): %v", plaidTxn.TransactionId, err)
+			skippedCount++
+			continue
+		}
+
+		// CRITICAL: Preserve user_notes from existing transaction
+		newTxn.UserNotes = existingTxn.UserNotes
+
+		// Copy ID from existing transaction (required for Update)
+		newTxn.ID = existingTxn.ID
+
+		// Update transaction with new data but preserved user_notes
+		if err := s.transactionRepo.Update(ctx, newTxn); err != nil {
+			return fmt.Errorf("failed to update transaction %s: %w", plaidTxn.TransactionId, err)
+		}
+
+		successCount++
+	}
+
+	log.Printf("Successfully updated %d modified transactions (skipped %d)", successCount, skippedCount)
+	return nil
+}
