@@ -25,7 +25,7 @@ NC='\033[0m' # No Color
 COMPOSE_FILE="docker-compose.staging.yml"
 ENV_FILE=".env.staging"
 BACKEND_HEALTH_URL="http://localhost:8080/health"
-FRONTEND_URL="https://localhost:3000"  # HTTPS with self-signed cert
+FRONTEND_URL="http://localhost:3000"  # Frontend serves HTTP only
 MAX_HEALTH_RETRIES=30
 HEALTH_RETRY_DELAY=2
 
