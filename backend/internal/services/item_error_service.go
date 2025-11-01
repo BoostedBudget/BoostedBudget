@@ -193,17 +193,187 @@ func (s *itemErrorService) HandleLoginRequired(
 	return nil
 }
 
-// Stub implementations for other methods (to be implemented in next phases)
-func (s *itemErrorService) HandleError(ctx context.Context, linkedItem *domain.LinkedItem, errorCode string, errorMessage string) error {
-	return fmt.Errorf("HandleError not yet implemented")
+// HandleError processes general ERROR webhook
+func (s *itemErrorService) HandleError(
+	ctx context.Context,
+	linkedItem *domain.LinkedItem,
+	errorCode string,
+	errorMessage string,
+) error {
+	// 1. Update LinkedItem status to "error" (critical - return error if fails)
+	now := time.Now()
+	linkedItem.Status = "error"
+	linkedItem.ErrorCode = &errorCode
+	linkedItem.ErrorMessage = &errorMessage
+	linkedItem.LastErrorAt = &now
+
+	err := s.linkedItemRepo.Update(ctx, linkedItem)
+	if err != nil {
+		return fmt.Errorf("failed to update linked item status for item %s: %w", linkedItem.ItemID, err)
+	}
+
+	// 2. Create notification (non-blocking - log error but continue)
+	// Note: No action URL for general errors (unlike LOGIN_REQUIRED)
+	notification := &domain.Notification{
+		UserID:    linkedItem.UserID,
+		Type:      "error",
+		Title:     "Connection Error",
+		Message:   fmt.Sprintf("We're experiencing a connection issue with %s: %s. We'll automatically retry, but you can also try reconnecting your account if the issue persists.", linkedItem.InstitutionName, errorMessage),
+		Read:      false,
+		SentEmail: false,
+	}
+
+	err = s.notificationRepo.Create(ctx, notification)
+	if err != nil {
+		// Non-blocking: log error but don't return (graceful degradation)
+		log.Printf("Warning: Failed to create notification for item %s: %v", linkedItem.ItemID, err)
+		// Don't send email if notification creation failed
+		return nil
+	}
+
+	// 3. Send email notification (non-blocking - log error but continue)
+	// TODO: Fetch user email from user repository/profile
+	// For now, using placeholder - will be implemented when user repository is available
+	userEmail := "user@example.com" // TODO: Fetch from user repository
+	err = s.emailService.SendNotificationEmail(ctx, userEmail, notification)
+	if err != nil {
+		// Non-blocking: log error but don't return (graceful degradation)
+		log.Printf("Warning: Failed to send email notification for item %s: %v", linkedItem.ItemID, err)
+	}
+
+	return nil
 }
 
-func (s *itemErrorService) HandlePendingExpiration(ctx context.Context, linkedItem *domain.LinkedItem, errorCode string, errorMessage string) error {
-	return fmt.Errorf("HandlePendingExpiration not yet implemented")
+// HandlePendingExpiration processes PENDING_EXPIRATION webhook
+func (s *itemErrorService) HandlePendingExpiration(
+	ctx context.Context,
+	linkedItem *domain.LinkedItem,
+	errorCode string,
+	errorMessage string,
+) error {
+	// 1. Decrypt access token (critical - return error if fails)
+	decryptedAccessToken, err := s.encryptionService.Decrypt(linkedItem.AccessTokenEncrypted)
+	if err != nil {
+		return fmt.Errorf("failed to decrypt access token for item %s: %w", linkedItem.ItemID, err)
+	}
+
+	// 2. Create update mode link token for re-authentication (critical)
+	linkTokenResponse, err := s.plaidService.CreateUpdateModeLinkToken(ctx, linkedItem.UserID, decryptedAccessToken)
+	if err != nil {
+		return fmt.Errorf("failed to create update mode link token for item %s: %w", linkedItem.ItemID, err)
+	}
+
+	// 3. Update LinkedItem status to "pending_expiration" (critical)
+	now := time.Now()
+	linkedItem.Status = "pending_expiration"
+	linkedItem.ErrorCode = &errorCode
+	linkedItem.ErrorMessage = &errorMessage
+	linkedItem.LastErrorAt = &now
+
+	err = s.linkedItemRepo.Update(ctx, linkedItem)
+	if err != nil {
+		return fmt.Errorf("failed to update linked item status for item %s: %w", linkedItem.ItemID, err)
+	}
+
+	// 4. Create notification with action URL (non-blocking)
+	actionURL := fmt.Sprintf("/accounts/reconnect?link_token=%s&item_id=%s", linkTokenResponse.LinkToken, linkedItem.ItemID)
+	actionLabel := "Reconnect Bank"
+
+	notification := &domain.Notification{
+		UserID:      linkedItem.UserID,
+		Type:        "pending_expiration",
+		Title:       "Bank Connection Expiring Soon",
+		Message:     fmt.Sprintf("Your connection to %s is expiring soon. Please reconnect your account to ensure uninterrupted access to your financial data.", linkedItem.InstitutionName),
+		ActionURL:   &actionURL,
+		ActionLabel: &actionLabel,
+		Read:        false,
+		SentEmail:   false,
+	}
+
+	err = s.notificationRepo.Create(ctx, notification)
+	if err != nil {
+		// Non-blocking: log error but don't return (graceful degradation)
+		log.Printf("Warning: Failed to create notification for item %s: %v", linkedItem.ItemID, err)
+		// Don't send email if notification creation failed
+		return nil
+	}
+
+	// 5. Send email notification (non-blocking)
+	// TODO: Fetch user email from user repository/profile
+	userEmail := "user@example.com" // TODO: Fetch from user repository
+	err = s.emailService.SendNotificationEmail(ctx, userEmail, notification)
+	if err != nil {
+		// Non-blocking: log error but don't return (graceful degradation)
+		log.Printf("Warning: Failed to send email notification for item %s: %v", linkedItem.ItemID, err)
+	}
+
+	return nil
 }
 
-func (s *itemErrorService) HandlePermissionRevoked(ctx context.Context, linkedItem *domain.LinkedItem, errorCode string, errorMessage string) error {
-	return fmt.Errorf("HandlePermissionRevoked not yet implemented")
+// HandlePermissionRevoked processes USER_PERMISSION_REVOKED webhook
+func (s *itemErrorService) HandlePermissionRevoked(
+	ctx context.Context,
+	linkedItem *domain.LinkedItem,
+	errorCode string,
+	errorMessage string,
+) error {
+	// 1. Decrypt access token (critical - return error if fails)
+	decryptedAccessToken, err := s.encryptionService.Decrypt(linkedItem.AccessTokenEncrypted)
+	if err != nil {
+		return fmt.Errorf("failed to decrypt access token for item %s: %w", linkedItem.ItemID, err)
+	}
+
+	// 2. Create update mode link token for re-linking (critical)
+	linkTokenResponse, err := s.plaidService.CreateUpdateModeLinkToken(ctx, linkedItem.UserID, decryptedAccessToken)
+	if err != nil {
+		return fmt.Errorf("failed to create update mode link token for item %s: %w", linkedItem.ItemID, err)
+	}
+
+	// 3. Update LinkedItem status to "revoked" (critical)
+	now := time.Now()
+	linkedItem.Status = "revoked"
+	linkedItem.ErrorCode = &errorCode
+	linkedItem.ErrorMessage = &errorMessage
+	linkedItem.LastErrorAt = &now
+
+	err = s.linkedItemRepo.Update(ctx, linkedItem)
+	if err != nil {
+		return fmt.Errorf("failed to update linked item status for item %s: %w", linkedItem.ItemID, err)
+	}
+
+	// 4. Create notification with action URL (non-blocking)
+	actionURL := fmt.Sprintf("/accounts/reconnect?link_token=%s&item_id=%s", linkTokenResponse.LinkToken, linkedItem.ItemID)
+	actionLabel := "Reconnect Bank"
+
+	notification := &domain.Notification{
+		UserID:      linkedItem.UserID,
+		Type:        "permission_revoked",
+		Title:       "Bank Access Revoked",
+		Message:     fmt.Sprintf("You have revoked BoostedBudget's access to %s at your bank. To restore access and continue syncing your transactions, please reconnect your account.", linkedItem.InstitutionName),
+		ActionURL:   &actionURL,
+		ActionLabel: &actionLabel,
+		Read:        false,
+		SentEmail:   false,
+	}
+
+	err = s.notificationRepo.Create(ctx, notification)
+	if err != nil {
+		// Non-blocking: log error but don't return (graceful degradation)
+		log.Printf("Warning: Failed to create notification for item %s: %v", linkedItem.ItemID, err)
+		// Don't send email if notification creation failed
+		return nil
+	}
+
+	// 5. Send email notification (non-blocking)
+	// TODO: Fetch user email from user repository/profile
+	userEmail := "user@example.com" // TODO: Fetch from user repository
+	err = s.emailService.SendNotificationEmail(ctx, userEmail, notification)
+	if err != nil {
+		// Non-blocking: log error but don't return (graceful degradation)
+		log.Printf("Warning: Failed to send email notification for item %s: %v", linkedItem.ItemID, err)
+	}
+
+	return nil
 }
 
 func (s *itemErrorService) ProcessWebhook(ctx context.Context, itemID string, errorType string, errorCode string, errorMessage string) error {
