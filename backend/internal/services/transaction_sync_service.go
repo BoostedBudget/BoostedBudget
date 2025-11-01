@@ -488,3 +488,50 @@ func (s *transactionSyncService) processModifiedTransactions(
 	log.Printf("Successfully updated %d modified transactions (skipped %d)", successCount, skippedCount)
 	return nil
 }
+
+// processRemovedTransactions deletes transactions that Plaid reports as removed.
+// Uses hard delete (no soft-delete/deleted_at column exists).
+//
+// Idempotent: If transaction already deleted, logs warning but continues.
+//
+// Graceful error handling:
+//   - Skips transactions with nil transaction_id (logs warning)
+//   - Continues processing even if delete fails for some transactions
+//   - Treats "not found" errors as success (idempotent)
+func (s *transactionSyncService) processRemovedTransactions(
+	ctx context.Context,
+	removed []plaid.RemovedTransaction,
+	linkedItem *domain.LinkedItem,
+) error {
+	// Optimization: Skip processing if no transactions
+	if len(removed) == 0 {
+		return nil
+	}
+
+	successCount := 0
+	skippedCount := 0
+
+	for _, removedTxn := range removed {
+		// Skip transactions with nil ID
+		if removedTxn.TransactionId == nil {
+			log.Printf("Warning: Removed transaction has nil transaction_id, skipping")
+			skippedCount++
+			continue
+		}
+
+		// Delete transaction (hard delete)
+		err := s.transactionRepo.DeleteByExternalID(ctx, domain.SourcePlaid, *removedTxn.TransactionId, linkedItem.UserID)
+		if err != nil {
+			// Log warning but continue (idempotent - may already be deleted)
+			log.Printf("Warning: Failed to delete transaction %s (may already be deleted): %v", *removedTxn.TransactionId, err)
+			// Count as skipped rather than failure for idempotency
+			skippedCount++
+			continue
+		}
+
+		successCount++
+	}
+
+	log.Printf("Successfully deleted %d removed transactions (skipped %d)", successCount, skippedCount)
+	return nil
+}
