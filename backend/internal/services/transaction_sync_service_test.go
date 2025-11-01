@@ -148,6 +148,11 @@ func TestProcessWebhook_Success(t *testing.T) {
 	// Mock cursor update (after sync completes)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "new-cursor-from-plaid").Return(nil)
 
+	// Issue #261: Mock account repository for transaction storage
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	// Mock transaction batch creation (empty because transaction has unmapped account, so will be skipped)
+	// No accounts exist, so all transactions will be skipped in processAddedTransactions
+
 	// Mock marking webhook as processed
 	mockWebhookRepo.On("Update", ctx, mock.MatchedBy(func(e *domain.WebhookEvent) bool {
 		return e.ID == webhookID && e.Processed && e.ProcessingCompletedAt != nil
@@ -296,14 +301,16 @@ func TestProcessWebhook_LinkedItemNotFound(t *testing.T) {
 func TestSyncTransactions_SuccessSinglePage(t *testing.T) {
 	// Setup mocks
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 
 	service := NewTransactionSyncService(
 		nil, // webhookRepo not needed for SyncTransactions
 		mockLinkedItemRepo,
-		nil, // transactionRepo not needed yet (issue #261)
-		nil, // accountRepo not needed yet (issue #261)
+		mockTransactionRepo,
+		mockAccountRepo,
 		mockPlaidService,
 		mockEncryptionService,
 	)
@@ -336,6 +343,10 @@ func TestSyncTransactions_SuccessSinglePage(t *testing.T) {
 	// Mock cursor update
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-after").Return(nil)
 
+	// Issue #261: Mock account repository for transaction storage
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	// All transactions will be skipped since no accounts exist
+
 	// Execute
 	result, err := service.SyncTransactions(ctx, linkedItem)
 
@@ -355,14 +366,16 @@ func TestSyncTransactions_SuccessSinglePage(t *testing.T) {
 // TestSyncTransactions_SuccessMultiplePages tests pagination with has_more=true
 func TestSyncTransactions_SuccessMultiplePages(t *testing.T) {
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 
 	service := NewTransactionSyncService(
 		nil,
 		mockLinkedItemRepo,
-		nil,
-		nil,
+		mockTransactionRepo,
+		mockAccountRepo,
 		mockPlaidService,
 		mockEncryptionService,
 	)
@@ -398,6 +411,11 @@ func TestSyncTransactions_SuccessMultiplePages(t *testing.T) {
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-page1").Return(plaidResp2, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-page2").Return(nil).Once()
+
+	// Issue #261: Mock account repository for transaction storage
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	// Mock deletion of removed transaction
+	mockTransactionRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, "txn-rem-1", linkedItem.UserID).Return(nil)
 
 	// Execute
 	result, err := service.SyncTransactions(ctx, linkedItem)
@@ -592,14 +610,16 @@ func TestSyncTransactions_CursorUpdateError(t *testing.T) {
 // TestSyncTransactions_EmptyCursor tests first sync with no cursor
 func TestSyncTransactions_EmptyCursor(t *testing.T) {
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 
 	service := NewTransactionSyncService(
 		nil,
 		mockLinkedItemRepo,
-		nil,
-		nil,
+		mockTransactionRepo,
+		mockAccountRepo,
 		mockPlaidService,
 		mockEncryptionService,
 	)
@@ -622,6 +642,9 @@ func TestSyncTransactions_EmptyCursor(t *testing.T) {
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "").Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-initial").Return(nil)
+
+	// Issue #261: Mock account repository for transaction storage
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 
 	// Execute
 	result, err := service.SyncTransactions(ctx, linkedItem)
