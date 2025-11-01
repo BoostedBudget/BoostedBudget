@@ -35,6 +35,10 @@ type LinkedItemRepository interface {
 	// UpdateCursor updates the transaction sync cursor for a linked item
 	UpdateCursor(ctx context.Context, id, cursor string) error
 
+	// Update updates a linked item's fields (e.g., status, error details)
+	// Issue #257: Item Error Handler - updates error tracking fields
+	Update(ctx context.Context, item *domain.LinkedItem) error
+
 	// Delete removes a linked item from the database
 	Delete(ctx context.Context, id string) error
 
@@ -242,6 +246,61 @@ func (r *linkedItemRepository) UpdateCursor(ctx context.Context, id, cursor stri
 	`
 
 	result, err := r.db.ExecContext(ctx, query, cursor, now, now, id)
+	if err != nil {
+		return err
+	}
+
+	// Check if any rows were affected
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return ErrLinkedItemNotFound
+	}
+
+	return nil
+}
+
+// Update updates a linked item's fields (e.g., status, error details)
+// Issue #257: Item Error Handler - updates error tracking fields
+func (r *linkedItemRepository) Update(ctx context.Context, item *domain.LinkedItem) error {
+	now := time.Now()
+	item.UpdatedAt = now
+
+	query := `
+		UPDATE linked_items
+		SET institution_id = $2,
+		    institution_name = $3,
+		    provider = $4,
+		    cursor = $5,
+		    last_synced_at = $6,
+		    status = $7,
+		    error_code = $8,
+		    error_message = $9,
+		    last_error_at = $10,
+		    retry_count = $11,
+		    next_retry_at = $12,
+		    updated_at = $13
+		WHERE id = $1
+	`
+
+	result, err := r.db.ExecContext(ctx, query,
+		item.ID,
+		item.InstitutionID,
+		item.InstitutionName,
+		item.Provider,
+		item.Cursor,
+		item.LastSyncedAt,
+		item.Status,
+		item.ErrorCode,
+		item.ErrorMessage,
+		item.LastErrorAt,
+		item.RetryCount,
+		item.NextRetryAt,
+		item.UpdatedAt,
+	)
 	if err != nil {
 		return err
 	}
