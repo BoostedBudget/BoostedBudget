@@ -314,7 +314,3 @@ func setupTestNotificationRepository(t *testing.T) NotificationRepository {
 	// For now, return nil - tests are skipped
 	return nil
 }
-
-func stringPtr(s string) *string {
-	return &s
-}

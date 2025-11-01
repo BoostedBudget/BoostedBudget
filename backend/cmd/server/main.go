@@ -103,6 +103,7 @@ func main() {
 		transactionRepo := repository.NewTransactionRepository(db)
 		webhookRepo := repository.NewWebhookRepository(db)
 		identityRepo := repository.NewUserIdentityRepository(db) // Maps Auth0 IDs to user UUIDs
+		notificationRepo := repository.NewNotificationRepository(db) // Issue #257: Notification storage
 
 		// Create mock audit logger (will be replaced with real implementation later)
 		auditLogger := &mockAuditLogger{}
@@ -115,6 +116,17 @@ func main() {
 		// Note: Passing nil for override repo - not yet implemented
 		subscriptionService := services.NewSubscriptionService(tierConfig, nil)
 
+		// Initialize Email service (needed by deletion service and item error service)
+		// Optional - uses no-op mock if not configured
+		var emailService services.EmailService
+		if cfg.SendGridAPIKey != "" && cfg.SendGridFromEmail != "" {
+			emailService = services.NewEmailService(cfg.SendGridAPIKey, cfg.SendGridFromEmail, cfg.FrontendURL)
+			log.Println("✅ Email service (SendGrid) initialized")
+		} else {
+			emailService = services.NewEmailServiceMock("", "", cfg.FrontendURL)
+			log.Println("⚠️  Email service disabled - cancellation links shown in UI instead (see GitHub issue for SendGrid integration)")
+		}
+
 		// Create deletion services (if Auth0 Management API configured)
 		if cfg.Auth0ManagementClientID != "" && cfg.Auth0ManagementClientSecret != "" && cfg.DeletionTokenSecret != "" {
 			// Initialize Auth0 Management API service
@@ -125,17 +137,7 @@ func main() {
 			)
 			log.Println("✅ Auth0 Management API service initialized")
 
-			// Initialize Email service (optional - uses no-op if not configured)
-			var emailService services.EmailService
-			if cfg.SendGridAPIKey != "" && cfg.SendGridFromEmail != "" {
-				emailService = services.NewEmailService(cfg.SendGridAPIKey, cfg.SendGridFromEmail, cfg.FrontendURL)
-				log.Println("✅ Email service (SendGrid) initialized")
-			} else {
-				emailService = services.NewEmailServiceMock("", "", cfg.FrontendURL)
-				log.Println("⚠️  Email service disabled - cancellation links shown in UI instead (see GitHub issue for SendGrid integration)")
-			}
-
-			// Initialize Deletion service (reuses auditLogger created earlier)
+			// Initialize Deletion service (reuses auditLogger and emailService created earlier)
 			deletionService := services.NewDeletionService(
 				profileRepo,
 				emailService,
@@ -208,17 +210,29 @@ func main() {
 					encryptionService,
 				)
 
+				// Initialize Item Error Service for ITEM webhook processing
+				// Issue #257: Item Error Handler - Process ITEM Webhooks and User Notifications
+				itemErrorService := services.NewItemErrorService(
+					linkedItemRepo,
+					notificationRepo,
+					plaidService,
+					encryptionService,
+					emailService,
+				)
+
 				// Initialize Webhook Processor background worker
-				// Polls for unprocessed TRANSACTIONS webhooks every 30 seconds
-				// Processes up to 10 webhooks per batch
+				// Polls for unprocessed TRANSACTIONS and ITEM webhooks every 30 seconds
+				// Processes up to 10 webhooks per batch (per type)
 				webhookProcessor = workers.NewWebhookProcessor(
 					transactionSyncService,
+					itemErrorService,
 					webhookRepo,
 					30*time.Second, // Poll interval
 					10,             // Batch size
 				)
 				log.Println("✅ Transaction sync service initialized")
-				log.Println("✅ Webhook processor initialized (interval: 30s, batch: 10)")
+				log.Println("✅ Item error service initialized")
+				log.Println("✅ Webhook processor initialized (interval: 30s, batch: 10, types: TRANSACTIONS+ITEM)")
 			}
 		}
 
@@ -226,6 +240,7 @@ func main() {
 		profileHandler := handlers.NewProfileHandler(profileService)
 		privacyHandler := handlers.NewPrivacyHandler(privacyService, profileService)
 		transactionHandler := handlers.NewTransactionHandler(transactionService)
+		notificationHandler := handlers.NewNotificationHandler(notificationRepo) // Issue #257: Notification API
 
 		// Create Auth0 middleware with identity resolution and auto-registration
 		auth0Middleware := middleware.Auth0Middleware(
@@ -243,6 +258,11 @@ func main() {
 		api.GET("/user/privacy", privacyHandler.GetPrivacySettings)
 		api.PUT("/user/privacy", privacyHandler.UpdatePrivacySettings)
 		api.GET("/transactions", transactionHandler.GetTransactions)
+
+		// Notification routes (Issue #257: User Notifications)
+		api.GET("/notifications", notificationHandler.GetNotifications)
+		api.PATCH("/notifications/:id/read", notificationHandler.MarkNotificationAsRead)
+		api.GET("/notifications/unread/count", notificationHandler.GetUnreadCount)
 
 		// Plaid routes (if enabled)
 		if plaidHandler != nil {
