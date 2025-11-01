@@ -376,6 +376,32 @@ func (s *itemErrorService) HandlePermissionRevoked(
 	return nil
 }
 
-func (s *itemErrorService) ProcessWebhook(ctx context.Context, itemID string, errorType string, errorCode string, errorMessage string) error {
-	return fmt.Errorf("ProcessWebhook not yet implemented")
+// ProcessWebhook is the main orchestrator for ITEM webhook processing
+func (s *itemErrorService) ProcessWebhook(
+	ctx context.Context,
+	itemID string,
+	errorType string,
+	errorCode string,
+	errorMessage string,
+) error {
+	// 1. Look up LinkedItem by Plaid item ID (critical - return error if fails)
+	linkedItem, err := s.linkedItemRepo.GetByItemID(ctx, itemID)
+	if err != nil {
+		return fmt.Errorf("failed to lookup linked item for item_id %s: %w", itemID, err)
+	}
+
+	// 2. Route to appropriate handler based on error type
+	switch errorType {
+	case "ITEM_LOGIN_REQUIRED":
+		return s.HandleLoginRequired(ctx, linkedItem, errorCode, errorMessage)
+	case "ERROR":
+		return s.HandleError(ctx, linkedItem, errorCode, errorMessage)
+	case "PENDING_EXPIRATION":
+		return s.HandlePendingExpiration(ctx, linkedItem, errorCode, errorMessage)
+	case "USER_PERMISSION_REVOKED":
+		return s.HandlePermissionRevoked(ctx, linkedItem, errorCode, errorMessage)
+	default:
+		// Unknown error type - log and return error (webhook cannot be processed)
+		return fmt.Errorf("unsupported error type %s for item_id %s", errorType, itemID)
+	}
 }
