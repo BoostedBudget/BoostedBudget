@@ -42,6 +42,26 @@ type PlaidService interface {
 	// The link token is used by the frontend to initialize Plaid Link for the specified user.
 	CreateLinkToken(ctx context.Context, userID string) (*domain.LinkTokenResponse, error)
 
+	// CreateUpdateModeLinkToken generates a Plaid Link token in update mode for re-authentication.
+	// This is used when a user needs to re-authenticate their bank connection due to:
+	//   - LOGIN_REQUIRED: Credentials changed, MFA required, or session expired
+	//   - PENDING_EXPIRATION: Item access expiring soon
+	//   - USER_PERMISSION_REVOKED: User revoked access at their bank
+	//
+	// The link token allows the user to re-authenticate through Plaid Link without creating
+	// a new Item. The existing Item and accounts remain intact.
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation and timeout
+	//   - userID: The user's ID (Auth0 ID)
+	//   - accessToken: The Plaid access token for the Item to update (must be decrypted)
+	//
+	// Returns the link token response containing the link token for update mode.
+	// Returns error if validation fails or the Plaid API call fails.
+	//
+	// Issue #257: Item Error Handler - Process ITEM Webhooks and User Notifications
+	CreateUpdateModeLinkToken(ctx context.Context, userID string, accessToken string) (*domain.LinkTokenResponse, error)
+
 	// RemoveItem invalidates a Plaid Item's access token and removes it from Plaid.
 	// This stops monthly billing for the Item and prevents further API calls with the access token.
 	// Should be called when a user disconnects an institution from BoostedBudget.
@@ -202,6 +222,90 @@ func (s *plaidService) CreateLinkToken(ctx context.Context, userID string) (*dom
 	resp, _, err := s.client.PlaidApi.LinkTokenCreate(ctx).LinkTokenCreateRequest(*request).Execute()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create link token: %w", err)
+	}
+
+	// Build response
+	return &domain.LinkTokenResponse{
+		LinkToken:  resp.GetLinkToken(),
+		Expiration: resp.GetExpiration(),
+		RequestID:  resp.GetRequestId(),
+	}, nil
+}
+
+// CreateUpdateModeLinkToken creates a Plaid Link token in update mode for re-authentication.
+//
+// Update mode is used when a user needs to re-authenticate their existing bank connection
+// due to credential changes, MFA requirements, session expiration, or access revocation.
+// Unlike CreateLinkToken (which creates a new Item), update mode maintains the existing
+// Item and accounts while allowing the user to re-authorize.
+//
+// When to use:
+//   - Plaid webhook returns ITEM_LOGIN_REQUIRED (credentials changed)
+//   - Plaid webhook returns PENDING_EXPIRATION (access expiring soon)
+//   - Plaid webhook returns USER_PERMISSION_REVOKED (user revoked access at bank)
+//
+// The frontend should initialize Plaid Link with the returned link token. After successful
+// re-authentication, the existing Item's access token remains valid and can continue to be
+// used for API calls.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout control
+//   - userID: The user's ID (Auth0 ID) for identifying the user in Plaid
+//   - accessToken: The Plaid access token for the Item (must be decrypted)
+//
+// Returns the link token response for update mode, or error if validation fails or Plaid API fails.
+//
+// Issue #257: Item Error Handler - Process ITEM Webhooks and User Notifications
+func (s *plaidService) CreateUpdateModeLinkToken(ctx context.Context, userID string, accessToken string) (*domain.LinkTokenResponse, error) {
+	// Validate required parameters
+	if userID == "" {
+		return nil, fmt.Errorf("user ID cannot be empty")
+	}
+	if accessToken == "" {
+		return nil, fmt.Errorf("access token cannot be empty")
+	}
+
+	// Validate required config before building request
+	if s.config.PlaidRedirectURI == "" {
+		return nil, fmt.Errorf("PLAID_REDIRECT_URI is required but not configured")
+	}
+
+	// Create Plaid API request
+	request := plaid.NewLinkTokenCreateRequest(
+		"BoostedBudget",       // client_name: Displayed in Plaid Link
+		"en",                  // language: English
+		[]plaid.CountryCode{plaid.COUNTRYCODE_US}, // country_codes: USA only (MVP)
+		*plaid.NewLinkTokenCreateRequestUser(userID), // user: Auth0 user ID
+	)
+
+	// CRITICAL: Set access token to enable update mode
+	// This tells Plaid to create a link token for re-authenticating the EXISTING Item
+	// rather than creating a new Item. The accessToken must be decrypted.
+	//
+	// Common mistake: Using item_id instead of access_token (SetAccessToken needs access_token!)
+	request.SetAccessToken(accessToken)
+
+	// Set products (same as CreateLinkToken - TRANSACTIONS only)
+	// Issue #232: BALANCE removed (not valid Link initialization product)
+	// Issue #237: AUTH removed (only supports checking/savings, caused NO_AUTH_ACCOUNTS)
+	request.SetProducts([]plaid.Products{
+		plaid.PRODUCTS_TRANSACTIONS,
+	})
+
+	// Set redirect URI for OAuth institution support
+	// Required for OAuth-based institutions (Chase, Capital One, etc.)
+	request.SetRedirectUri(s.config.PlaidRedirectURI)
+
+	// Set webhook URL if configured (same as CreateLinkToken)
+	// Enables real-time notifications after re-authentication succeeds
+	if s.config.PlaidWebhookURL != "" {
+		request.SetWebhook(s.config.PlaidWebhookURL)
+	}
+
+	// Call Plaid API to create update mode link token
+	resp, _, err := s.client.PlaidApi.LinkTokenCreate(ctx).LinkTokenCreateRequest(*request).Execute()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create update mode link token: %w", err)
 	}
 
 	// Build response
