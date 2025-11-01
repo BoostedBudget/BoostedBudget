@@ -87,6 +87,11 @@ func (m *MockEmailService) SendDeletionConfirmation(ctx context.Context, email, 
 	return args.Error(0)
 }
 
+func (m *MockEmailService) SendNotificationEmail(ctx context.Context, toEmail string, notification *domain.Notification) error {
+	args := m.Called(ctx, toEmail, notification)
+	return args.Error(0)
+}
+
 // MockAuth0Service for testing
 type MockAuth0Service struct {
 	mock.Mock

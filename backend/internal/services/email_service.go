@@ -3,9 +3,11 @@ package services
 import (
 	"context"
 	"fmt"
+	"log"
 	"regexp"
 	"time"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/sendgrid/sendgrid-go"
 	"github.com/sendgrid/sendgrid-go/helpers/mail"
 )
@@ -14,6 +16,21 @@ import (
 type EmailService interface {
 	// SendDeletionConfirmation sends account deletion confirmation email
 	SendDeletionConfirmation(ctx context.Context, toEmail, cancellationToken string, scheduledDate time.Time) error
+
+	// SendNotificationEmail sends an email notification to a user.
+	// Issue #257: Item Error Handler - User Notifications
+	//
+	// MVP Implementation: Stub that logs to console (no real email sending).
+	// Phase 3+: Implement real email sending via SendGrid.
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation and timeout control
+	//   - toEmail: User's email address
+	//   - notification: The notification containing email content
+	//
+	// Returns error if email sending fails.
+	// Note: Callers should handle errors gracefully (non-blocking).
+	SendNotificationEmail(ctx context.Context, toEmail string, notification *domain.Notification) error
 }
 
 // emailService implements EmailService using SendGrid
@@ -90,6 +107,44 @@ func (s *emailService) SendDeletionConfirmation(ctx context.Context, toEmail, ca
 		return fmt.Errorf("SendGrid API error (status %d): %s", response.StatusCode, response.Body)
 	}
 
+	return nil
+}
+
+// SendNotificationEmail sends a notification email (MVP: stub implementation).
+// Issue #257: Item Error Handler - User Notifications
+//
+// MVP Implementation: Logs email details to console without actually sending.
+// This allows the notification system to work without requiring email infrastructure.
+//
+// Future (Phase 3+): Replace with real SendGrid email sending:
+//   - Create HTML/plain text templates for each notification type
+//   - Send via SendGrid API
+//   - Track delivery status
+//   - Handle bounce/failure notifications
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout
+//   - toEmail: User's email address
+//   - notification: Notification containing email content
+//
+// Returns: Always nil in MVP (stub always succeeds). Real implementation will return errors.
+func (s *emailService) SendNotificationEmail(ctx context.Context, toEmail string, notification *domain.Notification) error {
+	// MVP STUB: Log email details to console (no actual sending)
+	log.Printf("[EMAIL STUB] Would send notification email:")
+	log.Printf("  To: %s", toEmail)
+	log.Printf("  User ID: %s", notification.UserID)
+	log.Printf("  Type: %s", notification.Type)
+	log.Printf("  Title: %s", notification.Title)
+	log.Printf("  Message: %s", notification.Message)
+	if notification.ActionURL != nil {
+		log.Printf("  Action URL: %s", *notification.ActionURL)
+	}
+	if notification.ActionLabel != nil {
+		log.Printf("  Action Label: %s", *notification.ActionLabel)
+	}
+
+	// MVP: Always succeeds (no real sending)
+	// Phase 3+: Will return actual sending errors
 	return nil
 }
 

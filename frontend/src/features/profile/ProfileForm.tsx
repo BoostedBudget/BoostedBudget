@@ -23,6 +23,14 @@ export function ProfileForm({ user, onProfileUpdate }: ProfileFormProps) {
     setPrimaryRegion(user.primary_region)
   }, [user.email, user.primary_region])
 
+  // Clear success message after 3 seconds (with cleanup)
+  useEffect(() => {
+    if (successMessage) {
+      const timer = setTimeout(() => setSuccessMessage(null), 3000)
+      return () => clearTimeout(timer)
+    }
+  }, [successMessage])
+
   function validateEmail(email: string): boolean {
     if (!email || email.trim() === '') {
       setValidationError('Email is required')
@@ -85,9 +93,6 @@ export function ProfileForm({ user, onProfileUpdate }: ProfileFormProps) {
 
       // Notify parent component
       onProfileUpdate?.(updatedUser)
-
-      // Clear success message after 3 seconds
-      setTimeout(() => setSuccessMessage(null), 3000)
     } catch (err) {
       console.error('Failed to update profile:', err)
       setValidationError('Failed to update profile. Please try again.')
