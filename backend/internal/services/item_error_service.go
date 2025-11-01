@@ -1,0 +1,97 @@
+// Package services provides business logic and external service integrations.
+// This file implements ItemErrorService for processing Plaid ITEM webhook errors.
+package services
+
+import (
+	"context"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+)
+
+// ItemErrorService handles Plaid ITEM webhook error processing.
+// Issue #257: Item Error Handler - Process ITEM Webhooks and User Notifications
+//
+// Processes ITEM webhook errors from Plaid including:
+// - LOGIN_REQUIRED: User needs to re-authenticate (credentials changed, MFA, session expired)
+// - ERROR: General connection error
+// - PENDING_EXPIRATION: Item access expiring soon
+// - USER_PERMISSION_REVOKED: User revoked access at their bank
+//
+// For each error type, the service:
+// 1. Updates LinkedItem status and error details in database
+// 2. Creates update mode link token for re-authentication (if applicable)
+// 3. Creates in-app notification for the user
+// 4. Sends email notification (stub in MVP, real email in Phase 3+)
+//
+// Error handling follows graceful degradation:
+// - Notification/email failures do NOT block webhook processing
+// - Errors are logged but webhook returns 200 OK to Plaid
+type ItemErrorService interface {
+	// HandleLoginRequired processes LOGIN_REQUIRED webhook error.
+	// This occurs when user needs to re-authenticate due to:
+	// - Credentials changed at bank
+	// - MFA required
+	// - Session expired
+	//
+	// Actions:
+	// 1. Updates LinkedItem status to "login_required" with error details
+	// 2. Creates update mode link token for re-authentication
+	// 3. Creates notification with action URL (link token embedded)
+	// 4. Sends email notification (non-blocking)
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation and timeout
+	//   - linkedItem: The LinkedItem that needs re-authentication
+	//   - errorCode: Plaid error code (e.g., "ITEM_LOGIN_REQUIRED")
+	//   - errorMessage: Human-readable error message
+	//
+	// Returns error only if critical operations fail (DB update, link token creation).
+	// Notification/email failures are logged but don't return error.
+	HandleLoginRequired(ctx context.Context, linkedItem *domain.LinkedItem, errorCode string, errorMessage string) error
+
+	// HandleError processes general ERROR webhook.
+	// For general connection errors that may be transient or require user action.
+	//
+	// Actions:
+	// 1. Updates LinkedItem status to "error" with error details
+	// 2. Creates notification informing user of the error
+	// 3. Sends email notification (non-blocking)
+	//
+	// Note: No link token needed for general errors (unlike LOGIN_REQUIRED).
+	HandleError(ctx context.Context, linkedItem *domain.LinkedItem, errorCode string, errorMessage string) error
+
+	// HandlePendingExpiration processes PENDING_EXPIRATION webhook.
+	// Alerts user that Item access is expiring soon and needs re-authentication.
+	//
+	// Actions:
+	// 1. Updates LinkedItem status to "pending_expiration" with error details
+	// 2. Creates update mode link token for re-authentication
+	// 3. Creates notification with action URL (link token embedded)
+	// 4. Sends email notification (non-blocking)
+	HandlePendingExpiration(ctx context.Context, linkedItem *domain.LinkedItem, errorCode string, errorMessage string) error
+
+	// HandlePermissionRevoked processes USER_PERMISSION_REVOKED webhook.
+	// User explicitly revoked access at their bank - requires re-linking.
+	//
+	// Actions:
+	// 1. Updates LinkedItem status to "revoked" with error details
+	// 2. Creates update mode link token for re-linking
+	// 3. Creates notification with action URL (link token embedded)
+	// 4. Sends email notification (non-blocking)
+	HandlePermissionRevoked(ctx context.Context, linkedItem *domain.LinkedItem, errorCode string, errorMessage string) error
+
+	// ProcessWebhook is the main orchestrator for ITEM webhook processing.
+	// Routes webhook to appropriate handler based on error type.
+	//
+	// Called by WebhookProcessor when ITEM webhook is received.
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation and timeout
+	//   - itemID: Plaid Item ID from webhook
+	//   - errorType: Webhook error type (e.g., "ITEM_LOGIN_REQUIRED", "ERROR")
+	//   - errorCode: Plaid error code
+	//   - errorMessage: Human-readable error message
+	//
+	// Returns error only for critical failures. Graceful degradation for notifications.
+	ProcessWebhook(ctx context.Context, itemID string, errorType string, errorCode string, errorMessage string) error
+}
