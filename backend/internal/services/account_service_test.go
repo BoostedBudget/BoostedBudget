@@ -105,6 +105,11 @@ func (m *MockLinkedItemRepository) UpdateCursor(ctx context.Context, id, cursor 
 	return args.Error(0)
 }
 
+func (m *MockLinkedItemRepository) Update(ctx context.Context, item *domain.LinkedItem) error {
+	args := m.Called(ctx, item)
+	return args.Error(0)
+}
+
 func (m *MockLinkedItemRepository) Delete(ctx context.Context, id string) error {
 	args := m.Called(ctx, id)
 	return args.Error(0)
