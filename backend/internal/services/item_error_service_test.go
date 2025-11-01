@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -1259,4 +1260,287 @@ func TestHandlePermissionRevoked_EmailFailureNonBlocking(t *testing.T) {
 	mockLinkedItemRepo.AssertExpectations(t)
 	mockNotificationRepo.AssertExpectations(t)
 	mockEmailService.AssertExpectations(t)
+}
+
+// ============================================================================
+// ProcessWebhook Tests
+// ============================================================================
+
+// TestProcessWebhook_LoginRequired tests routing to HandleLoginRequired
+func TestProcessWebhook_LoginRequired(t *testing.T) {
+	ctx := context.Background()
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
+	mockPlaidService := new(MockPlaidService)
+	mockEncryptionService := new(MockEncryptionService)
+	mockEmailService := new(MockEmailService)
+
+	service := NewItemErrorService(
+		mockLinkedItemRepo,
+		mockNotificationRepo,
+		mockPlaidService,
+		mockEncryptionService,
+		mockEmailService,
+	)
+
+	// Mock: Lookup LinkedItem by itemID
+	linkedItem := &domain.LinkedItem{
+		ID:                   "linked-item-123",
+		UserID:               "user-456",
+		ItemID:               "plaid-item-789",
+		AccessTokenEncrypted: "encrypted-access-token",
+		InstitutionID:        "ins_1",
+		InstitutionName:      "Test Bank",
+		Status:               "active",
+	}
+	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
+
+	// Mock: All operations for HandleLoginRequired
+	mockEncryptionService.On("Decrypt", "encrypted-access-token").Return("decrypted-access-token", nil)
+	linkTokenResponse := &domain.LinkTokenResponse{
+		LinkToken:  "link-token-123",
+		Expiration: time.Now().Add(30 * time.Minute),
+		RequestID:  "req-123",
+	}
+	mockPlaidService.On("CreateUpdateModeLinkToken", ctx, "user-456", "decrypted-access-token").Return(linkTokenResponse, nil)
+	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
+	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
+	mockEmailService.On("SendNotificationEmail", ctx, mock.Anything, mock.Anything).Return(nil)
+
+	// When: ProcessWebhook is called with ITEM_LOGIN_REQUIRED
+	err := service.ProcessWebhook(ctx, "plaid-item-789", "ITEM_LOGIN_REQUIRED", "ITEM_LOGIN_REQUIRED", "Credentials changed")
+
+	// Then: Routes to HandleLoginRequired and succeeds
+	require.NoError(t, err)
+	mockLinkedItemRepo.AssertExpectations(t)
+	mockEncryptionService.AssertExpectations(t)
+	mockPlaidService.AssertExpectations(t)
+	mockNotificationRepo.AssertExpectations(t)
+	mockEmailService.AssertExpectations(t)
+}
+
+// TestProcessWebhook_Error tests routing to HandleError
+func TestProcessWebhook_Error(t *testing.T) {
+	ctx := context.Background()
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
+	mockPlaidService := new(MockPlaidService)
+	mockEncryptionService := new(MockEncryptionService)
+	mockEmailService := new(MockEmailService)
+
+	service := NewItemErrorService(
+		mockLinkedItemRepo,
+		mockNotificationRepo,
+		mockPlaidService,
+		mockEncryptionService,
+		mockEmailService,
+	)
+
+	// Mock: Lookup LinkedItem by itemID
+	linkedItem := &domain.LinkedItem{
+		ID:              "linked-item-123",
+		UserID:          "user-456",
+		ItemID:          "plaid-item-789",
+		InstitutionName: "Test Bank",
+		Status:          "active",
+	}
+	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
+
+	// Mock: All operations for HandleError (no decryption/link token)
+	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
+	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
+	mockEmailService.On("SendNotificationEmail", ctx, mock.Anything, mock.Anything).Return(nil)
+
+	// When: ProcessWebhook is called with ERROR
+	err := service.ProcessWebhook(ctx, "plaid-item-789", "ERROR", "ITEM_ERROR", "Connection error")
+
+	// Then: Routes to HandleError and succeeds
+	require.NoError(t, err)
+	mockLinkedItemRepo.AssertExpectations(t)
+	mockNotificationRepo.AssertExpectations(t)
+	mockEmailService.AssertExpectations(t)
+	// HandleError does NOT call encryption or plaid service
+	mockEncryptionService.AssertNotCalled(t, "Decrypt")
+	mockPlaidService.AssertNotCalled(t, "CreateUpdateModeLinkToken")
+}
+
+// TestProcessWebhook_PendingExpiration tests routing to HandlePendingExpiration
+func TestProcessWebhook_PendingExpiration(t *testing.T) {
+	ctx := context.Background()
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
+	mockPlaidService := new(MockPlaidService)
+	mockEncryptionService := new(MockEncryptionService)
+	mockEmailService := new(MockEmailService)
+
+	service := NewItemErrorService(
+		mockLinkedItemRepo,
+		mockNotificationRepo,
+		mockPlaidService,
+		mockEncryptionService,
+		mockEmailService,
+	)
+
+	// Mock: Lookup LinkedItem by itemID
+	linkedItem := &domain.LinkedItem{
+		ID:                   "linked-item-123",
+		UserID:               "user-456",
+		ItemID:               "plaid-item-789",
+		AccessTokenEncrypted: "encrypted-access-token",
+		InstitutionID:        "ins_1",
+		InstitutionName:      "Test Bank",
+		Status:               "active",
+	}
+	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
+
+	// Mock: All operations for HandlePendingExpiration
+	mockEncryptionService.On("Decrypt", "encrypted-access-token").Return("decrypted-access-token", nil)
+	linkTokenResponse := &domain.LinkTokenResponse{
+		LinkToken:  "link-token-456",
+		Expiration: time.Now().Add(30 * time.Minute),
+		RequestID:  "req-456",
+	}
+	mockPlaidService.On("CreateUpdateModeLinkToken", ctx, "user-456", "decrypted-access-token").Return(linkTokenResponse, nil)
+	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
+	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
+	mockEmailService.On("SendNotificationEmail", ctx, mock.Anything, mock.Anything).Return(nil)
+
+	// When: ProcessWebhook is called with PENDING_EXPIRATION
+	err := service.ProcessWebhook(ctx, "plaid-item-789", "PENDING_EXPIRATION", "ITEM_PENDING_EXPIRATION", "Access expiring soon")
+
+	// Then: Routes to HandlePendingExpiration and succeeds
+	require.NoError(t, err)
+	mockLinkedItemRepo.AssertExpectations(t)
+	mockEncryptionService.AssertExpectations(t)
+	mockPlaidService.AssertExpectations(t)
+	mockNotificationRepo.AssertExpectations(t)
+	mockEmailService.AssertExpectations(t)
+}
+
+// TestProcessWebhook_PermissionRevoked tests routing to HandlePermissionRevoked
+func TestProcessWebhook_PermissionRevoked(t *testing.T) {
+	ctx := context.Background()
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
+	mockPlaidService := new(MockPlaidService)
+	mockEncryptionService := new(MockEncryptionService)
+	mockEmailService := new(MockEmailService)
+
+	service := NewItemErrorService(
+		mockLinkedItemRepo,
+		mockNotificationRepo,
+		mockPlaidService,
+		mockEncryptionService,
+		mockEmailService,
+	)
+
+	// Mock: Lookup LinkedItem by itemID
+	linkedItem := &domain.LinkedItem{
+		ID:                   "linked-item-123",
+		UserID:               "user-456",
+		ItemID:               "plaid-item-789",
+		AccessTokenEncrypted: "encrypted-access-token",
+		InstitutionID:        "ins_1",
+		InstitutionName:      "Test Bank",
+		Status:               "active",
+	}
+	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
+
+	// Mock: All operations for HandlePermissionRevoked
+	mockEncryptionService.On("Decrypt", "encrypted-access-token").Return("decrypted-access-token", nil)
+	linkTokenResponse := &domain.LinkTokenResponse{
+		LinkToken:  "link-token-789",
+		Expiration: time.Now().Add(30 * time.Minute),
+		RequestID:  "req-789",
+	}
+	mockPlaidService.On("CreateUpdateModeLinkToken", ctx, "user-456", "decrypted-access-token").Return(linkTokenResponse, nil)
+	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
+	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
+	mockEmailService.On("SendNotificationEmail", ctx, mock.Anything, mock.Anything).Return(nil)
+
+	// When: ProcessWebhook is called with USER_PERMISSION_REVOKED
+	err := service.ProcessWebhook(ctx, "plaid-item-789", "USER_PERMISSION_REVOKED", "ITEM_PERMISSION_REVOKED", "User revoked access")
+
+	// Then: Routes to HandlePermissionRevoked and succeeds
+	require.NoError(t, err)
+	mockLinkedItemRepo.AssertExpectations(t)
+	mockEncryptionService.AssertExpectations(t)
+	mockPlaidService.AssertExpectations(t)
+	mockNotificationRepo.AssertExpectations(t)
+	mockEmailService.AssertExpectations(t)
+}
+
+// TestProcessWebhook_ItemError_LinkedItemNotFound tests handling when LinkedItem lookup fails
+func TestProcessWebhook_ItemError_LinkedItemNotFound(t *testing.T) {
+	ctx := context.Background()
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
+	mockPlaidService := new(MockPlaidService)
+	mockEncryptionService := new(MockEncryptionService)
+	mockEmailService := new(MockEmailService)
+
+	service := NewItemErrorService(
+		mockLinkedItemRepo,
+		mockNotificationRepo,
+		mockPlaidService,
+		mockEncryptionService,
+		mockEmailService,
+	)
+
+	// Mock: LinkedItem not found
+	mockLinkedItemRepo.On("GetByItemID", ctx, "unknown-item-id").
+		Return(nil, repository.ErrLinkedItemNotFound)
+
+	// When: ProcessWebhook is called with unknown itemID
+	err := service.ProcessWebhook(ctx, "unknown-item-id", "ITEM_LOGIN_REQUIRED", "ITEM_LOGIN_REQUIRED", "Test error")
+
+	// Then: Returns error (critical failure - cannot process webhook without LinkedItem)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "linked item not found")
+	mockLinkedItemRepo.AssertExpectations(t)
+	// No handlers should be called if LinkedItem not found
+	mockEncryptionService.AssertNotCalled(t, "Decrypt")
+	mockPlaidService.AssertNotCalled(t, "CreateUpdateModeLinkToken")
+	mockNotificationRepo.AssertNotCalled(t, "Create")
+	mockEmailService.AssertNotCalled(t, "SendNotificationEmail")
+}
+
+// TestProcessWebhook_ItemError_UnknownErrorType tests handling of unknown/unsupported error types
+func TestProcessWebhook_ItemError_UnknownErrorType(t *testing.T) {
+	ctx := context.Background()
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
+	mockPlaidService := new(MockPlaidService)
+	mockEncryptionService := new(MockEncryptionService)
+	mockEmailService := new(MockEmailService)
+
+	service := NewItemErrorService(
+		mockLinkedItemRepo,
+		mockNotificationRepo,
+		mockPlaidService,
+		mockEncryptionService,
+		mockEmailService,
+	)
+
+	// Mock: Lookup LinkedItem by itemID
+	linkedItem := &domain.LinkedItem{
+		ID:     "linked-item-123",
+		UserID: "user-456",
+		ItemID: "plaid-item-789",
+		Status: "active",
+	}
+	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
+
+	// When: ProcessWebhook is called with unknown error type
+	err := service.ProcessWebhook(ctx, "plaid-item-789", "UNKNOWN_ERROR_TYPE", "UNKNOWN_CODE", "Test error")
+
+	// Then: Returns error (unsupported error type)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported error type")
+	mockLinkedItemRepo.AssertExpectations(t)
+	// No handlers should be called for unknown error type
+	mockEncryptionService.AssertNotCalled(t, "Decrypt")
+	mockPlaidService.AssertNotCalled(t, "CreateUpdateModeLinkToken")
+	mockNotificationRepo.AssertNotCalled(t, "Create")
+	mockEmailService.AssertNotCalled(t, "SendNotificationEmail")
 }
