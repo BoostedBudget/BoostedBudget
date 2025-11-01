@@ -46,6 +46,10 @@ func (m *mockPlaidService) TransactionsSync(ctx context.Context, accessToken str
 	return nil, errors.New("not implemented")
 }
 
+func (m *mockPlaidService) CreateUpdateModeLinkToken(ctx context.Context, userID string, accessToken string) (*domain.LinkTokenResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
 // mockAccountService is a mock implementation of AccountService for testing
 type mockAccountService struct {
 	getAccountsFunc          func(ctx context.Context, userID string) ([]domain.Account, error)
