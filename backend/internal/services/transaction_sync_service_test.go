@@ -1278,3 +1278,159 @@ func TestProcessModifiedTransactions_EmptySlice(t *testing.T) {
 	mockTransactionRepo.AssertNotCalled(t, "GetByExternalID")
 	mockTransactionRepo.AssertNotCalled(t, "Update")
 }
+
+// ============================================================================
+// Issue #261: processRemovedTransactions Tests (TDD RED Phase)
+// ============================================================================
+
+// TestProcessRemovedTransactions_Success tests deleting removed transactions
+func TestProcessRemovedTransactions_Success(t *testing.T) {
+	// Setup
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		mockTransactionRepo,
+		nil,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	userID := "user-456"
+
+	linkedItem := &domain.LinkedItem{
+		ID:     "linked-item-123",
+		UserID: userID,
+	}
+
+	// 3 removed transactions from Plaid
+	txnID1 := "plaid-txn-removed-1"
+	txnID2 := "plaid-txn-removed-2"
+	txnID3 := "plaid-txn-removed-3"
+
+	removed := []plaid.RemovedTransaction{
+		{TransactionId: &txnID1},
+		{TransactionId: &txnID2},
+		{TransactionId: &txnID3},
+	}
+
+	// Mock: DeleteByExternalID called for each transaction
+	mockTransactionRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, "plaid-txn-removed-1", userID).Return(nil)
+	mockTransactionRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, "plaid-txn-removed-2", userID).Return(nil)
+	mockTransactionRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, "plaid-txn-removed-3", userID).Return(nil)
+
+	// Execute
+	err := service.processRemovedTransactions(ctx, removed, linkedItem)
+
+	// Assert
+	assert.NoError(t, err)
+	mockTransactionRepo.AssertExpectations(t)
+}
+
+// TestProcessRemovedTransactions_IdempotentNotFound tests idempotent deletion (transaction already deleted)
+func TestProcessRemovedTransactions_IdempotentNotFound(t *testing.T) {
+	// Setup
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		mockTransactionRepo,
+		nil,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	userID := "user-456"
+
+	linkedItem := &domain.LinkedItem{
+		ID:     "linked-item-123",
+		UserID: userID,
+	}
+
+	txnID := "plaid-txn-not-found"
+	removed := []plaid.RemovedTransaction{
+		{TransactionId: &txnID},
+	}
+
+	// Mock: DeleteByExternalID returns "not found" error
+	// This is OK - transaction already deleted (idempotent)
+	mockTransactionRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, "plaid-txn-not-found", userID).
+		Return(errors.New("transaction not found"))
+
+	// Execute
+	err := service.processRemovedTransactions(ctx, removed, linkedItem)
+
+	// Assert - should succeed despite not-found (idempotent)
+	assert.NoError(t, err)
+	mockTransactionRepo.AssertExpectations(t)
+}
+
+// TestProcessRemovedTransactions_EmptySlice tests handling of empty input
+func TestProcessRemovedTransactions_EmptySlice(t *testing.T) {
+	// Setup
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		mockTransactionRepo,
+		nil,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{
+		ID:     "linked-item-123",
+		UserID: "user-456",
+	}
+
+	// Empty slice
+	removed := []plaid.RemovedTransaction{}
+
+	// Execute
+	err := service.processRemovedTransactions(ctx, removed, linkedItem)
+
+	// Assert
+	assert.NoError(t, err)
+	// DeleteByExternalID should NOT be called
+	mockTransactionRepo.AssertNotCalled(t, "DeleteByExternalID")
+}
+
+// TestProcessRemovedTransactions_NilTransactionID tests handling of nil transaction_id (should skip)
+func TestProcessRemovedTransactions_NilTransactionID(t *testing.T) {
+	// Setup
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		mockTransactionRepo,
+		nil,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{
+		ID:     "linked-item-123",
+		UserID: "user-456",
+	}
+
+	// Transaction with nil ID (should skip)
+	removed := []plaid.RemovedTransaction{
+		{TransactionId: nil}, // NIL ID
+	}
+
+	// Execute
+	err := service.processRemovedTransactions(ctx, removed, linkedItem)
+
+	// Assert - should succeed but skip nil transaction
+	assert.NoError(t, err)
+	// DeleteByExternalID should NOT be called for nil ID
+	mockTransactionRepo.AssertNotCalled(t, "DeleteByExternalID")
+}
