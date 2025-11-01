@@ -139,8 +139,8 @@ func (s *transactionSyncService) ProcessWebhook(ctx context.Context, webhook *do
 	}
 
 	// Log transaction counts for observability
-	// Note: Storage of transactions deferred to issue #261
-	log.Printf("Webhook %s processed: %d added, %d modified, %d removed transactions",
+	// Note: Storage handled in SyncTransactions (issue #261)
+	log.Printf("Webhook %s processed and stored: %d added, %d modified, %d removed transactions",
 		webhook.ID, len(result.Added), len(result.Modified), len(result.Removed))
 
 	// Mark webhook as processed successfully
@@ -220,6 +220,46 @@ func (s *transactionSyncService) SyncTransactions(
 	result.NewCursor = cursor
 	log.Printf("Sync complete for item %s: total %d added, %d modified, %d removed across %d pages",
 		linkedItem.ID, len(result.Added), len(result.Modified), len(result.Removed), pageCount)
+
+	// ========================================================================
+	// Issue #261: Transaction Storage Logic
+	// Store Added/Modified transactions, delete Removed transactions
+	// ========================================================================
+
+	// Step 5: Build account map for transaction mapping (O(1) lookups)
+	accountMap, err := s.buildAccountMap(ctx, linkedItem.ID)
+	if err != nil {
+		// Return successful sync result but log storage error
+		// Webhook can retry storage on next sync
+		log.Printf("ERROR: Failed to build account map for item %s: %v", linkedItem.ID, err)
+		return result, fmt.Errorf("failed to build account map: %w", err)
+	}
+
+	// Step 6: Process Added transactions (create batch)
+	if len(result.Added) > 0 {
+		if err := s.processAddedTransactions(ctx, result.Added, linkedItem, accountMap); err != nil {
+			log.Printf("ERROR: Failed to process added transactions for item %s: %v", linkedItem.ID, err)
+			return result, fmt.Errorf("failed to process added transactions: %w", err)
+		}
+	}
+
+	// Step 7: Process Modified transactions (update with user_notes preservation)
+	if len(result.Modified) > 0 {
+		if err := s.processModifiedTransactions(ctx, result.Modified, linkedItem, accountMap); err != nil {
+			log.Printf("ERROR: Failed to process modified transactions for item %s: %v", linkedItem.ID, err)
+			return result, fmt.Errorf("failed to process modified transactions: %w", err)
+		}
+	}
+
+	// Step 8: Process Removed transactions (hard delete)
+	if len(result.Removed) > 0 {
+		if err := s.processRemovedTransactions(ctx, result.Removed, linkedItem); err != nil {
+			log.Printf("ERROR: Failed to process removed transactions for item %s: %v", linkedItem.ID, err)
+			return result, fmt.Errorf("failed to process removed transactions: %w", err)
+		}
+	}
+
+	log.Printf("Transaction storage complete for item %s", linkedItem.ID)
 
 	return result, nil
 }
