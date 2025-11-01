@@ -32,6 +32,14 @@ func (m *MockPlaidService) CreateLinkToken(ctx context.Context, userID string) (
 	return args.Get(0).(*domain.LinkTokenResponse), args.Error(1)
 }
 
+func (m *MockPlaidService) CreateUpdateModeLinkToken(ctx context.Context, userID string, accessToken string) (*domain.LinkTokenResponse, error) {
+	args := m.Called(ctx, userID, accessToken)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.LinkTokenResponse), args.Error(1)
+}
+
 func (m *MockPlaidService) RemoveItem(ctx context.Context, accessToken string) error {
 	args := m.Called(ctx, accessToken)
 	return args.Error(0)
