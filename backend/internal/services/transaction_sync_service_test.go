@@ -78,6 +78,7 @@ func TestProcessWebhook_Success(t *testing.T) {
 	mockWebhookRepo := new(MockWebhookRepository)
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
 	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 
@@ -85,6 +86,7 @@ func TestProcessWebhook_Success(t *testing.T) {
 		mockWebhookRepo,
 		mockLinkedItemRepo,
 		mockTransactionRepo,
+		mockAccountRepo,
 		mockPlaidService,
 		mockEncryptionService,
 	)
@@ -146,6 +148,11 @@ func TestProcessWebhook_Success(t *testing.T) {
 	// Mock cursor update (after sync completes)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "new-cursor-from-plaid").Return(nil)
 
+	// Issue #261: Mock account repository for transaction storage
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	// Mock transaction batch creation (empty because transaction has unmapped account, so will be skipped)
+	// No accounts exist, so all transactions will be skipped in processAddedTransactions
+
 	// Mock marking webhook as processed
 	mockWebhookRepo.On("Update", ctx, mock.MatchedBy(func(e *domain.WebhookEvent) bool {
 		return e.ID == webhookID && e.Processed && e.ProcessingCompletedAt != nil
@@ -165,6 +172,7 @@ func TestProcessWebhook_WebhookNotFound(t *testing.T) {
 	mockWebhookRepo := new(MockWebhookRepository)
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
 	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 
@@ -172,6 +180,7 @@ func TestProcessWebhook_WebhookNotFound(t *testing.T) {
 		mockWebhookRepo,
 		mockLinkedItemRepo,
 		mockTransactionRepo,
+		mockAccountRepo,
 		mockPlaidService,
 		mockEncryptionService,
 	)
@@ -191,6 +200,7 @@ func TestProcessWebhook_ItemIDMissing(t *testing.T) {
 	mockWebhookRepo := new(MockWebhookRepository)
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
 	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 
@@ -198,6 +208,7 @@ func TestProcessWebhook_ItemIDMissing(t *testing.T) {
 		mockWebhookRepo,
 		mockLinkedItemRepo,
 		mockTransactionRepo,
+		mockAccountRepo,
 		mockPlaidService,
 		mockEncryptionService,
 	)
@@ -233,6 +244,7 @@ func TestProcessWebhook_LinkedItemNotFound(t *testing.T) {
 	mockWebhookRepo := new(MockWebhookRepository)
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
 	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 
@@ -240,6 +252,7 @@ func TestProcessWebhook_LinkedItemNotFound(t *testing.T) {
 		mockWebhookRepo,
 		mockLinkedItemRepo,
 		mockTransactionRepo,
+		mockAccountRepo,
 		mockPlaidService,
 		mockEncryptionService,
 	)
@@ -288,13 +301,16 @@ func TestProcessWebhook_LinkedItemNotFound(t *testing.T) {
 func TestSyncTransactions_SuccessSinglePage(t *testing.T) {
 	// Setup mocks
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 
 	service := NewTransactionSyncService(
 		nil, // webhookRepo not needed for SyncTransactions
 		mockLinkedItemRepo,
-		nil, // transactionRepo not needed yet (issue #261)
+		mockTransactionRepo,
+		mockAccountRepo,
 		mockPlaidService,
 		mockEncryptionService,
 	)
@@ -327,6 +343,10 @@ func TestSyncTransactions_SuccessSinglePage(t *testing.T) {
 	// Mock cursor update
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-after").Return(nil)
 
+	// Issue #261: Mock account repository for transaction storage
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	// All transactions will be skipped since no accounts exist
+
 	// Execute
 	result, err := service.SyncTransactions(ctx, linkedItem)
 
@@ -346,13 +366,16 @@ func TestSyncTransactions_SuccessSinglePage(t *testing.T) {
 // TestSyncTransactions_SuccessMultiplePages tests pagination with has_more=true
 func TestSyncTransactions_SuccessMultiplePages(t *testing.T) {
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 
 	service := NewTransactionSyncService(
 		nil,
 		mockLinkedItemRepo,
-		nil,
+		mockTransactionRepo,
+		mockAccountRepo,
 		mockPlaidService,
 		mockEncryptionService,
 	)
@@ -389,6 +412,11 @@ func TestSyncTransactions_SuccessMultiplePages(t *testing.T) {
 	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-page1").Return(plaidResp2, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-page2").Return(nil).Once()
 
+	// Issue #261: Mock account repository for transaction storage
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	// Mock deletion of removed transaction
+	mockTransactionRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, "txn-rem-1", linkedItem.UserID).Return(nil)
+
 	// Execute
 	result, err := service.SyncTransactions(ctx, linkedItem)
 
@@ -409,6 +437,7 @@ func TestSyncTransactions_DecryptionError(t *testing.T) {
 	mockEncryptionService := new(MockEncryptionService)
 
 	service := NewTransactionSyncService(
+		nil,
 		nil,
 		nil,
 		nil,
@@ -445,6 +474,7 @@ func TestSyncTransactions_PlaidErrorFirstPage(t *testing.T) {
 	service := NewTransactionSyncService(
 		nil,
 		mockLinkedItemRepo,
+		nil,
 		nil,
 		mockPlaidService,
 		mockEncryptionService,
@@ -486,6 +516,7 @@ func TestSyncTransactions_PlaidErrorSubsequentPage(t *testing.T) {
 	service := NewTransactionSyncService(
 		nil,
 		mockLinkedItemRepo,
+		nil,
 		nil,
 		mockPlaidService,
 		mockEncryptionService,
@@ -537,6 +568,7 @@ func TestSyncTransactions_CursorUpdateError(t *testing.T) {
 		nil,
 		mockLinkedItemRepo,
 		nil,
+		nil,
 		mockPlaidService,
 		mockEncryptionService,
 	)
@@ -578,13 +610,16 @@ func TestSyncTransactions_CursorUpdateError(t *testing.T) {
 // TestSyncTransactions_EmptyCursor tests first sync with no cursor
 func TestSyncTransactions_EmptyCursor(t *testing.T) {
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 
 	service := NewTransactionSyncService(
 		nil,
 		mockLinkedItemRepo,
-		nil,
+		mockTransactionRepo,
+		mockAccountRepo,
 		mockPlaidService,
 		mockEncryptionService,
 	)
@@ -608,6 +643,9 @@ func TestSyncTransactions_EmptyCursor(t *testing.T) {
 	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "").Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-initial").Return(nil)
 
+	// Issue #261: Mock account repository for transaction storage
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+
 	// Execute
 	result, err := service.SyncTransactions(ctx, linkedItem)
 
@@ -623,4 +661,799 @@ func TestSyncTransactions_EmptyCursor(t *testing.T) {
 // Helper function to create string pointers
 func stringPtr(s string) *string {
 	return &s
+}
+
+// ============================================================================
+// Issue #261: Transaction Storage Logic Tests
+// ============================================================================
+
+// TestBuildAccountMap_Success tests building account map with multiple accounts
+func TestBuildAccountMap_Success(t *testing.T) {
+	// Setup
+	mockAccountRepo := new(MockAccountRepository)
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		mockLinkedItemRepo,
+		nil,
+		mockAccountRepo,
+		nil,
+		nil,
+	).(*transactionSyncService) // Type assert to access private method
+
+	ctx := context.Background()
+	linkedItemID := "linked-item-123"
+
+	// Mock: GetByLinkedItemID returns 3 accounts
+	accounts := []domain.Account{
+		{
+			ID:             "account-uuid-1",
+			PlaidAccountID: "plaid-acc-1",
+			Name:           "Checking",
+		},
+		{
+			ID:             "account-uuid-2",
+			PlaidAccountID: "plaid-acc-2",
+			Name:           "Savings",
+		},
+		{
+			ID:             "account-uuid-3",
+			PlaidAccountID: "plaid-acc-3",
+			Name:           "Credit Card",
+		},
+	}
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItemID).Return(accounts, nil)
+
+	// Execute
+	accountMap, err := service.buildAccountMap(ctx, linkedItemID)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.NotNil(t, accountMap)
+	assert.Len(t, accountMap, 3)
+	assert.Equal(t, "account-uuid-1", accountMap["plaid-acc-1"])
+	assert.Equal(t, "account-uuid-2", accountMap["plaid-acc-2"])
+	assert.Equal(t, "account-uuid-3", accountMap["plaid-acc-3"])
+
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestBuildAccountMap_EmptyAccounts tests handling when no accounts exist
+func TestBuildAccountMap_EmptyAccounts(t *testing.T) {
+	// Setup
+	mockAccountRepo := new(MockAccountRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		nil,
+		mockAccountRepo,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItemID := "linked-item-123"
+
+	// Mock: GetByLinkedItemID returns empty slice
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItemID).Return([]domain.Account{}, nil)
+
+	// Execute
+	accountMap, err := service.buildAccountMap(ctx, linkedItemID)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.NotNil(t, accountMap)
+	assert.Len(t, accountMap, 0) // Empty map, not nil
+
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestBuildAccountMap_RepositoryError tests error handling
+func TestBuildAccountMap_RepositoryError(t *testing.T) {
+	// Setup
+	mockAccountRepo := new(MockAccountRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		nil,
+		mockAccountRepo,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItemID := "linked-item-123"
+
+	// Mock: GetByLinkedItemID returns error
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItemID).Return(nil, errors.New("database error"))
+
+	// Execute
+	accountMap, err := service.buildAccountMap(ctx, linkedItemID)
+
+	// Assert
+	assert.Error(t, err)
+	assert.Nil(t, accountMap)
+	assert.Contains(t, err.Error(), "failed to load accounts")
+
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// ============================================================================
+// Issue #261: processAddedTransactions Tests (TDD RED Phase)
+// ============================================================================
+
+// TestProcessAddedTransactions_Success tests processing added transactions with all accounts mapped
+func TestProcessAddedTransactions_Success(t *testing.T) {
+	// Setup
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		mockTransactionRepo,
+		mockAccountRepo,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItemID := "linked-item-123"
+	userID := "user-456"
+
+	// Account map: Plaid account_id -> Internal UUID
+	accountMap := map[string]string{
+		"plaid-acc-1": "account-uuid-1",
+		"plaid-acc-2": "account-uuid-2",
+		"plaid-acc-3": "account-uuid-3",
+	}
+
+	// Mock linked item
+	linkedItem := &domain.LinkedItem{
+		ID:     linkedItemID,
+		UserID: userID,
+	}
+
+	// 3 Plaid transactions to add
+	added := []plaid.Transaction{
+		{
+			TransactionId: "plaid-txn-1",
+			AccountId:     "plaid-acc-1",
+			Amount:        100.00,
+			Date:          "2024-01-15",
+			Name:          "Transaction 1",
+			Pending:       false,
+		},
+		{
+			TransactionId: "plaid-txn-2",
+			AccountId:     "plaid-acc-2",
+			Amount:        50.00,
+			Date:          "2024-01-16",
+			Name:          "Transaction 2",
+			Pending:       false,
+		},
+		{
+			TransactionId: "plaid-txn-3",
+			AccountId:     "plaid-acc-3",
+			Amount:        25.00,
+			Date:          "2024-01-17",
+			Name:          "Transaction 3",
+			Pending:       true,
+		},
+	}
+
+	// Mock: CreateBatch should be called with 3 transactions
+	mockTransactionRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
+		// Verify all 3 transactions are mapped correctly
+		if len(txns) != 3 {
+			return false
+		}
+		// Check first transaction
+		if txns[0].ExternalTransactionID == nil || *txns[0].ExternalTransactionID != "plaid-txn-1" {
+			return false
+		}
+		if txns[0].AccountID != "account-uuid-1" {
+			return false
+		}
+		if txns[0].Amount != 100.00 {
+			return false
+		}
+		// Check second transaction
+		if txns[1].AccountID != "account-uuid-2" {
+			return false
+		}
+		// Check third transaction is pending
+		if !txns[2].Pending {
+			return false
+		}
+		return true
+	})).Return(nil)
+
+	// Execute
+	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap)
+
+	// Assert
+	assert.NoError(t, err)
+	mockTransactionRepo.AssertExpectations(t)
+}
+
+// TestProcessAddedTransactions_Deduplication tests that duplicate transactions are handled by DB constraint
+func TestProcessAddedTransactions_Deduplication(t *testing.T) {
+	// Setup
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		mockTransactionRepo,
+		nil,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItemID := "linked-item-123"
+	userID := "user-456"
+
+	accountMap := map[string]string{
+		"plaid-acc-1": "account-uuid-1",
+	}
+
+	linkedItem := &domain.LinkedItem{
+		ID:     linkedItemID,
+		UserID: userID,
+	}
+
+	// Same transaction_id twice (Plaid API shouldn't do this, but if it does...)
+	added := []plaid.Transaction{
+		{
+			TransactionId: "plaid-txn-duplicate",
+			AccountId:     "plaid-acc-1",
+			Amount:        100.00,
+			Date:          "2024-01-15",
+			Name:          "Transaction 1",
+		},
+		{
+			TransactionId: "plaid-txn-duplicate", // DUPLICATE
+			AccountId:     "plaid-acc-1",
+			Amount:        100.00,
+			Date:          "2024-01-15",
+			Name:          "Transaction 1",
+		},
+	}
+
+	// Mock: CreateBatch with ON CONFLICT DO NOTHING handles deduplication
+	// Both transactions will be passed, database constraint handles it
+	mockTransactionRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
+		return len(txns) == 2 // Both passed to DB, constraint handles dedup
+	})).Return(nil)
+
+	// Execute
+	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap)
+
+	// Assert
+	assert.NoError(t, err)
+	mockTransactionRepo.AssertExpectations(t)
+}
+
+// TestProcessAddedTransactions_PartialFailure tests graceful error handling when some accounts missing
+func TestProcessAddedTransactions_PartialFailure(t *testing.T) {
+	// Setup
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		mockTransactionRepo,
+		nil,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItemID := "linked-item-123"
+	userID := "user-456"
+
+	// Account map missing plaid-acc-3
+	accountMap := map[string]string{
+		"plaid-acc-1": "account-uuid-1",
+		"plaid-acc-2": "account-uuid-2",
+		// plaid-acc-3 NOT in map
+	}
+
+	linkedItem := &domain.LinkedItem{
+		ID:     linkedItemID,
+		UserID: userID,
+	}
+
+	// 3 transactions, but 3rd has unmapped account
+	added := []plaid.Transaction{
+		{
+			TransactionId: "plaid-txn-1",
+			AccountId:     "plaid-acc-1",
+			Amount:        100.00,
+			Date:          "2024-01-15",
+			Name:          "Transaction 1",
+		},
+		{
+			TransactionId: "plaid-txn-2",
+			AccountId:     "plaid-acc-2",
+			Amount:        50.00,
+			Date:          "2024-01-16",
+			Name:          "Transaction 2",
+		},
+		{
+			TransactionId: "plaid-txn-3",
+			AccountId:     "plaid-acc-3", // MISSING FROM MAP
+			Amount:        25.00,
+			Date:          "2024-01-17",
+			Name:          "Transaction 3",
+		},
+	}
+
+	// Mock: CreateBatch should only receive 2 transactions (3rd skipped due to missing account)
+	mockTransactionRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
+		return len(txns) == 2 // Only first 2 transactions
+	})).Return(nil)
+
+	// Execute
+	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap)
+
+	// Assert - should succeed but log warning for skipped transaction
+	assert.NoError(t, err) // Continue processing despite skipping one
+	mockTransactionRepo.AssertExpectations(t)
+}
+
+// TestProcessAddedTransactions_EmptySlice tests handling of empty input
+func TestProcessAddedTransactions_EmptySlice(t *testing.T) {
+	// Setup
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		mockTransactionRepo,
+		nil,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{
+		ID:     "linked-item-123",
+		UserID: "user-456",
+	}
+	accountMap := map[string]string{}
+
+	// Empty slice
+	added := []plaid.Transaction{}
+
+	// Mock: CreateBatch should NOT be called for empty slice
+	// (We'll optimize to skip DB call if no transactions)
+
+	// Execute
+	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap)
+
+	// Assert
+	assert.NoError(t, err)
+	// CreateBatch should NOT have been called
+	mockTransactionRepo.AssertNotCalled(t, "CreateBatch")
+}
+
+// ============================================================================
+// Issue #261: processModifiedTransactions Tests (TDD RED Phase)
+// ============================================================================
+
+// TestProcessModifiedTransactions_Success tests updating existing transactions while preserving user_notes
+func TestProcessModifiedTransactions_Success(t *testing.T) {
+	// Setup
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		mockTransactionRepo,
+		nil,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItemID := "linked-item-123"
+	userID := "user-456"
+
+	accountMap := map[string]string{
+		"plaid-acc-1": "account-uuid-1",
+		"plaid-acc-2": "account-uuid-2",
+	}
+
+	linkedItem := &domain.LinkedItem{
+		ID:     linkedItemID,
+		UserID: userID,
+	}
+
+	// 2 modified transactions from Plaid
+	modified := []plaid.Transaction{
+		{
+			TransactionId: "plaid-txn-1",
+			AccountId:     "plaid-acc-1",
+			Amount:        150.00, // Amount changed from 100 to 150
+			Date:          "2024-01-15",
+			Name:          "Transaction 1 Updated",
+			Pending:       false,
+		},
+		{
+			TransactionId: "plaid-txn-2",
+			AccountId:     "plaid-acc-2",
+			Amount:        75.00, // Amount changed
+			Date:          "2024-01-16",
+			Name:          "Transaction 2 Updated",
+			Pending:       true, // Now pending
+		},
+	}
+
+	// Mock: GetByExternalID returns existing transactions WITH user_notes
+	existingUserNotes1 := "My custom note 1"
+	existingUserNotes2 := "My custom note 2"
+	externalID1 := "plaid-txn-1"
+	externalID2 := "plaid-txn-2"
+
+	existingTxn1 := &domain.Transaction{
+		ID:                    "txn-uuid-1",
+		UserID:                userID,
+		AccountID:             "account-uuid-1",
+		ExternalTransactionID: &externalID1,
+		Amount:                100.00, // Old amount
+		Name:                  "Transaction 1",
+		UserNotes:             &existingUserNotes1, // USER'S CUSTOM NOTE
+	}
+	existingTxn2 := &domain.Transaction{
+		ID:                    "txn-uuid-2",
+		UserID:                userID,
+		AccountID:             "account-uuid-2",
+		ExternalTransactionID: &externalID2,
+		Amount:                50.00, // Old amount
+		Name:                  "Transaction 2",
+		UserNotes:             &existingUserNotes2, // USER'S CUSTOM NOTE
+	}
+
+	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "plaid-txn-1", userID).Return(existingTxn1, nil)
+	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "plaid-txn-2", userID).Return(existingTxn2, nil)
+
+	// Mock: Update should be called with new data BUT old user_notes preserved
+	mockTransactionRepo.On("Update", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
+		// Transaction 1: Amount updated, user_notes preserved
+		if txn.ID == "txn-uuid-1" {
+			return txn.Amount == 150.00 &&
+				txn.Name == "Transaction 1 Updated" &&
+				txn.UserNotes != nil &&
+				*txn.UserNotes == "My custom note 1" // PRESERVED!
+		}
+		return false
+	})).Return(nil).Once()
+
+	mockTransactionRepo.On("Update", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
+		// Transaction 2: Amount updated, user_notes preserved
+		if txn.ID == "txn-uuid-2" {
+			return txn.Amount == 75.00 &&
+				txn.Pending == true &&
+				txn.UserNotes != nil &&
+				*txn.UserNotes == "My custom note 2" // PRESERVED!
+		}
+		return false
+	})).Return(nil).Once()
+
+	// Execute
+	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap)
+
+	// Assert
+	assert.NoError(t, err)
+	mockTransactionRepo.AssertExpectations(t)
+}
+
+// TestProcessModifiedTransactions_NewTransactionNoUserNotes tests transaction with nil user_notes
+func TestProcessModifiedTransactions_NewTransactionNoUserNotes(t *testing.T) {
+	// Setup
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		mockTransactionRepo,
+		nil,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItemID := "linked-item-123"
+	userID := "user-456"
+
+	accountMap := map[string]string{
+		"plaid-acc-1": "account-uuid-1",
+	}
+
+	linkedItem := &domain.LinkedItem{
+		ID:     linkedItemID,
+		UserID: userID,
+	}
+
+	modified := []plaid.Transaction{
+		{
+			TransactionId: "plaid-txn-1",
+			AccountId:     "plaid-acc-1",
+			Amount:        150.00,
+			Date:          "2024-01-15",
+			Name:          "Transaction 1",
+		},
+	}
+
+	// Existing transaction has NO user_notes
+	externalID := "plaid-txn-1"
+	existingTxn := &domain.Transaction{
+		ID:                    "txn-uuid-1",
+		UserID:                userID,
+		AccountID:             "account-uuid-1",
+		ExternalTransactionID: &externalID,
+		Amount:                100.00,
+		Name:                  "Transaction 1",
+		UserNotes:             nil, // NO user notes
+	}
+
+	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "plaid-txn-1", userID).Return(existingTxn, nil)
+
+	// Mock: Update with nil user_notes (unchanged)
+	mockTransactionRepo.On("Update", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
+		return txn.ID == "txn-uuid-1" && txn.UserNotes == nil
+	})).Return(nil)
+
+	// Execute
+	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap)
+
+	// Assert
+	assert.NoError(t, err)
+	mockTransactionRepo.AssertExpectations(t)
+}
+
+// TestProcessModifiedTransactions_TransactionNotFound tests handling when transaction doesn't exist yet
+func TestProcessModifiedTransactions_TransactionNotFound(t *testing.T) {
+	// Setup
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		mockTransactionRepo,
+		nil,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItemID := "linked-item-123"
+	userID := "user-456"
+
+	accountMap := map[string]string{
+		"plaid-acc-1": "account-uuid-1",
+	}
+
+	linkedItem := &domain.LinkedItem{
+		ID:     linkedItemID,
+		UserID: userID,
+	}
+
+	modified := []plaid.Transaction{
+		{
+			TransactionId: "plaid-txn-new",
+			AccountId:     "plaid-acc-1",
+			Amount:        150.00,
+			Date:          "2024-01-15",
+			Name:          "New Transaction",
+		},
+	}
+
+	// GetByExternalID returns error (not found)
+	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "plaid-txn-new", userID).
+		Return(nil, errors.New("transaction not found"))
+
+	// Execute
+	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap)
+
+	// Assert - should continue despite not finding transaction (log warning)
+	assert.NoError(t, err) // Gracefully skip
+	// Update should NOT be called for not-found transaction
+	mockTransactionRepo.AssertNotCalled(t, "Update")
+}
+
+// TestProcessModifiedTransactions_EmptySlice tests handling of empty input
+func TestProcessModifiedTransactions_EmptySlice(t *testing.T) {
+	// Setup
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		mockTransactionRepo,
+		nil,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{
+		ID:     "linked-item-123",
+		UserID: "user-456",
+	}
+	accountMap := map[string]string{}
+
+	// Empty slice
+	modified := []plaid.Transaction{}
+
+	// Execute
+	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap)
+
+	// Assert
+	assert.NoError(t, err)
+	// No repository methods should be called
+	mockTransactionRepo.AssertNotCalled(t, "GetByExternalID")
+	mockTransactionRepo.AssertNotCalled(t, "Update")
+}
+
+// ============================================================================
+// Issue #261: processRemovedTransactions Tests (TDD RED Phase)
+// ============================================================================
+
+// TestProcessRemovedTransactions_Success tests deleting removed transactions
+func TestProcessRemovedTransactions_Success(t *testing.T) {
+	// Setup
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		mockTransactionRepo,
+		nil,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	userID := "user-456"
+
+	linkedItem := &domain.LinkedItem{
+		ID:     "linked-item-123",
+		UserID: userID,
+	}
+
+	// 3 removed transactions from Plaid
+	txnID1 := "plaid-txn-removed-1"
+	txnID2 := "plaid-txn-removed-2"
+	txnID3 := "plaid-txn-removed-3"
+
+	removed := []plaid.RemovedTransaction{
+		{TransactionId: &txnID1},
+		{TransactionId: &txnID2},
+		{TransactionId: &txnID3},
+	}
+
+	// Mock: DeleteByExternalID called for each transaction
+	mockTransactionRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, "plaid-txn-removed-1", userID).Return(nil)
+	mockTransactionRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, "plaid-txn-removed-2", userID).Return(nil)
+	mockTransactionRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, "plaid-txn-removed-3", userID).Return(nil)
+
+	// Execute
+	err := service.processRemovedTransactions(ctx, removed, linkedItem)
+
+	// Assert
+	assert.NoError(t, err)
+	mockTransactionRepo.AssertExpectations(t)
+}
+
+// TestProcessRemovedTransactions_IdempotentNotFound tests idempotent deletion (transaction already deleted)
+func TestProcessRemovedTransactions_IdempotentNotFound(t *testing.T) {
+	// Setup
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		mockTransactionRepo,
+		nil,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	userID := "user-456"
+
+	linkedItem := &domain.LinkedItem{
+		ID:     "linked-item-123",
+		UserID: userID,
+	}
+
+	txnID := "plaid-txn-not-found"
+	removed := []plaid.RemovedTransaction{
+		{TransactionId: &txnID},
+	}
+
+	// Mock: DeleteByExternalID returns "not found" error
+	// This is OK - transaction already deleted (idempotent)
+	mockTransactionRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, "plaid-txn-not-found", userID).
+		Return(errors.New("transaction not found"))
+
+	// Execute
+	err := service.processRemovedTransactions(ctx, removed, linkedItem)
+
+	// Assert - should succeed despite not-found (idempotent)
+	assert.NoError(t, err)
+	mockTransactionRepo.AssertExpectations(t)
+}
+
+// TestProcessRemovedTransactions_EmptySlice tests handling of empty input
+func TestProcessRemovedTransactions_EmptySlice(t *testing.T) {
+	// Setup
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		mockTransactionRepo,
+		nil,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{
+		ID:     "linked-item-123",
+		UserID: "user-456",
+	}
+
+	// Empty slice
+	removed := []plaid.RemovedTransaction{}
+
+	// Execute
+	err := service.processRemovedTransactions(ctx, removed, linkedItem)
+
+	// Assert
+	assert.NoError(t, err)
+	// DeleteByExternalID should NOT be called
+	mockTransactionRepo.AssertNotCalled(t, "DeleteByExternalID")
+}
+
+// TestProcessRemovedTransactions_NilTransactionID tests handling of nil transaction_id (should skip)
+func TestProcessRemovedTransactions_NilTransactionID(t *testing.T) {
+	// Setup
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		mockTransactionRepo,
+		nil,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{
+		ID:     "linked-item-123",
+		UserID: "user-456",
+	}
+
+	// Transaction with nil ID (should skip)
+	removed := []plaid.RemovedTransaction{
+		{TransactionId: nil}, // NIL ID
+	}
+
+	// Execute
+	err := service.processRemovedTransactions(ctx, removed, linkedItem)
+
+	// Assert - should succeed but skip nil transaction
+	assert.NoError(t, err)
+	// DeleteByExternalID should NOT be called for nil ID
+	mockTransactionRepo.AssertNotCalled(t, "DeleteByExternalID")
 }
