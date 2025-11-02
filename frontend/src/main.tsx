@@ -16,7 +16,7 @@ const auth0ClientId = window.ENV?.AUTH0_CLIENT_ID || import.meta.env.VITE_AUTH0_
 const auth0Audience = window.ENV?.AUTH0_AUDIENCE || import.meta.env.VITE_AUTH0_AUDIENCE
 
 if (!auth0Domain || !auth0ClientId) {
-  console.warn('Auth0 configuration missing. Please set AUTH0_DOMAIN and AUTH0_CLIENT_ID environment variables.')
+  throw new Error('FATAL: Auth0 configuration not loaded. window.ENV is undefined or empty. Check that config.js is loading properly.')
 }
 
 // Component to initialize axios interceptor with Auth0 token
@@ -39,8 +39,8 @@ const InitializeAuth = () => {
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <Auth0Provider
-      domain={auth0Domain || 'placeholder.auth0.com'}
-      clientId={auth0ClientId || 'placeholder-client-id'}
+      domain={auth0Domain}
+      clientId={auth0ClientId}
       authorizationParams={{
         redirect_uri: `${window.location.origin}/callback`,
         audience: auth0Audience,
