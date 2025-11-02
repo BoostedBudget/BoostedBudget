@@ -9,9 +9,9 @@ set -e
 cat > /usr/share/nginx/html/config.js <<EOF
 window.ENV = {
   API_URL: '${API_URL:-http://localhost:8080}',
-  AUTH0_DOMAIN: '${AUTH0_DOMAIN:-}',
-  AUTH0_CLIENT_ID: '${AUTH0_CLIENT_ID:-}',
-  AUTH0_AUDIENCE: '${AUTH0_AUDIENCE:-}',
+  AUTH0_DOMAIN: '${AUTH0_DOMAIN:-${VITE_AUTH0_DOMAIN:-}}',
+  AUTH0_CLIENT_ID: '${AUTH0_CLIENT_ID:-${VITE_AUTH0_CLIENT_ID:-}}',
+  AUTH0_AUDIENCE: '${AUTH0_AUDIENCE:-${VITE_AUTH0_AUDIENCE:-}}',
   ENVIRONMENT: '${ENVIRONMENT:-production}'
 };
 EOF
