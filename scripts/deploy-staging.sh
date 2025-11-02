@@ -22,6 +22,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
+COMPOSE_PROJECT_NAME="boostedbudget-staging"
 COMPOSE_FILE="docker-compose.staging.yml"
 ENV_FILE=".env.staging"
 BACKEND_HEALTH_URL="http://localhost:8080/health"
@@ -172,12 +173,14 @@ cleanup_containers() {
   echo "Stopping and removing all staging containers, networks, and orphans..."
 
   # Stop and remove containers, networks, volumes, and orphans
-  docker-compose -f "$COMPOSE_FILE" down -v --remove-orphans 2>/dev/null || {
+  docker-compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" down -v --remove-orphans 2>/dev/null || {
     print_warning "docker-compose down failed or no containers exist"
   }
 
-  # Extra safety: manually remove any lingering staging containers
+  # Extra safety: manually remove any lingering staging containers (including workspace-prefixed containers)
   local lingering=$(docker ps -a --filter "name=boostedbudget-.*-staging" --format "{{.Names}}" 2>/dev/null || true)
+  local workspace_lingering=$(docker ps -a --filter "name=workspace-.*-staging" --format "{{.Names}}" 2>/dev/null || true)
+  lingering="${lingering}${lingering:+$'\n'}${workspace_lingering}"
   if [ -n "$lingering" ]; then
     echo "Found lingering staging containers, removing forcefully..."
     echo "$lingering" | xargs -r docker rm -f 2>/dev/null || true
@@ -289,7 +292,7 @@ build_or_pull_images() {
 
     echo "Building images with docker-compose..."
     for i in 1 2 3; do
-      docker-compose -f "$COMPOSE_FILE" build --pull && {
+      docker-compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" build --pull && {
         print_success "Images built successfully"
         break
       } || {
@@ -328,7 +331,7 @@ start_containers() {
   echo ""
 
   for i in 1 2; do
-    docker-compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d && {
+    docker-compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d && {
       print_success "Containers started"
       break
     } || {
@@ -336,11 +339,11 @@ start_containers() {
         print_error "Failed to start containers after 2 attempts"
         echo ""
         echo "Recent container logs:"
-        docker-compose -f "$COMPOSE_FILE" logs --tail=50
+        docker-compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" logs --tail=50
         return 1
       else
         echo "⚠ Start attempt failed, retrying in 10s..."
-        docker-compose -f "$COMPOSE_FILE" down 2>/dev/null || true
+        docker-compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" down 2>/dev/null || true
         sleep 10
       fi
     }
@@ -349,7 +352,7 @@ start_containers() {
   # Show running containers
   echo ""
   echo "Running staging containers:"
-  docker-compose -f "$COMPOSE_FILE" ps
+  docker-compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" ps
 
   # Give containers a moment to stabilize
   echo ""
@@ -361,7 +364,7 @@ start_containers() {
 verify_restart_policies() {
   print_section "Verifying Restart Policies"
 
-  local containers=$(docker-compose -f "$COMPOSE_FILE" ps -q)
+  local containers=$(docker-compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" ps -q)
   local all_correct=true
 
   for container_id in $containers; do
@@ -393,7 +396,7 @@ run_migrations() {
   sleep 5
 
   # Check if backend container is running
-  if docker-compose -f "$COMPOSE_FILE" ps backend | grep -q "Up"; then
+  if docker-compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" ps backend | grep -q "Up"; then
     echo "Running Atlas migrations..."
 
     # Check if Atlas CLI is available
@@ -486,7 +489,7 @@ verify_deployment() {
   local all_running=true
 
   for service in postgres redis rabbitmq backend frontend; do
-    if docker-compose -f "$COMPOSE_FILE" ps "$service" | grep -q "Up"; then
+    if docker-compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" ps "$service" | grep -q "Up"; then
       echo -e "${GREEN}✓${NC} $service is running"
     else
       echo -e "${RED}✗${NC} $service is not running"
@@ -512,12 +515,12 @@ rollback() {
   # Show logs from failed containers
   echo ""
   echo "=== Recent logs from failed deployment ==="
-  docker-compose -f "$COMPOSE_FILE" logs --tail=100 || true
+  docker-compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" logs --tail=100 || true
   echo "=========================================="
   echo ""
 
   # Stop failed containers with aggressive cleanup
-  docker-compose -f "$COMPOSE_FILE" down -v --remove-orphans 2>/dev/null || true
+  docker-compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" down -v --remove-orphans 2>/dev/null || true
 
   # If there were previous containers, try to restart them
   if [ -f /tmp/staging-containers-backup.txt ] && [ -s /tmp/staging-containers-backup.txt ]; then
@@ -526,7 +529,7 @@ rollback() {
   fi
 
   print_error "Rollback completed - staging environment may be down"
-  print_warning "Check logs: docker-compose -f $COMPOSE_FILE logs"
+  print_warning "Check logs: docker-compose -p $COMPOSE_PROJECT_NAME -f $COMPOSE_FILE logs"
   print_warning "Verify environment variables: cat $ENV_FILE"
 }
 
@@ -546,10 +549,10 @@ display_info() {
   echo -e "  ${GREEN}Backend:${NC}   http://mac-mini.tailnet-name.ts.net:8080"
   echo ""
   echo -e "${BLUE}Useful commands:${NC}"
-  echo -e "  View logs:    docker-compose -f $COMPOSE_FILE logs -f"
-  echo -e "  Stop:         docker-compose -f $COMPOSE_FILE down"
-  echo -e "  Restart:      docker-compose -f $COMPOSE_FILE restart"
-  echo -e "  Status:       docker-compose -f $COMPOSE_FILE ps"
+  echo -e "  View logs:    docker-compose -p $COMPOSE_PROJECT_NAME -f $COMPOSE_FILE logs -f"
+  echo -e "  Stop:         docker-compose -p $COMPOSE_PROJECT_NAME -f $COMPOSE_FILE down"
+  echo -e "  Restart:      docker-compose -p $COMPOSE_PROJECT_NAME -f $COMPOSE_FILE restart"
+  echo -e "  Status:       docker-compose -p $COMPOSE_PROJECT_NAME -f $COMPOSE_FILE ps"
   echo ""
   echo -e "${BLUE}Restart policies:${NC} All containers will auto-restart on Mac Mini boot"
 }
