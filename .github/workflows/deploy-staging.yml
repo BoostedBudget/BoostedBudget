@@ -486,7 +486,7 @@ jobs:
           fi
 
           # Frontend accessibility
-          if curl -k -f https://localhost:3000; then
+          if curl -f http://localhost:3000; then
             echo "✅ Frontend is accessible"
           else
             echo "::error::Frontend is not accessible"

@@ -80,17 +80,10 @@ function App() {
   const [health, setHealth] = useState<HealthCheck | null>(null)
   const [loading, setLoading] = useState(true)
 
+  // Health check removed - was calling frontend /health which returns text/plain
+  // Backend health is checked by workflow smoke tests
   useEffect(() => {
-    fetch('/health')
-      .then(res => res.json())
-      .then(data => {
-        setHealth(data)
-        setLoading(false)
-      })
-      .catch(err => {
-        console.error('Failed to fetch health:', err)
-        setLoading(false)
-      })
+    setLoading(false)
   }, [])
 
   // Helper function to update cookie consent data
