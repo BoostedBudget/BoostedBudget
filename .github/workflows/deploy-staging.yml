@@ -363,6 +363,7 @@ jobs:
         run: |
           cat > ${{ env.UNIQUE_WORKSPACE }}/.env.staging << EOF
           # Application Settings
+          COMPOSE_PROJECT_NAME=boostedbudget-staging
           NODE_ENV=staging
           GO_ENV=staging
           ENVIRONMENT=staging
