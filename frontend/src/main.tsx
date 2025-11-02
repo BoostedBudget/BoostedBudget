@@ -11,11 +11,18 @@ import './index.css'
 
 // Get Auth0 configuration from runtime config (injected by docker-entrypoint.sh)
 // Falls back to build-time env vars for local development
-const auth0Domain = window.ENV?.AUTH0_DOMAIN || import.meta.env.VITE_AUTH0_DOMAIN
-const auth0ClientId = window.ENV?.AUTH0_CLIENT_ID || import.meta.env.VITE_AUTH0_CLIENT_ID
+// In test environment, use placeholders to allow tests to run
+const isTestEnv = import.meta.env.MODE === 'test' || (typeof window !== 'undefined' && (window as { __VITEST__?: boolean }).__VITEST__)
+
+const auth0Domain = isTestEnv
+  ? 'placeholder.auth0.com'
+  : (window.ENV?.AUTH0_DOMAIN || import.meta.env.VITE_AUTH0_DOMAIN)
+const auth0ClientId = isTestEnv
+  ? 'placeholder-client-id'
+  : (window.ENV?.AUTH0_CLIENT_ID || import.meta.env.VITE_AUTH0_CLIENT_ID)
 const auth0Audience = window.ENV?.AUTH0_AUDIENCE || import.meta.env.VITE_AUTH0_AUDIENCE
 
-if (!auth0Domain || !auth0ClientId) {
+if (!isTestEnv && (!auth0Domain || !auth0ClientId)) {
   throw new Error('FATAL: Auth0 configuration not loaded. window.ENV is undefined or empty. Check that config.js is loading properly.')
 }
 
