@@ -17,22 +17,31 @@
 --   - pending_expiration: Item access expiring soon
 --   - revoked: User revoked access at their bank
 
--- Add status and error tracking columns
-ALTER TABLE linked_items
-ADD COLUMN status VARCHAR(50) DEFAULT 'active'
-    CHECK (status IN ('active', 'error', 'login_required', 'pending_expiration', 'revoked')),
-ADD COLUMN error_code VARCHAR(100),
-ADD COLUMN error_message TEXT,
-ADD COLUMN last_error_at TIMESTAMPTZ,
-ADD COLUMN retry_count INTEGER DEFAULT 0,
-ADD COLUMN next_retry_at TIMESTAMPTZ;
+-- Add status and error tracking columns (idempotent - safe to re-run)
+DO $$
+BEGIN
+    -- Check if status column already exists
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'linked_items' AND column_name = 'status'
+    ) THEN
+        ALTER TABLE linked_items
+        ADD COLUMN status VARCHAR(50) DEFAULT 'active'
+            CHECK (status IN ('active', 'error', 'login_required', 'pending_expiration', 'revoked')),
+        ADD COLUMN error_code VARCHAR(100),
+        ADD COLUMN error_message TEXT,
+        ADD COLUMN last_error_at TIMESTAMPTZ,
+        ADD COLUMN retry_count INTEGER DEFAULT 0,
+        ADD COLUMN next_retry_at TIMESTAMPTZ;
+    END IF;
+END $$;
 
 -- Create indexes for efficient querying
 -- Index for filtering by status and finding items needing attention
-CREATE INDEX idx_linked_items_status ON linked_items(status, last_error_at);
+CREATE INDEX IF NOT EXISTS idx_linked_items_status ON linked_items(status, last_error_at);
 
 -- Partial index for retry scheduling (only rows that need retry)
-CREATE INDEX idx_linked_items_retry ON linked_items(next_retry_at)
+CREATE INDEX IF NOT EXISTS idx_linked_items_retry ON linked_items(next_retry_at)
     WHERE next_retry_at IS NOT NULL;
 
 -- Add column comments for documentation

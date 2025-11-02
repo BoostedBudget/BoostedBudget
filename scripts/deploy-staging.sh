@@ -573,7 +573,9 @@ main() {
   build_or_pull_images || { rollback; exit 1; }
   start_containers || { rollback; exit 1; }
   verify_restart_policies || print_warning "Restart policy verification failed"
-  run_migrations || { rollback; exit 1; }
+  # NOTE: Migrations are handled by backend container entrypoint (docker-entrypoint.sh)
+  # Running migrations here causes duplicate execution and constraint violations
+  # run_migrations || { rollback; exit 1; }
   verify_deployment || { rollback; exit 1; }
 
   # Cleanup backup file
