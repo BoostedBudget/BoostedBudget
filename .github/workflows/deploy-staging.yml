@@ -377,7 +377,7 @@ jobs:
 
           # URLs
           BACKEND_URL=http://localhost:8080
-          FRONTEND_URL=https://localhost:3000
+          FRONTEND_URL=http://localhost:3000
 
           # Database (Staging)
           POSTGRES_USER=staginguser
@@ -438,14 +438,14 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         if: always()
         run: |
-          docker-compose -f docker-compose.staging.yml ps
+          docker-compose -f docker-compose.staging.yml --env-file .env.staging ps
 
       - name: Show logs on failure
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         if: failure()
         run: |
           echo "::group::Backend Logs"
-          docker-compose -f docker-compose.staging.yml logs --tail=50 backend
+          docker-compose -f docker-compose.staging.yml --env-file .env.staging logs --tail=50 backend
           echo "::endgroup::"
 
       - name: Final workspace cleanup
