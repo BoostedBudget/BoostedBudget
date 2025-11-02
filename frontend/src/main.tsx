@@ -11,14 +11,16 @@ import './index.css'
 
 // Get Auth0 configuration from runtime config (injected by docker-entrypoint.sh)
 // Falls back to build-time env vars for local development
-// In test environment, use placeholders to allow tests to run
+// In test/development environment without credentials, use placeholders
 const isTestEnv = import.meta.env.MODE === 'test' || (typeof window !== 'undefined' && (window as { __VITEST__?: boolean }).__VITEST__)
+const isDevelopment = import.meta.env.MODE === 'development'
 
 let auth0Domain: string
 let auth0ClientId: string
 let auth0Audience: string | undefined
 
 if (isTestEnv) {
+  // Unit tests (Vitest): always use placeholders
   auth0Domain = 'placeholder.auth0.com'
   auth0ClientId = 'placeholder-client-id'
   auth0Audience = 'placeholder-audience'
@@ -27,12 +29,21 @@ if (isTestEnv) {
   const clientId = window.ENV?.AUTH0_CLIENT_ID || import.meta.env.VITE_AUTH0_CLIENT_ID
 
   if (!domain || !clientId) {
-    throw new Error('FATAL: Auth0 configuration not loaded. window.ENV is undefined or empty. Check that config.js is loading properly.')
+    // In development (E2E tests, local dev without .env), use placeholders
+    // In production/staging, fail fast
+    if (isDevelopment) {
+      console.warn('[Auth0] No credentials found - using placeholders (development mode)')
+      auth0Domain = 'dev-placeholder.auth0.com'
+      auth0ClientId = 'dev-placeholder-client-id'
+      auth0Audience = undefined
+    } else {
+      throw new Error('FATAL: Auth0 configuration not loaded. window.ENV is undefined or empty. Check that config.js is loading properly.')
+    }
+  } else {
+    auth0Domain = domain
+    auth0ClientId = clientId
+    auth0Audience = window.ENV?.AUTH0_AUDIENCE || import.meta.env.VITE_AUTH0_AUDIENCE
   }
-
-  auth0Domain = domain
-  auth0ClientId = clientId
-  auth0Audience = window.ENV?.AUTH0_AUDIENCE || import.meta.env.VITE_AUTH0_AUDIENCE
 }
 
 // Component to initialize axios interceptor with Auth0 token
