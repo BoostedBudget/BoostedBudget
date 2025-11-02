@@ -306,6 +306,21 @@ atlas migrate apply --dir file://migrations --url "$DATABASE_URL"
 # See backend/docs/atlas-migration-guide.md for details
 ```
 
+**Migration Execution (CRITICAL)**:
+- **Backend container OWNS migration execution** (via `backend/scripts/docker-entrypoint.sh`)
+- Deploy scripts **MUST NOT** run migrations (causes duplicate execution)
+- Migrations run automatically when backend container starts
+- Built-in retry logic: 5 attempts with 5-second delays
+- All new migrations **MUST be idempotent** (safe to re-run)
+  - Use `DO $$ ... IF NOT EXISTS ... END $$;` for ALTER TABLE
+  - Use `CREATE INDEX IF NOT EXISTS` for indexes
+- **NEVER** skip this pattern - non-idempotent migrations cause deployment failures
+
+**Why this matters**:
+- Previous issue #279: Deploy script + container both ran migrations → constraint violations
+- Fix: Removed duplicate execution, made migrations idempotent
+- Pattern: Container startup = schema ready, no external migration orchestration needed
+
 **New rule type**:
 1. Schema in `backend/internal/rules/types.go`
 2. Executor in `backend/internal/rules/executors/`
