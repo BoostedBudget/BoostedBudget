@@ -126,7 +126,7 @@ jobs:
 
       - name: Build and push ${{ matrix.component }} image
         id: build
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: ${{ env.UNIQUE_WORKSPACE }}
           file: ${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile
@@ -369,6 +369,9 @@ jobs:
           ENVIRONMENT=staging
           VERSION=staging-${{ github.sha }}
           PRIMARY_REGION=iad
+
+          # CORS Configuration
+          CORS_ALLOWED_ORIGINS=${{ secrets.CORS_ALLOWED_ORIGINS_STAGING || 'https://qa.example.ts.net:3443,https://localhost:3443' }}
 
           # Docker Image Configuration (pull from GHCR)
           PULL_FROM_GHCR=true
