@@ -100,19 +100,24 @@ services:
     pull_policy: always  # Always pull latest image to ensure we have newest version
     restart: unless-stopped  # Auto-restart on Mac Mini boot
     ports:
-      - "3000:80"  # Map host 3000 to container port 80 (Nginx)
+      - "3000:80"   # HTTP (redirects to HTTPS)
+      - "3443:443"  # HTTPS
     environment:
       DOCKER_ENV: "true"  # Tells Vite to use Docker service names for proxy
-      VITE_API_URL: "http://localhost:8080"
+      ENVIRONMENT: "${ENVIRONMENT:-staging}"  # Critical: Enables non-fatal Auth0 errors in staging
+      VITE_API_URL: ""  # Empty = use nginx proxy with relative /api/* URLs
       VITE_AUTH0_DOMAIN: "${AUTH0_DOMAIN}"
       VITE_AUTH0_CLIENT_ID: "${VITE_AUTH0_CLIENT_ID}"
       VITE_AUTH0_AUDIENCE: "${AUTH0_AUDIENCE}"
       VITE_GOOGLE_ADSENSE_CLIENT: "${GOOGLE_ADSENSE_CLIENT:-}"
+    volumes:
+      - ./frontend/cert.pem:/etc/nginx/ssl/cert.pem:ro  # SSL cert (CI/CD restores from GitHub secrets)
+      - ./frontend/key.pem:/etc/nginx/ssl/key.pem:ro    # SSL key (CI/CD restores from GitHub secrets)
     depends_on:
       backend:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80/"]
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]  # Health check uses HTTP
       interval: 10s
       timeout: 5s
       retries: 5
