@@ -8,10 +8,11 @@ import (
 // Config holds application configuration
 type Config struct {
 	// Server
-	Port         string
-	Environment  string
-	Version      string
-	PrimaryRegion string
+	Port              string
+	Environment       string
+	Version           string
+	PrimaryRegion     string
+	CORSAllowedOrigins string
 
 	// Database
 	DatabaseURL string
@@ -65,10 +66,11 @@ type Config struct {
 func Load() (*Config, error) {
 	cfg := &Config{
 		// Server defaults
-		Port:         getEnv("PORT", "8080"),
-		Environment:  getEnv("ENVIRONMENT", "development"),
-		Version:      getEnv("VERSION", "0.1.0"),
-		PrimaryRegion: getEnv("PRIMARY_REGION", "iad"),
+		Port:              getEnv("PORT", "8080"),
+		Environment:       getEnv("ENVIRONMENT", "development"),
+		Version:           getEnv("VERSION", "0.1.0"),
+		PrimaryRegion:     getEnv("PRIMARY_REGION", "iad"),
+		CORSAllowedOrigins: getEnv("CORS_ALLOWED_ORIGINS", "*"),
 
 		// Database
 		DatabaseURL: getEnv("DATABASE_URL", ""),

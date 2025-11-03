@@ -1,0 +1,1 @@
+Review GitHub issues and recommend which one to work on next. Use available MCPs to check project context and priorities.
