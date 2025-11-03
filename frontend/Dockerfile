@@ -55,8 +55,8 @@ RUN chmod +x /docker-entrypoint.sh
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:80/ || exit 1
 
-# Expose port
-EXPOSE 80
+# Expose ports (HTTP and HTTPS)
+EXPOSE 80 443
 
 # Use entrypoint script for runtime config injection
 ENTRYPOINT ["/docker-entrypoint.sh"]
