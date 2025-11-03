@@ -56,7 +56,7 @@ func main() {
 	e.Use(middleware.StructuredLogging(os.Stdout))    // 2. Structured JSON logging
 	e.Use(middleware.MetricsMiddleware())             // 3. Prometheus metrics
 	e.Use(echomiddleware.Recover())                    // 4. Panic recovery
-	e.Use(echomiddleware.CORS())                       // 5. CORS handling
+	e.Use(echomiddleware.CORSWithConfig(middleware.GetCORSConfig(cfg.CORSAllowedOrigins))) // 5. CORS handling with configured origins
 
 	// Health check handler (no auth required)
 	healthHandler := &handlers.HealthHandler{
