@@ -1,4 +1,3 @@
-import { useState, useEffect } from 'react'
 import { Routes, Route, Link } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
 import { useCookieState } from './shared/hooks/useCookieState'
@@ -77,21 +76,11 @@ function HomePage({ health, loading }: { health: HealthCheck | null; loading: bo
 function App() {
   const { isAuthenticated, user } = useAuth0()
   const [, setConsentCookie] = useCookieState<CookieConsentData>(COOKIE_CONSENT_NAME)
-  const [health, setHealth] = useState<HealthCheck | null>(null)
-  const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    fetch('/health')
-      .then(res => res.json())
-      .then(data => {
-        setHealth(data)
-        setLoading(false)
-      })
-      .catch(err => {
-        console.error('Failed to fetch health:', err)
-        setLoading(false)
-      })
-  }, [])
+  // Health check removed - was calling frontend /health which returns text/plain
+  // Backend health is checked by workflow smoke tests
+  const health = null
+  const loading = false
 
   // Helper function to update cookie consent data
   const updateConsentCookie = (consents: CookieConsentSettings) => {
