@@ -106,6 +106,7 @@ services:
       DOCKER_ENV: "true"  # Tells Vite to use Docker service names for proxy
       ENVIRONMENT: "${ENVIRONMENT:-staging}"  # Critical: Enables non-fatal Auth0 errors in staging
       HTTPS_PORT: "3443"  # HTTPS redirect port for staging (production uses default 443)
+      API_URL: ""  # Empty = use nginx proxy with relative /api/* URLs (fixes CORS for Tailscale access)
       VITE_API_URL: ""  # Empty = use nginx proxy with relative /api/* URLs
       VITE_AUTH0_DOMAIN: "${AUTH0_DOMAIN}"
       VITE_AUTH0_CLIENT_ID: "${VITE_AUTH0_CLIENT_ID}"
