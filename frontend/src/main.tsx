@@ -7,6 +7,7 @@ import App from './App'
 import { store } from './store/store'
 import { AuthWrapper } from './auth'
 import { setupAuthInterceptor } from './api/axiosConfig'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import './index.css'
 
 // Get Auth0 configuration from runtime config (injected by docker-entrypoint.sh)
@@ -65,24 +66,26 @@ const InitializeAuth = () => {
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <Auth0Provider
-      domain={auth0Domain}
-      clientId={auth0ClientId}
-      authorizationParams={{
-        redirect_uri: `${window.location.origin}/callback`,
-        audience: auth0Audience,
-      }}
-      useRefreshTokens={true}
-      cacheLocation="localstorage"
-    >
-      <Provider store={store}>
-        <BrowserRouter>
-          <AuthWrapper>
-            <InitializeAuth />
-            <App />
-          </AuthWrapper>
-        </BrowserRouter>
-      </Provider>
-    </Auth0Provider>
+    <ErrorBoundary>
+      <Auth0Provider
+        domain={auth0Domain}
+        clientId={auth0ClientId}
+        authorizationParams={{
+          redirect_uri: `${window.location.origin}/callback`,
+          audience: auth0Audience,
+        }}
+        useRefreshTokens={true}
+        cacheLocation="localstorage"
+      >
+        <Provider store={store}>
+          <BrowserRouter>
+            <AuthWrapper>
+              <InitializeAuth />
+              <App />
+            </AuthWrapper>
+          </BrowserRouter>
+        </Provider>
+      </Auth0Provider>
+    </ErrorBoundary>
   </React.StrictMode>,
 )
