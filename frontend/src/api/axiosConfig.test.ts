@@ -184,6 +184,19 @@ describe('API URL Configuration (getApiUrl function)', () => {
     // Should fall back to VITE_API_URL
     expect(apiUrl).toBe('http://localhost:8080')
   })
+
+  it('should use /api when window.ENV.API_URL is empty and no VITE_API_URL (docker-compose staging scenario)', () => {
+    // Simulate docker-compose staging: API_URL set to empty string, no VITE_API_URL
+    window.ENV = {
+      API_URL: '',
+    }
+    delete (import.meta.env as Record<string, unknown>).VITE_API_URL
+
+    const apiUrl = getApiUrl()
+
+    // Empty string is falsy, should fall through to /api (nginx proxy)
+    expect(apiUrl).toBe('/api')
+  })
 })
 
 describe('apiClient instance', () => {
