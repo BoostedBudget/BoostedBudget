@@ -1,5 +1,5 @@
 # BoostedBudget Subscription Tiers Configuration
-# Last updated: 2025-10-19
+# Last updated: 2025-11-03
 #
 # This file defines the subscription tiers and their limits.
 # Changing values here will affect tier behavior without code deployment.
@@ -9,9 +9,19 @@
 #   - rules: Number of automation rules
 #   - executions_per_day: Maximum rule executions per day
 #   - min_execution_interval_minutes: Minimum time between rule executions
+#   - api_calls_per_month: API requests allowed per month
+#   - data_export_requests_per_month: Data export requests per month
+#   - accounts_synced_per_month: How many accounts can sync transactions per month (prevents abuse)
+#   - transaction_history_days: Historical depth for transaction syncs (30, 365, 730 days)
 #
 # Special Values:
 #   - Use -1 or 999999 for "unlimited" resources
+#
+# Monthly Sync Limits (Issue #242):
+#   Free tier: 3 accounts × 30 days = 90 account-days per month
+#   Premium Lite: 15 accounts × 365 days = 5,475 account-days per month
+#   Premium: 30 accounts × 730 days = 21,900 account-days per month (243x more than free!)
+#   Premium+: Unlimited accounts × 730 days = unlimited
 #
 # Future Extensibility:
 #   - Add new tiers by creating new top-level entries
@@ -34,6 +44,8 @@ tiers:
       min_execution_interval_minutes: 1440  # 24 hours
       api_calls_per_month: 0
       data_export_requests_per_month: 1
+      accounts_synced_per_month: 3  # Can sync 3 accounts per month
+      transaction_history_days: 30  # 30 days historical depth (90 account-days/month)
 
     features:
       ads_enabled: true
@@ -58,6 +70,8 @@ tiers:
       min_execution_interval_minutes: 720  # 12 hours
       api_calls_per_month: 0
       data_export_requests_per_month: 5
+      accounts_synced_per_month: 15  # Can sync 15 accounts per month
+      transaction_history_days: 365  # 1 year historical depth (5,475 account-days/month)
 
     features:
       ads_enabled: false
@@ -82,6 +96,8 @@ tiers:
       min_execution_interval_minutes: 240  # 4 hours
       api_calls_per_month: 0
       data_export_requests_per_month: 10
+      accounts_synced_per_month: 30  # Can sync 30 accounts per month
+      transaction_history_days: 730  # 2 years historical depth (21,900 account-days/month)
 
     features:
       ads_enabled: false
@@ -106,6 +122,8 @@ tiers:
       min_execution_interval_minutes: 10
       api_calls_per_month: 100000
       data_export_requests_per_month: -1  # Unlimited
+      accounts_synced_per_month: -1  # Unlimited accounts can sync per month
+      transaction_history_days: 730  # 2 years historical depth (Plaid maximum)
 
     features:
       ads_enabled: false

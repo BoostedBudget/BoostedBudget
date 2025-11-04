@@ -29,6 +29,11 @@
   gap: 1.5rem;
 }
 
+/* Issue #242: Monthly sync limits - sync stats section */
+.sync-stats-section {
+  margin-bottom: 2rem;
+}
+
 .empty-state {
   text-align: center;
   padding: 3rem 1rem;
