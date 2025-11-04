@@ -1,4 +1,4 @@
-h1:His2qRQO3DVeTVSP1O3L/DZZ6fZuHRdOZlcTQzrOU9A=
+h1:l2PrpOcBWq/W+k3LYiNg2ZdEWWOz6wQlteoghhqLMo4=
 000001_create_users_table.sql h1:0VjQyC14oyN9Kny/2ciS6P8NdrFlPvxB2a6NITGdu4M=
 000002_create_privacy_settings_table.sql h1:VbKbyVwZpVa23vIERVxrXeOBbLRbmIrqbyCnos/dN9E=
 000003_create_audit_logs_table.sql h1:LKmdHLVQH81RbVmDfQyhQh9PruT9T6Tgs3yPLeGjaIk=
@@ -13,3 +13,4 @@ h1:His2qRQO3DVeTVSP1O3L/DZZ6fZuHRdOZlcTQzrOU9A=
 000012_add_webhook_processing_metadata.sql h1:OEDtmOXs0MOHMQ92BchOIODnDglW9uNpNmGU161jxbY=
 000013_add_linked_items_error_tracking.sql h1:udKEole8wFeo51iYv+bEJIWvFdLZV6yXjBTgVzF2bLk=
 000014_create_notifications_table.sql h1:YscSZsQf7dkp14bsMwNV9dHmuTl1YLTOtSHxZp7Dok8=
+000015_add_monthly_sync_limits.sql h1:/gqANQZtF0VeBiWnhzHKwvmSlqYnvb96mwLDUIHFkEs=

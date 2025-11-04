@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { PlaidLinkButton } from './PlaidLinkButton'
 import { AccountCard } from './AccountCard'
 import { UpgradeBanner } from './UpgradeBanner'
+import { SyncStatsCard } from './SyncStatsCard'
 import { fetchAccounts, deleteAccount } from './api/plaidApi'
 import { fetchProfile } from '../profile/api/profileApi'
 import { useSubscriptionTiers } from '../subscription/hooks/useSubscriptionTiers'
@@ -101,6 +102,11 @@ export function AccountsPage() {
       </div>
 
       {shouldShowUpgradeBanner && <UpgradeBanner />}
+
+      {/* Issue #242: Monthly sync limits - show sync statistics */}
+      <div className="sync-stats-section">
+        <SyncStatsCard />
+      </div>
 
       {accounts.length === 0 ? (
         <div className="empty-state">

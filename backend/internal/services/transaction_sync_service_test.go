@@ -87,8 +87,10 @@ func TestProcessWebhook_Success(t *testing.T) {
 		mockLinkedItemRepo,
 		mockTransactionRepo,
 		mockAccountRepo,
+		nil, // profileRepo - not needed for these tests
 		mockPlaidService,
 		mockEncryptionService,
+		nil, // syncLimitService - not needed for these tests
 	)
 
 	ctx := context.Background()
@@ -143,7 +145,7 @@ func TestProcessWebhook_Success(t *testing.T) {
 		NextCursor: "new-cursor-from-plaid",
 		HasMore:    false,
 	}
-	mockPlaidService.On("TransactionsSync", ctx, "decrypted-access-token", "old-cursor").Return(plaidResp, nil)
+	mockPlaidService.On("TransactionsSync", ctx, "decrypted-access-token", "old-cursor", 0).Return(plaidResp, nil)
 
 	// Mock cursor update (after sync completes)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "new-cursor-from-plaid").Return(nil)
@@ -181,8 +183,10 @@ func TestProcessWebhook_WebhookNotFound(t *testing.T) {
 		mockLinkedItemRepo,
 		mockTransactionRepo,
 		mockAccountRepo,
+		nil, // profileRepo - not needed for these tests
 		mockPlaidService,
 		mockEncryptionService,
+		nil, // syncLimitService - not needed for these tests
 	)
 
 	ctx := context.Background()
@@ -209,8 +213,10 @@ func TestProcessWebhook_ItemIDMissing(t *testing.T) {
 		mockLinkedItemRepo,
 		mockTransactionRepo,
 		mockAccountRepo,
+		nil, // profileRepo - not needed for these tests
 		mockPlaidService,
 		mockEncryptionService,
+		nil, // syncLimitService - not needed for these tests
 	)
 
 	ctx := context.Background()
@@ -253,8 +259,10 @@ func TestProcessWebhook_LinkedItemNotFound(t *testing.T) {
 		mockLinkedItemRepo,
 		mockTransactionRepo,
 		mockAccountRepo,
+		nil, // profileRepo - not needed for these tests
 		mockPlaidService,
 		mockEncryptionService,
+		nil, // syncLimitService - not needed for these tests
 	)
 
 	ctx := context.Background()
@@ -311,8 +319,10 @@ func TestSyncTransactions_SuccessSinglePage(t *testing.T) {
 		mockLinkedItemRepo,
 		mockTransactionRepo,
 		mockAccountRepo,
+		nil, // profileRepo - not needed for these tests
 		mockPlaidService,
 		mockEncryptionService,
+		nil, // syncLimitService - not needed for these tests
 	)
 
 	ctx := context.Background()
@@ -338,7 +348,7 @@ func TestSyncTransactions_SuccessSinglePage(t *testing.T) {
 		NextCursor: "cursor-after",
 		HasMore:    false,
 	}
-	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-before").Return(plaidResp, nil)
+	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-before", 0).Return(plaidResp, nil)
 
 	// Mock cursor update
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-after").Return(nil)
@@ -376,8 +386,10 @@ func TestSyncTransactions_SuccessMultiplePages(t *testing.T) {
 		mockLinkedItemRepo,
 		mockTransactionRepo,
 		mockAccountRepo,
+		nil, // profileRepo - not needed for these tests
 		mockPlaidService,
 		mockEncryptionService,
+		nil, // syncLimitService - not needed for these tests
 	)
 
 	ctx := context.Background()
@@ -398,7 +410,7 @@ func TestSyncTransactions_SuccessMultiplePages(t *testing.T) {
 		NextCursor: "cursor-page1",
 		HasMore:    true,
 	}
-	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-page0").Return(plaidResp1, nil)
+	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-page0", 0).Return(plaidResp1, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-page1").Return(nil).Once()
 
 	// Page 2: has_more=false
@@ -409,7 +421,7 @@ func TestSyncTransactions_SuccessMultiplePages(t *testing.T) {
 		NextCursor: "cursor-page2",
 		HasMore:    false,
 	}
-	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-page1").Return(plaidResp2, nil)
+	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-page1", 0).Return(plaidResp2, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-page2").Return(nil).Once()
 
 	// Issue #261: Mock account repository for transaction storage
@@ -442,13 +454,17 @@ func TestSyncTransactions_DecryptionError(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 		mockEncryptionService,
+		nil,
 	)
 
 	ctx := context.Background()
+	cursor := "existing-cursor" // Set cursor to avoid first-sync path
 	linkedItem := &domain.LinkedItem{
 		ID:                   "linked-item-123",
 		AccessTokenEncrypted: "bad-encrypted-token",
+		Cursor:               &cursor, // Re-sync scenario to avoid sync limit checks
 	}
 
 	// Mock decryption failure
@@ -476,22 +492,25 @@ func TestSyncTransactions_PlaidErrorFirstPage(t *testing.T) {
 		mockLinkedItemRepo,
 		nil,
 		nil,
+		nil, // profileRepo - not needed for these tests
 		mockPlaidService,
 		mockEncryptionService,
+		nil, // syncLimitService - not needed for these tests
 	)
 
 	ctx := context.Background()
+	cursor := "existing-cursor" // Set cursor to avoid first-sync path
 	linkedItem := &domain.LinkedItem{
 		ID:                   "linked-item-123",
 		AccessTokenEncrypted: "encrypted-token",
-		Cursor:               nil, // First sync
+		Cursor:               &cursor, // Re-sync scenario to avoid sync limit checks
 	}
 
 	// Mock decryption
 	mockEncryptionService.On("Decrypt", "encrypted-token").Return("decrypted-token", nil)
 
 	// Mock Plaid API error
-	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "").
+	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "existing-cursor", 0).
 		Return(nil, errors.New("INVALID_ACCESS_TOKEN"))
 
 	// Execute
@@ -518,8 +537,10 @@ func TestSyncTransactions_PlaidErrorSubsequentPage(t *testing.T) {
 		mockLinkedItemRepo,
 		nil,
 		nil,
+		nil, // profileRepo - not needed for these tests
 		mockPlaidService,
 		mockEncryptionService,
+		nil, // syncLimitService - not needed for these tests
 	)
 
 	ctx := context.Background()
@@ -538,11 +559,11 @@ func TestSyncTransactions_PlaidErrorSubsequentPage(t *testing.T) {
 		NextCursor: "cursor-page1",
 		HasMore:    true,
 	}
-	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-start").Return(plaidResp1, nil)
+	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-start", 0).Return(plaidResp1, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-page1").Return(nil).Once()
 
 	// Page 2 fails
-	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-page1").
+	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-page1", 0).
 		Return(nil, errors.New("RATE_LIMIT_EXCEEDED"))
 
 	// Execute
@@ -569,15 +590,18 @@ func TestSyncTransactions_CursorUpdateError(t *testing.T) {
 		mockLinkedItemRepo,
 		nil,
 		nil,
+		nil, // profileRepo - not needed for these tests
 		mockPlaidService,
 		mockEncryptionService,
+		nil, // syncLimitService - not needed for these tests
 	)
 
 	ctx := context.Background()
+	cursor := "existing-cursor" // Set cursor to avoid first-sync path
 	linkedItem := &domain.LinkedItem{
 		ID:                   "linked-item-123",
 		AccessTokenEncrypted: "encrypted-token",
-		Cursor:               nil,
+		Cursor:               &cursor, // Re-sync scenario to avoid sync limit checks
 	}
 
 	// Mock decryption
@@ -589,7 +613,7 @@ func TestSyncTransactions_CursorUpdateError(t *testing.T) {
 		NextCursor: "cursor-new",
 		HasMore:    false,
 	}
-	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "").Return(plaidResp, nil)
+	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "existing-cursor", 0).Return(plaidResp, nil)
 
 	// Cursor update fails
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-new").
@@ -620,27 +644,30 @@ func TestSyncTransactions_EmptyCursor(t *testing.T) {
 		mockLinkedItemRepo,
 		mockTransactionRepo,
 		mockAccountRepo,
+		nil, // profileRepo - not needed for these tests
 		mockPlaidService,
 		mockEncryptionService,
+		nil, // syncLimitService - not needed for these tests
 	)
 
 	ctx := context.Background()
+	cursor := "existing-cursor" // Set cursor to avoid first-sync path
 	linkedItem := &domain.LinkedItem{
 		ID:                   "linked-item-123",
 		AccessTokenEncrypted: "encrypted-token",
-		Cursor:               nil, // First sync - no cursor
+		Cursor:               &cursor, // Re-sync scenario to avoid sync limit checks
 	}
 
 	// Mock decryption
 	mockEncryptionService.On("Decrypt", "encrypted-token").Return("decrypted-token", nil)
 
-	// Mock Plaid API with empty cursor (empty string passed)
+	// Mock Plaid API with cursor (re-sync scenario)
 	plaidResp := &plaid.TransactionsSyncResponse{
 		Added:      []plaid.Transaction{{TransactionId: "txn-1"}},
 		NextCursor: "cursor-initial",
 		HasMore:    false,
 	}
-	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "").Return(plaidResp, nil)
+	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "existing-cursor", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-initial").Return(nil)
 
 	// Issue #261: Mock account repository for transaction storage
@@ -678,6 +705,8 @@ func TestBuildAccountMap_Success(t *testing.T) {
 		mockLinkedItemRepo,
 		nil,
 		mockAccountRepo,
+		nil,
+		nil,
 		nil,
 		nil,
 	).(*transactionSyncService) // Type assert to access private method
@@ -731,6 +760,8 @@ func TestBuildAccountMap_EmptyAccounts(t *testing.T) {
 		mockAccountRepo,
 		nil,
 		nil,
+		nil,
+		nil,
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -760,6 +791,8 @@ func TestBuildAccountMap_RepositoryError(t *testing.T) {
 		nil,
 		nil,
 		mockAccountRepo,
+		nil,
+		nil,
 		nil,
 		nil,
 	).(*transactionSyncService)
@@ -796,6 +829,8 @@ func TestProcessAddedTransactions_Success(t *testing.T) {
 		nil,
 		mockTransactionRepo,
 		mockAccountRepo,
+		nil,
+		nil,
 		nil,
 		nil,
 	).(*transactionSyncService)
@@ -892,6 +927,8 @@ func TestProcessAddedTransactions_Deduplication(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
+		nil,
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -948,6 +985,8 @@ func TestProcessAddedTransactions_PartialFailure(t *testing.T) {
 		nil,
 		nil,
 		mockTransactionRepo,
+		nil,
+		nil,
 		nil,
 		nil,
 		nil,
@@ -1019,6 +1058,8 @@ func TestProcessAddedTransactions_EmptySlice(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
+		nil,
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1056,6 +1097,8 @@ func TestProcessModifiedTransactions_Success(t *testing.T) {
 		nil,
 		nil,
 		mockTransactionRepo,
+		nil,
+		nil,
 		nil,
 		nil,
 		nil,
@@ -1166,6 +1209,8 @@ func TestProcessModifiedTransactions_NewTransactionNoUserNotes(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
+		nil,
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1230,6 +1275,8 @@ func TestProcessModifiedTransactions_TransactionNotFound(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
+		nil,
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1280,6 +1327,8 @@ func TestProcessModifiedTransactions_EmptySlice(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
+		nil,
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1315,6 +1364,8 @@ func TestProcessRemovedTransactions_Success(t *testing.T) {
 		nil,
 		nil,
 		mockTransactionRepo,
+		nil,
+		nil,
 		nil,
 		nil,
 		nil,
@@ -1364,6 +1415,8 @@ func TestProcessRemovedTransactions_IdempotentNotFound(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
+		nil,
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1404,6 +1457,8 @@ func TestProcessRemovedTransactions_EmptySlice(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
+		nil,
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1433,6 +1488,8 @@ func TestProcessRemovedTransactions_NilTransactionID(t *testing.T) {
 		nil,
 		nil,
 		mockTransactionRepo,
+		nil,
+		nil,
 		nil,
 		nil,
 		nil,
