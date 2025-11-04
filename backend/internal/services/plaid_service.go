@@ -85,15 +85,18 @@ type PlaidService interface {
 	//   - ctx: Context for cancellation and timeout
 	//   - accessToken: The Plaid access token (decrypted) for the Item
 	//   - cursor: Cursor for pagination (empty string for first sync)
+	//   - daysRequested: Historical depth for initial sync (30, 365, 730 days) - only used when cursor is empty
 	//
 	// Returns the Plaid API response containing Added, Modified, Removed transactions,
 	// NextCursor, and HasMore flag. Returns error if the Plaid API call fails.
 	//
 	// Issue #260: Plaid TransactionsSync API Integration
+	// Issue #242: Monthly sync limits with tier-based historical depth
 	TransactionsSync(
 		ctx context.Context,
 		accessToken string,
 		cursor string,
+		daysRequested int,
 	) (*plaid.TransactionsSyncResponse, error)
 }
 
@@ -372,6 +375,7 @@ func (s *plaidService) TransactionsSync(
 	ctx context.Context,
 	accessToken string,
 	cursor string,
+	daysRequested int,
 ) (*plaid.TransactionsSyncResponse, error) {
 	// Validate access token
 	if accessToken == "" {
@@ -384,6 +388,16 @@ func (s *plaidService) TransactionsSync(
 	// Set cursor if provided (empty for first sync)
 	if cursor != "" {
 		request.SetCursor(cursor)
+	}
+
+	// Set historical depth for initial sync (Issue #242: tier-based limits)
+	// Only used when cursor is empty (first sync). Subsequent syncs use cursor.
+	// Plaid supports 30-730 days historical depth.
+	if cursor == "" && daysRequested > 0 {
+		options := plaid.NewTransactionsSyncRequestOptions()
+		days := int32(daysRequested)
+		options.SetDaysRequested(days)
+		request.SetOptions(*options)
 	}
 
 	// Call Plaid API

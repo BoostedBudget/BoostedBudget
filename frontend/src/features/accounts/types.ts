@@ -60,3 +60,18 @@ export interface GetAccountsResponse {
   accounts: Account[]
   total_count: number
 }
+
+/**
+ * Monthly sync statistics for subscription tier limits
+ * Response from GET /v1/sync-stats
+ * Issue #242: Monthly sync limits
+ */
+export interface SyncStats {
+  user_id: string
+  month: string // YYYY-MM format
+  accounts_synced: number
+  accounts_limit: number // -1 for unlimited
+  total_transactions: number
+  can_sync_more: boolean
+  reset_date: string // ISO 8601 date-time
+}
