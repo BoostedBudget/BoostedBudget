@@ -27,6 +27,6 @@ import type { SubscriptionTiersResponse } from '../types'
  * ```
  */
 export async function fetchSubscriptionTiers(): Promise<SubscriptionTiersResponse> {
-  const response = await apiClient.get<SubscriptionTiersResponse>('/api/v1/subscription/tiers')
+  const response = await apiClient.get<SubscriptionTiersResponse>('/v1/subscription/tiers')
   return response.data
 }

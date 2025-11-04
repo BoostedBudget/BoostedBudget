@@ -7,7 +7,7 @@ import type { PrivacySettings, UpdatePrivacySettingsRequest } from '../types'
  * Auto-creates GDPR-compliant defaults on first access
  */
 export async function fetchPrivacySettings(): Promise<PrivacySettings> {
-  const response = await apiClient.get<PrivacySettings>('/api/v1/user/privacy')
+  const response = await apiClient.get<PrivacySettings>('/v1/user/privacy')
   return response.data
 }
 
@@ -17,6 +17,6 @@ export async function fetchPrivacySettings(): Promise<PrivacySettings> {
  * Enforces GDPR validation (necessary consent cannot be disabled)
  */
 export async function updatePrivacySettings(data: UpdatePrivacySettingsRequest): Promise<PrivacySettings> {
-  const response = await apiClient.put<PrivacySettings>('/api/v1/user/privacy', data)
+  const response = await apiClient.put<PrivacySettings>('/v1/user/privacy', data)
   return response.data
 }

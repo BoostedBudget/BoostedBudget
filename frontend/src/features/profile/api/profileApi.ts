@@ -6,7 +6,7 @@ import type { User, UpdateProfileRequest } from '../types'
  * GET /api/v1/user/profile
  */
 export async function fetchProfile(): Promise<User> {
-  const response = await apiClient.get<User>('/api/v1/user/profile')
+  const response = await apiClient.get<User>('/v1/user/profile')
   return response.data
 }
 
@@ -15,6 +15,6 @@ export async function fetchProfile(): Promise<User> {
  * PUT /api/v1/user/profile
  */
 export async function updateProfile(data: UpdateProfileRequest): Promise<User> {
-  const response = await apiClient.put<User>('/api/v1/user/profile', data)
+  const response = await apiClient.put<User>('/v1/user/profile', data)
   return response.data
 }

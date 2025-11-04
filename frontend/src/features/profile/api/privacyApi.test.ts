@@ -17,7 +17,7 @@ describe('privacyApi', () => {
   })
 
   describe('fetchPrivacySettings', () => {
-    it('should call GET /api/v1/user/privacy', async () => {
+    it('should call GET /v1/user/privacy', async () => {
       const mockSettings: PrivacySettings = {
         id: '123e4567-e89b-12d3-a456-426614174000',
         user_id: 'user-uuid-123',
@@ -33,13 +33,13 @@ describe('privacyApi', () => {
         updated_at: '2025-01-15T10:00:00Z',
       }
 
-      mock.onGet('/api/v1/user/privacy').reply(200, mockSettings)
+      mock.onGet('/v1/user/privacy').reply(200, mockSettings)
 
       const settings = await fetchPrivacySettings()
 
       expect(settings).toEqual(mockSettings)
       expect(mock.history.get.length).toBe(1)
-      expect(mock.history.get[0].url).toBe('/api/v1/user/privacy')
+      expect(mock.history.get[0].url).toBe('/v1/user/privacy')
     })
 
     it('should include Auth0 token in Authorization header', async () => {
@@ -58,7 +58,7 @@ describe('privacyApi', () => {
         updated_at: '2025-01-01T00:00:00Z',
       }
 
-      mock.onGet('/api/v1/user/privacy').reply((config) => {
+      mock.onGet('/v1/user/privacy').reply((config) => {
         // Verify Authorization header exists (set by axios interceptor)
         expect(config.headers).toBeDefined()
         return [200, mockSettings]
@@ -68,26 +68,26 @@ describe('privacyApi', () => {
     })
 
     it('should handle 401 unauthorized error', async () => {
-      mock.onGet('/api/v1/user/privacy').reply(401, { error: 'Unauthorized' })
+      mock.onGet('/v1/user/privacy').reply(401, { error: 'Unauthorized' })
 
       await expect(fetchPrivacySettings()).rejects.toThrow()
     })
 
     it('should handle network errors', async () => {
-      mock.onGet('/api/v1/user/privacy').networkError()
+      mock.onGet('/v1/user/privacy').networkError()
 
       await expect(fetchPrivacySettings()).rejects.toThrow()
     })
 
     it('should handle 500 server errors', async () => {
-      mock.onGet('/api/v1/user/privacy').reply(500, { error: 'Internal server error' })
+      mock.onGet('/v1/user/privacy').reply(500, { error: 'Internal server error' })
 
       await expect(fetchPrivacySettings()).rejects.toThrow()
     })
   })
 
   describe('updatePrivacySettings', () => {
-    it('should call PUT /api/v1/user/privacy with updated data', async () => {
+    it('should call PUT /v1/user/privacy with updated data', async () => {
       const updateRequest: UpdatePrivacySettingsRequest = {
         gdpr_analytics_consent: true,
         marketing_emails_enabled: true,
@@ -108,13 +108,13 @@ describe('privacyApi', () => {
         updated_at: '2025-01-15T12:00:00Z',
       }
 
-      mock.onPut('/api/v1/user/privacy', updateRequest).reply(200, updatedSettings)
+      mock.onPut('/v1/user/privacy', updateRequest).reply(200, updatedSettings)
 
       const settings = await updatePrivacySettings(updateRequest)
 
       expect(settings).toEqual(updatedSettings)
       expect(mock.history.put.length).toBe(1)
-      expect(mock.history.put[0].url).toBe('/api/v1/user/privacy')
+      expect(mock.history.put[0].url).toBe('/v1/user/privacy')
       expect(JSON.parse(mock.history.put[0].data)).toEqual(updateRequest)
     })
 
@@ -138,7 +138,7 @@ describe('privacyApi', () => {
         updated_at: '2025-01-15T12:00:00Z',
       }
 
-      mock.onPut('/api/v1/user/privacy').reply(200, updatedSettings)
+      mock.onPut('/v1/user/privacy').reply(200, updatedSettings)
 
       const settings = await updatePrivacySettings(updateRequest)
 
@@ -165,7 +165,7 @@ describe('privacyApi', () => {
         updated_at: '2025-01-15T12:00:00Z',
       }
 
-      mock.onPut('/api/v1/user/privacy').reply(200, updatedSettings)
+      mock.onPut('/v1/user/privacy').reply(200, updatedSettings)
 
       const settings = await updatePrivacySettings(updateRequest)
 
@@ -177,19 +177,19 @@ describe('privacyApi', () => {
         gdpr_necessary_consent: false, // Attempt to disable - should fail
       }
 
-      mock.onPut('/api/v1/user/privacy').reply(400, { error: 'gdpr_necessary_consent cannot be disabled - required for app functionality' })
+      mock.onPut('/v1/user/privacy').reply(400, { error: 'gdpr_necessary_consent cannot be disabled - required for app functionality' })
 
       await expect(updatePrivacySettings(updateRequest)).rejects.toThrow()
     })
 
     it('should handle unauthorized errors (401)', async () => {
-      mock.onPut('/api/v1/user/privacy').reply(401, { error: 'Unauthorized' })
+      mock.onPut('/v1/user/privacy').reply(401, { error: 'Unauthorized' })
 
       await expect(updatePrivacySettings({})).rejects.toThrow()
     })
 
     it('should handle server errors (500)', async () => {
-      mock.onPut('/api/v1/user/privacy').reply(500, { error: 'Failed to update privacy settings' })
+      mock.onPut('/v1/user/privacy').reply(500, { error: 'Failed to update privacy settings' })
 
       await expect(updatePrivacySettings({})).rejects.toThrow()
     })
@@ -215,7 +215,7 @@ describe('privacyApi', () => {
         updated_at: '2025-01-15T12:00:00Z',
       }
 
-      mock.onPut('/api/v1/user/privacy').reply(200, updatedSettings)
+      mock.onPut('/v1/user/privacy').reply(200, updatedSettings)
 
       const settings = await updatePrivacySettings(updateRequest)
 
