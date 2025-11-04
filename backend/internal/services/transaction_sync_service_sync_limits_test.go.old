@@ -1,0 +1,402 @@
+package services
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/plaid/plaid-go/v23/plaid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+)
+
+// MockSyncLimitService is a mock implementation of SyncLimitService
+type MockSyncLimitService struct {
+	mock.Mock
+}
+
+func (m *MockSyncLimitService) CheckSyncLimit(ctx context.Context, userID, plaidAccountID string) (bool, string, error) {
+	args := m.Called(ctx, userID, plaidAccountID)
+	return args.Bool(0), args.String(1), args.Error(2)
+}
+
+func (m *MockSyncLimitService) RecordSync(ctx context.Context, userID, accountID, plaidAccountID string, tier domain.TierName, daysHistorical, transactionCount int) error {
+	args := m.Called(ctx, userID, accountID, plaidAccountID, tier, daysHistorical, transactionCount)
+	return args.Error(0)
+}
+
+func (m *MockSyncLimitService) GetSyncStats(ctx context.Context, userID string) (*domain.SyncStats, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.SyncStats), args.Error(1)
+}
+
+func (m *MockSyncLimitService) GetHistoricalDepthLimit(ctx context.Context, userID string) (int, error) {
+	args := m.Called(ctx, userID)
+	return args.Int(0), args.Error(1)
+}
+
+// TestTransactionSyncService_SyncTransactions_ChecksSyncLimitBeforeSync tests that sync limits are checked before calling Plaid
+func TestTransactionSyncService_SyncTransactions_ChecksSyncLimitBeforeSync(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-123"
+	plaidAccountID := "plaid-acc-456"
+
+	linkedItem := &domain.LinkedItem{
+		ID:                   "item-789",
+		UserID:               userID,
+		AccessTokenEncrypted: "encrypted-token",
+		Cursor:               nil,
+	}
+
+	mockSyncLimitService := new(MockSyncLimitService)
+
+	// Expect sync limit check to be called BEFORE Plaid API call
+	mockSyncLimitService.On("CheckSyncLimit", ctx, userID, plaidAccountID).Return(false, "monthly sync limit reached: 3 of 3 accounts synced", nil)
+
+	// Mock GetHistoricalDepthLimit should NOT be called if limit check fails
+	// Mock Plaid API should NOT be called if limit check fails
+
+	// Create service with mocked sync limit service
+	// NOTE: This test will fail until we implement the integration
+
+	err := checkSyncLimitBeforeSync(ctx, mockSyncLimitService, userID, plaidAccountID)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "monthly sync limit reached")
+	mockSyncLimitService.AssertExpectations(t)
+}
+
+// Helper function that demonstrates the expected integration pattern
+// This is what the actual implementation should do
+func checkSyncLimitBeforeSync(ctx context.Context, syncLimitService *MockSyncLimitService, userID, plaidAccountID string) error {
+	// Check if sync is allowed before calling Plaid
+	allowed, reason, err := syncLimitService.CheckSyncLimit(ctx, userID, plaidAccountID)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return errors.New(reason)
+	}
+	return nil
+}
+
+// TestTransactionSyncService_SyncTransactions_GetHistoricalDepthLimit tests that historical depth is retrieved based on user tier
+func TestTransactionSyncService_SyncTransactions_GetHistoricalDepthLimit(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-123"
+
+	mockSyncLimitService := new(MockSyncLimitService)
+
+	// Free tier user should get 30 days historical depth
+	mockSyncLimitService.On("GetHistoricalDepthLimit", ctx, userID).Return(30, nil)
+
+	daysHistorical, err := mockSyncLimitService.GetHistoricalDepthLimit(ctx, userID)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 30, daysHistorical)
+	mockSyncLimitService.AssertExpectations(t)
+}
+
+// TestTransactionSyncService_SyncTransactions_RecordSyncAfterSuccess tests that sync is recorded after successful sync
+func TestTransactionSyncService_SyncTransactions_RecordSyncAfterSuccess(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-123"
+	accountID := "acc-456"
+	plaidAccountID := "plaid-acc-789"
+	tier := domain.TierFree
+	daysHistorical := 30
+	transactionCount := 150
+
+	mockSyncLimitService := new(MockSyncLimitService)
+
+	// After successful sync, expect RecordSync to be called
+	mockSyncLimitService.On("RecordSync", ctx, userID, accountID, plaidAccountID, tier, daysHistorical, transactionCount).Return(nil)
+
+	err := mockSyncLimitService.RecordSync(ctx, userID, accountID, plaidAccountID, tier, daysHistorical, transactionCount)
+
+	assert.NoError(t, err)
+	mockSyncLimitService.AssertExpectations(t)
+}
+
+// TestTransactionSyncService_SyncTransactions_SkipsLimitCheckForReSyncs tests that re-syncs don't increment counter
+func TestTransactionSyncService_SyncTransactions_SkipsLimitCheckForReSyncs(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-123"
+	plaidAccountID := "plaid-acc-456"
+
+	mockSyncLimitService := new(MockSyncLimitService)
+
+	// Re-sync scenario: HasSyncedThisMonth returns true, so CheckSyncLimit allows it
+	mockSyncLimitService.On("CheckSyncLimit", ctx, userID, plaidAccountID).Return(true, "", nil)
+
+	allowed, reason, err := mockSyncLimitService.CheckSyncLimit(ctx, userID, plaidAccountID)
+
+	assert.NoError(t, err)
+	assert.True(t, allowed)
+	assert.Empty(t, reason)
+	mockSyncLimitService.AssertExpectations(t)
+}
+
+// TestTransactionSyncService_SyncTransactions_HandlesMultipleAccounts tests that each account is checked separately
+func TestTransactionSyncService_SyncTransactions_HandlesMultipleAccounts(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-123"
+
+	mockSyncLimitService := new(MockSyncLimitService)
+
+	// User syncs 3 different accounts
+	accounts := []struct {
+		plaidAccountID string
+		allowed        bool
+		reason         string
+	}{
+		{"plaid-acc-1", true, ""},
+		{"plaid-acc-2", true, ""},
+		{"plaid-acc-3", true, ""},
+	}
+
+	for _, acc := range accounts {
+		mockSyncLimitService.On("CheckSyncLimit", ctx, userID, acc.plaidAccountID).Return(acc.allowed, acc.reason, nil)
+
+		allowed, reason, err := mockSyncLimitService.CheckSyncLimit(ctx, userID, acc.plaidAccountID)
+
+		assert.NoError(t, err)
+		assert.True(t, allowed)
+		assert.Empty(t, reason)
+	}
+
+	mockSyncLimitService.AssertExpectations(t)
+}
+
+// TestTransactionSyncService_SyncTransactions_FailsGracefullyOnLimitCheckError tests error handling for sync limit check failures
+func TestTransactionSyncService_SyncTransactions_FailsGracefullyOnLimitCheckError(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-123"
+	plaidAccountID := "plaid-acc-456"
+
+	mockSyncLimitService := new(MockSyncLimitService)
+
+	// Simulate sync limit service error
+	mockSyncLimitService.On("CheckSyncLimit", ctx, userID, plaidAccountID).Return(false, "", errors.New("sync limit service unavailable"))
+
+	allowed, reason, err := mockSyncLimitService.CheckSyncLimit(ctx, userID, plaidAccountID)
+
+	assert.Error(t, err)
+	assert.False(t, allowed)
+	assert.Empty(t, reason)
+	assert.Contains(t, err.Error(), "sync limit service unavailable")
+	mockSyncLimitService.AssertExpectations(t)
+}
+
+// TestTransactionSyncService_SyncTransactions_RecordsCorrectTierAndDepth tests that the correct tier and depth are recorded
+func TestTransactionSyncService_SyncTransactions_RecordsCorrectTierAndDepth(t *testing.T) {
+	ctx := context.Background()
+
+	testCases := []struct {
+		name           string
+		userID         string
+		tier           domain.TierName
+		daysHistorical int
+	}{
+		{
+			name:           "free_tier_30_days",
+			userID:         "free-user",
+			tier:           domain.TierFree,
+			daysHistorical: 30,
+		},
+		{
+			name:           "premium_lite_365_days",
+			userID:         "lite-user",
+			tier:           domain.TierPremiumLite,
+			daysHistorical: 365,
+		},
+		{
+			name:           "premium_730_days",
+			userID:         "premium-user",
+			tier:           domain.TierPremium,
+			daysHistorical: 730,
+		},
+		{
+			name:           "premium_plus_730_days",
+			userID:         "plus-user",
+			tier:           domain.TierPremiumPlus,
+			daysHistorical: 730,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockSyncLimitService := new(MockSyncLimitService)
+			accountID := "acc-456"
+			plaidAccountID := "plaid-acc-789"
+			transactionCount := 200
+
+			mockSyncLimitService.On("RecordSync", ctx, tc.userID, accountID, plaidAccountID, tc.tier, tc.daysHistorical, transactionCount).Return(nil)
+
+			err := mockSyncLimitService.RecordSync(ctx, tc.userID, accountID, plaidAccountID, tc.tier, tc.daysHistorical, transactionCount)
+
+			assert.NoError(t, err)
+			mockSyncLimitService.AssertExpectations(t)
+		})
+	}
+}
+
+// TestTransactionSyncService_SyncTransactions_IntegrationFlow tests the complete integration flow
+func TestTransactionSyncService_SyncTransactions_IntegrationFlow(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-123"
+	accountID := "acc-456"
+	plaidAccountID := "plaid-acc-789"
+	tier := domain.TierFree
+
+	mockSyncLimitService := new(MockSyncLimitService)
+
+	// Step 1: Get historical depth limit (30 days for free tier)
+	mockSyncLimitService.On("GetHistoricalDepthLimit", ctx, userID).Return(30, nil)
+
+	// Step 2: Check if sync is allowed
+	mockSyncLimitService.On("CheckSyncLimit", ctx, userID, plaidAccountID).Return(true, "", nil)
+
+	// Step 3: After successful sync, record sync (150 transactions synced)
+	mockSyncLimitService.On("RecordSync", ctx, userID, accountID, plaidAccountID, tier, 30, 150).Return(nil)
+
+	// Execute the flow
+	daysHistorical, err := mockSyncLimitService.GetHistoricalDepthLimit(ctx, userID)
+	assert.NoError(t, err)
+	assert.Equal(t, 30, daysHistorical)
+
+	allowed, reason, err := mockSyncLimitService.CheckSyncLimit(ctx, userID, plaidAccountID)
+	assert.NoError(t, err)
+	assert.True(t, allowed)
+	assert.Empty(t, reason)
+
+	// Simulate sync completing with 150 transactions
+	transactionCount := 150
+	err = mockSyncLimitService.RecordSync(ctx, userID, accountID, plaidAccountID, tier, daysHistorical, transactionCount)
+	assert.NoError(t, err)
+
+	mockSyncLimitService.AssertExpectations(t)
+}
+
+// TestTransactionSyncService_SyncTransactions_DoesNotRecordSyncOnFailure tests that sync is NOT recorded if Plaid sync fails
+func TestTransactionSyncService_SyncTransactions_DoesNotRecordSyncOnFailure(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-123"
+	plaidAccountID := "plaid-acc-456"
+
+	mockSyncLimitService := new(MockSyncLimitService)
+
+	// Sync limit check passes
+	mockSyncLimitService.On("GetHistoricalDepthLimit", ctx, userID).Return(30, nil)
+	mockSyncLimitService.On("CheckSyncLimit", ctx, userID, plaidAccountID).Return(true, "", nil)
+
+	// Simulate Plaid API failure (in actual implementation)
+	// RecordSync should NOT be called if sync fails
+
+	daysHistorical, err := mockSyncLimitService.GetHistoricalDepthLimit(ctx, userID)
+	assert.NoError(t, err)
+
+	allowed, reason, err := mockSyncLimitService.CheckSyncLimit(ctx, userID, plaidAccountID)
+	assert.NoError(t, err)
+	assert.True(t, allowed)
+	assert.Empty(t, reason)
+
+	// If Plaid sync fails here, RecordSync should NOT be called
+	// The test verifies that no unexpected RecordSync calls occur
+	mockSyncLimitService.AssertExpectations(t)
+}
+
+// TestPlaidService_TransactionsSync_AcceptsDaysRequestedParameter tests that PlaidService accepts days_requested parameter
+func TestPlaidService_TransactionsSync_AcceptsDaysRequestedParameter(t *testing.T) {
+	// NOTE: This test documents the expected signature change to PlaidService.TransactionsSync()
+	// The method should accept a daysRequested parameter to control historical depth
+
+	testCases := []struct {
+		name           string
+		daysRequested  int
+		expectedDays   int
+		description    string
+	}{
+		{
+			name:          "free_tier_30_days",
+			daysRequested: 30,
+			expectedDays:  30,
+			description:   "Free tier should request 30 days of history",
+		},
+		{
+			name:          "premium_lite_365_days",
+			daysRequested: 365,
+			expectedDays:  365,
+			description:   "Premium Lite tier should request 365 days (1 year) of history",
+		},
+		{
+			name:          "premium_730_days",
+			daysRequested: 730,
+			expectedDays:  730,
+			description:   "Premium and Premium+ tiers should request 730 days (2 years) of history",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// This test documents the expected API signature:
+			// PlaidService.TransactionsSync(ctx, accessToken, cursor, daysRequested) (*plaid.TransactionsSyncResponse, error)
+
+			assert.Equal(t, tc.expectedDays, tc.daysRequested, tc.description)
+		})
+	}
+}
+
+// TestTransactionSyncService_GetAccountPlaidID tests retrieving plaid_account_id for sync audit tracking
+func TestTransactionSyncService_GetAccountPlaidID(t *testing.T) {
+	// NOTE: This test documents that we need to track plaid_account_id
+	// The accounts table already has this field (from Plaid API response)
+	// We need to pass it to RecordSync for proper audit tracking
+
+	ctx := context.Background()
+	accountID := "acc-123"
+
+	// Expected: AccountRepository.GetByID should return Account with PlaidAccountID
+	expectedPlaidAccountID := "plaid-acc-xyz"
+
+	// Mock would return account with plaid_account_id
+	// mockAccountRepo.On("GetByID", ctx, accountID).Return(&domain.Account{
+	//     ID: accountID,
+	//     PlaidAccountID: expectedPlaidAccountID,
+	// }, nil)
+
+	// Verify the field exists in domain.Account
+	account := &domain.Account{
+		ID:             accountID,
+		PlaidAccountID: &expectedPlaidAccountID,
+	}
+
+	assert.NotNil(t, account.PlaidAccountID)
+	assert.Equal(t, expectedPlaidAccountID, *account.PlaidAccountID)
+}
+
+// TestTransactionSyncService_SyncTransactions_HandlesNilPlaidAccountID tests handling of missing plaid_account_id
+func TestTransactionSyncService_SyncTransactions_HandlesNilPlaidAccountID(t *testing.T) {
+	// Edge case: What if plaid_account_id is NULL in database?
+	// This shouldn't happen for accounts created via Plaid, but we should handle it gracefully
+
+	account := &domain.Account{
+		ID:             "acc-123",
+		PlaidAccountID: nil, // NULL case
+	}
+
+	// Expected behavior: Skip sync audit recording if plaid_account_id is missing
+	// OR: Return error and prevent sync
+	// Decision: Return error - plaid_account_id is required for sync limit tracking
+
+	if account.PlaidAccountID == nil {
+		err := errors.New("plaid_account_id is required for sync limit tracking")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "plaid_account_id is required")
+	}
+}

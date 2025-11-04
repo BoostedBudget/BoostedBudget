@@ -42,7 +42,7 @@ func (m *mockPlaidService) RemoveItem(ctx context.Context, accessToken string) e
 	return errors.New("not implemented")
 }
 
-func (m *mockPlaidService) TransactionsSync(ctx context.Context, accessToken string, cursor string) (*plaid.TransactionsSyncResponse, error) {
+func (m *mockPlaidService) TransactionsSync(ctx context.Context, accessToken string, cursor string, daysRequested int) (*plaid.TransactionsSyncResponse, error) {
 	return nil, errors.New("not implemented")
 }
 

@@ -36,6 +36,8 @@ type SubscriptionLimits struct {
 	MinExecutionIntervalMinutes   int `yaml:"min_execution_interval_minutes" json:"min_execution_interval_minutes"`
 	APICallsPerMonth              int `yaml:"api_calls_per_month" json:"api_calls_per_month"`
 	DataExportRequestsPerMonth    int `yaml:"data_export_requests_per_month" json:"data_export_requests_per_month"`
+	AccountsSyncedPerMonth        int `yaml:"accounts_synced_per_month" json:"accounts_synced_per_month"`       // NEW: How many accounts can sync per month
+	TransactionHistoryDays        int `yaml:"transaction_history_days" json:"transaction_history_days"`         // NEW: Historical depth (30, 365, 730)
 }
 
 // SubscriptionFeatures defines feature flags for a tier
@@ -91,11 +93,13 @@ type EffectiveSubscription struct {
 type ResourceType string
 
 const (
-	ResourceAccounts              ResourceType = "accounts"
-	ResourceRules                 ResourceType = "rules"
-	ResourceExecutionsPerDay      ResourceType = "executions_per_day"
-	ResourceAPICallsPerMonth      ResourceType = "api_calls_per_month"
-	ResourceDataExportPerMonth    ResourceType = "data_export_requests_per_month"
+	ResourceAccounts                 ResourceType = "accounts"
+	ResourceRules                    ResourceType = "rules"
+	ResourceExecutionsPerDay         ResourceType = "executions_per_day"
+	ResourceAPICallsPerMonth         ResourceType = "api_calls_per_month"
+	ResourceDataExportPerMonth       ResourceType = "data_export_requests_per_month"
+	ResourceAccountsSyncedPerMonth   ResourceType = "accounts_synced_per_month"   // NEW: Monthly transaction sync quota
+	ResourceTransactionHistoryDays   ResourceType = "transaction_history_days"    // NEW: Historical depth limit (30, 365, 730 days)
 )
 
 // GetLimit returns the limit value for a specific resource type
@@ -111,6 +115,10 @@ func (l *SubscriptionLimits) GetLimit(resourceType ResourceType) int {
 		return l.APICallsPerMonth
 	case ResourceDataExportPerMonth:
 		return l.DataExportRequestsPerMonth
+	case ResourceAccountsSyncedPerMonth:
+		return l.AccountsSyncedPerMonth
+	case ResourceTransactionHistoryDays:
+		return l.TransactionHistoryDays
 	default:
 		return 0
 	}
@@ -129,6 +137,10 @@ func (l *SubscriptionLimits) SetLimit(resourceType ResourceType, value int) {
 		l.APICallsPerMonth = value
 	case ResourceDataExportPerMonth:
 		l.DataExportRequestsPerMonth = value
+	case ResourceAccountsSyncedPerMonth:
+		l.AccountsSyncedPerMonth = value
+	case ResourceTransactionHistoryDays:
+		l.TransactionHistoryDays = value
 	}
 }
 

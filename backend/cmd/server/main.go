@@ -104,6 +104,7 @@ func main() {
 		webhookRepo := repository.NewWebhookRepository(db)
 		identityRepo := repository.NewUserIdentityRepository(db) // Maps Auth0 IDs to user UUIDs
 		notificationRepo := repository.NewNotificationRepository(db) // Issue #257: Notification storage
+		syncAuditRepo := repository.NewSyncAuditRepository(db) // Issue #242: Monthly sync limits
 
 		// Create mock audit logger (will be replaced with real implementation later)
 		auditLogger := &mockAuditLogger{}
@@ -115,6 +116,8 @@ func main() {
 		registrationService := services.NewRegistrationService(profileRepo, identityRepo, privacyRepo, auditLogger, db)
 		// Note: Passing nil for override repo - not yet implemented
 		subscriptionService := services.NewSubscriptionService(tierConfig, nil)
+		// Issue #242: Monthly sync limits service
+		syncLimitService := services.NewSyncLimitService(syncAuditRepo, profileRepo, subscriptionService)
 
 		// Initialize Email service (needed by deletion service and item error service)
 		// Optional - uses no-op mock if not configured
@@ -201,13 +204,16 @@ func main() {
 
 				// Initialize Transaction Sync Service for webhook processing
 				// Issue #256: Transaction Sync Service
+				// Issue #242: Monthly sync limits integration
 				transactionSyncService := services.NewTransactionSyncService(
 					webhookRepo,
 					linkedItemRepo,
 					transactionRepo,
 					accountRepo,
+					profileRepo,
 					plaidService,
 					encryptionService,
+					syncLimitService,
 				)
 
 				// Initialize Item Error Service for ITEM webhook processing
@@ -241,6 +247,7 @@ func main() {
 		privacyHandler := handlers.NewPrivacyHandler(privacyService, profileService)
 		transactionHandler := handlers.NewTransactionHandler(transactionService)
 		notificationHandler := handlers.NewNotificationHandler(notificationRepo) // Issue #257: Notification API
+		syncStatsHandler := handlers.NewSyncStatsHandler(syncLimitService)       // Issue #242: Monthly sync limits API
 
 		// Create Auth0 middleware with identity resolution and auto-registration
 		auth0Middleware := middleware.Auth0Middleware(
@@ -263,6 +270,9 @@ func main() {
 		api.GET("/notifications", notificationHandler.GetNotifications)
 		api.PATCH("/notifications/:id/read", notificationHandler.MarkNotificationAsRead)
 		api.GET("/notifications/unread/count", notificationHandler.GetUnreadCount)
+
+		// Sync statistics route (Issue #242: Monthly sync limits)
+		api.GET("/sync-stats", syncStatsHandler.GetSyncStats)
 
 		// Plaid routes (if enabled)
 		if plaidHandler != nil {
