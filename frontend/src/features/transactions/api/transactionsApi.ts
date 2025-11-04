@@ -53,7 +53,7 @@ export async function fetchTransactions(
     }
   }
 
-  const response = await apiClient.get<GetTransactionsResponse>('/api/v1/transactions', {
+  const response = await apiClient.get<GetTransactionsResponse>('/v1/transactions', {
     params: queryParams,
   })
 

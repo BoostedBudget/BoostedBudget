@@ -1,7 +1,7 @@
 // Plaid Link types matching backend OpenAPI schemas
 
 /**
- * Response from POST /api/v1/plaid/link-token
+ * Response from POST /v1/plaid/link-token
  * Link token used to initialize Plaid Link in the frontend
  */
 export interface LinkTokenResponse {
@@ -11,7 +11,7 @@ export interface LinkTokenResponse {
 }
 
 /**
- * Request body for POST /api/v1/plaid/exchange-token
+ * Request body for POST /v1/plaid/exchange-token
  * Exchanges a public token from Plaid Link for account access
  */
 export interface ExchangePublicTokenRequest {
@@ -21,7 +21,7 @@ export interface ExchangePublicTokenRequest {
 }
 
 /**
- * Response from POST /api/v1/plaid/exchange-token
+ * Response from POST /v1/plaid/exchange-token
  * Result of linking bank accounts
  */
 export interface ExchangePublicTokenResponse {
@@ -32,7 +32,7 @@ export interface ExchangePublicTokenResponse {
 
 /**
  * Bank account with details and institution information
- * Returned from GET /api/v1/accounts
+ * Returned from GET /v1/accounts
  */
 export interface Account {
   id: string
@@ -53,7 +53,7 @@ export interface Account {
 }
 
 /**
- * Response from GET /api/v1/accounts
+ * Response from GET /v1/accounts
  * List of all linked accounts for the authenticated user
  */
 export interface GetAccountsResponse {

@@ -46,7 +46,7 @@ export interface TransactionFilters {
 }
 
 /**
- * Response from GET /api/v1/transactions
+ * Response from GET /v1/transactions
  * Paginated list of transactions with metadata
  */
 export interface GetTransactionsResponse {

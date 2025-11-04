@@ -12,13 +12,13 @@ import type { RequestDeletionResponse, CancelDeletionResponse } from '../types'
  * @throws Error if request fails
  */
 export async function requestDeletion(): Promise<RequestDeletionResponse> {
-  const response = await apiClient.post<RequestDeletionResponse>('/api/v1/user/delete')
+  const response = await apiClient.post<RequestDeletionResponse>('/v1/user/delete')
   return response.data
 }
 
 /**
  * Cancel scheduled account deletion
- * GET /api/v1/user/delete/cancel/:token
+ * GET /v1/user/delete/cancel/:token
  *
  * Public endpoint (no auth required) - validates JWT token.
  * Cancels the scheduled deletion for the user associated with the token.
@@ -28,6 +28,6 @@ export async function requestDeletion(): Promise<RequestDeletionResponse> {
  * @throws Error if token is invalid or expired
  */
 export async function cancelDeletion(token: string): Promise<CancelDeletionResponse> {
-  const response = await apiClient.get<CancelDeletionResponse>(`/api/v1/user/delete/cancel/${token}`)
+  const response = await apiClient.get<CancelDeletionResponse>(`/v1/user/delete/cancel/${token}`)
   return response.data
 }
