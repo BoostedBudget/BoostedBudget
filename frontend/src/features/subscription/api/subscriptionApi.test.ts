@@ -26,7 +26,7 @@ describe('fetchSubscriptionTiers', () => {
     vi.restoreAllMocks()
   })
 
-  it('should call GET /api/v1/subscription/tiers', async () => {
+  it('should call GET /v1/subscription/tiers', async () => {
     // Arrange
     const mockResponse: SubscriptionTiersResponse = {
       tiers: {
@@ -106,7 +106,7 @@ describe('fetchSubscriptionTiers', () => {
     await fetchSubscriptionTiers()
 
     // Assert
-    expect(apiClient.get).toHaveBeenCalledWith('/api/v1/subscription/tiers')
+    expect(apiClient.get).toHaveBeenCalledWith('/v1/subscription/tiers')
     expect(apiClient.get).toHaveBeenCalledTimes(1)
   })
 
@@ -391,7 +391,7 @@ describe('fetchSubscriptionTiers', () => {
 
     // Assert - Verify the call was made without passing a config with Authorization
     // The apiClient.get should be called with just the URL, no config object
-    expect(apiClient.get).toHaveBeenCalledWith('/api/v1/subscription/tiers')
+    expect(apiClient.get).toHaveBeenCalledWith('/v1/subscription/tiers')
 
     // Verify it was NOT called with a second parameter (config object)
     const calls = vi.mocked(apiClient.get).mock.calls

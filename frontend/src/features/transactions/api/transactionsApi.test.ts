@@ -17,7 +17,7 @@ describe('transactionsApi', () => {
   })
 
   describe('fetchTransactions', () => {
-    it('should call GET /api/v1/transactions with default parameters', async () => {
+    it('should call GET /v1/transactions with default parameters', async () => {
       const mockResponse: GetTransactionsResponse = {
         transactions: [
           {
@@ -43,7 +43,7 @@ describe('transactionsApi', () => {
         has_more: false,
       }
 
-      mock.onGet('/api/v1/transactions').reply(200, mockResponse)
+      mock.onGet('/v1/transactions').reply(200, mockResponse)
 
       const result = await fetchTransactions()
 
@@ -51,7 +51,7 @@ describe('transactionsApi', () => {
       expect(result.transactions).toHaveLength(1)
       expect(result.total_count).toBe(1)
       expect(mock.history.get.length).toBe(1)
-      expect(mock.history.get[0].url).toBe('/api/v1/transactions')
+      expect(mock.history.get[0].url).toBe('/v1/transactions')
     })
 
     it('should construct URL with limit and offset query parameters', async () => {
@@ -68,7 +68,7 @@ describe('transactionsApi', () => {
         has_more: true,
       }
 
-      mock.onGet('/api/v1/transactions').reply((config) => {
+      mock.onGet('/v1/transactions').reply((config) => {
         expect(config.params).toEqual({
           limit: 25,
           offset: 100,
@@ -103,7 +103,7 @@ describe('transactionsApi', () => {
         has_more: false,
       }
 
-      mock.onGet('/api/v1/transactions').reply((config) => {
+      mock.onGet('/v1/transactions').reply((config) => {
         expect(config.params).toEqual({
           account_id: 'account-123',
           start_date: '2025-01-01',
@@ -136,7 +136,7 @@ describe('transactionsApi', () => {
         has_more: false,
       }
 
-      mock.onGet('/api/v1/transactions').reply((config) => {
+      mock.onGet('/v1/transactions').reply((config) => {
         expect(config.params).toEqual({
           limit: 10,
           offset: 20,
@@ -158,7 +158,7 @@ describe('transactionsApi', () => {
         has_more: false,
       }
 
-      mock.onGet('/api/v1/transactions').reply(200, mockResponse)
+      mock.onGet('/v1/transactions').reply(200, mockResponse)
 
       const result = await fetchTransactions()
 
@@ -176,7 +176,7 @@ describe('transactionsApi', () => {
         has_more: false,
       }
 
-      mock.onGet('/api/v1/transactions').reply((config) => {
+      mock.onGet('/v1/transactions').reply((config) => {
         // Verify Authorization header exists (set by axios interceptor)
         expect(config.headers).toBeDefined()
         return [200, mockResponse]
@@ -186,19 +186,19 @@ describe('transactionsApi', () => {
     })
 
     it('should handle 401 unauthorized error', async () => {
-      mock.onGet('/api/v1/transactions').reply(401, { error: 'Unauthorized' })
+      mock.onGet('/v1/transactions').reply(401, { error: 'Unauthorized' })
 
       await expect(fetchTransactions()).rejects.toThrow()
     })
 
     it('should handle 400 bad request error (invalid parameters)', async () => {
-      mock.onGet('/api/v1/transactions').reply(400, { error: 'Invalid limit parameter' })
+      mock.onGet('/v1/transactions').reply(400, { error: 'Invalid limit parameter' })
 
       await expect(fetchTransactions({ limit: 150 })).rejects.toThrow()
     })
 
     it('should handle 400 bad request error (invalid date format)', async () => {
-      mock.onGet('/api/v1/transactions').reply(400, { error: 'Invalid start_date format' })
+      mock.onGet('/v1/transactions').reply(400, { error: 'Invalid start_date format' })
 
       await expect(
         fetchTransactions({ filters: { start_date: 'not-a-date' } })
@@ -206,13 +206,13 @@ describe('transactionsApi', () => {
     })
 
     it('should handle 500 server error', async () => {
-      mock.onGet('/api/v1/transactions').reply(500, { error: 'Internal server error' })
+      mock.onGet('/v1/transactions').reply(500, { error: 'Internal server error' })
 
       await expect(fetchTransactions()).rejects.toThrow()
     })
 
     it('should handle network errors', async () => {
-      mock.onGet('/api/v1/transactions').networkError()
+      mock.onGet('/v1/transactions').networkError()
 
       await expect(fetchTransactions()).rejects.toThrow()
     })
@@ -238,7 +238,7 @@ describe('transactionsApi', () => {
         has_more: true,
       }
 
-      mock.onGet('/api/v1/transactions').reply(200, mockResponse)
+      mock.onGet('/v1/transactions').reply(200, mockResponse)
 
       const result = await fetchTransactions({ limit: 50, offset: 0 })
 
@@ -263,7 +263,7 @@ describe('transactionsApi', () => {
         has_more: false,
       }
 
-      mock.onGet('/api/v1/transactions').reply((config) => {
+      mock.onGet('/v1/transactions').reply((config) => {
         // Should only include defined parameters
         expect(config.params).toEqual({
           account_id: 'account-123',

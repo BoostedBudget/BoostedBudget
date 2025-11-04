@@ -1,7 +1,7 @@
 /**
  * Subscription API Types
  *
- * Types matching the backend API response from GET /api/v1/subscription/tiers
+ * Types matching the backend API response from GET /v1/subscription/tiers
  * These types are runtime-loaded from the backend, not generated from YAML.
  */
 

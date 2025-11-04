@@ -17,20 +17,20 @@ describe('plaidApi', () => {
   })
 
   describe('fetchLinkToken', () => {
-    it('should call POST /api/v1/plaid/link-token and return link token', async () => {
+    it('should call POST /v1/plaid/link-token and return link token', async () => {
       const mockResponse: LinkTokenResponse = {
         link_token: 'link-sandbox-abc123-def456',
         expiration: '2025-10-20T22:00:00Z',
         request_id: 'plaid-request-xyz789',
       }
 
-      mock.onPost('/api/v1/plaid/link-token').reply(200, mockResponse)
+      mock.onPost('/v1/plaid/link-token').reply(200, mockResponse)
 
       const result = await fetchLinkToken()
 
       expect(result).toEqual(mockResponse)
       expect(mock.history.post.length).toBe(1)
-      expect(mock.history.post[0].url).toBe('/api/v1/plaid/link-token')
+      expect(mock.history.post[0].url).toBe('/v1/plaid/link-token')
     })
 
     it('should include Authorization header from apiClient interceptor', async () => {
@@ -40,7 +40,7 @@ describe('plaidApi', () => {
         request_id: 'request-123',
       }
 
-      mock.onPost('/api/v1/plaid/link-token').reply((config) => {
+      mock.onPost('/v1/plaid/link-token').reply((config) => {
         // Verify Authorization header exists (set by axios interceptor)
         expect(config.headers).toBeDefined()
         return [200, mockResponse]
@@ -50,26 +50,26 @@ describe('plaidApi', () => {
     })
 
     it('should handle 401 unauthorized error', async () => {
-      mock.onPost('/api/v1/plaid/link-token').reply(401, { error: 'Unauthorized' })
+      mock.onPost('/v1/plaid/link-token').reply(401, { error: 'Unauthorized' })
 
       await expect(fetchLinkToken()).rejects.toThrow()
     })
 
     it('should handle 500 server error', async () => {
-      mock.onPost('/api/v1/plaid/link-token').reply(500, { error: 'Internal server error' })
+      mock.onPost('/v1/plaid/link-token').reply(500, { error: 'Internal server error' })
 
       await expect(fetchLinkToken()).rejects.toThrow()
     })
 
     it('should handle network errors', async () => {
-      mock.onPost('/api/v1/plaid/link-token').networkError()
+      mock.onPost('/v1/plaid/link-token').networkError()
 
       await expect(fetchLinkToken()).rejects.toThrow()
     })
   })
 
   describe('exchangePublicToken', () => {
-    it('should call POST /api/v1/plaid/exchange-token with request body', async () => {
+    it('should call POST /v1/plaid/exchange-token with request body', async () => {
       const request: ExchangePublicTokenRequest = {
         public_token: 'public-sandbox-abc123-def456',
         institution_id: 'ins_109508',
@@ -82,13 +82,13 @@ describe('plaidApi', () => {
         accounts_linked: 3,
       }
 
-      mock.onPost('/api/v1/plaid/exchange-token', request).reply(200, mockResponse)
+      mock.onPost('/v1/plaid/exchange-token', request).reply(200, mockResponse)
 
       const result = await exchangePublicToken(request)
 
       expect(result).toEqual(mockResponse)
       expect(mock.history.post.length).toBe(1)
-      expect(mock.history.post[0].url).toBe('/api/v1/plaid/exchange-token')
+      expect(mock.history.post[0].url).toBe('/v1/plaid/exchange-token')
       expect(JSON.parse(mock.history.post[0].data)).toEqual(request)
     })
 
@@ -99,7 +99,7 @@ describe('plaidApi', () => {
         institution_name: 'Test Bank',
       }
 
-      mock.onPost('/api/v1/plaid/exchange-token').reply(400, { error: 'Invalid or expired public token' })
+      mock.onPost('/v1/plaid/exchange-token').reply(400, { error: 'Invalid or expired public token' })
 
       await expect(exchangePublicToken(request)).rejects.toThrow()
     })
@@ -111,7 +111,7 @@ describe('plaidApi', () => {
         institution_name: 'Test Bank',
       }
 
-      mock.onPost('/api/v1/plaid/exchange-token').reply(403, {
+      mock.onPost('/v1/plaid/exchange-token').reply(403, {
         error: 'Account limit exceeded for your subscription tier'
       })
 
@@ -125,7 +125,7 @@ describe('plaidApi', () => {
         institution_name: 'Test Bank',
       }
 
-      mock.onPost('/api/v1/plaid/exchange-token').reply(503, {
+      mock.onPost('/v1/plaid/exchange-token').reply(503, {
         error: 'Plaid service temporarily unavailable'
       })
 
@@ -145,7 +145,7 @@ describe('plaidApi', () => {
         accounts_linked: 1,
       }
 
-      mock.onPost('/api/v1/plaid/exchange-token').reply((config) => {
+      mock.onPost('/v1/plaid/exchange-token').reply((config) => {
         // Verify Authorization header exists (set by axios interceptor)
         expect(config.headers).toBeDefined()
         return [200, mockResponse]
@@ -156,7 +156,7 @@ describe('plaidApi', () => {
   })
 
   describe('fetchAccounts', () => {
-    it('should call GET /api/v1/accounts and return accounts list', async () => {
+    it('should call GET /v1/accounts and return accounts list', async () => {
       const mockResponse: GetAccountsResponse = {
         accounts: [
           {
@@ -196,7 +196,7 @@ describe('plaidApi', () => {
         total_count: 2,
       }
 
-      mock.onGet('/api/v1/accounts').reply(200, mockResponse)
+      mock.onGet('/v1/accounts').reply(200, mockResponse)
 
       const result = await fetchAccounts()
 
@@ -204,7 +204,7 @@ describe('plaidApi', () => {
       expect(result.accounts).toHaveLength(2)
       expect(result.total_count).toBe(2)
       expect(mock.history.get.length).toBe(1)
-      expect(mock.history.get[0].url).toBe('/api/v1/accounts')
+      expect(mock.history.get[0].url).toBe('/v1/accounts')
     })
 
     it('should return empty accounts array when user has no accounts', async () => {
@@ -213,7 +213,7 @@ describe('plaidApi', () => {
         total_count: 0,
       }
 
-      mock.onGet('/api/v1/accounts').reply(200, mockResponse)
+      mock.onGet('/v1/accounts').reply(200, mockResponse)
 
       const result = await fetchAccounts()
 
@@ -227,7 +227,7 @@ describe('plaidApi', () => {
         total_count: 0,
       }
 
-      mock.onGet('/api/v1/accounts').reply((config) => {
+      mock.onGet('/v1/accounts').reply((config) => {
         // Verify Authorization header exists (set by axios interceptor)
         expect(config.headers).toBeDefined()
         return [200, mockResponse]
@@ -237,40 +237,40 @@ describe('plaidApi', () => {
     })
 
     it('should handle 401 unauthorized error', async () => {
-      mock.onGet('/api/v1/accounts').reply(401, { error: 'Unauthorized' })
+      mock.onGet('/v1/accounts').reply(401, { error: 'Unauthorized' })
 
       await expect(fetchAccounts()).rejects.toThrow()
     })
 
     it('should handle 500 server error', async () => {
-      mock.onGet('/api/v1/accounts').reply(500, { error: 'Internal server error' })
+      mock.onGet('/v1/accounts').reply(500, { error: 'Internal server error' })
 
       await expect(fetchAccounts()).rejects.toThrow()
     })
 
     it('should handle network errors', async () => {
-      mock.onGet('/api/v1/accounts').networkError()
+      mock.onGet('/v1/accounts').networkError()
 
       await expect(fetchAccounts()).rejects.toThrow()
     })
   })
 
   describe('deleteAccount', () => {
-    it('should call DELETE /api/v1/accounts/:id and return successfully', async () => {
+    it('should call DELETE /v1/accounts/:id and return successfully', async () => {
       const accountId = '550e8400-e29b-41d4-a716-446655440000'
 
-      mock.onDelete(`/api/v1/accounts/${accountId}`).reply(204)
+      mock.onDelete(`/v1/accounts/${accountId}`).reply(204)
 
       await deleteAccount(accountId)
 
       expect(mock.history.delete.length).toBe(1)
-      expect(mock.history.delete[0].url).toBe(`/api/v1/accounts/${accountId}`)
+      expect(mock.history.delete[0].url).toBe(`/v1/accounts/${accountId}`)
     })
 
     it('should include Authorization header from apiClient interceptor', async () => {
       const accountId = '550e8400-e29b-41d4-a716-446655440000'
 
-      mock.onDelete(`/api/v1/accounts/${accountId}`).reply((config) => {
+      mock.onDelete(`/v1/accounts/${accountId}`).reply((config) => {
         // Verify Authorization header exists (set by axios interceptor)
         expect(config.headers).toBeDefined()
         return [204]
@@ -282,7 +282,7 @@ describe('plaidApi', () => {
     it('should handle 404 not found error', async () => {
       const accountId = 'non-existent-account-id'
 
-      mock.onDelete(`/api/v1/accounts/${accountId}`).reply(404, { error: 'Account not found' })
+      mock.onDelete(`/v1/accounts/${accountId}`).reply(404, { error: 'Account not found' })
 
       await expect(deleteAccount(accountId)).rejects.toThrow()
     })
@@ -290,7 +290,7 @@ describe('plaidApi', () => {
     it('should handle 401 unauthorized error', async () => {
       const accountId = '550e8400-e29b-41d4-a716-446655440000'
 
-      mock.onDelete(`/api/v1/accounts/${accountId}`).reply(401, { error: 'Unauthorized' })
+      mock.onDelete(`/v1/accounts/${accountId}`).reply(401, { error: 'Unauthorized' })
 
       await expect(deleteAccount(accountId)).rejects.toThrow()
     })
@@ -298,7 +298,7 @@ describe('plaidApi', () => {
     it('should handle 500 server error', async () => {
       const accountId = '550e8400-e29b-41d4-a716-446655440000'
 
-      mock.onDelete(`/api/v1/accounts/${accountId}`).reply(500, { error: 'Internal server error' })
+      mock.onDelete(`/v1/accounts/${accountId}`).reply(500, { error: 'Internal server error' })
 
       await expect(deleteAccount(accountId)).rejects.toThrow()
     })
@@ -306,28 +306,28 @@ describe('plaidApi', () => {
     it('should handle network errors', async () => {
       const accountId = '550e8400-e29b-41d4-a716-446655440000'
 
-      mock.onDelete(`/api/v1/accounts/${accountId}`).networkError()
+      mock.onDelete(`/v1/accounts/${accountId}`).networkError()
 
       await expect(deleteAccount(accountId)).rejects.toThrow()
     })
   })
 
   describe('disconnectInstitution', () => {
-    it('should call DELETE /api/v1/linked-items/:id and return successfully', async () => {
+    it('should call DELETE /v1/linked-items/:id and return successfully', async () => {
       const linkedItemId = '770e9511-f3ac-52e5-b827-557766551112'
 
-      mock.onDelete(`/api/v1/linked-items/${linkedItemId}`).reply(204)
+      mock.onDelete(`/v1/linked-items/${linkedItemId}`).reply(204)
 
       await disconnectInstitution(linkedItemId)
 
       expect(mock.history.delete.length).toBe(1)
-      expect(mock.history.delete[0].url).toBe(`/api/v1/linked-items/${linkedItemId}`)
+      expect(mock.history.delete[0].url).toBe(`/v1/linked-items/${linkedItemId}`)
     })
 
     it('should include Authorization header from apiClient interceptor', async () => {
       const linkedItemId = '770e9511-f3ac-52e5-b827-557766551112'
 
-      mock.onDelete(`/api/v1/linked-items/${linkedItemId}`).reply((config) => {
+      mock.onDelete(`/v1/linked-items/${linkedItemId}`).reply((config) => {
         // Verify Authorization header exists (set by axios interceptor)
         expect(config.headers).toBeDefined()
         return [204]
@@ -339,7 +339,7 @@ describe('plaidApi', () => {
     it('should handle 404 institution not found error', async () => {
       const linkedItemId = 'non-existent-item-id'
 
-      mock.onDelete(`/api/v1/linked-items/${linkedItemId}`).reply(404, { error: 'Institution not found' })
+      mock.onDelete(`/v1/linked-items/${linkedItemId}`).reply(404, { error: 'Institution not found' })
 
       await expect(disconnectInstitution(linkedItemId)).rejects.toThrow()
     })
@@ -347,7 +347,7 @@ describe('plaidApi', () => {
     it('should handle 401 unauthorized error', async () => {
       const linkedItemId = '770e9511-f3ac-52e5-b827-557766551112'
 
-      mock.onDelete(`/api/v1/linked-items/${linkedItemId}`).reply(401, { error: 'Unauthorized' })
+      mock.onDelete(`/v1/linked-items/${linkedItemId}`).reply(401, { error: 'Unauthorized' })
 
       await expect(disconnectInstitution(linkedItemId)).rejects.toThrow()
     })
@@ -355,7 +355,7 @@ describe('plaidApi', () => {
     it('should handle 500 server error', async () => {
       const linkedItemId = '770e9511-f3ac-52e5-b827-557766551112'
 
-      mock.onDelete(`/api/v1/linked-items/${linkedItemId}`).reply(500, { error: 'Failed to disconnect institution' })
+      mock.onDelete(`/v1/linked-items/${linkedItemId}`).reply(500, { error: 'Failed to disconnect institution' })
 
       await expect(disconnectInstitution(linkedItemId)).rejects.toThrow()
     })
@@ -363,7 +363,7 @@ describe('plaidApi', () => {
     it('should handle network errors', async () => {
       const linkedItemId = '770e9511-f3ac-52e5-b827-557766551112'
 
-      mock.onDelete(`/api/v1/linked-items/${linkedItemId}`).networkError()
+      mock.onDelete(`/v1/linked-items/${linkedItemId}`).networkError()
 
       await expect(disconnectInstitution(linkedItemId)).rejects.toThrow()
     })

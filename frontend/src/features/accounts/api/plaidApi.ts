@@ -17,7 +17,7 @@ import type {
  * @throws Error if request fails (401 unauthorized, 500 server error, network error)
  */
 export async function fetchLinkToken(): Promise<LinkTokenResponse> {
-  const response = await apiClient.post<LinkTokenResponse>('/api/v1/plaid/link-token')
+  const response = await apiClient.post<LinkTokenResponse>('/v1/plaid/link-token')
   return response.data
 }
 
@@ -40,7 +40,7 @@ export async function exchangePublicToken(
   data: ExchangePublicTokenRequest
 ): Promise<ExchangePublicTokenResponse> {
   const response = await apiClient.post<ExchangePublicTokenResponse>(
-    '/api/v1/plaid/exchange-token',
+    '/v1/plaid/exchange-token',
     data
   )
   return response.data
@@ -57,13 +57,13 @@ export async function exchangePublicToken(
  * @throws Error if request fails (401 unauthorized, 500 server error)
  */
 export async function fetchAccounts(): Promise<GetAccountsResponse> {
-  const response = await apiClient.get<GetAccountsResponse>('/api/v1/accounts')
+  const response = await apiClient.get<GetAccountsResponse>('/v1/accounts')
   return response.data
 }
 
 /**
  * Delete a single bank account
- * DELETE /api/v1/accounts/:id
+ * DELETE /v1/accounts/:id
  *
  * Deletes the specified account with ownership validation.
  * Only the account owner can delete their account.
@@ -73,12 +73,12 @@ export async function fetchAccounts(): Promise<GetAccountsResponse> {
  * @throws Error if request fails (401 unauthorized, 404 not found, 500 server error)
  */
 export async function deleteAccount(accountId: string): Promise<void> {
-  await apiClient.delete(`/api/v1/accounts/${accountId}`)
+  await apiClient.delete(`/v1/accounts/${accountId}`)
 }
 
 /**
  * Disconnect an institution and delete all associated accounts
- * DELETE /api/v1/linked-items/:id
+ * DELETE /v1/linked-items/:id
  *
  * This endpoint:
  * 1. Validates ownership of the linked item
@@ -90,5 +90,5 @@ export async function deleteAccount(accountId: string): Promise<void> {
  * @throws Error if request fails (401 unauthorized, 404 not found, 500 server error)
  */
 export async function disconnectInstitution(linkedItemId: string): Promise<void> {
-  await apiClient.delete(`/api/v1/linked-items/${linkedItemId}`)
+  await apiClient.delete(`/v1/linked-items/${linkedItemId}`)
 }
