@@ -50,6 +50,10 @@ func (m *mockPlaidService) CreateUpdateModeLinkToken(ctx context.Context, userID
 	return nil, errors.New("not implemented")
 }
 
+func (m *mockPlaidService) FireWebhook(ctx context.Context, accessToken string, webhookCode string) (*plaid.SandboxItemFireWebhookResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
 // mockAccountService is a mock implementation of AccountService for testing
 type mockAccountService struct {
 	getAccountsFunc          func(ctx context.Context, userID string) ([]domain.Account, error)
