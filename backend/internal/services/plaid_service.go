@@ -98,6 +98,33 @@ type PlaidService interface {
 		cursor string,
 		daysRequested int,
 	) (*plaid.TransactionsSyncResponse, error)
+
+	// FireWebhook fires a Plaid webhook for testing in sandbox environment.
+	// Uses the /sandbox/item/fire_webhook API endpoint to manually trigger webhook events.
+	//
+	// IMPORTANT: This method is ONLY available in sandbox environment. Calling this method
+	// when PlaidEnv is "production" or "development" will return an error.
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation and timeout
+	//   - accessToken: The Plaid access token (must be decrypted)
+	//   - webhookCode: Webhook code to fire (e.g., "DEFAULT_UPDATE", "INITIAL_UPDATE")
+	//
+	// Valid webhook codes:
+	//   - INITIAL_UPDATE: Triggers initial transaction sync
+	//   - DEFAULT_UPDATE: Triggers incremental transaction sync
+	//   - HISTORICAL_UPDATE: Triggers historical transaction sync
+	//   - TRANSACTIONS_REMOVED: Simulates transaction removal
+	//
+	// Returns the Plaid API response with webhook_fired=true on success.
+	// Returns error if PlaidEnv is not "sandbox" or if the Plaid API call fails.
+	//
+	// Issue #308: Admin API for Manual Webhook Firing in Staging
+	FireWebhook(
+		ctx context.Context,
+		accessToken string,
+		webhookCode string,
+	) (*plaid.SandboxItemFireWebhookResponse, error)
 }
 
 // plaidService implements PlaidService with a configured Plaid API client
@@ -407,6 +434,70 @@ func (s *plaidService) TransactionsSync(
 
 	if err != nil {
 		return nil, fmt.Errorf("plaid TransactionsSync failed: %w", err)
+	}
+
+	return &resp, nil
+}
+
+// FireWebhook fires a Plaid webhook for manual testing in sandbox environment.
+//
+// This method wraps the Plaid /sandbox/item/fire_webhook API endpoint, which allows
+// triggering webhook events on-demand for testing purposes. This is critical for
+// staging environments where webhooks cannot be delivered due to network restrictions
+// (e.g., Tailscale private network).
+//
+// Security: Triple-layer protection ensures this only works in sandbox:
+//   1. Route registration: Only registered when Environment=="staging" (main.go)
+//   2. AdminMiddleware: Returns 404 in non-staging environments
+//   3. This method: Returns error if PlaidEnv != "sandbox"
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout
+//   - accessToken: Plaid access token (decrypted)
+//   - webhookCode: Webhook code to fire (INITIAL_UPDATE, DEFAULT_UPDATE, etc.)
+//
+// Returns the Plaid API response or error.
+//
+// Issue #308: Admin API for Manual Webhook Firing in Staging
+func (s *plaidService) FireWebhook(
+	ctx context.Context,
+	accessToken string,
+	webhookCode string,
+) (*plaid.SandboxItemFireWebhookResponse, error) {
+	// Validate access token
+	if accessToken == "" {
+		return nil, fmt.Errorf("access token cannot be empty")
+	}
+
+	// Validate webhook code
+	if webhookCode == "" {
+		return nil, fmt.Errorf("webhook code cannot be empty")
+	}
+
+	// Sandbox-only validation (defense in depth - third layer of security)
+	// Layer 1: Route registration (main.go) only in staging environment
+	// Layer 2: AdminMiddleware returns 404 in production
+	// Layer 3: This check (prevents accidental misconfiguration)
+	if s.config.PlaidEnv != "sandbox" {
+		return nil, fmt.Errorf(
+			"FireWebhook is only available in sandbox environment, current environment: %s",
+			s.config.PlaidEnv,
+		)
+	}
+
+	// Build the sandbox fire webhook request
+	request := plaid.NewSandboxItemFireWebhookRequest(
+		accessToken,
+		webhookCode,
+	)
+
+	// Call Plaid API
+	resp, _, err := s.client.PlaidApi.SandboxItemFireWebhook(ctx).
+		SandboxItemFireWebhookRequest(*request).
+		Execute()
+
+	if err != nil {
+		return nil, fmt.Errorf("plaid SandboxItemFireWebhook failed: %w", err)
 	}
 
 	return &resp, nil

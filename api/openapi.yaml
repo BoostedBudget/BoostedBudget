@@ -520,6 +520,128 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
 
+  /api/v1/admin/plaid/fire-webhook:
+    post:
+      summary: Fire Plaid Webhook (Admin - Staging Only)
+      description: |
+        **ADMIN ENDPOINT - STAGING ONLY**
+
+        Manually trigger a Plaid webhook for testing purposes in the staging environment.
+        This endpoint allows administrators to simulate webhook events to test transaction sync,
+        error handling, and notification flows without waiting for actual Plaid events.
+
+        **Security - Triple Layer Defense**:
+        1. Route registration only in staging environment (main.go check)
+        2. AdminMiddleware returns 404 in production (security through obscurity)
+        3. Service-level sandbox validation (Plaid environment must be "sandbox")
+
+        **Future Enhancement (Issue #309)**: Will require "admin" role in Auth0 JWT custom claims.
+
+        **Supported Webhook Codes**:
+        - `INITIAL_UPDATE`: First transaction sync after account linking
+        - `DEFAULT_UPDATE`: Ongoing transaction updates (most common)
+        - `HISTORICAL_UPDATE`: Historical transaction backfill completed
+        - `TRANSACTIONS_REMOVED`: Transactions were deleted/removed
+
+        **Use Cases**:
+        - Test transaction sync without waiting for Plaid's schedule
+        - Trigger notification flows for manual testing
+        - Debug webhook processing pipeline
+        - Verify error handling for specific webhook types
+
+        **Related Issues**:
+        - Issue #308: Initial implementation (this endpoint)
+        - Issue #309: Role-based authentication (Phase 2)
+        - Issue #310: Bulk webhook firing (Phase 3)
+        - Issue #311: Webhook replay from history (Phase 5)
+      operationId: fireWebhook
+      tags:
+        - Admin
+      security:
+        - auth0: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FireWebhookRequest'
+            example:
+              item_id: "123e4567-e89b-12d3-a456-426614174000"
+              webhook_code: "DEFAULT_UPDATE"
+      responses:
+        '200':
+          description: Webhook fired successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FireWebhookResponse'
+              example:
+                webhook_fired: true
+                request_id: "wh_sandbox_abc123"
+                item_id: "123e4567-e89b-12d3-a456-426614174000"
+                webhook_code: "DEFAULT_UPDATE"
+        '400':
+          description: Invalid request (validation failure)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    description: Error message from Echo framework
+              examples:
+                missing_field:
+                  summary: Missing required field
+                  value:
+                    message: "Key: 'FireWebhookRequest.ItemID' Error:Field validation for 'ItemID' failed on the 'required' tag"
+                invalid_webhook_code:
+                  summary: Invalid webhook code
+                  value:
+                    message: "Key: 'FireWebhookRequest.WebhookCode' Error:Field validation for 'WebhookCode' failed on the 'oneof' tag"
+                invalid_uuid:
+                  summary: Invalid UUID format
+                  value:
+                    message: "Key: 'FireWebhookRequest.ItemID' Error:Field validation for 'ItemID' failed on the 'uuid' tag"
+        '404':
+          description: Item not found or endpoint not available in production
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    description: Error message from Echo framework
+              examples:
+                item_not_found:
+                  summary: Linked item not found
+                  value:
+                    message: "Item not found"
+                production_environment:
+                  summary: Endpoint hidden in production
+                  value:
+                    message: "Endpoint not available"
+        '500':
+          description: Server error (decryption failure, Plaid API error)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    description: Error message from Echo framework
+              examples:
+                decryption_error:
+                  summary: Failed to decrypt access token
+                  value:
+                    message: "Failed to decrypt access token"
+                plaid_api_error:
+                  summary: Plaid API error
+                  value:
+                    message: "Failed to fire webhook"
+
 components:
   securitySchemes:
     auth0:
@@ -924,6 +1046,67 @@ components:
           description: Number of accounts successfully linked from this institution
           example: 3
           minimum: 0
+
+    FireWebhookRequest:
+      type: object
+      description: Request to manually fire a Plaid webhook for testing (Issue #308)
+      required:
+        - item_id
+        - webhook_code
+      properties:
+        item_id:
+          type: string
+          format: uuid
+          description: |
+            UUID of the linked item (LinkedItem.ID in database).
+            The item must exist and have a valid encrypted access token.
+          example: "123e4567-e89b-12d3-a456-426614174000"
+        webhook_code:
+          type: string
+          enum:
+            - INITIAL_UPDATE
+            - DEFAULT_UPDATE
+            - HISTORICAL_UPDATE
+            - TRANSACTIONS_REMOVED
+          description: |
+            Type of webhook event to fire.
+            - `INITIAL_UPDATE`: First transaction sync after account linking
+            - `DEFAULT_UPDATE`: Ongoing transaction updates (most common)
+            - `HISTORICAL_UPDATE`: Historical transaction backfill completed
+            - `TRANSACTIONS_REMOVED`: Transactions were deleted/removed
+          example: "DEFAULT_UPDATE"
+
+    FireWebhookResponse:
+      type: object
+      description: Response after successfully firing a Plaid webhook (Issue #308)
+      required:
+        - webhook_fired
+        - request_id
+        - item_id
+        - webhook_code
+      properties:
+        webhook_fired:
+          type: boolean
+          description: Whether the webhook was successfully triggered by Plaid
+          example: true
+        request_id:
+          type: string
+          description: Plaid request ID for the webhook fire operation
+          example: "wh_sandbox_abc123"
+        item_id:
+          type: string
+          format: uuid
+          description: UUID of the linked item that the webhook was fired for
+          example: "123e4567-e89b-12d3-a456-426614174000"
+        webhook_code:
+          type: string
+          enum:
+            - INITIAL_UPDATE
+            - DEFAULT_UPDATE
+            - HISTORICAL_UPDATE
+            - TRANSACTIONS_REMOVED
+          description: The webhook code that was fired
+          example: "DEFAULT_UPDATE"
 
     GetAccountsResponse:
       type: object
