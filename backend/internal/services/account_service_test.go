@@ -53,6 +53,14 @@ func (m *MockPlaidService) TransactionsSync(ctx context.Context, accessToken str
 	return args.Get(0).(*plaid.TransactionsSyncResponse), args.Error(1)
 }
 
+func (m *MockPlaidService) FireWebhook(ctx context.Context, accessToken string, webhookCode string) (*plaid.SandboxItemFireWebhookResponse, error) {
+	args := m.Called(ctx, accessToken, webhookCode)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*plaid.SandboxItemFireWebhookResponse), args.Error(1)
+}
+
 type MockEncryptionService struct {
 	mock.Mock
 }

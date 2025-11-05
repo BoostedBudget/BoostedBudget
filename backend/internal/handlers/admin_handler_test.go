@@ -12,6 +12,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/plaid/plaid-go/v23/plaid"
 	"github.com/stretchr/testify/assert"
@@ -20,31 +21,31 @@ import (
 
 // Mock implementations for testing
 
-type mockPlaidService struct {
+type mockAdminPlaidService struct {
 	FireWebhookFunc func(ctx context.Context, accessToken string, webhookCode string) (*plaid.SandboxItemFireWebhookResponse, error)
 }
 
-func (m *mockPlaidService) GetClient() *plaid.APIClient {
+func (m *mockAdminPlaidService) GetClient() *plaid.APIClient {
 	return nil
 }
 
-func (m *mockPlaidService) CreateLinkToken(ctx context.Context, userID string) (*domain.LinkTokenResponse, error) {
+func (m *mockAdminPlaidService) CreateLinkToken(ctx context.Context, userID string) (*domain.LinkTokenResponse, error) {
 	return nil, nil
 }
 
-func (m *mockPlaidService) CreateUpdateModeLinkToken(ctx context.Context, userID string, accessToken string) (*domain.LinkTokenResponse, error) {
+func (m *mockAdminPlaidService) CreateUpdateModeLinkToken(ctx context.Context, userID string, accessToken string) (*domain.LinkTokenResponse, error) {
 	return nil, nil
 }
 
-func (m *mockPlaidService) RemoveItem(ctx context.Context, accessToken string) error {
+func (m *mockAdminPlaidService) RemoveItem(ctx context.Context, accessToken string) error {
 	return nil
 }
 
-func (m *mockPlaidService) TransactionsSync(ctx context.Context, accessToken string, cursor string, daysRequested int) (*plaid.TransactionsSyncResponse, error) {
+func (m *mockAdminPlaidService) TransactionsSync(ctx context.Context, accessToken string, cursor string, daysRequested int) (*plaid.TransactionsSyncResponse, error) {
 	return nil, nil
 }
 
-func (m *mockPlaidService) FireWebhook(ctx context.Context, accessToken string, webhookCode string) (*plaid.SandboxItemFireWebhookResponse, error) {
+func (m *mockAdminPlaidService) FireWebhook(ctx context.Context, accessToken string, webhookCode string) (*plaid.SandboxItemFireWebhookResponse, error) {
 	if m.FireWebhookFunc != nil {
 		return m.FireWebhookFunc(ctx, accessToken, webhookCode)
 	}
@@ -113,6 +114,7 @@ func (m *mockEncryptionService) Decrypt(ciphertext string) (string, error) {
 func TestFireWebhook_Success(t *testing.T) {
 	// Arrange
 	e := echo.New()
+	e.Validator = middleware.NewValidator()
 	requestBody := map[string]string{
 		"item_id":      "550e8400-e29b-41d4-a716-446655440000",
 		"webhook_code": "DEFAULT_UPDATE",
@@ -143,7 +145,7 @@ func TestFireWebhook_Success(t *testing.T) {
 	}
 
 	webhookID := "wh_test_123"
-	mockPlaid := &mockPlaidService{
+	mockPlaid := &mockAdminPlaidService{
 		FireWebhookFunc: func(ctx context.Context, accessToken string, webhookCode string) (*plaid.SandboxItemFireWebhookResponse, error) {
 			assert.Equal(t, "decrypted_access_token", accessToken)
 			assert.Equal(t, "DEFAULT_UPDATE", webhookCode)
@@ -185,13 +187,14 @@ func TestFireWebhook_Success(t *testing.T) {
 func TestFireWebhook_InvalidJSON(t *testing.T) {
 	// Arrange
 	e := echo.New()
+	e.Validator = middleware.NewValidator()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/plaid/fire-webhook", bytes.NewReader([]byte("invalid json")))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
 	handler := &AdminHandler{
-		plaidService:      &mockPlaidService{},
+		plaidService:      &mockAdminPlaidService{},
 		linkedItemRepo:    &mockLinkedItemRepository{},
 		encryptionService: &mockEncryptionService{},
 	}
@@ -221,10 +224,10 @@ func TestFireWebhook_MissingItemID(t *testing.T) {
 	c := e.NewContext(req, rec)
 
 	// Add validator to context (Echo requires this for validation)
-	e.Validator = &customValidator{}
+	e.Validator = middleware.NewValidator()
 
 	handler := &AdminHandler{
-		plaidService:      &mockPlaidService{},
+		plaidService:      &mockAdminPlaidService{},
 		linkedItemRepo:    &mockLinkedItemRepository{},
 		encryptionService: &mockEncryptionService{},
 	}
@@ -254,10 +257,10 @@ func TestFireWebhook_MissingWebhookCode(t *testing.T) {
 	c := e.NewContext(req, rec)
 
 	// Add validator to context
-	e.Validator = &customValidator{}
+	e.Validator = middleware.NewValidator()
 
 	handler := &AdminHandler{
-		plaidService:      &mockPlaidService{},
+		plaidService:      &mockAdminPlaidService{},
 		linkedItemRepo:    &mockLinkedItemRepository{},
 		encryptionService: &mockEncryptionService{},
 	}
@@ -287,10 +290,10 @@ func TestFireWebhook_InvalidWebhookCode(t *testing.T) {
 	c := e.NewContext(req, rec)
 
 	// Add validator to context
-	e.Validator = &customValidator{}
+	e.Validator = middleware.NewValidator()
 
 	handler := &AdminHandler{
-		plaidService:      &mockPlaidService{},
+		plaidService:      &mockAdminPlaidService{},
 		linkedItemRepo:    &mockLinkedItemRepository{},
 		encryptionService: &mockEncryptionService{},
 	}
@@ -309,6 +312,7 @@ func TestFireWebhook_InvalidWebhookCode(t *testing.T) {
 func TestFireWebhook_ItemNotFound(t *testing.T) {
 	// Arrange
 	e := echo.New()
+	e.Validator = middleware.NewValidator()
 	requestBody := map[string]string{
 		"item_id":      "550e8400-e29b-41d4-a716-446655440000",
 		"webhook_code": "DEFAULT_UPDATE",
@@ -327,7 +331,7 @@ func TestFireWebhook_ItemNotFound(t *testing.T) {
 	}
 
 	handler := &AdminHandler{
-		plaidService:      &mockPlaidService{},
+		plaidService:      &mockAdminPlaidService{},
 		linkedItemRepo:    mockRepo,
 		encryptionService: &mockEncryptionService{},
 	}
@@ -347,6 +351,7 @@ func TestFireWebhook_ItemNotFound(t *testing.T) {
 func TestFireWebhook_DecryptionFails(t *testing.T) {
 	// Arrange
 	e := echo.New()
+	e.Validator = middleware.NewValidator()
 	requestBody := map[string]string{
 		"item_id":      "550e8400-e29b-41d4-a716-446655440000",
 		"webhook_code": "DEFAULT_UPDATE",
@@ -383,7 +388,7 @@ func TestFireWebhook_DecryptionFails(t *testing.T) {
 	}
 
 	handler := &AdminHandler{
-		plaidService:      &mockPlaidService{},
+		plaidService:      &mockAdminPlaidService{},
 		linkedItemRepo:    mockRepo,
 		encryptionService: mockEncryption,
 	}
@@ -403,6 +408,7 @@ func TestFireWebhook_DecryptionFails(t *testing.T) {
 func TestFireWebhook_PlaidServiceError(t *testing.T) {
 	// Arrange
 	e := echo.New()
+	e.Validator = middleware.NewValidator()
 	requestBody := map[string]string{
 		"item_id":      "550e8400-e29b-41d4-a716-446655440000",
 		"webhook_code": "DEFAULT_UPDATE",
@@ -432,7 +438,7 @@ func TestFireWebhook_PlaidServiceError(t *testing.T) {
 	}
 
 	// Mock Plaid service to return error
-	mockPlaid := &mockPlaidService{
+	mockPlaid := &mockAdminPlaidService{
 		FireWebhookFunc: func(ctx context.Context, accessToken string, webhookCode string) (*plaid.SandboxItemFireWebhookResponse, error) {
 			return nil, errors.New("plaid API error: INVALID_ACCESS_TOKEN")
 		},
@@ -459,13 +465,4 @@ func TestFireWebhook_PlaidServiceError(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, http.StatusInternalServerError, httpErr.Code)
 	assert.Contains(t, httpErr.Message.(string), "Failed to fire webhook")
-}
-
-// customValidator is a simple validator for testing (placeholder)
-type customValidator struct{}
-
-func (cv *customValidator) Validate(i interface{}) error {
-	// Simple validation: check if fields are present
-	// In real implementation, this would use github.com/go-playground/validator
-	return nil
 }
