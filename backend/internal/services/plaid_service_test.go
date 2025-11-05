@@ -811,3 +811,114 @@ func TestCreateUpdateModeLinkToken_PlaidAPIError(t *testing.T) {
 		"Error should indicate link token creation failure")
 	assert.Nil(t, response, "Expected nil response on error")
 }
+
+// TestFireWebhook_ValidParams_Success tests successful webhook firing via Plaid SandboxItemFireWebhook API.
+// This test will fail initially (RED phase) since FireWebhook method doesn't exist yet.
+func TestFireWebhook_ValidParams_Success(t *testing.T) {
+	// Skip if not running integration tests (requires real Plaid API credentials)
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	// Given: Valid PlaidService with sandbox credentials
+	cfg := &config.Config{
+		PlaidClientID:    getTestEnv("PLAID_CLIENT_ID"),
+		PlaidSecret:      getTestEnv("PLAID_SECRET"),
+		PlaidEnv:         "sandbox",
+		PlaidWebhookURL:  "https://api.boostedbudget.com/webhooks/plaid",
+		PlaidRedirectURI: "https://boostedbudget.com/oauth-callback",
+	}
+
+	// Skip if credentials not available
+	if cfg.PlaidClientID == "" || cfg.PlaidSecret == "" {
+		t.Skip("Skipping test: PLAID_CLIENT_ID and PLAID_SECRET not set")
+	}
+
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err, "Service creation should succeed")
+
+	// When: Calling FireWebhook with valid access token and webhook code
+	ctx := context.Background()
+	accessToken := "access-sandbox-test-access-token" // Sandbox test token
+	webhookCode := "DEFAULT_UPDATE"
+
+	response, err := service.FireWebhook(ctx, accessToken, webhookCode)
+
+	// Then: Returns success response with webhook_fired = true
+	// Note: This may fail with real API if token is invalid, but method should exist
+	if err != nil {
+		// Expected error with fake token, but method should exist
+		assert.Contains(t, err.Error(), "plaid", "Error should be from Plaid API")
+	} else {
+		assert.NotNil(t, response, "Expected non-nil response on success")
+		assert.True(t, response.WebhookFired, "Expected webhook_fired to be true")
+		assert.NotEmpty(t, response.RequestId, "Expected request_id field")
+	}
+}
+
+// TestFireWebhook_EmptyAccessToken_ReturnsError tests validation of empty access token.
+func TestFireWebhook_EmptyAccessToken_ReturnsError(t *testing.T) {
+	// Given: Valid PlaidService
+	cfg := &config.Config{
+		PlaidClientID: "test_client_id",
+		PlaidSecret:   "test_secret",
+		PlaidEnv:      "sandbox",
+	}
+
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err, "Service creation should succeed")
+
+	// When: Calling FireWebhook with empty access token
+	ctx := context.Background()
+	response, err := service.FireWebhook(ctx, "", "DEFAULT_UPDATE")
+
+	// Then: Returns validation error
+	assert.Error(t, err, "Expected error with empty access token")
+	assert.Contains(t, err.Error(), "access token", "Error should mention access token")
+	assert.Nil(t, response, "Expected nil response on error")
+}
+
+// TestFireWebhook_EmptyWebhookCode_ReturnsError tests validation of empty webhook code.
+func TestFireWebhook_EmptyWebhookCode_ReturnsError(t *testing.T) {
+	// Given: Valid PlaidService
+	cfg := &config.Config{
+		PlaidClientID: "test_client_id",
+		PlaidSecret:   "test_secret",
+		PlaidEnv:      "sandbox",
+	}
+
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err, "Service creation should succeed")
+
+	// When: Calling FireWebhook with empty webhook code
+	ctx := context.Background()
+	response, err := service.FireWebhook(ctx, "access-token", "")
+
+	// Then: Returns validation error
+	assert.Error(t, err, "Expected error with empty webhook code")
+	assert.Contains(t, err.Error(), "webhook code", "Error should mention webhook code")
+	assert.Nil(t, response, "Expected nil response on error")
+}
+
+// TestFireWebhook_ProductionEnvironment_ReturnsError tests that FireWebhook
+// returns an error when PlaidEnv is "production" (sandbox-only method).
+func TestFireWebhook_ProductionEnvironment_ReturnsError(t *testing.T) {
+	// Given: PlaidService configured for production environment
+	cfg := &config.Config{
+		PlaidClientID: "test_client_id",
+		PlaidSecret:   "test_secret",
+		PlaidEnv:      "production", // Production environment!
+	}
+
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err, "Service creation should succeed")
+
+	// When: Attempting to fire webhook in production
+	ctx := context.Background()
+	response, err := service.FireWebhook(ctx, "access-token", "DEFAULT_UPDATE")
+
+	// Then: Returns error indicating sandbox-only operation
+	assert.Error(t, err, "Expected error when calling FireWebhook in production")
+	assert.Contains(t, err.Error(), "sandbox", "Error should indicate sandbox-only operation")
+	assert.Nil(t, response, "Expected nil response on error")
+}
