@@ -211,6 +211,185 @@ BAD ✗
 12. PR with "Closes #N"
 13. **Server Memory: FINAL update** - consolidate all decisions, learnings, patterns, gotchas for future reference
 
+## Test Scenarios Framework (Staging Data Population)
+
+**Location**: `backend/scripts/test-scenarios/`
+**Purpose**: Configuration-driven E2E/integration test scripts for populating staging with comprehensive transaction data
+
+### Quick Usage
+
+```bash
+# Setup
+cd backend/scripts/test-scenarios
+cp config/staging.env.example config/staging.env
+vim config/staging.env  # Add AUTH_TOKEN and DATABASE_URL
+
+# Run scenario
+source config/staging.env
+./run-scenario.sh scenarios/01-free-tier-first-sync.yaml
+
+# View results
+cat reports/latest.json
+```
+
+### Adding New Scenarios (5-Minute Guide)
+
+**Step 1**: Create YAML file in `scenarios/`
+```yaml
+version: "1.0"
+scenario:
+  name: "my-new-test"
+  category: "normal"  # normal|edge_case|error|tier_limit|special
+
+  setup:
+    user: {id: "test-user-001", tier: "free", email: "test@example.com"}
+    linked_items: [{id: "item-001", item_id: "plaid-sandbox-item", ...}]
+    accounts: [{id: "acc-001", name: "Checking", type: "depository", ...}]
+
+  steps:
+    - action: "fire_webhook"
+      webhook_code: "DEFAULT_UPDATE"
+      item_id: "plaid-sandbox-item"
+    - action: "wait"
+      wait_seconds: 5
+
+  assertions:
+    database:
+      transactions_count: ">= 1"
+    webhook_status:
+      processed: true
+```
+
+**Step 2**: Run it
+```bash
+./run-scenario.sh scenarios/my-new-test.yaml
+```
+
+**Step 3**: Commit to Git (scenarios are version controlled)
+
+### Architecture
+
+**Configuration-Driven**: All test data in YAML files (no code changes for new scenarios)
+
+**Core Libraries** (`lib/`):
+- `api-client.sh` - Fire webhooks via admin endpoint: `fire_webhook()`, `wait_for_webhook_processed()`
+- `db-utils.sh` - Database operations: `insert_user()`, `insert_linked_item()`, `query_db()`
+- `assertions.sh` - Test validations: `assert_transaction_count()`, `assert_user_notes_preserved()`
+- `reporting.sh` - HTML/JSON report generation
+
+**Templates** (`templates/`):
+- `transactions.yaml` - Reusable transaction patterns (purchases, refunds, paychecks)
+- `users.yaml` - User tier templates (free, premium, premium_plus)
+- `accounts.yaml` - Account type templates (checking, savings, credit)
+
+**Scenarios** (`scenarios/`):
+- YAML files defining test cases
+- Categories: normal flow, edge cases, errors, tier limits, special cases
+- Each scenario: setup → steps → assertions
+
+### Key Scenarios
+
+**Normal Flow**:
+- `01-free-tier-first-sync.yaml` - First sync with 30-day history
+- `02-pagination-multi-page.yaml` - >500 transactions, multi-page
+- `07-removed-transactions.yaml` - TRANSACTIONS_REMOVED webhook
+
+**Edge Cases** (**CRITICAL**):
+- `03-preserve-user-notes.yaml` - **MUST PASS** - Prevents data loss bug
+- `06-pending-to-posted.yaml` - Transaction state transitions
+
+**Tier Limits**:
+- `04-tier-limit-enforcement.yaml` - Free tier 3-account monthly limit
+
+**Error Scenarios**:
+- `05-item-error-login-required.yaml` - Item LOGIN_REQUIRED error
+
+### Extensibility Pattern
+
+**To add more scenarios as features grow**:
+
+1. **Create new template** (if needed):
+```yaml
+# templates/transactions.yaml
+new_transaction_type:
+  amount: -X.XX
+  category: ["New", "Category"]
+  # ... fields
+```
+
+2. **Create scenario referencing template**:
+```yaml
+setup:
+  existing_transactions:
+    - <<: *new_transaction_type  # Reference template
+      external_transaction_id: "custom-id"
+```
+
+3. **Run and validate**
+
+4. **Commit** - Scenarios grow with the app
+
+### Admin Endpoint (Issue #308)
+
+**Endpoint**: `POST /api/v1/admin/plaid/fire-webhook` (staging-only)
+
+**Usage**:
+```bash
+curl -X POST https://staging.boostedbudget.com/api/v1/admin/plaid/fire-webhook \
+  -H "Authorization: Bearer $AUTH_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"item_id":"uuid","webhook_code":"DEFAULT_UPDATE"}'
+```
+
+**Supported webhook codes**:
+- `INITIAL_UPDATE` - First sync (historical depth based on tier: 30/365/730 days)
+- `DEFAULT_UPDATE` - Incremental sync (cursor-based, no limit)
+- `HISTORICAL_UPDATE` - Backfill old transactions
+- `TRANSACTIONS_REMOVED` - Retroactive deletions
+
+**Security**: Triple-layer (route registration + middleware + service validation)
+
+### Progress Tracking
+
+**`PROGRESS.md`**: Tracks implementation progress and knowledge
+- Implementation status (phases, tasks)
+- Design decisions made
+- Blockers and resolutions
+- Knowledge base (pipeline flow, schemas, limits)
+- Lessons learned
+
+**Update PROGRESS.md** during implementation to preserve knowledge across context compactions
+
+### Testing Strategy
+
+**Local Testing** (Docker):
+```bash
+docker-compose up -d
+source config/local.env
+./run-scenario.sh scenarios/01-free-tier-first-sync.yaml --env local
+```
+
+**Staging Testing**:
+```bash
+source config/staging.env
+./run-all-scenarios.sh  # Run all scenarios
+```
+
+### When to Use This Framework
+
+✅ **Manual testing** - Populate staging with realistic data
+✅ **Regression testing** - Verify transaction pipeline after changes
+✅ **Edge case validation** - Test scenarios hard to reproduce manually
+✅ **Tier limit testing** - Validate subscription enforcement
+✅ **Documentation** - Scenarios serve as living documentation
+
+### Related Issues
+
+- **Issue #308** - Admin API for Manual Webhook Firing (implemented)
+- **Issue #309** - Role-Based Admin Authentication (future)
+- **Issue #310** - Bulk Webhook Firing (future)
+- **Issue #311** - Webhook Replay (future)
+
 ## Critical Implementation Notes
 
 **ALWAYS**:
