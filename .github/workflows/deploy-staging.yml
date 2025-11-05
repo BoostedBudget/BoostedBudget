@@ -408,6 +408,8 @@ jobs:
           PLAID_SECRET=${{ secrets.PLAID_SECRET_STAGING || 'changeme' }}
           PLAID_PRODUCTS=auth,transactions,balance
           PLAID_COUNTRY_CODES=US,CA,GB
+          PLAID_REDIRECT_URI=${{ secrets.PLAID_REDIRECT_URI_STAGING || 'https://localhost:3443/oauth-callback' }}
+          PLAID_WEBHOOK_URL=${{ secrets.PLAID_WEBHOOK_URL_STAGING || 'http://localhost:8080/webhooks/plaid' }}
 
           # Stripe (Test Mode)
           STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY_TEST || 'sk_test_changeme' }}
