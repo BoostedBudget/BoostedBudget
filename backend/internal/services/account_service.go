@@ -178,6 +178,7 @@ func (s *accountService) LinkAccounts(
 		AccessTokenEncrypted: encryptedToken,
 		InstitutionID:        institutionID,
 		InstitutionName:      institutionName,
+		Provider:             "plaid", // Set provider to avoid database constraint violation (Issue #305)
 	}
 
 	// Create linked item
