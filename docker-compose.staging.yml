@@ -75,6 +75,8 @@ services:
       PLAID_CLIENT_ID: "${PLAID_CLIENT_ID}"
       PLAID_SECRET: "${PLAID_SECRET}"
       PLAID_ENV: "sandbox"
+      PLAID_REDIRECT_URI: "${PLAID_REDIRECT_URI}"
+      PLAID_WEBHOOK_URL: "${PLAID_WEBHOOK_URL}"
       ENCRYPTION_KEY: "${ENCRYPTION_KEY}"
     depends_on:
       postgres:
