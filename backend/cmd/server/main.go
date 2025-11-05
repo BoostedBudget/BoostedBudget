@@ -249,6 +249,13 @@ func main() {
 		notificationHandler := handlers.NewNotificationHandler(notificationRepo) // Issue #257: Notification API
 		syncStatsHandler := handlers.NewSyncStatsHandler(syncLimitService)       // Issue #242: Monthly sync limits API
 
+		// Create admin handler (Issue #308: Admin API for Manual Webhook Firing)
+		// Requires plaidService and encryptionService, so declared here
+		var adminHandler *handlers.AdminHandler
+		if plaidService != nil && encryptionService != nil {
+			adminHandler = handlers.NewAdminHandler(plaidService, linkedItemRepo, encryptionService)
+		}
+
 		// Create Auth0 middleware with identity resolution and auto-registration
 		auth0Middleware := middleware.Auth0Middleware(
 			"https://"+cfg.Auth0Domain+"/",
@@ -281,6 +288,18 @@ func main() {
 			api.GET("/accounts", plaidHandler.GetAccounts)
 			api.DELETE("/accounts/:id", plaidHandler.DeleteAccount)
 			api.DELETE("/linked-items/:id", plaidHandler.DisconnectInstitution)
+		}
+
+		// Admin routes (Issue #308: staging-only admin endpoints)
+		// Triple-layer security:
+		//   1. Route registration only in staging (here)
+		//   2. AdminMiddleware returns 404 in production
+		//   3. Service-level validations (e.g., sandbox-only webhook firing)
+		// Future (Issue #309): Add role-based access control requiring "admin" role
+		if adminHandler != nil && cfg.Environment == "staging" {
+			admin := api.Group("/admin", middleware.AdminMiddleware(cfg))
+			admin.POST("/plaid/fire-webhook", adminHandler.FireWebhook)
+			log.Println("✅ Admin endpoints enabled (staging only)")
 		}
 
 		// Deletion routes (if enabled)
