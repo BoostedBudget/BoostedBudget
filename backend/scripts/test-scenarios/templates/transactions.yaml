@@ -1,0 +1,357 @@
+# Transaction Templates for BoostedBudget Test Scenarios
+# Provides reusable transaction patterns for testing
+
+# Anchor definitions (reusable templates)
+templates:
+  # Standard purchase transaction (debit)
+  standard_purchase: &standard_purchase
+    amount_range:
+      min: 5.00
+      max: 200.00
+    amount_sign: negative  # Debit
+    payment_channel: "online"
+    pending: false
+    category:
+      - "Shopping"
+      - "Retail"
+    iso_currency_code: "USD"
+    merchant_examples:
+      - "Amazon"
+      - "Target"
+      - "Walmart"
+      - "Best Buy"
+
+  # Pending purchase (not yet posted)
+  pending_purchase: &pending_purchase
+    <<: *standard_purchase
+    pending: true
+    pending_transaction_id: "auto_generated"
+    note: "Will transition to posted in follow-up sync"
+
+  # Grocery purchase
+  grocery_purchase: &grocery_purchase
+    amount_range:
+      min: 20.00
+      max: 150.00
+    amount_sign: negative
+    payment_channel: "in store"
+    pending: false
+    category:
+      - "Food and Drink"
+      - "Groceries"
+    merchant_examples:
+      - "Whole Foods"
+      - "Safeway"
+      - "Trader Joe's"
+      - "Kroger"
+      - "Costco"
+
+  # Restaurant purchase
+  restaurant_purchase: &restaurant_purchase
+    amount_range:
+      min: 15.00
+      max: 80.00
+    amount_sign: negative
+    payment_channel: "in store"
+    pending: false
+    category:
+      - "Food and Drink"
+      - "Restaurants"
+    merchant_examples:
+      - "Chipotle"
+      - "Starbucks"
+      - "McDonald's"
+      - "Panera Bread"
+
+  # Gas/fuel purchase
+  gas_purchase: &gas_purchase
+    amount_range:
+      min: 30.00
+      max: 70.00
+    amount_sign: negative
+    payment_channel: "in store"
+    pending: false
+    category:
+      - "Transportation"
+      - "Gas Stations"
+    merchant_examples:
+      - "Shell"
+      - "Chevron"
+      - "BP"
+      - "Exxon"
+
+  # Utility payment
+  utility_payment: &utility_payment
+    amount_range:
+      min: 50.00
+      max: 200.00
+    amount_sign: negative
+    payment_channel: "online"
+    pending: false
+    category:
+      - "Bills and Utilities"
+      - "Utilities"
+    merchant_examples:
+      - "PG&E"
+      - "Comcast"
+      - "AT&T"
+      - "Verizon"
+
+  # Subscription payment
+  subscription_payment: &subscription_payment
+    amount_range:
+      min: 5.00
+      max: 50.00
+    amount_sign: negative
+    payment_channel: "online"
+    pending: false
+    recurring: true
+    category:
+      - "Service"
+      - "Subscription"
+    merchant_examples:
+      - "Netflix"
+      - "Spotify"
+      - "Amazon Prime"
+      - "Disney+"
+
+  # Paycheck deposit (credit)
+  paycheck: &paycheck
+    amount_range:
+      min: 1000.00
+      max: 5000.00
+    amount_sign: positive  # Credit
+    payment_channel: "other"
+    pending: false
+    category:
+      - "Transfer"
+      - "Payroll"
+    name_pattern: "Direct Deposit - {employer}"
+    employer_examples:
+      - "Acme Corp"
+      - "TechStart Inc"
+      - "Global Solutions"
+      - "Innovation Labs"
+
+  # Refund transaction (credit)
+  refund: &refund
+    amount_range:
+      min: 10.00
+      max: 300.00
+    amount_sign: positive  # Credit
+    payment_channel: "online"
+    pending: false
+    category:
+      - "Transfer"
+      - "Refund"
+    name_pattern: "REFUND - {merchant}"
+
+  # ATM withdrawal
+  atm_withdrawal: &atm_withdrawal
+    amount_range:
+      min: 20.00
+      max: 200.00
+    amount_sign: negative
+    payment_channel: "in store"
+    pending: false
+    category:
+      - "Transfer"
+      - "ATM"
+    merchant_examples:
+      - "ATM Withdrawal"
+      - "Cash Withdrawal"
+
+  # Bank transfer (internal)
+  bank_transfer: &bank_transfer
+    amount_range:
+      min: 100.00
+      max: 2000.00
+    amount_sign: negative  # Can be positive or negative
+    payment_channel: "online"
+    pending: false
+    category:
+      - "Transfer"
+      - "Internal Transfer"
+    name_pattern: "Transfer to {account_type}"
+
+  # Foreign currency transaction
+  foreign_currency: &foreign_currency
+    amount_range:
+      min: 10.00
+      max: 500.00
+    amount_sign: negative
+    payment_channel: "online"
+    pending: false
+    iso_currency_code: "EUR"  # Example: Euro
+    unofficial_currency_code: null
+    category:
+      - "Shopping"
+      - "International"
+    note: "Foreign transaction with currency conversion"
+
+  # Check deposit
+  check_deposit: &check_deposit
+    amount_range:
+      min: 100.00
+      max: 1000.00
+    amount_sign: positive
+    payment_channel: "other"
+    pending: false
+    category:
+      - "Transfer"
+      - "Deposit"
+    name_pattern: "Check Deposit #{check_number}"
+
+# Transaction sets for scenarios
+transaction_sets:
+  # Typical monthly spending (free tier)
+  monthly_spending_free:
+    count: 25
+    date_range_days: 30
+    distribution:
+      groceries: 8      # 32%
+      restaurants: 6    # 24%
+      gas: 4            # 16%
+      retail: 4         # 16%
+      utilities: 2      # 8%
+      paycheck: 1       # 4%
+
+  # Heavy spending month (premium tier)
+  monthly_spending_premium:
+    count: 150
+    date_range_days: 30
+    distribution:
+      groceries: 40
+      restaurants: 30
+      gas: 15
+      retail: 25
+      utilities: 10
+      subscriptions: 10
+      atm: 5
+      transfers: 10
+      paychecks: 2
+      refunds: 3
+
+  # Pagination test set (>500 transactions)
+  pagination_test_set:
+    count: 550
+    date_range_days: 730  # 2 years for premium tier
+    distribution:
+      groceries: 180
+      restaurants: 150
+      gas: 60
+      retail: 80
+      utilities: 30
+      subscriptions: 24  # Monthly subscriptions
+      paychecks: 24      # Bi-weekly paychecks
+      refunds: 2
+
+# Example transaction instances
+example_transactions:
+  # Grocery purchase example
+  whole_foods_purchase:
+    <<: *grocery_purchase
+    external_transaction_id: "plaid-txn-whole-foods-001"
+    amount: -87.42
+    date: "2025-11-03"
+    name: "Whole Foods Market #10234"
+    merchant_name: "Whole Foods"
+    location:
+      city: "San Francisco"
+      region: "CA"
+      country: "US"
+      postal_code: "94102"
+
+  # Restaurant purchase example
+  chipotle_purchase:
+    <<: *restaurant_purchase
+    external_transaction_id: "plaid-txn-chipotle-001"
+    amount: -23.45
+    date: "2025-11-04"
+    name: "Chipotle Mexican Grill"
+    merchant_name: "Chipotle"
+
+  # Paycheck example
+  acme_paycheck:
+    <<: *paycheck
+    external_transaction_id: "plaid-txn-paycheck-001"
+    amount: 2500.00
+    date: "2025-11-01"
+    name: "Direct Deposit - Acme Corp"
+
+  # Pending transaction example
+  pending_amazon:
+    <<: *pending_purchase
+    external_transaction_id: "plaid-txn-amazon-pending-001"
+    pending_transaction_id: "plaid-pending-amazon-001"
+    amount: -45.99
+    date: "2025-11-05"
+    name: "Amazon.com"
+    pending: true
+
+  # Refund example
+  target_refund:
+    <<: *refund
+    external_transaction_id: "plaid-txn-refund-target-001"
+    amount: 34.99
+    date: "2025-11-02"
+    name: "REFUND - Target"
+
+  # Foreign currency example
+  foreign_purchase:
+    <<: *foreign_currency
+    external_transaction_id: "plaid-txn-foreign-001"
+    amount: -125.50
+    date: "2025-10-28"
+    name: "Amazon.de - Berlin DE"
+    iso_currency_code: "EUR"
+
+# Special scenario patterns
+special_scenarios:
+  # User notes preservation test
+  user_notes_test:
+    <<: *standard_purchase
+    external_transaction_id: "plaid-txn-notes-test-001"
+    amount: -50.00
+    date: "2025-10-15"
+    name: "Target - San Francisco"
+    user_notes: "Work supplies - reimbursable"
+    note: "CRITICAL: user_notes must be preserved on transaction update"
+
+  # Pending to posted transition
+  pending_to_posted:
+    initial:
+      <<: *pending_purchase
+      external_transaction_id: null
+      pending_transaction_id: "plaid-pending-transition-001"
+      amount: -75.00
+      date: "2025-11-04"
+      name: "Pending Purchase"
+      pending: true
+
+    posted:
+      <<: *standard_purchase
+      external_transaction_id: "plaid-txn-transition-001"
+      pending_transaction_id: null
+      amount: -75.00  # Same amount
+      date: "2025-11-05"  # Next day
+      name: "Posted Purchase"
+      pending: false
+      note: "This should replace the pending transaction"
+
+  # Removed transaction
+  removed_transaction:
+    <<: *standard_purchase
+    external_transaction_id: "plaid-txn-removed-001"
+    amount: -100.00
+    date: "2025-10-20"
+    name: "Transaction to be removed"
+    note: "Will be sent in TRANSACTIONS_REMOVED webhook"
+
+# Usage in scenarios:
+#
+# steps:
+#   - action: "generate_transactions"
+#     template: *grocery_purchase     # Reference template
+#     count: 10
+#     date_range_days: 30
