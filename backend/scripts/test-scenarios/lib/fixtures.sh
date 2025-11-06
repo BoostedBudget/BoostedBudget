@@ -418,6 +418,204 @@ generate_plaid_cursor() {
 }
 
 # ============================================================================
+# Budget Fixture Generators (Phase 3+)
+# ============================================================================
+# NOTE: Budget features not yet implemented - these are future-ready
+
+# Generate budget ID
+# Usage: generate_budget_id [prefix]
+generate_budget_id() {
+    local prefix="${1:-test-budget}"
+    local uuid=$(generate_uuid | cut -d'-' -f1)
+    echo "${prefix}-${uuid}"
+}
+
+# Generate budget for category
+# Usage: generate_category_budget <user_id> <category> <limit> [period]
+# Returns: Pipe-delimited budget data
+generate_category_budget() {
+    local user_id="$1"
+    local category="$2"
+    local limit="$3"
+    local period="${4:-monthly}"
+
+    local budget_id=$(generate_budget_id)
+    local name="$category Budget"
+    local current_spending="0.00"
+
+    # Calculate period dates
+    local period_start=$(date +%Y-%m-01)  # First of month
+    local period_end=$(date +%Y-%m-%d --date="$(date +%Y-%m-01) +1 month -1 day")  # Last of month
+
+    echo "$budget_id|$user_id|$name|$category|$limit|$current_spending|$period|$period_start|$period_end"
+}
+
+# Generate transactions to hit budget threshold
+# Usage: generate_budget_threshold_transactions <user_id> <account_id> <linked_item_id> <budget_limit> <target_percentage> <category>
+# Returns: Multiple pipe-delimited transaction lines
+generate_budget_threshold_transactions() {
+    local user_id="$1"
+    local account_id="$2"
+    local linked_item_id="$3"
+    local budget_limit="$4"
+    local target_percentage="$5"
+    local category="${6:-groceries}"
+
+    # Calculate target amount
+    local target_amount=$(awk "BEGIN {printf \"%.2f\", $budget_limit * $target_percentage}")
+
+    # Generate realistic distribution (front-loaded spending)
+    local txn_count=8
+    local amounts=(0.30 0.25 0.15 0.10 0.08 0.06 0.04 0.02)  # Percentages of target
+
+    for ((i=0; i<txn_count; i++)); do
+        local pct="${amounts[$i]}"
+        local amount=$(awk "BEGIN {printf \"%.2f\", $target_amount * $pct}")
+        local date=$(generate_date_in_past_days $((30 - i * 3)))  # Spread over month
+
+        local external_id=$(generate_plaid_transaction_id)
+        local merchant=$(generate_merchant_name "$category")
+        local name=$(generate_transaction_description "$merchant")
+
+        echo "$user_id|$account_id|$linked_item_id|$external_id|-$amount|$date|$name"
+    done
+}
+
+# Generate budget refund scenario
+# Usage: generate_budget_refund_scenario <user_id> <account_id> <linked_item_id> <spend_amount> <refund_amount>
+generate_budget_refund_scenario() {
+    local user_id="$1"
+    local account_id="$2"
+    local linked_item_id="$3"
+    local spend_amount="$4"
+    local refund_amount="$5"
+
+    local spend_date=$(generate_date_in_past_days 5)
+    local refund_date=$(generate_date_in_past_days 2)
+
+    local spend_id=$(generate_plaid_transaction_id)
+    local refund_id=$(generate_plaid_transaction_id)
+
+    local merchant=$(generate_merchant_name "retail")
+    local spend_name=$(generate_transaction_description "$merchant")
+    local refund_name="REFUND - $merchant"
+
+    # Spend transaction
+    echo "$user_id|$account_id|$linked_item_id|$spend_id|-$spend_amount|$spend_date|$spend_name"
+
+    # Refund transaction (positive amount)
+    echo "$user_id|$account_id|$linked_item_id|$refund_id|$refund_amount|$refund_date|$refund_name"
+}
+
+# ============================================================================
+# Rule Fixture Generators (Phase 4+)
+# ============================================================================
+# NOTE: Rules framework not yet implemented - these are future-ready
+
+# Generate rule ID
+# Usage: generate_rule_id [prefix]
+generate_rule_id() {
+    local prefix="${1:-test-rule}"
+    local uuid=$(generate_uuid | cut -d'-' -f1)
+    echo "${prefix}-${uuid}"
+}
+
+# Generate simple amount threshold rule
+# Usage: generate_amount_threshold_rule <user_id> <threshold> <action_type>
+# Returns: Pipe-delimited rule data
+generate_amount_threshold_rule() {
+    local user_id="$1"
+    local threshold="$2"
+    local action_type="${3:-send_notification}"
+
+    local rule_id=$(generate_rule_id)
+    local name="Large Transaction Alert (>$$threshold)"
+    local condition="amount|gt|$threshold"
+    local priority=5
+
+    echo "$rule_id|$user_id|$name|$condition|$action_type|$priority|true"
+}
+
+# Generate merchant matching rule
+# Usage: generate_merchant_rule <user_id> <merchant_pattern> <action_type> [category]
+generate_merchant_rule() {
+    local user_id="$1"
+    local merchant_pattern="$2"
+    local action_type="${3:-auto_categorize}"
+    local category="${4:-Auto-Categorized}"
+
+    local rule_id=$(generate_rule_id)
+    local name="Auto-Categorize $merchant_pattern"
+    local condition="merchant|contains|$merchant_pattern"
+    local action_params="$category"
+    local priority=8  # High priority for categorization
+
+    echo "$rule_id|$user_id|$name|$condition|$action_type|$priority|true|$action_params"
+}
+
+# Generate transaction to trigger rule
+# Usage: generate_rule_trigger_transaction <user_id> <account_id> <linked_item_id> <condition_field> <condition_value>
+# Returns: Pipe-delimited transaction that matches rule condition
+generate_rule_trigger_transaction() {
+    local user_id="$1"
+    local account_id="$2"
+    local linked_item_id="$3"
+    local condition_field="$4"
+    local condition_value="$5"
+
+    local external_id=$(generate_plaid_transaction_id)
+    local date=$(generate_date_in_past_days 1)
+
+    case "$condition_field" in
+        amount)
+            # Generate amount exceeding threshold
+            local amount=$(awk "BEGIN {printf \"%.2f\", $condition_value + 10}")
+            local merchant=$(generate_merchant_name "retail")
+            local name=$(generate_transaction_description "$merchant")
+            echo "$user_id|$account_id|$linked_item_id|$external_id|-$amount|$date|$name"
+            ;;
+
+        merchant)
+            # Generate transaction with matching merchant
+            local amount=$(generate_purchase_amount)
+            local name=$(generate_transaction_description "$condition_value")
+            echo "$user_id|$account_id|$linked_item_id|$external_id|-$amount|$date|$name"
+            ;;
+
+        category)
+            # Generate transaction with matching category
+            local amount=$(generate_purchase_amount)
+            local merchant=$(generate_merchant_name "${condition_value,,}")  # Lowercase
+            local name=$(generate_transaction_description "$merchant")
+            echo "$user_id|$account_id|$linked_item_id|$external_id|-$amount|$date|$name"
+            ;;
+
+        *)
+            log_error "Unknown condition field: $condition_field"
+            return 1
+            ;;
+    esac
+}
+
+# Generate multi-condition transaction (for complex rules)
+# Usage: generate_complex_rule_transaction <user_id> <account_id> <amount_threshold> <merchant_pattern> <category>
+generate_complex_rule_transaction() {
+    local user_id="$1"
+    local account_id="$2"
+    local linked_item_id="$3"
+    local amount_threshold="$4"
+    local merchant_pattern="$5"
+    local category="$6"
+
+    local external_id=$(generate_plaid_transaction_id)
+    local amount=$(awk "BEGIN {printf \"%.2f\", $amount_threshold + 10}")
+    local date=$(generate_date_in_past_days 1)
+    local name=$(generate_transaction_description "$merchant_pattern")
+
+    echo "$user_id|$account_id|$linked_item_id|$external_id|-$amount|$date|$name|$category"
+}
+
+# ============================================================================
 # Export Functions
 # ============================================================================
 
@@ -449,3 +647,16 @@ export -f generate_checking_balance
 export -f generate_savings_balance
 export -f generate_credit_card_balance
 export -f generate_plaid_cursor
+
+# Budget fixture generators (Phase 3+)
+export -f generate_budget_id
+export -f generate_category_budget
+export -f generate_budget_threshold_transactions
+export -f generate_budget_refund_scenario
+
+# Rule fixture generators (Phase 4+)
+export -f generate_rule_id
+export -f generate_amount_threshold_rule
+export -f generate_merchant_rule
+export -f generate_rule_trigger_transaction
+export -f generate_complex_rule_transaction

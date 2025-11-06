@@ -300,6 +300,270 @@ print_assertion_summary() {
     fi
 }
 
+# ============================================================================
+# Budget Assertions (Phase 3+)
+# ============================================================================
+# NOTE: Budget features not yet implemented - these are future-ready
+
+# Assert budget exists
+# Usage: assert_budget_exists <budget_id> [message]
+assert_budget_exists() {
+    local budget_id="$1"
+    local message="${2:-Budget $budget_id should exist}"
+
+    local count=$(count_rows "budgets" "id = '$budget_id'")
+
+    if [[ "$count" -eq 1 ]]; then
+        ((ASSERTIONS_PASSED++))
+        log_success "✓ $message"
+    else
+        ((ASSERTIONS_FAILED++))
+        ASSERTION_FAILURES+=("$message (found $count)")
+        log_error "✗ $message (found $count)"
+    fi
+}
+
+# Assert budget spending matches expected amount
+# Usage: assert_budget_spending <budget_id> <expected_amount> [message]
+assert_budget_spending() {
+    local budget_id="$1"
+    local expected_amount="$2"
+    local message="${3:-Budget $budget_id spending should be $expected_amount}"
+
+    local actual_spending=$(query_db "SELECT current_spending FROM budgets WHERE id = '$budget_id'" | tail -n +3 | head -n 1 | xargs)
+
+    if [[ -z "$actual_spending" ]]; then
+        ((ASSERTIONS_FAILED++))
+        ASSERTION_FAILURES+=("$message (budget not found)")
+        log_error "✗ $message (budget not found)"
+        return
+    fi
+
+    # Compare amounts (allow small floating point differences)
+    local diff=$(awk "BEGIN {printf \"%.2f\", ($actual_spending - $expected_amount)}")
+    local abs_diff=$(awk "BEGIN {printf \"%.2f\", ($diff < 0 ? -$diff : $diff)}")
+
+    if (( $(awk "BEGIN {print ($abs_diff < 0.01)}") )); then
+        ((ASSERTIONS_PASSED++))
+        log_success "✓ $message (actual: $actual_spending)"
+    else
+        ((ASSERTIONS_FAILED++))
+        ASSERTION_FAILURES+=("$message (actual: $actual_spending)")
+        log_error "✗ $message (actual: $actual_spending)"
+    fi
+}
+
+# Assert budget alert triggered at threshold
+# Usage: assert_budget_alert_triggered <budget_id> <threshold> [message]
+assert_budget_alert_triggered() {
+    local budget_id="$1"
+    local threshold="$2"
+    local message="${3:-Budget $budget_id should have alert at ${threshold}% threshold}"
+
+    # Check budget_alerts table for alert at this threshold
+    local count=$(count_rows "budget_alerts" "budget_id = '$budget_id' AND threshold = $threshold")
+
+    if [[ "$count" -ge 1 ]]; then
+        ((ASSERTIONS_PASSED++))
+        log_success "✓ $message"
+    else
+        ((ASSERTIONS_FAILED++))
+        ASSERTION_FAILURES+=("$message")
+        log_error "✗ $message"
+    fi
+}
+
+# Assert budget percentage matches expected
+# Usage: assert_budget_percentage <budget_id> <expected_percentage> [message]
+assert_budget_percentage() {
+    local budget_id="$1"
+    local expected_percentage="$2"
+    local message="${3:-Budget $budget_id should be at ${expected_percentage}% spent}"
+
+    # Calculate percentage from current_spending / limit
+    local result=$(query_db "SELECT (current_spending / NULLIF(limit, 0)) * 100 as percentage FROM budgets WHERE id = '$budget_id'" | tail -n +3 | head -n 1 | xargs)
+
+    if [[ -z "$result" ]]; then
+        ((ASSERTIONS_FAILED++))
+        ASSERTION_FAILURES+=("$message (budget not found)")
+        log_error "✗ $message (budget not found)"
+        return
+    fi
+
+    # Compare percentages
+    local diff=$(awk "BEGIN {printf \"%.2f\", ($result - $expected_percentage)}")
+    local abs_diff=$(awk "BEGIN {printf \"%.2f\", ($diff < 0 ? -$diff : $diff)}")
+
+    if (( $(awk "BEGIN {print ($abs_diff < 1.0)}") )); then  # Within 1%
+        ((ASSERTIONS_PASSED++))
+        log_success "✓ $message (actual: ${result}%)"
+    else
+        ((ASSERTIONS_FAILED++))
+        ASSERTION_FAILURES+=("$message (actual: ${result}%)")
+        log_error "✗ $message (actual: ${result}%)"
+    fi
+}
+
+# Assert budget alert count
+# Usage: assert_budget_alert_count <budget_id> <expected_count> [message]
+assert_budget_alert_count() {
+    local budget_id="$1"
+    local expected_count="$2"
+    local message="${3:-Budget $budget_id should have $expected_count alert(s)}"
+
+    local actual_count=$(count_rows "budget_alerts" "budget_id = '$budget_id'")
+
+    if [[ "$actual_count" -eq "$expected_count" ]]; then
+        ((ASSERTIONS_PASSED++))
+        log_success "✓ $message"
+    else
+        ((ASSERTIONS_FAILED++))
+        ASSERTION_FAILURES+=("$message (actual: $actual_count)")
+        log_error "✗ $message (actual: $actual_count)"
+    fi
+}
+
+# ============================================================================
+# Rule Assertions (Phase 4+)
+# ============================================================================
+# NOTE: Rules framework not yet implemented - these are future-ready
+
+# Assert rule exists
+# Usage: assert_rule_exists <rule_id> [message]
+assert_rule_exists() {
+    local rule_id="$1"
+    local message="${2:-Rule $rule_id should exist}"
+
+    local count=$(count_rows "automation_rules" "id = '$rule_id'")
+
+    if [[ "$count" -eq 1 ]]; then
+        ((ASSERTIONS_PASSED++))
+        log_success "✓ $message"
+    else
+        ((ASSERTIONS_FAILED++))
+        ASSERTION_FAILURES+=("$message (found $count)")
+        log_error "✗ $message (found $count)"
+    fi
+}
+
+# Assert rule execution logged
+# Usage: assert_rule_executed <rule_id> <transaction_id> [message]
+assert_rule_executed() {
+    local rule_id="$1"
+    local transaction_id="$2"
+    local message="${3:-Rule $rule_id should have executed for transaction $transaction_id}"
+
+    # Check rule_executions audit table
+    local count=$(count_rows "rule_executions" "rule_id = '$rule_id' AND transaction_id = '$transaction_id'")
+
+    if [[ "$count" -ge 1 ]]; then
+        ((ASSERTIONS_PASSED++))
+        log_success "✓ $message"
+    else
+        ((ASSERTIONS_FAILED++))
+        ASSERTION_FAILURES+=("$message")
+        log_error "✗ $message"
+    fi
+}
+
+# Assert rule execution count
+# Usage: assert_rule_execution_count <rule_id> <expected_count> [message]
+assert_rule_execution_count() {
+    local rule_id="$1"
+    local expected_count="$2"
+    local message="${3:-Rule $rule_id should have executed $expected_count time(s)}"
+
+    local actual_count=$(count_rows "rule_executions" "rule_id = '$rule_id'")
+
+    if [[ "$actual_count" -eq "$expected_count" ]]; then
+        ((ASSERTIONS_PASSED++))
+        log_success "✓ $message"
+    else
+        ((ASSERTIONS_FAILED++))
+        ASSERTION_FAILURES+=("$message (actual: $actual_count)")
+        log_error "✗ $message (actual: $actual_count)"
+    fi
+}
+
+# Assert rule action executed
+# Usage: assert_rule_action_executed <rule_id> <transaction_id> <action_type> [message]
+assert_rule_action_executed() {
+    local rule_id="$1"
+    local transaction_id="$2"
+    local action_type="$3"
+    local message="${4:-Rule $rule_id should have executed action '$action_type'}"
+
+    # Check rule_execution_actions table for specific action
+    local count=$(count_rows "rule_execution_actions" "rule_id = '$rule_id' AND transaction_id = '$transaction_id' AND action_type = '$action_type'")
+
+    if [[ "$count" -ge 1 ]]; then
+        ((ASSERTIONS_PASSED++))
+        log_success "✓ $message"
+    else
+        ((ASSERTIONS_FAILED++))
+        ASSERTION_FAILURES+=("$message")
+        log_error "✗ $message"
+    fi
+}
+
+# Assert rule not executed (idempotency check)
+# Usage: assert_rule_not_executed_twice <rule_id> <transaction_id> [message]
+assert_rule_not_executed_twice() {
+    local rule_id="$1"
+    local transaction_id="$2"
+    local message="${3:-Rule $rule_id should execute only once for transaction $transaction_id}"
+
+    local execution_count=$(count_rows "rule_executions" "rule_id = '$rule_id' AND transaction_id = '$transaction_id'")
+
+    if [[ "$execution_count" -eq 1 ]]; then
+        ((ASSERTIONS_PASSED++))
+        log_success "✓ $message (executed exactly once)"
+    else
+        ((ASSERTIONS_FAILED++))
+        ASSERTION_FAILURES+=("$message (executed $execution_count times)")
+        log_error "✗ $message (executed $execution_count times)"
+    fi
+}
+
+# Assert transaction auto-categorized by rule
+# Usage: assert_transaction_auto_categorized <transaction_id> <expected_category> [message]
+assert_transaction_auto_categorized() {
+    local transaction_id="$1"
+    local expected_category="$2"
+    local message="${3:-Transaction $transaction_id should be categorized as '$expected_category'}"
+
+    local actual_category=$(query_db "SELECT category FROM transactions WHERE external_transaction_id = '$transaction_id'" | tail -n +3 | head -n 1 | xargs)
+
+    if [[ "$actual_category" == "$expected_category" ]]; then
+        ((ASSERTIONS_PASSED++))
+        log_success "✓ $message"
+    else
+        ((ASSERTIONS_FAILED++))
+        ASSERTION_FAILURES+=("$message (actual: $actual_category)")
+        log_error "✗ $message (actual: $actual_category)"
+    fi
+}
+
+# Assert transaction has tag
+# Usage: assert_transaction_has_tag <transaction_id> <expected_tag> [message]
+assert_transaction_has_tag() {
+    local transaction_id="$1"
+    local expected_tag="$2"
+    local message="${3:-Transaction $transaction_id should have tag '$expected_tag'}"
+
+    # Check transaction_tags table
+    local count=$(count_rows "transaction_tags" "transaction_id = '$transaction_id' AND tag = '$expected_tag'")
+
+    if [[ "$count" -ge 1 ]]; then
+        ((ASSERTIONS_PASSED++))
+        log_success "✓ $message"
+    else
+        ((ASSERTIONS_FAILED++))
+        ASSERTION_FAILURES+=("$message")
+        log_error "✗ $message"
+    fi
+}
+
 # Export functions
 export -f reset_assertions
 export -f assert_equal
@@ -318,6 +582,22 @@ export -f assert_linked_item_status
 export -f assert_notification_exists
 export -f assert_notification_count
 export -f print_assertion_summary
+
+# Budget assertions (Phase 3+)
+export -f assert_budget_exists
+export -f assert_budget_spending
+export -f assert_budget_alert_triggered
+export -f assert_budget_percentage
+export -f assert_budget_alert_count
+
+# Rule assertions (Phase 4+)
+export -f assert_rule_exists
+export -f assert_rule_executed
+export -f assert_rule_execution_count
+export -f assert_rule_action_executed
+export -f assert_rule_not_executed_twice
+export -f assert_transaction_auto_categorized
+export -f assert_transaction_has_tag
 
 # Export variables
 export ASSERTIONS_PASSED

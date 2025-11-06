@@ -1,0 +1,318 @@
+# Budget Templates for BoostedBudget Test Scenarios
+# Provides reusable budget configurations for testing budget features (Phase 3)
+# NOTE: Budget features not yet implemented - these templates are future-ready
+
+# Anchor definitions (reusable templates)
+templates:
+  # Monthly category budget template
+  monthly_category_budget: &monthly_category_budget
+    period: "monthly"
+    period_start: "2025-11-01"  # First of current month
+    period_end: "2025-11-30"    # Last of current month
+    alert_thresholds: [0.50, 0.80, 0.90, 1.00]  # 50%, 80%, 90%, 100%
+    rollover_enabled: false
+    notification_channels: ["email", "push", "in_app"]
+    status: "active"
+
+  # Weekly budget template
+  weekly_budget: &weekly_budget
+    period: "weekly"
+    period_start: "2025-11-03"  # Monday
+    period_end: "2025-11-09"    # Sunday
+    alert_thresholds: [0.75, 1.00]  # 75%, 100%
+    rollover_enabled: false
+    notification_channels: ["push", "in_app"]
+    status: "active"
+
+  # Yearly budget template
+  yearly_budget: &yearly_budget
+    period: "yearly"
+    period_start: "2025-01-01"
+    period_end: "2025-12-31"
+    alert_thresholds: [0.50, 0.80, 1.00]
+    rollover_enabled: true  # Carry over unused amount
+    notification_channels: ["email"]
+    status: "active"
+
+  # Custom date range budget
+  custom_budget: &custom_budget
+    period: "custom"
+    # period_start and period_end must be specified
+    alert_thresholds: [0.80, 1.00]
+    rollover_enabled: false
+    notification_channels: ["email", "push"]
+    status: "active"
+
+# Category-based budget examples
+category_budgets:
+  # Groceries budget - common use case
+  groceries_monthly:
+    <<: *monthly_category_budget
+    id: "test-budget-groceries-001"
+    user_id: "test-user-001"
+    name: "Groceries"
+    category: "Food and Drink"
+    limit: 500.00
+    current_spending: 0.00
+    description: "Monthly grocery budget"
+
+  # Dining out budget
+  dining_monthly:
+    <<: *monthly_category_budget
+    id: "test-budget-dining-001"
+    user_id: "test-user-001"
+    name: "Dining Out"
+    category: "Food and Drink"
+    subcategory: "Restaurants"
+    limit: 300.00
+    current_spending: 0.00
+    description: "Monthly restaurant budget"
+
+  # Shopping budget
+  shopping_monthly:
+    <<: *monthly_category_budget
+    id: "test-budget-shopping-001"
+    user_id: "test-user-001"
+    name: "Shopping"
+    category: "Shopping"
+    limit: 400.00
+    current_spending: 0.00
+    description: "Monthly shopping budget"
+    alert_thresholds: [0.80, 0.90, 1.00]  # No 50% alert
+
+  # Gas/Transportation budget
+  gas_weekly:
+    <<: *weekly_budget
+    id: "test-budget-gas-001"
+    user_id: "test-user-001"
+    name: "Gas"
+    category: "Transportation"
+    subcategory: "Gas"
+    limit: 75.00
+    current_spending: 0.00
+    description: "Weekly gas budget"
+
+  # Entertainment budget
+  entertainment_monthly:
+    <<: *monthly_category_budget
+    id: "test-budget-entertainment-001"
+    user_id: "test-user-001"
+    name: "Entertainment"
+    category: "Entertainment"
+    limit: 200.00
+    current_spending: 0.00
+    description: "Monthly entertainment budget (movies, games, subscriptions)"
+
+  # Utilities budget (yearly)
+  utilities_yearly:
+    <<: *yearly_budget
+    id: "test-budget-utilities-001"
+    user_id: "test-user-001"
+    name: "Utilities"
+    category: "Bills and Utilities"
+    limit: 3600.00  # $300/month average
+    current_spending: 0.00
+    description: "Annual utilities budget"
+
+# Budget testing scenarios - transaction flow patterns
+budget_test_scenarios:
+  # Scenario 1: Gradual spending reaching 80% threshold
+  gradual_80_percent:
+    description: "Realistic spending pattern hitting 80% alert"
+    budget_limit: 500.00
+    target_percentage: 0.80
+    target_amount: 400.00
+    transaction_pattern: "realistic"  # Front-loaded spending (payday effect)
+    transaction_count: 12
+    distribution:
+      week_1: 40%  # $160 (payday spending)
+      week_2: 25%  # $100
+      week_3: 20%  # $80
+      week_4: 15%  # $60
+    expected_alerts: [0.50, 0.80]
+
+  # Scenario 2: Single large transaction triggering 100% alert
+  single_overspend:
+    description: "One large transaction exceeding budget"
+    budget_limit: 300.00
+    target_percentage: 1.10
+    target_amount: 330.00
+    transaction_pattern: "single"
+    transaction_count: 1
+    distribution:
+      single: 100%
+    expected_alerts: [0.50, 0.80, 0.90, 1.00]
+
+  # Scenario 3: Rapid spending hitting multiple thresholds quickly
+  rapid_spending:
+    description: "Quick succession of purchases triggering multiple alerts"
+    budget_limit: 200.00
+    target_percentage: 0.95
+    target_amount: 190.00
+    transaction_pattern: "burst"  # All within 2 days
+    transaction_count: 5
+    distribution:
+      day_1: 60%  # $114 - triggers 50% alert
+      day_2: 35%  # $66.50 - triggers 80%, 90% alerts
+    expected_alerts: [0.50, 0.80, 0.90]
+
+  # Scenario 4: Exactly at threshold (edge case)
+  exact_threshold:
+    description: "Spending exactly at budget limit"
+    budget_limit: 1000.00
+    target_percentage: 1.00
+    target_amount: 1000.00
+    transaction_pattern: "exact"
+    transaction_count: 4
+    distribution:
+      even: 100%  # 4 x $250 transactions
+    expected_alerts: [0.50, 0.80, 0.90, 1.00]
+
+  # Scenario 5: Stay under budget (no alerts except 50%)
+  under_budget:
+    description: "Responsible spending staying under budget"
+    budget_limit: 400.00
+    target_percentage: 0.65
+    target_amount: 260.00
+    transaction_pattern: "realistic"
+    transaction_count: 8
+    distribution:
+      week_1: 30%
+      week_2: 25%
+      week_3: 25%
+      week_4: 20%
+    expected_alerts: [0.50]
+
+  # Scenario 6: Refund reducing spending below threshold
+  refund_scenario:
+    description: "Spending crosses threshold, refund brings back under"
+    budget_limit: 300.00
+    transaction_pattern: "refund"
+    steps:
+      - spend: 250.00  # 83% - triggers 50%, 80% alerts
+      - refund: -50.00  # Back to 67% (no 80% alert anymore)
+    expected_alerts_after_spend: [0.50, 0.80]
+    expected_alerts_after_refund: [0.50]  # 80% alert should clear
+
+# Multi-budget scenarios (testing multiple budgets for same user)
+multi_budget_scenarios:
+  # Free tier: 3 budgets max (tier limit)
+  free_tier_budgets:
+    user_id: "test-user-free-001"
+    user_tier: "free"
+    budgets:
+      - <<: *monthly_category_budget
+        id: "test-budget-free-1"
+        name: "Groceries"
+        category: "Food and Drink"
+        limit: 400.00
+      - <<: *monthly_category_budget
+        id: "test-budget-free-2"
+        name: "Gas"
+        category: "Transportation"
+        limit: 100.00
+      - <<: *monthly_category_budget
+        id: "test-budget-free-3"
+        name: "Shopping"
+        category: "Shopping"
+        limit: 200.00
+    # Attempting to create 4th budget should fail (tier limit)
+
+  # Premium tier: Multiple budgets across categories
+  premium_tier_budgets:
+    user_id: "test-user-premium-001"
+    user_tier: "premium"
+    budgets:
+      - name: "Groceries"
+        limit: 600.00
+      - name: "Dining"
+        limit: 400.00
+      - name: "Shopping"
+        limit: 500.00
+      - name: "Gas"
+        limit: 150.00
+      - name: "Entertainment"
+        limit: 300.00
+      - name: "Utilities"
+        limit: 250.00
+      - name: "Healthcare"
+        limit: 200.00
+    # Premium can create up to 15 budgets
+
+# Budget alert notification preferences
+notification_preferences:
+  all_channels:
+    email_enabled: true
+    push_enabled: true
+    in_app_enabled: true
+    sms_enabled: false  # Phase 7+ feature
+
+  email_only:
+    email_enabled: true
+    push_enabled: false
+    in_app_enabled: false
+    sms_enabled: false
+
+  push_only:
+    email_enabled: false
+    push_enabled: true
+    in_app_enabled: true
+    sms_enabled: false
+
+  opt_out_all:
+    email_enabled: false
+    push_enabled: false
+    in_app_enabled: false
+    sms_enabled: false
+
+# Transaction flow generators (for triggering budget scenarios)
+# These define HOW to generate transactions to reach specific budget states
+transaction_flows:
+  # Generate transactions to hit 50% threshold
+  hit_50_percent:
+    type: "budget_threshold_trigger"
+    target_percentage: 0.50
+    pattern: "realistic"  # Front-loaded spending
+    merchant_categories: ["grocery", "restaurant"]
+
+  # Generate transactions to hit 80% threshold
+  hit_80_percent:
+    type: "budget_threshold_trigger"
+    target_percentage: 0.80
+    pattern: "realistic"
+    merchant_categories: ["grocery", "restaurant", "retail"]
+
+  # Generate transactions to exceed budget
+  exceed_budget:
+    type: "budget_threshold_trigger"
+    target_percentage: 1.10
+    pattern: "burst"  # Rapid spending
+    merchant_categories: ["retail", "online_shopping"]
+
+  # Generate transaction + refund scenario
+  with_refund:
+    type: "budget_refund_scenario"
+    initial_percentage: 0.85
+    refund_amount: 50.00
+    final_percentage: 0.68
+
+# Usage in scenarios:
+#
+# scenario:
+#   setup:
+#     budgets:
+#       - <<: *monthly_category_budget
+#         id: "test-budget-001"
+#         category: "Groceries"
+#         limit: 500.00
+#
+#   transaction_flows:
+#     - <<: *hit_80_percent
+#       budget_id: "test-budget-001"
+#       amount_to_generate: 400.00  # 80% of $500
+#
+#   assertions:
+#     budget_alerts:
+#       - budget_id: "test-budget-001"
+#         expected_alerts: [0.50, 0.80]
+#         alert_count: 2
