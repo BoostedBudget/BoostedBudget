@@ -1,0 +1,112 @@
+# Scenario 01: Free Tier First Sync
+# Tests the initial transaction sync for a free tier user (30-day historical limit)
+
+version: "1.0"
+
+scenario:
+  name: "Free Tier First Sync"
+  description: "Verify that free tier users can perform initial sync with 30-day historical limit enforced"
+  category: "tier_limit"
+  priority: "critical"
+
+  tags:
+    - "transaction_sync"
+    - "free_tier"
+    - "initial_sync"
+    - "tier_limits"
+
+  # Setup test data
+  setup:
+    user:
+      id: "test-user-free-first-sync-001"
+      tier: "free"
+      email: "test-free-sync@example.com"
+      auth0_user_id: "auth0|test-free-sync-001"
+
+    linked_items:
+      - id: "test-item-free-sync-001"
+        user_id: "test-user-free-first-sync-001"
+        item_id: "plaid-item-free-sync-001"
+        institution_name: "Chase"
+        institution_id: "ins_3"
+        cursor: null  # No cursor for first sync
+        status: "active"
+
+    accounts:
+      - id: "test-account-free-sync-001"
+        linked_item_id: "test-item-free-sync-001"
+        user_id: "test-user-free-first-sync-001"
+        plaid_account_id: "plaid-acc-free-sync-001"
+        name: "Chase Total Checking"
+        type: "depository"
+        subtype: "checking"
+        current_balance: 2500.00
+
+  # Execution steps
+  steps:
+    - action: "fire_webhook"
+      description: "Trigger INITIAL_UPDATE webhook for free tier user"
+      webhook_code: "INITIAL_UPDATE"
+      item_id: "test-item-free-sync-001"
+
+    - action: "wait"
+      description: "Wait for webhook processing and transaction sync"
+      wait_seconds: 10
+
+  # Assertions
+  assertions:
+    database:
+      # Should have at least 1 transaction (Plaid sandbox returns data)
+      transactions_count: ">= 1"
+
+      # Should create sync audit record
+      sync_audits_count: 1
+
+    webhook_status:
+      processed: true
+      error: null
+
+    custom:
+      # Verify tier limit enforced (30 days for free tier)
+      - description: "Sync audit should record 30-day historical limit"
+        query: |
+          SELECT days_historical, tier_at_sync
+          FROM account_sync_audit
+          WHERE user_id = 'test-user-free-first-sync-001'
+          AND sync_month = TO_CHAR(NOW(), 'YYYY-MM')
+        expected:
+          days_historical: 30
+          tier_at_sync: "free"
+
+      # Verify cursor updated (not null after sync)
+      - description: "Cursor should be updated after initial sync"
+        query: |
+          SELECT cursor IS NOT NULL as cursor_exists
+          FROM linked_items
+          WHERE id = 'test-item-free-sync-001'
+        expected:
+          cursor_exists: true
+
+      # Verify all transactions within 30-day window
+      - description: "All transactions should be within 30-day historical limit"
+        query: |
+          SELECT COUNT(*) as old_txn_count
+          FROM transactions
+          WHERE user_id = 'test-user-free-first-sync-001'
+          AND date < (CURRENT_DATE - INTERVAL '30 days')
+        expected:
+          old_txn_count: 0
+
+# Expected Outcomes:
+# 1. Webhook processed successfully
+# 2. At least 1 transaction synced
+# 3. Sync audit record created with tier='free', days_historical=30
+# 4. Cursor updated (no longer null)
+# 5. All transactions within 30-day window
+# 6. No errors logged
+
+# Test Data Notes:
+# - Plaid sandbox will return synthetic transactions
+# - Free tier enforces 30-day historical limit
+# - This is the first sync (cursor is null initially)
+# - After sync, cursor should be set for future incremental syncs

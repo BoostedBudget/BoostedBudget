@@ -1,0 +1,189 @@
+# Scenario 03: Preserve User Notes on Sync
+# Tests that user-added notes are preserved when transactions are updated by Plaid sync
+# CRITICAL: Regression test to prevent data loss bug
+
+version: "1.0"
+
+scenario:
+  name: "Preserve User Notes on Sync"
+  description: "Verify that user notes are NOT overwritten when Plaid sends transaction updates"
+  category: "data_integrity"
+  priority: "critical"
+
+  tags:
+    - "transaction_sync"
+    - "user_notes"
+    - "data_integrity"
+    - "regression_test"
+
+  # Setup test data
+  setup:
+    user:
+      id: "test-user-notes-001"
+      tier: "premium"
+      email: "test-notes@example.com"
+      auth0_user_id: "auth0|test-notes-001"
+
+    linked_items:
+      - id: "test-item-notes-001"
+        user_id: "test-user-notes-001"
+        item_id: "plaid-item-notes-001"
+        institution_name: "Wells Fargo"
+        institution_id: "ins_6"
+        cursor: "test-cursor-initial-001"  # Has cursor (not first sync)
+        status: "active"
+
+    accounts:
+      - id: "test-account-notes-001"
+        linked_item_id: "test-item-notes-001"
+        user_id: "test-user-notes-001"
+        plaid_account_id: "plaid-acc-notes-001"
+        name: "Wells Fargo Everyday Checking"
+        type: "depository"
+        subtype: "checking"
+        current_balance: 3200.00
+
+    # Pre-existing transactions WITH user notes
+    transactions:
+      - user_id: "test-user-notes-001"
+        account_id: "test-account-notes-001"
+        linked_item_id: "test-item-notes-001"
+        external_transaction_id: "plaid-txn-user-note-001"
+        amount: -125.50
+        date: "2025-11-01"
+        name: "Amazon.com"
+        user_notes: "Work laptop accessories - reimbursable"
+
+      - user_id: "test-user-notes-001"
+        account_id: "test-account-notes-001"
+        linked_item_id: "test-item-notes-001"
+        external_transaction_id: "plaid-txn-user-note-002"
+        amount: -45.00
+        date: "2025-11-02"
+        name: "Whole Foods"
+        user_notes: "Birthday cake for Sarah"
+
+      - user_id: "test-user-notes-001"
+        account_id: "test-account-notes-001"
+        linked_item_id: "test-item-notes-001"
+        external_transaction_id: "plaid-txn-user-note-003"
+        amount: -78.25
+        date: "2025-11-03"
+        name: "Shell Gas Station"
+        user_notes: "Road trip to Portland"
+
+  # Execution steps
+  steps:
+    - action: "fire_webhook"
+      description: "Trigger DEFAULT_UPDATE (incremental sync that may UPDATE existing transactions)"
+      webhook_code: "DEFAULT_UPDATE"
+      item_id: "test-item-notes-001"
+
+    - action: "wait"
+      description: "Wait for sync to process transaction updates"
+      wait_seconds: 10
+
+  # Assertions
+  assertions:
+    database:
+      # Should still have the 3 pre-existing transactions (at minimum)
+      transactions_count: ">= 3"
+
+    webhook_status:
+      processed: true
+      error: null
+
+    custom:
+      # CRITICAL: Verify user notes preserved for transaction 1
+      - description: "User notes should be preserved for Amazon transaction"
+        query: |
+          SELECT user_notes
+          FROM transactions
+          WHERE external_transaction_id = 'plaid-txn-user-note-001'
+          AND user_id = 'test-user-notes-001'
+        expected:
+          user_notes: "Work laptop accessories - reimbursable"
+
+      # CRITICAL: Verify user notes preserved for transaction 2
+      - description: "User notes should be preserved for Whole Foods transaction"
+        query: |
+          SELECT user_notes
+          FROM transactions
+          WHERE external_transaction_id = 'plaid-txn-user-note-002'
+          AND user_id = 'test-user-notes-001'
+        expected:
+          user_notes: "Birthday cake for Sarah"
+
+      # CRITICAL: Verify user notes preserved for transaction 3
+      - description: "User notes should be preserved for Shell transaction"
+        query: |
+          SELECT user_notes
+          FROM transactions
+          WHERE external_transaction_id = 'plaid-txn-user-note-003'
+          AND user_id = 'test-user-notes-001'
+        expected:
+          user_notes: "Road trip to Portland"
+
+      # Verify NO user notes are null for these specific transactions
+      - description: "User notes should NOT be null after sync"
+        query: |
+          SELECT COUNT(*) as null_notes_count
+          FROM transactions
+          WHERE user_id = 'test-user-notes-001'
+          AND external_transaction_id IN (
+            'plaid-txn-user-note-001',
+            'plaid-txn-user-note-002',
+            'plaid-txn-user-note-003'
+          )
+          AND user_notes IS NULL
+        expected:
+          null_notes_count: 0
+
+      # Verify transaction details CAN be updated (name, amount, etc.)
+      - description: "Transaction fields CAN be updated (not user_notes)"
+        query: |
+          SELECT
+            COUNT(*) as txn_count,
+            COUNT(DISTINCT name) as distinct_names,
+            COUNT(DISTINCT amount) as distinct_amounts
+          FROM transactions
+          WHERE external_transaction_id IN (
+            'plaid-txn-user-note-001',
+            'plaid-txn-user-note-002',
+            'plaid-txn-user-note-003'
+          )
+        expected:
+          txn_count: 3
+
+# Expected Outcomes:
+# 1. Webhook processed successfully
+# 2. User notes preserved for ALL pre-existing transactions
+# 3. Transaction fields (name, amount, date) CAN be updated by Plaid
+# 4. User notes field is explicitly EXCLUDED from UPDATE query
+# 5. No data loss in user_notes column
+
+# Test Data Notes:
+# - Pre-existing transactions simulate user having added notes previously
+# - Plaid may send updates for these transactions (amount changes, name changes)
+# - UPDATE query MUST use: UPDATE transactions SET name = $1, amount = $2 WHERE id = $3
+#   - MUST NOT include user_notes in UPDATE
+#   - user_notes should only be writable by user, never by sync
+# - This is a regression test for potential data loss bug
+
+# Implementation Notes:
+# The transaction sync service should use a pattern like:
+#
+# For MODIFIED transactions:
+#   UPDATE transactions
+#   SET
+#     name = $1,
+#     amount = $2,
+#     date = $3,
+#     pending = $4,
+#     -- EXPLICITLY EXCLUDE user_notes from UPDATE
+#   WHERE external_transaction_id = $5
+#   AND user_id = $6
+#
+# user_notes should ONLY be updated via:
+#   - Direct user API calls (PUT /transactions/:id/notes)
+#   - Never by sync service
