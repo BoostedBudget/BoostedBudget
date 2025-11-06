@@ -1,0 +1,144 @@
+# User Templates for BoostedBudget Test Scenarios
+# Provides reusable user configurations for different subscription tiers
+
+# Anchor definitions (reusable templates)
+templates:
+  # Free tier user template
+  free_user: &free_user
+    tier: "free"
+    auth0_user_id_prefix: "auth0|test-free"
+    email_domain: "freeuser.test.com"
+    subscription_tier: "free"
+    primary_region: "us-east-1"
+    limits:
+      max_rules: 1
+      max_accounts: 3
+      sync_frequency: "1x/day"
+      historical_days: 30
+      ads_enabled: true
+    features:
+      automation_rules: false
+      ai_insights: false
+      api_access: false
+      priority_support: false
+
+  # Premium Lite tier user template
+  premium_lite_user: &premium_lite_user
+    tier: "premium_lite"
+    auth0_user_id_prefix: "auth0|test-premium-lite"
+    email_domain: "premiumlite.test.com"
+    subscription_tier: "premium_lite"
+    primary_region: "us-east-1"
+    limits:
+      max_rules: 5
+      max_accounts: 15
+      sync_frequency: "2x/day"
+      historical_days: 365
+      ads_enabled: false
+    features:
+      automation_rules: true
+      ai_insights: false
+      api_access: false
+      priority_support: false
+    stripe:
+      price_id: "price_premium_lite"
+      amount: 499  # $4.99/month
+
+  # Premium tier user template
+  premium_user: &premium_user
+    tier: "premium"
+    auth0_user_id_prefix: "auth0|test-premium"
+    email_domain: "premium.test.com"
+    subscription_tier: "premium"
+    primary_region: "us-east-1"
+    limits:
+      max_rules: 15
+      max_accounts: 30
+      sync_frequency: "6x/day"
+      historical_days: 730
+      ads_enabled: false
+    features:
+      automation_rules: true
+      ai_insights: true
+      api_access: false
+      priority_support: true
+    stripe:
+      price_id: "price_premium"
+      amount: 999  # $9.99/month
+
+  # Premium Plus tier user template
+  premium_plus_user: &premium_plus_user
+    tier: "premium_plus"
+    auth0_user_id_prefix: "auth0|test-premium-plus"
+    email_domain: "premiumplus.test.com"
+    subscription_tier: "premium_plus"
+    primary_region: "us-east-1"
+    limits:
+      max_rules: -1  # Unlimited
+      max_accounts: -1  # Unlimited
+      sync_frequency: "every 10 minutes"
+      historical_days: 730
+      ads_enabled: false
+    features:
+      automation_rules: true
+      ai_insights: true
+      api_access: true
+      priority_support: true
+    stripe:
+      price_id: "price_premium_plus"
+      amount: 1999  # $19.99/month
+
+# Example user instances (scenarios can reference these)
+example_users:
+  # Free tier examples
+  free_user_001:
+    <<: *free_user
+    id: "test-user-free-001"
+    email: "free001@freeuser.test.com"
+    auth0_user_id: "auth0|test-free-001"
+    created_at: "2025-10-01T00:00:00Z"
+
+  free_user_002:
+    <<: *free_user
+    id: "test-user-free-002"
+    email: "free002@freeuser.test.com"
+    auth0_user_id: "auth0|test-free-002"
+    created_at: "2025-10-15T00:00:00Z"
+
+  # Premium Lite examples
+  premium_lite_user_001:
+    <<: *premium_lite_user
+    id: "test-user-premium-lite-001"
+    email: "lite001@premiumlite.test.com"
+    auth0_user_id: "auth0|test-premium-lite-001"
+    created_at: "2025-09-01T00:00:00Z"
+    stripe_customer_id: "cus_test_lite_001"
+    stripe_subscription_id: "sub_test_lite_001"
+
+  # Premium examples
+  premium_user_001:
+    <<: *premium_user
+    id: "test-user-premium-001"
+    email: "premium001@premium.test.com"
+    auth0_user_id: "auth0|test-premium-001"
+    created_at: "2025-08-01T00:00:00Z"
+    stripe_customer_id: "cus_test_premium_001"
+    stripe_subscription_id: "sub_test_premium_001"
+
+  # Premium Plus examples
+  premium_plus_user_001:
+    <<: *premium_plus_user
+    id: "test-user-premium-plus-001"
+    email: "plus001@premiumplus.test.com"
+    auth0_user_id: "auth0|test-premium-plus-001"
+    created_at: "2025-07-01T00:00:00Z"
+    stripe_customer_id: "cus_test_plus_001"
+    stripe_subscription_id: "sub_test_plus_001"
+
+# Usage in scenarios:
+#
+# setup:
+#   user:
+#     <<: *free_user           # Reference template
+#     id: "my-test-user-id"    # Override specific fields
+#     email: "custom@test.com"
