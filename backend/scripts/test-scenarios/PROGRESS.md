@@ -1,8 +1,15 @@
 # Test Scenarios Implementation Progress
 
 **Started:** 2025-11-05
-**Purpose:** Track implementation of configuration-driven E2E transaction test scripts
-**Goal:** Extensible YAML-based scenarios for populating staging with comprehensive transaction data
+**Purpose:** Track implementation of configuration-driven E2E test framework for staging environment
+**Goal:** Extensible YAML-based scenarios for populating staging with comprehensive test data across ALL app features
+
+**Scope:**
+- Transaction sync scenarios (Plaid webhooks, pagination, errors, tier limits)
+- Budgeting scenarios (budget creation, spending tracking, alerts, overages)
+- Automation rules scenarios (rule execution, triggers, conditions, actions)
+- General staging data population (realistic users, accounts, transactions, budgets, rules)
+- End-to-end user journeys (onboarding, subscription changes, feature usage)
 
 ---
 
@@ -27,14 +34,23 @@
 - [x] Created `templates/accounts.yaml` - Account type templates (185 lines)
 - [x] Created `run-scenario.sh` - Main scenario runner (485 lines)
 
-### Phase 3: Core Scenarios ⏳
-- [ ] 01-free-tier-first-sync.yaml
-- [ ] 02-pagination-multi-page.yaml
-- [ ] 03-preserve-user-notes.yaml
-- [ ] 04-tier-limit-enforcement.yaml
-- [ ] 05-item-error-login-required.yaml
+### Phase 3: Core Scenarios ✅ COMPLETE (2025-11-05)
+- [x] `01-free-tier-first-sync.yaml` - Tests free tier 30-day limit
+- [x] `02-pagination-multi-page.yaml` - Tests multi-page transaction sync
+- [x] `03-preserve-user-notes.yaml` - CRITICAL regression test for data loss
+- [x] `04-tier-limit-enforcement.yaml` - Tests monthly sync limits (revenue protection)
+- [x] `05-item-error-login-required.yaml` - Tests LOGIN_REQUIRED error handling
+- [x] `run-all-scenarios.sh` - Batch runner for sequential/parallel execution
 
-### Phase 4: Advanced Scenarios ⏳
+### Phase 4: Future-Ready Templates ✅ COMPLETE (2025-11-05)
+- [x] `templates/budgets.yaml` - Budget templates for Phase 3 budgeting features (350+ lines)
+- [x] `templates/rules.yaml` - Rule templates for Phase 4 automation features (610+ lines)
+- [x] Budget fixture generators added to `lib/fixtures.sh` (4 functions)
+- [x] Rule fixture generators added to `lib/fixtures.sh` (5 functions)
+- [x] Budget assertions added to `lib/assertions.sh` (5 functions)
+- [x] Rule assertions added to `lib/assertions.sh` (7 functions)
+
+### Phase 5: Advanced Scenarios ⏳ FUTURE
 - [ ] 06-pending-to-posted-transition.yaml
 - [ ] 07-refund-and-adjustment.yaml
 - [ ] 08-foreign-currency.yaml
@@ -188,14 +204,29 @@ premium_plus:
 6. ✅ Create `templates/accounts.yaml` - Account type templates
 7. ✅ Create `run-scenario.sh` - Main runner script
 
-**Phase 3 - NEXT 🎯**
-1. ⏳ Create `scenarios/01-free-tier-first-sync.yaml`
-2. ⏳ Create `scenarios/02-pagination-multi-page.yaml`
-3. ⏳ Create `scenarios/03-preserve-user-notes.yaml`
-4. ⏳ Create `scenarios/04-tier-limit-enforcement.yaml`
-5. ⏳ Create `scenarios/05-item-error-login-required.yaml`
-6. ⏳ Test all scenarios end-to-end
-7. ⏳ Commit Phase 3
+**Phase 3 - COMPLETE ✅**
+1. ✅ Create `scenarios/01-free-tier-first-sync.yaml`
+2. ✅ Create `scenarios/02-pagination-multi-page.yaml`
+3. ✅ Create `scenarios/03-preserve-user-notes.yaml`
+4. ✅ Create `scenarios/04-tier-limit-enforcement.yaml`
+5. ✅ Create `scenarios/05-item-error-login-required.yaml`
+6. ✅ Create `run-all-scenarios.sh` batch runner
+7. ✅ Commit Phase 3
+
+**Phase 4 - COMPLETE ✅**
+1. ✅ Create `templates/budgets.yaml` - Future-ready for Phase 3 budgeting
+2. ✅ Create `templates/rules.yaml` - Future-ready for Phase 4 automation
+3. ✅ Add budget/rule fixture generators to `lib/fixtures.sh`
+4. ✅ Add budget/rule assertions to `lib/assertions.sh`
+5. ✅ Create 15 out-of-scope GitHub issues (#316-330)
+6. ✅ Update PROGRESS.md with all work completed
+7. ✅ Commit Phase 4
+
+**Phase 5 - NEXT 🎯**
+1. ⏳ Test all scenarios end-to-end in staging (requires Auth0 token + Plaid sandbox)
+2. ⏳ Document any discovered issues
+3. ⏳ Create advanced scenarios (06-10) as needed
+4. ⏳ Mark PR #315 ready for review
 
 ---
 
@@ -260,16 +291,66 @@ export DATABASE_URL="..."
 
 ---
 
-## References
+## Out-of-Scope Work Identified
 
-- **Issue #308:** Admin API for Manual Webhook Firing
-- **Issue #309:** Role-Based Admin Authentication (future)
-- **Issue #310:** Bulk Webhook Firing (future)
-- **Issue #311:** Webhook Replay (future)
-- **Issue #242:** Monthly Sync Limits
-- **Issue #256:** Transaction Sync Service
-- **Issue #257:** Item Error Handler
+During planning, 15 additional testing initiatives were identified as out-of-scope for this framework but valuable for future implementation. GitHub issues created:
+
+### Security Testing (4 issues)
+- **Issue #316:** OWASP ZAP Automated Security Scanning (P1, Phase 5+)
+- **Issue #317:** Snyk Dependency Vulnerability Scanning (P1, Current phase)
+- **Issue #318:** GDPR Compliance Automated Testing (P1, Phase 5+)
+- **Issue #319:** Stripe Subscription Webhook Testing (P1, Phase 5+)
+
+### Performance Testing (2 issues)
+- **Issue #320:** k6 Load Testing Framework (P1, Phase 5+)
+- **Issue #321:** Percy Visual Regression Testing (P2, Phase 5+)
+
+### Chaos Engineering (1 issue)
+- **Issue #322:** Chaos Monkey Resilience Testing (P2, Phase 6+)
+
+### Testing Infrastructure (5 issues)
+- **Issue #323:** Pact API Contract Testing (P2, Phase 5+)
+- **Issue #324:** axe-core Accessibility Testing (P1, Phase 4)
+- **Issue #325:** Detox Mobile App E2E Testing (P2, Phase 6)
+- **Issue #326:** Database Migration Testing Framework (P1, Current phase)
+- **Issue #327:** Multi-Region Consistency Testing (P2, Phase 7+)
+
+### Feature-Specific Testing (3 issues)
+- **Issue #328:** AI Model Validation Testing - Premium+ Features (P2, Phase 6)
+- **Issue #329:** Budget Alert Notification Testing (P1, Phase 3)
+- **Issue #330:** Rule Execution Audit Testing (P1, Phase 4)
+
+**Rationale for Separation:**
+These testing initiatives either:
+1. Target features not yet implemented (budgets, rules, AI)
+2. Require specialized tooling beyond Bash/YAML (k6, Percy, Detox)
+3. Focus on different testing dimensions (security, performance, chaos)
+4. Belong in CI/CD rather than manual staging population
+
+**Integration Points:**
+- This framework (#314) can generate test data used by other testing tools
+- Scenarios created here can seed E2E tests, load tests, chaos experiments
+- Budget/rule templates prepared here accelerate Phase 3/4 testing implementation
 
 ---
 
-**Last Updated:** 2025-11-05 19:30 UTC (Phase 1 & 2 complete, ready for Phase 3)
+## References
+
+### Core Framework Issues
+- **Issue #314:** Configuration-Driven E2E Test Scenarios Framework (this work)
+- **Issue #308:** Admin API for Manual Webhook Firing (enables webhook testing)
+
+### Related Implementation Issues
+- **Issue #242:** Monthly Sync Limits
+- **Issue #256:** Transaction Sync Service
+- **Issue #257:** Item Error Handler
+- **Issue #309:** Role-Based Admin Authentication (future)
+- **Issue #310:** Bulk Webhook Firing (future)
+- **Issue #311:** Webhook Replay (future)
+
+### Out-of-Scope Testing Issues (see section above)
+- Issues #316-330: Security, performance, chaos, infrastructure, feature-specific testing
+
+---
+
+**Last Updated:** 2025-11-05 21:45 UTC (Phases 1-4 complete! 5 core scenarios, 2 template files, 15 GitHub issues created, ready for staging testing)
