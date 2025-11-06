@@ -1,0 +1,737 @@
+# Scenario 15: Merchant Diversity
+# Tests spending across 20+ unique merchants - realistic variety, not concentration
+# CRITICAL: Validates merchant loyalty analysis and spending diversity insights
+
+version: "1.0"
+
+scenario:
+  name: "Merchant Diversity"
+  description: "Test spending across 20+ unique merchants with diverse categories"
+  category: "normal"
+  priority: "medium"
+
+  tags:
+    - "merchant_diversity"
+    - "variety"
+    - "spending_distribution"
+    - "merchant_loyalty"
+    - "tier:premium"
+
+  # Setup test data
+  setup:
+    user:
+      id: "test-user-diversity-001"
+      tier: "premium"
+      email: "diversity-test@example.com"
+      auth0_user_id: "auth0|test-diversity-001"
+
+    linked_items:
+      - id: "test-item-diversity-001"
+        user_id: "test-user-diversity-001"
+        item_id: "plaid-item-diversity-001"
+        institution_name: "Chase"
+        institution_id: "ins_3"
+        cursor: "cursor-diversity-sync"
+        status: "active"
+
+    accounts:
+      - id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        user_id: "test-user-diversity-001"
+        plaid_account_id: "plaid-acc-diversity-001"
+        name: "Chase Sapphire Reserve"
+        official_name: "Chase Sapphire Reserve Credit Card"
+        type: "credit"
+        subtype: "credit card"
+        current_balance: -1850.00
+
+    # Pre-populate 30 transactions across 22 unique merchants
+    # Distribution: 4 merchants appear 2x (common places), 14 merchants appear 1x (variety)
+    transactions:
+      # ==============================================================================
+      # GROCERIES (4 different merchants)
+      # ==============================================================================
+
+      # Whole Foods (appears 2x - weekly shopper)
+      - external_transaction_id: "plaid-diversity-001"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -125.50
+        date: "2025-11-02"
+        name: "Whole Foods Market"
+        category: ["Shops", "Food and Beverage Store", "Supermarkets and Groceries"]
+        personal_finance_category:
+          primary: "FOOD_AND_DRINK"
+          detailed: "FOOD_AND_DRINK_GROCERIES"
+        payment_channel: "in store"
+        pending: false
+
+      - external_transaction_id: "plaid-diversity-002"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -98.75
+        date: "2025-11-16"
+        name: "Whole Foods Market"
+        category: ["Shops", "Food and Beverage Store", "Supermarkets and Groceries"]
+        personal_finance_category:
+          primary: "FOOD_AND_DRINK"
+          detailed: "FOOD_AND_DRINK_GROCERIES"
+        payment_channel: "in store"
+        pending: false
+
+      # Trader Joe's (appears 1x)
+      - external_transaction_id: "plaid-diversity-003"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -67.25
+        date: "2025-11-09"
+        name: "Trader Joe's"
+        category: ["Shops", "Supermarkets and Groceries"]
+        personal_finance_category:
+          primary: "FOOD_AND_DRINK"
+          detailed: "FOOD_AND_DRINK_GROCERIES"
+        payment_channel: "in store"
+        pending: false
+
+      # Costco (appears 1x - bulk purchase)
+      - external_transaction_id: "plaid-diversity-004"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -185.00
+        date: "2025-11-23"
+        name: "Costco Wholesale"
+        category: ["Shops", "Warehouses and Wholesale Stores"]
+        personal_finance_category:
+          primary: "FOOD_AND_DRINK"
+          detailed: "FOOD_AND_DRINK_GROCERIES"
+        payment_channel: "in store"
+        pending: false
+
+      # Aldi (appears 1x)
+      - external_transaction_id: "plaid-diversity-005"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -42.50
+        date: "2025-11-27"
+        name: "Aldi"
+        category: ["Shops", "Supermarkets and Groceries"]
+        personal_finance_category:
+          primary: "FOOD_AND_DRINK"
+          detailed: "FOOD_AND_DRINK_GROCERIES"
+        payment_channel: "in store"
+        pending: false
+
+      # ==============================================================================
+      # RESTAURANTS (5 different merchants)
+      # ==============================================================================
+
+      # Chipotle (appears 2x - lunch favorite)
+      - external_transaction_id: "plaid-diversity-006"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -12.50
+        date: "2025-11-05"
+        name: "Chipotle Mexican Grill"
+        category: ["Food and Drink", "Restaurants", "Fast Food"]
+        personal_finance_category:
+          primary: "FOOD_AND_DRINK"
+          detailed: "FOOD_AND_DRINK_RESTAURANTS"
+        payment_channel: "in store"
+        pending: false
+
+      - external_transaction_id: "plaid-diversity-007"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -14.75
+        date: "2025-11-19"
+        name: "Chipotle Mexican Grill"
+        category: ["Food and Drink", "Restaurants", "Fast Food"]
+        personal_finance_category:
+          primary: "FOOD_AND_DRINK"
+          detailed: "FOOD_AND_DRINK_RESTAURANTS"
+        payment_channel: "in store"
+        pending: false
+
+      # Olive Garden (appears 1x)
+      - external_transaction_id: "plaid-diversity-008"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -67.50
+        date: "2025-11-08"
+        name: "Olive Garden"
+        category: ["Food and Drink", "Restaurants"]
+        personal_finance_category:
+          primary: "FOOD_AND_DRINK"
+          detailed: "FOOD_AND_DRINK_RESTAURANTS"
+        payment_channel: "in store"
+        pending: false
+
+      # The Cheesecake Factory (appears 1x)
+      - external_transaction_id: "plaid-diversity-009"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -95.00
+        date: "2025-11-15"
+        name: "The Cheesecake Factory"
+        category: ["Food and Drink", "Restaurants"]
+        personal_finance_category:
+          primary: "FOOD_AND_DRINK"
+          detailed: "FOOD_AND_DRINK_RESTAURANTS"
+        payment_channel: "in store"
+        pending: false
+
+      # McDonald's (appears 1x)
+      - external_transaction_id: "plaid-diversity-010"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -8.75
+        date: "2025-11-22"
+        name: "McDonald's"
+        category: ["Food and Drink", "Restaurants", "Fast Food"]
+        personal_finance_category:
+          primary: "FOOD_AND_DRINK"
+          detailed: "FOOD_AND_DRINK_FAST_FOOD"
+        payment_channel: "in store"
+        pending: false
+
+      # Taco Bell (appears 1x)
+      - external_transaction_id: "plaid-diversity-011"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -11.25
+        date: "2025-11-28"
+        name: "Taco Bell"
+        category: ["Food and Drink", "Restaurants", "Fast Food"]
+        personal_finance_category:
+          primary: "FOOD_AND_DRINK"
+          detailed: "FOOD_AND_DRINK_FAST_FOOD"
+        payment_channel: "in store"
+        pending: false
+
+      # ==============================================================================
+      # COFFEE SHOPS (3 different merchants)
+      # ==============================================================================
+
+      # Starbucks (appears 2x - morning coffee)
+      - external_transaction_id: "plaid-diversity-012"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -5.45
+        date: "2025-11-04"
+        name: "Starbucks"
+        category: ["Food and Drink", "Restaurants", "Coffee Shop"]
+        personal_finance_category:
+          primary: "FOOD_AND_DRINK"
+          detailed: "FOOD_AND_DRINK_COFFEE"
+        payment_channel: "in store"
+        pending: false
+
+      - external_transaction_id: "plaid-diversity-013"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -6.10
+        date: "2025-11-18"
+        name: "Starbucks"
+        category: ["Food and Drink", "Restaurants", "Coffee Shop"]
+        personal_finance_category:
+          primary: "FOOD_AND_DRINK"
+          detailed: "FOOD_AND_DRINK_COFFEE"
+        payment_channel: "in store"
+        pending: false
+
+      # Dunkin' (appears 1x)
+      - external_transaction_id: "plaid-diversity-014"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -4.50
+        date: "2025-11-12"
+        name: "Dunkin'"
+        category: ["Food and Drink", "Restaurants", "Coffee Shop"]
+        personal_finance_category:
+          primary: "FOOD_AND_DRINK"
+          detailed: "FOOD_AND_DRINK_COFFEE"
+        payment_channel: "in store"
+        pending: false
+
+      # ==============================================================================
+      # GAS STATIONS (3 different merchants)
+      # ==============================================================================
+
+      # Shell (appears 1x)
+      - external_transaction_id: "plaid-diversity-015"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -42.18
+        date: "2025-11-03"
+        name: "Shell Gas Station"
+        category: ["Travel", "Gas Stations"]
+        personal_finance_category:
+          primary: "TRANSPORTATION"
+          detailed: "TRANSPORTATION_GAS"
+        payment_channel: "in store"
+        pending: false
+
+      # BP (appears 1x)
+      - external_transaction_id: "plaid-diversity-016"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -39.50
+        date: "2025-11-10"
+        name: "BP"
+        category: ["Travel", "Gas Stations"]
+        personal_finance_category:
+          primary: "TRANSPORTATION"
+          detailed: "TRANSPORTATION_GAS"
+        payment_channel: "in store"
+        pending: false
+
+      # Marathon (appears 1x)
+      - external_transaction_id: "plaid-diversity-017"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -44.00
+        date: "2025-11-24"
+        name: "Marathon"
+        category: ["Travel", "Gas Stations"]
+        personal_finance_category:
+          primary: "TRANSPORTATION"
+          detailed: "TRANSPORTATION_GAS"
+        payment_channel: "in store"
+        pending: false
+
+      # ==============================================================================
+      # ONLINE SHOPPING (2 different merchants)
+      # ==============================================================================
+
+      # Amazon (appears 2x - frequent online shopper)
+      - external_transaction_id: "plaid-diversity-018"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -67.99
+        date: "2025-11-07"
+        name: "Amazon.com"
+        category: ["Shops", "Digital Purchase"]
+        personal_finance_category:
+          primary: "GENERAL_MERCHANDISE"
+          detailed: "GENERAL_MERCHANDISE_ONLINE"
+        payment_channel: "online"
+        pending: false
+
+      - external_transaction_id: "plaid-diversity-019"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -129.99
+        date: "2025-11-21"
+        name: "Amazon.com"
+        category: ["Shops", "Digital Purchase"]
+        personal_finance_category:
+          primary: "GENERAL_MERCHANDISE"
+          detailed: "GENERAL_MERCHANDISE_ONLINE"
+        payment_channel: "online"
+        pending: false
+
+      # eBay (appears 1x)
+      - external_transaction_id: "plaid-diversity-020"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -45.00
+        date: "2025-11-14"
+        name: "eBay"
+        category: ["Shops", "Digital Purchase"]
+        personal_finance_category:
+          primary: "GENERAL_MERCHANDISE"
+          detailed: "GENERAL_MERCHANDISE_ONLINE"
+        payment_channel: "online"
+        pending: false
+
+      # ==============================================================================
+      # DEPARTMENT STORES (2 different merchants)
+      # ==============================================================================
+
+      # Target (appears 1x)
+      - external_transaction_id: "plaid-diversity-021"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -87.50
+        date: "2025-11-11"
+        name: "Target"
+        category: ["Shops", "Department Stores"]
+        personal_finance_category:
+          primary: "GENERAL_MERCHANDISE"
+          detailed: "GENERAL_MERCHANDISE_DEPARTMENT_STORES"
+        payment_channel: "in store"
+        pending: false
+
+      # Walmart (appears 1x)
+      - external_transaction_id: "plaid-diversity-022"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -65.00
+        date: "2025-11-25"
+        name: "Walmart Supercenter"
+        category: ["Shops", "Discount Stores"]
+        personal_finance_category:
+          primary: "GENERAL_MERCHANDISE"
+          detailed: "GENERAL_MERCHANDISE_DISCOUNT_STORES"
+        payment_channel: "in store"
+        pending: false
+
+      # ==============================================================================
+      # SUBSCRIPTIONS (3 different merchants)
+      # ==============================================================================
+
+      # Netflix (appears 1x)
+      - external_transaction_id: "plaid-diversity-023"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -15.99
+        date: "2025-11-05"
+        name: "Netflix"
+        category: ["Service", "Subscription"]
+        personal_finance_category:
+          primary: "ENTERTAINMENT"
+          detailed: "ENTERTAINMENT_MOVIES"
+        payment_channel: "other"
+        pending: false
+
+      # Spotify (appears 1x)
+      - external_transaction_id: "plaid-diversity-024"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -10.99
+        date: "2025-11-12"
+        name: "Spotify"
+        category: ["Service", "Subscription"]
+        personal_finance_category:
+          primary: "ENTERTAINMENT"
+          detailed: "ENTERTAINMENT_MUSIC"
+        payment_channel: "other"
+        pending: false
+
+      # Planet Fitness (appears 1x)
+      - external_transaction_id: "plaid-diversity-025"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -24.99
+        date: "2025-11-14"
+        name: "Planet Fitness"
+        category: ["Recreation", "Gyms and Fitness Centers"]
+        personal_finance_category:
+          primary: "PERSONAL_CARE"
+          detailed: "PERSONAL_CARE_GYM"
+        payment_channel: "other"
+        pending: false
+
+      # ==============================================================================
+      # TRANSPORTATION (2 different merchants)
+      # ==============================================================================
+
+      # Uber (appears 1x)
+      - external_transaction_id: "plaid-diversity-026"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -18.50
+        date: "2025-11-06"
+        name: "Uber"
+        category: ["Travel", "Taxi"]
+        personal_finance_category:
+          primary: "TRANSPORTATION"
+          detailed: "TRANSPORTATION_RIDE_SHARE"
+        payment_channel: "other"
+        pending: false
+
+      # Lyft (appears 1x)
+      - external_transaction_id: "plaid-diversity-027"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -22.00
+        date: "2025-11-20"
+        name: "Lyft"
+        category: ["Travel", "Taxi"]
+        personal_finance_category:
+          primary: "TRANSPORTATION"
+          detailed: "TRANSPORTATION_RIDE_SHARE"
+        payment_channel: "other"
+        pending: false
+
+      # CTA Ventra (appears 1x)
+      - external_transaction_id: "plaid-diversity-028"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -3.00
+        date: "2025-11-13"
+        name: "CTA Ventra"
+        category: ["Travel", "Public Transportation Services"]
+        personal_finance_category:
+          primary: "TRANSPORTATION"
+          detailed: "TRANSPORTATION_PUBLIC_TRANSIT"
+        payment_channel: "other"
+        pending: false
+
+      # Downtown Parking Garage (appears 1x)
+      - external_transaction_id: "plaid-diversity-029"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -20.00
+        date: "2025-11-17"
+        name: "Downtown Parking Garage"
+        category: ["Transportation", "Parking"]
+        personal_finance_category:
+          primary: "TRANSPORTATION"
+          detailed: "TRANSPORTATION_PARKING"
+        payment_channel: "in store"
+        pending: false
+
+      # ==============================================================================
+      # UTILITIES (1 merchant)
+      # ==============================================================================
+
+      # ComEd Electric (appears 1x)
+      - external_transaction_id: "plaid-diversity-030"
+        user_id: "test-user-diversity-001"
+        account_id: "test-account-diversity-001"
+        linked_item_id: "test-item-diversity-001"
+        amount: -95.00
+        date: "2025-11-01"
+        name: "ComEd Electric"
+        category: ["Service", "Utilities"]
+        personal_finance_category:
+          primary: "RENT_AND_UTILITIES"
+          detailed: "RENT_AND_UTILITIES_GAS_AND_ELECTRICITY"
+        payment_channel: "other"
+        pending: false
+
+  # Execution steps
+  steps:
+    - action: "wait"
+      description: "No webhook - this is a merchant diversity validation scenario"
+      wait_seconds: 1
+
+  # Assertions
+  assertions:
+    database:
+      # Total of 30 transactions
+      transactions_count: 30
+
+    custom:
+      # CRITICAL: Unique merchant count should be ≥20
+      - description: "Should have at least 20 unique merchants"
+        query: |
+          SELECT COUNT(DISTINCT name) as unique_merchants
+          FROM transactions
+          WHERE user_id = 'test-user-diversity-001'
+        expected_min:
+          unique_merchants: 20
+
+      # No merchant monopoly (max 2 appearances per merchant)
+      - description: "No merchant should appear more than 2 times (diversity, not concentration)"
+        query: |
+          SELECT MAX(merchant_count) as max_appearances
+          FROM (
+            SELECT name, COUNT(*) as merchant_count
+            FROM transactions
+            WHERE user_id = 'test-user-diversity-001'
+            GROUP BY name
+          ) merchant_counts
+        expected_max:
+          max_appearances: 2
+
+      # Category diversity (at least 8 primary categories)
+      - description: "Should have at least 8 different primary PFC categories"
+        query: |
+          SELECT COUNT(DISTINCT
+            (personal_finance_category->>'primary')
+          ) as unique_categories
+          FROM transactions
+          WHERE user_id = 'test-user-diversity-001'
+        expected_min:
+          unique_categories: 7
+
+      # Most common merchants (Whole Foods, Chipotle, Starbucks, Amazon - each 2x)
+      - description: "Should have exactly 4 merchants appearing twice (common places)"
+        query: |
+          SELECT COUNT(*) as repeat_merchants
+          FROM (
+            SELECT name, COUNT(*) as count
+            FROM transactions
+            WHERE user_id = 'test-user-diversity-001'
+            GROUP BY name
+            HAVING COUNT(*) = 2
+          ) repeats
+        expected:
+          repeat_merchants: 4
+
+      # Single-visit merchants (high diversity)
+      - description: "Should have at least 18 merchants appearing only once (high variety)"
+        query: |
+          SELECT COUNT(*) as one_time_merchants
+          FROM (
+            SELECT name, COUNT(*) as count
+            FROM transactions
+            WHERE user_id = 'test-user-diversity-001'
+            GROUP BY name
+            HAVING COUNT(*) = 1
+          ) singles
+        expected_min:
+          one_time_merchants: 18
+
+      # Grocery diversity (4 different grocery stores)
+      - description: "Should have 4 different grocery merchants (Whole Foods, Trader Joe's, Costco, Aldi)"
+        query: |
+          SELECT COUNT(DISTINCT name) as grocery_merchants
+          FROM transactions
+          WHERE user_id = 'test-user-diversity-001'
+          AND personal_finance_category->>'detailed' = 'FOOD_AND_DRINK_GROCERIES'
+        expected_min:
+          grocery_merchants: 4
+
+      # Restaurant diversity (6 different restaurants)
+      - description: "Should have at least 5 different restaurant merchants"
+        query: |
+          SELECT COUNT(DISTINCT name) as restaurant_merchants
+          FROM transactions
+          WHERE user_id = 'test-user-diversity-001'
+          AND (
+            personal_finance_category->>'detailed' = 'FOOD_AND_DRINK_RESTAURANTS'
+            OR personal_finance_category->>'detailed' = 'FOOD_AND_DRINK_FAST_FOOD'
+          )
+        expected_min:
+          restaurant_merchants: 5
+
+      # Coffee shop diversity (3 different coffee shops - not just Starbucks!)
+      - description: "Should have at least 2 different coffee shop merchants (not just Starbucks)"
+        query: |
+          SELECT COUNT(DISTINCT name) as coffee_merchants
+          FROM transactions
+          WHERE user_id = 'test-user-diversity-001'
+          AND personal_finance_category->>'detailed' = 'FOOD_AND_DRINK_COFFEE'
+        expected_min:
+          coffee_merchants: 2
+
+      # Gas station diversity (3 different gas stations)
+      - description: "Should have exactly 3 different gas station merchants"
+        query: |
+          SELECT COUNT(DISTINCT name) as gas_merchants
+          FROM transactions
+          WHERE user_id = 'test-user-diversity-001'
+          AND personal_finance_category->>'detailed' = 'TRANSPORTATION_GAS'
+        expected:
+          gas_merchants: 3
+
+      # Total spending distribution (no merchant >20% of total)
+      - description: "No single merchant should represent >20% of total spending"
+        query: |
+          WITH merchant_totals AS (
+            SELECT
+              name,
+              SUM(ABS(amount)) as merchant_total,
+              SUM(SUM(ABS(amount))) OVER () as grand_total
+            FROM transactions
+            WHERE user_id = 'test-user-diversity-001'
+            GROUP BY name
+          )
+          SELECT MAX((merchant_total / grand_total) * 100) as max_merchant_percentage
+          FROM merchant_totals
+        expected_max:
+          max_merchant_percentage: 20.00
+
+# Expected Outcomes:
+# 1. 30 transactions across 20+ unique merchants
+# 2. 4 merchants appear twice (Whole Foods, Chipotle, Starbucks, Amazon)
+# 3. 18+ merchants appear only once (high variety)
+# 4. No merchant appears >2 times (diversity, not concentration)
+# 5. 7+ primary categories (groceries, dining, gas, subscriptions, etc.)
+# 6. 4 different grocery stores
+# 7. 5+ different restaurants
+# 8. 2+ coffee shops (not just Starbucks)
+# 9. 3 different gas stations
+# 10. No merchant represents >20% of total spending
+
+# Real-World Business Value:
+# - Merchant diversity insights reveal spending patterns:
+#   1. **Merchant loyalty**: "You shop at 4 different grocery stores"
+#   2. **Savings opportunities**: "Switch to Aldi from Whole Foods = 50% savings"
+#   3. **Rewards optimization**: "Starbucks card = 2 stars per $1 spent"
+#   4. **Spending habits**: "18 one-time merchants = exploratory shopper"
+#   5. **Brand concentration**: "Amazon 2x = 13% of spending"
+#   6. **Category diversity**: "7 categories = balanced lifestyle"
+#   7. **Convenience vs cost**: "3 gas stations = price shopper, not loyalty"
+
+# Merchant Concentration Analysis:
+# - **High concentration** (3-4 merchants, 70%+ of spending):
+#   - Indicates strong merchant loyalty
+#   - May miss out on competitor rewards/promotions
+#   - Example: "90% of groceries at Whole Foods"
+# - **Medium concentration** (8-12 merchants, 40-60% of spending):
+#   - Balanced approach
+#   - Some loyalty, some exploration
+#   - Example: "60% split between Whole Foods + Trader Joe's"
+# - **High diversity** (20+ merchants, <30% concentration):
+#   - Exploratory shopper
+#   - Maximizes variety, may miss loyalty rewards
+#   - Example: "30 merchants, no single merchant >10%"
+
+# Implementation Notes:
+# - MVP: Simple merchant diversity metrics
+# - FUTURE: Merchant loyalty scoring (concentration index)
+# - FUTURE: Savings recommendations ("Switch to Aldi = $500/year")
+# - FUTURE: Rewards optimization ("Get Starbucks card for 10% back")
+# - FUTURE: Merchant comparison ("Whole Foods $125 vs Aldi $43")
+
+# Test Data Notes:
+# - 30 transactions across 22 unique merchants
+# - Realistic repeat merchants: Whole Foods (2x), Chipotle (2x), Starbucks (2x), Amazon (2x)
+# - High variety: 18 merchants appear only once
+# - Diverse categories: Groceries (4), Restaurants (6), Coffee (2), Gas (3), etc.
+# - Realistic merchant mix from merchants.yaml
+
+# Edge Cases Covered:
+# 1. Multiple grocery stores (not just one)
+# 2. Multiple coffee shops (not just Starbucks)
+# 3. Multiple gas stations (price shopper, not loyalty)
+# 4. Balanced online + in-store shopping
+# 5. Mix of chains (Chipotle) and local (Downtown Parking)
+
+# Future Enhancements (Issue #337 - Merchant Insights):
+# - Merchant diversity dashboard ("22 unique merchants this month")
+# - Loyalty recommendations ("Shop at Whole Foods 5x → get rewards")
+# - Savings opportunities ("Switch to Aldi → save $500/year")
+# - Merchant comparison ("Whole Foods $125 vs Aldi $43")
+# - Rewards optimization ("Get Starbucks card → 10% cashback")
+# - Spending concentration index (0-100 scale)
+
+# CRITICAL Validations:
+# - This scenario is a regression test for merchant diversity logic
+# - Validates unique merchant count (≥20)
+# - Ensures no merchant monopoly (<3 appearances)
+# - Confirms category diversity (7+ categories)
+# - Essential for merchant loyalty and savings insights

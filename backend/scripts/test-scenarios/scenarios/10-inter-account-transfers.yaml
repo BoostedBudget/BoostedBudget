@@ -1,0 +1,432 @@
+# Scenario 10: Inter-Account Transfers
+# Tests money movement between user's own accounts (checking → savings, checking → credit card)
+# CRITICAL: Validates net-zero impact on net worth and proper transfer categorization
+
+version: "1.0"
+
+scenario:
+  name: "Inter-Account Transfers"
+  description: "Test transfers between user's own accounts with net-zero validation"
+  category: "special"
+  priority: "high"
+
+  tags:
+    - "transfers"
+    - "inter_account"
+    - "net_zero"
+    - "multi_account"
+    - "tier:premium"
+
+  # Setup test data
+  setup:
+    user:
+      id: "test-user-transfers-001"
+      tier: "premium"
+      email: "transfers-test@example.com"
+      auth0_user_id: "auth0|test-transfers-001"
+
+    linked_items:
+      - id: "test-item-transfers-001"
+        user_id: "test-user-transfers-001"
+        item_id: "plaid-item-transfers-001"
+        institution_name: "Chase"
+        institution_id: "ins_3"
+        cursor: "cursor-with-transfers"
+        status: "active"
+
+    accounts:
+      # Account 1: Checking (source for transfers)
+      - id: "test-account-checking-001"
+        linked_item_id: "test-item-transfers-001"
+        user_id: "test-user-transfers-001"
+        plaid_account_id: "plaid-acc-checking-001"
+        name: "Chase Total Checking"
+        official_name: "Chase Total Checking Account"
+        type: "depository"
+        subtype: "checking"
+        current_balance: 3500.00
+        available_balance: 3500.00
+
+      # Account 2: Savings (destination for transfers)
+      - id: "test-account-savings-001"
+        linked_item_id: "test-item-transfers-001"
+        user_id: "test-user-transfers-001"
+        plaid_account_id: "plaid-acc-savings-001"
+        name: "Chase Savings"
+        official_name: "Chase Savings Account"
+        type: "depository"
+        subtype: "savings"
+        current_balance: 5000.00
+        available_balance: 5000.00
+
+      # Account 3: Credit Card (destination for payment transfers)
+      - id: "test-account-credit-001"
+        linked_item_id: "test-item-transfers-001"
+        user_id: "test-user-transfers-001"
+        plaid_account_id: "plaid-acc-credit-001"
+        name: "Chase Sapphire Reserve"
+        official_name: "Chase Sapphire Reserve Credit Card"
+        type: "credit"
+        subtype: "credit card"
+        current_balance: -1250.00
+        available_balance: -1250.00
+
+    # Pre-populate existing transactions + 2 transfer pairs
+    transactions:
+      # === CHECKING ACCOUNT TRANSACTIONS ===
+
+      # Normal checking activity (not transfers)
+      - external_transaction_id: "plaid-checking-paycheck-001"
+        user_id: "test-user-transfers-001"
+        account_id: "test-account-checking-001"
+        linked_item_id: "test-item-transfers-001"
+        amount: 3500.00
+        date: "2025-11-01"
+        name: "Employer Paycheck Direct Deposit"
+        payment_channel: "other"
+        pending: false
+
+      - external_transaction_id: "plaid-checking-rent-001"
+        user_id: "test-user-transfers-001"
+        account_id: "test-account-checking-001"
+        linked_item_id: "test-item-transfers-001"
+        amount: -2400.00
+        date: "2025-11-01"
+        name: "Rent Payment to Landlord"
+        payment_channel: "other"
+        pending: false
+
+      # EXISTING TRANSFER 1: Checking → Savings (already posted)
+      - external_transaction_id: "plaid-transfer-out-savings-001"
+        user_id: "test-user-transfers-001"
+        account_id: "test-account-checking-001"
+        linked_item_id: "test-item-transfers-001"
+        amount: -500.00
+        date: "2025-11-02"
+        name: "Transfer to Chase Savings"
+        payment_channel: "other"
+        pending: false
+
+      # EXISTING TRANSFER 2: Checking → Credit Card Payment (already posted)
+      - external_transaction_id: "plaid-transfer-out-ccpayment-001"
+        user_id: "test-user-transfers-001"
+        account_id: "test-account-checking-001"
+        linked_item_id: "test-item-transfers-001"
+        amount: -750.00
+        date: "2025-11-03"
+        name: "Credit Card Payment"
+        payment_channel: "other"
+        pending: false
+
+      # === SAVINGS ACCOUNT TRANSACTIONS ===
+
+      # EXISTING TRANSFER 1 (receiving side): Savings receives from Checking
+      - external_transaction_id: "plaid-transfer-in-savings-001"
+        user_id: "test-user-transfers-001"
+        account_id: "test-account-savings-001"
+        linked_item_id: "test-item-transfers-001"
+        amount: 500.00
+        date: "2025-11-02"
+        name: "Transfer from Chase Checking"
+        payment_channel: "other"
+        pending: false
+
+      # Normal savings activity (interest)
+      - external_transaction_id: "plaid-savings-interest-001"
+        user_id: "test-user-transfers-001"
+        account_id: "test-account-savings-001"
+        linked_item_id: "test-item-transfers-001"
+        amount: 12.50
+        date: "2025-11-01"
+        name: "Interest Earned"
+        payment_channel: "other"
+        pending: false
+
+      # === CREDIT CARD ACCOUNT TRANSACTIONS ===
+
+      # EXISTING TRANSFER 2 (receiving side): Credit card payment from Checking
+      - external_transaction_id: "plaid-transfer-in-ccpayment-001"
+        user_id: "test-user-transfers-001"
+        account_id: "test-account-credit-001"
+        linked_item_id: "test-item-transfers-001"
+        amount: 750.00
+        date: "2025-11-03"
+        name: "Payment from Chase Checking"
+        payment_channel: "other"
+        pending: false
+
+      # Normal credit card spending
+      - external_transaction_id: "plaid-credit-amazon-001"
+        user_id: "test-user-transfers-001"
+        account_id: "test-account-credit-001"
+        linked_item_id: "test-item-transfers-001"
+        amount: -125.00
+        date: "2025-11-04"
+        name: "Amazon.com"
+        payment_channel: "online"
+        pending: false
+
+  # Execution steps
+  steps:
+    - action: "fire_webhook"
+      description: "Trigger DEFAULT_UPDATE - Plaid sends new transfer pair (Checking → Savings $1000)"
+      webhook_code: "DEFAULT_UPDATE"
+      item_id: "plaid-item-transfers-001"
+      # Expected new transactions:
+      # 1. Debit from checking: -$1000.00 "Transfer to Chase Savings"
+      # 2. Credit to savings: +$1000.00 "Transfer from Chase Checking"
+
+    - action: "wait"
+      description: "Wait for sync to process transfer pair"
+      wait_seconds: 8
+
+  # Assertions
+  assertions:
+    database:
+      # Should have 10 total transactions (8 existing + 2 new transfer pair)
+      transactions_count: 10
+
+    webhook_status:
+      processed: true
+      error: null
+
+    custom:
+      # CRITICAL: Verify transfer pairs net to zero (sum = 0)
+      - description: "All transfer pairs should net to zero (no net worth impact)"
+        query: |
+          WITH transfer_transactions AS (
+            SELECT amount
+            FROM transactions
+            WHERE user_id = 'test-user-transfers-001'
+            AND (
+              name ILIKE '%transfer%'
+              OR name ILIKE '%payment from%'
+              OR name ILIKE '%payment to%'
+            )
+          )
+          SELECT SUM(amount) as net_transfer_amount
+          FROM transfer_transactions
+        expected:
+          net_transfer_amount: 0.00
+
+      # Count transfer-related transactions
+      - description: "Should have 6 transfer-related transactions (3 pairs: 2 existing + 1 new)"
+        query: |
+          SELECT COUNT(*) as transfer_count
+          FROM transactions
+          WHERE user_id = 'test-user-transfers-001'
+          AND (
+            name ILIKE '%transfer%'
+            OR name ILIKE '%payment from%'
+            OR name ILIKE '%payment to%'
+          )
+        expected:
+          transfer_count: 6
+
+      # Verify new transfer pair amounts are equal and opposite
+      - description: "Latest checking debit should be -$1000.00"
+        query: |
+          SELECT amount
+          FROM transactions
+          WHERE user_id = 'test-user-transfers-001'
+          AND account_id = 'test-account-checking-001'
+          AND name ILIKE '%transfer%'
+          ORDER BY date DESC
+          LIMIT 1
+        expected:
+          amount: -1000.00
+
+      - description: "Latest savings credit should be +$1000.00"
+        query: |
+          SELECT amount
+          FROM transactions
+          WHERE user_id = 'test-user-transfers-001'
+          AND account_id = 'test-account-savings-001'
+          AND name ILIKE '%transfer%'
+          ORDER BY date DESC
+          LIMIT 1
+        expected:
+          amount: 1000.00
+
+      # Verify transfer dates match (same date for both sides)
+      - description: "Transfer pairs should have matching dates"
+        query: |
+          WITH transfer_dates AS (
+            SELECT date, COUNT(*) as count
+            FROM transactions
+            WHERE user_id = 'test-user-transfers-001'
+            AND (name ILIKE '%transfer%' OR name ILIKE '%payment%')
+            GROUP BY date
+            HAVING COUNT(*) >= 2
+          )
+          SELECT COUNT(*) as matching_date_pairs
+          FROM transfer_dates
+        expected_min:
+          matching_date_pairs: 2  # At least 2 dates with paired transfers
+
+      # Verify all transfer amounts have matching counterparts
+      - description: "Each transfer debit should have a matching credit (absolute value)"
+        query: |
+          WITH debits AS (
+            SELECT ABS(amount) as abs_amount
+            FROM transactions
+            WHERE user_id = 'test-user-transfers-001'
+            AND amount < 0
+            AND (name ILIKE '%transfer%' OR name ILIKE '%payment%')
+          ),
+          credits AS (
+            SELECT amount as abs_amount
+            FROM transactions
+            WHERE user_id = 'test-user-transfers-001'
+            AND amount > 0
+            AND (name ILIKE '%transfer%' OR name ILIKE '%payment%')
+          )
+          SELECT
+            (SELECT COUNT(*) FROM debits) as debit_count,
+            (SELECT COUNT(*) FROM credits) as credit_count
+        expected:
+          debit_count: 3
+          credit_count: 3
+
+      # Verify checking account has correct number of outgoing transfers
+      - description: "Checking account should have 3 outgoing transfers"
+        query: |
+          SELECT COUNT(*) as outgoing_transfers
+          FROM transactions
+          WHERE user_id = 'test-user-transfers-001'
+          AND account_id = 'test-account-checking-001'
+          AND amount < 0
+          AND (name ILIKE '%transfer%' OR name ILIKE '%payment%')
+        expected:
+          outgoing_transfers: 3
+
+      # Verify savings account has correct number of incoming transfers
+      - description: "Savings account should have 2 incoming transfers"
+        query: |
+          SELECT COUNT(*) as incoming_transfers
+          FROM transactions
+          WHERE user_id = 'test-user-transfers-001'
+          AND account_id = 'test-account-savings-001'
+          AND amount > 0
+          AND name ILIKE '%transfer%'
+        expected:
+          incoming_transfers: 2
+
+      # Verify credit card payment received
+      - description: "Credit card account should have 1 payment received"
+        query: |
+          SELECT COUNT(*) as payments_received
+          FROM transactions
+          WHERE user_id = 'test-user-transfers-001'
+          AND account_id = 'test-account-credit-001'
+          AND amount > 0
+          AND name ILIKE '%payment%'
+        expected:
+          payments_received: 1
+
+      # Verify total net worth unchanged (transfers don't affect net worth)
+      - description: "Net worth impact from all transactions should account for non-transfer activity"
+        query: |
+          SELECT
+            SUM(CASE WHEN name NOT ILIKE '%transfer%' AND name NOT ILIKE '%payment%' THEN amount ELSE 0 END) as net_worth_change
+          FROM transactions
+          WHERE user_id = 'test-user-transfers-001'
+        expected_min:
+          net_worth_change: 1000.00  # Paycheck $3500 - Rent $2400 + Interest $12.50 - Amazon $125 = $987.50
+
+      # Verify no duplicate transactions
+      - description: "No duplicate transactions (each external_transaction_id unique)"
+        query: |
+          SELECT COUNT(*) as duplicate_count
+          FROM (
+            SELECT external_transaction_id, COUNT(*) as cnt
+            FROM transactions
+            WHERE user_id = 'test-user-transfers-001'
+            GROUP BY external_transaction_id
+            HAVING COUNT(*) > 1
+          ) duplicates
+        expected:
+          duplicate_count: 0
+
+# Expected Outcomes:
+# 1. Webhook processed successfully without errors
+# 2. 2 new transfer transactions added (debit checking $1000, credit savings $1000)
+# 3. Total of 6 transfer-related transactions (3 pairs)
+# 4. All transfer pairs net to zero (no net worth impact)
+# 5. Transfer amounts are equal and opposite within each pair
+# 6. Transfer dates match within each pair
+# 7. No duplicate transactions
+# 8. Checking account has 3 outgoing transfers
+# 9. Savings account has 2 incoming transfers
+# 10. Credit card has 1 payment received
+
+# Real-World Business Value:
+# - Inter-account transfers are extremely common:
+#   1. Moving emergency fund to high-yield savings
+#   2. Paying credit card bills from checking
+#   3. Automatic savings transfers (pay yourself first)
+#   4. Rebalancing between checking and savings
+#   5. Transferring to investment accounts
+# - CRITICAL: Transfers should NOT impact net worth (money moved, not gained/lost)
+# - Budget tracking: Transfers excluded from spending categories
+# - Cash flow: Transfers show liquidity management, not income/expenses
+# - User confusion: "Why did my spending increase by $1000?" (it's a transfer!)
+
+# Transfer Detection Patterns:
+# - Plaid provides transfer pairs as TWO separate transactions
+# - Keywords: "Transfer", "Payment from/to", "Move to", "From [Account Name]"
+# - Same absolute amount, opposite signs
+# - Same date (usually)
+# - Different accounts, same user
+# - Backend should ideally link transfer pairs (FUTURE enhancement)
+
+# Implementation Notes:
+# - Current MVP: Store transfers as standalone transactions
+# - FUTURE: Link transfer pairs via transfer_id foreign key
+# - FUTURE: Detect transfers via heuristics (amount, date, keywords)
+# - FUTURE: UI flag to mark/unmark as transfer
+# - For now: Rely on Plaid categorization + keywords
+# - Budget calculations: Exclude transfers from category totals
+# - Net worth: Include all accounts, transfers net to zero
+
+# Test Data Notes:
+# - 3 accounts (checking, savings, credit card) all same user
+# - 2 existing transfer pairs (checking→savings $500, checking→credit $750)
+# - 1 new transfer pair (checking→savings $1000)
+# - Normal non-transfer transactions mixed in (paycheck, rent, interest, Amazon)
+# - Transfer names use realistic keywords: "Transfer to/from", "Payment"
+
+# Edge Cases Covered:
+# 1. Multiple transfer pairs (not just one)
+# 2. Different transfer types (savings transfer, credit card payment)
+# 3. Mixed with non-transfer transactions
+# 4. Net-zero validation (critical for net worth accuracy)
+# 5. Date matching within pairs
+# 6. Amount matching within pairs
+
+# Known Limitations:
+# - Plaid sandbox may not support realistic transfer pairs
+# - Workaround: Pre-populate both sides of transfer in setup.transactions
+# - Admin API cannot customize webhook payload (Issue #308)
+# - No automatic transfer linking in MVP (manual detection via keywords)
+
+# Future Enhancements (Issue #334 - Transfer Linking):
+# - Automatic transfer pair detection
+# - Link via transfer_id foreign key
+# - UI to manually link/unlink transfers
+# - Budget exclusion for linked transfers
+# - Cash flow categorization (inter-account vs external)
+# - Split transfers (1 debit, multiple credits or vice versa)
+
+# CRITICAL Validations:
+# - This scenario is a regression test for net worth calculation bugs
+# - Validates that transfers don't inflate spending totals
+# - Ensures budget reports exclude inter-account movements
+# - Confirms transfer pairs have matching amounts and dates
+# - Essential for accurate financial insights
+
+# Business Rules:
+# - Transfers between user's own accounts: net worth impact = $0
+# - Transfers to external accounts (friend, family): expense (debit only, no credit)
+# - Transfers from external accounts (gift, reimbursement): income (credit only, no debit)
+# - This scenario tests ONLY inter-account (same user) transfers

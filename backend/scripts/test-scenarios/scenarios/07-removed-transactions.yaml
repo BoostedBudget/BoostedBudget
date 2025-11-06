@@ -1,0 +1,301 @@
+# Scenario 07: TRANSACTIONS_REMOVED Webhook
+# Tests transaction deletion flow when banks retroactively remove charges
+# CRITICAL: Validates hard deletes (not soft) and data integrity
+
+version: "1.0"
+
+scenario:
+  name: "Transactions Removed Webhook"
+  description: "Test TRANSACTIONS_REMOVED webhook for fraudulent charges, duplicates, and merchant corrections"
+  category: "transaction_lifecycle"
+  priority: "critical"
+
+  tags:
+    - "transaction_lifecycle"
+    - "transactions_removed"
+    - "deletion"
+    - "fraud"
+    - "data_integrity"
+    - "tier:premium"
+
+  # Setup test data
+  setup:
+    user:
+      id: "test-user-removal-001"
+      tier: "premium"
+      email: "removal-test@example.com"
+      auth0_user_id: "auth0|test-removal-001"
+
+    linked_items:
+      - id: "test-item-removal-001"
+        user_id: "test-user-removal-001"
+        item_id: "plaid-item-removal-001"
+        institution_name: "Bank of America"
+        institution_id: "ins_4"
+        cursor: "cursor-with-transactions"  # Has cursor (synced before)
+        status: "active"
+
+    accounts:
+      - id: "test-account-removal-001"
+        linked_item_id: "test-item-removal-001"
+        user_id: "test-user-removal-001"
+        plaid_account_id: "plaid-acc-removal-001"
+        name: "BofA Everyday Checking"
+        official_name: "Bank of America Everyday Checking"
+        type: "depository"
+        subtype: "checking"
+        current_balance: 3200.00
+
+    # Pre-populate 10 transactions (7 legitimate, 3 to be removed)
+    # These simulate transactions from previous syncs that will be retroactively removed
+    transactions:
+      # === TRANSACTIONS TO KEEP (7) ===
+
+      - external_transaction_id: "plaid-keep-001"
+        user_id: "test-user-removal-001"
+        account_id: "test-account-removal-001"
+        linked_item_id: "test-item-removal-001"
+        amount: -85.50
+        date: "2025-11-01"
+        name: "Whole Foods Market"
+        payment_channel: "in store"
+        pending: false
+
+      - external_transaction_id: "plaid-keep-002"
+        user_id: "test-user-removal-001"
+        account_id: "test-account-removal-001"
+        linked_item_id: "test-item-removal-001"
+        amount: -42.00
+        date: "2025-11-02"
+        name: "Shell Gas Station"
+        pending: false
+
+      - external_transaction_id: "plaid-keep-003"
+        user_id: "test-user-removal-001"
+        account_id: "test-account-removal-001"
+        linked_item_id: "test-item-removal-001"
+        amount: -125.00
+        date: "2025-11-03"
+        name: "Amazon.com"
+        pending: false
+
+      - external_transaction_id: "plaid-keep-004"
+        user_id: "test-user-removal-001"
+        account_id: "test-account-removal-001"
+        linked_item_id: "test-item-removal-001"
+        amount: -2400.00
+        date: "2025-11-01"
+        name: "Rent Payment to Landlord"
+        pending: false
+
+      - external_transaction_id: "plaid-keep-005"
+        user_id: "test-user-removal-001"
+        account_id: "test-account-removal-001"
+        linked_item_id: "test-item-removal-001"
+        amount: +3500.00
+        date: "2025-11-01"
+        name: "Employer Paycheck Direct Deposit"
+        pending: false
+
+      - external_transaction_id: "plaid-keep-006"
+        user_id: "test-user-removal-001"
+        account_id: "test-account-removal-001"
+        linked_item_id: "test-item-removal-001"
+        amount: -65.00
+        date: "2025-11-04"
+        name: "Chipotle Mexican Grill"
+        pending: false
+
+      - external_transaction_id: "plaid-keep-007"
+        user_id: "test-user-removal-001"
+        account_id: "test-account-removal-001"
+        linked_item_id: "test-item-removal-001"
+        amount: -15.99
+        date: "2025-11-05"
+        name: "Netflix Subscription"
+        pending: false
+
+      # === TRANSACTIONS TO BE REMOVED (3) ===
+
+      # REMOVE 1: Duplicate charge (bank posted twice by mistake)
+      - external_transaction_id: "plaid-duplicate-001"
+        user_id: "test-user-removal-001"
+        account_id: "test-account-removal-001"
+        linked_item_id: "test-item-removal-001"
+        amount: -45.00
+        date: "2025-11-02"
+        name: "Target"
+        pending: false
+        # Bank will remove this in TRANSACTIONS_REMOVED webhook
+
+      # REMOVE 2: Fraudulent charge (user disputed, bank removed after investigation)
+      - external_transaction_id: "plaid-fraud-001"
+        user_id: "test-user-removal-001"
+        account_id: "test-account-removal-001"
+        linked_item_id: "test-item-removal-001"
+        amount: -250.00
+        date: "2025-11-03"
+        name: "Suspicious Merchant Inc"
+        pending: false
+        # User reported fraud, bank reversed charge
+
+      # REMOVE 3: Merchant never captured (authorization expired)
+      - external_transaction_id: "plaid-correction-001"
+        user_id: "test-user-removal-001"
+        account_id: "test-account-removal-001"
+        linked_item_id: "test-item-removal-001"
+        amount: -120.00
+        date: "2025-11-04"
+        name: "Hotel Booking Never Finalized"
+        pending: false
+        # Merchant never captured the pre-authorization
+
+  # Execution steps
+  steps:
+    - action: "fire_webhook"
+      description: "Trigger TRANSACTIONS_REMOVED webhook with 3 transaction IDs to delete"
+      webhook_code: "TRANSACTIONS_REMOVED"
+      item_id: "plaid-item-removal-001"
+      # NOTE: Admin API may need enhancement to support removed_transaction_ids parameter
+      # If not supported, this test will validate existing webhook handling
+
+    - action: "wait"
+      description: "Wait for webhook processing and hard deletes to complete"
+      wait_seconds: 8
+
+  # Assertions
+  assertions:
+    database:
+      # Should have exactly 7 transactions remaining (10 - 3 removed = 7)
+      transactions_count: 7
+
+    webhook_status:
+      processed: true
+      error: null
+
+    custom:
+      # CRITICAL: Verify removed transactions are HARD DELETED (not soft delete)
+      - description: "Removed transactions should be completely deleted from database (hard delete)"
+        query: |
+          SELECT COUNT(*) as removed_count
+          FROM transactions
+          WHERE user_id = 'test-user-removal-001'
+          AND external_transaction_id IN (
+            'plaid-duplicate-001',
+            'plaid-fraud-001',
+            'plaid-correction-001'
+          )
+        expected:
+          removed_count: 0
+
+      # Verify legitimate transactions remain untouched
+      - description: "All 7 legitimate transactions should still exist"
+        query: |
+          SELECT COUNT(*) as kept_count
+          FROM transactions
+          WHERE user_id = 'test-user-removal-001'
+          AND external_transaction_id LIKE 'plaid-keep-%'
+        expected:
+          kept_count: 7
+
+      # Verify specific kept transactions by name (spot check)
+      - description: "Whole Foods transaction should still exist"
+        query: |
+          SELECT COUNT(*) as whole_foods_count
+          FROM transactions
+          WHERE user_id = 'test-user-removal-001'
+          AND name LIKE '%Whole Foods%'
+        expected:
+          whole_foods_count: 1
+
+      # Verify paycheck (high-value transaction) still exists
+      - description: "Paycheck deposit should still exist (not removed)"
+        query: |
+          SELECT amount
+          FROM transactions
+          WHERE user_id = 'test-user-removal-001'
+          AND name LIKE '%Paycheck%'
+        expected:
+          amount: 3500.00
+
+      # Verify Netflix subscription (recurring) still exists
+      - description: "Netflix subscription should still exist"
+        query: |
+          SELECT amount
+          FROM transactions
+          WHERE user_id = 'test-user-removal-001'
+          AND name LIKE '%Netflix%'
+        expected:
+          amount: -15.99
+
+      # Verify exact count matches expectation
+      - description: "Total transaction count should be exactly 7 (no more, no less)"
+        query: |
+          SELECT COUNT(*) as final_count
+          FROM transactions
+          WHERE user_id = 'test-user-removal-001'
+        expected:
+          final_count: 7
+
+      # Verify no orphaned data (foreign key cascade worked)
+      - description: "No orphaned transaction records (foreign keys intact)"
+        query: |
+          SELECT COUNT(*) as orphaned_count
+          FROM transactions t
+          LEFT JOIN accounts a ON t.account_id = a.id
+          WHERE t.user_id = 'test-user-removal-001'
+          AND a.id IS NULL
+        expected:
+          orphaned_count: 0
+
+# Expected Outcomes:
+# 1. Webhook processed successfully without errors
+# 2. 3 transactions HARD DELETED from database (not soft delete with deleted_at)
+# 3. 7 legitimate transactions remain completely untouched
+# 4. No orphaned data (foreign key relationships maintained)
+# 5. Specific high-value transactions preserved (paycheck, rent)
+# 6. Recurring subscriptions preserved (Netflix)
+# 7. Total count exactly 7 (validates delete query precision)
+
+# Real-World Business Value:
+# - Banks retroactively remove transactions for multiple reasons:
+#   1. Fraudulent charges (user disputes, bank investigations)
+#   2. Duplicate postings (merchant charged twice by mistake)
+#   3. Merchant corrections (hotel pre-auth never captured)
+#   4. Bank errors (incorrect debits)
+#   5. Reversed ACH payments (insufficient funds at source)
+# - CRITICAL for data integrity - must hard delete, not soft delete
+# - User balance must reflect actual bank state
+# - Budgets and spending reports must be accurate
+# - Historical data should match bank statements exactly
+
+# Implementation Notes:
+# - Plaid sends TRANSACTIONS_REMOVED webhook with array of transaction_ids
+# - Backend processRemoved() should:
+#   1. Loop through removed_transaction_ids
+#   2. DELETE FROM transactions WHERE external_transaction_id = ?
+#   3. NOT soft delete (no deleted_at column in schema)
+#   4. Emit events for each removal
+#   5. Update cursor after processing
+# - Database schema has CASCADE DELETE (if needed for child tables)
+# - This is a HARD DELETE, no undo (matches bank behavior)
+
+# Test Data Notes:
+# - 10 pre-existing transactions simulate previous syncs
+# - 3 transactions marked for removal (duplicate, fraud, correction)
+# - 7 transactions should remain (groceries, gas, rent, paycheck, etc.)
+# - Assertions verify EXACT count (no more, no less)
+# - Spot checks high-value and recurring transactions
+
+# Known Limitations (Admin API Issue #308):
+# - Admin webhook endpoint may not support custom "removed_transaction_ids" payload
+# - Workaround: Framework may need to manually delete test transactions via SQL
+# - Or: Rely on Plaid sandbox behavior (if it supports TRANSACTIONS_REMOVED)
+# - Future enhancement: Issue #333 for advanced admin API features
+
+# CRITICAL Data Integrity Test:
+# - This scenario is a regression test for data loss bugs
+# - Validates that ONLY specified transactions are removed
+# - Ensures no cascade deletes of unrelated data
+# - Confirms hard delete (not soft delete)
+# - Essential for production data safety

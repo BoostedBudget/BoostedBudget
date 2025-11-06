@@ -1,0 +1,396 @@
+# BoostedBudget Test Scenarios - Merchant Directory
+# Realistic merchant names organized by Plaid Personal Finance Category
+# Use YAML anchors to reference in scenario files: <<: *whole_foods
+
+# ==============================================================================
+# FOOD_AND_DRINK - Groceries
+# ==============================================================================
+
+groceries_merchants:
+  whole_foods: &whole_foods
+    name: "Whole Foods Market"
+    category: ["Shops", "Food and Beverage Store", "Supermarkets and Groceries"]
+    personal_finance_category:
+      primary: "FOOD_AND_DRINK"
+      detailed: "FOOD_AND_DRINK_GROCERIES"
+    typical_amount_range: [50.00, 200.00]
+
+  trader_joes: &trader_joes
+    name: "Trader Joe's"
+    category: ["Shops", "Supermarkets and Groceries"]
+    personal_finance_category:
+      primary: "FOOD_AND_DRINK"
+      detailed: "FOOD_AND_DRINK_GROCERIES"
+    typical_amount_range: [40.00, 150.00]
+
+  costco: &costco
+    name: "Costco Wholesale"
+    category: ["Shops", "Warehouses and Wholesale Stores"]
+    personal_finance_category:
+      primary: "FOOD_AND_DRINK"
+      detailed: "FOOD_AND_DRINK_GROCERIES"
+    typical_amount_range: [100.00, 300.00]
+
+  walmart: &walmart
+    name: "Walmart Supercenter"
+    category: ["Shops", "Discount Stores"]
+    personal_finance_category:
+      primary: "GENERAL_MERCHANDISE"
+      detailed: "GENERAL_MERCHANDISE_DISCOUNT_STORES"
+    typical_amount_range: [30.00, 150.00]
+
+  target: &target
+    name: "Target"
+    category: ["Shops", "Department Stores"]
+    personal_finance_category:
+      primary: "GENERAL_MERCHANDISE"
+      detailed: "GENERAL_MERCHANDISE_DEPARTMENT_STORES"
+    typical_amount_range: [25.00, 180.00]
+
+  aldi: &aldi
+    name: "Aldi"
+    category: ["Shops", "Supermarkets and Groceries"]
+    personal_finance_category:
+      primary: "FOOD_AND_DRINK"
+      detailed: "FOOD_AND_DRINK_GROCERIES"
+    typical_amount_range: [30.00, 100.00]
+
+# ==============================================================================
+# FOOD_AND_DRINK - Restaurants
+# ==============================================================================
+
+restaurants:
+  chipotle: &chipotle
+    name: "Chipotle Mexican Grill"
+    category: ["Food and Drink", "Restaurants", "Fast Food"]
+    personal_finance_category:
+      primary: "FOOD_AND_DRINK"
+      detailed: "FOOD_AND_DRINK_RESTAURANTS"
+    typical_amount_range: [10.00, 30.00]
+
+  olive_garden: &olive_garden
+    name: "Olive Garden"
+    category: ["Food and Drink", "Restaurants"]
+    personal_finance_category:
+      primary: "FOOD_AND_DRINK"
+      detailed: "FOOD_AND_DRINK_RESTAURANTS"
+    typical_amount_range: [40.00, 90.00]
+
+  cheesecake_factory: &cheesecake_factory
+    name: "The Cheesecake Factory"
+    category: ["Food and Drink", "Restaurants"]
+    personal_finance_category:
+      primary: "FOOD_AND_DRINK"
+      detailed: "FOOD_AND_DRINK_RESTAURANTS"
+    typical_amount_range: [50.00, 120.00]
+
+  mcdonalds: &mcdonalds
+    name: "McDonald's"
+    category: ["Food and Drink", "Restaurants", "Fast Food"]
+    personal_finance_category:
+      primary: "FOOD_AND_DRINK"
+      detailed: "FOOD_AND_DRINK_FAST_FOOD"
+    typical_amount_range: [5.00, 15.00]
+
+  taco_bell: &taco_bell
+    name: "Taco Bell"
+    category: ["Food and Drink", "Restaurants", "Fast Food"]
+    personal_finance_category:
+      primary: "FOOD_AND_DRINK"
+      detailed: "FOOD_AND_DRINK_FAST_FOOD"
+    typical_amount_range: [7.00, 18.00]
+
+# ==============================================================================
+# FOOD_AND_DRINK - Coffee Shops
+# ==============================================================================
+
+coffee_shops:
+  starbucks: &starbucks
+    name: "Starbucks"
+    category: ["Food and Drink", "Restaurants", "Coffee Shop"]
+    personal_finance_category:
+      primary: "FOOD_AND_DRINK"
+      detailed: "FOOD_AND_DRINK_COFFEE"
+    typical_amount_range: [4.00, 8.00]
+
+  dunkin: &dunkin
+    name: "Dunkin'"
+    category: ["Food and Drink", "Restaurants", "Coffee Shop"]
+    personal_finance_category:
+      primary: "FOOD_AND_DRINK"
+      detailed: "FOOD_AND_DRINK_COFFEE"
+    typical_amount_range: [3.00, 7.00]
+
+# ==============================================================================
+# TRANSPORTATION - Gas Stations
+# ==============================================================================
+
+gas_stations:
+  shell: &shell
+    name: "Shell Gas Station"
+    category: ["Travel", "Gas Stations"]
+    personal_finance_category:
+      primary: "TRANSPORTATION"
+      detailed: "TRANSPORTATION_GAS"
+    typical_amount_range: [35.00, 75.00]
+
+  bp: &bp
+    name: "BP"
+    category: ["Travel", "Gas Stations"]
+    personal_finance_category:
+      primary: "TRANSPORTATION"
+      detailed: "TRANSPORTATION_GAS"
+    typical_amount_range: [35.00, 75.00]
+
+  marathon: &marathon
+    name: "Marathon"
+    category: ["Travel", "Gas Stations"]
+    personal_finance_category:
+      primary: "TRANSPORTATION"
+      detailed: "TRANSPORTATION_GAS"
+    typical_amount_range: [35.00, 75.00]
+
+# ==============================================================================
+# TRANSPORTATION - Ride Share & Transit
+# ==============================================================================
+
+transportation:
+  uber: &uber
+    name: "Uber"
+    category: ["Travel", "Taxi"]
+    personal_finance_category:
+      primary: "TRANSPORTATION"
+      detailed: "TRANSPORTATION_RIDE_SHARE"
+    typical_amount_range: [12.00, 45.00]
+
+  lyft: &lyft
+    name: "Lyft"
+    category: ["Travel", "Taxi"]
+    personal_finance_category:
+      primary: "TRANSPORTATION"
+      detailed: "TRANSPORTATION_RIDE_SHARE"
+    typical_amount_range: [10.00, 40.00]
+
+  cta_ventra: &cta_ventra
+    name: "CTA Ventra"
+    category: ["Travel", "Public Transportation Services"]
+    personal_finance_category:
+      primary: "TRANSPORTATION"
+      detailed: "TRANSPORTATION_PUBLIC_TRANSIT"
+    typical_amount_range: [3.00, 3.00]
+
+  parking_garage: &parking_garage
+    name: "Downtown Parking Garage"
+    category: ["Transportation", "Parking"]
+    personal_finance_category:
+      primary: "TRANSPORTATION"
+      detailed: "TRANSPORTATION_PARKING"
+    typical_amount_range: [15.00, 30.00]
+
+# ==============================================================================
+# GENERAL_MERCHANDISE - Online Shopping
+# ==============================================================================
+
+online_shopping:
+  amazon: &amazon
+    name: "Amazon.com"
+    category: ["Shops", "Digital Purchase"]
+    personal_finance_category:
+      primary: "GENERAL_MERCHANDISE"
+      detailed: "GENERAL_MERCHANDISE_ONLINE"
+    typical_amount_range: [15.00, 150.00]
+
+  ebay: &ebay
+    name: "eBay"
+    category: ["Shops", "Digital Purchase"]
+    personal_finance_category:
+      primary: "GENERAL_MERCHANDISE"
+      detailed: "GENERAL_MERCHANDISE_ONLINE"
+    typical_amount_range: [10.00, 200.00]
+
+# ==============================================================================
+# ENTERTAINMENT - Subscriptions
+# ==============================================================================
+
+subscriptions:
+  netflix: &netflix
+    name: "Netflix"
+    category: ["Service", "Subscription"]
+    personal_finance_category:
+      primary: "ENTERTAINMENT"
+      detailed: "ENTERTAINMENT_MOVIES"
+    typical_amount_range: [15.99, 15.99]
+
+  spotify: &spotify
+    name: "Spotify"
+    category: ["Service", "Subscription"]
+    personal_finance_category:
+      primary: "ENTERTAINMENT"
+      detailed: "ENTERTAINMENT_MUSIC"
+    typical_amount_range: [10.99, 10.99]
+
+  hulu: &hulu
+    name: "Hulu"
+    category: ["Service", "Subscription"]
+    personal_finance_category:
+      primary: "ENTERTAINMENT"
+      detailed: "ENTERTAINMENT_MOVIES"
+    typical_amount_range: [7.99, 14.99]
+
+  disney_plus: &disney_plus
+    name: "Disney+"
+    category: ["Service", "Subscription"]
+    personal_finance_category:
+      primary: "ENTERTAINMENT"
+      detailed: "ENTERTAINMENT_MOVIES"
+    typical_amount_range: [7.99, 7.99]
+
+  hbo_max: &hbo_max
+    name: "HBO Max"
+    category: ["Service", "Subscription"]
+    personal_finance_category:
+      primary: "ENTERTAINMENT"
+      detailed: "ENTERTAINMENT_MOVIES"
+    typical_amount_range: [15.99, 15.99]
+
+  apple_music: &apple_music
+    name: "Apple Music"
+    category: ["Service", "Subscription"]
+    personal_finance_category:
+      primary: "ENTERTAINMENT"
+      detailed: "ENTERTAINMENT_MUSIC"
+    typical_amount_range: [9.99, 9.99]
+
+  amazon_prime: &amazon_prime
+    name: "Amazon Prime Membership"
+    category: ["Service", "Subscription"]
+    personal_finance_category:
+      primary: "GENERAL_SERVICES"
+      detailed: "GENERAL_SERVICES_OTHER"
+    typical_amount_range: [14.99, 14.99]
+
+  adobe_creative: &adobe_creative
+    name: "Adobe Creative Cloud"
+    category: ["Service", "Subscription"]
+    personal_finance_category:
+      primary: "GENERAL_SERVICES"
+      detailed: "GENERAL_SERVICES_OTHER"
+    typical_amount_range: [54.99, 54.99]
+
+  icloud_storage: &icloud_storage
+    name: "iCloud Storage"
+    category: ["Service", "Subscription"]
+    personal_finance_category:
+      primary: "GENERAL_SERVICES"
+      detailed: "GENERAL_SERVICES_OTHER"
+    typical_amount_range: [2.99, 2.99]
+
+# ==============================================================================
+# PERSONAL_CARE - Gym & Fitness
+# ==============================================================================
+
+personal_care:
+  planet_fitness: &planet_fitness
+    name: "Planet Fitness"
+    category: ["Recreation", "Gyms and Fitness Centers"]
+    personal_finance_category:
+      primary: "PERSONAL_CARE"
+      detailed: "PERSONAL_CARE_GYM"
+    typical_amount_range: [24.99, 24.99]
+
+  la_fitness: &la_fitness
+    name: "LA Fitness"
+    category: ["Recreation", "Gyms and Fitness Centers"]
+    personal_finance_category:
+      primary: "PERSONAL_CARE"
+      detailed: "PERSONAL_CARE_GYM"
+    typical_amount_range: [49.99, 49.99]
+
+# ==============================================================================
+# RENT_AND_UTILITIES
+# ==============================================================================
+
+utilities:
+  comed_electric: &comed_electric
+    name: "ComEd Electric"
+    category: ["Service", "Utilities"]
+    personal_finance_category:
+      primary: "RENT_AND_UTILITIES"
+      detailed: "RENT_AND_UTILITIES_GAS_AND_ELECTRICITY"
+    typical_amount_range: [80.00, 150.00]
+
+  water_department: &water_department
+    name: "City Water Department"
+    category: ["Service", "Utilities"]
+    personal_finance_category:
+      primary: "RENT_AND_UTILITIES"
+      detailed: "RENT_AND_UTILITIES_WATER"
+    typical_amount_range: [35.00, 60.00]
+
+  comcast_internet: &comcast_internet
+    name: "Comcast Internet"
+    category: ["Service", "Telecommunication Services"]
+    personal_finance_category:
+      primary: "RENT_AND_UTILITIES"
+      detailed: "RENT_AND_UTILITIES_INTERNET"
+    typical_amount_range: [70.00, 100.00]
+
+  verizon_wireless: &verizon_wireless
+    name: "Verizon Wireless"
+    category: ["Service", "Telecommunication Services"]
+    personal_finance_category:
+      primary: "RENT_AND_UTILITIES"
+      detailed: "RENT_AND_UTILITIES_PHONE"
+    typical_amount_range: [80.00, 120.00]
+
+  rent_payment: &rent_payment
+    name: "Rent Payment to Landlord"
+    category: ["Payment"]
+    personal_finance_category:
+      primary: "RENT_AND_UTILITIES"
+      detailed: "RENT_AND_UTILITIES_RENT"
+    typical_amount_range: [1200.00, 3000.00]
+
+# ==============================================================================
+# INCOME
+# ==============================================================================
+
+income:
+  paycheck: &paycheck
+    name: "Employer Paycheck Direct Deposit"
+    category: ["Bank Fees", "Deposit"]
+    personal_finance_category:
+      primary: "INCOME"
+      detailed: "INCOME_WAGES"
+    typical_amount_range: [2000.00, 6000.00]
+
+  tax_refund: &tax_refund
+    name: "IRS Tax Refund"
+    category: ["Bank Fees", "Deposit"]
+    personal_finance_category:
+      primary: "INCOME"
+      detailed: "INCOME_TAX_REFUND"
+    typical_amount_range: [500.00, 5000.00]
+
+# ==============================================================================
+# Usage Example
+# ==============================================================================
+
+# In a scenario file, reference merchants like this:
+#
+# transactions:
+#   - <<: *whole_foods
+#     amount: -125.50
+#     date: "2025-11-01"
+#     external_transaction_id: "txn-001"
+#
+#   - <<: *starbucks
+#     amount: -5.45
+#     date: "2025-11-02"
+#     external_transaction_id: "txn-002"
+
+# This provides:
+# - Realistic merchant names
+# - Proper Plaid categories
+# - Typical amount ranges
+# - Consistent categorization across scenarios

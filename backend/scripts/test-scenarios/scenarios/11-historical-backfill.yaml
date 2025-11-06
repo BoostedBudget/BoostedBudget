@@ -1,0 +1,265 @@
+# Scenario 11: Historical Backfill (HISTORICAL_UPDATE)
+# Tests Premium tier 730-day (2-year) historical transaction sync
+# CRITICAL: Validates tier-based date range limits and large dataset handling
+
+version: "1.0"
+
+scenario:
+  name: "Historical Backfill Premium 730 Days"
+  description: "Test Premium tier historical sync with 730-day limit, validating date range enforcement and pagination"
+  category: "historical_sync"
+  priority: "critical"
+
+  tags:
+    - "historical_sync"
+    - "tier:premium"
+    - "pagination"
+    - "date_range"
+    - "730_day_limit"
+    - "large_dataset"
+
+  # Setup test data
+  setup:
+    user:
+      id: "test-user-historical-001"
+      tier: "premium"  # Premium = 730-day historical limit (2 years)
+      email: "historical-test@example.com"
+      auth0_user_id: "auth0|test-historical-001"
+
+    linked_items:
+      - id: "test-item-historical-001"
+        user_id: "test-user-historical-001"
+        item_id: "plaid-item-historical-001"
+        institution_name: "Wells Fargo"
+        institution_id: "ins_6"
+        cursor: null  # No cursor = first historical sync
+        status: "active"
+
+    accounts:
+      - id: "test-account-historical-001"
+        linked_item_id: "test-item-historical-001"
+        user_id: "test-user-historical-001"
+        plaid_account_id: "plaid-acc-historical-001"
+        name: "Wells Fargo Everyday Checking"
+        official_name: "Wells Fargo Everyday Checking Account"
+        type: "depository"
+        subtype: "checking"
+        current_balance: 5000.00
+
+  # Execution steps
+  steps:
+    - action: "fire_webhook"
+      description: "Trigger HISTORICAL_UPDATE webhook to fetch 730 days of transactions"
+      webhook_code: "HISTORICAL_UPDATE"
+      item_id: "plaid-item-historical-001"
+      # NOTE: Plaid sandbox may return fewer transactions
+      # Expecting ~500 transactions across 24 months with realistic distribution
+
+    - action: "wait"
+      description: "Wait for large historical sync to complete (multi-page, ~500 transactions)"
+      wait_seconds: 20
+
+  # Assertions
+  assertions:
+    database:
+      # Should have many transactions (realistic range for 2-year history)
+      transactions_count: ">= 100"  # Minimum viable for testing
+
+    webhook_status:
+      processed: true
+      error: null
+
+    custom:
+      # CRITICAL: Verify NO transactions older than 730 days (tier limit enforcement)
+      - description: "No transactions should be older than 730 days (Premium tier limit)"
+        query: |
+          SELECT COUNT(*) as old_txn_count
+          FROM transactions
+          WHERE user_id = 'test-user-historical-001'
+          AND date < (CURRENT_DATE - INTERVAL '730 days')
+        expected:
+          old_txn_count: 0
+
+      # Verify transaction count in expected range (Plaid sandbox variability)
+      - description: "Transaction count should be in realistic range for 2-year history"
+        query: |
+          SELECT COUNT(*) as total_txn
+          FROM transactions
+          WHERE user_id = 'test-user-historical-001'
+        expected_range:
+          total_txn: [100, 1000]  # Wide range to account for sandbox variability
+
+      # Verify transactions span multiple months (not all same date)
+      - description: "Transactions should span at least 12 months (1 year minimum)"
+        query: |
+          SELECT COUNT(DISTINCT TO_CHAR(date, 'YYYY-MM')) as month_count
+          FROM transactions
+          WHERE user_id = 'test-user-historical-001'
+        expected_min:
+          month_count: 12  # At least 12 of 24 months represented
+
+      # Verify oldest transaction is within 730-day window
+      - description: "Oldest transaction should be within 730 days from today"
+        query: |
+          SELECT
+            date AS oldest_date,
+            CURRENT_DATE - date AS days_ago
+          FROM transactions
+          WHERE user_id = 'test-user-historical-001'
+          ORDER BY date ASC
+          LIMIT 1
+        expected_max:
+          days_ago: 730
+
+      # Verify newest transactions are recent
+      - description: "Most recent transaction should be within last 30 days"
+        query: |
+          SELECT
+            date AS newest_date,
+            CURRENT_DATE - date AS days_ago
+          FROM transactions
+          WHERE user_id = 'test-user-historical-001'
+          ORDER BY date DESC
+          LIMIT 1
+        expected_max:
+          days_ago: 30
+
+      # Verify no duplicate transactions (idempotency)
+      - description: "No duplicate transactions (pagination should not double-insert)"
+        query: |
+          SELECT COUNT(*) as duplicate_count
+          FROM (
+            SELECT external_transaction_id, COUNT(*) as cnt
+            FROM transactions
+            WHERE user_id = 'test-user-historical-001'
+            GROUP BY external_transaction_id
+            HAVING COUNT(*) > 1
+          ) duplicates
+        expected:
+          duplicate_count: 0
+
+      # Verify cursor was updated after sync
+      - description: "Cursor should be updated after historical sync completes"
+        query: |
+          SELECT
+            cursor IS NOT NULL as cursor_exists,
+            LENGTH(cursor) > 10 as cursor_valid
+          FROM linked_items
+          WHERE id = 'test-item-historical-001'
+        expected:
+          cursor_exists: true
+          cursor_valid: true
+
+      # Verify all transactions have required fields (no nulls in critical data)
+      - description: "All transactions should have valid required fields"
+        query: |
+          SELECT COUNT(*) as invalid_count
+          FROM transactions
+          WHERE user_id = 'test-user-historical-001'
+          AND (
+            amount IS NULL
+            OR date IS NULL
+            OR name IS NULL
+            OR external_transaction_id IS NULL
+            OR account_id IS NULL
+          )
+        expected:
+          invalid_count: 0
+
+      # Verify reasonable amount distribution (sanity check)
+      - description: "Transactions should have reasonable amounts (not all zero or null)"
+        query: |
+          SELECT
+            COUNT(*) as total_count,
+            COUNT(CASE WHEN amount != 0 THEN 1 END) as non_zero_count,
+            MIN(amount) as min_amount,
+            MAX(amount) as max_amount
+          FROM transactions
+          WHERE user_id = 'test-user-historical-001'
+        expected_min:
+          non_zero_count: 50  # At least 50 non-zero transactions
+
+      # Verify sync audit record created (monthly sync tracking)
+      - description: "Sync audit record should be created for this account"
+        query: |
+          SELECT COUNT(*) as audit_count
+          FROM account_sync_audit
+          WHERE user_id = 'test-user-historical-001'
+          AND plaid_account_id = 'plaid-acc-historical-001'
+        expected_min:
+          audit_count: 1
+
+# Expected Outcomes:
+# 1. Webhook processed successfully without errors
+# 2. Large number of transactions synced (100-1000 depending on Plaid sandbox)
+# 3. All transactions within 730-day window (Premium tier limit enforced)
+# 4. Transactions span at least 12 months (validates historical depth)
+# 5. No duplicates (pagination idempotency)
+# 6. Cursor updated for future incremental syncs
+# 7. All transactions have valid required fields
+# 8. Sync audit record created for monthly tracking
+
+# Real-World Business Value:
+# - Premium tier users get 2 years of transaction history
+# - Enables:
+#   1. Year-over-year spending comparisons
+#   2. Long-term budget trend analysis
+#   3. Tax preparation (full year + previous year)
+#   4. Historical spending pattern detection
+#   5. Comprehensive financial health assessment
+# - Critical for users switching from other platforms (need historical data)
+# - Competitive advantage vs free tier (30 days only)
+
+# Subscription Tier Limits:
+# - Free: 30 days historical (1 month)
+# - Premium Lite: 365 days (1 year)
+# - Premium: 730 days (2 years)  ← THIS SCENARIO
+# - Premium+: 730 days (same as Premium, but more frequent sync)
+
+# Implementation Notes:
+# - Plaid HISTORICAL_UPDATE webhook triggers deep historical sync
+# - Backend should:
+#   1. Fetch user's tier from database
+#   2. Calculate days_requested based on tier (730 for Premium)
+#   3. Call plaid.TransactionsSync() with no cursor (first sync)
+#   4. Handle pagination (Plaid returns ~500 transactions per page)
+#   5. Filter transactions older than tier limit
+#   6. Update cursor after all pages processed
+# - This is typically ONE-TIME per account (initial setup)
+# - Subsequent syncs use DEFAULT_UPDATE (incremental)
+
+# Performance Considerations:
+# - Large dataset: ~500 transactions = ~500 DB inserts
+# - Pagination: Multiple API calls to Plaid (3-5 pages typical)
+# - Processing time: 10-20 seconds total
+# - Database load: Batch inserts recommended
+# - Memory: Process page-by-page (don't load all in memory)
+
+# Test Data Notes:
+# - Plaid sandbox returns synthetic data
+# - Transaction count may vary (100-1000 range)
+# - Dates should span 24 months
+# - Amounts should be realistic (-$500 to +$5000)
+# - Categories should be diverse
+# - This scenario validates the SYNC LOGIC, not specific data
+
+# Edge Cases Covered:
+# 1. First sync (no cursor)
+# 2. Large dataset (pagination)
+# 3. Tier limit enforcement (730-day filter)
+# 4. Month coverage (ensures full 24-month span)
+# 5. Duplicate prevention (idempotency)
+# 6. Data integrity (no nulls in required fields)
+
+# Known Limitations (Admin API Issue #308):
+# - Admin webhook endpoint may not support custom date range
+# - Sandbox may return fewer transactions than expected
+# - Workaround: Use range assertions (100-1000 instead of exact count)
+# - This test validates LOGIC, not exact data
+# - Future enhancement: Mock transaction generator for deterministic testing
+
+# Future Enhancements:
+# - Generate specific transaction patterns (seasonal, recurring)
+# - Test FREE tier (30-day limit) vs Premium (730-day)
+# - Test cursor-based incremental after historical (scenario 02)
+# - Test historical sync on existing account (re-sync)
