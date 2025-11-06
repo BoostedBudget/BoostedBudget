@@ -1,0 +1,512 @@
+# Scenario 14: Large Purchases Tracking
+# Tests high-value transactions (>$500) - rent, travel, electronics, tuition
+# CRITICAL: Validates large purchase tracking for fraud detection and savings goals
+
+version: "1.0"
+
+scenario:
+  name: "Large Purchases Tracking"
+  description: "Test large purchase detection and categorization (>$500 transactions)"
+  category: "normal"
+  priority: "medium"
+
+  tags:
+    - "large_purchases"
+    - "high_value"
+    - "fraud_detection"
+    - "savings_goals"
+    - "tier:premium"
+
+  # Setup test data
+  setup:
+    user:
+      id: "test-user-large-001"
+      tier: "premium"
+      email: "large-purchases-test@example.com"
+      auth0_user_id: "auth0|test-large-001"
+
+    linked_items:
+      - id: "test-item-large-001"
+        user_id: "test-user-large-001"
+        item_id: "plaid-item-large-001"
+        institution_name: "Chase"
+        institution_id: "ins_3"
+        cursor: "cursor-large-sync"
+        status: "active"
+
+    accounts:
+      # Checking account (for rent, tuition)
+      - id: "test-account-large-checking-001"
+        linked_item_id: "test-item-large-001"
+        user_id: "test-user-large-001"
+        plaid_account_id: "plaid-acc-large-checking-001"
+        name: "Chase Total Checking"
+        official_name: "Chase Total Checking Account"
+        type: "depository"
+        subtype: "checking"
+        current_balance: 8500.00
+
+      # Credit card (for travel, electronics)
+      - id: "test-account-large-credit-001"
+        linked_item_id: "test-item-large-001"
+        user_id: "test-user-large-001"
+        plaid_account_id: "plaid-acc-large-credit-001"
+        name: "Chase Sapphire Reserve"
+        official_name: "Chase Sapphire Reserve Credit Card"
+        type: "credit"
+        subtype: "credit card"
+        current_balance: -5250.00
+
+    # Pre-populate 15 transactions (8 large >$500, 7 normal <$500)
+    transactions:
+      # ==============================================================================
+      # LARGE PURCHASES (>$500) - 8 transactions
+      # ==============================================================================
+
+      # 1. Rent payment ($2400 - largest monthly expense)
+      - external_transaction_id: "plaid-large-rent-001"
+        user_id: "test-user-large-001"
+        account_id: "test-account-large-checking-001"
+        linked_item_id: "test-item-large-001"
+        amount: -2400.00
+        date: "2025-11-01"
+        name: "Rent Payment to Landlord"
+        category: ["Payment"]
+        personal_finance_category:
+          primary: "RENT_AND_UTILITIES"
+          detailed: "RENT_AND_UTILITIES_RENT"
+        payment_channel: "other"
+        pending: false
+
+      # 2. Tuition payment ($3500 - education expense)
+      - external_transaction_id: "plaid-large-tuition-001"
+        user_id: "test-user-large-001"
+        account_id: "test-account-large-checking-001"
+        linked_item_id: "test-item-large-001"
+        amount: -3500.00
+        date: "2025-11-05"
+        name: "University Tuition Payment"
+        category: ["Service", "Education"]
+        personal_finance_category:
+          primary: "GENERAL_SERVICES"
+          detailed: "GENERAL_SERVICES_EDUCATION"
+        payment_channel: "other"
+        pending: false
+
+      # 3. Flight booking ($1250 - travel)
+      - external_transaction_id: "plaid-large-flight-001"
+        user_id: "test-user-large-001"
+        account_id: "test-account-large-credit-001"
+        linked_item_id: "test-item-large-001"
+        amount: -1250.00
+        date: "2025-11-08"
+        name: "United Airlines"
+        category: ["Travel", "Airlines and Aviation Services"]
+        personal_finance_category:
+          primary: "TRAVEL"
+          detailed: "TRAVEL_FLIGHTS"
+        payment_channel: "online"
+        pending: false
+
+      # 4. Laptop purchase ($1899 - electronics)
+      - external_transaction_id: "plaid-large-laptop-001"
+        user_id: "test-user-large-001"
+        account_id: "test-account-large-credit-001"
+        linked_item_id: "test-item-large-001"
+        amount: -1899.00
+        date: "2025-11-10"
+        name: "Apple Store"
+        category: ["Shops", "Computers and Electronics"]
+        personal_finance_category:
+          primary: "GENERAL_MERCHANDISE"
+          detailed: "GENERAL_MERCHANDISE_ELECTRONICS"
+        payment_channel: "in store"
+        pending: false
+
+      # 5. Hotel booking ($850 - travel accommodation)
+      - external_transaction_id: "plaid-large-hotel-001"
+        user_id: "test-user-large-001"
+        account_id: "test-account-large-credit-001"
+        linked_item_id: "test-item-large-001"
+        amount: -850.00
+        date: "2025-11-12"
+        name: "Marriott Hotel"
+        category: ["Travel", "Lodging"]
+        personal_finance_category:
+          primary: "TRAVEL"
+          detailed: "TRAVEL_LODGING"
+        payment_channel: "online"
+        pending: false
+
+      # 6. Furniture purchase ($725 - home improvement)
+      - external_transaction_id: "plaid-large-furniture-001"
+        user_id: "test-user-large-001"
+        account_id: "test-account-large-credit-001"
+        linked_item_id: "test-item-large-001"
+        amount: -725.00
+        date: "2025-11-15"
+        name: "IKEA"
+        category: ["Shops", "Furniture and Home Decor"]
+        personal_finance_category:
+          primary: "GENERAL_MERCHANDISE"
+          detailed: "GENERAL_MERCHANDISE_HOME_IMPROVEMENT"
+        payment_channel: "in store"
+        pending: false
+
+      # 7. Medical procedure ($1200 - healthcare)
+      - external_transaction_id: "plaid-large-medical-001"
+        user_id: "test-user-large-001"
+        account_id: "test-account-large-checking-001"
+        linked_item_id: "test-item-large-001"
+        amount: -1200.00
+        date: "2025-11-18"
+        name: "Hospital - Medical Procedure"
+        category: ["Healthcare", "Hospitals and Medical Services"]
+        personal_finance_category:
+          primary: "MEDICAL"
+          detailed: "MEDICAL_HEALTHCARE_SERVICES"
+        payment_channel: "other"
+        pending: false
+
+      # 8. Car repair ($950 - automotive)
+      - external_transaction_id: "plaid-large-car-repair-001"
+        user_id: "test-user-large-001"
+        account_id: "test-account-large-credit-001"
+        linked_item_id: "test-item-large-001"
+        amount: -950.00
+        date: "2025-11-20"
+        name: "Dealership Auto Repair"
+        category: ["Service", "Automotive"]
+        personal_finance_category:
+          primary: "TRANSPORTATION"
+          detailed: "TRANSPORTATION_MAINTENANCE"
+        payment_channel: "in store"
+        pending: false
+
+      # ==============================================================================
+      # NORMAL PURCHASES (<$500) - 7 transactions (for contrast)
+      # ==============================================================================
+
+      # Grocery shopping ($125)
+      - external_transaction_id: "plaid-normal-grocery-001"
+        user_id: "test-user-large-001"
+        account_id: "test-account-large-credit-001"
+        linked_item_id: "test-item-large-001"
+        amount: -125.00
+        date: "2025-11-03"
+        name: "Whole Foods Market"
+        category: ["Shops", "Food and Beverage Store", "Supermarkets and Groceries"]
+        personal_finance_category:
+          primary: "FOOD_AND_DRINK"
+          detailed: "FOOD_AND_DRINK_GROCERIES"
+        payment_channel: "in store"
+        pending: false
+
+      # Gas station ($42)
+      - external_transaction_id: "plaid-normal-gas-001"
+        user_id: "test-user-large-001"
+        account_id: "test-account-large-credit-001"
+        linked_item_id: "test-item-large-001"
+        amount: -42.00
+        date: "2025-11-06"
+        name: "Shell Gas Station"
+        category: ["Travel", "Gas Stations"]
+        personal_finance_category:
+          primary: "TRANSPORTATION"
+          detailed: "TRANSPORTATION_GAS"
+        payment_channel: "in store"
+        pending: false
+
+      # Restaurant dinner ($87)
+      - external_transaction_id: "plaid-normal-restaurant-001"
+        user_id: "test-user-large-001"
+        account_id: "test-account-large-credit-001"
+        linked_item_id: "test-item-large-001"
+        amount: -87.00
+        date: "2025-11-09"
+        name: "The Cheesecake Factory"
+        category: ["Food and Drink", "Restaurants"]
+        personal_finance_category:
+          primary: "FOOD_AND_DRINK"
+          detailed: "FOOD_AND_DRINK_RESTAURANTS"
+        payment_channel: "in store"
+        pending: false
+
+      # Clothing ($165)
+      - external_transaction_id: "plaid-normal-clothing-001"
+        user_id: "test-user-large-001"
+        account_id: "test-account-large-credit-001"
+        linked_item_id: "test-item-large-001"
+        amount: -165.00
+        date: "2025-11-13"
+        name: "Target"
+        category: ["Shops", "Department Stores"]
+        personal_finance_category:
+          primary: "GENERAL_MERCHANDISE"
+          detailed: "GENERAL_MERCHANDISE_DEPARTMENT_STORES"
+        payment_channel: "in store"
+        pending: false
+
+      # Utility bill ($95)
+      - external_transaction_id: "plaid-normal-utility-001"
+        user_id: "test-user-large-001"
+        account_id: "test-account-large-checking-001"
+        linked_item_id: "test-item-large-001"
+        amount: -95.00
+        date: "2025-11-14"
+        name: "ComEd Electric"
+        category: ["Service", "Utilities"]
+        personal_finance_category:
+          primary: "RENT_AND_UTILITIES"
+          detailed: "RENT_AND_UTILITIES_GAS_AND_ELECTRICITY"
+        payment_channel: "other"
+        pending: false
+
+      # Online shopping ($89)
+      - external_transaction_id: "plaid-normal-amazon-001"
+        user_id: "test-user-large-001"
+        account_id: "test-account-large-credit-001"
+        linked_item_id: "test-item-large-001"
+        amount: -89.00
+        date: "2025-11-17"
+        name: "Amazon.com"
+        category: ["Shops", "Digital Purchase"]
+        personal_finance_category:
+          primary: "GENERAL_MERCHANDISE"
+          detailed: "GENERAL_MERCHANDISE_ONLINE"
+        payment_channel: "online"
+        pending: false
+
+      # Gym membership ($25)
+      - external_transaction_id: "plaid-normal-gym-001"
+        user_id: "test-user-large-001"
+        account_id: "test-account-large-credit-001"
+        linked_item_id: "test-item-large-001"
+        amount: -24.99
+        date: "2025-11-19"
+        name: "Planet Fitness"
+        category: ["Recreation", "Gyms and Fitness Centers"]
+        personal_finance_category:
+          primary: "PERSONAL_CARE"
+          detailed: "PERSONAL_CARE_GYM"
+        payment_channel: "other"
+        pending: false
+
+  # Execution steps
+  steps:
+    - action: "wait"
+      description: "No webhook - this is a large purchase detection validation scenario"
+      wait_seconds: 1
+
+  # Assertions
+  assertions:
+    database:
+      # Total of 15 transactions (8 large + 7 normal)
+      transactions_count: 15
+
+    custom:
+      # CRITICAL: Detect large purchases (>$500)
+      - description: "Should have exactly 8 large purchases (>$500)"
+        query: |
+          SELECT COUNT(*) as large_purchase_count
+          FROM transactions
+          WHERE user_id = 'test-user-large-001'
+          AND ABS(amount) > 500.00
+        expected:
+          large_purchase_count: 8
+
+      # Verify normal purchases (<$500)
+      - description: "Should have exactly 7 normal purchases (<$500)"
+        query: |
+          SELECT COUNT(*) as normal_purchase_count
+          FROM transactions
+          WHERE user_id = 'test-user-large-001'
+          AND ABS(amount) <= 500.00
+        expected:
+          normal_purchase_count: 7
+
+      # Verify largest purchase (tuition $3500)
+      - description: "Largest purchase should be $3500 (tuition)"
+        query: |
+          SELECT MAX(ABS(amount)) as max_purchase
+          FROM transactions
+          WHERE user_id = 'test-user-large-001'
+        expected:
+          max_purchase: 3500.00
+
+      # Verify smallest large purchase (furniture $725)
+      - description: "Smallest large purchase should be $725 (furniture)"
+        query: |
+          SELECT MIN(ABS(amount)) as min_large_purchase
+          FROM transactions
+          WHERE user_id = 'test-user-large-001'
+          AND ABS(amount) > 500.00
+        expected:
+          min_large_purchase: 725.00
+
+      # Average large purchase amount
+      - description: "Average large purchase should be ~$1470"
+        query: |
+          SELECT ROUND(AVG(ABS(amount)), 2) as avg_large_purchase
+          FROM transactions
+          WHERE user_id = 'test-user-large-001'
+          AND ABS(amount) > 500.00
+        expected_min:
+          avg_large_purchase: 1400.00
+        expected_max:
+          avg_large_purchase: 1550.00
+
+      # Total large purchase spending
+      - description: "Total large purchases should sum to ~$11,774"
+        query: |
+          SELECT SUM(ABS(amount)) as total_large_purchases
+          FROM transactions
+          WHERE user_id = 'test-user-large-001'
+          AND ABS(amount) > 500.00
+        expected:
+          total_large_purchases: 11774.00
+
+      # Category diversity (at least 6 categories for large purchases)
+      - description: "Large purchases should span at least 6 different primary categories"
+        query: |
+          SELECT COUNT(DISTINCT
+            (personal_finance_category->>'primary')
+          ) as unique_categories
+          FROM transactions
+          WHERE user_id = 'test-user-large-001'
+          AND ABS(amount) > 500.00
+        expected_min:
+          unique_categories: 5
+
+      # Specific large purchase verification (rent)
+      - description: "Rent payment should be exactly $2400"
+        query: |
+          SELECT ABS(amount) as rent_amount
+          FROM transactions
+          WHERE user_id = 'test-user-large-001'
+          AND name ILIKE '%rent%'
+        expected:
+          rent_amount: 2400.00
+
+      # Specific large purchase verification (tuition)
+      - description: "Tuition payment should be exactly $3500"
+        query: |
+          SELECT ABS(amount) as tuition_amount
+          FROM transactions
+          WHERE user_id = 'test-user-large-001'
+          AND name ILIKE '%tuition%'
+        expected:
+          tuition_amount: 3500.00
+
+      # Travel-related large purchases
+      - description: "Should have 2 travel-related large purchases (flight + hotel)"
+        query: |
+          SELECT COUNT(*) as travel_large_purchases
+          FROM transactions
+          WHERE user_id = 'test-user-large-001'
+          AND ABS(amount) > 500.00
+          AND personal_finance_category->>'primary' = 'TRAVEL'
+        expected:
+          travel_large_purchases: 2
+
+      # Electronics large purchase
+      - description: "Should have 1 electronics large purchase (laptop $1899)"
+        query: |
+          SELECT COUNT(*) as electronics_large_purchases
+          FROM transactions
+          WHERE user_id = 'test-user-large-001'
+          AND ABS(amount) > 500.00
+          AND personal_finance_category->>'detailed' = 'GENERAL_MERCHANDISE_ELECTRONICS'
+        expected:
+          electronics_large_purchases: 1
+
+      # Percentage of spending that is large purchases
+      - description: "Large purchases should represent ~93% of total spending"
+        query: |
+          WITH totals AS (
+            SELECT
+              SUM(CASE WHEN ABS(amount) > 500 THEN ABS(amount) ELSE 0 END) as large_total,
+              SUM(ABS(amount)) as grand_total
+            FROM transactions
+            WHERE user_id = 'test-user-large-001'
+            AND amount < 0
+          )
+          SELECT ROUND((large_total / grand_total) * 100, 2) as large_purchase_percentage
+          FROM totals
+        expected_min:
+          large_purchase_percentage: 90.00
+
+# Expected Outcomes:
+# 1. 15 total transactions (8 large >$500, 7 normal <$500)
+# 2. Largest purchase: $3500 (tuition)
+# 3. Smallest large purchase: $725 (furniture)
+# 4. Average large purchase: ~$1470
+# 5. Total large purchases: $11,774
+# 6. Category diversity: 5+ primary categories
+# 7. Large purchases represent ~93% of total spending
+# 8. 2 travel-related large purchases (flight + hotel)
+# 9. 1 electronics large purchase (laptop)
+
+# Real-World Business Value:
+# - Large purchases are CRITICAL financial events:
+#   1. **Fraud detection**: $3500 charge unusual → alert user
+#   2. **Savings goals**: "Need $1899 for laptop → save for 3 months"
+#   3. **Budget shock**: "Spent $11,774 in large purchases this month!"
+#   4. **Category insights**: "Travel spending $2100 (flight + hotel)"
+#   5. **Cash flow planning**: "Big purchases coming → ensure funds available"
+#   6. **Tax deductions**: Medical $1200, tuition $3500 may be deductible
+#   7. **Credit card rewards**: $11,774 × 2% cashback = $235 rewards
+#   8. **Financial review**: "70% of spending is 8 large purchases"
+
+# Large Purchase Thresholds:
+# - $500+: "Large purchase" (1-2 per month typical)
+# - $1000+: "Very large" (requires savings or planning)
+# - $2000+: "Major expense" (rent, tuition, travel packages)
+# - $5000+: "Significant financial event" (car down payment, medical emergency)
+
+# Detection Use Cases:
+# 1. **Fraud alerts**: "$1899 Apple Store charge - was this you?"
+# 2. **Budget warnings**: "Large purchases $11,774 exceed monthly budget by $5000"
+# 3. **Savings opportunities**: "Cancel $1250 flight = 3 months rent savings"
+# 4. **Spending insights**: "93% of spending in 8 transactions (not many small purchases)"
+# 5. **Credit utilization**: "$5250 credit card balance from large purchases"
+
+# Implementation Notes:
+# - MVP: Simple >$500 threshold
+# - FUTURE: Dynamic threshold based on user's typical spending
+# - FUTURE: Category-specific thresholds (rent always large, groceries rarely)
+# - FUTURE: Relative threshold (>3× user's average transaction)
+# - FUTURE: Large purchase alerts via notifications
+
+# Test Data Notes:
+# - 8 large purchases across diverse categories
+# - Rent ($2400) - largest recurring expense
+# - Tuition ($3500) - largest one-time expense
+# - Travel ($2100 total) - flight + hotel
+# - Electronics ($1899) - laptop
+# - Medical ($1200) - procedure
+# - Automotive ($950) - car repair
+# - Furniture ($725) - home improvement
+# - 7 normal purchases for contrast ($25-$165 range)
+
+# Edge Cases Covered:
+# 1. Multiple large purchases in same month (8 total)
+# 2. Diverse categories (not all rent/tuition)
+# 3. Travel packages (flight + hotel)
+# 4. One-time vs recurring large purchases
+# 5. Large purchases on different accounts (checking vs credit)
+
+# Future Enhancements (Issue #336 - Large Purchase Tracking):
+# - Large purchase dashboard ("8 large purchases this month")
+# - Savings goal integration ("Save $1899 for laptop → 3 months")
+# - Fraud detection alerts ("Unusual $3500 charge")
+# - Tax deduction tracking (medical, education)
+# - Budget impact warnings ("Large purchases exceed budget by $5000")
+# - Credit card rewards calculator ("$235 cashback on large purchases")
+
+# CRITICAL Validations:
+# - This scenario is a regression test for large purchase detection
+# - Validates $500+ threshold logic
+# - Ensures category diversity (not just rent)
+# - Confirms percentage calculations (93% of spending)
+# - Essential for fraud detection and budget insights
