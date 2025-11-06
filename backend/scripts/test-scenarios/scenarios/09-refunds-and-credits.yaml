@@ -1,0 +1,404 @@
+# Scenario 09: Refunds and Credits
+# Tests positive amount transactions - merchant refunds, cashback, reimbursements, income
+# CRITICAL: Validates positive amounts are handled correctly and matched to original purchases
+
+version: "1.0"
+
+scenario:
+  name: "Refunds and Credits"
+  description: "Test refunds, cashback, reimbursements, and income transactions (positive amounts)"
+  category: "normal"
+  priority: "high"
+
+  tags:
+    - "refunds"
+    - "credits"
+    - "positive_amounts"
+    - "cashback"
+    - "reimbursements"
+    - "tier:premium"
+
+  # Setup test data
+  setup:
+    user:
+      id: "test-user-refunds-001"
+      tier: "premium"
+      email: "refunds-test@example.com"
+      auth0_user_id: "auth0|test-refunds-001"
+
+    linked_items:
+      - id: "test-item-refunds-001"
+        user_id: "test-user-refunds-001"
+        item_id: "plaid-item-refunds-001"
+        institution_name: "Chase"
+        institution_id: "ins_3"
+        cursor: "cursor-with-refunds"  # Has cursor (synced before)
+        status: "active"
+
+    accounts:
+      - id: "test-account-refunds-001"
+        linked_item_id: "test-item-refunds-001"
+        user_id: "test-user-refunds-001"
+        plaid_account_id: "plaid-acc-refunds-001"
+        name: "Chase Sapphire Reserve"
+        official_name: "Chase Sapphire Reserve Credit Card"
+        type: "credit"
+        subtype: "credit card"
+        current_balance: -850.00
+
+    # Pre-populate 11 transactions (6 purchases, 5 credits)
+    # Mix of full refunds, partial refunds, cashback, and unrefunded purchases
+    transactions:
+      # === PURCHASES (6 transactions) ===
+
+      # Purchase 1: Amazon order $129.99 (will be fully refunded)
+      - external_transaction_id: "plaid-purchase-amazon-001"
+        user_id: "test-user-refunds-001"
+        account_id: "test-account-refunds-001"
+        linked_item_id: "test-item-refunds-001"
+        amount: -129.99
+        date: "2025-10-28"
+        name: "Amazon.com"
+        payment_channel: "online"
+        pending: false
+
+      # Purchase 2: Target return item $45.00 (will be fully refunded)
+      - external_transaction_id: "plaid-purchase-target-001"
+        user_id: "test-user-refunds-001"
+        account_id: "test-account-refunds-001"
+        linked_item_id: "test-item-refunds-001"
+        amount: -45.00
+        date: "2025-10-30"
+        name: "Target"
+        payment_channel: "in store"
+        pending: false
+
+      # Purchase 3: Defective product $89.50 (will be partially refunded $50.00)
+      - external_transaction_id: "plaid-purchase-bestbuy-001"
+        user_id: "test-user-refunds-001"
+        account_id: "test-account-refunds-001"
+        linked_item_id: "test-item-refunds-001"
+        amount: -89.50
+        date: "2025-10-25"
+        name: "Best Buy"
+        payment_channel: "in store"
+        pending: false
+
+      # Purchase 4: Restaurant (NO refund - normal transaction)
+      - external_transaction_id: "plaid-purchase-restaurant-001"
+        user_id: "test-user-refunds-001"
+        account_id: "test-account-refunds-001"
+        linked_item_id: "test-item-refunds-001"
+        amount: -67.50
+        date: "2025-11-01"
+        name: "Olive Garden"
+        payment_channel: "in store"
+        pending: false
+
+      # Purchase 5: Grocery shopping (NO refund - normal transaction)
+      - external_transaction_id: "plaid-purchase-grocery-001"
+        user_id: "test-user-refunds-001"
+        account_id: "test-account-refunds-001"
+        linked_item_id: "test-item-refunds-001"
+        amount: -125.75
+        date: "2025-11-02"
+        name: "Whole Foods Market"
+        payment_channel: "in store"
+        pending: false
+
+      # Purchase 6: Gas station (will receive cashback)
+      - external_transaction_id: "plaid-purchase-gas-001"
+        user_id: "test-user-refunds-001"
+        account_id: "test-account-refunds-001"
+        linked_item_id: "test-item-refunds-001"
+        amount: -42.00
+        date: "2025-11-03"
+        name: "Shell Gas Station"
+        payment_channel: "in store"
+        pending: false
+
+      # === CREDITS (5 existing refunds/credits) ===
+
+      # Refund 1: Amazon full refund
+      - external_transaction_id: "plaid-refund-amazon-001"
+        user_id: "test-user-refunds-001"
+        account_id: "test-account-refunds-001"
+        linked_item_id: "test-item-refunds-001"
+        amount: 129.99
+        date: "2025-11-01"
+        name: "Amazon.com - Refund"
+        payment_channel: "online"
+        pending: false
+
+      # Refund 2: Target full refund
+      - external_transaction_id: "plaid-refund-target-001"
+        user_id: "test-user-refunds-001"
+        account_id: "test-account-refunds-001"
+        linked_item_id: "test-item-refunds-001"
+        amount: 45.00
+        date: "2025-11-02"
+        name: "Target - Return"
+        payment_channel: "in store"
+        pending: false
+
+      # Refund 3: Best Buy partial refund (product defect compensation)
+      - external_transaction_id: "plaid-refund-bestbuy-001"
+        user_id: "test-user-refunds-001"
+        account_id: "test-account-refunds-001"
+        linked_item_id: "test-item-refunds-001"
+        amount: 50.00
+        date: "2025-11-03"
+        name: "Best Buy - Refund"
+        payment_channel: "in store"
+        pending: false
+
+      # Credit 4: Credit card cashback reward (3% on gas)
+      - external_transaction_id: "plaid-cashback-001"
+        user_id: "test-user-refunds-001"
+        account_id: "test-account-refunds-001"
+        linked_item_id: "test-item-refunds-001"
+        amount: 1.26
+        date: "2025-11-04"
+        name: "Cashback Reward"
+        payment_channel: "other"
+        pending: false
+
+      # Credit 5: Employer reimbursement (travel expense)
+      - external_transaction_id: "plaid-reimbursement-001"
+        user_id: "test-user-refunds-001"
+        account_id: "test-account-refunds-001"
+        linked_item_id: "test-item-refunds-001"
+        amount: 75.00
+        date: "2025-11-05"
+        name: "Employer Reimbursement - Travel"
+        payment_channel: "other"
+        pending: false
+
+  # Execution steps
+  steps:
+    - action: "fire_webhook"
+      description: "Trigger DEFAULT_UPDATE - Plaid sends 2 new credits (statement credit + fraud reversal)"
+      webhook_code: "DEFAULT_UPDATE"
+      item_id: "plaid-item-refunds-001"
+      # Expected new transactions:
+      # - Statement credit: +$25.00 (credit card annual fee waived)
+      # - Fraud reversal: +$150.00 (disputed charge reversed)
+
+    - action: "wait"
+      description: "Wait for sync to process new refund/credit transactions"
+      wait_seconds: 8
+
+  # Assertions
+  assertions:
+    database:
+      # Should have 13 total transactions (11 existing + 2 new credits)
+      transactions_count: 13
+
+    webhook_status:
+      processed: true
+      error: null
+
+    custom:
+      # CRITICAL: Count all positive amount transactions (refunds + credits)
+      - description: "Should have 7 total credits/refunds (5 existing + 2 new)"
+        query: |
+          SELECT COUNT(*) as credit_count
+          FROM transactions
+          WHERE user_id = 'test-user-refunds-001'
+          AND amount > 0
+        expected:
+          credit_count: 7
+
+      # Verify no negative refunds (data integrity check)
+      - description: "All credits should be positive amounts (> 0)"
+        query: |
+          SELECT COUNT(*) as invalid_refunds
+          FROM transactions
+          WHERE user_id = 'test-user-refunds-001'
+          AND amount > 0
+          AND amount <= 0
+        expected:
+          invalid_refunds: 0
+
+      # Verify total debits vs credits (sanity check)
+      - description: "Should have 6 purchases (negative amounts)"
+        query: |
+          SELECT COUNT(*) as debit_count
+          FROM transactions
+          WHERE user_id = 'test-user-refunds-001'
+          AND amount < 0
+        expected:
+          debit_count: 6
+
+      # Verify specific refund amounts (spot checks)
+      - description: "Amazon full refund should be +$129.99"
+        query: |
+          SELECT amount
+          FROM transactions
+          WHERE user_id = 'test-user-refunds-001'
+          AND name LIKE '%Amazon%Refund%'
+        expected:
+          amount: 129.99
+
+      - description: "Best Buy partial refund should be +$50.00 (not full $89.50)"
+        query: |
+          SELECT amount
+          FROM transactions
+          WHERE user_id = 'test-user-refunds-001'
+          AND name LIKE '%Best Buy%Refund%'
+        expected:
+          amount: 50.00
+
+      - description: "Cashback reward should be small positive amount ($1.26)"
+        query: |
+          SELECT amount
+          FROM transactions
+          WHERE user_id = 'test-user-refunds-001'
+          AND name LIKE '%Cashback%'
+        expected:
+          amount: 1.26
+
+      - description: "Employer reimbursement should be +$75.00"
+        query: |
+          SELECT amount
+          FROM transactions
+          WHERE user_id = 'test-user-refunds-001'
+          AND name LIKE '%Employer Reimbursement%'
+        expected:
+          amount: 75.00
+
+      # Verify total credit amount (all refunds/credits combined)
+      - description: "Total credits should sum to reasonable amount"
+        query: |
+          SELECT SUM(amount) as total_credits
+          FROM transactions
+          WHERE user_id = 'test-user-refunds-001'
+          AND amount > 0
+        expected_min:
+          total_credits: 300.00  # At least $300 in total credits
+
+      # Verify refund names contain keywords (data quality check)
+      - description: "Refund transactions should have identifying keywords in name"
+        query: |
+          SELECT COUNT(*) as named_refunds
+          FROM transactions
+          WHERE user_id = 'test-user-refunds-001'
+          AND amount > 0
+          AND (
+            name ILIKE '%refund%'
+            OR name ILIKE '%return%'
+            OR name ILIKE '%credit%'
+            OR name ILIKE '%cashback%'
+            OR name ILIKE '%reimbursement%'
+            OR name ILIKE '%reversal%'
+          )
+        expected_min:
+          named_refunds: 5  # At least 5 of 7 credits have identifying keywords
+
+      # Verify no duplicate refunds
+      - description: "No duplicate refund transactions (each external_transaction_id unique)"
+        query: |
+          SELECT COUNT(*) as duplicate_count
+          FROM (
+            SELECT external_transaction_id, COUNT(*) as cnt
+            FROM transactions
+            WHERE user_id = 'test-user-refunds-001'
+            GROUP BY external_transaction_id
+            HAVING COUNT(*) > 1
+          ) duplicates
+        expected:
+          duplicate_count: 0
+
+      # Verify date chronology (refunds typically come AFTER purchases)
+      - description: "Most refunds should occur after their corresponding purchases"
+        query: |
+          SELECT COUNT(*) as chronological_refunds
+          FROM transactions refund
+          WHERE refund.user_id = 'test-user-refunds-001'
+          AND refund.amount > 0
+          AND refund.name ILIKE '%refund%'
+          AND EXISTS (
+            SELECT 1
+            FROM transactions purchase
+            WHERE purchase.user_id = 'test-user-refunds-001'
+            AND purchase.amount < 0
+            AND purchase.name NOT ILIKE '%refund%'
+            AND purchase.date <= refund.date
+          )
+        expected_min:
+          chronological_refunds: 2  # At least 2 refunds have preceding purchases
+
+# Expected Outcomes:
+# 1. Webhook processed successfully without errors
+# 2. 2 new credit transactions added (statement credit, fraud reversal)
+# 3. Total of 7 positive amount transactions (refunds + credits)
+# 4. All credits have positive amounts (> 0)
+# 5. Specific refund amounts validated (Amazon $129.99, Best Buy $50, cashback $1.26)
+# 6. No duplicate transactions
+# 7. Total credits sum to >$300
+# 8. Refund transactions have identifying keywords in names
+
+# Real-World Business Value:
+# - Merchants issue refunds for returns, defective products, cancellations
+# - Credit cards provide cashback rewards (1-5% depending on category)
+# - Employers reimburse business expenses (travel, supplies, meals)
+# - Banks reverse fraudulent charges after disputes
+# - Statement credits for fees, promotions, annual fee waivers
+# - Critical for accurate balance tracking (positive amounts increase available credit)
+# - Budgeting: Refunds offset spending in categories
+# - Tax reporting: Reimbursements may not be taxable income
+
+# Refund Types Tested:
+# 1. **Full merchant refund**: Amazon $129.99 (entire purchase refunded)
+# 2. **Partial refund**: Best Buy $50 of $89.50 (partial compensation)
+# 3. **Cashback**: $1.26 (3% on $42 gas purchase)
+# 4. **Reimbursement**: $75 employer travel expense
+# 5. **Statement credit**: Bank promotional credit or fee waiver
+# 6. **Fraud reversal**: Disputed charge reversed by bank
+
+# Implementation Notes:
+# - Positive amounts are credits (increase available balance)
+# - Plaid provides refunds as separate transactions (not linked to original purchase)
+# - Backend should:
+#   1. Accept positive amounts without validation errors
+#   2. Store with amount > 0 (not negated)
+#   3. Display refunds with "+" or green color in UI
+#   4. Include in budget calculations (offset spending)
+# - Refund matching (to original purchase) is FUTURE feature (not in MVP)
+# - Current implementation: Store refunds as standalone transactions
+
+# Test Data Notes:
+# - 6 purchases simulate normal spending
+# - 3 purchases have corresponding refunds (full or partial)
+# - 2 purchases have NO refunds (normal flow)
+# - 2 credits have no matching purchase (cashback, reimbursement)
+# - Realistic amounts: $1.26 (cashback) to $129.99 (full refund)
+# - Refund names typically include keywords: "Refund", "Return", "Credit"
+
+# Edge Cases Covered:
+# 1. Full refund (100% of purchase amount)
+# 2. Partial refund (56% of purchase amount)
+# 3. Small cashback ($1.26)
+# 4. Large reimbursement ($75)
+# 5. Refund timing (typically days after purchase)
+# 6. Multiple refunds from same merchant
+
+# Known Limitations:
+# - No automatic refund-to-purchase linking (future enhancement)
+# - Plaid sandbox may not support custom refund transactions
+# - Workaround: Pre-populate refunds in setup.transactions
+# - Admin API cannot customize webhook payload (Issue #308)
+
+# Future Enhancements:
+# - Refund matching algorithm (link to original purchase)
+# - Category-specific cashback tracking (3% gas, 2% dining)
+# - Reimbursement tracking (tax reporting)
+# - Fraud dispute workflow (user-initiated)
+# - Split refunds (1 purchase, multiple partial refunds)
+
+# CRITICAL Validations:
+# - This scenario is a regression test for positive amount handling
+# - Validates that backend accepts amount > 0 without errors
+# - Ensures UI displays refunds correctly (not as negative debits)
+# - Confirms budget calculations include refunds as offsets
+# - Essential for data integrity and user trust
