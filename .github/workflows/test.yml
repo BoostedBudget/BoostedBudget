@@ -225,6 +225,13 @@ jobs:
       - name: Make backend binary executable
         run: chmod +x $GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
 
+      - name: Remove SSL certificates to force HTTP mode
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        run: |
+          echo "🔒 Ensuring HTTP mode for E2E tests..."
+          rm -f cert.pem key.pem 2>/dev/null || true
+          echo "✅ SSL certificates removed (workspace-isolated, safe)"
+
       - name: Run E2E tests
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         env:
