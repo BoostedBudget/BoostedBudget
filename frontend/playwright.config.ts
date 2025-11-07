@@ -89,6 +89,7 @@ export default defineConfig({
       url: `http://localhost:${frontendPort}`,
       reuseExistingServer: !process.env.CI,
       timeout: 120 * 1000,
+      ignoreHTTPSErrors: true,
     },
   ] : [
     {
@@ -100,6 +101,7 @@ export default defineConfig({
       url: `http://localhost:${frontendPort}`,
       reuseExistingServer: !process.env.CI,
       timeout: 120 * 1000,
+      ignoreHTTPSErrors: true,
     },
     {
       // Pass PORT env var to backend for dynamic port allocation
@@ -107,6 +109,7 @@ export default defineConfig({
       url: `http://localhost:${backendPort}/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 120 * 1000,
+      ignoreHTTPSErrors: true,
     },
   ],
 });
