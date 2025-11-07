@@ -78,8 +78,21 @@ export default defineConfig({
 
   // Run your local dev server before starting the tests
   // Comment this out if you want to run tests against already running servers
-  webServer: [
+  // In E2E_SCENARIOS_MODE, backend runs in Docker Compose, so only start frontend
+  webServer: process.env.E2E_SCENARIOS_MODE ? [
     {
+      // Scenarios mode: Only frontend (backend already in Docker Compose)
+      // Pass PORT and E2E_BACKEND_PORT env vars to Vite for dynamic port allocation
+      // E2E_BACKEND_PORT is needed for the Vite proxy configuration
+      // E2E_DISABLE_HTTPS disables HTTPS in CI environments with self-signed certs
+      command: `PORT=${frontendPort} E2E_BACKEND_PORT=${backendPort} E2E_DISABLE_HTTPS=${process.env.E2E_DISABLE_HTTPS || 'false'} npm run dev`,
+      url: `http://localhost:${frontendPort}`,
+      reuseExistingServer: !process.env.CI,
+      timeout: 120 * 1000,
+    },
+  ] : [
+    {
+      // Regular mode: Start both frontend and backend
       // Pass PORT and E2E_BACKEND_PORT env vars to Vite for dynamic port allocation
       // E2E_BACKEND_PORT is needed for the Vite proxy configuration
       // E2E_DISABLE_HTTPS disables HTTPS in CI environments with self-signed certs
