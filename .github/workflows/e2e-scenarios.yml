@@ -224,6 +224,13 @@ jobs:
       # ---------------------------------------------------------------------------
       # Run E2E Scenarios (Parallel with 4 Workers)
       # ---------------------------------------------------------------------------
+      - name: Remove SSL certificates to force HTTP mode
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        run: |
+          echo "🔒 Ensuring HTTP mode for E2E tests..."
+          rm -f cert.pem key.pem 2>/dev/null || true
+          echo "✅ SSL certificates removed (workspace-isolated, safe)"
+
       - name: Run E2E scenarios
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         env:
