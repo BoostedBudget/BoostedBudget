@@ -103,7 +103,7 @@ export class ScenarioLoader {
    * @param templateName Name of template file (without .yaml extension)
    * @returns Parsed template data
    */
-  async loadTemplate(templateName: string): Promise<any> {
+  async loadTemplate(templateName: string): Promise<unknown> {
     const templatePath = path.join(this.templatesDir, `${templateName}.yaml`);
 
     if (!fs.existsSync(templatePath)) {
@@ -120,7 +120,7 @@ export class ScenarioLoader {
    * Validate a scenario without loading from file
    * Useful for testing
    */
-  validate(rawScenario: any): Scenario {
+  validate(rawScenario: unknown): Scenario {
     try {
       return ScenarioSchema.parse(rawScenario);
     } catch (error) {

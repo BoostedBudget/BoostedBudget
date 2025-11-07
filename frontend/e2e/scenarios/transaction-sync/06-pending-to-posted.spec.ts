@@ -103,7 +103,7 @@ test.describe('P2: Pending to Posted Transactions', () => {
     ).toHaveLength(0);
   });
 
-  test('should not create duplicate transactions during state transition', async ({ page }) => {
+  test('should not create duplicate transactions during state transition', async ({ page: _page }) => {
     // This test validates that posting a pending transaction updates the existing
     // record rather than creating a duplicate
 
@@ -122,7 +122,7 @@ test.describe('P2: Pending to Posted Transactions', () => {
     ).toBe(3);
   });
 
-  test('should update all pending flags to false', async ({ page }) => {
+  test('should update all pending flags to false', async ({ page: _page }) => {
     // This test validates that all transactions transitioned to posted status
 
     // Query: Count transactions by pending status
@@ -147,7 +147,7 @@ test.describe('P2: Pending to Posted Transactions', () => {
     ).toBe(3);
   });
 
-  test('should correctly update restaurant charge with tip', async ({ page }) => {
+  test('should correctly update restaurant charge with tip', async ({ page: _page }) => {
     // This test validates that amount changes (like tips) are properly handled
 
     // Query: Get restaurant transaction
@@ -168,7 +168,7 @@ test.describe('P2: Pending to Posted Transactions', () => {
     expect(txn?.user_notes).toBe('Team lunch - add tip later');
   });
 
-  test('should update hotel checkout date correctly', async ({ page }) => {
+  test('should update hotel checkout date correctly', async ({ page: _page }) => {
     // This test validates that date changes (like checkout date) are handled
 
     // Query: Get hotel transaction
@@ -189,7 +189,7 @@ test.describe('P2: Pending to Posted Transactions', () => {
     expect(txn?.pending).toBe(false);
   });
 
-  test('should preserve user notes during state transition', async ({ page }) => {
+  test('should preserve user notes during state transition', async ({ page: _page }) => {
     // This test validates critical data preservation during pending→posted transition
 
     // Query: Get all user notes
@@ -219,7 +219,7 @@ test.describe('P2: Pending to Posted Transactions', () => {
     expect(restaurantNotes?.user_notes).toBe('Team lunch - add tip later');
   });
 
-  test('should handle gas purchase with unchanged amount', async ({ page }) => {
+  test('should handle gas purchase with unchanged amount', async ({ page: _page }) => {
     // This test validates transactions that post with the same amount as authorization
 
     // Query: Get gas transaction
@@ -239,7 +239,7 @@ test.describe('P2: Pending to Posted Transactions', () => {
     expect(txn?.pending).toBe(false);
   });
 
-  test('should verify all transactions have complete data after posting', async ({ page }) => {
+  test('should verify all transactions have complete data after posting', async ({ page: _page }) => {
     // This test validates data integrity after state transition
 
     // Query: Check for any incomplete data

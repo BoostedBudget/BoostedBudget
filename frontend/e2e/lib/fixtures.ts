@@ -17,7 +17,7 @@ export interface TemplateConfig {
   count?: number;
   dateRange?: string; // e.g., "last_30_days", "last_90_days"
   accountId?: string;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 /**

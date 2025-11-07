@@ -103,7 +103,7 @@ test.describe('P0: Tier Limit Enforcement', () => {
     ).toHaveLength(0);
   });
 
-  test('should verify tier limits from config/subscription_tiers.yaml', async ({ page }) => {
+  test('should verify tier limits from config/subscription_tiers.yaml', async ({ page: _page }) => {
     // This test validates the tier limits match the configured values
     // from config/subscription_tiers.yaml
 
@@ -135,7 +135,7 @@ test.describe('P0: Tier Limit Enforcement', () => {
     ).toBe('free');
   });
 
-  test('should prevent account creation beyond tier limit', async ({ page }) => {
+  test('should prevent account creation beyond tier limit', async ({ page: _page }) => {
     // This test verifies that attempting to create more accounts
     // beyond the tier limit is properly rejected
 
@@ -166,7 +166,7 @@ test.describe('P0: Tier Limit Enforcement', () => {
     expect(originalAccountsResult.rows[2]?.plaid_account_id).toBe('plaid-acc-limit-003');
   });
 
-  test('should provide helpful upgrade message when limit exceeded', async ({ page }) => {
+  test('should provide helpful upgrade message when limit exceeded', async ({ page: _page }) => {
     // This test validates that when a user hits their tier limit,
     // they receive a helpful error message explaining they need to upgrade
 

@@ -8,7 +8,7 @@
  * Issue #331: E2E Test Scenarios Framework
  */
 
-import { Pool, PoolClient, QueryResult } from 'pg';
+import { Pool, QueryResult } from 'pg';
 import type {
   User,
   LinkedItem,
@@ -61,7 +61,7 @@ export class DatabaseSeeder {
   /**
    * Execute a SQL query
    */
-  async query<T = any>(sql: string, params?: any[]): Promise<QueryResult<T>> {
+  async query<T = unknown>(sql: string, params?: unknown[]): Promise<QueryResult<T>> {
     return this.pool.query(sql, params);
   }
 
@@ -244,7 +244,7 @@ export class DatabaseSeeder {
     }
 
     // Build batch insert query
-    const values: any[] = [];
+    const values: unknown[] = [];
     const valueStrings: string[] = [];
 
     transactions.forEach((txn, index) => {
@@ -289,7 +289,13 @@ export class DatabaseSeeder {
   /**
    * Get database snapshot for debugging
    */
-  async getDatabaseSnapshot(userId?: string): Promise<any> {
+  async getDatabaseSnapshot(userId?: string): Promise<{
+    message?: string;
+    users?: unknown[];
+    linked_items?: unknown[];
+    accounts?: unknown[];
+    transaction_count?: number | string;
+  }> {
     if (!userId) {
       return { message: 'No user ID provided for snapshot' };
     }

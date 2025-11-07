@@ -103,7 +103,7 @@ test.describe('P2: Removed Transactions', () => {
     ).toHaveLength(0);
   });
 
-  test('should delete exactly 3 transactions', async ({ page }) => {
+  test('should delete exactly 3 transactions', async ({ page: _page }) => {
     // This test validates the correct count of deletions
 
     // Query: Count total transactions
@@ -121,7 +121,7 @@ test.describe('P2: Removed Transactions', () => {
     ).toBe(2);
   });
 
-  test('should verify removed transactions no longer exist', async ({ page }) => {
+  test('should verify removed transactions no longer exist', async ({ page: _page }) => {
     // This test validates that specific removed transaction IDs are gone
 
     // Query: Check for removed transaction IDs
@@ -144,7 +144,7 @@ test.describe('P2: Removed Transactions', () => {
     ).toBe(0);
   });
 
-  test('should verify remaining transactions are intact', async ({ page }) => {
+  test('should verify remaining transactions are intact', async ({ page: _page }) => {
     // This test validates that non-removed transactions are still present
 
     // Query: Check for kept transaction IDs
@@ -181,7 +181,7 @@ test.describe('P2: Removed Transactions', () => {
     expect(paycheckTxn?.merchant_name).toBe('Employer Inc');
   });
 
-  test('should preserve user notes on non-removed transactions', async ({ page }) => {
+  test('should preserve user notes on non-removed transactions', async ({ page: _page }) => {
     // This test validates critical data preservation during deletion
 
     // Query: Check user notes on remaining transactions
@@ -211,7 +211,7 @@ test.describe('P2: Removed Transactions', () => {
     expect(paycheckNotes?.user_notes).toBe('Biweekly paycheck');
   });
 
-  test('should handle idempotent removal webhook', async ({ page }) => {
+  test('should handle idempotent removal webhook', async ({ page: _page }) => {
     // This test validates that firing the same removal webhook multiple times
     // doesn't cause errors (idempotency)
 
@@ -246,7 +246,7 @@ test.describe('P2: Removed Transactions', () => {
     expect(parseInt(countResult.rows[0]?.count || '0', 10)).toBe(2);
   });
 
-  test('should verify no orphaned data after removal', async ({ page }) => {
+  test('should verify no orphaned data after removal', async ({ page: _page }) => {
     // This test validates that no related data is left orphaned
 
     // Query: Check for any orphaned references (if budgets/rules existed)

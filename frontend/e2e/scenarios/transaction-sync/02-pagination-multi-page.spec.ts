@@ -103,7 +103,7 @@ test.describe('P1: Pagination Multi-Page', () => {
     ).toHaveLength(0);
   });
 
-  test('should verify all 600 transactions were synced', async ({ page }) => {
+  test('should verify all 600 transactions were synced', async ({ page: _page }) => {
     // This test validates that no transactions were lost during pagination
 
     // Query: Get total transaction count
@@ -121,7 +121,7 @@ test.describe('P1: Pagination Multi-Page', () => {
     ).toBe(600);
   });
 
-  test('should verify no duplicate transactions across pages', async ({ page }) => {
+  test('should verify no duplicate transactions across pages', async ({ page: _page }) => {
     // This test validates the common pagination bug where transactions
     // appear multiple times due to cursor handling issues
 
@@ -142,7 +142,7 @@ test.describe('P1: Pagination Multi-Page', () => {
     ).toBe(0);
   });
 
-  test('should verify cursor was updated after pagination', async ({ page }) => {
+  test('should verify cursor was updated after pagination', async ({ page: _page }) => {
     // This test validates that the pagination cursor was properly updated
     // after fetching all pages
 
@@ -165,7 +165,7 @@ test.describe('P1: Pagination Multi-Page', () => {
     ).not.toBeNull();
   });
 
-  test('should verify transaction uniqueness', async ({ page }) => {
+  test('should verify transaction uniqueness', async ({ page: _page }) => {
     // This test validates that all external transaction IDs are unique
     // (no accidental duplicates during multi-page sync)
 

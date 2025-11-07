@@ -71,14 +71,15 @@ export class CleanupManager {
             duration: Date.now() - startTime,
           };
 
-        case CleanupStrategy.DELETE_TEST_USERS:
-          const deletedUsers = await this.deleteTestUsers();
+        case CleanupStrategy.DELETE_TEST_USERS: {
+          await this.deleteTestUsers();
           return {
             success: true,
             strategy,
             tablesAffected: ['users', 'linked_items', 'accounts', 'transactions'],
             duration: Date.now() - startTime,
           };
+        }
 
         case CleanupStrategy.NONE:
           return {
@@ -90,11 +91,12 @@ export class CleanupManager {
         default:
           throw new Error(`Unknown cleanup strategy: ${strategy}`);
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       return {
         success: false,
         strategy,
-        error: `Cleanup failed: ${error.message}`,
+        error: `Cleanup failed: ${errorMessage}`,
         duration: Date.now() - startTime,
       };
     }
@@ -183,7 +185,7 @@ export class CleanupManager {
           snapshot.budget_rules === 0
         );
 
-      case CleanupStrategy.DELETE_TEST_USERS:
+      case CleanupStrategy.DELETE_TEST_USERS: {
         // Test users should be gone (check via email pattern)
         const testUserCheck = await this.pool.query(`
           SELECT COUNT(*) as count FROM users
@@ -192,6 +194,7 @@ export class CleanupManager {
              OR auth0_user_id LIKE 'auth0|test-%'
         `);
         return parseInt(testUserCheck.rows[0].count, 10) === 0;
+      }
 
       case CleanupStrategy.NONE:
         // No verification needed

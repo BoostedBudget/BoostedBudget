@@ -103,7 +103,7 @@ test.describe('P1: Item Error - Login Required', () => {
     ).toHaveLength(0);
   });
 
-  test('should preserve existing transactions during error state', async ({ page }) => {
+  test('should preserve existing transactions during error state', async ({ page: _page }) => {
     // This test validates that no data loss occurs when item enters error state
 
     // Query: Count transactions that existed before error
@@ -137,7 +137,7 @@ test.describe('P1: Item Error - Login Required', () => {
     ).toBe('Weekly groceries - important note');
   });
 
-  test('should set correct error metadata on linked item', async ({ page }) => {
+  test('should set correct error metadata on linked item', async ({ page: _page }) => {
     // This test validates that error metadata is properly recorded for debugging
 
     // Query: Get error metadata
@@ -164,7 +164,7 @@ test.describe('P1: Item Error - Login Required', () => {
     ).toBeTruthy();
   });
 
-  test('should not sync new transactions while in error state', async ({ page }) => {
+  test('should not sync new transactions while in error state', async ({ page: _page }) => {
     // This test validates that transaction syncing is paused during error state
     // to prevent partial/inconsistent data
 
@@ -185,7 +185,7 @@ test.describe('P1: Item Error - Login Required', () => {
     ).toBe(0);
   });
 
-  test('should preserve cursor value during error state', async ({ page }) => {
+  test('should preserve cursor value during error state', async ({ page: _page }) => {
     // This test validates that the cursor is not reset when item enters error state
     // This is critical for resuming sync from correct position after reconnection
 
@@ -208,7 +208,7 @@ test.describe('P1: Item Error - Login Required', () => {
     ).not.toBeNull();
   });
 
-  test('should allow fetching existing transactions during error state', async ({ page }) => {
+  test('should allow fetching existing transactions during error state', async ({ page: _page }) => {
     // This test validates that users can still view their existing transactions
     // even when the linked item is in error state
 
