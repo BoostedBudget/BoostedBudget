@@ -1,0 +1,159 @@
+# P1 Scenario: Pagination Multi-Page
+# Issue #331: E2E Test Scenarios Framework
+#
+# Tests that transaction sync handles pagination correctly when Plaid returns
+# more than 500 transactions (typical page size).
+#
+# HIGH PRIORITY: Ensures large transaction volumes are handled correctly
+#
+# Expected Behavior:
+#   - Plaid returns transactions in pages (typically 500 per page)
+#   - System should fetch all pages until no more transactions
+#   - Cursor should be updated after all pages fetched
+#   - No duplicate transactions across pages
+#   - All transactions should be stored correctly
+#
+# This scenario verifies pagination logic handles multi-page responses.
+
+version: "1.0"
+
+scenario:
+  name: "pagination-multi-page"
+  description: "Verify transaction sync handles >500 transactions across multiple pages correctly"
+  category: "transaction-sync"
+
+  setup:
+    # Create premium user (has 2-year history, enough for many transactions)
+    user:
+      id: "test-pagination-001"
+      email: "pagination@test.example.com"
+      tier: "premium"
+      auth0_user_id: "auto-generate"
+
+    # Create Plaid linked item
+    linked_items:
+      - id: "linked-item-pagination-001"
+        item_id: "plaid-sandbox-pagination-001"
+        institution: "Chase"
+        institution_id: "ins_3"
+        cursor: null  # First sync
+        status: "active"
+
+    # Create checking account
+    accounts:
+      - id: "account-pagination-001"
+        linked_item_id: "linked-item-pagination-001"
+        plaid_account_id: "plaid-acc-pagination-001"
+        name: "Chase Checking"
+        type: "depository"
+        subtype: "checking"
+        current_balance: 10000.00
+        available_balance: 9500.00
+
+    # Generate 600 transactions (more than 1 page)
+    # This simulates a user with high transaction volume
+    generate_transactions:
+      template: "grocery_shopping"
+      count: 600  # Exceeds typical 500-transaction page size
+      date_range: "last_90_days"
+
+  steps:
+    # Step 1: Fire INITIAL_UPDATE webhook (first sync with pagination)
+    - action: "api_call"
+      method: "POST"
+      endpoint: "/api/v1/plaid/webhook"
+      body:
+        webhook_type: "TRANSACTIONS"
+        webhook_code: "INITIAL_UPDATE"
+        item_id: "plaid-sandbox-pagination-001"
+      expect_status: 200
+
+    # Step 2: Wait for webhook processing (pagination may take longer)
+    - action: "delay"
+      duration: 10000  # 10 seconds for multi-page processing
+
+  assertions:
+    database:
+      # Assertion 1: Should have all 600 transactions (no data loss across pages)
+      - description: "Should have all 600 transactions (complete pagination)"
+        query: |
+          SELECT COUNT(*) as count
+          FROM transactions t
+          JOIN accounts a ON t.account_id = a.id
+          WHERE a.id = 'account-pagination-001'
+        expected:
+          count: 600
+
+      # Assertion 2: Should have no duplicate transactions
+      # (duplicates are a common pagination bug)
+      - description: "Should have no duplicate transactions"
+        query: |
+          SELECT COUNT(*) as duplicate_count
+          FROM (
+            SELECT external_transaction_id, COUNT(*) as cnt
+            FROM transactions t
+            JOIN accounts a ON t.account_id = a.id
+            WHERE a.id = 'account-pagination-001'
+            GROUP BY external_transaction_id
+            HAVING COUNT(*) > 1
+          ) duplicates
+        expected:
+          duplicate_count: 0
+
+      # Assertion 3: All transactions should have unique external IDs
+      - description: "All transactions should have unique external IDs"
+        query: |
+          SELECT COUNT(DISTINCT external_transaction_id) as unique_count
+          FROM transactions t
+          JOIN accounts a ON t.account_id = a.id
+          WHERE a.id = 'account-pagination-001'
+        expected:
+          unique_count: 600
+
+      # Assertion 4: Cursor should be updated (pagination complete)
+      - description: "Linked item cursor should be updated after pagination"
+        query: |
+          SELECT cursor
+          FROM linked_items
+          WHERE id = 'linked-item-pagination-001'
+        expected_not_null: ["cursor"]
+
+      # Assertion 5: All transactions should have valid data
+      - description: "All transactions should have required fields populated"
+        query: |
+          SELECT COUNT(*) as count
+          FROM transactions t
+          JOIN accounts a ON t.account_id = a.id
+          WHERE a.id = 'account-pagination-001'
+          AND (
+            t.external_transaction_id IS NULL
+            OR t.amount IS NULL
+            OR t.date IS NULL
+            OR t.name IS NULL
+          )
+        expected:
+          count: 0
+
+      # Assertion 6: Transactions should span the expected date range
+      - description: "Transactions should cover the last 90 days"
+        query: |
+          SELECT
+            MIN(date) as earliest_date,
+            MAX(date) as latest_date
+          FROM transactions t
+          JOIN accounts a ON t.account_id = a.id
+          WHERE a.id = 'account-pagination-001'
+        expected_min:
+          earliest_date: "2024-01-01"  # At least 90 days ago
+        expected_not_null: ["earliest_date", "latest_date"]
+
+    api:
+      # Assertion 7: GET /transactions should return paginated results
+      - description: "GET /transactions should return transactions with pagination support"
+        method: "GET"
+        endpoint: "/api/v1/transactions?account_id=account-pagination-001&limit=100"
+        expect_status: 200
+        expect_body_contains: ["id", "amount", "date"]
+
+  cleanup:
+    strategy: "truncate_all"
