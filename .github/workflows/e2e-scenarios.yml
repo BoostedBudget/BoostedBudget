@@ -1,0 +1,322 @@
+name: E2E Scenarios
+
+# Trigger on pull requests - quality gate for critical scenarios
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'frontend/e2e/**'
+      - 'backend/**'
+      - '.github/workflows/e2e-scenarios.yml'
+
+# Cancel in-progress runs for the same PR
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.25'
+  NODE_VERSION: '20'
+  POSTGRES_VERSION: '15'
+
+jobs:
+  # =============================================================================
+  # E2E Scenarios - YAML-Driven Regression Tests
+  # =============================================================================
+  e2e-scenarios:
+    name: E2E Scenarios (YAML-Driven)
+    runs-on: [self-hosted, macOS, mac-mini]
+    timeout-minutes: 30
+    env:
+      UNIQUE_WORKSPACE: workspace-e2e-scenarios-${{ github.run_id }}
+
+    steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          clean: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # ---------------------------------------------------------------------------
+      # Install Dependencies
+      # ---------------------------------------------------------------------------
+      - name: Install frontend dependencies
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        run: |
+          echo "📦 Installing frontend dependencies..."
+          for i in 1 2 3 4; do
+            echo "npm ci attempt $i/4..."
+            npm ci --prefer-offline --no-audit && {
+              echo "✅ Dependencies installed"
+              break
+            } || {
+              echo "⚠️ npm ci attempt $i/4 failed"
+              npm cache clean --force
+              [ $i -lt 4 ] && sleep 10
+            }
+          done
+
+      - name: Install Playwright browsers
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        run: |
+          echo "🎭 Installing Playwright browsers..."
+          for i in 1 2 3; do
+            npx playwright install --with-deps chromium && {
+              echo "✅ Browsers installed"
+              break
+            } || {
+              echo "⚠️ Install attempt $i/3 failed"
+              [ $i -lt 3 ] && sleep 15
+            }
+          done
+
+      - name: Install backend dependencies
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        run: |
+          echo "📦 Installing backend dependencies..."
+          go mod download
+
+      # ---------------------------------------------------------------------------
+      # Start Test Services (Docker Compose)
+      # ---------------------------------------------------------------------------
+      - name: Start test services (Docker Compose)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend/e2e
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: |
+          echo "::group::Starting test services"
+
+          # Stop any existing test services from previous runs
+          docker-compose -f docker-compose.test.yml down -v 2>/dev/null || true
+
+          # Pull images with retry
+          for i in 1 2 3; do
+            docker-compose -f docker-compose.test.yml pull && {
+              echo "✅ Images pulled"
+              break
+            } || {
+              echo "⚠️ Pull attempt $i/3 failed"
+              [ $i -lt 3 ] && sleep 10
+            }
+          done
+
+          # Start services in detached mode
+          docker-compose -f docker-compose.test.yml up -d
+
+          echo "Waiting for services to be ready..."
+          sleep 10
+
+          # Get dynamically assigned ports
+          POSTGRES_PORT=$(docker-compose -f docker-compose.test.yml port postgres-test 5432 | cut -d: -f2)
+          REDIS_PORT=$(docker-compose -f docker-compose.test.yml port redis-test 6379 | cut -d: -f2)
+          BACKEND_PORT=$(docker-compose -f docker-compose.test.yml port backend-test 8080 | cut -d: -f2)
+
+          echo "Dynamic ports assigned:"
+          echo "  PostgreSQL: $POSTGRES_PORT"
+          echo "  Redis: $REDIS_PORT"
+          echo "  Backend: $BACKEND_PORT"
+
+          # Export for subsequent steps
+          echo "POSTGRES_PORT=$POSTGRES_PORT" >> $GITHUB_ENV
+          echo "REDIS_PORT=$REDIS_PORT" >> $GITHUB_ENV
+          echo "BACKEND_PORT=$BACKEND_PORT" >> $GITHUB_ENV
+          echo "TEST_DATABASE_URL=postgresql://testuser:testpass@localhost:$POSTGRES_PORT/boostedbudget_test" >> $GITHUB_ENV
+          echo "API_BASE_URL=http://localhost:$BACKEND_PORT" >> $GITHUB_ENV
+
+          # Verify PostgreSQL is ready
+          for i in {1..30}; do
+            if docker-compose -f docker-compose.test.yml exec -T postgres-test pg_isready -U testuser > /dev/null 2>&1; then
+              echo "✅ PostgreSQL is ready!"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "::error::Timeout waiting for PostgreSQL"
+              docker-compose -f docker-compose.test.yml logs postgres-test
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # Verify Redis is ready
+          for i in {1..30}; do
+            if docker-compose -f docker-compose.test.yml exec -T redis-test redis-cli ping > /dev/null 2>&1; then
+              echo "✅ Redis is ready!"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "::error::Timeout waiting for Redis"
+              docker-compose -f docker-compose.test.yml logs redis-test
+              exit 1
+            fi
+            sleep 1
+          done
+
+          echo "::notice::✅ All test services ready on dynamic ports"
+          echo "::endgroup::"
+
+      - name: Show service status
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend/e2e
+        run: |
+          echo "::group::Service status"
+          docker-compose -f docker-compose.test.yml ps
+          echo "::endgroup::"
+
+      # ---------------------------------------------------------------------------
+      # Setup Test Databases
+      # ---------------------------------------------------------------------------
+      - name: Create test databases for parallel workers
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend/e2e
+        env:
+          TEST_DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+        run: |
+          echo "::group::Creating worker databases"
+
+          # Run global setup to create 4 worker databases
+          npx tsx setup/create-test-databases.ts
+
+          echo "::notice::✅ Worker databases created"
+          echo "::endgroup::"
+
+      - name: Run database migrations on all worker databases
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        env:
+          POSTGRES_PORT: ${{ env.POSTGRES_PORT }}
+        run: |
+          echo "::group::Running migrations on worker databases"
+
+          # Run migrations on each worker database
+          for i in 0 1 2 3; do
+            echo "Migrating worker database $i..."
+            DATABASE_URL="postgresql://testuser:testpass@localhost:$POSTGRES_PORT/boostedbudget_test_worker_$i?sslmode=disable" \
+              atlas migrate apply \
+                --dir file://migrations \
+                --url "postgresql://testuser:testpass@localhost:$POSTGRES_PORT/boostedbudget_test_worker_$i?sslmode=disable" || {
+                echo "::error::Migration failed for worker $i"
+                exit 1
+              }
+          done
+
+          echo "::notice::✅ All worker databases migrated"
+          echo "::endgroup::"
+
+      # ---------------------------------------------------------------------------
+      # Run E2E Scenarios (Parallel with 4 Workers)
+      # ---------------------------------------------------------------------------
+      - name: Run E2E scenarios
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        env:
+          CI: true
+          E2E_SCENARIOS_MODE: true
+          TEST_DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+          API_BASE_URL: ${{ env.API_BASE_URL }}
+          POSTGRES_PORT: ${{ env.POSTGRES_PORT }}
+          # Worker-specific database URLs (Playwright will use based on TEST_PARALLEL_INDEX)
+          TEST_DATABASE_URL_0: postgresql://testuser:testpass@localhost:${{ env.POSTGRES_PORT }}/boostedbudget_test_worker_0
+          TEST_DATABASE_URL_1: postgresql://testuser:testpass@localhost:${{ env.POSTGRES_PORT }}/boostedbudget_test_worker_1
+          TEST_DATABASE_URL_2: postgresql://testuser:testpass@localhost:${{ env.POSTGRES_PORT }}/boostedbudget_test_worker_2
+          TEST_DATABASE_URL_3: postgresql://testuser:testpass@localhost:${{ env.POSTGRES_PORT }}/boostedbudget_test_worker_3
+        run: |
+          echo "::group::Running E2E scenarios with 4 parallel workers"
+
+          # Run scenarios with Playwright
+          # --workers=4 enables parallel execution
+          # Each worker gets its own isolated database
+          npx playwright test e2e/scenarios/**/*.spec.ts \
+            --workers=4 \
+            --reporter=list,html \
+            --output=test-results || {
+            echo "::error::E2E scenarios failed"
+            exit 1
+          }
+
+          echo "::notice::✅ All E2E scenarios passed"
+          echo "::endgroup::"
+
+      # ---------------------------------------------------------------------------
+      # Upload Artifacts
+      # ---------------------------------------------------------------------------
+      - name: Upload Playwright HTML report
+        if: success() || failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: playwright-e2e-scenarios-report-${{ github.run_id }}
+          path: ${{ env.UNIQUE_WORKSPACE }}/frontend/playwright-report/
+          retention-days: 30
+
+      - name: Upload test results (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: playwright-e2e-scenarios-results-${{ github.run_id }}
+          path: ${{ env.UNIQUE_WORKSPACE }}/frontend/test-results/
+          retention-days: 7
+
+      - name: Upload scenario screenshots (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: playwright-e2e-scenarios-screenshots-${{ github.run_id }}
+          path: ${{ env.UNIQUE_WORKSPACE }}/frontend/test-results/**/*.png
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Upload scenario videos (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: playwright-e2e-scenarios-videos-${{ github.run_id }}
+          path: ${{ env.UNIQUE_WORKSPACE }}/frontend/test-results/**/*.webm
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # ---------------------------------------------------------------------------
+      # Show Service Logs (on failure)
+      # ---------------------------------------------------------------------------
+      - name: Show service logs on failure
+        if: failure()
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend/e2e
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: |
+          echo "::group::PostgreSQL logs"
+          docker-compose -f docker-compose.test.yml logs postgres-test
+          echo "::endgroup::"
+
+          echo "::group::Redis logs"
+          docker-compose -f docker-compose.test.yml logs redis-test
+          echo "::endgroup::"
+
+          echo "::group::Backend logs"
+          docker-compose -f docker-compose.test.yml logs backend-test
+          echo "::endgroup::"
+
+      # ---------------------------------------------------------------------------
+      # Cleanup
+      # ---------------------------------------------------------------------------
+      - name: Stop test services
+        if: always()
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend/e2e
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: |
+          echo "::group::Stopping test services"
+          docker-compose -f docker-compose.test.yml down -v
+          echo "::notice::✅ Test services stopped"
+          echo "::endgroup::"
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true

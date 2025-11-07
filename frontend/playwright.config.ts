@@ -30,10 +30,12 @@ export default defineConfig({
   // Retry on CI only
   retries: process.env.CI ? 2 : 0,
 
-  // Opt out of parallel tests on CI
-  // Limit to 2 workers locally to prevent memory exhaustion (was 8 on 8-core system)
+  // Parallel workers:
+  // - CI scenarios: 4 workers for E2E scenarios (worker-specific databases)
+  // - CI regular: 1 worker for traditional E2E tests
+  // - Local: 2 workers to prevent memory exhaustion
   // See: Memory leak investigation Oct 2025 - saves 1.5GB vs unlimited workers
-  workers: process.env.CI ? 1 : 2,
+  workers: process.env.E2E_SCENARIOS_MODE ? 4 : (process.env.CI ? 1 : 2),
 
   // Reporter to use
   reporter: [

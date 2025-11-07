@@ -8,13 +8,13 @@ services:
   # PostgreSQL Test Database
   postgres-test:
     image: postgres:15-alpine
-    container_name: boostedbudget-postgres-test
+    container_name: boostedbudget-postgres-test-${GITHUB_RUN_ID:-local}
     environment:
       POSTGRES_DB: boostedbudget_test
       POSTGRES_USER: testuser
       POSTGRES_PASSWORD: testpass
     ports:
-      - "5433:5432"  # Different port to avoid conflict with dev DB
+      - "5432"  # Dynamic port assignment to avoid conflicts
     volumes:
       - postgres-test-data:/var/lib/postgresql/data
     healthcheck:
@@ -29,9 +29,9 @@ services:
   # Redis Test Cache
   redis-test:
     image: redis:7-alpine
-    container_name: boostedbudget-redis-test
+    container_name: boostedbudget-redis-test-${GITHUB_RUN_ID:-local}
     ports:
-      - "6380:6379"  # Different port to avoid conflict with dev Redis
+      - "6379"  # Dynamic port assignment to avoid conflicts
     volumes:
       - redis-test-data:/data
     healthcheck:
@@ -48,9 +48,9 @@ services:
     build:
       context: ../../backend
       dockerfile: Dockerfile.dev
-    container_name: boostedbudget-backend-test
+    container_name: boostedbudget-backend-test-${GITHUB_RUN_ID:-local}
     ports:
-      - "8081:8080"  # Different port to avoid conflict with dev backend
+      - "8080"  # Dynamic port assignment to avoid conflicts
     environment:
       PORT: "8080"
       ENVIRONMENT: "test"
