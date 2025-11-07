@@ -16,7 +16,8 @@ export default defineConfig({
     port: parseInt(process.env.PORT || process.env.E2E_FRONTEND_PORT || '3000'),
     host: '0.0.0.0', // Explicitly bind to all interfaces for Tailscale access
     // HTTPS configuration for Tailscale access (self-signed cert)
-    https: fs.existsSync(path.resolve(__dirname, './cert.pem')) ? {
+    // Disabled in E2E test environments via E2E_DISABLE_HTTPS env var
+    https: (process.env.E2E_DISABLE_HTTPS !== 'true' && fs.existsSync(path.resolve(__dirname, './cert.pem'))) ? {
       key: fs.readFileSync(path.resolve(__dirname, './key.pem')),
       cert: fs.readFileSync(path.resolve(__dirname, './cert.pem')),
     } : undefined,

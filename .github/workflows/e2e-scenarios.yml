@@ -229,6 +229,7 @@ jobs:
         env:
           CI: true
           E2E_SCENARIOS_MODE: true
+          E2E_DISABLE_HTTPS: true
           TEST_DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
           API_BASE_URL: ${{ env.API_BASE_URL }}
           POSTGRES_PORT: ${{ env.POSTGRES_PORT }}
