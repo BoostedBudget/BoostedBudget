@@ -34,8 +34,8 @@ test.describe('P0: Tier Limit Enforcement', () => {
 
     // Create scenario loader
     loader = new ScenarioLoader(
-      path.join(__dirname, '..'),  // scenarios dir
-      path.join(__dirname, '../../templates')  // templates dir
+      path.join(import.meta.dirname, '..'),  // scenarios dir
+      path.join(import.meta.dirname, '../../templates')  // templates dir
     );
 
     // Create scenario runner
@@ -55,7 +55,7 @@ test.describe('P0: Tier Limit Enforcement', () => {
 
   test('should enforce free tier 3-account monthly limit', async ({ page }) => {
     // Load scenario from YAML
-    const scenarioPath = path.join(__dirname, '04-tier-limit-enforcement.yaml');
+    const scenarioPath = path.join(import.meta.dirname, '04-tier-limit-enforcement.yaml');
     const scenario = await loader.load(scenarioPath);
 
     // Run scenario

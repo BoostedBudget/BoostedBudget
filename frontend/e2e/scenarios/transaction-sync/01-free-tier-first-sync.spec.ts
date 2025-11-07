@@ -34,8 +34,8 @@ test.describe('P0: Free Tier First Sync', () => {
 
     // Create scenario loader
     loader = new ScenarioLoader(
-      path.join(__dirname, '..'),  // scenarios dir
-      path.join(__dirname, '../../templates')  // templates dir
+      path.join(import.meta.dirname, '..'),  // scenarios dir
+      path.join(import.meta.dirname, '../../templates')  // templates dir
     );
 
     // Create scenario runner
@@ -55,7 +55,7 @@ test.describe('P0: Free Tier First Sync', () => {
 
   test('should limit free tier users to 30 days of transaction history', async ({ page }) => {
     // Load scenario from YAML
-    const scenarioPath = path.join(__dirname, '01-free-tier-first-sync.yaml');
+    const scenarioPath = path.join(import.meta.dirname, '01-free-tier-first-sync.yaml');
     const scenario = await loader.load(scenarioPath);
 
     // Run scenario

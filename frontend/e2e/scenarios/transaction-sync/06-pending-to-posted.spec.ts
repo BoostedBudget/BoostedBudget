@@ -34,8 +34,8 @@ test.describe('P2: Pending to Posted Transactions', () => {
 
     // Create scenario loader
     loader = new ScenarioLoader(
-      path.join(__dirname, '..'),  // scenarios dir
-      path.join(__dirname, '../../templates')  // templates dir
+      path.join(import.meta.dirname, '..'),  // scenarios dir
+      path.join(import.meta.dirname, '../../templates')  // templates dir
     );
 
     // Create scenario runner
@@ -55,7 +55,7 @@ test.describe('P2: Pending to Posted Transactions', () => {
 
   test('should transition pending transactions to posted correctly', async ({ page }) => {
     // Load scenario from YAML
-    const scenarioPath = path.join(__dirname, '06-pending-to-posted.yaml');
+    const scenarioPath = path.join(import.meta.dirname, '06-pending-to-posted.yaml');
     const scenario = await loader.load(scenarioPath);
 
     // Run scenario
