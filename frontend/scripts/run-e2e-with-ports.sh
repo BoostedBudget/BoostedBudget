@@ -16,5 +16,5 @@ echo "  Frontend: $E2E_FRONTEND_PORT"
 echo "  Backend: $E2E_BACKEND_PORT"
 
 # Run Playwright tests directly (not via npm to avoid circular dependency)
-# Exclude scenario tests (they run in e2e-scenarios.yml with Docker Compose + worker databases)
-npx playwright test --ignore-pattern="**/scenarios/**/*.spec.ts" "$@"
+# Scenario tests are excluded via testIgnore in playwright.config.ts (not E2E_SCENARIOS_MODE)
+npx playwright test "$@"
