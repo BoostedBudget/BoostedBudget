@@ -34,8 +34,8 @@ test.describe('P1: Pagination Multi-Page', () => {
 
     // Create scenario loader
     loader = new ScenarioLoader(
-      path.join(__dirname, '..'),  // scenarios dir
-      path.join(__dirname, '../../templates')  // templates dir
+      path.join(import.meta.dirname, '..'),  // scenarios dir
+      path.join(import.meta.dirname, '../../templates')  // templates dir
     );
 
     // Create scenario runner
@@ -55,7 +55,7 @@ test.describe('P1: Pagination Multi-Page', () => {
 
   test('should handle >500 transactions across multiple pages', async ({ page }) => {
     // Load scenario from YAML
-    const scenarioPath = path.join(__dirname, '02-pagination-multi-page.yaml');
+    const scenarioPath = path.join(import.meta.dirname, '02-pagination-multi-page.yaml');
     const scenario = await loader.load(scenarioPath);
 
     // Run scenario

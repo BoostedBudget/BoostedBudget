@@ -34,8 +34,8 @@ test.describe('P1: Item Error - Login Required', () => {
 
     // Create scenario loader
     loader = new ScenarioLoader(
-      path.join(__dirname, '..'),  // scenarios dir
-      path.join(__dirname, '../../templates')  // templates dir
+      path.join(import.meta.dirname, '..'),  // scenarios dir
+      path.join(import.meta.dirname, '../../templates')  // templates dir
     );
 
     // Create scenario runner
@@ -55,7 +55,7 @@ test.describe('P1: Item Error - Login Required', () => {
 
   test('should handle ITEM_LOGIN_REQUIRED error gracefully', async ({ page }) => {
     // Load scenario from YAML
-    const scenarioPath = path.join(__dirname, '05-item-error-login-required.yaml');
+    const scenarioPath = path.join(import.meta.dirname, '05-item-error-login-required.yaml');
     const scenario = await loader.load(scenarioPath);
 
     // Run scenario
