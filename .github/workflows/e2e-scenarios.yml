@@ -133,7 +133,7 @@ jobs:
           echo "POSTGRES_PORT=$POSTGRES_PORT" >> $GITHUB_ENV
           echo "REDIS_PORT=$REDIS_PORT" >> $GITHUB_ENV
           echo "BACKEND_PORT=$BACKEND_PORT" >> $GITHUB_ENV
-          echo "TEST_DATABASE_URL=postgresql://testuser:testpass@localhost:$POSTGRES_PORT/boostedbudget_test" >> $GITHUB_ENV
+          echo "TEST_DATABASE_URL=postgres://testuser:testpass@localhost:$POSTGRES_PORT/boostedbudget_test" >> $GITHUB_ENV
           echo "API_BASE_URL=http://localhost:$BACKEND_PORT" >> $GITHUB_ENV
 
           # Verify PostgreSQL is ready
@@ -184,10 +184,19 @@ jobs:
         run: |
           echo "::group::Creating worker databases"
 
-          # Run global setup to create 4 worker databases
-          npx tsx setup/create-test-databases.ts
+          echo "Environment:"
+          echo "  TEST_DATABASE_URL: ${TEST_DATABASE_URL}"
+          echo "  Worker count: 4"
+          echo ""
 
-          echo "::notice::✅ Worker databases created"
+          # Run setup script with explicit error handling
+          if ! npx tsx setup/create-test-databases.ts; then
+            echo "::error::Failed to create worker databases"
+            echo "::endgroup::"
+            exit 1
+          fi
+
+          echo "::notice::✅ Worker databases created successfully"
           echo "::endgroup::"
 
       - name: Run database migrations on all worker databases
@@ -224,10 +233,10 @@ jobs:
           API_BASE_URL: ${{ env.API_BASE_URL }}
           POSTGRES_PORT: ${{ env.POSTGRES_PORT }}
           # Worker-specific database URLs (Playwright will use based on TEST_PARALLEL_INDEX)
-          TEST_DATABASE_URL_0: postgresql://testuser:testpass@localhost:${{ env.POSTGRES_PORT }}/boostedbudget_test_worker_0
-          TEST_DATABASE_URL_1: postgresql://testuser:testpass@localhost:${{ env.POSTGRES_PORT }}/boostedbudget_test_worker_1
-          TEST_DATABASE_URL_2: postgresql://testuser:testpass@localhost:${{ env.POSTGRES_PORT }}/boostedbudget_test_worker_2
-          TEST_DATABASE_URL_3: postgresql://testuser:testpass@localhost:${{ env.POSTGRES_PORT }}/boostedbudget_test_worker_3
+          TEST_DATABASE_URL_0: postgres://testuser:testpass@localhost:${{ env.POSTGRES_PORT }}/boostedbudget_test_worker_0
+          TEST_DATABASE_URL_1: postgres://testuser:testpass@localhost:${{ env.POSTGRES_PORT }}/boostedbudget_test_worker_1
+          TEST_DATABASE_URL_2: postgres://testuser:testpass@localhost:${{ env.POSTGRES_PORT }}/boostedbudget_test_worker_2
+          TEST_DATABASE_URL_3: postgres://testuser:testpass@localhost:${{ env.POSTGRES_PORT }}/boostedbudget_test_worker_3
         run: |
           echo "::group::Running E2E scenarios with 4 parallel workers"
 

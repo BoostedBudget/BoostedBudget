@@ -7,7 +7,6 @@
  * Issue #331: E2E Test Scenarios Framework
  */
 
-import { execSync } from 'child_process';
 import { Pool } from 'pg';
 
 const WORKER_COUNT = 4; // Matches Playwright workers config
@@ -25,9 +24,13 @@ function parseDatabaseUrl(url: string): {
   port: string;
   database: string;
 } {
-  const match = url.match(/^(postgres:\/\/)([^:]+):([^@]+)@([^:]+):(\d+)\/(.+?)(\?.*)?$/);
+  // Support both postgres:// and postgresql:// protocols
+  // Database name is optional (for connecting to admin 'postgres' database)
+  const match = url.match(/^(postgres(?:ql)?:\/\/)([^:]+):([^@]+)@([^:]+):(\d+)(?:\/([^?]+))?(\?.*)?$/);
   if (!match) {
-    throw new Error(`Invalid database URL format: ${url}`);
+    const errorMsg = `Invalid database URL format: ${url}\nExpected: postgres://user:pass@host:port or postgres://user:pass@host:port/dbname`;
+    console.error(`\n❌ ERROR: ${errorMsg}\n`);
+    throw new Error(errorMsg);
   }
 
   return {
@@ -36,7 +39,7 @@ function parseDatabaseUrl(url: string): {
     password: match[3],
     host: match[4],
     port: match[5],
-    database: match[6],
+    database: match[6] || 'postgres', // Default to 'postgres' if not specified
   };
 }
 
@@ -53,39 +56,16 @@ async function createDatabase(adminPool: Pool, dbName: string): Promise<void> {
 
     if (result.rows.length === 0) {
       // Database doesn't exist, create it
-      console.log(`  Creating database: ${dbName}`);
+      console.log(`  📦 Creating database: ${dbName}`);
       await adminPool.query(`CREATE DATABASE ${dbName}`);
-      console.log(`  ✓ Database ${dbName} created`);
+      console.log(`  ✅ Database ${dbName} created`);
     } else {
-      console.log(`  ✓ Database ${dbName} already exists`);
+      console.log(`  ℹ️  Database ${dbName} already exists (skipping)`);
     }
   } catch (error) {
-    console.error(`  ✗ Failed to create database ${dbName}:`, error);
-    throw error;
-  }
-}
-
-/**
- * Run Atlas migrations on a database
- */
-async function runMigrations(dbUrl: string, dbName: string): Promise<void> {
-  try {
-    console.log(`  Running migrations on: ${dbName}`);
-
-    // Construct full database URL
-    const parsed = parseDatabaseUrl(dbUrl);
-    const fullUrl = `${parsed.protocol}${parsed.user}:${parsed.password}@${parsed.host}:${parsed.port}/${dbName}?sslmode=disable`;
-
-    // Run Atlas migrations
-    // Note: This assumes atlas is available in PATH and migrations are in backend/migrations
-    const migrationDir = 'file://../../backend/migrations';
-    const command = `atlas migrate apply --dir ${migrationDir} --url "${fullUrl}"`;
-
-    execSync(command, { stdio: 'inherit' });
-    console.log(`  ✓ Migrations completed for ${dbName}`);
-  } catch (error) {
-    console.error(`  ✗ Failed to run migrations on ${dbName}:`, error);
-    throw error;
+    console.error(`\n❌ Failed to create database ${dbName}`);
+    console.error('Error details:', error);
+    throw error; // Re-throw to fail the entire setup
   }
 }
 
@@ -94,6 +74,16 @@ async function runMigrations(dbUrl: string, dbName: string): Promise<void> {
  */
 async function globalSetup(): Promise<void> {
   console.log('\n🚀 Setting up E2E test environment...\n');
+
+  // Validate environment first
+  if (!BASE_DB_URL || BASE_DB_URL === 'postgres://testuser:testpass@localhost:5433') {
+    console.error('⚠️  WARNING: Using default TEST_DATABASE_URL');
+    console.error('   Set TEST_DATABASE_URL environment variable for proper database connection\n');
+  }
+
+  console.log('📋 Configuration:');
+  console.log(`  Base URL: ${BASE_DB_URL}`);
+  console.log(`  Worker count: ${WORKER_COUNT}\n`);
 
   const parsed = parseDatabaseUrl(BASE_DB_URL);
 
@@ -119,23 +109,13 @@ async function globalSetup(): Promise<void> {
         `${parsed.protocol}${parsed.user}:${parsed.password}@${parsed.host}:${parsed.port}/${workerDbName}?sslmode=disable`;
     }
 
-    console.log('\n🔧 Running migrations on all databases...\n');
-
-    // Run migrations on main test database
-    await runMigrations(BASE_DB_URL, MAIN_DB_NAME);
-
-    // Run migrations on each worker database
+    console.log('\n✅ All worker databases created successfully!\n');
+    console.log('Created databases:');
+    console.log(`  ${MAIN_DB_NAME} (main test database)`);
     for (let i = 0; i < WORKER_COUNT; i++) {
-      const workerDbName = `boostedbudget_test_worker_${i}`;
-      await runMigrations(BASE_DB_URL, workerDbName);
+      console.log(`  boostedbudget_test_worker_${i} (worker ${i})`);
     }
-
-    console.log('\n✅ E2E test environment setup complete!\n');
-    console.log('Worker database URLs:');
-    for (let i = 0; i < WORKER_COUNT; i++) {
-      console.log(`  Worker ${i}: TEST_DATABASE_URL_${i}=${process.env[`TEST_DATABASE_URL_${i}`]}`);
-    }
-    console.log('');
+    console.log('\n💡 Note: Migrations will be run separately by the workflow\n');
 
   } catch (error) {
     console.error('\n❌ Setup failed:', error);
@@ -145,4 +125,16 @@ async function globalSetup(): Promise<void> {
   }
 }
 
-export default globalSetup;
+// Execute setup when run directly
+globalSetup()
+  .then(() => {
+    console.log('✅ Setup completed successfully\n');
+    process.exit(0);
+  })
+  .catch((error) => {
+    console.error('\n❌ Setup failed:', error);
+    if (error instanceof Error) {
+      console.error('Stack trace:', error.stack);
+    }
+    process.exit(1);
+  });
