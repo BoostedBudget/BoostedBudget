@@ -18,6 +18,9 @@ export default defineConfig({
   // Test directory
   testDir: './e2e',
 
+  // Exclude scenarios from regular E2E runs (they run in e2e-scenarios.yml with Docker Compose)
+  testIgnore: process.env.E2E_SCENARIOS_MODE ? [] : ['**/scenarios/**'],
+
   // Maximum time one test can run
   timeout: 30 * 1000,
 
@@ -79,7 +82,8 @@ export default defineConfig({
     {
       // Pass PORT and E2E_BACKEND_PORT env vars to Vite for dynamic port allocation
       // E2E_BACKEND_PORT is needed for the Vite proxy configuration
-      command: `PORT=${frontendPort} E2E_BACKEND_PORT=${backendPort} npm run dev`,
+      // E2E_DISABLE_HTTPS disables HTTPS in CI environments with self-signed certs
+      command: `PORT=${frontendPort} E2E_BACKEND_PORT=${backendPort} E2E_DISABLE_HTTPS=${process.env.E2E_DISABLE_HTTPS || 'false'} npm run dev`,
       url: `http://localhost:${frontendPort}`,
       reuseExistingServer: !process.env.CI,
       timeout: 120 * 1000,
