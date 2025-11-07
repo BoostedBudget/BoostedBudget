@@ -103,7 +103,7 @@ test.describe('P0: Free Tier First Sync', () => {
     ).toHaveLength(0);
   });
 
-  test('should validate free tier limits are enforced', async ({ page }) => {
+  test('should validate free tier limits are enforced', async ({ page: _page }) => {
     // This test validates the specific business logic of free tier limits
     // by querying the database directly after the scenario runs
 

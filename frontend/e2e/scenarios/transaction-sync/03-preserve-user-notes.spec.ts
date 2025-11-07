@@ -104,7 +104,7 @@ test.describe('P0: Preserve User Notes', () => {
     ).toHaveLength(0);
   });
 
-  test('should verify user notes are never null after sync', async ({ page }) => {
+  test('should verify user notes are never null after sync', async ({ page: _page }) => {
     // This test validates that user notes are never accidentally set to null
     // during sync operations - a common data loss bug pattern
 
@@ -125,7 +125,7 @@ test.describe('P0: Preserve User Notes', () => {
     ).toBe(0);
   });
 
-  test('should verify exact note content preservation', async ({ page }) => {
+  test('should verify exact note content preservation', async ({ page: _page }) => {
     // This test verifies the exact content of user notes
     // to ensure no truncation, encoding issues, or whitespace corruption
 
@@ -155,7 +155,7 @@ test.describe('P0: Preserve User Notes', () => {
     expect(notes[2]?.user_notes).toBe('Reimbursable expense\nReceipt in folder\nSubmit by 01/31');
   });
 
-  test('should prevent accidental note overwriting', async ({ page }) => {
+  test('should prevent accidental note overwriting', async ({ page: _page }) => {
     // This test simulates the specific bug pattern where sync operations
     // accidentally overwrite user notes with empty values or Plaid data
 

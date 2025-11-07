@@ -16,15 +16,15 @@ export interface ApiRequest {
   method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
   url: string;
   headers?: Record<string, string>;
-  params?: Record<string, any>;
-  body?: any;
+  params?: Record<string, unknown>;
+  body?: unknown;
   timeout?: number;
 }
 
 /**
  * API response wrapper
  */
-export interface ApiResponse<T = any> {
+export interface ApiResponse<T = unknown> {
   status: number;
   statusText: string;
   headers: Record<string, string>;
@@ -64,7 +64,7 @@ export class ApiClient {
   /**
    * Make an HTTP request
    */
-  async request<T = any>(config: ApiRequest): Promise<ApiResponse<T>> {
+  async request<T = unknown>(config: ApiRequest): Promise<ApiResponse<T>> {
     const axiosConfig: AxiosRequestConfig = {
       method: config.method,
       url: config.url,
@@ -118,9 +118,9 @@ export class ApiClient {
   /**
    * GET request
    */
-  async get<T = any>(
+  async get<T = unknown>(
     url: string,
-    params?: Record<string, any>,
+    params?: Record<string, unknown>,
     headers?: Record<string, string>
   ): Promise<ApiResponse<T>> {
     return this.request<T>({
@@ -134,9 +134,9 @@ export class ApiClient {
   /**
    * POST request
    */
-  async post<T = any>(
+  async post<T = unknown>(
     url: string,
-    body?: any,
+    body?: unknown,
     headers?: Record<string, string>
   ): Promise<ApiResponse<T>> {
     return this.request<T>({
@@ -150,9 +150,9 @@ export class ApiClient {
   /**
    * PUT request
    */
-  async put<T = any>(
+  async put<T = unknown>(
     url: string,
-    body?: any,
+    body?: unknown,
     headers?: Record<string, string>
   ): Promise<ApiResponse<T>> {
     return this.request<T>({
@@ -166,7 +166,7 @@ export class ApiClient {
   /**
    * DELETE request
    */
-  async delete<T = any>(
+  async delete<T = unknown>(
     url: string,
     headers?: Record<string, string>
   ): Promise<ApiResponse<T>> {
@@ -180,9 +180,9 @@ export class ApiClient {
   /**
    * PATCH request
    */
-  async patch<T = any>(
+  async patch<T = unknown>(
     url: string,
-    body?: any,
+    body?: unknown,
     headers?: Record<string, string>
   ): Promise<ApiResponse<T>> {
     return this.request<T>({

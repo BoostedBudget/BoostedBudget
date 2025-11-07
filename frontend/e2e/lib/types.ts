@@ -112,7 +112,7 @@ export const ApiCallStepSchema = z.object({
   method: z.enum(['GET', 'POST', 'PUT', 'DELETE', 'PATCH']),
   endpoint: z.string(),
   headers: z.record(z.string()).optional(),
-  body: z.any().optional(),
+  body: z.unknown().optional(),
   expect_status: z.number().optional(),
 });
 
@@ -186,7 +186,7 @@ export const StepSchema = z.discriminatedUnion('action', [
 export const DatabaseAssertionSchema = z.object({
   description: z.string(),
   query: z.string(), // SQL query
-  expected: z.record(z.any()).optional(), // Expected exact match
+  expected: z.record(z.unknown()).optional(), // Expected exact match
   expected_min: z.record(z.number()).optional(), // Minimum values
   expected_max: z.record(z.number()).optional(), // Maximum values
   expected_not_null: z.array(z.string()).optional(), // Fields that should not be null
@@ -201,12 +201,12 @@ export const ApiAssertionSchema = z.object({
   description: z.string(),
   method: z.enum(['GET', 'POST', 'PUT', 'DELETE', 'PATCH']),
   endpoint: z.string(),
-  params: z.record(z.any()).optional(),
+  params: z.record(z.unknown()).optional(),
   headers: z.record(z.string()).optional(),
-  body: z.any().optional(),
+  body: z.unknown().optional(),
   expect_status: z.number(),
   expect_body_contains: z.array(z.string()).optional(),
-  assert_response: z.any().optional(), // Complex assertions on response body
+  assert_response: z.unknown().optional(), // Complex assertions on response body
 });
 
 /**
@@ -370,9 +370,9 @@ export interface ScenarioContext {
   auth?: {
     token: string;
   };
-  api_responses: any[];
-  ui_snapshots: any[];
-  [key: string]: any; // Allow dynamic properties
+  api_responses: unknown[];
+  ui_snapshots: unknown[];
+  [key: string]: unknown; // Allow dynamic properties
 }
 
 /**
@@ -381,8 +381,8 @@ export interface ScenarioContext {
 export interface AssertionResult {
   description: string;
   passed: boolean;
-  expected?: any;
-  actual?: any;
+  expected?: unknown;
+  actual?: unknown;
   error?: string;
 }
 
@@ -396,7 +396,7 @@ export interface ScenarioResult {
   assertions: AssertionResult[];
   context: ScenarioContext;
   error?: string;
-  failureContext?: any;
+  failureContext?: unknown;
 }
 
 /**
@@ -408,7 +408,7 @@ export interface FailureContext {
   url: string;
   consoleLogs: Array<{ type: string; text: string; timestamp: number }>;
   networkRequests: Array<{ method: string; url: string; timestamp: number }>;
-  databaseSnapshot: any;
+  databaseSnapshot: unknown;
   contextVariables: string;
   error: {
     message: string;

@@ -94,7 +94,7 @@ export class AssertionRunner {
         };
       }
 
-      const actual = result.rows[0];
+      const actual = result.rows[0] as Record<string, unknown>;
 
       // Check exact match
       if (assertion.expected) {
@@ -112,7 +112,7 @@ export class AssertionRunner {
 
       // Check minimum values
       if (assertion.expected_min) {
-        const match = this.matchesMin(actual, assertion.expected_min);
+        const match = this.matchesMin(actual, assertion.expected_min as Record<string, number>);
         if (!match.passed) {
           return {
             description: assertion.description,
@@ -126,7 +126,7 @@ export class AssertionRunner {
 
       // Check maximum values
       if (assertion.expected_max) {
-        const match = this.matchesMax(actual, assertion.expected_max);
+        const match = this.matchesMax(actual, assertion.expected_max as Record<string, number>);
         if (!match.passed) {
           return {
             description: assertion.description,
@@ -154,7 +154,7 @@ export class AssertionRunner {
 
       // Check greater than
       if (assertion.expected_greater_than) {
-        const match = this.matchesGreaterThan(actual, assertion.expected_greater_than);
+        const match = this.matchesGreaterThan(actual, assertion.expected_greater_than as Record<string, number>);
         if (!match.passed) {
           return {
             description: assertion.description,
@@ -168,7 +168,7 @@ export class AssertionRunner {
 
       // Check less than
       if (assertion.expected_less_than) {
-        const match = this.matchesLessThan(actual, assertion.expected_less_than);
+        const match = this.matchesLessThan(actual, assertion.expected_less_than as Record<string, number>);
         if (!match.passed) {
           return {
             description: assertion.description,
@@ -186,11 +186,12 @@ export class AssertionRunner {
         expected: assertion.expected,
         actual,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       return {
         description: assertion.description,
         passed: false,
-        error: `Database assertion failed: ${error.message}`,
+        error: `Database assertion failed: ${errorMessage}`,
       };
     }
   }
@@ -206,7 +207,7 @@ export class AssertionRunner {
       // Resolve variables in endpoint and body
       const endpoint = this.resolveVariables(assertion.endpoint, context);
       const params = assertion.params
-        ? this.resolveVariablesInObject(assertion.params, context)
+        ? this.resolveVariablesInObject(assertion.params, context) as Record<string, unknown>
         : undefined;
       const body = assertion.body
         ? this.resolveVariablesInObject(assertion.body, context)
@@ -218,7 +219,7 @@ export class AssertionRunner {
         url: endpoint,
         params,
         body,
-        headers: assertion.headers,
+        headers: assertion.headers as Record<string, string>,
       });
 
       // Check status code
@@ -257,11 +258,12 @@ export class AssertionRunner {
         expected: `status ${assertion.expect_status}`,
         actual: response.data,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       return {
         description: assertion.description,
         passed: false,
-        error: `API assertion failed: ${error.message}`,
+        error: `API assertion failed: ${errorMessage}`,
       };
     }
   }
@@ -351,11 +353,12 @@ export class AssertionRunner {
         description: assertion.description,
         passed: true,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       return {
         description: assertion.description,
         passed: false,
-        error: `UI assertion failed: ${error.message}`,
+        error: `UI assertion failed: ${errorMessage}`,
       };
     }
   }
@@ -364,8 +367,8 @@ export class AssertionRunner {
    * Check if actual matches expected (exact match)
    */
   private matchesExpected(
-    actual: any,
-    expected: Record<string, any>
+    actual: Record<string, unknown>,
+    expected: Record<string, unknown>
   ): { passed: boolean; error?: string } {
     for (const [key, value] of Object.entries(expected)) {
       if (actual[key] !== value) {
@@ -382,14 +385,15 @@ export class AssertionRunner {
    * Check if actual meets minimum values
    */
   private matchesMin(
-    actual: any,
+    actual: Record<string, unknown>,
     min: Record<string, number>
   ): { passed: boolean; error?: string } {
     for (const [key, minValue] of Object.entries(min)) {
-      if (actual[key] < minValue) {
+      const actualValue = actual[key];
+      if (typeof actualValue === 'number' && actualValue < minValue) {
         return {
           passed: false,
-          error: `Field "${key}": expected >= ${minValue}, got ${actual[key]}`,
+          error: `Field "${key}": expected >= ${minValue}, got ${actualValue}`,
         };
       }
     }
@@ -400,14 +404,15 @@ export class AssertionRunner {
    * Check if actual meets maximum values
    */
   private matchesMax(
-    actual: any,
+    actual: Record<string, unknown>,
     max: Record<string, number>
   ): { passed: boolean; error?: string } {
     for (const [key, maxValue] of Object.entries(max)) {
-      if (actual[key] > maxValue) {
+      const actualValue = actual[key];
+      if (typeof actualValue === 'number' && actualValue > maxValue) {
         return {
           passed: false,
-          error: `Field "${key}": expected <= ${maxValue}, got ${actual[key]}`,
+          error: `Field "${key}": expected <= ${maxValue}, got ${actualValue}`,
         };
       }
     }
@@ -418,7 +423,7 @@ export class AssertionRunner {
    * Check if fields are not null
    */
   private matchesNotNull(
-    actual: any,
+    actual: Record<string, unknown>,
     fields: string[]
   ): { passed: boolean; error?: string } {
     for (const field of fields) {
@@ -436,14 +441,15 @@ export class AssertionRunner {
    * Check if actual is greater than expected
    */
   private matchesGreaterThan(
-    actual: any,
+    actual: Record<string, unknown>,
     greaterThan: Record<string, number>
   ): { passed: boolean; error?: string } {
     for (const [key, value] of Object.entries(greaterThan)) {
-      if (actual[key] <= value) {
+      const actualValue = actual[key];
+      if (typeof actualValue === 'number' && actualValue <= value) {
         return {
           passed: false,
-          error: `Field "${key}": expected > ${value}, got ${actual[key]}`,
+          error: `Field "${key}": expected > ${value}, got ${actualValue}`,
         };
       }
     }
@@ -454,14 +460,15 @@ export class AssertionRunner {
    * Check if actual is less than expected
    */
   private matchesLessThan(
-    actual: any,
+    actual: Record<string, unknown>,
     lessThan: Record<string, number>
   ): { passed: boolean; error?: string } {
     for (const [key, value] of Object.entries(lessThan)) {
-      if (actual[key] >= value) {
+      const actualValue = actual[key];
+      if (typeof actualValue === 'number' && actualValue >= value) {
         return {
           passed: false,
-          error: `Field "${key}": expected < ${value}, got ${actual[key]}`,
+          error: `Field "${key}": expected < ${value}, got ${actualValue}`,
         };
       }
     }
@@ -474,7 +481,7 @@ export class AssertionRunner {
   private resolveVariables(value: string, context: ScenarioContext): string {
     return value.replace(/\{\{\s*([^}]+)\s*\}\}/g, (match, path) => {
       const keys = path.trim().split('.');
-      let result: any = context;
+      let result: unknown = context;
 
       for (const key of keys) {
         // Handle array notation: accounts[0]
@@ -482,9 +489,16 @@ export class AssertionRunner {
         if (arrayMatch) {
           const arrayName = arrayMatch[1];
           const index = parseInt(arrayMatch[2], 10);
-          result = result?.[arrayName]?.[index];
+          if (result && typeof result === 'object' && arrayName in result) {
+            const arrayValue = (result as Record<string, unknown>)[arrayName];
+            if (Array.isArray(arrayValue)) {
+              result = arrayValue[index];
+            }
+          }
         } else {
-          result = result?.[key];
+          if (result && typeof result === 'object' && key in result) {
+            result = (result as Record<string, unknown>)[key];
+          }
         }
       }
 
@@ -495,7 +509,7 @@ export class AssertionRunner {
   /**
    * Resolve variables in an object
    */
-  private resolveVariablesInObject(obj: any, context: ScenarioContext): any {
+  private resolveVariablesInObject(obj: unknown, context: ScenarioContext): unknown {
     if (typeof obj === 'string') {
       return this.resolveVariables(obj, context);
     }
@@ -505,7 +519,7 @@ export class AssertionRunner {
     }
 
     if (typeof obj === 'object' && obj !== null) {
-      const resolved: any = {};
+      const resolved: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(obj)) {
         resolved[key] = this.resolveVariablesInObject(value, context);
       }

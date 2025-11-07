@@ -15,10 +15,6 @@ import type {
   SetupConfig,
   Step,
   ScenarioContext,
-  User,
-  LinkedItem,
-  Account,
-  Transaction,
   AssertionResult,
 } from './types';
 import { ScenarioLoader } from './scenario-loader';
@@ -26,7 +22,7 @@ import { DatabaseSeeder } from './seeding';
 import { FixtureGenerator } from './fixtures';
 import { ApiClient } from './api-client';
 import { AssertionRunner } from './assertions';
-import { CleanupManager, CleanupStrategy } from './cleanup';
+import { CleanupManager } from './cleanup';
 
 /**
  * Scenario execution result
@@ -149,7 +145,7 @@ export class ScenarioRunner {
         context,
         assertions: assertionResults,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Attempt cleanup even on failure
       const cleanupStart = Date.now();
       if (!this.config.skipCleanup) {
@@ -161,6 +157,7 @@ export class ScenarioRunner {
       }
       cleanupDuration = Date.now() - cleanupStart;
 
+      const errorMessage = error instanceof Error ? error.message : String(error);
       return {
         scenario: scenario.scenario.name,
         success: false,
@@ -171,7 +168,7 @@ export class ScenarioRunner {
         cleanupDuration,
         context,
         assertions: [],
-        error: `Scenario execution failed: ${error.message}`,
+        error: `Scenario execution failed: ${errorMessage}`,
       };
     }
   }
@@ -288,7 +285,7 @@ export class ScenarioRunner {
         break;
 
       default:
-        throw new Error(`Unknown step action: ${(step as any).action}`);
+        throw new Error(`Unknown step action: ${(step as Step).action}`);
     }
   }
 
