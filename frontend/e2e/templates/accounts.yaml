@@ -1,0 +1,251 @@
+# Account Templates
+# Issue #331: E2E Test Scenarios Framework
+#
+# Reusable account configurations for different account types
+# Reference these in scenarios using YAML anchors/aliases
+#
+# Usage:
+#   accounts:
+#     - <<: *checking_account
+#       linked_item_id: "{{ linked_items[0].id }}"
+#       name: "Chase Checking"
+
+# ============================================================================
+# CHECKING ACCOUNT
+# ============================================================================
+
+checking_account: &checking_account
+  type: "depository"
+  subtype: "checking"
+  current_balance: 5000.00
+  available_balance: 4800.00
+  # Typical checking account:
+  #   - Daily transactions
+  #   - Bill payments
+  #   - Direct deposits
+  #   - ATM withdrawals
+
+# Example usage:
+# accounts:
+#   - <<: *checking_account
+#     linked_item_id: "{{ linked_items[0].id }}"
+#     name: "Chase Everyday Checking"
+
+# ============================================================================
+# SAVINGS ACCOUNT
+# ============================================================================
+
+savings_account: &savings_account
+  type: "depository"
+  subtype: "savings"
+  current_balance: 10000.00
+  available_balance: 10000.00
+  # Typical savings account:
+  #   - Higher balance
+  #   - Fewer transactions
+  #   - Interest deposits
+  #   - Transfers to/from checking
+
+# Example usage:
+# accounts:
+#   - <<: *savings_account
+#     linked_item_id: "{{ linked_items[0].id }}"
+#     name: "Chase Savings"
+
+# ============================================================================
+# CREDIT CARD
+# ============================================================================
+
+credit_card: &credit_card
+  type: "credit"
+  subtype: "credit card"
+  current_balance: -1500.00  # Negative = owed to bank
+  available_balance: 8500.00  # $10k limit - $1.5k used = $8.5k available
+  # Typical credit card:
+  #   - Negative balance (debt)
+  #   - Monthly statement
+  #   - Purchase transactions
+  #   - Payment transactions
+
+# Example usage:
+# accounts:
+#   - <<: *credit_card
+#     linked_item_id: "{{ linked_items[0].id }}"
+#     name: "Chase Sapphire Preferred"
+
+# ============================================================================
+# LOAN ACCOUNT (e.g., mortgage, auto loan)
+# ============================================================================
+
+loan_account: &loan_account
+  type: "loan"
+  subtype: "mortgage"
+  current_balance: -250000.00  # Negative = owed to lender
+  available_balance: 0.00  # No available credit for loans
+  # Typical loan account:
+  #   - Large negative balance
+  #   - Monthly payment transactions
+  #   - Interest charges
+  #   - Principal paydown
+
+# Example usage:
+# accounts:
+#   - <<: *loan_account
+#     linked_item_id: "{{ linked_items[0].id }}"
+#     name: "Home Mortgage"
+
+# ============================================================================
+# INVESTMENT ACCOUNT
+# ============================================================================
+
+investment_account: &investment_account
+  type: "investment"
+  subtype: "brokerage"
+  current_balance: 50000.00
+  available_balance: 50000.00
+  # Typical investment account:
+  #   - Stock purchases/sales
+  #   - Dividend deposits
+  #   - Capital gains/losses
+  #   - Portfolio rebalancing
+
+# Example usage:
+# accounts:
+#   - <<: *investment_account
+#     linked_item_id: "{{ linked_items[0].id }}"
+#     name: "Fidelity Brokerage"
+
+# ============================================================================
+# ACCOUNT BALANCE VARIATIONS
+# ============================================================================
+
+# Low balance checking (near zero)
+low_balance_checking: &low_balance_checking
+  <<: *checking_account
+  current_balance: 50.00
+  available_balance: 25.00
+  # Use for testing:
+  #   - Overdraft scenarios
+  #   - Low balance alerts
+  #   - Spending limits
+
+# High balance checking (wealthy user)
+high_balance_checking: &high_balance_checking
+  <<: *checking_account
+  current_balance: 250000.00
+  available_balance: 250000.00
+  # Use for testing:
+  #   - Large transactions
+  #   - Bulk spending
+  #   - Premium features
+
+# Maxed out credit card
+maxed_credit_card: &maxed_credit_card
+  <<: *credit_card
+  current_balance: -10000.00  # Full limit used
+  available_balance: 0.00  # No available credit
+  # Use for testing:
+  #   - Credit limit alerts
+  #   - Declined transactions
+  #   - Payment required warnings
+
+# Nearly paid off credit card
+low_balance_credit_card: &low_balance_credit_card
+  <<: *credit_card
+  current_balance: -100.00  # Only $100 owed
+  available_balance: 9900.00  # Almost full limit available
+  # Use for testing:
+  #   - Pay off scenarios
+  #   - Low utilization
+
+# ============================================================================
+# MULTI-ACCOUNT SCENARIOS
+# ============================================================================
+
+# Complete banking setup (checking + savings + credit)
+standard_banking_setup: &standard_banking_setup
+  - <<: *checking_account
+    name: "Primary Checking"
+  - <<: *savings_account
+    name: "Emergency Fund"
+  - <<: *credit_card
+    name: "Rewards Credit Card"
+
+# Example usage:
+# accounts: *standard_banking_setup
+# Note: Each account still needs linked_item_id set via variable interpolation
+
+# ============================================================================
+# SPECIFIC INSTITUTION TEMPLATES
+# ============================================================================
+
+# Chase checking with realistic naming
+chase_checking: &chase_checking
+  <<: *checking_account
+  name: "Chase Total Checking"
+
+# Bank of America checking
+bofa_checking: &bofa_checking
+  <<: *checking_account
+  name: "Bank of America Advantage Banking"
+
+# Wells Fargo checking
+wells_fargo_checking: &wells_fargo_checking
+  <<: *checking_account
+  name: "Wells Fargo Everyday Checking"
+
+# Capital One credit card
+capital_one_credit: &capital_one_credit
+  <<: *credit_card
+  name: "Capital One Quicksilver"
+
+# ============================================================================
+# ACCOUNT STATES FOR TESTING
+# ============================================================================
+
+# Active account (normal state)
+active_account: &active_account
+  <<: *checking_account
+  # No special state - default
+
+# Account with pending transactions
+account_with_pending: &account_with_pending
+  <<: *checking_account
+  current_balance: 5000.00
+  available_balance: 4700.00  # $300 pending
+  # Use with pending transactions in setup
+
+# Account needing reauth (login required)
+account_login_required: &account_login_required
+  <<: *checking_account
+  # Associated linked_item should have status: "login_required"
+  # Use for testing error handling
+
+# Inactive/closed account
+closed_account: &closed_account
+  <<: *checking_account
+  current_balance: 0.00
+  available_balance: 0.00
+  # Use for testing account closure scenarios
+
+# ============================================================================
+# NOTES
+# ============================================================================
+
+# Account Types (Plaid standard):
+#   - depository: checking, savings, money market
+#   - credit: credit card, line of credit
+#   - loan: mortgage, auto loan, student loan
+#   - investment: brokerage, 401k, IRA
+#   - other: other types not categorized above
+#
+# Balance Conventions:
+#   - Depository: Positive = money you have
+#   - Credit: Negative = money you owe
+#   - Loan: Negative = money you owe
+#   - Investment: Positive = portfolio value
+#
+# Testing Strategy:
+#   - Use standard templates for normal flows
+#   - Use variation templates for edge cases
+#   - Use state templates for error scenarios

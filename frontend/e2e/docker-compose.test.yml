@@ -1,0 +1,108 @@
+version: '3.9'
+
+# E2E Test Environment
+# Isolated services with different ports to avoid conflicts with development environment
+# Issue #331: E2E Test Scenarios Framework
+
+services:
+  # PostgreSQL Test Database
+  postgres-test:
+    image: postgres:15-alpine
+    container_name: boostedbudget-postgres-test
+    environment:
+      POSTGRES_DB: boostedbudget_test
+      POSTGRES_USER: testuser
+      POSTGRES_PASSWORD: testpass
+    ports:
+      - "5433:5432"  # Different port to avoid conflict with dev DB
+    volumes:
+      - postgres-test-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U testuser -d boostedbudget_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - test-network
+
+  # Redis Test Cache
+  redis-test:
+    image: redis:7-alpine
+    container_name: boostedbudget-redis-test
+    ports:
+      - "6380:6379"  # Different port to avoid conflict with dev Redis
+    volumes:
+      - redis-test-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks:
+      - test-network
+
+  # Backend API Test Server
+  backend-test:
+    build:
+      context: ../../backend
+      dockerfile: Dockerfile.dev
+    container_name: boostedbudget-backend-test
+    ports:
+      - "8081:8080"  # Different port to avoid conflict with dev backend
+    environment:
+      PORT: "8080"
+      ENVIRONMENT: "test"
+      VERSION: "0.1.0-test"
+      PRIMARY_REGION: "iad"
+      TEST_MODE: "true"
+
+      # Database connection (points to postgres-test service)
+      DATABASE_URL: "postgres://testuser:testpass@postgres-test:5432/boostedbudget_test?sslmode=disable"
+
+      # Redis connection (points to redis-test service)
+      REDIS_URL: "redis://redis-test:6379"
+
+      # Auth0 test tenant (use test credentials)
+      AUTH0_DOMAIN: "${TEST_AUTH0_DOMAIN:-test-boostedbudget.us.auth0.com}"
+      AUTH0_AUDIENCE: "${TEST_AUTH0_AUDIENCE:-https://api.test.boostedbudget.com}"
+      AUTH0_CLIENT_ID: "${TEST_AUTH0_CLIENT_ID}"
+      AUTH0_CLIENT_SECRET: "${TEST_AUTH0_CLIENT_SECRET}"
+
+      # Plaid sandbox configuration
+      PLAID_CLIENT_ID: "${TEST_PLAID_CLIENT_ID}"
+      PLAID_SECRET: "${TEST_PLAID_SECRET}"
+      PLAID_ENV: "sandbox"
+      PLAID_REDIRECT_URI: "http://localhost:3000/oauth/callback"
+      PLAID_WEBHOOK_URL: "http://localhost:8081/api/v1/webhooks/plaid"
+
+      # Disable external services that aren't needed for tests
+      RABBITMQ_ENABLED: "false"
+      STRIPE_ENABLED: "false"
+      ADSENSE_ENABLED: "false"
+
+      # Test-specific settings
+      LOG_LEVEL: "debug"
+      ENABLE_ADMIN_ENDPOINTS: "true"
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s  # Allow time for migrations
+    networks:
+      - test-network
+
+volumes:
+  postgres-test-data:
+  redis-test-data:
+
+networks:
+  test-network:
+    driver: bridge

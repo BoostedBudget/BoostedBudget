@@ -1,0 +1,230 @@
+# P2 Scenario: Removed Transactions
+# Issue #331: E2E Test Scenarios Framework
+#
+# Tests that the system handles TRANSACTIONS_REMOVED webhook correctly,
+# deleting transactions that were retroactively removed by the financial institution.
+#
+# MEDIUM PRIORITY: Important edge case for data consistency
+#
+# Expected Behavior:
+#   - TRANSACTIONS_REMOVED webhook contains list of transaction IDs
+#   - System deletes corresponding transactions from database
+#   - User notes on other transactions are preserved
+#   - Account balances remain accurate
+#   - No orphaned data left behind
+#
+# This scenario verifies retroactive transaction deletion maintains data integrity.
+
+version: "1.0"
+
+scenario:
+  name: "removed-transactions"
+  description: "Verify TRANSACTIONS_REMOVED webhook correctly deletes retroactively removed transactions"
+  category: "transaction-sync"
+
+  setup:
+    # Create premium user (has full transaction history)
+    user:
+      id: "test-removed-txn-001"
+      email: "removed-txn@test.example.com"
+      tier: "premium"
+      auth0_user_id: "auto-generate"
+
+    # Create Plaid linked item
+    linked_items:
+      - id: "linked-item-removed-001"
+        item_id: "plaid-sandbox-removed-001"
+        institution: "Chase"
+        institution_id: "ins_3"
+        cursor: "cursor-after-initial-sync"
+        status: "active"
+
+    # Create checking account
+    accounts:
+      - id: "account-removed-001"
+        linked_item_id: "linked-item-removed-001"
+        plaid_account_id: "plaid-acc-removed-001"
+        name: "Chase Checking"
+        type: "depository"
+        subtype: "checking"
+        current_balance: 5000.00
+        available_balance: 4800.00
+
+    # Create 5 existing transactions (some will be removed)
+    existing_transactions:
+      # Transaction 1: Will be REMOVED (duplicate charge)
+      - id: "txn-to-remove-001"
+        account_id: "account-removed-001"
+        external_transaction_id: "plaid-txn-removed-001"
+        amount: -100.00
+        date: "2024-01-15"
+        name: "Duplicate Charge"
+        merchant_name: "Electronics Store"
+        category: "Shopping"
+        user_notes: "This is a duplicate charge - should be removed"
+
+      # Transaction 2: Will be REMOVED (erroneous charge)
+      - id: "txn-to-remove-002"
+        account_id: "account-removed-001"
+        external_transaction_id: "plaid-txn-removed-002"
+        amount: -250.00
+        date: "2024-01-14"
+        name: "Erroneous Charge"
+        merchant_name: "Random Merchant"
+        category: "Other"
+        user_notes: "Error - never authorized this"
+
+      # Transaction 3: Will STAY (legitimate transaction)
+      - id: "txn-to-keep-001"
+        account_id: "account-removed-001"
+        external_transaction_id: "plaid-txn-keep-001"
+        amount: -50.00
+        date: "2024-01-13"
+        name: "Grocery Store"
+        merchant_name: "Whole Foods"
+        category: "Groceries"
+        user_notes: "Weekly groceries - important note to preserve"
+
+      # Transaction 4: Will STAY (paycheck)
+      - id: "txn-to-keep-002"
+        account_id: "account-removed-001"
+        external_transaction_id: "plaid-txn-keep-002"
+        amount: 3000.00
+        date: "2024-01-10"
+        name: "Payroll Deposit"
+        merchant_name: "Employer Inc"
+        category: "Income"
+        user_notes: "Biweekly paycheck"
+
+      # Transaction 5: Will be REMOVED (reversed payment)
+      - id: "txn-to-remove-003"
+        account_id: "account-removed-001"
+        external_transaction_id: "plaid-txn-removed-003"
+        amount: -75.00
+        date: "2024-01-12"
+        name: "Reversed Payment"
+        merchant_name: "Service Provider"
+        category: "Services"
+
+  steps:
+    # Step 1: Verify initial state (5 transactions exist)
+    - action: "api_call"
+      method: "GET"
+      endpoint: "/api/v1/transactions?account_id=account-removed-001"
+      expect_status: 200
+      save_as: "initial_transactions"
+
+    # Step 2: Fire TRANSACTIONS_REMOVED webhook
+    # This simulates financial institution retroactively removing transactions
+    - action: "api_call"
+      method: "POST"
+      endpoint: "/api/v1/plaid/webhook"
+      body:
+        webhook_type: "TRANSACTIONS"
+        webhook_code: "TRANSACTIONS_REMOVED"
+        item_id: "plaid-sandbox-removed-001"
+        removed_transactions:
+          - "plaid-txn-removed-001"  # Duplicate charge
+          - "plaid-txn-removed-002"  # Erroneous charge
+          - "plaid-txn-removed-003"  # Reversed payment
+      expect_status: 200
+
+    # Step 3: Wait for webhook processing
+    - action: "delay"
+      duration: 3000
+
+  assertions:
+    database:
+      # Assertion 1: Should have exactly 2 remaining transactions
+      - description: "Should have 2 transactions remaining after removal (3 removed from 5)"
+        query: |
+          SELECT COUNT(*) as count
+          FROM transactions
+          WHERE account_id = 'account-removed-001'
+        expected:
+          count: 2
+
+      # Assertion 2: Removed transactions should not exist in database
+      - description: "Removed transactions should not exist in database"
+        query: |
+          SELECT COUNT(*) as count
+          FROM transactions
+          WHERE account_id = 'account-removed-001'
+          AND external_transaction_id IN (
+            'plaid-txn-removed-001',
+            'plaid-txn-removed-002',
+            'plaid-txn-removed-003'
+          )
+        expected:
+          count: 0
+
+      # Assertion 3: Remaining transactions should still exist
+      - description: "Remaining transactions should be preserved"
+        query: |
+          SELECT COUNT(*) as count
+          FROM transactions
+          WHERE account_id = 'account-removed-001'
+          AND external_transaction_id IN (
+            'plaid-txn-keep-001',
+            'plaid-txn-keep-002'
+          )
+        expected:
+          count: 2
+
+      # Assertion 4: User notes on remaining transactions should be preserved
+      - description: "User notes on remaining transactions should be preserved"
+        query: |
+          SELECT user_notes
+          FROM transactions
+          WHERE external_transaction_id = 'plaid-txn-keep-001'
+        expected:
+          user_notes: "Weekly groceries - important note to preserve"
+
+      # Assertion 5: All remaining transactions should have valid data
+      - description: "Remaining transactions should have complete data"
+        query: |
+          SELECT COUNT(*) as count
+          FROM transactions
+          WHERE account_id = 'account-removed-001'
+          AND (
+            external_transaction_id IS NULL
+            OR amount IS NULL
+            OR date IS NULL
+            OR name IS NULL
+          )
+        expected:
+          count: 0
+
+      # Assertion 6: Verify specific kept transactions by external ID
+      - description: "Verify grocery transaction was kept"
+        query: |
+          SELECT
+            external_transaction_id,
+            amount,
+            merchant_name
+          FROM transactions
+          WHERE external_transaction_id = 'plaid-txn-keep-001'
+        expected:
+          external_transaction_id: "plaid-txn-keep-001"
+          amount: -50.00
+          merchant_name: "Whole Foods"
+
+      # Assertion 7: Verify paycheck was kept
+      - description: "Verify paycheck transaction was kept"
+        query: |
+          SELECT amount
+          FROM transactions
+          WHERE external_transaction_id = 'plaid-txn-keep-002'
+        expected:
+          amount: 3000.00
+
+    api:
+      # Assertion 8: GET /transactions should return only 2 transactions
+      - description: "GET /transactions should return 2 remaining transactions"
+        method: "GET"
+        endpoint: "/api/v1/transactions?account_id=account-removed-001"
+        expect_status: 200
+        expect_body_contains: ["id", "amount", "date"]
+
+  cleanup:
+    strategy: "truncate_all"

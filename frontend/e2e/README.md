@@ -274,10 +274,153 @@ npm run test:e2e:debug
    - Keyboard navigation
    - Screen reader compatibility
 
+---
+
+## E2E Test Scenarios Framework (Issue #331)
+
+**Status**: Phase 1 Complete ✅
+
+A new YAML-driven regression testing framework is being built to complement the existing E2E tests. This framework provides:
+
+- **Configuration-driven scenarios**: Write tests in YAML, no code changes needed
+- **Database-per-worker isolation**: True parallel execution without test pollution
+- **Template system**: Reusable YAML templates for DRY scenarios
+- **CI/CD integration**: Automatic execution on every PR
+- **Context compaction resilience**: PROGRESS.md preserves all knowledge
+
+### Architecture
+
+**Test Environment** (`docker-compose.test.yml`):
+- `postgres-test`: Port 5433 (4 worker databases for parallel execution)
+- `redis-test`: Port 6380
+- `backend-test`: Port 8081 (test mode, admin endpoints enabled)
+
+**Directory Structure**:
+```
+e2e/
+├── docker-compose.test.yml      # ✅ Isolated test environment
+├── PROGRESS.md                  # ✅ Implementation progress tracking
+├── setup/
+│   └── create-test-databases.ts # ✅ Database-per-worker setup
+├── lib/                         # 🔄 Core framework (Phase 2)
+│   ├── types.ts                 # TypeScript types + Zod schemas
+│   ├── scenario-loader.ts       # YAML parser + validator
+│   ├── scenario-runner.ts       # Main executor
+│   ├── fixtures.ts              # Data generators
+│   ├── seeding.ts               # Database seeding
+│   ├── assertions.ts            # DB/API/UI assertions
+│   └── cleanup.ts               # Cleanup manager
+├── scenarios/                   # ⏳ YAML scenarios (Phase 3-4)
+│   ├── transaction-sync/        # Transaction sync tests
+│   ├── budgets/                 # Budget tests (Phase 3 ready)
+│   └── rules/                   # Rule tests (Phase 4 ready)
+└── templates/                   # ⏳ Reusable templates (Phase 3)
+    ├── users.yaml               # User tier templates
+    ├── accounts.yaml            # Account templates
+    └── transactions.yaml        # Transaction templates
+```
+
+### Quick Start (Scenarios Framework)
+
+**1. Start test environment**:
+```bash
+docker-compose -f e2e/docker-compose.test.yml up -d
+```
+
+**2. Configure test credentials**:
+```bash
+# Copy example files
+cp ../backend/.env.test.example ../backend/.env.test
+cp .env.test.example .env.test
+
+# Edit with your test Auth0/Plaid credentials
+```
+
+**3. Run scenarios** (once Phase 2+ complete):
+```bash
+npm run test:scenarios
+```
+
+### Implementation Progress
+
+**Phase 1** (✅ Complete): Test environment setup
+- docker-compose.test.yml with isolated services
+- Database-per-worker isolation (4 databases)
+- Environment configuration files
+- Setup documentation
+
+**Phase 2** (🔄 Next): Core framework implementation
+- TypeScript framework modules
+- YAML parser + validation (Zod)
+- Database seeding utilities
+- Assertion runners (DB/API/UI)
+
+**Phase 3** (⏳ Pending): Template system
+- YAML schema documentation
+- Reusable templates (users, accounts, transactions, budgets, rules)
+- Template loading and validation
+
+**Phase 4** (⏳ Pending): Core scenarios
+- 14 scenarios across 4 categories
+- P0 critical scenarios (data loss prevention, revenue protection)
+- P1 high-priority scenarios
+- P2 user journey scenarios
+
+**Phase 5** (⏳ Pending): CI/CD integration
+- GitHub Actions workflow
+- Parallel execution (4 workers)
+- Artifact uploads on failure
+- Target: <15 minutes for full suite
+
+**Phase 6** (⏳ Pending): Advanced features
+- Custom Playwright reporter
+- Plugin architecture (budgets, rules)
+- Performance benchmarking
+
+### Design Decisions
+
+**Format**: YAML (proven in Issue #314, js-yaml installed, team familiar)
+**Isolation**: Database-per-worker (prevents pollution, enables parallelization)
+**Cleanup**: TRUNCATE CASCADE (fast, safe, keeps schema)
+**Variables**: Handlebars-style `{{ user.id }}` interpolation
+**Templates**: YAML anchors/aliases for DRY patterns
+
+### Resources
+
+- **Issue #331**: E2E Test Scenarios Framework
+- **Issue #314**: Staging Population Framework (YAML inspiration)
+- **PROGRESS.md**: Complete implementation log with decisions, learnings, gotchas
+
+### Troubleshooting (Scenarios Framework)
+
+**Services won't start**:
+```bash
+# Check port conflicts
+lsof -i :5433 -i :6380 -i :8081
+
+# Clean up
+docker-compose -f e2e/docker-compose.test.yml down -v
+```
+
+**Database connection errors**:
+```bash
+# Check postgres-test health
+docker-compose -f e2e/docker-compose.test.yml ps
+
+# View logs
+docker logs boostedbudget-postgres-test
+```
+
+**See PROGRESS.md** for detailed troubleshooting and known issues.
+
+---
+
 ## References
 
 - [Playwright Documentation](https://playwright.dev/)
 - [Auth0 Testing Guide](https://auth0.com/docs/test)
 - [GDPR Cookie Consent Best Practices](https://gdpr.eu/cookies/)
 - Issue #12: Phase 0 Integration Testing
+- Issue #331: E2E Test Scenarios Framework
 - `boosted-budget-complete-plan.md`: Phase 0 requirements
+- `PROGRESS.md`: E2E Scenarios Framework implementation progress

@@ -1,0 +1,491 @@
+# Automation Rules Templates
+# Issue #331: E2E Test Scenarios Framework
+#
+# Reusable automation rule configurations for testing (Phase 4+)
+# These templates are FUTURE-READY for when automation rules are implemented
+#
+# Usage:
+#   rules:
+#     - <<: *auto_categorize_rule
+#       user_id: "{{ user.id }}"
+
+# ============================================================================
+# BASIC RULE TYPES
+# ============================================================================
+
+# Auto-categorize rule (change transaction category)
+auto_categorize_rule: &auto_categorize_rule
+  name: "Auto-categorize Rule"
+  rule_type: "auto_categorize"
+  priority: 1  # Lower number = higher priority
+  enabled: true
+  conditions:
+    - field: "merchant_name"
+      operator: "equals"
+      value: "Starbucks"
+  actions:
+    - type: "set_category"
+      value: "Food and Drink"
+  # Note: Rules not yet implemented (Phase 4+)
+
+# Auto-note rule (add notes to matching transactions)
+auto_note_rule: &auto_note_rule
+  name: "Auto-note Rule"
+  rule_type: "auto_note"
+  priority: 2
+  enabled: true
+  conditions:
+    - field: "category"
+      operator: "equals"
+      value: "Travel"
+  actions:
+    - type: "append_note"
+      value: "Business trip expense"
+
+# Auto-split rule (split transactions)
+auto_split_rule: &auto_split_rule
+  name: "Auto-split Rule"
+  rule_type: "auto_split"
+  priority: 3
+  enabled: true
+  conditions:
+    - field: "merchant_name"
+      operator: "contains"
+      value: "Costco"
+  actions:
+    - type: "split_transaction"
+      splits:
+        - category: "Groceries"
+          percentage: 60
+        - category: "Household"
+          percentage: 40
+
+# Auto-hide rule (hide unwanted transactions)
+auto_hide_rule: &auto_hide_rule
+  name: "Auto-hide Rule"
+  rule_type: "auto_hide"
+  priority: 4
+  enabled: true
+  conditions:
+    - field: "amount"
+      operator: "equals"
+      value: "0.00"
+  actions:
+    - type: "hide_transaction"
+
+# ============================================================================
+# CONDITION OPERATORS
+# ============================================================================
+
+# Equals condition
+equals_condition: &equals_condition
+  field: "merchant_name"
+  operator: "equals"
+  value: "Amazon"
+
+# Contains condition
+contains_condition: &contains_condition
+  field: "name"
+  operator: "contains"
+  value: "Starbucks"
+
+# Greater than condition
+greater_than_condition: &greater_than_condition
+  field: "amount"
+  operator: "greater_than"
+  value: "100.00"
+
+# Less than condition
+less_than_condition: &less_than_condition
+  field: "amount"
+  operator: "less_than"
+  value: "10.00"
+
+# In list condition
+in_list_condition: &in_list_condition
+  field: "category"
+  operator: "in"
+  value: ["Food and Drink", "Groceries", "Restaurant"]
+
+# Regex match condition
+regex_condition: &regex_condition
+  field: "merchant_name"
+  operator: "matches"
+  value: "^Amazon.*"
+
+# ============================================================================
+# MERCHANT-SPECIFIC RULES
+# ============================================================================
+
+# Amazon auto-categorize
+amazon_rule: &amazon_rule
+  <<: *auto_categorize_rule
+  name: "Amazon → Shopping"
+  conditions:
+    - field: "merchant_name"
+      operator: "contains"
+      value: "Amazon"
+  actions:
+    - type: "set_category"
+      value: "Shopping"
+
+# Starbucks auto-categorize
+starbucks_rule: &starbucks_rule
+  <<: *auto_categorize_rule
+  name: "Starbucks → Coffee"
+  conditions:
+    - field: "merchant_name"
+      operator: "contains"
+      value: "Starbucks"
+  actions:
+    - type: "set_category"
+      value: "Food and Drink"
+
+# Uber auto-categorize
+uber_rule: &uber_rule
+  <<: *auto_categorize_rule
+  name: "Uber → Transportation"
+  conditions:
+    - field: "merchant_name"
+      operator: "contains"
+      value: "Uber"
+  actions:
+    - type: "set_category"
+      value: "Transportation"
+
+# Netflix auto-categorize
+netflix_rule: &netflix_rule
+  <<: *auto_categorize_rule
+  name: "Netflix → Entertainment"
+  conditions:
+    - field: "merchant_name"
+      operator: "equals"
+      value: "Netflix"
+  actions:
+    - type: "set_category"
+      value: "Entertainment"
+
+# ============================================================================
+# AMOUNT-BASED RULES
+# ============================================================================
+
+# Large transaction alert
+large_transaction_rule: &large_transaction_rule
+  <<: *auto_note_rule
+  name: "Large Transaction Alert"
+  conditions:
+    - field: "amount"
+      operator: "less_than"  # Negative amount (expense)
+      value: "-1000.00"
+  actions:
+    - type: "append_note"
+      value: "⚠️ Large expense - review"
+    - type: "send_alert"
+      value: "email"
+
+# Small transaction hide
+micro_transaction_rule: &micro_transaction_rule
+  <<: *auto_hide_rule
+  name: "Hide Micro Transactions"
+  conditions:
+    - field: "amount"
+      operator: "greater_than"
+      value: "-5.00"
+    - field: "amount"
+      operator: "less_than"
+      value: "0.00"
+  actions:
+    - type: "hide_transaction"
+
+# Round dollar categorization
+round_amount_rule: &round_amount_rule
+  <<: *auto_note_rule
+  name: "Round Amount Note"
+  conditions:
+    - field: "amount"
+      operator: "matches"
+      value: "^-?\\d+\\.00$"  # Regex for .00 amounts
+  actions:
+    - type: "append_note"
+      value: "Round dollar amount"
+
+# ============================================================================
+# CATEGORY-BASED RULES
+# ============================================================================
+
+# Business expense rule
+business_expense_rule: &business_expense_rule
+  <<: *auto_note_rule
+  name: "Mark Business Expenses"
+  conditions:
+    - field: "category"
+      operator: "in"
+      value: ["Travel", "Transportation", "Gas"]
+  actions:
+    - type: "append_note"
+      value: "🧾 Business expense"
+    - type: "add_tag"
+      value: "business"
+
+# Personal expense rule
+personal_expense_rule: &personal_expense_rule
+  <<: *auto_note_rule
+  name: "Mark Personal Expenses"
+  conditions:
+    - field: "category"
+      operator: "in"
+      value: ["Entertainment", "Shopping", "Dining"]
+  actions:
+    - type: "add_tag"
+      value: "personal"
+
+# ============================================================================
+# COMPLEX MULTI-CONDITION RULES
+# ============================================================================
+
+# Business lunch (dining + weekday + working hours)
+business_lunch_rule: &business_lunch_rule
+  <<: *auto_categorize_rule
+  name: "Business Lunch Detection"
+  priority: 1
+  conditions:
+    - field: "category"
+      operator: "equals"
+      value: "Food and Drink"
+    - field: "amount"
+      operator: "less_than"
+      value: "-20.00"
+    - field: "day_of_week"
+      operator: "in"
+      value: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+  actions:
+    - type: "append_note"
+      value: "Potential business lunch"
+    - type: "add_tag"
+      value: "business"
+
+# Weekend entertainment (higher spending on weekends)
+weekend_entertainment_rule: &weekend_entertainment_rule
+  <<: *auto_note_rule
+  name: "Weekend Entertainment"
+  priority: 2
+  conditions:
+    - field: "category"
+      operator: "equals"
+      value: "Entertainment"
+    - field: "day_of_week"
+      operator: "in"
+      value: ["Saturday", "Sunday"]
+  actions:
+    - type: "add_tag"
+      value: "weekend"
+
+# ============================================================================
+# RULE PRIORITY EXAMPLES
+# ============================================================================
+
+# High priority rule (executes first)
+high_priority_rule: &high_priority_rule
+  <<: *auto_categorize_rule
+  priority: 1  # Lower number = higher priority
+  name: "High Priority Rule"
+
+# Medium priority rule
+medium_priority_rule: &medium_priority_rule
+  <<: *auto_categorize_rule
+  priority: 5
+  name: "Medium Priority Rule"
+
+# Low priority rule (executes last)
+low_priority_rule: &low_priority_rule
+  <<: *auto_categorize_rule
+  priority: 10
+  name: "Low Priority Rule"
+
+# ============================================================================
+# RULE STATES FOR TESTING
+# ============================================================================
+
+# Active rule
+active_rule: &active_rule
+  <<: *auto_categorize_rule
+  enabled: true
+
+# Disabled rule
+disabled_rule: &disabled_rule
+  <<: *auto_categorize_rule
+  enabled: false
+
+# Rule with execution count (for idempotency testing)
+executed_rule: &executed_rule
+  <<: *auto_categorize_rule
+  execution_count: 5
+  last_executed_at: "2024-01-15T10:30:00Z"
+
+# ============================================================================
+# TIER-SPECIFIC RULE SETS
+# ============================================================================
+
+# Free tier (max 1 rule)
+free_tier_rules: &free_tier_rules
+  - <<: *amazon_rule
+    priority: 1
+  # Free tier limit: 1 automation rule only
+
+# Premium Lite tier (max 5 rules)
+premium_lite_rules: &premium_lite_rules
+  - <<: *amazon_rule
+    priority: 1
+  - <<: *starbucks_rule
+    priority: 2
+  - <<: *uber_rule
+    priority: 3
+  - <<: *netflix_rule
+    priority: 4
+  - <<: *large_transaction_rule
+    priority: 5
+  # Premium Lite limit: 5 automation rules
+
+# Premium tier (max 15 rules)
+premium_rules: &premium_rules
+  - <<: *amazon_rule
+    priority: 1
+  - <<: *starbucks_rule
+    priority: 2
+  - <<: *uber_rule
+    priority: 3
+  - <<: *netflix_rule
+    priority: 4
+  - <<: *large_transaction_rule
+    priority: 5
+  - <<: *business_expense_rule
+    priority: 6
+  # ... up to 15 rules for premium tier
+
+# Premium Plus tier (unlimited rules)
+premium_plus_rules: &premium_plus_rules
+  - <<: *amazon_rule
+  - <<: *starbucks_rule
+  - <<: *uber_rule
+  - <<: *netflix_rule
+  - <<: *large_transaction_rule
+  - <<: *business_expense_rule
+  - <<: *personal_expense_rule
+  - <<: *business_lunch_rule
+  - <<: *weekend_entertainment_rule
+  # ... unlimited rules for premium plus tier
+
+# ============================================================================
+# RULE CONFLICT SCENARIOS
+# ============================================================================
+
+# Conflicting rules (same transaction, different actions)
+conflicting_rules:
+  - <<: *auto_categorize_rule
+    name: "Rule A: Set to Shopping"
+    priority: 1
+    actions:
+      - type: "set_category"
+        value: "Shopping"
+  - <<: *auto_categorize_rule
+    name: "Rule B: Set to Entertainment"
+    priority: 2
+    actions:
+      - type: "set_category"
+        value: "Entertainment"
+  # Use for testing rule priority and conflict resolution
+  # Expected: Rule A executes (higher priority), Rule B skipped
+
+# Cascading rules (rule A triggers, then rule B)
+cascading_rules:
+  - <<: *auto_categorize_rule
+    name: "Rule A: Set category"
+    priority: 1
+    actions:
+      - type: "set_category"
+        value: "Shopping"
+  - <<: *auto_note_rule
+    name: "Rule B: Add note to Shopping"
+    priority: 2
+    conditions:
+      - field: "category"
+        operator: "equals"
+        value: "Shopping"
+    actions:
+      - type: "append_note"
+        value: "Categorized by Rule A"
+  # Use for testing rule chaining
+
+# ============================================================================
+# RULE IDEMPOTENCY TESTING
+# ============================================================================
+
+# Idempotent rule (safe to run multiple times)
+idempotent_rule: &idempotent_rule
+  <<: *auto_categorize_rule
+  name: "Idempotent Rule"
+  conditions:
+    - field: "merchant_name"
+      operator: "equals"
+      value: "Starbucks"
+  actions:
+    - type: "set_category"
+      value: "Food and Drink"
+  # Running twice should produce same result (no duplicate actions)
+
+# Non-idempotent rule (appends notes)
+non_idempotent_rule: &non_idempotent_rule
+  <<: *auto_note_rule
+  name: "Non-Idempotent Rule"
+  actions:
+    - type: "append_note"
+      value: "Rule executed"
+  # Running twice would append note twice (may need deduplication)
+
+# ============================================================================
+# NOTES
+# ============================================================================
+
+# Rule Types (Phase 4+):
+#   - auto_categorize: Change transaction category
+#   - auto_note: Add notes to transactions
+#   - auto_split: Split transactions into multiple categories
+#   - auto_hide: Hide unwanted transactions
+#   - auto_tag: Add tags for organization
+#
+# Condition Operators:
+#   - equals: Exact match
+#   - contains: Substring match
+#   - greater_than: Numeric comparison
+#   - less_than: Numeric comparison
+#   - in: Value in list
+#   - matches: Regex match
+#
+# Rule Priority:
+#   - Lower number = higher priority (1 executes before 10)
+#   - Rules with same priority execute in creation order
+#   - Conflicting actions: Higher priority rule wins
+#
+# Tier Limits (from config/subscription_tiers.yaml):
+#   - Free: 1 automation rule
+#   - Premium Lite: 5 automation rules
+#   - Premium: 15 automation rules
+#   - Premium Plus: Unlimited automation rules
+#
+# Idempotency:
+#   - set_category, set_field: Idempotent (same result if run twice)
+#   - append_note, add_tag: Non-idempotent (appends each time)
+#   - Best practice: Check if note/tag already exists before adding
+#
+# Testing Strategy:
+#   - Use merchant-specific rules for realistic scenarios
+#   - Use amount-based rules for edge cases
+#   - Use priority conflicts for rule engine testing
+#   - Use tier-specific sets for limit enforcement tests
+#   - Use idempotency tests for webhook replay scenarios
+#
+# Future Enhancement:
+#   - ML-powered rule suggestions
+#   - Shared rules (household accounts)
+#   - Scheduled rules (time-based activation)
+#   - Conditional actions (if-then-else logic)

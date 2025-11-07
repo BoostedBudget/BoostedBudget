@@ -1,0 +1,241 @@
+# P2 Scenario: Pending to Posted Transactions
+# Issue #331: E2E Test Scenarios Framework
+#
+# Tests that the system correctly handles transaction state transitions
+# from pending to posted (settled) status.
+#
+# MEDIUM PRIORITY: Important for accurate transaction tracking
+#
+# Expected Behavior:
+#   - Pending transactions are created with pending=true
+#   - When transaction posts, pending flag changes to false
+#   - Amount may change slightly (final vs authorization amount)
+#   - Date may change (pending date vs posted date)
+#   - User notes are preserved during transition
+#   - Transaction ID remains the same (not duplicate)
+#
+# This scenario verifies state transitions maintain data integrity.
+
+version: "1.0"
+
+scenario:
+  name: "pending-to-posted"
+  description: "Verify pending transactions correctly transition to posted status"
+  category: "transaction-sync"
+
+  setup:
+    # Create premium user
+    user:
+      id: "test-pending-001"
+      email: "pending@test.example.com"
+      tier: "premium"
+      auth0_user_id: "auto-generate"
+
+    # Create Plaid linked item
+    linked_items:
+      - id: "linked-item-pending-001"
+        item_id: "plaid-sandbox-pending-001"
+        institution: "Chase"
+        institution_id: "ins_3"
+        cursor: null
+        status: "active"
+
+    # Create credit card account
+    accounts:
+      - id: "account-pending-001"
+        linked_item_id: "linked-item-pending-001"
+        plaid_account_id: "plaid-acc-pending-001"
+        name: "Chase Credit Card"
+        type: "credit"
+        subtype: "credit card"
+        current_balance: -500.00
+        available_balance: 9500.00
+
+    # Create pending transactions (authorization holds)
+    existing_transactions:
+      # Transaction 1: Pending gas purchase (will post with same amount)
+      - id: "txn-pending-001"
+        account_id: "account-pending-001"
+        external_transaction_id: "plaid-txn-pending-001"
+        amount: -55.00
+        date: "2024-01-15"
+        name: "Shell Gas Station"
+        merchant_name: "Shell"
+        category: "Gas"
+        pending: true
+        user_notes: "Fill up - work trip"
+
+      # Transaction 2: Pending restaurant charge (amount will change when posted)
+      - id: "txn-pending-002"
+        account_id: "account-pending-001"
+        external_transaction_id: "plaid-txn-pending-002"
+        amount: -45.00  # Authorization amount
+        date: "2024-01-14"
+        name: "Restaurant"
+        merchant_name: "Olive Garden"
+        category: "Dining"
+        pending: true
+        user_notes: "Team lunch - add tip later"
+
+      # Transaction 3: Pending hotel hold (will post with different date)
+      - id: "txn-pending-003"
+        account_id: "account-pending-001"
+        external_transaction_id: "plaid-txn-pending-003"
+        amount: -200.00
+        date: "2024-01-13"
+        name: "Hotel Reservation"
+        merchant_name: "Marriott"
+        category: "Travel"
+        pending: true
+
+  steps:
+    # Step 1: Verify initial state (3 pending transactions)
+    - action: "api_call"
+      method: "GET"
+      endpoint: "/api/v1/transactions?account_id=account-pending-001&pending=true"
+      expect_status: 200
+      save_as: "initial_pending"
+
+    # Step 2: Fire DEFAULT_UPDATE webhook with posted versions
+    # Transaction 1: Posts with same amount (gas purchase)
+    # Transaction 2: Posts with higher amount (tip added to restaurant)
+    # Transaction 3: Posts with different date (hotel checkout)
+    - action: "api_call"
+      method: "POST"
+      endpoint: "/api/v1/plaid/webhook"
+      body:
+        webhook_type: "TRANSACTIONS"
+        webhook_code: "DEFAULT_UPDATE"
+        item_id: "plaid-sandbox-pending-001"
+        new_transactions:
+          # Posted version of transaction 1 (same amount)
+          - transaction_id: "plaid-txn-pending-001"
+            amount: -55.00
+            date: "2024-01-15"
+            name: "Shell Gas Station"
+            merchant_name: "Shell"
+            category: "Gas"
+            pending: false
+
+          # Posted version of transaction 2 (tip added, amount changed)
+          - transaction_id: "plaid-txn-pending-002"
+            amount: -54.50  # +$9.50 tip (was -$45.00)
+            date: "2024-01-14"
+            name: "Restaurant"
+            merchant_name: "Olive Garden"
+            category: "Dining"
+            pending: false
+
+          # Posted version of transaction 3 (checkout date different)
+          - transaction_id: "plaid-txn-pending-003"
+            amount: -200.00
+            date: "2024-01-16"  # Posted on checkout date (was 01-13)
+            name: "Hotel Reservation"
+            merchant_name: "Marriott"
+            category: "Travel"
+            pending: false
+      expect_status: 200
+
+    # Step 3: Wait for webhook processing
+    - action: "delay"
+      duration: 3000
+
+  assertions:
+    database:
+      # Assertion 1: Should still have exactly 3 transactions (not duplicated)
+      - description: "Should have 3 transactions (no duplicates after posting)"
+        query: |
+          SELECT COUNT(*) as count
+          FROM transactions
+          WHERE account_id = 'account-pending-001'
+        expected:
+          count: 3
+
+      # Assertion 2: All transactions should now be posted (pending=false)
+      - description: "All transactions should be posted (pending=false)"
+        query: |
+          SELECT COUNT(*) as count
+          FROM transactions
+          WHERE account_id = 'account-pending-001'
+          AND pending = false
+        expected:
+          count: 3
+
+      # Assertion 3: No pending transactions should remain
+      - description: "No pending transactions should remain"
+        query: |
+          SELECT COUNT(*) as count
+          FROM transactions
+          WHERE account_id = 'account-pending-001'
+          AND pending = true
+        expected:
+          count: 0
+
+      # Assertion 4: Transaction 1 amount should be unchanged
+      - description: "Gas purchase amount should remain -55.00"
+        query: |
+          SELECT amount
+          FROM transactions
+          WHERE external_transaction_id = 'plaid-txn-pending-001'
+        expected:
+          amount: -55.00
+
+      # Assertion 5: Transaction 2 amount should be updated (tip added)
+      - description: "Restaurant charge should be updated to -54.50 (tip added)"
+        query: |
+          SELECT amount
+          FROM transactions
+          WHERE external_transaction_id = 'plaid-txn-pending-002'
+        expected:
+          amount: -54.50
+
+      # Assertion 6: Transaction 3 date should be updated
+      - description: "Hotel charge date should be updated to checkout date"
+        query: |
+          SELECT date
+          FROM transactions
+          WHERE external_transaction_id = 'plaid-txn-pending-003'
+        expected:
+          date: "2024-01-16"
+
+      # Assertion 7: User notes should be preserved during transition
+      - description: "User notes should be preserved after posting"
+        query: |
+          SELECT user_notes
+          FROM transactions
+          WHERE external_transaction_id = 'plaid-txn-pending-001'
+        expected:
+          user_notes: "Fill up - work trip"
+
+      # Assertion 8: All transactions should have valid posted data
+      - description: "All posted transactions should have complete data"
+        query: |
+          SELECT COUNT(*) as count
+          FROM transactions
+          WHERE account_id = 'account-pending-001'
+          AND (
+            external_transaction_id IS NULL
+            OR amount IS NULL
+            OR date IS NULL
+            OR name IS NULL
+            OR pending IS NULL
+          )
+        expected:
+          count: 0
+
+    api:
+      # Assertion 9: GET /transactions?pending=false should return 3 transactions
+      - description: "GET /transactions?pending=false should return all 3 posted transactions"
+        method: "GET"
+        endpoint: "/api/v1/transactions?account_id=account-pending-001&pending=false"
+        expect_status: 200
+        expect_body_contains: ["id", "amount", "date", "pending"]
+
+      # Assertion 10: GET /transactions?pending=true should return 0 transactions
+      - description: "GET /transactions?pending=true should return no pending transactions"
+        method: "GET"
+        endpoint: "/api/v1/transactions?account_id=account-pending-001&pending=true"
+        expect_status: 200
+
+  cleanup:
+    strategy: "truncate_all"
