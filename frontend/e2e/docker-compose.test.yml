@@ -88,6 +88,9 @@ services:
       # Admin API authentication (for E2E webhook testing)
       ADMIN_API_TOKEN: "test-admin-token-e2e-12345"
 
+      # E2E Scenarios Mode (Issue #331: Use mock Plaid service)
+      E2E_SCENARIOS_MODE: "true"
+
       # Test-specific settings
       LOG_LEVEL: "debug"
       ENABLE_ADMIN_ENDPOINTS: "true"

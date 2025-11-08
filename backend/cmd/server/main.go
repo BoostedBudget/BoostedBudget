@@ -183,10 +183,20 @@ func main() {
 		var plaidHandler *handlers.PlaidHandler
 		if cfg.PlaidClientID != "" && cfg.PlaidSecret != "" {
 			var err error
-			plaidService, err = services.NewPlaidService(cfg)
-			if err != nil {
-				log.Printf("⚠️  Failed to initialize Plaid service: %v", err)
+
+			// Issue #331: E2E Test Scenarios Framework
+			// Use mock Plaid service in E2E test mode to generate synthetic transaction data
+			if os.Getenv("E2E_SCENARIOS_MODE") == "true" {
+				plaidService = services.NewMockPlaidService(cfg)
+				log.Println("🧪 Using MockPlaidService for E2E testing")
 			} else {
+				plaidService, err = services.NewPlaidService(cfg)
+				if err != nil {
+					log.Printf("⚠️  Failed to initialize Plaid service: %v", err)
+				}
+			}
+
+			if plaidService != nil {
 				// Create account service with all dependencies
 				accountService := services.NewAccountService(
 					plaidService,
