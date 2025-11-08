@@ -9,6 +9,7 @@
  */
 
 import { Pool, QueryResult } from 'pg';
+import { v4 as uuidv4, v5 as uuidv5 } from 'uuid';
 import type {
   User,
   LinkedItem,
@@ -66,11 +67,32 @@ export class DatabaseSeeder {
   }
 
   /**
+   * Convert string ID to UUID format
+   * Accepts either UUID format or string, returns valid UUID
+   * Uses deterministic generation (UUIDv5) for string inputs
+   */
+  private ensureUUID(id: string | undefined): string {
+    if (!id) {
+      return uuidv4(); // Generate random UUID if not provided
+    }
+
+    // If already UUID format, return as-is
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+      return id;
+    }
+
+    // Generate deterministic UUID from string using UUIDv5
+    // Using DNS namespace for consistency
+    const namespace = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
+    return uuidv5(id, namespace);
+  }
+
+  /**
    * Create a user
    */
   async createUser(setup: UserSetup): Promise<User> {
-    // Generate ID if not provided
-    const id = setup.id || this.fixtureGenerator.generateUser().id!;
+    // Generate or convert ID to UUID format
+    const id = this.ensureUUID(setup.id || this.fixtureGenerator.generateUser().id!);
 
     // Generate Auth0 user ID if set to auto-generate
     const auth0UserId =
@@ -94,7 +116,7 @@ export class DatabaseSeeder {
         setup.tier,
         auth0UserId,
         setup.subscription_status || 'active',
-        'us-east-1', // Default region for MVP
+        'iad', // Default region for MVP (Fly.io IATA code for us-east-1)
         true, // Email verified for test users
       ]
     );
@@ -113,7 +135,7 @@ export class DatabaseSeeder {
     setup: LinkedItemSetup,
     userId: string
   ): Promise<LinkedItem> {
-    const id = setup.id || this.fixtureGenerator.generateLinkedItem(userId).id!;
+    const id = this.ensureUUID(setup.id || this.fixtureGenerator.generateLinkedItem(userId).id!);
     const itemId = setup.item_id || `plaid-item-test-${id}`;
 
     // Get institution ID if not provided
@@ -156,7 +178,7 @@ export class DatabaseSeeder {
     userId: string,
     linkedItemId: string
   ): Promise<Account> {
-    const id = setup.id || this.fixtureGenerator.generateAccount(linkedItemId, userId).id!;
+    const id = this.ensureUUID(setup.id || this.fixtureGenerator.generateAccount(linkedItemId, userId).id!);
     const plaidAccountId =
       setup.plaid_account_id || `plaid-acc-test-${id}`;
 
@@ -198,7 +220,7 @@ export class DatabaseSeeder {
     setup: TransactionSetup,
     accountId: string
   ): Promise<Transaction> {
-    const id = setup.id || this.fixtureGenerator.generateTransaction(accountId).id!;
+    const id = this.ensureUUID(setup.id || this.fixtureGenerator.generateTransaction(accountId).id!);
     const externalTxnId =
       setup.external_transaction_id || `plaid-txn-test-${id}`;
 
@@ -254,7 +276,7 @@ export class DatabaseSeeder {
           `$${offset + 6}, $${offset + 7}, $${offset + 8}, $${offset + 9}, $${offset + 10}, $${offset + 11})`
       );
 
-      const id = txn.id || this.fixtureGenerator.generateTransaction(txn.account_id!).id!;
+      const id = this.ensureUUID(txn.id || this.fixtureGenerator.generateTransaction(txn.account_id!).id!);
       const externalId = txn.external_transaction_id || `plaid-txn-test-${id}`;
 
       values.push(
