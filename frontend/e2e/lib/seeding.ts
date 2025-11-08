@@ -71,7 +71,7 @@ export class DatabaseSeeder {
    * Accepts either UUID format or string, returns valid UUID
    * Uses deterministic generation (UUIDv5) for string inputs
    */
-  private ensureUUID(id: string | undefined): string {
+  public ensureUUID(id: string | undefined): string {
     if (!id) {
       return uuidv4(); // Generate random UUID if not provided
     }

@@ -204,8 +204,10 @@ export class ScenarioRunner {
       context.accounts = [];
       for (const accountSetup of setup.accounts) {
         // Find the linked item for this account
-        const linkedItemId =
-          accountSetup.linked_item_id || context.linked_items[0]?.id;
+        // Convert string ID references to UUIDs for foreign key lookups
+        const linkedItemId = accountSetup.linked_item_id
+          ? this.seeder.ensureUUID(accountSetup.linked_item_id)
+          : context.linked_items[0]?.id;
         if (!linkedItemId) {
           throw new Error('No linked_item_id available for account');
         }
@@ -224,7 +226,10 @@ export class ScenarioRunner {
       context.transactions = [];
       for (const txnSetup of setup.existing_transactions) {
         // Find the account for this transaction
-        const accountId = txnSetup.account_id || context.accounts[0]?.id;
+        // Convert string ID references to UUIDs for foreign key lookups
+        const accountId = txnSetup.account_id
+          ? this.seeder.ensureUUID(txnSetup.account_id)
+          : context.accounts[0]?.id;
         if (!accountId) {
           throw new Error('No account_id available for transaction');
         }
