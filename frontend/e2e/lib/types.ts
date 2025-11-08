@@ -69,6 +69,16 @@ export const TransactionSetupSchema = z.object({
 });
 
 /**
+ * Generate transactions configuration (bulk transaction generation)
+ */
+export const GenerateTransactionsSchema = z.object({
+  template: z.string(), // Template name from transaction templates
+  count: z.number().optional(), // Number of transactions to generate
+  date_range: z.string().optional(), // Date range for generation
+  amount_range: z.string().optional(), // Amount range for generation
+});
+
+/**
  * Complete setup configuration
  */
 export const SetupSchema = z.object({
@@ -76,6 +86,8 @@ export const SetupSchema = z.object({
   linked_items: z.array(LinkedItemSetupSchema).optional(),
   accounts: z.array(AccountSetupSchema).optional(),
   seed_transactions: z.array(TransactionSetupSchema).optional(),
+  existing_transactions: z.array(TransactionSetupSchema).optional(), // Transactions that already exist (for update scenarios)
+  generate_transactions: GenerateTransactionsSchema.optional(), // Bulk transaction generation from templates
 });
 
 // ============================================================================
@@ -164,6 +176,25 @@ export const AssertUiStepSchema = z.object({
 });
 
 /**
+ * Delay step (wait for duration)
+ */
+export const DelayStepSchema = z.object({
+  action: z.literal('delay'),
+  description: z.string().optional(),
+  duration: z.number(), // Duration in milliseconds
+});
+
+/**
+ * Wait for selector step (wait for element)
+ */
+export const WaitForSelectorStepSchema = z.object({
+  action: z.literal('wait_for_selector'),
+  description: z.string().optional(),
+  selector: z.string(), // CSS selector to wait for
+  timeout_ms: z.number().optional(), // Timeout in milliseconds
+});
+
+/**
  * Union of all step types
  */
 export const StepSchema = z.discriminatedUnion('action', [
@@ -174,6 +205,8 @@ export const StepSchema = z.discriminatedUnion('action', [
   ClickStepSchema,
   FillStepSchema,
   AssertUiStepSchema,
+  DelayStepSchema,
+  WaitForSelectorStepSchema,
 ]);
 
 // ============================================================================
@@ -276,6 +309,7 @@ export type UserSetup = z.infer<typeof UserSetupSchema>;
 export type LinkedItemSetup = z.infer<typeof LinkedItemSetupSchema>;
 export type AccountSetup = z.infer<typeof AccountSetupSchema>;
 export type TransactionSetup = z.infer<typeof TransactionSetupSchema>;
+export type GenerateTransactions = z.infer<typeof GenerateTransactionsSchema>;
 export type Setup = z.infer<typeof SetupSchema>;
 
 export type LoginStep = z.infer<typeof LoginStepSchema>;
@@ -285,6 +319,8 @@ export type WaitForStep = z.infer<typeof WaitForStepSchema>;
 export type ClickStep = z.infer<typeof ClickStepSchema>;
 export type FillStep = z.infer<typeof FillStepSchema>;
 export type AssertUiStep = z.infer<typeof AssertUiStepSchema>;
+export type DelayStep = z.infer<typeof DelayStepSchema>;
+export type WaitForSelectorStep = z.infer<typeof WaitForSelectorStepSchema>;
 export type Step = z.infer<typeof StepSchema>;
 
 export type DatabaseAssertion = z.infer<typeof DatabaseAssertionSchema>;
