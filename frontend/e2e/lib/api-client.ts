@@ -59,6 +59,12 @@ export class ApiClient {
       timeout: 30000, // 30 second default timeout
       validateStatus: () => true, // Don't throw on any status code
     });
+
+    // Auto-initialize with admin token from environment if available (for E2E scenarios)
+    const adminToken = process.env.ADMIN_API_TOKEN;
+    if (adminToken) {
+      this.token = adminToken;
+    }
   }
 
   /**

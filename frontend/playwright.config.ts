@@ -68,6 +68,11 @@ export default defineConfig({
     video: process.env.CI ? 'retain-on-failure' : 'off',
   },
 
+  // Environment variables passed to test files
+  env: {
+    ADMIN_API_TOKEN: process.env.ADMIN_API_TOKEN || '',
+  },
+
   // Configure projects for major browsers
   projects: [
     {
