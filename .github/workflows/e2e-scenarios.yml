@@ -125,8 +125,28 @@ jobs:
             }
           done
 
+          # Debug: Check Docker environment before startup
+          echo "::group::Pre-startup Docker debug"
+          echo "=== Docker Info ==="
+          docker info | grep -E "CPUs|Total Memory|Server Version" || true
+          echo "=== Docker Images ==="
+          docker images | grep -E "backend-test|postgres|redis" || true
+          echo "=== Existing Containers ==="
+          docker ps -a | grep -E "backend-test|postgres-test|redis-test" || true
+          echo "::endgroup::"
+
           # Start services in detached mode
           docker-compose -f docker-compose.test.yml up -d
+
+          # Debug: Check container status immediately after startup
+          echo "::group::Post-startup Docker debug"
+          echo "=== Container Status (immediately after up -d) ==="
+          docker-compose -f docker-compose.test.yml ps -a
+          echo "=== Backend Container Inspection ==="
+          docker inspect boostedbudget-backend-test-${{ github.run_id }} 2>&1 || echo "❌ Backend container doesn't exist!"
+          echo "=== Backend Container Logs (early) ==="
+          docker logs boostedbudget-backend-test-${{ github.run_id }} 2>&1 || echo "❌ No logs available yet"
+          echo "::endgroup::"
 
           echo "Waiting for services to be ready..."
           sleep 10

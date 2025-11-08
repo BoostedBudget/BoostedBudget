@@ -1,6 +1,16 @@
 #!/bin/bash
 set -e
 
+# TRAP EXIT for debugging (shows exactly where script fails)
+trap 'echo "❌ Script failed at line $LINENO with exit code $?"' ERR
+
+echo "=========================================="
+echo "🚀 ENTRYPOINT STARTING"
+echo "Current directory: $(pwd)"
+echo "User: $(whoami)"
+echo "Date: $(date)"
+echo "=========================================="
+
 echo "Starting BoostedBudget Backend..."
 
 # Check if DATABASE_URL is set
