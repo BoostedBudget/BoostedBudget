@@ -134,7 +134,7 @@ scenario:
   steps:
     - action: "api_call"
       method: "POST"
-      endpoint: "/api/v1/plaid/webhook"
+      endpoint: "/api/v1/admin/plaid/fire-webhook"
       body:
         webhook_type: "TRANSACTIONS"
         webhook_code: "DEFAULT_UPDATE"
