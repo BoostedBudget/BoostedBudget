@@ -1,7 +1,7 @@
 # Development Dockerfile for Backend
 FROM golang:1.25-alpine
 
-# Install dependencies for hot reload and health checks
+# Install dependencies for hot reload, health checks, and migrations
 RUN echo "📦 Installing build dependencies..." && \
     for i in 1 2 3; do \
       apk add --no-cache curl && break || \
@@ -11,6 +11,15 @@ RUN echo "📦 Installing build dependencies..." && \
     for i in 1 2 3; do \
       go install github.com/air-verse/air@latest && break || \
       { echo "⚠ go install attempt $i/3 failed"; [ $i -lt 3 ] && sleep 10; }; \
+    done && \
+    echo "📦 Installing Atlas CLI for database migrations..." && \
+    for i in 1 2 3; do \
+      curl -sSfL --retry 3 --retry-delay 5 --connect-timeout 10 \
+        "https://release.ariga.io/atlas/atlas-linux-amd64-latest" \
+        -o /usr/local/bin/atlas && \
+      chmod +x /usr/local/bin/atlas && \
+      echo "✓ Atlas installed successfully" && break || \
+      { echo "⚠ Atlas download attempt $i/3 failed"; [ $i -lt 3 ] && sleep 5; }; \
     done
 
 WORKDIR /app
@@ -26,6 +35,12 @@ RUN echo "📦 Downloading Go modules..." && \
 # Copy source
 COPY . .
 
+# Copy entrypoint script and migrations (required for database setup)
+COPY scripts/docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
+COPY migrations /app/migrations
+COPY atlas.hcl /app/atlas.hcl
+
 # Expose port
 EXPOSE 8080
 
@@ -33,5 +48,6 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-# Run with air for hot reload
-CMD ["air", "-c", ".air.toml"]
+# Use entrypoint for E2E tests (runs migrations then starts server)
+# For local dev with hot-reload, override with: docker-compose run --entrypoint air backend
+CMD ["/app/docker-entrypoint.sh"]
