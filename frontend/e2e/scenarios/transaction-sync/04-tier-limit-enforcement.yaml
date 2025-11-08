@@ -30,7 +30,7 @@ scenario:
   setup:
     # Create free tier user
     user:
-      id: "test-tier-limit-001"
+      id: "00000000-0000-0000-0000-000000000001"
       email: "tier-limit@test.example.com"
       tier: "free"
       auth0_user_id: "auto-generate"

@@ -111,7 +111,7 @@ test.describe('P0: Tier Limit Enforcement', () => {
     const accountCountResult = await dbPool.query(`
       SELECT COUNT(*) as count
       FROM accounts
-      WHERE user_id = 'test-tier-limit-001'
+      WHERE user_id = '00000000-0000-0000-0000-000000000001'
     `);
 
     const accountCount = parseInt(accountCountResult.rows[0]?.count || '0', 10);
@@ -126,7 +126,7 @@ test.describe('P0: Tier Limit Enforcement', () => {
     const tierResult = await dbPool.query(`
       SELECT tier
       FROM users
-      WHERE id = 'test-tier-limit-001'
+      WHERE id = '00000000-0000-0000-0000-000000000001'
     `);
 
     expect(
@@ -143,7 +143,7 @@ test.describe('P0: Tier Limit Enforcement', () => {
     const fourthAccountResult = await dbPool.query(`
       SELECT COUNT(*) as count
       FROM accounts
-      WHERE user_id = 'test-tier-limit-001'
+      WHERE user_id = '00000000-0000-0000-0000-000000000001'
       AND (plaid_account_id = 'plaid-acc-limit-004' OR plaid_account_id = 'plaid-acc-limit-005')
     `);
 
@@ -156,7 +156,7 @@ test.describe('P0: Tier Limit Enforcement', () => {
     const originalAccountsResult = await dbPool.query(`
       SELECT plaid_account_id
       FROM accounts
-      WHERE user_id = 'test-tier-limit-001'
+      WHERE user_id = '00000000-0000-0000-0000-000000000001'
       ORDER BY plaid_account_id
     `);
 
@@ -178,7 +178,7 @@ test.describe('P0: Tier Limit Enforcement', () => {
 
     // Placeholder: Verify enforcement happened
     const accountCount = await dbPool.query(`
-      SELECT COUNT(*) as count FROM accounts WHERE user_id = 'test-tier-limit-001'
+      SELECT COUNT(*) as count FROM accounts WHERE user_id = '00000000-0000-0000-0000-000000000001'
     `);
 
     expect(parseInt(accountCount.rows[0]?.count || '0', 10)).toBe(3);

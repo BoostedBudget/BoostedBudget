@@ -35,6 +35,11 @@ RUN echo "📦 Downloading Go modules..." && \
 # Copy source
 COPY . .
 
+# Build server binary (required by docker-entrypoint.sh)
+RUN echo "🔨 Building server binary..." && \
+    go build -o /app/server ./cmd/server && \
+    echo "✓ Server binary built successfully"
+
 # Copy entrypoint script and migrations (required for database setup)
 COPY scripts/docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
