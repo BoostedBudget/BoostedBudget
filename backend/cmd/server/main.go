@@ -312,8 +312,10 @@ func main() {
 		//   2. AdminMiddleware returns 404 in production
 		//   3. Service-level validations (e.g., sandbox-only webhook firing)
 		// Future (Issue #309): Add role-based access control requiring "admin" role
+		// Issue #331: Register admin routes directly under Echo instance to bypass Auth0Middleware
+		// This allows E2E tests to use simple ADMIN_API_TOKEN instead of Auth0 JWT tokens
 		if adminHandler != nil && cfg.Environment == "staging" {
-			admin := api.Group("/admin", middleware.AdminMiddleware(cfg))
+			admin := e.Group("/api/v1/admin", middleware.AdminMiddleware(cfg))
 			admin.POST("/plaid/fire-webhook", adminHandler.FireWebhook)
 			log.Println("✅ Admin endpoints enabled (staging only)")
 		}
