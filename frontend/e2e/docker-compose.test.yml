@@ -101,10 +101,10 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-      start_period: 30s  # Allow time for migrations
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 60s  # Allow extra time for migrations and slow startup
     networks:
       - test-network
 
