@@ -102,7 +102,7 @@ scenario:
     # Transaction 3: Posts with different date (hotel checkout)
     - action: "api_call"
       method: "POST"
-      endpoint: "/api/v1/plaid/webhook"
+      endpoint: "/api/v1/admin/plaid/fire-webhook"
       body:
         webhook_type: "TRANSACTIONS"
         webhook_code: "DEFAULT_UPDATE"

@@ -118,7 +118,7 @@ scenario:
     # This simulates financial institution retroactively removing transactions
     - action: "api_call"
       method: "POST"
-      endpoint: "/api/v1/plaid/webhook"
+      endpoint: "/api/v1/admin/plaid/fire-webhook"
       body:
         webhook_type: "TRANSACTIONS"
         webhook_code: "TRANSACTIONS_REMOVED"

@@ -82,7 +82,7 @@ scenario:
     # Step 2: Fire ITEM_LOGIN_REQUIRED webhook (credentials expired)
     - action: "api_call"
       method: "POST"
-      endpoint: "/api/v1/plaid/webhook"
+      endpoint: "/api/v1/admin/plaid/fire-webhook"
       body:
         webhook_type: "ITEM"
         webhook_code: "ERROR"
@@ -100,7 +100,7 @@ scenario:
     # Step 4: Attempt to sync transactions (should fail gracefully)
     - action: "api_call"
       method: "POST"
-      endpoint: "/api/v1/plaid/webhook"
+      endpoint: "/api/v1/admin/plaid/fire-webhook"
       body:
         webhook_type: "TRANSACTIONS"
         webhook_code: "DEFAULT_UPDATE"
