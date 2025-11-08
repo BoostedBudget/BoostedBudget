@@ -1,6 +1,5 @@
 #!/bin/bash
 set -e
-set -x  # Enable debug output to diagnose silent container failures
 
 echo "Starting BoostedBudget Backend..."
 
