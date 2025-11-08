@@ -25,6 +25,9 @@ test.describe('P1: Pagination Multi-Page', () => {
   let runner: ScenarioRunner;
   let loader: ScenarioLoader;
 
+  // Configure tests to run serially (sequentially) to ensure test 1 sets up data for tests 2-5
+  test.describe.configure({ mode: 'serial' });
+
   test.beforeAll(async () => {
     // Create database pool for this worker
     dbPool = new Pool({

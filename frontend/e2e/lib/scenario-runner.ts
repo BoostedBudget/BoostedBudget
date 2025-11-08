@@ -95,7 +95,13 @@ export class ScenarioRunner {
    */
   async run(scenario: Scenario, page: Page): Promise<ScenarioResult> {
     const startTime = Date.now();
-    const context: ScenarioContext = {};
+    const context: ScenarioContext = {
+      linked_items: [],
+      accounts: [],
+      transactions: [],
+      api_responses: [],
+      ui_snapshots: [],
+    };
     let setupDuration = 0;
     let stepsDuration = 0;
     let assertionsDuration = 0;
