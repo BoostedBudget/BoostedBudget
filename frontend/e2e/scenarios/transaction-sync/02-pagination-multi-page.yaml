@@ -138,14 +138,13 @@ scenario:
       - description: "Transactions should cover the last 90 days"
         query: |
           SELECT
-            MIN(date) as earliest_date,
-            MAX(date) as latest_date
+            COUNT(*) as valid_date_range
           FROM transactions t
           JOIN accounts a ON t.account_id = a.id
           WHERE a.id = 'account-pagination-001'
-        expected_min:
-          earliest_date: "2024-01-01"  # At least 90 days ago
-        expected_not_null: ["earliest_date", "latest_date"]
+          AND t.date >= CURRENT_DATE - INTERVAL '90 days'
+        expected:
+          valid_date_range: 600  # All 600 transactions should be within 90 days
 
     api:
       # Assertion 7: GET /transactions should return paginated results
