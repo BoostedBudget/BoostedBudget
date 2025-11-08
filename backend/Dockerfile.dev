@@ -50,7 +50,12 @@ RUN echo "🔨 Building server binary..." && \
     echo "✓ Server binary built successfully"
 
 # Make entrypoint script executable (already copied with backend source)
-RUN chmod +x /app/scripts/docker-entrypoint.sh
+# Verify file exists and show first 5 lines for debugging
+RUN chmod +x /app/scripts/docker-entrypoint.sh && \
+    echo "✓ Entrypoint script verification:" && \
+    ls -la /app/scripts/docker-entrypoint.sh && \
+    echo "✓ First 5 lines:" && \
+    head -5 /app/scripts/docker-entrypoint.sh
 
 # Expose port
 EXPOSE 8080
@@ -61,4 +66,5 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
 
 # Use entrypoint for E2E tests (runs migrations then starts server)
 # For local dev with hot-reload, override with: docker-compose run --entrypoint air backend
-CMD ["/app/scripts/docker-entrypoint.sh"]
+# Force unbuffered output and redirect stderr to stdout for debugging
+CMD ["/bin/bash", "-c", "/app/scripts/docker-entrypoint.sh 2>&1"]
