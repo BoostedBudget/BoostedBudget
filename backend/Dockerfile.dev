@@ -50,12 +50,16 @@ RUN echo "🔨 Building server binary..." && \
     echo "✓ Server binary built successfully"
 
 # Make entrypoint script executable (already copied with backend source)
-# Verify file exists and show first 5 lines for debugging
-RUN chmod +x /app/scripts/docker-entrypoint.sh && \
-    echo "✓ Entrypoint script verification:" && \
-    ls -la /app/scripts/docker-entrypoint.sh && \
-    echo "✓ First 5 lines:" && \
-    head -5 /app/scripts/docker-entrypoint.sh
+RUN chmod +x /app/scripts/docker-entrypoint.sh
+
+# Verify critical files and permissions before runtime
+RUN echo "🔍 Pre-flight checks..." && \
+    test -f /app/server || { echo "❌ /app/server binary missing"; exit 1; } && \
+    test -x /app/server || { echo "❌ /app/server not executable"; exit 1; } && \
+    test -f /app/scripts/docker-entrypoint.sh || { echo "❌ entrypoint.sh missing"; exit 1; } && \
+    test -x /app/scripts/docker-entrypoint.sh || { echo "❌ entrypoint.sh not executable"; exit 1; } && \
+    test -f /app/config/subscription_tiers.yaml || { echo "❌ subscription_tiers.yaml missing"; exit 1; } && \
+    echo "✅ All pre-flight checks passed"
 
 # Expose port
 EXPOSE 8080
@@ -66,5 +70,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
 
 # Use entrypoint for E2E tests (runs migrations then starts server)
 # For local dev with hot-reload, override with: docker-compose run --entrypoint air backend
-# Force unbuffered output and redirect stderr to stdout for debugging
-CMD ["/bin/bash", "-c", "/app/scripts/docker-entrypoint.sh 2>&1"]
+CMD ["/app/scripts/docker-entrypoint.sh"]
