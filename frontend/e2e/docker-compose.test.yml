@@ -85,6 +85,9 @@ services:
       # Security (required for Plaid token encryption)
       ENCRYPTION_KEY: "12345678901234567890123456789012"  # 32-byte test key
 
+      # Admin API authentication (for E2E webhook testing)
+      ADMIN_API_TOKEN: "test-admin-token-e2e-12345"
+
       # Test-specific settings
       LOG_LEVEL: "debug"
       ENABLE_ADMIN_ENDPOINTS: "true"
