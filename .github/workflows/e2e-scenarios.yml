@@ -119,23 +119,6 @@ jobs:
           echo "Waiting for services to be ready..."
           sleep 10
 
-          # Get dynamically assigned ports
-          POSTGRES_PORT=$(docker-compose -f docker-compose.test.yml port postgres-test 5432 | cut -d: -f2)
-          REDIS_PORT=$(docker-compose -f docker-compose.test.yml port redis-test 6379 | cut -d: -f2)
-          BACKEND_PORT=$(docker-compose -f docker-compose.test.yml port backend-test 8080 | cut -d: -f2)
-
-          echo "Dynamic ports assigned:"
-          echo "  PostgreSQL: $POSTGRES_PORT"
-          echo "  Redis: $REDIS_PORT"
-          echo "  Backend: $BACKEND_PORT"
-
-          # Export for subsequent steps
-          echo "POSTGRES_PORT=$POSTGRES_PORT" >> $GITHUB_ENV
-          echo "REDIS_PORT=$REDIS_PORT" >> $GITHUB_ENV
-          echo "BACKEND_PORT=$BACKEND_PORT" >> $GITHUB_ENV
-          echo "TEST_DATABASE_URL=postgres://testuser:testpass@localhost:$POSTGRES_PORT/boostedbudget_test" >> $GITHUB_ENV
-          echo "API_BASE_URL=http://localhost:$BACKEND_PORT" >> $GITHUB_ENV
-
           # Verify PostgreSQL is ready
           for i in {1..30}; do
             if docker-compose -f docker-compose.test.yml exec -T postgres-test pg_isready -U testuser > /dev/null 2>&1; then
@@ -163,6 +146,60 @@ jobs:
             fi
             sleep 1
           done
+
+          # Verify Backend is ready (wait for healthcheck to pass)
+          echo "Waiting for backend service to become healthy..."
+          for i in {1..60}; do
+            BACKEND_HEALTH=$(docker inspect --format='{{.State.Health.Status}}' boostedbudget-backend-test-${{ github.run_id }} 2>/dev/null || echo "unknown")
+            if [ "$BACKEND_HEALTH" = "healthy" ]; then
+              echo "✅ Backend is healthy!"
+              break
+            fi
+            if [ $i -eq 60 ]; then
+              echo "::error::Timeout waiting for Backend to become healthy (status: $BACKEND_HEALTH)"
+              docker-compose -f docker-compose.test.yml logs backend-test | tail -100
+              exit 1
+            fi
+            echo "⏳ Backend health: $BACKEND_HEALTH (attempt $i/60)"
+            sleep 2
+          done
+
+          # Get dynamically assigned ports (services are confirmed running)
+          POSTGRES_PORT=$(docker-compose -f docker-compose.test.yml port postgres-test 5432 | cut -d: -f2)
+          REDIS_PORT=$(docker-compose -f docker-compose.test.yml port redis-test 6379 | cut -d: -f2)
+          BACKEND_PORT=$(docker-compose -f docker-compose.test.yml port backend-test 8080 | cut -d: -f2)
+
+          # Validate ports were extracted successfully
+          if [ -z "$BACKEND_PORT" ]; then
+            echo "::error::Failed to extract BACKEND_PORT"
+            docker-compose -f docker-compose.test.yml ps
+            docker-compose -f docker-compose.test.yml port backend-test 8080
+            exit 1
+          fi
+
+          if [ -z "$POSTGRES_PORT" ]; then
+            echo "::error::Failed to extract POSTGRES_PORT"
+            docker-compose -f docker-compose.test.yml ps
+            exit 1
+          fi
+
+          if [ -z "$REDIS_PORT" ]; then
+            echo "::error::Failed to extract REDIS_PORT"
+            docker-compose -f docker-compose.test.yml ps
+            exit 1
+          fi
+
+          echo "✅ Dynamic ports assigned:"
+          echo "  PostgreSQL: $POSTGRES_PORT"
+          echo "  Redis: $REDIS_PORT"
+          echo "  Backend: $BACKEND_PORT"
+
+          # Export for subsequent steps
+          echo "POSTGRES_PORT=$POSTGRES_PORT" >> $GITHUB_ENV
+          echo "REDIS_PORT=$REDIS_PORT" >> $GITHUB_ENV
+          echo "BACKEND_PORT=$BACKEND_PORT" >> $GITHUB_ENV
+          echo "TEST_DATABASE_URL=postgres://testuser:testpass@localhost:$POSTGRES_PORT/boostedbudget_test" >> $GITHUB_ENV
+          echo "API_BASE_URL=http://localhost:$BACKEND_PORT" >> $GITHUB_ENV
 
           echo "::notice::✅ All test services ready on dynamic ports"
           echo "::endgroup::"
