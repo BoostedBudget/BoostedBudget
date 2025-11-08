@@ -231,12 +231,33 @@ jobs:
           rm -f cert.pem key.pem 2>/dev/null || true
           echo "✅ SSL certificates removed (workspace-isolated, safe)"
 
+      - name: Find available ports for frontend
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        run: |
+          echo "🔍 Finding available ports for E2E tests..."
+
+          # Get frontend port using job-specific ranges
+          PORTS_OUTPUT=$(node scripts/find-available-ports.js 2>&1)
+
+          # Extract frontend port from output
+          FRONTEND_PORT=$(echo "$PORTS_OUTPUT" | grep E2E_FRONTEND_PORT | cut -d= -f2)
+
+          # Backend port already set from Docker Compose (line 135)
+          echo "Ports allocated:"
+          echo "  Frontend: $FRONTEND_PORT"
+          echo "  Backend: ${{ env.BACKEND_PORT }} (from Docker Compose)"
+
+          # Export for subsequent steps
+          echo "E2E_FRONTEND_PORT=$FRONTEND_PORT" >> $GITHUB_ENV
+
       - name: Run E2E scenarios
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         env:
           CI: true
           E2E_SCENARIOS_MODE: true
           E2E_DISABLE_HTTPS: true
+          E2E_FRONTEND_PORT: ${{ env.E2E_FRONTEND_PORT }}
+          E2E_BACKEND_PORT: ${{ env.BACKEND_PORT }}
           TEST_DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
           API_BASE_URL: ${{ env.API_BASE_URL }}
           POSTGRES_PORT: ${{ env.POSTGRES_PORT }}
