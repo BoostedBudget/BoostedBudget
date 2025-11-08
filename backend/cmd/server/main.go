@@ -27,6 +27,12 @@ func main() {
 		log.Fatal("Failed to load config:", err)
 	}
 
+	// CRITICAL SECURITY CHECK: Ensure test mode is NEVER active in production
+	// Issue #331: E2E Test Scenarios Framework
+	if cfg.Environment == "production" && (os.Getenv("E2E_SCENARIOS_MODE") == "true" || os.Getenv("TEST_MODE") == "true") {
+		log.Fatal("FATAL: E2E_SCENARIOS_MODE or TEST_MODE cannot be enabled in production environment")
+	}
+
 	// Initialize database connection (optional for local dev)
 	var db *sql.DB
 	if cfg.DatabaseURL != "" {
