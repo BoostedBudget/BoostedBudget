@@ -70,6 +70,11 @@ test.describe('P0: Preserve User Notes', () => {
     console.log(`  Assertions: ${result.assertionsDuration}ms`);
     console.log(`  Cleanup: ${result.cleanupDuration}ms`);
 
+    // Log error if validation or execution failed
+    if (result.error) {
+      console.error(`\n❌ Error: ${result.error}`);
+    }
+
     // Log failed assertions
     if (!result.success) {
       console.error('\n❌ Failed Assertions:');

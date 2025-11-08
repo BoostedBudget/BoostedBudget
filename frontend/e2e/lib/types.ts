@@ -126,6 +126,7 @@ export const ApiCallStepSchema = z.object({
   headers: z.record(z.string()).optional(),
   body: z.unknown().optional(),
   expect_status: z.number().optional(),
+  save_as: z.string().optional(), // Store API response in context for later use
 });
 
 /**
