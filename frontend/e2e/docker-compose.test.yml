@@ -46,8 +46,8 @@ services:
   # Backend API Test Server
   backend-test:
     build:
-      context: ../../backend
-      dockerfile: Dockerfile.dev
+      context: ../..  # Project root to access config/ directory
+      dockerfile: backend/Dockerfile.dev
     container_name: boostedbudget-backend-test-${GITHUB_RUN_ID:-local}
     ports:
       - "8080"  # Dynamic port assignment to avoid conflicts
