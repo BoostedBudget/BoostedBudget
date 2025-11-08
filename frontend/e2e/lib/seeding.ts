@@ -81,7 +81,7 @@ export class DatabaseSeeder {
     const result = await this.query<User>(
       `
       INSERT INTO users (
-        id, email, tier, auth0_user_id, subscription_status, primary_region,
+        id, email, subscription_tier, auth0_user_id, subscription_status, primary_region,
         email_verified, created_at, updated_at
       )
       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())

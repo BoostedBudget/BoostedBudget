@@ -308,7 +308,8 @@ export class ScenarioRunner {
     // Verify status code if specified
     if (step.expect_status && response.status !== step.expect_status) {
       throw new Error(
-        `API call failed: expected status ${step.expect_status}, got ${response.status}`
+        `API call failed: expected status ${step.expect_status}, got ${response.status}\n` +
+          `Response body: ${JSON.stringify(response.data, null, 2)}`
       );
     }
   }
