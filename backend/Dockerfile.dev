@@ -24,27 +24,28 @@ RUN echo "📦 Installing build dependencies..." && \
 
 WORKDIR /app
 
-# Copy go mod files
-COPY go.mod go.sum ./
+# Copy go mod files from backend directory
+COPY backend/go.mod backend/go.sum ./
 RUN echo "📦 Downloading Go modules..." && \
     for i in 1 2 3; do \
       go mod download && break || \
       { echo "⚠ Download attempt $i/3 failed"; [ $i -lt 3 ] && sleep 10; }; \
     done
 
-# Copy source
-COPY . .
+# Copy config from project root (CRITICAL: Required for subscription tiers)
+COPY config ./config
+
+# Copy backend source
+COPY backend .
+
 
 # Build server binary (required by docker-entrypoint.sh)
 RUN echo "🔨 Building server binary..." && \
     go build -o /app/server ./cmd/server && \
     echo "✓ Server binary built successfully"
 
-# Copy entrypoint script and migrations (required for database setup)
-COPY scripts/docker-entrypoint.sh /app/docker-entrypoint.sh
-RUN chmod +x /app/docker-entrypoint.sh
-COPY migrations /app/migrations
-COPY atlas.hcl /app/atlas.hcl
+# Make entrypoint script executable (already copied with backend source)
+RUN chmod +x /app/scripts/docker-entrypoint.sh
 
 # Expose port
 EXPOSE 8080
@@ -55,4 +56,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
 
 # Use entrypoint for E2E tests (runs migrations then starts server)
 # For local dev with hot-reload, override with: docker-compose run --entrypoint air backend
-CMD ["/app/docker-entrypoint.sh"]
+CMD ["/app/scripts/docker-entrypoint.sh"]

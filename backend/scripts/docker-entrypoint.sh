@@ -11,6 +11,20 @@ fi
 
 echo "Database URL configured"
 
+# Verify subscription tiers config file exists (CRITICAL for server startup)
+if [ ! -f "config/subscription_tiers.yaml" ]; then
+  echo "❌ ERROR: config/subscription_tiers.yaml not found"
+  echo "Current directory: $(pwd)"
+  echo "Directory contents:"
+  ls -la
+  echo "Config directory contents:"
+  ls -la config/ 2>/dev/null || echo "(config/ directory does not exist)"
+  echo ""
+  echo "This file is required for server startup. Ensure Dockerfile copies config/ directory."
+  exit 1
+fi
+echo "✅ Subscription tiers config found"
+
 # Verify atlas tool is available
 if ! command -v atlas &> /dev/null; then
   echo "ERROR: atlas tool not found in PATH"
