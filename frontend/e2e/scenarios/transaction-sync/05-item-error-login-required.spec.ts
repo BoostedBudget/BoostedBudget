@@ -142,7 +142,7 @@ test.describe('P1: Item Error - Login Required', () => {
 
     // Query: Get error metadata
     const errorResult = await dbPool.query(`
-      SELECT status, error_code, error_timestamp
+      SELECT status, error_code, last_error_at
       FROM linked_items li
       JOIN users u ON li.user_id = u.id
       WHERE u.email = 'item-error@test.example.com'
@@ -159,7 +159,7 @@ test.describe('P1: Item Error - Login Required', () => {
     ).toBe('ITEM_LOGIN_REQUIRED');
 
     expect(
-      errorResult.rows[0]?.error_timestamp,
+      errorResult.rows[0]?.last_error_at,
       'Error timestamp should be set for tracking'
     ).toBeTruthy();
   });
@@ -176,7 +176,7 @@ test.describe('P1: Item Error - Login Required', () => {
       JOIN linked_items li ON a.linked_item_id = li.id
       JOIN users u ON li.user_id = u.id
       WHERE u.email = 'item-error@test.example.com'
-      AND t.created_at > li.error_timestamp
+      AND t.created_at > li.last_error_at
     `);
 
     expect(
