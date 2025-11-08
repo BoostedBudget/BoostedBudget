@@ -102,13 +102,25 @@ jobs:
           # Stop any existing test services from previous runs
           docker-compose -f docker-compose.test.yml down -v 2>/dev/null || true
 
-          # Pull images with retry
+          # Pull external images (postgres, redis) with retry
           for i in 1 2 3; do
             docker-compose -f docker-compose.test.yml pull && {
-              echo "✅ Images pulled"
+              echo "✅ External images pulled"
               break
             } || {
               echo "⚠️ Pull attempt $i/3 failed"
+              [ $i -lt 3 ] && sleep 10
+            }
+          done
+
+          # Build backend image (force rebuild to include latest code changes)
+          echo "Building backend image with latest code changes..."
+          for i in 1 2 3; do
+            docker-compose -f docker-compose.test.yml build --no-cache backend-test && {
+              echo "✅ Backend image built successfully"
+              break
+            } || {
+              echo "⚠️ Build attempt $i/3 failed"
               [ $i -lt 3 ] && sleep 10
             }
           done
