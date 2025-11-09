@@ -21,18 +21,19 @@ import (
 //
 // Environment Behavior:
 //   - staging: Allows request to proceed (200 OK with handler response)
+//   - test: Allows request to proceed (for E2E testing, Issue #331)
 //   - production: Returns 404 Not Found (hides endpoint existence)
-//   - development: Returns 404 Not Found (staging-only endpoint)
+//   - development: Returns 404 Not Found (non-production admin endpoint)
 //
 // Future Enhancement (Issue #309): Add role-based access control to check for "admin" role
 // in Auth0 JWT custom claims. Current implementation only validates environment.
 func AdminMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			// Environment check: Only allow staging
+			// Environment check: Only allow staging and test (Issue #331: E2E testing)
 			// Returns 404 instead of 403 for security through obscurity
 			// (prevents revealing endpoint existence to unauthorized users)
-			if cfg.Environment != "staging" {
+			if cfg.Environment != "staging" && cfg.Environment != "test" {
 				return echo.NewHTTPError(http.StatusNotFound, "Endpoint not available")
 			}
 
