@@ -224,25 +224,41 @@ export class DatabaseSeeder {
     const externalTxnId =
       setup.external_transaction_id || `plaid-txn-test-${id}`;
 
+    // Query account to get user_id and linked_item_id for foreign key constraints
+    const accountResult = await this.query<Account>(
+      'SELECT user_id, linked_item_id FROM accounts WHERE id = $1',
+      [accountId]
+    );
+
+    if (accountResult.rows.length === 0) {
+      throw new Error(`Account not found: ${accountId}`);
+    }
+
+    const account = accountResult.rows[0];
+
     const result = await this.query<Transaction>(
       `
       INSERT INTO transactions (
-        id, account_id, external_transaction_id, amount, date, name,
+        id, user_id, linked_item_id, account_id, source,
+        external_transaction_id, amount, date, name,
         merchant_name, category, pending, user_notes, created_at, updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
       ON CONFLICT (id) DO NOTHING
       RETURNING *
       `,
       [
         id,
+        account.user_id,
+        account.linked_item_id,
         accountId,
+        'plaid', // Default source for test transactions
         externalTxnId,
         setup.amount,
         setup.date,
         setup.name,
         setup.merchant_name || setup.name,
-        setup.category || 'Other',
+        JSON.stringify([setup.category || 'Other']), // Convert to JSONB array format
         setup.pending || false,
         setup.user_notes || null,
       ]
@@ -265,29 +281,56 @@ export class DatabaseSeeder {
       return [];
     }
 
+    // Query all account IDs to get user_id and linked_item_id mappings
+    const accountIds = [...new Set(transactions.map(txn => txn.account_id).filter(Boolean))];
+    const accountMappings = new Map<string, { user_id: string; linked_item_id: string }>();
+
+    if (accountIds.length > 0) {
+      const accountResult = await this.query<Account>(
+        `SELECT id, user_id, linked_item_id FROM accounts WHERE id = ANY($1)`,
+        [accountIds]
+      );
+
+      for (const account of accountResult.rows) {
+        accountMappings.set(account.id, {
+          user_id: account.user_id,
+          linked_item_id: account.linked_item_id,
+        });
+      }
+    }
+
     // Build batch insert query
     const values: unknown[] = [];
     const valueStrings: string[] = [];
 
     transactions.forEach((txn, index) => {
-      const offset = index * 11;
+      const offset = index * 14;
       valueStrings.push(
         `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, ` +
-          `$${offset + 6}, $${offset + 7}, $${offset + 8}, $${offset + 9}, $${offset + 10}, $${offset + 11})`
+          `$${offset + 6}, $${offset + 7}, $${offset + 8}, $${offset + 9}, $${offset + 10}, ` +
+          `$${offset + 11}, $${offset + 12}, $${offset + 13}, $${offset + 14})`
       );
 
       const id = this.ensureUUID(txn.id || this.fixtureGenerator.generateTransaction(txn.account_id!).id!);
       const externalId = txn.external_transaction_id || `plaid-txn-test-${id}`;
+      const accountMapping = accountMappings.get(txn.account_id!);
+
+      if (!accountMapping) {
+        throw new Error(`Account mapping not found for account_id: ${txn.account_id}`);
+      }
 
       values.push(
         id,
+        accountMapping.user_id,
+        accountMapping.linked_item_id,
         txn.account_id,
+        'plaid', // Default source for test transactions
         externalId,
         txn.amount,
         txn.date,
         txn.name,
         txn.merchant_name || txn.name,
-        txn.category || 'Other',
+        JSON.stringify([txn.category || 'Other']), // Convert to JSONB array format
         txn.pending || false,
         txn.user_notes || null,
         new Date() // created_at
@@ -296,7 +339,8 @@ export class DatabaseSeeder {
 
     const sql = `
       INSERT INTO transactions (
-        id, account_id, external_transaction_id, amount, date, name,
+        id, user_id, linked_item_id, account_id, source,
+        external_transaction_id, amount, date, name,
         merchant_name, category, pending, user_notes, created_at
       )
       VALUES ${valueStrings.join(', ')}
