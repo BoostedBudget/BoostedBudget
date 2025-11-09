@@ -308,16 +308,17 @@ func main() {
 
 		// Admin routes (Issue #308: staging-only admin endpoints)
 		// Triple-layer security:
-		//   1. Route registration only in staging (here)
+		//   1. Route registration only in staging or when ENABLE_ADMIN_ENDPOINTS=true (here)
 		//   2. AdminMiddleware returns 404 in production
 		//   3. Service-level validations (e.g., sandbox-only webhook firing)
 		// Future (Issue #309): Add role-based access control requiring "admin" role
 		// Issue #331: Register admin routes directly under Echo instance to bypass Auth0Middleware
 		// This allows E2E tests to use simple ADMIN_API_TOKEN instead of Auth0 JWT tokens
-		if adminHandler != nil && cfg.Environment == "staging" {
+		enableAdmin := cfg.Environment == "staging" || os.Getenv("ENABLE_ADMIN_ENDPOINTS") == "true"
+		if adminHandler != nil && enableAdmin {
 			admin := e.Group("/api/v1/admin", middleware.AdminMiddleware(cfg))
 			admin.POST("/plaid/fire-webhook", adminHandler.FireWebhook)
-			log.Println("✅ Admin endpoints enabled (staging only)")
+			log.Println("✅ Admin endpoints enabled (staging or ENABLE_ADMIN_ENDPOINTS=true)")
 		}
 
 		// Deletion routes (if enabled)
