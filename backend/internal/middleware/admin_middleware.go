@@ -30,12 +30,22 @@ import (
 func AdminMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
+			// DEBUG: Log environment value and comparison results (Issue #331)
+			log.Printf("🔍 AdminMiddleware DEBUG:")
+			log.Printf("  cfg.Environment = '%s'", cfg.Environment)
+			log.Printf("  len(cfg.Environment) = %d", len(cfg.Environment))
+			log.Printf("  cfg.Environment == \"test\" = %v", cfg.Environment == "test")
+			log.Printf("  cfg.Environment == \"staging\" = %v", cfg.Environment == "staging")
+
 			// Environment check: Only allow staging and test (Issue #331: E2E testing)
 			// Returns 404 instead of 403 for security through obscurity
 			// (prevents revealing endpoint existence to unauthorized users)
 			if cfg.Environment != "staging" && cfg.Environment != "test" {
+				log.Printf("❌ AdminMiddleware: BLOCKING request - environment '%s' not allowed", cfg.Environment)
 				return echo.NewHTTPError(http.StatusNotFound, "Endpoint not available")
 			}
+
+			log.Println("✅ AdminMiddleware: Allowing request to proceed")
 
 			// TODO (Issue #309): Add role-based auth check
 			// if !HasRole(c, "admin") {
