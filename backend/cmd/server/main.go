@@ -27,6 +27,15 @@ func main() {
 		log.Fatal("Failed to load config:", err)
 	}
 
+	// DEBUG: Log critical config values at startup (Issue #331)
+	log.Println("========================================")
+	log.Printf("🔧 SERVER STARTUP CONFIGURATION:")
+	log.Printf("  Environment: '%s'", cfg.Environment)
+	log.Printf("  Version: %s", cfg.Version)
+	log.Printf("  Port: %s", cfg.Port)
+	log.Printf("  PlaidEnv: %s", cfg.PlaidEnv)
+	log.Println("========================================")
+
 	// CRITICAL SECURITY CHECK: Ensure test mode is NEVER active in production
 	// Issue #331: E2E Test Scenarios Framework
 	if cfg.Environment == "production" && (os.Getenv("E2E_SCENARIOS_MODE") == "true" || os.Getenv("TEST_MODE") == "true") {
@@ -318,7 +327,20 @@ func main() {
 		if adminHandler != nil && enableAdmin {
 			admin := e.Group("/api/v1/admin", middleware.AdminMiddleware(cfg))
 			admin.POST("/plaid/fire-webhook", adminHandler.FireWebhook)
-			log.Println("✅ Admin endpoints enabled (staging or ENABLE_ADMIN_ENDPOINTS=true)")
+
+			// DEBUG: Log admin endpoint registration details (Issue #331)
+			log.Printf("✅ Admin endpoints enabled:")
+			log.Printf("   cfg.Environment = '%s'", cfg.Environment)
+			log.Printf("   ENABLE_ADMIN_ENDPOINTS = '%s'", os.Getenv("ENABLE_ADMIN_ENDPOINTS"))
+			log.Printf("   enableAdmin = %v", enableAdmin)
+			log.Printf("   adminHandler != nil = %v", adminHandler != nil)
+		} else {
+			// DEBUG: Log why admin endpoints are NOT enabled (Issue #331)
+			log.Printf("⚠️  Admin endpoints NOT enabled:")
+			log.Printf("   cfg.Environment = '%s'", cfg.Environment)
+			log.Printf("   ENABLE_ADMIN_ENDPOINTS = '%s'", os.Getenv("ENABLE_ADMIN_ENDPOINTS"))
+			log.Printf("   enableAdmin = %v", enableAdmin)
+			log.Printf("   adminHandler != nil = %v", adminHandler != nil)
 		}
 
 		// Deletion routes (if enabled)
