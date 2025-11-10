@@ -10,6 +10,7 @@
 
 import { Pool, QueryResult } from 'pg';
 import { v4 as uuidv4, v5 as uuidv5 } from 'uuid';
+import { createCipheriv, randomBytes } from 'crypto';
 import type {
   User,
   LinkedItem,
@@ -85,6 +86,37 @@ export class DatabaseSeeder {
     // Using DNS namespace for consistency
     const namespace = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
     return uuidv5(id, namespace);
+  }
+
+  /**
+   * Encrypt plaintext using AES-256-GCM (matches backend encryption service)
+   * Issue #331: E2E tests need properly encrypted Plaid access tokens
+   * Backend expects base64-encoded format: nonce (12 bytes) + ciphertext + auth tag (16 bytes)
+   */
+  private encryptAccessToken(plaintext: string): string {
+    // Use same encryption key as backend (from docker-compose.test.yml)
+    const encryptionKey = Buffer.from('12345678901234567890123456789012', 'utf-8'); // 32 bytes for AES-256
+
+    // Generate random 12-byte nonce (same as Go's GCM standard)
+    const nonce = randomBytes(12);
+
+    // Create AES-256-GCM cipher
+    const cipher = createCipheriv('aes-256-gcm', encryptionKey, nonce);
+
+    // Encrypt the plaintext
+    const encrypted = Buffer.concat([
+      cipher.update(plaintext, 'utf8'),
+      cipher.final(),
+    ]);
+
+    // Get authentication tag (16 bytes)
+    const authTag = cipher.getAuthTag();
+
+    // Combine: nonce + encrypted + authTag (matches Go's gcm.Seal format)
+    const combined = Buffer.concat([nonce, encrypted, authTag]);
+
+    // Return base64-encoded result (matches backend's storage format)
+    return combined.toString('base64');
   }
 
   /**
@@ -168,7 +200,7 @@ export class DatabaseSeeder {
         itemId,
         setup.institution,
         institutionId,
-        'test-encrypted-token', // Placeholder for test
+        this.encryptAccessToken('access-sandbox-test-token'), // Encrypted test token
         setup.cursor || null,
         setup.status || 'active',
       ]
