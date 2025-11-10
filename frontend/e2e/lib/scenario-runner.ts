@@ -301,13 +301,35 @@ export class ScenarioRunner {
   }
 
   /**
+   * Transform request body to convert item_id to UUID format
+   * Issue #331: Admin webhook API requires UUID format for item_id
+   */
+  private transformRequestBody(body: any): any {
+    if (!body) return body;
+
+    // Clone body to avoid mutating original
+    const transformed = { ...body };
+
+    // Convert item_id if present
+    if (transformed.item_id) {
+      transformed.item_id = this.seeder.ensureUUID(transformed.item_id);
+    }
+
+    return transformed;
+  }
+
+  /**
    * Execute API call step
    */
   private async executeApiCall(step: Extract<Step, { action: 'api_call' }>, context: ScenarioContext): Promise<void> {
+    // Issue #331: Transform item_id to UUID for admin webhook API
+    // Admin handler validates item_id as UUID, but YAML scenarios use readable strings
+    const transformedBody = this.transformRequestBody(step.body);
+
     const response = await this.apiClient.request({
       method: step.method,
       url: step.endpoint,
-      body: step.body,
+      body: transformedBody,
       headers: step.headers,
     });
 
