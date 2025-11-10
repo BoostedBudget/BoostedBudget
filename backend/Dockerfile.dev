@@ -40,6 +40,9 @@ RUN echo "📦 Downloading Go modules..." && \
 # Copy config from project root (CRITICAL: Required for subscription tiers)
 COPY config ./config
 
+# Force rebuild to pick up Plaid credentials fix (Issue #331)
+# REBUILD_MARKER: 2025-11-09-fix-plaid-credentials-dev
+
 # Copy backend source
 COPY backend .
 
