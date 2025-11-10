@@ -89,6 +89,8 @@ export class DatabaseSeeder {
 
   /**
    * Create a user
+   * Issue #331: Delete existing user first to prevent cascading test failures
+   * When cleanup fails, deterministic UUIDs cause "user already exists" errors
    */
   async createUser(setup: UserSetup): Promise<User> {
     // Generate or convert ID to UUID format
@@ -100,6 +102,14 @@ export class DatabaseSeeder {
         ? this.fixtureGenerator.generateAuth0UserId()
         : setup.auth0_user_id;
 
+    // Delete any existing user with this email or ID first
+    // This ensures tests can run even if previous test cleanup failed
+    await this.query(
+      `DELETE FROM users WHERE email = $1 OR id = $2`,
+      [setup.email, id]
+    );
+
+    // Now insert the user (no conflict possible)
     const result = await this.query<User>(
       `
       INSERT INTO users (
@@ -107,7 +117,6 @@ export class DatabaseSeeder {
         email_verified, created_at, updated_at
       )
       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
-      ON CONFLICT (id) DO NOTHING
       RETURNING *
       `,
       [
@@ -122,7 +131,7 @@ export class DatabaseSeeder {
     );
 
     if (result.rows.length === 0) {
-      throw new Error(`Failed to create user: ${setup.email} (may already exist)`);
+      throw new Error(`Failed to create user: ${setup.email}`);
     }
 
     return result.rows[0];
