@@ -12,6 +12,7 @@ import { test, expect } from '@playwright/test';
 import { Pool } from 'pg';
 import { ScenarioRunner } from '../../lib/scenario-runner';
 import { ScenarioLoader } from '../../lib/scenario-loader';
+import { CleanupManager } from '../../lib/cleanup';
 import type { RunnerConfig } from '../../lib/scenario-runner';
 import path from 'path';
 
@@ -48,6 +49,13 @@ test.describe('P1: Pagination Multi-Page', () => {
       seed: 99999,  // Different seed
     };
     runner = new ScenarioRunner(config, dbPool);
+  });
+
+  // Issue #331: Clean database before EACH test to prevent cascading failures
+  // Ensures tests start with clean state regardless of previous test outcome
+  test.beforeEach(async () => {
+    const cleanupManager = new CleanupManager(dbPool);
+    await cleanupManager.cleanup({ strategy: 'truncate_all' });
   });
 
   test.afterAll(async () => {
