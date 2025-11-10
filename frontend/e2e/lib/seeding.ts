@@ -9,7 +9,6 @@
  */
 
 import { Pool, QueryResult } from 'pg';
-import { v4 as uuidv4, v5 as uuidv5 } from 'uuid';
 import { createCipheriv, randomBytes } from 'crypto';
 import type {
   User,
@@ -22,6 +21,7 @@ import type {
   TransactionSetup,
 } from './types';
 import { FixtureGenerator } from './fixtures';
+import { ensureUUID } from './uuid-utils';
 
 /**
  * Database seeder class
@@ -68,27 +68,6 @@ export class DatabaseSeeder {
   }
 
   /**
-   * Convert string ID to UUID format
-   * Accepts either UUID format or string, returns valid UUID
-   * Uses deterministic generation (UUIDv5) for string inputs
-   */
-  public ensureUUID(id: string | undefined): string {
-    if (!id) {
-      return uuidv4(); // Generate random UUID if not provided
-    }
-
-    // If already UUID format, return as-is
-    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
-      return id;
-    }
-
-    // Generate deterministic UUID from string using UUIDv5
-    // Using DNS namespace for consistency
-    const namespace = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
-    return uuidv5(id, namespace);
-  }
-
-  /**
    * Encrypt plaintext using AES-256-GCM (matches backend encryption service)
    * Issue #331: E2E tests need properly encrypted Plaid access tokens
    * Backend expects base64-encoded format: nonce (12 bytes) + ciphertext + auth tag (16 bytes)
@@ -126,7 +105,7 @@ export class DatabaseSeeder {
    */
   async createUser(setup: UserSetup): Promise<User> {
     // Generate or convert ID to UUID format
-    const id = this.ensureUUID(setup.id || this.fixtureGenerator.generateUser().id!);
+    const id = ensureUUID(setup.id || this.fixtureGenerator.generateUser().id!);
 
     // Generate Auth0 user ID if set to auto-generate
     const auth0UserId =
@@ -176,10 +155,10 @@ export class DatabaseSeeder {
     setup: LinkedItemSetup,
     userId: string
   ): Promise<LinkedItem> {
-    const id = this.ensureUUID(setup.id || this.fixtureGenerator.generateLinkedItem(userId).id!);
+    const id = ensureUUID(setup.id || this.fixtureGenerator.generateLinkedItem(userId).id!);
     // Issue #331: Convert item_id to UUID format for admin webhook API validation
     // Plaid item_id must be UUID format - use deterministic UUIDv5 from readable names
-    const itemId = this.ensureUUID(setup.item_id || `plaid-item-test-${id}`);
+    const itemId = ensureUUID(setup.item_id || `plaid-item-test-${id}`);
 
     // Get institution ID if not provided
     const institutionId = setup.institution_id || this.getInstitutionId(setup.institution);
@@ -221,7 +200,7 @@ export class DatabaseSeeder {
     userId: string,
     linkedItemId: string
   ): Promise<Account> {
-    const id = this.ensureUUID(setup.id || this.fixtureGenerator.generateAccount(linkedItemId, userId).id!);
+    const id = ensureUUID(setup.id || this.fixtureGenerator.generateAccount(linkedItemId, userId).id!);
     const plaidAccountId =
       setup.plaid_account_id || `plaid-acc-test-${id}`;
 
@@ -263,7 +242,7 @@ export class DatabaseSeeder {
     setup: TransactionSetup,
     accountId: string
   ): Promise<Transaction> {
-    const id = this.ensureUUID(setup.id || this.fixtureGenerator.generateTransaction(accountId).id!);
+    const id = ensureUUID(setup.id || this.fixtureGenerator.generateTransaction(accountId).id!);
     const externalTxnId =
       setup.external_transaction_id || `plaid-txn-test-${id}`;
 
@@ -354,7 +333,7 @@ export class DatabaseSeeder {
           `$${offset + 11}, $${offset + 12}, $${offset + 13}, $${offset + 14})`
       );
 
-      const id = this.ensureUUID(txn.id || this.fixtureGenerator.generateTransaction(txn.account_id!).id!);
+      const id = ensureUUID(txn.id || this.fixtureGenerator.generateTransaction(txn.account_id!).id!);
       const externalId = txn.external_transaction_id || `plaid-txn-test-${id}`;
       const accountMapping = accountMappings.get(txn.account_id!);
 

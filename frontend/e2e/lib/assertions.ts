@@ -19,6 +19,7 @@ import type {
   ScenarioContext,
 } from './types';
 import { ApiClient } from './api-client';
+import { ensureUUID } from './uuid-utils';
 
 /**
  * Assertion runner class
@@ -477,9 +478,12 @@ export class AssertionRunner {
 
   /**
    * Resolve variables in a string (e.g., "{{ user.id }}")
+   * Also converts string IDs to UUIDs in SQL queries for PostgreSQL UUID column compatibility
+   * Issue #331: Fix UUID validation errors in assertion queries
    */
   private resolveVariables(value: string, context: ScenarioContext): string {
-    return value.replace(/\{\{\s*([^}]+)\s*\}\}/g, (match, path) => {
+    // Step 1: Replace {{ context.variables }} as before
+    let resolved = value.replace(/\{\{\s*([^}]+)\s*\}\}/g, (match, path) => {
       const keys = path.trim().split('.');
       let result: unknown = context;
 
@@ -504,6 +508,20 @@ export class AssertionRunner {
 
       return result !== undefined && result !== null ? String(result) : match;
     });
+
+    // Step 2: Convert string IDs to UUIDs in SQL WHERE clauses
+    // Pattern: WHERE table.id = 'string-id-name' or WHERE id = 'string-id-name'
+    // This ensures human-readable IDs from YAML scenarios work with PostgreSQL UUID columns
+    resolved = resolved.replace(
+      /(\b(?:id|account_id|linked_item_id|user_id|item_id)\s*=\s*')([^']+)(')/gi,
+      (match, prefix, id, suffix) => {
+        // Convert to UUID if not already in UUID format
+        const convertedId = ensureUUID(id);
+        return prefix + convertedId + suffix;
+      }
+    );
+
+    return resolved;
   }
 
   /**

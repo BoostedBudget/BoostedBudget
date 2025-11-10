@@ -23,6 +23,7 @@ import { FixtureGenerator } from './fixtures';
 import { ApiClient } from './api-client';
 import { AssertionRunner } from './assertions';
 import { CleanupManager } from './cleanup';
+import { ensureUUID } from './uuid-utils';
 
 /**
  * Scenario execution result
@@ -206,7 +207,7 @@ export class ScenarioRunner {
         // Find the linked item for this account
         // Convert string ID references to UUIDs for foreign key lookups
         const linkedItemId = accountSetup.linked_item_id
-          ? this.seeder.ensureUUID(accountSetup.linked_item_id)
+          ? ensureUUID(accountSetup.linked_item_id)
           : context.linked_items[0]?.id;
         if (!linkedItemId) {
           throw new Error('No linked_item_id available for account');
@@ -228,7 +229,7 @@ export class ScenarioRunner {
         // Find the account for this transaction
         // Convert string ID references to UUIDs for foreign key lookups
         const accountId = txnSetup.account_id
-          ? this.seeder.ensureUUID(txnSetup.account_id)
+          ? ensureUUID(txnSetup.account_id)
           : context.accounts[0]?.id;
         if (!accountId) {
           throw new Error('No account_id available for transaction');
@@ -312,7 +313,7 @@ export class ScenarioRunner {
 
     // Convert item_id if present
     if (transformed.item_id) {
-      transformed.item_id = this.seeder.ensureUUID(transformed.item_id);
+      transformed.item_id = ensureUUID(transformed.item_id);
     }
 
     return transformed;
