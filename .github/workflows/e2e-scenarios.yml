@@ -252,54 +252,13 @@ jobs:
           echo "::endgroup::"
 
       # ---------------------------------------------------------------------------
-      # Setup Test Databases
+      # Database migrations already applied by backend container startup
+      # Issue #331: Using single shared test database for sequential execution
       # ---------------------------------------------------------------------------
-      - name: Create test databases for parallel workers
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend/e2e
-        env:
-          TEST_DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
-        run: |
-          echo "::group::Creating worker databases"
-
-          echo "Environment:"
-          echo "  TEST_DATABASE_URL: ${TEST_DATABASE_URL}"
-          echo "  Worker count: 4"
-          echo ""
-
-          # Run setup script with explicit error handling
-          if ! npx tsx setup/create-test-databases.ts; then
-            echo "::error::Failed to create worker databases"
-            echo "::endgroup::"
-            exit 1
-          fi
-
-          echo "::notice::✅ Worker databases created successfully"
-          echo "::endgroup::"
-
-      - name: Run database migrations on all worker databases
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
-        env:
-          POSTGRES_PORT: ${{ env.POSTGRES_PORT }}
-        run: |
-          echo "::group::Running migrations on worker databases"
-
-          # Run migrations on each worker database
-          for i in 0 1 2 3; do
-            echo "Migrating worker database $i..."
-            DATABASE_URL="postgresql://testuser:testpass@localhost:$POSTGRES_PORT/boostedbudget_test_worker_$i?sslmode=disable" \
-              atlas migrate apply \
-                --dir file://migrations \
-                --url "postgresql://testuser:testpass@localhost:$POSTGRES_PORT/boostedbudget_test_worker_$i?sslmode=disable" || {
-                echo "::error::Migration failed for worker $i"
-                exit 1
-              }
-          done
-
-          echo "::notice::✅ All worker databases migrated"
-          echo "::endgroup::"
 
       # ---------------------------------------------------------------------------
-      # Run E2E Scenarios (Parallel with 4 Workers)
+      # Run E2E Scenarios (Sequential Execution)
+      # Issue #331: Sequential mode fixes database worker isolation issue
       # ---------------------------------------------------------------------------
       - name: Remove SSL certificates to force HTTP mode
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
@@ -340,19 +299,14 @@ jobs:
           POSTGRES_PORT: ${{ env.POSTGRES_PORT }}
           # Admin API authentication (for E2E webhook testing)
           ADMIN_API_TOKEN: "test-admin-token-e2e-12345"
-          # Worker-specific database URLs (Playwright will use based on TEST_PARALLEL_INDEX)
-          TEST_DATABASE_URL_0: postgres://testuser:testpass@localhost:${{ env.POSTGRES_PORT }}/boostedbudget_test_worker_0
-          TEST_DATABASE_URL_1: postgres://testuser:testpass@localhost:${{ env.POSTGRES_PORT }}/boostedbudget_test_worker_1
-          TEST_DATABASE_URL_2: postgres://testuser:testpass@localhost:${{ env.POSTGRES_PORT }}/boostedbudget_test_worker_2
-          TEST_DATABASE_URL_3: postgres://testuser:testpass@localhost:${{ env.POSTGRES_PORT }}/boostedbudget_test_worker_3
         run: |
-          echo "::group::Running E2E scenarios with 4 parallel workers"
+          echo "::group::Running E2E scenarios sequentially (Issue #331: Fixed database isolation)"
 
-          # Run scenarios with Playwright
-          # --workers=4 enables parallel execution
-          # Each worker gets its own isolated database
+          # Run scenarios with Playwright in sequential mode
+          # --workers=1 for sequential execution (fixes database isolation issue)
+          # All tests share single backend database instance
           npx playwright test e2e/scenarios/**/*.spec.ts \
-            --workers=4 \
+            --workers=1 \
             --reporter=list,html \
             --output=test-results || {
             echo "::error::E2E scenarios failed"
