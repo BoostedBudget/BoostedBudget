@@ -506,7 +506,8 @@ func handleE2ETestAuth(c echo.Context, next echo.HandlerFunc) error {
 	// Inject mock user context for E2E tests
 	// This allows tests to proceed as if authenticated
 	// Tests should seed the database with this user ID in their setup phase
-	c.Set("user_id", "test-user-e2e-mock")
+	// Issue #331: Use UUID format to match production code path and PostgreSQL UUID column type
+	c.Set("user_id", "e2e00000-0000-0000-0000-000000000001") // Fixed UUID for E2E test user
 	c.Set("auth0_user_id", "e2e-test|mock-user")
 	c.Set("claims", jwt.MapClaims{
 		"sub":             "e2e-test|mock-user",
