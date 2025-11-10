@@ -136,7 +136,9 @@ export class DatabaseSeeder {
     userId: string
   ): Promise<LinkedItem> {
     const id = this.ensureUUID(setup.id || this.fixtureGenerator.generateLinkedItem(userId).id!);
-    const itemId = setup.item_id || `plaid-item-test-${id}`;
+    // Issue #331: Convert item_id to UUID format for admin webhook API validation
+    // Plaid item_id must be UUID format - use deterministic UUIDv5 from readable names
+    const itemId = this.ensureUUID(setup.item_id || `plaid-item-test-${id}`);
 
     // Get institution ID if not provided
     const institutionId = setup.institution_id || this.getInstitutionId(setup.institution);
