@@ -25,8 +25,8 @@ RUN echo "📦 Downloading Go modules..." && \
 # Copy config directory (needed for runtime)
 COPY config/ ./config/
 
-# Force rebuild to ensure debug logging is included (Issue #331)
-# REBUILD_MARKER: 2025-11-09-debug-admin-middleware
+# Force rebuild to ensure plaidService fix is included (Issue #331)
+# REBUILD_MARKER: 2025-11-09-fix-plaid-credentials
 
 # Copy backend source code
 COPY backend/ .

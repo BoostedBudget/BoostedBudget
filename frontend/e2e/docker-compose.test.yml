@@ -71,8 +71,9 @@ services:
       AUTH0_CLIENT_SECRET: "${TEST_AUTH0_CLIENT_SECRET}"
 
       # Plaid sandbox configuration
-      PLAID_CLIENT_ID: "${TEST_PLAID_CLIENT_ID}"
-      PLAID_SECRET: "${TEST_PLAID_SECRET}"
+      # Issue #331: Default values for E2E tests (MockPlaidService doesn't validate credentials)
+      PLAID_CLIENT_ID: "${TEST_PLAID_CLIENT_ID:-test-client-id-e2e}"
+      PLAID_SECRET: "${TEST_PLAID_SECRET:-test-secret-e2e}"
       PLAID_ENV: "sandbox"
       PLAID_REDIRECT_URI: "http://localhost:3000/oauth/callback"
       PLAID_WEBHOOK_URL: "http://localhost:8081/api/v1/webhooks/plaid"
