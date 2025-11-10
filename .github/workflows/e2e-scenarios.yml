@@ -115,15 +115,23 @@ jobs:
 
           # Build backend image (force rebuild to include latest code changes)
           echo "Building backend image with latest code changes..."
+          BUILD_SUCCESS=false
           for i in 1 2 3; do
             docker-compose -f docker-compose.test.yml build --no-cache backend-test && {
               echo "✅ Backend image built successfully"
+              BUILD_SUCCESS=true
               break
             } || {
               echo "⚠️ Build attempt $i/3 failed"
               [ $i -lt 3 ] && sleep 10
             }
           done
+
+          # Fail workflow if backend build failed after all retries
+          if [ "$BUILD_SUCCESS" != "true" ]; then
+            echo "::error::Backend build failed after 3 attempts. Check compilation errors above."
+            exit 1
+          fi
 
           # Debug: Check Docker environment before startup
           echo "::group::Pre-startup Docker debug"
