@@ -25,15 +25,15 @@ scenario:
   setup:
     # Create user with active linked item
     user:
-      id: "test-item-error-001"
+      id: "e2e00005-0000-0000-0000-000000000001"
       email: "item-error@test.example.com"
       tier: "premium"
       auth0_user_id: "auto-generate"
 
     # Create Plaid linked item (initially active)
     linked_items:
-      - id: "linked-item-error-001"
-        item_id: "plaid-sandbox-error-001"
+      - id: "e2e00005-item-0000-0000-000000000001"
+        item_id: "e2e00005-plid-0000-0000-000000000001"
         institution: "Chase"
         institution_id: "ins_3"
         cursor: "cursor-before-error-123"
@@ -42,7 +42,7 @@ scenario:
     # Create checking account
     accounts:
       - id: "account-error-001"
-        linked_item_id: "linked-item-error-001"
+        linked_item_id: "e2e00005-item-0000-0000-000000000001"
         plaid_account_id: "plaid-acc-error-001"
         name: "Chase Checking"
         type: "depository"
@@ -75,7 +75,7 @@ scenario:
     # Step 1: Verify item is initially active
     - action: "api_call"
       method: "GET"
-      endpoint: "/api/v1/linked-items/linked-item-error-001"
+      endpoint: "/api/v1/linked-items/e2e00005-item-0000-0000-000000000001"
       expect_status: 200
       save_as: "initial_item_status"
 
@@ -86,7 +86,7 @@ scenario:
       body:
         webhook_type: "ITEM"
         webhook_code: "ERROR"
-        item_id: "plaid-sandbox-error-001"
+        item_id: "e2e00005-plid-0000-0000-000000000001"
         error:
           error_code: "ITEM_LOGIN_REQUIRED"
           error_message: "the login details of this item have changed (credentials, MFA, or required user action) and a user login is required to update this information"
@@ -104,7 +104,7 @@ scenario:
       body:
         webhook_type: "TRANSACTIONS"
         webhook_code: "DEFAULT_UPDATE"
-        item_id: "plaid-sandbox-error-001"
+        item_id: "e2e00005-plid-0000-0000-000000000001"
       expect_status: 200  # Should accept webhook but not process due to error state
 
     # Step 5: Wait to verify no new transactions added
@@ -118,7 +118,7 @@ scenario:
         query: |
           SELECT status, error_code
           FROM linked_items
-          WHERE id = 'linked-item-error-001'
+          WHERE id = 'e2e00005-item-0000-0000-000000000001'
         expected:
           status: "login_required"
           error_code: "ITEM_LOGIN_REQUIRED"
@@ -146,7 +146,7 @@ scenario:
         query: |
           SELECT cursor
           FROM linked_items
-          WHERE id = 'linked-item-error-001'
+          WHERE id = 'e2e00005-item-0000-0000-000000000001'
         expected:
           cursor: "cursor-before-error-123"
 
@@ -159,7 +159,7 @@ scenario:
           AND created_at > (
             SELECT updated_at
             FROM linked_items
-            WHERE id = 'linked-item-error-001'
+            WHERE id = 'e2e00005-item-0000-0000-000000000001'
           )
         expected:
           count: 0
@@ -169,14 +169,14 @@ scenario:
         query: |
           SELECT error_timestamp
           FROM linked_items
-          WHERE id = 'linked-item-error-001'
+          WHERE id = 'e2e00005-item-0000-0000-000000000001'
         expected_not_null: ["error_timestamp"]
 
     api:
       # Assertion 7: GET /linked-items should show error status
       - description: "GET /linked-items should return error status with reconnection prompt"
         method: "GET"
-        endpoint: "/api/v1/linked-items/linked-item-error-001"
+        endpoint: "/api/v1/linked-items/e2e00005-item-0000-0000-000000000001"
         expect_status: 200
         expect_body_contains: ["status", "login_required", "error_code", "ITEM_LOGIN_REQUIRED"]
 
