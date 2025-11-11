@@ -179,7 +179,7 @@ export class DatabaseSeeder {
         itemId,
         setup.institution,
         institutionId,
-        this.encryptAccessToken(`mock-access-${setup.id}`), // Mock token with linked item ID for dynamic account lookup (Issue #331 Phase 2)
+        this.encryptAccessToken(`mock-access-${id}`), // Mock token with linked item UUID for dynamic account lookup (Issue #331 Phase 5)
         setup.cursor || null,
         setup.status || 'active',
       ]
