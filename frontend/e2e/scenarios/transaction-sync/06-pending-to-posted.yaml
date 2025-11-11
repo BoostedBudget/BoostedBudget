@@ -42,7 +42,7 @@ scenario:
 
     # Create credit card account
     accounts:
-      - id: "account-pending-001"
+      - id: "577068d8-b019-51e3-8920-c2fb3aa192eb"
         linked_item_id: "e2e00006-item-0000-0000-000000000001"
         plaid_account_id: "plaid-acc-pending-001"
         name: "Chase Credit Card"
@@ -55,7 +55,7 @@ scenario:
     existing_transactions:
       # Transaction 1: Pending gas purchase (will post with same amount)
       - id: "txn-pending-001"
-        account_id: "account-pending-001"
+        account_id: "577068d8-b019-51e3-8920-c2fb3aa192eb"
         external_transaction_id: "plaid-txn-pending-001"
         amount: -55.00
         date: "2024-01-15"
@@ -67,7 +67,7 @@ scenario:
 
       # Transaction 2: Pending restaurant charge (amount will change when posted)
       - id: "txn-pending-002"
-        account_id: "account-pending-001"
+        account_id: "577068d8-b019-51e3-8920-c2fb3aa192eb"
         external_transaction_id: "plaid-txn-pending-002"
         amount: -45.00  # Authorization amount
         date: "2024-01-14"
@@ -79,7 +79,7 @@ scenario:
 
       # Transaction 3: Pending hotel hold (will post with different date)
       - id: "txn-pending-003"
-        account_id: "account-pending-001"
+        account_id: "577068d8-b019-51e3-8920-c2fb3aa192eb"
         external_transaction_id: "plaid-txn-pending-003"
         amount: -200.00
         date: "2024-01-13"

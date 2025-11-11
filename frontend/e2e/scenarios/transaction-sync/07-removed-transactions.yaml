@@ -25,7 +25,7 @@ scenario:
   setup:
     # Create premium user (has full transaction history)
     user:
-      id: "test-removed-txn-001"
+      id: "33e36202-7322-5f8e-8c18-20ab7e816970"
       email: "removed-txn@test.example.com"
       tier: "premium"
       auth0_user_id: "auto-generate"
@@ -41,7 +41,7 @@ scenario:
 
     # Create checking account
     accounts:
-      - id: "account-removed-001"
+      - id: "e5588029-7d2f-53e5-9552-5cb0124cea59"
         linked_item_id: "e2e00007-item-0000-0000-000000000001"
         plaid_account_id: "plaid-acc-removed-001"
         name: "Chase Checking"
@@ -54,7 +54,7 @@ scenario:
     existing_transactions:
       # Transaction 1: Will be REMOVED (duplicate charge)
       - id: "txn-to-remove-001"
-        account_id: "account-removed-001"
+        account_id: "e5588029-7d2f-53e5-9552-5cb0124cea59"
         external_transaction_id: "plaid-txn-removed-001"
         amount: -100.00
         date: "2024-01-15"
@@ -65,7 +65,7 @@ scenario:
 
       # Transaction 2: Will be REMOVED (erroneous charge)
       - id: "txn-to-remove-002"
-        account_id: "account-removed-001"
+        account_id: "e5588029-7d2f-53e5-9552-5cb0124cea59"
         external_transaction_id: "plaid-txn-removed-002"
         amount: -250.00
         date: "2024-01-14"
@@ -76,7 +76,7 @@ scenario:
 
       # Transaction 3: Will STAY (legitimate transaction)
       - id: "txn-to-keep-001"
-        account_id: "account-removed-001"
+        account_id: "e5588029-7d2f-53e5-9552-5cb0124cea59"
         external_transaction_id: "plaid-txn-keep-001"
         amount: -50.00
         date: "2024-01-13"
@@ -87,7 +87,7 @@ scenario:
 
       # Transaction 4: Will STAY (paycheck)
       - id: "txn-to-keep-002"
-        account_id: "account-removed-001"
+        account_id: "e5588029-7d2f-53e5-9552-5cb0124cea59"
         external_transaction_id: "plaid-txn-keep-002"
         amount: 3000.00
         date: "2024-01-10"
@@ -98,7 +98,7 @@ scenario:
 
       # Transaction 5: Will be REMOVED (reversed payment)
       - id: "txn-to-remove-003"
-        account_id: "account-removed-001"
+        account_id: "e5588029-7d2f-53e5-9552-5cb0124cea59"
         external_transaction_id: "plaid-txn-removed-003"
         amount: -75.00
         date: "2024-01-12"

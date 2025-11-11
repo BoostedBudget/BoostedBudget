@@ -41,7 +41,7 @@ scenario:
 
     # Create checking account
     accounts:
-      - id: "account-error-001"
+      - id: "126c5487-b98e-5600-aff9-33b8e62692fb"
         linked_item_id: "e2e00005-item-0000-0000-000000000001"
         plaid_account_id: "plaid-acc-error-001"
         name: "Chase Checking"
@@ -53,7 +53,7 @@ scenario:
     # Create existing transactions (before error occurred)
     existing_transactions:
       - id: "txn-before-error-001"
-        account_id: "account-error-001"
+        account_id: "126c5487-b98e-5600-aff9-33b8e62692fb"
         external_transaction_id: "plaid-txn-error-001"
         amount: -100.00
         date: "2024-01-15"
@@ -63,7 +63,7 @@ scenario:
         user_notes: "Weekly groceries - important note"
 
       - id: "txn-before-error-002"
-        account_id: "account-error-001"
+        account_id: "126c5487-b98e-5600-aff9-33b8e62692fb"
         external_transaction_id: "plaid-txn-error-002"
         amount: -50.00
         date: "2024-01-14"
