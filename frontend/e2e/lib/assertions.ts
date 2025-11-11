@@ -205,8 +205,9 @@ export class AssertionRunner {
     context: ScenarioContext
   ): Promise<AssertionResult> {
     try {
-      // Resolve variables in endpoint and body
-      const endpoint = this.resolveVariables(assertion.endpoint, context);
+      // Resolve variables in endpoint and body, then convert query param IDs to UUIDs
+      const resolvedEndpoint = this.resolveVariables(assertion.endpoint, context);
+      const endpoint = this.convertQueryParamIds(resolvedEndpoint);
       const params = assertion.params
         ? this.resolveVariablesInObject(assertion.params, context) as Record<string, unknown>
         : undefined;
@@ -522,6 +523,24 @@ export class AssertionRunner {
     );
 
     return resolved;
+  }
+
+  /**
+   * Convert query parameter IDs to UUIDs
+   * Handles URL query strings like ?account_id=account-pending-001
+   * Issue #331: Fix UUID validation errors in API endpoint query parameters
+   */
+  private convertQueryParamIds(endpoint: string): string {
+    // Convert IDs in query parameters: ?account_id=string-id or &user_id=string-id
+    // Pattern: matches query param names followed by = and a value (until & or end of string)
+    return endpoint.replace(
+      /([?&](?:id|account_id|linked_item_id|user_id|item_id)=)([^&]+)/gi,
+      (match, prefix, id) => {
+        // Convert to UUID if not already in UUID format
+        const convertedId = ensureUUID(id);
+        return prefix + convertedId;
+      }
+    );
   }
 
   /**
