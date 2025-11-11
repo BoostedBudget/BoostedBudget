@@ -80,7 +80,7 @@ scenario:
     # Step 1: Verify user has exactly 3 accounts (at limit)
     - action: "api_call"
       method: "GET"
-      endpoint: "/api/v1/accounts?user_id=test-tier-limit-001"
+      endpoint: "/api/v1/accounts?user_id=00000000-0000-0000-0000-000000000001"
       expect_status: 200
       save_as: "initial_accounts"
 
@@ -90,7 +90,7 @@ scenario:
       method: "POST"
       endpoint: "/api/v1/accounts"
       body:
-        user_id: "test-tier-limit-001"
+        user_id: "00000000-0000-0000-0000-000000000001"
         linked_item_id: "linked-item-limit-001"
         plaid_account_id: "plaid-acc-limit-004"
         name: "Chase Investment Account"
@@ -110,7 +110,7 @@ scenario:
         query: |
           SELECT COUNT(*) as count
           FROM accounts
-          WHERE user_id = 'test-tier-limit-001'
+          WHERE user_id = '00000000-0000-0000-0000-000000000001'
         expected:
           count: 3
 
@@ -119,7 +119,7 @@ scenario:
         query: |
           SELECT COUNT(*) as count
           FROM accounts
-          WHERE user_id = 'test-tier-limit-001'
+          WHERE user_id = '00000000-0000-0000-0000-000000000001'
           AND plaid_account_id = 'plaid-acc-limit-004'
         expected:
           count: 0
@@ -127,18 +127,18 @@ scenario:
       # Assertion 3: User tier should still be 'free'
       - description: "User should still be on free tier"
         query: |
-          SELECT tier
+          SELECT subscription_tier
           FROM users
-          WHERE id = 'test-tier-limit-001'
+          WHERE id = '00000000-0000-0000-0000-000000000001'
         expected:
-          tier: "free"
+          subscription_tier: "free"
 
       # Assertion 4: Verify the 3 accounts that exist are the original ones
       - description: "Original 3 accounts should still exist"
         query: |
           SELECT COUNT(*) as count
           FROM accounts
-          WHERE user_id = 'test-tier-limit-001'
+          WHERE user_id = '00000000-0000-0000-0000-000000000001'
           AND plaid_account_id IN ('plaid-acc-limit-001', 'plaid-acc-limit-002', 'plaid-acc-limit-003')
         expected:
           count: 3
@@ -147,7 +147,7 @@ scenario:
       # Assertion 5: GET /accounts should return exactly 3 accounts
       - description: "GET /accounts should return 3 accounts for free tier user"
         method: "GET"
-        endpoint: "/api/v1/accounts?user_id=test-tier-limit-001"
+        endpoint: "/api/v1/accounts?user_id=00000000-0000-0000-0000-000000000001"
         expect_status: 200
         expect_body_contains: ["id", "name", "type"]
 
@@ -156,7 +156,7 @@ scenario:
         method: "POST"
         endpoint: "/api/v1/accounts"
         body:
-          user_id: "test-tier-limit-001"
+          user_id: "00000000-0000-0000-0000-000000000001"
           linked_item_id: "linked-item-limit-001"
           plaid_account_id: "plaid-acc-limit-005"
           name: "Another Account"
