@@ -32,8 +32,8 @@ scenario:
 
     # Create Plaid linked item
     linked_items:
-      - id: "linked-item-removed-001"
-        item_id: "plaid-sandbox-removed-001"
+      - id: "e2e00007-item-0000-0000-000000000001"
+        item_id: "e2e00007-plid-0000-0000-000000000001"
         institution: "Chase"
         institution_id: "ins_3"
         cursor: "cursor-after-initial-sync"
@@ -42,7 +42,7 @@ scenario:
     # Create checking account
     accounts:
       - id: "account-removed-001"
-        linked_item_id: "linked-item-removed-001"
+        linked_item_id: "e2e00007-item-0000-0000-000000000001"
         plaid_account_id: "plaid-acc-removed-001"
         name: "Chase Checking"
         type: "depository"
@@ -122,7 +122,7 @@ scenario:
       body:
         webhook_type: "TRANSACTIONS"
         webhook_code: "TRANSACTIONS_REMOVED"
-        item_id: "plaid-sandbox-removed-001"
+        item_id: "e2e00007-plid-0000-0000-000000000001"
         removed_transactions:
           - "plaid-txn-removed-001"  # Duplicate charge
           - "plaid-txn-removed-002"  # Erroneous charge

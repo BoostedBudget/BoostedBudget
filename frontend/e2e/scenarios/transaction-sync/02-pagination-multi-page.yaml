@@ -25,15 +25,15 @@ scenario:
   setup:
     # Create premium user (has 2-year history, enough for many transactions)
     user:
-      id: "test-pagination-001"
+      id: "e2e00002-0000-0000-0000-000000000001"
       email: "pagination@test.example.com"
       tier: "premium"
       auth0_user_id: "auto-generate"
 
     # Create Plaid linked item
     linked_items:
-      - id: "linked-item-pagination-001"
-        item_id: "plaid-sandbox-pagination-001"
+      - id: "e2e00002-item-0000-0000-000000000001"
+        item_id: "e2e00002-plid-0000-0000-000000000001"
         institution: "Chase"
         institution_id: "ins_3"
         cursor: null  # First sync
@@ -41,8 +41,8 @@ scenario:
 
     # Create checking account
     accounts:
-      - id: "account-pagination-001"
-        linked_item_id: "linked-item-pagination-001"
+      - id: "e2e00002-0001-0000-0000-000000000001"
+        linked_item_id: "e2e00002-item-0000-0000-000000000001"
         plaid_account_id: "plaid-acc-pagination-001"
         name: "Chase Checking"
         type: "depository"
@@ -65,7 +65,7 @@ scenario:
       body:
         webhook_type: "TRANSACTIONS"
         webhook_code: "INITIAL_UPDATE"
-        item_id: "plaid-sandbox-pagination-001"
+        item_id: "e2e00002-plid-0000-0000-000000000001"
       expect_status: 200
 
     # Step 2: Wait for webhook processing (pagination may take longer)
@@ -80,7 +80,7 @@ scenario:
           SELECT COUNT(*) as count
           FROM transactions t
           JOIN accounts a ON t.account_id = a.id
-          WHERE a.id = 'account-pagination-001'
+          WHERE a.id = 'e2e00002-0001-0000-0000-000000000001'
         expected:
           count: 600
 
@@ -93,7 +93,7 @@ scenario:
             SELECT external_transaction_id, COUNT(*) as cnt
             FROM transactions t
             JOIN accounts a ON t.account_id = a.id
-            WHERE a.id = 'account-pagination-001'
+            WHERE a.id = 'e2e00002-0001-0000-0000-000000000001'
             GROUP BY external_transaction_id
             HAVING COUNT(*) > 1
           ) duplicates
@@ -106,7 +106,7 @@ scenario:
           SELECT COUNT(DISTINCT external_transaction_id) as unique_count
           FROM transactions t
           JOIN accounts a ON t.account_id = a.id
-          WHERE a.id = 'account-pagination-001'
+          WHERE a.id = 'e2e00002-0001-0000-0000-000000000001'
         expected:
           unique_count: 600
 
@@ -115,7 +115,7 @@ scenario:
         query: |
           SELECT cursor
           FROM linked_items
-          WHERE id = 'linked-item-pagination-001'
+          WHERE id = 'e2e00002-item-0000-0000-000000000001'
         expected_not_null: ["cursor"]
 
       # Assertion 5: All transactions should have valid data
@@ -124,7 +124,7 @@ scenario:
           SELECT COUNT(*) as count
           FROM transactions t
           JOIN accounts a ON t.account_id = a.id
-          WHERE a.id = 'account-pagination-001'
+          WHERE a.id = 'e2e00002-0001-0000-0000-000000000001'
           AND (
             t.external_transaction_id IS NULL
             OR t.amount IS NULL
@@ -141,7 +141,7 @@ scenario:
             COUNT(*) as valid_date_range
           FROM transactions t
           JOIN accounts a ON t.account_id = a.id
-          WHERE a.id = 'account-pagination-001'
+          WHERE a.id = 'e2e00002-0001-0000-0000-000000000001'
           AND t.date >= CURRENT_DATE - INTERVAL '90 days'
         expected:
           valid_date_range: 600  # All 600 transactions should be within 90 days
@@ -150,7 +150,7 @@ scenario:
       # Assertion 7: GET /transactions should return paginated results
       - description: "GET /transactions should return transactions with pagination support"
         method: "GET"
-        endpoint: "/api/v1/transactions?account_id=account-pagination-001&limit=100"
+        endpoint: "/api/v1/transactions?account_id=e2e00002-0001-0000-0000-000000000001&limit=100"
         expect_status: 200
         expect_body_contains: ["id", "amount", "date"]
 

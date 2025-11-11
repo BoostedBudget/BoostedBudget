@@ -26,15 +26,15 @@ scenario:
   setup:
     # Create premium user
     user:
-      id: "test-pending-001"
+      id: "e2e00006-0000-0000-0000-000000000001"
       email: "pending@test.example.com"
       tier: "premium"
       auth0_user_id: "auto-generate"
 
     # Create Plaid linked item
     linked_items:
-      - id: "linked-item-pending-001"
-        item_id: "plaid-sandbox-pending-001"
+      - id: "e2e00006-item-0000-0000-000000000001"
+        item_id: "e2e00006-plid-0000-0000-000000000001"
         institution: "Chase"
         institution_id: "ins_3"
         cursor: null
@@ -43,7 +43,7 @@ scenario:
     # Create credit card account
     accounts:
       - id: "account-pending-001"
-        linked_item_id: "linked-item-pending-001"
+        linked_item_id: "e2e00006-item-0000-0000-000000000001"
         plaid_account_id: "plaid-acc-pending-001"
         name: "Chase Credit Card"
         type: "credit"
@@ -106,7 +106,7 @@ scenario:
       body:
         webhook_type: "TRANSACTIONS"
         webhook_code: "DEFAULT_UPDATE"
-        item_id: "plaid-sandbox-pending-001"
+        item_id: "e2e00006-plid-0000-0000-000000000001"
         new_transactions:
           # Posted version of transaction 1 (same amount)
           - transaction_id: "plaid-txn-pending-001"

@@ -24,15 +24,15 @@ scenario:
   setup:
     # Create free tier user
     user:
-      id: "test-free-tier-sync-001"
+      id: "e2e00001-0000-0000-0000-000000000001"
       email: "free-tier-sync@test.example.com"
       tier: "free"
       auth0_user_id: "auto-generate"
 
     # Create Plaid linked item
     linked_items:
-      - id: "linked-item-free-001"
-        item_id: "plaid-sandbox-free-tier-001"
+      - id: "e2e00001-item-0000-0000-000000000001"
+        item_id: "e2e00001-plid-0000-0000-000000000001"
         institution: "Chase"
         institution_id: "ins_3"
         cursor: null  # First sync - no cursor yet
@@ -40,8 +40,8 @@ scenario:
 
     # Create checking account
     accounts:
-      - id: "account-free-checking-001"
-        linked_item_id: "linked-item-free-001"
+      - id: "e2e00001-0001-0000-0000-000000000001"
+        linked_item_id: "e2e00001-item-0000-0000-000000000001"
         plaid_account_id: "plaid-acc-free-001"
         name: "Chase Everyday Checking"
         type: "depository"
@@ -63,7 +63,7 @@ scenario:
       body:
         webhook_type: "TRANSACTIONS"
         webhook_code: "INITIAL_UPDATE"
-        item_id: "plaid-sandbox-free-tier-001"
+        item_id: "e2e00001-plid-0000-0000-000000000001"
       expect_status: 200
 
     # Step 2: Wait for webhook processing
@@ -78,7 +78,7 @@ scenario:
           SELECT COUNT(*) as count
           FROM transactions t
           JOIN accounts a ON t.account_id = a.id
-          WHERE a.id = 'account-free-checking-001'
+          WHERE a.id = 'e2e00001-0001-0000-0000-000000000001'
           AND t.date >= CURRENT_DATE - INTERVAL '30 days'
         expected:
           count: 30
@@ -89,7 +89,7 @@ scenario:
           SELECT COUNT(*) as count
           FROM transactions t
           JOIN accounts a ON t.account_id = a.id
-          WHERE a.id = 'account-free-checking-001'
+          WHERE a.id = 'e2e00001-0001-0000-0000-000000000001'
           AND t.date < CURRENT_DATE - INTERVAL '30 days'
         expected:
           count: 0
@@ -100,7 +100,7 @@ scenario:
           SELECT t.id, t.external_transaction_id, t.amount, t.date, t.name
           FROM transactions t
           JOIN accounts a ON t.account_id = a.id
-          WHERE a.id = 'account-free-checking-001'
+          WHERE a.id = 'e2e00001-0001-0000-0000-000000000001'
           LIMIT 1
         expected_not_null: ["id", "external_transaction_id", "amount", "date", "name"]
 
@@ -109,14 +109,14 @@ scenario:
         query: |
           SELECT cursor
           FROM linked_items
-          WHERE id = 'linked-item-free-001'
+          WHERE id = 'e2e00001-item-0000-0000-000000000001'
         expected_not_null: ["cursor"]
 
     api:
       # Assertion 5: GET transactions should return 30 transactions
       - description: "API should return 30 transactions for free tier user"
         method: "GET"
-        endpoint: "/api/v1/transactions?account_id=account-free-checking-001"
+        endpoint: "/api/v1/transactions?account_id=e2e00001-0001-0000-0000-000000000001"
         expect_status: 200
         expect_body_contains: ["id", "amount", "date"]
 

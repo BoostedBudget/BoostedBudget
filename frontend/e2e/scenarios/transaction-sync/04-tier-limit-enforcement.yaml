@@ -37,8 +37,8 @@ scenario:
 
     # Create Plaid linked item
     linked_items:
-      - id: "linked-item-limit-001"
-        item_id: "plaid-sandbox-limit-001"
+      - id: "e2e00004-item-0000-0000-000000000001"
+        item_id: "e2e00004-plid-0000-0000-000000000001"
         institution: "Chase"
         institution_id: "ins_3"
         cursor: null
@@ -47,8 +47,8 @@ scenario:
     # Create exactly 3 accounts (free tier limit)
     accounts:
       # Account 1: Checking
-      - id: "account-limit-001"
-        linked_item_id: "linked-item-limit-001"
+      - id: "e2e00004-0001-0000-0000-000000000001"
+        linked_item_id: "e2e00004-item-0000-0000-000000000001"
         plaid_account_id: "plaid-acc-limit-001"
         name: "Chase Checking"
         type: "depository"
@@ -57,8 +57,8 @@ scenario:
         available_balance: 4800.00
 
       # Account 2: Savings
-      - id: "account-limit-002"
-        linked_item_id: "linked-item-limit-001"
+      - id: "e2e00004-0002-0000-0000-000000000001"
+        linked_item_id: "e2e00004-item-0000-0000-000000000001"
         plaid_account_id: "plaid-acc-limit-002"
         name: "Chase Savings"
         type: "depository"
@@ -67,8 +67,8 @@ scenario:
         available_balance: 10000.00
 
       # Account 3: Credit Card (at limit now)
-      - id: "account-limit-003"
-        linked_item_id: "linked-item-limit-001"
+      - id: "e2e00004-0003-0000-0000-000000000001"
+        linked_item_id: "e2e00004-item-0000-0000-000000000001"
         plaid_account_id: "plaid-acc-limit-003"
         name: "Chase Credit Card"
         type: "credit"
@@ -91,7 +91,7 @@ scenario:
       endpoint: "/api/v1/accounts"
       body:
         user_id: "00000000-0000-0000-0000-000000000001"
-        linked_item_id: "linked-item-limit-001"
+        linked_item_id: "e2e00004-item-0000-0000-000000000001"
         plaid_account_id: "plaid-acc-limit-004"
         name: "Chase Investment Account"
         type: "investment"
@@ -157,7 +157,7 @@ scenario:
         endpoint: "/api/v1/accounts"
         body:
           user_id: "00000000-0000-0000-0000-000000000001"
-          linked_item_id: "linked-item-limit-001"
+          linked_item_id: "e2e00004-item-0000-0000-000000000001"
           plaid_account_id: "plaid-acc-limit-005"
           name: "Another Account"
           type: "depository"
