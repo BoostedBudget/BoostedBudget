@@ -97,7 +97,7 @@ scenario:
       # Assertion 3: All transactions should have required fields
       - description: "All transactions should have valid data"
         query: |
-          SELECT t.id, external_transaction_id, amount, date, name
+          SELECT t.id, t.external_transaction_id, t.amount, t.date, t.name
           FROM transactions t
           JOIN accounts a ON t.account_id = a.id
           WHERE a.id = 'account-free-checking-001'
