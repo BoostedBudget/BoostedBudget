@@ -18,24 +18,24 @@ scenario:
   # Setup test data
   setup:
     user:
-      id: "test-user-free-first-sync-001"
+      id: "11a687dc-3eab-5523-9c29-5b24b4ad350e"
       tier: "free"
       email: "test-free-sync@example.com"
       auth0_user_id: "auth0|test-free-sync-001"
 
     linked_items:
-      - id: "test-item-free-sync-001"
-        user_id: "test-user-free-first-sync-001"
-        item_id: "plaid-item-free-sync-001"
+      - id: "5c5018c5-9db3-5c64-941d-fc47ac22112c"
+        user_id: "11a687dc-3eab-5523-9c29-5b24b4ad350e"
+        item_id: "7eeeb269-1c02-5bb6-87d9-e8e015d92aa7"
         institution_name: "Chase"
         institution_id: "ins_3"
         cursor: null  # No cursor for first sync
         status: "active"
 
     accounts:
-      - id: "test-account-free-sync-001"
-        linked_item_id: "test-item-free-sync-001"
-        user_id: "test-user-free-first-sync-001"
+      - id: "534d4391-157e-5f6f-8cda-730af62c9a8a"
+        linked_item_id: "5c5018c5-9db3-5c64-941d-fc47ac22112c"
+        user_id: "11a687dc-3eab-5523-9c29-5b24b4ad350e"
         plaid_account_id: "plaid-acc-free-sync-001"
         name: "Chase Total Checking"
         type: "depository"
@@ -47,7 +47,7 @@ scenario:
     - action: "fire_webhook"
       description: "Trigger INITIAL_UPDATE webhook for free tier user"
       webhook_code: "INITIAL_UPDATE"
-      item_id: "test-item-free-sync-001"
+      item_id: "5c5018c5-9db3-5c64-941d-fc47ac22112c"
 
     - action: "wait"
       description: "Wait for webhook processing and transaction sync"

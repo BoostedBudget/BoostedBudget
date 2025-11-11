@@ -97,7 +97,7 @@ example_tags:
 # User object structure:
 
 user_schema:
-  id: "string (required) - User ID"
+  id: "d57532c8-8b02-5908-a5c4-fd482076f242"
   tier: "string (required) - free|premium_lite|premium|premium_plus"
   email: "string (required) - User email"
   auth0_user_id: "string (optional) - Auth0 user ID (defaults to 'auth0|{id}')"
@@ -112,9 +112,9 @@ user_schema:
 # Linked item object structure:
 
 linked_item_schema:
-  id: "string (required) - Linked item ID"
-  user_id: "string (required) - User ID (foreign key)"
-  item_id: "string (required) - Plaid item ID"
+  id: "8af8c036-9268-5fbf-a647-278bfbe6b432"
+  user_id: "4b3473b2-59f7-5ebf-934c-bdd1472f430e"
+  item_id: "603dd3c7-c68b-5583-ad83-d257bdf154cc"
   institution_name: "string (required) - Institution name"
   institution_id: "string (optional) - Plaid institution ID (default: 'ins_3')"
   cursor: "string|null (optional) - Sync cursor (default: null)"
@@ -127,9 +127,9 @@ linked_item_schema:
 # Account object structure:
 
 account_schema:
-  id: "string (required) - Account ID"
-  linked_item_id: "string (required) - Linked item ID (foreign key)"
-  user_id: "string (required) - User ID (foreign key)"
+  id: "6f055170-eb66-54d0-82d2-cfb4e706d3c9"
+  linked_item_id: "3b477653-12ba-5149-b25d-09360ac80af1"
+  user_id: "4b3473b2-59f7-5ebf-934c-bdd1472f430e"
   plaid_account_id: "string (required) - Plaid account ID"
   name: "string (required) - Account name"
   official_name: "string (optional) - Official account name"
@@ -149,9 +149,9 @@ account_schema:
 # Pre-existing transaction object structure (for update/modify scenarios):
 
 transaction_schema:
-  user_id: "string (required) - User ID"
-  account_id: "string (required) - Account ID"
-  linked_item_id: "string (required) - Linked item ID"
+  user_id: "d57532c8-8b02-5908-a5c4-fd482076f242"
+  account_id: "6f055170-eb66-54d0-82d2-cfb4e706d3c9"
+  linked_item_id: "8af8c036-9268-5fbf-a647-278bfbe6b432"
   external_transaction_id: "string (required) - Plaid transaction ID"
   amount: "number (required) - Transaction amount (negative=debit, positive=credit)"
   date: "string (required) - Transaction date (YYYY-MM-DD)"
@@ -169,7 +169,7 @@ steps_schema:
   # Fire webhook action
   - action: "fire_webhook"
     webhook_code: "string (required) - INITIAL_UPDATE|DEFAULT_UPDATE|HISTORICAL_UPDATE|TRANSACTIONS_REMOVED"
-    item_id: "string (required) - Plaid item ID to fire webhook for"
+    item_id: "1c93772c-0d78-58c6-9385-fb760d6fa4c4"
 
   # Wait action
   - action: "wait"
@@ -247,22 +247,22 @@ example_scenario:
 
     setup:
       user:
-        id: "test-user-free-001"
+        id: "ede25ef3-778f-5191-8ad8-f3e73e32457f"
         tier: "free"
         email: "freeuser001@test.com"
 
       linked_items:
-        - id: "test-item-free-001"
-          user_id: "test-user-free-001"
-          item_id: "plaid-sandbox-item-001"
+        - id: "9e8024c6-098d-5540-b348-54fbd2ac71a7"
+          user_id: "ede25ef3-778f-5191-8ad8-f3e73e32457f"
+          item_id: "34628385-87e5-5067-97a5-248df6d6f1d0"
           institution_name: "Chase"
           cursor: null
           status: "active"
 
       accounts:
-        - id: "test-acc-free-001"
-          linked_item_id: "test-item-free-001"
-          user_id: "test-user-free-001"
+        - id: "a85c5981-3190-5718-b769-5cdc96249832"
+          linked_item_id: "9e8024c6-098d-5540-b348-54fbd2ac71a7"
+          user_id: "ede25ef3-778f-5191-8ad8-f3e73e32457f"
           plaid_account_id: "plaid-acc-checking-001"
           name: "Chase Checking"
           type: "depository"
@@ -272,7 +272,7 @@ example_scenario:
     steps:
       - action: "fire_webhook"
         webhook_code: "INITIAL_UPDATE"
-        item_id: "plaid-sandbox-item-001"
+        item_id: "34628385-87e5-5067-97a5-248df6d6f1d0"
 
       - action: "wait"
         wait_seconds: 5

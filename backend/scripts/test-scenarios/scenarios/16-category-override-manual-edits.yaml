@@ -21,24 +21,24 @@ scenario:
   # Setup test data
   setup:
     user:
-      id: "test-user-category-001"
+      id: "a710b7d5-40a0-5667-9f39-c5af1261a233"
       tier: "premium"
       email: "category-test@example.com"
       auth0_user_id: "auth0|test-category-001"
 
     linked_items:
-      - id: "test-item-category-001"
-        user_id: "test-user-category-001"
-        item_id: "plaid-item-category-001"
+      - id: "6500b0b7-01be-526c-8b5d-d96566069c04"
+        user_id: "a710b7d5-40a0-5667-9f39-c5af1261a233"
+        item_id: "9dce5adc-7407-5083-8ba2-eefe74c1a8ac"
         institution_name: "Chase"
         institution_id: "ins_3"
         cursor: "cursor-category-sync"
         status: "active"
 
     accounts:
-      - id: "test-account-category-001"
-        linked_item_id: "test-item-category-001"
-        user_id: "test-user-category-001"
+      - id: "8def8be7-9bc4-5372-ba79-a5e95ba5fc63"
+        linked_item_id: "6500b0b7-01be-526c-8b5d-d96566069c04"
+        user_id: "a710b7d5-40a0-5667-9f39-c5af1261a233"
         plaid_account_id: "plaid-acc-category-001"
         name: "Chase Sapphire Reserve"
         official_name: "Chase Sapphire Reserve Credit Card"
@@ -59,9 +59,9 @@ scenario:
       # Transaction 1: Costco - Plaid says "FOOD_AND_DRINK_GROCERIES", user changed to "GENERAL_MERCHANDISE"
       # User thinks: "I bought electronics at Costco, not groceries"
       - external_transaction_id: "plaid-category-override-001"
-        user_id: "test-user-category-001"
-        account_id: "test-account-category-001"
-        linked_item_id: "test-item-category-001"
+        user_id: "a710b7d5-40a0-5667-9f39-c5af1261a233"
+        account_id: "8def8be7-9bc4-5372-ba79-a5e95ba5fc63"
+        linked_item_id: "6500b0b7-01be-526c-8b5d-d96566069c04"
         amount: -285.00
         date: "2025-11-10"
         name: "Costco Wholesale"
@@ -78,9 +78,9 @@ scenario:
       # Transaction 2: Amazon - Plaid says "GENERAL_MERCHANDISE_ONLINE", user changed to "ENTERTAINMENT"
       # User thinks: "I bought books and streaming device, it's entertainment"
       - external_transaction_id: "plaid-category-override-002"
-        user_id: "test-user-category-001"
-        account_id: "test-account-category-001"
-        linked_item_id: "test-item-category-001"
+        user_id: "a710b7d5-40a0-5667-9f39-c5af1261a233"
+        account_id: "8def8be7-9bc4-5372-ba79-a5e95ba5fc63"
+        linked_item_id: "6500b0b7-01be-526c-8b5d-d96566069c04"
         amount: -129.99
         date: "2025-11-12"
         name: "Amazon.com"
@@ -96,9 +96,9 @@ scenario:
       # Transaction 3: Target - Plaid says "GENERAL_MERCHANDISE", user changed to "FOOD_AND_DRINK_GROCERIES"
       # User thinks: "I only bought groceries at Target this time"
       - external_transaction_id: "plaid-category-override-003"
-        user_id: "test-user-category-001"
-        account_id: "test-account-category-001"
-        linked_item_id: "test-item-category-001"
+        user_id: "a710b7d5-40a0-5667-9f39-c5af1261a233"
+        account_id: "8def8be7-9bc4-5372-ba79-a5e95ba5fc63"
+        linked_item_id: "6500b0b7-01be-526c-8b5d-d96566069c04"
         amount: -87.50
         date: "2025-11-15"
         name: "Target"
@@ -117,9 +117,9 @@ scenario:
 
       # Transaction 4: Shell Gas - Plaid correct, but user added note + custom subcategory
       - external_transaction_id: "plaid-category-override-004"
-        user_id: "test-user-category-001"
-        account_id: "test-account-category-001"
-        linked_item_id: "test-item-category-001"
+        user_id: "a710b7d5-40a0-5667-9f39-c5af1261a233"
+        account_id: "8def8be7-9bc4-5372-ba79-a5e95ba5fc63"
+        linked_item_id: "6500b0b7-01be-526c-8b5d-d96566069c04"
         amount: -42.00
         date: "2025-11-08"
         name: "Shell Gas Station"
@@ -136,9 +136,9 @@ scenario:
       # Transaction 5: Whole Foods - User override + notes
       # Plaid: "FOOD_AND_DRINK_GROCERIES", User: "MEDICAL" (vitamins/supplements)
       - external_transaction_id: "plaid-category-override-005"
-        user_id: "test-user-category-001"
-        account_id: "test-account-category-001"
-        linked_item_id: "test-item-category-001"
+        user_id: "a710b7d5-40a0-5667-9f39-c5af1261a233"
+        account_id: "8def8be7-9bc4-5372-ba79-a5e95ba5fc63"
+        linked_item_id: "6500b0b7-01be-526c-8b5d-d96566069c04"
         amount: -67.50
         date: "2025-11-14"
         name: "Whole Foods Market"
@@ -158,9 +158,9 @@ scenario:
 
       # Transaction 6: Starbucks - User accepts Plaid category
       - external_transaction_id: "plaid-category-no-override-001"
-        user_id: "test-user-category-001"
-        account_id: "test-account-category-001"
-        linked_item_id: "test-item-category-001"
+        user_id: "a710b7d5-40a0-5667-9f39-c5af1261a233"
+        account_id: "8def8be7-9bc4-5372-ba79-a5e95ba5fc63"
+        linked_item_id: "6500b0b7-01be-526c-8b5d-d96566069c04"
         amount: -5.45
         date: "2025-11-16"
         name: "Starbucks"
@@ -174,9 +174,9 @@ scenario:
 
       # Transaction 7: Chipotle - User accepts Plaid category (no override)
       - external_transaction_id: "plaid-category-no-override-002"
-        user_id: "test-user-category-001"
-        account_id: "test-account-category-001"
-        linked_item_id: "test-item-category-001"
+        user_id: "a710b7d5-40a0-5667-9f39-c5af1261a233"
+        account_id: "8def8be7-9bc4-5372-ba79-a5e95ba5fc63"
+        linked_item_id: "6500b0b7-01be-526c-8b5d-d96566069c04"
         amount: -12.50
         date: "2025-11-18"
         name: "Chipotle Mexican Grill"
@@ -190,9 +190,9 @@ scenario:
 
       # Transaction 8: Netflix - User accepts Plaid category
       - external_transaction_id: "plaid-category-no-override-003"
-        user_id: "test-user-category-001"
-        account_id: "test-account-category-001"
-        linked_item_id: "test-item-category-001"
+        user_id: "a710b7d5-40a0-5667-9f39-c5af1261a233"
+        account_id: "8def8be7-9bc4-5372-ba79-a5e95ba5fc63"
+        linked_item_id: "6500b0b7-01be-526c-8b5d-d96566069c04"
         amount: -15.99
         date: "2025-11-05"
         name: "Netflix"
@@ -209,7 +209,7 @@ scenario:
     - action: "fire_webhook"
       description: "Trigger DEFAULT_UPDATE - Plaid sends MODIFIED transactions (amounts/dates may change)"
       webhook_code: "DEFAULT_UPDATE"
-      item_id: "plaid-item-category-001"
+      item_id: "9dce5adc-7407-5083-8ba2-eefe74c1a8ac"
       # Plaid may send category updates, but user overrides should be preserved
 
     - action: "wait"

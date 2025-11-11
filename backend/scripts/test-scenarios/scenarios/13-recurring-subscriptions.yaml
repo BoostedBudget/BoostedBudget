@@ -21,24 +21,24 @@ scenario:
   # Setup test data
   setup:
     user:
-      id: "test-user-subscriptions-001"
+      id: "ec6aeff5-6a2f-581a-84e2-d9842507d3a1"
       tier: "premium"
       email: "subscriptions-test@example.com"
       auth0_user_id: "auth0|test-subscriptions-001"
 
     linked_items:
-      - id: "test-item-subscriptions-001"
-        user_id: "test-user-subscriptions-001"
-        item_id: "plaid-item-subscriptions-001"
+      - id: "b90f779d-08f9-508c-be23-03e526942552"
+        user_id: "ec6aeff5-6a2f-581a-84e2-d9842507d3a1"
+        item_id: "a5d61526-8cb2-530d-9a51-f9ce7b207c30"
         institution_name: "Chase"
         institution_id: "ins_3"
         cursor: "cursor-subscriptions-sync"
         status: "active"
 
     accounts:
-      - id: "test-account-subscriptions-001"
-        linked_item_id: "test-item-subscriptions-001"
-        user_id: "test-user-subscriptions-001"
+      - id: "2d59f122-d0e9-5ffe-97d8-b2d060ce767c"
+        linked_item_id: "b90f779d-08f9-508c-be23-03e526942552"
+        user_id: "ec6aeff5-6a2f-581a-84e2-d9842507d3a1"
         plaid_account_id: "plaid-acc-subscriptions-001"
         name: "Chase Sapphire Reserve"
         official_name: "Chase Sapphire Reserve Credit Card"
@@ -56,9 +56,9 @@ scenario:
 
       # September 5
       - external_transaction_id: "plaid-subscription-netflix-sep"
-        user_id: "test-user-subscriptions-001"
-        account_id: "test-account-subscriptions-001"
-        linked_item_id: "test-item-subscriptions-001"
+        user_id: "ec6aeff5-6a2f-581a-84e2-d9842507d3a1"
+        account_id: "2d59f122-d0e9-5ffe-97d8-b2d060ce767c"
+        linked_item_id: "b90f779d-08f9-508c-be23-03e526942552"
         amount: -15.99
         date: "2025-09-05"
         name: "Netflix"
@@ -71,9 +71,9 @@ scenario:
 
       # October 5 (30 days later)
       - external_transaction_id: "plaid-subscription-netflix-oct"
-        user_id: "test-user-subscriptions-001"
-        account_id: "test-account-subscriptions-001"
-        linked_item_id: "test-item-subscriptions-001"
+        user_id: "ec6aeff5-6a2f-581a-84e2-d9842507d3a1"
+        account_id: "2d59f122-d0e9-5ffe-97d8-b2d060ce767c"
+        linked_item_id: "b90f779d-08f9-508c-be23-03e526942552"
         amount: -15.99
         date: "2025-10-05"
         name: "Netflix"
@@ -86,9 +86,9 @@ scenario:
 
       # November 5 (31 days later)
       - external_transaction_id: "plaid-subscription-netflix-nov"
-        user_id: "test-user-subscriptions-001"
-        account_id: "test-account-subscriptions-001"
-        linked_item_id: "test-item-subscriptions-001"
+        user_id: "ec6aeff5-6a2f-581a-84e2-d9842507d3a1"
+        account_id: "2d59f122-d0e9-5ffe-97d8-b2d060ce767c"
+        linked_item_id: "b90f779d-08f9-508c-be23-03e526942552"
         amount: -15.99
         date: "2025-11-05"
         name: "Netflix"
@@ -105,9 +105,9 @@ scenario:
 
       # September 12
       - external_transaction_id: "plaid-subscription-spotify-sep"
-        user_id: "test-user-subscriptions-001"
-        account_id: "test-account-subscriptions-001"
-        linked_item_id: "test-item-subscriptions-001"
+        user_id: "ec6aeff5-6a2f-581a-84e2-d9842507d3a1"
+        account_id: "2d59f122-d0e9-5ffe-97d8-b2d060ce767c"
+        linked_item_id: "b90f779d-08f9-508c-be23-03e526942552"
         amount: -10.99
         date: "2025-09-12"
         name: "Spotify"
@@ -120,9 +120,9 @@ scenario:
 
       # October 12 (30 days later)
       - external_transaction_id: "plaid-subscription-spotify-oct"
-        user_id: "test-user-subscriptions-001"
-        account_id: "test-account-subscriptions-001"
-        linked_item_id: "test-item-subscriptions-001"
+        user_id: "ec6aeff5-6a2f-581a-84e2-d9842507d3a1"
+        account_id: "2d59f122-d0e9-5ffe-97d8-b2d060ce767c"
+        linked_item_id: "b90f779d-08f9-508c-be23-03e526942552"
         amount: -10.99
         date: "2025-10-12"
         name: "Spotify"
@@ -135,9 +135,9 @@ scenario:
 
       # November 12 (31 days later)
       - external_transaction_id: "plaid-subscription-spotify-nov"
-        user_id: "test-user-subscriptions-001"
-        account_id: "test-account-subscriptions-001"
-        linked_item_id: "test-item-subscriptions-001"
+        user_id: "ec6aeff5-6a2f-581a-84e2-d9842507d3a1"
+        account_id: "2d59f122-d0e9-5ffe-97d8-b2d060ce767c"
+        linked_item_id: "b90f779d-08f9-508c-be23-03e526942552"
         amount: -10.99
         date: "2025-11-05"
         name: "Spotify"
@@ -154,9 +154,9 @@ scenario:
 
       # September 14
       - external_transaction_id: "plaid-subscription-gym-sep"
-        user_id: "test-user-subscriptions-001"
-        account_id: "test-account-subscriptions-001"
-        linked_item_id: "test-item-subscriptions-001"
+        user_id: "ec6aeff5-6a2f-581a-84e2-d9842507d3a1"
+        account_id: "2d59f122-d0e9-5ffe-97d8-b2d060ce767c"
+        linked_item_id: "b90f779d-08f9-508c-be23-03e526942552"
         amount: -24.99
         date: "2025-09-14"
         name: "Planet Fitness"
@@ -169,9 +169,9 @@ scenario:
 
       # October 14 (30 days later)
       - external_transaction_id: "plaid-subscription-gym-oct"
-        user_id: "test-user-subscriptions-001"
-        account_id: "test-account-subscriptions-001"
-        linked_item_id: "test-item-subscriptions-001"
+        user_id: "ec6aeff5-6a2f-581a-84e2-d9842507d3a1"
+        account_id: "2d59f122-d0e9-5ffe-97d8-b2d060ce767c"
+        linked_item_id: "b90f779d-08f9-508c-be23-03e526942552"
         amount: -24.99
         date: "2025-10-14"
         name: "Planet Fitness"
@@ -184,9 +184,9 @@ scenario:
 
       # November 14 (31 days later)
       - external_transaction_id: "plaid-subscription-gym-nov"
-        user_id: "test-user-subscriptions-001"
-        account_id: "test-account-subscriptions-001"
-        linked_item_id: "test-item-subscriptions-001"
+        user_id: "ec6aeff5-6a2f-581a-84e2-d9842507d3a1"
+        account_id: "2d59f122-d0e9-5ffe-97d8-b2d060ce767c"
+        linked_item_id: "b90f779d-08f9-508c-be23-03e526942552"
         amount: -24.99
         date: "2025-11-14"
         name: "Planet Fitness"
@@ -203,9 +203,9 @@ scenario:
 
       # One-time Amazon purchase (NOT a subscription)
       - external_transaction_id: "plaid-onetime-amazon-001"
-        user_id: "test-user-subscriptions-001"
-        account_id: "test-account-subscriptions-001"
-        linked_item_id: "test-item-subscriptions-001"
+        user_id: "ec6aeff5-6a2f-581a-84e2-d9842507d3a1"
+        account_id: "2d59f122-d0e9-5ffe-97d8-b2d060ce767c"
+        linked_item_id: "b90f779d-08f9-508c-be23-03e526942552"
         amount: -89.99
         date: "2025-10-15"
         name: "Amazon.com"
@@ -218,9 +218,9 @@ scenario:
 
       # One-time restaurant (NOT a subscription)
       - external_transaction_id: "plaid-onetime-restaurant-001"
-        user_id: "test-user-subscriptions-001"
-        account_id: "test-account-subscriptions-001"
-        linked_item_id: "test-item-subscriptions-001"
+        user_id: "ec6aeff5-6a2f-581a-84e2-d9842507d3a1"
+        account_id: "2d59f122-d0e9-5ffe-97d8-b2d060ce767c"
+        linked_item_id: "b90f779d-08f9-508c-be23-03e526942552"
         amount: -52.00
         date: "2025-10-20"
         name: "Olive Garden"
@@ -233,9 +233,9 @@ scenario:
 
       # Recurring grocery (SAME merchant, DIFFERENT amounts - NOT a subscription)
       - external_transaction_id: "plaid-recurring-grocery-001"
-        user_id: "test-user-subscriptions-001"
-        account_id: "test-account-subscriptions-001"
-        linked_item_id: "test-item-subscriptions-001"
+        user_id: "ec6aeff5-6a2f-581a-84e2-d9842507d3a1"
+        account_id: "2d59f122-d0e9-5ffe-97d8-b2d060ce767c"
+        linked_item_id: "b90f779d-08f9-508c-be23-03e526942552"
         amount: -125.00
         date: "2025-09-10"
         name: "Whole Foods Market"
@@ -247,9 +247,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-recurring-grocery-002"
-        user_id: "test-user-subscriptions-001"
-        account_id: "test-account-subscriptions-001"
-        linked_item_id: "test-item-subscriptions-001"
+        user_id: "ec6aeff5-6a2f-581a-84e2-d9842507d3a1"
+        account_id: "2d59f122-d0e9-5ffe-97d8-b2d060ce767c"
+        linked_item_id: "b90f779d-08f9-508c-be23-03e526942552"
         amount: -98.50
         date: "2025-10-08"
         name: "Whole Foods Market"
@@ -261,9 +261,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-recurring-grocery-003"
-        user_id: "test-user-subscriptions-001"
-        account_id: "test-account-subscriptions-001"
-        linked_item_id: "test-item-subscriptions-001"
+        user_id: "ec6aeff5-6a2f-581a-84e2-d9842507d3a1"
+        account_id: "2d59f122-d0e9-5ffe-97d8-b2d060ce767c"
+        linked_item_id: "b90f779d-08f9-508c-be23-03e526942552"
         amount: -142.75
         date: "2025-11-06"
         name: "Whole Foods Market"

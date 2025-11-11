@@ -21,24 +21,24 @@ scenario:
   # Setup test data
   setup:
     user:
-      id: "test-user-historical-001"
+      id: "714de8d5-feba-53eb-95b9-498575d2bc70"
       tier: "premium"  # Premium = 730-day historical limit (2 years)
       email: "historical-test@example.com"
       auth0_user_id: "auth0|test-historical-001"
 
     linked_items:
-      - id: "test-item-historical-001"
-        user_id: "test-user-historical-001"
-        item_id: "plaid-item-historical-001"
+      - id: "f3b53328-1f5f-5d4e-87f8-514290207963"
+        user_id: "714de8d5-feba-53eb-95b9-498575d2bc70"
+        item_id: "07dd7c90-a21a-5c66-b7f8-41c148d9045b"
         institution_name: "Wells Fargo"
         institution_id: "ins_6"
         cursor: null  # No cursor = first historical sync
         status: "active"
 
     accounts:
-      - id: "test-account-historical-001"
-        linked_item_id: "test-item-historical-001"
-        user_id: "test-user-historical-001"
+      - id: "4cf7f619-4a26-592d-8cde-f1d6fe03ae53"
+        linked_item_id: "f3b53328-1f5f-5d4e-87f8-514290207963"
+        user_id: "714de8d5-feba-53eb-95b9-498575d2bc70"
         plaid_account_id: "plaid-acc-historical-001"
         name: "Wells Fargo Everyday Checking"
         official_name: "Wells Fargo Everyday Checking Account"
@@ -51,7 +51,7 @@ scenario:
     - action: "fire_webhook"
       description: "Trigger HISTORICAL_UPDATE webhook to fetch 730 days of transactions"
       webhook_code: "HISTORICAL_UPDATE"
-      item_id: "plaid-item-historical-001"
+      item_id: "07dd7c90-a21a-5c66-b7f8-41c148d9045b"
       # NOTE: Plaid sandbox may return fewer transactions
       # Expecting ~500 transactions across 24 months with realistic distribution
 

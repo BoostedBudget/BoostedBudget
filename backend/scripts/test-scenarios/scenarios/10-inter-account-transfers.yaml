@@ -20,15 +20,15 @@ scenario:
   # Setup test data
   setup:
     user:
-      id: "test-user-transfers-001"
+      id: "27b6f487-3aa8-55c5-b86d-f27eb0dd4762"
       tier: "premium"
       email: "transfers-test@example.com"
       auth0_user_id: "auth0|test-transfers-001"
 
     linked_items:
-      - id: "test-item-transfers-001"
-        user_id: "test-user-transfers-001"
-        item_id: "plaid-item-transfers-001"
+      - id: "275c37fe-a70d-5810-8ed4-ccefde73152a"
+        user_id: "27b6f487-3aa8-55c5-b86d-f27eb0dd4762"
+        item_id: "7af8a10f-e1a1-57f3-bcfc-d2ff14d84b85"
         institution_name: "Chase"
         institution_id: "ins_3"
         cursor: "cursor-with-transfers"
@@ -36,9 +36,9 @@ scenario:
 
     accounts:
       # Account 1: Checking (source for transfers)
-      - id: "test-account-checking-001"
-        linked_item_id: "test-item-transfers-001"
-        user_id: "test-user-transfers-001"
+      - id: "99158bb6-0366-5f15-a04c-91c8e7ecd26c"
+        linked_item_id: "275c37fe-a70d-5810-8ed4-ccefde73152a"
+        user_id: "27b6f487-3aa8-55c5-b86d-f27eb0dd4762"
         plaid_account_id: "plaid-acc-checking-001"
         name: "Chase Total Checking"
         official_name: "Chase Total Checking Account"
@@ -48,9 +48,9 @@ scenario:
         available_balance: 3500.00
 
       # Account 2: Savings (destination for transfers)
-      - id: "test-account-savings-001"
-        linked_item_id: "test-item-transfers-001"
-        user_id: "test-user-transfers-001"
+      - id: "67d251a3-44ef-55ec-a2fa-ce47ac271494"
+        linked_item_id: "275c37fe-a70d-5810-8ed4-ccefde73152a"
+        user_id: "27b6f487-3aa8-55c5-b86d-f27eb0dd4762"
         plaid_account_id: "plaid-acc-savings-001"
         name: "Chase Savings"
         official_name: "Chase Savings Account"
@@ -60,9 +60,9 @@ scenario:
         available_balance: 5000.00
 
       # Account 3: Credit Card (destination for payment transfers)
-      - id: "test-account-credit-001"
-        linked_item_id: "test-item-transfers-001"
-        user_id: "test-user-transfers-001"
+      - id: "f691c0de-9e1d-53da-8429-fab42b2dc9e9"
+        linked_item_id: "275c37fe-a70d-5810-8ed4-ccefde73152a"
+        user_id: "27b6f487-3aa8-55c5-b86d-f27eb0dd4762"
         plaid_account_id: "plaid-acc-credit-001"
         name: "Chase Sapphire Reserve"
         official_name: "Chase Sapphire Reserve Credit Card"
@@ -77,9 +77,9 @@ scenario:
 
       # Normal checking activity (not transfers)
       - external_transaction_id: "plaid-checking-paycheck-001"
-        user_id: "test-user-transfers-001"
-        account_id: "test-account-checking-001"
-        linked_item_id: "test-item-transfers-001"
+        user_id: "27b6f487-3aa8-55c5-b86d-f27eb0dd4762"
+        account_id: "99158bb6-0366-5f15-a04c-91c8e7ecd26c"
+        linked_item_id: "275c37fe-a70d-5810-8ed4-ccefde73152a"
         amount: 3500.00
         date: "2025-11-01"
         name: "Employer Paycheck Direct Deposit"
@@ -87,9 +87,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-checking-rent-001"
-        user_id: "test-user-transfers-001"
-        account_id: "test-account-checking-001"
-        linked_item_id: "test-item-transfers-001"
+        user_id: "27b6f487-3aa8-55c5-b86d-f27eb0dd4762"
+        account_id: "99158bb6-0366-5f15-a04c-91c8e7ecd26c"
+        linked_item_id: "275c37fe-a70d-5810-8ed4-ccefde73152a"
         amount: -2400.00
         date: "2025-11-01"
         name: "Rent Payment to Landlord"
@@ -98,9 +98,9 @@ scenario:
 
       # EXISTING TRANSFER 1: Checking → Savings (already posted)
       - external_transaction_id: "plaid-transfer-out-savings-001"
-        user_id: "test-user-transfers-001"
-        account_id: "test-account-checking-001"
-        linked_item_id: "test-item-transfers-001"
+        user_id: "27b6f487-3aa8-55c5-b86d-f27eb0dd4762"
+        account_id: "99158bb6-0366-5f15-a04c-91c8e7ecd26c"
+        linked_item_id: "275c37fe-a70d-5810-8ed4-ccefde73152a"
         amount: -500.00
         date: "2025-11-02"
         name: "Transfer to Chase Savings"
@@ -109,9 +109,9 @@ scenario:
 
       # EXISTING TRANSFER 2: Checking → Credit Card Payment (already posted)
       - external_transaction_id: "plaid-transfer-out-ccpayment-001"
-        user_id: "test-user-transfers-001"
-        account_id: "test-account-checking-001"
-        linked_item_id: "test-item-transfers-001"
+        user_id: "27b6f487-3aa8-55c5-b86d-f27eb0dd4762"
+        account_id: "99158bb6-0366-5f15-a04c-91c8e7ecd26c"
+        linked_item_id: "275c37fe-a70d-5810-8ed4-ccefde73152a"
         amount: -750.00
         date: "2025-11-03"
         name: "Credit Card Payment"
@@ -122,9 +122,9 @@ scenario:
 
       # EXISTING TRANSFER 1 (receiving side): Savings receives from Checking
       - external_transaction_id: "plaid-transfer-in-savings-001"
-        user_id: "test-user-transfers-001"
-        account_id: "test-account-savings-001"
-        linked_item_id: "test-item-transfers-001"
+        user_id: "27b6f487-3aa8-55c5-b86d-f27eb0dd4762"
+        account_id: "67d251a3-44ef-55ec-a2fa-ce47ac271494"
+        linked_item_id: "275c37fe-a70d-5810-8ed4-ccefde73152a"
         amount: 500.00
         date: "2025-11-02"
         name: "Transfer from Chase Checking"
@@ -133,9 +133,9 @@ scenario:
 
       # Normal savings activity (interest)
       - external_transaction_id: "plaid-savings-interest-001"
-        user_id: "test-user-transfers-001"
-        account_id: "test-account-savings-001"
-        linked_item_id: "test-item-transfers-001"
+        user_id: "27b6f487-3aa8-55c5-b86d-f27eb0dd4762"
+        account_id: "67d251a3-44ef-55ec-a2fa-ce47ac271494"
+        linked_item_id: "275c37fe-a70d-5810-8ed4-ccefde73152a"
         amount: 12.50
         date: "2025-11-01"
         name: "Interest Earned"
@@ -146,9 +146,9 @@ scenario:
 
       # EXISTING TRANSFER 2 (receiving side): Credit card payment from Checking
       - external_transaction_id: "plaid-transfer-in-ccpayment-001"
-        user_id: "test-user-transfers-001"
-        account_id: "test-account-credit-001"
-        linked_item_id: "test-item-transfers-001"
+        user_id: "27b6f487-3aa8-55c5-b86d-f27eb0dd4762"
+        account_id: "f691c0de-9e1d-53da-8429-fab42b2dc9e9"
+        linked_item_id: "275c37fe-a70d-5810-8ed4-ccefde73152a"
         amount: 750.00
         date: "2025-11-03"
         name: "Payment from Chase Checking"
@@ -157,9 +157,9 @@ scenario:
 
       # Normal credit card spending
       - external_transaction_id: "plaid-credit-amazon-001"
-        user_id: "test-user-transfers-001"
-        account_id: "test-account-credit-001"
-        linked_item_id: "test-item-transfers-001"
+        user_id: "27b6f487-3aa8-55c5-b86d-f27eb0dd4762"
+        account_id: "f691c0de-9e1d-53da-8429-fab42b2dc9e9"
+        linked_item_id: "275c37fe-a70d-5810-8ed4-ccefde73152a"
         amount: -125.00
         date: "2025-11-04"
         name: "Amazon.com"
@@ -171,7 +171,7 @@ scenario:
     - action: "fire_webhook"
       description: "Trigger DEFAULT_UPDATE - Plaid sends new transfer pair (Checking → Savings $1000)"
       webhook_code: "DEFAULT_UPDATE"
-      item_id: "plaid-item-transfers-001"
+      item_id: "7af8a10f-e1a1-57f3-bcfc-d2ff14d84b85"
       # Expected new transactions:
       # 1. Debit from checking: -$1000.00 "Transfer to Chase Savings"
       # 2. Credit to savings: +$1000.00 "Transfer from Chase Checking"

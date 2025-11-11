@@ -19,24 +19,24 @@ scenario:
   # Setup test data
   setup:
     user:
-      id: "test-user-notes-001"
+      id: "55999eb9-ebb5-5b9a-aef1-5cac8e50aa1f"
       tier: "premium"
       email: "test-notes@example.com"
       auth0_user_id: "auth0|test-notes-001"
 
     linked_items:
-      - id: "test-item-notes-001"
-        user_id: "test-user-notes-001"
-        item_id: "plaid-item-notes-001"
+      - id: "3095db05-505b-52cc-b560-a534a60e3c93"
+        user_id: "55999eb9-ebb5-5b9a-aef1-5cac8e50aa1f"
+        item_id: "6fff2eba-03b3-58e2-9b3a-638f1e44c211"
         institution_name: "Wells Fargo"
         institution_id: "ins_6"
         cursor: "test-cursor-initial-001"  # Has cursor (not first sync)
         status: "active"
 
     accounts:
-      - id: "test-account-notes-001"
-        linked_item_id: "test-item-notes-001"
-        user_id: "test-user-notes-001"
+      - id: "4273214d-edaf-55b9-be33-812ffe529987"
+        linked_item_id: "3095db05-505b-52cc-b560-a534a60e3c93"
+        user_id: "55999eb9-ebb5-5b9a-aef1-5cac8e50aa1f"
         plaid_account_id: "plaid-acc-notes-001"
         name: "Wells Fargo Everyday Checking"
         type: "depository"
@@ -45,27 +45,27 @@ scenario:
 
     # Pre-existing transactions WITH user notes
     transactions:
-      - user_id: "test-user-notes-001"
-        account_id: "test-account-notes-001"
-        linked_item_id: "test-item-notes-001"
+      - user_id: "55999eb9-ebb5-5b9a-aef1-5cac8e50aa1f"
+        account_id: "4273214d-edaf-55b9-be33-812ffe529987"
+        linked_item_id: "3095db05-505b-52cc-b560-a534a60e3c93"
         external_transaction_id: "plaid-txn-user-note-001"
         amount: -125.50
         date: "2025-11-01"
         name: "Amazon.com"
         user_notes: "Work laptop accessories - reimbursable"
 
-      - user_id: "test-user-notes-001"
-        account_id: "test-account-notes-001"
-        linked_item_id: "test-item-notes-001"
+      - user_id: "55999eb9-ebb5-5b9a-aef1-5cac8e50aa1f"
+        account_id: "4273214d-edaf-55b9-be33-812ffe529987"
+        linked_item_id: "3095db05-505b-52cc-b560-a534a60e3c93"
         external_transaction_id: "plaid-txn-user-note-002"
         amount: -45.00
         date: "2025-11-02"
         name: "Whole Foods"
         user_notes: "Birthday cake for Sarah"
 
-      - user_id: "test-user-notes-001"
-        account_id: "test-account-notes-001"
-        linked_item_id: "test-item-notes-001"
+      - user_id: "55999eb9-ebb5-5b9a-aef1-5cac8e50aa1f"
+        account_id: "4273214d-edaf-55b9-be33-812ffe529987"
+        linked_item_id: "3095db05-505b-52cc-b560-a534a60e3c93"
         external_transaction_id: "plaid-txn-user-note-003"
         amount: -78.25
         date: "2025-11-03"
@@ -77,7 +77,7 @@ scenario:
     - action: "fire_webhook"
       description: "Trigger DEFAULT_UPDATE (incremental sync that may UPDATE existing transactions)"
       webhook_code: "DEFAULT_UPDATE"
-      item_id: "test-item-notes-001"
+      item_id: "3095db05-505b-52cc-b560-a534a60e3c93"
 
     - action: "wait"
       description: "Wait for sync to process transaction updates"

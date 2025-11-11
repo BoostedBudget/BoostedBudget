@@ -18,24 +18,24 @@ scenario:
   # Setup test data
   setup:
     user:
-      id: "test-user-pagination-001"
+      id: "d4a00ee2-0f35-5d34-96e6-41887a223c20"
       tier: "premium"  # Premium for 2-year history (more transactions)
       email: "test-pagination@example.com"
       auth0_user_id: "auth0|test-pagination-001"
 
     linked_items:
-      - id: "test-item-pagination-001"
-        user_id: "test-user-pagination-001"
-        item_id: "plaid-item-pagination-001"
+      - id: "a38fba72-a0f0-5b27-9405-88a85fbd0f8b"
+        user_id: "d4a00ee2-0f35-5d34-96e6-41887a223c20"
+        item_id: "aca79736-0ee8-54ed-9767-ec6b2af8ce30"
         institution_name: "Bank of America"
         institution_id: "ins_4"
         cursor: null  # No cursor for first sync
         status: "active"
 
     accounts:
-      - id: "test-account-pagination-001"
-        linked_item_id: "test-item-pagination-001"
-        user_id: "test-user-pagination-001"
+      - id: "7d50b914-75ae-5167-a80f-6fb673c6ed8f"
+        linked_item_id: "a38fba72-a0f0-5b27-9405-88a85fbd0f8b"
+        user_id: "d4a00ee2-0f35-5d34-96e6-41887a223c20"
         plaid_account_id: "plaid-acc-pagination-001"
         name: "BofA Advantage Checking"
         type: "depository"
@@ -47,7 +47,7 @@ scenario:
     - action: "fire_webhook"
       description: "Trigger DEFAULT_UPDATE webhook (incremental sync with pagination)"
       webhook_code: "DEFAULT_UPDATE"
-      item_id: "test-item-pagination-001"
+      item_id: "a38fba72-a0f0-5b27-9405-88a85fbd0f8b"
 
     - action: "wait"
       description: "Wait for paginated sync to complete (multiple API calls)"

@@ -22,24 +22,24 @@ scenario:
   # Setup test data
   setup:
     user:
-      id: "test-user-seasonal-001"
+      id: "4afad99b-b384-5684-b985-6b46269749a4"
       tier: "premium"
       email: "seasonal-test@example.com"
       auth0_user_id: "auth0|test-seasonal-001"
 
     linked_items:
-      - id: "test-item-seasonal-001"
-        user_id: "test-user-seasonal-001"
-        item_id: "plaid-item-seasonal-001"
+      - id: "fb5e378a-3997-54bf-869b-1e6f2c5b67c7"
+        user_id: "4afad99b-b384-5684-b985-6b46269749a4"
+        item_id: "e240f131-9d72-5563-9898-7a1951690e07"
         institution_name: "Chase"
         institution_id: "ins_3"
         cursor: "cursor-seasonal-sync"
         status: "active"
 
     accounts:
-      - id: "test-account-seasonal-001"
-        linked_item_id: "test-item-seasonal-001"
-        user_id: "test-user-seasonal-001"
+      - id: "4558130b-7e28-5392-b575-3a2e9f83d04f"
+        linked_item_id: "fb5e378a-3997-54bf-869b-1e6f2c5b67c7"
+        user_id: "4afad99b-b384-5684-b985-6b46269749a4"
         plaid_account_id: "plaid-acc-seasonal-001"
         name: "Chase Sapphire Reserve"
         official_name: "Chase Sapphire Reserve Credit Card"
@@ -59,9 +59,9 @@ scenario:
 
       # Nov 2 - Regular grocery
       - external_transaction_id: "plaid-seasonal-001"
-        user_id: "test-user-seasonal-001"
-        account_id: "test-account-seasonal-001"
-        linked_item_id: "test-item-seasonal-001"
+        user_id: "4afad99b-b384-5684-b985-6b46269749a4"
+        account_id: "4558130b-7e28-5392-b575-3a2e9f83d04f"
+        linked_item_id: "fb5e378a-3997-54bf-869b-1e6f2c5b67c7"
         amount: -125.00
         date: "2025-11-02"
         name: "Whole Foods Market"
@@ -74,9 +74,9 @@ scenario:
 
       # Nov 4 - Gas
       - external_transaction_id: "plaid-seasonal-002"
-        user_id: "test-user-seasonal-001"
-        account_id: "test-account-seasonal-001"
-        linked_item_id: "test-item-seasonal-001"
+        user_id: "4afad99b-b384-5684-b985-6b46269749a4"
+        account_id: "4558130b-7e28-5392-b575-3a2e9f83d04f"
+        linked_item_id: "fb5e378a-3997-54bf-869b-1e6f2c5b67c7"
         amount: -42.00
         date: "2025-11-04"
         name: "Shell Gas Station"
@@ -89,9 +89,9 @@ scenario:
 
       # Nov 6 - Restaurant
       - external_transaction_id: "plaid-seasonal-003"
-        user_id: "test-user-seasonal-001"
-        account_id: "test-account-seasonal-001"
-        linked_item_id: "test-item-seasonal-001"
+        user_id: "4afad99b-b384-5684-b985-6b46269749a4"
+        account_id: "4558130b-7e28-5392-b575-3a2e9f83d04f"
+        linked_item_id: "fb5e378a-3997-54bf-869b-1e6f2c5b67c7"
         amount: -67.50
         date: "2025-11-06"
         name: "Olive Garden"
@@ -108,9 +108,9 @@ scenario:
 
       # Nov 9 - Grocery
       - external_transaction_id: "plaid-seasonal-004"
-        user_id: "test-user-seasonal-001"
-        account_id: "test-account-seasonal-001"
-        linked_item_id: "test-item-seasonal-001"
+        user_id: "4afad99b-b384-5684-b985-6b46269749a4"
+        account_id: "4558130b-7e28-5392-b575-3a2e9f83d04f"
+        linked_item_id: "fb5e378a-3997-54bf-869b-1e6f2c5b67c7"
         amount: -98.00
         date: "2025-11-09"
         name: "Trader Joe's"
@@ -123,9 +123,9 @@ scenario:
 
       # Nov 11 - Gas
       - external_transaction_id: "plaid-seasonal-005"
-        user_id: "test-user-seasonal-001"
-        account_id: "test-account-seasonal-001"
-        linked_item_id: "test-item-seasonal-001"
+        user_id: "4afad99b-b384-5684-b985-6b46269749a4"
+        account_id: "4558130b-7e28-5392-b575-3a2e9f83d04f"
+        linked_item_id: "fb5e378a-3997-54bf-869b-1e6f2c5b67c7"
         amount: -39.50
         date: "2025-11-11"
         name: "BP"
@@ -138,9 +138,9 @@ scenario:
 
       # Nov 13 - Shopping (normal)
       - external_transaction_id: "plaid-seasonal-006"
-        user_id: "test-user-seasonal-001"
-        account_id: "test-account-seasonal-001"
-        linked_item_id: "test-item-seasonal-001"
+        user_id: "4afad99b-b384-5684-b985-6b46269749a4"
+        account_id: "4558130b-7e28-5392-b575-3a2e9f83d04f"
+        linked_item_id: "fb5e378a-3997-54bf-869b-1e6f2c5b67c7"
         amount: -87.00
         date: "2025-11-13"
         name: "Target"
@@ -157,9 +157,9 @@ scenario:
 
       # Nov 16 - Grocery (stocking up)
       - external_transaction_id: "plaid-seasonal-007"
-        user_id: "test-user-seasonal-001"
-        account_id: "test-account-seasonal-001"
-        linked_item_id: "test-item-seasonal-001"
+        user_id: "4afad99b-b384-5684-b985-6b46269749a4"
+        account_id: "4558130b-7e28-5392-b575-3a2e9f83d04f"
+        linked_item_id: "fb5e378a-3997-54bf-869b-1e6f2c5b67c7"
         amount: -142.00
         date: "2025-11-16"
         name: "Whole Foods Market"
@@ -172,9 +172,9 @@ scenario:
 
       # Nov 18 - Online shopping (gift shopping starts)
       - external_transaction_id: "plaid-seasonal-008"
-        user_id: "test-user-seasonal-001"
-        account_id: "test-account-seasonal-001"
-        linked_item_id: "test-item-seasonal-001"
+        user_id: "4afad99b-b384-5684-b985-6b46269749a4"
+        account_id: "4558130b-7e28-5392-b575-3a2e9f83d04f"
+        linked_item_id: "fb5e378a-3997-54bf-869b-1e6f2c5b67c7"
         amount: -129.99
         date: "2025-11-18"
         name: "Amazon.com"
@@ -187,9 +187,9 @@ scenario:
 
       # Nov 20 - Department store (gift shopping)
       - external_transaction_id: "plaid-seasonal-009"
-        user_id: "test-user-seasonal-001"
-        account_id: "test-account-seasonal-001"
-        linked_item_id: "test-item-seasonal-001"
+        user_id: "4afad99b-b384-5684-b985-6b46269749a4"
+        account_id: "4558130b-7e28-5392-b575-3a2e9f83d04f"
+        linked_item_id: "fb5e378a-3997-54bf-869b-1e6f2c5b67c7"
         amount: -165.00
         date: "2025-11-20"
         name: "Target"
@@ -206,9 +206,9 @@ scenario:
 
       # Nov 22 - Gas (travel preparation)
       - external_transaction_id: "plaid-seasonal-010"
-        user_id: "test-user-seasonal-001"
-        account_id: "test-account-seasonal-001"
-        linked_item_id: "test-item-seasonal-001"
+        user_id: "4afad99b-b384-5684-b985-6b46269749a4"
+        account_id: "4558130b-7e28-5392-b575-3a2e9f83d04f"
+        linked_item_id: "fb5e378a-3997-54bf-869b-1e6f2c5b67c7"
         amount: -44.00
         date: "2025-11-22"
         name: "Marathon"
@@ -221,9 +221,9 @@ scenario:
 
       # Nov 23 - THANKSGIVING GROCERY HAUL (Costco bulk purchase)
       - external_transaction_id: "plaid-seasonal-011"
-        user_id: "test-user-seasonal-001"
-        account_id: "test-account-seasonal-001"
-        linked_item_id: "test-item-seasonal-001"
+        user_id: "4afad99b-b384-5684-b985-6b46269749a4"
+        account_id: "4558130b-7e28-5392-b575-3a2e9f83d04f"
+        linked_item_id: "fb5e378a-3997-54bf-869b-1e6f2c5b67c7"
         amount: -285.00
         date: "2025-11-23"
         name: "Costco Wholesale"
@@ -236,9 +236,9 @@ scenario:
 
       # Nov 24 - Thanksgiving Day (Uber to family)
       - external_transaction_id: "plaid-seasonal-012"
-        user_id: "test-user-seasonal-001"
-        account_id: "test-account-seasonal-001"
-        linked_item_id: "test-item-seasonal-001"
+        user_id: "4afad99b-b384-5684-b985-6b46269749a4"
+        account_id: "4558130b-7e28-5392-b575-3a2e9f83d04f"
+        linked_item_id: "fb5e378a-3997-54bf-869b-1e6f2c5b67c7"
         amount: -52.00
         date: "2025-11-24"
         name: "Uber"
@@ -251,9 +251,9 @@ scenario:
 
       # Nov 25 - Additional grocery items (forgotten ingredients)
       - external_transaction_id: "plaid-seasonal-013"
-        user_id: "test-user-seasonal-001"
-        account_id: "test-account-seasonal-001"
-        linked_item_id: "test-item-seasonal-001"
+        user_id: "4afad99b-b384-5684-b985-6b46269749a4"
+        account_id: "4558130b-7e28-5392-b575-3a2e9f83d04f"
+        linked_item_id: "fb5e378a-3997-54bf-869b-1e6f2c5b67c7"
         amount: -67.00
         date: "2025-11-25"
         name: "Whole Foods Market"
@@ -266,9 +266,9 @@ scenario:
 
       # Nov 26 - Wine/spirits for gathering
       - external_transaction_id: "plaid-seasonal-014"
-        user_id: "test-user-seasonal-001"
-        account_id: "test-account-seasonal-001"
-        linked_item_id: "test-item-seasonal-001"
+        user_id: "4afad99b-b384-5684-b985-6b46269749a4"
+        account_id: "4558130b-7e28-5392-b575-3a2e9f83d04f"
+        linked_item_id: "fb5e378a-3997-54bf-869b-1e6f2c5b67c7"
         amount: -89.00
         date: "2025-11-26"
         name: "Total Wine & More"
@@ -285,9 +285,9 @@ scenario:
 
       # Nov 28 - BLACK FRIDAY online shopping (Amazon deals)
       - external_transaction_id: "plaid-seasonal-015"
-        user_id: "test-user-seasonal-001"
-        account_id: "test-account-seasonal-001"
-        linked_item_id: "test-item-seasonal-001"
+        user_id: "4afad99b-b384-5684-b985-6b46269749a4"
+        account_id: "4558130b-7e28-5392-b575-3a2e9f83d04f"
+        linked_item_id: "fb5e378a-3997-54bf-869b-1e6f2c5b67c7"
         amount: -249.99
         date: "2025-11-28"
         name: "Amazon.com - Black Friday"
@@ -300,9 +300,9 @@ scenario:
 
       # Nov 28 - BLACK FRIDAY electronics (laptop deal)
       - external_transaction_id: "plaid-seasonal-016"
-        user_id: "test-user-seasonal-001"
-        account_id: "test-account-seasonal-001"
-        linked_item_id: "test-item-seasonal-001"
+        user_id: "4afad99b-b384-5684-b985-6b46269749a4"
+        account_id: "4558130b-7e28-5392-b575-3a2e9f83d04f"
+        linked_item_id: "fb5e378a-3997-54bf-869b-1e6f2c5b67c7"
         amount: -799.00
         date: "2025-11-28"
         name: "Best Buy - Black Friday Sale"
@@ -315,9 +315,9 @@ scenario:
 
       # Nov 29 - Small Business Saturday (local shop)
       - external_transaction_id: "plaid-seasonal-017"
-        user_id: "test-user-seasonal-001"
-        account_id: "test-account-seasonal-001"
-        linked_item_id: "test-item-seasonal-001"
+        user_id: "4afad99b-b384-5684-b985-6b46269749a4"
+        account_id: "4558130b-7e28-5392-b575-3a2e9f83d04f"
+        linked_item_id: "fb5e378a-3997-54bf-869b-1e6f2c5b67c7"
         amount: -125.00
         date: "2025-11-29"
         name: "Local Boutique"
@@ -330,9 +330,9 @@ scenario:
 
       # Nov 30 - Cyber Monday (online shopping)
       - external_transaction_id: "plaid-seasonal-018"
-        user_id: "test-user-seasonal-001"
-        account_id: "test-account-seasonal-001"
-        linked_item_id: "test-item-seasonal-001"
+        user_id: "4afad99b-b384-5684-b985-6b46269749a4"
+        account_id: "4558130b-7e28-5392-b575-3a2e9f83d04f"
+        linked_item_id: "fb5e378a-3997-54bf-869b-1e6f2c5b67c7"
         amount: -189.99
         date: "2025-11-30"
         name: "eBay - Cyber Monday"

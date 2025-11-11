@@ -21,24 +21,24 @@ scenario:
   # Setup test data
   setup:
     user:
-      id: "test-user-micro-001"
+      id: "b0362d05-a7c5-54bd-891f-b7e6c451614a"
       tier: "premium"
       email: "micro-test@example.com"
       auth0_user_id: "auth0|test-micro-001"
 
     linked_items:
-      - id: "test-item-micro-001"
-        user_id: "test-user-micro-001"
-        item_id: "plaid-item-micro-001"
+      - id: "61b5aeb0-8de0-5326-b59d-767d521c2f9f"
+        user_id: "b0362d05-a7c5-54bd-891f-b7e6c451614a"
+        item_id: "ab8386c0-ec1e-5e8f-bbec-cade3188cdf1"
         institution_name: "Chase"
         institution_id: "ins_3"
         cursor: "cursor-micro-sync"
         status: "active"
 
     accounts:
-      - id: "test-account-micro-001"
-        linked_item_id: "test-item-micro-001"
-        user_id: "test-user-micro-001"
+      - id: "9809a6f2-a249-59f7-8c40-358e3ef0bcf0"
+        linked_item_id: "61b5aeb0-8de0-5326-b59d-767d521c2f9f"
+        user_id: "b0362d05-a7c5-54bd-891f-b7e6c451614a"
         plaid_account_id: "plaid-acc-micro-001"
         name: "Chase Sapphire Reserve"
         official_name: "Chase Sapphire Reserve Credit Card"
@@ -56,9 +56,9 @@ scenario:
 
       # Morning coffee
       - external_transaction_id: "plaid-micro-001"
-        user_id: "test-user-micro-001"
-        account_id: "test-account-micro-001"
-        linked_item_id: "test-item-micro-001"
+        user_id: "b0362d05-a7c5-54bd-891f-b7e6c451614a"
+        account_id: "9809a6f2-a249-59f7-8c40-358e3ef0bcf0"
+        linked_item_id: "61b5aeb0-8de0-5326-b59d-767d521c2f9f"
         amount: -4.75
         date: "2025-11-04"
         name: "Starbucks"
@@ -71,9 +71,9 @@ scenario:
 
       # Morning transit
       - external_transaction_id: "plaid-micro-002"
-        user_id: "test-user-micro-001"
-        account_id: "test-account-micro-001"
-        linked_item_id: "test-item-micro-001"
+        user_id: "b0362d05-a7c5-54bd-891f-b7e6c451614a"
+        account_id: "9809a6f2-a249-59f7-8c40-358e3ef0bcf0"
+        linked_item_id: "61b5aeb0-8de0-5326-b59d-767d521c2f9f"
         amount: -3.00
         date: "2025-11-04"
         name: "CTA Ventra"
@@ -90,9 +90,9 @@ scenario:
 
       # Morning coffee
       - external_transaction_id: "plaid-micro-003"
-        user_id: "test-user-micro-001"
-        account_id: "test-account-micro-001"
-        linked_item_id: "test-item-micro-001"
+        user_id: "b0362d05-a7c5-54bd-891f-b7e6c451614a"
+        account_id: "9809a6f2-a249-59f7-8c40-358e3ef0bcf0"
+        linked_item_id: "61b5aeb0-8de0-5326-b59d-767d521c2f9f"
         amount: -5.10
         date: "2025-11-05"
         name: "Dunkin'"
@@ -105,9 +105,9 @@ scenario:
 
       # Afternoon snack
       - external_transaction_id: "plaid-micro-004"
-        user_id: "test-user-micro-001"
-        account_id: "test-account-micro-001"
-        linked_item_id: "test-item-micro-001"
+        user_id: "b0362d05-a7c5-54bd-891f-b7e6c451614a"
+        account_id: "9809a6f2-a249-59f7-8c40-358e3ef0bcf0"
+        linked_item_id: "61b5aeb0-8de0-5326-b59d-767d521c2f9f"
         amount: -2.50
         date: "2025-11-05"
         name: "Vending Machine"
@@ -124,9 +124,9 @@ scenario:
 
       # Morning coffee
       - external_transaction_id: "plaid-micro-005"
-        user_id: "test-user-micro-001"
-        account_id: "test-account-micro-001"
-        linked_item_id: "test-item-micro-001"
+        user_id: "b0362d05-a7c5-54bd-891f-b7e6c451614a"
+        account_id: "9809a6f2-a249-59f7-8c40-358e3ef0bcf0"
+        linked_item_id: "61b5aeb0-8de0-5326-b59d-767d521c2f9f"
         amount: -4.50
         date: "2025-11-06"
         name: "Starbucks"
@@ -139,9 +139,9 @@ scenario:
 
       # Morning transit
       - external_transaction_id: "plaid-micro-006"
-        user_id: "test-user-micro-001"
-        account_id: "test-account-micro-001"
-        linked_item_id: "test-item-micro-001"
+        user_id: "b0362d05-a7c5-54bd-891f-b7e6c451614a"
+        account_id: "9809a6f2-a249-59f7-8c40-358e3ef0bcf0"
+        linked_item_id: "61b5aeb0-8de0-5326-b59d-767d521c2f9f"
         amount: -3.00
         date: "2025-11-06"
         name: "CTA Ventra"
@@ -154,9 +154,9 @@ scenario:
 
       # Lunch snack
       - external_transaction_id: "plaid-micro-007"
-        user_id: "test-user-micro-001"
-        account_id: "test-account-micro-001"
-        linked_item_id: "test-item-micro-001"
+        user_id: "b0362d05-a7c5-54bd-891f-b7e6c451614a"
+        account_id: "9809a6f2-a249-59f7-8c40-358e3ef0bcf0"
+        linked_item_id: "61b5aeb0-8de0-5326-b59d-767d521c2f9f"
         amount: -3.25
         date: "2025-11-06"
         name: "McDonald's - Snack"
@@ -173,9 +173,9 @@ scenario:
 
       # Morning coffee
       - external_transaction_id: "plaid-micro-008"
-        user_id: "test-user-micro-001"
-        account_id: "test-account-micro-001"
-        linked_item_id: "test-item-micro-001"
+        user_id: "b0362d05-a7c5-54bd-891f-b7e6c451614a"
+        account_id: "9809a6f2-a249-59f7-8c40-358e3ef0bcf0"
+        linked_item_id: "61b5aeb0-8de0-5326-b59d-767d521c2f9f"
         amount: -4.95
         date: "2025-11-07"
         name: "Dunkin'"
@@ -192,9 +192,9 @@ scenario:
 
       # Morning coffee
       - external_transaction_id: "plaid-micro-009"
-        user_id: "test-user-micro-001"
-        account_id: "test-account-micro-001"
-        linked_item_id: "test-item-micro-001"
+        user_id: "b0362d05-a7c5-54bd-891f-b7e6c451614a"
+        account_id: "9809a6f2-a249-59f7-8c40-358e3ef0bcf0"
+        linked_item_id: "61b5aeb0-8de0-5326-b59d-767d521c2f9f"
         amount: -5.25
         date: "2025-11-08"
         name: "Starbucks"
@@ -207,9 +207,9 @@ scenario:
 
       # Evening transit (going out)
       - external_transaction_id: "plaid-micro-010"
-        user_id: "test-user-micro-001"
-        account_id: "test-account-micro-001"
-        linked_item_id: "test-item-micro-001"
+        user_id: "b0362d05-a7c5-54bd-891f-b7e6c451614a"
+        account_id: "9809a6f2-a249-59f7-8c40-358e3ef0bcf0"
+        linked_item_id: "61b5aeb0-8de0-5326-b59d-767d521c2f9f"
         amount: -3.00
         date: "2025-11-08"
         name: "CTA Ventra"
@@ -226,9 +226,9 @@ scenario:
 
       # Morning coffee
       - external_transaction_id: "plaid-micro-011"
-        user_id: "test-user-micro-001"
-        account_id: "test-account-micro-001"
-        linked_item_id: "test-item-micro-001"
+        user_id: "b0362d05-a7c5-54bd-891f-b7e6c451614a"
+        account_id: "9809a6f2-a249-59f7-8c40-358e3ef0bcf0"
+        linked_item_id: "61b5aeb0-8de0-5326-b59d-767d521c2f9f"
         amount: -4.80
         date: "2025-11-11"
         name: "Starbucks"
@@ -241,9 +241,9 @@ scenario:
 
       # Morning transit
       - external_transaction_id: "plaid-micro-012"
-        user_id: "test-user-micro-001"
-        account_id: "test-account-micro-001"
-        linked_item_id: "test-item-micro-001"
+        user_id: "b0362d05-a7c5-54bd-891f-b7e6c451614a"
+        account_id: "9809a6f2-a249-59f7-8c40-358e3ef0bcf0"
+        linked_item_id: "61b5aeb0-8de0-5326-b59d-767d521c2f9f"
         amount: -3.00
         date: "2025-11-11"
         name: "CTA Ventra"
@@ -260,9 +260,9 @@ scenario:
 
       # Morning coffee
       - external_transaction_id: "plaid-micro-013"
-        user_id: "test-user-micro-001"
-        account_id: "test-account-micro-001"
-        linked_item_id: "test-item-micro-001"
+        user_id: "b0362d05-a7c5-54bd-891f-b7e6c451614a"
+        account_id: "9809a6f2-a249-59f7-8c40-358e3ef0bcf0"
+        linked_item_id: "61b5aeb0-8de0-5326-b59d-767d521c2f9f"
         amount: -4.65
         date: "2025-11-12"
         name: "Dunkin'"
@@ -275,9 +275,9 @@ scenario:
 
       # Afternoon snack
       - external_transaction_id: "plaid-micro-014"
-        user_id: "test-user-micro-001"
-        account_id: "test-account-micro-001"
-        linked_item_id: "test-item-micro-001"
+        user_id: "b0362d05-a7c5-54bd-891f-b7e6c451614a"
+        account_id: "9809a6f2-a249-59f7-8c40-358e3ef0bcf0"
+        linked_item_id: "61b5aeb0-8de0-5326-b59d-767d521c2f9f"
         amount: -3.75
         date: "2025-11-12"
         name: "Taco Bell - Snack"
@@ -294,9 +294,9 @@ scenario:
 
       # Morning coffee
       - external_transaction_id: "plaid-micro-015"
-        user_id: "test-user-micro-001"
-        account_id: "test-account-micro-001"
-        linked_item_id: "test-item-micro-001"
+        user_id: "b0362d05-a7c5-54bd-891f-b7e6c451614a"
+        account_id: "9809a6f2-a249-59f7-8c40-358e3ef0bcf0"
+        linked_item_id: "61b5aeb0-8de0-5326-b59d-767d521c2f9f"
         amount: -5.00
         date: "2025-11-13"
         name: "Starbucks"
@@ -309,9 +309,9 @@ scenario:
 
       # Morning transit
       - external_transaction_id: "plaid-micro-016"
-        user_id: "test-user-micro-001"
-        account_id: "test-account-micro-001"
-        linked_item_id: "test-item-micro-001"
+        user_id: "b0362d05-a7c5-54bd-891f-b7e6c451614a"
+        account_id: "9809a6f2-a249-59f7-8c40-358e3ef0bcf0"
+        linked_item_id: "61b5aeb0-8de0-5326-b59d-767d521c2f9f"
         amount: -3.00
         date: "2025-11-13"
         name: "CTA Ventra"
@@ -328,9 +328,9 @@ scenario:
 
       # Morning coffee
       - external_transaction_id: "plaid-micro-017"
-        user_id: "test-user-micro-001"
-        account_id: "test-account-micro-001"
-        linked_item_id: "test-item-micro-001"
+        user_id: "b0362d05-a7c5-54bd-891f-b7e6c451614a"
+        account_id: "9809a6f2-a249-59f7-8c40-358e3ef0bcf0"
+        linked_item_id: "61b5aeb0-8de0-5326-b59d-767d521c2f9f"
         amount: -4.85
         date: "2025-11-14"
         name: "Dunkin'"
@@ -347,9 +347,9 @@ scenario:
 
       # Morning coffee
       - external_transaction_id: "plaid-micro-018"
-        user_id: "test-user-micro-001"
-        account_id: "test-account-micro-001"
-        linked_item_id: "test-item-micro-001"
+        user_id: "b0362d05-a7c5-54bd-891f-b7e6c451614a"
+        account_id: "9809a6f2-a249-59f7-8c40-358e3ef0bcf0"
+        linked_item_id: "61b5aeb0-8de0-5326-b59d-767d521c2f9f"
         amount: -5.15
         date: "2025-11-15"
         name: "Starbucks"
@@ -362,9 +362,9 @@ scenario:
 
       # Morning transit
       - external_transaction_id: "plaid-micro-019"
-        user_id: "test-user-micro-001"
-        account_id: "test-account-micro-001"
-        linked_item_id: "test-item-micro-001"
+        user_id: "b0362d05-a7c5-54bd-891f-b7e6c451614a"
+        account_id: "9809a6f2-a249-59f7-8c40-358e3ef0bcf0"
+        linked_item_id: "61b5aeb0-8de0-5326-b59d-767d521c2f9f"
         amount: -3.00
         date: "2025-11-15"
         name: "CTA Ventra"
@@ -377,9 +377,9 @@ scenario:
 
       # Afternoon parking meter
       - external_transaction_id: "plaid-micro-020"
-        user_id: "test-user-micro-001"
-        account_id: "test-account-micro-001"
-        linked_item_id: "test-item-micro-001"
+        user_id: "b0362d05-a7c5-54bd-891f-b7e6c451614a"
+        account_id: "9809a6f2-a249-59f7-8c40-358e3ef0bcf0"
+        linked_item_id: "61b5aeb0-8de0-5326-b59d-767d521c2f9f"
         amount: -2.00
         date: "2025-11-15"
         name: "Parking Meter"

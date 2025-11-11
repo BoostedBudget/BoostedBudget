@@ -20,24 +20,24 @@ scenario:
   # Setup test data
   setup:
     user:
-      id: "test-user-diversity-001"
+      id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
       tier: "premium"
       email: "diversity-test@example.com"
       auth0_user_id: "auth0|test-diversity-001"
 
     linked_items:
-      - id: "test-item-diversity-001"
-        user_id: "test-user-diversity-001"
-        item_id: "plaid-item-diversity-001"
+      - id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        item_id: "d261994c-5f90-5318-b392-4d9cf3f52081"
         institution_name: "Chase"
         institution_id: "ins_3"
         cursor: "cursor-diversity-sync"
         status: "active"
 
     accounts:
-      - id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
-        user_id: "test-user-diversity-001"
+      - id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
         plaid_account_id: "plaid-acc-diversity-001"
         name: "Chase Sapphire Reserve"
         official_name: "Chase Sapphire Reserve Credit Card"
@@ -54,9 +54,9 @@ scenario:
 
       # Whole Foods (appears 2x - weekly shopper)
       - external_transaction_id: "plaid-diversity-001"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -125.50
         date: "2025-11-02"
         name: "Whole Foods Market"
@@ -68,9 +68,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-diversity-002"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -98.75
         date: "2025-11-16"
         name: "Whole Foods Market"
@@ -83,9 +83,9 @@ scenario:
 
       # Trader Joe's (appears 1x)
       - external_transaction_id: "plaid-diversity-003"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -67.25
         date: "2025-11-09"
         name: "Trader Joe's"
@@ -98,9 +98,9 @@ scenario:
 
       # Costco (appears 1x - bulk purchase)
       - external_transaction_id: "plaid-diversity-004"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -185.00
         date: "2025-11-23"
         name: "Costco Wholesale"
@@ -113,9 +113,9 @@ scenario:
 
       # Aldi (appears 1x)
       - external_transaction_id: "plaid-diversity-005"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -42.50
         date: "2025-11-27"
         name: "Aldi"
@@ -132,9 +132,9 @@ scenario:
 
       # Chipotle (appears 2x - lunch favorite)
       - external_transaction_id: "plaid-diversity-006"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -12.50
         date: "2025-11-05"
         name: "Chipotle Mexican Grill"
@@ -146,9 +146,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-diversity-007"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -14.75
         date: "2025-11-19"
         name: "Chipotle Mexican Grill"
@@ -161,9 +161,9 @@ scenario:
 
       # Olive Garden (appears 1x)
       - external_transaction_id: "plaid-diversity-008"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -67.50
         date: "2025-11-08"
         name: "Olive Garden"
@@ -176,9 +176,9 @@ scenario:
 
       # The Cheesecake Factory (appears 1x)
       - external_transaction_id: "plaid-diversity-009"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -95.00
         date: "2025-11-15"
         name: "The Cheesecake Factory"
@@ -191,9 +191,9 @@ scenario:
 
       # McDonald's (appears 1x)
       - external_transaction_id: "plaid-diversity-010"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -8.75
         date: "2025-11-22"
         name: "McDonald's"
@@ -206,9 +206,9 @@ scenario:
 
       # Taco Bell (appears 1x)
       - external_transaction_id: "plaid-diversity-011"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -11.25
         date: "2025-11-28"
         name: "Taco Bell"
@@ -225,9 +225,9 @@ scenario:
 
       # Starbucks (appears 2x - morning coffee)
       - external_transaction_id: "plaid-diversity-012"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -5.45
         date: "2025-11-04"
         name: "Starbucks"
@@ -239,9 +239,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-diversity-013"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -6.10
         date: "2025-11-18"
         name: "Starbucks"
@@ -254,9 +254,9 @@ scenario:
 
       # Dunkin' (appears 1x)
       - external_transaction_id: "plaid-diversity-014"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -4.50
         date: "2025-11-12"
         name: "Dunkin'"
@@ -273,9 +273,9 @@ scenario:
 
       # Shell (appears 1x)
       - external_transaction_id: "plaid-diversity-015"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -42.18
         date: "2025-11-03"
         name: "Shell Gas Station"
@@ -288,9 +288,9 @@ scenario:
 
       # BP (appears 1x)
       - external_transaction_id: "plaid-diversity-016"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -39.50
         date: "2025-11-10"
         name: "BP"
@@ -303,9 +303,9 @@ scenario:
 
       # Marathon (appears 1x)
       - external_transaction_id: "plaid-diversity-017"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -44.00
         date: "2025-11-24"
         name: "Marathon"
@@ -322,9 +322,9 @@ scenario:
 
       # Amazon (appears 2x - frequent online shopper)
       - external_transaction_id: "plaid-diversity-018"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -67.99
         date: "2025-11-07"
         name: "Amazon.com"
@@ -336,9 +336,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-diversity-019"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -129.99
         date: "2025-11-21"
         name: "Amazon.com"
@@ -351,9 +351,9 @@ scenario:
 
       # eBay (appears 1x)
       - external_transaction_id: "plaid-diversity-020"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -45.00
         date: "2025-11-14"
         name: "eBay"
@@ -370,9 +370,9 @@ scenario:
 
       # Target (appears 1x)
       - external_transaction_id: "plaid-diversity-021"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -87.50
         date: "2025-11-11"
         name: "Target"
@@ -385,9 +385,9 @@ scenario:
 
       # Walmart (appears 1x)
       - external_transaction_id: "plaid-diversity-022"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -65.00
         date: "2025-11-25"
         name: "Walmart Supercenter"
@@ -404,9 +404,9 @@ scenario:
 
       # Netflix (appears 1x)
       - external_transaction_id: "plaid-diversity-023"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -15.99
         date: "2025-11-05"
         name: "Netflix"
@@ -419,9 +419,9 @@ scenario:
 
       # Spotify (appears 1x)
       - external_transaction_id: "plaid-diversity-024"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -10.99
         date: "2025-11-12"
         name: "Spotify"
@@ -434,9 +434,9 @@ scenario:
 
       # Planet Fitness (appears 1x)
       - external_transaction_id: "plaid-diversity-025"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -24.99
         date: "2025-11-14"
         name: "Planet Fitness"
@@ -453,9 +453,9 @@ scenario:
 
       # Uber (appears 1x)
       - external_transaction_id: "plaid-diversity-026"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -18.50
         date: "2025-11-06"
         name: "Uber"
@@ -468,9 +468,9 @@ scenario:
 
       # Lyft (appears 1x)
       - external_transaction_id: "plaid-diversity-027"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -22.00
         date: "2025-11-20"
         name: "Lyft"
@@ -483,9 +483,9 @@ scenario:
 
       # CTA Ventra (appears 1x)
       - external_transaction_id: "plaid-diversity-028"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -3.00
         date: "2025-11-13"
         name: "CTA Ventra"
@@ -498,9 +498,9 @@ scenario:
 
       # Downtown Parking Garage (appears 1x)
       - external_transaction_id: "plaid-diversity-029"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -20.00
         date: "2025-11-17"
         name: "Downtown Parking Garage"
@@ -517,9 +517,9 @@ scenario:
 
       # ComEd Electric (appears 1x)
       - external_transaction_id: "plaid-diversity-030"
-        user_id: "test-user-diversity-001"
-        account_id: "test-account-diversity-001"
-        linked_item_id: "test-item-diversity-001"
+        user_id: "d36f2d7c-ff8b-59a2-b163-6cb8f9030d0e"
+        account_id: "d965ed7d-ce3a-5ad6-9d91-6e6926b12ecc"
+        linked_item_id: "782b5328-dd2d-5bcb-b1a3-d55b769766ce"
         amount: -95.00
         date: "2025-11-01"
         name: "ComEd Electric"

@@ -21,15 +21,15 @@ scenario:
   # Setup test data
   setup:
     user:
-      id: "test-user-monthly-001"
+      id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
       tier: "premium"
       email: "monthly-test@example.com"
       auth0_user_id: "auth0|test-monthly-001"
 
     linked_items:
-      - id: "test-item-monthly-001"
-        user_id: "test-user-monthly-001"
-        item_id: "plaid-item-monthly-001"
+      - id: "fd260c60-6de2-56e2-b760-69f50030fb65"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        item_id: "3dc5fba6-04d0-5570-90f6-fe7c31001471"
         institution_name: "Chase"
         institution_id: "ins_3"
         cursor: "cursor-monthly-sync"
@@ -37,9 +37,9 @@ scenario:
 
     accounts:
       # Primary checking account
-      - id: "test-account-monthly-001"
-        linked_item_id: "test-item-monthly-001"
-        user_id: "test-user-monthly-001"
+      - id: "c39c03e4-9128-52db-a0b6-a3ff7f7098e2"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
         plaid_account_id: "plaid-acc-monthly-001"
         name: "Chase Total Checking"
         official_name: "Chase Total Checking Account"
@@ -48,9 +48,9 @@ scenario:
         current_balance: 4500.00
 
       # Credit card account
-      - id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
-        user_id: "test-user-monthly-001"
+      - id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
         plaid_account_id: "plaid-acc-monthly-002"
         name: "Chase Sapphire Reserve"
         official_name: "Chase Sapphire Reserve Credit Card"
@@ -69,9 +69,9 @@ scenario:
 
       # Nov 1 - INCOME + RENT + UTILITIES (payday!)
       - external_transaction_id: "plaid-monthly-001"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-001"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c39c03e4-9128-52db-a0b6-a3ff7f7098e2"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: 3500.00
         date: "2025-11-01"
         name: "Employer Paycheck Direct Deposit"
@@ -83,9 +83,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-monthly-002"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-001"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c39c03e4-9128-52db-a0b6-a3ff7f7098e2"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -2400.00
         date: "2025-11-01"
         name: "Rent Payment to Landlord"
@@ -97,9 +97,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-monthly-003"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-001"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c39c03e4-9128-52db-a0b6-a3ff7f7098e2"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -95.00
         date: "2025-11-01"
         name: "ComEd Electric"
@@ -112,9 +112,9 @@ scenario:
 
       # Nov 2 - Weekend grocery shopping + coffee
       - external_transaction_id: "plaid-monthly-004"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -125.50
         date: "2025-11-02"
         name: "Whole Foods Market"
@@ -126,9 +126,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-monthly-005"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -5.45
         date: "2025-11-02"
         name: "Starbucks"
@@ -141,9 +141,9 @@ scenario:
 
       # Nov 3 - Gas + fast food
       - external_transaction_id: "plaid-monthly-006"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -42.18
         date: "2025-11-03"
         name: "Shell Gas Station"
@@ -155,9 +155,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-monthly-007"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -12.50
         date: "2025-11-03"
         name: "Chipotle Mexican Grill"
@@ -170,9 +170,9 @@ scenario:
 
       # Nov 4 - Coffee + online shopping
       - external_transaction_id: "plaid-monthly-008"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -4.75
         date: "2025-11-04"
         name: "Dunkin'"
@@ -184,9 +184,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-monthly-009"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -67.99
         date: "2025-11-04"
         name: "Amazon.com"
@@ -199,9 +199,9 @@ scenario:
 
       # Nov 5 - SUBSCRIPTIONS DAY (monthly billings)
       - external_transaction_id: "plaid-monthly-010"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -15.99
         date: "2025-11-05"
         name: "Netflix"
@@ -213,9 +213,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-monthly-011"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -10.99
         date: "2025-11-05"
         name: "Spotify"
@@ -227,9 +227,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-monthly-012"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -7.99
         date: "2025-11-05"
         name: "Disney+"
@@ -242,9 +242,9 @@ scenario:
 
       # Nov 6 - Grocery pickup + dinner
       - external_transaction_id: "plaid-monthly-013"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -87.25
         date: "2025-11-06"
         name: "Trader Joe's"
@@ -256,9 +256,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-monthly-014"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -52.00
         date: "2025-11-06"
         name: "Olive Garden"
@@ -271,9 +271,9 @@ scenario:
 
       # Nov 7 - Utility bill + coffee
       - external_transaction_id: "plaid-monthly-015"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-001"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c39c03e4-9128-52db-a0b6-a3ff7f7098e2"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -85.00
         date: "2025-11-07"
         name: "Comcast Internet"
@@ -290,9 +290,9 @@ scenario:
 
       # Nov 8 - Coffee + fast food
       - external_transaction_id: "plaid-monthly-016"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -5.10
         date: "2025-11-08"
         name: "Starbucks"
@@ -304,9 +304,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-monthly-017"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -8.75
         date: "2025-11-08"
         name: "McDonald's"
@@ -319,9 +319,9 @@ scenario:
 
       # Nov 9 - Weekend groceries (Costco bulk)
       - external_transaction_id: "plaid-monthly-018"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -185.00
         date: "2025-11-09"
         name: "Costco Wholesale"
@@ -334,9 +334,9 @@ scenario:
 
       # Nov 10 - Gas + parking
       - external_transaction_id: "plaid-monthly-019"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -39.50
         date: "2025-11-10"
         name: "BP"
@@ -348,9 +348,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-monthly-020"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -20.00
         date: "2025-11-10"
         name: "Downtown Parking Garage"
@@ -363,9 +363,9 @@ scenario:
 
       # Nov 11 - Shopping (Target)
       - external_transaction_id: "plaid-monthly-021"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -67.50
         date: "2025-11-11"
         name: "Target"
@@ -378,9 +378,9 @@ scenario:
 
       # Nov 12 - SUBSCRIPTION RENEWALS
       - external_transaction_id: "plaid-monthly-022"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -9.99
         date: "2025-11-12"
         name: "Apple Music"
@@ -392,9 +392,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-monthly-023"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -14.99
         date: "2025-11-12"
         name: "Amazon Prime Membership"
@@ -407,9 +407,9 @@ scenario:
 
       # Nov 13 - Groceries + dinner
       - external_transaction_id: "plaid-monthly-024"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -52.00
         date: "2025-11-13"
         name: "Aldi"
@@ -421,9 +421,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-monthly-025"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -78.00
         date: "2025-11-13"
         name: "The Cheesecake Factory"
@@ -436,9 +436,9 @@ scenario:
 
       # Nov 14 - Coffee + ride share
       - external_transaction_id: "plaid-monthly-026"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -5.00
         date: "2025-11-14"
         name: "Dunkin'"
@@ -450,9 +450,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-monthly-027"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -18.50
         date: "2025-11-14"
         name: "Uber"
@@ -465,9 +465,9 @@ scenario:
 
       # Nov 14 - Utility bill
       - external_transaction_id: "plaid-monthly-028"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-001"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c39c03e4-9128-52db-a0b6-a3ff7f7098e2"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -105.00
         date: "2025-11-14"
         name: "Verizon Wireless"
@@ -479,9 +479,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-monthly-029"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-001"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c39c03e4-9128-52db-a0b6-a3ff7f7098e2"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -45.00
         date: "2025-11-14"
         name: "City Water Department"
@@ -494,9 +494,9 @@ scenario:
 
       # Nov 14 - Gym membership
       - external_transaction_id: "plaid-monthly-030"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -24.99
         date: "2025-11-14"
         name: "Planet Fitness"
@@ -513,9 +513,9 @@ scenario:
 
       # Nov 15 - PAYDAY (2nd paycheck)
       - external_transaction_id: "plaid-monthly-031"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-001"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c39c03e4-9128-52db-a0b6-a3ff7f7098e2"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: 3500.00
         date: "2025-11-15"
         name: "Employer Paycheck Direct Deposit"
@@ -528,9 +528,9 @@ scenario:
 
       # Nov 16 - Weekend groceries + coffee
       - external_transaction_id: "plaid-monthly-032"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -115.00
         date: "2025-11-16"
         name: "Whole Foods Market"
@@ -542,9 +542,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-monthly-033"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -6.25
         date: "2025-11-16"
         name: "Starbucks"
@@ -557,9 +557,9 @@ scenario:
 
       # Nov 17 - Gas
       - external_transaction_id: "plaid-monthly-034"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -44.00
         date: "2025-11-17"
         name: "Marathon"
@@ -572,9 +572,9 @@ scenario:
 
       # Nov 18 - Online shopping
       - external_transaction_id: "plaid-monthly-035"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -89.99
         date: "2025-11-18"
         name: "Amazon.com"
@@ -587,9 +587,9 @@ scenario:
 
       # Nov 19 - Subscriptions
       - external_transaction_id: "plaid-monthly-036"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -15.99
         date: "2025-11-19"
         name: "HBO Max"
@@ -601,9 +601,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-monthly-037"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -2.99
         date: "2025-11-19"
         name: "iCloud Storage"
@@ -616,9 +616,9 @@ scenario:
 
       # Nov 20 - Groceries + dinner
       - external_transaction_id: "plaid-monthly-038"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -72.50
         date: "2025-11-20"
         name: "Trader Joe's"
@@ -630,9 +630,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-monthly-039"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -45.00
         date: "2025-11-20"
         name: "Chipotle Mexican Grill"
@@ -645,9 +645,9 @@ scenario:
 
       # Nov 21 - Coffee + fast food
       - external_transaction_id: "plaid-monthly-040"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -4.80
         date: "2025-11-21"
         name: "Dunkin'"
@@ -659,9 +659,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-monthly-041"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -10.50
         date: "2025-11-21"
         name: "Taco Bell"
@@ -674,9 +674,9 @@ scenario:
 
       # Nov 21 - Shopping
       - external_transaction_id: "plaid-monthly-042"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -125.00
         date: "2025-11-21"
         name: "Walmart Supercenter"
@@ -689,9 +689,9 @@ scenario:
 
       # Nov 21 - Creative Cloud subscription
       - external_transaction_id: "plaid-monthly-043"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -54.99
         date: "2025-11-21"
         name: "Adobe Creative Cloud"
@@ -704,9 +704,9 @@ scenario:
 
       # Nov 21 - Gas
       - external_transaction_id: "plaid-monthly-044"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -41.00
         date: "2025-11-21"
         name: "Shell Gas Station"
@@ -723,9 +723,9 @@ scenario:
 
       # Nov 23 - Weekend groceries (Thanksgiving prep)
       - external_transaction_id: "plaid-monthly-045"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -220.00
         date: "2025-11-23"
         name: "Costco Wholesale"
@@ -738,9 +738,9 @@ scenario:
 
       # Nov 24 - Gas + coffee
       - external_transaction_id: "plaid-monthly-046"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -43.50
         date: "2025-11-24"
         name: "BP"
@@ -752,9 +752,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-monthly-047"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -5.50
         date: "2025-11-24"
         name: "Starbucks"
@@ -767,9 +767,9 @@ scenario:
 
       # Nov 25 - Online shopping (Black Friday)
       - external_transaction_id: "plaid-monthly-048"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -149.99
         date: "2025-11-25"
         name: "Amazon.com"
@@ -782,9 +782,9 @@ scenario:
 
       # Nov 26 - Restaurant
       - external_transaction_id: "plaid-monthly-049"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -85.00
         date: "2025-11-26"
         name: "Olive Garden"
@@ -797,9 +797,9 @@ scenario:
 
       # Nov 27 - Groceries + gas
       - external_transaction_id: "plaid-monthly-050"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -95.00
         date: "2025-11-27"
         name: "Whole Foods Market"
@@ -811,9 +811,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-monthly-051"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -38.00
         date: "2025-11-27"
         name: "Marathon"
@@ -826,9 +826,9 @@ scenario:
 
       # Nov 28 - Shopping + ride share
       - external_transaction_id: "plaid-monthly-052"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -78.00
         date: "2025-11-28"
         name: "Target"
@@ -840,9 +840,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-monthly-053"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -22.00
         date: "2025-11-28"
         name: "Lyft"
@@ -855,9 +855,9 @@ scenario:
 
       # Nov 28 - Restaurant
       - external_transaction_id: "plaid-monthly-054"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -95.00
         date: "2025-11-28"
         name: "The Cheesecake Factory"
@@ -874,9 +874,9 @@ scenario:
 
       # Nov 29 - Groceries
       - external_transaction_id: "plaid-monthly-055"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -65.00
         date: "2025-11-29"
         name: "Aldi"
@@ -889,9 +889,9 @@ scenario:
 
       # Nov 29 - Gas
       - external_transaction_id: "plaid-monthly-056"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -40.00
         date: "2025-11-29"
         name: "Shell Gas Station"
@@ -904,9 +904,9 @@ scenario:
 
       # Nov 30 - Fast food + online shopping
       - external_transaction_id: "plaid-monthly-057"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -14.00
         date: "2025-11-30"
         name: "Chipotle Mexican Grill"
@@ -918,9 +918,9 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-monthly-058"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -55.00
         date: "2025-11-30"
         name: "Amazon.com"
@@ -933,9 +933,9 @@ scenario:
 
       # Nov 30 - Restaurant (end of month celebration)
       - external_transaction_id: "plaid-monthly-059"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-002"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c0a245e5-ad67-596b-ae6e-1a54b6fda73b"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -110.00
         date: "2025-11-30"
         name: "The Cheesecake Factory"
@@ -948,9 +948,9 @@ scenario:
 
       # Nov 30 - Transit pass (CTA)
       - external_transaction_id: "plaid-monthly-060"
-        user_id: "test-user-monthly-001"
-        account_id: "test-account-monthly-001"
-        linked_item_id: "test-item-monthly-001"
+        user_id: "e97d7cb7-56cf-5e8d-8a48-850679c2f911"
+        account_id: "c39c03e4-9128-52db-a0b6-a3ff7f7098e2"
+        linked_item_id: "fd260c60-6de2-56e2-b760-69f50030fb65"
         amount: -3.00
         date: "2025-11-30"
         name: "CTA Ventra"
