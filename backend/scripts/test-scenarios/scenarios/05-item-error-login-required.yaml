@@ -19,24 +19,24 @@ scenario:
   # Setup test data
   setup:
     user:
-      id: "test-user-error-001"
+      id: "3d6709a9-4e9a-5724-9cf6-ab25fdb0d302"
       tier: "premium"
       email: "test-error@example.com"
       auth0_user_id: "auth0|test-error-001"
 
     linked_items:
-      - id: "test-item-error-001"
-        user_id: "test-user-error-001"
-        item_id: "plaid-item-error-001"
+      - id: "eee713a4-6fd1-57aa-acf3-e93c831bd118"
+        user_id: "3d6709a9-4e9a-5724-9cf6-ab25fdb0d302"
+        item_id: "761f26d2-7a74-557e-aa73-8f0a92c14d1e"
         institution_name: "Discover"
         institution_id: "ins_7"
         cursor: "previous-cursor-before-error"
         status: "active"  # Initially active, will change to login_required
 
     accounts:
-      - id: "test-account-error-001"
-        linked_item_id: "test-item-error-001"
-        user_id: "test-user-error-001"
+      - id: "be9377b5-3df9-5155-b871-d52a15292bd8"
+        linked_item_id: "eee713a4-6fd1-57aa-acf3-e93c831bd118"
+        user_id: "3d6709a9-4e9a-5724-9cf6-ab25fdb0d302"
         plaid_account_id: "plaid-acc-error-001"
         name: "Discover it Cash Back"
         type: "credit"
@@ -45,18 +45,18 @@ scenario:
 
     # Pre-existing transactions (from before error occurred)
     transactions:
-      - user_id: "test-user-error-001"
-        account_id: "test-account-error-001"
-        linked_item_id: "test-item-error-001"
+      - user_id: "3d6709a9-4e9a-5724-9cf6-ab25fdb0d302"
+        account_id: "be9377b5-3df9-5155-b871-d52a15292bd8"
+        linked_item_id: "eee713a4-6fd1-57aa-acf3-e93c831bd118"
         external_transaction_id: "plaid-txn-before-error-001"
         amount: -50.00
         date: "2025-11-01"
         name: "Target"
         user_notes: null
 
-      - user_id: "test-user-error-001"
-        account_id: "test-account-error-001"
-        linked_item_id: "test-item-error-001"
+      - user_id: "3d6709a9-4e9a-5724-9cf6-ab25fdb0d302"
+        account_id: "be9377b5-3df9-5155-b871-d52a15292bd8"
+        linked_item_id: "eee713a4-6fd1-57aa-acf3-e93c831bd118"
         external_transaction_id: "plaid-txn-before-error-002"
         amount: -25.00
         date: "2025-11-02"
@@ -68,7 +68,7 @@ scenario:
     - action: "fire_webhook"
       description: "Trigger webhook that will return LOGIN_REQUIRED error from Plaid"
       webhook_code: "DEFAULT_UPDATE"
-      item_id: "test-item-error-001"
+      item_id: "eee713a4-6fd1-57aa-acf3-e93c831bd118"
       # NOTE: Plaid sandbox can simulate errors, or we may need to manually
       # set up item to return this error
 

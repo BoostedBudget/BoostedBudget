@@ -20,15 +20,15 @@ scenario:
   # Setup test data
   setup:
     user:
-      id: "test-user-large-001"
+      id: "63302efe-310d-5e78-b681-6d89accac224"
       tier: "premium"
       email: "large-purchases-test@example.com"
       auth0_user_id: "auth0|test-large-001"
 
     linked_items:
-      - id: "test-item-large-001"
-        user_id: "test-user-large-001"
-        item_id: "plaid-item-large-001"
+      - id: "cd64435b-78be-5831-a5ba-cb1ad4749e1e"
+        user_id: "63302efe-310d-5e78-b681-6d89accac224"
+        item_id: "345a0176-d03d-5631-9408-a2c90ce610a1"
         institution_name: "Chase"
         institution_id: "ins_3"
         cursor: "cursor-large-sync"
@@ -36,9 +36,9 @@ scenario:
 
     accounts:
       # Checking account (for rent, tuition)
-      - id: "test-account-large-checking-001"
-        linked_item_id: "test-item-large-001"
-        user_id: "test-user-large-001"
+      - id: "40224bba-7533-51f5-b12f-cc31b1f304ec"
+        linked_item_id: "cd64435b-78be-5831-a5ba-cb1ad4749e1e"
+        user_id: "63302efe-310d-5e78-b681-6d89accac224"
         plaid_account_id: "plaid-acc-large-checking-001"
         name: "Chase Total Checking"
         official_name: "Chase Total Checking Account"
@@ -47,9 +47,9 @@ scenario:
         current_balance: 8500.00
 
       # Credit card (for travel, electronics)
-      - id: "test-account-large-credit-001"
-        linked_item_id: "test-item-large-001"
-        user_id: "test-user-large-001"
+      - id: "ddac07fb-9312-5f10-a78b-050717efbaab"
+        linked_item_id: "cd64435b-78be-5831-a5ba-cb1ad4749e1e"
+        user_id: "63302efe-310d-5e78-b681-6d89accac224"
         plaid_account_id: "plaid-acc-large-credit-001"
         name: "Chase Sapphire Reserve"
         official_name: "Chase Sapphire Reserve Credit Card"
@@ -65,9 +65,9 @@ scenario:
 
       # 1. Rent payment ($2400 - largest monthly expense)
       - external_transaction_id: "plaid-large-rent-001"
-        user_id: "test-user-large-001"
-        account_id: "test-account-large-checking-001"
-        linked_item_id: "test-item-large-001"
+        user_id: "63302efe-310d-5e78-b681-6d89accac224"
+        account_id: "40224bba-7533-51f5-b12f-cc31b1f304ec"
+        linked_item_id: "cd64435b-78be-5831-a5ba-cb1ad4749e1e"
         amount: -2400.00
         date: "2025-11-01"
         name: "Rent Payment to Landlord"
@@ -80,9 +80,9 @@ scenario:
 
       # 2. Tuition payment ($3500 - education expense)
       - external_transaction_id: "plaid-large-tuition-001"
-        user_id: "test-user-large-001"
-        account_id: "test-account-large-checking-001"
-        linked_item_id: "test-item-large-001"
+        user_id: "63302efe-310d-5e78-b681-6d89accac224"
+        account_id: "40224bba-7533-51f5-b12f-cc31b1f304ec"
+        linked_item_id: "cd64435b-78be-5831-a5ba-cb1ad4749e1e"
         amount: -3500.00
         date: "2025-11-05"
         name: "University Tuition Payment"
@@ -95,9 +95,9 @@ scenario:
 
       # 3. Flight booking ($1250 - travel)
       - external_transaction_id: "plaid-large-flight-001"
-        user_id: "test-user-large-001"
-        account_id: "test-account-large-credit-001"
-        linked_item_id: "test-item-large-001"
+        user_id: "63302efe-310d-5e78-b681-6d89accac224"
+        account_id: "ddac07fb-9312-5f10-a78b-050717efbaab"
+        linked_item_id: "cd64435b-78be-5831-a5ba-cb1ad4749e1e"
         amount: -1250.00
         date: "2025-11-08"
         name: "United Airlines"
@@ -110,9 +110,9 @@ scenario:
 
       # 4. Laptop purchase ($1899 - electronics)
       - external_transaction_id: "plaid-large-laptop-001"
-        user_id: "test-user-large-001"
-        account_id: "test-account-large-credit-001"
-        linked_item_id: "test-item-large-001"
+        user_id: "63302efe-310d-5e78-b681-6d89accac224"
+        account_id: "ddac07fb-9312-5f10-a78b-050717efbaab"
+        linked_item_id: "cd64435b-78be-5831-a5ba-cb1ad4749e1e"
         amount: -1899.00
         date: "2025-11-10"
         name: "Apple Store"
@@ -125,9 +125,9 @@ scenario:
 
       # 5. Hotel booking ($850 - travel accommodation)
       - external_transaction_id: "plaid-large-hotel-001"
-        user_id: "test-user-large-001"
-        account_id: "test-account-large-credit-001"
-        linked_item_id: "test-item-large-001"
+        user_id: "63302efe-310d-5e78-b681-6d89accac224"
+        account_id: "ddac07fb-9312-5f10-a78b-050717efbaab"
+        linked_item_id: "cd64435b-78be-5831-a5ba-cb1ad4749e1e"
         amount: -850.00
         date: "2025-11-12"
         name: "Marriott Hotel"
@@ -140,9 +140,9 @@ scenario:
 
       # 6. Furniture purchase ($725 - home improvement)
       - external_transaction_id: "plaid-large-furniture-001"
-        user_id: "test-user-large-001"
-        account_id: "test-account-large-credit-001"
-        linked_item_id: "test-item-large-001"
+        user_id: "63302efe-310d-5e78-b681-6d89accac224"
+        account_id: "ddac07fb-9312-5f10-a78b-050717efbaab"
+        linked_item_id: "cd64435b-78be-5831-a5ba-cb1ad4749e1e"
         amount: -725.00
         date: "2025-11-15"
         name: "IKEA"
@@ -155,9 +155,9 @@ scenario:
 
       # 7. Medical procedure ($1200 - healthcare)
       - external_transaction_id: "plaid-large-medical-001"
-        user_id: "test-user-large-001"
-        account_id: "test-account-large-checking-001"
-        linked_item_id: "test-item-large-001"
+        user_id: "63302efe-310d-5e78-b681-6d89accac224"
+        account_id: "40224bba-7533-51f5-b12f-cc31b1f304ec"
+        linked_item_id: "cd64435b-78be-5831-a5ba-cb1ad4749e1e"
         amount: -1200.00
         date: "2025-11-18"
         name: "Hospital - Medical Procedure"
@@ -170,9 +170,9 @@ scenario:
 
       # 8. Car repair ($950 - automotive)
       - external_transaction_id: "plaid-large-car-repair-001"
-        user_id: "test-user-large-001"
-        account_id: "test-account-large-credit-001"
-        linked_item_id: "test-item-large-001"
+        user_id: "63302efe-310d-5e78-b681-6d89accac224"
+        account_id: "ddac07fb-9312-5f10-a78b-050717efbaab"
+        linked_item_id: "cd64435b-78be-5831-a5ba-cb1ad4749e1e"
         amount: -950.00
         date: "2025-11-20"
         name: "Dealership Auto Repair"
@@ -189,9 +189,9 @@ scenario:
 
       # Grocery shopping ($125)
       - external_transaction_id: "plaid-normal-grocery-001"
-        user_id: "test-user-large-001"
-        account_id: "test-account-large-credit-001"
-        linked_item_id: "test-item-large-001"
+        user_id: "63302efe-310d-5e78-b681-6d89accac224"
+        account_id: "ddac07fb-9312-5f10-a78b-050717efbaab"
+        linked_item_id: "cd64435b-78be-5831-a5ba-cb1ad4749e1e"
         amount: -125.00
         date: "2025-11-03"
         name: "Whole Foods Market"
@@ -204,9 +204,9 @@ scenario:
 
       # Gas station ($42)
       - external_transaction_id: "plaid-normal-gas-001"
-        user_id: "test-user-large-001"
-        account_id: "test-account-large-credit-001"
-        linked_item_id: "test-item-large-001"
+        user_id: "63302efe-310d-5e78-b681-6d89accac224"
+        account_id: "ddac07fb-9312-5f10-a78b-050717efbaab"
+        linked_item_id: "cd64435b-78be-5831-a5ba-cb1ad4749e1e"
         amount: -42.00
         date: "2025-11-06"
         name: "Shell Gas Station"
@@ -219,9 +219,9 @@ scenario:
 
       # Restaurant dinner ($87)
       - external_transaction_id: "plaid-normal-restaurant-001"
-        user_id: "test-user-large-001"
-        account_id: "test-account-large-credit-001"
-        linked_item_id: "test-item-large-001"
+        user_id: "63302efe-310d-5e78-b681-6d89accac224"
+        account_id: "ddac07fb-9312-5f10-a78b-050717efbaab"
+        linked_item_id: "cd64435b-78be-5831-a5ba-cb1ad4749e1e"
         amount: -87.00
         date: "2025-11-09"
         name: "The Cheesecake Factory"
@@ -234,9 +234,9 @@ scenario:
 
       # Clothing ($165)
       - external_transaction_id: "plaid-normal-clothing-001"
-        user_id: "test-user-large-001"
-        account_id: "test-account-large-credit-001"
-        linked_item_id: "test-item-large-001"
+        user_id: "63302efe-310d-5e78-b681-6d89accac224"
+        account_id: "ddac07fb-9312-5f10-a78b-050717efbaab"
+        linked_item_id: "cd64435b-78be-5831-a5ba-cb1ad4749e1e"
         amount: -165.00
         date: "2025-11-13"
         name: "Target"
@@ -249,9 +249,9 @@ scenario:
 
       # Utility bill ($95)
       - external_transaction_id: "plaid-normal-utility-001"
-        user_id: "test-user-large-001"
-        account_id: "test-account-large-checking-001"
-        linked_item_id: "test-item-large-001"
+        user_id: "63302efe-310d-5e78-b681-6d89accac224"
+        account_id: "40224bba-7533-51f5-b12f-cc31b1f304ec"
+        linked_item_id: "cd64435b-78be-5831-a5ba-cb1ad4749e1e"
         amount: -95.00
         date: "2025-11-14"
         name: "ComEd Electric"
@@ -264,9 +264,9 @@ scenario:
 
       # Online shopping ($89)
       - external_transaction_id: "plaid-normal-amazon-001"
-        user_id: "test-user-large-001"
-        account_id: "test-account-large-credit-001"
-        linked_item_id: "test-item-large-001"
+        user_id: "63302efe-310d-5e78-b681-6d89accac224"
+        account_id: "ddac07fb-9312-5f10-a78b-050717efbaab"
+        linked_item_id: "cd64435b-78be-5831-a5ba-cb1ad4749e1e"
         amount: -89.00
         date: "2025-11-17"
         name: "Amazon.com"
@@ -279,9 +279,9 @@ scenario:
 
       # Gym membership ($25)
       - external_transaction_id: "plaid-normal-gym-001"
-        user_id: "test-user-large-001"
-        account_id: "test-account-large-credit-001"
-        linked_item_id: "test-item-large-001"
+        user_id: "63302efe-310d-5e78-b681-6d89accac224"
+        account_id: "ddac07fb-9312-5f10-a78b-050717efbaab"
+        linked_item_id: "cd64435b-78be-5831-a5ba-cb1ad4749e1e"
         amount: -24.99
         date: "2025-11-19"
         name: "Planet Fitness"

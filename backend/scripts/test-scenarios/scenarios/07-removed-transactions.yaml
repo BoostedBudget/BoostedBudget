@@ -21,24 +21,24 @@ scenario:
   # Setup test data
   setup:
     user:
-      id: "test-user-removal-001"
+      id: "99006a82-6c53-5a51-a82d-77d6f1ca3493"
       tier: "premium"
       email: "removal-test@example.com"
       auth0_user_id: "auth0|test-removal-001"
 
     linked_items:
-      - id: "test-item-removal-001"
-        user_id: "test-user-removal-001"
-        item_id: "plaid-item-removal-001"
+      - id: "12177496-f412-52ce-9b39-18cfa92ecd30"
+        user_id: "99006a82-6c53-5a51-a82d-77d6f1ca3493"
+        item_id: "ef72f2e7-bdeb-5ce9-8f0a-0f7895a6f332"
         institution_name: "Bank of America"
         institution_id: "ins_4"
         cursor: "cursor-with-transactions"  # Has cursor (synced before)
         status: "active"
 
     accounts:
-      - id: "test-account-removal-001"
-        linked_item_id: "test-item-removal-001"
-        user_id: "test-user-removal-001"
+      - id: "e7049304-23d2-5777-8a1f-58187ce5a58b"
+        linked_item_id: "12177496-f412-52ce-9b39-18cfa92ecd30"
+        user_id: "99006a82-6c53-5a51-a82d-77d6f1ca3493"
         plaid_account_id: "plaid-acc-removal-001"
         name: "BofA Everyday Checking"
         official_name: "Bank of America Everyday Checking"
@@ -52,9 +52,9 @@ scenario:
       # === TRANSACTIONS TO KEEP (7) ===
 
       - external_transaction_id: "plaid-keep-001"
-        user_id: "test-user-removal-001"
-        account_id: "test-account-removal-001"
-        linked_item_id: "test-item-removal-001"
+        user_id: "99006a82-6c53-5a51-a82d-77d6f1ca3493"
+        account_id: "e7049304-23d2-5777-8a1f-58187ce5a58b"
+        linked_item_id: "12177496-f412-52ce-9b39-18cfa92ecd30"
         amount: -85.50
         date: "2025-11-01"
         name: "Whole Foods Market"
@@ -62,54 +62,54 @@ scenario:
         pending: false
 
       - external_transaction_id: "plaid-keep-002"
-        user_id: "test-user-removal-001"
-        account_id: "test-account-removal-001"
-        linked_item_id: "test-item-removal-001"
+        user_id: "99006a82-6c53-5a51-a82d-77d6f1ca3493"
+        account_id: "e7049304-23d2-5777-8a1f-58187ce5a58b"
+        linked_item_id: "12177496-f412-52ce-9b39-18cfa92ecd30"
         amount: -42.00
         date: "2025-11-02"
         name: "Shell Gas Station"
         pending: false
 
       - external_transaction_id: "plaid-keep-003"
-        user_id: "test-user-removal-001"
-        account_id: "test-account-removal-001"
-        linked_item_id: "test-item-removal-001"
+        user_id: "99006a82-6c53-5a51-a82d-77d6f1ca3493"
+        account_id: "e7049304-23d2-5777-8a1f-58187ce5a58b"
+        linked_item_id: "12177496-f412-52ce-9b39-18cfa92ecd30"
         amount: -125.00
         date: "2025-11-03"
         name: "Amazon.com"
         pending: false
 
       - external_transaction_id: "plaid-keep-004"
-        user_id: "test-user-removal-001"
-        account_id: "test-account-removal-001"
-        linked_item_id: "test-item-removal-001"
+        user_id: "99006a82-6c53-5a51-a82d-77d6f1ca3493"
+        account_id: "e7049304-23d2-5777-8a1f-58187ce5a58b"
+        linked_item_id: "12177496-f412-52ce-9b39-18cfa92ecd30"
         amount: -2400.00
         date: "2025-11-01"
         name: "Rent Payment to Landlord"
         pending: false
 
       - external_transaction_id: "plaid-keep-005"
-        user_id: "test-user-removal-001"
-        account_id: "test-account-removal-001"
-        linked_item_id: "test-item-removal-001"
+        user_id: "99006a82-6c53-5a51-a82d-77d6f1ca3493"
+        account_id: "e7049304-23d2-5777-8a1f-58187ce5a58b"
+        linked_item_id: "12177496-f412-52ce-9b39-18cfa92ecd30"
         amount: +3500.00
         date: "2025-11-01"
         name: "Employer Paycheck Direct Deposit"
         pending: false
 
       - external_transaction_id: "plaid-keep-006"
-        user_id: "test-user-removal-001"
-        account_id: "test-account-removal-001"
-        linked_item_id: "test-item-removal-001"
+        user_id: "99006a82-6c53-5a51-a82d-77d6f1ca3493"
+        account_id: "e7049304-23d2-5777-8a1f-58187ce5a58b"
+        linked_item_id: "12177496-f412-52ce-9b39-18cfa92ecd30"
         amount: -65.00
         date: "2025-11-04"
         name: "Chipotle Mexican Grill"
         pending: false
 
       - external_transaction_id: "plaid-keep-007"
-        user_id: "test-user-removal-001"
-        account_id: "test-account-removal-001"
-        linked_item_id: "test-item-removal-001"
+        user_id: "99006a82-6c53-5a51-a82d-77d6f1ca3493"
+        account_id: "e7049304-23d2-5777-8a1f-58187ce5a58b"
+        linked_item_id: "12177496-f412-52ce-9b39-18cfa92ecd30"
         amount: -15.99
         date: "2025-11-05"
         name: "Netflix Subscription"
@@ -119,9 +119,9 @@ scenario:
 
       # REMOVE 1: Duplicate charge (bank posted twice by mistake)
       - external_transaction_id: "plaid-duplicate-001"
-        user_id: "test-user-removal-001"
-        account_id: "test-account-removal-001"
-        linked_item_id: "test-item-removal-001"
+        user_id: "99006a82-6c53-5a51-a82d-77d6f1ca3493"
+        account_id: "e7049304-23d2-5777-8a1f-58187ce5a58b"
+        linked_item_id: "12177496-f412-52ce-9b39-18cfa92ecd30"
         amount: -45.00
         date: "2025-11-02"
         name: "Target"
@@ -130,9 +130,9 @@ scenario:
 
       # REMOVE 2: Fraudulent charge (user disputed, bank removed after investigation)
       - external_transaction_id: "plaid-fraud-001"
-        user_id: "test-user-removal-001"
-        account_id: "test-account-removal-001"
-        linked_item_id: "test-item-removal-001"
+        user_id: "99006a82-6c53-5a51-a82d-77d6f1ca3493"
+        account_id: "e7049304-23d2-5777-8a1f-58187ce5a58b"
+        linked_item_id: "12177496-f412-52ce-9b39-18cfa92ecd30"
         amount: -250.00
         date: "2025-11-03"
         name: "Suspicious Merchant Inc"
@@ -141,9 +141,9 @@ scenario:
 
       # REMOVE 3: Merchant never captured (authorization expired)
       - external_transaction_id: "plaid-correction-001"
-        user_id: "test-user-removal-001"
-        account_id: "test-account-removal-001"
-        linked_item_id: "test-item-removal-001"
+        user_id: "99006a82-6c53-5a51-a82d-77d6f1ca3493"
+        account_id: "e7049304-23d2-5777-8a1f-58187ce5a58b"
+        linked_item_id: "12177496-f412-52ce-9b39-18cfa92ecd30"
         amount: -120.00
         date: "2025-11-04"
         name: "Hotel Booking Never Finalized"
@@ -155,7 +155,7 @@ scenario:
     - action: "fire_webhook"
       description: "Trigger TRANSACTIONS_REMOVED webhook with 3 transaction IDs to delete"
       webhook_code: "TRANSACTIONS_REMOVED"
-      item_id: "plaid-item-removal-001"
+      item_id: "ef72f2e7-bdeb-5ce9-8f0a-0f7895a6f332"
       # NOTE: Admin API may need enhancement to support removed_transaction_ids parameter
       # If not supported, this test will validate existing webhook handling
 

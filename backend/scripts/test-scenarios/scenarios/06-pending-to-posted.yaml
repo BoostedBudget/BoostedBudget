@@ -21,24 +21,24 @@ scenario:
   # Setup test data
   setup:
     user:
-      id: "test-user-pending-001"
+      id: "6e01a89a-6ddc-5c18-bcac-1eeab5367aa4"
       tier: "premium"
       email: "pending-test@example.com"
       auth0_user_id: "auth0|test-pending-001"
 
     linked_items:
-      - id: "test-item-pending-001"
-        user_id: "test-user-pending-001"
-        item_id: "plaid-item-pending-001"
+      - id: "72db6cf3-76bb-546f-bb1c-7139c122320a"
+        user_id: "6e01a89a-6ddc-5c18-bcac-1eeab5367aa4"
+        item_id: "76a1cac5-5e39-5c8a-ad4f-bfc45d948af7"
         institution_name: "Chase"
         institution_id: "ins_3"
         cursor: "initial-cursor-pending"  # Has cursor (not first sync)
         status: "active"
 
     accounts:
-      - id: "test-account-pending-001"
-        linked_item_id: "test-item-pending-001"
-        user_id: "test-user-pending-001"
+      - id: "efa4e29e-d380-52db-9d03-c318d385a54d"
+        linked_item_id: "72db6cf3-76bb-546f-bb1c-7139c122320a"
+        user_id: "6e01a89a-6ddc-5c18-bcac-1eeab5367aa4"
         plaid_account_id: "plaid-acc-pending-001"
         name: "Chase Sapphire Reserve"
         official_name: "Chase Sapphire Reserve Credit Card"
@@ -53,9 +53,9 @@ scenario:
     transactions:
       # Gas station: Pre-auth $45.00 → Final $42.18 (pump reduced pre-authorization)
       - external_transaction_id: "plaid-pending-gas-001"
-        user_id: "test-user-pending-001"
-        account_id: "test-account-pending-001"
-        linked_item_id: "test-item-pending-001"
+        user_id: "6e01a89a-6ddc-5c18-bcac-1eeab5367aa4"
+        account_id: "efa4e29e-d380-52db-9d03-c318d385a54d"
+        linked_item_id: "72db6cf3-76bb-546f-bb1c-7139c122320a"
         amount: -45.00
         date: "2025-11-05"
         name: "Shell Gas Station"
@@ -64,9 +64,9 @@ scenario:
 
       # Restaurant: Pre-auth $67.50 → Final $75.00 (tip added after meal)
       - external_transaction_id: "plaid-pending-restaurant-001"
-        user_id: "test-user-pending-001"
-        account_id: "test-account-pending-001"
-        linked_item_id: "test-item-pending-001"
+        user_id: "6e01a89a-6ddc-5c18-bcac-1eeab5367aa4"
+        account_id: "efa4e29e-d380-52db-9d03-c318d385a54d"
+        linked_item_id: "72db6cf3-76bb-546f-bb1c-7139c122320a"
         amount: -67.50
         date: "2025-11-05"
         name: "Olive Garden"
@@ -75,9 +75,9 @@ scenario:
 
       # Online order: Remains pending (not yet shipped)
       - external_transaction_id: "plaid-pending-online-001"
-        user_id: "test-user-pending-001"
-        account_id: "test-account-pending-001"
-        linked_item_id: "test-item-pending-001"
+        user_id: "6e01a89a-6ddc-5c18-bcac-1eeab5367aa4"
+        account_id: "efa4e29e-d380-52db-9d03-c318d385a54d"
+        linked_item_id: "72db6cf3-76bb-546f-bb1c-7139c122320a"
         amount: -129.99
         date: "2025-11-04"
         name: "Amazon.com"
@@ -89,7 +89,7 @@ scenario:
     - action: "fire_webhook"
       description: "Trigger DEFAULT_UPDATE - Plaid sends MODIFIED transactions (2 pending→posted with amount changes)"
       webhook_code: "DEFAULT_UPDATE"
-      item_id: "plaid-item-pending-001"
+      item_id: "76a1cac5-5e39-5c8a-ad4f-bfc45d948af7"
 
     - action: "wait"
       description: "Wait for sync to process state transitions and amount modifications"
