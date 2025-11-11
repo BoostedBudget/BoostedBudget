@@ -53,7 +53,8 @@ func (m *mockAdminPlaidService) FireWebhook(ctx context.Context, accessToken str
 }
 
 type mockLinkedItemRepository struct {
-	GetByIDFunc func(ctx context.Context, id string) (*domain.LinkedItem, error)
+	GetByIDFunc     func(ctx context.Context, id string) (*domain.LinkedItem, error)
+	GetByItemIDFunc func(ctx context.Context, itemID string) (*domain.LinkedItem, error)
 }
 
 func (m *mockLinkedItemRepository) Create(ctx context.Context, item *domain.LinkedItem) error {
@@ -72,7 +73,10 @@ func (m *mockLinkedItemRepository) GetByUserID(ctx context.Context, userID strin
 }
 
 func (m *mockLinkedItemRepository) GetByItemID(ctx context.Context, itemID string) (*domain.LinkedItem, error) {
-	return nil, nil
+	if m.GetByItemIDFunc != nil {
+		return m.GetByItemIDFunc(ctx, itemID)
+	}
+	return nil, repository.ErrLinkedItemNotFound
 }
 
 func (m *mockLinkedItemRepository) UpdateCursor(ctx context.Context, id, cursor string) error {
@@ -139,7 +143,7 @@ func TestFireWebhook_Success(t *testing.T) {
 	}
 
 	mockRepo := &mockLinkedItemRepository{
-		GetByIDFunc: func(ctx context.Context, id string) (*domain.LinkedItem, error) {
+		GetByItemIDFunc: func(ctx context.Context, itemID string) (*domain.LinkedItem, error) {
 			return linkedItem, nil
 		},
 	}
@@ -325,7 +329,7 @@ func TestFireWebhook_ItemNotFound(t *testing.T) {
 
 	// Mock repository to return not found error
 	mockRepo := &mockLinkedItemRepository{
-		GetByIDFunc: func(ctx context.Context, id string) (*domain.LinkedItem, error) {
+		GetByItemIDFunc: func(ctx context.Context, itemID string) (*domain.LinkedItem, error) {
 			return nil, repository.ErrLinkedItemNotFound
 		},
 	}
@@ -375,7 +379,7 @@ func TestFireWebhook_DecryptionFails(t *testing.T) {
 	}
 
 	mockRepo := &mockLinkedItemRepository{
-		GetByIDFunc: func(ctx context.Context, id string) (*domain.LinkedItem, error) {
+		GetByItemIDFunc: func(ctx context.Context, itemID string) (*domain.LinkedItem, error) {
 			return linkedItem, nil
 		},
 	}
@@ -432,7 +436,7 @@ func TestFireWebhook_PlaidServiceError(t *testing.T) {
 	}
 
 	mockRepo := &mockLinkedItemRepository{
-		GetByIDFunc: func(ctx context.Context, id string) (*domain.LinkedItem, error) {
+		GetByItemIDFunc: func(ctx context.Context, itemID string) (*domain.LinkedItem, error) {
 			return linkedItem, nil
 		},
 	}

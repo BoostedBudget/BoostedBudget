@@ -5,10 +5,12 @@ package services
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/plaid/plaid-go/v23/plaid"
 )
 
@@ -17,12 +19,13 @@ import (
 //
 // Usage:
 //
-//	service := NewMockPlaidService(cfg)
+//	service := NewMockPlaidService(cfg, accountRepo)
 //	response, err := service.TransactionsSync(ctx, accessToken, cursor, days)
 //
-// Issue #331: E2E Test Scenarios Framework
+// Issue #331: E2E Test Scenarios Framework - Phase 2
 type mockPlaidService struct {
-	config *config.Config
+	config      *config.Config
+	accountRepo repository.AccountRepository
 }
 
 // NewMockPlaidService creates a new mock Plaid service for E2E testing.
@@ -31,14 +34,16 @@ type mockPlaidService struct {
 //
 // Parameters:
 //   - cfg: Application configuration (used for tier limits)
+//   - accountRepo: Account repository for dynamic account ID lookup
 //
 // Returns a PlaidService implementation that can be used in place of the real
 // Plaid service during E2E tests.
 //
-// Issue #331: E2E Test Scenarios Framework
-func NewMockPlaidService(cfg *config.Config) PlaidService {
+// Issue #331: E2E Test Scenarios Framework - Phase 2
+func NewMockPlaidService(cfg *config.Config, accountRepo repository.AccountRepository) PlaidService {
 	return &mockPlaidService{
-		config: cfg,
+		config:      cfg,
+		accountRepo: accountRepo,
 	}
 }
 
@@ -102,7 +107,7 @@ func (m *mockPlaidService) RemoveItem(ctx context.Context, accessToken string) e
 // Returns a mock TransactionsSyncResponse with generated transactions matching
 // the tier's historical depth limit.
 //
-// Issue #331: E2E Test Scenarios Framework
+// Issue #331: E2E Test Scenarios Framework - Phase 2 (Dynamic Account ID Lookup)
 func (m *mockPlaidService) TransactionsSync(
 	ctx context.Context,
 	accessToken string,
@@ -114,9 +119,35 @@ func (m *mockPlaidService) TransactionsSync(
 		return nil, fmt.Errorf("access token cannot be empty")
 	}
 
+	// Dynamically determine account ID from database (E2E test scenarios)
+	// The access token for mock service contains the linked item ID in format: "mock-access-<linkedItemID>"
+	// This allows us to lookup the correct accounts and use their plaid_account_id values
+	accountID := "mock-account-001" // Fallback if lookup fails
+
+	if m.accountRepo != nil && len(accessToken) > 12 && accessToken[:12] == "mock-access-" {
+		// Extract linked item ID from mock access token
+		// Format: "mock-access-<linkedItemID>"
+		linkedItemID := accessToken[12:]
+
+		// Query for accounts belonging to this linked item
+		accounts, err := m.accountRepo.GetByLinkedItemID(ctx, linkedItemID)
+		if err != nil {
+			log.Printf("[MockPlaidService] Warning: failed to fetch accounts for linked item %s: %v (using fallback account ID)", linkedItemID, err)
+		} else if len(accounts) > 0 {
+			// Use the first account's plaid_account_id
+			accountID = accounts[0].PlaidAccountID
+			log.Printf("[MockPlaidService] Dynamically determined account ID: %s from %d accounts for linked item %s", accountID, len(accounts), linkedItemID)
+		} else {
+			log.Printf("[MockPlaidService] Warning: no accounts found for linked item %s (using fallback account ID)", linkedItemID)
+		}
+	} else {
+		// Access token doesn't follow mock convention, use fallback
+		log.Printf("[MockPlaidService] Using fallback account ID: %s (access token doesn't match mock-access-* pattern)", accountID)
+	}
+
 	// For mock, generate transactions based on daysRequested
 	// This respects tier limits: free=30 days, premium=365 days, etc.
-	transactions := m.generateMockTransactions(daysRequested)
+	transactions := m.generateMockTransactions(daysRequested, accountID)
 
 	// Build mock response
 	nextCursor := fmt.Sprintf("mock-cursor-%d", time.Now().Unix())
@@ -176,9 +207,12 @@ func (m *mockPlaidService) FireWebhook(
 //
 // Parameters:
 //   - days: Number of days of transaction history to generate
+//   - accountID: The plaid_account_id to use for all generated transactions
 //
 // Returns a slice of mock Plaid transactions.
-func (m *mockPlaidService) generateMockTransactions(days int) []plaid.Transaction {
+//
+// Issue #331: E2E Test Scenarios Framework - Phase 2 (Dynamic Account ID)
+func (m *mockPlaidService) generateMockTransactions(days int, accountID string) []plaid.Transaction {
 	if days <= 0 {
 		return []plaid.Transaction{}
 	}
@@ -193,14 +227,14 @@ func (m *mockPlaidService) generateMockTransactions(days int) []plaid.Transactio
 
 		// Create minimal mock transaction with only required fields
 		transactionId := fmt.Sprintf("mock-txn-%d", i)
-		accountId := "mock-account-001"
+		// Use the provided accountID parameter (dynamically determined from database)
 		amount := float64(10 + i%20) // $10-$30
 		dateField := dateStr
 		name := fmt.Sprintf("Mock Transaction %d", i+1)
 
 		transaction := plaid.Transaction{
 			TransactionId: transactionId,
-			AccountId:     accountId,
+			AccountId:     accountID, // Now using dynamic account ID!
 			Amount:        amount,
 			Date:          dateField,
 			Name:          name,

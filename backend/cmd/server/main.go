@@ -199,11 +199,11 @@ func main() {
 		if cfg.PlaidClientID != "" && cfg.PlaidSecret != "" {
 			var err error
 
-			// Issue #331: E2E Test Scenarios Framework
+			// Issue #331: E2E Test Scenarios Framework - Phase 2
 			// Use mock Plaid service in E2E test mode to generate synthetic transaction data
 			if os.Getenv("E2E_SCENARIOS_MODE") == "true" {
-				plaidService = services.NewMockPlaidService(cfg)
-				log.Println("🧪 Using MockPlaidService for E2E testing")
+				plaidService = services.NewMockPlaidService(cfg, accountRepo)
+				log.Println("🧪 Using MockPlaidService for E2E testing (with dynamic account lookup)")
 			} else {
 				plaidService, err = services.NewPlaidService(cfg)
 				if err != nil {
