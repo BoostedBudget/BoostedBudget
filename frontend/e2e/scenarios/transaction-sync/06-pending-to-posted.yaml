@@ -92,7 +92,7 @@ scenario:
     # Step 1: Verify initial state (3 pending transactions)
     - action: "api_call"
       method: "GET"
-      endpoint: "/api/v1/transactions?account_id=account-pending-001&pending=true"
+      endpoint: "/api/v1/transactions?account_id=577068d8-b019-51e3-8920-c2fb3aa192eb&pending=true"
       expect_status: 200
       save_as: "initial_pending"
 
@@ -147,7 +147,7 @@ scenario:
         query: |
           SELECT COUNT(*) as count
           FROM transactions
-          WHERE account_id = 'account-pending-001'
+          WHERE account_id = '577068d8-b019-51e3-8920-c2fb3aa192eb'
         expected:
           count: 3
 
@@ -156,7 +156,7 @@ scenario:
         query: |
           SELECT COUNT(*) as count
           FROM transactions
-          WHERE account_id = 'account-pending-001'
+          WHERE account_id = '577068d8-b019-51e3-8920-c2fb3aa192eb'
           AND pending = false
         expected:
           count: 3
@@ -166,7 +166,7 @@ scenario:
         query: |
           SELECT COUNT(*) as count
           FROM transactions
-          WHERE account_id = 'account-pending-001'
+          WHERE account_id = '577068d8-b019-51e3-8920-c2fb3aa192eb'
           AND pending = true
         expected:
           count: 0
@@ -212,7 +212,7 @@ scenario:
         query: |
           SELECT COUNT(*) as count
           FROM transactions
-          WHERE account_id = 'account-pending-001'
+          WHERE account_id = '577068d8-b019-51e3-8920-c2fb3aa192eb'
           AND (
             external_transaction_id IS NULL
             OR amount IS NULL
@@ -227,14 +227,14 @@ scenario:
       # Assertion 9: GET /transactions?pending=false should return 3 transactions
       - description: "GET /transactions?pending=false should return all 3 posted transactions"
         method: "GET"
-        endpoint: "/api/v1/transactions?account_id=account-pending-001&pending=false"
+        endpoint: "/api/v1/transactions?account_id=577068d8-b019-51e3-8920-c2fb3aa192eb&pending=false"
         expect_status: 200
         expect_body_contains: ["id", "amount", "date", "pending"]
 
       # Assertion 10: GET /transactions?pending=true should return 0 transactions
       - description: "GET /transactions?pending=true should return no pending transactions"
         method: "GET"
-        endpoint: "/api/v1/transactions?account_id=account-pending-001&pending=true"
+        endpoint: "/api/v1/transactions?account_id=577068d8-b019-51e3-8920-c2fb3aa192eb&pending=true"
         expect_status: 200
 
   cleanup:
