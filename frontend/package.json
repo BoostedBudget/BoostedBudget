@@ -42,10 +42,8 @@
     "@testing-library/user-event": "^14.5.2",
     "@types/js-cookie": "^3.0.6",
     "@types/js-yaml": "^4.0.9",
-    "@types/pg": "^8.15.6",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "@types/uuid": "^10.0.0",
     "@typescript-eslint/eslint-plugin": "^8.46.3",
     "@typescript-eslint/parser": "^8.0.0",
     "@vitejs/plugin-react": "^5.1.0",
@@ -57,13 +55,10 @@
     "globals": "^16.5.0",
     "js-yaml": "^4.1.0",
     "jsdom": "^27.1.0",
-    "pg": "^8.16.3",
     "prettier": "^3.4.2",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
-    "uuid": "^11.0.5",
     "vite": "^7.1.12",
-    "vitest": "^4.0.3",
-    "zod": "^3.23.8"
+    "vitest": "^4.0.3"
   }
 }
