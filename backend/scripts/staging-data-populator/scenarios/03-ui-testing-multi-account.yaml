@@ -1,0 +1,78 @@
+version: "2.0"
+
+metadata:
+  name: "UI Testing - Multi-Account Pagination"
+  description: "Create many accounts and transactions for testing pagination and performance"
+  tags: ["ui-testing", "pagination", "performance", "premium"]
+
+setup:
+  user:
+    email: "test-multi-account@example.com"
+    tier: "premium"
+
+  linked_items:
+    - institution: "Chase"
+    - institution: "Wells Fargo"
+
+  accounts:
+    - item_index: 0
+      type: "checking"
+      name: "Checking Account 1"
+      balance: 1500.00
+
+    - item_index: 0
+      type: "savings"
+      name: "Savings Account 1"
+      balance: 5000.00
+
+    - item_index: 0
+      type: "credit_card"
+      name: "Credit Card 1"
+      balance: -800.00
+
+    - item_index: 0
+      type: "checking"
+      name: "Business Checking"
+      balance: 8500.00
+
+    - item_index: 1
+      type: "checking"
+      name: "Checking Account 2"
+      balance: 2300.00
+
+    - item_index: 1
+      type: "savings"
+      name: "Emergency Fund"
+      balance: 10000.00
+
+    - item_index: 1
+      type: "credit_card"
+      name: "Credit Card 2"
+      balance: -1200.00
+
+    - item_index: 1
+      type: "investment"
+      name: "Brokerage Account"
+      balance: 45000.00
+
+    - item_index: 1
+      type: "loan"
+      name: "Student Loan"
+      balance: -25000.00
+
+    - item_index: 1
+      type: "loan"
+      name: "Auto Loan"
+      balance: -18500.00
+
+  transactions:
+    count_per_account: 100
+
+assertions:
+  - type: "transaction_count"
+    operator: ">="
+    value: 1000
+
+  - type: "account_count"
+    operator: "="
+    value: 10

@@ -1,0 +1,60 @@
+version: "2.0"
+
+metadata:
+  name: "Demo Data - Premium User"
+  description: "Create realistic demo data for premium user with multiple accounts and 2-year history"
+  tags: ["demo", "premium", "ui-testing"]
+
+setup:
+  user:
+    email: "demo-premium@example.com"
+    tier: "premium"
+
+  linked_items:
+    - institution: "Chase"
+    - institution: "Bank of America"
+
+  accounts:
+    - item_index: 0
+      type: "checking"
+      name: "Chase Checking"
+      balance: 5234.67
+
+    - item_index: 0
+      type: "savings"
+      name: "Chase Savings"
+      balance: 25000.00
+
+    - item_index: 0
+      type: "credit_card"
+      name: "Chase Sapphire Reserve"
+      balance: -3218.45
+
+    - item_index: 1
+      type: "checking"
+      name: "BofA Checking"
+      balance: 3567.89
+
+    - item_index: 1
+      type: "investment"
+      name: "BofA Investment Account"
+      balance: 75423.12
+
+  transactions:
+    count_per_account: 50
+
+assertions:
+  - type: "transaction_count"
+    operator: ">="
+    value: 250
+
+  - type: "account_count"
+    operator: "="
+    value: 5
+
+  - type: "user_tier"
+    expected: "premium"
+
+  - type: "balance_sum"
+    operator: ">="
+    value: 100000

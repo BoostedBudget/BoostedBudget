@@ -1,0 +1,78 @@
+version: "2.0"
+
+metadata:
+  name: "Edge Cases - Pending Transactions & Refunds"
+  description: "Test edge cases including pending transactions, refunds, and user notes"
+  tags: ["edge-cases", "testing", "pending", "refunds"]
+
+setup:
+  user:
+    email: "test-edge-cases@example.com"
+    tier: "premium_lite"
+
+  linked_items:
+    - institution: "Chase"
+
+  accounts:
+    - item_index: 0
+      type: "checking"
+      name: "Chase Checking"
+      balance: 2000.00
+
+  transactions:
+    - account_index: 0
+      amount: -125.50
+      date: "2025-11-10"
+      name: "Amazon Purchase"
+      category: ["Shopping", "Online"]
+      pending: true
+      user_notes: ""
+
+    - account_index: 0
+      amount: 75.00
+      date: "2025-11-08"
+      name: "Amazon Refund"
+      category: ["Shopping", "Refund"]
+      pending: false
+      user_notes: "Refund for returned item"
+
+    - account_index: 0
+      amount: -45.23
+      date: "2025-11-07"
+      name: "Starbucks"
+      category: ["Food and Drink", "Coffee Shop"]
+      pending: false
+      user_notes: "Morning coffee - business expense"
+
+    - account_index: 0
+      amount: -12.50
+      date: "2025-11-06"
+      name: "Netflix Subscription"
+      category: ["Entertainment", "Subscription"]
+      pending: false
+      user_notes: ""
+
+    - account_index: 0
+      amount: -250.00
+      date: "2025-11-05"
+      name: "Hilton Hotel"
+      category: ["Travel", "Lodging"]
+      pending: true
+      user_notes: "Business trip - pending checkout"
+
+    - account_index: 0
+      amount: 3500.00
+      date: "2025-11-01"
+      name: "Direct Deposit - Salary"
+      category: ["Income", "Payroll"]
+      pending: false
+      user_notes: ""
+
+assertions:
+  - type: "transaction_count"
+    operator: "="
+    value: 6
+
+  - type: "account_count"
+    operator: "="
+    value: 1
