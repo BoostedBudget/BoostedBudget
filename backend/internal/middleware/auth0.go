@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -224,13 +223,6 @@ func Auth0Middleware(issuer, audience string, identityRepo repository.UserIdenti
 
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			// E2E Test Mode: Bypass Auth0 JWT validation
-			// Issue #331: E2E scenarios use simple token auth instead of Auth0
-			testMode := os.Getenv("E2E_SCENARIOS_MODE") == "true" || os.Getenv("TEST_MODE") == "true"
-			if testMode {
-				return handleE2ETestAuth(c, next)
-			}
-
 			// Extract token from Authorization header
 			authHeader := c.Request().Header.Get("Authorization")
 			if authHeader == "" {
@@ -472,49 +464,4 @@ func GetPrimaryRegion(c echo.Context) string {
 	}
 
 	return region
-}
-
-// handleE2ETestAuth provides simple token-based authentication for E2E tests
-// Only active when E2E_SCENARIOS_MODE or TEST_MODE environment variables are true
-// Issue #331: E2E Test Scenarios Framework
-//
-// This bypass allows E2E tests to authenticate using a simple bearer token instead
-// of Auth0 JWT tokens, eliminating the need for Auth0 test tenant setup and
-// avoiding token expiration issues during testing.
-//
-// Security: This function should NEVER be called in production. The Auth0Middleware
-// checks for test mode, and main.go should include a safety check to prevent
-// test mode from being enabled in production environments.
-func handleE2ETestAuth(c echo.Context, next echo.HandlerFunc) error {
-	authHeader := c.Request().Header.Get("Authorization")
-	if authHeader == "" {
-		return echo.NewHTTPError(http.StatusUnauthorized, "missing authorization header")
-	}
-
-	parts := strings.SplitN(authHeader, " ", 2)
-	if len(parts) != 2 || parts[0] != "Bearer" {
-		return echo.NewHTTPError(http.StatusUnauthorized, "invalid authorization header format")
-	}
-
-	token := parts[1]
-	expectedToken := os.Getenv("ADMIN_API_TOKEN")
-
-	if expectedToken == "" || token != expectedToken {
-		return echo.NewHTTPError(http.StatusUnauthorized, "invalid test token")
-	}
-
-	// Inject mock user context for E2E tests
-	// This allows tests to proceed as if authenticated
-	// Tests should seed the database with this user ID in their setup phase
-	// Issue #331: Use UUID format to match production code path and PostgreSQL UUID column type
-	c.Set("user_id", "e2e00000-0000-0000-0000-000000000001") // Fixed UUID for E2E test user
-	c.Set("auth0_user_id", "e2e-test|mock-user")
-	c.Set("claims", jwt.MapClaims{
-		"sub":             "e2e-test|mock-user",
-		"email":           "e2e-test@example.com",
-		"email_verified":  true,
-		"https://boostedbudget.com/subscription_tier": "premium", // Grant premium for testing
-	})
-
-	return next(c)
 }
