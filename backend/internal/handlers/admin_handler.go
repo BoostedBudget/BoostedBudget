@@ -94,8 +94,9 @@ func (h *AdminHandler) FireWebhook(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	// 3. Fetch linked item by ID
-	linkedItem, err := h.linkedItemRepo.GetByID(c.Request().Context(), req.ItemID)
+	// 3. Fetch linked item by Plaid item ID (not database primary key)
+	// Issue #331: item_id is the Plaid identifier, not the database primary key
+	linkedItem, err := h.linkedItemRepo.GetByItemID(c.Request().Context(), req.ItemID)
 	if err != nil {
 		if err == repository.ErrLinkedItemNotFound {
 			return echo.NewHTTPError(http.StatusNotFound, "Item not found")

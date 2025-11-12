@@ -16,4 +16,5 @@ echo "  Frontend: $E2E_FRONTEND_PORT"
 echo "  Backend: $E2E_BACKEND_PORT"
 
 # Run Playwright tests directly (not via npm to avoid circular dependency)
+# Scenario tests are excluded via testIgnore in playwright.config.ts (not E2E_SCENARIOS_MODE)
 npx playwright test "$@"
