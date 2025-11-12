@@ -18,9 +18,6 @@ export default defineConfig({
   // Test directory
   testDir: './e2e',
 
-  // Exclude scenarios from regular E2E runs (they run in e2e-scenarios.yml with Docker Compose)
-  testIgnore: process.env.E2E_SCENARIOS_MODE ? [] : ['**/scenarios/**'],
-
   // Maximum time one test can run
   timeout: 30 * 1000,
 
@@ -34,11 +31,10 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
 
   // Parallel workers:
-  // - CI scenarios: 4 workers for E2E scenarios (worker-specific databases)
-  // - CI regular: 1 worker for traditional E2E tests
+  // - CI: 1 worker for traditional E2E tests
   // - Local: 2 workers to prevent memory exhaustion
   // See: Memory leak investigation Oct 2025 - saves 1.5GB vs unlimited workers
-  workers: process.env.E2E_SCENARIOS_MODE ? 4 : (process.env.CI ? 1 : 2),
+  workers: process.env.CI ? 1 : 2,
 
   // Reporter to use
   reporter: [
@@ -83,22 +79,9 @@ export default defineConfig({
 
   // Run your local dev server before starting the tests
   // Comment this out if you want to run tests against already running servers
-  // In E2E_SCENARIOS_MODE, backend runs in Docker Compose, so only start frontend
-  webServer: process.env.E2E_SCENARIOS_MODE ? [
+  webServer: [
     {
-      // Scenarios mode: Only frontend (backend already in Docker Compose)
-      // Pass PORT and E2E_BACKEND_PORT env vars to Vite for dynamic port allocation
-      // E2E_BACKEND_PORT is needed for the Vite proxy configuration
-      // E2E_DISABLE_HTTPS disables HTTPS in CI environments with self-signed certs
-      command: `PORT=${frontendPort} E2E_BACKEND_PORT=${backendPort} E2E_DISABLE_HTTPS=${process.env.E2E_DISABLE_HTTPS || 'false'} npm run dev`,
-      url: `http://localhost:${frontendPort}`,
-      reuseExistingServer: !process.env.CI,
-      timeout: 120 * 1000,
-      ignoreHTTPSErrors: true,
-    },
-  ] : [
-    {
-      // Regular mode: Start both frontend and backend
+      // Start frontend dev server
       // Pass PORT and E2E_BACKEND_PORT env vars to Vite for dynamic port allocation
       // E2E_BACKEND_PORT is needed for the Vite proxy configuration
       // E2E_DISABLE_HTTPS disables HTTPS in CI environments with self-signed certs
@@ -109,6 +92,7 @@ export default defineConfig({
       ignoreHTTPSErrors: true,
     },
     {
+      // Start backend server
       // Pass PORT env var to backend for dynamic port allocation
       command: `cd ../backend && PORT=${backendPort} ./bin/server`,
       url: `http://localhost:${backendPort}/health`,
