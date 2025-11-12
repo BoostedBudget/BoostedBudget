@@ -110,7 +110,7 @@ scenario:
     # Step 1: Verify initial state (5 transactions exist)
     - action: "api_call"
       method: "GET"
-      endpoint: "/api/v1/transactions?account_id=account-removed-001"
+      endpoint: "/api/v1/transactions?account_id=e5588029-7d2f-53e5-9552-5cb0124cea59"
       expect_status: 200
       save_as: "initial_transactions"
 
@@ -140,7 +140,7 @@ scenario:
         query: |
           SELECT COUNT(*) as count
           FROM transactions
-          WHERE account_id = 'account-removed-001'
+          WHERE account_id = 'e5588029-7d2f-53e5-9552-5cb0124cea59'
         expected:
           count: 2
 
@@ -149,7 +149,7 @@ scenario:
         query: |
           SELECT COUNT(*) as count
           FROM transactions
-          WHERE account_id = 'account-removed-001'
+          WHERE account_id = 'e5588029-7d2f-53e5-9552-5cb0124cea59'
           AND external_transaction_id IN (
             'plaid-txn-removed-001',
             'plaid-txn-removed-002',
@@ -163,7 +163,7 @@ scenario:
         query: |
           SELECT COUNT(*) as count
           FROM transactions
-          WHERE account_id = 'account-removed-001'
+          WHERE account_id = 'e5588029-7d2f-53e5-9552-5cb0124cea59'
           AND external_transaction_id IN (
             'plaid-txn-keep-001',
             'plaid-txn-keep-002'
@@ -185,7 +185,7 @@ scenario:
         query: |
           SELECT COUNT(*) as count
           FROM transactions
-          WHERE account_id = 'account-removed-001'
+          WHERE account_id = 'e5588029-7d2f-53e5-9552-5cb0124cea59'
           AND (
             external_transaction_id IS NULL
             OR amount IS NULL
@@ -222,7 +222,7 @@ scenario:
       # Assertion 8: GET /transactions should return only 2 transactions
       - description: "GET /transactions should return 2 remaining transactions"
         method: "GET"
-        endpoint: "/api/v1/transactions?account_id=account-removed-001"
+        endpoint: "/api/v1/transactions?account_id=e5588029-7d2f-53e5-9552-5cb0124cea59"
         expect_status: 200
         expect_body_contains: ["id", "amount", "date"]
 
