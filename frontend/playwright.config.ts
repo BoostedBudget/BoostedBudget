@@ -30,9 +30,8 @@ export default defineConfig({
   // Retry on CI only
   retries: process.env.CI ? 2 : 0,
 
-  // Parallel workers:
-  // - CI: 1 worker for traditional E2E tests
-  // - Local: 2 workers to prevent memory exhaustion
+  // Opt out of parallel tests on CI
+  // Limit to 2 workers locally to prevent memory exhaustion (was 8 on 8-core system)
   // See: Memory leak investigation Oct 2025 - saves 1.5GB vs unlimited workers
   workers: process.env.CI ? 1 : 2,
 
@@ -64,11 +63,6 @@ export default defineConfig({
     video: process.env.CI ? 'retain-on-failure' : 'off',
   },
 
-  // Environment variables passed to test files
-  env: {
-    ADMIN_API_TOKEN: process.env.ADMIN_API_TOKEN || '',
-  },
-
   // Configure projects for major browsers
   projects: [
     {
@@ -81,24 +75,19 @@ export default defineConfig({
   // Comment this out if you want to run tests against already running servers
   webServer: [
     {
-      // Start frontend dev server
       // Pass PORT and E2E_BACKEND_PORT env vars to Vite for dynamic port allocation
       // E2E_BACKEND_PORT is needed for the Vite proxy configuration
-      // E2E_DISABLE_HTTPS disables HTTPS in CI environments with self-signed certs
-      command: `PORT=${frontendPort} E2E_BACKEND_PORT=${backendPort} E2E_DISABLE_HTTPS=${process.env.E2E_DISABLE_HTTPS || 'false'} npm run dev`,
+      command: `PORT=${frontendPort} E2E_BACKEND_PORT=${backendPort} npm run dev`,
       url: `http://localhost:${frontendPort}`,
       reuseExistingServer: !process.env.CI,
       timeout: 120 * 1000,
-      ignoreHTTPSErrors: true,
     },
     {
-      // Start backend server
       // Pass PORT env var to backend for dynamic port allocation
       command: `cd ../backend && PORT=${backendPort} ./bin/server`,
       url: `http://localhost:${backendPort}/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 120 * 1000,
-      ignoreHTTPSErrors: true,
     },
   ],
 });
