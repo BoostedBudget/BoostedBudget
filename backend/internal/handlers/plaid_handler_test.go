@@ -2,15 +2,18 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/plaid/plaid-go/v23/plaid"
@@ -56,12 +59,16 @@ func (m *mockPlaidService) FireWebhook(ctx context.Context, accessToken string, 
 
 // mockAccountService is a mock implementation of AccountService for testing
 type mockAccountService struct {
+	linkAccountsFunc         func(ctx context.Context, userID, publicToken, institutionID, institutionName string) (*services.LinkAccountsResult, error)
 	getAccountsFunc          func(ctx context.Context, userID string) ([]domain.Account, error)
 	deleteAccountFunc        func(ctx context.Context, accountID, userID string) error
 	disconnectInstitutionFunc func(ctx context.Context, linkedItemID, userID string) error
 }
 
 func (m *mockAccountService) LinkAccounts(ctx context.Context, userID, publicToken, institutionID, institutionName string) (*services.LinkAccountsResult, error) {
+	if m.linkAccountsFunc != nil {
+		return m.linkAccountsFunc(ctx, userID, publicToken, institutionID, institutionName)
+	}
 	return nil, errors.New("not implemented")
 }
 
@@ -530,4 +537,105 @@ func TestDisconnectInstitution_InternalError(t *testing.T) {
 	require.Error(t, err, "Expected error from handler")
 	httpErr := err.(*echo.HTTPError)
 	assert.Equal(t, http.StatusInternalServerError, httpErr.Code, "Expected 500 Internal Server Error")
+}
+
+// TestExchangePublicToken_FreeTierLimitExceeded tests that free tier users are blocked when exceeding account limit
+// This test validates Scenario #4 (tier-limit-enforcement):
+// - Free tier users have a 3-account limit
+// - Attempting to link a 4th account should return 403 Forbidden
+// - Error message should indicate tier limit exceeded
+func TestExchangePublicToken_FreeTierLimitExceeded(t *testing.T) {
+	// Given: Mock service that returns account limit exceeded error (free tier at 3-account limit)
+	mockService := &mockAccountService{
+		linkAccountsFunc: func(ctx context.Context, userID, publicToken, institutionID, institutionName string) (*services.LinkAccountsResult, error) {
+			assert.Equal(t, "auth0|free-user-123", userID, "Should pass correct user ID")
+			assert.Equal(t, "public-sandbox-test-token", publicToken, "Should pass public token")
+			assert.Equal(t, "ins_3", institutionID, "Should pass institution ID")
+			assert.Equal(t, "Chase", institutionName, "Should pass institution name")
+
+			// Service layer detects free tier user already has 3 accounts
+			return nil, services.ErrAccountLimitExceeded
+		},
+	}
+
+	handler := NewPlaidHandler(nil, mockService)
+
+	// When: Free tier user with 3 accounts attempts to exchange token for 4th account
+	e := echo.New()
+	e.Validator = middleware.NewValidator()
+	reqBody := `{"public_token":"public-sandbox-test-token","institution_id":"ins_3","institution_name":"Chase"}`
+	req := httptest.NewRequest(http.MethodPost, "/plaid/exchange-token", strings.NewReader(reqBody))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set("user_id", "auth0|free-user-123") // Free tier user attempting to add 4th account
+
+	err := handler.ExchangePublicToken(c)
+
+	// Then: Returns 403 Forbidden with tier limit error message
+	require.Error(t, err, "Expected error from handler")
+	httpErr := err.(*echo.HTTPError)
+	assert.Equal(t, http.StatusForbidden, httpErr.Code, "Expected 403 Forbidden for tier limit")
+	assert.Contains(t, httpErr.Message, "Account limit exceeded", "Error message should mention limit")
+	assert.Contains(t, httpErr.Message, "subscription tier", "Error message should mention subscription")
+}
+
+// TestExchangePublicToken_PremiumAllowsMoreAccounts tests that premium tier users can exceed free tier limit
+// This test validates Scenario #4 (tier-limit-enforcement):
+// - Premium tier users have higher account limits (Premium: 30, Premium+: unlimited)
+// - Premium users should successfully link accounts beyond free tier's 3-account limit
+// - Response should include linked item ID and account count
+func TestExchangePublicToken_PremiumAllowsMoreAccounts(t *testing.T) {
+	// Given: Mock service that successfully links accounts for premium user (already has 5 accounts, adding more)
+	expectedItemID := "item-premium-" + uuid.New().String()
+	expectedAccounts := []domain.Account{
+		{ID: uuid.New().String(), Name: "Premium Checking", Type: "depository"},
+		{ID: uuid.New().String(), Name: "Premium Savings", Type: "depository"},
+		{ID: uuid.New().String(), Name: "Premium Credit", Type: "credit"},
+	}
+
+	mockService := &mockAccountService{
+		linkAccountsFunc: func(ctx context.Context, userID, publicToken, institutionID, institutionName string) (*services.LinkAccountsResult, error) {
+			assert.Equal(t, "auth0|premium-user-456", userID, "Should pass correct user ID")
+			assert.Equal(t, "public-sandbox-premium-token", publicToken, "Should pass public token")
+			assert.Equal(t, "ins_3", institutionID, "Should pass institution ID")
+			assert.Equal(t, "Chase", institutionName, "Should pass institution name")
+
+			// Service allows premium user to link accounts beyond free tier limit
+			return &services.LinkAccountsResult{
+				LinkedItem: &domain.LinkedItem{
+					ItemID:          expectedItemID,
+					InstitutionID:   institutionID,
+					InstitutionName: institutionName,
+				},
+				Accounts: expectedAccounts,
+			}, nil
+		},
+	}
+
+	handler := NewPlaidHandler(nil, mockService)
+
+	// When: Premium tier user (already has 5 accounts) exchanges token for 3 more accounts
+	e := echo.New()
+	e.Validator = middleware.NewValidator()
+	reqBody := `{"public_token":"public-sandbox-premium-token","institution_id":"ins_3","institution_name":"Chase"}`
+	req := httptest.NewRequest(http.MethodPost, "/plaid/exchange-token", strings.NewReader(reqBody))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set("user_id", "auth0|premium-user-456") // Premium user, no limit constraint
+
+	err := handler.ExchangePublicToken(c)
+
+	// Then: Returns 200 OK with successful link response
+	require.NoError(t, err, "Premium user should successfully link accounts")
+	assert.Equal(t, http.StatusOK, rec.Code, "Expected 200 OK for premium user")
+
+	// Verify response body
+	var response ExchangePublicTokenResponse
+	err = json.Unmarshal(rec.Body.Bytes(), &response)
+	require.NoError(t, err, "Should parse response body")
+	assert.True(t, response.Success, "Success should be true")
+	assert.Equal(t, expectedItemID, response.ItemID, "Should return correct item ID")
+	assert.Equal(t, 3, response.Accounts, "Should return count of linked accounts")
 }

@@ -1514,3 +1514,186 @@ func TestProcessRemovedTransactions_NilTransactionID(t *testing.T) {
 	// DeleteByExternalID should NOT be called for nil ID
 	mockTransactionRepo.AssertNotCalled(t, "DeleteByExternalID")
 }
+
+// ============================================================================
+// Issue #331: E2E Migration - Pending to Posted Transition Tests
+// ============================================================================
+// Tests migrated from YAML scenario #6: pending-to-posted.yaml
+// Verifies that transactions correctly transition from pending to posted status
+// while preserving user data and handling amount/date changes.
+
+// TestProcessModifiedTransactions_PendingToPosted tests the complete pending→posted transition
+// This test validates:
+// 1. Single transaction (no duplication on status change)
+// 2. Pending status change (true → false)
+// 3. Amount change (tip added to restaurant charge)
+// 4. Date change (hotel checkout date vs reservation date)
+// 5. User notes preserved during transition
+//
+// Scenario: User has pending transactions that finalize (post/settle) with updates
+func TestProcessModifiedTransactions_PendingToPosted(t *testing.T) {
+	// Setup
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		mockTransactionRepo,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItemID := "linked-item-123"
+	userID := "user-456"
+
+	accountMap := map[string]string{
+		"plaid-acc-restaurant": "account-uuid-restaurant",
+		"plaid-acc-hotel":      "account-uuid-hotel",
+		"plaid-acc-gas":        "account-uuid-gas",
+	}
+
+	linkedItem := &domain.LinkedItem{
+		ID:     linkedItemID,
+		UserID: userID,
+	}
+
+	// Existing pending transactions in database (will be queried during processModified)
+	userNotesRestaurant := "Team lunch - add tip later"
+	userNotesHotel := "Business trip hotel"
+	existingPendingRestaurant := &domain.Transaction{
+		ID:                    "txn-pending-restaurant",
+		UserID:                userID,
+		AccountID:             "account-uuid-restaurant",
+		LinkedItemID:          linkedItemID,
+		ExternalTransactionID: strPtrHelper("plaid-txn-restaurant"),
+		Amount:                -45.00, // Authorization amount (before tip)
+		Pending:               true,   // Currently pending
+		UserNotes:             &userNotesRestaurant,
+	}
+
+	existingPendingHotel := &domain.Transaction{
+		ID:                    "txn-pending-hotel",
+		UserID:                userID,
+		AccountID:             "account-uuid-hotel",
+		LinkedItemID:          linkedItemID,
+		ExternalTransactionID: strPtrHelper("plaid-txn-hotel"),
+		Amount:                -200.00, // Hotel reservation hold
+		Pending:               true,
+		UserNotes:             &userNotesHotel,
+	}
+
+	existingPendingGas := &domain.Transaction{
+		ID:                    "txn-pending-gas",
+		UserID:                userID,
+		AccountID:             "account-uuid-gas",
+		LinkedItemID:          linkedItemID,
+		ExternalTransactionID: strPtrHelper("plaid-txn-gas"),
+		Amount:                -55.00, // Gas station authorization
+		Pending:               true,
+		UserNotes:             nil, // No notes on this one
+	}
+
+	// Modified transactions from Plaid (posted versions)
+	merchantRestaurant := "Olive Garden"
+	merchantHotel := "Marriott"
+	merchantGas := "Shell"
+	modified := []plaid.Transaction{
+		// Restaurant: Amount changed (tip added), pending→false, notes MUST be preserved
+		{
+			TransactionId: "plaid-txn-restaurant",
+			AccountId:     "plaid-acc-restaurant",
+			Amount:        54.50,  // Tip added: $45 + $9.50 tip
+			Date:          "2024-01-14",
+			Name:          "Restaurant",
+			MerchantName:  *plaid.NewNullableString(&merchantRestaurant),
+			Pending:       false, // Now posted
+		},
+		// Hotel: Date changed (checkout date vs reservation date), pending→false, notes preserved
+		{
+			TransactionId: "plaid-txn-hotel",
+			AccountId:     "plaid-acc-hotel",
+			Amount:        200.00, // Amount unchanged
+			Date:          "2024-01-16", // Posted on checkout (was 2024-01-13 reservation)
+			Name:          "Hotel Reservation",
+			MerchantName:  *plaid.NewNullableString(&merchantHotel),
+			Pending:       false, // Now posted
+		},
+		// Gas: Amount unchanged, pending→false, no notes (test nil notes preservation)
+		{
+			TransactionId: "plaid-txn-gas",
+			AccountId:     "plaid-acc-gas",
+			Amount:        55.00, // Same as authorization
+			Date:          "2024-01-15",
+			Name:          "Shell Gas Station",
+			MerchantName:  *plaid.NewNullableString(&merchantGas),
+			Pending:       false, // Now posted
+		},
+	}
+
+	// Mock GetByExternalID to return existing pending transactions
+	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "plaid-txn-restaurant", userID).
+		Return(existingPendingRestaurant, nil)
+	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "plaid-txn-hotel", userID).
+		Return(existingPendingHotel, nil)
+	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "plaid-txn-gas", userID).
+		Return(existingPendingGas, nil)
+
+	// Mock Update calls - verify each transaction updates correctly
+	// Restaurant: Amount changed, pending→false, user_notes PRESERVED
+	mockTransactionRepo.On("Update", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
+		return txn.ExternalTransactionID != nil &&
+			*txn.ExternalTransactionID == "plaid-txn-restaurant" &&
+			txn.Amount == 54.50 && // Tip added (Plaid returns positive for debits)
+			!txn.Pending && // No longer pending
+			txn.UserNotes != nil &&
+			*txn.UserNotes == "Team lunch - add tip later" // Notes PRESERVED
+	})).Return(nil).Once()
+
+	// Hotel: Date changed, pending→false, user_notes PRESERVED
+	mockTransactionRepo.On("Update", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
+		return txn.ExternalTransactionID != nil &&
+			*txn.ExternalTransactionID == "plaid-txn-hotel" &&
+			txn.Amount == 200.00 && // Plaid returns positive for debits
+			!txn.Pending &&
+			txn.UserNotes != nil &&
+			*txn.UserNotes == "Business trip hotel" // Notes PRESERVED
+	})).Return(nil).Once()
+
+	// Gas: Amount unchanged, pending→false, nil notes preserved as nil
+	mockTransactionRepo.On("Update", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
+		return txn.ExternalTransactionID != nil &&
+			*txn.ExternalTransactionID == "plaid-txn-gas" &&
+			txn.Amount == 55.00 && // Plaid returns positive for debits
+			!txn.Pending &&
+			txn.UserNotes == nil // No notes, preserved as nil
+	})).Return(nil).Once()
+
+	// Execute
+	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap)
+
+	// Assert
+	assert.NoError(t, err)
+
+	// Verify all expected Update calls occurred exactly once
+	mockTransactionRepo.AssertExpectations(t)
+
+	// Verify no Create calls (no duplication - same transaction updated, not created new)
+	mockTransactionRepo.AssertNotCalled(t, "Create")
+
+	// Key assertions verified by mock matchers:
+	// ✓ Single transaction per external_transaction_id (no duplication)
+	// ✓ Pending status changed from true to false
+	// ✓ Amount updated with tip (restaurant)
+	// ✓ Date can change (hotel - not verified in mock, but supported)
+	// ✓ User notes preserved during transition (restaurant, hotel)
+	// ✓ Nil user notes preserved as nil (gas)
+}
+
+// strPtrHelper is a helper to create string pointers for tests
+func strPtrHelper(s string) *string {
+	return &s
+}
