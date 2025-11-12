@@ -1,0 +1,133 @@
+# Account Templates
+# Reusable account configurations for common patterns
+# (Note: Template system not yet implemented - use as reference for copy-paste)
+
+# Checking accounts
+basic_checking:
+  type: "checking"
+  name: "Checking Account"
+  balance: 1500.00
+
+premium_checking:
+  type: "checking"
+  name: "Premier Checking"
+  balance: 5000.00
+
+business_checking:
+  type: "checking"
+  name: "Business Checking"
+  balance: 10000.00
+
+# Savings accounts
+basic_savings:
+  type: "savings"
+  name: "Savings Account"
+  balance: 5000.00
+
+high_yield_savings:
+  type: "savings"
+  name: "High-Yield Savings"
+  balance: 25000.00
+
+emergency_fund:
+  type: "savings"
+  name: "Emergency Fund"
+  balance: 10000.00
+
+# Credit cards
+low_balance_credit:
+  type: "credit_card"
+  name: "Credit Card"
+  balance: -250.00
+
+medium_balance_credit:
+  type: "credit_card"
+  name: "Credit Card"
+  balance: -1500.00
+
+high_balance_credit:
+  type: "credit_card"
+  name: "Premium Credit Card"
+  balance: -4500.00
+
+# Investment accounts
+starter_investment:
+  type: "investment"
+  name: "Brokerage Account"
+  balance: 10000.00
+
+retirement_investment:
+  type: "investment"
+  name: "Retirement Account"
+  balance: 50000.00
+
+large_investment:
+  type: "investment"
+  name: "Investment Portfolio"
+  balance: 250000.00
+
+# Loans
+auto_loan:
+  type: "loan"
+  name: "Auto Loan"
+  balance: -18500.00
+
+student_loan:
+  type: "loan"
+  name: "Student Loan"
+  balance: -35000.00
+
+mortgage:
+  type: "loan"
+  name: "Mortgage"
+  balance: -325000.00
+
+# Common combinations by user profile
+
+# Young professional (age 25-35)
+young_professional_accounts:
+  - type: "checking"
+    name: "Checking Account"
+    balance: 2500.00
+  - type: "savings"
+    name: "Emergency Fund"
+    balance: 8000.00
+  - type: "credit_card"
+    name: "Credit Card"
+    balance: -850.00
+  - type: "loan"
+    name: "Student Loan"
+    balance: -25000.00
+
+# Established professional (age 35-50)
+established_professional_accounts:
+  - type: "checking"
+    name: "Primary Checking"
+    balance: 5000.00
+  - type: "savings"
+    name: "Savings Account"
+    balance: 25000.00
+  - type: "investment"
+    name: "401(k)"
+    balance: 150000.00
+  - type: "credit_card"
+    name: "Rewards Card"
+    balance: -2000.00
+  - type: "loan"
+    name: "Mortgage"
+    balance: -275000.00
+
+# Retiree (age 65+)
+retiree_accounts:
+  - type: "checking"
+    name: "Checking Account"
+    balance: 3500.00
+  - type: "savings"
+    name: "High-Yield Savings"
+    balance: 50000.00
+  - type: "investment"
+    name: "Retirement Portfolio"
+    balance: 750000.00
+  - type: "investment"
+    name: "IRA"
+    balance: 300000.00

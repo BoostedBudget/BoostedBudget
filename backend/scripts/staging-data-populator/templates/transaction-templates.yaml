@@ -1,0 +1,152 @@
+# Transaction Templates
+# Reusable transaction patterns for common scenarios
+# (Note: Template system not yet implemented - use as reference for manual transactions)
+
+# Coffee shops
+morning_coffee:
+  amount: -5.75
+  category: ["Food and Drink", "Coffee Shop"]
+  merchants: ["Starbucks", "Peet's Coffee", "Blue Bottle", "Philz Coffee"]
+
+# Groceries
+weekly_groceries:
+  amount: -85.43
+  category: ["Groceries"]
+  merchants: ["Whole Foods Market", "Trader Joe's", "Safeway", "Kroger", "Costco"]
+
+monthly_costco_run:
+  amount: -247.89
+  category: ["Groceries", "Warehouse"]
+  merchants: ["Costco", "Sam's Club", "BJ's Wholesale"]
+
+# Dining
+casual_dining:
+  amount: -35.50
+  category: ["Food and Drink", "Restaurants"]
+  merchants: ["Chipotle", "Panera Bread", "Olive Garden", "Chili's"]
+
+fine_dining:
+  amount: -125.00
+  category: ["Food and Drink", "Restaurants", "Fine Dining"]
+  merchants: ["The French Laundry", "Per Se", "Eleven Madison Park"]
+
+fast_food:
+  amount: -12.50
+  category: ["Food and Drink", "Fast Food"]
+  merchants: ["McDonald's", "Subway", "Taco Bell", "Chick-fil-A"]
+
+# Transportation
+gas_station:
+  amount: -45.00
+  category: ["Transportation", "Gas"]
+  merchants: ["Shell", "Chevron", "BP", "Exxon", "Mobil"]
+
+uber_ride:
+  amount: -18.75
+  category: ["Transportation", "Ride Share"]
+  merchants: ["Uber", "Lyft"]
+
+parking:
+  amount: -15.00
+  category: ["Transportation", "Parking"]
+  merchants: ["Parking Garage", "ParkMobile", "SpotHero"]
+
+# Entertainment
+streaming_service:
+  amount: -14.99
+  category: ["Entertainment", "Subscriptions"]
+  merchants: ["Netflix", "Hulu", "Disney+", "HBO Max", "Amazon Prime Video"]
+
+music_streaming:
+  amount: -9.99
+  category: ["Entertainment", "Music"]
+  merchants: ["Spotify", "Apple Music", "YouTube Music"]
+
+movie_tickets:
+  amount: -32.00
+  category: ["Entertainment", "Movies"]
+  merchants: ["AMC Theatres", "Regal Cinemas", "Cinemark"]
+
+# Shopping
+amazon_purchase:
+  amount: -67.89
+  category: ["Shopping", "Online"]
+  merchants: ["Amazon", "Amazon.com"]
+
+target_run:
+  amount: -53.24
+  category: ["Shopping", "Retail"]
+  merchants: ["Target", "Walmart", "Costco"]
+
+# Utilities & Bills
+electric_bill:
+  amount: -120.00
+  category: ["Utilities", "Electric"]
+  merchants: ["PG&E", "ConEd", "Duke Energy"]
+
+internet_bill:
+  amount: -79.99
+  category: ["Utilities", "Internet"]
+  merchants: ["Comcast", "Spectrum", "AT&T", "Verizon Fios"]
+
+phone_bill:
+  amount: -85.00
+  category: ["Utilities", "Phone"]
+  merchants: ["AT&T", "Verizon", "T-Mobile", "Sprint"]
+
+# Healthcare
+pharmacy:
+  amount: -25.00
+  category: ["Healthcare", "Pharmacy"]
+  merchants: ["CVS Pharmacy", "Walgreens", "Rite Aid"]
+
+doctor_copay:
+  amount: -35.00
+  category: ["Healthcare", "Medical"]
+  merchants: ["Medical Office", "Kaiser Permanente", "Blue Cross"]
+
+# Income
+monthly_salary:
+  amount: 5000.00
+  category: ["Income", "Payroll"]
+  merchants: ["Direct Deposit - Payroll", "Paycheck"]
+
+freelance_payment:
+  amount: 2500.00
+  category: ["Income", "Freelance"]
+  merchants: ["Freelance Payment", "Consulting Fee"]
+
+# Refunds
+amazon_refund:
+  amount: 45.00
+  category: ["Shopping", "Refund"]
+  merchants: ["Amazon Refund"]
+
+# Pending transactions
+pending_hotel:
+  amount: -250.00
+  category: ["Travel", "Lodging"]
+  merchants: ["Hilton", "Marriott", "Hyatt"]
+  pending: true
+
+pending_restaurant:
+  amount: -85.00
+  category: ["Food and Drink", "Restaurants"]
+  pending: true
+
+# Edge cases
+large_purchase:
+  amount: -1499.99
+  category: ["Shopping", "Electronics"]
+  merchants: ["Apple Store", "Best Buy"]
+  notes: "New laptop for work"
+
+zero_dollar_transaction:
+  amount: 0.00
+  category: ["Other"]
+  notes: "Authorization check"
+
+small_refund:
+  amount: 2.50
+  category: ["Food and Drink", "Refund"]
+  notes: "Price adjustment"

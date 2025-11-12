@@ -1,0 +1,45 @@
+version: "2.0"
+
+metadata:
+  name: "Demo Data - Free Tier User"
+  description: "Create realistic demo data for free tier user with 3 accounts"
+  tags: ["demo", "free-tier", "ui-testing"]
+
+setup:
+  user:
+    email: "demo-free@example.com"
+    tier: "free"
+
+  linked_items:
+    - institution: "Chase"
+
+  accounts:
+    - item_index: 0
+      type: "checking"
+      name: "Chase Total Checking"
+      balance: 2847.53
+
+    - item_index: 0
+      type: "savings"
+      name: "Chase Savings"
+      balance: 5230.00
+
+    - item_index: 0
+      type: "credit_card"
+      name: "Chase Freedom"
+      balance: -1247.89
+
+  transactions:
+    count_per_account: 15
+
+assertions:
+  - type: "transaction_count"
+    operator: ">="
+    value: 45
+
+  - type: "account_count"
+    operator: "="
+    value: 3
+
+  - type: "user_tier"
+    expected: "free"
