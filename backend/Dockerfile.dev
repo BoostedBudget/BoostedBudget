@@ -1,68 +1,30 @@
 # Development Dockerfile for Backend
-FROM golang:1.25-bookworm
+FROM golang:1.25-alpine
 
-# Install dependencies for hot reload, health checks, and migrations
+# Install dependencies for hot reload and health checks
 RUN echo "📦 Installing build dependencies..." && \
     for i in 1 2 3; do \
-      echo "Attempt $i/3..." && \
-      apt-get update && apt-get install -y --no-install-recommends \
-        curl ca-certificates tzdata && \
-      rm -rf /var/lib/apt/lists/* && \
-      echo "✓ Dependencies installed" && break || \
-      { echo "⚠ apt-get attempt $i/3 failed"; \
-        [ $i -lt 3 ] && sleep 5; }; \
+      apk add --no-cache curl && break || \
+      { echo "⚠ apk add attempt $i/3 failed"; [ $i -lt 3 ] && sleep 5; }; \
     done && \
     echo "📦 Installing air for hot reload..." && \
     for i in 1 2 3; do \
       go install github.com/air-verse/air@latest && break || \
       { echo "⚠ go install attempt $i/3 failed"; [ $i -lt 3 ] && sleep 10; }; \
-    done && \
-    echo "📦 Installing Atlas CLI for database migrations..." && \
-    for i in 1 2 3; do \
-      curl -sSfL --retry 3 --retry-delay 5 --connect-timeout 10 \
-        "https://release.ariga.io/atlas/atlas-linux-amd64-latest" \
-        -o /usr/local/bin/atlas && \
-      chmod +x /usr/local/bin/atlas && \
-      echo "✓ Atlas installed successfully" && break || \
-      { echo "⚠ Atlas download attempt $i/3 failed"; [ $i -lt 3 ] && sleep 5; }; \
     done
 
 WORKDIR /app
 
-# Copy go mod files from backend directory
-COPY backend/go.mod backend/go.sum ./
+# Copy go mod files
+COPY go.mod go.sum ./
 RUN echo "📦 Downloading Go modules..." && \
     for i in 1 2 3; do \
       go mod download && break || \
       { echo "⚠ Download attempt $i/3 failed"; [ $i -lt 3 ] && sleep 10; }; \
     done
 
-# Copy config from project root (CRITICAL: Required for subscription tiers)
-COPY config ./config
-
-# Force rebuild to pick up Plaid credentials fix (Issue #331)
-# REBUILD_MARKER: 2025-11-09-fix-plaid-credentials-dev
-
-# Copy backend source
-COPY backend .
-
-
-# Build server binary (required by docker-entrypoint.sh)
-RUN echo "🔨 Building server binary..." && \
-    go build -o /app/server ./cmd/server && \
-    echo "✓ Server binary built successfully"
-
-# Make entrypoint script executable (already copied with backend source)
-RUN chmod +x /app/scripts/docker-entrypoint.sh
-
-# Verify critical files and permissions before runtime
-RUN echo "🔍 Pre-flight checks..." && \
-    test -f /app/server || { echo "❌ /app/server binary missing"; exit 1; } && \
-    test -x /app/server || { echo "❌ /app/server not executable"; exit 1; } && \
-    test -f /app/scripts/docker-entrypoint.sh || { echo "❌ entrypoint.sh missing"; exit 1; } && \
-    test -x /app/scripts/docker-entrypoint.sh || { echo "❌ entrypoint.sh not executable"; exit 1; } && \
-    test -f /app/config/subscription_tiers.yaml || { echo "❌ subscription_tiers.yaml missing"; exit 1; } && \
-    echo "✅ All pre-flight checks passed"
+# Copy source
+COPY . .
 
 # Expose port
 EXPOSE 8080
@@ -71,6 +33,5 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-# Use entrypoint for E2E tests (runs migrations then starts server)
-# For local dev with hot-reload, override with: docker-compose run --entrypoint air backend
-CMD ["/app/scripts/docker-entrypoint.sh"]
+# Run with air for hot reload
+CMD ["air", "-c", ".air.toml"]

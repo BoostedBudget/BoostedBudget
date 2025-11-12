@@ -1,16 +1,6 @@
 #!/bin/bash
 set -e
 
-# TRAP EXIT for debugging (shows exactly where script fails)
-trap 'echo "❌ Script failed at line $LINENO with exit code $?"' ERR
-
-echo "=========================================="
-echo "🚀 ENTRYPOINT STARTING"
-echo "Current directory: $(pwd)"
-echo "User: $(whoami)"
-echo "Date: $(date)"
-echo "=========================================="
-
 echo "Starting BoostedBudget Backend..."
 
 # Check if DATABASE_URL is set
@@ -20,20 +10,6 @@ if [ -z "$DATABASE_URL" ]; then
 fi
 
 echo "Database URL configured"
-
-# Verify subscription tiers config file exists (CRITICAL for server startup)
-if [ ! -f "config/subscription_tiers.yaml" ]; then
-  echo "❌ ERROR: config/subscription_tiers.yaml not found"
-  echo "Current directory: $(pwd)"
-  echo "Directory contents:"
-  ls -la
-  echo "Config directory contents:"
-  ls -la config/ 2>/dev/null || echo "(config/ directory does not exist)"
-  echo ""
-  echo "This file is required for server startup. Ensure Dockerfile copies config/ directory."
-  exit 1
-fi
-echo "✅ Subscription tiers config found"
 
 # Verify atlas tool is available
 if ! command -v atlas &> /dev/null; then

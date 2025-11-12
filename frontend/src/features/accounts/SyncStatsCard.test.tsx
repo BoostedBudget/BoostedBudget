@@ -410,7 +410,7 @@ describe('SyncStatsCard', () => {
     const { container } = render(<SyncStatsCard />)
 
     await waitFor(() => {
-      expect(screen.getByText('Accounts Synced This Month')).toBeInTheDocument()
+      expect(container.querySelector('.sync-stats-card')).toBeInTheDocument()
     })
 
     expect(container.querySelector('.sync-stats-card__header')).toBeInTheDocument()

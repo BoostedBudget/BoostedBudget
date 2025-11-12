@@ -27,21 +27,6 @@ func main() {
 		log.Fatal("Failed to load config:", err)
 	}
 
-	// DEBUG: Log critical config values at startup (Issue #331)
-	log.Println("========================================")
-	log.Printf("🔧 SERVER STARTUP CONFIGURATION:")
-	log.Printf("  Environment: '%s'", cfg.Environment)
-	log.Printf("  Version: %s", cfg.Version)
-	log.Printf("  Port: %s", cfg.Port)
-	log.Printf("  PlaidEnv: %s", cfg.PlaidEnv)
-	log.Println("========================================")
-
-	// CRITICAL SECURITY CHECK: Ensure test mode is NEVER active in production
-	// Issue #331: E2E Test Scenarios Framework
-	if cfg.Environment == "production" && (os.Getenv("E2E_SCENARIOS_MODE") == "true" || os.Getenv("TEST_MODE") == "true") {
-		log.Fatal("FATAL: E2E_SCENARIOS_MODE or TEST_MODE cannot be enabled in production environment")
-	}
-
 	// Initialize database connection (optional for local dev)
 	var db *sql.DB
 	if cfg.DatabaseURL != "" {
@@ -198,20 +183,10 @@ func main() {
 		var plaidHandler *handlers.PlaidHandler
 		if cfg.PlaidClientID != "" && cfg.PlaidSecret != "" {
 			var err error
-
-			// Issue #331: E2E Test Scenarios Framework - Phase 2
-			// Use mock Plaid service in E2E test mode to generate synthetic transaction data
-			if os.Getenv("E2E_SCENARIOS_MODE") == "true" {
-				plaidService = services.NewMockPlaidService(cfg, accountRepo)
-				log.Println("🧪 Using MockPlaidService for E2E testing (with dynamic account lookup)")
+			plaidService, err = services.NewPlaidService(cfg)
+			if err != nil {
+				log.Printf("⚠️  Failed to initialize Plaid service: %v", err)
 			} else {
-				plaidService, err = services.NewPlaidService(cfg)
-				if err != nil {
-					log.Printf("⚠️  Failed to initialize Plaid service: %v", err)
-				}
-			}
-
-			if plaidService != nil {
 				// Create account service with all dependencies
 				accountService := services.NewAccountService(
 					plaidService,
@@ -317,30 +292,14 @@ func main() {
 
 		// Admin routes (Issue #308: staging-only admin endpoints)
 		// Triple-layer security:
-		//   1. Route registration only in staging or when ENABLE_ADMIN_ENDPOINTS=true (here)
+		//   1. Route registration only in staging (here)
 		//   2. AdminMiddleware returns 404 in production
 		//   3. Service-level validations (e.g., sandbox-only webhook firing)
 		// Future (Issue #309): Add role-based access control requiring "admin" role
-		// Issue #331: Register admin routes directly under Echo instance to bypass Auth0Middleware
-		// This allows E2E tests to use simple ADMIN_API_TOKEN instead of Auth0 JWT tokens
-		enableAdmin := cfg.Environment == "staging" || os.Getenv("ENABLE_ADMIN_ENDPOINTS") == "true"
-		if adminHandler != nil && enableAdmin {
-			admin := e.Group("/api/v1/admin", middleware.AdminMiddleware(cfg))
+		if adminHandler != nil && cfg.Environment == "staging" {
+			admin := api.Group("/admin", middleware.AdminMiddleware(cfg))
 			admin.POST("/plaid/fire-webhook", adminHandler.FireWebhook)
-
-			// DEBUG: Log admin endpoint registration details (Issue #331)
-			log.Printf("✅ Admin endpoints enabled:")
-			log.Printf("   cfg.Environment = '%s'", cfg.Environment)
-			log.Printf("   ENABLE_ADMIN_ENDPOINTS = '%s'", os.Getenv("ENABLE_ADMIN_ENDPOINTS"))
-			log.Printf("   enableAdmin = %v", enableAdmin)
-			log.Printf("   adminHandler != nil = %v", adminHandler != nil)
-		} else {
-			// DEBUG: Log why admin endpoints are NOT enabled (Issue #331)
-			log.Printf("⚠️  Admin endpoints NOT enabled:")
-			log.Printf("   cfg.Environment = '%s'", cfg.Environment)
-			log.Printf("   ENABLE_ADMIN_ENDPOINTS = '%s'", os.Getenv("ENABLE_ADMIN_ENDPOINTS"))
-			log.Printf("   enableAdmin = %v", enableAdmin)
-			log.Printf("   adminHandler != nil = %v", adminHandler != nil)
+			log.Println("✅ Admin endpoints enabled (staging only)")
 		}
 
 		// Deletion routes (if enabled)

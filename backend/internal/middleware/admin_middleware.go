@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"log"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
@@ -22,31 +21,20 @@ import (
 //
 // Environment Behavior:
 //   - staging: Allows request to proceed (200 OK with handler response)
-//   - test: Allows request to proceed (for E2E testing, Issue #331)
 //   - production: Returns 404 Not Found (hides endpoint existence)
-//   - development: Returns 404 Not Found (non-production admin endpoint)
+//   - development: Returns 404 Not Found (staging-only endpoint)
 //
 // Future Enhancement (Issue #309): Add role-based access control to check for "admin" role
 // in Auth0 JWT custom claims. Current implementation only validates environment.
 func AdminMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			// DEBUG: Log environment value and comparison results (Issue #331)
-			log.Printf("🔍 AdminMiddleware DEBUG:")
-			log.Printf("  cfg.Environment = '%s'", cfg.Environment)
-			log.Printf("  len(cfg.Environment) = %d", len(cfg.Environment))
-			log.Printf("  cfg.Environment == \"test\" = %v", cfg.Environment == "test")
-			log.Printf("  cfg.Environment == \"staging\" = %v", cfg.Environment == "staging")
-
-			// Environment check: Only allow staging and test (Issue #331: E2E testing)
+			// Environment check: Only allow staging
 			// Returns 404 instead of 403 for security through obscurity
 			// (prevents revealing endpoint existence to unauthorized users)
-			if cfg.Environment != "staging" && cfg.Environment != "test" {
-				log.Printf("❌ AdminMiddleware: BLOCKING request - environment '%s' not allowed", cfg.Environment)
+			if cfg.Environment != "staging" {
 				return echo.NewHTTPError(http.StatusNotFound, "Endpoint not available")
 			}
-
-			log.Println("✅ AdminMiddleware: Allowing request to proceed")
 
 			// TODO (Issue #309): Add role-based auth check
 			// if !HasRole(c, "admin") {
