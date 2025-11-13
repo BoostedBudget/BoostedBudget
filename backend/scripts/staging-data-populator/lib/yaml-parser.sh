@@ -3,11 +3,15 @@
 # yaml-parser.sh - YAML parsing utilities using yq
 # Provides helper functions for reading scenario YAML files
 
-# Global variables set by parse_scenario
-declare -g SCENARIO_VERSION
-declare -g SCENARIO_NAME
-declare -g SCENARIO_DESCRIPTION
-declare -g SCENARIO_TAGS
+# Global variables set by parse_scenario (bash 3.2+ compatible)
+SCENARIO_VERSION=""
+SCENARIO_NAME=""
+SCENARIO_DESCRIPTION=""
+SCENARIO_TAGS=""
+
+# Optional override variables (can be set by command-line)
+OVERRIDE_USER_EMAIL="${OVERRIDE_USER_EMAIL:-}"
+OVERRIDE_USER_MODE="${OVERRIDE_USER_MODE:-}"
 
 # Parse and validate scenario YAML
 parse_scenario() {

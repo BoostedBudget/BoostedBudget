@@ -3,10 +3,38 @@
 # setup-accounts.sh - Accounts creation for fake data mode
 # Creates fake accounts with fake Plaid account IDs
 
-# Global arrays set by setup_accounts
-declare -ag ACCOUNT_IDS
-declare -ag ACCOUNT_PLAID_IDS
-declare -ag ACCOUNT_LINKED_ITEM_IDS
+# Global arrays set by setup_accounts (bash 3.2+ compatible)
+ACCOUNT_IDS=()
+ACCOUNT_PLAID_IDS=()
+ACCOUNT_LINKED_ITEM_IDS=()
+
+# Map user-friendly account types to Plaid account types
+map_account_type() {
+  local user_type=$1
+
+  case "$user_type" in
+    "checking"|"savings")
+      echo "depository"
+      ;;
+    "credit_card")
+      echo "credit"
+      ;;
+    "loan"|"mortgage")
+      echo "loan"
+      ;;
+    "investment"|"brokerage")
+      echo "investment"
+      ;;
+    # Pass through Plaid types unchanged
+    "depository"|"credit"|"loan"|"investment"|"other")
+      echo "$user_type"
+      ;;
+    *)
+      log_warning "Unknown account type: $user_type, defaulting to 'other'"
+      echo "other"
+      ;;
+  esac
+}
 
 # Create accounts from scenario
 setup_accounts() {
@@ -51,6 +79,10 @@ setup_accounts() {
       type="checking"
     fi
 
+    # Map user-friendly type to Plaid type
+    local plaid_type
+    plaid_type=$(map_account_type "$type")
+
     if [ "$name" = "null" ] || [ -z "$name" ]; then
       name="Account $((i + 1))"
     fi
@@ -68,7 +100,7 @@ setup_accounts() {
 
     log_debug "Creating account[$i]:"
     log_debug "  Name: $name"
-    log_debug "  Type: $type"
+    log_debug "  Type: $type (Plaid: $plaid_type)"
     log_debug "  Balance: $balance"
     log_debug "  Linked Item: $item_index"
 
@@ -84,7 +116,7 @@ setup_accounts() {
         '$USER_ID',
         '$plaid_account_id',
         '$name',
-        '$type',
+        '$plaid_type',
         $balance,
         NOW(),
         NOW()

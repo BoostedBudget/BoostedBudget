@@ -3,11 +3,11 @@
 # setup-user.sh - User creation functions
 # Creates users based on YAML scenario configuration
 
-# Global variable set by setup_user
-declare -g USER_ID
-declare -g USER_EMAIL
-declare -g USER_TIER
-declare -g HISTORICAL_DAYS
+# Global variables set by setup_user (bash 3.2+ compatible)
+USER_ID=""
+USER_EMAIL=""
+USER_TIER=""
+HISTORICAL_DAYS=""
 
 # Create user from scenario
 setup_user() {

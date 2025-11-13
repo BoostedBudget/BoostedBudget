@@ -3,6 +3,11 @@
 # fake-data-generator.sh - Realistic transaction generation
 # Generates or inserts transactions based on scenario configuration
 
+# Escape single quotes for SQL (replace ' with '')
+sql_escape() {
+  echo "$1" | sed "s/'/''/g"
+}
+
 # Merchant pools for realistic data
 declare -a EXPENSE_MERCHANTS=(
   "Starbucks" "Amazon" "Shell Gas Station" "Whole Foods Market" "Netflix"
@@ -107,11 +112,14 @@ generate_fake_transaction() {
   local txn_id=$(uuidgen | tr '[:upper:]' '[:lower:]')
   local external_id="fake-txn-$(uuidgen)"
 
+  # Escape SQL special characters
+  local escaped_merchant=$(sql_escape "$merchant")
+
   # Insert transaction
   local sql="
     INSERT INTO transactions (
       id, user_id, account_id, linked_item_id, source,
-      external_transaction_id, amount, date, name,
+      external_transaction_id, amount, date, authorized_date, name,
       category, pending, created_at, updated_at
     )
     VALUES (
@@ -123,8 +131,9 @@ generate_fake_transaction() {
       '$external_id',
       $amount,
       '$date',
-      '$merchant',
-      ARRAY['$category'],
+      '$date',
+      '$escaped_merchant',
+      to_jsonb(ARRAY['$category']),
       $pending,
       NOW(),
       NOW()
@@ -190,11 +199,15 @@ insert_manual_transaction() {
 
   log_debug "Inserting manual transaction[$index]: $name ($amount)"
 
+  # Escape SQL special characters
+  local escaped_name=$(sql_escape "$name")
+  local escaped_notes=$(sql_escape "$user_notes")
+
   # Build SQL with optional user_notes
   local sql="
     INSERT INTO transactions (
       id, user_id, account_id, linked_item_id, source,
-      external_transaction_id, amount, date, name,
+      external_transaction_id, amount, date, authorized_date, name,
       category, pending, user_notes, created_at, updated_at
     )
     VALUES (
@@ -206,10 +219,11 @@ insert_manual_transaction() {
       '$external_id',
       $amount,
       '$date',
-      '$name',
-      ARRAY['$category'],
+      '$date',
+      '$escaped_name',
+      to_jsonb(ARRAY['$category']),
       $pending,
-      $([ -n "$user_notes" ] && echo "'$user_notes'" || echo "NULL"),
+      $([ -n "$user_notes" ] && echo "'$escaped_notes'" || echo "NULL"),
       NOW(),
       NOW()
     );
