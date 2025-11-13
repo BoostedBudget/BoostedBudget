@@ -42,11 +42,36 @@ function parseCategory(categoryJson: string | null | undefined): string {
 /**
  * Format date with relative labels (Today, Yesterday) or readable format
  * Uses local timezone for consistent comparison across environments
+ * Handles both YYYY-MM-DD and RFC3339 (YYYY-MM-DDTHH:MM:SSZ) formats
  */
-function formatDate(dateStr: string): string {
+function formatDate(dateStr: string | null | undefined): string {
+  // Validate input
+  if (!dateStr || typeof dateStr !== 'string') {
+    return 'Invalid Date'
+  }
+
+  // Extract date portion from RFC3339 format (e.g., "2025-11-12T00:00:00Z" -> "2025-11-12")
+  const datePortion = dateStr.split('T')[0]
+
+  // Validate YYYY-MM-DD format
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(datePortion)) {
+    return 'Invalid Date'
+  }
+
   // Parse date components to avoid timezone issues
-  const [year, month, day] = dateStr.split('-').map(Number)
+  const [year, month, day] = datePortion.split('-').map(Number)
+
+  // Validate parsed values
+  if (isNaN(year) || isNaN(month) || isNaN(day)) {
+    return 'Invalid Date'
+  }
+
   const transactionDate = new Date(year, month - 1, day) // month is 0-indexed
+
+  // Validate resulting date
+  if (isNaN(transactionDate.getTime())) {
+    return 'Invalid Date'
+  }
 
   const today = new Date()
   today.setHours(0, 0, 0, 0)
