@@ -1,0 +1,148 @@
+version: "2.0"
+
+metadata:
+  name: "Existing User Example - Frontend Testing"
+  description: "Template for populating data for a REAL Auth0 user (viewable in frontend)"
+  tags: ["existing-user", "frontend-testing", "template"]
+
+# ==============================================================================
+# INSTRUCTIONS FOR USING THIS TEMPLATE
+# ==============================================================================
+#
+# This template is designed for populating data for REAL Auth0 users who can
+# log into the staging frontend and view the populated data.
+#
+# PREREQUISITES:
+# 1. User must already exist in the database (they must have logged into
+#    staging.boostedbudget.com via Auth0 at least once)
+#
+# 2. You need to know the user's email address
+#
+# STEPS TO USE:
+# 1. Log into https://staging.boostedbudget.com via Auth0
+#    - Use Google, Microsoft, or any supported auth provider
+#    - This creates your user account in the database
+#
+# 2. Find your email using the helper script:
+#    cd backend/scripts/staging-data-populator
+#    ./helpers/list-users.sh
+#
+# 3. Copy this file and replace YOUR-EMAIL-HERE below with your email
+#
+# 4. Run the populator:
+#    ./populate.sh scenarios/99-existing-user-example.yaml
+#
+# 5. Refresh the frontend - you should see the populated data!
+#
+# ==============================================================================
+
+setup:
+  user:
+    # REQUIRED: Set mode to "existing" to use a real Auth0 user
+    mode: "existing"
+
+    # REQUIRED: Replace with YOUR email from staging login
+    # Find your email by running: ./helpers/list-users.sh
+    email: "YOUR-EMAIL-HERE@example.com"
+
+    # OPTIONAL: Upgrade/downgrade the user's tier
+    # If omitted, keeps the user's current tier
+    # Options: "free", "premium_lite", "premium", "premium_plus"
+    tier: "premium"
+
+    # OPTIONAL: Validate the Auth0 user ID
+    # If provided, script will verify it matches the email
+    # Find Auth0 ID by running: ./helpers/list-users.sh
+    # auth0_user_id: "google-oauth2|123456789012345678901"
+
+  # Linked items (fake Plaid institutions)
+  linked_items:
+    - institution: "Chase"
+    - institution: "Bank of America"
+
+  # Accounts (fake Plaid accounts)
+  accounts:
+    # Checking account
+    - item_index: 0
+      type: "checking"
+      name: "Chase Total Checking"
+      balance: 5247.89
+
+    # Savings account
+    - item_index: 0
+      type: "savings"
+      name: "Chase Savings"
+      balance: 12350.00
+
+    # Credit card
+    - item_index: 0
+      type: "credit_card"
+      name: "Chase Freedom Card"
+      balance: -1842.37
+
+    # Investment account
+    - item_index: 1
+      type: "investment"
+      name: "BofA Investment Account"
+      balance: 45000.00
+
+  # Auto-generate realistic transactions
+  # 50 transactions per account = 200 total transactions
+  transactions:
+    count_per_account: 50
+
+# Validate results
+assertions:
+  - type: "transaction_count"
+    operator: ">="
+    value: 200
+
+  - type: "account_count"
+    operator: "="
+    value: 4
+
+  - type: "user_tier"
+    expected: "premium"
+
+# ==============================================================================
+# WHAT HAPPENS WHEN YOU RUN THIS:
+# ==============================================================================
+#
+# 1. Cleanup Phase:
+#    - Deletes all existing accounts, transactions, and linked items
+#    - PRESERVES your user account and Auth0 login (you can still log in!)
+#
+# 2. Setup Phase:
+#    - Creates 2 linked items (fake Plaid institutions)
+#    - Creates 4 accounts (checking, savings, credit, investment)
+#    - Generates 200 realistic transactions (50 per account)
+#
+# 3. Assertion Phase:
+#    - Verifies 200+ transactions exist
+#    - Verifies 4 accounts exist
+#    - Verifies tier is "premium"
+#
+# 4. Frontend Access:
+#    - Go to https://staging.boostedbudget.com
+#    - Log in with your Auth0 account (same email as above)
+#    - You should see all 4 accounts and 200 transactions!
+#
+# ==============================================================================
+# TROUBLESHOOTING:
+# ==============================================================================
+#
+# Error: "User not found: your-email@example.com"
+# Solution: You must log into staging.boostedbudget.com first
+#
+# Error: "Auth0 user ID mismatch"
+# Solution: Remove the auth0_user_id field (it's optional)
+#
+# Frontend shows no data:
+# Solution: Verify mode is "existing" (not "new")
+#           Verify email matches your Auth0 login exactly
+#
+# Cannot log into frontend:
+# Solution: This template PRESERVES your login - cleanup only deletes data
+#           Try logging in again with the same Auth0 provider
+#
+# ==============================================================================
