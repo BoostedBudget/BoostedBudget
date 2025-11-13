@@ -59,9 +59,24 @@ metadata:
 ```yaml
 setup:
   user:
+    mode: "new"  # OPTIONAL - "existing" or "new" (default: "new")
     email: "unique-email@example.com"  # REQUIRED - must be unique
-    tier: "free"  # REQUIRED
+    tier: "free"  # REQUIRED for new users, OPTIONAL for existing users
+    auth0_user_id: "google-oauth2|123..."  # OPTIONAL - for validation only
 ```
+
+**User Modes:**
+- `new` - Create a new fake user with fake Auth0 ID (default)
+  - **Frontend will NOT work** - cannot log in with fake Auth0 users
+  - Use for backend testing, API testing, SQL queries
+  - Script generates fake auth0_user_id automatically
+
+- `existing` - Use a real Auth0 user who has logged into staging
+  - **Frontend WILL work** - user can log in and see populated data!
+  - User must exist in database (must have logged into staging.boostedbudget.com first)
+  - Script preserves user account during cleanup (only deletes data)
+  - Optionally updates tier if specified
+  - Use `helpers/list-users.sh` to find existing users
 
 **Tiers:**
 - `free` - 3 accounts max, 1 rule, 30-day transaction history
@@ -73,6 +88,25 @@ setup:
 - Test data: `test-<scenario-name>@example.com`
 - Demo data: `demo-<tier>@example.com`
 - Edge cases: `test-edge-<case>@example.com`
+
+**Example - New User (Fake Data):**
+```yaml
+setup:
+  user:
+    mode: "new"  # or omit (defaults to "new")
+    email: "test-new-user@example.com"
+    tier: "free"
+```
+
+**Example - Existing User (Frontend Testing):**
+```yaml
+setup:
+  user:
+    mode: "existing"  # REQUIRED for real Auth0 users
+    email: "your-email@example.com"  # Must match Auth0 login
+    tier: "premium"  # Optional - upgrades user's tier
+    # auth0_user_id: "google-oauth2|123..."  # Optional validation
+```
 
 ### Linked Items
 
@@ -299,9 +333,14 @@ When generating scenarios:
 
 ## More Examples
 
-See the 5 example scenarios in this directory:
+See the example scenarios in this directory:
+
+**For Backend/API Testing (mode: new):**
 - `01-demo-data-free-user.yaml` - Basic free tier
 - `02-demo-data-premium-user.yaml` - Premium with multiple accounts
 - `03-ui-testing-multi-account.yaml` - Many accounts for pagination
 - `04-tier-limit-testing.yaml` - Free tier at maximum (3 accounts)
 - `05-edge-cases-pending-refunds.yaml` - Manual transactions, edge cases
+
+**For Frontend Testing (mode: existing):**
+- `99-existing-user-example.yaml` - Template for real Auth0 users (frontend testing)

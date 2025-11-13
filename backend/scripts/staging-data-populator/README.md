@@ -86,6 +86,79 @@ Test specific scenarios (pending transactions, refunds, user notes).
 ./populate.sh scenarios/05-edge-cases-pending-refunds.yaml
 ```
 
+### 5. **Frontend Testing with Real Users** ⭐
+
+**The scenarios above create FAKE Auth0 users that CANNOT be used in the frontend.**
+
+For frontend testing (viewing data in the UI), use `mode: existing` with a real Auth0 user:
+
+**Step 1: Log into staging to create your user**
+```bash
+# Visit staging and log in via Auth0
+open https://staging.boostedbudget.com
+# Use Google, Microsoft, or any auth provider
+```
+
+**Step 2: Find your email**
+```bash
+cd backend/scripts/staging-data-populator
+./helpers/list-users.sh
+```
+
+Output:
+```
+      email                  | subscription_tier | auth0_user_id           | accounts | transactions
+-----------------------------|-------------------|-------------------------|----------|-------------
+your-email@example.com       | free              | google-oauth2|12345... | 0        | 0
+```
+
+**Step 3: Create or modify a scenario**
+```yaml
+# Copy scenarios/99-existing-user-example.yaml
+# Change email to yours:
+setup:
+  user:
+    mode: "existing"  # REQUIRED for real users!
+    email: "your-email@example.com"  # Your Auth0 email
+    tier: "premium"  # Optional tier upgrade
+```
+
+**Step 4: Run the populator**
+```bash
+./populate.sh scenarios/99-existing-user-example.yaml
+```
+
+**Step 5: View in frontend**
+```bash
+# Refresh the frontend - you should see the data!
+open https://staging.boostedbudget.com
+```
+
+**Key Differences:**
+| Feature | `mode: new` (default) | `mode: existing` |
+|---------|----------------------|------------------|
+| **Frontend Access** | ❌ Cannot log in | ✅ Can log in and view data |
+| **User Creation** | Creates fake Auth0 user | Uses real Auth0 user |
+| **Cleanup Behavior** | Deletes user completely | Preserves user, deletes only data |
+| **Use Case** | Backend/API testing | Frontend/UI testing |
+
+**Troubleshooting:**
+- **"User not found"** → Log into staging.boostedbudget.com first
+- **Frontend shows no data** → Verify `mode: existing` in YAML
+- **Cannot log in** → Use the same Auth0 provider (Google/Microsoft/etc.)
+
+**Helper Scripts:**
+```bash
+# List all users in database
+./helpers/list-users.sh
+
+# Filter by email pattern
+./helpers/list-users.sh --email 'demo%'
+
+# Show all users
+./helpers/list-users.sh --all
+```
+
 ## Prerequisites
 
 ### Required Dependencies

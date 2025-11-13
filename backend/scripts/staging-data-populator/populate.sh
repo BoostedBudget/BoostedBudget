@@ -21,20 +21,28 @@ trap 'handle_error $? $LINENO $BASH_LINENO "$BASH_COMMAND"' ERR
 # Usage message
 usage() {
   cat << EOF
-Usage: $(basename "$0") <scenario.yaml>
+Usage: $(basename "$0") <scenario.yaml> [options]
 
 Populate staging database with fake test data from YAML scenario.
 
 Arguments:
-  scenario.yaml    Path to YAML scenario file
-
-Examples:
-  $(basename "$0") scenarios/01-demo-data-free-user.yaml
-  $(basename "$0") scenarios/02-demo-data-premium-user.yaml
+  scenario.yaml          Path to YAML scenario file
 
 Options:
-  --no-cleanup     Skip cleanup of existing data (for debugging)
-  --debug          Enable debug logging
+  --no-cleanup           Skip cleanup of existing data (for debugging)
+  --debug                Enable debug logging
+  --existing-user EMAIL  Override mode to 'existing' and use this email
+                         (Requires user to exist in database)
+
+Examples:
+  # Create fake user (mode: new)
+  $(basename "$0") scenarios/01-demo-data-free-user.yaml
+
+  # Use existing Auth0 user (mode: existing)
+  $(basename "$0") scenarios/01-demo-data-free-user.yaml --existing-user you@example.com
+
+  # Use scenario with mode: existing already set
+  $(basename "$0") scenarios/99-existing-user-example.yaml
 
 Environment:
   DATABASE_URL     Loaded from backend/.env
@@ -48,6 +56,7 @@ EOF
 # Parse arguments
 SCENARIO_FILE=""
 NO_CLEANUP=false
+EXISTING_USER_EMAIL=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -58,6 +67,10 @@ while [[ $# -gt 0 ]]; do
     --debug)
       export DEBUG=true
       shift
+      ;;
+    --existing-user)
+      EXISTING_USER_EMAIL="$2"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -122,10 +135,26 @@ if [ -n "$SCENARIO_TAGS" ] && [ "$SCENARIO_TAGS" != "null" ]; then
 fi
 echo ""
 
+# Apply command-line overrides
+if [ -n "$EXISTING_USER_EMAIL" ]; then
+  export OVERRIDE_USER_EMAIL="$EXISTING_USER_EMAIL"
+  export OVERRIDE_USER_MODE="existing"
+  log_info "Command-line override: --existing-user $EXISTING_USER_EMAIL (mode: existing)"
+  echo ""
+fi
+
 # Cleanup phase (optional)
 if [ "$NO_CLEANUP" = "false" ]; then
   USER_EMAIL=$(get_user_email)
-  if ! cleanup_by_email "$USER_EMAIL"; then
+  USER_MODE=$(get_user_mode)
+
+  # Preserve user for existing mode, delete all for new mode
+  PRESERVE_USER="false"
+  if [ "$USER_MODE" = "existing" ]; then
+    PRESERVE_USER="true"
+  fi
+
+  if ! cleanup_by_email "$USER_EMAIL" "$PRESERVE_USER"; then
     log_error "Cleanup failed"
     exit 1
   fi

@@ -74,6 +74,30 @@ get_user_id_by_email() {
   echo "$user_id"
 }
 
+# Get user ID by Auth0 user ID
+get_user_id_by_auth0_id() {
+  local auth0_user_id=$1
+
+  local user_id
+  user_id=$(query_db "SELECT user_id FROM user_identities WHERE auth0_user_id = '$auth0_user_id';")
+
+  if [ -z "$user_id" ]; then
+    return 1
+  fi
+
+  echo "$user_id"
+}
+
+# Update user's subscription tier
+update_user_tier() {
+  local user_id=$1
+  local tier=$2
+
+  execute_db "UPDATE users SET subscription_tier = '$tier', updated_at = NOW() WHERE id = '$user_id';" || return 1
+
+  return 0
+}
+
 # Delete user and all associated data (cascade)
 delete_user_by_email() {
   local email=$1
