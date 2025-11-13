@@ -3,9 +3,39 @@
 # cleanup.sh - Idempotent cleanup functions
 # Ensures scenarios can be run multiple times safely
 
+# Cleanup user's data (accounts, transactions) but preserve the user
+cleanup_user_data_only() {
+  local email=$1
+
+  if [ -z "$email" ]; then
+    log_error "cleanup_user_data_only: email is required"
+    return 1
+  fi
+
+  local user_id
+  user_id=$(get_user_id_by_email "$email")
+
+  if [ -z "$user_id" ]; then
+    log_debug "User not found: $email"
+    return 0
+  fi
+
+  log_debug "Cleaning up data for user: $user_id ($email)"
+
+  # Delete only the user's data, NOT the user or user_identities
+  execute_db "DELETE FROM transactions WHERE user_id = '$user_id';" || return 1
+  execute_db "DELETE FROM accounts WHERE user_id = '$user_id';" || return 1
+  execute_db "DELETE FROM linked_items WHERE user_id = '$user_id';" || return 1
+  execute_db "DELETE FROM subscription_overrides WHERE user_id = '$user_id';" || return 1
+
+  log_debug "Data cleanup complete (user preserved): $email"
+  return 0
+}
+
 # Cleanup all data for a user by email
 cleanup_by_email() {
   local email=$1
+  local preserve_user=${2:-false}
 
   if [ -z "$email" ]; then
     log_error "cleanup_by_email: email is required"
@@ -20,13 +50,25 @@ cleanup_by_email() {
     return 0
   fi
 
-  # Delete user and all associated data
-  if delete_user_by_email "$email"; then
-    log_success "Cleanup complete: $email"
-    return 0
+  if [ "$preserve_user" = "true" ]; then
+    # Preserve user (for existing mode) - only delete data
+    log_debug "Preserving user account, cleaning data only"
+    if cleanup_user_data_only "$email"; then
+      log_success "Cleanup complete (user preserved): $email"
+      return 0
+    else
+      log_error "Cleanup failed: $email"
+      return 1
+    fi
   else
-    log_error "Cleanup failed: $email"
-    return 1
+    # Delete user and all associated data
+    if delete_user_by_email "$email"; then
+      log_success "Cleanup complete: $email"
+      return 0
+    else
+      log_error "Cleanup failed: $email"
+      return 1
+    fi
   fi
 }
 

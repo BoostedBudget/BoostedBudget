@@ -43,11 +43,41 @@ parse_scenario() {
 
 # Get user configuration
 get_user_email() {
+  # Check for command-line override first
+  if [ -n "$OVERRIDE_USER_EMAIL" ]; then
+    echo "$OVERRIDE_USER_EMAIL"
+    return
+  fi
+
   yq e '.setup.user.email' "$SCENARIO_FILE"
 }
 
 get_user_tier() {
   yq e '.setup.user.tier' "$SCENARIO_FILE"
+}
+
+get_user_mode() {
+  # Check for command-line override first
+  if [ -n "$OVERRIDE_USER_MODE" ]; then
+    echo "$OVERRIDE_USER_MODE"
+    return
+  fi
+
+  local mode=$(yq e '.setup.user.mode' "$SCENARIO_FILE")
+  if [ "$mode" = "null" ] || [ -z "$mode" ]; then
+    echo "new"  # Default to "new" for backward compatibility
+  else
+    echo "$mode"
+  fi
+}
+
+get_user_auth0_id() {
+  local auth0_id=$(yq e '.setup.user.auth0_user_id' "$SCENARIO_FILE")
+  if [ "$auth0_id" = "null" ]; then
+    echo ""
+  else
+    echo "$auth0_id"
+  fi
 }
 
 # Get counts
