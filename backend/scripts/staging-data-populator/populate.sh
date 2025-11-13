@@ -14,6 +14,7 @@ START_TIME=$(date +%s)
 # Load dependencies
 source "$DIR/lib/logging.sh"
 source "$DIR/lib/config.sh"
+source "$DIR/lib/db-operations.sh"
 
 # Error trap
 trap 'handle_error $? $LINENO $BASH_LINENO "$BASH_COMMAND"' ERR
@@ -115,7 +116,6 @@ fi
 
 # Load remaining dependencies
 source "$DIR/lib/yaml-parser.sh"
-source "$DIR/lib/db-operations.sh"
 source "$DIR/lib/cleanup.sh"
 source "$DIR/lib/setup-user.sh"
 source "$DIR/lib/setup-items.sh"

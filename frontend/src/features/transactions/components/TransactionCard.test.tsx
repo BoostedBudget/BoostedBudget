@@ -261,6 +261,45 @@ describe('TransactionCard', () => {
       render(<TransactionCard transaction={yesterdayTransaction} />)
       expect(screen.getByText('Yesterday')).toBeInTheDocument()
     })
+
+    // TDD RED: These tests will fail until formatDate() is fixed
+    describe('Date Format Edge Cases', () => {
+      it('should handle RFC3339 date format from backend', () => {
+        // Backend returns dates as RFC3339: "2025-09-15T00:00:00Z"
+        const transactionWithRFC3339Date: Transaction = {
+          ...mockTransaction,
+          date: '2025-09-15T00:00:00Z',
+          authorized_date: null,
+        }
+
+        render(<TransactionCard transaction={transactionWithRFC3339Date} />)
+        expect(screen.getByText(/Sep.*15.*2025/i)).toBeInTheDocument()
+      })
+
+      it('should handle null/undefined date gracefully', () => {
+        // Edge case: both date fields are null (shouldn't happen but must not crash)
+        const transactionWithNullDate: Transaction = {
+          ...mockTransaction,
+          date: null as unknown as string, // Type assertion to test runtime behavior
+          authorized_date: null,
+        }
+
+        render(<TransactionCard transaction={transactionWithNullDate} />)
+        expect(screen.getByText('Invalid Date')).toBeInTheDocument()
+      })
+
+      it('should handle malformed date string gracefully', () => {
+        // Edge case: corrupted/invalid date string
+        const transactionWithBadDate: Transaction = {
+          ...mockTransaction,
+          date: 'not-a-valid-date',
+          authorized_date: null,
+        }
+
+        render(<TransactionCard transaction={transactionWithBadDate} />)
+        expect(screen.getByText('Invalid Date')).toBeInTheDocument()
+      })
+    })
   })
 
   describe('Accessibility', () => {

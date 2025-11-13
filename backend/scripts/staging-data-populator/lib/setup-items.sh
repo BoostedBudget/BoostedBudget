@@ -3,9 +3,9 @@
 # setup-items.sh - Linked items creation for fake data mode
 # Creates fake linked_items with fake Plaid access tokens
 
-# Global arrays set by setup_linked_items
-declare -ag LINKED_ITEM_IDS
-declare -ag LINKED_ITEM_PLAID_IDS
+# Global arrays set by setup_linked_items (bash 3.2+ compatible)
+LINKED_ITEM_IDS=()
+LINKED_ITEM_PLAID_IDS=()
 
 # Create linked items from scenario
 setup_linked_items() {
