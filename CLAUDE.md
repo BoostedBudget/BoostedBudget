@@ -201,6 +201,9 @@ BAD ✗
 6. Check subscription limits (free vs premium) → **Server Memory: Note tier-specific logic added**
 7. GDPR implications check → **Server Memory: Log GDPR considerations and compliance approach**
 8. Migrations for schema changes → **Server Memory: Document migration reasoning and rollback strategy**
+   - Write idempotent migrations (IF NOT EXISTS, DO $$ blocks)
+   - Run `./scripts/test-migrations.sh` BEFORE committing
+   - Verify all 4 test suites pass (idempotency, performance, data integrity, schema validation)
 9. Auth0 integration verification → **Server Memory: Note auth flow decisions**
 10. `*InRegion` abstractions, `primary_region`='us-east-1' → **Server Memory: Track region-related decisions**
 11. **RUN ALL TESTS** (MANDATORY before PR):
@@ -472,17 +475,23 @@ npm run test:api
 ```bash
 # Manual approach (create SQL files)
 cd backend/migrations
-touch 000006_<name>.up.sql 000006_<name>.down.sql
-# Write SQL, then:
+touch 000006_<name>.sql  # Note: Single .sql file (forward-only migrations)
+# Write SQL with idempotency guards, then:
 cd .. && atlas migrate hash
 
 # ALWAYS lint before committing:
 atlas migrate lint --dir file://migrations --dev-url "docker://postgres/15/test" --latest 1
 
-# Test locally:
-atlas migrate apply --dir file://migrations --url "$DATABASE_URL"
+# CRITICAL: Test migration comprehensively (Issue #326):
+./scripts/test-migrations.sh
+# This runs 4 test suites:
+#   1. Idempotency (migrations can run 2x safely)
+#   2. Performance (duration tracking)
+#   3. Data integrity (preserves existing data)
+#   4. Schema validation (tables/constraints/indexes)
 
-# See backend/docs/atlas-migration-guide.md for details
+# See backend/docs/migration-testing.md for details
+# See backend/docs/atlas-migration-guide.md for Atlas usage
 ```
 
 **Migration Execution (CRITICAL)**:
