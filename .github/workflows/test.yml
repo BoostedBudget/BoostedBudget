@@ -273,33 +273,60 @@ jobs:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
 
-      - name: Install PostgreSQL client tools
+      - name: Configure PostgreSQL client tools
         run: |
-          echo "::group::Installing PostgreSQL client"
+          echo "::group::Configuring PostgreSQL client"
 
-          # Check if already installed
-          if command -v psql &> /dev/null; then
-            echo "psql already installed: $(psql --version)"
+          # Check if psql already in PATH (avoid redundant setup)
+          if command -v psql &> /dev/null && command -v pg_dump &> /dev/null; then
+            echo "✅ PostgreSQL client tools already in PATH"
+            psql --version
+            pg_dump --version
             echo "::endgroup::"
             exit 0
           fi
 
-          echo "Installing PostgreSQL client via Homebrew..."
+          # Locate PostgreSQL@15 installation
+          # Try standard Homebrew paths (Apple Silicon first, then Intel)
+          POSTGRES_BIN=""
+          SEARCH_PATHS=(
+            "/opt/homebrew/opt/postgresql@15/bin"
+            "/usr/local/opt/postgresql@15/bin"
+          )
 
-          # Install postgresql@15 (matches container version)
-          brew install postgresql@15
+          for path in "${SEARCH_PATHS[@]}"; do
+            if [ -d "$path" ] && [ -f "$path/psql" ]; then
+              POSTGRES_BIN="$path"
+              echo "Found PostgreSQL@15 at: $path"
+              break
+            fi
+          done
 
-          # Add to PATH for current and future steps
-          echo "/opt/homebrew/opt/postgresql@15/bin" >> $GITHUB_PATH
-
-          # Verify installation
-          if /opt/homebrew/opt/postgresql@15/bin/psql --version; then
-            echo "::notice::✅ PostgreSQL client installed successfully"
-          else
-            echo "::error::Failed to install PostgreSQL client"
+          if [ -z "$POSTGRES_BIN" ]; then
+            echo "::error::PostgreSQL@15 not found in Homebrew locations"
+            echo "::error::Searched: ${SEARCH_PATHS[*]}"
+            echo "::error::Please ensure postgresql@15 is installed via Homebrew"
             exit 1
           fi
 
+          # Add to PATH for all subsequent steps in this job
+          echo "$POSTGRES_BIN" >> $GITHUB_PATH
+
+          # Verify binaries are executable
+          if ! "$POSTGRES_BIN/psql" --version; then
+            echo "::error::psql found but not executable"
+            exit 1
+          fi
+
+          if ! "$POSTGRES_BIN/pg_dump" --version; then
+            echo "::error::pg_dump found but not executable"
+            exit 1
+          fi
+
+          echo "::notice::✅ PostgreSQL client tools configured successfully"
+          echo "  Location: $POSTGRES_BIN"
+          echo "  psql version: $("$POSTGRES_BIN/psql" --version)"
+          echo "  pg_dump version: $("$POSTGRES_BIN/pg_dump" --version)"
           echo "::endgroup::"
 
       - name: Start PostgreSQL container
