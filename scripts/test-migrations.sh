@@ -80,10 +80,15 @@ run_psql() {
 # Uses --schema=public to dump only application tables, excluding:
 #   - Atlas tracking schemas (atlas_schema_revisions)
 #   - System schemas (pg_catalog, information_schema, etc.)
+# Also filters pg_dump 15.14+ security tokens (CVE-2025-8714):
+#   - \restrict and \unrestrict with random keys (change on each dump)
+#   - Filtering is safe and standard practice (Rails, GitLab, etc.)
 get_schema_hash() {
-    # Capture pg_dump output to variable
+    # Capture pg_dump output, filtering out security tokens
     local dump=$(pg_dump "$DATABASE_URL" --schema-only --no-owner --no-privileges \
-        --schema=public 2>/dev/null)
+        --schema=public 2>/dev/null \
+        | grep -v '^\\restrict ' \
+        | grep -v '^\\unrestrict ')
 
     # Save to timestamped file for debugging
     local timestamp=$(date +%s%N)
