@@ -273,6 +273,35 @@ jobs:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
 
+      - name: Install PostgreSQL client tools
+        run: |
+          echo "::group::Installing PostgreSQL client"
+
+          # Check if already installed
+          if command -v psql &> /dev/null; then
+            echo "psql already installed: $(psql --version)"
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          echo "Installing PostgreSQL client via Homebrew..."
+
+          # Install postgresql@15 (matches container version)
+          brew install postgresql@15
+
+          # Add to PATH for current and future steps
+          echo "/opt/homebrew/opt/postgresql@15/bin" >> $GITHUB_PATH
+
+          # Verify installation
+          if /opt/homebrew/opt/postgresql@15/bin/psql --version; then
+            echo "::notice::✅ PostgreSQL client installed successfully"
+          else
+            echo "::error::Failed to install PostgreSQL client"
+            exit 1
+          fi
+
+          echo "::endgroup::"
+
       - name: Start PostgreSQL container
         run: |
           docker stop test-postgres-${{ github.run_id }} 2>/dev/null || true
