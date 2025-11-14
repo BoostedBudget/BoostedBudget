@@ -81,8 +81,25 @@ run_psql() {
 #   - Atlas tracking schemas (atlas_schema_revisions)
 #   - System schemas (pg_catalog, information_schema, etc.)
 get_schema_hash() {
-    pg_dump "$DATABASE_URL" --schema-only --no-owner --no-privileges \
-        --schema=public 2>/dev/null | md5sum | cut -d' ' -f1
+    # Capture pg_dump output to variable
+    local dump=$(pg_dump "$DATABASE_URL" --schema-only --no-owner --no-privileges \
+        --schema=public 2>/dev/null)
+
+    # Save to timestamped file for debugging
+    local timestamp=$(date +%s%N)
+    local dump_file="/tmp/schema_dump_${timestamp}.sql"
+    echo "$dump" > "$dump_file"
+
+    # Log file location (visible in CI logs for debugging)
+    echo "📝 Schema dump saved: $dump_file" >&2
+
+    # Show first 50 lines for quick inspection
+    echo "=== Schema Dump Preview (first 50 lines) ===" >&2
+    echo "$dump" | head -50 >&2
+    echo "..." >&2
+
+    # Calculate and return hash
+    echo "$dump" | md5sum | cut -d' ' -f1
 }
 
 # Clean database (drop all tables and Atlas tracking)
@@ -180,6 +197,27 @@ test_idempotency() {
         log_error "  1st application: $hash1"
         log_error "  2nd application: $hash2"
         log_error ""
+
+        # Show diff between the two dumps for debugging
+        echo "🔍 Analyzing differences between schema dumps..." >&2
+        DUMP1=$(ls -t /tmp/schema_dump_*.sql 2>/dev/null | sed -n '2p')  # Second newest
+        DUMP2=$(ls -t /tmp/schema_dump_*.sql 2>/dev/null | sed -n '1p')  # Newest
+
+        if [ -f "$DUMP1" ] && [ -f "$DUMP2" ]; then
+            echo "Comparing:" >&2
+            echo "  First run:  $DUMP1" >&2
+            echo "  Second run: $DUMP2" >&2
+            echo "" >&2
+            echo "=== DIFF OUTPUT (first 100 lines) ===" >&2
+            diff -u "$DUMP1" "$DUMP2" | head -100 >&2 || true
+            echo "===" >&2
+        else
+            log_error "Could not find dump files for comparison"
+            log_error "  DUMP1: ${DUMP1:-not found}"
+            log_error "  DUMP2: ${DUMP2:-not found}"
+        fi
+        echo "" >&2
+
         log_error "This indicates migrations are NOT idempotent"
         log_error "Check for missing IF NOT EXISTS guards on:"
         log_error "  - CREATE TABLE"
