@@ -333,28 +333,35 @@ jobs:
           echo "::notice::✅ Migration lint passed"
           echo "::endgroup::"
 
-      - name: Run migrations up
+      - name: Run comprehensive migration tests
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
         run: |
-          echo "::group::Running migrations"
-          atlas migrate apply \
-            --dir file://${{ env.UNIQUE_WORKSPACE }}/backend/migrations \
-            --url "$DATABASE_URL"
+          echo "::group::Comprehensive Migration Testing"
+          cd ${{ env.UNIQUE_WORKSPACE }}
+
+          # Make script executable
+          chmod +x scripts/test-migrations.sh
+
+          # Run comprehensive tests (idempotency, performance, data integrity, schema validation)
+          ./scripts/test-migrations.sh
+
+          if [ $? -ne 0 ]; then
+            echo "::error::Migration tests failed - see output above for details"
+            exit 1
+          fi
+
+          echo "::notice::✅ All migration tests passed (idempotency, performance, data integrity, schema constraints)"
           echo "::endgroup::"
 
-      - name: Validate schema
-        env:
-          DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: |
-          echo "::group::Validating database schema"
-
-          echo "Checking tables..."
-          docker exec test-postgres-${{ github.run_id }} psql -U test -d test -c "\dt" | grep users || { echo "::error::users table missing"; exit 1; }
-          docker exec test-postgres-${{ github.run_id }} psql -U test -d test -c "\dt" | grep privacy_settings || { echo "::error::privacy_settings table missing"; exit 1; }
-
-          echo "::notice::✅ Schema validation passed"
-          echo "::endgroup::"
+      - name: Upload performance benchmarks
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-performance-${{ github.run_id }}
+          path: ${{ env.UNIQUE_WORKSPACE }}/migration-performance.json
+          retention-days: 30
+          if-no-files-found: warn
 
       - name: Cleanup PostgreSQL container
         if: always()
