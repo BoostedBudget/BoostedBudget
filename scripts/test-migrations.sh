@@ -77,11 +77,12 @@ run_psql() {
 }
 
 # Get schema hash for idempotency comparison
+# Uses --schema=public to dump only application tables, excluding:
+#   - Atlas tracking schemas (atlas_schema_revisions)
+#   - System schemas (pg_catalog, information_schema, etc.)
 get_schema_hash() {
-    # Use pg_dump to get schema-only SQL, then hash it
-    # Exclude atlas_schema_revisions table as it changes with each apply
     pg_dump "$DATABASE_URL" --schema-only --no-owner --no-privileges \
-        --exclude-table=atlas_schema_revisions 2>/dev/null | md5sum | cut -d' ' -f1
+        --schema=public 2>/dev/null | md5sum | cut -d' ' -f1
 }
 
 # Clean database (drop all tables and Atlas tracking)
