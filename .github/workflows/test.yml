@@ -383,8 +383,8 @@ jobs:
           echo "::group::Linting migrations"
           cd ${{ env.UNIQUE_WORKSPACE }}/backend
           atlas migrate lint \
-            --dir file://migrations \
-            --dev-url "docker://postgres/15/test" \
+            --config file://atlas.hcl \
+            --env local \
             --latest 1
           echo "::notice::✅ Migration lint passed"
           echo "::endgroup::"
