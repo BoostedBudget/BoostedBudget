@@ -1,12 +1,14 @@
 #!/bin/bash
 # Migration Testing Framework for BoostedBudget
 # Issue #326: Comprehensive Atlas migration testing
+# Issue #348: Rollback capability testing (.up/.down migrations)
 #
 # Tests:
 #   1. Idempotency (migrations can be run multiple times safely)
 #   2. Performance (migrations complete within acceptable timeframes)
 #   3. Data Integrity (migrations preserve existing data)
 #   4. Schema Constraints (foreign keys, indexes, constraints exist)
+#   5. Rollback Testing (up→down→up cycle produces identical schema)
 
 set -euo pipefail
 
@@ -111,27 +113,59 @@ get_schema_hash() {
 clean_database() {
     log_info "Cleaning database..."
     # Drop public schema (all tables)
-    psql "$DATABASE_URL" -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" > /dev/null 2>&1
+    # NOTE: Errors visible for debugging - previously silenced with > /dev/null 2>&1
+    psql "$DATABASE_URL" -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
     # Drop Atlas tracking schema (so Atlas doesn't think migrations are already applied)
-    psql "$DATABASE_URL" -c "DROP SCHEMA IF EXISTS atlas_schema_revisions CASCADE;" > /dev/null 2>&1
+    psql "$DATABASE_URL" -c "DROP SCHEMA IF EXISTS atlas_schema_revisions CASCADE;"
 }
 
 # Apply migrations using Atlas
 apply_migrations() {
     local start_time=$(date +%s)
 
-    # Get absolute path to migrations directory
+    # Get absolute paths to atlas.hcl config file and migrations directory
+    local abs_config_path
     local abs_migrations_dir
-    if [[ "$MIGRATIONS_DIR" = /* ]]; then
-        abs_migrations_dir="$MIGRATIONS_DIR"
-    else
-        abs_migrations_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/$MIGRATIONS_DIR"
-    fi
+    local project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    abs_config_path="$project_root/backend/atlas.hcl"
+    abs_migrations_dir="$project_root/backend/migrations"
 
+    # NOTE: Errors visible for debugging - previously silenced with > /dev/null 2>&1
+    # NOTE: Using --dir flag to provide absolute path with golang-migrate format
+    # The format parameter is CRITICAL - without it, Atlas runs both .up and .down files
     atlas migrate apply \
-        --dir "file://$abs_migrations_dir" \
+        --config "file://$abs_config_path" \
+        --env local \
         --url "$DATABASE_URL" \
-        > /dev/null 2>&1
+        --dir "file://$abs_migrations_dir?format=golang-migrate"
+
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    echo "$duration"
+}
+
+# Rollback all migrations using Atlas
+rollback_migrations() {
+    local start_time=$(date +%s)
+
+    # Get absolute paths to atlas.hcl config file and migrations directory
+    local abs_config_path
+    local abs_migrations_dir
+    local project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    abs_config_path="$project_root/backend/atlas.hcl"
+    abs_migrations_dir="$project_root/backend/migrations"
+
+    # Rollback all migrations using amount positional argument
+    # NOTE: Using --dir flag to provide absolute path with golang-migrate format
+    # The format parameter is CRITICAL - without it, Atlas runs both .up and .down files
+    # NOTE: Amount 100 (positional arg) ensures ALL migrations are rolled back (current count: 15)
+    #       --to-version 0 does NOT work (keeps migrations UP TO version 0, not before it)
+    atlas migrate down \
+        --config "file://$abs_config_path" \
+        --env local \
+        --url "$DATABASE_URL" \
+        --dir "file://$abs_migrations_dir?format=golang-migrate" \
+        100
 
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
@@ -248,9 +282,19 @@ test_performance() {
 
     # Time the migration application
     local start_time=$(date +%s)
-    apply_migrations > /dev/null 2>&1
+    local duration_output
+    duration_output=$(apply_migrations 2>&1)
+    local apply_exit_code=$?
     local end_time=$(date +%s)
     local total_duration=$((end_time - start_time))
+
+    # Check if migration application failed
+    if [ $apply_exit_code -ne 0 ]; then
+        fail_test "MIGRATION APPLICATION FAILED during performance test"
+        log_error "Atlas migrate apply returned exit code: $apply_exit_code"
+        log_error "Output: $duration_output"
+        return 1
+    fi
 
     log_info "Total migration time: ${total_duration}s"
 
@@ -271,6 +315,7 @@ test_performance() {
     fi
 
     # Generate JSON performance report
+    # NOTE: Count only .up.sql files (forward migrations), not .down.sql
     cat > "$PERF_REPORT_FILE" <<EOF
 {
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -278,7 +323,7 @@ test_performance() {
   "threshold_warn_seconds": $PERF_WARN_THRESHOLD,
   "threshold_fail_seconds": $PERF_FAIL_THRESHOLD,
   "status": "$perf_status",
-  "migrations_count": $(ls -1 "$MIGRATIONS_DIR"/*.sql 2>/dev/null | wc -l | tr -d ' ')
+  "migrations_count": $(ls -1 "$MIGRATIONS_DIR"/*.up.sql 2>/dev/null | wc -l | tr -d ' ')
 }
 EOF
 
@@ -561,6 +606,81 @@ test_schema_constraints() {
 }
 
 # =============================================================================
+# Test 5: Rollback Testing
+# =============================================================================
+# Purpose: Verify that rollback migrations (.down.sql) correctly reverse
+#          the forward migrations (.up.sql), enabling safe rollbacks in production
+
+test_rollback() {
+    log_section "TEST 5: ROLLBACK TESTING"
+
+    log_info "Testing migration rollback capability (up → down → up cycle)..."
+    log_info "This validates Issue #348: Add .up/.down Migration Support"
+    echo ""
+
+    # Clean start
+    clean_database
+
+    # Step 1: Apply all migrations (forward)
+    log_info "Step 1: Applying all migrations (forward)..."
+    local apply_duration=$(apply_migrations)
+    log_success "Migrations applied in ${apply_duration}s"
+
+    # Capture baseline schema hash
+    log_info "Capturing baseline schema hash..."
+    local hash_baseline=$(get_schema_hash)
+    log_info "Baseline schema hash: $hash_baseline"
+    echo ""
+
+    # Step 2: Rollback all migrations (reverse)
+    log_info "Step 2: Rolling back all migrations (reverse)..."
+    local rollback_duration=$(rollback_migrations)
+    log_success "Migrations rolled back in ${rollback_duration}s"
+
+    # Verify clean state (only Atlas tracking should remain)
+    log_info "Verifying clean state after rollback..."
+    local tables_after_rollback=$(run_psql "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name NOT LIKE 'atlas_%'")
+
+    if [ "$tables_after_rollback" != "0" ]; then
+        fail_test "Rollback incomplete - $tables_after_rollback application tables still exist"
+        log_error "Expected: 0 tables, Found: $tables_after_rollback tables"
+        return 1
+    fi
+
+    log_success "Clean state verified (0 application tables)"
+    echo ""
+
+    # Step 3: Re-apply all migrations (forward again)
+    log_info "Step 3: Re-applying all migrations (forward)..."
+    local reapply_duration=$(apply_migrations)
+    log_success "Migrations re-applied in ${reapply_duration}s"
+
+    # Capture final schema hash
+    log_info "Capturing final schema hash..."
+    local hash_reapplied=$(get_schema_hash)
+    log_info "Final schema hash: $hash_reapplied"
+    echo ""
+
+    # Step 4: Compare schemas
+    log_info "Step 4: Comparing baseline vs final schema..."
+
+    if [ "$hash_baseline" = "$hash_reapplied" ]; then
+        echo ""
+        pass_test "ROLLBACK TEST PASSED - Schema identical after up→down→up cycle"
+        log_success "✓ All .down.sql migrations correctly reverse their .up.sql counterparts"
+        log_success "✓ Rollback capability verified for production use"
+        return 0
+    else
+        echo ""
+        fail_test "ROLLBACK TEST FAILED - Schema mismatch after up→down→up cycle"
+        log_error "Baseline hash: $hash_baseline"
+        log_error "Final hash:    $hash_reapplied"
+        log_error "This indicates incomplete or incorrect rollback logic in .down.sql files"
+        return 1
+    fi
+}
+
+# =============================================================================
 # Main Execution
 # =============================================================================
 
@@ -600,6 +720,7 @@ main() {
     test_performance
     test_data_integrity
     test_schema_constraints
+    test_rollback
 
     # Summary
     log_section "TEST SUMMARY"

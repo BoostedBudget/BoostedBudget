@@ -47,8 +47,10 @@ for i in $(seq 1 $MAX_ATTEMPTS); do
   echo "Migration attempt $i/$MAX_ATTEMPTS..."
 
   # Apply all pending migrations (Atlas handles fresh databases automatically)
+  # Use atlas.hcl config for golang-migrate format support (.up.sql/.down.sql)
   atlas migrate apply \
-    --dir file:///app/migrations \
+    --config file:///app/atlas.hcl \
+    --env production \
     --url "$MIGRATION_URL" \
     --revisions-schema public && {
     echo "✓ Migrations completed successfully"
