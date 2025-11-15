@@ -29,7 +29,7 @@ const formatCurrency = (value: number) => {
 
 // Custom tooltip component (outside of render to avoid recreation)
 function CustomTooltip({ active, payload }: TooltipProps<number, string>) {
-  if (active && payload && payload.length) {
+  if (active && payload && payload.length > 0) {
     const data = payload[0].payload as { fullDate: string }
 
     return (
@@ -37,7 +37,7 @@ function CustomTooltip({ active, payload }: TooltipProps<number, string>) {
         <p className="text-sm font-semibold text-gray-900 mb-2">
           {format(parseISO(data.fullDate), 'MMMM d, yyyy')}
         </p>
-        {payload.map((entry, index: number) => (
+        {payload.map((entry: any, index: number) => (
           <div key={index} className="flex items-center justify-between space-x-4">
             <span
               className="text-sm"
