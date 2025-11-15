@@ -80,7 +80,41 @@
 - ✅ Repository with comprehensive test coverage
 - ✅ All tests passing
 
-**Next:** Phase 2 - Webhook Integration
+### PHASE 2: Webhook Integration
+
+#### Implementation: Balance Snapshot Creation
+- **Status:** ✅ Complete
+- Modified `TransactionSyncService` to capture balance snapshots
+- **Integration Point:** After transaction processing completes (line 303)
+- **Method Added:** `createBalanceSnapshots(ctx, linkedItem, accessToken)`
+- **Features:**
+  - Calls Plaid `/accounts/get` to fetch current balances
+  - Maps Plaid accounts to internal UUIDs
+  - Creates snapshots with daily deduplication (UPSERT)
+  - Graceful error handling (logs warnings, doesn't fail sync)
+  - Skips accounts without balance data
+  - Supports multiple currencies via ISO currency code
+- **Dependencies Updated:**
+  - Added `balanceSnapshotRepo` to service struct
+  - Updated constructor signature
+  - Updated `main.go` to inject repository
+  - Code compiles successfully ✅
+
+**Decision Log:**
+- Non-blocking implementation: Balance snapshot failures don't fail transaction sync
+- Will retry on next webhook (daily deduplication ensures correctness)
+- Used GetClient() pattern to call Plaid API (follows existing codebase patterns)
+
+### PHASE 2 COMPLETE ✅
+
+**Summary:**
+- ✅ Balance snapshots captured on every Plaid webhook
+- ✅ Integrated into TransactionSyncService
+- ✅ Daily deduplication with UPSERT
+- ✅ Non-critical error handling
+- ✅ Code compiles and ready for testing
+
+**Next:** Phase 3 - Dashboard API (Service + Handler + Routes)
 
 #### Planning Phase
 - **Completed:** Comprehensive codebase exploration using Plan subagent

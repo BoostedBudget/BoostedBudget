@@ -105,6 +105,7 @@ func main() {
 		identityRepo := repository.NewUserIdentityRepository(db) // Maps Auth0 IDs to user UUIDs
 		notificationRepo := repository.NewNotificationRepository(db) // Issue #257: Notification storage
 		syncAuditRepo := repository.NewSyncAuditRepository(db) // Issue #242: Monthly sync limits
+		balanceSnapshotRepo := repository.NewBalanceSnapshotRepository(db) // Issue #353: Balance tracking
 
 		// Create mock audit logger (will be replaced with real implementation later)
 		auditLogger := &mockAuditLogger{}
@@ -211,6 +212,7 @@ func main() {
 					transactionRepo,
 					accountRepo,
 					profileRepo,
+					balanceSnapshotRepo,
 					plaidService,
 					encryptionService,
 					syncLimitService,
