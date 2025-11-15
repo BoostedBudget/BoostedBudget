@@ -4,6 +4,7 @@ YAML-based script suite for populating staging environment with fake test data. 
 
 ## Quick Start
 
+### Basic Usage (No Webhooks)
 ```bash
 cd backend/scripts/staging-data-populator
 
@@ -11,7 +12,18 @@ cd backend/scripts/staging-data-populator
 ./populate.sh scenarios/01-demo-data-free-user.yaml
 ```
 
-**Output:**
+### With Webhook Integration (Balance Snapshots)
+```bash
+cd backend/scripts/staging-data-populator
+
+# Export Auth0 token
+export AUTH_TOKEN="your-jwt-token"
+
+# Run scenario with webhook firing
+./populate.sh scenarios/06-balance-snapshot-creation.yaml
+```
+
+**Output (Basic Scenario):**
 ```
 🚀 Staging Data Populator
 
@@ -58,6 +70,7 @@ Results:
 ✅ **Idempotent** - Safe to run multiple times (auto-cleanup)
 ✅ **Extensible** - YAML-based, easy to add new scenarios
 ✅ **AI-Friendly** - Optimized for Claude Code to generate YAMLs
+✅ **Webhook Integration** - NEW: Fire Plaid webhooks to create balance snapshots (Issue #353)
 
 ## Use Cases
 
@@ -192,6 +205,17 @@ ls ../../.env
 DATABASE_URL=postgresql://user:pass@localhost:5432/boostedbudget
 ```
 
+### Environment Variables
+
+**Required:**
+- `DATABASE_URL` - PostgreSQL connection string (read from backend/.env)
+
+**Optional (for webhook firing):**
+- `AUTH_TOKEN` - Auth0 JWT token for admin webhook endpoint
+  - Required only when using `webhooks.fire_after_setup: true` in scenarios
+  - Enables balance snapshot creation via webhook processing
+  - Obtain from staging Auth0 login (see "Webhook Integration" below)
+
 ## Available Scenarios
 
 ### 1. Demo Data - Free Tier User
@@ -223,6 +247,75 @@ DATABASE_URL=postgresql://user:pass@localhost:5432/boostedbudget
 **User:** `test-edge-cases@example.com`
 **Tier:** Premium Lite (manual transactions with pending, refunds, notes)
 **Use:** Edge case testing
+
+### 6. Balance Snapshot Creation Test ⭐ NEW
+**File:** `scenarios/06-balance-snapshot-creation.yaml`
+**User:** `test-balance-snapshots@example.com`
+**Tier:** Premium (3 accounts, 30 transactions, webhook-driven)
+**Use:** Balance snapshot testing, webhook integration validation
+**Requires:** AUTH_TOKEN environment variable
+
+### 7. Dashboard Balance History Test ⭐ NEW
+**File:** `scenarios/07-balance-history-dashboard-test.yaml`
+**User:** `test-dashboard-ui@example.com`
+**Tier:** Premium (4 accounts, 100 transactions, balance snapshots)
+**Use:** Dashboard UI testing, balance history chart validation
+**Requires:** AUTH_TOKEN environment variable
+
+## Webhook Integration (Issue #353)
+
+**NEW:** Fire Plaid webhooks after data insertion to create balance snapshots for dashboard testing.
+
+### Setup
+```bash
+# Export your Auth0 JWT token (required for admin webhook endpoint)
+export AUTH_TOKEN="your-auth0-jwt-token"
+
+# Run a scenario with webhook firing enabled
+./populate.sh scenarios/06-balance-snapshot-creation.yaml
+```
+
+### How It Works
+1. Scenario inserts user, accounts, and transactions into PostgreSQL
+2. Script fires admin webhook via `POST /api/v1/admin/plaid/fire-webhook`
+3. Webhook processing creates balance snapshots in `balance_snapshots` table
+4. Assertions validate snapshots were created correctly
+
+### Webhook-Enabled Scenarios
+```bash
+# Balance snapshot creation test
+export AUTH_TOKEN="..." && ./populate.sh scenarios/06-balance-snapshot-creation.yaml
+
+# Dashboard balance history test (4 accounts)
+export AUTH_TOKEN="..." && ./populate.sh scenarios/07-balance-history-dashboard-test.yaml
+```
+
+### Example Webhook Configuration in YAML
+```yaml
+webhooks:
+  fire_after_setup: true        # Fire webhook after data insertion
+  webhook_code: "DEFAULT_UPDATE" # Webhook type (DEFAULT_UPDATE, INITIAL_UPDATE, etc.)
+  wait_for_processing: true     # Wait for async processing to complete
+  timeout_seconds: 30           # Maximum wait time
+
+assertions:
+  - type: "balance_snapshot_count"
+    operator: "="
+    value: 3  # One snapshot per account for today
+```
+
+### Obtaining AUTH_TOKEN
+```bash
+# Option 1: Log into staging and extract token from browser DevTools
+# 1. Open https://staging.boostedbudget.com
+# 2. Open DevTools → Application → Local Storage
+# 3. Copy the auth token value
+
+# Option 2: Use Auth0 CLI (if configured)
+auth0 test login
+```
+
+**Security Note:** Webhook endpoint is staging-only and requires valid Auth0 JWT authentication.
 
 ## Creating New Scenarios
 
@@ -390,6 +483,52 @@ assertions:
     value: 50  # If you have count_per_account: 10 across 3 accounts, this expects 50 but you'll only get 30
 ```
 
+### Webhook Issues
+
+**"AUTH_TOKEN not set. Skipping webhook firing."**
+```bash
+# Export your Auth0 JWT token before running
+export AUTH_TOKEN="eyJhbGc..."
+./populate.sh scenarios/06-balance-snapshot-creation.yaml
+```
+
+**"Webhook firing failed (401 Unauthorized)"**
+- Token expired: Auth0 JWT tokens expire after 24 hours
+- Invalid token: Ensure token is from staging Auth0 tenant
+- Solution: Get a fresh token from staging.boostedbudget.com
+
+**"Webhook firing failed (500 Internal Server Error)"**
+- Check backend logs: `fly logs -a boostedbudget-backend-staging`
+- Verify admin webhook endpoint is deployed to staging
+- Check if item_id exists in database
+
+**"Timeout waiting for webhook processing"**
+```yaml
+webhooks:
+  timeout_seconds: 60  # Increase timeout for many accounts
+```
+- Default timeout is 30 seconds
+- Increase for scenarios with >5 accounts
+- Check backend logs for processing errors
+
+**"Balance snapshots not created"**
+- Verify webhook was fired successfully (check logs)
+- Check webhook.processed = true in database:
+  ```sql
+  SELECT * FROM webhooks WHERE item_id = 'your-item-id' ORDER BY created_at DESC LIMIT 1;
+  ```
+- Verify balance_snapshots table exists:
+  ```sql
+  SELECT COUNT(*) FROM balance_snapshots WHERE user_id = 'your-user-id';
+  ```
+
+**"balance_snapshot_count assertion failed"**
+- Snapshots may already exist from previous run
+- Solution: Cleanup runs automatically, but check manually:
+  ```sql
+  DELETE FROM balance_snapshots WHERE user_id = (SELECT id FROM users WHERE email = 'test-email@example.com');
+  ```
+
 ## Architecture
 
 ### File Structure
@@ -400,20 +539,23 @@ staging-data-populator/
 │   ├── config.sh            # Load backend/.env
 │   ├── yaml-parser.sh       # Parse YAML scenarios
 │   ├── logging.sh           # Structured logging
-│   ├── db-operations.sh     # PostgreSQL helpers
-│   ├── cleanup.sh           # Idempotent cleanup
+│   ├── db-operations.sh     # PostgreSQL helpers (includes balance snapshot operations)
+│   ├── cleanup.sh           # Idempotent cleanup (includes balance snapshot cleanup)
 │   ├── setup-user.sh        # User creation
 │   ├── setup-items.sh       # Linked items creation
 │   ├── setup-accounts.sh    # Accounts creation
 │   ├── fake-data-generator.sh  # Transaction generation
-│   └── assertions.sh        # Validation framework
+│   ├── admin-webhook.sh     # Admin webhook firing (NEW - Issue #353)
+│   └── assertions.sh        # Validation framework (includes balance_snapshot_count)
 ├── scenarios/
 │   ├── README.md            # Schema documentation
 │   ├── 01-demo-data-free-user.yaml
 │   ├── 02-demo-data-premium-user.yaml
 │   ├── 03-ui-testing-multi-account.yaml
 │   ├── 04-tier-limit-testing.yaml
-│   └── 05-edge-cases-pending-refunds.yaml
+│   ├── 05-edge-cases-pending-refunds.yaml
+│   ├── 06-balance-snapshot-creation.yaml      # NEW - Balance snapshot testing
+│   └── 07-balance-history-dashboard-test.yaml # NEW - Dashboard UI testing
 └── templates/               # (Future) Reusable YAML templates
 ```
 
@@ -421,13 +563,14 @@ staging-data-populator/
 1. Parse YAML scenario
 2. Validate dependencies (yq, psql, jq)
 3. Load DATABASE_URL from backend/.env
-4. Cleanup existing data by email (idempotent)
+4. Cleanup existing data by email (idempotent, including balance snapshots)
 5. Create user with specified tier
 6. Create linked items (fake Plaid items)
 7. Create accounts (fake Plaid account IDs)
 8. Generate transactions (auto or manual)
-9. Run assertions (validate results)
-10. Display summary
+9. **Fire webhooks (optional)** - NEW: Creates balance snapshots via admin endpoint
+10. Run assertions (validate results, including balance_snapshot_count)
+11. Display summary (includes balance snapshot count)
 
 ## Integration with Claude Code
 
@@ -476,10 +619,13 @@ assertions:
 
 ## Limitations
 
-- **Fake Data Only** - Does not integrate with real Plaid API (no actual webhook testing)
+- **Fake Data Only** - Does not integrate with real Plaid API for data fetching
+  - ✅ **NEW:** Admin webhook integration now available (Issue #353) for balance snapshot testing
+  - Fires real webhooks to create balance snapshots via production code path
 - **PostgreSQL Only** - Requires PostgreSQL database
 - **macOS/Linux** - Shell scripts designed for Unix-like systems
 - **Single Region** - Populates current environment only (no multi-region support)
+- **Auth0 Token Required** - Webhook firing requires valid Auth0 JWT token
 
 ## Comparison to Deleted Framework
 

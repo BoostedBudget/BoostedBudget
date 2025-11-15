@@ -227,3 +227,40 @@ get_assertion_expected() {
   local index=$1
   yq e ".assertions[$index].expected" "$SCENARIO_FILE"
 }
+
+# Get webhook configuration
+get_webhooks_fire_after_setup() {
+  local fire=$(yq e '.webhooks.fire_after_setup' "$SCENARIO_FILE")
+  if [ "$fire" = "null" ] || [ "$fire" = "false" ]; then
+    echo "false"
+  else
+    echo "true"
+  fi
+}
+
+get_webhooks_code() {
+  local code=$(yq e '.webhooks.webhook_code' "$SCENARIO_FILE")
+  if [ "$code" = "null" ] || [ -z "$code" ]; then
+    echo "DEFAULT_UPDATE"  # Default webhook code
+  else
+    echo "$code"
+  fi
+}
+
+get_webhooks_wait_for_processing() {
+  local wait=$(yq e '.webhooks.wait_for_processing' "$SCENARIO_FILE")
+  if [ "$wait" = "null" ] || [ "$wait" = "false" ]; then
+    echo "false"
+  else
+    echo "true"
+  fi
+}
+
+get_webhooks_timeout() {
+  local timeout=$(yq e '.webhooks.timeout_seconds' "$SCENARIO_FILE")
+  if [ "$timeout" = "null" ] || [ -z "$timeout" ]; then
+    echo "30"  # Default timeout
+  else
+    echo "$timeout"
+  fi
+}

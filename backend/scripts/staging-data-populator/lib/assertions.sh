@@ -53,6 +53,13 @@ run_assertions() {
           ((failed++))
         fi
         ;;
+      "balance_snapshot_count")
+        if assert_balance_snapshot_count "$i"; then
+          ((passed++))
+        else
+          ((failed++))
+        fi
+        ;;
       *)
         log_error "Unknown assertion type: $type"
         ((failed++))
@@ -237,6 +244,49 @@ assert_balance_sum() {
     return 0
   else
     log_error "Balance sum: $actual NOT $operator $expected"
+    return 1
+  fi
+}
+
+# Assert balance snapshot count
+assert_balance_snapshot_count() {
+  local index=$1
+  local operator
+  operator=$(get_assertion_operator "$index")
+  local expected
+  expected=$(get_assertion_value "$index")
+
+  local actual
+  actual=$(count_balance_snapshots_by_user_id "$USER_ID")
+
+  local result
+  case "$operator" in
+    ">=")
+      [[ $actual -ge $expected ]] && result=0 || result=1
+      ;;
+    "=")
+      [[ $actual -eq $expected ]] && result=0 || result=1
+      ;;
+    "<=")
+      [[ $actual -le $expected ]] && result=0 || result=1
+      ;;
+    ">")
+      [[ $actual -gt $expected ]] && result=0 || result=1
+      ;;
+    "<")
+      [[ $actual -lt $expected ]] && result=0 || result=1
+      ;;
+    *)
+      log_error "Unknown operator: $operator"
+      return 1
+      ;;
+  esac
+
+  if [ $result -eq 0 ]; then
+    log_success "Balance snapshot count: $actual $operator $expected"
+    return 0
+  else
+    log_error "Balance snapshot count: $actual NOT $operator $expected"
     return 1
   fi
 }
