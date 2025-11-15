@@ -399,7 +399,7 @@ jobs:
           # Make script executable
           chmod +x scripts/test-migrations.sh
 
-          # Run comprehensive tests (idempotency, performance, data integrity, schema validation)
+          # Run comprehensive tests (idempotency, performance, data integrity, schema validation, rollback testing)
           ./scripts/test-migrations.sh
 
           if [ $? -ne 0 ]; then
@@ -407,7 +407,7 @@ jobs:
             exit 1
           fi
 
-          echo "::notice::✅ All migration tests passed (idempotency, performance, data integrity, schema constraints)"
+          echo "::notice::✅ All migration tests passed (idempotency, performance, data integrity, schema constraints, rollback testing)"
           echo "::endgroup::"
 
       - name: Upload performance benchmarks
