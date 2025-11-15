@@ -8,6 +8,7 @@ env "local" {
 
   migration {
     dir = "file://migrations"
+    format = golang-migrate
   }
 
   format {
@@ -23,6 +24,7 @@ env "production" {
 
   migration {
     dir = "file://migrations"
+    format = golang-migrate
   }
 }
 
