@@ -1,12 +1,14 @@
 #!/bin/bash
 # Migration Testing Framework for BoostedBudget
 # Issue #326: Comprehensive Atlas migration testing
+# Issue #348: Rollback capability testing (.up/.down migrations)
 #
 # Tests:
 #   1. Idempotency (migrations can be run multiple times safely)
 #   2. Performance (migrations complete within acceptable timeframes)
 #   3. Data Integrity (migrations preserve existing data)
 #   4. Schema Constraints (foreign keys, indexes, constraints exist)
+#   5. Rollback Testing (up→down→up cycle produces identical schema)
 
 set -euo pipefail
 
@@ -129,6 +131,28 @@ apply_migrations() {
         --config "file://$abs_config_path" \
         --env local \
         --url "$DATABASE_URL" \
+        > /dev/null 2>&1
+
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    echo "$duration"
+}
+
+# Rollback all migrations using Atlas
+rollback_migrations() {
+    local start_time=$(date +%s)
+
+    # Get absolute path to atlas.hcl config file
+    local abs_config_path
+    local project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    abs_config_path="$project_root/backend/atlas.hcl"
+
+    # Rollback all migrations (to version 0 = no migrations applied)
+    atlas migrate down \
+        --config "file://$abs_config_path" \
+        --env local \
+        --url "$DATABASE_URL" \
+        --to-version 0 \
         > /dev/null 2>&1
 
     local end_time=$(date +%s)
@@ -559,6 +583,81 @@ test_schema_constraints() {
 }
 
 # =============================================================================
+# Test 5: Rollback Testing
+# =============================================================================
+# Purpose: Verify that rollback migrations (.down.sql) correctly reverse
+#          the forward migrations (.up.sql), enabling safe rollbacks in production
+
+test_rollback() {
+    log_section "TEST 5: ROLLBACK TESTING"
+
+    log_info "Testing migration rollback capability (up → down → up cycle)..."
+    log_info "This validates Issue #348: Add .up/.down Migration Support"
+    echo ""
+
+    # Clean start
+    clean_database
+
+    # Step 1: Apply all migrations (forward)
+    log_info "Step 1: Applying all migrations (forward)..."
+    local apply_duration=$(apply_migrations)
+    log_success "Migrations applied in ${apply_duration}s"
+
+    # Capture baseline schema hash
+    log_info "Capturing baseline schema hash..."
+    local hash_baseline=$(get_schema_hash)
+    log_info "Baseline schema hash: $hash_baseline"
+    echo ""
+
+    # Step 2: Rollback all migrations (reverse)
+    log_info "Step 2: Rolling back all migrations (reverse)..."
+    local rollback_duration=$(rollback_migrations)
+    log_success "Migrations rolled back in ${rollback_duration}s"
+
+    # Verify clean state (only Atlas tracking should remain)
+    log_info "Verifying clean state after rollback..."
+    local tables_after_rollback=$(run_psql "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name NOT LIKE 'atlas_%'")
+
+    if [ "$tables_after_rollback" != "0" ]; then
+        fail_test "Rollback incomplete - $tables_after_rollback application tables still exist"
+        log_error "Expected: 0 tables, Found: $tables_after_rollback tables"
+        return 1
+    fi
+
+    log_success "Clean state verified (0 application tables)"
+    echo ""
+
+    # Step 3: Re-apply all migrations (forward again)
+    log_info "Step 3: Re-applying all migrations (forward)..."
+    local reapply_duration=$(apply_migrations)
+    log_success "Migrations re-applied in ${reapply_duration}s"
+
+    # Capture final schema hash
+    log_info "Capturing final schema hash..."
+    local hash_reapplied=$(get_schema_hash)
+    log_info "Final schema hash: $hash_reapplied"
+    echo ""
+
+    # Step 4: Compare schemas
+    log_info "Step 4: Comparing baseline vs final schema..."
+
+    if [ "$hash_baseline" = "$hash_reapplied" ]; then
+        echo ""
+        pass_test "ROLLBACK TEST PASSED - Schema identical after up→down→up cycle"
+        log_success "✓ All .down.sql migrations correctly reverse their .up.sql counterparts"
+        log_success "✓ Rollback capability verified for production use"
+        return 0
+    else
+        echo ""
+        fail_test "ROLLBACK TEST FAILED - Schema mismatch after up→down→up cycle"
+        log_error "Baseline hash: $hash_baseline"
+        log_error "Final hash:    $hash_reapplied"
+        log_error "This indicates incomplete or incorrect rollback logic in .down.sql files"
+        return 1
+    fi
+}
+
+# =============================================================================
 # Main Execution
 # =============================================================================
 
@@ -598,6 +697,7 @@ main() {
     test_performance
     test_data_integrity
     test_schema_constraints
+    test_rollback
 
     # Summary
     log_section "TEST SUMMARY"
