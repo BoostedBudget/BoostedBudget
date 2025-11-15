@@ -155,16 +155,17 @@ rollback_migrations() {
     abs_config_path="$project_root/backend/atlas.hcl"
     abs_migrations_dir="$project_root/backend/migrations"
 
-    # Rollback all migrations (to version 0 = no migrations applied)
+    # Rollback all migrations using amount positional argument
     # NOTE: Using --dir flag to provide absolute path with golang-migrate format
     # The format parameter is CRITICAL - without it, Atlas runs both .up and .down files
+    # NOTE: Amount 100 (positional arg) ensures ALL migrations are rolled back (current count: 15)
+    #       --to-version 0 does NOT work (keeps migrations UP TO version 0, not before it)
     atlas migrate down \
         --config "file://$abs_config_path" \
         --env local \
         --url "$DATABASE_URL" \
-        --to-version 0 \
         --dir "file://$abs_migrations_dir?format=golang-migrate" \
-        > /dev/null 2>&1
+        100
 
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
