@@ -123,16 +123,21 @@ clean_database() {
 apply_migrations() {
     local start_time=$(date +%s)
 
-    # Get absolute path to atlas.hcl config file
+    # Get absolute paths to atlas.hcl config file and migrations directory
     local abs_config_path
+    local abs_migrations_dir
     local project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
     abs_config_path="$project_root/backend/atlas.hcl"
+    abs_migrations_dir="$project_root/backend/migrations"
 
     # NOTE: Errors visible for debugging - previously silenced with > /dev/null 2>&1
+    # NOTE: Using --dir flag to provide absolute path with golang-migrate format
+    # The format parameter is CRITICAL - without it, Atlas runs both .up and .down files
     atlas migrate apply \
         --config "file://$abs_config_path" \
         --env local \
-        --url "$DATABASE_URL"
+        --url "$DATABASE_URL" \
+        --dir "file://$abs_migrations_dir?format=golang-migrate"
 
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
@@ -143,17 +148,22 @@ apply_migrations() {
 rollback_migrations() {
     local start_time=$(date +%s)
 
-    # Get absolute path to atlas.hcl config file
+    # Get absolute paths to atlas.hcl config file and migrations directory
     local abs_config_path
+    local abs_migrations_dir
     local project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
     abs_config_path="$project_root/backend/atlas.hcl"
+    abs_migrations_dir="$project_root/backend/migrations"
 
     # Rollback all migrations (to version 0 = no migrations applied)
+    # NOTE: Using --dir flag to provide absolute path with golang-migrate format
+    # The format parameter is CRITICAL - without it, Atlas runs both .up and .down files
     atlas migrate down \
         --config "file://$abs_config_path" \
         --env local \
         --url "$DATABASE_URL" \
         --to-version 0 \
+        --dir "file://$abs_migrations_dir?format=golang-migrate" \
         > /dev/null 2>&1
 
     local end_time=$(date +%s)
