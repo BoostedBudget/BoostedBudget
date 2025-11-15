@@ -473,22 +473,29 @@ npm run test:api
 
 **New migration**:
 ```bash
-# Manual approach (create SQL files)
+# Manual approach (create SQL files - Issue #348: .up/.down pairs for rollback support)
 cd backend/migrations
-touch 000006_<name>.sql  # Note: Single .sql file (forward-only migrations)
-# Write SQL with idempotency guards, then:
+touch 000006_<name>.up.sql    # Forward migration
+touch 000006_<name>.down.sql  # Rollback migration (REQUIRED)
+
+# Write .up.sql with idempotency guards (IF NOT EXISTS, DO $$ blocks)
+# Write .down.sql to reverse .up.sql (DROP TABLE CASCADE, etc.)
+# See migrations 000005, 000015 for rollback examples
+
+# Regenerate checksums:
 cd .. && atlas migrate hash
 
 # ALWAYS lint before committing:
 atlas migrate lint --dir file://migrations --dev-url "docker://postgres/15/test" --latest 1
 
-# CRITICAL: Test migration comprehensively (Issue #326):
+# CRITICAL: Test migration comprehensively (Issues #326, #348):
 ./scripts/test-migrations.sh
-# This runs 4 test suites:
+# This runs 5 test suites:
 #   1. Idempotency (migrations can run 2x safely)
 #   2. Performance (duration tracking)
 #   3. Data integrity (preserves existing data)
 #   4. Schema validation (tables/constraints/indexes)
+#   5. Rollback testing (up→down→up cycle produces identical schema)
 
 # See backend/docs/migration-testing.md for details
 # See backend/docs/atlas-migration-guide.md for Atlas usage
