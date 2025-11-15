@@ -113,9 +113,10 @@ get_schema_hash() {
 clean_database() {
     log_info "Cleaning database..."
     # Drop public schema (all tables)
-    psql "$DATABASE_URL" -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" > /dev/null 2>&1
+    # NOTE: Errors visible for debugging - previously silenced with > /dev/null 2>&1
+    psql "$DATABASE_URL" -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
     # Drop Atlas tracking schema (so Atlas doesn't think migrations are already applied)
-    psql "$DATABASE_URL" -c "DROP SCHEMA IF EXISTS atlas_schema_revisions CASCADE;" > /dev/null 2>&1
+    psql "$DATABASE_URL" -c "DROP SCHEMA IF EXISTS atlas_schema_revisions CASCADE;"
 }
 
 # Apply migrations using Atlas
@@ -127,11 +128,11 @@ apply_migrations() {
     local project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
     abs_config_path="$project_root/backend/atlas.hcl"
 
+    # NOTE: Errors visible for debugging - previously silenced with > /dev/null 2>&1
     atlas migrate apply \
         --config "file://$abs_config_path" \
         --env local \
-        --url "$DATABASE_URL" \
-        > /dev/null 2>&1
+        --url "$DATABASE_URL"
 
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
@@ -270,9 +271,19 @@ test_performance() {
 
     # Time the migration application
     local start_time=$(date +%s)
-    apply_migrations > /dev/null 2>&1
+    local duration_output
+    duration_output=$(apply_migrations 2>&1)
+    local apply_exit_code=$?
     local end_time=$(date +%s)
     local total_duration=$((end_time - start_time))
+
+    # Check if migration application failed
+    if [ $apply_exit_code -ne 0 ]; then
+        fail_test "MIGRATION APPLICATION FAILED during performance test"
+        log_error "Atlas migrate apply returned exit code: $apply_exit_code"
+        log_error "Output: $duration_output"
+        return 1
+    fi
 
     log_info "Total migration time: ${total_duration}s"
 
@@ -293,6 +304,7 @@ test_performance() {
     fi
 
     # Generate JSON performance report
+    # NOTE: Count only .up.sql files (forward migrations), not .down.sql
     cat > "$PERF_REPORT_FILE" <<EOF
 {
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -300,7 +312,7 @@ test_performance() {
   "threshold_warn_seconds": $PERF_WARN_THRESHOLD,
   "threshold_fail_seconds": $PERF_FAIL_THRESHOLD,
   "status": "$perf_status",
-  "migrations_count": $(ls -1 "$MIGRATIONS_DIR"/*.sql 2>/dev/null | wc -l | tr -d ' ')
+  "migrations_count": $(ls -1 "$MIGRATIONS_DIR"/*.up.sql 2>/dev/null | wc -l | tr -d ' ')
 }
 EOF
 
