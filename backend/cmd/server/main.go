@@ -119,6 +119,8 @@ func main() {
 		subscriptionService := services.NewSubscriptionService(tierConfig, nil)
 		// Issue #242: Monthly sync limits service
 		syncLimitService := services.NewSyncLimitService(syncAuditRepo, profileRepo, subscriptionService)
+		// Issue #353: Dashboard service for balance tracking
+		dashboardService := services.NewDashboardService(balanceSnapshotRepo, accountRepo)
 
 		// Initialize Email service (needed by deletion service and item error service)
 		// Optional - uses no-op mock if not configured
@@ -250,6 +252,7 @@ func main() {
 		transactionHandler := handlers.NewTransactionHandler(transactionService)
 		notificationHandler := handlers.NewNotificationHandler(notificationRepo) // Issue #257: Notification API
 		syncStatsHandler := handlers.NewSyncStatsHandler(syncLimitService)       // Issue #242: Monthly sync limits API
+		dashboardHandler := handlers.NewDashboardHandler(dashboardService)       // Issue #353: Balance tracking dashboard
 
 		// Create admin handler (Issue #308: Admin API for Manual Webhook Firing)
 		// Requires plaidService and encryptionService, so declared here
@@ -282,6 +285,11 @@ func main() {
 
 		// Sync statistics route (Issue #242: Monthly sync limits)
 		api.GET("/sync-stats", syncStatsHandler.GetSyncStats)
+
+		// Dashboard routes (Issue #353: Balance tracking dashboard)
+		api.GET("/dashboard/balance-summary", dashboardHandler.GetBalanceSummary)
+		api.GET("/dashboard/balance-history", dashboardHandler.GetBalanceHistory)
+		api.GET("/dashboard/account-types", dashboardHandler.GetAccountTypes)
 
 		// Plaid routes (if enabled)
 		if plaidHandler != nil {

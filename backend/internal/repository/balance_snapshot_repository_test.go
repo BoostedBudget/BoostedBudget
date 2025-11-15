@@ -351,8 +351,3 @@ func TestBalanceSnapshotRepository_DeleteByAccountID(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
-
-// Helper function for string pointers (used in tests)
-func strPtr(s string) *string {
-	return &s
-}

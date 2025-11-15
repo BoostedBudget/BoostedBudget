@@ -683,6 +683,11 @@ func (s *transactionSyncService) createBalanceSnapshots(
 	linkedItem *domain.LinkedItem,
 	accessToken string,
 ) error {
+	// Skip if balance snapshot repository is not configured (backward compatibility for tests)
+	if s.balanceSnapshotRepo == nil {
+		return nil
+	}
+
 	// Step 1: Call Plaid /accounts/get to fetch current balances
 	client := s.plaidService.GetClient()
 	accountsReq := plaid.NewAccountsGetRequest(accessToken)

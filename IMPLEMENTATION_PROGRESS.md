@@ -116,6 +116,96 @@
 
 **Next:** Phase 3 - Dashboard API (Service + Handler + Routes)
 
+### PHASE 3: Dashboard API
+
+#### TDD Cycle 5: Dashboard Domain Types
+- **Status:** ✅ Complete
+- Created `backend/internal/domain/dashboard.go`
+- **Types Created:**
+  - BalanceSummaryResponse - Current balance overview with breakdown by account type
+  - BalanceHistoryResponse - Time series data for charts
+  - AccountTypesResponse - Available account types for filters
+  - DashboardFilters - Query parameters for filtering
+  - Supporting types: AccountTypeBalance, AccountBalanceDetail, PeriodComparisonData, BalanceHistorySnapshot, AccountTypeInfo
+
+#### TDD Cycle 6: DashboardService (GREEN, then Tests)
+- **Status:** ✅ Complete
+- **Note:** Implementation created before tests (not ideal TDD, but tests written retroactively)
+- Created `backend/internal/services/dashboard_service.go`
+- Created `backend/internal/services/dashboard_service_test.go`
+- **Service Methods:**
+  1. GetBalanceSummary - Current balance with type breakdown, period comparison (vs 30 days ago)
+  2. GetBalanceHistory - Time series data filtered by date range and account types
+  3. GetAccountTypes - Available account types with counts and totals
+- **Tests Written (8 total):**
+  - TestGetBalanceSummary_Success
+  - TestGetBalanceSummary_WithAccountTypeFilter
+  - TestGetBalanceSummary_SnapshotRepoError
+  - TestGetBalanceHistory_Success
+  - TestGetBalanceHistory_InvalidDateRange
+  - TestGetBalanceHistory_WithAccountTypeFilter
+  - TestGetAccountTypes_Success
+  - TestGetAccountTypes_NoSnapshots
+- **Test Results:** All 8 tests passing ✅
+- **Helpers:** formatAccountTypeLabel() - Maps account types to user-friendly labels
+
+**Next:** Dashboard Handler tests (RED), then implementation (GREEN), then routes
+
+#### TDD Cycle 7: DashboardHandler (RED-GREEN)
+- **Status:** ✅ Complete
+- Created `backend/internal/handlers/dashboard_handler_test.go`
+- Created `backend/internal/handlers/dashboard_handler.go`
+- **Tests Written (8 total):**
+  - TestGetBalanceSummary_Success
+  - TestGetBalanceSummary_WithQueryParams
+  - TestGetBalanceSummary_Unauthorized
+  - TestGetBalanceSummary_ServiceError
+  - TestGetBalanceHistory_Success
+  - TestGetBalanceHistory_InvalidDateFormat
+  - TestGetAccountTypes_Success
+  - TestGetAccountTypes_Unauthorized
+- **Test Results:** All 8 tests passing ✅
+- **Handler Features:**
+  - User authentication via context (Auth0 middleware)
+  - Query parameter parsing (account_types, as_of_date, start_date, end_date, granularity)
+  - Error handling (400 Bad Request, 401 Unauthorized, 500 Internal Server Error)
+  - JSON response formatting
+
+#### Routes Registration
+- **Status:** ✅ Complete
+- Updated `backend/cmd/server/main.go`:
+  - Created dashboardService instance (line 123)
+  - Created dashboardHandler instance (line 255)
+  - Registered 3 dashboard routes (lines 290-292):
+    - GET /api/v1/dashboard/balance-summary
+    - GET /api/v1/dashboard/balance-history
+    - GET /api/v1/dashboard/account-types
+- **Verification:** Backend compiles successfully ✅
+
+### PHASE 3 COMPLETE ✅
+
+**Summary:**
+- ✅ Dashboard domain types (requests & responses)
+- ✅ DashboardService with comprehensive tests (8/8 passing)
+- ✅ DashboardHandler with comprehensive tests (8/8 passing)
+- ✅ Routes registered and protected with Auth0 middleware
+- ✅ Backend compiles successfully
+
+**Files Created:**
+- `backend/internal/domain/dashboard.go`
+- `backend/internal/services/dashboard_service.go`
+- `backend/internal/services/dashboard_service_test.go`
+- `backend/internal/handlers/dashboard_handler.go`
+- `backend/internal/handlers/dashboard_handler_test.go`
+
+**Files Modified:**
+- `backend/cmd/server/main.go` (dashboard service, handler, and routes)
+- `backend/internal/services/dashboard_service_test.go` (removed duplicate mocks)
+- `backend/internal/services/transaction_mapper_test.go` (fixed NewTransactionSyncService calls)
+- `backend/internal/services/transaction_sync_service_test.go` (fixed NewTransactionSyncService calls)
+
+**Next:** Phase 4 - Frontend Dashboard (React components, hooks, Recharts integration)
+
 #### Planning Phase
 - **Completed:** Comprehensive codebase exploration using Plan subagent
 - **Found:** Plaid webhook integration in `plaid_webhook_handler.go`
