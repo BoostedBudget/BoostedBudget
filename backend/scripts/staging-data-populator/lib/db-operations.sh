@@ -208,3 +208,46 @@ validate_database_schema() {
   log_debug "Database schema validated"
   return 0
 }
+
+# Balance snapshot operations (Issue #353)
+
+# Count balance snapshots by user ID
+count_balance_snapshots_by_user_id() {
+  local user_id=$1
+
+  local count
+  count=$(query_db "SELECT COUNT(*) FROM balance_snapshots WHERE user_id = '$user_id';")
+
+  echo "$count"
+}
+
+# Get latest balance snapshots for user (up to limit)
+get_latest_balance_snapshots() {
+  local user_id=$1
+  local limit=${2:-10}
+
+  query_db "SELECT account_id, current_balance, available_balance, snapshot_date FROM balance_snapshots WHERE user_id = '$user_id' ORDER BY snapshot_date DESC LIMIT $limit;" false
+}
+
+# Delete balance snapshots by user ID
+delete_balance_snapshots_by_user_id() {
+  local user_id=$1
+
+  execute_db "DELETE FROM balance_snapshots WHERE user_id = '$user_id';" || return 1
+
+  return 0
+}
+
+# Check if balance snapshots exist for today
+balance_snapshots_exist_for_today() {
+  local user_id=$1
+
+  local count
+  count=$(query_db "SELECT COUNT(*) FROM balance_snapshots WHERE user_id = '$user_id' AND snapshot_date = CURRENT_DATE;")
+
+  if [ "$count" -gt 0 ]; then
+    return 0
+  else
+    return 1
+  fi
+}
