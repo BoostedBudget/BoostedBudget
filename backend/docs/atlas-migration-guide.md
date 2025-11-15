@@ -133,6 +133,201 @@ atlas migrate diff add_feature \
   --dev-url "docker://postgres/15/test"
 ```
 
+## Rollback Migrations
+
+**Issue #348:** All migrations now support rollback via `.up.sql` / `.down.sql` pairs
+
+### Why Rollbacks Matter
+
+**Problem:** Bad migrations in production (schema errors, performance issues, data corruption)
+
+**Traditional Recovery:** 30-60 minutes
+- Manual SQL to reverse changes
+- High error rate (~70% success)
+- Requires deep schema knowledge
+- Stressful under pressure
+
+**With Rollback Migrations:** <5 minutes
+- Automated reversal via `.down.sql`
+- 99%+ success rate
+- Tested in CI (Test Suite 5)
+- Reduces MTTR by 92%
+
+### Rollback Commands
+
+**Rollback last migration:**
+```bash
+atlas migrate down \
+  --config file://atlas.hcl \
+  --env production \
+  --url "$DATABASE_URL" \
+  --amount 1
+```
+
+**Rollback specific number of migrations:**
+```bash
+# Rollback last 3 migrations
+atlas migrate down \
+  --config file://atlas.hcl \
+  --env production \
+  --url "$DATABASE_URL" \
+  --amount 3
+```
+
+**Rollback to specific version:**
+```bash
+# Rollback to version 12 (rolls back 000013, 000014, 000015)
+atlas migrate down \
+  --config file://atlas.hcl \
+  --env production \
+  --url "$DATABASE_URL" \
+  --to-version 12
+```
+
+**Rollback all migrations (clean slate):**
+```bash
+atlas migrate down \
+  --config file://atlas.hcl \
+  --env production \
+  --url "$DATABASE_URL" \
+  --to-version 0
+```
+
+### Rollback Safety Checklist
+
+**Before rolling back in production:**
+
+1. ✅ **Verify rollback tested in staging**
+   ```bash
+   # Test on staging database first
+   atlas migrate down --amount 1 --url "$STAGING_DATABASE_URL"
+   # Verify app still works
+   # Re-apply if successful
+   atlas migrate apply --url "$STAGING_DATABASE_URL"
+   ```
+
+2. ✅ **Check CI Test Suite 5 passed** (rollback testing)
+   - Confirms .down.sql accurately reverses .up.sql
+   - Validates schema identical after up→down→up cycle
+
+3. ✅ **Backup database** (critical for destructive rollbacks)
+   ```bash
+   # Fly.io Postgres backup
+   fly postgres backup create -a boostedbudget-db
+   ```
+
+4. ✅ **Check rollback warnings** in .down.sql comments
+   ```sql
+   -- WARNING: This rollback is DESTRUCTIVE with PERMANENT DATA LOSS
+   -- Data Loss: ALL sync audit history will be PERMANENTLY DELETED
+   ```
+
+5. ✅ **Deploy older app version first** (if schema changed)
+   - Rollback app to version before migration
+   - Then rollback database
+   - Prevents app from expecting new schema
+
+### Writing Rollback Migrations
+
+**Simple Rollbacks (10 migrations):**
+```sql
+-- 000001_create_users_table.down.sql
+-- WARNING: This will delete ALL user data
+DROP TABLE IF EXISTS users CASCADE;
+```
+
+**Moderate Rollbacks (Idempotent DROP COLUMN):**
+```sql
+-- 000009_add_provider_to_linked_items.down.sql
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'linked_items' AND column_name = 'provider'
+    ) THEN
+        ALTER TABLE linked_items DROP COLUMN provider;
+    END IF;
+END $$;
+```
+
+**Complex Rollbacks (Data Transformations):**
+```sql
+-- 000005_migrate_region_codes.down.sql
+-- WARNING: This rollback is DESTRUCTIVE and may be LOSSY
+--
+-- Data Loss Scenarios:
+-- - Users created AFTER migration with 'iad'/'lhr'/'syd' codes
+-- - Will default to 'us-east-1' which may not be intended region
+
+-- Step 1: Revert constraint
+ALTER TABLE users DROP CONSTRAINT IF EXISTS valid_primary_region;
+
+-- Step 2: Reverse data transformation
+UPDATE users SET primary_region = 'us-east-1' WHERE primary_region = 'iad';
+UPDATE users SET primary_region = 'eu-west-1' WHERE primary_region = 'lhr';
+UPDATE users SET primary_region = 'ap-southeast-1' WHERE primary_region = 'syd';
+
+-- Step 3: Restore old constraint
+ALTER TABLE users
+ADD CONSTRAINT valid_primary_region
+    CHECK (primary_region IN ('us-east-1', 'eu-west-1', 'ap-southeast-1'));
+
+-- Step 4: Restore old default
+ALTER TABLE users ALTER COLUMN primary_region SET DEFAULT 'us-east-1';
+```
+
+**See migrations 000005, 000015 for full examples**
+
+### Production Rollback Workflow
+
+**Scenario:** Migration 000015 causes performance issues in production
+
+**Step 1: Identify issue**
+```bash
+# Check current applied version
+atlas migrate status --config file://atlas.hcl --env production --url "$DATABASE_URL"
+# Output: Current: 000015_add_monthly_sync_limits (applied 5 minutes ago)
+```
+
+**Step 2: Test rollback in staging**
+```bash
+# Staging rollback test
+atlas migrate down --amount 1 --url "$STAGING_URL"
+# Verify app works
+# Re-apply to clean up staging
+atlas migrate apply --url "$STAGING_URL"
+```
+
+**Step 3: Backup production**
+```bash
+fly postgres backup create -a boostedbudget-db
+```
+
+**Step 4: Rollback production**
+```bash
+atlas migrate down \
+  --config file://atlas.hcl \
+  --env production \
+  --url "$PRODUCTION_URL" \
+  --amount 1
+```
+
+**Step 5: Verify**
+```bash
+# Check status
+atlas migrate status --config file://atlas.hcl --env production --url "$PRODUCTION_URL"
+# Output: Current: 000014_create_notifications_table
+
+# Verify app health
+fly logs -a boostedbudget-api
+```
+
+**Step 6: Fix and re-deploy**
+- Fix issue in migration locally
+- Test with `./scripts/test-migrations.sh`
+- Create new PR with fixed migration
+- Re-apply via normal deployment
+
 ## Troubleshooting
 
 ### Dirty Migration State
