@@ -120,16 +120,14 @@ clean_database() {
 apply_migrations() {
     local start_time=$(date +%s)
 
-    # Get absolute path to migrations directory
-    local abs_migrations_dir
-    if [[ "$MIGRATIONS_DIR" = /* ]]; then
-        abs_migrations_dir="$MIGRATIONS_DIR"
-    else
-        abs_migrations_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/$MIGRATIONS_DIR"
-    fi
+    # Get absolute path to atlas.hcl config file
+    local abs_config_path
+    local project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    abs_config_path="$project_root/backend/atlas.hcl"
 
     atlas migrate apply \
-        --dir "file://$abs_migrations_dir" \
+        --config "file://$abs_config_path" \
+        --env local \
         --url "$DATABASE_URL" \
         > /dev/null 2>&1
 
