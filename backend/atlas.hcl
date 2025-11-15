@@ -3,11 +3,11 @@
 
 // Local development environment
 env "local" {
-  src = "file://migrations"
+  src = "file://./migrations"
   dev = "docker://postgres/15/test?search_path=public"
 
   migration {
-    dir = "file://migrations"
+    dir = "file://./migrations"
     format = golang-migrate
   }
 
@@ -20,10 +20,10 @@ env "local" {
 
 // Production environment (Fly.io)
 env "production" {
-  src = "file://migrations"
+  src = "file://./migrations"
 
   migration {
-    dir = "file://migrations"
+    dir = "file://./migrations"
     format = golang-migrate
   }
 }
