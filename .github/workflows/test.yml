@@ -376,23 +376,23 @@ jobs:
             sleep 1
           done
 
-      # TEMPORARILY DISABLED FOR PR #352 ONLY
-      # Reason: Migrating from single .sql files to .up.sql/.down.sql format
-      # Atlas lint detects this as a breaking change (checksum mismatch)
-      # This is a ONE-TIME migration format change - re-enable after PR #352 merges
-      # TODO: RE-ENABLE THIS STEP after PR #352 is merged to staging
-      # - name: Lint migrations (Atlas validation)
-      #   env:
-      #     DATABASE_URL: ${{ env.DATABASE_URL }}
-      #   run: |
-      #     echo "::group::Linting migrations"
-      #     cd ${{ env.UNIQUE_WORKSPACE }}/backend
-      #     atlas migrate lint \
-      #       --config file://atlas.hcl \
-      #       --env local \
-      #       --latest 1
-      #     echo "::notice::✅ Migration lint passed"
-      #     echo "::endgroup::"
+      - name: Lint migrations (Atlas validation)
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: |
+          echo "::group::Linting migrations"
+          cd ${{ env.UNIQUE_WORKSPACE }}/backend
+
+          # NOTE: Must include format=golang-migrate in --dir URL for .up/.down file support
+          # Validates migration file integrity (checksums), SQL syntax, schema conflicts
+          atlas migrate lint \
+            --config file://atlas.hcl \
+            --env local \
+            --dir "file://migrations?format=golang-migrate" \
+            --latest 1
+
+          echo "::notice::✅ Migration lint passed - no schema errors detected"
+          echo "::endgroup::"
 
       - name: Run comprehensive migration tests
         env:
