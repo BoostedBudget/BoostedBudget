@@ -1,4 +1,4 @@
-import { Routes, Route, Link } from 'react-router-dom'
+import { Routes, Route, Link, Navigate } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
 import { useCookieState } from './shared/hooks/useCookieState'
 import {
@@ -161,7 +161,7 @@ function App() {
           <nav className="main-nav">
             {isAuthenticated ? (
               <>
-                <Link to="/">Dashboard</Link>
+                <Link to="/dashboard">Dashboard</Link>
                 <Link to="/accounts">Accounts</Link>
                 <Link to="/transactions">Transactions</Link>
                 <Link to="/profile">Profile</Link>
@@ -198,12 +198,18 @@ function App() {
               path="/"
               element={
                 isAuthenticated ? (
-                  <ProtectedRoute>
-                    <DashboardPage />
-                  </ProtectedRoute>
+                  <Navigate to="/dashboard" replace />
                 ) : (
                   <HomePage health={health} loading={loading} />
                 )
+              }
+            />
+            <Route
+              path="/dashboard"
+              element={
+                <ProtectedRoute>
+                  <DashboardPage />
+                </ProtectedRoute>
               }
             />
             <Route path="/callback" element={<HomePage health={health} loading={loading} />} />
