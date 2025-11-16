@@ -34,6 +34,7 @@ describe('App', () => {
     beforeEach(() => {
       mockUseAuth0.mockReturnValue({
         isAuthenticated: false,
+        isLoading: false,
         user: null,
         loginWithRedirect: vi.fn(),
       })
@@ -86,8 +87,10 @@ describe('App', () => {
     beforeEach(() => {
       mockUseAuth0.mockReturnValue({
         isAuthenticated: true,
+        isLoading: false,
         user: mockUser,
         logout: vi.fn(),
+        loginWithRedirect: vi.fn(),
       })
     })
 
@@ -144,7 +147,9 @@ describe('App', () => {
     beforeEach(() => {
       mockUseAuth0.mockReturnValue({
         isAuthenticated: false,
+        isLoading: false,
         user: null,
+        loginWithRedirect: vi.fn(),
       })
     })
 
@@ -177,7 +182,9 @@ describe('App', () => {
     beforeEach(() => {
       mockUseAuth0.mockReturnValue({
         isAuthenticated: false,
+        isLoading: false,
         user: null,
+        loginWithRedirect: vi.fn(),
       })
     })
 
@@ -217,8 +224,10 @@ describe('App', () => {
       beforeEach(() => {
         mockUseAuth0.mockReturnValue({
           isAuthenticated: true,
+          isLoading: false,
           user: mockUser,
           logout: vi.fn(),
+          loginWithRedirect: vi.fn(),
         })
       })
 
