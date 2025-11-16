@@ -808,7 +808,7 @@ describe('useDashboardData', () => {
     it('should handle null history gracefully', async () => {
       // Arrange
       vi.mocked(dashboardApi.fetchBalanceSummary).mockResolvedValue(mockBalanceSummary)
-      vi.mocked(dashboardApi.fetchBalanceHistory).mockResolvedValue(null as any)
+      vi.mocked(dashboardApi.fetchBalanceHistory).mockResolvedValue(null as unknown as BalanceHistory)
       vi.mocked(dashboardApi.fetchAccountTypes).mockResolvedValue(mockAccountTypes)
 
       // Act
