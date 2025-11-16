@@ -183,6 +183,60 @@ transactions:
 3. **User Notes:** Test notes preservation across syncs
 4. **Specific Dates/Amounts:** Edge case testing
 
+### Webhooks (Optional - Balance Snapshots)
+
+**NEW in Issue #353:** Fire Plaid webhooks after data insertion to create balance snapshots.
+
+```yaml
+webhooks:
+  fire_after_setup: true  # Fire webhook after data insertion
+  webhook_code: "DEFAULT_UPDATE"  # or INITIAL_UPDATE, HISTORICAL_UPDATE
+  wait_for_processing: true  # Wait for async processing to complete
+  timeout_seconds: 30  # Maximum wait time (default: 30)
+```
+
+**Webhook Codes:**
+- `DEFAULT_UPDATE` - Standard incremental sync (recommended for testing)
+- `INITIAL_UPDATE` - First sync with historical depth based on tier
+- `HISTORICAL_UPDATE` - Backfill old transactions
+- `TRANSACTIONS_REMOVED` - Retroactive deletions
+
+**Requirements:**
+- `AUTH_TOKEN` environment variable must be set with valid Auth0 JWT
+- Admin webhook endpoint must be deployed to staging
+- Webhook processing creates balance snapshots for all accounts
+
+**Why Use Webhooks:**
+- ✅ Creates balance snapshots (for dashboard testing)
+- ✅ Tests the full webhook processing pipeline
+- ✅ Matches production behavior exactly
+- ❌ Slower (adds 5-30 seconds per scenario)
+- ❌ Requires Auth0 authentication
+
+**Example:**
+```yaml
+metadata:
+  name: "Dashboard Balance Test"
+  tags: ["dashboard", "balance", "snapshots"]
+
+setup:
+  user:
+    email: "test-dashboard@example.com"
+    tier: "premium"
+  accounts:
+    - {item_index: 0, type: "checking", name: "Checking", balance: 5000}
+
+webhooks:
+  fire_after_setup: true
+  webhook_code: "DEFAULT_UPDATE"
+  wait_for_processing: true
+
+assertions:
+  - type: "balance_snapshot_count"
+    operator: "="
+    value: 1  # One snapshot created for today
+```
+
 ### Assertions
 
 **Transaction Count:**

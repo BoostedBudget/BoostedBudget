@@ -57,14 +57,15 @@ type TransactionSyncService interface {
 
 // transactionSyncService implements TransactionSyncService
 type transactionSyncService struct {
-	webhookRepo       repository.WebhookRepository
-	linkedItemRepo    repository.LinkedItemRepository
-	transactionRepo   repository.TransactionRepository
-	accountRepo       repository.AccountRepository     // Issue #261: For account mapping (Plaid account_id -> internal UUID)
-	profileRepo       repository.ProfileRepository     // Issue #242: For fetching user tier during sync audit
-	plaidService      PlaidService
-	encryptionService EncryptionService
-	syncLimitService  SyncLimitService // Issue #242: Monthly sync limits and tier-based historical depth
+	webhookRepo          repository.WebhookRepository
+	linkedItemRepo       repository.LinkedItemRepository
+	transactionRepo      repository.TransactionRepository
+	accountRepo          repository.AccountRepository          // Issue #261: For account mapping (Plaid account_id -> internal UUID)
+	profileRepo          repository.ProfileRepository          // Issue #242: For fetching user tier during sync audit
+	balanceSnapshotRepo  repository.BalanceSnapshotRepository  // Issue #353: For storing balance snapshots
+	plaidService         PlaidService
+	encryptionService    EncryptionService
+	syncLimitService     SyncLimitService // Issue #242: Monthly sync limits and tier-based historical depth
 }
 
 // NewTransactionSyncService creates a new TransactionSyncService instance
@@ -74,19 +75,21 @@ func NewTransactionSyncService(
 	transactionRepo repository.TransactionRepository,
 	accountRepo repository.AccountRepository,
 	profileRepo repository.ProfileRepository,
+	balanceSnapshotRepo repository.BalanceSnapshotRepository,
 	plaidService PlaidService,
 	encryptionService EncryptionService,
 	syncLimitService SyncLimitService,
 ) TransactionSyncService {
 	return &transactionSyncService{
-		webhookRepo:       webhookRepo,
-		linkedItemRepo:    linkedItemRepo,
-		transactionRepo:   transactionRepo,
-		accountRepo:       accountRepo,
-		profileRepo:       profileRepo,
-		plaidService:      plaidService,
-		encryptionService: encryptionService,
-		syncLimitService:  syncLimitService,
+		webhookRepo:         webhookRepo,
+		linkedItemRepo:      linkedItemRepo,
+		transactionRepo:     transactionRepo,
+		accountRepo:         accountRepo,
+		profileRepo:         profileRepo,
+		balanceSnapshotRepo: balanceSnapshotRepo,
+		plaidService:        plaidService,
+		encryptionService:   encryptionService,
+		syncLimitService:    syncLimitService,
 	}
 }
 
@@ -290,6 +293,18 @@ func (s *transactionSyncService) SyncTransactions(
 	}
 
 	log.Printf("Transaction storage complete for item %s", linkedItem.ID)
+
+	// ========================================================================
+	// Issue #353: Create Balance Snapshots
+	// Capture current account balances after transaction sync completes
+	// ========================================================================
+
+	// Create balance snapshots for all accounts (non-blocking)
+	if err := s.createBalanceSnapshots(ctx, linkedItem, accessToken); err != nil {
+		log.Printf("Warning: Failed to create balance snapshots for item %s: %v", linkedItem.ID, err)
+		// Don't fail the entire sync - snapshots are non-critical
+		// Will retry on next webhook
+	}
 
 	// ========================================================================
 	// Issue #242: Record Sync Audit for Monthly Limits
@@ -650,5 +665,122 @@ func (s *transactionSyncService) processRemovedTransactions(
 	}
 
 	log.Printf("Successfully deleted %d removed transactions (skipped %d)", successCount, skippedCount)
+	return nil
+}
+
+// createBalanceSnapshots fetches current account balances from Plaid and stores snapshots.
+// Issue #353: Balance Tracking Dashboard - Capture balance snapshots during webhook processing
+//
+// Called after transaction sync completes to capture the current state of all account balances.
+// Uses daily deduplication (UPSERT) so multiple webhooks on the same day update the same snapshot.
+//
+// Error Handling:
+//   - Logs warnings but doesn't fail the entire sync
+//   - Balance snapshots are non-critical for transaction sync
+//   - Failed snapshots will be retried on next webhook
+func (s *transactionSyncService) createBalanceSnapshots(
+	ctx context.Context,
+	linkedItem *domain.LinkedItem,
+	accessToken string,
+) error {
+	// Skip if balance snapshot repository is not configured (backward compatibility for tests)
+	if s.balanceSnapshotRepo == nil {
+		return nil
+	}
+
+	// Step 1: Call Plaid /accounts/get to fetch current balances
+	client := s.plaidService.GetClient()
+	accountsReq := plaid.NewAccountsGetRequest(accessToken)
+	accountsResp, _, err := client.PlaidApi.AccountsGet(ctx).AccountsGetRequest(*accountsReq).Execute()
+	if err != nil {
+		return fmt.Errorf("failed to fetch accounts from Plaid: %w", err)
+	}
+
+	plaidAccounts := accountsResp.GetAccounts()
+	if len(plaidAccounts) == 0 {
+		log.Printf("No accounts returned from Plaid for item %s, skipping balance snapshots", linkedItem.ID)
+		return nil
+	}
+
+	// Step 2: Get internal account IDs (map Plaid account_id -> internal UUID)
+	internalAccounts, err := s.accountRepo.GetByLinkedItemID(ctx, linkedItem.ID)
+	if err != nil {
+		return fmt.Errorf("failed to get internal accounts: %w", err)
+	}
+
+	// Build map: plaid_account_id -> internal account
+	accountMap := make(map[string]domain.Account)
+	for _, account := range internalAccounts {
+		accountMap[account.PlaidAccountID] = account
+	}
+
+	// Step 3: Create balance snapshots for each account
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	successCount := 0
+	skippedCount := 0
+
+	for _, plaidAccount := range plaidAccounts {
+		plaidAccountID := plaidAccount.GetAccountId()
+
+		// Find matching internal account
+		internalAccount, exists := accountMap[plaidAccountID]
+		if !exists {
+			log.Printf("Warning: Plaid account %s not found in internal accounts, skipping snapshot", plaidAccountID)
+			skippedCount++
+			continue
+		}
+
+		// Extract balance from Plaid response
+		balances, hasBalances := plaidAccount.GetBalancesOk()
+		if !hasBalances || balances == nil {
+			log.Printf("Warning: No balance data for account %s, skipping snapshot", plaidAccountID)
+			skippedCount++
+			continue
+		}
+
+		// Create balance snapshot
+		snapshot := &domain.BalanceSnapshot{
+			AccountID:    internalAccount.ID,
+			UserID:       linkedItem.UserID,
+			SnapshotDate: today,
+			Source:       domain.SnapshotSourcePlaidWebhook,
+			CurrencyCode: "USD", // Default to USD
+		}
+
+		// Set current balance if available
+		if current, ok := balances.GetCurrentOk(); ok && current != nil {
+			currentFloat := float64(*current)
+			snapshot.CurrentBalance = &currentFloat
+		}
+
+		// Set available balance if available
+		if available, ok := balances.GetAvailableOk(); ok && available != nil {
+			availableFloat := float64(*available)
+			snapshot.AvailableBalance = &availableFloat
+		}
+
+		// Set currency code if available
+		if currencyCode, ok := balances.GetIsoCurrencyCodeOk(); ok && currencyCode != nil {
+			snapshot.CurrencyCode = *currencyCode
+		}
+
+		// Validate snapshot has at least one balance
+		if snapshot.CurrentBalance == nil && snapshot.AvailableBalance == nil {
+			log.Printf("Warning: Account %s has neither current nor available balance, skipping snapshot", plaidAccountID)
+			skippedCount++
+			continue
+		}
+
+		// Store snapshot (UPSERT for daily deduplication)
+		if err := s.balanceSnapshotRepo.CreateOrUpdate(ctx, snapshot); err != nil {
+			log.Printf("Warning: Failed to create balance snapshot for account %s: %v", plaidAccountID, err)
+			skippedCount++
+			continue
+		}
+
+		successCount++
+	}
+
+	log.Printf("Created %d balance snapshots for item %s (skipped %d)", successCount, linkedItem.ID, skippedCount)
 	return nil
 }

@@ -27,8 +27,9 @@ cleanup_user_data_only() {
   execute_db "DELETE FROM accounts WHERE user_id = '$user_id';" || return 1
   execute_db "DELETE FROM linked_items WHERE user_id = '$user_id';" || return 1
 
-  # Optional table - may not exist yet
+  # Optional tables - may not exist yet
   execute_db "DELETE FROM subscription_overrides WHERE user_id = '$user_id';" 2>/dev/null || true
+  execute_db "DELETE FROM balance_snapshots WHERE user_id = '$user_id';" 2>/dev/null || true
 
   log_debug "Data cleanup complete (user preserved): $email"
   return 0

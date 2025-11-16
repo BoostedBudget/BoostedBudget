@@ -1,0 +1,60 @@
+version: "2.0"
+
+metadata:
+  name: "Balance Snapshot Creation Test"
+  description: "Verify balance snapshots are created after webhook processing"
+  tags: ["balance", "snapshots", "webhook", "integration"]
+
+setup:
+  user:
+    email: "test-balance-snapshots@example.com"
+    tier: "premium"  # Premium tier for better test coverage
+
+  linked_items:
+    - institution: "Chase"
+
+  accounts:
+    - item_index: 0
+      type: "checking"
+      name: "Chase Total Checking"
+      balance: 5000.00
+
+    - item_index: 0
+      type: "savings"
+      name: "Chase Savings"
+      balance: 15000.00
+
+    - item_index: 0
+      type: "credit_card"
+      name: "Chase Freedom Unlimited"
+      balance: -2000.00  # Negative balance for credit card
+
+  transactions:
+    count_per_account: 10  # Minimal transactions for testing
+
+# NEW: Webhook configuration
+webhooks:
+  fire_after_setup: true  # Fire webhook after data insertion
+  webhook_code: "DEFAULT_UPDATE"  # Use DEFAULT_UPDATE webhook
+  wait_for_processing: true  # Wait for async processing to complete
+  timeout_seconds: 30  # Maximum wait time
+
+assertions:
+  # Verify basic data was created
+  - type: "account_count"
+    operator: "="
+    value: 3
+
+  - type: "transaction_count"
+    operator: ">="
+    value: 30  # 10 per account × 3 accounts
+
+  # NEW: Verify balance snapshots were created
+  - type: "balance_snapshot_count"
+    operator: "="
+    value: 3  # One snapshot per account for today
+
+  # Verify total balance
+  - type: "balance_sum"
+    operator: "="
+    value: 18000.00  # 5000 + 15000 - 2000
