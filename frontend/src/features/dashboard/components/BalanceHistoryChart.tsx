@@ -8,7 +8,6 @@ import {
   Tooltip,
   Legend,
   ResponsiveContainer,
-  type TooltipProps,
 } from 'recharts'
 import type { BalanceHistory } from '../types'
 
@@ -17,13 +16,17 @@ interface BalanceHistoryChartProps {
   showTypeBreakdown?: boolean
 }
 
-// Type for Recharts tooltip payload entry
-interface TooltipPayloadEntry {
-  value: number
-  name: string
-  color?: string
-  dataKey?: string
-  payload?: Record<string, unknown>
+// Type for custom Recharts tooltip component
+interface CustomTooltipProps {
+  active?: boolean
+  payload?: Array<{
+    value: number | string
+    name: string
+    color?: string
+    dataKey?: string
+    payload?: Record<string, unknown>
+  }>
+  label?: string | number
 }
 
 // Currency formatter
@@ -37,7 +40,7 @@ const formatCurrency = (value: number) => {
 }
 
 // Custom tooltip component (outside of render to avoid recreation)
-function CustomTooltip({ active, payload }: TooltipProps<number, string>) {
+function CustomTooltip({ active, payload }: CustomTooltipProps) {
   if (active && payload && payload.length > 0) {
     const data = payload[0].payload as { fullDate: string }
 
@@ -46,7 +49,7 @@ function CustomTooltip({ active, payload }: TooltipProps<number, string>) {
         <p className="text-sm font-semibold text-gray-900 mb-2">
           {format(parseISO(data.fullDate), 'MMMM d, yyyy')}
         </p>
-        {payload.map((entry: TooltipPayloadEntry, index: number) => (
+        {payload.map((entry, index: number) => (
           <div key={index} className="flex items-center justify-between space-x-4">
             <span
               className="text-sm"
