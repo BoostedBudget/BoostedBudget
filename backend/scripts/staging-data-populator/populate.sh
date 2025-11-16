@@ -48,6 +48,8 @@ Examples:
 Environment:
   DATABASE_URL     Loaded from backend/.env
   DEBUG            Set to 'true' for debug logging
+  AUTH_TOKEN       Auth0 JWT token for admin webhook firing (optional)
+                   Required only if scenario has webhooks.fire_after_setup: true
 
 For more information, see README.md
 EOF
@@ -121,6 +123,7 @@ source "$DIR/lib/setup-user.sh"
 source "$DIR/lib/setup-items.sh"
 source "$DIR/lib/setup-accounts.sh"
 source "$DIR/lib/fake-data-generator.sh"
+source "$DIR/lib/admin-webhook.sh"
 source "$DIR/lib/assertions.sh"
 
 # Parse scenario
@@ -189,6 +192,26 @@ if ! generate_transactions; then
   exit 1
 fi
 
+# 5. Fire webhooks (optional - creates balance snapshots)
+echo ""
+FIRE_WEBHOOKS=$(get_webhooks_fire_after_setup)
+if [ "$FIRE_WEBHOOKS" = "true" ]; then
+  WEBHOOK_CODE=$(get_webhooks_code)
+  WAIT_FOR_PROCESSING=$(get_webhooks_wait_for_processing)
+  WEBHOOK_TIMEOUT=$(get_webhooks_timeout)
+
+  # Check for AUTH_TOKEN environment variable
+  if [ -z "${AUTH_TOKEN:-}" ]; then
+    log_warning "AUTH_TOKEN not set. Skipping webhook firing."
+    log_warning "Set AUTH_TOKEN environment variable to enable webhook integration."
+  else
+    if ! fire_webhooks_for_scenario "$WEBHOOK_CODE" "$AUTH_TOKEN" "$WAIT_FOR_PROCESSING" "$WEBHOOK_TIMEOUT"; then
+      log_warning "Webhook firing completed with warnings. See above for details."
+      # Don't fail the scenario - webhooks are optional
+    fi
+  fi
+fi
+
 # Assertion phase
 echo ""
 if ! run_assertions; then
@@ -209,6 +232,9 @@ log_info "  Tier: $USER_TIER"
 log_info "  Accounts: $(count_accounts_by_user_id "$USER_ID")"
 log_info "  Transactions: $(count_transactions_by_user_id "$USER_ID")"
 log_info "  Historical days: $HISTORICAL_DAYS"
+if command -v count_balance_snapshots_by_user_id &> /dev/null; then
+  log_info "  Balance snapshots: $(count_balance_snapshots_by_user_id "$USER_ID")"
+fi
 echo ""
 
 exit 0

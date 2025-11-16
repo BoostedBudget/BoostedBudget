@@ -1,4 +1,4 @@
-import { Routes, Route, Link } from 'react-router-dom'
+import { Routes, Route, Link, Navigate } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
 import { useCookieState } from './shared/hooks/useCookieState'
 import {
@@ -17,6 +17,7 @@ import { ProfilePage } from './features/profile/ProfilePage'
 import { AccountsPage } from './features/accounts/AccountsPage'
 import { PlaidOAuthCallback } from './features/accounts/PlaidOAuthCallback'
 import { TransactionsPage } from './features/transactions/TransactionsPage'
+import { DashboardPage } from './features/dashboard/components/DashboardPage'
 import { updatePrivacySettings } from './features/profile/api/privacyApi'
 import type { PrivacySettings as PrivacySettingsType } from './features/profile/types'
 import { PrivacyPolicy } from './legal/PrivacyPolicy'
@@ -158,10 +159,16 @@ function App() {
             <p>Supercharge your finances with intelligent automation</p>
           </div>
           <nav className="main-nav">
-            <Link to="/">Home</Link>
-            {isAuthenticated && <Link to="/accounts">Accounts</Link>}
-            {isAuthenticated && <Link to="/transactions">Transactions</Link>}
-            {isAuthenticated && <Link to="/profile">Profile</Link>}
+            {isAuthenticated ? (
+              <>
+                <Link to="/dashboard">Dashboard</Link>
+                <Link to="/accounts">Accounts</Link>
+                <Link to="/transactions">Transactions</Link>
+                <Link to="/profile">Profile</Link>
+              </>
+            ) : (
+              <Link to="/">Home</Link>
+            )}
           </nav>
           <div className="auth-section">
             {isAuthenticated ? (
@@ -187,7 +194,24 @@ function App() {
 
         <main className="app-main">
           <Routes>
-            <Route path="/" element={<HomePage health={health} loading={loading} />} />
+            <Route
+              path="/"
+              element={
+                isAuthenticated ? (
+                  <Navigate to="/dashboard" replace />
+                ) : (
+                  <HomePage health={health} loading={loading} />
+                )
+              }
+            />
+            <Route
+              path="/dashboard"
+              element={
+                <ProtectedRoute>
+                  <DashboardPage />
+                </ProtectedRoute>
+              }
+            />
             <Route path="/callback" element={<HomePage health={health} loading={loading} />} />
             <Route
               path="/oauth-callback"

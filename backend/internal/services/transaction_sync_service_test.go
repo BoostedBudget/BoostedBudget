@@ -88,6 +88,7 @@ func TestProcessWebhook_Success(t *testing.T) {
 		mockTransactionRepo,
 		mockAccountRepo,
 		nil, // profileRepo - not needed for these tests
+		nil, // balanceSnapshotRepo - not needed for these tests
 		mockPlaidService,
 		mockEncryptionService,
 		nil, // syncLimitService - not needed for these tests
@@ -184,6 +185,7 @@ func TestProcessWebhook_WebhookNotFound(t *testing.T) {
 		mockTransactionRepo,
 		mockAccountRepo,
 		nil, // profileRepo - not needed for these tests
+		nil, // balanceSnapshotRepo - not needed for these tests
 		mockPlaidService,
 		mockEncryptionService,
 		nil, // syncLimitService - not needed for these tests
@@ -214,6 +216,7 @@ func TestProcessWebhook_ItemIDMissing(t *testing.T) {
 		mockTransactionRepo,
 		mockAccountRepo,
 		nil, // profileRepo - not needed for these tests
+		nil, // balanceSnapshotRepo - not needed for these tests
 		mockPlaidService,
 		mockEncryptionService,
 		nil, // syncLimitService - not needed for these tests
@@ -260,6 +263,7 @@ func TestProcessWebhook_LinkedItemNotFound(t *testing.T) {
 		mockTransactionRepo,
 		mockAccountRepo,
 		nil, // profileRepo - not needed for these tests
+		nil, // balanceSnapshotRepo - not needed for these tests
 		mockPlaidService,
 		mockEncryptionService,
 		nil, // syncLimitService - not needed for these tests
@@ -320,6 +324,7 @@ func TestSyncTransactions_SuccessSinglePage(t *testing.T) {
 		mockTransactionRepo,
 		mockAccountRepo,
 		nil, // profileRepo - not needed for these tests
+		nil, // balanceSnapshotRepo - not needed for these tests
 		mockPlaidService,
 		mockEncryptionService,
 		nil, // syncLimitService - not needed for these tests
@@ -387,6 +392,7 @@ func TestSyncTransactions_SuccessMultiplePages(t *testing.T) {
 		mockTransactionRepo,
 		mockAccountRepo,
 		nil, // profileRepo - not needed for these tests
+		nil, // balanceSnapshotRepo - not needed for these tests
 		mockPlaidService,
 		mockEncryptionService,
 		nil, // syncLimitService - not needed for these tests
@@ -455,6 +461,7 @@ func TestSyncTransactions_DecryptionError(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil, // balanceSnapshotRepo
 		mockEncryptionService,
 		nil,
 	)
@@ -493,6 +500,7 @@ func TestSyncTransactions_PlaidErrorFirstPage(t *testing.T) {
 		nil,
 		nil,
 		nil, // profileRepo - not needed for these tests
+		nil, // balanceSnapshotRepo - not needed for these tests
 		mockPlaidService,
 		mockEncryptionService,
 		nil, // syncLimitService - not needed for these tests
@@ -538,6 +546,7 @@ func TestSyncTransactions_PlaidErrorSubsequentPage(t *testing.T) {
 		nil,
 		nil,
 		nil, // profileRepo - not needed for these tests
+		nil, // balanceSnapshotRepo - not needed for these tests
 		mockPlaidService,
 		mockEncryptionService,
 		nil, // syncLimitService - not needed for these tests
@@ -591,6 +600,7 @@ func TestSyncTransactions_CursorUpdateError(t *testing.T) {
 		nil,
 		nil,
 		nil, // profileRepo - not needed for these tests
+		nil, // balanceSnapshotRepo - not needed for these tests
 		mockPlaidService,
 		mockEncryptionService,
 		nil, // syncLimitService - not needed for these tests
@@ -645,6 +655,7 @@ func TestSyncTransactions_EmptyCursor(t *testing.T) {
 		mockTransactionRepo,
 		mockAccountRepo,
 		nil, // profileRepo - not needed for these tests
+		nil, // balanceSnapshotRepo - not needed for these tests
 		mockPlaidService,
 		mockEncryptionService,
 		nil, // syncLimitService - not needed for these tests
@@ -707,6 +718,7 @@ func TestBuildAccountMap_Success(t *testing.T) {
 		mockAccountRepo,
 		nil,
 		nil,
+		nil, // balanceSnapshotRepo
 		nil,
 		nil,
 	).(*transactionSyncService) // Type assert to access private method
@@ -760,6 +772,7 @@ func TestBuildAccountMap_EmptyAccounts(t *testing.T) {
 		mockAccountRepo,
 		nil,
 		nil,
+		nil, // balanceSnapshotRepo
 		nil,
 		nil,
 	).(*transactionSyncService)
@@ -793,6 +806,7 @@ func TestBuildAccountMap_RepositoryError(t *testing.T) {
 		mockAccountRepo,
 		nil,
 		nil,
+		nil, // balanceSnapshotRepo
 		nil,
 		nil,
 	).(*transactionSyncService)
@@ -831,6 +845,7 @@ func TestProcessAddedTransactions_Success(t *testing.T) {
 		mockAccountRepo,
 		nil,
 		nil,
+		nil, // balanceSnapshotRepo
 		nil,
 		nil,
 	).(*transactionSyncService)
@@ -927,6 +942,7 @@ func TestProcessAddedTransactions_Deduplication(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil, // balanceSnapshotRepo
 		nil,
 		nil,
 	).(*transactionSyncService)
@@ -988,6 +1004,7 @@ func TestProcessAddedTransactions_PartialFailure(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil, // balanceSnapshotRepo
 		nil,
 		nil,
 	).(*transactionSyncService)
@@ -1058,6 +1075,7 @@ func TestProcessAddedTransactions_EmptySlice(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil, // balanceSnapshotRepo
 		nil,
 		nil,
 	).(*transactionSyncService)
@@ -1100,6 +1118,7 @@ func TestProcessModifiedTransactions_Success(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil, // balanceSnapshotRepo
 		nil,
 		nil,
 	).(*transactionSyncService)
@@ -1209,6 +1228,7 @@ func TestProcessModifiedTransactions_NewTransactionNoUserNotes(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil, // balanceSnapshotRepo
 		nil,
 		nil,
 	).(*transactionSyncService)
@@ -1275,6 +1295,7 @@ func TestProcessModifiedTransactions_TransactionNotFound(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil, // balanceSnapshotRepo
 		nil,
 		nil,
 	).(*transactionSyncService)
@@ -1327,6 +1348,7 @@ func TestProcessModifiedTransactions_EmptySlice(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil, // balanceSnapshotRepo
 		nil,
 		nil,
 	).(*transactionSyncService)
@@ -1367,6 +1389,7 @@ func TestProcessRemovedTransactions_Success(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil, // balanceSnapshotRepo
 		nil,
 		nil,
 	).(*transactionSyncService)
@@ -1415,6 +1438,7 @@ func TestProcessRemovedTransactions_IdempotentNotFound(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil, // balanceSnapshotRepo
 		nil,
 		nil,
 	).(*transactionSyncService)
@@ -1457,6 +1481,7 @@ func TestProcessRemovedTransactions_EmptySlice(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil, // balanceSnapshotRepo
 		nil,
 		nil,
 	).(*transactionSyncService)
@@ -1491,6 +1516,7 @@ func TestProcessRemovedTransactions_NilTransactionID(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil, // balanceSnapshotRepo
 		nil,
 		nil,
 	).(*transactionSyncService)
@@ -1542,6 +1568,7 @@ func TestProcessModifiedTransactions_PendingToPosted(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil, // balanceSnapshotRepo
 		nil,
 		nil,
 	).(*transactionSyncService)
