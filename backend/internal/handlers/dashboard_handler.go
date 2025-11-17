@@ -33,8 +33,8 @@ func NewDashboardHandler(service DashboardService) *DashboardHandler {
 // Returns current balance overview with breakdown by account type and period comparison
 func (h *DashboardHandler) GetBalanceSummary(c echo.Context) error {
 	// Extract user ID from context (set by auth middleware)
-	userID, ok := c.Get("userID").(string)
-	if !ok || userID == "" {
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
 		return echo.NewHTTPError(http.StatusUnauthorized, "User not authenticated")
 	}
 
@@ -57,8 +57,8 @@ func (h *DashboardHandler) GetBalanceSummary(c echo.Context) error {
 // Returns time series balance data for charts with optional account type breakdown
 func (h *DashboardHandler) GetBalanceHistory(c echo.Context) error {
 	// Extract user ID from context
-	userID, ok := c.Get("userID").(string)
-	if !ok || userID == "" {
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
 		return echo.NewHTTPError(http.StatusUnauthorized, "User not authenticated")
 	}
 
@@ -81,8 +81,8 @@ func (h *DashboardHandler) GetBalanceHistory(c echo.Context) error {
 // Returns available account types for the user with counts and totals
 func (h *DashboardHandler) GetAccountTypes(c echo.Context) error {
 	// Extract user ID from context
-	userID, ok := c.Get("userID").(string)
-	if !ok || userID == "" {
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
 		return echo.NewHTTPError(http.StatusUnauthorized, "User not authenticated")
 	}
 
