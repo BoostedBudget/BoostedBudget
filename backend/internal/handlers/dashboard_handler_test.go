@@ -58,7 +58,7 @@ func TestGetBalanceSummary_Success(t *testing.T) {
 
 	// Set user ID in context (simulating auth middleware)
 	userID := "test-user-123"
-	c.Set("userID", userID)
+	c.Set("user_id", userID)
 
 	// Mock response
 	asOfDate := time.Now().UTC()
@@ -121,7 +121,7 @@ func TestGetBalanceSummary_WithQueryParams(t *testing.T) {
 	c := e.NewContext(req, rec)
 
 	userID := "test-user-123"
-	c.Set("userID", userID)
+	c.Set("user_id", userID)
 
 	// Mock response
 	mockResponse := &domain.BalanceSummaryResponse{
@@ -191,7 +191,7 @@ func TestGetBalanceSummary_ServiceError(t *testing.T) {
 	c := e.NewContext(req, rec)
 
 	userID := "test-user-123"
-	c.Set("userID", userID)
+	c.Set("user_id", userID)
 
 	// Mock service error
 	mockService.On("GetBalanceSummary", mock.Anything, userID, mock.Anything).Return(nil, errors.New("database connection failed"))
@@ -220,7 +220,7 @@ func TestGetBalanceHistory_Success(t *testing.T) {
 	c := e.NewContext(req, rec)
 
 	userID := "test-user-123"
-	c.Set("userID", userID)
+	c.Set("user_id", userID)
 
 	// Mock response
 	mockResponse := &domain.BalanceHistoryResponse{
@@ -271,7 +271,7 @@ func TestGetBalanceHistory_InvalidDateFormat(t *testing.T) {
 	c := e.NewContext(req, rec)
 
 	userID := "test-user-123"
-	c.Set("userID", userID)
+	c.Set("user_id", userID)
 
 	// Execute
 	err := handler.GetBalanceHistory(c)
@@ -295,7 +295,7 @@ func TestGetAccountTypes_Success(t *testing.T) {
 	c := e.NewContext(req, rec)
 
 	userID := "test-user-123"
-	c.Set("userID", userID)
+	c.Set("user_id", userID)
 
 	// Mock response
 	mockResponse := &domain.AccountTypesResponse{
