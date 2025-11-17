@@ -418,9 +418,9 @@ run_migrations() {
 
       # Check if baseline is needed (database exists but no Atlas tracking)
       echo "Checking migration status..."
-      if atlas migrate status --dir file://migrations --url "$STAGING_DB_URL" 2>&1 | grep -q "No migration applied yet"; then
+      if atlas migrate status --dir "file://migrations?format=golang-migrate" --url "$STAGING_DB_URL" 2>&1 | grep -q "No migration applied yet"; then
         echo "Fresh database detected, establishing baseline at version 000012..."
-        atlas migrate set 000012 --dir file://migrations --url "$STAGING_DB_URL" || {
+        atlas migrate set 000012 --dir "file://migrations?format=golang-migrate" --url "$STAGING_DB_URL" || {
           cd ..
           print_error "Failed to set baseline version"
           return 1
@@ -429,7 +429,7 @@ run_migrations() {
       fi
 
       # Apply any new migrations
-      atlas migrate apply --dir file://migrations --url "$STAGING_DB_URL" || {
+      atlas migrate apply --dir "file://migrations?format=golang-migrate" --url "$STAGING_DB_URL" || {
         cd ..
         print_error "Failed to apply migrations"
         return 1
