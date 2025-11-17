@@ -48,9 +48,11 @@ for i in $(seq 1 $MAX_ATTEMPTS); do
 
   # Apply all pending migrations (Atlas handles fresh databases automatically)
   # Use atlas.hcl config for golang-migrate format support (.up.sql/.down.sql)
+  # Explicit --dir with format parameter for consistency with CI/CD lint command
   atlas migrate apply \
     --config file:///app/atlas.hcl \
     --env production \
+    --dir "file:///app/migrations?format=golang-migrate" \
     --url "$MIGRATION_URL" \
     --revisions-schema public && {
     echo "✓ Migrations completed successfully"

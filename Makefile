@@ -86,7 +86,7 @@ test-fast:
 	@# See: Memory leak investigation Oct 2025 - prevents dangling Docker image accumulation
 	@if docker compose ps postgres 2>/dev/null | grep -q "running"; then \
 		cd backend && atlas migrate lint \
-			--dir file://migrations \
+			--dir "file://migrations?format=golang-migrate" \
 			--dev-url "postgres://devuser:devpass@localhost:5432/boostedbudget?sslmode=disable" \
 			--latest 1; \
 	else \
@@ -146,7 +146,7 @@ test-all:
 	@# See: Memory leak investigation Oct 2025 - prevents dangling Docker image accumulation
 	@if docker compose ps postgres 2>/dev/null | grep -q "running"; then \
 		cd backend && atlas migrate lint \
-			--dir file://migrations \
+			--dir "file://migrations?format=golang-migrate" \
 			--dev-url "postgres://devuser:devpass@localhost:5432/boostedbudget?sslmode=disable" \
 			--latest 1; \
 	else \
