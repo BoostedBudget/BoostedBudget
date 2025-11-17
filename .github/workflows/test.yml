@@ -376,6 +376,22 @@ jobs:
             sleep 1
           done
 
+      - name: Debug migration files
+        run: |
+          echo "::group::Migration Files Debug"
+          cd ${{ env.UNIQUE_WORKSPACE }}/backend
+          echo "Working directory: $(pwd)"
+          echo ""
+          echo "Migration files count:"
+          ls -1 migrations/*.sql 2>/dev/null | wc -l || echo "No migration files found"
+          echo ""
+          echo ".down.sql files count:"
+          ls -1 migrations/*.down.sql 2>/dev/null | wc -l || echo "No .down.sql files found"
+          echo ""
+          echo "atlas.sum line count:"
+          wc -l migrations/atlas.sum || echo "atlas.sum not found"
+          echo "::endgroup::"
+
       - name: Lint migrations (Atlas validation)
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
@@ -385,10 +401,11 @@ jobs:
 
           # NOTE: Must include format=golang-migrate in --dir URL for .up/.down file support
           # Validates migration file integrity (checksums), SQL syntax, schema conflicts
+          # Using absolute path ($PWD) to ensure proper resolution in unique workspace
           atlas migrate lint \
             --config file://atlas.hcl \
             --env local \
-            --dir "file://migrations?format=golang-migrate" \
+            --dir "file://$PWD/migrations?format=golang-migrate" \
             --latest 1
 
           echo "::notice::✅ Migration lint passed - no schema errors detected"
