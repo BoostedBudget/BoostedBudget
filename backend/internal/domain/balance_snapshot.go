@@ -5,8 +5,9 @@ import (
 	"time"
 )
 
-// BalanceSnapshot represents a daily snapshot of an account's balance.
+// BalanceSnapshot represents a point-in-time snapshot of an account's balance.
 // Captured from Plaid webhooks (INITIAL_UPDATE, DEFAULT_UPDATE) to track historical balances.
+// Supports multiple snapshots per day for Premium+ tier high-frequency syncs (10-minute intervals).
 type BalanceSnapshot struct {
 	ID               string    `json:"id" db:"id"`
 	AccountID        string    `json:"account_id" db:"account_id"`
@@ -14,9 +15,9 @@ type BalanceSnapshot struct {
 	CurrentBalance   *float64  `json:"current_balance,omitempty" db:"current_balance"`
 	AvailableBalance *float64  `json:"available_balance,omitempty" db:"available_balance"`
 	CurrencyCode     string    `json:"currency_code" db:"currency_code"` // ISO 4217 currency code
-	SnapshotDate     time.Time `json:"snapshot_date" db:"snapshot_date"` // The date this balance represents
+	SnapshotAt       time.Time `json:"snapshot_at" db:"snapshot_at"`     // Timestamp when this snapshot was captured
 	Source           string    `json:"source" db:"source"`               // plaid_webhook, migration, manual
-	CreatedAt        time.Time `json:"created_at" db:"created_at"`       // When this snapshot was created
+	CreatedAt        time.Time `json:"created_at" db:"created_at"`       // When this record was created
 }
 
 // BalanceSnapshotSource constants for the source field
@@ -37,8 +38,8 @@ func (bs *BalanceSnapshot) Validate() error {
 	if bs.CurrencyCode == "" {
 		return errors.New("currency_code is required")
 	}
-	if bs.SnapshotDate.IsZero() {
-		return errors.New("snapshot_date is required")
+	if bs.SnapshotAt.IsZero() {
+		return errors.New("snapshot_at is required")
 	}
 	if bs.Source == "" {
 		return errors.New("source is required")
