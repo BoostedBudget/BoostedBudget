@@ -6,8 +6,6 @@
 -- Existing date-based data converted to timestamp (midnight UTC)
 -- ============================================================================
 
-BEGIN;
-
 -- Step 1: Drop old unique constraint (allows multiple snapshots per day)
 ALTER TABLE balance_snapshots
 DROP CONSTRAINT IF EXISTS unique_account_date;
@@ -46,5 +44,3 @@ ON balance_snapshots(account_id, snapshot_at DESC);
 -- Step 8: Add comment
 COMMENT ON COLUMN balance_snapshots.snapshot_at IS
 'Timestamp when this balance snapshot was captured. Supports multiple snapshots per account per day for Premium+ tier high-frequency syncs (10-minute intervals).';
-
-COMMIT;
