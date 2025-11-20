@@ -427,3 +427,261 @@ func TestBalanceSnapshotRepository_DeleteByAccountID(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestBalanceSnapshotRepository_Create_PreservesMicroseconds tests that microsecond precision is preserved
+func TestBalanceSnapshotRepository_Create_PreservesMicroseconds(t *testing.T) {
+	db, mock, repo := setupSnapshotMockDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	// Create timestamp with microsecond precision
+	snapshotAt := time.Date(2024, 11, 15, 10, 30, 45, 123456000, time.UTC) // 123456 microseconds
+	balance := 1500.50
+
+	snapshot := &domain.BalanceSnapshot{
+		ID:             uuid.New().String(),
+		AccountID:      uuid.New().String(),
+		UserID:         uuid.New().String(),
+		CurrentBalance: &balance,
+		CurrencyCode:   "USD",
+		SnapshotAt:     snapshotAt,
+		Source:         domain.SnapshotSourcePlaidWebhook,
+	}
+
+	// Expect INSERT with exact timestamp including microseconds
+	mock.ExpectExec(regexp.QuoteMeta(`
+		INSERT INTO balance_snapshots
+		(id, account_id, user_id, current_balance, available_balance, currency_code, snapshot_at, source, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`)).WithArgs(
+		snapshot.ID,
+		snapshot.AccountID,
+		snapshot.UserID,
+		snapshot.CurrentBalance,
+		snapshot.AvailableBalance,
+		snapshot.CurrencyCode,
+		snapshotAt, // Microseconds should be preserved
+		snapshot.Source,
+		sqlmock.AnyArg(),
+	).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// Execute
+	err := repo.Create(ctx, snapshot)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.Equal(t, 123456000, snapshot.SnapshotAt.Nanosecond()) // Verify microseconds preserved in struct
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestBalanceSnapshotRepository_GetByUserIDAndDateRange_SubSecondOrdering tests ordering of snapshots less than 1 second apart
+func TestBalanceSnapshotRepository_GetByUserIDAndDateRange_SubSecondOrdering(t *testing.T) {
+	db, mock, repo := setupSnapshotMockDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	accountID := uuid.New().String()
+	startDate := time.Date(2024, 11, 15, 10, 30, 45, 0, time.UTC)
+	endDate := time.Date(2024, 11, 15, 10, 30, 46, 0, time.UTC)
+
+	// Two snapshots within same second, different microseconds
+	time1 := time.Date(2024, 11, 15, 10, 30, 45, 100000000, time.UTC) // .100 seconds
+	time2 := time.Date(2024, 11, 15, 10, 30, 45, 900000000, time.UTC) // .900 seconds
+
+	rows := sqlmock.NewRows([]string{
+		"id", "account_id", "user_id", "current_balance", "available_balance",
+		"currency_code", "snapshot_at", "source", "created_at",
+	}).
+		AddRow(uuid.New().String(), accountID, userID, 1000.00, nil, "USD", time1, "plaid_webhook", time.Now()).
+		AddRow(uuid.New().String(), accountID, userID, 1001.00, nil, "USD", time2, "plaid_webhook", time.Now())
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, account_id, user_id, current_balance, available_balance,
+		       currency_code, snapshot_at, source, created_at
+		FROM balance_snapshots
+		WHERE user_id = $1
+		  AND snapshot_at >= $2
+		  AND snapshot_at <= $3
+		ORDER BY snapshot_at ASC
+	`)).WithArgs(userID, startDate, endDate).WillReturnRows(rows)
+
+	// Execute
+	snapshots, err := repo.GetByUserIDAndDateRange(ctx, userID, startDate, endDate)
+
+	// Assert - verify ordering is correct even within same second
+	assert.NoError(t, err)
+	assert.Len(t, snapshots, 2)
+	assert.True(t, snapshots[0].SnapshotAt.Before(snapshots[1].SnapshotAt), "Snapshots should be ordered by timestamp ASC")
+	assert.Equal(t, 1000.00, *snapshots[0].CurrentBalance)
+	assert.Equal(t, 1001.00, *snapshots[1].CurrentBalance)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestBalanceSnapshotRepository_GetByUserIDAndDateRange_BoundaryConditions tests inclusive range boundaries
+func TestBalanceSnapshotRepository_GetByUserIDAndDateRange_BoundaryConditions(t *testing.T) {
+	db, mock, repo := setupSnapshotMockDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	accountID := uuid.New().String()
+
+	// Define exact boundaries
+	startDate := time.Date(2024, 11, 15, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 11, 15, 23, 59, 59, 999999000, time.UTC)
+
+	// Snapshots at exact boundaries
+	atStart := time.Date(2024, 11, 15, 0, 0, 0, 0, time.UTC)
+	atEnd := time.Date(2024, 11, 15, 23, 59, 59, 999999000, time.UTC)
+	middle := time.Date(2024, 11, 15, 12, 0, 0, 0, time.UTC)
+
+	rows := sqlmock.NewRows([]string{
+		"id", "account_id", "user_id", "current_balance", "available_balance",
+		"currency_code", "snapshot_at", "source", "created_at",
+	}).
+		AddRow(uuid.New().String(), accountID, userID, 1000.00, nil, "USD", atStart, "plaid_webhook", time.Now()).
+		AddRow(uuid.New().String(), accountID, userID, 1100.00, nil, "USD", middle, "plaid_webhook", time.Now()).
+		AddRow(uuid.New().String(), accountID, userID, 1200.00, nil, "USD", atEnd, "plaid_webhook", time.Now())
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, account_id, user_id, current_balance, available_balance,
+		       currency_code, snapshot_at, source, created_at
+		FROM balance_snapshots
+		WHERE user_id = $1
+		  AND snapshot_at >= $2
+		  AND snapshot_at <= $3
+		ORDER BY snapshot_at ASC
+	`)).WithArgs(userID, startDate, endDate).WillReturnRows(rows)
+
+	// Execute
+	snapshots, err := repo.GetByUserIDAndDateRange(ctx, userID, startDate, endDate)
+
+	// Assert - all three should be included (inclusive boundaries)
+	assert.NoError(t, err)
+	assert.Len(t, snapshots, 3)
+	assert.Equal(t, 1000.00, *snapshots[0].CurrentBalance) // Start boundary
+	assert.Equal(t, 1100.00, *snapshots[1].CurrentBalance) // Middle
+	assert.Equal(t, 1200.00, *snapshots[2].CurrentBalance) // End boundary
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestBalanceSnapshotRepository_GetAggregatedHistory_MultipleSnapshotsPerDay tests aggregation sums all snapshots per day
+func TestBalanceSnapshotRepository_GetAggregatedHistory_MultipleSnapshotsPerDay(t *testing.T) {
+	db, mock, repo := setupSnapshotMockDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	startDate := time.Date(2024, 11, 15, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 11, 15, 23, 59, 59, 0, time.UTC)
+
+	// Mock aggregated data - the repository aggregates by date
+	// If there are 3 snapshots with balances 1000, 1100, 1200 for same account on same day,
+	// the SUM would be 3300 (this is the current implementation behavior)
+	// NOTE: This tests the current behavior; if the intention was to use latest balance per day,
+	// the implementation would need to change
+	rows := sqlmock.NewRows([]string{"snapshot_date", "total_balance"}).
+		AddRow(time.Date(2024, 11, 15, 0, 0, 0, 0, time.UTC), 3300.00) // Sum of 1000+1100+1200
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT (bs.snapshot_at AT TIME ZONE 'UTC')::date as snapshot_date, SUM(bs.current_balance) as total_balance
+		FROM balance_snapshots bs
+		WHERE bs.user_id = $1
+		  AND bs.snapshot_at >= $2
+		  AND bs.snapshot_at <= $3
+		GROUP BY (bs.snapshot_at AT TIME ZONE 'UTC')::date
+		ORDER BY (bs.snapshot_at AT TIME ZONE 'UTC')::date ASC
+	`)).WithArgs(userID, startDate, endDate).WillReturnRows(rows)
+
+	// Execute
+	history, err := repo.GetAggregatedHistory(ctx, userID, startDate, endDate, nil)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.Len(t, history, 1)
+	assert.Equal(t, 3300.00, history[0].TotalBalance)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestBalanceSnapshotRepository_GetAggregatedHistory_TimezoneConsistency tests UTC conversion for aggregation
+func TestBalanceSnapshotRepository_GetAggregatedHistory_TimezoneConsistency(t *testing.T) {
+	db, mock, repo := setupSnapshotMockDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	// Query in UTC
+	startDate := time.Date(2024, 11, 14, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 11, 16, 23, 59, 59, 0, time.UTC)
+
+	// Mock aggregated data - the AT TIME ZONE 'UTC' casting ensures
+	// all timestamps are normalized to UTC before date extraction
+	rows := sqlmock.NewRows([]string{"snapshot_date", "total_balance"}).
+		AddRow(time.Date(2024, 11, 14, 0, 0, 0, 0, time.UTC), 1000.00).
+		AddRow(time.Date(2024, 11, 15, 0, 0, 0, 0, time.UTC), 2000.00).
+		AddRow(time.Date(2024, 11, 16, 0, 0, 0, 0, time.UTC), 3000.00)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT (bs.snapshot_at AT TIME ZONE 'UTC')::date as snapshot_date, SUM(bs.current_balance) as total_balance
+		FROM balance_snapshots bs
+		WHERE bs.user_id = $1
+		  AND bs.snapshot_at >= $2
+		  AND bs.snapshot_at <= $3
+		GROUP BY (bs.snapshot_at AT TIME ZONE 'UTC')::date
+		ORDER BY (bs.snapshot_at AT TIME ZONE 'UTC')::date ASC
+	`)).WithArgs(userID, startDate, endDate).WillReturnRows(rows)
+
+	// Execute
+	history, err := repo.GetAggregatedHistory(ctx, userID, startDate, endDate, nil)
+
+	// Assert - all dates should be UTC
+	assert.NoError(t, err)
+	assert.Len(t, history, 3)
+
+	// Verify dates are in UTC
+	for _, h := range history {
+		assert.Equal(t, time.UTC, h.Date.Location())
+	}
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestBalanceSnapshotRepository_GetLatestByAccountID_SubSecondPrecision tests that latest uses full timestamp precision
+func TestBalanceSnapshotRepository_GetLatestByAccountID_SubSecondPrecision(t *testing.T) {
+	db, mock, repo := setupSnapshotMockDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+
+	// Latest snapshot with microsecond precision
+	snapshotAt := time.Date(2024, 11, 15, 14, 30, 45, 999999000, time.UTC)
+
+	rows := sqlmock.NewRows([]string{
+		"id", "account_id", "user_id", "current_balance", "available_balance",
+		"currency_code", "snapshot_at", "source", "created_at",
+	}).AddRow(
+		uuid.New().String(), accountID, userID, 1500.00, 1400.00,
+		"USD", snapshotAt, "plaid_webhook", time.Now(),
+	)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, account_id, user_id, current_balance, available_balance,
+		       currency_code, snapshot_at, source, created_at
+		FROM balance_snapshots
+		WHERE account_id = $1
+		ORDER BY snapshot_at DESC
+		LIMIT 1
+	`)).WithArgs(accountID).WillReturnRows(rows)
+
+	// Execute
+	snapshot, err := repo.GetLatestByAccountID(ctx, accountID)
+
+	// Assert - microseconds should be preserved
+	assert.NoError(t, err)
+	assert.NotNil(t, snapshot)
+	assert.Equal(t, snapshotAt, snapshot.SnapshotAt)
+	assert.Equal(t, 999999000, snapshot.SnapshotAt.Nanosecond())
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
