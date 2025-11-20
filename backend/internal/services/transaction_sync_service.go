@@ -670,9 +670,11 @@ func (s *transactionSyncService) processRemovedTransactions(
 
 // createBalanceSnapshots fetches current account balances from Plaid and stores snapshots.
 // Issue #353: Balance Tracking Dashboard - Capture balance snapshots during webhook processing
+// Issue #364: Migrated to timestamp-based storage for high-frequency Premium+ syncs
 //
 // Called after transaction sync completes to capture the current state of all account balances.
-// Uses daily deduplication (UPSERT) so multiple webhooks on the same day update the same snapshot.
+// Uses 5-minute deduplication window to prevent excessive snapshots while allowing
+// multiple snapshots per day for high-frequency sync tiers.
 //
 // Error Handling:
 //   - Logs warnings but doesn't fail the entire sync
@@ -715,9 +717,11 @@ func (s *transactionSyncService) createBalanceSnapshots(
 	}
 
 	// Step 3: Create balance snapshots for each account
-	today := time.Now().UTC().Truncate(24 * time.Hour)
+	now := time.Now().UTC()
+	deduplicationWindow := 5 * time.Minute
 	successCount := 0
 	skippedCount := 0
+	dedupedCount := 0
 
 	for _, plaidAccount := range plaidAccounts {
 		plaidAccountID := plaidAccount.GetAccountId()
@@ -727,6 +731,18 @@ func (s *transactionSyncService) createBalanceSnapshots(
 		if !exists {
 			log.Printf("Warning: Plaid account %s not found in internal accounts, skipping snapshot", plaidAccountID)
 			skippedCount++
+			continue
+		}
+
+		// Check for recent snapshot (5-minute deduplication window)
+		latestSnapshot, err := s.balanceSnapshotRepo.GetLatestByAccountID(ctx, internalAccount.ID)
+		if err != nil {
+			log.Printf("Warning: Failed to check latest snapshot for account %s: %v", plaidAccountID, err)
+			// Continue anyway - create snapshot even if dedup check fails
+		} else if latestSnapshot != nil && now.Sub(latestSnapshot.SnapshotAt) < deduplicationWindow {
+			log.Printf("Skipping snapshot for account %s: recent snapshot exists (%v ago)",
+				plaidAccountID, now.Sub(latestSnapshot.SnapshotAt).Round(time.Second))
+			dedupedCount++
 			continue
 		}
 
@@ -742,7 +758,7 @@ func (s *transactionSyncService) createBalanceSnapshots(
 		snapshot := &domain.BalanceSnapshot{
 			AccountID:    internalAccount.ID,
 			UserID:       linkedItem.UserID,
-			SnapshotDate: today,
+			SnapshotAt:   now,
 			Source:       domain.SnapshotSourcePlaidWebhook,
 			CurrencyCode: "USD", // Default to USD
 		}
@@ -771,8 +787,8 @@ func (s *transactionSyncService) createBalanceSnapshots(
 			continue
 		}
 
-		// Store snapshot (UPSERT for daily deduplication)
-		if err := s.balanceSnapshotRepo.CreateOrUpdate(ctx, snapshot); err != nil {
+		// Store snapshot
+		if err := s.balanceSnapshotRepo.Create(ctx, snapshot); err != nil {
 			log.Printf("Warning: Failed to create balance snapshot for account %s: %v", plaidAccountID, err)
 			skippedCount++
 			continue
@@ -781,6 +797,7 @@ func (s *transactionSyncService) createBalanceSnapshots(
 		successCount++
 	}
 
-	log.Printf("Created %d balance snapshots for item %s (skipped %d)", successCount, linkedItem.ID, skippedCount)
+	log.Printf("Created %d balance snapshots for item %s (skipped %d, deduped %d)",
+		successCount, linkedItem.ID, skippedCount, dedupedCount)
 	return nil
 }
