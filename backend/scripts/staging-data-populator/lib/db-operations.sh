@@ -226,7 +226,7 @@ get_latest_balance_snapshots() {
   local user_id=$1
   local limit=${2:-10}
 
-  query_db "SELECT account_id, current_balance, available_balance, snapshot_date FROM balance_snapshots WHERE user_id = '$user_id' ORDER BY snapshot_date DESC LIMIT $limit;" false
+  query_db "SELECT account_id, current_balance, available_balance, snapshot_at FROM balance_snapshots WHERE user_id = '$user_id' ORDER BY snapshot_at DESC LIMIT $limit;" false
 }
 
 # Delete balance snapshots by user ID
@@ -238,12 +238,12 @@ delete_balance_snapshots_by_user_id() {
   return 0
 }
 
-# Check if balance snapshots exist for today
-balance_snapshots_exist_for_today() {
+# Check if balance snapshots exist within last 5 minutes (deduplication window)
+balance_snapshots_exist_recent() {
   local user_id=$1
 
   local count
-  count=$(query_db "SELECT COUNT(*) FROM balance_snapshots WHERE user_id = '$user_id' AND snapshot_date = CURRENT_DATE;")
+  count=$(query_db "SELECT COUNT(*) FROM balance_snapshots WHERE user_id = '$user_id' AND snapshot_at >= NOW() - INTERVAL '5 minutes';")
 
   if [ "$count" -gt 0 ]; then
     return 0

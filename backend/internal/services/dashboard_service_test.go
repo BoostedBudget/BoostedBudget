@@ -15,7 +15,7 @@ type MockBalanceSnapshotRepository struct {
 	mock.Mock
 }
 
-func (m *MockBalanceSnapshotRepository) CreateOrUpdate(ctx context.Context, snapshot *domain.BalanceSnapshot) error {
+func (m *MockBalanceSnapshotRepository) Create(ctx context.Context, snapshot *domain.BalanceSnapshot) error {
 	args := m.Called(ctx, snapshot)
 	return args.Error(0)
 }
@@ -44,6 +44,14 @@ func (m *MockBalanceSnapshotRepository) GetLatestByUserID(ctx context.Context, u
 	return args.Get(0).([]domain.BalanceSnapshot), args.Error(1)
 }
 
+func (m *MockBalanceSnapshotRepository) GetLatestByAccountID(ctx context.Context, accountID string) (*domain.BalanceSnapshot, error) {
+	args := m.Called(ctx, accountID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.BalanceSnapshot), args.Error(1)
+}
+
 func (m *MockBalanceSnapshotRepository) DeleteByAccountID(ctx context.Context, accountID string) error {
 	args := m.Called(ctx, accountID)
 	return args.Error(0)
@@ -62,14 +70,14 @@ func TestGetBalanceSummary_Success(t *testing.T) {
 			AccountID:      "account-1",
 			UserID:         userID,
 			CurrentBalance: &balance1,
-			SnapshotDate:   time.Now().UTC(),
+			SnapshotAt:     time.Now().UTC(),
 		},
 		{
 			ID:             "snapshot-2",
 			AccountID:      "account-2",
 			UserID:         userID,
 			CurrentBalance: &balance2,
-			SnapshotDate:   time.Now().UTC(),
+			SnapshotAt:     time.Now().UTC(),
 		},
 	}
 
