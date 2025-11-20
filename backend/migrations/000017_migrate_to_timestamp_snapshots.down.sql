@@ -5,8 +5,6 @@
 -- If multiple snapshots per day exist, only keeps most recent per day
 -- ============================================================================
 
-BEGIN;
-
 -- Step 1: Drop new indexes
 DROP INDEX IF EXISTS idx_balance_snapshots_snapshot_at;
 DROP INDEX IF EXISTS idx_balance_snapshots_user_at;
@@ -42,5 +40,3 @@ ON balance_snapshots(snapshot_date DESC);
 
 CREATE INDEX idx_balance_snapshots_user_date
 ON balance_snapshots(user_id, snapshot_date DESC);
-
-COMMIT;
