@@ -215,7 +215,7 @@ verify_balance_snapshots_created() {
   log_info "Verifying balance snapshots were created..."
 
   local actual_count
-  actual_count=$(query_db "SELECT COUNT(*) FROM balance_snapshots WHERE user_id = '$user_id' AND snapshot_date = CURRENT_DATE;")
+  actual_count=$(query_db "SELECT COUNT(*) FROM balance_snapshots WHERE user_id = '$user_id' AND DATE(snapshot_at) = CURRENT_DATE;")
 
   if [ "$actual_count" -ge "$expected_count" ]; then
     log_success "Balance snapshots created: $actual_count snapshot(s) for today"
