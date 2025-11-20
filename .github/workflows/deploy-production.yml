@@ -244,7 +244,7 @@ jobs:
       - name: Run Trivy vulnerability scanner (with retry)
         id: trivy-scan
         continue-on-error: true
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           image-ref: ${{ steps.image-ref.outputs.image-ref }}
           format: 'sarif'
@@ -267,7 +267,7 @@ jobs:
         if: steps.trivy-scan.outcome == 'failure'
         id: trivy-scan-retry1
         continue-on-error: true
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           image-ref: ${{ steps.image-ref.outputs.image-ref }}
           format: 'sarif'
@@ -289,7 +289,7 @@ jobs:
       - name: Retry Trivy scan (attempt 3)
         if: steps.trivy-scan-retry1.outcome == 'failure'
         id: trivy-scan-retry2
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           image-ref: ${{ steps.image-ref.outputs.image-ref }}
           format: 'sarif'
