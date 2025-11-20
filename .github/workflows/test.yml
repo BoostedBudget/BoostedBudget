@@ -480,113 +480,10 @@ jobs:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
 
-      - name: Setup Trivy with isolated installation
-        uses: aquasecurity/setup-trivy@v0.2.4
-        with:
-          version: v0.67.2
-          cache-dir: ${{ env.TRIVY_CACHE_DIR }}
-
-      - name: Locate Trivy binary and add to PATH
-        id: locate-trivy
-        run: |
-          echo "::group::Locating Trivy Binary"
-          echo "Component: ${{ matrix.component }}"
-
-          # Try multiple common installation locations in order of likelihood
-          # Each parallel job will independently find its own installation
-          TRIVY_BIN=""
-          SEARCH_PATHS=(
-            "$(which trivy 2>/dev/null || echo '')"
-            "$HOME/.trivy/bin/trivy"
-            "/usr/local/bin/trivy"
-            "$HOME/bin/trivy"
-            "/opt/homebrew/bin/trivy"
-            "$RUNNER_TOOL_CACHE/trivy/*/x64/trivy"
-          )
-
-          for path in "${SEARCH_PATHS[@]}"; do
-            # Handle glob patterns
-            if [[ "$path" == *"*"* ]]; then
-              for expanded in $path; do
-                if [ -f "$expanded" ]; then
-                  TRIVY_BIN="$expanded"
-                  break 2
-                fi
-              done
-            elif [ -f "$path" ]; then
-              TRIVY_BIN="$path"
-              break
-            fi
-          done
-
-          if [ -z "$TRIVY_BIN" ]; then
-            echo "::error::Failed to locate Trivy binary in any expected location"
-            echo "Searched paths:"
-            printf '%s\n' "${SEARCH_PATHS[@]}"
-            exit 1
-          fi
-
-          echo "Found Trivy at: $TRIVY_BIN"
-
-          # Make executable if needed (handle permissions without race conditions)
-          if [ ! -x "$TRIVY_BIN" ]; then
-            echo "Setting executable permissions..."
-            chmod +x "$TRIVY_BIN" || {
-              echo "::error::Failed to set executable permissions"
-              exit 1
-            }
-          fi
-
-          # Add directory to PATH for this job (safe for parallel execution)
-          TRIVY_DIR=$(dirname "$TRIVY_BIN")
-          echo "$TRIVY_DIR" >> $GITHUB_PATH
-          echo "Added $TRIVY_DIR to GITHUB_PATH"
-
-          # Export absolute path for explicit use in this job
-          echo "TRIVY_BIN=$TRIVY_BIN" >> $GITHUB_ENV
-          echo "Exported TRIVY_BIN=$TRIVY_BIN"
-
-          echo "::notice::✅ Trivy located and configured for ${{ matrix.component }}"
-          echo "::endgroup::"
-
-      - name: Health check - Verify Trivy installation
-        id: trivy-health-check
-        run: |
-          echo "::group::Trivy Health Check"
-          echo "Component: ${{ matrix.component }}"
-          echo "TRIVY_BIN: $TRIVY_BIN"
-          echo "TRIVY_TEMP_DIR: ${{ env.TRIVY_TEMP_DIR }}"
-          echo "TRIVY_CACHE_DIR: ${{ env.TRIVY_CACHE_DIR }}"
-
-          # Verify the binary exists at the located path
-          if [ ! -f "$TRIVY_BIN" ]; then
-            echo "::error::Trivy binary not found at: $TRIVY_BIN"
-            exit 1
-          fi
-
-          # Verify executable permissions
-          if [ ! -x "$TRIVY_BIN" ]; then
-            echo "::error::Trivy binary not executable at: $TRIVY_BIN"
-            exit 1
-          fi
-          echo "Permissions: $(ls -l $TRIVY_BIN | awk '{print $1}')"
-
-          # Verify version using explicit path (safe for parallel jobs)
-          "$TRIVY_BIN" --version || {
-            echo "::error::Trivy version check failed"
-            exit 1
-          }
-
-          # Also verify it's in PATH now
-          which trivy &>/dev/null && echo "Trivy also available via PATH: $(which trivy)" || echo "Note: Trivy not in PATH, but available via TRIVY_BIN"
-
-          echo "::notice::✅ Trivy health check passed for ${{ matrix.component }}"
-          echo "::endgroup::"
-
       - name: Scan ${{ matrix.component }} dependencies (with retry)
         id: scan-deps
         continue-on-error: true
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
           scan-ref: '${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}'
@@ -611,7 +508,7 @@ jobs:
         if: steps.scan-deps.outcome == 'failure'
         id: scan-deps-retry1
         continue-on-error: true
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
           scan-ref: '${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}'
@@ -635,7 +532,7 @@ jobs:
       - name: Retry dependency scan (attempt 3)
         if: steps.scan-deps-retry1.outcome == 'failure'
         id: scan-deps-retry2
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
           scan-ref: '${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}'
@@ -680,7 +577,7 @@ jobs:
       - name: Scan ${{ matrix.component }} Dockerfile (with retry)
         id: scan-dockerfile
         continue-on-error: true
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'config'
           scan-ref: '${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile'
@@ -703,7 +600,7 @@ jobs:
         if: steps.scan-dockerfile.outcome == 'failure'
         id: scan-dockerfile-retry1
         continue-on-error: true
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'config'
           scan-ref: '${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile'
@@ -724,7 +621,7 @@ jobs:
 
       - name: Retry Dockerfile scan (attempt 3)
         if: steps.scan-dockerfile-retry1.outcome == 'failure'
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'config'
           scan-ref: '${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile'
