@@ -96,6 +96,11 @@ func (m *MockTransactionRepository) UpdateTags(ctx context.Context, id string, u
 	return args.Error(0)
 }
 
+func (m *MockTransactionRepository) UpdateCategory(ctx context.Context, id string, userID string, categoryOverride []string, categorySource domain.CategorySource) error {
+	args := m.Called(ctx, id, userID, categoryOverride, categorySource)
+	return args.Error(0)
+}
+
 // TestTransactionService_ListTransactions_EnforcesMaxLimit tests that the service enforces a maximum limit of 100
 func TestTransactionService_ListTransactions_EnforcesMaxLimit(t *testing.T) {
 	mockRepo := new(MockTransactionRepository)

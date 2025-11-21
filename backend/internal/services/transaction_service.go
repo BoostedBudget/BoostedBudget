@@ -2,9 +2,11 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -46,6 +48,10 @@ type TransactionService interface {
 	// UpdateTransactionTags updates the tags on a transaction
 	// Returns the updated transaction
 	UpdateTransactionTags(ctx context.Context, userID, transactionID string, tags []string) (*domain.Transaction, error)
+
+	// UpdateTransactionCategory updates the category override on a transaction
+	// Returns the updated transaction
+	UpdateTransactionCategory(ctx context.Context, userID, transactionID string, category []string) (*domain.Transaction, error)
 }
 
 // TransactionListResponse contains paginated transaction results with metadata
@@ -231,6 +237,30 @@ func (s *transactionService) UpdateTransactionTags(ctx context.Context, userID, 
 	// Update the transaction object
 	tx.Tags = tags
 	tx.TagsSource = tagsSource
+
+	return tx, nil
+}
+
+// UpdateTransactionCategory updates the category override on a transaction
+func (s *transactionService) UpdateTransactionCategory(ctx context.Context, userID, transactionID string, category []string) (*domain.Transaction, error) {
+	// Get existing transaction to verify ownership
+	tx, err := s.GetTransactionByID(ctx, userID, transactionID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Update category in database
+	if err := s.repo.UpdateCategory(ctx, transactionID, userID, category, domain.CategorySourceManual); err != nil {
+		return nil, fmt.Errorf("failed to update transaction category: %w", err)
+	}
+
+	// Update the transaction object
+	categoryJSON, _ := json.Marshal(category)
+	categoryStr := string(categoryJSON)
+	tx.CategoryOverride = &categoryStr
+	tx.CategorySourceField = domain.CategorySourceManual
+	now := time.Now()
+	tx.CategoryOverrideDate = &now
 
 	return tx, nil
 }
