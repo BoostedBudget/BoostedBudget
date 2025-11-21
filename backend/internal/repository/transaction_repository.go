@@ -357,7 +357,9 @@ func (r *transactionRepository) GetByUserIDWithFilters(ctx context.Context, user
 		SELECT id, user_id, account_id, linked_item_id, source, external_transaction_id,
 		       external_metadata, amount, date, authorized_date, name, merchant_name,
 		       category, personal_finance_category, payment_channel, pending,
-		       user_notes, created_at, updated_at
+		       user_notes, created_at, updated_at,
+		       tags, tags_source,
+		       category_override, category_source, category_override_date, original_category
 		FROM transactions
 		%s
 		ORDER BY date DESC, created_at DESC
@@ -402,13 +404,18 @@ func (r *transactionRepository) GetByExternalID(ctx context.Context, source doma
 		       external_transaction_id, external_metadata, amount, date,
 		       authorized_date, name, merchant_name, category,
 		       personal_finance_category, payment_channel, pending,
-		       user_notes, created_at, updated_at
+		       user_notes, created_at, updated_at,
+		       tags, tags_source,
+		       category_override, category_source, category_override_date, original_category
 		FROM transactions
 		WHERE source = $1 AND external_transaction_id = $2 AND user_id = $3
 	`
 
 	var tx domain.Transaction
 	var sourceStr string
+	var tagsJSON []byte
+	var tagsSourceJSON []byte
+	var categorySource sql.NullString
 
 	err := r.db.QueryRowContext(ctx, query, string(source), externalID, userID).Scan(
 		&tx.ID,
@@ -430,6 +437,12 @@ func (r *transactionRepository) GetByExternalID(ctx context.Context, source doma
 		&tx.UserNotes,
 		&tx.CreatedAt,
 		&tx.UpdatedAt,
+		&tagsJSON,
+		&tagsSourceJSON,
+		&tx.CategoryOverride,
+		&categorySource,
+		&tx.CategoryOverrideDate,
+		&tx.OriginalCategory,
 	)
 
 	if err == sql.ErrNoRows {
@@ -440,6 +453,26 @@ func (r *transactionRepository) GetByExternalID(ctx context.Context, source doma
 	}
 
 	tx.Source = domain.TransactionSource(sourceStr)
+
+	// Parse tags from JSONB
+	if tagsJSON != nil {
+		if err := json.Unmarshal(tagsJSON, &tx.Tags); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal tags: %w", err)
+		}
+	}
+
+	// Parse tags_source from JSONB
+	if tagsSourceJSON != nil {
+		if err := json.Unmarshal(tagsSourceJSON, &tx.TagsSource); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal tags_source: %w", err)
+		}
+	}
+
+	// Set category source
+	if categorySource.Valid {
+		tx.CategorySourceField = domain.CategorySource(categorySource.String)
+	}
+
 	return &tx, nil
 }
 
@@ -512,6 +545,9 @@ func (r *transactionRepository) scanTransactions(rows *sql.Rows) ([]domain.Trans
 	for rows.Next() {
 		var tx domain.Transaction
 		var source string
+		var tagsJSON []byte
+		var tagsSourceJSON []byte
+		var categorySource sql.NullString
 
 		err := rows.Scan(
 			&tx.ID,
@@ -533,6 +569,12 @@ func (r *transactionRepository) scanTransactions(rows *sql.Rows) ([]domain.Trans
 			&tx.UserNotes,
 			&tx.CreatedAt,
 			&tx.UpdatedAt,
+			&tagsJSON,
+			&tagsSourceJSON,
+			&tx.CategoryOverride,
+			&categorySource,
+			&tx.CategoryOverrideDate,
+			&tx.OriginalCategory,
 		)
 
 		if err != nil {
@@ -540,6 +582,26 @@ func (r *transactionRepository) scanTransactions(rows *sql.Rows) ([]domain.Trans
 		}
 
 		tx.Source = domain.TransactionSource(source)
+
+		// Parse tags from JSONB
+		if tagsJSON != nil {
+			if err := json.Unmarshal(tagsJSON, &tx.Tags); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal tags: %w", err)
+			}
+		}
+
+		// Parse tags_source from JSONB
+		if tagsSourceJSON != nil {
+			if err := json.Unmarshal(tagsSourceJSON, &tx.TagsSource); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal tags_source: %w", err)
+			}
+		}
+
+		// Set category source
+		if categorySource.Valid {
+			tx.CategorySourceField = domain.CategorySource(categorySource.String)
+		}
+
 		transactions = append(transactions, tx)
 	}
 
@@ -556,7 +618,8 @@ func (r *transactionRepository) GetByID(ctx context.Context, id string) (*domain
 		SELECT id, user_id, account_id, linked_item_id, source, external_transaction_id,
 			   external_metadata, amount, date, authorized_date, name, merchant_name,
 			   category, personal_finance_category, payment_channel, pending, user_notes,
-			   created_at, updated_at, tags, tags_source
+			   created_at, updated_at, tags, tags_source,
+			   category_override, category_source, category_override_date, original_category
 		FROM transactions
 		WHERE id = $1
 	`
@@ -565,6 +628,7 @@ func (r *transactionRepository) GetByID(ctx context.Context, id string) (*domain
 	var source string
 	var tagsJSON []byte
 	var tagsSourceJSON []byte
+	var categorySource sql.NullString
 
 	err := r.db.QueryRowContext(ctx, query, id).Scan(
 		&tx.ID,
@@ -588,6 +652,10 @@ func (r *transactionRepository) GetByID(ctx context.Context, id string) (*domain
 		&tx.UpdatedAt,
 		&tagsJSON,
 		&tagsSourceJSON,
+		&tx.CategoryOverride,
+		&categorySource,
+		&tx.CategoryOverrideDate,
+		&tx.OriginalCategory,
 	)
 
 	if err != nil {
@@ -611,6 +679,11 @@ func (r *transactionRepository) GetByID(ctx context.Context, id string) (*domain
 		if err := json.Unmarshal(tagsSourceJSON, &tx.TagsSource); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal tags_source: %w", err)
 		}
+	}
+
+	// Set category source
+	if categorySource.Valid {
+		tx.CategorySourceField = domain.CategorySource(categorySource.String)
 	}
 
 	return &tx, nil
