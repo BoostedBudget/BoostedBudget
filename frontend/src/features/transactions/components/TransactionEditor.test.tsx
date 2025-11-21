@@ -181,6 +181,106 @@ describe('TransactionEditor', () => {
       })
     })
 
+    it('should pass updated transaction to onSave with tag changes', async () => {
+      const onSave = vi.fn()
+      const updatedTxn: Transaction = {
+        ...mockTransaction,
+        tags: [],
+        updated_at: '2025-01-15T12:00:00Z',
+      }
+      vi.mocked(updateTransactionTags).mockResolvedValue(updatedTxn)
+
+      render(<TransactionEditor {...defaultProps} onSave={onSave} />)
+
+      // Remove tag
+      const removeButton = screen.getByRole('button', { name: /remove food/i })
+      fireEvent.click(removeButton)
+
+      const saveButton = screen.getByRole('button', { name: /save/i })
+      fireEvent.click(saveButton)
+
+      await waitFor(() => {
+        expect(onSave).toHaveBeenCalledWith(updatedTxn)
+      })
+    })
+
+    it('should pass updated transaction to onSave with category changes', async () => {
+      const onSave = vi.fn()
+      const txnNoTags: Transaction = {
+        ...mockTransaction,
+        tags: [],
+        category: '["Food & Dining"]',
+      }
+      const updatedTxn: Transaction = {
+        ...txnNoTags,
+        category_override: '["Shopping"]',
+        updated_at: '2025-01-15T12:00:00Z',
+      }
+      vi.mocked(updateTransactionCategory).mockResolvedValue(updatedTxn)
+
+      render(
+        <TransactionEditor
+          {...defaultProps}
+          transaction={txnNoTags}
+          onSave={onSave}
+        />
+      )
+
+      // Change category
+      const changeButton = screen.getByRole('button', { name: /change category/i })
+      fireEvent.click(changeButton)
+
+      await waitFor(() => {
+        const option = screen.getByRole('option', { name: 'Shopping' })
+        fireEvent.click(option)
+      })
+
+      const saveButton = screen.getByRole('button', { name: /save/i })
+      fireEvent.click(saveButton)
+
+      await waitFor(() => {
+        expect(onSave).toHaveBeenCalledWith(updatedTxn)
+      })
+    })
+
+    it('should pass final transaction state when both tags and category change', async () => {
+      const onSave = vi.fn()
+      const afterTagUpdate: Transaction = {
+        ...mockTransaction,
+        tags: [],
+      }
+      const afterCategoryUpdate: Transaction = {
+        ...afterTagUpdate,
+        category_override: '["Shopping"]',
+        updated_at: '2025-01-15T12:00:00Z',
+      }
+      vi.mocked(updateTransactionTags).mockResolvedValue(afterTagUpdate)
+      vi.mocked(updateTransactionCategory).mockResolvedValue(afterCategoryUpdate)
+
+      render(<TransactionEditor {...defaultProps} onSave={onSave} />)
+
+      // Remove tag
+      const removeButton = screen.getByRole('button', { name: /remove food/i })
+      fireEvent.click(removeButton)
+
+      // Change category
+      const changeButton = screen.getByRole('button', { name: /change category/i })
+      fireEvent.click(changeButton)
+
+      await waitFor(() => {
+        const option = screen.getByRole('option', { name: 'Shopping' })
+        fireEvent.click(option)
+      })
+
+      const saveButton = screen.getByRole('button', { name: /save/i })
+      fireEvent.click(saveButton)
+
+      await waitFor(() => {
+        // Should receive the final state after both updates
+        expect(onSave).toHaveBeenCalledWith(afterCategoryUpdate)
+      })
+    })
+
     it('should show error message on save failure', async () => {
       vi.mocked(updateTransactionTags).mockRejectedValue(new Error('Save failed'))
       render(<TransactionEditor {...defaultProps} />)
