@@ -410,13 +410,13 @@ describe('SyncStatsCard', () => {
     const { container } = render(<SyncStatsCard />)
 
     await waitFor(() => {
-      expect(container.querySelector('.sync-stats-card')).toBeInTheDocument()
+      expect(container.querySelector('.sync-stats-card__progress-section')).toBeInTheDocument()
     })
 
+    expect(container.querySelector('.sync-stats-card')).toBeInTheDocument()
     expect(container.querySelector('.sync-stats-card__header')).toBeInTheDocument()
     expect(container.querySelector('.sync-stats-card__title')).toBeInTheDocument()
     expect(container.querySelector('.sync-stats-card__content')).toBeInTheDocument()
-    expect(container.querySelector('.sync-stats-card__progress-section')).toBeInTheDocument()
     expect(container.querySelector('.sync-stats-card__reset-info')).toBeInTheDocument()
   })
 
