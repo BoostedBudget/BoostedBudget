@@ -46,13 +46,16 @@ tiers:
       data_export_requests_per_month: 1
       accounts_synced_per_month: 3  # Can sync 3 accounts per month
       transaction_history_days: 30  # 30 days historical depth (90 account-days/month)
+      custom_categories_max: 25  # Issue #345: Category/tag editing FREE for all
+      custom_tags_max: 50
 
     features:
       ads_enabled: true
       ai_insights: false
       api_access: false
       priority_support: false
-      custom_categories: false
+      custom_categories: true  # Issue #345: FREE for all tiers
+      custom_tags: true  # Issue #345: FREE for all tiers
       advanced_reports: false
 
   premium_lite:
@@ -72,6 +75,8 @@ tiers:
       data_export_requests_per_month: 5
       accounts_synced_per_month: 15  # Can sync 15 accounts per month
       transaction_history_days: 365  # 1 year historical depth (5,475 account-days/month)
+      custom_categories_max: 50
+      custom_tags_max: 100
 
     features:
       ads_enabled: false
@@ -79,6 +84,7 @@ tiers:
       api_access: false
       priority_support: false
       custom_categories: true
+      custom_tags: true
       advanced_reports: false
 
   premium:
@@ -98,6 +104,8 @@ tiers:
       data_export_requests_per_month: 10
       accounts_synced_per_month: 30  # Can sync 30 accounts per month
       transaction_history_days: 730  # 2 years historical depth (21,900 account-days/month)
+      custom_categories_max: 100
+      custom_tags_max: 200
 
     features:
       ads_enabled: false
@@ -105,6 +113,7 @@ tiers:
       api_access: false
       priority_support: true
       custom_categories: true
+      custom_tags: true
       advanced_reports: true
 
   premium_plus:
@@ -124,6 +133,8 @@ tiers:
       data_export_requests_per_month: -1  # Unlimited
       accounts_synced_per_month: -1  # Unlimited accounts can sync per month
       transaction_history_days: 730  # 2 years historical depth (Plaid maximum)
+      custom_categories_max: -1  # Unlimited
+      custom_tags_max: -1  # Unlimited
 
     features:
       ads_enabled: false
@@ -131,6 +142,7 @@ tiers:
       api_access: true
       priority_support: true
       custom_categories: true
+      custom_tags: true
       advanced_reports: true
 
 # Default tier for new users

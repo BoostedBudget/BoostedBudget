@@ -38,6 +38,14 @@ type TransactionService interface {
 		limit int,
 		offset int,
 	) (*TransactionListResponse, error)
+
+	// GetTransactionByID retrieves a transaction by its ID
+	// Returns error if transaction doesn't exist or user doesn't own it
+	GetTransactionByID(ctx context.Context, userID, transactionID string) (*domain.Transaction, error)
+
+	// UpdateTransactionTags updates the tags on a transaction
+	// Returns the updated transaction
+	UpdateTransactionTags(ctx context.Context, userID, transactionID string, tags []string) (*domain.Transaction, error)
 }
 
 // TransactionListResponse contains paginated transaction results with metadata
@@ -178,4 +186,51 @@ func sanitizeSearchInput(input string) string {
 	sanitized = strings.TrimSpace(sanitized)
 
 	return sanitized
+}
+
+// GetTransactionByID retrieves a transaction by its ID
+func (s *transactionService) GetTransactionByID(ctx context.Context, userID, transactionID string) (*domain.Transaction, error) {
+	tx, err := s.repo.GetByID(ctx, transactionID)
+	if err != nil {
+		if err == repository.ErrTransactionNotFound {
+			return nil, repository.ErrTransactionNotFound
+		}
+		return nil, fmt.Errorf("failed to get transaction: %w", err)
+	}
+
+	// Verify ownership
+	if tx.UserID != userID {
+		return nil, repository.ErrTransactionNotFound
+	}
+
+	return tx, nil
+}
+
+// UpdateTransactionTags updates the tags on a transaction
+func (s *transactionService) UpdateTransactionTags(ctx context.Context, userID, transactionID string, tags []string) (*domain.Transaction, error) {
+	// Get existing transaction to verify ownership
+	tx, err := s.GetTransactionByID(ctx, userID, transactionID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build tags source - all manual for now
+	tagsSource := make([]domain.TagSource, len(tags))
+	for i, tag := range tags {
+		tagsSource[i] = domain.TagSource{
+			Tag:    tag,
+			Source: "manual",
+		}
+	}
+
+	// Update tags in database
+	if err := s.repo.UpdateTags(ctx, transactionID, userID, tags, tagsSource); err != nil {
+		return nil, fmt.Errorf("failed to update transaction tags: %w", err)
+	}
+
+	// Update the transaction object
+	tx.Tags = tags
+	tx.TagsSource = tagsSource
+
+	return tx, nil
 }
