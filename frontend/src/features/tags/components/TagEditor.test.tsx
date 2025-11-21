@@ -182,5 +182,63 @@ describe('TagEditor', () => {
       const tagChip = screen.getByText('Food').closest('.tag-chip')
       expect(tagChip).toHaveStyle({ backgroundColor: '#FF5733' })
     })
+
+    it('should use default color when tag has no color', () => {
+      const tagsWithNoColor = [
+        {
+          ...mockTags[0],
+          color: null,
+        },
+        ...mockTags.slice(1),
+      ]
+
+      render(
+        <TagEditor
+          {...defaultProps}
+          availableTags={tagsWithNoColor}
+        />
+      )
+
+      const tagChip = screen.getByText('Food').closest('.tag-chip')
+      expect(tagChip).toHaveStyle({ backgroundColor: '#6B7280' })
+    })
+  })
+
+  describe('Edge cases', () => {
+    it('should disable add button when no tags available for selection', () => {
+      // All tags are already selected
+      render(
+        <TagEditor
+          {...defaultProps}
+          selectedTags={['Food', 'Shopping', 'Entertainment']}
+        />
+      )
+
+      const addButton = screen.getByRole('button', { name: /add tag/i })
+      expect(addButton).toBeDisabled()
+    })
+
+    it('should not toggle dropdown when clicking add button while disabled', () => {
+      render(<TagEditor {...defaultProps} disabled={true} />)
+
+      const addButton = screen.getByRole('button', { name: /add tag/i })
+      fireEvent.click(addButton)
+
+      // Dropdown should not appear
+      expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+    })
+
+    it('should handle tag not found in availableTags', () => {
+      render(
+        <TagEditor
+          {...defaultProps}
+          selectedTags={['Unknown Tag']}
+        />
+      )
+
+      // Should still render the tag with default color
+      const tagChip = screen.getByText('Unknown Tag').closest('.tag-chip')
+      expect(tagChip).toHaveStyle({ backgroundColor: '#6B7280' })
+    })
   })
 })

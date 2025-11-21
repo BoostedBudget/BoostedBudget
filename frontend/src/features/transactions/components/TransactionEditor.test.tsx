@@ -235,4 +235,103 @@ describe('TransactionEditor', () => {
       expect(onClose).toHaveBeenCalled()
     })
   })
+
+  describe('Category changes', () => {
+    it('should save only category changes without calling updateTransactionTags', async () => {
+      // Transaction with no tags to ensure only category changes
+      const txnNoTags: Transaction = {
+        ...mockTransaction,
+        tags: [],
+        category: '["Food & Dining"]',
+      }
+
+      render(
+        <TransactionEditor
+          {...defaultProps}
+          transaction={txnNoTags}
+        />
+      )
+
+      // Change category
+      const changeButton = screen.getByRole('button', { name: /change category/i })
+      fireEvent.click(changeButton)
+
+      await waitFor(() => {
+        const option = screen.getByRole('option', { name: 'Shopping' })
+        fireEvent.click(option)
+      })
+
+      // Click save
+      const saveButton = screen.getByRole('button', { name: /save/i })
+      fireEvent.click(saveButton)
+
+      await waitFor(() => {
+        expect(updateTransactionCategory).toHaveBeenCalledWith('txn-1', { category: ['Shopping'] })
+        expect(updateTransactionTags).not.toHaveBeenCalled()
+      })
+    })
+
+    it('should save both tag and category changes', async () => {
+      render(<TransactionEditor {...defaultProps} />)
+
+      // Remove a tag
+      const removeButton = screen.getByRole('button', { name: /remove food/i })
+      fireEvent.click(removeButton)
+
+      // Change category
+      const changeButton = screen.getByRole('button', { name: /change category/i })
+      fireEvent.click(changeButton)
+
+      await waitFor(() => {
+        const option = screen.getByRole('option', { name: 'Shopping' })
+        fireEvent.click(option)
+      })
+
+      // Click save
+      const saveButton = screen.getByRole('button', { name: /save/i })
+      fireEvent.click(saveButton)
+
+      await waitFor(() => {
+        expect(updateTransactionTags).toHaveBeenCalled()
+        expect(updateTransactionCategory).toHaveBeenCalled()
+      })
+    })
+  })
+
+  describe('parseCategory edge cases', () => {
+    it('should handle transaction with null category', () => {
+      const txnNullCategory: Transaction = {
+        ...mockTransaction,
+        category: null,
+      }
+
+      render(
+        <TransactionEditor
+          {...defaultProps}
+          transaction={txnNullCategory}
+        />
+      )
+
+      // Should show Uncategorized
+      expect(screen.getByText(/uncategorized/i)).toBeInTheDocument()
+    })
+
+    it('should handle transaction with category_override', () => {
+      const txnWithOverride: Transaction = {
+        ...mockTransaction,
+        category: '["Food & Dining"]',
+        category_override: '["Shopping"]',
+      }
+
+      render(
+        <TransactionEditor
+          {...defaultProps}
+          transaction={txnWithOverride}
+        />
+      )
+
+      // Should display the override category
+      expect(screen.getByText('Shopping')).toBeInTheDocument()
+    })
+  })
 })
