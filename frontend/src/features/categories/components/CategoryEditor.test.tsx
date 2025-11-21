@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { CategoryEditor } from './CategoryEditor'
+import * as categoriesApi from '../api/categoriesApi'
 import type { CustomCategory } from '../types'
+
+// Mock the categories API
+vi.mock('../api/categoriesApi')
 
 describe('CategoryEditor', () => {
   const mockCategories: CustomCategory[] = [
@@ -43,6 +47,16 @@ describe('CategoryEditor', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    // Mock createCategory to return the new category with an id
+    vi.mocked(categoriesApi.createCategory).mockImplementation(async (request) => ({
+      id: 'new-cat-id',
+      user_id: 'user-1',
+      name: request.name,
+      color: request.color || '#6B7280',
+      usage_count: 0,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }))
   })
 
   describe('Rendering', () => {
@@ -189,6 +203,193 @@ describe('CategoryEditor', () => {
 
       const colorIndicator = screen.getByTestId('category-color')
       expect(colorIndicator).toHaveStyle({ backgroundColor: '#6B7280' })
+    })
+  })
+
+  describe('Inline category creation', () => {
+    it('should show "Create new category" option in dropdown even when availableCategories is empty', async () => {
+      render(<CategoryEditor {...defaultProps} availableCategories={[]} selectedCategory={[]} />)
+
+      const button = screen.getByRole('button', { name: /change category/i })
+      fireEvent.click(button)
+
+      await waitFor(() => {
+        expect(screen.getByText(/create new category/i)).toBeInTheDocument()
+      })
+    })
+
+    it('should show "Create new category" option at bottom of dropdown with existing categories', async () => {
+      render(<CategoryEditor {...defaultProps} />)
+
+      const button = screen.getByRole('button', { name: /change category/i })
+      fireEvent.click(button)
+
+      await waitFor(() => {
+        expect(screen.getByText(/create new category/i)).toBeInTheDocument()
+        expect(screen.getByRole('option', { name: 'Shopping' })).toBeInTheDocument()
+      })
+    })
+
+    it('should show creation form when "Create new category" is clicked', async () => {
+      render(<CategoryEditor {...defaultProps} />)
+
+      const button = screen.getByRole('button', { name: /change category/i })
+      fireEvent.click(button)
+
+      await waitFor(() => {
+        const createOption = screen.getByText(/create new category/i)
+        fireEvent.click(createOption)
+      })
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText(/category name/i)).toBeInTheDocument()
+        expect(screen.getByLabelText(/color/i)).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: /create$/i })).toBeInTheDocument()
+      })
+    })
+
+    it('should call onCategoryCreated with new category after creation', async () => {
+      const onCategoryCreated = vi.fn()
+      render(<CategoryEditor {...defaultProps} onCategoryCreated={onCategoryCreated} />)
+
+      const button = screen.getByRole('button', { name: /change category/i })
+      fireEvent.click(button)
+
+      await waitFor(() => {
+        const createOption = screen.getByText(/create new category/i)
+        fireEvent.click(createOption)
+      })
+
+      const nameInput = screen.getByPlaceholderText(/category name/i)
+      fireEvent.change(nameInput, { target: { value: 'New Category' } })
+
+      const createButton = screen.getByRole('button', { name: /create$/i })
+      fireEvent.click(createButton)
+
+      await waitFor(() => {
+        expect(onCategoryCreated).toHaveBeenCalledWith(expect.objectContaining({
+          name: 'New Category',
+        }))
+      })
+    })
+
+    it('should auto-select newly created category', async () => {
+      const onChange = vi.fn()
+      const onCategoryCreated = vi.fn()
+      render(
+        <CategoryEditor
+          {...defaultProps}
+          onChange={onChange}
+          onCategoryCreated={onCategoryCreated}
+        />
+      )
+
+      const button = screen.getByRole('button', { name: /change category/i })
+      fireEvent.click(button)
+
+      await waitFor(() => {
+        const createOption = screen.getByText(/create new category/i)
+        fireEvent.click(createOption)
+      })
+
+      const nameInput = screen.getByPlaceholderText(/category name/i)
+      fireEvent.change(nameInput, { target: { value: 'New Category' } })
+
+      const createButton = screen.getByRole('button', { name: /create$/i })
+      fireEvent.click(createButton)
+
+      await waitFor(() => {
+        expect(onChange).toHaveBeenCalledWith(['New Category'])
+      })
+    })
+
+    it('should close creation form and dropdown after successful creation', async () => {
+      const onCategoryCreated = vi.fn()
+      render(<CategoryEditor {...defaultProps} onCategoryCreated={onCategoryCreated} />)
+
+      const button = screen.getByRole('button', { name: /change category/i })
+      fireEvent.click(button)
+
+      await waitFor(() => {
+        const createOption = screen.getByText(/create new category/i)
+        fireEvent.click(createOption)
+      })
+
+      const nameInput = screen.getByPlaceholderText(/category name/i)
+      fireEvent.change(nameInput, { target: { value: 'New Category' } })
+
+      const createButton = screen.getByRole('button', { name: /create$/i })
+      fireEvent.click(createButton)
+
+      await waitFor(() => {
+        expect(screen.queryByPlaceholderText(/category name/i)).not.toBeInTheDocument()
+        expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+      })
+    })
+
+    it('should allow creating category with custom color', async () => {
+      const onCategoryCreated = vi.fn()
+      render(<CategoryEditor {...defaultProps} onCategoryCreated={onCategoryCreated} />)
+
+      const button = screen.getByRole('button', { name: /change category/i })
+      fireEvent.click(button)
+
+      await waitFor(() => {
+        const createOption = screen.getByText(/create new category/i)
+        fireEvent.click(createOption)
+      })
+
+      const nameInput = screen.getByPlaceholderText(/category name/i)
+      fireEvent.change(nameInput, { target: { value: 'New Category' } })
+
+      const colorInput = screen.getByLabelText(/color/i)
+      fireEvent.change(colorInput, { target: { value: '#ff0000' } })
+
+      const createButton = screen.getByRole('button', { name: /create$/i })
+      fireEvent.click(createButton)
+
+      await waitFor(() => {
+        expect(onCategoryCreated).toHaveBeenCalledWith(expect.objectContaining({
+          name: 'New Category',
+          color: '#ff0000',
+        }))
+      })
+    })
+
+    it('should disable create button when category name is empty', async () => {
+      render(<CategoryEditor {...defaultProps} />)
+
+      const button = screen.getByRole('button', { name: /change category/i })
+      fireEvent.click(button)
+
+      await waitFor(() => {
+        const createOption = screen.getByText(/create new category/i)
+        fireEvent.click(createOption)
+      })
+
+      const createButton = screen.getByRole('button', { name: /create$/i })
+      expect(createButton).toBeDisabled()
+    })
+
+    it('should have cancel button to close creation form', async () => {
+      render(<CategoryEditor {...defaultProps} />)
+
+      const button = screen.getByRole('button', { name: /change category/i })
+      fireEvent.click(button)
+
+      await waitFor(() => {
+        const createOption = screen.getByText(/create new category/i)
+        fireEvent.click(createOption)
+      })
+
+      const cancelButton = screen.getByRole('button', { name: /cancel/i })
+      fireEvent.click(cancelButton)
+
+      await waitFor(() => {
+        expect(screen.queryByPlaceholderText(/category name/i)).not.toBeInTheDocument()
+        // Dropdown should stay open
+        expect(screen.getByRole('listbox')).toBeInTheDocument()
+      })
     })
   })
 

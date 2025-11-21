@@ -13,6 +13,8 @@ interface TransactionEditorProps {
   availableCategories: CustomCategory[]
   onClose: () => void
   onSave: () => void
+  onTagCreated?: (tag: UserTag) => void
+  onCategoryCreated?: (category: CustomCategory) => void
   isOpen: boolean
 }
 
@@ -51,6 +53,8 @@ export function TransactionEditor({
   availableCategories,
   onClose,
   onSave,
+  onTagCreated,
+  onCategoryCreated,
   isOpen,
 }: TransactionEditorProps) {
   const [tags, setTags] = useState<string[]>(transaction.tags || [])
@@ -138,6 +142,7 @@ export function TransactionEditor({
             selectedTags={tags}
             availableTags={availableTags}
             onChange={setTags}
+            onTagCreated={onTagCreated}
             disabled={isSaving}
           />
         </div>
@@ -148,6 +153,7 @@ export function TransactionEditor({
             selectedCategory={category}
             availableCategories={availableCategories}
             onChange={setCategory}
+            onCategoryCreated={onCategoryCreated}
             disabled={isSaving}
           />
         </div>
