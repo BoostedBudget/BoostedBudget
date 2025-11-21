@@ -27,7 +27,6 @@ export interface UseTransactionsResult {
   nextPage: () => void
   previousPage: () => void
   refetch: () => void
-  updateTransaction: (transaction: import('../types').Transaction) => void
   hasMore: boolean
   totalCount: number
   currentPage: number
@@ -155,19 +154,6 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
     loadTransactions(offset)
   }, [offset, loadTransactions])
 
-  // Update a single transaction in the current data
-  const updateTransaction = useCallback((updatedTransaction: import('../types').Transaction) => {
-    setData((prevData) => {
-      if (!prevData) return prevData
-      return {
-        ...prevData,
-        transactions: prevData.transactions.map((txn) =>
-          txn.id === updatedTransaction.id ? updatedTransaction : txn
-        ),
-      }
-    })
-  }, [])
-
   // Effect: Handle filter changes with search debouncing
   useEffect(() => {
     // Clear any pending search timeout
@@ -224,7 +210,6 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
     nextPage,
     previousPage,
     refetch,
-    updateTransaction,
     hasMore,
     totalCount,
     currentPage,
