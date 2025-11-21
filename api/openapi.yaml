@@ -642,6 +642,399 @@ paths:
                   value:
                     message: "Failed to fire webhook"
 
+  # Issue #345: Transaction Category & Tag Editing
+  /api/v1/transactions:
+    get:
+      summary: List Transactions
+      description: Retrieve paginated transactions for the authenticated user with optional filters
+      operationId: listTransactions
+      tags:
+        - Transactions
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: account_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: start_date
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: end_date
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: category
+          in: query
+          schema:
+            type: string
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: pending
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: Transactions retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/transactions/{id}:
+    get:
+      summary: Get Transaction by ID
+      description: Retrieve a specific transaction by its ID
+      operationId: getTransactionById
+      tags:
+        - Transactions
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Transaction retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Transaction not found
+
+  /api/v1/transactions/{id}/tags:
+    put:
+      summary: Update Transaction Tags
+      description: Update the tags on a specific transaction
+      operationId: updateTransactionTags
+      tags:
+        - Transactions
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTransactionTagsRequest'
+      responses:
+        '200':
+          description: Tags updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Transaction not found
+
+  /api/v1/transactions/{id}/category:
+    put:
+      summary: Update Transaction Category
+      description: Update the category override on a specific transaction
+      operationId: updateTransactionCategory
+      tags:
+        - Transactions
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTransactionCategoryRequest'
+      responses:
+        '200':
+          description: Category updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Transaction not found
+
+  /api/v1/tags:
+    get:
+      summary: Get User Tags
+      description: Retrieve all tags for the authenticated user
+      operationId: getUserTags
+      tags:
+        - Tags
+      responses:
+        '200':
+          description: Tags retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UserTag'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      summary: Create Tag
+      description: Create a new user tag
+      operationId: createTag
+      tags:
+        - Tags
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTagRequest'
+      responses:
+        '201':
+          description: Tag created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserTag'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Tag limit exceeded for subscription tier
+        '409':
+          description: Tag with this name already exists
+
+  /api/v1/tags/{id}:
+    get:
+      summary: Get Tag by ID
+      description: Retrieve a specific tag by its ID
+      operationId: getTagById
+      tags:
+        - Tags
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Tag retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserTag'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Tag not found
+    put:
+      summary: Update Tag
+      description: Update an existing tag
+      operationId: updateTag
+      tags:
+        - Tags
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTagRequest'
+      responses:
+        '200':
+          description: Tag updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserTag'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Tag not found
+        '409':
+          description: Tag with this name already exists
+    delete:
+      summary: Delete Tag
+      description: Delete an existing tag
+      operationId: deleteTag
+      tags:
+        - Tags
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Tag deleted successfully
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Tag not found
+
+  /api/v1/categories:
+    get:
+      summary: Get User Categories
+      description: Retrieve all custom categories for the authenticated user
+      operationId: getUserCategories
+      tags:
+        - Categories
+      responses:
+        '200':
+          description: Categories retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CustomCategory'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      summary: Create Category
+      description: Create a new custom category
+      operationId: createCategory
+      tags:
+        - Categories
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCategoryRequest'
+      responses:
+        '201':
+          description: Category created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomCategory'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Category limit exceeded for subscription tier
+        '409':
+          description: Category with this name already exists
+
+  /api/v1/categories/{id}:
+    get:
+      summary: Get Category by ID
+      description: Retrieve a specific category by its ID
+      operationId: getCategoryById
+      tags:
+        - Categories
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Category retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomCategory'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Category not found
+    put:
+      summary: Update Category
+      description: Update an existing category
+      operationId: updateCategory
+      tags:
+        - Categories
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCategoryRequest'
+      responses:
+        '200':
+          description: Category updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomCategory'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Category not found
+        '409':
+          description: Category with this name already exists
+    delete:
+      summary: Delete Category
+      description: Delete an existing category
+      operationId: deleteCategory
+      tags:
+        - Categories
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Category deleted successfully
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Category not found
+
 components:
   securitySchemes:
     auth0:
@@ -1360,6 +1753,255 @@ components:
           description: Stripe price ID for yearly subscription (null if not configured)
           example: null
 
+    # Issue #345: Transaction, Tag, and Category schemas
+    Transaction:
+      type: object
+      required:
+        - id
+        - user_id
+        - account_id
+        - amount
+        - date
+        - name
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        account_id:
+          type: string
+          format: uuid
+        linked_item_id:
+          type: string
+          format: uuid
+        source:
+          type: string
+          enum: [plaid, manual, teller]
+        external_transaction_id:
+          type: string
+        amount:
+          type: number
+          format: double
+        date:
+          type: string
+          format: date
+        authorized_date:
+          type: string
+          format: date
+        name:
+          type: string
+        merchant_name:
+          type: string
+        category:
+          type: string
+        personal_finance_category:
+          type: string
+        payment_channel:
+          type: string
+        pending:
+          type: boolean
+        user_notes:
+          type: string
+        category_override:
+          type: string
+        category_source:
+          type: string
+          enum: [plaid, rule, manual]
+        category_override_date:
+          type: string
+          format: date-time
+        original_category:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        tags_source:
+          type: array
+          items:
+            type: object
+            properties:
+              tag:
+                type: string
+              source:
+                type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    TransactionListResponse:
+      type: object
+      required:
+        - transactions
+        - total_count
+        - limit
+        - offset
+        - has_more
+      properties:
+        transactions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Transaction'
+        total_count:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+        has_more:
+          type: boolean
+
+    UpdateTransactionTagsRequest:
+      type: object
+      required:
+        - tags
+      properties:
+        tags:
+          type: array
+          items:
+            type: string
+          description: Array of tag names to assign to the transaction
+
+    UpdateTransactionCategoryRequest:
+      type: object
+      required:
+        - category
+      properties:
+        category:
+          type: array
+          items:
+            type: string
+          description: Category hierarchy array (e.g., ["Food and Drink", "Coffee Shop"])
+
+    UserTag:
+      type: object
+      required:
+        - id
+        - user_id
+        - name
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 50
+        color:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+        usage_count:
+          type: integer
+          default: 0
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateTagRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 50
+        color:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+
+    UpdateTagRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 50
+        color:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+
+    CustomCategory:
+      type: object
+      required:
+        - id
+        - user_id
+        - name
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        parent_category:
+          type: string
+        icon:
+          type: string
+        color:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+        usage_count:
+          type: integer
+          default: 0
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateCategoryRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        parent_category:
+          type: string
+        icon:
+          type: string
+        color:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+
+    UpdateCategoryRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        parent_category:
+          type: string
+        icon:
+          type: string
+        color:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+
   responses:
     BadRequest:
       description: Invalid request parameters
@@ -1424,3 +2066,11 @@ tags:
     description: Subscription tier information and configuration
   - name: Plaid
     description: Plaid bank account linking and integration
+  - name: Transactions
+    description: Transaction listing and editing
+  - name: Tags
+    description: User tag management (Issue #345)
+  - name: Categories
+    description: Custom category management (Issue #345)
+  - name: Admin
+    description: Admin endpoints (staging only)

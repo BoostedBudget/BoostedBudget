@@ -36,8 +36,10 @@ type SubscriptionLimits struct {
 	MinExecutionIntervalMinutes   int `yaml:"min_execution_interval_minutes" json:"min_execution_interval_minutes"`
 	APICallsPerMonth              int `yaml:"api_calls_per_month" json:"api_calls_per_month"`
 	DataExportRequestsPerMonth    int `yaml:"data_export_requests_per_month" json:"data_export_requests_per_month"`
-	AccountsSyncedPerMonth        int `yaml:"accounts_synced_per_month" json:"accounts_synced_per_month"`       // NEW: How many accounts can sync per month
-	TransactionHistoryDays        int `yaml:"transaction_history_days" json:"transaction_history_days"`         // NEW: Historical depth (30, 365, 730)
+	AccountsSyncedPerMonth        int `yaml:"accounts_synced_per_month" json:"accounts_synced_per_month"`       // How many accounts can sync per month
+	TransactionHistoryDays        int `yaml:"transaction_history_days" json:"transaction_history_days"`         // Historical depth (30, 365, 730)
+	CustomCategoriesMax           int `yaml:"custom_categories_max" json:"custom_categories_max"`               // Issue #345: Max custom categories
+	CustomTagsMax                 int `yaml:"custom_tags_max" json:"custom_tags_max"`                           // Issue #345: Max custom tags
 }
 
 // SubscriptionFeatures defines feature flags for a tier
@@ -47,6 +49,7 @@ type SubscriptionFeatures struct {
 	APIAccess         bool `yaml:"api_access" json:"api_access"`
 	PrioritySupport   bool `yaml:"priority_support" json:"priority_support"`
 	CustomCategories  bool `yaml:"custom_categories" json:"custom_categories"`
+	CustomTags        bool `yaml:"custom_tags" json:"custom_tags"`              // Issue #345: Tag editing enabled
 	AdvancedReports   bool `yaml:"advanced_reports" json:"advanced_reports"`
 }
 
@@ -98,8 +101,10 @@ const (
 	ResourceExecutionsPerDay         ResourceType = "executions_per_day"
 	ResourceAPICallsPerMonth         ResourceType = "api_calls_per_month"
 	ResourceDataExportPerMonth       ResourceType = "data_export_requests_per_month"
-	ResourceAccountsSyncedPerMonth   ResourceType = "accounts_synced_per_month"   // NEW: Monthly transaction sync quota
-	ResourceTransactionHistoryDays   ResourceType = "transaction_history_days"    // NEW: Historical depth limit (30, 365, 730 days)
+	ResourceAccountsSyncedPerMonth   ResourceType = "accounts_synced_per_month"   // Monthly transaction sync quota
+	ResourceTransactionHistoryDays   ResourceType = "transaction_history_days"    // Historical depth limit (30, 365, 730 days)
+	ResourceCustomCategoriesMax      ResourceType = "custom_categories_max"       // Issue #345: Max custom categories
+	ResourceCustomTagsMax            ResourceType = "custom_tags_max"             // Issue #345: Max custom tags
 )
 
 // GetLimit returns the limit value for a specific resource type
@@ -119,6 +124,10 @@ func (l *SubscriptionLimits) GetLimit(resourceType ResourceType) int {
 		return l.AccountsSyncedPerMonth
 	case ResourceTransactionHistoryDays:
 		return l.TransactionHistoryDays
+	case ResourceCustomCategoriesMax:
+		return l.CustomCategoriesMax
+	case ResourceCustomTagsMax:
+		return l.CustomTagsMax
 	default:
 		return 0
 	}
@@ -141,6 +150,10 @@ func (l *SubscriptionLimits) SetLimit(resourceType ResourceType, value int) {
 		l.AccountsSyncedPerMonth = value
 	case ResourceTransactionHistoryDays:
 		l.TransactionHistoryDays = value
+	case ResourceCustomCategoriesMax:
+		l.CustomCategoriesMax = value
+	case ResourceCustomTagsMax:
+		l.CustomTagsMax = value
 	}
 }
 

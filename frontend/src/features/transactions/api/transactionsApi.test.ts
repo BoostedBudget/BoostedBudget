@@ -1,8 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import MockAdapter from 'axios-mock-adapter'
 import { apiClient } from '../../../api/axiosConfig'
-import { fetchTransactions } from './transactionsApi'
-import type { GetTransactionsResponse, FetchTransactionsParams } from '../types'
+import {
+  fetchTransactions,
+  fetchTransactionById,
+  updateTransactionTags,
+  updateTransactionCategory,
+} from './transactionsApi'
+import type { GetTransactionsResponse, FetchTransactionsParams, Transaction } from '../types'
 
 describe('transactionsApi', () => {
   let mock: MockAdapter
@@ -272,6 +277,147 @@ describe('transactionsApi', () => {
       })
 
       await fetchTransactions(params)
+    })
+  })
+
+  describe('fetchTransactionById', () => {
+    const mockTransaction: Transaction = {
+      id: 'txn-123',
+      user_id: 'user-123',
+      account_id: 'account-456',
+      linked_item_id: 'item-789',
+      source: 'plaid',
+      amount: -25.50,
+      date: '2025-10-25',
+      name: 'Test Transaction',
+      merchant_name: 'Test Merchant',
+      category: '["Food and Drink"]',
+      pending: false,
+      tags: ['Food'],
+      created_at: '2025-10-25T10:00:00Z',
+      updated_at: '2025-10-25T10:00:00Z',
+    }
+
+    it('should fetch a transaction by ID', async () => {
+      mock.onGet('/v1/transactions/txn-123').reply(200, mockTransaction)
+
+      const result = await fetchTransactionById('txn-123')
+
+      expect(result).toEqual(mockTransaction)
+      expect(mock.history.get[0].url).toBe('/v1/transactions/txn-123')
+    })
+
+    it('should handle 404 not found error', async () => {
+      mock.onGet('/v1/transactions/invalid-id').reply(404, { error: 'Transaction not found' })
+
+      await expect(fetchTransactionById('invalid-id')).rejects.toThrow()
+    })
+
+    it('should handle network errors', async () => {
+      mock.onGet('/v1/transactions/txn-123').networkError()
+
+      await expect(fetchTransactionById('txn-123')).rejects.toThrow()
+    })
+  })
+
+  describe('updateTransactionTags', () => {
+    const mockTransaction: Transaction = {
+      id: 'txn-123',
+      user_id: 'user-123',
+      account_id: 'account-456',
+      linked_item_id: 'item-789',
+      source: 'plaid',
+      amount: -25.50,
+      date: '2025-10-25',
+      name: 'Test Transaction',
+      merchant_name: 'Test Merchant',
+      category: '["Food and Drink"]',
+      pending: false,
+      tags: ['Food', 'Shopping'],
+      created_at: '2025-10-25T10:00:00Z',
+      updated_at: '2025-10-25T10:00:00Z',
+    }
+
+    it('should update transaction tags', async () => {
+      mock.onPut('/v1/transactions/txn-123/tags').reply(200, mockTransaction)
+
+      const result = await updateTransactionTags('txn-123', { tags: ['Food', 'Shopping'] })
+
+      expect(result).toEqual(mockTransaction)
+      expect(mock.history.put[0].url).toBe('/v1/transactions/txn-123/tags')
+      expect(JSON.parse(mock.history.put[0].data)).toEqual({ tags: ['Food', 'Shopping'] })
+    })
+
+    it('should handle empty tags array', async () => {
+      const txnWithNoTags = { ...mockTransaction, tags: [] }
+      mock.onPut('/v1/transactions/txn-123/tags').reply(200, txnWithNoTags)
+
+      const result = await updateTransactionTags('txn-123', { tags: [] })
+
+      expect(result.tags).toEqual([])
+    })
+
+    it('should handle 404 not found error', async () => {
+      mock.onPut('/v1/transactions/invalid-id/tags').reply(404, { error: 'Transaction not found' })
+
+      await expect(updateTransactionTags('invalid-id', { tags: ['Food'] })).rejects.toThrow()
+    })
+
+    it('should handle network errors', async () => {
+      mock.onPut('/v1/transactions/txn-123/tags').networkError()
+
+      await expect(updateTransactionTags('txn-123', { tags: ['Food'] })).rejects.toThrow()
+    })
+  })
+
+  describe('updateTransactionCategory', () => {
+    const mockTransaction: Transaction = {
+      id: 'txn-123',
+      user_id: 'user-123',
+      account_id: 'account-456',
+      linked_item_id: 'item-789',
+      source: 'plaid',
+      amount: -25.50,
+      date: '2025-10-25',
+      name: 'Test Transaction',
+      merchant_name: 'Test Merchant',
+      category: '["Food and Drink"]',
+      category_override: '["Shopping"]',
+      category_source: 'manual',
+      pending: false,
+      created_at: '2025-10-25T10:00:00Z',
+      updated_at: '2025-10-25T10:00:00Z',
+    }
+
+    it('should update transaction category', async () => {
+      mock.onPut('/v1/transactions/txn-123/category').reply(200, mockTransaction)
+
+      const result = await updateTransactionCategory('txn-123', { category: ['Shopping'] })
+
+      expect(result).toEqual(mockTransaction)
+      expect(mock.history.put[0].url).toBe('/v1/transactions/txn-123/category')
+      expect(JSON.parse(mock.history.put[0].data)).toEqual({ category: ['Shopping'] })
+    })
+
+    it('should handle empty category array', async () => {
+      const txnWithNoCategory = { ...mockTransaction, category_override: null }
+      mock.onPut('/v1/transactions/txn-123/category').reply(200, txnWithNoCategory)
+
+      const result = await updateTransactionCategory('txn-123', { category: [] })
+
+      expect(result.category_override).toBeNull()
+    })
+
+    it('should handle 404 not found error', async () => {
+      mock.onPut('/v1/transactions/invalid-id/category').reply(404, { error: 'Transaction not found' })
+
+      await expect(updateTransactionCategory('invalid-id', { category: ['Food'] })).rejects.toThrow()
+    })
+
+    it('should handle network errors', async () => {
+      mock.onPut('/v1/transactions/txn-123/category').networkError()
+
+      await expect(updateTransactionCategory('txn-123', { category: ['Food'] })).rejects.toThrow()
     })
   })
 })

@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -59,6 +60,18 @@ type TransactionRepository interface {
 	// Used during transaction sync to lookup existing transactions for updates
 	// Returns ErrTransactionNotFound if transaction doesn't exist
 	GetByExternalID(ctx context.Context, source domain.TransactionSource, externalID string, userID string) (*domain.Transaction, error)
+
+	// GetByID retrieves a transaction by its internal ID
+	// Returns ErrTransactionNotFound if transaction doesn't exist
+	GetByID(ctx context.Context, id string) (*domain.Transaction, error)
+
+	// UpdateTags updates the tags and tags_source for a transaction
+	// Used when manually editing transaction tags
+	UpdateTags(ctx context.Context, id string, userID string, tags []string, tagsSource []domain.TagSource) error
+
+	// UpdateCategory updates the category override for a transaction
+	// Used when manually editing transaction category
+	UpdateCategory(ctx context.Context, id string, userID string, categoryOverride []string, categorySource domain.CategorySource) error
 }
 
 // transactionRepository implements TransactionRepository using PostgreSQL
@@ -535,4 +548,140 @@ func (r *transactionRepository) scanTransactions(rows *sql.Rows) ([]domain.Trans
 	}
 
 	return transactions, nil
+}
+
+// GetByID retrieves a transaction by its internal ID
+func (r *transactionRepository) GetByID(ctx context.Context, id string) (*domain.Transaction, error) {
+	query := `
+		SELECT id, user_id, account_id, linked_item_id, source, external_transaction_id,
+			   external_metadata, amount, date, authorized_date, name, merchant_name,
+			   category, personal_finance_category, payment_channel, pending, user_notes,
+			   created_at, updated_at, tags, tags_source
+		FROM transactions
+		WHERE id = $1
+	`
+
+	var tx domain.Transaction
+	var source string
+	var tagsJSON []byte
+	var tagsSourceJSON []byte
+
+	err := r.db.QueryRowContext(ctx, query, id).Scan(
+		&tx.ID,
+		&tx.UserID,
+		&tx.AccountID,
+		&tx.LinkedItemID,
+		&source,
+		&tx.ExternalTransactionID,
+		&tx.ExternalMetadata,
+		&tx.Amount,
+		&tx.Date,
+		&tx.AuthorizedDate,
+		&tx.Name,
+		&tx.MerchantName,
+		&tx.Category,
+		&tx.PersonalFinanceCategory,
+		&tx.PaymentChannel,
+		&tx.Pending,
+		&tx.UserNotes,
+		&tx.CreatedAt,
+		&tx.UpdatedAt,
+		&tagsJSON,
+		&tagsSourceJSON,
+	)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, ErrTransactionNotFound
+		}
+		return nil, fmt.Errorf("failed to get transaction by ID: %w", err)
+	}
+
+	tx.Source = domain.TransactionSource(source)
+
+	// Parse tags from JSONB
+	if tagsJSON != nil {
+		if err := json.Unmarshal(tagsJSON, &tx.Tags); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal tags: %w", err)
+		}
+	}
+
+	// Parse tags_source from JSONB
+	if tagsSourceJSON != nil {
+		if err := json.Unmarshal(tagsSourceJSON, &tx.TagsSource); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal tags_source: %w", err)
+		}
+	}
+
+	return &tx, nil
+}
+
+// UpdateTags updates the tags and tags_source for a transaction
+func (r *transactionRepository) UpdateTags(ctx context.Context, id string, userID string, tags []string, tagsSource []domain.TagSource) error {
+	// Serialize tags to JSONB
+	tagsJSON, err := json.Marshal(tags)
+	if err != nil {
+		return fmt.Errorf("failed to marshal tags: %w", err)
+	}
+
+	// Serialize tags_source to JSONB
+	tagsSourceJSON, err := json.Marshal(tagsSource)
+	if err != nil {
+		return fmt.Errorf("failed to marshal tags_source: %w", err)
+	}
+
+	query := `
+		UPDATE transactions
+		SET tags = $1, tags_source = $2, updated_at = $3
+		WHERE id = $4 AND user_id = $5
+	`
+
+	result, err := r.db.ExecContext(ctx, query, tagsJSON, tagsSourceJSON, time.Now(), id, userID)
+	if err != nil {
+		return fmt.Errorf("failed to update transaction tags: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return ErrTransactionNotFound
+	}
+
+	return nil
+}
+
+// UpdateCategory updates the category override for a transaction
+func (r *transactionRepository) UpdateCategory(ctx context.Context, id string, userID string, categoryOverride []string, categorySource domain.CategorySource) error {
+	// Serialize category override to JSON
+	categoryJSON, err := json.Marshal(categoryOverride)
+	if err != nil {
+		return fmt.Errorf("failed to marshal category override: %w", err)
+	}
+
+	now := time.Now()
+
+	query := `
+		UPDATE transactions
+		SET category_override = $1, category_source = $2, category_override_date = $3, updated_at = $4
+		WHERE id = $5 AND user_id = $6
+	`
+
+	result, err := r.db.ExecContext(ctx, query, categoryJSON, categorySource, now, now, id, userID)
+	if err != nil {
+		return fmt.Errorf("failed to update transaction category: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return ErrTransactionNotFound
+	}
+
+	return nil
 }
