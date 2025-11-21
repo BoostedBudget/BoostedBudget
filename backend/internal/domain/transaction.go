@@ -26,6 +26,27 @@ const (
 	SourceYodlee TransactionSource = "yodlee"
 )
 
+// CategorySource represents where the current category came from
+type CategorySource string
+
+const (
+	// CategorySourcePlaid is the original category from Plaid API
+	CategorySourcePlaid CategorySource = "plaid"
+
+	// CategorySourceRule is a category applied by an automation rule
+	CategorySourceRule CategorySource = "rule"
+
+	// CategorySourceManual is a category manually set by the user
+	CategorySourceManual CategorySource = "manual"
+)
+
+// TagSource tracks the origin of a tag on a transaction
+type TagSource struct {
+	Tag    string  `json:"tag"`
+	Source string  `json:"source"` // "manual" or "rule"
+	RuleID *string `json:"rule_id,omitempty"`
+}
+
 // Transaction represents a financial transaction from any provider (Plaid, manual, or future providers).
 // This is a provider-agnostic model that standardizes transaction data across all sources.
 //
@@ -72,6 +93,16 @@ type Transaction struct {
 
 	// User customization
 	UserNotes *string `json:"user_notes,omitempty" db:"user_notes"` // User-added notes or annotations
+
+	// Category override (Issue #345: Manual Transaction Category & Tag Editing)
+	CategoryOverride     *string        `json:"category_override,omitempty" db:"category_override"`         // User's chosen category override (JSON array)
+	CategorySourceField  CategorySource `json:"category_source" db:"category_source"`                       // 'plaid', 'rule', or 'manual'
+	CategoryOverrideDate *time.Time     `json:"category_override_date,omitempty" db:"category_override_date"` // When category was last edited
+	OriginalCategory     *string        `json:"original_category,omitempty" db:"original_category"`         // Preserved Plaid category (JSON array)
+
+	// Tags (Issue #345: Manual Transaction Category & Tag Editing)
+	Tags       []string    `json:"tags" db:"tags"`               // Array of tag names
+	TagsSource []TagSource `json:"tags_source" db:"tags_source"` // Source tracking for each tag
 
 	// Timestamps
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
