@@ -1,7 +1,12 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useTransactions } from './hooks/useTransactions'
 import { TransactionCard } from './components/TransactionCard'
-import type { TransactionFilters } from './types'
+import { TransactionEditor } from './components/TransactionEditor'
+import { fetchTags } from '../tags/api/tagsApi'
+import { fetchCategories } from '../categories/api/categoriesApi'
+import type { Transaction, TransactionFilters } from './types'
+import type { UserTag } from '../tags/types'
+import type { CustomCategory } from '../categories/types'
 import './TransactionsPage.css'
 
 /**
@@ -18,6 +23,10 @@ import './TransactionsPage.css'
  */
 export function TransactionsPage() {
   const [filters, setFilters] = useState<TransactionFilters>({})
+  const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null)
+  const [isEditorOpen, setIsEditorOpen] = useState(false)
+  const [availableTags, setAvailableTags] = useState<UserTag[]>([])
+  const [availableCategories, setAvailableCategories] = useState<CustomCategory[]>([])
 
   const {
     data,
@@ -30,6 +39,41 @@ export function TransactionsPage() {
     totalCount,
     currentPage,
   } = useTransactions({ filters, limit: 50 })
+
+  // Fetch available tags and categories for the editor
+  useEffect(() => {
+    const loadMetadata = async () => {
+      try {
+        const [tags, categories] = await Promise.all([
+          fetchTags(),
+          fetchCategories(),
+        ])
+        setAvailableTags(tags)
+        setAvailableCategories(categories)
+      } catch (err) {
+        console.error('Failed to load tags/categories:', err)
+      }
+    }
+    loadMetadata()
+  }, [])
+
+  // Handle opening the transaction editor
+  const handleEditTransaction = (transaction: Transaction) => {
+    setSelectedTransaction(transaction)
+    setIsEditorOpen(true)
+  }
+
+  // Handle closing the editor
+  const handleEditorClose = () => {
+    setIsEditorOpen(false)
+    setSelectedTransaction(null)
+  }
+
+  // Handle successful save
+  const handleEditorSave = () => {
+    refetch()
+    handleEditorClose()
+  }
 
   // Handle search input change
   function handleSearchChange(event: React.ChangeEvent<HTMLInputElement>) {
@@ -97,7 +141,11 @@ export function TransactionsPage() {
 
           <div className="transactions-list">
             {transactions.map((transaction) => (
-              <TransactionCard key={transaction.id} transaction={transaction} />
+              <TransactionCard
+                key={transaction.id}
+                transaction={transaction}
+                onEdit={handleEditTransaction}
+              />
             ))}
           </div>
 
@@ -116,6 +164,17 @@ export function TransactionsPage() {
             </div>
           )}
         </>
+      )}
+
+      {selectedTransaction && (
+        <TransactionEditor
+          transaction={selectedTransaction}
+          availableTags={availableTags}
+          availableCategories={availableCategories}
+          isOpen={isEditorOpen}
+          onClose={handleEditorClose}
+          onSave={handleEditorSave}
+        />
       )}
     </main>
   )

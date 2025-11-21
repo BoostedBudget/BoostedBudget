@@ -3,6 +3,7 @@ import './TransactionCard.css'
 
 interface TransactionCardProps {
   transaction: Transaction
+  onEdit?: (transaction: Transaction) => void
 }
 
 /**
@@ -98,7 +99,7 @@ function formatDate(dateStr: string | null | undefined): string {
   }).format(transactionDate)
 }
 
-export function TransactionCard({ transaction }: TransactionCardProps) {
+export function TransactionCard({ transaction, onEdit }: TransactionCardProps) {
   const {
     id,
     name,
@@ -109,6 +110,17 @@ export function TransactionCard({ transaction }: TransactionCardProps) {
     category,
     pending,
   } = transaction
+
+  const handleClick = () => {
+    onEdit?.(transaction)
+  }
+
+  const handleKeyDown = (event: React.KeyboardEvent) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      onEdit?.(transaction)
+    }
+  }
 
   const displayDate = formatDate(authorized_date || date)
   const displayName = merchant_name || name
@@ -126,10 +138,14 @@ export function TransactionCard({ transaction }: TransactionCardProps) {
 
   return (
     <article
-      className={`transaction-card${pending ? ' pending' : ''}`}
+      className={`transaction-card${pending ? ' pending' : ''}${onEdit ? ' clickable' : ''}`}
       data-transaction-id={id}
       data-pending={pending}
       aria-label={ariaLabel}
+      onClick={onEdit ? handleClick : undefined}
+      onKeyDown={onEdit ? handleKeyDown : undefined}
+      role={onEdit ? 'button' : undefined}
+      tabIndex={onEdit ? 0 : undefined}
     >
       <div className="transaction-card__header">
         <div className="transaction-card__info">
