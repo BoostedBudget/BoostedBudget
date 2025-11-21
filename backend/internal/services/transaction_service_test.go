@@ -83,6 +83,19 @@ func (m *MockTransactionRepository) GetByExternalID(ctx context.Context, source 
 	return args.Get(0).(*domain.Transaction), args.Error(1)
 }
 
+func (m *MockTransactionRepository) GetByID(ctx context.Context, id string) (*domain.Transaction, error) {
+	args := m.Called(ctx, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.Transaction), args.Error(1)
+}
+
+func (m *MockTransactionRepository) UpdateTags(ctx context.Context, id string, userID string, tags []string, tagsSource []domain.TagSource) error {
+	args := m.Called(ctx, id, userID, tags, tagsSource)
+	return args.Error(0)
+}
+
 // TestTransactionService_ListTransactions_EnforcesMaxLimit tests that the service enforces a maximum limit of 100
 func TestTransactionService_ListTransactions_EnforcesMaxLimit(t *testing.T) {
 	mockRepo := new(MockTransactionRepository)

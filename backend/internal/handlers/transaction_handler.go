@@ -9,6 +9,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/middleware"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
@@ -133,4 +134,69 @@ func (h *TransactionHandler) GetTransactions(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, result)
+}
+
+// UpdateTransactionTagsRequest represents the request body for updating transaction tags
+type UpdateTransactionTagsRequest struct {
+	Tags []string `json:"tags"`
+}
+
+// UpdateTransactionTags handles PUT /api/v1/transactions/:id/tags
+// Updates the tags on a specific transaction
+func (h *TransactionHandler) UpdateTransactionTags(c echo.Context) error {
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "User not authenticated")
+	}
+
+	transactionID := c.Param("id")
+	if transactionID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Transaction ID is required")
+	}
+
+	var req UpdateTransactionTagsRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
+	}
+
+	// Validate tags (optional: add max tag limit or validation)
+	if req.Tags == nil {
+		req.Tags = []string{}
+	}
+
+	tx, err := h.transactionService.UpdateTransactionTags(c.Request().Context(), userID, transactionID, req.Tags)
+	if err != nil {
+		if errors.Is(err, repository.ErrTransactionNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "Transaction not found")
+		}
+		c.Logger().Errorf("Failed to update transaction tags for user %s: %v", userID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update transaction tags")
+	}
+
+	return c.JSON(http.StatusOK, tx)
+}
+
+// GetTransactionByID handles GET /api/v1/transactions/:id
+// Retrieves a specific transaction by ID
+func (h *TransactionHandler) GetTransactionByID(c echo.Context) error {
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "User not authenticated")
+	}
+
+	transactionID := c.Param("id")
+	if transactionID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Transaction ID is required")
+	}
+
+	tx, err := h.transactionService.GetTransactionByID(c.Request().Context(), userID, transactionID)
+	if err != nil {
+		if errors.Is(err, repository.ErrTransactionNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "Transaction not found")
+		}
+		c.Logger().Errorf("Failed to get transaction for user %s: %v", userID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get transaction")
+	}
+
+	return c.JSON(http.StatusOK, tx)
 }
