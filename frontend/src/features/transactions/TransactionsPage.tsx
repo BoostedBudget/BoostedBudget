@@ -35,7 +35,6 @@ export function TransactionsPage() {
     nextPage,
     previousPage,
     refetch,
-    updateTransaction,
     hasMore,
     totalCount,
     currentPage,
@@ -70,9 +69,9 @@ export function TransactionsPage() {
     setSelectedTransaction(null)
   }
 
-  // Handle successful save - update transaction in place for immediate display
-  const handleEditorSave = (updatedTransaction: Transaction) => {
-    updateTransaction(updatedTransaction)
+  // Handle successful save
+  const handleEditorSave = () => {
+    refetch()
     handleEditorClose()
   }
 
