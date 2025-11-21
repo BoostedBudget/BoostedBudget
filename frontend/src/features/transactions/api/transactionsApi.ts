@@ -1,5 +1,11 @@
 import { apiClient } from '../../../api/axiosConfig'
-import type { GetTransactionsResponse, FetchTransactionsParams } from '../types'
+import type {
+  GetTransactionsResponse,
+  FetchTransactionsParams,
+  Transaction,
+  UpdateTransactionTagsRequest,
+  UpdateTransactionCategoryRequest,
+} from '../types'
 
 /**
  * Fetch transactions for the authenticated user
@@ -57,5 +63,38 @@ export async function fetchTransactions(
     params: queryParams,
   })
 
+  return response.data
+}
+
+/**
+ * Get a single transaction by ID
+ * GET /api/v1/transactions/:id
+ */
+export async function fetchTransactionById(transactionId: string): Promise<Transaction> {
+  const response = await apiClient.get<Transaction>(`/v1/transactions/${transactionId}`)
+  return response.data
+}
+
+/**
+ * Update transaction tags
+ * PUT /api/v1/transactions/:id/tags
+ */
+export async function updateTransactionTags(
+  transactionId: string,
+  request: UpdateTransactionTagsRequest
+): Promise<Transaction> {
+  const response = await apiClient.put<Transaction>(`/v1/transactions/${transactionId}/tags`, request)
+  return response.data
+}
+
+/**
+ * Update transaction category
+ * PUT /api/v1/transactions/:id/category
+ */
+export async function updateTransactionCategory(
+  transactionId: string,
+  request: UpdateTransactionCategoryRequest
+): Promise<Transaction> {
+  const response = await apiClient.put<Transaction>(`/v1/transactions/${transactionId}/category`, request)
   return response.data
 }
