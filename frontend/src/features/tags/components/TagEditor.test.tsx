@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { TagEditor } from './TagEditor'
+import * as tagsApi from '../api/tagsApi'
 import type { UserTag } from '../types'
+
+// Mock the tags API
+vi.mock('../api/tagsApi')
 
 describe('TagEditor', () => {
   const mockTags: UserTag[] = [
@@ -43,6 +47,16 @@ describe('TagEditor', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    // Mock createTag to return the new tag with an id
+    vi.mocked(tagsApi.createTag).mockImplementation(async (request) => ({
+      id: 'new-tag-id',
+      user_id: 'user-1',
+      name: request.name,
+      color: request.color || '#6B7280',
+      usage_count: 0,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }))
   })
 
   describe('Rendering', () => {
@@ -204,9 +218,196 @@ describe('TagEditor', () => {
     })
   })
 
+  describe('Inline tag creation', () => {
+    it('should show "Create new tag" option in dropdown even when availableTags is empty', async () => {
+      render(<TagEditor {...defaultProps} availableTags={[]} selectedTags={[]} />)
+
+      const addButton = screen.getByRole('button', { name: /add tag/i })
+      fireEvent.click(addButton)
+
+      await waitFor(() => {
+        expect(screen.getByText(/create new tag/i)).toBeInTheDocument()
+      })
+    })
+
+    it('should show "Create new tag" option at bottom of dropdown with existing tags', async () => {
+      render(<TagEditor {...defaultProps} />)
+
+      const addButton = screen.getByRole('button', { name: /add tag/i })
+      fireEvent.click(addButton)
+
+      await waitFor(() => {
+        expect(screen.getByText(/create new tag/i)).toBeInTheDocument()
+        expect(screen.getByText('Shopping')).toBeInTheDocument()
+      })
+    })
+
+    it('should show creation form when "Create new tag" is clicked', async () => {
+      render(<TagEditor {...defaultProps} />)
+
+      const addButton = screen.getByRole('button', { name: /add tag/i })
+      fireEvent.click(addButton)
+
+      await waitFor(() => {
+        const createOption = screen.getByText(/create new tag/i)
+        fireEvent.click(createOption)
+      })
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText(/tag name/i)).toBeInTheDocument()
+        expect(screen.getByLabelText(/color/i)).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: /create$/i })).toBeInTheDocument()
+      })
+    })
+
+    it('should call onTagCreated with new tag after creation', async () => {
+      const onTagCreated = vi.fn()
+      render(<TagEditor {...defaultProps} onTagCreated={onTagCreated} />)
+
+      const addButton = screen.getByRole('button', { name: /add tag/i })
+      fireEvent.click(addButton)
+
+      await waitFor(() => {
+        const createOption = screen.getByText(/create new tag/i)
+        fireEvent.click(createOption)
+      })
+
+      const nameInput = screen.getByPlaceholderText(/tag name/i)
+      fireEvent.change(nameInput, { target: { value: 'New Tag' } })
+
+      const createButton = screen.getByRole('button', { name: /create$/i })
+      fireEvent.click(createButton)
+
+      await waitFor(() => {
+        expect(onTagCreated).toHaveBeenCalledWith(expect.objectContaining({
+          name: 'New Tag',
+        }))
+      })
+    })
+
+    it('should auto-select newly created tag', async () => {
+      const onChange = vi.fn()
+      const onTagCreated = vi.fn()
+      render(
+        <TagEditor
+          {...defaultProps}
+          onChange={onChange}
+          onTagCreated={onTagCreated}
+        />
+      )
+
+      const addButton = screen.getByRole('button', { name: /add tag/i })
+      fireEvent.click(addButton)
+
+      await waitFor(() => {
+        const createOption = screen.getByText(/create new tag/i)
+        fireEvent.click(createOption)
+      })
+
+      const nameInput = screen.getByPlaceholderText(/tag name/i)
+      fireEvent.change(nameInput, { target: { value: 'New Tag' } })
+
+      const createButton = screen.getByRole('button', { name: /create$/i })
+      fireEvent.click(createButton)
+
+      await waitFor(() => {
+        expect(onChange).toHaveBeenCalledWith(['Food', 'New Tag'])
+      })
+    })
+
+    it('should close creation form and dropdown after successful creation', async () => {
+      const onTagCreated = vi.fn()
+      render(<TagEditor {...defaultProps} onTagCreated={onTagCreated} />)
+
+      const addButton = screen.getByRole('button', { name: /add tag/i })
+      fireEvent.click(addButton)
+
+      await waitFor(() => {
+        const createOption = screen.getByText(/create new tag/i)
+        fireEvent.click(createOption)
+      })
+
+      const nameInput = screen.getByPlaceholderText(/tag name/i)
+      fireEvent.change(nameInput, { target: { value: 'New Tag' } })
+
+      const createButton = screen.getByRole('button', { name: /create$/i })
+      fireEvent.click(createButton)
+
+      await waitFor(() => {
+        expect(screen.queryByPlaceholderText(/tag name/i)).not.toBeInTheDocument()
+        expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+      })
+    })
+
+    it('should allow creating tag with custom color', async () => {
+      const onTagCreated = vi.fn()
+      render(<TagEditor {...defaultProps} onTagCreated={onTagCreated} />)
+
+      const addButton = screen.getByRole('button', { name: /add tag/i })
+      fireEvent.click(addButton)
+
+      await waitFor(() => {
+        const createOption = screen.getByText(/create new tag/i)
+        fireEvent.click(createOption)
+      })
+
+      const nameInput = screen.getByPlaceholderText(/tag name/i)
+      fireEvent.change(nameInput, { target: { value: 'New Tag' } })
+
+      const colorInput = screen.getByLabelText(/color/i)
+      fireEvent.change(colorInput, { target: { value: '#FF0000' } })
+
+      const createButton = screen.getByRole('button', { name: /create$/i })
+      fireEvent.click(createButton)
+
+      await waitFor(() => {
+        expect(onTagCreated).toHaveBeenCalledWith(expect.objectContaining({
+          name: 'New Tag',
+          color: '#ff0000', // Browser returns lowercase hex
+        }))
+      })
+    })
+
+    it('should disable create button when tag name is empty', async () => {
+      render(<TagEditor {...defaultProps} />)
+
+      const addButton = screen.getByRole('button', { name: /add tag/i })
+      fireEvent.click(addButton)
+
+      await waitFor(() => {
+        const createOption = screen.getByText(/create new tag/i)
+        fireEvent.click(createOption)
+      })
+
+      const createButton = screen.getByRole('button', { name: /create$/i })
+      expect(createButton).toBeDisabled()
+    })
+
+    it('should have cancel button to close creation form', async () => {
+      render(<TagEditor {...defaultProps} />)
+
+      const addButton = screen.getByRole('button', { name: /add tag/i })
+      fireEvent.click(addButton)
+
+      await waitFor(() => {
+        const createOption = screen.getByText(/create new tag/i)
+        fireEvent.click(createOption)
+      })
+
+      const cancelButton = screen.getByRole('button', { name: /cancel/i })
+      fireEvent.click(cancelButton)
+
+      await waitFor(() => {
+        expect(screen.queryByPlaceholderText(/tag name/i)).not.toBeInTheDocument()
+        // Dropdown should stay open to allow selecting existing tags
+        expect(screen.getByRole('listbox')).toBeInTheDocument()
+      })
+    })
+  })
+
   describe('Edge cases', () => {
-    it('should disable add button when no tags available for selection', () => {
-      // All tags are already selected
+    it('should enable add button even when all existing tags are selected (to allow creation)', () => {
+      // All tags are already selected, but user can still create new ones
       render(
         <TagEditor
           {...defaultProps}
@@ -215,7 +416,8 @@ describe('TagEditor', () => {
       )
 
       const addButton = screen.getByRole('button', { name: /add tag/i })
-      expect(addButton).toBeDisabled()
+      // Button should be enabled to allow creating new tags
+      expect(addButton).not.toBeDisabled()
     })
 
     it('should not toggle dropdown when clicking add button while disabled', () => {

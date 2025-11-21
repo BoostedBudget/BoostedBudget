@@ -75,6 +75,16 @@ export function TransactionsPage() {
     handleEditorClose()
   }
 
+  // Handle tag creation - add to available tags
+  const handleTagCreated = (tag: UserTag) => {
+    setAvailableTags((prev) => [...prev, tag])
+  }
+
+  // Handle category creation - add to available categories
+  const handleCategoryCreated = (category: CustomCategory) => {
+    setAvailableCategories((prev) => [...prev, category])
+  }
+
   // Handle search input change
   function handleSearchChange(event: React.ChangeEvent<HTMLInputElement>) {
     const searchValue = event.target.value
@@ -174,6 +184,8 @@ export function TransactionsPage() {
           isOpen={isEditorOpen}
           onClose={handleEditorClose}
           onSave={handleEditorSave}
+          onTagCreated={handleTagCreated}
+          onCategoryCreated={handleCategoryCreated}
         />
       )}
     </main>
