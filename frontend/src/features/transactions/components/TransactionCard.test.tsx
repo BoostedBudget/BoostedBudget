@@ -115,6 +115,103 @@ describe('TransactionCard', () => {
       render(<TransactionCard transaction={transactionWithEmptyCategory} />)
       expect(screen.getByText('Uncategorized')).toBeInTheDocument()
     })
+
+    it('should display category_override when present (priority over category)', () => {
+      const transactionWithOverride: Transaction = {
+        ...mockTransaction,
+        category: '["Food and Drink", "Coffee"]',
+        category_override: '["Shopping", "Groceries"]',
+      }
+
+      render(<TransactionCard transaction={transactionWithOverride} />)
+      // Should show override category "Shopping", not original "Food and Drink"
+      expect(screen.getByText(/Shopping/i)).toBeInTheDocument()
+      expect(screen.queryByText(/Food and Drink/i)).not.toBeInTheDocument()
+    })
+
+    it('should fall back to category when category_override is null', () => {
+      const transactionWithoutOverride: Transaction = {
+        ...mockTransaction,
+        category: '["Food and Drink", "Coffee"]',
+        category_override: null,
+      }
+
+      render(<TransactionCard transaction={transactionWithoutOverride} />)
+      expect(screen.getByText(/Food and Drink/i)).toBeInTheDocument()
+    })
+
+    it('should fall back to category when category_override is empty array', () => {
+      const transactionWithEmptyOverride: Transaction = {
+        ...mockTransaction,
+        category: '["Food and Drink", "Coffee"]',
+        category_override: '[]',
+      }
+
+      render(<TransactionCard transaction={transactionWithEmptyOverride} />)
+      expect(screen.getByText(/Food and Drink/i)).toBeInTheDocument()
+    })
+  })
+
+  describe('Tags Display', () => {
+    it('should display tags when present', () => {
+      const transactionWithTags: Transaction = {
+        ...mockTransaction,
+        tags: ['Groceries', 'Monthly'],
+      }
+
+      render(<TransactionCard transaction={transactionWithTags} />)
+      expect(screen.getByText('Groceries')).toBeInTheDocument()
+      expect(screen.getByText('Monthly')).toBeInTheDocument()
+    })
+
+    it('should not display tags section when tags array is empty', () => {
+      const transactionWithEmptyTags: Transaction = {
+        ...mockTransaction,
+        tags: [],
+      }
+
+      render(<TransactionCard transaction={transactionWithEmptyTags} />)
+      // Should not have a tags container when no tags
+      expect(screen.queryByTestId('transaction-tags')).not.toBeInTheDocument()
+    })
+
+    it('should not display tags section when tags is undefined', () => {
+      const transactionWithoutTags: Transaction = {
+        ...mockTransaction,
+        tags: undefined,
+      }
+
+      render(<TransactionCard transaction={transactionWithoutTags} />)
+      expect(screen.queryByTestId('transaction-tags')).not.toBeInTheDocument()
+    })
+
+    it('should display multiple tags with correct styling', () => {
+      const transactionWithMultipleTags: Transaction = {
+        ...mockTransaction,
+        tags: ['Work', 'Expense', 'Reimbursable'],
+      }
+
+      const { container } = render(<TransactionCard transaction={transactionWithMultipleTags} />)
+
+      // Should have all three tags
+      expect(screen.getByText('Work')).toBeInTheDocument()
+      expect(screen.getByText('Expense')).toBeInTheDocument()
+      expect(screen.getByText('Reimbursable')).toBeInTheDocument()
+
+      // Should have tags container with correct class
+      const tagsContainer = container.querySelector('.transaction-card__tags')
+      expect(tagsContainer).toBeInTheDocument()
+    })
+
+    it('should display single tag correctly', () => {
+      const transactionWithSingleTag: Transaction = {
+        ...mockTransaction,
+        tags: ['Important'],
+      }
+
+      render(<TransactionCard transaction={transactionWithSingleTag} />)
+      expect(screen.getByText('Important')).toBeInTheDocument()
+    })
   })
 
   describe('Pending Status', () => {

@@ -819,4 +819,200 @@ describeTransactionEditing('Transaction Editing - Authenticated User', () => {
       await expect(page.getByText(/create new category/i)).toBeVisible()
     })
   })
+
+  // ==========================================================================
+  // Save and Display Verification Tests (Issue #372)
+  // ==========================================================================
+
+  test.describe('Save and Display Verification', () => {
+    test('should display saved tags on TransactionCard after save', async ({ page }) => {
+      // Arrange - Set up mocks with updated transaction data after save
+      let savedTags: string[] = ['Food']
+
+      await page.route('**/api/v1/transactions**', (route) => {
+        if (route.request().method() === 'GET') {
+          // Return transactions with current saved tags
+          const transactions = {
+            ...mockTransactions,
+            transactions: mockTransactions.transactions.map((txn, index) =>
+              index === 0 ? { ...txn, tags: savedTags } : txn
+            ),
+          }
+          route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify(transactions),
+          })
+        } else {
+          route.continue()
+        }
+      })
+
+      await page.route('**/api/v1/tags', (route) => {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(mockTags),
+        })
+      })
+
+      await page.route('**/api/v1/categories', (route) => {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(mockCategories),
+        })
+      })
+
+      // Mock the update endpoint to update savedTags
+      await page.route('**/api/v1/transactions/*/tags', (route) => {
+        if (route.request().method() === 'PUT') {
+          const body = route.request().postDataJSON()
+          savedTags = body.tags
+          route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ ...mockTransactions.transactions[0], tags: savedTags }),
+          })
+        } else {
+          route.continue()
+        }
+      })
+
+      await page.goto('/transactions')
+      await page.waitForLoadState('networkidle')
+
+      // Verify initial tag displays
+      const transactionCard = page.locator('article').first()
+      await expect(transactionCard.getByText('Food')).toBeVisible()
+
+      // Open editor and add a new tag
+      await transactionCard.click()
+      await expect(page.getByText('Edit Transaction')).toBeVisible()
+
+      // Add Shopping tag
+      await page.getByRole('button', { name: /add tag/i }).click()
+      await page.getByRole('option', { name: 'Shopping' }).click()
+
+      // Save
+      await page.getByRole('button', { name: /save/i }).click()
+
+      // Wait for modal to close and refetch
+      await expect(page.getByText('Edit Transaction')).not.toBeVisible()
+
+      // Assert - Both tags should now display on the card
+      await expect(transactionCard.getByText('Food')).toBeVisible()
+      await expect(transactionCard.getByText('Shopping')).toBeVisible()
+    })
+
+    test('should display saved category override on TransactionCard after save', async ({ page }) => {
+      // Arrange - Set up mocks with category override after save
+      let savedCategoryOverride: string | null = null
+
+      await page.route('**/api/v1/transactions**', (route) => {
+        if (route.request().method() === 'GET') {
+          const transactions = {
+            ...mockTransactions,
+            transactions: mockTransactions.transactions.map((txn, index) =>
+              index === 0
+                ? { ...txn, category_override: savedCategoryOverride }
+                : txn
+            ),
+          }
+          route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify(transactions),
+          })
+        } else {
+          route.continue()
+        }
+      })
+
+      await page.route('**/api/v1/tags', (route) => {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(mockTags),
+        })
+      })
+
+      await page.route('**/api/v1/categories', (route) => {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(mockCategories),
+        })
+      })
+
+      // Mock the update endpoint to update savedCategoryOverride
+      await page.route('**/api/v1/transactions/*/category', (route) => {
+        if (route.request().method() === 'PUT') {
+          const body = route.request().postDataJSON()
+          savedCategoryOverride = JSON.stringify(body.category)
+          route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              ...mockTransactions.transactions[0],
+              category_override: savedCategoryOverride
+            }),
+          })
+        } else {
+          route.continue()
+        }
+      })
+
+      await page.goto('/transactions')
+      await page.waitForLoadState('networkidle')
+
+      // Verify initial category displays (original Plaid category)
+      const transactionCard = page.locator('article').first()
+      await expect(transactionCard.getByText('Food and Drink')).toBeVisible()
+
+      // Open editor and change category
+      await transactionCard.click()
+      await expect(page.getByText('Edit Transaction')).toBeVisible()
+
+      // Change to Shopping category
+      await page.getByRole('button', { name: /change category/i }).click()
+      await page.getByRole('option', { name: 'Shopping' }).click()
+
+      // Save
+      await page.getByRole('button', { name: /save/i }).click()
+
+      // Wait for modal to close and refetch
+      await expect(page.getByText('Edit Transaction')).not.toBeVisible()
+
+      // Assert - New category should display instead of original
+      await expect(transactionCard.getByText('Shopping')).toBeVisible()
+      await expect(transactionCard.getByText('Food and Drink')).not.toBeVisible()
+    })
+
+    test('should display tags on TransactionCard for transaction with existing tags', async ({ page }) => {
+      // Arrange
+      await mockTransactionAPIs(page)
+      await page.goto('/transactions')
+      await page.waitForLoadState('networkidle')
+
+      // Assert - First transaction should show its tag
+      const firstTransaction = page.locator('article').first()
+      await expect(firstTransaction.getByText('Food')).toBeVisible()
+    })
+
+    test('should not display tags section when transaction has no tags', async ({ page }) => {
+      // Arrange
+      await mockTransactionAPIs(page)
+      await page.goto('/transactions')
+      await page.waitForLoadState('networkidle')
+
+      // Assert - Second transaction (Whole Foods) has empty tags array
+      const secondTransaction = page.locator('article').nth(1)
+      await expect(secondTransaction.getByText('Whole Foods')).toBeVisible()
+
+      // Should not have any tags displayed
+      const tagsContainer = secondTransaction.locator('[data-testid="transaction-tags"]')
+      await expect(tagsContainer).not.toBeVisible()
+    })
+  })
 })

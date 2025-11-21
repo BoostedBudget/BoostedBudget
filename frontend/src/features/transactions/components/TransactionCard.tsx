@@ -108,6 +108,8 @@ export function TransactionCard({ transaction, onEdit }: TransactionCardProps) {
     date,
     authorized_date,
     category,
+    category_override,
+    tags,
     pending,
   } = transaction
 
@@ -124,7 +126,11 @@ export function TransactionCard({ transaction, onEdit }: TransactionCardProps) {
 
   const displayDate = formatDate(authorized_date || date)
   const displayName = merchant_name || name
-  const categoryLabel = parseCategory(category)
+  // Use category_override if present and non-empty, otherwise fall back to category
+  const categoryToDisplay = category_override && parseCategory(category_override) !== 'Uncategorized'
+    ? category_override
+    : category
+  const categoryLabel = parseCategory(categoryToDisplay)
   const amountFormatted = formatAmount(amount)
 
   // Determine amount styling
@@ -154,6 +160,15 @@ export function TransactionCard({ transaction, onEdit }: TransactionCardProps) {
             <span className="transaction-card__category">{categoryLabel}</span>
             <span className="transaction-card__date">{displayDate}</span>
           </div>
+          {tags && tags.length > 0 && (
+            <div className="transaction-card__tags" data-testid="transaction-tags">
+              {tags.map((tag) => (
+                <span key={tag} className="transaction-card__tag">
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
         <div className="transaction-card__amount-container">
           <div className={amountClass}>{amountFormatted}</div>
