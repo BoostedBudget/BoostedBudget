@@ -12,7 +12,7 @@ interface TransactionEditorProps {
   availableTags: UserTag[]
   availableCategories: CustomCategory[]
   onClose: () => void
-  onSave: () => void
+  onSave: (updatedTransaction: Transaction) => void
   onTagCreated?: (tag: UserTag) => void
   onCategoryCreated?: (category: CustomCategory) => void
   isOpen: boolean
@@ -80,17 +80,21 @@ export function TransactionEditor({
     setError(null)
 
     try {
+      // Track the latest version of the transaction after each update
+      let updatedTransaction = transaction
+
       // Save tag changes
       if (hasTagChanges) {
-        await updateTransactionTags(transaction.id, { tags })
+        updatedTransaction = await updateTransactionTags(transaction.id, { tags })
       }
 
       // Save category changes
       if (hasCategoryChanges) {
-        await updateTransactionCategory(transaction.id, { category })
+        updatedTransaction = await updateTransactionCategory(transaction.id, { category })
       }
 
-      onSave()
+      // Pass the updated transaction to parent for immediate state update
+      onSave(updatedTransaction)
       onClose()
     } catch {
       setError('Failed to save changes. Please try again.')

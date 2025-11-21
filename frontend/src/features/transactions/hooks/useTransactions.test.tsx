@@ -638,4 +638,121 @@ describe('useTransactions', () => {
       })
     })
   })
+
+  describe('updateTransaction', () => {
+    it('should update a single transaction in the current data', async () => {
+      // Arrange
+      vi.mocked(transactionsApi.fetchTransactions).mockResolvedValue(mockTransactionsResponse)
+
+      // Act
+      const { result } = renderHook(() => useTransactions())
+
+      await waitFor(() => {
+        expect(result.current.loading).toBe(false)
+      })
+
+      // Update first transaction with new tags
+      const updatedTransaction = {
+        ...mockTransactionsResponse.transactions[0],
+        tags: ['New Tag'],
+        category_override: '["Custom Category"]',
+      }
+
+      act(() => {
+        result.current.updateTransaction(updatedTransaction)
+      })
+
+      // Assert - Transaction should be updated in place
+      expect(result.current.data?.transactions[0].tags).toEqual(['New Tag'])
+      expect(result.current.data?.transactions[0].category_override).toBe('["Custom Category"]')
+      // Second transaction should remain unchanged
+      expect(result.current.data?.transactions[1]).toEqual(mockTransactionsResponse.transactions[1])
+    })
+
+    it('should not trigger a refetch when updating transaction', async () => {
+      // Arrange
+      vi.mocked(transactionsApi.fetchTransactions).mockResolvedValue(mockTransactionsResponse)
+
+      // Act
+      const { result } = renderHook(() => useTransactions())
+
+      await waitFor(() => {
+        expect(result.current.loading).toBe(false)
+      })
+
+      const callCountAfterLoad = vi.mocked(transactionsApi.fetchTransactions).mock.calls.length
+
+      // Update transaction
+      const updatedTransaction = {
+        ...mockTransactionsResponse.transactions[0],
+        tags: ['Updated'],
+      }
+
+      act(() => {
+        result.current.updateTransaction(updatedTransaction)
+      })
+
+      // Assert - No additional fetch should be made
+      expect(transactionsApi.fetchTransactions).toHaveBeenCalledTimes(callCountAfterLoad)
+    })
+
+    it('should preserve metadata when updating transaction', async () => {
+      // Arrange
+      vi.mocked(transactionsApi.fetchTransactions).mockResolvedValue(mockTransactionsResponse)
+
+      // Act
+      const { result } = renderHook(() => useTransactions())
+
+      await waitFor(() => {
+        expect(result.current.loading).toBe(false)
+      })
+
+      // Update transaction
+      act(() => {
+        result.current.updateTransaction({
+          ...mockTransactionsResponse.transactions[0],
+          tags: ['Updated'],
+        })
+      })
+
+      // Assert - Metadata should be preserved
+      expect(result.current.data?.total_count).toBe(150)
+      expect(result.current.data?.has_more).toBe(true)
+      expect(result.current.hasMore).toBe(true)
+      expect(result.current.totalCount).toBe(150)
+    })
+
+    it('should handle update when data is null', async () => {
+      // Arrange - Never resolve to keep data null
+      vi.mocked(transactionsApi.fetchTransactions).mockImplementation(
+        () => new Promise(() => {})
+      )
+
+      // Act
+      const { result } = renderHook(() => useTransactions())
+
+      // Data should be null
+      expect(result.current.data).toBeNull()
+
+      // Try to update - should not throw
+      act(() => {
+        result.current.updateTransaction({
+          id: 'txn-1',
+          user_id: 'user-123',
+          account_id: 'account-456',
+          linked_item_id: 'item-789',
+          source: 'plaid' as const,
+          amount: -25.50,
+          date: '2025-10-25',
+          name: 'Test',
+          pending: false,
+          created_at: '2025-10-25T10:00:00Z',
+          updated_at: '2025-10-25T10:00:00Z',
+        })
+      })
+
+      // Data should still be null
+      expect(result.current.data).toBeNull()
+    })
+  })
 })
