@@ -514,3 +514,151 @@ func TestWebhookProcessor_ProcessPendingWebhooks_ItemWebhook_InvalidPayload(t *t
 	// ItemErrorService.ProcessWebhook should NOT be called due to invalid payload
 	mockItemErrorService.AssertNotCalled(t, "ProcessWebhook")
 }
+
+// ============================================================================
+// Coverage Gap Tests - Issue #372
+// ============================================================================
+
+// TestWebhookProcessor_TransactionWebhooks_RepoError tests error handling when repository fails
+func TestWebhookProcessor_TransactionWebhooks_RepoError(t *testing.T) {
+	ctx := context.Background()
+	mockSyncService := new(MockTransactionSyncServiceForWorker)
+	mockItemErrorService := new(MockItemErrorServiceForWorker)
+	mockWebhookRepo := new(MockWebhookRepoForWorker)
+
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10)
+
+	// Mock: TRANSACTIONS repo returns error
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "TRANSACTIONS", 10).
+		Return(nil, errors.New("database connection failed"))
+	// Mock: ITEM webhooks still processed
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "ITEM", 10).
+		Return([]domain.WebhookEvent{}, nil)
+
+	// Execute
+	err := processor.ProcessPendingWebhooks(ctx)
+
+	// Assert - should not error (logged but continues to ITEM webhooks)
+	assert.NoError(t, err)
+	mockWebhookRepo.AssertExpectations(t)
+	// Sync service should NOT be called since repo failed
+	mockSyncService.AssertNotCalled(t, "ProcessWebhook")
+}
+
+// TestWebhookProcessor_ItemWebhooks_RepoError tests error handling when ITEM repo fails
+func TestWebhookProcessor_ItemWebhooks_RepoError(t *testing.T) {
+	ctx := context.Background()
+	mockSyncService := new(MockTransactionSyncServiceForWorker)
+	mockItemErrorService := new(MockItemErrorServiceForWorker)
+	mockWebhookRepo := new(MockWebhookRepoForWorker)
+
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10)
+
+	// Mock: TRANSACTIONS succeeds with empty
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "TRANSACTIONS", 10).
+		Return([]domain.WebhookEvent{}, nil)
+	// Mock: ITEM repo returns error
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "ITEM", 10).
+		Return(nil, errors.New("database connection failed"))
+
+	// Execute
+	err := processor.ProcessPendingWebhooks(ctx)
+
+	// Assert - should not error (logged but completes)
+	assert.NoError(t, err)
+	mockWebhookRepo.AssertExpectations(t)
+}
+
+// TestWebhookProcessor_ItemWebhook_NilItemID tests that webhooks with nil ItemID are skipped
+func TestWebhookProcessor_ItemWebhook_NilItemID(t *testing.T) {
+	ctx := context.Background()
+	mockSyncService := new(MockTransactionSyncServiceForWorker)
+	mockItemErrorService := new(MockItemErrorServiceForWorker)
+	mockWebhookRepo := new(MockWebhookRepoForWorker)
+
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10)
+
+	// Create ITEM webhook with nil ItemID
+	webhook := domain.WebhookEvent{
+		ID:          "webhook-nil-item",
+		WebhookType: "ITEM",
+		ItemID:      nil, // This should be skipped
+		Payload:     json.RawMessage(`{"error":{"error_type":"ERROR","error_code":"CODE","error_message":"msg"}}`),
+		Processed:   false,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+
+	// Mock: No TRANSACTIONS webhooks
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "TRANSACTIONS", 10).Return([]domain.WebhookEvent{}, nil)
+	// Mock: Return webhook with nil ItemID
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "ITEM", 10).Return([]domain.WebhookEvent{webhook}, nil)
+
+	// Execute
+	err := processor.ProcessPendingWebhooks(ctx)
+
+	// Assert - should not error
+	assert.NoError(t, err)
+	mockWebhookRepo.AssertExpectations(t)
+	// ItemErrorService should NOT be called since ItemID is nil
+	mockItemErrorService.AssertNotCalled(t, "ProcessWebhook")
+}
+
+// TestWebhookProcessor_ItemWebhook_MissingErrorType tests handling of webhook with empty error fields
+func TestWebhookProcessor_ItemWebhook_MissingErrorType(t *testing.T) {
+	ctx := context.Background()
+	mockSyncService := new(MockTransactionSyncServiceForWorker)
+	mockItemErrorService := new(MockItemErrorServiceForWorker)
+	mockWebhookRepo := new(MockWebhookRepoForWorker)
+
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10)
+
+	// Create ITEM webhook with empty error fields
+	itemID := "item-1"
+	webhook := domain.WebhookEvent{
+		ID:          "webhook-empty-error",
+		WebhookType: "ITEM",
+		ItemID:      &itemID,
+		Payload:     json.RawMessage(`{"error":{"error_type":"","error_code":"","error_message":""}}`),
+		Processed:   false,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+
+	// Mock: No TRANSACTIONS webhooks
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "TRANSACTIONS", 10).Return([]domain.WebhookEvent{}, nil)
+	// Mock: Return webhook with empty error fields
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "ITEM", 10).Return([]domain.WebhookEvent{webhook}, nil)
+
+	// Execute
+	err := processor.ProcessPendingWebhooks(ctx)
+
+	// Assert - should not error
+	assert.NoError(t, err)
+	mockWebhookRepo.AssertExpectations(t)
+	// ItemErrorService should NOT be called since error fields are empty (validation fails)
+	mockItemErrorService.AssertNotCalled(t, "ProcessWebhook")
+}
+
+// TestWebhookProcessor_BothReposFail tests that function completes even if both repos fail
+func TestWebhookProcessor_BothReposFail(t *testing.T) {
+	ctx := context.Background()
+	mockSyncService := new(MockTransactionSyncServiceForWorker)
+	mockItemErrorService := new(MockItemErrorServiceForWorker)
+	mockWebhookRepo := new(MockWebhookRepoForWorker)
+
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10)
+
+	// Mock: Both repos fail
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "TRANSACTIONS", 10).
+		Return(nil, errors.New("TRANSACTIONS repo failed"))
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "ITEM", 10).
+		Return(nil, errors.New("ITEM repo failed"))
+
+	// Execute
+	err := processor.ProcessPendingWebhooks(ctx)
+
+	// Assert - should not return error (errors are logged)
+	assert.NoError(t, err)
+	mockWebhookRepo.AssertExpectations(t)
+}
