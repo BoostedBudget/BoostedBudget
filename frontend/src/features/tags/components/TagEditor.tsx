@@ -1,11 +1,13 @@
 import { useState } from 'react'
 import type { UserTag } from '../types'
+import { createTag } from '../api/tagsApi'
 import './TagEditor.css'
 
 interface TagEditorProps {
   selectedTags: string[]
   availableTags: UserTag[]
   onChange: (tags: string[]) => void
+  onTagCreated?: (tag: UserTag) => void
   disabled?: boolean
 }
 
@@ -13,9 +15,13 @@ export function TagEditor({
   selectedTags,
   availableTags,
   onChange,
+  onTagCreated,
   disabled = false,
 }: TagEditorProps) {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false)
+  const [isCreating, setIsCreating] = useState(false)
+  const [newTagName, setNewTagName] = useState('')
+  const [newTagColor, setNewTagColor] = useState('#6B7280')
 
   // Get tag object by name
   const getTagByName = (name: string): UserTag | undefined => {
@@ -40,6 +46,36 @@ export function TagEditor({
   const toggleDropdown = () => {
     if (!disabled) {
       setIsDropdownOpen(!isDropdownOpen)
+    }
+  }
+
+  const handleShowCreateForm = () => {
+    setIsCreating(true)
+  }
+
+  const handleCancelCreate = () => {
+    setIsCreating(false)
+    setNewTagName('')
+    setNewTagColor('#6B7280')
+  }
+
+  const handleCreateTag = async () => {
+    if (!newTagName.trim()) return
+
+    try {
+      const newTag = await createTag({
+        name: newTagName.trim(),
+        color: newTagColor,
+      })
+
+      onTagCreated?.(newTag)
+      onChange([...selectedTags, newTag.name])
+      setIsCreating(false)
+      setIsDropdownOpen(false)
+      setNewTagName('')
+      setNewTagColor('#6B7280')
+    } catch (error) {
+      console.error('Failed to create tag:', error)
     }
   }
 
@@ -78,7 +114,7 @@ export function TagEditor({
           type="button"
           className="tag-editor__add-button"
           onClick={toggleDropdown}
-          disabled={disabled || availableForSelection.length === 0}
+          disabled={disabled}
           aria-label="Add tag"
         >
           + Add tag
@@ -101,6 +137,49 @@ export function TagEditor({
                 {tag.name}
               </li>
             ))}
+
+            {isCreating ? (
+              <li className="tag-editor__create-form">
+                <input
+                  type="text"
+                  placeholder="Tag name"
+                  value={newTagName}
+                  onChange={(e) => setNewTagName(e.target.value)}
+                  className="tag-editor__create-input"
+                />
+                <input
+                  type="color"
+                  value={newTagColor}
+                  onChange={(e) => setNewTagColor(e.target.value)}
+                  className="tag-editor__create-color"
+                  aria-label="Color"
+                />
+                <div className="tag-editor__create-actions">
+                  <button
+                    type="button"
+                    onClick={handleCreateTag}
+                    disabled={!newTagName.trim()}
+                    className="tag-editor__create-button"
+                  >
+                    Create
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCancelCreate}
+                    className="tag-editor__cancel-button"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </li>
+            ) : (
+              <li
+                className="tag-editor__option tag-editor__create-option"
+                onClick={handleShowCreateForm}
+              >
+                + Create new tag
+              </li>
+            )}
           </ul>
         )}
       </div>
