@@ -16,6 +16,24 @@
   border-color: #fde047;
 }
 
+.transaction-card.clickable {
+  cursor: pointer;
+}
+
+.transaction-card.clickable:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  border-color: #3b82f6;
+}
+
+.transaction-card.clickable:focus {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+}
+
+.transaction-card.clickable:active {
+  transform: scale(0.99);
+}
+
 .transaction-card__header {
   display: flex;
   justify-content: space-between;
