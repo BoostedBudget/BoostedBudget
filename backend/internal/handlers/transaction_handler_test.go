@@ -17,9 +17,10 @@ import (
 
 // mockTransactionService is a mock implementation of TransactionService for testing
 type mockTransactionService struct {
-	listTransactionsFunc       func(ctx context.Context, userID string, filters domain.TransactionFilters, limit, offset int) (*services.TransactionListResponse, error)
-	getTransactionByIDFunc     func(ctx context.Context, userID, transactionID string) (*domain.Transaction, error)
-	updateTransactionTagsFunc  func(ctx context.Context, userID, transactionID string, tags []string) (*domain.Transaction, error)
+	listTransactionsFunc           func(ctx context.Context, userID string, filters domain.TransactionFilters, limit, offset int) (*services.TransactionListResponse, error)
+	getTransactionByIDFunc         func(ctx context.Context, userID, transactionID string) (*domain.Transaction, error)
+	updateTransactionTagsFunc      func(ctx context.Context, userID, transactionID string, tags []string) (*domain.Transaction, error)
+	updateTransactionCategoryFunc  func(ctx context.Context, userID, transactionID string, category []string) (*domain.Transaction, error)
 }
 
 func (m *mockTransactionService) ListTransactions(ctx context.Context, userID string, filters domain.TransactionFilters, limit, offset int) (*services.TransactionListResponse, error) {
@@ -39,6 +40,13 @@ func (m *mockTransactionService) GetTransactionByID(ctx context.Context, userID,
 func (m *mockTransactionService) UpdateTransactionTags(ctx context.Context, userID, transactionID string, tags []string) (*domain.Transaction, error) {
 	if m.updateTransactionTagsFunc != nil {
 		return m.updateTransactionTagsFunc(ctx, userID, transactionID, tags)
+	}
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockTransactionService) UpdateTransactionCategory(ctx context.Context, userID, transactionID string, category []string) (*domain.Transaction, error) {
+	if m.updateTransactionCategoryFunc != nil {
+		return m.updateTransactionCategoryFunc(ctx, userID, transactionID, category)
 	}
 	return nil, errors.New("not implemented")
 }

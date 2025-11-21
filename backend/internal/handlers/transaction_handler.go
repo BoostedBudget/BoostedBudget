@@ -200,3 +200,43 @@ func (h *TransactionHandler) GetTransactionByID(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, tx)
 }
+
+// UpdateTransactionCategoryRequest represents the request body for updating transaction category
+type UpdateTransactionCategoryRequest struct {
+	Category []string `json:"category"`
+}
+
+// UpdateTransactionCategory handles PUT /api/v1/transactions/:id/category
+// Updates the category override on a specific transaction
+func (h *TransactionHandler) UpdateTransactionCategory(c echo.Context) error {
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "User not authenticated")
+	}
+
+	transactionID := c.Param("id")
+	if transactionID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Transaction ID is required")
+	}
+
+	var req UpdateTransactionCategoryRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
+	}
+
+	// Validate category (optional: ensure non-nil)
+	if req.Category == nil {
+		req.Category = []string{}
+	}
+
+	tx, err := h.transactionService.UpdateTransactionCategory(c.Request().Context(), userID, transactionID, req.Category)
+	if err != nil {
+		if errors.Is(err, repository.ErrTransactionNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "Transaction not found")
+		}
+		c.Logger().Errorf("Failed to update transaction category for user %s: %v", userID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update transaction category")
+	}
+
+	return c.JSON(http.StatusOK, tx)
+}

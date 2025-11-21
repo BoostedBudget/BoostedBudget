@@ -68,6 +68,10 @@ type TransactionRepository interface {
 	// UpdateTags updates the tags and tags_source for a transaction
 	// Used when manually editing transaction tags
 	UpdateTags(ctx context.Context, id string, userID string, tags []string, tagsSource []domain.TagSource) error
+
+	// UpdateCategory updates the category override for a transaction
+	// Used when manually editing transaction category
+	UpdateCategory(ctx context.Context, id string, userID string, categoryOverride []string, categorySource domain.CategorySource) error
 }
 
 // transactionRepository implements TransactionRepository using PostgreSQL
@@ -635,6 +639,39 @@ func (r *transactionRepository) UpdateTags(ctx context.Context, id string, userI
 	result, err := r.db.ExecContext(ctx, query, tagsJSON, tagsSourceJSON, time.Now(), id, userID)
 	if err != nil {
 		return fmt.Errorf("failed to update transaction tags: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return ErrTransactionNotFound
+	}
+
+	return nil
+}
+
+// UpdateCategory updates the category override for a transaction
+func (r *transactionRepository) UpdateCategory(ctx context.Context, id string, userID string, categoryOverride []string, categorySource domain.CategorySource) error {
+	// Serialize category override to JSON
+	categoryJSON, err := json.Marshal(categoryOverride)
+	if err != nil {
+		return fmt.Errorf("failed to marshal category override: %w", err)
+	}
+
+	now := time.Now()
+
+	query := `
+		UPDATE transactions
+		SET category_override = $1, category_source = $2, category_override_date = $3, updated_at = $4
+		WHERE id = $5 AND user_id = $6
+	`
+
+	result, err := r.db.ExecContext(ctx, query, categoryJSON, categorySource, now, now, id, userID)
+	if err != nil {
+		return fmt.Errorf("failed to update transaction category: %w", err)
 	}
 
 	rowsAffected, err := result.RowsAffected()
