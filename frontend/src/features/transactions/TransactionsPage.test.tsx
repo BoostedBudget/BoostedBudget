@@ -10,10 +10,16 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TransactionsPage } from './TransactionsPage'
 import * as transactionsApi from './api/transactionsApi'
+import * as tagsApi from '../tags/api/tagsApi'
+import * as categoriesApi from '../categories/api/categoriesApi'
 import type { GetTransactionsResponse } from './types'
+import type { UserTag } from '../tags/types'
+import type { CustomCategory } from '../categories/types'
 
-// Mock the API
+// Mock the APIs
 vi.mock('./api/transactionsApi')
+vi.mock('../tags/api/tagsApi')
+vi.mock('../categories/api/categoriesApi')
 
 describe('TransactionsPage', () => {
   const mockTransactionsResponse: GetTransactionsResponse = {
@@ -57,8 +63,53 @@ describe('TransactionsPage', () => {
     has_more: false,
   }
 
+  const mockTags: UserTag[] = [
+    {
+      id: 'tag-1',
+      user_id: 'user-123',
+      name: 'Food',
+      color: '#FF5733',
+      usage_count: 5,
+      created_at: '2025-01-01T00:00:00Z',
+      updated_at: '2025-01-01T00:00:00Z',
+    },
+    {
+      id: 'tag-2',
+      user_id: 'user-123',
+      name: 'Shopping',
+      color: '#33FF57',
+      usage_count: 3,
+      created_at: '2025-01-01T00:00:00Z',
+      updated_at: '2025-01-01T00:00:00Z',
+    },
+  ]
+
+  const mockCategories: CustomCategory[] = [
+    {
+      id: 'cat-1',
+      user_id: 'user-123',
+      name: 'Food & Dining',
+      color: '#FF5733',
+      usage_count: 10,
+      created_at: '2025-01-01T00:00:00Z',
+      updated_at: '2025-01-01T00:00:00Z',
+    },
+    {
+      id: 'cat-2',
+      user_id: 'user-123',
+      name: 'Shopping',
+      color: '#33FF57',
+      usage_count: 5,
+      created_at: '2025-01-01T00:00:00Z',
+      updated_at: '2025-01-01T00:00:00Z',
+    },
+  ]
+
   beforeEach(() => {
     vi.clearAllMocks()
+    // Default mocks for tags and categories
+    vi.mocked(tagsApi.fetchTags).mockResolvedValue(mockTags)
+    vi.mocked(categoriesApi.fetchCategories).mockResolvedValue(mockCategories)
   })
 
   describe('Initial Loading', () => {
@@ -323,6 +374,114 @@ describe('TransactionsPage', () => {
       })
 
       expect(container.querySelector('main')).toBeInTheDocument()
+    })
+  })
+
+  describe('Transaction Editing', () => {
+    it('should fetch tags and categories on mount', async () => {
+      vi.mocked(transactionsApi.fetchTransactions).mockResolvedValue(mockTransactionsResponse)
+
+      render(<TransactionsPage />)
+
+      await waitFor(() => {
+        expect(tagsApi.fetchTags).toHaveBeenCalled()
+        expect(categoriesApi.fetchCategories).toHaveBeenCalled()
+      })
+    })
+
+    it('should open editor when clicking a transaction', async () => {
+      const user = userEvent.setup()
+      vi.mocked(transactionsApi.fetchTransactions).mockResolvedValue(mockTransactionsResponse)
+
+      render(<TransactionsPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
+      })
+
+      // Click on the transaction card
+      const transactionCard = screen.getByText('Starbucks Coffee').closest('article')
+      expect(transactionCard).toBeInTheDocument()
+      await user.click(transactionCard!)
+
+      // Editor should open
+      await waitFor(() => {
+        expect(screen.getByText('Edit Transaction')).toBeInTheDocument()
+      })
+    })
+
+    it('should display transaction details in editor', async () => {
+      const user = userEvent.setup()
+      vi.mocked(transactionsApi.fetchTransactions).mockResolvedValue(mockTransactionsResponse)
+
+      render(<TransactionsPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
+      })
+
+      const transactionCard = screen.getByText('Starbucks Coffee').closest('article')
+      await user.click(transactionCard!)
+
+      await waitFor(() => {
+        expect(screen.getByText('Edit Transaction')).toBeInTheDocument()
+        // Check amount is displayed (formatted)
+        expect(screen.getByText('$25.50')).toBeInTheDocument()
+      })
+    })
+
+    it('should close editor when cancel is clicked', async () => {
+      const user = userEvent.setup()
+      vi.mocked(transactionsApi.fetchTransactions).mockResolvedValue(mockTransactionsResponse)
+
+      render(<TransactionsPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
+      })
+
+      const transactionCard = screen.getByText('Starbucks Coffee').closest('article')
+      await user.click(transactionCard!)
+
+      await waitFor(() => {
+        expect(screen.getByText('Edit Transaction')).toBeInTheDocument()
+      })
+
+      // Click cancel
+      const cancelButton = screen.getByRole('button', { name: /cancel/i })
+      await user.click(cancelButton)
+
+      // Editor should close
+      await waitFor(() => {
+        expect(screen.queryByText('Edit Transaction')).not.toBeInTheDocument()
+      })
+    })
+
+    it('should handle tag/category fetch errors gracefully', async () => {
+      vi.mocked(transactionsApi.fetchTransactions).mockResolvedValue(mockTransactionsResponse)
+      vi.mocked(tagsApi.fetchTags).mockRejectedValue(new Error('Failed to fetch tags'))
+      vi.mocked(categoriesApi.fetchCategories).mockRejectedValue(new Error('Failed to fetch categories'))
+
+      // Should not crash
+      render(<TransactionsPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
+      })
+    })
+
+    it('should make transaction cards clickable', async () => {
+      vi.mocked(transactionsApi.fetchTransactions).mockResolvedValue(mockTransactionsResponse)
+
+      render(<TransactionsPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
+      })
+
+      const transactionCard = screen.getByText('Starbucks Coffee').closest('article')
+      expect(transactionCard).toHaveAttribute('role', 'button')
+      expect(transactionCard).toHaveAttribute('tabIndex', '0')
     })
   })
 })
