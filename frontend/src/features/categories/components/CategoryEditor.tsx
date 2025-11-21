@@ -1,11 +1,13 @@
 import { useState } from 'react'
 import type { CustomCategory } from '../types'
+import { createCategory } from '../api/categoriesApi'
 import './CategoryEditor.css'
 
 interface CategoryEditorProps {
   selectedCategory: string[]
   availableCategories: CustomCategory[]
   onChange: (category: string[]) => void
+  onCategoryCreated?: (category: CustomCategory) => void
   disabled?: boolean
 }
 
@@ -13,9 +15,13 @@ export function CategoryEditor({
   selectedCategory,
   availableCategories,
   onChange,
+  onCategoryCreated,
   disabled = false,
 }: CategoryEditorProps) {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false)
+  const [isCreating, setIsCreating] = useState(false)
+  const [newCategoryName, setNewCategoryName] = useState('')
+  const [newCategoryColor, setNewCategoryColor] = useState('#6B7280')
 
   const currentCategory = selectedCategory[0] || null
   const currentCategoryObj = availableCategories.find(
@@ -34,6 +40,36 @@ export function CategoryEditor({
   const toggleDropdown = () => {
     if (!disabled) {
       setIsDropdownOpen(!isDropdownOpen)
+    }
+  }
+
+  const handleShowCreateForm = () => {
+    setIsCreating(true)
+  }
+
+  const handleCancelCreate = () => {
+    setIsCreating(false)
+    setNewCategoryName('')
+    setNewCategoryColor('#6B7280')
+  }
+
+  const handleCreateCategory = async () => {
+    if (!newCategoryName.trim()) return
+
+    try {
+      const newCategory = await createCategory({
+        name: newCategoryName.trim(),
+        color: newCategoryColor,
+      })
+
+      onCategoryCreated?.(newCategory)
+      onChange([newCategory.name])
+      setIsCreating(false)
+      setIsDropdownOpen(false)
+      setNewCategoryName('')
+      setNewCategoryColor('#6B7280')
+    } catch (error) {
+      console.error('Failed to create category:', error)
     }
   }
 
@@ -93,6 +129,49 @@ export function CategoryEditor({
                 {category.name}
               </li>
             ))}
+
+            {isCreating ? (
+              <li className="category-editor__create-form">
+                <input
+                  type="text"
+                  placeholder="Category name"
+                  value={newCategoryName}
+                  onChange={(e) => setNewCategoryName(e.target.value)}
+                  className="category-editor__create-input"
+                />
+                <input
+                  type="color"
+                  value={newCategoryColor}
+                  onChange={(e) => setNewCategoryColor(e.target.value)}
+                  className="category-editor__create-color"
+                  aria-label="Color"
+                />
+                <div className="category-editor__create-actions">
+                  <button
+                    type="button"
+                    onClick={handleCreateCategory}
+                    disabled={!newCategoryName.trim()}
+                    className="category-editor__create-button"
+                  >
+                    Create
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCancelCreate}
+                    className="category-editor__cancel-button"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </li>
+            ) : (
+              <li
+                className="category-editor__option category-editor__create-option"
+                onClick={handleShowCreateForm}
+              >
+                + Create new category
+              </li>
+            )}
           </ul>
         )}
       </div>

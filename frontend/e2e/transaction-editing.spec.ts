@@ -151,22 +151,64 @@ async function mockTransactionAPIs(
     }
   })
 
-  // Mock tags endpoint
+  // Mock tags endpoint (GET and POST)
   await page.route('**/api/v1/tags', (route) => {
-    route.fulfill({
-      status: tagsStatus,
-      contentType: 'application/json',
-      body: JSON.stringify(tags),
-    })
+    if (route.request().method() === 'GET') {
+      route.fulfill({
+        status: tagsStatus,
+        contentType: 'application/json',
+        body: JSON.stringify(tags),
+      })
+    } else if (route.request().method() === 'POST') {
+      // Handle tag creation
+      const body = route.request().postDataJSON()
+      const newTag = {
+        id: 'new-tag-id',
+        user_id: 'user-123',
+        name: body.name,
+        color: body.color || '#6B7280',
+        usage_count: 0,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }
+      route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify(newTag),
+      })
+    } else {
+      route.continue()
+    }
   })
 
-  // Mock categories endpoint
+  // Mock categories endpoint (GET and POST)
   await page.route('**/api/v1/categories', (route) => {
-    route.fulfill({
-      status: categoriesStatus,
-      contentType: 'application/json',
-      body: JSON.stringify(categories),
-    })
+    if (route.request().method() === 'GET') {
+      route.fulfill({
+        status: categoriesStatus,
+        contentType: 'application/json',
+        body: JSON.stringify(categories),
+      })
+    } else if (route.request().method() === 'POST') {
+      // Handle category creation
+      const body = route.request().postDataJSON()
+      const newCategory = {
+        id: 'new-cat-id',
+        user_id: 'user-123',
+        name: body.name,
+        color: body.color || '#6B7280',
+        usage_count: 0,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }
+      route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify(newCategory),
+      })
+    } else {
+      route.continue()
+    }
   })
 }
 
@@ -554,6 +596,227 @@ describeTransactionEditing('Transaction Editing - Authenticated User', () => {
 
       // Assert - Editor should open
       await expect(page.getByText('Edit Transaction')).toBeVisible()
+    })
+  })
+
+  // ==========================================================================
+  // Inline Tag Creation Tests
+  // ==========================================================================
+
+  test.describe('Inline Tag Creation', () => {
+    test('should show create new tag option in dropdown', async ({ page }) => {
+      // Arrange
+      await mockTransactionAPIs(page)
+      await page.goto('/transactions')
+      await page.waitForLoadState('networkidle')
+
+      // Open editor
+      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      await transactionCard.click()
+      await expect(page.getByText('Edit Transaction')).toBeVisible()
+
+      // Act - Click add tag button
+      const addTagButton = page.getByRole('button', { name: /add tag/i })
+      await addTagButton.click()
+
+      // Assert - Create new tag option should be visible
+      await expect(page.getByText(/create new tag/i)).toBeVisible()
+    })
+
+    test('should show creation form when clicking create new tag', async ({ page }) => {
+      // Arrange
+      await mockTransactionAPIs(page)
+      await page.goto('/transactions')
+      await page.waitForLoadState('networkidle')
+
+      // Open editor
+      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      await transactionCard.click()
+      await expect(page.getByText('Edit Transaction')).toBeVisible()
+
+      // Act - Click add tag then create new
+      const addTagButton = page.getByRole('button', { name: /add tag/i })
+      await addTagButton.click()
+      await page.getByText(/create new tag/i).click()
+
+      // Assert - Creation form should appear
+      await expect(page.getByPlaceholder(/tag name/i)).toBeVisible()
+      await expect(page.getByRole('button', { name: /^create$/i })).toBeVisible()
+    })
+
+    test('should create new tag and add to transaction', async ({ page }) => {
+      // Arrange
+      await mockTransactionAPIs(page)
+      await mockTransactionUpdateAPIs(page)
+      await page.goto('/transactions')
+      await page.waitForLoadState('networkidle')
+
+      // Open editor
+      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      await transactionCard.click()
+      await expect(page.getByText('Edit Transaction')).toBeVisible()
+
+      // Act - Create a new tag
+      const addTagButton = page.getByRole('button', { name: /add tag/i })
+      await addTagButton.click()
+      await page.getByText(/create new tag/i).click()
+
+      await page.getByPlaceholder(/tag name/i).fill('My New Tag')
+      await page.getByRole('button', { name: /^create$/i }).click()
+
+      // Assert - New tag should appear in the tag list
+      const tagEditor = page.locator('.tag-editor, [data-testid="tag-editor"]')
+      await expect(tagEditor.getByText('My New Tag')).toBeVisible()
+    })
+
+    test('should cancel tag creation and return to dropdown', async ({ page }) => {
+      // Arrange
+      await mockTransactionAPIs(page)
+      await page.goto('/transactions')
+      await page.waitForLoadState('networkidle')
+
+      // Open editor
+      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      await transactionCard.click()
+      await expect(page.getByText('Edit Transaction')).toBeVisible()
+
+      // Act - Start creation then cancel
+      const addTagButton = page.getByRole('button', { name: /add tag/i })
+      await addTagButton.click()
+      await page.getByText(/create new tag/i).click()
+      await page.getByRole('button', { name: /cancel/i }).click()
+
+      // Assert - Should be back to dropdown with existing tags
+      await expect(page.getByRole('option', { name: 'Shopping' })).toBeVisible()
+    })
+
+    test('should allow creating tag when no tags exist', async ({ page }) => {
+      // Arrange - Mock with empty tags
+      await mockTransactionAPIs(page, { tags: [] })
+      await page.goto('/transactions')
+      await page.waitForLoadState('networkidle')
+
+      // Open editor
+      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      await transactionCard.click()
+      await expect(page.getByText('Edit Transaction')).toBeVisible()
+
+      // Act - Click add tag (should be enabled even with no tags)
+      const addTagButton = page.getByRole('button', { name: /add tag/i })
+      await addTagButton.click()
+
+      // Assert - Create option should be available
+      await expect(page.getByText(/create new tag/i)).toBeVisible()
+    })
+  })
+
+  // ==========================================================================
+  // Inline Category Creation Tests
+  // ==========================================================================
+
+  test.describe('Inline Category Creation', () => {
+    test('should show create new category option in dropdown', async ({ page }) => {
+      // Arrange
+      await mockTransactionAPIs(page)
+      await page.goto('/transactions')
+      await page.waitForLoadState('networkidle')
+
+      // Open editor
+      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      await transactionCard.click()
+      await expect(page.getByText('Edit Transaction')).toBeVisible()
+
+      // Act - Click change category button
+      const changeCategoryButton = page.getByRole('button', { name: /change category/i })
+      await changeCategoryButton.click()
+
+      // Assert - Create new category option should be visible
+      await expect(page.getByText(/create new category/i)).toBeVisible()
+    })
+
+    test('should show creation form when clicking create new category', async ({ page }) => {
+      // Arrange
+      await mockTransactionAPIs(page)
+      await page.goto('/transactions')
+      await page.waitForLoadState('networkidle')
+
+      // Open editor
+      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      await transactionCard.click()
+      await expect(page.getByText('Edit Transaction')).toBeVisible()
+
+      // Act - Click change category then create new
+      const changeCategoryButton = page.getByRole('button', { name: /change category/i })
+      await changeCategoryButton.click()
+      await page.getByText(/create new category/i).click()
+
+      // Assert - Creation form should appear
+      await expect(page.getByPlaceholder(/category name/i)).toBeVisible()
+      await expect(page.getByRole('button', { name: /^create$/i })).toBeVisible()
+    })
+
+    test('should create new category and assign to transaction', async ({ page }) => {
+      // Arrange
+      await mockTransactionAPIs(page)
+      await mockTransactionUpdateAPIs(page)
+      await page.goto('/transactions')
+      await page.waitForLoadState('networkidle')
+
+      // Open editor
+      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      await transactionCard.click()
+      await expect(page.getByText('Edit Transaction')).toBeVisible()
+
+      // Act - Create a new category
+      const changeCategoryButton = page.getByRole('button', { name: /change category/i })
+      await changeCategoryButton.click()
+      await page.getByText(/create new category/i).click()
+
+      await page.getByPlaceholder(/category name/i).fill('My New Category')
+      await page.getByRole('button', { name: /^create$/i }).click()
+
+      // Assert - New category should be selected
+      await expect(page.getByText('My New Category')).toBeVisible()
+    })
+
+    test('should cancel category creation and return to dropdown', async ({ page }) => {
+      // Arrange
+      await mockTransactionAPIs(page)
+      await page.goto('/transactions')
+      await page.waitForLoadState('networkidle')
+
+      // Open editor
+      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      await transactionCard.click()
+      await expect(page.getByText('Edit Transaction')).toBeVisible()
+
+      // Act - Start creation then cancel
+      const changeCategoryButton = page.getByRole('button', { name: /change category/i })
+      await changeCategoryButton.click()
+      await page.getByText(/create new category/i).click()
+      await page.getByRole('button', { name: /cancel/i }).click()
+
+      // Assert - Should be back to dropdown with existing categories
+      await expect(page.getByRole('option', { name: 'Entertainment' })).toBeVisible()
+    })
+
+    test('should allow creating category when no categories exist', async ({ page }) => {
+      // Arrange - Mock with empty categories
+      await mockTransactionAPIs(page, { categories: [] })
+      await page.goto('/transactions')
+      await page.waitForLoadState('networkidle')
+
+      // Open editor
+      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      await transactionCard.click()
+      await expect(page.getByText('Edit Transaction')).toBeVisible()
+
+      // Act - Click change category
+      const changeCategoryButton = page.getByRole('button', { name: /change category/i })
+      await changeCategoryButton.click()
+
+      // Assert - Create option should be available
+      await expect(page.getByText(/create new category/i)).toBeVisible()
     })
   })
 })
