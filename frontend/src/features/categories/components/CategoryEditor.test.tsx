@@ -170,5 +170,50 @@ describe('CategoryEditor', () => {
       const colorIndicator = screen.getByTestId('category-color')
       expect(colorIndicator).toHaveStyle({ backgroundColor: '#FF5733' })
     })
+
+    it('should use default color when category has no color', () => {
+      const categoriesWithNoColor = [
+        {
+          ...mockCategories[0],
+          color: null,
+        },
+        ...mockCategories.slice(1),
+      ]
+
+      render(
+        <CategoryEditor
+          {...defaultProps}
+          availableCategories={categoriesWithNoColor}
+        />
+      )
+
+      const colorIndicator = screen.getByTestId('category-color')
+      expect(colorIndicator).toHaveStyle({ backgroundColor: '#6B7280' })
+    })
+  })
+
+  describe('Edge cases', () => {
+    it('should not toggle dropdown when clicking button while disabled', () => {
+      render(<CategoryEditor {...defaultProps} disabled={true} />)
+
+      const button = screen.getByRole('button', { name: /change category/i })
+      fireEvent.click(button)
+
+      // Dropdown should not appear
+      expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+    })
+
+    it('should handle category not found in availableCategories', () => {
+      render(
+        <CategoryEditor
+          {...defaultProps}
+          selectedCategory={['Unknown Category']}
+        />
+      )
+
+      // Should still render with default color
+      const colorIndicator = screen.getByTestId('category-color')
+      expect(colorIndicator).toHaveStyle({ backgroundColor: '#6B7280' })
+    })
   })
 })
