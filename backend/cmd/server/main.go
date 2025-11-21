@@ -106,6 +106,8 @@ func main() {
 		notificationRepo := repository.NewNotificationRepository(db) // Issue #257: Notification storage
 		syncAuditRepo := repository.NewSyncAuditRepository(db) // Issue #242: Monthly sync limits
 		balanceSnapshotRepo := repository.NewBalanceSnapshotRepository(db) // Issue #353: Balance tracking
+		userTagRepo := repository.NewUserTagRepository(db) // Issue #345: User tags
+		customCategoryRepo := repository.NewCustomCategoryRepository(db) // Issue #345: Custom categories
 
 		// Create mock audit logger (will be replaced with real implementation later)
 		auditLogger := &mockAuditLogger{}
@@ -121,6 +123,9 @@ func main() {
 		syncLimitService := services.NewSyncLimitService(syncAuditRepo, profileRepo, subscriptionService)
 		// Issue #353: Dashboard service for balance tracking
 		dashboardService := services.NewDashboardService(balanceSnapshotRepo, accountRepo)
+		// Issue #345: Tag and category services
+		userTagService := services.NewUserTagService(userTagRepo, subscriptionService, profileRepo)
+		customCategoryService := services.NewCustomCategoryService(customCategoryRepo, subscriptionService, profileRepo)
 
 		// Initialize Email service (needed by deletion service and item error service)
 		// Optional - uses no-op mock if not configured
@@ -253,6 +258,8 @@ func main() {
 		notificationHandler := handlers.NewNotificationHandler(notificationRepo) // Issue #257: Notification API
 		syncStatsHandler := handlers.NewSyncStatsHandler(syncLimitService)       // Issue #242: Monthly sync limits API
 		dashboardHandler := handlers.NewDashboardHandler(dashboardService)       // Issue #353: Balance tracking dashboard
+		tagHandler := handlers.NewTagHandler(userTagService)                      // Issue #345: User tag management
+		categoryHandler := handlers.NewCategoryHandler(customCategoryService)     // Issue #345: Custom category management
 
 		// Create admin handler (Issue #308: Admin API for Manual Webhook Firing)
 		// Requires plaidService and encryptionService, so declared here
@@ -277,6 +284,23 @@ func main() {
 		api.GET("/user/privacy", privacyHandler.GetPrivacySettings)
 		api.PUT("/user/privacy", privacyHandler.UpdatePrivacySettings)
 		api.GET("/transactions", transactionHandler.GetTransactions)
+		api.GET("/transactions/:id", transactionHandler.GetTransactionByID)
+		api.PUT("/transactions/:id/tags", transactionHandler.UpdateTransactionTags)
+		api.PUT("/transactions/:id/category", transactionHandler.UpdateTransactionCategory)
+
+		// Tag routes (Issue #345: User tag management)
+		api.POST("/tags", tagHandler.CreateTag)
+		api.GET("/tags", tagHandler.GetUserTags)
+		api.GET("/tags/:id", tagHandler.GetTagByID)
+		api.PUT("/tags/:id", tagHandler.UpdateTag)
+		api.DELETE("/tags/:id", tagHandler.DeleteTag)
+
+		// Category routes (Issue #345: Custom category management)
+		api.POST("/categories", categoryHandler.CreateCategory)
+		api.GET("/categories", categoryHandler.GetUserCategories)
+		api.GET("/categories/:id", categoryHandler.GetCategoryByID)
+		api.PUT("/categories/:id", categoryHandler.UpdateCategory)
+		api.DELETE("/categories/:id", categoryHandler.DeleteCategory)
 
 		// Notification routes (Issue #257: User Notifications)
 		api.GET("/notifications", notificationHandler.GetNotifications)
