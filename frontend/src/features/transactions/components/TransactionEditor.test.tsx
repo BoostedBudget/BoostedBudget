@@ -434,4 +434,108 @@ describe('TransactionEditor', () => {
       expect(screen.getByText('Shopping')).toBeInTheDocument()
     })
   })
+
+  describe('Uncategorized option', () => {
+    it('should show Uncategorized as first option in category dropdown', async () => {
+      render(<TransactionEditor {...defaultProps} />)
+
+      // Open category dropdown
+      const changeButton = screen.getByRole('button', { name: /change category/i })
+      fireEvent.click(changeButton)
+
+      await waitFor(() => {
+        const uncategorizedOption = screen.getByRole('option', { name: /uncategorized/i })
+        expect(uncategorizedOption).toBeInTheDocument()
+      })
+    })
+
+    it('should have a clear button to remove category', () => {
+      render(<TransactionEditor {...defaultProps} />)
+
+      const clearButton = screen.getByRole('button', { name: /clear category/i })
+      expect(clearButton).toBeInTheDocument()
+    })
+
+    it('should set category to empty array when clear button is clicked', async () => {
+      render(<TransactionEditor {...defaultProps} />)
+
+      const clearButton = screen.getByRole('button', { name: /clear category/i })
+      fireEvent.click(clearButton)
+
+      const saveButton = screen.getByRole('button', { name: /save/i })
+      fireEvent.click(saveButton)
+
+      await waitFor(() => {
+        expect(updateTransactionCategory).toHaveBeenCalledWith('txn-1', { category: [] })
+      })
+    })
+
+    it('should set category to empty when Uncategorized option is selected', async () => {
+      render(<TransactionEditor {...defaultProps} />)
+
+      // Open category dropdown
+      const changeButton = screen.getByRole('button', { name: /change category/i })
+      fireEvent.click(changeButton)
+
+      await waitFor(() => {
+        const uncategorizedOption = screen.getByRole('option', { name: /uncategorized/i })
+        fireEvent.click(uncategorizedOption)
+      })
+
+      const saveButton = screen.getByRole('button', { name: /save/i })
+      fireEvent.click(saveButton)
+
+      await waitFor(() => {
+        expect(updateTransactionCategory).toHaveBeenCalledWith('txn-1', { category: [] })
+      })
+    })
+
+    it('should show Reset to Original option when original_category exists', async () => {
+      const txnWithOriginal: Transaction = {
+        ...mockTransaction,
+        category: '["Food & Dining"]',
+        category_override: '[]',
+        category_source: 'manual',
+        original_category: '["Food & Dining"]',
+      }
+
+      render(
+        <TransactionEditor
+          {...defaultProps}
+          transaction={txnWithOriginal}
+        />
+      )
+
+      // Should see a reset option
+      const resetButton = screen.getByRole('button', { name: /reset to original/i })
+      expect(resetButton).toBeInTheDocument()
+    })
+
+    it('should reset to original category when reset button is clicked', async () => {
+      const txnWithOriginal: Transaction = {
+        ...mockTransaction,
+        category: '["Food & Dining"]',
+        category_override: '[]',
+        category_source: 'manual',
+        original_category: '["Food & Dining"]',
+      }
+
+      render(
+        <TransactionEditor
+          {...defaultProps}
+          transaction={txnWithOriginal}
+        />
+      )
+
+      const resetButton = screen.getByRole('button', { name: /reset to original/i })
+      fireEvent.click(resetButton)
+
+      const saveButton = screen.getByRole('button', { name: /save/i })
+      fireEvent.click(saveButton)
+
+      await waitFor(() => {
+        expect(updateTransactionCategory).toHaveBeenCalledWith('txn-1', { category: ['Food & Dining'] })
+      })
+    })
+  })
 })
