@@ -29,6 +29,7 @@ BACKEND_HEALTH_URL="http://localhost:8080/health"
 FRONTEND_URL="http://localhost:3000"  # Frontend serves HTTP only
 MAX_HEALTH_RETRIES=30
 HEALTH_RETRY_DELAY=2
+RESET_VOLUMES=${RESET_VOLUMES:-false}
 
 # Function to print section headers
 print_section() {
@@ -172,10 +173,18 @@ cleanup_containers() {
 
   echo "Stopping and removing all staging containers, networks, and orphans..."
 
-  # Stop and remove containers, networks, volumes, and orphans
-  docker-compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" down -v --remove-orphans 2>/dev/null || {
-    print_warning "docker-compose down failed or no containers exist"
-  }
+  # Stop and remove containers, networks, and orphans
+  # Use RESET_VOLUMES=true to also remove volumes (wipes database)
+  if [ "$RESET_VOLUMES" = "true" ]; then
+    docker-compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" down -v --remove-orphans 2>/dev/null || {
+      print_warning "docker-compose down failed or no containers exist"
+    }
+    print_warning "Volumes wiped due to RESET_VOLUMES=true"
+  else
+    docker-compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" down --remove-orphans 2>/dev/null || {
+      print_warning "docker-compose down failed or no containers exist"
+    }
+  fi
 
   # Extra safety: manually remove any lingering staging containers (including workspace-prefixed containers)
   local lingering=$(docker ps -a --filter "name=boostedbudget-.*-staging" --format "{{.Names}}" 2>/dev/null || true)
@@ -519,8 +528,8 @@ rollback() {
   echo "=========================================="
   echo ""
 
-  # Stop failed containers with aggressive cleanup
-  docker-compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" down -v --remove-orphans 2>/dev/null || true
+  # Stop failed containers with cleanup (preserve volumes for data recovery)
+  docker-compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" down --remove-orphans 2>/dev/null || true
 
   # If there were previous containers, try to restart them
   if [ -f /tmp/staging-containers-backup.txt ] && [ -s /tmp/staging-containers-backup.txt ]; then
@@ -553,6 +562,10 @@ display_info() {
   echo -e "  Stop:         docker-compose -p $COMPOSE_PROJECT_NAME -f $COMPOSE_FILE down"
   echo -e "  Restart:      docker-compose -p $COMPOSE_PROJECT_NAME -f $COMPOSE_FILE restart"
   echo -e "  Status:       docker-compose -p $COMPOSE_PROJECT_NAME -f $COMPOSE_FILE ps"
+  echo ""
+  echo -e "${BLUE}Data persistence:${NC}"
+  echo -e "  Database data persists across deployments by default."
+  echo -e "  To wipe database: ${YELLOW}RESET_VOLUMES=true ./scripts/deploy-staging.sh${NC}"
   echo ""
   echo -e "${BLUE}Restart policies:${NC} All containers will auto-restart on Mac Mini boot"
 }
