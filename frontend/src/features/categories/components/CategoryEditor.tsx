@@ -112,6 +112,24 @@ export function CategoryEditor({
 
         {isDropdownOpen && (
           <ul className="category-editor__dropdown" role="listbox">
+            {/* Uncategorized option first */}
+            <li
+              role="option"
+              aria-label="Uncategorized"
+              className={`category-editor__option category-editor__uncategorized${
+                !currentCategory ? ' selected' : ''
+              }`}
+              onClick={() => {
+                onChange([])
+                setIsDropdownOpen(false)
+              }}
+            >
+              <span
+                className="category-editor__option-color"
+                style={{ backgroundColor: '#9CA3AF' }}
+              />
+              Uncategorized
+            </li>
             {availableCategories.map((category) => (
               <li
                 key={category.id}

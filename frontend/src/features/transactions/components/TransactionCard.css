@@ -64,7 +64,14 @@
 }
 
 .transaction-card__category {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.transaction-card__uncategorized-warning {
+  font-size: 12px;
+  line-height: 1;
 }
 
 .transaction-card__date {
