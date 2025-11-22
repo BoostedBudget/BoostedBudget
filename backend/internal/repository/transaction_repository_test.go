@@ -206,6 +206,8 @@ func TestTransactionRepository_GetByUserID_Success(t *testing.T) {
 		"amount", "date", "authorized_date", "name", "merchant_name",
 		"category", "personal_finance_category", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
+		"tags", "tags_source",
+		"category_override", "category_source", "category_override_date", "original_category",
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
@@ -213,6 +215,8 @@ func TestTransactionRepository_GetByUserID_Success(t *testing.T) {
 			-50.00, time.Now(), nil, "Transaction 1", nil,
 			nil, nil, nil,
 			false, nil, time.Now(), time.Now(),
+			nil, nil,
+			nil, nil, nil, nil,
 		).
 		AddRow(
 			"tx-2", userID, "account-2", "item-1",
@@ -220,6 +224,8 @@ func TestTransactionRepository_GetByUserID_Success(t *testing.T) {
 			-25.00, time.Now(), nil, "Transaction 2", nil,
 			nil, nil, nil,
 			false, nil, time.Now(), time.Now(),
+			nil, nil,
+			nil, nil, nil, nil,
 		)
 
 	// Expect SELECT query
@@ -255,6 +261,8 @@ func TestTransactionRepository_GetByAccountID_Success(t *testing.T) {
 		"amount", "date", "authorized_date", "name", "merchant_name",
 		"category", "personal_finance_category", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
+		"tags", "tags_source",
+		"category_override", "category_source", "category_override_date", "original_category",
 	}).
 		AddRow(
 			"tx-1", "user-1", accountID, "item-1",
@@ -262,6 +270,8 @@ func TestTransactionRepository_GetByAccountID_Success(t *testing.T) {
 			-50.00, time.Now(), nil, "Transaction 1", nil,
 			nil, nil, nil,
 			false, nil, time.Now(), time.Now(),
+			nil, nil,
+			nil, nil, nil, nil,
 		)
 
 	// Expect SELECT query
@@ -297,6 +307,8 @@ func TestTransactionRepository_GetBySource_Success(t *testing.T) {
 		"amount", "date", "authorized_date", "name", "merchant_name",
 		"category", "personal_finance_category", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
+		"tags", "tags_source",
+		"category_override", "category_source", "category_override_date", "original_category",
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
@@ -304,6 +316,8 @@ func TestTransactionRepository_GetBySource_Success(t *testing.T) {
 			-50.00, time.Now(), nil, "Transaction 1", nil,
 			nil, nil, nil,
 			false, nil, time.Now(), time.Now(),
+			nil, nil,
+			nil, nil, nil, nil,
 		)
 
 	// Expect SELECT query
@@ -341,6 +355,8 @@ func TestTransactionRepository_GetByUserIDWithFilters_NoFilters(t *testing.T) {
 		"amount", "date", "authorized_date", "name", "merchant_name",
 		"category", "personal_finance_category", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
+		"tags", "tags_source",
+		"category_override", "category_source", "category_override_date", "original_category",
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
@@ -348,6 +364,8 @@ func TestTransactionRepository_GetByUserIDWithFilters_NoFilters(t *testing.T) {
 			-50.00, time.Now(), nil, "Transaction 1", nil,
 			nil, nil, nil,
 			false, nil, time.Now(), time.Now(),
+			nil, nil,
+			nil, nil, nil, nil,
 		)
 
 	// Expect SELECT query with only user_id filter
@@ -389,6 +407,8 @@ func TestTransactionRepository_GetByUserIDWithFilters_DateRange(t *testing.T) {
 		"amount", "date", "authorized_date", "name", "merchant_name",
 		"category", "personal_finance_category", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
+		"tags", "tags_source",
+		"category_override", "category_source", "category_override_date", "original_category",
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
@@ -396,6 +416,8 @@ func TestTransactionRepository_GetByUserIDWithFilters_DateRange(t *testing.T) {
 			-50.00, time.Date(2025, 6, 15, 0, 0, 0, 0, time.UTC), nil, "Transaction 1", nil,
 			nil, nil, nil,
 			false, nil, time.Now(), time.Now(),
+			nil, nil,
+			nil, nil, nil, nil,
 		)
 
 	// Expect SELECT query with date range filter
@@ -435,6 +457,8 @@ func TestTransactionRepository_GetByUserIDWithFilters_AccountID(t *testing.T) {
 		"amount", "date", "authorized_date", "name", "merchant_name",
 		"category", "personal_finance_category", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
+		"tags", "tags_source",
+		"category_override", "category_source", "category_override_date", "original_category",
 	}).
 		AddRow(
 			"tx-1", userID, accountID, "item-1",
@@ -442,6 +466,8 @@ func TestTransactionRepository_GetByUserIDWithFilters_AccountID(t *testing.T) {
 			-50.00, time.Now(), nil, "Transaction 1", nil,
 			nil, nil, nil,
 			false, nil, time.Now(), time.Now(),
+			nil, nil,
+			nil, nil, nil, nil,
 		)
 
 	// Expect SELECT query with account_id filter
@@ -483,6 +509,8 @@ func TestTransactionRepository_GetByUserIDWithFilters_Search(t *testing.T) {
 		"amount", "date", "authorized_date", "name", "merchant_name",
 		"category", "personal_finance_category", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
+		"tags", "tags_source",
+		"category_override", "category_source", "category_override_date", "original_category",
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
@@ -490,6 +518,8 @@ func TestTransactionRepository_GetByUserIDWithFilters_Search(t *testing.T) {
 			-5.49, time.Now(), nil, "Starbucks", &merchantName,
 			nil, nil, nil,
 			false, nil, time.Now(), time.Now(),
+			nil, nil,
+			nil, nil, nil, nil,
 		)
 
 	// Expect SELECT query with ILIKE search (case-insensitive)
@@ -532,6 +562,8 @@ func TestTransactionRepository_GetByUserIDWithFilters_Category(t *testing.T) {
 		"amount", "date", "authorized_date", "name", "merchant_name",
 		"category", "personal_finance_category", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
+		"tags", "tags_source",
+		"category_override", "category_source", "category_override_date", "original_category",
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
@@ -539,6 +571,8 @@ func TestTransactionRepository_GetByUserIDWithFilters_Category(t *testing.T) {
 			-25.00, time.Now(), nil, "Restaurant", nil,
 			&categoryJSON, nil, nil,
 			false, nil, time.Now(), time.Now(),
+			nil, nil,
+			nil, nil, nil, nil,
 		)
 
 	// Expect SELECT query with category filter (JSON contains check)
@@ -578,6 +612,8 @@ func TestTransactionRepository_GetByUserIDWithFilters_Pending(t *testing.T) {
 		"amount", "date", "authorized_date", "name", "merchant_name",
 		"category", "personal_finance_category", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
+		"tags", "tags_source",
+		"category_override", "category_source", "category_override_date", "original_category",
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
@@ -585,6 +621,8 @@ func TestTransactionRepository_GetByUserIDWithFilters_Pending(t *testing.T) {
 			-100.00, time.Now(), nil, "Pending Transaction", nil,
 			nil, nil, nil,
 			true, nil, time.Now(), time.Now(),
+			nil, nil,
+			nil, nil, nil, nil,
 		)
 
 	// Expect SELECT query with pending filter
@@ -629,6 +667,8 @@ func TestTransactionRepository_GetByUserIDWithFilters_MultipleFilters(t *testing
 		"amount", "date", "authorized_date", "name", "merchant_name",
 		"category", "personal_finance_category", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
+		"tags", "tags_source",
+		"category_override", "category_source", "category_override_date", "original_category",
 	}).
 		AddRow(
 			"tx-1", userID, accountID, "item-1",
@@ -636,6 +676,8 @@ func TestTransactionRepository_GetByUserIDWithFilters_MultipleFilters(t *testing
 			-50.00, time.Date(2025, 6, 15, 0, 0, 0, 0, time.UTC), nil, "Transaction 1", nil,
 			nil, nil, nil,
 			false, nil, time.Now(), time.Now(),
+			nil, nil,
+			nil, nil, nil, nil,
 		)
 
 	// Expect SELECT query with multiple filters (account_id AND date >= AND pending)
@@ -736,6 +778,8 @@ func TestTransactionRepository_GetByExternalID_Success(t *testing.T) {
 		"amount", "date", "authorized_date", "name", "merchant_name",
 		"category", "personal_finance_category", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
+		"tags", "tags_source",
+		"category_override", "category_source", "category_override_date", "original_category",
 	}).
 		AddRow(
 			"tx-uuid-123", userID, "account-456", "item-789",
@@ -743,6 +787,8 @@ func TestTransactionRepository_GetByExternalID_Success(t *testing.T) {
 			-25.50, time.Now(), nil, "Starbucks", &merchantName,
 			&categoryJSON, nil, nil,
 			false, nil, time.Now(), time.Now(),
+			nil, nil,
+			nil, nil, nil, nil,
 		)
 
 	// Expect SELECT query with WHERE source = $1 AND external_transaction_id = $2 AND user_id = $3
@@ -784,6 +830,166 @@ func TestTransactionRepository_GetByExternalID_NotFound(t *testing.T) {
 	assert.Error(t, err)
 	assert.Equal(t, ErrTransactionNotFound, err)
 	assert.Nil(t, transaction)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetByUserIDWithFilters_ReturnsTags tests that tags are returned
+// TDD RED: This test will FAIL until GetByUserIDWithFilters includes tags in SELECT
+func TestTransactionRepository_GetByUserIDWithFilters_ReturnsTags(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-123"
+	limit := 10
+	offset := 0
+	filters := domain.TransactionFilters{}
+
+	// Mock result rows including tags and tags_source
+	rows := sqlmock.NewRows([]string{
+		"id", "user_id", "account_id", "linked_item_id",
+		"source", "external_transaction_id", "external_metadata",
+		"amount", "date", "authorized_date", "name", "merchant_name",
+		"category", "personal_finance_category", "payment_channel",
+		"pending", "user_notes", "created_at", "updated_at",
+		"tags", "tags_source",
+		"category_override", "category_source", "category_override_date", "original_category",
+	}).
+		AddRow(
+			"tx-1", userID, "account-1", "item-1",
+			"plaid", "plaid_tx_1", nil,
+			-50.00, time.Now(), nil, "Transaction 1", nil,
+			nil, nil, nil,
+			false, nil, time.Now(), time.Now(),
+			[]byte(`["Food", "Shopping"]`), []byte(`[{"tag":"Food","source":"user"},{"tag":"Shopping","source":"user"}]`),
+			nil, nil, nil, nil,
+		)
+
+	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE user_id").
+		WithArgs(userID, limit, offset).
+		WillReturnRows(rows)
+
+	transactions, err := repo.GetByUserIDWithFilters(ctx, userID, filters, limit, offset)
+	assert.NoError(t, err)
+	require.Len(t, transactions, 1)
+
+	// Assert tags are returned
+	assert.Equal(t, []string{"Food", "Shopping"}, transactions[0].Tags)
+	assert.Len(t, transactions[0].TagsSource, 2)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetByUserIDWithFilters_ReturnsCategoryOverride tests category_override fields
+// TDD RED: This test will FAIL until GetByUserIDWithFilters includes category_override in SELECT
+func TestTransactionRepository_GetByUserIDWithFilters_ReturnsCategoryOverride(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-123"
+	limit := 10
+	offset := 0
+	filters := domain.TransactionFilters{}
+
+	overrideDate := time.Now()
+
+	// Mock result rows including category_override fields
+	rows := sqlmock.NewRows([]string{
+		"id", "user_id", "account_id", "linked_item_id",
+		"source", "external_transaction_id", "external_metadata",
+		"amount", "date", "authorized_date", "name", "merchant_name",
+		"category", "personal_finance_category", "payment_channel",
+		"pending", "user_notes", "created_at", "updated_at",
+		"tags", "tags_source",
+		"category_override", "category_source", "category_override_date", "original_category",
+	}).
+		AddRow(
+			"tx-1", userID, "account-1", "item-1",
+			"plaid", "plaid_tx_1", nil,
+			-50.00, time.Now(), nil, "Transaction 1", nil,
+			`["Food and Drink"]`, nil, nil,
+			false, nil, time.Now(), time.Now(),
+			nil, nil,
+			`["Custom Category"]`, "user", overrideDate, `["Food and Drink"]`,
+		)
+
+	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE user_id").
+		WithArgs(userID, limit, offset).
+		WillReturnRows(rows)
+
+	transactions, err := repo.GetByUserIDWithFilters(ctx, userID, filters, limit, offset)
+	assert.NoError(t, err)
+	require.Len(t, transactions, 1)
+
+	// Assert category_override fields are returned
+	assert.NotNil(t, transactions[0].CategoryOverride)
+	assert.Equal(t, `["Custom Category"]`, *transactions[0].CategoryOverride)
+	assert.Equal(t, domain.CategorySource("user"), transactions[0].CategorySourceField)
+	assert.NotNil(t, transactions[0].CategoryOverrideDate)
+	assert.NotNil(t, transactions[0].OriginalCategory)
+	assert.Equal(t, `["Food and Drink"]`, *transactions[0].OriginalCategory)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetByID_ReturnsCategoryOverrideFields tests GetByID returns all category fields
+// TDD RED: This test will FAIL until GetByID includes category_override fields in SELECT
+func TestTransactionRepository_GetByID_ReturnsCategoryOverrideFields(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	txID := "tx-123"
+	overrideDate := time.Now()
+
+	// Mock result row including all fields
+	rows := sqlmock.NewRows([]string{
+		"id", "user_id", "account_id", "linked_item_id", "source", "external_transaction_id",
+		"external_metadata", "amount", "date", "authorized_date", "name", "merchant_name",
+		"category", "personal_finance_category", "payment_channel", "pending", "user_notes",
+		"created_at", "updated_at", "tags", "tags_source",
+		"category_override", "category_source", "category_override_date", "original_category",
+	}).
+		AddRow(
+			txID, "user-123", "account-1", "item-1", "plaid", "plaid_tx_1",
+			nil, -50.00, time.Now(), nil, "Transaction 1", nil,
+			`["Food and Drink"]`, nil, nil, false, nil,
+			time.Now(), time.Now(), []byte(`["Food"]`), []byte(`[{"tag":"Food","source":"user"}]`),
+			`["Custom Category"]`, "user", overrideDate, `["Food and Drink"]`,
+		)
+
+	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE id").
+		WithArgs(txID).
+		WillReturnRows(rows)
+
+	transaction, err := repo.GetByID(ctx, txID)
+	assert.NoError(t, err)
+	require.NotNil(t, transaction)
+
+	// Assert tags are returned
+	assert.Equal(t, []string{"Food"}, transaction.Tags)
+
+	// Assert category_override fields are returned
+	assert.NotNil(t, transaction.CategoryOverride)
+	assert.Equal(t, `["Custom Category"]`, *transaction.CategoryOverride)
+	assert.Equal(t, domain.CategorySource("user"), transaction.CategorySourceField)
+	assert.NotNil(t, transaction.CategoryOverrideDate)
+	assert.NotNil(t, transaction.OriginalCategory)
+	assert.Equal(t, `["Food and Drink"]`, *transaction.OriginalCategory)
 
 	err = mock.ExpectationsWereMet()
 	assert.NoError(t, err)
