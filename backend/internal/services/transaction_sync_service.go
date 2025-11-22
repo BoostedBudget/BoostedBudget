@@ -468,6 +468,7 @@ func (s *transactionSyncService) mapPlaidTransaction(
 		Name:                    plaidTxn.Name,
 		MerchantName:            merchantName,
 		Category:                categoryJSON,
+		OriginalCategory:        categoryJSON, // Preserve original Plaid category for reset functionality
 		PersonalFinanceCategory: pfCategoryJSON,
 		PaymentChannel:          paymentChannel,
 		Pending:                 plaidTxn.GetPending(),

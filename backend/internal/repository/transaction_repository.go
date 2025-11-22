@@ -738,7 +738,8 @@ func (r *transactionRepository) UpdateCategory(ctx context.Context, id string, u
 
 	query := `
 		UPDATE transactions
-		SET category_override = $1, category_source = $2, category_override_date = $3, updated_at = $4
+		SET category_override = $1, category_source = $2, category_override_date = $3,
+		    original_category = COALESCE(original_category, category), updated_at = $4
 		WHERE id = $5 AND user_id = $6
 	`
 
