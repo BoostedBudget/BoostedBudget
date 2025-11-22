@@ -149,3 +149,25 @@
   cursor: not-allowed;
   opacity: 0.5;
 }
+
+.transaction-editor__reset-category {
+  margin-top: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid #D1D5DB;
+  border-radius: 0.25rem;
+  background: #F9FAFB;
+  color: #4B5563;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.transaction-editor__reset-category:hover:not(:disabled) {
+  background: #E5E7EB;
+  border-color: #9CA3AF;
+}
+
+.transaction-editor__reset-category:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
