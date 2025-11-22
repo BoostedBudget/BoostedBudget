@@ -36,6 +36,14 @@ function parseCategory(categoryJson: string | null | undefined): string[] {
 }
 
 /**
+ * Get display name for original category
+ */
+function getOriginalCategoryName(originalCategory: string | null | undefined): string | null {
+  const parsed = parseCategory(originalCategory)
+  return parsed.length > 0 ? parsed[0] : null
+}
+
+/**
  * Format amount for display
  */
 function formatAmount(amount: number): string {
@@ -160,6 +168,17 @@ export function TransactionEditor({
             onCategoryCreated={onCategoryCreated}
             disabled={isSaving}
           />
+          {transaction.original_category && (
+            <button
+              type="button"
+              className="transaction-editor__reset-category"
+              onClick={() => setCategory(parseCategory(transaction.original_category))}
+              disabled={isSaving}
+              aria-label={`Reset to original: ${getOriginalCategoryName(transaction.original_category)}`}
+            >
+              Reset to Original ({getOriginalCategoryName(transaction.original_category)})
+            </button>
+          )}
         </div>
 
         <div className="transaction-editor__actions">

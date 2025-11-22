@@ -1,4 +1,4 @@
-import type { Transaction } from '../types'
+import type { Transaction, CategorySource } from '../types'
 import './TransactionCard.css'
 
 interface TransactionCardProps {
@@ -38,6 +38,50 @@ function parseCategory(categoryJson: string | null | undefined): string {
   } catch {
     return 'Uncategorized'
   }
+}
+
+/**
+ * Check if transaction is explicitly uncategorized by user
+ * Returns true when user manually cleared the category (should NOT fall back to Plaid)
+ */
+function isExplicitlyUncategorized(
+  categoryOverride: string | null | undefined,
+  categorySource: CategorySource | undefined
+): boolean {
+  // If category_source is 'manual', user explicitly set something
+  // If override is empty/null at that point, they explicitly uncategorized it
+  if (categorySource === 'manual') {
+    const parsed = parseCategory(categoryOverride)
+    return parsed === 'Uncategorized'
+  }
+  return false
+}
+
+/**
+ * Check if transaction should display as uncategorized (for warning indicator)
+ */
+function isUncategorized(
+  category: string | null | undefined,
+  categoryOverride: string | null | undefined,
+  categorySource: CategorySource | undefined
+): boolean {
+  // Explicitly uncategorized by user
+  if (isExplicitlyUncategorized(categoryOverride, categorySource)) {
+    return true
+  }
+  // Never had a category
+  if (!category && !categoryOverride) {
+    return true
+  }
+  // Has override but it's empty (and not manual source)
+  if (categoryOverride && parseCategory(categoryOverride) === 'Uncategorized' && categorySource !== 'manual') {
+    return parseCategory(category) === 'Uncategorized'
+  }
+  // Check if displayed category would be uncategorized
+  const displayedCategory = categoryOverride && parseCategory(categoryOverride) !== 'Uncategorized'
+    ? categoryOverride
+    : category
+  return parseCategory(displayedCategory) === 'Uncategorized'
 }
 
 /**
@@ -109,6 +153,8 @@ export function TransactionCard({ transaction, onEdit }: TransactionCardProps) {
     authorized_date,
     category,
     category_override,
+    category_source,
+    original_category,
     tags,
     pending,
   } = transaction
@@ -126,11 +172,24 @@ export function TransactionCard({ transaction, onEdit }: TransactionCardProps) {
 
   const displayDate = formatDate(authorized_date || date)
   const displayName = merchant_name || name
+
+  // Check if explicitly uncategorized by user (should NOT fall back to Plaid)
+  const explicitlyUncategorized = isExplicitlyUncategorized(category_override, category_source)
+
   // Use category_override if present and non-empty, otherwise fall back to category
-  const categoryToDisplay = category_override && parseCategory(category_override) !== 'Uncategorized'
-    ? category_override
-    : category
+  // UNLESS explicitly uncategorized by user
+  let categoryToDisplay: string | null | undefined
+  if (explicitlyUncategorized) {
+    categoryToDisplay = null // Will display as "Uncategorized"
+  } else if (category_override && parseCategory(category_override) !== 'Uncategorized') {
+    categoryToDisplay = category_override
+  } else {
+    categoryToDisplay = category
+  }
   const categoryLabel = parseCategory(categoryToDisplay)
+
+  // Check if should show warning indicator
+  const showUncategorizedWarning = isUncategorized(category, category_override, category_source)
   const amountFormatted = formatAmount(amount)
 
   // Determine amount styling
@@ -147,6 +206,7 @@ export function TransactionCard({ transaction, onEdit }: TransactionCardProps) {
       className={`transaction-card${pending ? ' pending' : ''}${onEdit ? ' clickable' : ''}`}
       data-transaction-id={id}
       data-pending={pending}
+      data-original-category={original_category || undefined}
       aria-label={ariaLabel}
       onClick={onEdit ? handleClick : undefined}
       onKeyDown={onEdit ? handleKeyDown : undefined}
@@ -157,7 +217,12 @@ export function TransactionCard({ transaction, onEdit }: TransactionCardProps) {
         <div className="transaction-card__info">
           <div className="transaction-card__name">{displayName}</div>
           <div className="transaction-card__meta">
-            <span className="transaction-card__category">{categoryLabel}</span>
+            <span className="transaction-card__category">
+              {showUncategorizedWarning && (
+                <span className="transaction-card__uncategorized-warning" title="Uncategorized">⚠️</span>
+              )}
+              {categoryLabel}
+            </span>
             <span className="transaction-card__date">{displayDate}</span>
           </div>
           {tags && tags.length > 0 && (

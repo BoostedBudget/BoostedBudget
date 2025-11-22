@@ -140,15 +140,92 @@ describe('TransactionCard', () => {
       expect(screen.getByText(/Food and Drink/i)).toBeInTheDocument()
     })
 
-    it('should fall back to category when category_override is empty array', () => {
+    it('should fall back to category when category_override is empty array and category_source is NOT manual', () => {
       const transactionWithEmptyOverride: Transaction = {
         ...mockTransaction,
         category: '["Food and Drink", "Coffee"]',
         category_override: '[]',
+        category_source: 'plaid', // Not manual, so fall back
       }
 
       render(<TransactionCard transaction={transactionWithEmptyOverride} />)
       expect(screen.getByText(/Food and Drink/i)).toBeInTheDocument()
+    })
+  })
+
+  describe('Explicit Uncategorized Display', () => {
+    it('should display Uncategorized when category_source is manual and category_override is empty', () => {
+      const explicitlyUncategorized: Transaction = {
+        ...mockTransaction,
+        category: '["Food and Drink", "Coffee"]',
+        category_override: '[]',
+        category_source: 'manual', // User explicitly cleared the category
+      }
+
+      render(<TransactionCard transaction={explicitlyUncategorized} />)
+      expect(screen.getByText('Uncategorized')).toBeInTheDocument()
+      // Should NOT fall back to Plaid category
+      expect(screen.queryByText(/Food and Drink/i)).not.toBeInTheDocument()
+    })
+
+    it('should display Uncategorized when category_source is manual and category_override is null', () => {
+      const explicitlyUncategorized: Transaction = {
+        ...mockTransaction,
+        category: '["Food and Drink", "Coffee"]',
+        category_override: null,
+        category_source: 'manual',
+      }
+
+      render(<TransactionCard transaction={explicitlyUncategorized} />)
+      expect(screen.getByText('Uncategorized')).toBeInTheDocument()
+      expect(screen.queryByText(/Food and Drink/i)).not.toBeInTheDocument()
+    })
+
+    it('should show warning indicator for explicitly uncategorized transactions', () => {
+      const explicitlyUncategorized: Transaction = {
+        ...mockTransaction,
+        category: '["Food and Drink", "Coffee"]',
+        category_override: '[]',
+        category_source: 'manual',
+      }
+
+      const { container } = render(<TransactionCard transaction={explicitlyUncategorized} />)
+      // Should have warning indicator element
+      const warningIndicator = container.querySelector('.transaction-card__uncategorized-warning')
+      expect(warningIndicator).toBeInTheDocument()
+    })
+
+    it('should show warning indicator for any uncategorized transaction', () => {
+      const neverCategorized: Transaction = {
+        ...mockTransaction,
+        category: null,
+        category_override: null,
+      }
+
+      const { container } = render(<TransactionCard transaction={neverCategorized} />)
+      const warningIndicator = container.querySelector('.transaction-card__uncategorized-warning')
+      expect(warningIndicator).toBeInTheDocument()
+    })
+
+    it('should NOT show warning indicator for categorized transactions', () => {
+      const { container } = render(<TransactionCard transaction={mockTransaction} />)
+      const warningIndicator = container.querySelector('.transaction-card__uncategorized-warning')
+      expect(warningIndicator).not.toBeInTheDocument()
+    })
+
+    it('should display original_category when available for reset context', () => {
+      const withOriginalCategory: Transaction = {
+        ...mockTransaction,
+        category: '["Food and Drink", "Coffee"]',
+        category_override: '[]',
+        category_source: 'manual',
+        original_category: '["Food and Drink", "Coffee"]',
+      }
+
+      render(<TransactionCard transaction={withOriginalCategory} />)
+      // Original category should be accessible (e.g., in data attribute or tooltip)
+      const card = screen.getByRole('article')
+      expect(card).toHaveAttribute('data-original-category', '["Food and Drink", "Coffee"]')
     })
   })
 
