@@ -994,3 +994,38 @@ func TestTransactionRepository_GetByID_ReturnsCategoryOverrideFields(t *testing.
 	err = mock.ExpectationsWereMet()
 	assert.NoError(t, err)
 }
+
+// TestTransactionRepository_UpdateCategory_PreservesOriginalCategory tests that UpdateCategory
+// preserves original_category using COALESCE when it's NULL
+// TDD RED: This test will FAIL until UpdateCategory SQL includes COALESCE for original_category
+func TestTransactionRepository_UpdateCategory_PreservesOriginalCategory(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	txID := "tx-123"
+	userID := "user-123"
+	categoryOverride := []string{"Custom", "Category"}
+
+	// Expect the UPDATE query with COALESCE for original_category
+	// This ensures the first manual edit preserves the original Plaid category
+	mock.ExpectExec("UPDATE transactions SET category_override.*original_category = COALESCE\\(original_category, category\\)").
+		WithArgs(
+			sqlmock.AnyArg(), // category_override JSON
+			domain.CategorySource("user"),
+			sqlmock.AnyArg(), // category_override_date
+			sqlmock.AnyArg(), // updated_at
+			txID,
+			userID,
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err = repo.UpdateCategory(ctx, txID, userID, categoryOverride, domain.CategorySource("user"))
+	assert.NoError(t, err)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
