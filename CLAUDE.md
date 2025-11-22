@@ -482,8 +482,8 @@ touch 000006_<name>.down.sql  # Rollback migration (REQUIRED)
 # Write .down.sql to reverse .up.sql (DROP TABLE CASCADE, etc.)
 # See migrations 000005, 000015 for rollback examples
 
-# Regenerate checksums:
-cd .. && atlas migrate hash
+# Regenerate checksums (MUST use --dir-format golang-migrate):
+cd .. && atlas migrate hash --dir file://migrations --dir-format golang-migrate
 
 # ALWAYS lint before committing:
 atlas migrate lint --dir file://migrations --dev-url "docker://postgres/15/test" --latest 1

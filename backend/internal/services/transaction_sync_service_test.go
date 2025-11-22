@@ -1720,6 +1720,83 @@ func TestProcessModifiedTransactions_PendingToPosted(t *testing.T) {
 	// ✓ Nil user notes preserved as nil (gas)
 }
 
+// TestProcessAddedTransactions_SetsOriginalCategory tests that OriginalCategory is set
+// to the same value as Category when transactions are first synced from Plaid
+// TDD RED: This test will FAIL until mapPlaidTransaction sets OriginalCategory
+func TestProcessAddedTransactions_SetsOriginalCategory(t *testing.T) {
+	// Setup
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil,
+		nil,
+		mockTransactionRepo,
+		nil,
+		nil,
+		nil,
+		nil, // balanceSnapshotRepo
+		nil,
+		nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItemID := "linked-item-123"
+	userID := "user-456"
+
+	accountMap := map[string]string{
+		"plaid-acc-1": "account-uuid-1",
+	}
+
+	linkedItem := &domain.LinkedItem{
+		ID:     linkedItemID,
+		UserID: userID,
+	}
+
+	// Create Plaid transaction with category
+	added := []plaid.Transaction{
+		{
+			TransactionId: "plaid-txn-with-category",
+			AccountId:     "plaid-acc-1",
+			Amount:        100.00,
+			Date:          "2024-01-15",
+			Name:          "Grocery Store",
+			Category:      []string{"Food and Drink", "Groceries"},
+			Pending:       false,
+		},
+	}
+
+	// Mock: CreateBatch should be called with transactions that have OriginalCategory set
+	mockTransactionRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
+		if len(txns) != 1 {
+			return false
+		}
+		// Verify Category is set
+		if txns[0].Category == nil {
+			t.Errorf("Category should be set")
+			return false
+		}
+		// Verify OriginalCategory is set to same value as Category
+		if txns[0].OriginalCategory == nil {
+			t.Errorf("OriginalCategory should be set when transaction has category")
+			return false
+		}
+		// Both should have the same JSON value
+		if *txns[0].Category != *txns[0].OriginalCategory {
+			t.Errorf("OriginalCategory should match Category, got %s vs %s",
+				*txns[0].OriginalCategory, *txns[0].Category)
+			return false
+		}
+		return true
+	})).Return(nil)
+
+	// Execute
+	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap)
+
+	// Assert
+	assert.NoError(t, err)
+	mockTransactionRepo.AssertExpectations(t)
+}
+
 // strPtrHelper is a helper to create string pointers for tests
 func strPtrHelper(s string) *string {
 	return &s
