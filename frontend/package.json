@@ -24,23 +24,23 @@
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\""
   },
   "dependencies": {
-    "@auth0/auth0-react": "^2.2.4",
-    "@reduxjs/toolkit": "^2.10.1",
+    "@auth0/auth0-react": "^2.9.0",
+    "@reduxjs/toolkit": "^2.11.0",
     "@types/react-datepicker": "^6.2.0",
     "axios": "^1.13.2",
     "date-fns": "^4.1.0",
     "js-cookie": "^3.0.5",
     "react": "^19.2.0",
-    "react-datepicker": "^8.9.0",
+    "react-datepicker": "^8.10.0",
     "react-dom": "^19.2.0",
     "react-plaid-link": "^4.1.1",
     "react-redux": "^9.2.0",
     "react-router-dom": "^7.9.6",
-    "recharts": "^3.4.1"
+    "recharts": "^3.5.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",
-    "@playwright/test": "^1.56.1",
+    "@playwright/test": "^1.57.0",
     "@testing-library/jest-dom": "^6.6.4",
     "@testing-library/react": "^16.1.0",
     "@testing-library/user-event": "^14.5.2",
@@ -51,7 +51,7 @@
     "@typescript-eslint/eslint-plugin": "^8.46.4",
     "@typescript-eslint/parser": "^8.0.0",
     "@vitejs/plugin-react": "^5.1.1",
-    "@vitest/coverage-v8": "^4.0.9",
+    "@vitest/coverage-v8": "^4.0.14",
     "axios-mock-adapter": "^2.1.0",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",
@@ -59,10 +59,10 @@
     "globals": "^16.5.0",
     "js-yaml": "^4.1.1",
     "jsdom": "^27.2.0",
-    "prettier": "^3.4.2",
-    "tsx": "^4.20.6",
+    "prettier": "^3.7.3",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "vite": "^7.2.2",
+    "vite": "^7.2.4",
     "vitest": "^4.0.3"
   }
 }
