@@ -358,7 +358,7 @@ describe('RuleEditor', () => {
 
   describe('Saving state', () => {
     it('should show saving indicator', async () => {
-      let resolvePromise: () => void
+      let resolvePromise: (value?: unknown) => void
       mockOnSave.mockImplementation(() => new Promise((resolve) => {
         resolvePromise = resolve
       }))
@@ -385,7 +385,7 @@ describe('RuleEditor', () => {
     })
 
     it('should disable form while saving', async () => {
-      let resolvePromise: () => void
+      let resolvePromise: (value?: unknown) => void
       mockOnSave.mockImplementation(() => new Promise((resolve) => {
         resolvePromise = resolve
       }))

@@ -243,7 +243,7 @@ describe('RuleCard', () => {
     })
 
     it('should show Saving... while toggling', async () => {
-      let resolveToggle: () => void
+      let resolveToggle: (value?: unknown) => void
       mockOnToggle.mockImplementation(() => new Promise((resolve) => {
         resolveToggle = resolve
       }))
@@ -346,7 +346,7 @@ describe('RuleCard', () => {
     })
 
     it('should show Deleting... while deleting', async () => {
-      let resolveDelete: () => void
+      let resolveDelete: (value?: unknown) => void
       mockOnDelete.mockImplementation(() => new Promise((resolve) => {
         resolveDelete = resolve
       }))
