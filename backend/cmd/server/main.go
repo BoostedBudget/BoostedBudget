@@ -108,6 +108,7 @@ func main() {
 		balanceSnapshotRepo := repository.NewBalanceSnapshotRepository(db) // Issue #353: Balance tracking
 		userTagRepo := repository.NewUserTagRepository(db) // Issue #345: User tags
 		customCategoryRepo := repository.NewCustomCategoryRepository(db) // Issue #345: Custom categories
+		categorizationRuleRepo := repository.NewCategorizationRuleRepository(db) // Issue #346: Categorization rules
 
 		// Create mock audit logger (will be replaced with real implementation later)
 		auditLogger := &mockAuditLogger{}
@@ -126,6 +127,9 @@ func main() {
 		// Issue #345: Tag and category services
 		userTagService := services.NewUserTagService(userTagRepo, subscriptionService, profileRepo)
 		customCategoryService := services.NewCustomCategoryService(customCategoryRepo, subscriptionService, profileRepo)
+		// Issue #346: Categorization rules services
+		categorizationRuleService := services.NewCategorizationRuleService(categorizationRuleRepo, subscriptionService, profileRepo)
+		ruleApplicationService := services.NewRuleApplicationService(categorizationRuleRepo)
 
 		// Initialize Email service (needed by deletion service and item error service)
 		// Optional - uses no-op mock if not configured
@@ -213,6 +217,7 @@ func main() {
 				// Initialize Transaction Sync Service for webhook processing
 				// Issue #256: Transaction Sync Service
 				// Issue #242: Monthly sync limits integration
+				// Issue #346: Categorization rules integration
 				transactionSyncService := services.NewTransactionSyncService(
 					webhookRepo,
 					linkedItemRepo,
@@ -223,6 +228,7 @@ func main() {
 					plaidService,
 					encryptionService,
 					syncLimitService,
+					ruleApplicationService,
 				)
 
 				// Initialize Item Error Service for ITEM webhook processing
@@ -260,6 +266,7 @@ func main() {
 		dashboardHandler := handlers.NewDashboardHandler(dashboardService)       // Issue #353: Balance tracking dashboard
 		tagHandler := handlers.NewTagHandler(userTagService)                      // Issue #345: User tag management
 		categoryHandler := handlers.NewCategoryHandler(customCategoryService)     // Issue #345: Custom category management
+		ruleHandler := handlers.NewCategorizationRuleHandler(categorizationRuleService) // Issue #346: Categorization rules
 
 		// Create admin handler (Issue #308: Admin API for Manual Webhook Firing)
 		// Requires plaidService and encryptionService, so declared here
@@ -301,6 +308,14 @@ func main() {
 		api.GET("/categories/:id", categoryHandler.GetCategoryByID)
 		api.PUT("/categories/:id", categoryHandler.UpdateCategory)
 		api.DELETE("/categories/:id", categoryHandler.DeleteCategory)
+
+		// Categorization rule routes (Issue #346: Categorization rules)
+		api.POST("/rules", ruleHandler.CreateRule)
+		api.GET("/rules", ruleHandler.GetUserRules)
+		api.GET("/rules/:id", ruleHandler.GetRuleByID)
+		api.PUT("/rules/:id", ruleHandler.UpdateRule)
+		api.DELETE("/rules/:id", ruleHandler.DeleteRule)
+		api.POST("/rules/:id/toggle", ruleHandler.ToggleRule)
 
 		// Notification routes (Issue #257: User Notifications)
 		api.GET("/notifications", notificationHandler.GetNotifications)

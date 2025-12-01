@@ -57,15 +57,16 @@ type TransactionSyncService interface {
 
 // transactionSyncService implements TransactionSyncService
 type transactionSyncService struct {
-	webhookRepo          repository.WebhookRepository
-	linkedItemRepo       repository.LinkedItemRepository
-	transactionRepo      repository.TransactionRepository
-	accountRepo          repository.AccountRepository          // Issue #261: For account mapping (Plaid account_id -> internal UUID)
-	profileRepo          repository.ProfileRepository          // Issue #242: For fetching user tier during sync audit
-	balanceSnapshotRepo  repository.BalanceSnapshotRepository  // Issue #353: For storing balance snapshots
-	plaidService         PlaidService
-	encryptionService    EncryptionService
-	syncLimitService     SyncLimitService // Issue #242: Monthly sync limits and tier-based historical depth
+	webhookRepo            repository.WebhookRepository
+	linkedItemRepo         repository.LinkedItemRepository
+	transactionRepo        repository.TransactionRepository
+	accountRepo            repository.AccountRepository          // Issue #261: For account mapping (Plaid account_id -> internal UUID)
+	profileRepo            repository.ProfileRepository          // Issue #242: For fetching user tier during sync audit
+	balanceSnapshotRepo    repository.BalanceSnapshotRepository  // Issue #353: For storing balance snapshots
+	plaidService           PlaidService
+	encryptionService      EncryptionService
+	syncLimitService       SyncLimitService       // Issue #242: Monthly sync limits and tier-based historical depth
+	ruleApplicationService RuleApplicationService // Issue #346: Apply categorization rules to new transactions
 }
 
 // NewTransactionSyncService creates a new TransactionSyncService instance
@@ -79,17 +80,19 @@ func NewTransactionSyncService(
 	plaidService PlaidService,
 	encryptionService EncryptionService,
 	syncLimitService SyncLimitService,
+	ruleApplicationService RuleApplicationService,
 ) TransactionSyncService {
 	return &transactionSyncService{
-		webhookRepo:         webhookRepo,
-		linkedItemRepo:      linkedItemRepo,
-		transactionRepo:     transactionRepo,
-		accountRepo:         accountRepo,
-		profileRepo:         profileRepo,
-		balanceSnapshotRepo: balanceSnapshotRepo,
-		plaidService:        plaidService,
-		encryptionService:   encryptionService,
-		syncLimitService:    syncLimitService,
+		webhookRepo:            webhookRepo,
+		linkedItemRepo:         linkedItemRepo,
+		transactionRepo:        transactionRepo,
+		accountRepo:            accountRepo,
+		profileRepo:            profileRepo,
+		balanceSnapshotRepo:    balanceSnapshotRepo,
+		plaidService:           plaidService,
+		encryptionService:      encryptionService,
+		syncLimitService:       syncLimitService,
+		ruleApplicationService: ruleApplicationService,
 	}
 }
 
@@ -548,6 +551,16 @@ func (s *transactionSyncService) processAddedTransactions(
 	if len(transactions) == 0 {
 		log.Printf("Warning: All %d added transactions skipped due to mapping errors", len(added))
 		return nil
+	}
+
+	// Issue #346: Apply categorization rules to transactions before storing
+	// This applies user-defined rules to automatically categorize and tag transactions.
+	// Rules are applied in-place, modifying the transaction slice.
+	if s.ruleApplicationService != nil {
+		if err := s.ruleApplicationService.ApplyRulesToBatch(ctx, transactions, linkedItem.UserID); err != nil {
+			// Log but don't fail - rule application is non-critical
+			log.Printf("Warning: Failed to apply categorization rules: %v", err)
+		}
 	}
 
 	// Store in database (ON CONFLICT DO NOTHING handles deduplication)
