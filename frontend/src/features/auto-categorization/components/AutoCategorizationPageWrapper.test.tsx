@@ -33,20 +33,55 @@ describe('AutoCategorizationPageWrapper', () => {
 
   const mockUser = {
     id: 'user-1',
+    auth0_user_id: 'auth0|test123',
     email: 'test@example.com',
-    name: 'Test User',
+    email_verified: true,
     subscription_tier: 'premium' as const,
-    created_at: '2025-01-01',
-    updated_at: '2025-01-01',
+    subscription_status: 'active',
+    primary_region: 'iad',
+    is_active: true,
+    is_deleted: false,
+    created_at: '2025-01-01T00:00:00Z',
+    updated_at: '2025-01-01T00:00:00Z',
+    last_login_at: '2025-01-01T00:00:00Z',
   }
 
   const mockTiers = {
     tiers: {
-      free: { limits: { rules: 1, accounts: 3, tags: 50 } },
-      premium_lite: { limits: { rules: 5, accounts: 15, tags: 100 } },
-      premium: { limits: { rules: 15, accounts: 30, tags: 200 } },
-      premium_plus: { limits: { rules: -1, accounts: -1, tags: -1 } },
+      free: {
+        display_name: 'Free',
+        description: 'Free tier',
+        price_monthly: 0,
+        price_yearly: 0,
+        limits: { accounts: 3, rules: 1, executions_per_day: 1, min_execution_interval_minutes: 1440 },
+        features: { ads_enabled: true, ai_insights: false },
+      },
+      premium_lite: {
+        display_name: 'Premium Lite',
+        description: 'Premium Lite tier',
+        price_monthly: 4.99,
+        price_yearly: 49.99,
+        limits: { accounts: 15, rules: 5, executions_per_day: 2, min_execution_interval_minutes: 720 },
+        features: { ads_enabled: false, ai_insights: false },
+      },
+      premium: {
+        display_name: 'Premium',
+        description: 'Premium tier',
+        price_monthly: 9.99,
+        price_yearly: 99.99,
+        limits: { accounts: 30, rules: 15, executions_per_day: 6, min_execution_interval_minutes: 240 },
+        features: { ads_enabled: false, ai_insights: false },
+      },
+      premium_plus: {
+        display_name: 'Premium+',
+        description: 'Premium+ tier',
+        price_monthly: 19.99,
+        price_yearly: 199.99,
+        limits: { accounts: -1, rules: -1, executions_per_day: 144, min_execution_interval_minutes: 10 },
+        features: { ads_enabled: false, ai_insights: true, api_access: true },
+      },
     },
+    default_tier: 'free' as const,
   }
 
   beforeEach(() => {
