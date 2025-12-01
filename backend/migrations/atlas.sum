@@ -1,4 +1,4 @@
-h1:WI5h7TNhkM+VBF/lIE+T0RUpXJQwO5Vc8AhJHm1Glvw=
+h1:GvR+gseCGelJJ3d4xOlWhNFp0frva4sq+MaximfxoK8=
 000001_create_users_table.up.sql h1:yLRXvyF/CMBakERSQ+AtUhi7PwM2FE7Accl3PYwNohc=
 000002_create_privacy_settings_table.up.sql h1:PCNdCyla6SD17iu74ZQfRGqu45htbLl2DQ8MtjRpw1s=
 000003_create_audit_logs_table.up.sql h1:9VxaVOzvjrH8wJq5rKcJ8hL9FzoVV81mGhxOULA5iSM=
@@ -18,3 +18,4 @@ h1:WI5h7TNhkM+VBF/lIE+T0RUpXJQwO5Vc8AhJHm1Glvw=
 000017_migrate_to_timestamp_snapshots.up.sql h1:dt9QDBrHgZb57oJsNs97Uram4cyMN/ftYzY/f6CJR94=
 000018_add_transaction_categories_and_tags.up.sql h1:rMKS9fO1UFkQP009k8tCnOS4Pruz6YATPwSpxSOyGgs=
 000019_backfill_original_category.up.sql h1:zkjDZWmXW1Cd4vZPEEH//+wGegygAuBSz1ZjxW105a8=
+000020_create_categorization_rules.up.sql h1:zZzr1oap8G8QXXC6UdDZhUKsaMrhSG/5lLIlTRML8Bw=
