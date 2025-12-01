@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { RuleEditor } from './RuleEditor'
+import { AutoCategorizationRuleEditor } from './AutoCategorizationRuleEditor'
 import type { CategorizationRule } from '../types'
 
-describe('RuleEditor', () => {
+describe('AutoCategorizationRuleEditor', () => {
   const mockOnSave = vi.fn()
   const mockOnCancel = vi.fn()
 
@@ -43,7 +43,7 @@ describe('RuleEditor', () => {
   describe('Create mode', () => {
     it('should render empty form for create mode', () => {
       render(
-        <RuleEditor
+        <AutoCategorizationRuleEditor
           mode="create"
           onSave={mockOnSave}
           onCancel={mockOnCancel}
@@ -57,7 +57,7 @@ describe('RuleEditor', () => {
 
     it('should show Create Rule title', () => {
       render(
-        <RuleEditor
+        <AutoCategorizationRuleEditor
           mode="create"
           onSave={mockOnSave}
           onCancel={mockOnCancel}
@@ -70,7 +70,7 @@ describe('RuleEditor', () => {
 
     it('should require rule name', async () => {
       render(
-        <RuleEditor
+        <AutoCategorizationRuleEditor
           mode="create"
           onSave={mockOnSave}
           onCancel={mockOnCancel}
@@ -88,7 +88,7 @@ describe('RuleEditor', () => {
     it('should require at least one condition', async () => {
       const user = userEvent.setup()
       render(
-        <RuleEditor
+        <AutoCategorizationRuleEditor
           mode="create"
           onSave={mockOnSave}
           onCancel={mockOnCancel}
@@ -108,7 +108,7 @@ describe('RuleEditor', () => {
     it('should require target category or tags', async () => {
       const user = userEvent.setup()
       render(
-        <RuleEditor
+        <AutoCategorizationRuleEditor
           mode="create"
           onSave={mockOnSave}
           onCancel={mockOnCancel}
@@ -137,7 +137,7 @@ describe('RuleEditor', () => {
       mockOnSave.mockResolvedValue(undefined)
 
       render(
-        <RuleEditor
+        <AutoCategorizationRuleEditor
           mode="create"
           onSave={mockOnSave}
           onCancel={mockOnCancel}
@@ -173,7 +173,7 @@ describe('RuleEditor', () => {
 
     it('should call onCancel when Cancel is clicked', () => {
       render(
-        <RuleEditor
+        <AutoCategorizationRuleEditor
           mode="create"
           onSave={mockOnSave}
           onCancel={mockOnCancel}
@@ -191,7 +191,7 @@ describe('RuleEditor', () => {
   describe('Edit mode', () => {
     it('should populate form with existing rule data', () => {
       render(
-        <RuleEditor
+        <AutoCategorizationRuleEditor
           mode="edit"
           rule={mockExistingRule}
           onSave={mockOnSave}
@@ -207,7 +207,7 @@ describe('RuleEditor', () => {
 
     it('should show existing conditions', () => {
       render(
-        <RuleEditor
+        <AutoCategorizationRuleEditor
           mode="edit"
           rule={mockExistingRule}
           onSave={mockOnSave}
@@ -221,7 +221,7 @@ describe('RuleEditor', () => {
 
     it('should show existing tags', () => {
       render(
-        <RuleEditor
+        <AutoCategorizationRuleEditor
           mode="edit"
           rule={mockExistingRule}
           onSave={mockOnSave}
@@ -238,7 +238,7 @@ describe('RuleEditor', () => {
       mockOnSave.mockResolvedValue(undefined)
 
       render(
-        <RuleEditor
+        <AutoCategorizationRuleEditor
           mode="edit"
           rule={mockExistingRule}
           onSave={mockOnSave}
@@ -265,7 +265,7 @@ describe('RuleEditor', () => {
   describe('Conditions', () => {
     it('should add a new condition', () => {
       render(
-        <RuleEditor
+        <AutoCategorizationRuleEditor
           mode="create"
           onSave={mockOnSave}
           onCancel={mockOnCancel}
@@ -281,7 +281,7 @@ describe('RuleEditor', () => {
 
     it('should remove a condition', () => {
       render(
-        <RuleEditor
+        <AutoCategorizationRuleEditor
           mode="edit"
           rule={mockExistingRule}
           onSave={mockOnSave}
@@ -299,7 +299,7 @@ describe('RuleEditor', () => {
     it('should change condition type', async () => {
       const user = userEvent.setup()
       render(
-        <RuleEditor
+        <AutoCategorizationRuleEditor
           mode="create"
           onSave={mockOnSave}
           onCancel={mockOnCancel}
@@ -321,7 +321,7 @@ describe('RuleEditor', () => {
     it('should add a tag', async () => {
       const user = userEvent.setup()
       render(
-        <RuleEditor
+        <AutoCategorizationRuleEditor
           mode="create"
           onSave={mockOnSave}
           onCancel={mockOnCancel}
@@ -340,7 +340,7 @@ describe('RuleEditor', () => {
 
     it('should remove a tag', () => {
       render(
-        <RuleEditor
+        <AutoCategorizationRuleEditor
           mode="edit"
           rule={mockExistingRule}
           onSave={mockOnSave}
@@ -364,7 +364,7 @@ describe('RuleEditor', () => {
       }))
 
       render(
-        <RuleEditor
+        <AutoCategorizationRuleEditor
           mode="edit"
           rule={mockExistingRule}
           onSave={mockOnSave}
@@ -391,7 +391,7 @@ describe('RuleEditor', () => {
       }))
 
       render(
-        <RuleEditor
+        <AutoCategorizationRuleEditor
           mode="edit"
           rule={mockExistingRule}
           onSave={mockOnSave}
@@ -418,7 +418,7 @@ describe('RuleEditor', () => {
     it('should allow setting priority', async () => {
       const user = userEvent.setup()
       render(
-        <RuleEditor
+        <AutoCategorizationRuleEditor
           mode="create"
           onSave={mockOnSave}
           onCancel={mockOnCancel}
@@ -437,7 +437,7 @@ describe('RuleEditor', () => {
   describe('Condition logic', () => {
     it('should toggle condition logic', () => {
       render(
-        <RuleEditor
+        <AutoCategorizationRuleEditor
           mode="create"
           onSave={mockOnSave}
           onCancel={mockOnCancel}

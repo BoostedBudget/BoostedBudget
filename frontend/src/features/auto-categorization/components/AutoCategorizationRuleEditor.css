@@ -1,11 +1,11 @@
 /**
- * RuleEditor Component Styles
+ * AutoCategorizationRuleEditor Component Styles
  * Issue #346: Custom Transaction Categorization Rules
  *
  * BEM naming convention
  */
 
-.rule-editor {
+.auto-categorization-rule-editor {
   background: var(--color-surface, #ffffff);
   border: 1px solid var(--color-border, #e0e0e0);
   border-radius: 8px;
@@ -13,7 +13,7 @@
   max-width: 600px;
 }
 
-.rule-editor__title {
+.auto-categorization-rule-editor__title {
   margin: 0 0 1.5rem;
   font-size: 1.25rem;
   font-weight: 600;
@@ -21,25 +21,25 @@
 }
 
 /* Sections */
-.rule-editor__section {
+.auto-categorization-rule-editor__section {
   margin-bottom: 1.5rem;
   padding-bottom: 1.5rem;
   border-bottom: 1px solid var(--color-border, #e0e0e0);
 }
 
-.rule-editor__section:last-of-type {
+.auto-categorization-rule-editor__section:last-of-type {
   border-bottom: none;
   padding-bottom: 0;
 }
 
-.rule-editor__section-header {
+.auto-categorization-rule-editor__section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 1rem;
 }
 
-.rule-editor__section-title {
+.auto-categorization-rule-editor__section-title {
   margin: 0;
   font-size: 0.9375rem;
   font-weight: 600;
@@ -47,19 +47,19 @@
 }
 
 /* Fields */
-.rule-editor__field {
+.auto-categorization-rule-editor__field {
   margin-bottom: 1rem;
 }
 
-.rule-editor__field:last-child {
+.auto-categorization-rule-editor__field:last-child {
   margin-bottom: 0;
 }
 
-.rule-editor__field--small {
+.auto-categorization-rule-editor__field--small {
   max-width: 120px;
 }
 
-.rule-editor__label {
+.auto-categorization-rule-editor__label {
   display: block;
   margin-bottom: 0.375rem;
   font-size: 0.8125rem;
@@ -67,7 +67,7 @@
   color: var(--color-text-secondary, #666666);
 }
 
-.rule-editor__input {
+.auto-categorization-rule-editor__input {
   width: 100%;
   padding: 0.5rem 0.75rem;
   font-size: 0.875rem;
@@ -78,17 +78,17 @@
   transition: border-color 0.15s ease;
 }
 
-.rule-editor__input:focus {
+.auto-categorization-rule-editor__input:focus {
   outline: none;
   border-color: var(--color-primary, #0284c7);
 }
 
-.rule-editor__input:disabled {
+.auto-categorization-rule-editor__input:disabled {
   background: var(--color-surface-muted, #f5f5f5);
   opacity: 0.7;
 }
 
-.rule-editor__select {
+.auto-categorization-rule-editor__select {
   padding: 0.5rem 0.75rem;
   font-size: 0.875rem;
   border: 1px solid var(--color-border, #e0e0e0);
@@ -99,18 +99,18 @@
   min-width: 150px;
 }
 
-.rule-editor__select:focus {
+.auto-categorization-rule-editor__select:focus {
   outline: none;
   border-color: var(--color-primary, #0284c7);
 }
 
-.rule-editor__select:disabled {
+.auto-categorization-rule-editor__select:disabled {
   background: var(--color-surface-muted, #f5f5f5);
   opacity: 0.7;
   cursor: not-allowed;
 }
 
-.rule-editor__error {
+.auto-categorization-rule-editor__error {
   display: block;
   margin-top: 0.25rem;
   font-size: 0.75rem;
@@ -118,7 +118,7 @@
 }
 
 /* Condition logic toggle */
-.rule-editor__logic-toggle {
+.auto-categorization-rule-editor__logic-toggle {
   display: flex;
   gap: 0;
   border: 1px solid var(--color-border, #e0e0e0);
@@ -126,7 +126,7 @@
   overflow: hidden;
 }
 
-.rule-editor__logic-btn {
+.auto-categorization-rule-editor__logic-btn {
   padding: 0.25rem 0.75rem;
   font-size: 0.75rem;
   font-weight: 600;
@@ -137,43 +137,43 @@
   transition: all 0.15s ease;
 }
 
-.rule-editor__logic-btn:hover:not(:disabled) {
+.auto-categorization-rule-editor__logic-btn:hover:not(:disabled) {
   background: var(--color-surface-muted, #f5f5f5);
 }
 
-.rule-editor__logic-btn.active {
+.auto-categorization-rule-editor__logic-btn.active {
   background: var(--color-primary, #0284c7);
   color: white;
 }
 
-.rule-editor__logic-btn:disabled {
+.auto-categorization-rule-editor__logic-btn:disabled {
   opacity: 0.7;
   cursor: not-allowed;
 }
 
 /* Conditions list */
-.rule-editor__conditions {
+.auto-categorization-rule-editor__conditions {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
   margin-bottom: 0.75rem;
 }
 
-.rule-editor__condition {
+.auto-categorization-rule-editor__condition {
   display: flex;
   align-items: center;
   gap: 0.5rem;
 }
 
-.rule-editor__condition .rule-editor__select {
+.auto-categorization-rule-editor__condition .auto-categorization-rule-editor__select {
   flex: 0 0 auto;
 }
 
-.rule-editor__condition .rule-editor__input {
+.auto-categorization-rule-editor__condition .auto-categorization-rule-editor__input {
   flex: 1;
 }
 
-.rule-editor__remove-btn {
+.auto-categorization-rule-editor__remove-btn {
   padding: 0.25rem 0.5rem;
   font-size: 1.25rem;
   line-height: 1;
@@ -185,15 +185,15 @@
   transition: opacity 0.15s ease;
 }
 
-.rule-editor__remove-btn:hover:not(:disabled) {
+.auto-categorization-rule-editor__remove-btn:hover:not(:disabled) {
   opacity: 1;
 }
 
-.rule-editor__remove-btn:disabled {
+.auto-categorization-rule-editor__remove-btn:disabled {
   cursor: not-allowed;
 }
 
-.rule-editor__add-btn {
+.auto-categorization-rule-editor__add-btn {
   padding: 0.375rem 0.75rem;
   font-size: 0.8125rem;
   font-weight: 500;
@@ -205,25 +205,25 @@
   transition: all 0.15s ease;
 }
 
-.rule-editor__add-btn:hover:not(:disabled) {
+.auto-categorization-rule-editor__add-btn:hover:not(:disabled) {
   border-color: var(--color-primary, #0284c7);
   color: var(--color-primary, #0284c7);
 }
 
-.rule-editor__add-btn:disabled {
+.auto-categorization-rule-editor__add-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
 /* Tags */
-.rule-editor__tags {
+.auto-categorization-rule-editor__tags {
   display: flex;
   flex-wrap: wrap;
   gap: 0.375rem;
   margin-bottom: 0.5rem;
 }
 
-.rule-editor__tag {
+.auto-categorization-rule-editor__tag {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
@@ -234,7 +234,7 @@
   border-radius: 4px;
 }
 
-.rule-editor__tag-remove {
+.auto-categorization-rule-editor__tag-remove {
   padding: 0;
   font-size: 1rem;
   line-height: 1;
@@ -245,27 +245,27 @@
   opacity: 0.7;
 }
 
-.rule-editor__tag-remove:hover:not(:disabled) {
+.auto-categorization-rule-editor__tag-remove:hover:not(:disabled) {
   opacity: 1;
 }
 
-.rule-editor__tag-input-row {
+.auto-categorization-rule-editor__tag-input-row {
   display: flex;
   gap: 0.5rem;
 }
 
-.rule-editor__tag-input-row .rule-editor__input {
+.auto-categorization-rule-editor__tag-input-row .auto-categorization-rule-editor__input {
   flex: 1;
 }
 
 /* Radio group */
-.rule-editor__radio-group {
+.auto-categorization-rule-editor__radio-group {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
 }
 
-.rule-editor__radio {
+.auto-categorization-rule-editor__radio {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -274,12 +274,12 @@
   cursor: pointer;
 }
 
-.rule-editor__radio input {
+.auto-categorization-rule-editor__radio input {
   cursor: pointer;
 }
 
 /* Footer */
-.rule-editor__footer {
+.auto-categorization-rule-editor__footer {
   display: flex;
   justify-content: flex-end;
   gap: 0.75rem;
@@ -288,7 +288,7 @@
   border-top: 1px solid var(--color-border, #e0e0e0);
 }
 
-.rule-editor__btn {
+.auto-categorization-rule-editor__btn {
   padding: 0.5rem 1.25rem;
   font-size: 0.875rem;
   font-weight: 500;
@@ -298,27 +298,27 @@
   transition: all 0.15s ease;
 }
 
-.rule-editor__btn:disabled {
+.auto-categorization-rule-editor__btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
 
-.rule-editor__btn--cancel {
+.auto-categorization-rule-editor__btn--cancel {
   background: var(--color-surface, #ffffff);
   border-color: var(--color-border, #e0e0e0);
   color: var(--color-text-primary, #1a1a1a);
 }
 
-.rule-editor__btn--cancel:hover:not(:disabled) {
+.auto-categorization-rule-editor__btn--cancel:hover:not(:disabled) {
   background: var(--color-surface-muted, #f5f5f5);
 }
 
-.rule-editor__btn--save {
+.auto-categorization-rule-editor__btn--save {
   background: var(--color-primary, #0284c7);
   color: white;
 }
 
-.rule-editor__btn--save:hover:not(:disabled) {
+.auto-categorization-rule-editor__btn--save:hover:not(:disabled) {
   background: var(--color-primary-hover, #0369a1);
 }
 
