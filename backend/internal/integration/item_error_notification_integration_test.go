@@ -241,8 +241,12 @@ func TestWebhookProcessor_Integration(t *testing.T) {
 		linkedItemRepo,
 		transactionRepo,
 		accountRepo,
+		nil, // profileRepo
+		nil, // balanceSnapshotRepo
 		mockPlaidService,
 		mockEncryptionService,
+		nil, // syncLimitService
+		nil, // ruleApplicationService
 	)
 
 	itemErrorService := services.NewItemErrorService(
