@@ -83,10 +83,12 @@ func TestSyncLimits_E2E_FreeTierFirstSyncFlow(t *testing.T) {
 		linkedItemRepo,
 		transactionRepo,
 		accountRepo,
+		profileRepo,
+		nil, // balanceSnapshotRepo
 		mockPlaidService,
 		mockEncryptionService,
-		profileRepo,
 		syncLimitService,
+		nil, // ruleApplicationService
 	)
 
 	// Initialize handlers

@@ -92,6 +92,7 @@ func TestProcessWebhook_Success(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		nil, // syncLimitService - not needed for these tests
+		nil, // ruleApplicationService - not needed for these tests
 	)
 
 	ctx := context.Background()
@@ -189,6 +190,7 @@ func TestProcessWebhook_WebhookNotFound(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		nil, // syncLimitService - not needed for these tests
+		nil, // ruleApplicationService - not needed for these tests
 	)
 
 	ctx := context.Background()
@@ -220,6 +222,7 @@ func TestProcessWebhook_ItemIDMissing(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		nil, // syncLimitService - not needed for these tests
+		nil, // ruleApplicationService - not needed for these tests
 	)
 
 	ctx := context.Background()
@@ -267,6 +270,7 @@ func TestProcessWebhook_LinkedItemNotFound(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		nil, // syncLimitService - not needed for these tests
+		nil, // ruleApplicationService - not needed for these tests
 	)
 
 	ctx := context.Background()
@@ -328,6 +332,7 @@ func TestSyncTransactions_SuccessSinglePage(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		nil, // syncLimitService - not needed for these tests
+		nil, // ruleApplicationService - not needed for these tests
 	)
 
 	ctx := context.Background()
@@ -396,6 +401,7 @@ func TestSyncTransactions_SuccessMultiplePages(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		nil, // syncLimitService - not needed for these tests
+		nil, // ruleApplicationService - not needed for these tests
 	)
 
 	ctx := context.Background()
@@ -459,11 +465,12 @@ func TestSyncTransactions_DecryptionError(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		nil,
-		nil,
+		nil, // profileRepo
 		nil, // balanceSnapshotRepo
+		nil, // plaidService
 		mockEncryptionService,
-		nil,
+		nil, // syncLimitService
+		nil, // ruleApplicationService
 	)
 
 	ctx := context.Background()
@@ -504,6 +511,7 @@ func TestSyncTransactions_PlaidErrorFirstPage(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		nil, // syncLimitService - not needed for these tests
+		nil, // ruleApplicationService - not needed for these tests
 	)
 
 	ctx := context.Background()
@@ -550,6 +558,7 @@ func TestSyncTransactions_PlaidErrorSubsequentPage(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		nil, // syncLimitService - not needed for these tests
+		nil, // ruleApplicationService - not needed for these tests
 	)
 
 	ctx := context.Background()
@@ -604,6 +613,7 @@ func TestSyncTransactions_CursorUpdateError(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		nil, // syncLimitService - not needed for these tests
+		nil, // ruleApplicationService - not needed for these tests
 	)
 
 	ctx := context.Background()
@@ -659,6 +669,7 @@ func TestSyncTransactions_EmptyCursor(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		nil, // syncLimitService - not needed for these tests
+		nil, // ruleApplicationService - not needed for these tests
 	)
 
 	ctx := context.Background()
@@ -716,11 +727,12 @@ func TestBuildAccountMap_Success(t *testing.T) {
 		mockLinkedItemRepo,
 		nil,
 		mockAccountRepo,
-		nil,
-		nil,
+		nil, // profileRepo
 		nil, // balanceSnapshotRepo
-		nil,
-		nil,
+		nil, // plaidService
+		nil, // encryptionService
+		nil, // syncLimitService
+		nil, // ruleApplicationService
 	).(*transactionSyncService) // Type assert to access private method
 
 	ctx := context.Background()
@@ -770,11 +782,12 @@ func TestBuildAccountMap_EmptyAccounts(t *testing.T) {
 		nil,
 		nil,
 		mockAccountRepo,
-		nil,
-		nil,
+		nil, // profileRepo
 		nil, // balanceSnapshotRepo
-		nil,
-		nil,
+		nil, // plaidService
+		nil, // encryptionService
+		nil, // syncLimitService
+		nil, // ruleApplicationService
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -804,11 +817,12 @@ func TestBuildAccountMap_RepositoryError(t *testing.T) {
 		nil,
 		nil,
 		mockAccountRepo,
-		nil,
-		nil,
+		nil, // profileRepo
 		nil, // balanceSnapshotRepo
-		nil,
-		nil,
+		nil, // plaidService
+		nil, // encryptionService
+		nil, // syncLimitService
+		nil, // ruleApplicationService
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -843,11 +857,12 @@ func TestProcessAddedTransactions_Success(t *testing.T) {
 		nil,
 		mockTransactionRepo,
 		mockAccountRepo,
-		nil,
-		nil,
+		nil, // profileRepo
 		nil, // balanceSnapshotRepo
-		nil,
-		nil,
+		nil, // plaidService
+		nil, // encryptionService
+		nil, // syncLimitService
+		nil, // ruleApplicationService
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -940,11 +955,12 @@ func TestProcessAddedTransactions_Deduplication(t *testing.T) {
 		nil,
 		mockTransactionRepo,
 		nil,
-		nil,
-		nil,
+		nil, // profileRepo
 		nil, // balanceSnapshotRepo
-		nil,
-		nil,
+		nil, // plaidService
+		nil, // encryptionService
+		nil, // syncLimitService
+		nil, // ruleApplicationService
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1002,11 +1018,12 @@ func TestProcessAddedTransactions_PartialFailure(t *testing.T) {
 		nil,
 		mockTransactionRepo,
 		nil,
-		nil,
-		nil,
+		nil, // profileRepo
 		nil, // balanceSnapshotRepo
-		nil,
-		nil,
+		nil, // plaidService
+		nil, // encryptionService
+		nil, // syncLimitService
+		nil, // ruleApplicationService
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1073,11 +1090,12 @@ func TestProcessAddedTransactions_EmptySlice(t *testing.T) {
 		nil,
 		mockTransactionRepo,
 		nil,
-		nil,
-		nil,
+		nil, // profileRepo
 		nil, // balanceSnapshotRepo
-		nil,
-		nil,
+		nil, // plaidService
+		nil, // encryptionService
+		nil, // syncLimitService
+		nil, // ruleApplicationService
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1116,11 +1134,12 @@ func TestProcessModifiedTransactions_Success(t *testing.T) {
 		nil,
 		mockTransactionRepo,
 		nil,
-		nil,
-		nil,
+		nil, // profileRepo
 		nil, // balanceSnapshotRepo
-		nil,
-		nil,
+		nil, // plaidService
+		nil, // encryptionService
+		nil, // syncLimitService
+		nil, // ruleApplicationService
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1226,11 +1245,12 @@ func TestProcessModifiedTransactions_NewTransactionNoUserNotes(t *testing.T) {
 		nil,
 		mockTransactionRepo,
 		nil,
-		nil,
-		nil,
+		nil, // profileRepo
 		nil, // balanceSnapshotRepo
-		nil,
-		nil,
+		nil, // plaidService
+		nil, // encryptionService
+		nil, // syncLimitService
+		nil, // ruleApplicationService
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1293,11 +1313,12 @@ func TestProcessModifiedTransactions_TransactionNotFound(t *testing.T) {
 		nil,
 		mockTransactionRepo,
 		nil,
-		nil,
-		nil,
+		nil, // profileRepo
 		nil, // balanceSnapshotRepo
-		nil,
-		nil,
+		nil, // plaidService
+		nil, // encryptionService
+		nil, // syncLimitService
+		nil, // ruleApplicationService
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1346,11 +1367,12 @@ func TestProcessModifiedTransactions_EmptySlice(t *testing.T) {
 		nil,
 		mockTransactionRepo,
 		nil,
-		nil,
-		nil,
+		nil, // profileRepo
 		nil, // balanceSnapshotRepo
-		nil,
-		nil,
+		nil, // plaidService
+		nil, // encryptionService
+		nil, // syncLimitService
+		nil, // ruleApplicationService
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1387,11 +1409,12 @@ func TestProcessRemovedTransactions_Success(t *testing.T) {
 		nil,
 		mockTransactionRepo,
 		nil,
-		nil,
-		nil,
+		nil, // profileRepo
 		nil, // balanceSnapshotRepo
-		nil,
-		nil,
+		nil, // plaidService
+		nil, // encryptionService
+		nil, // syncLimitService
+		nil, // ruleApplicationService
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1436,11 +1459,12 @@ func TestProcessRemovedTransactions_IdempotentNotFound(t *testing.T) {
 		nil,
 		mockTransactionRepo,
 		nil,
-		nil,
-		nil,
+		nil, // profileRepo
 		nil, // balanceSnapshotRepo
-		nil,
-		nil,
+		nil, // plaidService
+		nil, // encryptionService
+		nil, // syncLimitService
+		nil, // ruleApplicationService
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1479,11 +1503,12 @@ func TestProcessRemovedTransactions_EmptySlice(t *testing.T) {
 		nil,
 		mockTransactionRepo,
 		nil,
-		nil,
-		nil,
+		nil, // profileRepo
 		nil, // balanceSnapshotRepo
-		nil,
-		nil,
+		nil, // plaidService
+		nil, // encryptionService
+		nil, // syncLimitService
+		nil, // ruleApplicationService
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1514,11 +1539,12 @@ func TestProcessRemovedTransactions_NilTransactionID(t *testing.T) {
 		nil,
 		mockTransactionRepo,
 		nil,
-		nil,
-		nil,
+		nil, // profileRepo
 		nil, // balanceSnapshotRepo
-		nil,
-		nil,
+		nil, // plaidService
+		nil, // encryptionService
+		nil, // syncLimitService
+		nil, // ruleApplicationService
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1566,11 +1592,12 @@ func TestProcessModifiedTransactions_PendingToPosted(t *testing.T) {
 		nil,
 		mockTransactionRepo,
 		nil,
-		nil,
-		nil,
+		nil, // profileRepo
 		nil, // balanceSnapshotRepo
-		nil,
-		nil,
+		nil, // plaidService
+		nil, // encryptionService
+		nil, // syncLimitService
+		nil, // ruleApplicationService
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1732,11 +1759,12 @@ func TestProcessAddedTransactions_SetsOriginalCategory(t *testing.T) {
 		nil,
 		mockTransactionRepo,
 		nil,
-		nil,
-		nil,
+		nil, // profileRepo
 		nil, // balanceSnapshotRepo
-		nil,
-		nil,
+		nil, // plaidService
+		nil, // encryptionService
+		nil, // syncLimitService
+		nil, // ruleApplicationService
 	).(*transactionSyncService)
 
 	ctx := context.Background()
