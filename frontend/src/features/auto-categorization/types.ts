@@ -139,9 +139,9 @@ export interface ToggleRuleRequest {
 }
 
 /**
- * Hook result type for useRules
+ * Hook result type for useAutoCategorizationRules
  */
-export interface UseRulesResult {
+export interface UseAutoCategorizationRulesResult {
   rules: CategorizationRule[]
   loading: boolean
   error: string | null

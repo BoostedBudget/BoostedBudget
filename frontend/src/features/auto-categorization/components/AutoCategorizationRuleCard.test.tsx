@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { RuleCard } from './RuleCard'
+import { AutoCategorizationRuleCard } from './AutoCategorizationRuleCard'
 import type { CategorizationRule } from '../types'
 
-describe('RuleCard', () => {
+describe('AutoCategorizationRuleCard', () => {
   const mockRule: CategorizationRule = {
     id: 'rule-1',
     user_id: 'user-1',
@@ -38,7 +38,7 @@ describe('RuleCard', () => {
   describe('Rendering', () => {
     it('should render rule name and description', () => {
       render(
-        <RuleCard
+        <AutoCategorizationRuleCard
           rule={mockRule}
           onToggle={mockOnToggle}
           onEdit={mockOnEdit}
@@ -52,7 +52,7 @@ describe('RuleCard', () => {
 
     it('should show Active status for enabled rule', () => {
       render(
-        <RuleCard
+        <AutoCategorizationRuleCard
           rule={mockRule}
           onToggle={mockOnToggle}
           onEdit={mockOnEdit}
@@ -66,7 +66,7 @@ describe('RuleCard', () => {
     it('should show Disabled status for disabled rule', () => {
       const disabledRule = { ...mockRule, enabled: false }
       render(
-        <RuleCard
+        <AutoCategorizationRuleCard
           rule={disabledRule}
           onToggle={mockOnToggle}
           onEdit={mockOnEdit}
@@ -79,7 +79,7 @@ describe('RuleCard', () => {
 
     it('should render conditions with labels', () => {
       render(
-        <RuleCard
+        <AutoCategorizationRuleCard
           rule={mockRule}
           onToggle={mockOnToggle}
           onEdit={mockOnEdit}
@@ -95,7 +95,7 @@ describe('RuleCard', () => {
 
     it('should show condition logic', () => {
       render(
-        <RuleCard
+        <AutoCategorizationRuleCard
           rule={mockRule}
           onToggle={mockOnToggle}
           onEdit={mockOnEdit}
@@ -108,7 +108,7 @@ describe('RuleCard', () => {
 
     it('should render target category as breadcrumb', () => {
       render(
-        <RuleCard
+        <AutoCategorizationRuleCard
           rule={mockRule}
           onToggle={mockOnToggle}
           onEdit={mockOnEdit}
@@ -121,7 +121,7 @@ describe('RuleCard', () => {
 
     it('should render target tags', () => {
       render(
-        <RuleCard
+        <AutoCategorizationRuleCard
           rule={mockRule}
           onToggle={mockOnToggle}
           onEdit={mockOnEdit}
@@ -135,7 +135,7 @@ describe('RuleCard', () => {
 
     it('should show tag behavior label', () => {
       render(
-        <RuleCard
+        <AutoCategorizationRuleCard
           rule={mockRule}
           onToggle={mockOnToggle}
           onEdit={mockOnEdit}
@@ -149,7 +149,7 @@ describe('RuleCard', () => {
     it('should show Replace tags label for replace behavior', () => {
       const replaceRule = { ...mockRule, tag_behavior: 'replace' as const }
       render(
-        <RuleCard
+        <AutoCategorizationRuleCard
           rule={replaceRule}
           onToggle={mockOnToggle}
           onEdit={mockOnEdit}
@@ -162,7 +162,7 @@ describe('RuleCard', () => {
 
     it('should render stats', () => {
       render(
-        <RuleCard
+        <AutoCategorizationRuleCard
           rule={mockRule}
           onToggle={mockOnToggle}
           onEdit={mockOnEdit}
@@ -176,7 +176,7 @@ describe('RuleCard', () => {
 
     it('should render priority', () => {
       render(
-        <RuleCard
+        <AutoCategorizationRuleCard
           rule={mockRule}
           onToggle={mockOnToggle}
           onEdit={mockOnEdit}
@@ -190,7 +190,7 @@ describe('RuleCard', () => {
     it('should not render description if not provided', () => {
       const ruleWithoutDesc = { ...mockRule, description: undefined }
       render(
-        <RuleCard
+        <AutoCategorizationRuleCard
           rule={ruleWithoutDesc}
           onToggle={mockOnToggle}
           onEdit={mockOnEdit}
@@ -206,7 +206,7 @@ describe('RuleCard', () => {
     it('should call onToggle with false when disabling', async () => {
       mockOnToggle.mockResolvedValue(undefined)
       render(
-        <RuleCard
+        <AutoCategorizationRuleCard
           rule={mockRule}
           onToggle={mockOnToggle}
           onEdit={mockOnEdit}
@@ -226,7 +226,7 @@ describe('RuleCard', () => {
       const disabledRule = { ...mockRule, enabled: false }
       mockOnToggle.mockResolvedValue(undefined)
       render(
-        <RuleCard
+        <AutoCategorizationRuleCard
           rule={disabledRule}
           onToggle={mockOnToggle}
           onEdit={mockOnEdit}
@@ -249,7 +249,7 @@ describe('RuleCard', () => {
       }))
 
       render(
-        <RuleCard
+        <AutoCategorizationRuleCard
           rule={mockRule}
           onToggle={mockOnToggle}
           onEdit={mockOnEdit}
@@ -272,7 +272,7 @@ describe('RuleCard', () => {
   describe('Edit', () => {
     it('should call onEdit when Edit button is clicked', () => {
       render(
-        <RuleCard
+        <AutoCategorizationRuleCard
           rule={mockRule}
           onToggle={mockOnToggle}
           onEdit={mockOnEdit}
@@ -290,7 +290,7 @@ describe('RuleCard', () => {
   describe('Delete', () => {
     it('should show confirmation dialog when Delete is clicked', () => {
       render(
-        <RuleCard
+        <AutoCategorizationRuleCard
           rule={mockRule}
           onToggle={mockOnToggle}
           onEdit={mockOnEdit}
@@ -306,7 +306,7 @@ describe('RuleCard', () => {
 
     it('should hide confirmation dialog when Cancel is clicked', () => {
       render(
-        <RuleCard
+        <AutoCategorizationRuleCard
           rule={mockRule}
           onToggle={mockOnToggle}
           onEdit={mockOnEdit}
@@ -326,7 +326,7 @@ describe('RuleCard', () => {
     it('should call onDelete when confirmed', async () => {
       mockOnDelete.mockResolvedValue(undefined)
       render(
-        <RuleCard
+        <AutoCategorizationRuleCard
           rule={mockRule}
           onToggle={mockOnToggle}
           onEdit={mockOnEdit}
@@ -352,7 +352,7 @@ describe('RuleCard', () => {
       }))
 
       render(
-        <RuleCard
+        <AutoCategorizationRuleCard
           rule={mockRule}
           onToggle={mockOnToggle}
           onEdit={mockOnEdit}
@@ -382,7 +382,7 @@ describe('RuleCard', () => {
         conditions: [{ type: 'account_type' as const, value: ['checking', 'savings'] }],
       }
       render(
-        <RuleCard
+        <AutoCategorizationRuleCard
           rule={ruleWithArrayCondition}
           onToggle={mockOnToggle}
           onEdit={mockOnEdit}
@@ -399,7 +399,7 @@ describe('RuleCard', () => {
         conditions: [{ type: 'amount_range' as const, value: { min: 10, max: 100 } }],
       }
       render(
-        <RuleCard
+        <AutoCategorizationRuleCard
           rule={ruleWithRange}
           onToggle={mockOnToggle}
           onEdit={mockOnEdit}
@@ -416,7 +416,7 @@ describe('RuleCard', () => {
         conditions: [{ type: 'date_range' as const, value: { start: '2025-01-01', end: '2025-12-31' } }],
       }
       render(
-        <RuleCard
+        <AutoCategorizationRuleCard
           rule={ruleWithDateRange}
           onToggle={mockOnToggle}
           onEdit={mockOnEdit}

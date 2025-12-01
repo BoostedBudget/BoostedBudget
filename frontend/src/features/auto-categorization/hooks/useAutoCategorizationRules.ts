@@ -1,27 +1,27 @@
 /**
- * useRules Hook
+ * useAutoCategorizationRules Hook
  *
- * React hook for managing categorization rules - fetching, creating, updating, deleting, and toggling.
+ * React hook for managing auto-categorization rules - fetching, creating, updating, deleting, and toggling.
  * Issue #346: Custom Transaction Categorization Rules
  */
 
 import { useState, useEffect, useCallback } from 'react'
 import {
-  fetchRules,
-  createRule as apiCreateRule,
-  updateRule as apiUpdateRule,
-  deleteRule as apiDeleteRule,
-  toggleRule as apiToggleRule,
-} from '../api/rulesApi'
+  fetchAutoCategorizationRules,
+  createAutoCategorizationRule as apiCreateRule,
+  updateAutoCategorizationRule as apiUpdateRule,
+  deleteAutoCategorizationRule as apiDeleteRule,
+  toggleAutoCategorizationRule as apiToggleRule,
+} from '../api/autoCategorizationApi'
 import type {
   CategorizationRule,
   CreateRuleRequest,
   UpdateRuleRequest,
-  UseRulesResult,
+  UseAutoCategorizationRulesResult,
 } from '../types'
 
 /**
- * Hook for managing categorization rules
+ * Hook for managing auto-categorization rules
  *
  * Features:
  * - Fetches rules on mount
@@ -34,7 +34,7 @@ import type {
  *
  * @example
  * ```tsx
- * function RulesList() {
+ * function AutoCategorizationRulesList() {
  *   const {
  *     rules,
  *     loading,
@@ -44,7 +44,7 @@ import type {
  *     deleteRule,
  *     toggleRule,
  *     refresh
- *   } = useRules()
+ *   } = useAutoCategorizationRules()
  *
  *   if (loading) return <LoadingSpinner />
  *   if (error) return <ErrorMessage error={error} onRetry={refresh} />
@@ -52,7 +52,7 @@ import type {
  *   return (
  *     <>
  *       {rules.map(rule => (
- *         <RuleCard
+ *         <AutoCategorizationRuleCard
  *           key={rule.id}
  *           rule={rule}
  *           onToggle={(enabled) => toggleRule(rule.id, enabled)}
@@ -64,7 +64,7 @@ import type {
  * }
  * ```
  */
-export function useRules(): UseRulesResult {
+export function useAutoCategorizationRules(): UseAutoCategorizationRulesResult {
   const [rules, setRules] = useState<CategorizationRule[]>([])
   const [loading, setLoading] = useState<boolean>(true)
   const [error, setError] = useState<string | null>(null)
@@ -74,7 +74,7 @@ export function useRules(): UseRulesResult {
     try {
       setLoading(true)
       setError(null)
-      const result = await fetchRules()
+      const result = await fetchAutoCategorizationRules()
       // Sort by priority (higher first), then by created_at (newer first)
       const sorted = result.sort((a, b) => {
         if (b.priority !== a.priority) {

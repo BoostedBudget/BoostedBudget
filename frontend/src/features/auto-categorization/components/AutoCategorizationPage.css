@@ -1,44 +1,44 @@
 /**
- * RulesPage Component Styles
+ * AutoCategorizationPage Component Styles
  * Issue #346: Custom Transaction Categorization Rules
  *
  * BEM naming convention
  */
 
-.rules-page {
+.auto-categorization-page {
   max-width: 800px;
   margin: 0 auto;
   padding: 2rem 1rem;
 }
 
 /* Header */
-.rules-page__header {
+.auto-categorization-page__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 1.5rem;
 }
 
-.rules-page__title-row {
+.auto-categorization-page__title-row {
   display: flex;
   align-items: baseline;
   gap: 0.75rem;
 }
 
-.rules-page__title {
+.auto-categorization-page__title {
   margin: 0;
   font-size: 1.5rem;
   font-weight: 600;
   color: var(--color-text-primary, #1a1a1a);
 }
 
-.rules-page__count {
+.auto-categorization-page__count {
   font-size: 0.875rem;
   color: var(--color-text-secondary, #666666);
 }
 
 /* Buttons */
-.rules-page__btn {
+.auto-categorization-page__btn {
   padding: 0.5rem 1rem;
   font-size: 0.875rem;
   font-weight: 500;
@@ -48,32 +48,32 @@
   transition: all 0.15s ease;
 }
 
-.rules-page__btn:disabled {
+.auto-categorization-page__btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.rules-page__btn--primary {
+.auto-categorization-page__btn--primary {
   background: var(--color-primary, #0284c7);
   color: white;
 }
 
-.rules-page__btn--primary:hover:not(:disabled) {
+.auto-categorization-page__btn--primary:hover:not(:disabled) {
   background: var(--color-primary-hover, #0369a1);
 }
 
-.rules-page__btn--retry {
+.auto-categorization-page__btn--retry {
   background: var(--color-surface, #ffffff);
   border-color: var(--color-border, #e0e0e0);
   color: var(--color-text-primary, #1a1a1a);
 }
 
-.rules-page__btn--retry:hover:not(:disabled) {
+.auto-categorization-page__btn--retry:hover:not(:disabled) {
   background: var(--color-surface-muted, #f5f5f5);
 }
 
 /* Loading state */
-.rules-page__loading {
+.auto-categorization-page__loading {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -83,7 +83,7 @@
   color: var(--color-text-secondary, #666666);
 }
 
-.rules-page__spinner {
+.auto-categorization-page__spinner {
   width: 40px;
   height: 40px;
   border: 3px solid var(--color-border, #e0e0e0);
@@ -100,7 +100,7 @@
 }
 
 /* Error state */
-.rules-page__error {
+.auto-categorization-page__error {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -110,13 +110,13 @@
   border-radius: 8px;
 }
 
-.rules-page__error-message {
+.auto-categorization-page__error-message {
   margin: 0 0 1rem;
   color: var(--color-danger, #dc2626);
 }
 
 /* Empty state */
-.rules-page__empty {
+.auto-categorization-page__empty {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -126,21 +126,21 @@
   border-radius: 8px;
 }
 
-.rules-page__empty-title {
+.auto-categorization-page__empty-title {
   margin: 0 0 0.5rem;
   font-size: 1.25rem;
   font-weight: 600;
   color: var(--color-text-primary, #1a1a1a);
 }
 
-.rules-page__empty-text {
+.auto-categorization-page__empty-text {
   margin: 0 0 1.5rem;
   max-width: 400px;
   color: var(--color-text-secondary, #666666);
 }
 
 /* Tier warning */
-.rules-page__tier-warning {
+.auto-categorization-page__tier-warning {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -152,13 +152,13 @@
   border-radius: 6px;
 }
 
-.rules-page__tier-warning p {
+.auto-categorization-page__tier-warning p {
   margin: 0;
   font-size: 0.875rem;
   color: var(--color-warning-text, #92400e);
 }
 
-.rules-page__upgrade-link {
+.auto-categorization-page__upgrade-link {
   flex-shrink: 0;
   font-size: 0.875rem;
   font-weight: 500;
@@ -166,29 +166,29 @@
   text-decoration: none;
 }
 
-.rules-page__upgrade-link:hover {
+.auto-categorization-page__upgrade-link:hover {
   text-decoration: underline;
 }
 
 /* Rules list */
-.rules-page__list {
+.auto-categorization-page__list {
   display: flex;
   flex-direction: column;
   gap: 0;
 }
 
-.rules-page__list .rule-card {
+.auto-categorization-page__list .auto-categorization-rule-card {
   margin-bottom: 0;
   border-radius: 0;
   border-bottom: none;
 }
 
-.rules-page__list .rule-card:first-child {
+.auto-categorization-page__list .auto-categorization-rule-card:first-child {
   border-top-left-radius: 8px;
   border-top-right-radius: 8px;
 }
 
-.rules-page__list .rule-card:last-child {
+.auto-categorization-page__list .auto-categorization-rule-card:last-child {
   border-bottom-left-radius: 8px;
   border-bottom-right-radius: 8px;
   border-bottom: 1px solid var(--color-border, #e0e0e0);

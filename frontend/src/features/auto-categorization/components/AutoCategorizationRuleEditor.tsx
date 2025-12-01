@@ -1,7 +1,7 @@
 /**
- * RuleEditor Component
+ * AutoCategorizationRuleEditor Component
  *
- * Form for creating and editing categorization rules.
+ * Form for creating and editing auto-categorization rules.
  * Issue #346: Custom Transaction Categorization Rules
  */
 
@@ -16,9 +16,9 @@ import type {
   TagBehavior,
 } from '../types'
 import { CONDITION_TYPE_LABELS } from '../types'
-import './RuleEditor.css'
+import './AutoCategorizationRuleEditor.css'
 
-export interface RuleEditorProps {
+export interface AutoCategorizationRuleEditorProps {
   mode: 'create' | 'edit'
   rule?: CategorizationRule
   onSave: (data: CreateRuleRequest | UpdateRuleRequest) => Promise<void>
@@ -37,7 +37,7 @@ const DEFAULT_CONDITION: RuleCondition = {
   value: '',
 }
 
-export function RuleEditor({ mode, rule, onSave, onCancel, categories }: RuleEditorProps) {
+export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, categories }: AutoCategorizationRuleEditorProps) {
   // Form state
   const [name, setName] = useState(rule?.name || '')
   const [description, setDescription] = useState(rule?.description || '')
@@ -140,37 +140,37 @@ export function RuleEditor({ mode, rule, onSave, onCancel, categories }: RuleEdi
   const categoryValue = targetCategory ? targetCategory.join(' > ') : ''
 
   return (
-    <form className="rule-editor" onSubmit={handleSubmit}>
-      <h2 className="rule-editor__title">
+    <form className="auto-categorization-rule-editor" onSubmit={handleSubmit}>
+      <h2 className="auto-categorization-rule-editor__title">
         {mode === 'create' ? 'Create Rule' : 'Edit Rule'}
       </h2>
 
       {/* Basic Info */}
-      <div className="rule-editor__section">
-        <div className="rule-editor__field">
-          <label htmlFor="rule-name" className="rule-editor__label">
+      <div className="auto-categorization-rule-editor__section">
+        <div className="auto-categorization-rule-editor__field">
+          <label htmlFor="rule-name" className="auto-categorization-rule-editor__label">
             Rule Name
           </label>
           <input
             id="rule-name"
             type="text"
-            className="rule-editor__input"
+            className="auto-categorization-rule-editor__input"
             value={name}
             onChange={(e) => setName(e.target.value)}
             disabled={saving}
             placeholder="e.g., Coffee Shops"
           />
-          {errors.name && <span className="rule-editor__error">{errors.name}</span>}
+          {errors.name && <span className="auto-categorization-rule-editor__error">{errors.name}</span>}
         </div>
 
-        <div className="rule-editor__field">
-          <label htmlFor="rule-description" className="rule-editor__label">
+        <div className="auto-categorization-rule-editor__field">
+          <label htmlFor="rule-description" className="auto-categorization-rule-editor__label">
             Description
           </label>
           <input
             id="rule-description"
             type="text"
-            className="rule-editor__input"
+            className="auto-categorization-rule-editor__input"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             disabled={saving}
@@ -178,14 +178,14 @@ export function RuleEditor({ mode, rule, onSave, onCancel, categories }: RuleEdi
           />
         </div>
 
-        <div className="rule-editor__field rule-editor__field--small">
-          <label htmlFor="rule-priority" className="rule-editor__label">
+        <div className="auto-categorization-rule-editor__field auto-categorization-rule-editor__field--small">
+          <label htmlFor="rule-priority" className="auto-categorization-rule-editor__label">
             Priority
           </label>
           <input
             id="rule-priority"
             type="number"
-            className="rule-editor__input"
+            className="auto-categorization-rule-editor__input"
             value={priority}
             onChange={(e) => setPriority(parseInt(e.target.value, 10) || 0)}
             disabled={saving}
@@ -196,14 +196,14 @@ export function RuleEditor({ mode, rule, onSave, onCancel, categories }: RuleEdi
       </div>
 
       {/* Conditions */}
-      <div className="rule-editor__section">
-        <div className="rule-editor__section-header">
-          <h3 className="rule-editor__section-title">Conditions</h3>
+      <div className="auto-categorization-rule-editor__section">
+        <div className="auto-categorization-rule-editor__section-header">
+          <h3 className="auto-categorization-rule-editor__section-title">Conditions</h3>
           {conditions.length > 1 && (
-            <div className="rule-editor__logic-toggle">
+            <div className="auto-categorization-rule-editor__logic-toggle">
               <button
                 type="button"
-                className={`rule-editor__logic-btn ${conditionLogic === 'AND' ? 'active' : ''}`}
+                className={`auto-categorization-rule-editor__logic-btn ${conditionLogic === 'AND' ? 'active' : ''}`}
                 onClick={() => setConditionLogic('AND')}
                 disabled={saving}
               >
@@ -211,7 +211,7 @@ export function RuleEditor({ mode, rule, onSave, onCancel, categories }: RuleEdi
               </button>
               <button
                 type="button"
-                className={`rule-editor__logic-btn ${conditionLogic === 'OR' ? 'active' : ''}`}
+                className={`auto-categorization-rule-editor__logic-btn ${conditionLogic === 'OR' ? 'active' : ''}`}
                 onClick={() => setConditionLogic('OR')}
                 disabled={saving}
               >
@@ -222,19 +222,19 @@ export function RuleEditor({ mode, rule, onSave, onCancel, categories }: RuleEdi
         </div>
 
         {errors.conditions && (
-          <span className="rule-editor__error">{errors.conditions}</span>
+          <span className="auto-categorization-rule-editor__error">{errors.conditions}</span>
         )}
 
-        <div className="rule-editor__conditions">
+        <div className="auto-categorization-rule-editor__conditions">
           {conditions.map((condition, index) => (
-            <div key={index} className="rule-editor__condition">
+            <div key={index} className="auto-categorization-rule-editor__condition">
               <label htmlFor={`condition-type-${index}`} className="visually-hidden">
                 Condition type
               </label>
               <select
                 id={`condition-type-${index}`}
                 aria-label="Condition type"
-                className="rule-editor__select"
+                className="auto-categorization-rule-editor__select"
                 value={condition.type}
                 onChange={(e) => updateCondition(index, { type: e.target.value as ConditionType })}
                 disabled={saving}
@@ -247,7 +247,7 @@ export function RuleEditor({ mode, rule, onSave, onCancel, categories }: RuleEdi
               </select>
               <input
                 type="text"
-                className="rule-editor__input"
+                className="auto-categorization-rule-editor__input"
                 value={String(condition.value)}
                 onChange={(e) => updateCondition(index, { value: e.target.value })}
                 disabled={saving}
@@ -255,7 +255,7 @@ export function RuleEditor({ mode, rule, onSave, onCancel, categories }: RuleEdi
               />
               <button
                 type="button"
-                className="rule-editor__remove-btn"
+                className="auto-categorization-rule-editor__remove-btn"
                 onClick={() => removeCondition(index)}
                 disabled={saving}
                 aria-label="Remove condition"
@@ -268,7 +268,7 @@ export function RuleEditor({ mode, rule, onSave, onCancel, categories }: RuleEdi
 
         <button
           type="button"
-          className="rule-editor__add-btn"
+          className="auto-categorization-rule-editor__add-btn"
           onClick={addCondition}
           disabled={saving}
         >
@@ -277,17 +277,17 @@ export function RuleEditor({ mode, rule, onSave, onCancel, categories }: RuleEdi
       </div>
 
       {/* Target Category */}
-      <div className="rule-editor__section">
-        <h3 className="rule-editor__section-title">Actions</h3>
-        {errors.target && <span className="rule-editor__error">{errors.target}</span>}
+      <div className="auto-categorization-rule-editor__section">
+        <h3 className="auto-categorization-rule-editor__section-title">Actions</h3>
+        {errors.target && <span className="auto-categorization-rule-editor__error">{errors.target}</span>}
 
-        <div className="rule-editor__field">
-          <label htmlFor="target-category" className="rule-editor__label">
+        <div className="auto-categorization-rule-editor__field">
+          <label htmlFor="target-category" className="auto-categorization-rule-editor__label">
             Target Category
           </label>
           <select
             id="target-category"
-            className="rule-editor__select"
+            className="auto-categorization-rule-editor__select"
             value={categoryValue}
             onChange={(e) => handleCategoryChange(e.target.value)}
             disabled={saving}
@@ -305,15 +305,15 @@ export function RuleEditor({ mode, rule, onSave, onCancel, categories }: RuleEdi
         </div>
 
         {/* Tags */}
-        <div className="rule-editor__field">
-          <label className="rule-editor__label">Target Tags</label>
-          <div className="rule-editor__tags">
+        <div className="auto-categorization-rule-editor__field">
+          <label className="auto-categorization-rule-editor__label">Target Tags</label>
+          <div className="auto-categorization-rule-editor__tags">
             {targetTags.map((tag) => (
-              <span key={tag} className="rule-editor__tag">
+              <span key={tag} className="auto-categorization-rule-editor__tag">
                 {tag}
                 <button
                   type="button"
-                  className="rule-editor__tag-remove"
+                  className="auto-categorization-rule-editor__tag-remove"
                   onClick={() => removeTag(tag)}
                   disabled={saving}
                   aria-label={`Remove tag ${tag}`}
@@ -323,10 +323,10 @@ export function RuleEditor({ mode, rule, onSave, onCancel, categories }: RuleEdi
               </span>
             ))}
           </div>
-          <div className="rule-editor__tag-input-row">
+          <div className="auto-categorization-rule-editor__tag-input-row">
             <input
               type="text"
-              className="rule-editor__input"
+              className="auto-categorization-rule-editor__input"
               value={newTag}
               onChange={(e) => setNewTag(e.target.value)}
               onKeyDown={(e) => {
@@ -340,7 +340,7 @@ export function RuleEditor({ mode, rule, onSave, onCancel, categories }: RuleEdi
             />
             <button
               type="button"
-              className="rule-editor__add-btn"
+              className="auto-categorization-rule-editor__add-btn"
               onClick={addTag}
               disabled={saving || !newTag.trim()}
             >
@@ -351,10 +351,10 @@ export function RuleEditor({ mode, rule, onSave, onCancel, categories }: RuleEdi
 
         {/* Tag behavior */}
         {targetTags.length > 0 && (
-          <div className="rule-editor__field">
-            <label className="rule-editor__label">Tag Behavior</label>
-            <div className="rule-editor__radio-group">
-              <label className="rule-editor__radio">
+          <div className="auto-categorization-rule-editor__field">
+            <label className="auto-categorization-rule-editor__label">Tag Behavior</label>
+            <div className="auto-categorization-rule-editor__radio-group">
+              <label className="auto-categorization-rule-editor__radio">
                 <input
                   type="radio"
                   name="tag-behavior"
@@ -365,7 +365,7 @@ export function RuleEditor({ mode, rule, onSave, onCancel, categories }: RuleEdi
                 />
                 Add to existing tags
               </label>
-              <label className="rule-editor__radio">
+              <label className="auto-categorization-rule-editor__radio">
                 <input
                   type="radio"
                   name="tag-behavior"
@@ -382,10 +382,10 @@ export function RuleEditor({ mode, rule, onSave, onCancel, categories }: RuleEdi
       </div>
 
       {/* Actions */}
-      <div className="rule-editor__footer">
+      <div className="auto-categorization-rule-editor__footer">
         <button
           type="button"
-          className="rule-editor__btn rule-editor__btn--cancel"
+          className="auto-categorization-rule-editor__btn auto-categorization-rule-editor__btn--cancel"
           onClick={onCancel}
           disabled={saving}
         >
@@ -393,7 +393,7 @@ export function RuleEditor({ mode, rule, onSave, onCancel, categories }: RuleEdi
         </button>
         <button
           type="submit"
-          className="rule-editor__btn rule-editor__btn--save"
+          className="auto-categorization-rule-editor__btn auto-categorization-rule-editor__btn--save"
           disabled={saving}
         >
           {saving ? 'Saving...' : 'Save'}
