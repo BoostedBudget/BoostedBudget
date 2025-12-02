@@ -1,18 +1,18 @@
 /**
- * RulesPage Component
+ * AutoCategorizationPage Component
  *
- * Main page for managing categorization rules.
+ * Main page for managing auto-categorization rules.
  * Issue #346: Custom Transaction Categorization Rules
  */
 
 import { useState, useCallback } from 'react'
-import { useRules } from '../hooks/useRules'
-import { RuleCard } from './RuleCard'
-import { RuleEditor } from './RuleEditor'
+import { useAutoCategorizationRules } from '../hooks/useAutoCategorizationRules'
+import { AutoCategorizationRuleCard } from './AutoCategorizationRuleCard'
+import { AutoCategorizationRuleEditor } from './AutoCategorizationRuleEditor'
 import type { CategorizationRule, CreateRuleRequest, UpdateRuleRequest } from '../types'
-import './RulesPage.css'
+import './AutoCategorizationPage.css'
 
-export interface RulesPageProps {
+export interface AutoCategorizationPageProps {
   categories: string[][]
   maxRules?: number
   currentTier?: string
@@ -20,7 +20,7 @@ export interface RulesPageProps {
 
 type EditorMode = 'create' | 'edit' | null
 
-export function RulesPage({ categories, maxRules, currentTier }: RulesPageProps) {
+export function AutoCategorizationPage({ categories, maxRules, currentTier }: AutoCategorizationPageProps) {
   const {
     rules,
     loading,
@@ -30,7 +30,7 @@ export function RulesPage({ categories, maxRules, currentTier }: RulesPageProps)
     deleteRule,
     toggleRule,
     refresh,
-  } = useRules()
+  } = useAutoCategorizationRules()
 
   const [editorMode, setEditorMode] = useState<EditorMode>(null)
   const [editingRule, setEditingRule] = useState<CategorizationRule | null>(null)
@@ -83,9 +83,9 @@ export function RulesPage({ categories, maxRules, currentTier }: RulesPageProps)
   // Loading state
   if (loading) {
     return (
-      <div className="rules-page">
-        <div className="rules-page__loading">
-          <div className="rules-page__spinner" />
+      <div className="auto-categorization-page">
+        <div className="auto-categorization-page__loading">
+          <div className="auto-categorization-page__spinner" />
           <p>Loading rules...</p>
         </div>
       </div>
@@ -95,12 +95,12 @@ export function RulesPage({ categories, maxRules, currentTier }: RulesPageProps)
   // Error state
   if (error) {
     return (
-      <div className="rules-page">
-        <div className="rules-page__error">
-          <p className="rules-page__error-message">{error}</p>
+      <div className="auto-categorization-page">
+        <div className="auto-categorization-page__error">
+          <p className="auto-categorization-page__error-message">{error}</p>
           <button
             type="button"
-            className="rules-page__btn rules-page__btn--retry"
+            className="auto-categorization-page__btn auto-categorization-page__btn--retry"
             onClick={refresh}
           >
             Retry
@@ -113,8 +113,8 @@ export function RulesPage({ categories, maxRules, currentTier }: RulesPageProps)
   // Editor mode
   if (editorMode) {
     return (
-      <div className="rules-page">
-        <RuleEditor
+      <div className="auto-categorization-page">
+        <AutoCategorizationRuleEditor
           mode={editorMode}
           rule={editingRule ?? undefined}
           onSave={handleEditorSave}
@@ -128,15 +128,15 @@ export function RulesPage({ categories, maxRules, currentTier }: RulesPageProps)
   // Empty state
   if (rules.length === 0) {
     return (
-      <div className="rules-page">
-        <div className="rules-page__empty">
-          <h2 className="rules-page__empty-title">No rules yet</h2>
-          <p className="rules-page__empty-text">
-            Create categorization rules to automatically organize your transactions.
+      <div className="auto-categorization-page">
+        <div className="auto-categorization-page__empty">
+          <h2 className="auto-categorization-page__empty-title">No rules yet</h2>
+          <p className="auto-categorization-page__empty-text">
+            Create auto-categorization rules to automatically organize your transactions.
           </p>
           <button
             type="button"
-            className="rules-page__btn rules-page__btn--primary"
+            className="auto-categorization-page__btn auto-categorization-page__btn--primary"
             onClick={handleCreateClick}
           >
             Create Your First Rule
@@ -148,15 +148,15 @@ export function RulesPage({ categories, maxRules, currentTier }: RulesPageProps)
 
   // Rules list
   return (
-    <div className="rules-page">
-      <div className="rules-page__header">
-        <div className="rules-page__title-row">
-          <h1 className="rules-page__title">Categorization Rules</h1>
-          <span className="rules-page__count">{rules.length} rules</span>
+    <div className="auto-categorization-page">
+      <div className="auto-categorization-page__header">
+        <div className="auto-categorization-page__title-row">
+          <h1 className="auto-categorization-page__title">Auto-Categorization Rules</h1>
+          <span className="auto-categorization-page__count">{rules.length} rules</span>
         </div>
         <button
           type="button"
-          className="rules-page__btn rules-page__btn--primary"
+          className="auto-categorization-page__btn auto-categorization-page__btn--primary"
           onClick={handleCreateClick}
           disabled={isAtLimit}
         >
@@ -165,20 +165,20 @@ export function RulesPage({ categories, maxRules, currentTier }: RulesPageProps)
       </div>
 
       {showTierWarning && (
-        <div className="rules-page__tier-warning">
+        <div className="auto-categorization-page__tier-warning">
           <p>
             <strong>Rule limit reached.</strong> You&apos;ve reached the maximum of{' '}
             {maxRules} rule{maxRules !== 1 ? 's' : ''} for the free tier.
           </p>
-          <a href="/settings/subscription" className="rules-page__upgrade-link">
+          <a href="/settings/subscription" className="auto-categorization-page__upgrade-link">
             Upgrade for more rules
           </a>
         </div>
       )}
 
-      <div className="rules-page__list">
+      <div className="auto-categorization-page__list">
         {rules.map((rule) => (
-          <RuleCard
+          <AutoCategorizationRuleCard
             key={rule.id}
             rule={rule}
             onToggle={(enabled) => handleToggle(rule.id, enabled)}
