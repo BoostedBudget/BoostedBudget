@@ -11,7 +11,8 @@ export default mergeConfig(
       setupFiles: './src/test/setup.ts',
       // Increase timeout for slower CI environments (GitHub Actions can be slow)
       // CI is 10x+ slower than local - some tests timing out even at 10000ms
-      testTimeout: 20000,
+      // Increased from 20000 to 30000 due to flaky timeouts with singleFork mode
+      testTimeout: 30000,
       // Increase teardown timeout for pool cleanup with V8 coverage
       // V8 coverage provider can take >10s to cleanup in CI, especially with single fork mode
       teardownTimeout: 30000,
