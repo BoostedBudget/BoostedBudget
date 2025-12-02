@@ -427,4 +427,318 @@ describe('AutoCategorizationRuleCard', () => {
       expect(screen.getByText('from 2025-01-01 to 2025-12-31')).toBeInTheDocument()
     })
   })
+
+  describe('All condition types display', () => {
+    // Tests for all 13 condition types to ensure they display correctly
+
+    it('should display merchant_equals condition', () => {
+      const rule = {
+        ...mockRule,
+        conditions: [{ type: 'merchant_equals' as const, value: 'Amazon.com' }],
+      }
+      render(
+        <AutoCategorizationRuleCard
+          rule={rule}
+          onToggle={mockOnToggle}
+          onEdit={mockOnEdit}
+          onDelete={mockOnDelete}
+        />
+      )
+
+      expect(screen.getByText('Merchant equals')).toBeInTheDocument()
+      expect(screen.getByText('Amazon.com')).toBeInTheDocument()
+    })
+
+    it('should display merchant_starts_with condition', () => {
+      const rule = {
+        ...mockRule,
+        conditions: [{ type: 'merchant_starts_with' as const, value: 'AMAZON' }],
+      }
+      render(
+        <AutoCategorizationRuleCard
+          rule={rule}
+          onToggle={mockOnToggle}
+          onEdit={mockOnEdit}
+          onDelete={mockOnDelete}
+        />
+      )
+
+      expect(screen.getByText('Merchant starts with')).toBeInTheDocument()
+      expect(screen.getByText('AMAZON')).toBeInTheDocument()
+    })
+
+    it('should display merchant_ends_with condition', () => {
+      const rule = {
+        ...mockRule,
+        conditions: [{ type: 'merchant_ends_with' as const, value: 'CAFE' }],
+      }
+      render(
+        <AutoCategorizationRuleCard
+          rule={rule}
+          onToggle={mockOnToggle}
+          onEdit={mockOnEdit}
+          onDelete={mockOnDelete}
+        />
+      )
+
+      expect(screen.getByText('Merchant ends with')).toBeInTheDocument()
+      expect(screen.getByText('CAFE')).toBeInTheDocument()
+    })
+
+    it('should display amount_less_than condition', () => {
+      const rule = {
+        ...mockRule,
+        conditions: [{ type: 'amount_less_than' as const, value: 50 }],
+      }
+      render(
+        <AutoCategorizationRuleCard
+          rule={rule}
+          onToggle={mockOnToggle}
+          onEdit={mockOnEdit}
+          onDelete={mockOnDelete}
+        />
+      )
+
+      expect(screen.getByText('Amount less than')).toBeInTheDocument()
+      expect(screen.getByText('50')).toBeInTheDocument()
+    })
+
+    it('should display amount_equals condition', () => {
+      const rule = {
+        ...mockRule,
+        conditions: [{ type: 'amount_equals' as const, value: 99.99 }],
+      }
+      render(
+        <AutoCategorizationRuleCard
+          rule={rule}
+          onToggle={mockOnToggle}
+          onEdit={mockOnEdit}
+          onDelete={mockOnDelete}
+        />
+      )
+
+      expect(screen.getByText('Amount equals')).toBeInTheDocument()
+      expect(screen.getByText('99.99')).toBeInTheDocument()
+    })
+
+    it('should display account_id condition', () => {
+      const rule = {
+        ...mockRule,
+        conditions: [{ type: 'account_id' as const, value: 'acc-12345' }],
+      }
+      render(
+        <AutoCategorizationRuleCard
+          rule={rule}
+          onToggle={mockOnToggle}
+          onEdit={mockOnEdit}
+          onDelete={mockOnDelete}
+        />
+      )
+
+      expect(screen.getByText('Account is')).toBeInTheDocument()
+      expect(screen.getByText('acc-12345')).toBeInTheDocument()
+    })
+
+    it('should display payment_channel condition', () => {
+      const rule = {
+        ...mockRule,
+        conditions: [{ type: 'payment_channel' as const, value: 'online' }],
+      }
+      render(
+        <AutoCategorizationRuleCard
+          rule={rule}
+          onToggle={mockOnToggle}
+          onEdit={mockOnEdit}
+          onDelete={mockOnDelete}
+        />
+      )
+
+      expect(screen.getByText('Payment channel is')).toBeInTheDocument()
+      expect(screen.getByText('online')).toBeInTheDocument()
+    })
+
+    it('should display existing_category condition', () => {
+      const rule = {
+        ...mockRule,
+        conditions: [{ type: 'existing_category' as const, value: 'Food & Drink' }],
+      }
+      render(
+        <AutoCategorizationRuleCard
+          rule={rule}
+          onToggle={mockOnToggle}
+          onEdit={mockOnEdit}
+          onDelete={mockOnDelete}
+        />
+      )
+
+      expect(screen.getByText('Current category is')).toBeInTheDocument()
+      expect(screen.getByText('Food & Drink')).toBeInTheDocument()
+    })
+
+    it('should display date_range with only start date', () => {
+      const rule = {
+        ...mockRule,
+        conditions: [{ type: 'date_range' as const, value: { start: '2025-01-01' } }],
+      }
+      render(
+        <AutoCategorizationRuleCard
+          rule={rule}
+          onToggle={mockOnToggle}
+          onEdit={mockOnEdit}
+          onDelete={mockOnDelete}
+        />
+      )
+
+      expect(screen.getByText('Date between')).toBeInTheDocument()
+      expect(screen.getByText('from 2025-01-01')).toBeInTheDocument()
+    })
+
+    it('should display date_range with only end date', () => {
+      const rule = {
+        ...mockRule,
+        conditions: [{ type: 'date_range' as const, value: { end: '2025-12-31' } }],
+      }
+      render(
+        <AutoCategorizationRuleCard
+          rule={rule}
+          onToggle={mockOnToggle}
+          onEdit={mockOnEdit}
+          onDelete={mockOnDelete}
+        />
+      )
+
+      expect(screen.getByText('Date between')).toBeInTheDocument()
+      expect(screen.getByText('to 2025-12-31')).toBeInTheDocument()
+    })
+  })
+
+  describe('Value formatting edge cases', () => {
+    it('should handle empty string condition value', () => {
+      const rule = {
+        ...mockRule,
+        conditions: [{ type: 'merchant_contains' as const, value: '' }],
+      }
+      render(
+        <AutoCategorizationRuleCard
+          rule={rule}
+          onToggle={mockOnToggle}
+          onEdit={mockOnEdit}
+          onDelete={mockOnDelete}
+        />
+      )
+
+      expect(screen.getByText('Merchant contains')).toBeInTheDocument()
+      // Value container should exist but be empty or show placeholder
+      const conditions = screen.getByText('Conditions (AND)').parentElement?.parentElement
+      expect(conditions).toBeInTheDocument()
+    })
+
+    it('should handle empty array for account_type', () => {
+      const rule = {
+        ...mockRule,
+        conditions: [{ type: 'account_type' as const, value: [] }],
+      }
+      render(
+        <AutoCategorizationRuleCard
+          rule={rule}
+          onToggle={mockOnToggle}
+          onEdit={mockOnEdit}
+          onDelete={mockOnDelete}
+        />
+      )
+
+      expect(screen.getByText('Account type is')).toBeInTheDocument()
+    })
+
+    it('should handle amount_range with only min', () => {
+      const rule = {
+        ...mockRule,
+        conditions: [{ type: 'amount_range' as const, value: { min: 10 } }],
+      }
+      render(
+        <AutoCategorizationRuleCard
+          rule={rule}
+          onToggle={mockOnToggle}
+          onEdit={mockOnEdit}
+          onDelete={mockOnDelete}
+        />
+      )
+
+      expect(screen.getByText('Amount between')).toBeInTheDocument()
+    })
+
+    it('should handle amount_range with only max', () => {
+      const rule = {
+        ...mockRule,
+        conditions: [{ type: 'amount_range' as const, value: { max: 100 } }],
+      }
+      render(
+        <AutoCategorizationRuleCard
+          rule={rule}
+          onToggle={mockOnToggle}
+          onEdit={mockOnEdit}
+          onDelete={mockOnDelete}
+        />
+      )
+
+      expect(screen.getByText('Amount between')).toBeInTheDocument()
+    })
+
+    it('should handle zero amount value', () => {
+      const rule = {
+        ...mockRule,
+        conditions: [{ type: 'amount_equals' as const, value: 0 }],
+      }
+      render(
+        <AutoCategorizationRuleCard
+          rule={rule}
+          onToggle={mockOnToggle}
+          onEdit={mockOnEdit}
+          onDelete={mockOnDelete}
+        />
+      )
+
+      expect(screen.getByText('Amount equals')).toBeInTheDocument()
+      expect(screen.getByText('0')).toBeInTheDocument()
+    })
+
+    it('should handle negative amount value', () => {
+      const rule = {
+        ...mockRule,
+        conditions: [{ type: 'amount_greater_than' as const, value: -50 }],
+      }
+      render(
+        <AutoCategorizationRuleCard
+          rule={rule}
+          onToggle={mockOnToggle}
+          onEdit={mockOnEdit}
+          onDelete={mockOnDelete}
+        />
+      )
+
+      expect(screen.getByText('Amount greater than')).toBeInTheDocument()
+      expect(screen.getByText('-50')).toBeInTheDocument()
+    })
+
+    it('should handle multiple conditions with OR logic', () => {
+      const rule = {
+        ...mockRule,
+        condition_logic: 'OR' as const,
+        conditions: [
+          { type: 'merchant_contains' as const, value: 'coffee' },
+          { type: 'merchant_contains' as const, value: 'cafe' },
+        ],
+      }
+      render(
+        <AutoCategorizationRuleCard
+          rule={rule}
+          onToggle={mockOnToggle}
+          onEdit={mockOnEdit}
+          onDelete={mockOnDelete}
+        />
+      )
+
+      expect(screen.getByText('Conditions (OR)')).toBeInTheDocument()
+    })
+  })
 })

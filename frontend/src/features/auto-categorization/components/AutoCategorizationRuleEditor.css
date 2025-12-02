@@ -159,10 +159,23 @@
   margin-bottom: 0.75rem;
 }
 
+.auto-categorization-rule-editor__condition-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
 .auto-categorization-rule-editor__condition {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.auto-categorization-rule-editor__condition--error {
+  border-left: 2px solid var(--color-danger, #dc2626);
+  padding-left: 0.5rem;
+  margin-left: -0.5rem;
 }
 
 .auto-categorization-rule-editor__condition .auto-categorization-rule-editor__select {
@@ -171,6 +184,61 @@
 
 .auto-categorization-rule-editor__condition .auto-categorization-rule-editor__input {
   flex: 1;
+  min-width: 100px;
+}
+
+.auto-categorization-rule-editor__condition-error {
+  font-size: 0.75rem;
+  color: var(--color-danger, #dc2626);
+  padding-left: 0.5rem;
+}
+
+/* Number and date inputs */
+.auto-categorization-rule-editor__input--number {
+  max-width: 120px;
+}
+
+.auto-categorization-rule-editor__input--date {
+  max-width: 150px;
+}
+
+/* Range inputs (amount range, date range) */
+.auto-categorization-rule-editor__range-inputs {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+}
+
+.auto-categorization-rule-editor__range-separator {
+  font-size: 0.875rem;
+  color: var(--color-text-secondary, #666666);
+}
+
+/* Checkbox group for account types */
+.auto-categorization-rule-editor__checkbox-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding: 0.5rem;
+  background: var(--color-surface-muted, #f5f5f5);
+  border-radius: 4px;
+  flex: 1;
+  min-width: 200px;
+}
+
+.auto-categorization-rule-editor__checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.8125rem;
+  color: var(--color-text-primary, #1a1a1a);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.auto-categorization-rule-editor__checkbox-label input[type="checkbox"] {
+  cursor: pointer;
 }
 
 .auto-categorization-rule-editor__remove-btn {
