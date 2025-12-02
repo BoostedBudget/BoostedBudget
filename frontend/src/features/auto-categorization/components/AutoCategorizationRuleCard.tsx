@@ -1,16 +1,16 @@
 /**
- * RuleCard Component
+ * AutoCategorizationRuleCard Component
  *
- * Displays a single categorization rule with toggle, edit, and delete actions.
+ * Displays a single auto-categorization rule with toggle, edit, and delete actions.
  * Issue #346: Custom Transaction Categorization Rules
  */
 
 import { useState } from 'react'
 import type { CategorizationRule } from '../types'
 import { CONDITION_TYPE_LABELS } from '../types'
-import './RuleCard.css'
+import './AutoCategorizationRuleCard.css'
 
-export interface RuleCardProps {
+export interface AutoCategorizationRuleCardProps {
   rule: CategorizationRule
   onToggle: (enabled: boolean) => Promise<void>
   onEdit: () => void
@@ -40,7 +40,7 @@ function formatConditionValue(value: unknown): string {
   return String(value)
 }
 
-export function RuleCard({ rule, onToggle, onEdit, onDelete }: RuleCardProps) {
+export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }: AutoCategorizationRuleCardProps) {
   const [toggling, setToggling] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
@@ -73,32 +73,32 @@ export function RuleCard({ rule, onToggle, onEdit, onDelete }: RuleCardProps) {
   }
 
   return (
-    <div className={`rule-card ${!rule.enabled ? 'rule-card--disabled' : ''}`}>
-      <div className="rule-card__header">
-        <div className="rule-card__title-row">
-          <h3 className="rule-card__name">{rule.name}</h3>
-          <span className={`rule-card__status ${rule.enabled ? 'rule-card__status--enabled' : 'rule-card__status--disabled'}`}>
+    <div className={`auto-categorization-rule-card ${!rule.enabled ? 'auto-categorization-rule-card--disabled' : ''}`}>
+      <div className="auto-categorization-rule-card__header">
+        <div className="auto-categorization-rule-card__title-row">
+          <h3 className="auto-categorization-rule-card__name">{rule.name}</h3>
+          <span className={`auto-categorization-rule-card__status ${rule.enabled ? 'auto-categorization-rule-card__status--enabled' : 'auto-categorization-rule-card__status--disabled'}`}>
             {rule.enabled ? 'Active' : 'Disabled'}
           </span>
         </div>
         {rule.description && (
-          <p className="rule-card__description">{rule.description}</p>
+          <p className="auto-categorization-rule-card__description">{rule.description}</p>
         )}
       </div>
 
-      <div className="rule-card__content">
+      <div className="auto-categorization-rule-card__content">
         {/* Conditions */}
-        <div className="rule-card__section">
-          <h4 className="rule-card__section-title">
+        <div className="auto-categorization-rule-card__section">
+          <h4 className="auto-categorization-rule-card__section-title">
             Conditions ({rule.condition_logic})
           </h4>
-          <ul className="rule-card__conditions">
+          <ul className="auto-categorization-rule-card__conditions">
             {rule.conditions.map((condition, index) => (
-              <li key={index} className="rule-card__condition">
-                <span className="rule-card__condition-type">
+              <li key={index} className="auto-categorization-rule-card__condition">
+                <span className="auto-categorization-rule-card__condition-type">
                   {CONDITION_TYPE_LABELS[condition.type] || condition.type}
                 </span>
-                <span className="rule-card__condition-value">
+                <span className="auto-categorization-rule-card__condition-value">
                   {formatConditionValue(condition.value)}
                 </span>
               </li>
@@ -107,25 +107,25 @@ export function RuleCard({ rule, onToggle, onEdit, onDelete }: RuleCardProps) {
         </div>
 
         {/* Actions */}
-        <div className="rule-card__section">
-          <h4 className="rule-card__section-title">Actions</h4>
-          <div className="rule-card__actions-list">
+        <div className="auto-categorization-rule-card__section">
+          <h4 className="auto-categorization-rule-card__section-title">Actions</h4>
+          <div className="auto-categorization-rule-card__actions-list">
             {rule.target_category && rule.target_category.length > 0 && (
-              <div className="rule-card__action">
-                <span className="rule-card__action-label">Set category:</span>
-                <span className="rule-card__action-value">
+              <div className="auto-categorization-rule-card__action">
+                <span className="auto-categorization-rule-card__action-label">Set category:</span>
+                <span className="auto-categorization-rule-card__action-value">
                   {rule.target_category.join(' > ')}
                 </span>
               </div>
             )}
             {rule.target_tags && rule.target_tags.length > 0 && (
-              <div className="rule-card__action">
-                <span className="rule-card__action-label">
+              <div className="auto-categorization-rule-card__action">
+                <span className="auto-categorization-rule-card__action-label">
                   {rule.tag_behavior === 'replace' ? 'Replace tags:' : 'Add tags:'}
                 </span>
-                <span className="rule-card__action-value">
+                <span className="auto-categorization-rule-card__action-value">
                   {rule.target_tags.map((tag) => (
-                    <span key={tag} className="rule-card__tag">{tag}</span>
+                    <span key={tag} className="auto-categorization-rule-card__tag">{tag}</span>
                   ))}
                 </span>
               </div>
@@ -134,29 +134,29 @@ export function RuleCard({ rule, onToggle, onEdit, onDelete }: RuleCardProps) {
         </div>
 
         {/* Stats */}
-        <div className="rule-card__stats">
-          <span className="rule-card__stat">
+        <div className="auto-categorization-rule-card__stats">
+          <span className="auto-categorization-rule-card__stat">
             Matched: {rule.match_count}
           </span>
-          <span className="rule-card__stat">
+          <span className="auto-categorization-rule-card__stat">
             Overridden: {rule.override_count}
           </span>
           {rule.last_matched_at && (
-            <span className="rule-card__stat">
+            <span className="auto-categorization-rule-card__stat">
               Last match: {new Date(rule.last_matched_at).toLocaleDateString()}
             </span>
           )}
         </div>
       </div>
 
-      <div className="rule-card__footer">
-        <div className="rule-card__priority">
+      <div className="auto-categorization-rule-card__footer">
+        <div className="auto-categorization-rule-card__priority">
           Priority: {rule.priority}
         </div>
-        <div className="rule-card__buttons">
+        <div className="auto-categorization-rule-card__buttons">
           <button
             type="button"
-            className="rule-card__button rule-card__button--toggle"
+            className="auto-categorization-rule-card__button auto-categorization-rule-card__button--toggle"
             onClick={handleToggle}
             disabled={toggling}
           >
@@ -164,14 +164,14 @@ export function RuleCard({ rule, onToggle, onEdit, onDelete }: RuleCardProps) {
           </button>
           <button
             type="button"
-            className="rule-card__button rule-card__button--edit"
+            className="auto-categorization-rule-card__button auto-categorization-rule-card__button--edit"
             onClick={onEdit}
           >
             Edit
           </button>
           <button
             type="button"
-            className="rule-card__button rule-card__button--delete"
+            className="auto-categorization-rule-card__button auto-categorization-rule-card__button--delete"
             onClick={handleDeleteClick}
             disabled={deleting}
           >
@@ -182,13 +182,13 @@ export function RuleCard({ rule, onToggle, onEdit, onDelete }: RuleCardProps) {
 
       {/* Delete confirmation dialog */}
       {showDeleteConfirm && (
-        <div className="rule-card__confirm-overlay">
-          <div className="rule-card__confirm-dialog">
+        <div className="auto-categorization-rule-card__confirm-overlay">
+          <div className="auto-categorization-rule-card__confirm-dialog">
             <p>Are you sure you want to delete "{rule.name}"?</p>
-            <div className="rule-card__confirm-buttons">
+            <div className="auto-categorization-rule-card__confirm-buttons">
               <button
                 type="button"
-                className="rule-card__button rule-card__button--cancel"
+                className="auto-categorization-rule-card__button auto-categorization-rule-card__button--cancel"
                 onClick={handleDeleteCancel}
                 disabled={deleting}
               >
@@ -196,7 +196,7 @@ export function RuleCard({ rule, onToggle, onEdit, onDelete }: RuleCardProps) {
               </button>
               <button
                 type="button"
-                className="rule-card__button rule-card__button--confirm-delete"
+                className="auto-categorization-rule-card__button auto-categorization-rule-card__button--confirm-delete"
                 onClick={handleDeleteConfirm}
                 disabled={deleting}
               >

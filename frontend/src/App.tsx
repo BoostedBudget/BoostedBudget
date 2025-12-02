@@ -22,6 +22,7 @@ import { updatePrivacySettings } from './features/profile/api/privacyApi'
 import type { PrivacySettings as PrivacySettingsType } from './features/profile/types'
 import { PrivacyPolicy } from './legal/PrivacyPolicy'
 import { CancelDeletionPage } from './features/deletion/components/CancelDeletionPage'
+import { AutoCategorizationPageWrapper } from './features/auto-categorization/components/AutoCategorizationPageWrapper'
 import './App.css'
 
 interface HealthCheck {
@@ -164,6 +165,7 @@ function App() {
                 <Link to="/dashboard">Dashboard</Link>
                 <Link to="/accounts">Accounts</Link>
                 <Link to="/transactions">Transactions</Link>
+                <Link to="/auto-categorization">Auto-Cat</Link>
                 <Link to="/profile">Profile</Link>
               </>
             ) : (
@@ -234,6 +236,14 @@ function App() {
               element={
                 <ProtectedRoute>
                   <TransactionsPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/auto-categorization"
+              element={
+                <ProtectedRoute>
+                  <AutoCategorizationPageWrapper />
                 </ProtectedRoute>
               }
             />

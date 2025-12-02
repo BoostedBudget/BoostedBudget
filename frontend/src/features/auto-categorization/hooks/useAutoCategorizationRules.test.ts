@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { renderHook, waitFor, act } from '@testing-library/react'
-import { useRules } from './useRules'
-import * as rulesApi from '../api/rulesApi'
+import { useAutoCategorizationRules } from './useAutoCategorizationRules'
+import * as autoCategorizationApi from '../api/autoCategorizationApi'
 import type { CategorizationRule } from '../types'
 
 // Mock the API module
-vi.mock('../api/rulesApi')
+vi.mock('../api/autoCategorizationApi')
 
-describe('useRules', () => {
+describe('useAutoCategorizationRules', () => {
   const mockRule1: CategorizationRule = {
     id: 'rule-1',
     user_id: 'user-1',
@@ -46,9 +46,9 @@ describe('useRules', () => {
 
   describe('Fetching', () => {
     it('should fetch rules on mount', async () => {
-      vi.mocked(rulesApi.fetchRules).mockResolvedValue([mockRule1])
+      vi.mocked(autoCategorizationApi.fetchAutoCategorizationRules).mockResolvedValue([mockRule1])
 
-      const { result } = renderHook(() => useRules())
+      const { result } = renderHook(() => useAutoCategorizationRules())
 
       expect(result.current.loading).toBe(true)
 
@@ -56,16 +56,16 @@ describe('useRules', () => {
         expect(result.current.loading).toBe(false)
       })
 
-      expect(rulesApi.fetchRules).toHaveBeenCalledTimes(1)
+      expect(autoCategorizationApi.fetchAutoCategorizationRules).toHaveBeenCalledTimes(1)
       expect(result.current.rules).toHaveLength(1)
       expect(result.current.rules[0].id).toBe('rule-1')
       expect(result.current.error).toBeNull()
     })
 
     it('should sort rules by priority (highest first)', async () => {
-      vi.mocked(rulesApi.fetchRules).mockResolvedValue([mockRule2, mockRule1])
+      vi.mocked(autoCategorizationApi.fetchAutoCategorizationRules).mockResolvedValue([mockRule2, mockRule1])
 
-      const { result } = renderHook(() => useRules())
+      const { result } = renderHook(() => useAutoCategorizationRules())
 
       await waitFor(() => {
         expect(result.current.loading).toBe(false)
@@ -77,9 +77,9 @@ describe('useRules', () => {
     })
 
     it('should handle empty rules', async () => {
-      vi.mocked(rulesApi.fetchRules).mockResolvedValue([])
+      vi.mocked(autoCategorizationApi.fetchAutoCategorizationRules).mockResolvedValue([])
 
-      const { result } = renderHook(() => useRules())
+      const { result } = renderHook(() => useAutoCategorizationRules())
 
       await waitFor(() => {
         expect(result.current.loading).toBe(false)
@@ -89,9 +89,9 @@ describe('useRules', () => {
     })
 
     it('should handle fetch error', async () => {
-      vi.mocked(rulesApi.fetchRules).mockRejectedValue(new Error('Network error'))
+      vi.mocked(autoCategorizationApi.fetchAutoCategorizationRules).mockRejectedValue(new Error('Network error'))
 
-      const { result } = renderHook(() => useRules())
+      const { result } = renderHook(() => useAutoCategorizationRules())
 
       await waitFor(() => {
         expect(result.current.loading).toBe(false)
@@ -104,10 +104,10 @@ describe('useRules', () => {
 
   describe('Create Rule', () => {
     it('should create a new rule and add it to the list', async () => {
-      vi.mocked(rulesApi.fetchRules).mockResolvedValue([mockRule2])
-      vi.mocked(rulesApi.createRule).mockResolvedValue(mockRule1)
+      vi.mocked(autoCategorizationApi.fetchAutoCategorizationRules).mockResolvedValue([mockRule2])
+      vi.mocked(autoCategorizationApi.createAutoCategorizationRule).mockResolvedValue(mockRule1)
 
-      const { result } = renderHook(() => useRules())
+      const { result } = renderHook(() => useAutoCategorizationRules())
 
       await waitFor(() => {
         expect(result.current.loading).toBe(false)
@@ -131,11 +131,11 @@ describe('useRules', () => {
 
   describe('Update Rule', () => {
     it('should update a rule in the list', async () => {
-      vi.mocked(rulesApi.fetchRules).mockResolvedValue([mockRule1])
+      vi.mocked(autoCategorizationApi.fetchAutoCategorizationRules).mockResolvedValue([mockRule1])
       const updatedRule = { ...mockRule1, name: 'Updated Name' }
-      vi.mocked(rulesApi.updateRule).mockResolvedValue(updatedRule)
+      vi.mocked(autoCategorizationApi.updateAutoCategorizationRule).mockResolvedValue(updatedRule)
 
-      const { result } = renderHook(() => useRules())
+      const { result } = renderHook(() => useAutoCategorizationRules())
 
       await waitFor(() => {
         expect(result.current.loading).toBe(false)
@@ -151,11 +151,11 @@ describe('useRules', () => {
     })
 
     it('should re-sort after priority change', async () => {
-      vi.mocked(rulesApi.fetchRules).mockResolvedValue([mockRule1, mockRule2])
+      vi.mocked(autoCategorizationApi.fetchAutoCategorizationRules).mockResolvedValue([mockRule1, mockRule2])
       const updatedRule2 = { ...mockRule2, priority: 20 }
-      vi.mocked(rulesApi.updateRule).mockResolvedValue(updatedRule2)
+      vi.mocked(autoCategorizationApi.updateAutoCategorizationRule).mockResolvedValue(updatedRule2)
 
-      const { result } = renderHook(() => useRules())
+      const { result } = renderHook(() => useAutoCategorizationRules())
 
       await waitFor(() => {
         expect(result.current.loading).toBe(false)
@@ -175,10 +175,10 @@ describe('useRules', () => {
 
   describe('Delete Rule', () => {
     it('should delete a rule from the list', async () => {
-      vi.mocked(rulesApi.fetchRules).mockResolvedValue([mockRule1, mockRule2])
-      vi.mocked(rulesApi.deleteRule).mockResolvedValue(undefined)
+      vi.mocked(autoCategorizationApi.fetchAutoCategorizationRules).mockResolvedValue([mockRule1, mockRule2])
+      vi.mocked(autoCategorizationApi.deleteAutoCategorizationRule).mockResolvedValue(undefined)
 
-      const { result } = renderHook(() => useRules())
+      const { result } = renderHook(() => useAutoCategorizationRules())
 
       await waitFor(() => {
         expect(result.current.loading).toBe(false)
@@ -190,7 +190,7 @@ describe('useRules', () => {
         await result.current.deleteRule('rule-1')
       })
 
-      expect(rulesApi.deleteRule).toHaveBeenCalledWith('rule-1')
+      expect(autoCategorizationApi.deleteAutoCategorizationRule).toHaveBeenCalledWith('rule-1')
       expect(result.current.rules).toHaveLength(1)
       expect(result.current.rules[0].id).toBe('rule-2')
     })
@@ -198,11 +198,11 @@ describe('useRules', () => {
 
   describe('Toggle Rule', () => {
     it('should toggle a rule enabled status', async () => {
-      vi.mocked(rulesApi.fetchRules).mockResolvedValue([mockRule1])
+      vi.mocked(autoCategorizationApi.fetchAutoCategorizationRules).mockResolvedValue([mockRule1])
       const disabledRule = { ...mockRule1, enabled: false }
-      vi.mocked(rulesApi.toggleRule).mockResolvedValue(disabledRule)
+      vi.mocked(autoCategorizationApi.toggleAutoCategorizationRule).mockResolvedValue(disabledRule)
 
-      const { result } = renderHook(() => useRules())
+      const { result } = renderHook(() => useAutoCategorizationRules())
 
       await waitFor(() => {
         expect(result.current.loading).toBe(false)
@@ -214,18 +214,18 @@ describe('useRules', () => {
         await result.current.toggleRule('rule-1', false)
       })
 
-      expect(rulesApi.toggleRule).toHaveBeenCalledWith('rule-1', false)
+      expect(autoCategorizationApi.toggleAutoCategorizationRule).toHaveBeenCalledWith('rule-1', false)
       expect(result.current.rules[0].enabled).toBe(false)
     })
   })
 
   describe('Refresh', () => {
     it('should refetch rules', async () => {
-      vi.mocked(rulesApi.fetchRules)
+      vi.mocked(autoCategorizationApi.fetchAutoCategorizationRules)
         .mockResolvedValueOnce([mockRule1])
         .mockResolvedValueOnce([mockRule1, mockRule2])
 
-      const { result } = renderHook(() => useRules())
+      const { result } = renderHook(() => useAutoCategorizationRules())
 
       await waitFor(() => {
         expect(result.current.loading).toBe(false)
@@ -237,7 +237,7 @@ describe('useRules', () => {
         await result.current.refresh()
       })
 
-      expect(rulesApi.fetchRules).toHaveBeenCalledTimes(2)
+      expect(autoCategorizationApi.fetchAutoCategorizationRules).toHaveBeenCalledTimes(2)
       expect(result.current.rules).toHaveLength(2)
     })
   })
