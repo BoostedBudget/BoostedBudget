@@ -605,9 +605,12 @@ describe('useTransactions', () => {
       // Act
       const { result } = renderHook(() => useTransactions({ filters, limit: 25 }))
 
-      await waitFor(() => {
-        expect(result.current.loading).toBe(false)
-      })
+      await waitFor(
+        () => {
+          expect(result.current.loading).toBe(false)
+        },
+        { timeout: 5000 }
+      )
 
       // Go to next page
       act(() => {

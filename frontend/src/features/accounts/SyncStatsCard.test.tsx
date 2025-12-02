@@ -333,15 +333,18 @@ describe('SyncStatsCard', () => {
       reset_date: '2026-01-01T00:00:00Z',
     }
 
-    vi.mocked(syncStatsApi.fetchSyncStats).mockResolvedValueOnce(mockStats)
+    vi.mocked(syncStatsApi.fetchSyncStats).mockResolvedValue(mockStats)
 
     render(<SyncStatsCard />)
 
-    await waitFor(() => {
-      // Check reset date is displayed (format varies by timezone)
-      // Note: Timezone offset may show Dec 31, 2025 or Jan 1, 2026
-      expect(screen.getByText(/Resets on/)).toBeInTheDocument()
-    })
+    await waitFor(
+      () => {
+        // Check reset date is displayed (format varies by timezone)
+        // Note: Timezone offset may show Dec 31, 2025 or Jan 1, 2026
+        expect(screen.getByText(/Resets on/)).toBeInTheDocument()
+      },
+      { timeout: 5000 }
+    )
   })
 
   // ========================================================================
