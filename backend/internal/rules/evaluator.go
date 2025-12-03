@@ -42,6 +42,7 @@ func NewConditionRegistry() *ConditionRegistry {
 	// Register other evaluators
 	r.evaluators[domain.ConditionPaymentChannel] = &PaymentChannelEvaluator{}
 	r.evaluators[domain.ConditionAccountID] = &AccountIDEvaluator{}
+	r.evaluators[domain.ConditionAccountType] = &AccountTypeEvaluator{}
 	r.evaluators[domain.ConditionExistingCategory] = &ExistingCategoryEvaluator{}
 	r.evaluators[domain.ConditionDateRange] = &DateRangeEvaluator{}
 
@@ -255,6 +256,10 @@ func (e *PaymentChannelEvaluator) Evaluate(tx *domain.Transaction, condition dom
 // AccountIDEvaluator checks if transaction belongs to specific account(s).
 type AccountIDEvaluator struct{}
 
+// AccountTypeEvaluator checks if transaction's account is of a specific type.
+// Uses OR logic: matches if account type is ANY of the specified types.
+type AccountTypeEvaluator struct{}
+
 func (e *AccountIDEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
 	if tx.AccountID == "" {
 		return false, nil
@@ -269,7 +274,29 @@ func (e *AccountIDEvaluator) Evaluate(tx *domain.Transaction, condition domain.R
 	return false, nil
 }
 
+func (e *AccountTypeEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
+	// Transaction must have an associated Account with a Type
+	if tx.Account == nil || tx.Account.Type == "" {
+		return false, nil
+	}
+
+	values := extractStringValues(condition.Value)
+	if len(values) == 0 {
+		return false, nil
+	}
+
+	// OR logic: match if account type is ANY of the specified types
+	txAccountType := strings.ToLower(tx.Account.Type)
+	for _, v := range values {
+		if strings.EqualFold(txAccountType, v) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // ExistingCategoryEvaluator checks transaction's existing (Plaid) category.
+// Only matches against the primary category (index 0) for consistency.
 type ExistingCategoryEvaluator struct{}
 
 func (e *ExistingCategoryEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
@@ -283,18 +310,21 @@ func (e *ExistingCategoryEvaluator) Evaluate(tx *domain.Transaction, condition d
 		return false, nil
 	}
 
+	// Must have at least one category (primary)
+	if len(categories) == 0 {
+		return false, nil
+	}
+
 	values := extractStringValues(condition.Value)
 	if len(values) == 0 {
 		return false, nil
 	}
 
-	// Check if any category matches any value (case insensitive)
-	for _, cat := range categories {
-		catLower := strings.ToLower(cat)
-		for _, v := range values {
-			if catLower == strings.ToLower(v) {
-				return true, nil
-			}
+	// Only check primary category (index 0) for consistency
+	primaryCategory := strings.ToLower(categories[0])
+	for _, v := range values {
+		if primaryCategory == strings.ToLower(v) {
+			return true, nil
 		}
 	}
 	return false, nil

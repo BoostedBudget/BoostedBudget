@@ -19,6 +19,7 @@ const (
 	ConditionAmountEquals       ConditionType = "amount_equals"
 	ConditionAmountRange        ConditionType = "amount_range"
 	ConditionAccountID          ConditionType = "account_id"
+	ConditionAccountType        ConditionType = "account_type"
 	ConditionPaymentChannel     ConditionType = "payment_channel"
 	ConditionExistingCategory   ConditionType = "existing_category"
 	ConditionDateRange          ConditionType = "date_range"
@@ -35,6 +36,7 @@ var validConditionTypes = map[ConditionType]bool{
 	ConditionAmountEquals:       true,
 	ConditionAmountRange:        true,
 	ConditionAccountID:          true,
+	ConditionAccountType:        true,
 	ConditionPaymentChannel:     true,
 	ConditionExistingCategory:   true,
 	ConditionDateRange:          true,

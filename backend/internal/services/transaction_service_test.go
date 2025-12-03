@@ -101,6 +101,14 @@ func (m *MockTransactionRepository) UpdateCategory(ctx context.Context, id strin
 	return args.Error(0)
 }
 
+func (m *MockTransactionRepository) GetDistinctPlaidCategories(ctx context.Context, userID string) ([]string, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]string), args.Error(1)
+}
+
 // TestTransactionService_ListTransactions_EnforcesMaxLimit tests that the service enforces a maximum limit of 100
 func TestTransactionService_ListTransactions_EnforcesMaxLimit(t *testing.T) {
 	mockRepo := new(MockTransactionRepository)
@@ -396,4 +404,60 @@ func containsSQLInjection(s string) bool {
 		}
 	}
 	return false
+}
+
+// TestTransactionService_GetDistinctPlaidCategories_Success tests successful retrieval of Plaid categories
+func TestTransactionService_GetDistinctPlaidCategories_Success(t *testing.T) {
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo)
+	ctx := context.Background()
+
+	userID := "user-123"
+	expectedCategories := []string{"Coffee Shop", "Groceries", "Restaurants"}
+
+	mockRepo.On("GetDistinctPlaidCategories", ctx, userID).Return(expectedCategories, nil)
+
+	categories, err := service.GetDistinctPlaidCategories(ctx, userID)
+
+	assert.NoError(t, err)
+	assert.Equal(t, expectedCategories, categories)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestTransactionService_GetDistinctPlaidCategories_Empty tests empty result
+func TestTransactionService_GetDistinctPlaidCategories_Empty(t *testing.T) {
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo)
+	ctx := context.Background()
+
+	userID := "user-no-transactions"
+
+	// Return nil from repo (no transactions)
+	mockRepo.On("GetDistinctPlaidCategories", ctx, userID).Return(nil, nil)
+
+	categories, err := service.GetDistinctPlaidCategories(ctx, userID)
+
+	assert.NoError(t, err)
+	// Should return empty slice, not nil, for consistent JSON serialization
+	assert.NotNil(t, categories)
+	assert.Empty(t, categories)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestTransactionService_GetDistinctPlaidCategories_Error tests error handling
+func TestTransactionService_GetDistinctPlaidCategories_Error(t *testing.T) {
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo)
+	ctx := context.Background()
+
+	userID := "user-123"
+
+	mockRepo.On("GetDistinctPlaidCategories", ctx, userID).Return(nil, errors.New("database error"))
+
+	categories, err := service.GetDistinctPlaidCategories(ctx, userID)
+
+	assert.Error(t, err)
+	assert.Nil(t, categories)
+	assert.Contains(t, err.Error(), "failed to get distinct plaid categories")
+	mockRepo.AssertExpectations(t)
 }

@@ -510,10 +510,10 @@ func TestExistingCategoryEvaluator_Evaluate(t *testing.T) {
 			want:      true,
 		},
 		{
-			name:      "matches subcategory",
+			name:      "does not match secondary category (primary only)",
 			category:  []string{"Food and Drink", "Restaurants"},
 			condition: domain.RuleCondition{Type: domain.ConditionExistingCategory, Value: "restaurants"},
-			want:      true,
+			want:      false, // Changed: no longer matches secondary
 		},
 		{
 			name:      "matches one of multiple values",
@@ -532,6 +532,12 @@ func TestExistingCategoryEvaluator_Evaluate(t *testing.T) {
 			category:  nil,
 			condition: domain.RuleCondition{Type: domain.ConditionExistingCategory, Value: "Food"},
 			want:      false,
+		},
+		{
+			name:      "case insensitive match on primary",
+			category:  []string{"Food and Drink", "Restaurants"},
+			condition: domain.RuleCondition{Type: domain.ConditionExistingCategory, Value: "food and drink"},
+			want:      true,
 		},
 	}
 
@@ -628,6 +634,77 @@ func TestDateRangeEvaluator_Evaluate(t *testing.T) {
 			got, err := evaluator.Evaluate(tx, tt.condition)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Evaluate() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("Evaluate() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAccountTypeEvaluator_Evaluate(t *testing.T) {
+	evaluator := &AccountTypeEvaluator{}
+
+	tests := []struct {
+		name        string
+		accountType string
+		condition   domain.RuleCondition
+		want        bool
+	}{
+		{
+			name:        "single type match - depository",
+			accountType: "depository",
+			condition:   domain.RuleCondition{Type: domain.ConditionAccountType, Value: "depository"},
+			want:        true,
+		},
+		{
+			name:        "single type no match",
+			accountType: "credit",
+			condition:   domain.RuleCondition{Type: domain.ConditionAccountType, Value: "depository"},
+			want:        false,
+		},
+		{
+			name:        "multiple types OR logic - matches first",
+			accountType: "depository",
+			condition:   domain.RuleCondition{Type: domain.ConditionAccountType, Value: []interface{}{"depository", "credit"}},
+			want:        true,
+		},
+		{
+			name:        "multiple types OR logic - matches second",
+			accountType: "credit",
+			condition:   domain.RuleCondition{Type: domain.ConditionAccountType, Value: []interface{}{"depository", "credit"}},
+			want:        true,
+		},
+		{
+			name:        "multiple types OR logic - no match",
+			accountType: "loan",
+			condition:   domain.RuleCondition{Type: domain.ConditionAccountType, Value: []interface{}{"depository", "credit"}},
+			want:        false,
+		},
+		{
+			name:        "case insensitive match",
+			accountType: "DEPOSITORY",
+			condition:   domain.RuleCondition{Type: domain.ConditionAccountType, Value: "depository"},
+			want:        true,
+		},
+		{
+			name:        "nil account returns false",
+			accountType: "", // will create nil Account
+			condition:   domain.RuleCondition{Type: domain.ConditionAccountType, Value: "depository"},
+			want:        false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction("MERCHANT", 10.0, "in store", nil)
+			if tt.accountType != "" {
+				tx.Account = &domain.Account{Type: tt.accountType}
+			}
+			got, err := evaluator.Evaluate(tx, tt.condition)
+			if err != nil {
+				t.Errorf("Evaluate() error = %v", err)
 				return
 			}
 			if got != tt.want {

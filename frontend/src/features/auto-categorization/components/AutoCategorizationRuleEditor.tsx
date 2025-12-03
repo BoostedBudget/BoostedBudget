@@ -132,6 +132,7 @@ export interface AutoCategorizationRuleEditorProps {
   onSave: (data: CreateRuleRequest | UpdateRuleRequest) => Promise<void>
   onCancel: () => void
   categories: string[][]
+  plaidCategories?: string[] // Plaid categories from user's transactions for "existing_category" condition
   accounts?: Account[] // Optional accounts list for account_id dropdown
 }
 
@@ -150,7 +151,7 @@ const DEFAULT_CONDITION: RuleCondition = {
   value: '',
 }
 
-export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, categories, accounts = [] }: AutoCategorizationRuleEditorProps) {
+export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, categories, plaidCategories = [], accounts = [] }: AutoCategorizationRuleEditorProps) {
   // Form state
   const [name, setName] = useState(rule?.name || '')
   const [description, setDescription] = useState(rule?.description || '')
@@ -373,7 +374,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
             }}
             onBlur={() => validateSingleCondition(index, conditions[index])}
             disabled={saving}
-            placeholder="Enter amount"
+            placeholder="$0.00 (supports decimals)"
             aria-label="Condition value"
           />
         )
@@ -390,7 +391,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
               onChange={(e) => updateAmountRangeValue(index, 'min', e.target.value)}
               onBlur={() => validateSingleCondition(index, conditions[index])}
               disabled={saving}
-              placeholder="Min"
+              placeholder="$0.00"
               aria-label="Minimum amount"
             />
             <span className="auto-categorization-rule-editor__range-separator">to</span>
@@ -402,7 +403,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
               onChange={(e) => updateAmountRangeValue(index, 'max', e.target.value)}
               onBlur={() => validateSingleCondition(index, conditions[index])}
               disabled={saving}
-              placeholder="Max"
+              placeholder="$0.00"
               aria-label="Maximum amount"
             />
           </div>
@@ -437,14 +438,15 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
       }
 
       case 'category_select':
+        // Use Plaid categories from user's transactions for "existing_category" condition
         return (
           <SearchableSelect
-            options={flatCategories.map(cat => ({ value: cat, label: cat }))}
+            options={plaidCategories.map(cat => ({ value: cat, label: cat }))}
             value={String(condition.value || '') || null}
             onChange={(value) => updateCondition(index, { value: value || '' })}
-            placeholder="Search categories..."
+            placeholder="Search Plaid categories..."
             disabled={saving}
-            aria-label="Select category"
+            aria-label="Select Plaid category"
             allowClear
             clearLabel="Select a category"
           />
@@ -472,6 +474,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
         const selectedTypes = (Array.isArray(condition.value) ? condition.value : []) as string[]
         return (
           <div className="auto-categorization-rule-editor__checkbox-group">
+            <span className="auto-categorization-rule-editor__match-label">Match ANY of:</span>
             {ACCOUNT_TYPES.map((type) => (
               <label key={type.value} className="auto-categorization-rule-editor__checkbox-label">
                 <input
