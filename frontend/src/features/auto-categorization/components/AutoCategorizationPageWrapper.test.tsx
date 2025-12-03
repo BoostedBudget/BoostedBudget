@@ -96,7 +96,7 @@ describe('AutoCategorizationPageWrapper', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(categoriesApi.fetchCategories).mockResolvedValue(mockCategories)
-    vi.mocked(plaidApi.fetchAccounts).mockResolvedValue({ accounts: mockAccounts })
+    vi.mocked(plaidApi.fetchAccounts).mockResolvedValue({ accounts: mockAccounts, total_count: mockAccounts.length })
     vi.mocked(useProfileHook.useProfile).mockReturnValue({
       user: mockUser,
       loading: false,
