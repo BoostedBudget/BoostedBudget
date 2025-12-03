@@ -8,17 +8,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { AutoCategorizationPageWrapper } from './AutoCategorizationPageWrapper'
 import * as categoriesApi from '../../categories/api/categoriesApi'
+import * as plaidApi from '../../accounts/api/plaidApi'
 import * as useProfileHook from '../../profile/hooks/useProfile'
 import * as useSubscriptionTiersHook from '../../subscription/hooks/useSubscriptionTiers'
+import type { Account } from '../../accounts/types'
 
 // Mock dependencies
 vi.mock('../../categories/api/categoriesApi')
+vi.mock('../../accounts/api/plaidApi')
 vi.mock('../../profile/hooks/useProfile')
 vi.mock('../../subscription/hooks/useSubscriptionTiers')
 vi.mock('./AutoCategorizationPage', () => ({
-  AutoCategorizationPage: ({ categories, maxRules, currentTier }: { categories: string[][], maxRules?: number, currentTier?: string }) => (
+  AutoCategorizationPage: ({ categories, accounts, maxRules, currentTier }: { categories: string[][], accounts?: Account[], maxRules?: number, currentTier?: string }) => (
     <div data-testid="auto-categorization-page">
       <span data-testid="categories-count">{categories.length}</span>
+      <span data-testid="accounts-count">{accounts?.length ?? 0}</span>
       <span data-testid="max-rules">{maxRules ?? 'undefined'}</span>
       <span data-testid="current-tier">{currentTier ?? 'undefined'}</span>
     </div>
@@ -29,6 +33,11 @@ describe('AutoCategorizationPageWrapper', () => {
   const mockCategories = [
     { id: '1', user_id: 'user-1', name: 'Coffee', parent_category: 'Food & Drink', color: null, icon: null, usage_count: 5, created_at: '2025-01-01', updated_at: '2025-01-01' },
     { id: '2', user_id: 'user-1', name: 'Groceries', parent_category: null, color: null, icon: null, usage_count: 10, created_at: '2025-01-01', updated_at: '2025-01-01' },
+  ]
+
+  const mockAccounts: Account[] = [
+    { id: 'acc-1', name: 'Checking', type: 'depository', mask: '1234', linked_item_id: 'item-1', user_id: 'user-1', plaid_account_id: 'plaid-1', currency_code: 'USD', created_at: '2025-01-01', updated_at: '2025-01-01' },
+    { id: 'acc-2', name: 'Savings', type: 'depository', mask: '5678', linked_item_id: 'item-1', user_id: 'user-1', plaid_account_id: 'plaid-2', currency_code: 'USD', created_at: '2025-01-01', updated_at: '2025-01-01' },
   ]
 
   const mockUser = {
@@ -87,6 +96,7 @@ describe('AutoCategorizationPageWrapper', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(categoriesApi.fetchCategories).mockResolvedValue(mockCategories)
+    vi.mocked(plaidApi.fetchAccounts).mockResolvedValue({ accounts: mockAccounts })
     vi.mocked(useProfileHook.useProfile).mockReturnValue({
       user: mockUser,
       loading: false,
@@ -163,7 +173,7 @@ describe('AutoCategorizationPageWrapper', () => {
     expect(screen.getByTestId('max-rules')).toHaveTextContent('1')
   })
 
-  it('should handle category fetch error gracefully', async () => {
+  it('should handle data fetch error gracefully', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.mocked(categoriesApi.fetchCategories).mockRejectedValue(new Error('Network error'))
 
@@ -173,11 +183,24 @@ describe('AutoCategorizationPageWrapper', () => {
       expect(screen.getByTestId('auto-categorization-page')).toBeInTheDocument()
     })
 
-    // Should still render with empty categories
+    // Should still render with empty categories and accounts
     expect(screen.getByTestId('categories-count')).toHaveTextContent('0')
-    expect(consoleError).toHaveBeenCalledWith('Failed to load categories:', expect.any(Error))
+    expect(screen.getByTestId('accounts-count')).toHaveTextContent('0')
+    expect(consoleError).toHaveBeenCalledWith('Failed to load data:', expect.any(Error))
 
     consoleError.mockRestore()
+  })
+
+  it('should fetch both categories and accounts', async () => {
+    render(<AutoCategorizationPageWrapper />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('auto-categorization-page')).toBeInTheDocument()
+    })
+
+    expect(categoriesApi.fetchCategories).toHaveBeenCalledTimes(1)
+    expect(plaidApi.fetchAccounts).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('accounts-count')).toHaveTextContent('2')
   })
 
   it('should handle undefined tiers gracefully', async () => {
