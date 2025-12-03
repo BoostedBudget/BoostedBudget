@@ -54,7 +54,7 @@ type TransactionService interface {
 	UpdateTransactionCategory(ctx context.Context, userID, transactionID string, category []string) (*domain.Transaction, error)
 
 	// GetDistinctPlaidCategories returns distinct Plaid category names from user's transactions
-	// Prefers secondary category level for better granularity (e.g., "Restaurants" instead of "Food and Drink")
+	// Uses primary category level (e.g., "Food and Drink") for consistency across the application
 	// Used by rule editor to populate "existing_category" dropdown
 	GetDistinctPlaidCategories(ctx context.Context, userID string) ([]string, error)
 }

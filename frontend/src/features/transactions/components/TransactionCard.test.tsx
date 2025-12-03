@@ -80,36 +80,36 @@ describe('TransactionCard', () => {
   })
 
   describe('Category Display', () => {
-    it('should display secondary category from JSON string for better granularity', () => {
-      // Use a transaction without "Coffee" in merchant name to avoid confusion
+    it('should display primary category from JSON string for consistency', () => {
+      // Use a transaction without "Food" in merchant name to avoid confusion
       const transactionWithCategories: Transaction = {
         ...mockTransaction,
         merchant_name: 'Local Restaurant',
         category: '["Food and Drink", "Restaurants"]',
       }
       render(<TransactionCard transaction={transactionWithCategories} />)
-      // Should show secondary category "Restaurants" instead of primary "Food and Drink"
-      expect(screen.getByText(/Restaurants/i)).toBeInTheDocument()
+      // Should show primary category "Food and Drink" for consistency
+      expect(screen.getByText(/Food and Drink/i)).toBeInTheDocument()
     })
 
-    it('should fallback to primary category when secondary is not available', () => {
+    it('should display primary category when only one category exists', () => {
       const transactionWithPrimaryOnly: Transaction = {
         ...mockTransaction,
-        category: '["Food and Drink"]', // Only primary category
+        category: '["Travel"]', // Only primary category
       }
 
       render(<TransactionCard transaction={transactionWithPrimaryOnly} />)
-      expect(screen.getByText(/Food and Drink/i)).toBeInTheDocument()
+      expect(screen.getByText(/Travel/i)).toBeInTheDocument()
     })
 
-    it('should fallback to primary when secondary is empty string', () => {
-      const transactionWithEmptySecondary: Transaction = {
+    it('should display primary category even when secondary exists', () => {
+      const transactionWithSecondary: Transaction = {
         ...mockTransaction,
-        category: '["Food and Drink", ""]', // Empty secondary
+        category: '["Shops", "Clothing"]', // Has secondary but should show primary
       }
 
-      render(<TransactionCard transaction={transactionWithEmptySecondary} />)
-      expect(screen.getByText(/Food and Drink/i)).toBeInTheDocument()
+      render(<TransactionCard transaction={transactionWithSecondary} />)
+      expect(screen.getByText(/Shops/i)).toBeInTheDocument()
     })
 
     it('should handle null category gracefully', () => {
@@ -151,9 +151,9 @@ describe('TransactionCard', () => {
       }
 
       render(<TransactionCard transaction={transactionWithOverride} />)
-      // Should show override secondary category "Groceries", not original "Restaurants"
-      expect(screen.getByText(/Groceries/i)).toBeInTheDocument()
-      expect(screen.queryByText(/Restaurants/i)).not.toBeInTheDocument()
+      // Should show override primary category "Shopping", not original "Food and Drink"
+      expect(screen.getByText(/Shopping/i)).toBeInTheDocument()
+      expect(screen.queryByText(/Food and Drink/i)).not.toBeInTheDocument()
     })
 
     it('should fall back to category when category_override is null', () => {
@@ -165,8 +165,8 @@ describe('TransactionCard', () => {
       }
 
       render(<TransactionCard transaction={transactionWithoutOverride} />)
-      // Should show secondary category "Restaurants"
-      expect(screen.getByText(/Restaurants/i)).toBeInTheDocument()
+      // Should show primary category "Food and Drink"
+      expect(screen.getByText(/Food and Drink/i)).toBeInTheDocument()
     })
 
     it('should fall back to category when category_override is empty array and category_source is NOT manual', () => {
@@ -179,8 +179,8 @@ describe('TransactionCard', () => {
       }
 
       render(<TransactionCard transaction={transactionWithEmptyOverride} />)
-      // Should show secondary category "Restaurants"
-      expect(screen.getByText(/Restaurants/i)).toBeInTheDocument()
+      // Should show primary category "Food and Drink"
+      expect(screen.getByText(/Food and Drink/i)).toBeInTheDocument()
     })
   })
 
@@ -558,8 +558,8 @@ describe('TransactionCard', () => {
       }
 
       render(<TransactionCard transaction={multiCategoryTransaction} />)
-      // Should show secondary category for better granularity
-      expect(screen.getByText(/Restaurants/i)).toBeInTheDocument()
+      // Should show primary category for consistency
+      expect(screen.getByText(/Food and Drink/i)).toBeInTheDocument()
     })
   })
 })

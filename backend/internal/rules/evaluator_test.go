@@ -510,10 +510,10 @@ func TestExistingCategoryEvaluator_Evaluate(t *testing.T) {
 			want:      true,
 		},
 		{
-			name:      "matches subcategory",
+			name:      "does not match secondary category (primary only)",
 			category:  []string{"Food and Drink", "Restaurants"},
 			condition: domain.RuleCondition{Type: domain.ConditionExistingCategory, Value: "restaurants"},
-			want:      true,
+			want:      false, // Changed: no longer matches secondary
 		},
 		{
 			name:      "matches one of multiple values",
@@ -532,6 +532,12 @@ func TestExistingCategoryEvaluator_Evaluate(t *testing.T) {
 			category:  nil,
 			condition: domain.RuleCondition{Type: domain.ConditionExistingCategory, Value: "Food"},
 			want:      false,
+		},
+		{
+			name:      "case insensitive match on primary",
+			category:  []string{"Food and Drink", "Restaurants"},
+			condition: domain.RuleCondition{Type: domain.ConditionExistingCategory, Value: "food and drink"},
+			want:      true,
 		},
 	}
 

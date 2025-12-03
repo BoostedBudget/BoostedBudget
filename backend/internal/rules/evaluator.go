@@ -296,6 +296,7 @@ func (e *AccountTypeEvaluator) Evaluate(tx *domain.Transaction, condition domain
 }
 
 // ExistingCategoryEvaluator checks transaction's existing (Plaid) category.
+// Only matches against the primary category (index 0) for consistency.
 type ExistingCategoryEvaluator struct{}
 
 func (e *ExistingCategoryEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
@@ -309,18 +310,21 @@ func (e *ExistingCategoryEvaluator) Evaluate(tx *domain.Transaction, condition d
 		return false, nil
 	}
 
+	// Must have at least one category (primary)
+	if len(categories) == 0 {
+		return false, nil
+	}
+
 	values := extractStringValues(condition.Value)
 	if len(values) == 0 {
 		return false, nil
 	}
 
-	// Check if any category matches any value (case insensitive)
-	for _, cat := range categories {
-		catLower := strings.ToLower(cat)
-		for _, v := range values {
-			if catLower == strings.ToLower(v) {
-				return true, nil
-			}
+	// Only check primary category (index 0) for consistency
+	primaryCategory := strings.ToLower(categories[0])
+	for _, v := range values {
+		if primaryCategory == strings.ToLower(v) {
+			return true, nil
 		}
 	}
 	return false, nil
