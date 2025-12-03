@@ -10,17 +10,19 @@ import { useAutoCategorizationRules } from '../hooks/useAutoCategorizationRules'
 import { AutoCategorizationRuleCard } from './AutoCategorizationRuleCard'
 import { AutoCategorizationRuleEditor } from './AutoCategorizationRuleEditor'
 import type { CategorizationRule, CreateRuleRequest, UpdateRuleRequest } from '../types'
+import type { Account } from '../../accounts/types'
 import './AutoCategorizationPage.css'
 
 export interface AutoCategorizationPageProps {
   categories: string[][]
+  accounts?: Account[]
   maxRules?: number
   currentTier?: string
 }
 
 type EditorMode = 'create' | 'edit' | null
 
-export function AutoCategorizationPage({ categories, maxRules, currentTier }: AutoCategorizationPageProps) {
+export function AutoCategorizationPage({ categories, accounts = [], maxRules, currentTier }: AutoCategorizationPageProps) {
   const {
     rules,
     loading,
@@ -120,6 +122,7 @@ export function AutoCategorizationPage({ categories, maxRules, currentTier }: Au
           onSave={handleEditorSave}
           onCancel={handleEditorCancel}
           categories={categories}
+          accounts={accounts}
         />
       </div>
     )

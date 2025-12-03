@@ -18,6 +18,8 @@ import type {
   DateRangeValue,
 } from '../types'
 import { CONDITION_TYPE_LABELS } from '../types'
+import { SearchableSelect } from '../../../shared/components/SearchableSelect'
+import type { Account } from '../../accounts/types'
 import './AutoCategorizationRuleEditor.css'
 
 // Account types available for selection
@@ -122,12 +124,6 @@ function validateCondition(condition: RuleCondition): string | null {
   }
 
   return null
-}
-
-export interface Account {
-  id: string
-  name: string
-  type: string
 }
 
 export interface AutoCategorizationRuleEditorProps {
@@ -442,38 +438,34 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
 
       case 'category_select':
         return (
-          <select
-            className="auto-categorization-rule-editor__select"
-            value={String(condition.value || '')}
-            onChange={(e) => updateCondition(index, { value: e.target.value })}
+          <SearchableSelect
+            options={flatCategories.map(cat => ({ value: cat, label: cat }))}
+            value={String(condition.value || '') || null}
+            onChange={(value) => updateCondition(index, { value: value || '' })}
+            placeholder="Search categories..."
             disabled={saving}
             aria-label="Select category"
-          >
-            <option value="">Select a category</option>
-            {flatCategories.map((cat) => (
-              <option key={cat} value={cat}>
-                {cat}
-              </option>
-            ))}
-          </select>
+            allowClear
+            clearLabel="Select a category"
+          />
         )
 
       case 'account_select':
         return (
-          <select
-            className="auto-categorization-rule-editor__select"
-            value={String(condition.value || '')}
-            onChange={(e) => updateCondition(index, { value: e.target.value })}
+          <SearchableSelect
+            options={accounts.map(acc => ({
+              value: acc.id,
+              label: acc.name,
+              sublabel: `${acc.type}${acc.mask ? ` ••••${acc.mask}` : ''}`
+            }))}
+            value={String(condition.value || '') || null}
+            onChange={(value) => updateCondition(index, { value: value || '' })}
+            placeholder="Search accounts..."
             disabled={saving}
             aria-label="Select account"
-          >
-            <option value="">Select an account</option>
-            {accounts.map((account) => (
-              <option key={account.id} value={account.id}>
-                {account.name} ({account.type})
-              </option>
-            ))}
-          </select>
+            allowClear
+            clearLabel="Select an account"
+          />
         )
 
       case 'account_type_select': {
@@ -675,23 +667,16 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
           <label htmlFor="target-category" className="auto-categorization-rule-editor__label">
             Target Category
           </label>
-          <select
-            id="target-category"
-            className="auto-categorization-rule-editor__select"
-            value={categoryValue}
-            onChange={(e) => handleCategoryChange(e.target.value)}
+          <SearchableSelect
+            options={flatCategories.map(cat => ({ value: cat, label: cat }))}
+            value={categoryValue || null}
+            onChange={(value) => handleCategoryChange(value || '')}
+            placeholder="Search categories..."
             disabled={saving}
-          >
-            <option value="">No category change</option>
-            {categories.map((cat) => {
-              const value = cat.join(' > ')
-              return (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              )
-            })}
-          </select>
+            aria-label="Target category"
+            allowClear
+            clearLabel="No category change"
+          />
         </div>
 
         {/* Tags */}
