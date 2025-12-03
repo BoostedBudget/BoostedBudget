@@ -1029,3 +1029,94 @@ func TestTransactionRepository_UpdateCategory_PreservesOriginalCategory(t *testi
 	err = mock.ExpectationsWereMet()
 	assert.NoError(t, err)
 }
+
+// TestTransactionRepository_GetDistinctPlaidCategories_Success tests retrieving distinct Plaid categories
+// Returns secondary category level when available, otherwise primary
+func TestTransactionRepository_GetDistinctPlaidCategories_Success(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-123"
+
+	// Mock result rows - distinct secondary categories extracted from JSON arrays
+	rows := sqlmock.NewRows([]string{"cat"}).
+		AddRow("Coffee Shop").
+		AddRow("Restaurants").
+		AddRow("Groceries")
+
+	// Expect SELECT DISTINCT query that extracts secondary category (index 1) when available
+	mock.ExpectQuery("SELECT DISTINCT").
+		WithArgs(userID).
+		WillReturnRows(rows)
+
+	categories, err := repo.GetDistinctPlaidCategories(ctx, userID)
+	assert.NoError(t, err)
+	assert.Len(t, categories, 3)
+	assert.Contains(t, categories, "Coffee Shop")
+	assert.Contains(t, categories, "Restaurants")
+	assert.Contains(t, categories, "Groceries")
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetDistinctPlaidCategories_Empty tests when user has no categorized transactions
+func TestTransactionRepository_GetDistinctPlaidCategories_Empty(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-no-transactions"
+
+	// Mock empty result
+	rows := sqlmock.NewRows([]string{"cat"})
+
+	mock.ExpectQuery("SELECT DISTINCT").
+		WithArgs(userID).
+		WillReturnRows(rows)
+
+	categories, err := repo.GetDistinctPlaidCategories(ctx, userID)
+	assert.NoError(t, err)
+	assert.Empty(t, categories)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetDistinctPlaidCategories_FallbackToPrimary tests fallback to primary category
+// when secondary is not available (single-element arrays)
+func TestTransactionRepository_GetDistinctPlaidCategories_FallbackToPrimary(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-123"
+
+	// Mock result - includes primary category fallback
+	rows := sqlmock.NewRows([]string{"cat"}).
+		AddRow("Food and Drink"). // Primary category (no secondary available)
+		AddRow("Restaurants")     // Secondary category
+
+	mock.ExpectQuery("SELECT DISTINCT").
+		WithArgs(userID).
+		WillReturnRows(rows)
+
+	categories, err := repo.GetDistinctPlaidCategories(ctx, userID)
+	assert.NoError(t, err)
+	assert.Len(t, categories, 2)
+	assert.Contains(t, categories, "Food and Drink")
+	assert.Contains(t, categories, "Restaurants")
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}

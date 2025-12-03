@@ -25,6 +25,8 @@ function formatAmount(amount: number): string {
 
 /**
  * Parse category from JSON string
+ * Prefers secondary category (index 1) for better granularity,
+ * falls back to primary (index 0) if secondary is unavailable
  */
 function parseCategory(categoryJson: string | null | undefined): string {
   if (!categoryJson) return 'Uncategorized'
@@ -32,7 +34,12 @@ function parseCategory(categoryJson: string | null | undefined): string {
   try {
     const categories = JSON.parse(categoryJson)
     if (Array.isArray(categories) && categories.length > 0) {
-      return categories[0] // Return primary category
+      // Prefer secondary category (index 1) for better granularity
+      // e.g., "Restaurants" instead of "Food and Drink"
+      if (categories.length > 1 && categories[1]) {
+        return categories[1]
+      }
+      return categories[0] // Fallback to primary
     }
     return 'Uncategorized'
   } catch {

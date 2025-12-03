@@ -52,6 +52,11 @@ type TransactionService interface {
 	// UpdateTransactionCategory updates the category override on a transaction
 	// Returns the updated transaction
 	UpdateTransactionCategory(ctx context.Context, userID, transactionID string, category []string) (*domain.Transaction, error)
+
+	// GetDistinctPlaidCategories returns distinct Plaid category names from user's transactions
+	// Prefers secondary category level for better granularity (e.g., "Restaurants" instead of "Food and Drink")
+	// Used by rule editor to populate "existing_category" dropdown
+	GetDistinctPlaidCategories(ctx context.Context, userID string) ([]string, error)
 }
 
 // TransactionListResponse contains paginated transaction results with metadata
@@ -263,4 +268,19 @@ func (s *transactionService) UpdateTransactionCategory(ctx context.Context, user
 	tx.CategoryOverrideDate = &now
 
 	return tx, nil
+}
+
+// GetDistinctPlaidCategories returns distinct Plaid categories from user's transactions
+func (s *transactionService) GetDistinctPlaidCategories(ctx context.Context, userID string) ([]string, error) {
+	categories, err := s.repo.GetDistinctPlaidCategories(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get distinct plaid categories: %w", err)
+	}
+
+	// Return empty slice instead of nil for consistent JSON serialization
+	if categories == nil {
+		return []string{}, nil
+	}
+
+	return categories, nil
 }

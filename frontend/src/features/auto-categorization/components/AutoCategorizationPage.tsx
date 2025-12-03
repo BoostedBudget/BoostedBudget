@@ -15,6 +15,7 @@ import './AutoCategorizationPage.css'
 
 export interface AutoCategorizationPageProps {
   categories: string[][]
+  plaidCategories?: string[]  // Plaid categories from user's transactions for "existing_category" condition
   accounts?: Account[]
   maxRules?: number
   currentTier?: string
@@ -22,7 +23,7 @@ export interface AutoCategorizationPageProps {
 
 type EditorMode = 'create' | 'edit' | null
 
-export function AutoCategorizationPage({ categories, accounts = [], maxRules, currentTier }: AutoCategorizationPageProps) {
+export function AutoCategorizationPage({ categories, plaidCategories = [], accounts = [], maxRules, currentTier }: AutoCategorizationPageProps) {
   const {
     rules,
     loading,
@@ -122,6 +123,7 @@ export function AutoCategorizationPage({ categories, accounts = [], maxRules, cu
           onSave={handleEditorSave}
           onCancel={handleEditorCancel}
           categories={categories}
+          plaidCategories={plaidCategories}
           accounts={accounts}
         />
       </div>
