@@ -47,7 +47,7 @@ export async function deleteCategory(categoryId: string): Promise<void> {
 
 /**
  * Fetch distinct Plaid categories from user's transactions
- * Uses secondary category level for better granularity (e.g., "Restaurants" instead of "Food and Drink")
+ * Uses primary category level (e.g., "Food and Drink") for consistency across the application
  * GET /api/v1/categories/plaid
  */
 export async function fetchPlaidCategories(): Promise<string[]> {

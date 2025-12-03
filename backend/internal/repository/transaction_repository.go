@@ -767,20 +767,13 @@ func (r *transactionRepository) UpdateCategory(ctx context.Context, id string, u
 }
 
 // GetDistinctPlaidCategories returns distinct Plaid category names for a user's transactions
-// Uses secondary category (index 1) when available for better granularity,
-// falls back to primary category (index 0) when secondary is not available
+// Uses primary category (index 0) for consistency across the application
 func (r *transactionRepository) GetDistinctPlaidCategories(ctx context.Context, userID string) ([]string, error) {
-	// Query extracts the best category from JSONB array:
-	// - Prefers secondary (index 1) for granularity (e.g., "Restaurants" instead of "Food and Drink")
-	// - Falls back to primary (index 0) if secondary not available
+	// Query extracts the primary category (index 0) from JSONB array
+	// - Uses index 0 consistently (e.g., "Food and Drink")
 	// - Filters out NULL categories and invalid JSON
 	query := `
-		SELECT DISTINCT
-			CASE
-				WHEN jsonb_array_length(category::jsonb) > 1 AND (category::jsonb)->>1 IS NOT NULL AND (category::jsonb)->>1 != ''
-				THEN (category::jsonb)->>1
-				ELSE (category::jsonb)->>0
-			END as cat
+		SELECT DISTINCT (category::jsonb)->>0 as cat
 		FROM transactions
 		WHERE user_id = $1
 		  AND category IS NOT NULL

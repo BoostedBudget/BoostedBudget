@@ -243,7 +243,7 @@ func (h *TransactionHandler) UpdateTransactionCategory(c echo.Context) error {
 
 // GetPlaidCategories handles GET /api/v1/categories/plaid
 // Returns distinct Plaid category names from the user's transactions
-// Uses secondary category level for better granularity (e.g., "Restaurants" instead of "Food and Drink")
+// Uses primary category level (e.g., "Food and Drink") for consistency across the application
 // Response: JSON array of category strings, sorted alphabetically
 func (h *TransactionHandler) GetPlaidCategories(c echo.Context) error {
 	userID, err := middleware.GetUserID(c)
