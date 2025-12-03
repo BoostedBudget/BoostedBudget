@@ -305,6 +305,7 @@ func main() {
 		// Category routes (Issue #345: Custom category management)
 		api.POST("/categories", categoryHandler.CreateCategory)
 		api.GET("/categories", categoryHandler.GetUserCategories)
+		api.GET("/categories/plaid", transactionHandler.GetPlaidCategories) // Issue #397: Plaid categories for rule editor
 		api.GET("/categories/:id", categoryHandler.GetCategoryByID)
 		api.PUT("/categories/:id", categoryHandler.UpdateCategory)
 		api.DELETE("/categories/:id", categoryHandler.DeleteCategory)

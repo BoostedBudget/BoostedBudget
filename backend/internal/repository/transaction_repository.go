@@ -72,6 +72,12 @@ type TransactionRepository interface {
 	// UpdateCategory updates the category override for a transaction
 	// Used when manually editing transaction category
 	UpdateCategory(ctx context.Context, id string, userID string, categoryOverride []string, categorySource domain.CategorySource) error
+
+	// GetDistinctPlaidCategories returns distinct Plaid category names for a user's transactions
+	// Prefers secondary category (index 1) when available for better granularity
+	// Falls back to primary category (index 0) when secondary is not available
+	// Used by the rule editor to populate the "existing_category" dropdown
+	GetDistinctPlaidCategories(ctx context.Context, userID string) ([]string, error)
 }
 
 // transactionRepository implements TransactionRepository using PostgreSQL
@@ -758,4 +764,52 @@ func (r *transactionRepository) UpdateCategory(ctx context.Context, id string, u
 	}
 
 	return nil
+}
+
+// GetDistinctPlaidCategories returns distinct Plaid category names for a user's transactions
+// Uses secondary category (index 1) when available for better granularity,
+// falls back to primary category (index 0) when secondary is not available
+func (r *transactionRepository) GetDistinctPlaidCategories(ctx context.Context, userID string) ([]string, error) {
+	// Query extracts the best category from JSONB array:
+	// - Prefers secondary (index 1) for granularity (e.g., "Restaurants" instead of "Food and Drink")
+	// - Falls back to primary (index 0) if secondary not available
+	// - Filters out NULL categories and invalid JSON
+	query := `
+		SELECT DISTINCT
+			CASE
+				WHEN jsonb_array_length(category::jsonb) > 1 AND (category::jsonb)->>1 IS NOT NULL AND (category::jsonb)->>1 != ''
+				THEN (category::jsonb)->>1
+				ELSE (category::jsonb)->>0
+			END as cat
+		FROM transactions
+		WHERE user_id = $1
+		  AND category IS NOT NULL
+		  AND category != 'null'
+		  AND category != ''
+		  AND category::text LIKE '[%'
+		ORDER BY cat
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query distinct plaid categories: %w", err)
+	}
+	defer rows.Close()
+
+	var categories []string
+	for rows.Next() {
+		var cat sql.NullString
+		if err := rows.Scan(&cat); err != nil {
+			return nil, fmt.Errorf("failed to scan category: %w", err)
+		}
+		if cat.Valid && cat.String != "" {
+			categories = append(categories, cat.String)
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating category rows: %w", err)
+	}
+
+	return categories, nil
 }

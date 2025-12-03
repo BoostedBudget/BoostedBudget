@@ -637,6 +637,77 @@ func TestDateRangeEvaluator_Evaluate(t *testing.T) {
 	}
 }
 
+func TestAccountTypeEvaluator_Evaluate(t *testing.T) {
+	evaluator := &AccountTypeEvaluator{}
+
+	tests := []struct {
+		name        string
+		accountType string
+		condition   domain.RuleCondition
+		want        bool
+	}{
+		{
+			name:        "single type match - depository",
+			accountType: "depository",
+			condition:   domain.RuleCondition{Type: domain.ConditionAccountType, Value: "depository"},
+			want:        true,
+		},
+		{
+			name:        "single type no match",
+			accountType: "credit",
+			condition:   domain.RuleCondition{Type: domain.ConditionAccountType, Value: "depository"},
+			want:        false,
+		},
+		{
+			name:        "multiple types OR logic - matches first",
+			accountType: "depository",
+			condition:   domain.RuleCondition{Type: domain.ConditionAccountType, Value: []interface{}{"depository", "credit"}},
+			want:        true,
+		},
+		{
+			name:        "multiple types OR logic - matches second",
+			accountType: "credit",
+			condition:   domain.RuleCondition{Type: domain.ConditionAccountType, Value: []interface{}{"depository", "credit"}},
+			want:        true,
+		},
+		{
+			name:        "multiple types OR logic - no match",
+			accountType: "loan",
+			condition:   domain.RuleCondition{Type: domain.ConditionAccountType, Value: []interface{}{"depository", "credit"}},
+			want:        false,
+		},
+		{
+			name:        "case insensitive match",
+			accountType: "DEPOSITORY",
+			condition:   domain.RuleCondition{Type: domain.ConditionAccountType, Value: "depository"},
+			want:        true,
+		},
+		{
+			name:        "nil account returns false",
+			accountType: "", // will create nil Account
+			condition:   domain.RuleCondition{Type: domain.ConditionAccountType, Value: "depository"},
+			want:        false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction("MERCHANT", 10.0, "in store", nil)
+			if tt.accountType != "" {
+				tx.Account = &domain.Account{Type: tt.accountType}
+			}
+			got, err := evaluator.Evaluate(tx, tt.condition)
+			if err != nil {
+				t.Errorf("Evaluate() error = %v", err)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("Evaluate() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestAmountEqualsEvaluator_Evaluate(t *testing.T) {
 	evaluator := &AmountEqualsEvaluator{}
 

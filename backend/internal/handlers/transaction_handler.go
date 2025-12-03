@@ -240,3 +240,22 @@ func (h *TransactionHandler) UpdateTransactionCategory(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, tx)
 }
+
+// GetPlaidCategories handles GET /api/v1/categories/plaid
+// Returns distinct Plaid category names from the user's transactions
+// Uses secondary category level for better granularity (e.g., "Restaurants" instead of "Food and Drink")
+// Response: JSON array of category strings, sorted alphabetically
+func (h *TransactionHandler) GetPlaidCategories(c echo.Context) error {
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "User not authenticated")
+	}
+
+	categories, err := h.transactionService.GetDistinctPlaidCategories(c.Request().Context(), userID)
+	if err != nil {
+		c.Logger().Errorf("Failed to get plaid categories for user %s: %v", userID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get Plaid categories")
+	}
+
+	return c.JSON(http.StatusOK, categories)
+}

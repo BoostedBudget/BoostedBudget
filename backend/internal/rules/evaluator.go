@@ -42,6 +42,7 @@ func NewConditionRegistry() *ConditionRegistry {
 	// Register other evaluators
 	r.evaluators[domain.ConditionPaymentChannel] = &PaymentChannelEvaluator{}
 	r.evaluators[domain.ConditionAccountID] = &AccountIDEvaluator{}
+	r.evaluators[domain.ConditionAccountType] = &AccountTypeEvaluator{}
 	r.evaluators[domain.ConditionExistingCategory] = &ExistingCategoryEvaluator{}
 	r.evaluators[domain.ConditionDateRange] = &DateRangeEvaluator{}
 
@@ -255,6 +256,10 @@ func (e *PaymentChannelEvaluator) Evaluate(tx *domain.Transaction, condition dom
 // AccountIDEvaluator checks if transaction belongs to specific account(s).
 type AccountIDEvaluator struct{}
 
+// AccountTypeEvaluator checks if transaction's account is of a specific type.
+// Uses OR logic: matches if account type is ANY of the specified types.
+type AccountTypeEvaluator struct{}
+
 func (e *AccountIDEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
 	if tx.AccountID == "" {
 		return false, nil
@@ -263,6 +268,27 @@ func (e *AccountIDEvaluator) Evaluate(tx *domain.Transaction, condition domain.R
 	values := extractStringValues(condition.Value)
 	for _, v := range values {
 		if tx.AccountID == v {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (e *AccountTypeEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
+	// Transaction must have an associated Account with a Type
+	if tx.Account == nil || tx.Account.Type == "" {
+		return false, nil
+	}
+
+	values := extractStringValues(condition.Value)
+	if len(values) == 0 {
+		return false, nil
+	}
+
+	// OR logic: match if account type is ANY of the specified types
+	txAccountType := strings.ToLower(tx.Account.Type)
+	for _, v := range values {
+		if strings.EqualFold(txAccountType, v) {
 			return true, nil
 		}
 	}

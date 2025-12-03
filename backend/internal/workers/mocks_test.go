@@ -153,6 +153,14 @@ func (m *MockTransactionRepository) UpdateCategory(ctx context.Context, id strin
 	return args.Error(0)
 }
 
+func (m *MockTransactionRepository) GetDistinctPlaidCategories(ctx context.Context, userID string) ([]string, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]string), args.Error(1)
+}
+
 // MockPlaidClient is a mock for Plaid API client
 type MockPlaidClient struct {
 	mock.Mock
