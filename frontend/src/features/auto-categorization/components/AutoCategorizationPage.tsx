@@ -11,19 +11,21 @@ import { AutoCategorizationRuleCard } from './AutoCategorizationRuleCard'
 import { AutoCategorizationRuleEditor } from './AutoCategorizationRuleEditor'
 import type { CategorizationRule, CreateRuleRequest, UpdateRuleRequest } from '../types'
 import type { Account } from '../../accounts/types'
+import type { UserTag } from '../../tags/types'
 import './AutoCategorizationPage.css'
 
 export interface AutoCategorizationPageProps {
   categories: string[][]
   plaidCategories?: string[]  // Plaid categories from user's transactions for "existing_category" condition
   accounts?: Account[]
+  tags?: UserTag[]  // User tags for target tags autocomplete
   maxRules?: number
   currentTier?: string
 }
 
 type EditorMode = 'create' | 'edit' | null
 
-export function AutoCategorizationPage({ categories, plaidCategories = [], accounts = [], maxRules, currentTier }: AutoCategorizationPageProps) {
+export function AutoCategorizationPage({ categories, plaidCategories = [], accounts = [], tags = [], maxRules, currentTier }: AutoCategorizationPageProps) {
   const {
     rules,
     loading,
@@ -125,6 +127,7 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
           categories={categories}
           plaidCategories={plaidCategories}
           accounts={accounts}
+          tags={tags}
         />
       </div>
     )
