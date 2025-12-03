@@ -49,10 +49,11 @@ export interface RuleCondition {
 
 /**
  * Value type for amount_range condition
+ * Both min and max are optional to support open-ended ranges (e.g., "above $100" or "below $50")
  */
 export interface AmountRangeValue {
-  min: number
-  max: number
+  min?: number
+  max?: number
 }
 
 /**

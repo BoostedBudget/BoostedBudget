@@ -5,7 +5,7 @@
  * Issue #346: Custom Transaction Categorization Rules
  */
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import type {
   CategorizationRule,
   CreateRuleRequest,
@@ -14,9 +14,117 @@ import type {
   ConditionType,
   ConditionLogic,
   TagBehavior,
+  AmountRangeValue,
+  DateRangeValue,
 } from '../types'
 import { CONDITION_TYPE_LABELS } from '../types'
+import { SearchableSelect } from '../../../shared/components/SearchableSelect'
+import type { Account } from '../../accounts/types'
 import './AutoCategorizationRuleEditor.css'
+
+// Account types available for selection
+const ACCOUNT_TYPES = [
+  { value: 'depository', label: 'Depository (Checking/Savings)' },
+  { value: 'credit', label: 'Credit Card' },
+  { value: 'loan', label: 'Loan' },
+  { value: 'investment', label: 'Investment' },
+  { value: 'other', label: 'Other' },
+]
+
+// Payment channels available for selection
+const PAYMENT_CHANNELS = [
+  { value: 'online', label: 'Online' },
+  { value: 'in store', label: 'In Store' },
+  { value: 'other', label: 'Other' },
+]
+
+/**
+ * Determines the input type for a given condition type
+ */
+function getInputTypeForCondition(conditionType: ConditionType): string {
+  switch (conditionType) {
+    case 'amount_greater_than':
+    case 'amount_less_than':
+    case 'amount_equals':
+      return 'number'
+    case 'amount_range':
+      return 'amount_range'
+    case 'date_range':
+      return 'date_range'
+    case 'existing_category':
+      return 'category_select'
+    case 'account_id':
+      return 'account_select'
+    case 'account_type':
+      return 'account_type_select'
+    case 'payment_channel':
+      return 'payment_channel_select'
+    default:
+      return 'text'
+  }
+}
+
+/**
+ * Validates a single condition and returns an error message if invalid
+ */
+function validateCondition(condition: RuleCondition): string | null {
+  const { type, value } = condition
+
+  // Required value check (except for some range types that allow partial values)
+  if (type !== 'date_range' && type !== 'amount_range') {
+    if (value === undefined || value === null || value === '') {
+      return 'Value is required'
+    }
+  }
+
+  // Amount validation
+  if (['amount_greater_than', 'amount_less_than', 'amount_equals'].includes(type)) {
+    const numValue = typeof value === 'string' ? parseFloat(value) : value
+    if (typeof numValue !== 'number' || isNaN(numValue)) {
+      return 'Must be a valid number'
+    }
+  }
+
+  // Amount range validation
+  if (type === 'amount_range') {
+    const rangeValue = value as AmountRangeValue
+    if (!rangeValue || (rangeValue.min === undefined && rangeValue.max === undefined)) {
+      return 'At least one value is required'
+    }
+    if (rangeValue.min !== undefined && rangeValue.max !== undefined) {
+      if (isNaN(rangeValue.min) || isNaN(rangeValue.max)) {
+        return 'Min and max must be valid numbers'
+      }
+      if (rangeValue.min > rangeValue.max) {
+        return 'Min must be less than or equal to max'
+      }
+    }
+  }
+
+  // Date range validation
+  if (type === 'date_range') {
+    const rangeValue = value as DateRangeValue
+    if (!rangeValue || (!rangeValue.start && !rangeValue.end)) {
+      return 'At least one date is required'
+    }
+    if (rangeValue.start && rangeValue.end) {
+      const startDate = new Date(rangeValue.start)
+      const endDate = new Date(rangeValue.end)
+      if (startDate > endDate) {
+        return 'Start date must be before or equal to end date'
+      }
+    }
+  }
+
+  // Account type validation (must be array)
+  if (type === 'account_type') {
+    if (!Array.isArray(value) || value.length === 0) {
+      return 'At least one account type must be selected'
+    }
+  }
+
+  return null
+}
 
 export interface AutoCategorizationRuleEditorProps {
   mode: 'create' | 'edit'
@@ -24,6 +132,7 @@ export interface AutoCategorizationRuleEditorProps {
   onSave: (data: CreateRuleRequest | UpdateRuleRequest) => Promise<void>
   onCancel: () => void
   categories: string[][]
+  accounts?: Account[] // Optional accounts list for account_id dropdown
 }
 
 interface FormErrors {
@@ -32,12 +141,16 @@ interface FormErrors {
   target?: string
 }
 
+interface ConditionErrors {
+  [index: number]: string | null
+}
+
 const DEFAULT_CONDITION: RuleCondition = {
   type: 'merchant_contains',
   value: '',
 }
 
-export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, categories }: AutoCategorizationRuleEditorProps) {
+export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, categories, accounts = [] }: AutoCategorizationRuleEditorProps) {
   // Form state
   const [name, setName] = useState(rule?.name || '')
   const [description, setDescription] = useState(rule?.description || '')
@@ -58,10 +171,24 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
   // UI state
   const [saving, setSaving] = useState(false)
   const [errors, setErrors] = useState<FormErrors>({})
+  const [conditionErrors, setConditionErrors] = useState<ConditionErrors>({})
+
+  // Flatten categories for the searchable dropdown
+  const flatCategories = useMemo(() => {
+    return categories.map(cat => cat.join(' > '))
+  }, [categories])
+
+  // Validate a single condition and update error state
+  const validateSingleCondition = useCallback((index: number, condition: RuleCondition): string | null => {
+    const error = validateCondition(condition)
+    setConditionErrors(prev => ({ ...prev, [index]: error }))
+    return error
+  }, [])
 
   // Validation
   const validate = useCallback((): boolean => {
     const newErrors: FormErrors = {}
+    const newConditionErrors: ConditionErrors = {}
 
     if (!name.trim()) {
       newErrors.name = 'Rule name is required'
@@ -69,6 +196,19 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
 
     if (conditions.length === 0) {
       newErrors.conditions = 'At least one condition is required'
+    } else {
+      // Validate each condition
+      let hasConditionError = false
+      conditions.forEach((condition, index) => {
+        const error = validateCondition(condition)
+        newConditionErrors[index] = error
+        if (error) {
+          hasConditionError = true
+        }
+      })
+      if (hasConditionError) {
+        newErrors.conditions = 'Please fix condition errors'
+      }
     }
 
     if (!targetCategory && targetTags.length === 0) {
@@ -76,6 +216,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
     }
 
     setErrors(newErrors)
+    setConditionErrors(newConditionErrors)
     return Object.keys(newErrors).length === 0
   }, [name, conditions, targetCategory, targetTags])
 
@@ -105,16 +246,91 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
     }
   }
 
+  // Get default value for a condition type
+  const getDefaultValueForType = (type: ConditionType): RuleCondition['value'] => {
+    switch (type) {
+      case 'amount_range':
+        return { min: 0, max: 100 } as AmountRangeValue
+      case 'date_range':
+        return { start: '', end: '' } as DateRangeValue
+      case 'account_type':
+        return [] as string[]
+      case 'amount_greater_than':
+      case 'amount_less_than':
+      case 'amount_equals':
+        return 0
+      default:
+        return ''
+    }
+  }
+
   const addCondition = () => {
     setConditions([...conditions, { ...DEFAULT_CONDITION }])
   }
 
   const removeCondition = (index: number) => {
     setConditions(conditions.filter((_, i) => i !== index))
+    // Remove error for this condition and shift errors for subsequent conditions
+    setConditionErrors(prev => {
+      const newErrors: ConditionErrors = {}
+      Object.keys(prev).forEach(key => {
+        const keyNum = parseInt(key, 10)
+        if (keyNum < index) {
+          newErrors[keyNum] = prev[keyNum]
+        } else if (keyNum > index) {
+          newErrors[keyNum - 1] = prev[keyNum]
+        }
+      })
+      return newErrors
+    })
   }
 
   const updateCondition = (index: number, updates: Partial<RuleCondition>) => {
-    setConditions(conditions.map((c, i) => (i === index ? { ...c, ...updates } : c)))
+    setConditions(conditions.map((c, i) => {
+      if (i !== index) return c
+
+      // If type changed, reset value to appropriate default
+      if (updates.type && updates.type !== c.type) {
+        return {
+          ...c,
+          ...updates,
+          value: getDefaultValueForType(updates.type)
+        }
+      }
+
+      return { ...c, ...updates }
+    }))
+    // Clear error for this condition on change
+    setConditionErrors(prev => ({ ...prev, [index]: null }))
+  }
+
+  // Update amount range value
+  const updateAmountRangeValue = (index: number, field: 'min' | 'max', value: string) => {
+    const numValue = value === '' ? undefined : parseFloat(value)
+    const condition = conditions[index]
+    const currentValue = (condition.value as AmountRangeValue) || { min: undefined, max: undefined }
+    updateCondition(index, {
+      value: { ...currentValue, [field]: numValue } as AmountRangeValue
+    })
+  }
+
+  // Update date range value
+  const updateDateRangeValue = (index: number, field: 'start' | 'end', value: string) => {
+    const condition = conditions[index]
+    const currentValue = (condition.value as DateRangeValue) || { start: '', end: '' }
+    updateCondition(index, {
+      value: { ...currentValue, [field]: value || undefined } as DateRangeValue
+    })
+  }
+
+  // Toggle account type selection
+  const toggleAccountType = (index: number, accountType: string) => {
+    const condition = conditions[index]
+    const currentTypes = (Array.isArray(condition.value) ? condition.value : []) as string[]
+    const newTypes = currentTypes.includes(accountType)
+      ? currentTypes.filter(t => t !== accountType)
+      : [...currentTypes, accountType]
+    updateCondition(index, { value: newTypes })
   }
 
   const handleCategoryChange = (value: string) => {
@@ -138,6 +354,172 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
   }
 
   const categoryValue = targetCategory ? targetCategory.join(' > ') : ''
+
+  // Render the appropriate input for a condition based on its type
+  const renderConditionValueInput = (condition: RuleCondition, index: number) => {
+    const inputType = getInputTypeForCondition(condition.type)
+
+    switch (inputType) {
+      case 'number':
+        return (
+          <input
+            type="number"
+            step="0.01"
+            className="auto-categorization-rule-editor__input auto-categorization-rule-editor__input--number"
+            value={condition.value === '' ? '' : String(condition.value)}
+            onChange={(e) => {
+              const val = e.target.value === '' ? '' : parseFloat(e.target.value)
+              updateCondition(index, { value: val })
+            }}
+            onBlur={() => validateSingleCondition(index, conditions[index])}
+            disabled={saving}
+            placeholder="Enter amount"
+            aria-label="Condition value"
+          />
+        )
+
+      case 'amount_range': {
+        const rangeValue = (condition.value as AmountRangeValue) || { min: undefined, max: undefined }
+        return (
+          <div className="auto-categorization-rule-editor__range-inputs">
+            <input
+              type="number"
+              step="0.01"
+              className="auto-categorization-rule-editor__input auto-categorization-rule-editor__input--number"
+              value={rangeValue.min ?? ''}
+              onChange={(e) => updateAmountRangeValue(index, 'min', e.target.value)}
+              onBlur={() => validateSingleCondition(index, conditions[index])}
+              disabled={saving}
+              placeholder="Min"
+              aria-label="Minimum amount"
+            />
+            <span className="auto-categorization-rule-editor__range-separator">to</span>
+            <input
+              type="number"
+              step="0.01"
+              className="auto-categorization-rule-editor__input auto-categorization-rule-editor__input--number"
+              value={rangeValue.max ?? ''}
+              onChange={(e) => updateAmountRangeValue(index, 'max', e.target.value)}
+              onBlur={() => validateSingleCondition(index, conditions[index])}
+              disabled={saving}
+              placeholder="Max"
+              aria-label="Maximum amount"
+            />
+          </div>
+        )
+      }
+
+      case 'date_range': {
+        const dateValue = (condition.value as DateRangeValue) || { start: '', end: '' }
+        return (
+          <div className="auto-categorization-rule-editor__range-inputs">
+            <input
+              type="date"
+              className="auto-categorization-rule-editor__input auto-categorization-rule-editor__input--date"
+              value={dateValue.start || ''}
+              onChange={(e) => updateDateRangeValue(index, 'start', e.target.value)}
+              onBlur={() => validateSingleCondition(index, conditions[index])}
+              disabled={saving}
+              aria-label="Start date"
+            />
+            <span className="auto-categorization-rule-editor__range-separator">to</span>
+            <input
+              type="date"
+              className="auto-categorization-rule-editor__input auto-categorization-rule-editor__input--date"
+              value={dateValue.end || ''}
+              onChange={(e) => updateDateRangeValue(index, 'end', e.target.value)}
+              onBlur={() => validateSingleCondition(index, conditions[index])}
+              disabled={saving}
+              aria-label="End date"
+            />
+          </div>
+        )
+      }
+
+      case 'category_select':
+        return (
+          <SearchableSelect
+            options={flatCategories.map(cat => ({ value: cat, label: cat }))}
+            value={String(condition.value || '') || null}
+            onChange={(value) => updateCondition(index, { value: value || '' })}
+            placeholder="Search categories..."
+            disabled={saving}
+            aria-label="Select category"
+            allowClear
+            clearLabel="Select a category"
+          />
+        )
+
+      case 'account_select':
+        return (
+          <SearchableSelect
+            options={accounts.map(acc => ({
+              value: acc.id,
+              label: acc.name,
+              sublabel: `${acc.type}${acc.mask ? ` ••••${acc.mask}` : ''}`
+            }))}
+            value={String(condition.value || '') || null}
+            onChange={(value) => updateCondition(index, { value: value || '' })}
+            placeholder="Search accounts..."
+            disabled={saving}
+            aria-label="Select account"
+            allowClear
+            clearLabel="Select an account"
+          />
+        )
+
+      case 'account_type_select': {
+        const selectedTypes = (Array.isArray(condition.value) ? condition.value : []) as string[]
+        return (
+          <div className="auto-categorization-rule-editor__checkbox-group">
+            {ACCOUNT_TYPES.map((type) => (
+              <label key={type.value} className="auto-categorization-rule-editor__checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={selectedTypes.includes(type.value)}
+                  onChange={() => toggleAccountType(index, type.value)}
+                  disabled={saving}
+                />
+                {type.label}
+              </label>
+            ))}
+          </div>
+        )
+      }
+
+      case 'payment_channel_select':
+        return (
+          <select
+            className="auto-categorization-rule-editor__select"
+            value={String(condition.value || '')}
+            onChange={(e) => updateCondition(index, { value: e.target.value })}
+            disabled={saving}
+            aria-label="Select payment channel"
+          >
+            <option value="">Select payment channel</option>
+            {PAYMENT_CHANNELS.map((channel) => (
+              <option key={channel.value} value={channel.value}>
+                {channel.label}
+              </option>
+            ))}
+          </select>
+        )
+
+      default:
+        return (
+          <input
+            type="text"
+            className="auto-categorization-rule-editor__input"
+            value={String(condition.value)}
+            onChange={(e) => updateCondition(index, { value: e.target.value })}
+            onBlur={() => validateSingleCondition(index, conditions[index])}
+            disabled={saving}
+            placeholder="Enter value"
+            aria-label="Condition value"
+          />
+        )
+    }
+  }
 
   return (
     <form className="auto-categorization-rule-editor" onSubmit={handleSubmit}>
@@ -227,41 +609,41 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
 
         <div className="auto-categorization-rule-editor__conditions">
           {conditions.map((condition, index) => (
-            <div key={index} className="auto-categorization-rule-editor__condition">
-              <label htmlFor={`condition-type-${index}`} className="visually-hidden">
-                Condition type
-              </label>
-              <select
-                id={`condition-type-${index}`}
-                aria-label="Condition type"
-                className="auto-categorization-rule-editor__select"
-                value={condition.type}
-                onChange={(e) => updateCondition(index, { type: e.target.value as ConditionType })}
-                disabled={saving}
-              >
-                {Object.entries(CONDITION_TYPE_LABELS).map(([type, label]) => (
-                  <option key={type} value={type}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-              <input
-                type="text"
-                className="auto-categorization-rule-editor__input"
-                value={String(condition.value)}
-                onChange={(e) => updateCondition(index, { value: e.target.value })}
-                disabled={saving}
-                placeholder="Enter value"
-              />
-              <button
-                type="button"
-                className="auto-categorization-rule-editor__remove-btn"
-                onClick={() => removeCondition(index)}
-                disabled={saving}
-                aria-label="Remove condition"
-              >
-                &times;
-              </button>
+            <div key={index} className="auto-categorization-rule-editor__condition-wrapper">
+              <div className={`auto-categorization-rule-editor__condition ${conditionErrors[index] ? 'auto-categorization-rule-editor__condition--error' : ''}`}>
+                <label htmlFor={`condition-type-${index}`} className="visually-hidden">
+                  Condition type
+                </label>
+                <select
+                  id={`condition-type-${index}`}
+                  aria-label="Condition type"
+                  className="auto-categorization-rule-editor__select"
+                  value={condition.type}
+                  onChange={(e) => updateCondition(index, { type: e.target.value as ConditionType })}
+                  disabled={saving}
+                >
+                  {Object.entries(CONDITION_TYPE_LABELS).map(([type, label]) => (
+                    <option key={type} value={type}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+                {renderConditionValueInput(condition, index)}
+                <button
+                  type="button"
+                  className="auto-categorization-rule-editor__remove-btn"
+                  onClick={() => removeCondition(index)}
+                  disabled={saving}
+                  aria-label="Remove condition"
+                >
+                  &times;
+                </button>
+              </div>
+              {conditionErrors[index] && (
+                <span className="auto-categorization-rule-editor__condition-error">
+                  {conditionErrors[index]}
+                </span>
+              )}
             </div>
           ))}
         </div>
@@ -285,23 +667,16 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
           <label htmlFor="target-category" className="auto-categorization-rule-editor__label">
             Target Category
           </label>
-          <select
-            id="target-category"
-            className="auto-categorization-rule-editor__select"
-            value={categoryValue}
-            onChange={(e) => handleCategoryChange(e.target.value)}
+          <SearchableSelect
+            options={flatCategories.map(cat => ({ value: cat, label: cat }))}
+            value={categoryValue || null}
+            onChange={(value) => handleCategoryChange(value || '')}
+            placeholder="Search categories..."
             disabled={saving}
-          >
-            <option value="">No category change</option>
-            {categories.map((cat) => {
-              const value = cat.join(' > ')
-              return (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              )
-            })}
-          </select>
+            aria-label="Target category"
+            allowClear
+            clearLabel="No category change"
+          />
         </div>
 
         {/* Tags */}

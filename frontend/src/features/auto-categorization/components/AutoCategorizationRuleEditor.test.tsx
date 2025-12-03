@@ -155,9 +155,10 @@ describe('AutoCategorizationRuleEditor', () => {
       const conditionValueInput = screen.getByPlaceholderText(/enter value/i)
       await user.type(conditionValueInput, 'amazon')
 
-      // Select category
-      const categorySelect = screen.getByLabelText(/target category/i)
-      await user.selectOptions(categorySelect, 'Food & Drink > Coffee')
+      // Select category (SearchableSelect uses click-based selection)
+      const categorySelect = screen.getByRole('combobox', { name: /target category/i })
+      await user.click(categorySelect)
+      await user.click(screen.getByText('Food & Drink > Coffee'))
 
       const saveButton = screen.getByRole('button', { name: /save/i })
       fireEvent.click(saveButton)
@@ -454,6 +455,995 @@ describe('AutoCategorizationRuleEditor', () => {
       fireEvent.click(orButton)
 
       expect(orButton).toHaveClass('active')
+    })
+  })
+
+  describe('Input type rendering', () => {
+    it('should render number input for amount_greater_than', async () => {
+      const user = userEvent.setup()
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      const addButton = screen.getByRole('button', { name: /add condition/i })
+      fireEvent.click(addButton)
+
+      const typeSelect = screen.getByLabelText(/condition type/i)
+      await user.selectOptions(typeSelect, 'amount_greater_than')
+
+      const numberInput = screen.getByRole('spinbutton', { name: /condition value/i })
+      expect(numberInput).toBeInTheDocument()
+      expect(numberInput).toHaveAttribute('type', 'number')
+    })
+
+    it('should render number input for amount_less_than', async () => {
+      const user = userEvent.setup()
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      const addButton = screen.getByRole('button', { name: /add condition/i })
+      fireEvent.click(addButton)
+
+      const typeSelect = screen.getByLabelText(/condition type/i)
+      await user.selectOptions(typeSelect, 'amount_less_than')
+
+      const numberInput = screen.getByRole('spinbutton', { name: /condition value/i })
+      expect(numberInput).toBeInTheDocument()
+      expect(numberInput).toHaveAttribute('type', 'number')
+    })
+
+    it('should render number input for amount_equals', async () => {
+      const user = userEvent.setup()
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      const addButton = screen.getByRole('button', { name: /add condition/i })
+      fireEvent.click(addButton)
+
+      const typeSelect = screen.getByLabelText(/condition type/i)
+      await user.selectOptions(typeSelect, 'amount_equals')
+
+      const numberInput = screen.getByRole('spinbutton', { name: /condition value/i })
+      expect(numberInput).toBeInTheDocument()
+      expect(numberInput).toHaveAttribute('type', 'number')
+    })
+
+    it('should render two number inputs for amount_range', async () => {
+      const user = userEvent.setup()
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      const addButton = screen.getByRole('button', { name: /add condition/i })
+      fireEvent.click(addButton)
+
+      const typeSelect = screen.getByLabelText(/condition type/i)
+      await user.selectOptions(typeSelect, 'amount_range')
+
+      const minInput = screen.getByLabelText(/minimum amount/i)
+      const maxInput = screen.getByLabelText(/maximum amount/i)
+      expect(minInput).toBeInTheDocument()
+      expect(maxInput).toBeInTheDocument()
+      expect(minInput).toHaveAttribute('type', 'number')
+      expect(maxInput).toHaveAttribute('type', 'number')
+    })
+
+    it('should render date inputs for date_range', async () => {
+      const user = userEvent.setup()
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      const addButton = screen.getByRole('button', { name: /add condition/i })
+      fireEvent.click(addButton)
+
+      const typeSelect = screen.getByLabelText(/condition type/i)
+      await user.selectOptions(typeSelect, 'date_range')
+
+      const startInput = screen.getByLabelText(/start date/i)
+      const endInput = screen.getByLabelText(/end date/i)
+      expect(startInput).toBeInTheDocument()
+      expect(endInput).toBeInTheDocument()
+      expect(startInput).toHaveAttribute('type', 'date')
+      expect(endInput).toHaveAttribute('type', 'date')
+    })
+
+    it('should render text input for merchant conditions', async () => {
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      const addButton = screen.getByRole('button', { name: /add condition/i })
+      fireEvent.click(addButton)
+
+      // Default is merchant_contains
+      const textInput = screen.getByPlaceholderText(/enter value/i)
+      expect(textInput).toBeInTheDocument()
+      expect(textInput).toHaveAttribute('type', 'text')
+    })
+
+    it('should render searchable category dropdown for existing_category', async () => {
+      const user = userEvent.setup()
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      const addButton = screen.getByRole('button', { name: /add condition/i })
+      fireEvent.click(addButton)
+
+      const typeSelect = screen.getByLabelText(/condition type/i)
+      await user.selectOptions(typeSelect, 'existing_category')
+
+      // SearchableSelect renders as a combobox INPUT
+      const categorySelect = screen.getByRole('combobox', { name: /select category/i })
+      expect(categorySelect).toBeInTheDocument()
+      expect(categorySelect.tagName).toBe('INPUT')
+    })
+
+    it('should render payment channel select for payment_channel', async () => {
+      const user = userEvent.setup()
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      const addButton = screen.getByRole('button', { name: /add condition/i })
+      fireEvent.click(addButton)
+
+      const typeSelect = screen.getByLabelText(/condition type/i)
+      await user.selectOptions(typeSelect, 'payment_channel')
+
+      const channelSelect = screen.getByLabelText(/select payment channel/i)
+      expect(channelSelect).toBeInTheDocument()
+      expect(channelSelect.tagName).toBe('SELECT')
+    })
+
+    it('should render searchable account dropdown for account_id', async () => {
+      const user = userEvent.setup()
+      const mockAccounts = [
+        { id: 'acc-1', name: 'Checking', type: 'depository' as const, linked_item_id: 'item-1', user_id: 'user-1', plaid_account_id: 'plaid-1', currency_code: 'USD', created_at: '2024-01-01', updated_at: '2024-01-01' },
+        { id: 'acc-2', name: 'Savings', type: 'depository' as const, linked_item_id: 'item-1', user_id: 'user-1', plaid_account_id: 'plaid-2', currency_code: 'USD', created_at: '2024-01-01', updated_at: '2024-01-01' },
+      ]
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+          accounts={mockAccounts}
+        />
+      )
+
+      const addButton = screen.getByRole('button', { name: /add condition/i })
+      fireEvent.click(addButton)
+
+      const typeSelect = screen.getByLabelText(/condition type/i)
+      await user.selectOptions(typeSelect, 'account_id')
+
+      // SearchableSelect renders as a combobox INPUT
+      const accountSelect = screen.getByRole('combobox', { name: /select account/i })
+      expect(accountSelect).toBeInTheDocument()
+      expect(accountSelect.tagName).toBe('INPUT')
+    })
+
+    it('should render checkboxes for account_type', async () => {
+      const user = userEvent.setup()
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      const addButton = screen.getByRole('button', { name: /add condition/i })
+      fireEvent.click(addButton)
+
+      const typeSelect = screen.getByLabelText(/condition type/i)
+      await user.selectOptions(typeSelect, 'account_type')
+
+      // Should see checkboxes for account types
+      expect(screen.getByText(/depository/i)).toBeInTheDocument()
+      expect(screen.getByText(/credit card/i)).toBeInTheDocument()
+    })
+  })
+
+  describe('Input validation', () => {
+    it('should show error for empty condition value on save', async () => {
+      const user = userEvent.setup()
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      await user.type(screen.getByLabelText(/rule name/i), 'Test Rule')
+
+      // Add a condition but don't fill in value
+      const addButton = screen.getByRole('button', { name: /add condition/i })
+      fireEvent.click(addButton)
+
+      // Select category to satisfy target requirement (SearchableSelect uses click-based selection)
+      const categorySelect = screen.getByRole('combobox', { name: /target category/i })
+      await user.click(categorySelect)
+      await user.click(screen.getByText('Food & Drink > Coffee'))
+
+      const saveButton = screen.getByRole('button', { name: /save/i })
+      fireEvent.click(saveButton)
+
+      // Should show validation error for empty condition value
+      await waitFor(() => {
+        expect(screen.getByText(/value is required/i)).toBeInTheDocument()
+      })
+      expect(mockOnSave).not.toHaveBeenCalled()
+    })
+
+    it('should show error when amount_range min > max', async () => {
+      const user = userEvent.setup()
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      await user.type(screen.getByLabelText(/rule name/i), 'Test Rule')
+
+      // Add amount_range condition
+      const addButton = screen.getByRole('button', { name: /add condition/i })
+      fireEvent.click(addButton)
+
+      const typeSelect = screen.getByLabelText(/condition type/i)
+      await user.selectOptions(typeSelect, 'amount_range')
+
+      // Set min > max
+      const minInput = screen.getByLabelText(/minimum amount/i)
+      const maxInput = screen.getByLabelText(/maximum amount/i)
+      await user.clear(minInput)
+      await user.type(minInput, '100')
+      await user.clear(maxInput)
+      await user.type(maxInput, '50')
+
+      // Select category (SearchableSelect uses click-based selection)
+      const categorySelect = screen.getByRole('combobox', { name: /target category/i })
+      await user.click(categorySelect)
+      await user.click(screen.getByText('Food & Drink > Coffee'))
+
+      const saveButton = screen.getByRole('button', { name: /save/i })
+      fireEvent.click(saveButton)
+
+      await waitFor(() => {
+        expect(screen.getByText(/min must be less than or equal to max/i)).toBeInTheDocument()
+      })
+      expect(mockOnSave).not.toHaveBeenCalled()
+    })
+
+    it('should show error when date_range start > end', async () => {
+      const user = userEvent.setup()
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      await user.type(screen.getByLabelText(/rule name/i), 'Test Rule')
+
+      // Add date_range condition
+      const addButton = screen.getByRole('button', { name: /add condition/i })
+      fireEvent.click(addButton)
+
+      const typeSelect = screen.getByLabelText(/condition type/i)
+      await user.selectOptions(typeSelect, 'date_range')
+
+      // Set start > end
+      const startInput = screen.getByLabelText(/start date/i)
+      const endInput = screen.getByLabelText(/end date/i)
+      fireEvent.change(startInput, { target: { value: '2025-12-31' } })
+      fireEvent.change(endInput, { target: { value: '2025-01-01' } })
+
+      // Select category (SearchableSelect uses click-based selection)
+      const categorySelect = screen.getByRole('combobox', { name: /target category/i })
+      await user.click(categorySelect)
+      await user.click(screen.getByText('Food & Drink > Coffee'))
+
+      const saveButton = screen.getByRole('button', { name: /save/i })
+      fireEvent.click(saveButton)
+
+      await waitFor(() => {
+        expect(screen.getByText(/start date must be before or equal to end date/i)).toBeInTheDocument()
+      })
+      expect(mockOnSave).not.toHaveBeenCalled()
+    })
+
+    it('should accept decimal values for amount conditions', async () => {
+      const user = userEvent.setup()
+      mockOnSave.mockResolvedValue(undefined)
+
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      await user.type(screen.getByLabelText(/rule name/i), 'Test Rule')
+
+      // Add amount condition
+      const addButton = screen.getByRole('button', { name: /add condition/i })
+      fireEvent.click(addButton)
+
+      const typeSelect = screen.getByLabelText(/condition type/i)
+      await user.selectOptions(typeSelect, 'amount_greater_than')
+
+      const amountInput = screen.getByRole('spinbutton', { name: /condition value/i })
+      await user.type(amountInput, '99.99')
+
+      // Select category (SearchableSelect uses click-based selection)
+      const categorySelect = screen.getByRole('combobox', { name: /target category/i })
+      await user.click(categorySelect)
+      await user.click(screen.getByText('Food & Drink > Coffee'))
+
+      const saveButton = screen.getByRole('button', { name: /save/i })
+      fireEvent.click(saveButton)
+
+      await waitFor(() => {
+        expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
+          conditions: [{ type: 'amount_greater_than', value: 99.99 }],
+        }))
+      })
+    })
+
+    it('should accept partial date_range with only start', async () => {
+      const user = userEvent.setup()
+      mockOnSave.mockResolvedValue(undefined)
+
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      await user.type(screen.getByLabelText(/rule name/i), 'Test Rule')
+
+      // Add date_range condition
+      const addButton = screen.getByRole('button', { name: /add condition/i })
+      fireEvent.click(addButton)
+
+      const typeSelect = screen.getByLabelText(/condition type/i)
+      await user.selectOptions(typeSelect, 'date_range')
+
+      // Only set start date
+      const startInput = screen.getByLabelText(/start date/i)
+      fireEvent.change(startInput, { target: { value: '2025-01-01' } })
+
+      // Select category (SearchableSelect uses click-based selection)
+      const categorySelect = screen.getByRole('combobox', { name: /target category/i })
+      await user.click(categorySelect)
+      await user.click(screen.getByText('Food & Drink > Coffee'))
+
+      const saveButton = screen.getByRole('button', { name: /save/i })
+      fireEvent.click(saveButton)
+
+      await waitFor(() => {
+        expect(mockOnSave).toHaveBeenCalled()
+      })
+    })
+
+    it('should require at least one account type when account_type selected', async () => {
+      const user = userEvent.setup()
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      await user.type(screen.getByLabelText(/rule name/i), 'Test Rule')
+
+      // Add account_type condition
+      const addButton = screen.getByRole('button', { name: /add condition/i })
+      fireEvent.click(addButton)
+
+      const typeSelect = screen.getByLabelText(/condition type/i)
+      await user.selectOptions(typeSelect, 'account_type')
+
+      // Don't select any checkboxes
+
+      // Select category (SearchableSelect uses click-based selection)
+      const categorySelect = screen.getByRole('combobox', { name: /target category/i })
+      await user.click(categorySelect)
+      await user.click(screen.getByText('Food & Drink > Coffee'))
+
+      const saveButton = screen.getByRole('button', { name: /save/i })
+      fireEvent.click(saveButton)
+
+      await waitFor(() => {
+        expect(screen.getByText(/at least one account type must be selected/i)).toBeInTheDocument()
+      })
+      expect(mockOnSave).not.toHaveBeenCalled()
+    })
+
+    it('should clear condition error when value is updated', async () => {
+      const user = userEvent.setup()
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      await user.type(screen.getByLabelText(/rule name/i), 'Test Rule')
+
+      // Add a condition but don't fill in value
+      const addButton = screen.getByRole('button', { name: /add condition/i })
+      fireEvent.click(addButton)
+
+      // Select category (SearchableSelect uses click-based selection)
+      const categorySelect = screen.getByRole('combobox', { name: /target category/i })
+      await user.click(categorySelect)
+      await user.click(screen.getByText('Food & Drink > Coffee'))
+
+      // Try to save - should show error
+      const saveButton = screen.getByRole('button', { name: /save/i })
+      fireEvent.click(saveButton)
+
+      await waitFor(() => {
+        expect(screen.getByText(/value is required/i)).toBeInTheDocument()
+      })
+
+      // Now fill in the value
+      const textInput = screen.getByPlaceholderText(/enter value/i)
+      await user.type(textInput, 'starbucks')
+
+      // Error should be cleared
+      expect(screen.queryByText(/value is required/i)).not.toBeInTheDocument()
+    })
+  })
+
+  describe('Edge cases', () => {
+    it('should handle switching condition type and reset value', async () => {
+      const user = userEvent.setup()
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      // Add a condition and fill in text value
+      const addButton = screen.getByRole('button', { name: /add condition/i })
+      fireEvent.click(addButton)
+
+      const textInput = screen.getByPlaceholderText(/enter value/i)
+      await user.type(textInput, 'some text')
+
+      // Switch to amount type
+      const typeSelect = screen.getByLabelText(/condition type/i)
+      await user.selectOptions(typeSelect, 'amount_greater_than')
+
+      // Input should be number type with default value
+      const numberInput = screen.getByRole('spinbutton', { name: /condition value/i })
+      expect(numberInput).toBeInTheDocument()
+      // Value should be reset to default (0 for amount)
+      expect(numberInput).toHaveValue(0)
+    })
+
+    it('should handle removing condition and update error indices', async () => {
+      const user = userEvent.setup()
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      await user.type(screen.getByLabelText(/rule name/i), 'Test Rule')
+
+      // Add two conditions
+      const addButton = screen.getByRole('button', { name: /add condition/i })
+      fireEvent.click(addButton)
+      fireEvent.click(addButton)
+
+      // Fill in first condition, leave second empty
+      const textInputs = screen.getAllByPlaceholderText(/enter value/i)
+      await user.type(textInputs[0], 'first')
+
+      // Select category (SearchableSelect uses click-based selection)
+      const categorySelect = screen.getByRole('combobox', { name: /target category/i })
+      await user.click(categorySelect)
+      await user.click(screen.getByText('Food & Drink > Coffee'))
+
+      // Try to save
+      const saveButton = screen.getByRole('button', { name: /save/i })
+      fireEvent.click(saveButton)
+
+      await waitFor(() => {
+        expect(screen.getByText(/value is required/i)).toBeInTheDocument()
+      })
+
+      // Remove the first condition (the one that's filled)
+      const removeButtons = screen.getAllByRole('button', { name: /remove condition/i })
+      fireEvent.click(removeButtons[0])
+
+      // Error should still show for the remaining condition
+      expect(screen.getByText(/value is required/i)).toBeInTheDocument()
+    })
+
+    it('should handle special characters in merchant name', async () => {
+      const user = userEvent.setup()
+      mockOnSave.mockResolvedValue(undefined)
+
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      await user.type(screen.getByLabelText(/rule name/i), 'Test Rule')
+
+      // Add condition with special characters
+      const addButton = screen.getByRole('button', { name: /add condition/i })
+      fireEvent.click(addButton)
+
+      const textInput = screen.getByPlaceholderText(/enter value/i)
+      await user.type(textInput, "McDonald's & Co. <test>")
+
+      // Select category (SearchableSelect uses click-based selection)
+      const categorySelect = screen.getByRole('combobox', { name: /target category/i })
+      await user.click(categorySelect)
+      await user.click(screen.getByText('Food & Drink > Coffee'))
+
+      const saveButton = screen.getByRole('button', { name: /save/i })
+      fireEvent.click(saveButton)
+
+      await waitFor(() => {
+        expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
+          conditions: [{ type: 'merchant_contains', value: "McDonald's & Co. <test>" }],
+        }))
+      })
+    })
+
+    it('should handle zero amount value', async () => {
+      const user = userEvent.setup()
+      mockOnSave.mockResolvedValue(undefined)
+
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      await user.type(screen.getByLabelText(/rule name/i), 'Test Rule')
+
+      // Add amount condition with 0
+      const addButton = screen.getByRole('button', { name: /add condition/i })
+      fireEvent.click(addButton)
+
+      const typeSelect = screen.getByLabelText(/condition type/i)
+      await user.selectOptions(typeSelect, 'amount_equals')
+
+      // Input should already have 0 as default
+      const amountInput = screen.getByRole('spinbutton', { name: /condition value/i })
+      expect(amountInput).toHaveValue(0)
+
+      // Select category (SearchableSelect uses click-based selection)
+      const categorySelect = screen.getByRole('combobox', { name: /target category/i })
+      await user.click(categorySelect)
+      await user.click(screen.getByText('Food & Drink > Coffee'))
+
+      const saveButton = screen.getByRole('button', { name: /save/i })
+      fireEvent.click(saveButton)
+
+      await waitFor(() => {
+        expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
+          conditions: [{ type: 'amount_equals', value: 0 }],
+        }))
+      })
+    })
+
+    it('should handle negative amount value', async () => {
+      const user = userEvent.setup()
+      mockOnSave.mockResolvedValue(undefined)
+
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      await user.type(screen.getByLabelText(/rule name/i), 'Test Rule')
+
+      // Add amount condition
+      const addButton = screen.getByRole('button', { name: /add condition/i })
+      fireEvent.click(addButton)
+
+      const typeSelect = screen.getByLabelText(/condition type/i)
+      await user.selectOptions(typeSelect, 'amount_greater_than')
+
+      const amountInput = screen.getByRole('spinbutton', { name: /condition value/i })
+      await user.clear(amountInput)
+      await user.type(amountInput, '-50')
+
+      // Select category (SearchableSelect uses click-based selection)
+      const categorySelect = screen.getByRole('combobox', { name: /target category/i })
+      await user.click(categorySelect)
+      await user.click(screen.getByText('Food & Drink > Coffee'))
+
+      const saveButton = screen.getByRole('button', { name: /save/i })
+      fireEvent.click(saveButton)
+
+      await waitFor(() => {
+        expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
+          conditions: [{ type: 'amount_greater_than', value: -50 }],
+        }))
+      })
+    })
+  })
+
+  describe('Searchable Dropdowns', () => {
+    const mockAccounts = [
+      { id: 'acc-1', name: 'Checking', type: 'depository' as const, mask: '1234', linked_item_id: 'item-1', user_id: 'user-1', plaid_account_id: 'plaid-1', currency_code: 'USD', created_at: '2024-01-01', updated_at: '2024-01-01' },
+      { id: 'acc-2', name: 'Savings', type: 'depository' as const, mask: '5678', linked_item_id: 'item-1', user_id: 'user-1', plaid_account_id: 'plaid-2', currency_code: 'USD', created_at: '2024-01-01', updated_at: '2024-01-01' },
+      { id: 'acc-3', name: 'Credit Card', type: 'credit' as const, mask: '9012', linked_item_id: 'item-2', user_id: 'user-1', plaid_account_id: 'plaid-3', currency_code: 'USD', created_at: '2024-01-01', updated_at: '2024-01-01' },
+    ]
+
+    describe('existing_category condition', () => {
+      it('should show searchable dropdown for category selection', async () => {
+        const user = userEvent.setup()
+
+        render(
+          <AutoCategorizationRuleEditor
+            mode="create"
+            onSave={mockOnSave}
+            onCancel={mockOnCancel}
+            categories={mockCategories}
+          />
+        )
+
+        // Add existing_category condition
+        const addButton = screen.getByRole('button', { name: /add condition/i })
+        fireEvent.click(addButton)
+
+        const typeSelect = screen.getByLabelText(/condition type/i)
+        await user.selectOptions(typeSelect, 'existing_category')
+
+        // Should render a searchable input (combobox) instead of basic select
+        const searchInput = screen.getByRole('combobox', { name: /select category/i })
+        expect(searchInput).toBeInTheDocument()
+      })
+
+      it('should filter categories as user types', async () => {
+        const user = userEvent.setup()
+
+        render(
+          <AutoCategorizationRuleEditor
+            mode="create"
+            onSave={mockOnSave}
+            onCancel={mockOnCancel}
+            categories={mockCategories}
+          />
+        )
+
+        const addButton = screen.getByRole('button', { name: /add condition/i })
+        fireEvent.click(addButton)
+
+        const typeSelect = screen.getByLabelText(/condition type/i)
+        await user.selectOptions(typeSelect, 'existing_category')
+
+        const searchInput = screen.getByRole('combobox', { name: /select category/i })
+        await user.click(searchInput)
+        await user.type(searchInput, 'food')
+
+        // Should filter to show only matching "food" categories
+        await waitFor(() => {
+          // Food-related categories should be visible
+          expect(screen.getByText('Food & Drink')).toBeInTheDocument()
+          expect(screen.getByText('Food & Drink > Coffee')).toBeInTheDocument()
+          expect(screen.getByText('Food & Drink > Restaurants')).toBeInTheDocument()
+          // Shopping categories should be filtered out
+          expect(screen.queryByText('Shopping')).not.toBeInTheDocument()
+        })
+      })
+
+      it('should update condition value on selection', async () => {
+        const user = userEvent.setup()
+        mockOnSave.mockResolvedValue(undefined)
+
+        render(
+          <AutoCategorizationRuleEditor
+            mode="create"
+            onSave={mockOnSave}
+            onCancel={mockOnCancel}
+            categories={mockCategories}
+          />
+        )
+
+        await user.type(screen.getByLabelText(/rule name/i), 'Category Match Rule')
+
+        const addButton = screen.getByRole('button', { name: /add condition/i })
+        fireEvent.click(addButton)
+
+        const typeSelect = screen.getByLabelText(/condition type/i)
+        await user.selectOptions(typeSelect, 'existing_category')
+
+        const searchInput = screen.getByRole('combobox', { name: /select category/i })
+        await user.click(searchInput)
+
+        // Click on a category option
+        await user.click(screen.getByText('Shopping'))
+
+        // Set target category to make form valid (now a SearchableSelect)
+        const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
+        await user.click(targetCategoryInput)
+        await user.click(screen.getByText('Food & Drink > Coffee'))
+
+        const saveButton = screen.getByRole('button', { name: /save/i })
+        fireEvent.click(saveButton)
+
+        await waitFor(() => {
+          expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
+            conditions: [{ type: 'existing_category', value: 'Shopping' }],
+          }))
+        })
+      })
+    })
+
+    describe('account_id condition', () => {
+      it('should show searchable dropdown for account selection', async () => {
+        const user = userEvent.setup()
+
+        render(
+          <AutoCategorizationRuleEditor
+            mode="create"
+            onSave={mockOnSave}
+            onCancel={mockOnCancel}
+            categories={mockCategories}
+            accounts={mockAccounts}
+          />
+        )
+
+        const addButton = screen.getByRole('button', { name: /add condition/i })
+        fireEvent.click(addButton)
+
+        const typeSelect = screen.getByLabelText(/condition type/i)
+        await user.selectOptions(typeSelect, 'account_id')
+
+        // Should render a searchable input (combobox)
+        const searchInput = screen.getByRole('combobox', { name: /select account/i })
+        expect(searchInput).toBeInTheDocument()
+      })
+
+      it('should display account name with type and mask', async () => {
+        const user = userEvent.setup()
+
+        render(
+          <AutoCategorizationRuleEditor
+            mode="create"
+            onSave={mockOnSave}
+            onCancel={mockOnCancel}
+            categories={mockCategories}
+            accounts={mockAccounts}
+          />
+        )
+
+        const addButton = screen.getByRole('button', { name: /add condition/i })
+        fireEvent.click(addButton)
+
+        const typeSelect = screen.getByLabelText(/condition type/i)
+        await user.selectOptions(typeSelect, 'account_id')
+
+        const searchInput = screen.getByRole('combobox', { name: /select account/i })
+        await user.click(searchInput)
+
+        // Should show account with sublabel containing type and mask (format: "depository ••••1234")
+        expect(screen.getByText('Checking')).toBeInTheDocument()
+        // The sublabel format is "type ••••mask"
+        expect(screen.getByText('depository ••••1234')).toBeInTheDocument()
+      })
+
+      it('should filter accounts as user types', async () => {
+        const user = userEvent.setup()
+
+        render(
+          <AutoCategorizationRuleEditor
+            mode="create"
+            onSave={mockOnSave}
+            onCancel={mockOnCancel}
+            categories={mockCategories}
+            accounts={mockAccounts}
+          />
+        )
+
+        const addButton = screen.getByRole('button', { name: /add condition/i })
+        fireEvent.click(addButton)
+
+        const typeSelect = screen.getByLabelText(/condition type/i)
+        await user.selectOptions(typeSelect, 'account_id')
+
+        const searchInput = screen.getByRole('combobox', { name: /select account/i })
+        await user.click(searchInput)
+        await user.type(searchInput, 'credit')
+
+        await waitFor(() => {
+          // Should only show credit card account in the filtered results
+          expect(screen.getByText('Credit Card')).toBeInTheDocument()
+          // The other accounts should be filtered out
+          expect(screen.queryByText('Checking')).not.toBeInTheDocument()
+          expect(screen.queryByText('Savings')).not.toBeInTheDocument()
+        })
+      })
+
+      it('should update condition value with account ID', async () => {
+        const user = userEvent.setup()
+        mockOnSave.mockResolvedValue(undefined)
+
+        render(
+          <AutoCategorizationRuleEditor
+            mode="create"
+            onSave={mockOnSave}
+            onCancel={mockOnCancel}
+            categories={mockCategories}
+            accounts={mockAccounts}
+          />
+        )
+
+        await user.type(screen.getByLabelText(/rule name/i), 'Account Rule')
+
+        const addButton = screen.getByRole('button', { name: /add condition/i })
+        fireEvent.click(addButton)
+
+        const typeSelect = screen.getByLabelText(/condition type/i)
+        await user.selectOptions(typeSelect, 'account_id')
+
+        const searchInput = screen.getByRole('combobox', { name: /select account/i })
+        await user.click(searchInput)
+        await user.click(screen.getByText('Checking'))
+
+        // Set target category to make form valid (now a SearchableSelect)
+        const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
+        await user.click(targetCategoryInput)
+        await user.click(screen.getByText('Shopping'))
+
+        const saveButton = screen.getByRole('button', { name: /save/i })
+        fireEvent.click(saveButton)
+
+        await waitFor(() => {
+          expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
+            conditions: [{ type: 'account_id', value: 'acc-1' }],
+          }))
+        })
+      })
+    })
+
+    describe('Target Category selector', () => {
+      it('should use searchable dropdown for target category', async () => {
+        render(
+          <AutoCategorizationRuleEditor
+            mode="create"
+            onSave={mockOnSave}
+            onCancel={mockOnCancel}
+            categories={mockCategories}
+          />
+        )
+
+        // Target category should be a searchable combobox
+        const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
+        expect(targetCategoryInput).toBeInTheDocument()
+      })
+
+      it('should show "No category change" as first option', async () => {
+        const user = userEvent.setup()
+
+        render(
+          <AutoCategorizationRuleEditor
+            mode="create"
+            onSave={mockOnSave}
+            onCancel={mockOnCancel}
+            categories={mockCategories}
+          />
+        )
+
+        const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
+        await user.click(targetCategoryInput)
+
+        // Should have a clear option at the top
+        expect(screen.getByText('No category change')).toBeInTheDocument()
+      })
+
+      it('should filter categories as user types', async () => {
+        const user = userEvent.setup()
+
+        render(
+          <AutoCategorizationRuleEditor
+            mode="create"
+            onSave={mockOnSave}
+            onCancel={mockOnCancel}
+            categories={mockCategories}
+          />
+        )
+
+        const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
+        await user.click(targetCategoryInput)
+        await user.type(targetCategoryInput, 'food')
+
+        await waitFor(() => {
+          // Should filter to show only food-related categories
+          const foodOption = screen.getByText('Food & Drink')
+          expect(foodOption).toBeInTheDocument()
+        })
+      })
     })
   })
 })
