@@ -25,6 +25,7 @@ function formatAmount(amount: number): string {
 
 /**
  * Parse category from JSON string
+ * Uses primary category (index 0) for consistency across the application
  */
 function parseCategory(categoryJson: string | null | undefined): string {
   if (!categoryJson) return 'Uncategorized'
@@ -32,7 +33,7 @@ function parseCategory(categoryJson: string | null | undefined): string {
   try {
     const categories = JSON.parse(categoryJson)
     if (Array.isArray(categories) && categories.length > 0) {
-      return categories[0] // Return primary category
+      return categories[0] // Always use primary category
     }
     return 'Uncategorized'
   } catch {

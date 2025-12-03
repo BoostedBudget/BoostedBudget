@@ -107,6 +107,10 @@ type Transaction struct {
 	// Timestamps
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
+
+	// Associated data (populated on demand, not stored in DB)
+	// Used by rule engine to evaluate account_type conditions
+	Account *Account `json:"account,omitempty" db:"-"`
 }
 
 // Validate checks that the Transaction has all required fields and valid values.

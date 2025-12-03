@@ -44,3 +44,13 @@ export async function updateCategory(categoryId: string, request: UpdateCategory
 export async function deleteCategory(categoryId: string): Promise<void> {
   await apiClient.delete(`/v1/categories/${categoryId}`)
 }
+
+/**
+ * Fetch distinct Plaid categories from user's transactions
+ * Uses primary category level (e.g., "Food and Drink") for consistency across the application
+ * GET /api/v1/categories/plaid
+ */
+export async function fetchPlaidCategories(): Promise<string[]> {
+  const response = await apiClient.get<string[]>('/v1/categories/plaid')
+  return response.data
+}

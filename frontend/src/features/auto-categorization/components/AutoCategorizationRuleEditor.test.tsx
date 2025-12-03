@@ -36,6 +36,15 @@ describe('AutoCategorizationRuleEditor', () => {
     ['Shopping', 'Clothing'],
   ]
 
+  // Mock Plaid categories from user's transactions (secondary level)
+  const mockPlaidCategories = [
+    'Coffee',
+    'Restaurants',
+    'Groceries',
+    'Shopping',
+    'Clothing',
+  ]
+
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -602,6 +611,7 @@ describe('AutoCategorizationRuleEditor', () => {
           onSave={mockOnSave}
           onCancel={mockOnCancel}
           categories={mockCategories}
+          plaidCategories={mockPlaidCategories}
         />
       )
 
@@ -612,7 +622,7 @@ describe('AutoCategorizationRuleEditor', () => {
       await user.selectOptions(typeSelect, 'existing_category')
 
       // SearchableSelect renders as a combobox INPUT
-      const categorySelect = screen.getByRole('combobox', { name: /select category/i })
+      const categorySelect = screen.getByRole('combobox', { name: /select plaid category/i })
       expect(categorySelect).toBeInTheDocument()
       expect(categorySelect.tagName).toBe('INPUT')
     })
@@ -1160,7 +1170,7 @@ describe('AutoCategorizationRuleEditor', () => {
     ]
 
     describe('existing_category condition', () => {
-      it('should show searchable dropdown for category selection', async () => {
+      it('should show searchable dropdown for Plaid category selection', async () => {
         const user = userEvent.setup()
 
         render(
@@ -1169,6 +1179,7 @@ describe('AutoCategorizationRuleEditor', () => {
             onSave={mockOnSave}
             onCancel={mockOnCancel}
             categories={mockCategories}
+            plaidCategories={mockPlaidCategories}
           />
         )
 
@@ -1179,12 +1190,12 @@ describe('AutoCategorizationRuleEditor', () => {
         const typeSelect = screen.getByLabelText(/condition type/i)
         await user.selectOptions(typeSelect, 'existing_category')
 
-        // Should render a searchable input (combobox) instead of basic select
-        const searchInput = screen.getByRole('combobox', { name: /select category/i })
+        // Should render a searchable input (combobox) for Plaid categories
+        const searchInput = screen.getByRole('combobox', { name: /select plaid category/i })
         expect(searchInput).toBeInTheDocument()
       })
 
-      it('should filter categories as user types', async () => {
+      it('should filter Plaid categories as user types', async () => {
         const user = userEvent.setup()
 
         render(
@@ -1193,6 +1204,7 @@ describe('AutoCategorizationRuleEditor', () => {
             onSave={mockOnSave}
             onCancel={mockOnCancel}
             categories={mockCategories}
+            plaidCategories={mockPlaidCategories}
           />
         )
 
@@ -1202,18 +1214,16 @@ describe('AutoCategorizationRuleEditor', () => {
         const typeSelect = screen.getByLabelText(/condition type/i)
         await user.selectOptions(typeSelect, 'existing_category')
 
-        const searchInput = screen.getByRole('combobox', { name: /select category/i })
+        const searchInput = screen.getByRole('combobox', { name: /select plaid category/i })
         await user.click(searchInput)
-        await user.type(searchInput, 'food')
+        await user.type(searchInput, 'cof')
 
-        // Should filter to show only matching "food" categories
+        // Should filter to show only matching "coffee" category
         await waitFor(() => {
-          // Food-related categories should be visible
-          expect(screen.getByText('Food & Drink')).toBeInTheDocument()
-          expect(screen.getByText('Food & Drink > Coffee')).toBeInTheDocument()
-          expect(screen.getByText('Food & Drink > Restaurants')).toBeInTheDocument()
-          // Shopping categories should be filtered out
-          expect(screen.queryByText('Shopping')).not.toBeInTheDocument()
+          // Coffee should be visible
+          expect(screen.getByText('Coffee')).toBeInTheDocument()
+          // Other categories should be filtered out
+          expect(screen.queryByText('Groceries')).not.toBeInTheDocument()
         })
       })
 
@@ -1227,6 +1237,7 @@ describe('AutoCategorizationRuleEditor', () => {
             onSave={mockOnSave}
             onCancel={mockOnCancel}
             categories={mockCategories}
+            plaidCategories={mockPlaidCategories}
           />
         )
 
@@ -1238,11 +1249,11 @@ describe('AutoCategorizationRuleEditor', () => {
         const typeSelect = screen.getByLabelText(/condition type/i)
         await user.selectOptions(typeSelect, 'existing_category')
 
-        const searchInput = screen.getByRole('combobox', { name: /select category/i })
+        const searchInput = screen.getByRole('combobox', { name: /select plaid category/i })
         await user.click(searchInput)
 
-        // Click on a category option
-        await user.click(screen.getByText('Shopping'))
+        // Click on a Plaid category option
+        await user.click(screen.getByText('Restaurants'))
 
         // Set target category to make form valid (now a SearchableSelect)
         const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
@@ -1254,7 +1265,7 @@ describe('AutoCategorizationRuleEditor', () => {
 
         await waitFor(() => {
           expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
-            conditions: [{ type: 'existing_category', value: 'Shopping' }],
+            conditions: [{ type: 'existing_category', value: 'Restaurants' }],
           }))
         })
       })

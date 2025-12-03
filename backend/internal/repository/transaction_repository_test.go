@@ -1029,3 +1029,64 @@ func TestTransactionRepository_UpdateCategory_PreservesOriginalCategory(t *testi
 	err = mock.ExpectationsWereMet()
 	assert.NoError(t, err)
 }
+
+// TestTransactionRepository_GetDistinctPlaidCategories_Success tests retrieving distinct Plaid categories
+// Returns primary category level (index 0) for consistency
+func TestTransactionRepository_GetDistinctPlaidCategories_Success(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-123"
+
+	// Mock result rows - distinct primary categories extracted from JSON arrays
+	rows := sqlmock.NewRows([]string{"cat"}).
+		AddRow("Food and Drink").
+		AddRow("Shops").
+		AddRow("Travel")
+
+	// Expect SELECT DISTINCT query that extracts primary category (index 0)
+	mock.ExpectQuery("SELECT DISTINCT").
+		WithArgs(userID).
+		WillReturnRows(rows)
+
+	categories, err := repo.GetDistinctPlaidCategories(ctx, userID)
+	assert.NoError(t, err)
+	assert.Len(t, categories, 3)
+	assert.Contains(t, categories, "Food and Drink")
+	assert.Contains(t, categories, "Shops")
+	assert.Contains(t, categories, "Travel")
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetDistinctPlaidCategories_Empty tests when user has no categorized transactions
+func TestTransactionRepository_GetDistinctPlaidCategories_Empty(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-no-transactions"
+
+	// Mock empty result
+	rows := sqlmock.NewRows([]string{"cat"})
+
+	mock.ExpectQuery("SELECT DISTINCT").
+		WithArgs(userID).
+		WillReturnRows(rows)
+
+	categories, err := repo.GetDistinctPlaidCategories(ctx, userID)
+	assert.NoError(t, err)
+	assert.Empty(t, categories)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+

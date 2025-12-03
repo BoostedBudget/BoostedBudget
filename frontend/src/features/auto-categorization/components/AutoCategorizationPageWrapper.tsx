@@ -3,17 +3,19 @@
  *
  * Wrapper component that fetches required data for AutoCategorizationPage:
  * - Categories from API (converted to string[][] format)
+ * - Plaid categories from user's transactions (for "existing_category" condition)
  * - Accounts from API (for account_id condition)
  * - User subscription tier for rule limits
  * - Subscription tiers config for max rules limit
  *
  * Issue #393: Integrate AutoCategorizationPage into App Router and Navigation
  * Issue #395: Add searchable dropdowns for categories and accounts
+ * Issue #397: Add Plaid categories for "existing_category" condition
  */
 
 import { useState, useEffect } from 'react'
 import { AutoCategorizationPage } from './AutoCategorizationPage'
-import { fetchCategories } from '../../categories/api/categoriesApi'
+import { fetchCategories, fetchPlaidCategories } from '../../categories/api/categoriesApi'
 import { fetchAccounts } from '../../accounts/api/plaidApi'
 import { useSubscriptionTiers } from '../../subscription/hooks/useSubscriptionTiers'
 import { useProfile } from '../../profile/hooks/useProfile'
@@ -22,6 +24,7 @@ import type { Account } from '../../accounts/types'
 
 export function AutoCategorizationPageWrapper() {
   const [categories, setCategories] = useState<string[][]>([])
+  const [plaidCategories, setPlaidCategories] = useState<string[]>([])
   const [accounts, setAccounts] = useState<Account[]>([])
 
   const { user } = useProfile()
@@ -30,9 +33,10 @@ export function AutoCategorizationPageWrapper() {
   useEffect(() => {
     const loadData = async () => {
       try {
-        // Fetch categories and accounts in parallel
-        const [customCategories, accountsResponse] = await Promise.all([
+        // Fetch categories, Plaid categories, and accounts in parallel
+        const [customCategories, plaidCats, accountsResponse] = await Promise.all([
           fetchCategories(),
+          fetchPlaidCategories(),
           fetchAccounts(),
         ])
 
@@ -43,6 +47,7 @@ export function AutoCategorizationPageWrapper() {
             : [cat.name]
         )
         setCategories(categoryPaths)
+        setPlaidCategories(plaidCats)
         setAccounts(accountsResponse.accounts)
       } catch (err) {
         console.error('Failed to load data:', err)
@@ -58,6 +63,7 @@ export function AutoCategorizationPageWrapper() {
   return (
     <AutoCategorizationPage
       categories={categories}
+      plaidCategories={plaidCategories}
       accounts={accounts}
       maxRules={maxRules}
       currentTier={userTier}
