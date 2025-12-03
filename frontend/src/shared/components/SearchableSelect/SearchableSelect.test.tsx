@@ -6,7 +6,7 @@ import { SearchableSelect } from './SearchableSelect'
 import type { SearchableSelectOption, SearchableSelectProps } from './SearchableSelect'
 
 // Wrapper for controlled component tests
-function ControlledSearchableSelect(props: Omit<SearchableSelectProps, 'value' | 'onChange'> & { initialValue?: string | null }) {
+function ControlledSearchableSelect(props: Omit<SearchableSelectProps, 'value' | 'onChange'> & { initialValue?: string | null; onChange?: (value: string | null) => void }) {
   const [value, setValue] = useState<string | null>(props.initialValue ?? null)
   return (
     <SearchableSelect
