@@ -134,6 +134,7 @@ export interface AutoCategorizationRuleEditorProps {
   categories: string[][]
   plaidCategories?: string[] // Plaid categories from user's transactions for "existing_category" condition
   accounts?: Account[] // Optional accounts list for account_id dropdown
+  tags?: { id: string; name: string }[] // User tags for target tags autocomplete
 }
 
 interface FormErrors {
@@ -151,7 +152,7 @@ const DEFAULT_CONDITION: RuleCondition = {
   value: '',
 }
 
-export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, categories, plaidCategories = [], accounts = [] }: AutoCategorizationRuleEditorProps) {
+export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, categories, plaidCategories = [], accounts = [], tags = [] }: AutoCategorizationRuleEditorProps) {
   // Form state
   const [name, setName] = useState(rule?.name || '')
   const [description, setDescription] = useState(rule?.description || '')
@@ -702,28 +703,47 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
             ))}
           </div>
           <div className="auto-categorization-rule-editor__tag-input-row">
-            <input
-              type="text"
-              className="auto-categorization-rule-editor__input"
-              value={newTag}
-              onChange={(e) => setNewTag(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault()
-                  addTag()
-                }
-              }}
-              disabled={saving}
-              placeholder="Add tag"
-            />
-            <button
-              type="button"
-              className="auto-categorization-rule-editor__add-btn"
-              onClick={addTag}
-              disabled={saving || !newTag.trim()}
-            >
-              Add Tag
-            </button>
+            {tags.length > 0 ? (
+              <SearchableSelect
+                options={tags
+                  .filter(tag => !targetTags.includes(tag.name))
+                  .map(tag => ({ value: tag.name, label: tag.name }))}
+                value={null}
+                onChange={(tagName) => {
+                  if (tagName && !targetTags.includes(tagName)) {
+                    setTargetTags([...targetTags, tagName])
+                  }
+                }}
+                placeholder="Search tags..."
+                disabled={saving}
+                aria-label="Select tag"
+              />
+            ) : (
+              <>
+                <input
+                  type="text"
+                  className="auto-categorization-rule-editor__input"
+                  value={newTag}
+                  onChange={(e) => setNewTag(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      addTag()
+                    }
+                  }}
+                  disabled={saving}
+                  placeholder="Add tag"
+                />
+                <button
+                  type="button"
+                  className="auto-categorization-rule-editor__add-btn"
+                  onClick={addTag}
+                  disabled={saving || !newTag.trim()}
+                >
+                  Add Tag
+                </button>
+              </>
+            )}
           </div>
         </div>
 

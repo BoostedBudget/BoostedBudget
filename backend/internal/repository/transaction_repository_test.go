@@ -1031,7 +1031,7 @@ func TestTransactionRepository_UpdateCategory_PreservesOriginalCategory(t *testi
 }
 
 // TestTransactionRepository_GetDistinctPlaidCategories_Success tests retrieving distinct Plaid categories
-// Returns primary category level (index 0) for consistency
+// Returns primary category from personal_finance_category JSONB (Plaid v2 format)
 func TestTransactionRepository_GetDistinctPlaidCategories_Success(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -1042,13 +1042,13 @@ func TestTransactionRepository_GetDistinctPlaidCategories_Success(t *testing.T) 
 
 	userID := "user-123"
 
-	// Mock result rows - distinct primary categories extracted from JSON arrays
+	// Mock result rows - distinct primary categories from personal_finance_category JSONB
 	rows := sqlmock.NewRows([]string{"cat"}).
-		AddRow("Food and Drink").
-		AddRow("Shops").
-		AddRow("Travel")
+		AddRow("FOOD_AND_DRINK").
+		AddRow("GENERAL_MERCHANDISE").
+		AddRow("TRAVEL")
 
-	// Expect SELECT DISTINCT query that extracts primary category (index 0)
+	// Expect SELECT DISTINCT query that extracts primary category from personal_finance_category
 	mock.ExpectQuery("SELECT DISTINCT").
 		WithArgs(userID).
 		WillReturnRows(rows)
@@ -1056,9 +1056,9 @@ func TestTransactionRepository_GetDistinctPlaidCategories_Success(t *testing.T) 
 	categories, err := repo.GetDistinctPlaidCategories(ctx, userID)
 	assert.NoError(t, err)
 	assert.Len(t, categories, 3)
-	assert.Contains(t, categories, "Food and Drink")
-	assert.Contains(t, categories, "Shops")
-	assert.Contains(t, categories, "Travel")
+	assert.Contains(t, categories, "FOOD_AND_DRINK")
+	assert.Contains(t, categories, "GENERAL_MERCHANDISE")
+	assert.Contains(t, categories, "TRAVEL")
 
 	err = mock.ExpectationsWereMet()
 	assert.NoError(t, err)
