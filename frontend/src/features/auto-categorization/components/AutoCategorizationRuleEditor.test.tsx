@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AutoCategorizationRuleEditor } from './AutoCategorizationRuleEditor'
 import type { CategorizationRule } from '../types'
@@ -1547,6 +1547,208 @@ describe('AutoCategorizationRuleEditor', () => {
           }))
         })
       })
+    })
+  })
+
+  // Issue #404: Uncategorized target category option
+  describe('Uncategorized target category (Issue #404)', () => {
+    it('should show "Uncategorized" as an option in the dropdown', async () => {
+      const user = userEvent.setup()
+
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
+      await user.click(targetCategoryInput)
+
+      // Should have "Uncategorized" option
+      expect(screen.getByText('Uncategorized')).toBeInTheDocument()
+    })
+
+    it('should set targetCategory to empty array when Uncategorized selected', async () => {
+      const user = userEvent.setup()
+      mockOnSave.mockResolvedValue(undefined)
+
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      await user.type(screen.getByLabelText(/rule name/i), 'Clear Category Rule')
+
+      // Add a condition
+      const addButton = screen.getByRole('button', { name: /add condition/i })
+      fireEvent.click(addButton)
+      const conditionValueInput = screen.getByPlaceholderText(/enter value/i)
+      await user.type(conditionValueInput, 'spam')
+
+      // Select "Uncategorized" from target category dropdown
+      const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
+      await user.click(targetCategoryInput)
+      await user.click(screen.getByText('Uncategorized'))
+
+      const saveButton = screen.getByRole('button', { name: /save/i })
+      fireEvent.click(saveButton)
+
+      await waitFor(() => {
+        expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
+          // Uncategorized should be stored as empty array []
+          target_category: [],
+        }))
+      })
+    })
+
+    it('should display "Uncategorized" when editing rule with empty target_category array', () => {
+      const ruleWithEmptyCategory: CategorizationRule = {
+        ...mockExistingRule,
+        target_category: [], // Empty array = uncategorized
+        target_tags: ['spam'], // Has tags to be valid
+      }
+
+      render(
+        <AutoCategorizationRuleEditor
+          mode="edit"
+          rule={ruleWithEmptyCategory}
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      // The category input should show "Uncategorized"
+      const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
+      expect(targetCategoryInput).toHaveValue('Uncategorized')
+    })
+
+    it('should distinguish null (no action) from empty array (clear category)', async () => {
+      const user = userEvent.setup()
+      mockOnSave.mockResolvedValue(undefined)
+
+      // Rule with null target_category = no category action
+      const ruleWithNullCategory: CategorizationRule = {
+        ...mockExistingRule,
+        target_category: null,
+        target_tags: ['tagged'],
+      }
+
+      render(
+        <AutoCategorizationRuleEditor
+          mode="edit"
+          rule={ruleWithNullCategory}
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      // Should not show "Uncategorized" - should be empty/placeholder
+      const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
+      expect(targetCategoryInput).not.toHaveValue('Uncategorized')
+
+      // Now select Uncategorized
+      await user.click(targetCategoryInput)
+      await user.click(screen.getByText('Uncategorized'))
+
+      const saveButton = screen.getByRole('button', { name: /save/i })
+      fireEvent.click(saveButton)
+
+      await waitFor(() => {
+        expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
+          // Should now be empty array, not null
+          target_category: [],
+        }))
+      })
+    })
+
+    it('should allow rule with only Uncategorized action (no tags)', async () => {
+      const user = userEvent.setup()
+      mockOnSave.mockResolvedValue(undefined)
+
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      await user.type(screen.getByLabelText(/rule name/i), 'Clear Only Rule')
+
+      // Add a condition
+      const addButton = screen.getByRole('button', { name: /add condition/i })
+      fireEvent.click(addButton)
+      const conditionValueInput = screen.getByPlaceholderText(/enter value/i)
+      await user.type(conditionValueInput, 'junk')
+
+      // Select "Uncategorized" from target category dropdown (no tags)
+      const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
+      await user.click(targetCategoryInput)
+      await user.click(screen.getByText('Uncategorized'))
+
+      const saveButton = screen.getByRole('button', { name: /save/i })
+      fireEvent.click(saveButton)
+
+      await waitFor(() => {
+        // Should save successfully with empty array target_category and no tags
+        expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
+          target_category: [],
+        }))
+      })
+    })
+
+    it('should clear to null (no action) when using "No category change"', async () => {
+      const user = userEvent.setup()
+      mockOnSave.mockResolvedValue(undefined)
+
+      // Start with a rule that has a category
+      const ruleWithCategory: CategorizationRule = {
+        ...mockExistingRule,
+        target_category: ['Food & Drink'],
+        target_tags: ['tagged'],
+      }
+
+      render(
+        <AutoCategorizationRuleEditor
+          mode="edit"
+          rule={ruleWithCategory}
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      // Clear the category using the clear option (should set to null)
+      const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
+      await user.click(targetCategoryInput)
+
+      // Wait for dropdown to open and find the "No category change" option within the listbox
+      const listbox = await screen.findByRole('listbox')
+      const noCategoryOption = within(listbox).getByText('No category change')
+      await user.click(noCategoryOption)
+
+      const saveButton = screen.getByRole('button', { name: /save/i })
+      fireEvent.click(saveButton)
+
+      await waitFor(() => {
+        expect(mockOnSave).toHaveBeenCalled()
+      }, { timeout: 3000 })
+
+      // Verify the call argument
+      expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
+        // Should be null (no action), not empty array
+        target_category: null,
+      }))
     })
   })
 })

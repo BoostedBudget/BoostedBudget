@@ -458,3 +458,108 @@ func TestRuleEngine_RuleMatches(t *testing.T) {
 		})
 	}
 }
+
+// TestRuleEngine_EvaluateRules_ClearCategory_Uncategorized tests that rules with
+// empty array TargetCategory correctly set result.Category to empty array.
+// Issue #404: Empty array [] represents "clear category" / "uncategorized".
+func TestRuleEngine_EvaluateRules_ClearCategory_Uncategorized(t *testing.T) {
+	engine := NewRuleEngine()
+
+	// Rule with empty TargetCategory = "clear to uncategorized"
+	rules := []*domain.CategorizationRule{
+		{
+			ID:       "rule-clear",
+			Name:     "Clear Refund Categories",
+			Enabled:  true,
+			Priority: 10,
+			Conditions: []domain.RuleCondition{
+				{Type: domain.ConditionMerchantContains, Value: "refund"},
+			},
+			ConditionLogic: "AND",
+			TargetCategory: []string{}, // Empty array = clear/uncategorized
+			TagBehavior:    "add",
+			Source:         "manual",
+		},
+	}
+
+	tx := newTestTransaction("AMAZON REFUND #123", 50.00, "online", nil)
+
+	result, err := engine.EvaluateRules(tx, rules)
+	if err != nil {
+		t.Fatalf("EvaluateRules() error = %v", err)
+	}
+
+	// Rule should match
+	if len(result.MatchedRuleIDs) != 1 {
+		t.Errorf("Expected 1 matched rule, got %d", len(result.MatchedRuleIDs))
+	}
+
+	// Category should be set to empty array (not nil)
+	if result.Category == nil {
+		t.Error("Expected Category to be empty array [], got nil")
+	}
+
+	if len(result.Category) != 0 {
+		t.Errorf("Expected empty Category [], got %v", result.Category)
+	}
+
+	// CategoryRuleID should be set
+	if result.CategoryRuleID != "rule-clear" {
+		t.Errorf("Expected CategoryRuleID = rule-clear, got %s", result.CategoryRuleID)
+	}
+}
+
+// TestRuleEngine_EvaluateRules_ClearCategory_FirstMatchWins tests that the first
+// matching "clear category" rule wins over later assign category rules.
+func TestRuleEngine_EvaluateRules_ClearCategory_FirstMatchWins(t *testing.T) {
+	engine := NewRuleEngine()
+
+	rules := []*domain.CategorizationRule{
+		{
+			ID:       "rule-clear",
+			Name:     "Clear Category (high priority)",
+			Enabled:  true,
+			Priority: 20, // Higher priority - should win
+			Conditions: []domain.RuleCondition{
+				{Type: domain.ConditionMerchantContains, Value: "amazon"},
+			},
+			ConditionLogic: "AND",
+			TargetCategory: []string{}, // Clear to uncategorized
+			TagBehavior:    "add",
+			Source:         "manual",
+		},
+		{
+			ID:       "rule-assign",
+			Name:     "Assign Shopping Category (low priority)",
+			Enabled:  true,
+			Priority: 10, // Lower priority
+			Conditions: []domain.RuleCondition{
+				{Type: domain.ConditionMerchantContains, Value: "amazon"},
+			},
+			ConditionLogic: "AND",
+			TargetCategory: []string{"Shopping"},
+			TagBehavior:    "add",
+			Source:         "manual",
+		},
+	}
+
+	tx := newTestTransaction("AMAZON.COM", -25.00, "online", nil)
+
+	result, err := engine.EvaluateRules(tx, rules)
+	if err != nil {
+		t.Fatalf("EvaluateRules() error = %v", err)
+	}
+
+	// Higher priority "clear" rule should win
+	if result.Category == nil {
+		t.Error("Expected Category to be empty array [], got nil")
+	}
+
+	if len(result.Category) != 0 {
+		t.Errorf("Expected empty Category [] from clear rule, got %v", result.Category)
+	}
+
+	if result.CategoryRuleID != "rule-clear" {
+		t.Errorf("Expected CategoryRuleID = rule-clear, got %s", result.CategoryRuleID)
+	}
+}

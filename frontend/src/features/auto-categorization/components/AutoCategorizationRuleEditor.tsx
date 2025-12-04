@@ -181,9 +181,20 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
     return categories.map(cat => cat.join(' > '))
   }, [categories])
 
+  // Issue #404: Special value for "Uncategorized" (clear category) option
+  const UNCATEGORIZED_VALUE = '__UNCATEGORIZED__'
+  const UNCATEGORIZED_LABEL = 'Uncategorized'
+
   // Combined category options for target category dropdown (custom + Plaid)
   // Issue #402: Merge custom categories with Plaid categories in a flat, sorted list
+  // Issue #404: Add "Uncategorized" option at the top to allow clearing category
   const allTargetCategoryOptions = useMemo(() => {
+    // Issue #404: "Uncategorized" option first - clears category to empty array
+    const uncategorizedOption = {
+      value: UNCATEGORIZED_VALUE,
+      label: UNCATEGORIZED_LABEL,
+    }
+
     // Custom categories (keep as-is)
     const customOptions = flatCategories.map(cat => ({ value: cat, label: cat }))
 
@@ -199,10 +210,12 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
       }))
       .filter(opt => !existingValues.has(opt.value.toLowerCase()))
 
-    // Merge and sort alphabetically
-    return [...customOptions, ...plaidOptions].sort((a, b) =>
+    // Merge and sort alphabetically, then add Uncategorized at the top
+    const sortedCategories = [...customOptions, ...plaidOptions].sort((a, b) =>
       a.label.localeCompare(b.label)
     )
+
+    return [uncategorizedOption, ...sortedCategories]
   }, [flatCategories, plaidCategories])
 
   // Validate a single condition and update error state
@@ -238,7 +251,9 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
       }
     }
 
-    if (!targetCategory && targetTags.length === 0) {
+    // Issue #404: Empty array [] is a valid action (clear category), only null means no action
+    // null = no category action, [] = clear category action, ['Food'] = assign category action
+    if (targetCategory === null && targetTags.length === 0) {
       newErrors.target = 'Target category or tags required'
     }
 
@@ -263,7 +278,9 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
         priority,
         conditions,
         condition_logic: conditionLogic,
-        target_category: targetCategory || undefined,
+        // Issue #404: Preserve null (no action) vs [] (clear category) distinction
+        // null = no category action, [] = clear category, ['Food'] = assign category
+        target_category: targetCategory === null ? null : (targetCategory || undefined),
         target_tags: targetTags.length > 0 ? targetTags : undefined,
         tag_behavior: tagBehavior,
       }
@@ -360,9 +377,14 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
     updateCondition(index, { value: newTypes })
   }
 
+  // Issue #404: Handle category change including Uncategorized option
   const handleCategoryChange = (value: string) => {
-    if (value === '') {
+    if (value === '' || value === null) {
+      // "No category change" selected (via allowClear) - null means no action
       setTargetCategory(null)
+    } else if (value === UNCATEGORIZED_VALUE) {
+      // "Uncategorized" selected - empty array means clear category
+      setTargetCategory([])
     } else {
       setTargetCategory(value.split(' > '))
     }
@@ -380,7 +402,18 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
     setTargetTags(targetTags.filter((t) => t !== tag))
   }
 
-  const categoryValue = targetCategory ? targetCategory.join(' > ') : ''
+  // Issue #404: Display "Uncategorized" when targetCategory is empty array
+  // null = no selection (placeholder), [] = Uncategorized selected, ['Food'] = category selected
+  // Note: SearchableSelect matches on value, then displays label, so we return UNCATEGORIZED_VALUE
+  const categoryValue = useMemo(() => {
+    if (targetCategory === null) {
+      return null // Shows placeholder "Search categories..."
+    }
+    if (targetCategory.length === 0) {
+      return UNCATEGORIZED_VALUE // SearchableSelect will display "Uncategorized" label
+    }
+    return targetCategory.join(' > ')
+  }, [targetCategory])
 
   // Render the appropriate input for a condition based on its type
   const renderConditionValueInput = (condition: RuleCondition, index: number) => {
