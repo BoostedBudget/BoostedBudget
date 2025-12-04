@@ -331,3 +331,196 @@ func TestRuleApplicationService_ReplaceTagBehavior(t *testing.T) {
 func strPtr(s string) *string {
 	return &s
 }
+
+// TestRuleApplicationService_ClearCategoryUncategorized tests that rules with empty
+// TargetCategory [] clear the category (set to uncategorized).
+// Issue #404: Empty array represents "clear category" action.
+func TestRuleApplicationService_ClearCategoryUncategorized(t *testing.T) {
+	mockRepo := new(mockRuleApplicationRepository)
+	service := NewRuleApplicationService(mockRepo)
+	ctx := context.Background()
+	userID := "user-123"
+
+	// Rule with empty TargetCategory = "clear category" action
+	rules := []*domain.CategorizationRule{
+		{
+			ID:             "rule-clear",
+			UserID:         userID,
+			Name:           "Clear Category Rule",
+			Enabled:        true,
+			Priority:       10,
+			Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "spam"}},
+			ConditionLogic: "AND",
+			TargetCategory: []string{}, // Empty array = clear category
+			TargetTags:     []string{"cleared"},
+			TagBehavior:    "add",
+			Source:         "manual",
+		},
+	}
+
+	mockRepo.On("GetEnabledByUserID", ctx, userID).Return(rules, nil)
+	mockRepo.On("IncrementMatchCount", ctx, "rule-clear").Return(nil)
+
+	merchantName := "Spam Merchant"
+	existingCategory := `["Shopping","Electronics"]`
+	tx := &domain.Transaction{
+		ID:               "tx-123",
+		UserID:           userID,
+		MerchantName:     &merchantName,
+		CategoryOverride: &existingCategory,
+	}
+
+	err := service.ApplyRulesToTransaction(ctx, tx)
+
+	require.NoError(t, err)
+	// CategoryOverride should be set to empty JSON array "[]"
+	require.NotNil(t, tx.CategoryOverride, "CategoryOverride should not be nil")
+	assert.Equal(t, "[]", *tx.CategoryOverride, "Category should be cleared to empty array")
+	assert.Equal(t, domain.CategorySourceRule, tx.CategorySourceField)
+	// Tags should still be applied
+	assert.Contains(t, tx.Tags, "cleared")
+	mockRepo.AssertExpectations(t)
+}
+
+// TestRuleApplicationService_ClearCategoryUncategorized_Batch tests that batch
+// processing also handles clear category rules correctly.
+// Issue #404: Empty array represents "clear category" action.
+func TestRuleApplicationService_ClearCategoryUncategorized_Batch(t *testing.T) {
+	mockRepo := new(mockRuleApplicationRepository)
+	service := NewRuleApplicationService(mockRepo)
+	ctx := context.Background()
+	userID := "user-123"
+
+	// Rule with empty TargetCategory = "clear category" action
+	rules := []*domain.CategorizationRule{
+		{
+			ID:             "rule-clear",
+			UserID:         userID,
+			Name:           "Clear Category Rule",
+			Enabled:        true,
+			Priority:       10,
+			Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "spam"}},
+			ConditionLogic: "AND",
+			TargetCategory: []string{}, // Empty array = clear category
+			TagBehavior:    "add",
+			Source:         "manual",
+		},
+	}
+
+	mockRepo.On("GetEnabledByUserID", ctx, userID).Return(rules, nil)
+	mockRepo.On("IncrementMatchCount", ctx, "rule-clear").Return(nil)
+
+	merchant1 := "Spam Company"
+	merchant2 := "Normal Store"
+	existingCategory := `["Shopping"]`
+	txns := []domain.Transaction{
+		{ID: "tx-1", UserID: userID, MerchantName: &merchant1, CategoryOverride: &existingCategory},
+		{ID: "tx-2", UserID: userID, MerchantName: &merchant2, CategoryOverride: &existingCategory},
+	}
+
+	err := service.ApplyRulesToBatch(ctx, txns, userID)
+
+	require.NoError(t, err)
+	// First transaction should have category cleared
+	require.NotNil(t, txns[0].CategoryOverride)
+	assert.Equal(t, "[]", *txns[0].CategoryOverride, "Category should be cleared to empty array")
+	assert.Equal(t, domain.CategorySourceRule, txns[0].CategorySourceField)
+	// Second transaction should NOT match (no "spam" in name)
+	assert.Equal(t, `["Shopping"]`, *txns[1].CategoryOverride, "Non-matching transaction should keep original category")
+}
+
+// TestRuleApplicationService_NoCategoryActionNil tests that rules with nil
+// TargetCategory (not empty array) do not modify the category at all.
+// Issue #404: Distinguish nil (no action) from [] (clear action).
+func TestRuleApplicationService_NoCategoryActionNil(t *testing.T) {
+	mockRepo := new(mockRuleApplicationRepository)
+	service := NewRuleApplicationService(mockRepo)
+	ctx := context.Background()
+	userID := "user-123"
+
+	// Rule with nil TargetCategory = no category action
+	rules := []*domain.CategorizationRule{
+		{
+			ID:             "rule-tags-only",
+			UserID:         userID,
+			Name:           "Tags Only Rule",
+			Enabled:        true,
+			Priority:       10,
+			Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "store"}},
+			ConditionLogic: "AND",
+			TargetCategory: nil, // nil = no category action
+			TargetTags:     []string{"tagged"},
+			TagBehavior:    "add",
+			Source:         "manual",
+		},
+	}
+
+	mockRepo.On("GetEnabledByUserID", ctx, userID).Return(rules, nil)
+	mockRepo.On("IncrementMatchCount", ctx, "rule-tags-only").Return(nil)
+
+	merchantName := "Some Store"
+	existingCategory := `["Shopping"]`
+	tx := &domain.Transaction{
+		ID:               "tx-123",
+		UserID:           userID,
+		MerchantName:     &merchantName,
+		CategoryOverride: &existingCategory,
+	}
+
+	err := service.ApplyRulesToTransaction(ctx, tx)
+
+	require.NoError(t, err)
+	// Category should NOT be modified (nil = no action)
+	assert.Equal(t, `["Shopping"]`, *tx.CategoryOverride, "Category should remain unchanged with nil TargetCategory")
+	// Tags should still be applied
+	assert.Contains(t, tx.Tags, "tagged")
+	mockRepo.AssertExpectations(t)
+}
+
+// TestRuleApplicationService_ClearCategoryOnlyAction tests that a rule with only
+// empty TargetCategory (no tags) still works as a valid action.
+// Issue #404: Empty array [] is a valid action even without tags.
+func TestRuleApplicationService_ClearCategoryOnlyAction(t *testing.T) {
+	mockRepo := new(mockRuleApplicationRepository)
+	service := NewRuleApplicationService(mockRepo)
+	ctx := context.Background()
+	userID := "user-123"
+
+	// Rule with ONLY empty TargetCategory, no tags
+	rules := []*domain.CategorizationRule{
+		{
+			ID:             "rule-clear-only",
+			UserID:         userID,
+			Name:           "Clear Only Rule",
+			Enabled:        true,
+			Priority:       10,
+			Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "junk"}},
+			ConditionLogic: "AND",
+			TargetCategory: []string{}, // Empty array = clear category
+			TargetTags:     nil,        // No tag action
+			TagBehavior:    "add",
+			Source:         "manual",
+		},
+	}
+
+	mockRepo.On("GetEnabledByUserID", ctx, userID).Return(rules, nil)
+	mockRepo.On("IncrementMatchCount", ctx, "rule-clear-only").Return(nil)
+
+	merchantName := "Junk Mail Inc"
+	existingCategory := `["Entertainment"]`
+	tx := &domain.Transaction{
+		ID:               "tx-123",
+		UserID:           userID,
+		MerchantName:     &merchantName,
+		CategoryOverride: &existingCategory,
+	}
+
+	err := service.ApplyRulesToTransaction(ctx, tx)
+
+	require.NoError(t, err)
+	// CategoryOverride should be set to empty JSON array "[]"
+	require.NotNil(t, tx.CategoryOverride, "CategoryOverride should not be nil")
+	assert.Equal(t, "[]", *tx.CategoryOverride, "Category should be cleared to empty array")
+	assert.Equal(t, domain.CategorySourceRule, tx.CategorySourceField)
+	mockRepo.AssertExpectations(t)
+}
