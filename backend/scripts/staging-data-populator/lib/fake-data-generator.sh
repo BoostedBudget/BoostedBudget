@@ -34,6 +34,26 @@ declare -a CATEGORIES=(
   "Travel" "Personal Care" "Recreation" "Subscriptions"
 )
 
+# Map user-facing category to Plaid primary category enum
+# Used to populate personal_finance_category JSONB field
+get_plaid_primary_category() {
+  local category="$1"
+  case "$category" in
+    "Food and Drink"|"Groceries") echo "FOOD_AND_DRINK" ;;
+    "Shopping") echo "SHOPPING" ;;
+    "Transportation"|"Gas") echo "TRANSPORTATION" ;;
+    "Entertainment"|"Recreation") echo "ENTERTAINMENT" ;;
+    "Healthcare") echo "HEALTHCARE" ;;
+    "Utilities") echo "UTILITIES" ;;
+    "Home") echo "HOME_IMPROVEMENT" ;;
+    "Travel") echo "TRAVEL" ;;
+    "Personal Care") echo "PERSONAL_CARE" ;;
+    "Subscriptions") echo "RENT_AND_UTILITIES" ;;
+    "Income") echo "INCOME" ;;
+    *) echo "GENERAL_MERCHANDISE" ;;
+  esac
+}
+
 # Generate random merchant name
 get_random_merchant() {
   echo "${EXPENSE_MERCHANTS[$RANDOM % ${#EXPENSE_MERCHANTS[@]}]}"
@@ -115,12 +135,16 @@ generate_fake_transaction() {
   # Escape SQL special characters
   local escaped_merchant=$(sql_escape "$merchant")
 
+  # Get Plaid primary category for personal_finance_category JSONB
+  local plaid_cat
+  plaid_cat=$(get_plaid_primary_category "$category")
+
   # Insert transaction
   local sql="
     INSERT INTO transactions (
       id, user_id, account_id, linked_item_id, source,
       external_transaction_id, amount, date, authorized_date, name,
-      category, pending, created_at, updated_at
+      category, personal_finance_category, pending, created_at, updated_at
     )
     VALUES (
       '$txn_id',
@@ -134,6 +158,7 @@ generate_fake_transaction() {
       '$date',
       '$escaped_merchant',
       to_jsonb(ARRAY['$category']),
+      jsonb_build_object('primary', '$plaid_cat'),
       $pending,
       NOW(),
       NOW()
@@ -203,12 +228,16 @@ insert_manual_transaction() {
   local escaped_name=$(sql_escape "$name")
   local escaped_notes=$(sql_escape "$user_notes")
 
+  # Get Plaid primary category for personal_finance_category JSONB
+  local plaid_cat
+  plaid_cat=$(get_plaid_primary_category "$category")
+
   # Build SQL with optional user_notes
   local sql="
     INSERT INTO transactions (
       id, user_id, account_id, linked_item_id, source,
       external_transaction_id, amount, date, authorized_date, name,
-      category, pending, user_notes, created_at, updated_at
+      category, personal_finance_category, pending, user_notes, created_at, updated_at
     )
     VALUES (
       '$txn_id',
@@ -222,6 +251,7 @@ insert_manual_transaction() {
       '$date',
       '$escaped_name',
       to_jsonb(ARRAY['$category']),
+      jsonb_build_object('primary', '$plaid_cat'),
       $pending,
       $([ -n "$user_notes" ] && echo "'$escaped_notes'" || echo "NULL"),
       NOW(),

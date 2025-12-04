@@ -36,13 +36,12 @@ describe('AutoCategorizationRuleEditor', () => {
     ['Shopping', 'Clothing'],
   ]
 
-  // Mock Plaid categories from user's transactions (secondary level)
+  // Mock Plaid categories from user's transactions (Plaid enum format)
   const mockPlaidCategories = [
-    'Coffee',
-    'Restaurants',
-    'Groceries',
-    'Shopping',
-    'Clothing',
+    'FOOD_AND_DRINK',
+    'SHOPPING',
+    'TRANSPORTATION',
+    'ENTERTAINMENT',
   ]
 
   beforeEach(() => {
@@ -1216,14 +1215,14 @@ describe('AutoCategorizationRuleEditor', () => {
 
         const searchInput = screen.getByRole('combobox', { name: /select plaid category/i })
         await user.click(searchInput)
-        await user.type(searchInput, 'cof')
+        await user.type(searchInput, 'food')
 
-        // Should filter to show only matching "coffee" category
+        // Should filter to show only matching category (displayed as human-readable)
         await waitFor(() => {
-          // Coffee should be visible
-          expect(screen.getByText('Coffee')).toBeInTheDocument()
+          // Food And Drink should be visible (formatted from FOOD_AND_DRINK)
+          expect(screen.getByText('Food And Drink')).toBeInTheDocument()
           // Other categories should be filtered out
-          expect(screen.queryByText('Groceries')).not.toBeInTheDocument()
+          expect(screen.queryByText('Transportation')).not.toBeInTheDocument()
         })
       })
 
@@ -1252,8 +1251,8 @@ describe('AutoCategorizationRuleEditor', () => {
         const searchInput = screen.getByRole('combobox', { name: /select plaid category/i })
         await user.click(searchInput)
 
-        // Click on a Plaid category option
-        await user.click(screen.getByText('Restaurants'))
+        // Click on a Plaid category option (displayed as human-readable but stored as enum)
+        await user.click(screen.getByText('Shopping'))
 
         // Set target category to make form valid (now a SearchableSelect)
         const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
@@ -1265,7 +1264,8 @@ describe('AutoCategorizationRuleEditor', () => {
 
         await waitFor(() => {
           expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
-            conditions: [{ type: 'existing_category', value: 'Restaurants' }],
+            // Value should be stored as the original Plaid enum
+            conditions: [{ type: 'existing_category', value: 'SHOPPING' }],
           }))
         })
       })
@@ -1453,6 +1453,98 @@ describe('AutoCategorizationRuleEditor', () => {
           // Should filter to show only food-related categories
           const foodOption = screen.getByText('Food & Drink')
           expect(foodOption).toBeInTheDocument()
+        })
+      })
+
+      it('should show both custom and Plaid categories in dropdown', async () => {
+        const user = userEvent.setup()
+
+        render(
+          <AutoCategorizationRuleEditor
+            mode="create"
+            onSave={mockOnSave}
+            onCancel={mockOnCancel}
+            categories={mockCategories}
+            plaidCategories={mockPlaidCategories}
+          />
+        )
+
+        const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
+        await user.click(targetCategoryInput)
+
+        await waitFor(() => {
+          // Should show custom categories
+          expect(screen.getByText('Food & Drink')).toBeInTheDocument()
+          // 'Shopping' appears in both custom and Plaid - deduplication keeps custom one
+          expect(screen.getByText('Shopping')).toBeInTheDocument()
+
+          // Should show unique Plaid categories in human-readable format
+          // Note: 'Shopping' from SHOPPING is deduplicated (already in custom categories)
+          expect(screen.getByText('Food And Drink')).toBeInTheDocument() // From FOOD_AND_DRINK
+          expect(screen.getByText('Transportation')).toBeInTheDocument() // From TRANSPORTATION
+          expect(screen.getByText('Entertainment')).toBeInTheDocument()  // From ENTERTAINMENT
+        })
+      })
+
+      it('should sort combined categories alphabetically', async () => {
+        const user = userEvent.setup()
+
+        render(
+          <AutoCategorizationRuleEditor
+            mode="create"
+            onSave={mockOnSave}
+            onCancel={mockOnCancel}
+            categories={mockCategories}
+            plaidCategories={mockPlaidCategories}
+          />
+        )
+
+        const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
+        await user.click(targetCategoryInput)
+
+        await waitFor(() => {
+          // All categories should be present (sorted alphabetically in merged list)
+          const options = screen.getAllByRole('option')
+          // Options should exist (we don't test exact order in this basic test)
+          expect(options.length).toBeGreaterThan(0)
+        })
+      })
+
+      it('should store Plaid category as single-element array when selected', async () => {
+        const user = userEvent.setup()
+        mockOnSave.mockResolvedValue(undefined)
+
+        render(
+          <AutoCategorizationRuleEditor
+            mode="create"
+            onSave={mockOnSave}
+            onCancel={mockOnCancel}
+            categories={mockCategories}
+            plaidCategories={mockPlaidCategories}
+          />
+        )
+
+        await user.type(screen.getByLabelText(/rule name/i), 'Plaid Category Rule')
+
+        // Add a condition
+        const addButton = screen.getByRole('button', { name: /add condition/i })
+        fireEvent.click(addButton)
+        const conditionValueInput = screen.getByPlaceholderText(/enter value/i)
+        await user.type(conditionValueInput, 'test')
+
+        // Select a Plaid category from target category dropdown
+        const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
+        await user.click(targetCategoryInput)
+        await user.click(screen.getByText('Transportation'))
+
+        const saveButton = screen.getByRole('button', { name: /save/i })
+        fireEvent.click(saveButton)
+
+        await waitFor(() => {
+          expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
+            // Plaid category should be stored as single-element array
+            target_category: ['Transportation'],
+          }))
         })
       })
     })

@@ -20,6 +20,7 @@ import type {
 import { CONDITION_TYPE_LABELS } from '../types'
 import { SearchableSelect } from '../../../shared/components/SearchableSelect'
 import type { Account } from '../../accounts/types'
+import { formatPlaidCategory } from '../utils/categoryUtils'
 import './AutoCategorizationRuleEditor.css'
 
 // Account types available for selection
@@ -179,6 +180,30 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
   const flatCategories = useMemo(() => {
     return categories.map(cat => cat.join(' > '))
   }, [categories])
+
+  // Combined category options for target category dropdown (custom + Plaid)
+  // Issue #402: Merge custom categories with Plaid categories in a flat, sorted list
+  const allTargetCategoryOptions = useMemo(() => {
+    // Custom categories (keep as-is)
+    const customOptions = flatCategories.map(cat => ({ value: cat, label: cat }))
+
+    // Track existing values for deduplication
+    const existingValues = new Set(customOptions.map(opt => opt.value.toLowerCase()))
+
+    // Plaid categories (format for display, keep human-readable value for storage)
+    // Filter out duplicates that already exist in custom categories
+    const plaidOptions = plaidCategories
+      .map(cat => ({
+        value: formatPlaidCategory(cat),
+        label: formatPlaidCategory(cat),
+      }))
+      .filter(opt => !existingValues.has(opt.value.toLowerCase()))
+
+    // Merge and sort alphabetically
+    return [...customOptions, ...plaidOptions].sort((a, b) =>
+      a.label.localeCompare(b.label)
+    )
+  }, [flatCategories, plaidCategories])
 
   // Validate a single condition and update error state
   const validateSingleCondition = useCallback((index: number, condition: RuleCondition): string | null => {
@@ -440,9 +465,13 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
 
       case 'category_select':
         // Use Plaid categories from user's transactions for "existing_category" condition
+        // Issue #402: Display human-readable format, store Plaid enum value
         return (
           <SearchableSelect
-            options={plaidCategories.map(cat => ({ value: cat, label: cat }))}
+            options={plaidCategories.map(cat => ({
+              value: cat,
+              label: formatPlaidCategory(cat),
+            }))}
             value={String(condition.value || '') || null}
             onChange={(value) => updateCondition(index, { value: value || '' })}
             placeholder="Search Plaid categories..."
@@ -671,8 +700,9 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
           <label htmlFor="target-category" className="auto-categorization-rule-editor__label">
             Target Category
           </label>
+          {/* Issue #402: Combined custom + Plaid categories in a flat, sorted list */}
           <SearchableSelect
-            options={flatCategories.map(cat => ({ value: cat, label: cat }))}
+            options={allTargetCategoryOptions}
             value={categoryValue || null}
             onChange={(value) => handleCategoryChange(value || '')}
             placeholder="Search categories..."
