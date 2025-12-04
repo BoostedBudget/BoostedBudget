@@ -145,7 +145,10 @@ describe('AutoCategorizationPageWrapper', () => {
     // The mock AutoCategorizationPage receives the converted categories
     // Coffee has parent_category so it becomes ['Food & Drink', 'Coffee']
     // Groceries has no parent so it becomes ['Groceries']
-    expect(screen.getByTestId('categories-count')).toHaveTextContent('2')
+    // Wait for state update to be flushed to the UI
+    await waitFor(() => {
+      expect(screen.getByTestId('categories-count')).toHaveTextContent('2')
+    })
   })
 
   it('should pass maxRules from tier config based on user subscription', async () => {
