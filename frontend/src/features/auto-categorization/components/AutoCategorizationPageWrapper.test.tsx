@@ -2,6 +2,7 @@
  * AutoCategorizationPageWrapper Component Tests
  *
  * Issue #393: Integrate AutoCategorizationPage into App Router and Navigation
+ * Issue #399: Add tags autocomplete for target tags
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -9,20 +10,24 @@ import { render, screen, waitFor } from '@testing-library/react'
 import { AutoCategorizationPageWrapper } from './AutoCategorizationPageWrapper'
 import * as categoriesApi from '../../categories/api/categoriesApi'
 import * as plaidApi from '../../accounts/api/plaidApi'
+import * as tagsApi from '../../tags/api/tagsApi'
 import * as useProfileHook from '../../profile/hooks/useProfile'
 import * as useSubscriptionTiersHook from '../../subscription/hooks/useSubscriptionTiers'
 import type { Account } from '../../accounts/types'
+import type { UserTag } from '../../tags/types'
 
 // Mock dependencies
 vi.mock('../../categories/api/categoriesApi')
 vi.mock('../../accounts/api/plaidApi')
+vi.mock('../../tags/api/tagsApi')
 vi.mock('../../profile/hooks/useProfile')
 vi.mock('../../subscription/hooks/useSubscriptionTiers')
 vi.mock('./AutoCategorizationPage', () => ({
-  AutoCategorizationPage: ({ categories, accounts, maxRules, currentTier }: { categories: string[][], accounts?: Account[], maxRules?: number, currentTier?: string }) => (
+  AutoCategorizationPage: ({ categories, accounts, tags, maxRules, currentTier }: { categories: string[][], accounts?: Account[], tags?: UserTag[], maxRules?: number, currentTier?: string }) => (
     <div data-testid="auto-categorization-page">
       <span data-testid="categories-count">{categories.length}</span>
       <span data-testid="accounts-count">{accounts?.length ?? 0}</span>
+      <span data-testid="tags-count">{tags?.length ?? 0}</span>
       <span data-testid="max-rules">{maxRules ?? 'undefined'}</span>
       <span data-testid="current-tier">{currentTier ?? 'undefined'}</span>
     </div>
@@ -39,6 +44,13 @@ describe('AutoCategorizationPageWrapper', () => {
     { id: 'acc-1', name: 'Checking', type: 'depository', mask: '1234', linked_item_id: 'item-1', user_id: 'user-1', plaid_account_id: 'plaid-1', currency_code: 'USD', created_at: '2025-01-01', updated_at: '2025-01-01' },
     { id: 'acc-2', name: 'Savings', type: 'depository', mask: '5678', linked_item_id: 'item-1', user_id: 'user-1', plaid_account_id: 'plaid-2', currency_code: 'USD', created_at: '2025-01-01', updated_at: '2025-01-01' },
   ]
+
+  const mockTags: UserTag[] = [
+    { id: 'tag-1', user_id: 'user-1', name: 'Bills', color: '#ff0000', usage_count: 5, created_at: '2025-01-01', updated_at: '2025-01-01' },
+    { id: 'tag-2', user_id: 'user-1', name: 'Recurring', color: '#00ff00', usage_count: 3, created_at: '2025-01-01', updated_at: '2025-01-01' },
+  ]
+
+  const mockPlaidCategories = ['FOOD_AND_DRINK', 'GENERAL_MERCHANDISE', 'TRAVEL']
 
   const mockUser = {
     id: 'user-1',
@@ -96,7 +108,9 @@ describe('AutoCategorizationPageWrapper', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(categoriesApi.fetchCategories).mockResolvedValue(mockCategories)
+    vi.mocked(categoriesApi.fetchPlaidCategories).mockResolvedValue(mockPlaidCategories)
     vi.mocked(plaidApi.fetchAccounts).mockResolvedValue({ accounts: mockAccounts, total_count: mockAccounts.length })
+    vi.mocked(tagsApi.fetchTags).mockResolvedValue(mockTags)
     vi.mocked(useProfileHook.useProfile).mockReturnValue({
       user: mockUser,
       loading: false,
@@ -131,7 +145,10 @@ describe('AutoCategorizationPageWrapper', () => {
     // The mock AutoCategorizationPage receives the converted categories
     // Coffee has parent_category so it becomes ['Food & Drink', 'Coffee']
     // Groceries has no parent so it becomes ['Groceries']
-    expect(screen.getByTestId('categories-count')).toHaveTextContent('2')
+    // Wait for state update to be flushed to the UI
+    await waitFor(() => {
+      expect(screen.getByTestId('categories-count')).toHaveTextContent('2')
+    })
   })
 
   it('should pass maxRules from tier config based on user subscription', async () => {
