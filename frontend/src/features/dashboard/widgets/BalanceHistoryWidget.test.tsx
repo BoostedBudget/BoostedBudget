@@ -20,7 +20,7 @@ vi.mock('../hooks/useDashboardData', () => ({
 }))
 
 vi.mock('../components/BalanceHistoryChart', () => ({
-  BalanceHistoryChart: ({ history, showTypeBreakdown }: {
+  BalanceHistoryChart: ({ showTypeBreakdown }: {
     history: unknown
     showTypeBreakdown: boolean
   }) => (
