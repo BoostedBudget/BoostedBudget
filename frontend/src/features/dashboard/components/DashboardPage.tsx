@@ -1,60 +1,75 @@
-import { useState } from 'react'
-import { format, subDays } from 'date-fns'
-import { useDashboardData } from '../hooks/useDashboardData'
-import { BalanceOverview } from './BalanceOverview'
-import { BalanceHistoryChart } from './BalanceHistoryChart'
+import { useState, useCallback } from 'react'
+import { PlusIcon, PencilIcon, ArrowPathIcon } from '@heroicons/react/24/outline'
+import { DashboardProvider, useDashboardContext } from '../context/DashboardContext'
+import { useDashboardLayout } from '../hooks/useDashboardLayout'
+import { DashboardGrid, WidgetCatalog } from '../widgets'
 import { AccountTypeFilter } from './AccountTypeFilter'
 import { TimeframeSelector } from './TimeframeSelector'
-import { AccountBalanceCards } from './AccountBalanceCards'
-import type { DashboardFilters } from '../types'
+import { useDashboardData } from '../hooks/useDashboardData'
+import type { WidgetType } from '../types'
+
+// Import widgets to register them
+import '../widgets'
 
 /**
- * DashboardPage - Main dashboard view for authenticated users
+ * DashboardPage - Main dashboard view with customizable widget system
  *
  * Features:
- * - Balance overview with period comparison
- * - Interactive balance history chart
- * - Account type filtering
- * - Timeframe selection
- * - Individual account balance cards
- * - Loading and error states
+ * - Drag-and-drop widget reordering
+ * - Widget resizing
+ * - Add/remove widgets from catalog
+ * - Layout persistence to backend
+ * - Cash flow analysis widgets (Issue #354)
+ * - Timeframe and account type filtering
  * - Responsive grid layout
  *
- * This is the homepage for authenticated users.
- *
- * Issue #353: Balance Tracking Dashboard
+ * Issue #354: Cash Flow Analysis + Customizable Dashboard
  */
-export function DashboardPage() {
-  // Default to last 30 days
-  const today = new Date()
-  const thirtyDaysAgo = subDays(today, 30)
 
-  const [filters, setFilters] = useState<DashboardFilters>({
-    startDate: format(thirtyDaysAgo, 'yyyy-MM-dd'),
-    endDate: format(today, 'yyyy-MM-dd'),
-    accountTypes: [],
-  })
+function DashboardContent() {
+  const { filters, setFilters, isEditing, setIsEditing } = useDashboardContext()
+  const { layout, loading, error, saving, updateLayout, addWidget, removeWidget, resetToDefault } = useDashboardLayout()
+  const [catalogOpen, setCatalogOpen] = useState(false)
 
-  const [showTypeBreakdown, setShowTypeBreakdown] = useState(false)
-
-  const { summary, history, accountTypes, loading, error, refetch } =
-    useDashboardData(filters)
-
-  const handleAccountTypeChange = (types: string[]) => {
-    setFilters({ ...filters, accountTypes: types })
+  // Fetch account types for filter
+  const dashboardFilters = {
+    startDate: filters.startDate,
+    endDate: filters.endDate,
+    accountTypes: filters.accountTypes,
   }
+  const { accountTypes } = useDashboardData(dashboardFilters)
 
-  const handleTimeframeChange = (startDate: string, endDate: string) => {
-    setFilters({ ...filters, startDate, endDate })
-  }
+  const handleAccountTypeChange = useCallback((types: string[]) => {
+    setFilters({ accountTypes: types.length > 0 ? types : undefined })
+  }, [setFilters])
+
+  const handleTimeframeChange = useCallback((startDate: string, endDate: string) => {
+    setFilters({ startDate, endDate })
+  }, [setFilters])
+
+  const handleAddWidget = useCallback((type: WidgetType) => {
+    addWidget(type)
+  }, [addWidget])
+
+  const handleRemoveWidget = useCallback((widgetId: string) => {
+    removeWidget(widgetId)
+  }, [removeWidget])
+
+  const handleResetLayout = useCallback(async () => {
+    await resetToDefault()
+    setIsEditing(false)
+  }, [resetToDefault, setIsEditing])
+
+  // Get existing widget types for catalog
+  const existingWidgetTypes = layout.widgets.map(w => w.type)
 
   // Loading state
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
         <div className="text-center">
           <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-          <p className="mt-4 text-gray-600">Loading dashboard...</p>
+          <p className="mt-4 text-gray-600 dark:text-gray-400">Loading dashboard...</p>
         </div>
       </div>
     )
@@ -63,15 +78,15 @@ export function DashboardPage() {
   // Error state
   if (error) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="bg-white rounded-lg shadow-lg p-8 max-w-md text-center">
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8 max-w-md text-center">
           <div className="text-red-600 text-5xl mb-4">⚠️</div>
-          <h2 className="text-xl font-semibold text-gray-900 mb-2">
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
             Failed to Load Dashboard
           </h2>
-          <p className="text-gray-600 mb-6">{error.message}</p>
+          <p className="text-gray-600 dark:text-gray-400 mb-6">{error}</p>
           <button
-            onClick={refetch}
+            onClick={() => window.location.reload()}
             className="px-6 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors"
           >
             Try Again
@@ -81,66 +96,69 @@ export function DashboardPage() {
     )
   }
 
-  // Empty state
-  if (!summary || !history || !accountTypes) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="bg-white rounded-lg shadow-lg p-8 max-w-md text-center">
-          <div className="text-gray-400 text-5xl mb-4">📊</div>
-          <h2 className="text-xl font-semibold text-gray-900 mb-2">
-            No Data Available
-          </h2>
-          <p className="text-gray-600">
-            Connect your accounts to start tracking your balance history.
-          </p>
-        </div>
-      </div>
-    )
-  }
-
   return (
-    <div className="min-h-screen bg-gray-50 py-8">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 py-8">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
-          <p className="mt-2 text-gray-600">
-            Track your balance across all accounts
-          </p>
+        <div className="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Dashboard</h1>
+            <p className="mt-2 text-gray-600 dark:text-gray-400">
+              {isEditing ? 'Drag widgets to reorder, resize from corners' : 'Track your balance and cash flow'}
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3">
+            {saving && (
+              <span className="text-sm text-gray-500 dark:text-gray-400 flex items-center gap-1">
+                <ArrowPathIcon className="h-4 w-4 animate-spin" />
+                Saving...
+              </span>
+            )}
+
+            {isEditing && (
+              <>
+                <button
+                  onClick={() => setCatalogOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors"
+                >
+                  <PlusIcon className="h-4 w-4" />
+                  Add Widget
+                </button>
+                <button
+                  onClick={handleResetLayout}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 font-medium rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
+                >
+                  <ArrowPathIcon className="h-4 w-4" />
+                  Reset
+                </button>
+              </>
+            )}
+
+            <button
+              onClick={() => setIsEditing(!isEditing)}
+              className={`inline-flex items-center gap-1.5 px-4 py-2 font-medium rounded-lg transition-colors ${
+                isEditing
+                  ? 'bg-green-600 text-white hover:bg-green-700'
+                  : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600'
+              }`}
+            >
+              <PencilIcon className="h-4 w-4" />
+              {isEditing ? 'Done' : 'Edit'}
+            </button>
+          </div>
         </div>
 
         {/* Main Grid Layout */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left Column - Overview and Chart */}
-          <div className="lg:col-span-2 space-y-6">
-            {/* Balance Overview */}
-            <BalanceOverview summary={summary} />
-
-            {/* Balance History Chart */}
-            <div className="relative">
-              <BalanceHistoryChart
-                history={history}
-                showTypeBreakdown={showTypeBreakdown}
-              />
-
-              {/* Chart Controls */}
-              <div className="absolute top-6 right-6">
-                <button
-                  onClick={() => setShowTypeBreakdown(!showTypeBreakdown)}
-                  className="px-4 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors shadow-sm"
-                >
-                  {showTypeBreakdown ? 'Total Only' : 'Show Breakdown'}
-                </button>
-              </div>
-            </div>
-
-            {/* Account Balance Cards */}
-            <div>
-              <h2 className="text-xl font-semibold text-gray-900 mb-4">
-                Accounts
-              </h2>
-              <AccountBalanceCards summary={summary} />
-            </div>
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+          {/* Main Content - Widget Grid */}
+          <div className="lg:col-span-3">
+            <DashboardGrid
+              layout={layout}
+              isEditing={isEditing}
+              onLayoutChange={updateLayout}
+              onRemoveWidget={handleRemoveWidget}
+            />
           </div>
 
           {/* Right Column - Filters */}
@@ -149,14 +167,32 @@ export function DashboardPage() {
             <TimeframeSelector onRangeChange={handleTimeframeChange} />
 
             {/* Account Type Filter */}
-            <AccountTypeFilter
-              accountTypes={accountTypes}
-              selectedTypes={filters.accountTypes || []}
-              onChange={handleAccountTypeChange}
-            />
+            {accountTypes && (
+              <AccountTypeFilter
+                accountTypes={accountTypes}
+                selectedTypes={filters.accountTypes || []}
+                onChange={handleAccountTypeChange}
+              />
+            )}
           </div>
         </div>
       </div>
+
+      {/* Widget Catalog Modal */}
+      <WidgetCatalog
+        isOpen={catalogOpen}
+        onClose={() => setCatalogOpen(false)}
+        onAddWidget={handleAddWidget}
+        existingWidgetTypes={existingWidgetTypes}
+      />
     </div>
+  )
+}
+
+export function DashboardPage() {
+  return (
+    <DashboardProvider>
+      <DashboardContent />
+    </DashboardProvider>
   )
 }
