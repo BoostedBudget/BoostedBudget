@@ -66,12 +66,14 @@ func (s *ruleApplicationService) ApplyRulesToTransaction(ctx context.Context, tx
 	}
 
 	// No rules matched
-	if result == nil || (len(result.Category) == 0 && len(result.Tags) == 0) {
+	// Issue #404: Changed from len()==0 to ==nil to support empty array [] as "clear category" action
+	if result == nil || (result.Category == nil && len(result.Tags) == 0) {
 		return nil
 	}
 
 	// Apply category if matched (first-match-wins)
-	if len(result.Category) > 0 {
+	// Issue #404: Changed from len()>0 to !=nil to apply empty array [] as "clear category"
+	if result.Category != nil {
 		categoryJSON, err := json.Marshal(result.Category)
 		if err != nil {
 			return err
@@ -178,12 +180,14 @@ func (s *ruleApplicationService) ApplyRulesToBatch(ctx context.Context, txns []d
 		}
 
 		// No rules matched
-		if result == nil || (len(result.Category) == 0 && len(result.Tags) == 0) {
+		// Issue #404: Changed from len()==0 to ==nil to support empty array [] as "clear category" action
+		if result == nil || (result.Category == nil && len(result.Tags) == 0) {
 			continue
 		}
 
 		// Apply category if matched
-		if len(result.Category) > 0 {
+		// Issue #404: Changed from len()>0 to !=nil to apply empty array [] as "clear category"
+		if result.Category != nil {
 			categoryJSON, err := json.Marshal(result.Category)
 			if err != nil {
 				continue
