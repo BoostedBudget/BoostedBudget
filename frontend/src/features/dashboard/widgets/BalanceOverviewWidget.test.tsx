@@ -34,6 +34,7 @@ vi.mock('./registry', () => ({
 import { BalanceOverviewWidget } from './BalanceOverviewWidget'
 import { useDashboardContext } from '../context/DashboardContext'
 import { useDashboardData } from '../hooks/useDashboardData'
+import type { BalanceSummary } from '../types'
 
 describe('BalanceOverviewWidget', () => {
   const mockFilters = {
@@ -42,12 +43,15 @@ describe('BalanceOverviewWidget', () => {
     accountTypes: undefined,
   }
 
-  const mockSummary = {
-    totalBalance: 10000,
-    previousBalance: 9500,
-    change: 500,
-    changePercent: 5.26,
-    accounts: [],
+  const mockSummary: BalanceSummary = {
+    as_of_date: '2024-01-31',
+    total_balance: 10000,
+    by_type: {},
+    period_comparison: {
+      previous_balance: 9500,
+      change_amount: 500,
+      change_percent: 5.26,
+    },
   }
 
   beforeEach(() => {
@@ -68,6 +72,8 @@ describe('BalanceOverviewWidget', () => {
     it('should show loading spinner when loading', () => {
       vi.mocked(useDashboardData).mockReturnValue({
         summary: null,
+        history: null,
+        accountTypes: null,
         loading: true,
         error: null,
         refetch: vi.fn(),
@@ -85,6 +91,8 @@ describe('BalanceOverviewWidget', () => {
     it('should show error message when error occurs', () => {
       vi.mocked(useDashboardData).mockReturnValue({
         summary: null,
+        history: null,
+        accountTypes: null,
         loading: false,
         error: new Error('Network error'),
         refetch: vi.fn(),
@@ -98,6 +106,8 @@ describe('BalanceOverviewWidget', () => {
     it('should show error text in red', () => {
       vi.mocked(useDashboardData).mockReturnValue({
         summary: null,
+        history: null,
+        accountTypes: null,
         loading: false,
         error: new Error('API Error'),
         refetch: vi.fn(),
@@ -114,6 +124,8 @@ describe('BalanceOverviewWidget', () => {
     it('should show no data message when summary is null', () => {
       vi.mocked(useDashboardData).mockReturnValue({
         summary: null,
+        history: null,
+        accountTypes: null,
         loading: false,
         error: null,
         refetch: vi.fn(),
@@ -129,6 +141,8 @@ describe('BalanceOverviewWidget', () => {
     it('should render BalanceOverview component with data', () => {
       vi.mocked(useDashboardData).mockReturnValue({
         summary: mockSummary,
+        history: null,
+        accountTypes: null,
         loading: false,
         error: null,
         refetch: vi.fn(),
@@ -142,6 +156,8 @@ describe('BalanceOverviewWidget', () => {
     it('should pass summary to BalanceOverview component', () => {
       vi.mocked(useDashboardData).mockReturnValue({
         summary: mockSummary,
+        history: null,
+        accountTypes: null,
         loading: false,
         error: null,
         refetch: vi.fn(),
@@ -157,6 +173,8 @@ describe('BalanceOverviewWidget', () => {
     it('should use filters from dashboard context', () => {
       vi.mocked(useDashboardData).mockReturnValue({
         summary: mockSummary,
+        history: null,
+        accountTypes: null,
         loading: false,
         error: null,
         refetch: vi.fn(),

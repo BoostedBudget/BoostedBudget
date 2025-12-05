@@ -59,7 +59,7 @@ describe('WidgetWrapper', () => {
       render(
         <WidgetWrapper
           widgetId="widget-1"
-          widgetType="unknown-type"
+          widgetType="balance-overview"
           isEditing={false}
           onRemove={mockOnRemove}
         >
@@ -67,7 +67,8 @@ describe('WidgetWrapper', () => {
         </WidgetWrapper>
       )
 
-      expect(screen.getByText('unknown-type')).toBeInTheDocument()
+      // When registry returns undefined, component shows type as fallback
+      expect(screen.getByText('balance-overview')).toBeInTheDocument()
     })
 
     it('should show drag handle in edit mode', () => {

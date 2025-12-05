@@ -37,6 +37,7 @@ vi.mock('./registry', () => ({
 import { BalanceHistoryWidget } from './BalanceHistoryWidget'
 import { useDashboardContext } from '../context/DashboardContext'
 import { useDashboardData } from '../hooks/useDashboardData'
+import type { BalanceHistory } from '../types'
 
 describe('BalanceHistoryWidget', () => {
   const mockFilters = {
@@ -45,11 +46,16 @@ describe('BalanceHistoryWidget', () => {
     accountTypes: undefined,
   }
 
-  const mockHistory = [
-    { date: '2024-01-01', balance: 10000 },
-    { date: '2024-01-15', balance: 10500 },
-    { date: '2024-01-31', balance: 11000 },
-  ]
+  const mockHistory: BalanceHistory = {
+    start_date: '2024-01-01',
+    end_date: '2024-01-31',
+    granularity: 'daily',
+    snapshots: [
+      { date: '2024-01-01', balance: 10000 },
+      { date: '2024-01-15', balance: 10500 },
+      { date: '2024-01-31', balance: 11000 },
+    ],
+  }
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -67,7 +73,9 @@ describe('BalanceHistoryWidget', () => {
   describe('Loading State', () => {
     it('should show loading spinner when loading', () => {
       vi.mocked(useDashboardData).mockReturnValue({
+        summary: null,
         history: null,
+        accountTypes: null,
         loading: true,
         error: null,
         refetch: vi.fn(),
@@ -83,7 +91,9 @@ describe('BalanceHistoryWidget', () => {
   describe('Error State', () => {
     it('should show error message when error occurs', () => {
       vi.mocked(useDashboardData).mockReturnValue({
+        summary: null,
         history: null,
+        accountTypes: null,
         loading: false,
         error: new Error('Failed to load history'),
         refetch: vi.fn(),
@@ -98,7 +108,9 @@ describe('BalanceHistoryWidget', () => {
   describe('Empty State', () => {
     it('should show no data message when history is null', () => {
       vi.mocked(useDashboardData).mockReturnValue({
+        summary: null,
         history: null,
+        accountTypes: null,
         loading: false,
         error: null,
         refetch: vi.fn(),
@@ -113,7 +125,9 @@ describe('BalanceHistoryWidget', () => {
   describe('Success State', () => {
     it('should render BalanceHistoryChart with data', () => {
       vi.mocked(useDashboardData).mockReturnValue({
+        summary: null,
         history: mockHistory,
+        accountTypes: null,
         loading: false,
         error: null,
         refetch: vi.fn(),
@@ -128,7 +142,9 @@ describe('BalanceHistoryWidget', () => {
   describe('Breakdown Toggle', () => {
     it('should show "Breakdown" button initially', () => {
       vi.mocked(useDashboardData).mockReturnValue({
+        summary: null,
         history: mockHistory,
+        accountTypes: null,
         loading: false,
         error: null,
         refetch: vi.fn(),
@@ -141,7 +157,9 @@ describe('BalanceHistoryWidget', () => {
 
     it('should toggle breakdown when button clicked', () => {
       vi.mocked(useDashboardData).mockReturnValue({
+        summary: null,
         history: mockHistory,
+        accountTypes: null,
         loading: false,
         error: null,
         refetch: vi.fn(),
@@ -161,7 +179,9 @@ describe('BalanceHistoryWidget', () => {
 
     it('should toggle back to total view', () => {
       vi.mocked(useDashboardData).mockReturnValue({
+        summary: null,
         history: mockHistory,
+        accountTypes: null,
         loading: false,
         error: null,
         refetch: vi.fn(),

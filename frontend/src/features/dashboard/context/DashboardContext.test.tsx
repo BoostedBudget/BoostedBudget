@@ -7,7 +7,6 @@
  * Issue #354: Customizable Dashboard Widget System
  */
 
-import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, renderHook, act } from '@testing-library/react'
 import { format, subDays, startOfMonth, endOfMonth } from 'date-fns'
