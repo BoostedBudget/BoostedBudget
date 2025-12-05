@@ -16,6 +16,7 @@ import type {
   BalanceSummary,
   BalanceHistory,
   AccountTypesResponse,
+  WidgetType,
 } from '../types'
 
 // Mock the useDashboardData hook
@@ -28,11 +29,11 @@ vi.mock('../hooks/useDashboardLayout')
 const defaultLayoutMock = {
   layout: {
     widgets: [
-      { i: 'balance-overview-1', type: 'balance-overview', x: 0, y: 0, w: 4, h: 2 },
-      { i: 'cash-flow-summary-1', type: 'cash-flow-summary', x: 4, y: 0, w: 8, h: 2 },
-      { i: 'balance-history-1', type: 'balance-history', x: 0, y: 2, w: 6, h: 4 },
-      { i: 'cash-flow-chart-1', type: 'cash-flow-chart', x: 6, y: 2, w: 6, h: 4 },
-      { i: 'account-cards-1', type: 'account-cards', x: 0, y: 6, w: 12, h: 3 },
+      { i: 'balance-overview-1', type: 'balance-overview' as WidgetType, x: 0, y: 0, w: 4, h: 2 },
+      { i: 'cash-flow-summary-1', type: 'cash-flow-summary' as WidgetType, x: 4, y: 0, w: 8, h: 2 },
+      { i: 'balance-history-1', type: 'balance-history' as WidgetType, x: 0, y: 2, w: 6, h: 4 },
+      { i: 'cash-flow-chart-1', type: 'cash-flow-chart' as WidgetType, x: 6, y: 2, w: 6, h: 4 },
+      { i: 'account-cards-1', type: 'account-cards' as WidgetType, x: 0, y: 6, w: 12, h: 3 },
     ],
     version: 1,
   },
