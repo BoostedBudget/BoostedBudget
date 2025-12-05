@@ -217,7 +217,10 @@ describe('AutoCategorizationPageWrapper', () => {
 
     expect(categoriesApi.fetchCategories).toHaveBeenCalledTimes(1)
     expect(plaidApi.fetchAccounts).toHaveBeenCalledTimes(1)
-    expect(screen.getByTestId('accounts-count')).toHaveTextContent('2')
+    // Wait for async state update to be flushed to the UI
+    await waitFor(() => {
+      expect(screen.getByTestId('accounts-count')).toHaveTextContent('2')
+    })
   })
 
   it('should handle undefined tiers gracefully', async () => {
