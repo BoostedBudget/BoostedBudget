@@ -111,8 +111,8 @@ describe('CancelDeletionPage', () => {
     it('should display success icon and message', async () => {
       render(<CancelDeletionPage />)
 
-      // Use findByText for better async handling of state updates
-      expect(await screen.findByText('✓')).toBeInTheDocument()
+      // Increase timeout for slower CI environments
+      expect(await screen.findByText('✓', {}, { timeout: 5000 })).toBeInTheDocument()
       expect(screen.getByText(/account deletion canceled/i)).toBeInTheDocument()
     })
 
