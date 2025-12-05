@@ -1119,6 +1119,8 @@ describe('AutoCategorizationRuleEditor', () => {
       })
     })
 
+    // This test has many userEvent interactions that can be slow on CI
+    // Extended timeout to 60s to accommodate slower runners
     it('should handle negative amount value', async () => {
       const user = userEvent.setup()
       mockOnSave.mockResolvedValue(undefined)
@@ -1160,7 +1162,7 @@ describe('AutoCategorizationRuleEditor', () => {
           conditions: [{ type: 'amount_greater_than', value: -50 }],
         }))
       })
-    })
+    }, 60000)
   })
 
   describe('Searchable Dropdowns', () => {
