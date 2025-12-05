@@ -56,3 +56,104 @@ export interface DashboardFilters {
   endDate?: string;
   granularity?: 'daily' | 'weekly' | 'monthly';
 }
+
+// Issue #354: Cash Flow Analytics Types
+
+export interface CashFlowFilters {
+  startDate: string;
+  endDate: string;
+  accountTypes?: string[];
+  includeTransfers?: boolean;
+  grouping?: 'daily' | 'weekly' | 'monthly';
+}
+
+export interface CashFlowPeriodComparison {
+  previous_income: number;
+  previous_expenses: number;
+  previous_net_cash_flow: number;
+  income_change_amount: number;
+  income_change_percent: number;
+  expense_change_amount: number;
+  expense_change_percent: number;
+  net_change_amount: number;
+  net_change_percent: number;
+}
+
+export interface CashFlowSummary {
+  start_date: string;
+  end_date: string;
+  income: number;
+  expenses: number;
+  net_cash_flow: number;
+  income_count: number;
+  expense_count: number;
+  period_comparison?: CashFlowPeriodComparison;
+}
+
+export interface CashFlowPeriodData {
+  period_start: string;
+  period_end: string;
+  income: number;
+  expenses: number;
+  net_cash_flow: number;
+  transaction_count: number;
+}
+
+export interface CashFlowHistory {
+  start_date: string;
+  end_date: string;
+  grouping: 'daily' | 'weekly' | 'monthly';
+  periods: CashFlowPeriodData[];
+}
+
+// Issue #354: Widget System Types
+
+export type WidgetType =
+  | 'balance-overview'
+  | 'balance-history'
+  | 'cash-flow-summary'
+  | 'cash-flow-chart'
+  | 'account-cards';
+
+export interface WidgetConfig {
+  i: string;          // Unique widget instance ID (react-grid-layout uses 'i')
+  type: WidgetType;   // Widget type
+  x: number;          // Grid X position (0-11)
+  y: number;          // Grid Y position
+  w: number;          // Width in grid units (1-12)
+  h: number;          // Height in grid units
+  minW?: number;      // Minimum width
+  minH?: number;      // Minimum height
+  maxW?: number;      // Maximum width
+  maxH?: number;      // Maximum height
+  static?: boolean;   // Prevent drag/resize
+}
+
+export interface DashboardLayout {
+  widgets: WidgetConfig[];
+  version: number;    // For future migrations
+}
+
+export interface DashboardPreferencesResponse {
+  layout: DashboardLayout;
+  updated_at?: string;
+}
+
+// Widget Props interface for all widget components
+export interface WidgetProps {
+  widgetId: string;
+  onRemove: () => void;
+}
+
+// Widget Definition for registry
+export interface WidgetDefinition {
+  type: WidgetType;
+  title: string;
+  description: string;
+  icon: string;  // Icon name for catalog
+  category: 'overview' | 'charts' | 'accounts';
+  defaultSize: { w: number; h: number };
+  minSize: { w: number; h: number };
+  maxSize?: { w: number; h: number };
+  Component: React.ComponentType<WidgetProps>;
+}
