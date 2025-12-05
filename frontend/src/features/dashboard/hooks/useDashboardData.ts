@@ -51,6 +51,16 @@ export function useDashboardData(
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<Error | null>(null)
 
+  // Serialize filters for stable dependency comparison
+  // This prevents infinite loops when callers pass new object references with same values
+  const filterKey = JSON.stringify({
+    startDate: filters?.startDate,
+    endDate: filters?.endDate,
+    accountTypes: filters?.accountTypes,
+    asOfDate: filters?.asOfDate,
+    granularity: filters?.granularity,
+  })
+
   const fetchData = useCallback(async () => {
     setLoading(true)
     setError(null)
@@ -80,7 +90,8 @@ export function useDashboardData(
     } finally {
       setLoading(false)
     }
-  }, [filters])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterKey])
 
   useEffect(() => {
     fetchData()
