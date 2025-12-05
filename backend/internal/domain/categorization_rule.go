@@ -124,9 +124,19 @@ func (r *CategorizationRule) Validate() error {
 	return nil
 }
 
-// HasCategoryAction returns true if the rule sets a category.
+// HasCategoryAction returns true if the rule has a category action.
+// Issue #404: This includes both assigning a category AND clearing to uncategorized (empty array).
+// - nil = no category action (rule doesn't touch category)
+// - [] = clear category action (set to uncategorized)
+// - ["Food"] = assign category action
 func (r *CategorizationRule) HasCategoryAction() bool {
-	return len(r.TargetCategory) > 0
+	return r.TargetCategory != nil
+}
+
+// IsClearCategoryAction returns true if the rule clears the category (sets to uncategorized).
+// Issue #404: Empty array [] represents "clear category" / "uncategorized".
+func (r *CategorizationRule) IsClearCategoryAction() bool {
+	return r.TargetCategory != nil && len(r.TargetCategory) == 0
 }
 
 // HasTagAction returns true if the rule adds tags.

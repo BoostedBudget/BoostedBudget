@@ -195,6 +195,7 @@ func TestCategorizationRule_Validate(t *testing.T) {
 }
 
 // TestCategorizationRule_HasCategoryAction tests the HasCategoryAction helper
+// Issue #404: Empty slice [] now represents "clear category" action (uncategorized)
 func TestCategorizationRule_HasCategoryAction(t *testing.T) {
 	tests := []struct {
 		name string
@@ -202,7 +203,7 @@ func TestCategorizationRule_HasCategoryAction(t *testing.T) {
 		want bool
 	}{
 		{
-			name: "has category action",
+			name: "has category action (assigns category)",
 			rule: CategorizationRule{
 				TargetCategory: []string{"Food & Drink"},
 			},
@@ -216,11 +217,11 @@ func TestCategorizationRule_HasCategoryAction(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "no category action (empty slice)",
+			name: "has category action (empty slice = clear/uncategorized)",
 			rule: CategorizationRule{
 				TargetCategory: []string{},
 			},
-			want: false,
+			want: true, // Issue #404: Empty slice is now "clear category" action
 		},
 	}
 
@@ -228,6 +229,53 @@ func TestCategorizationRule_HasCategoryAction(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.rule.HasCategoryAction(); got != tt.want {
 				t.Errorf("HasCategoryAction() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestCategorizationRule_IsClearCategoryAction tests the IsClearCategoryAction helper
+// Issue #404: Distinguish between assigning a category and clearing to uncategorized
+func TestCategorizationRule_IsClearCategoryAction(t *testing.T) {
+	tests := []struct {
+		name string
+		rule CategorizationRule
+		want bool
+	}{
+		{
+			name: "assigns category (not clear)",
+			rule: CategorizationRule{
+				TargetCategory: []string{"Food & Drink"},
+			},
+			want: false,
+		},
+		{
+			name: "no action (nil, not clear)",
+			rule: CategorizationRule{
+				TargetCategory: nil,
+			},
+			want: false,
+		},
+		{
+			name: "clears category (empty slice = uncategorized)",
+			rule: CategorizationRule{
+				TargetCategory: []string{},
+			},
+			want: true,
+		},
+		{
+			name: "multi-level category (not clear)",
+			rule: CategorizationRule{
+				TargetCategory: []string{"Food & Drink", "Coffee Shops"},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.rule.IsClearCategoryAction(); got != tt.want {
+				t.Errorf("IsClearCategoryAction() = %v, want %v", got, tt.want)
 			}
 		})
 	}
