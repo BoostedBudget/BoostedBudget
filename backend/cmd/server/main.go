@@ -109,6 +109,8 @@ func main() {
 		userTagRepo := repository.NewUserTagRepository(db) // Issue #345: User tags
 		customCategoryRepo := repository.NewCustomCategoryRepository(db) // Issue #345: Custom categories
 		categorizationRuleRepo := repository.NewCategorizationRuleRepository(db) // Issue #346: Categorization rules
+		analyticsRepo := repository.NewAnalyticsRepository(db) // Issue #354: Cash flow analytics
+		dashboardPrefsRepo := repository.NewDashboardPreferencesRepository(db) // Issue #354: Dashboard preferences
 
 		// Create mock audit logger (will be replaced with real implementation later)
 		auditLogger := &mockAuditLogger{}
@@ -130,6 +132,9 @@ func main() {
 		// Issue #346: Categorization rules services
 		categorizationRuleService := services.NewCategorizationRuleService(categorizationRuleRepo, subscriptionService, profileRepo)
 		ruleApplicationService := services.NewRuleApplicationService(categorizationRuleRepo)
+		// Issue #354: Cash flow analytics and dashboard preferences services
+		analyticsService := services.NewAnalyticsService(analyticsRepo)
+		dashboardPrefsService := services.NewDashboardPreferencesService(dashboardPrefsRepo)
 
 		// Initialize Email service (needed by deletion service and item error service)
 		// Optional - uses no-op mock if not configured
@@ -267,6 +272,8 @@ func main() {
 		tagHandler := handlers.NewTagHandler(userTagService)                      // Issue #345: User tag management
 		categoryHandler := handlers.NewCategoryHandler(customCategoryService)     // Issue #345: Custom category management
 		ruleHandler := handlers.NewCategorizationRuleHandler(categorizationRuleService) // Issue #346: Categorization rules
+		analyticsHandler := handlers.NewAnalyticsHandler(analyticsService)        // Issue #354: Cash flow analytics
+		dashboardPrefsHandler := handlers.NewDashboardPreferencesHandler(dashboardPrefsService) // Issue #354: Dashboard preferences
 
 		// Create admin handler (Issue #308: Admin API for Manual Webhook Firing)
 		// Requires plaidService and encryptionService, so declared here
@@ -330,6 +337,15 @@ func main() {
 		api.GET("/dashboard/balance-summary", dashboardHandler.GetBalanceSummary)
 		api.GET("/dashboard/balance-history", dashboardHandler.GetBalanceHistory)
 		api.GET("/dashboard/account-types", dashboardHandler.GetAccountTypes)
+
+		// Analytics routes (Issue #354: Cash flow analysis)
+		api.GET("/analytics/cash-flow-summary", analyticsHandler.GetCashFlowSummary)
+		api.GET("/analytics/cash-flow-history", analyticsHandler.GetCashFlowHistory)
+
+		// Dashboard preferences routes (Issue #354: Customizable dashboard)
+		api.GET("/dashboard/preferences", dashboardPrefsHandler.GetPreferences)
+		api.PUT("/dashboard/preferences", dashboardPrefsHandler.SavePreferences)
+		api.POST("/dashboard/preferences/reset", dashboardPrefsHandler.ResetPreferences)
 
 		// Plaid routes (if enabled)
 		if plaidHandler != nil {
