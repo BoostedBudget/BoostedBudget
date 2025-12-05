@@ -279,8 +279,8 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
         conditions,
         condition_logic: conditionLogic,
         // Issue #404: Preserve null (no action) vs [] (clear category) distinction
-        // null = no category action, [] = clear category, ['Food'] = assign category
-        target_category: targetCategory === null ? null : (targetCategory || undefined),
+        // null/undefined = no category action, [] = clear category, ['Food'] = assign category
+        target_category: targetCategory === null ? undefined : (targetCategory || undefined),
         target_tags: targetTags.length > 0 ? targetTags : undefined,
         tag_behavior: tagBehavior,
       }

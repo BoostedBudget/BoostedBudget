@@ -1746,8 +1746,9 @@ describe('AutoCategorizationRuleEditor', () => {
 
       // Verify the call argument
       expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
-        // Should be null (no action), not empty array
-        target_category: null,
+        // Should be undefined (no action), not empty array
+        // Note: null in component state maps to undefined in API request
+        target_category: undefined,
       }))
     })
   })
