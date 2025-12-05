@@ -5,7 +5,7 @@
  * Wraps the existing BalanceHistoryChart component for use in the widget system.
  */
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { BalanceHistoryChart } from '../components/BalanceHistoryChart';
 import { useDashboardContext } from '../context/DashboardContext';
 import { useDashboardData } from '../hooks/useDashboardData';
@@ -16,11 +16,12 @@ function BalanceHistoryWidget(_props: WidgetProps) {
   const { filters } = useDashboardContext();
   const [showTypeBreakdown, setShowTypeBreakdown] = useState(false);
 
-  const dashboardFilters = {
+  // useMemo to prevent infinite re-renders from new object references
+  const dashboardFilters = useMemo(() => ({
     startDate: filters.startDate,
     endDate: filters.endDate,
     accountTypes: filters.accountTypes,
-  };
+  }), [filters.startDate, filters.endDate, filters.accountTypes]);
 
   const { history, loading, error } = useDashboardData(dashboardFilters);
 

@@ -5,6 +5,7 @@
  * Wraps the existing AccountBalanceCards component for use in the widget system.
  */
 
+import { useMemo } from 'react';
 import { AccountBalanceCards } from '../components/AccountBalanceCards';
 import { useDashboardContext } from '../context/DashboardContext';
 import { useDashboardData } from '../hooks/useDashboardData';
@@ -14,11 +15,12 @@ import type { WidgetProps } from '../types';
 function AccountCardsWidget(_props: WidgetProps) {
   const { filters } = useDashboardContext();
 
-  const dashboardFilters = {
+  // useMemo to prevent infinite re-renders from new object references
+  const dashboardFilters = useMemo(() => ({
     startDate: filters.startDate,
     endDate: filters.endDate,
     accountTypes: filters.accountTypes,
-  };
+  }), [filters.startDate, filters.endDate, filters.accountTypes]);
 
   const { summary, loading, error } = useDashboardData(dashboardFilters);
 
