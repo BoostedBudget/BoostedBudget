@@ -1146,9 +1146,11 @@ describe('AutoCategorizationRuleEditor', () => {
       await user.type(amountInput, '-50')
 
       // Select category (SearchableSelect uses click-based selection)
+      // Use async findByRole pattern to wait for dropdown to render (fixes CI timing issues)
       const categorySelect = screen.getByRole('combobox', { name: /target category/i })
       await user.click(categorySelect)
-      await user.click(screen.getByText('Food & Drink > Coffee'))
+      const listbox = await screen.findByRole('listbox')
+      await user.click(within(listbox).getByText('Food & Drink > Coffee'))
 
       const saveButton = screen.getByRole('button', { name: /save/i })
       fireEvent.click(saveButton)
