@@ -9,7 +9,6 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import type { ReactNode } from 'react'
 
 // Mock dependencies before importing the component
 vi.mock('../context/DashboardContext', () => ({

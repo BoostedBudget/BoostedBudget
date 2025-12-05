@@ -11,7 +11,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { WidgetCatalog } from './WidgetCatalog'
 import * as registry from './registry'
-import type { WidgetDefinition, WidgetType } from '../types'
+import type { WidgetDefinition } from '../types'
 
 // Mock the registry
 vi.mock('./registry', () => ({
