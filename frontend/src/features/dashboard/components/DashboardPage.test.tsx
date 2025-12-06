@@ -26,6 +26,10 @@ vi.mock('../hooks/useDashboardData')
 import { useDashboardLayout } from '../hooks/useDashboardLayout'
 vi.mock('../hooks/useDashboardLayout')
 
+// Mock the useDashboardOnboarding hook
+import { useDashboardOnboarding } from '../hooks/useDashboardOnboarding'
+vi.mock('../hooks/useDashboardOnboarding')
+
 const defaultLayoutMock = {
   layout: {
     widgets: [
@@ -180,6 +184,11 @@ describe('DashboardPage', () => {
     vi.clearAllMocks()
     // Default mock for useDashboardLayout
     vi.mocked(useDashboardLayout).mockReturnValue(defaultLayoutMock)
+    // Default mock for useDashboardOnboarding - hide hint by default
+    vi.mocked(useDashboardOnboarding).mockReturnValue({
+      showHint: false,
+      dismissHint: vi.fn(),
+    })
   })
 
   afterEach(() => {
@@ -777,6 +786,101 @@ describe('DashboardPage', () => {
       // Assert - Dashboard grid is rendered (widgets handle their own empty states)
       expect(screen.getByTestId('dashboard-grid')).toBeInTheDocument()
       expect(screen.getByText('Dashboard')).toBeInTheDocument()
+    })
+  })
+
+  describe('Onboarding Hint', () => {
+    // Issue #412: Dashboard widget UX improvements - discoverability hint
+    beforeEach(() => {
+      vi.mocked(useDashboardData).mockReturnValue({
+        summary: mockSummary,
+        history: mockHistory,
+        accountTypes: mockAccountTypes,
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      })
+    })
+
+    it('should show onboarding hint when showHint is true and not editing', () => {
+      // Arrange
+      vi.mocked(useDashboardOnboarding).mockReturnValue({
+        showHint: true,
+        dismissHint: vi.fn(),
+      })
+
+      // Act
+      render(<DashboardPage />)
+
+      // Assert
+      expect(screen.getByText(/Click "Edit" to customize your dashboard/i)).toBeInTheDocument()
+    })
+
+    it('should not show onboarding hint when showHint is false', () => {
+      // Arrange
+      vi.mocked(useDashboardOnboarding).mockReturnValue({
+        showHint: false,
+        dismissHint: vi.fn(),
+      })
+
+      // Act
+      render(<DashboardPage />)
+
+      // Assert
+      expect(screen.queryByText(/Click "Edit" to customize your dashboard/i)).not.toBeInTheDocument()
+    })
+
+    it('should not show onboarding hint when editing', async () => {
+      // Arrange
+      const user = userEvent.setup()
+      vi.mocked(useDashboardOnboarding).mockReturnValue({
+        showHint: true,
+        dismissHint: vi.fn(),
+      })
+
+      // Act
+      render(<DashboardPage />)
+
+      // Click Edit to enter edit mode
+      await user.click(screen.getByRole('button', { name: /Edit/i }))
+
+      // Assert - Hint should be hidden while editing
+      expect(screen.queryByText(/Click "Edit" to customize your dashboard/i)).not.toBeInTheDocument()
+    })
+
+    it('should call dismissHint when dismiss button clicked', async () => {
+      // Arrange
+      const user = userEvent.setup()
+      const mockDismissHint = vi.fn()
+      vi.mocked(useDashboardOnboarding).mockReturnValue({
+        showHint: true,
+        dismissHint: mockDismissHint,
+      })
+
+      // Act
+      render(<DashboardPage />)
+
+      // Click dismiss button
+      const dismissButton = screen.getByLabelText('Dismiss tip')
+      await user.click(dismissButton)
+
+      // Assert
+      expect(mockDismissHint).toHaveBeenCalledTimes(1)
+    })
+
+    it('should render hint with proper styling', () => {
+      // Arrange
+      vi.mocked(useDashboardOnboarding).mockReturnValue({
+        showHint: true,
+        dismissHint: vi.fn(),
+      })
+
+      // Act
+      render(<DashboardPage />)
+
+      // Assert - Check hint has correct styling classes
+      const hint = screen.getByText(/Click "Edit" to customize your dashboard/i)
+      expect(hint).toBeInTheDocument()
     })
   })
 })
