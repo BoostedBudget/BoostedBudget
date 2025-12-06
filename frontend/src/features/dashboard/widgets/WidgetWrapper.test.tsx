@@ -136,7 +136,8 @@ describe('WidgetWrapper', () => {
       expect(screen.queryByLabelText('Remove widget')).not.toBeInTheDocument()
     })
 
-    it('should call onRemove when remove button clicked', () => {
+    it('should open confirmation dialog when remove button clicked', () => {
+      // Issue #412: Changed behavior - now shows confirmation dialog instead of direct removal
       render(
         <WidgetWrapper
           widgetId="widget-1"
@@ -150,7 +151,9 @@ describe('WidgetWrapper', () => {
 
       fireEvent.click(screen.getByLabelText('Remove widget'))
 
-      expect(mockOnRemove).toHaveBeenCalledTimes(1)
+      // Dialog should open, onRemove not called yet
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+      expect(mockOnRemove).not.toHaveBeenCalled()
     })
 
     it('should stop event propagation on remove click', () => {
@@ -171,7 +174,7 @@ describe('WidgetWrapper', () => {
 
       fireEvent.click(screen.getByLabelText('Remove widget'))
 
-      expect(mockOnRemove).toHaveBeenCalledTimes(1)
+      // Parent click should not be triggered
       expect(parentClickHandler).not.toHaveBeenCalled()
     })
 
@@ -189,6 +192,89 @@ describe('WidgetWrapper', () => {
 
       const removeButton = screen.getByLabelText('Remove widget')
       expect(removeButton).toHaveAttribute('title', 'Remove widget')
+    })
+  })
+
+  describe('Remove Confirmation Dialog', () => {
+    it('should show confirmation dialog when remove button clicked', async () => {
+      // Issue #412: Delete confirmation before removing widget
+      render(
+        <WidgetWrapper
+          widgetId="widget-1"
+          widgetType="balance-overview"
+          isEditing={true}
+          onRemove={mockOnRemove}
+        >
+          <div>Content</div>
+        </WidgetWrapper>
+      )
+
+      fireEvent.click(screen.getByLabelText('Remove widget'))
+
+      // Dialog should appear with title and confirmation message
+      expect(screen.getByText('Remove Widget')).toBeInTheDocument()
+      expect(screen.getByText(/Are you sure you want to remove/)).toBeInTheDocument()
+    })
+
+    it('should not call onRemove immediately when remove button clicked', () => {
+      render(
+        <WidgetWrapper
+          widgetId="widget-1"
+          widgetType="balance-overview"
+          isEditing={true}
+          onRemove={mockOnRemove}
+        >
+          <div>Content</div>
+        </WidgetWrapper>
+      )
+
+      // Click remove button
+      fireEvent.click(screen.getByLabelText('Remove widget'))
+
+      // onRemove should NOT be called yet - dialog should show first
+      expect(mockOnRemove).not.toHaveBeenCalled()
+    })
+
+    it('should call onRemove only after confirming in dialog', () => {
+      render(
+        <WidgetWrapper
+          widgetId="widget-1"
+          widgetType="balance-overview"
+          isEditing={true}
+          onRemove={mockOnRemove}
+        >
+          <div>Content</div>
+        </WidgetWrapper>
+      )
+
+      // Click remove button to open dialog
+      fireEvent.click(screen.getByLabelText('Remove widget'))
+
+      // Click confirm in dialog
+      fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+
+      expect(mockOnRemove).toHaveBeenCalledTimes(1)
+    })
+
+    it('should not call onRemove when canceling dialog', () => {
+      render(
+        <WidgetWrapper
+          widgetId="widget-1"
+          widgetType="balance-overview"
+          isEditing={true}
+          onRemove={mockOnRemove}
+        >
+          <div>Content</div>
+        </WidgetWrapper>
+      )
+
+      // Click remove button to open dialog
+      fireEvent.click(screen.getByLabelText('Remove widget'))
+
+      // Click cancel
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+      expect(mockOnRemove).not.toHaveBeenCalled()
     })
   })
 
@@ -298,6 +384,25 @@ describe('WidgetWrapper', () => {
 
       const wrapper = container.firstChild as HTMLElement
       expect(wrapper).toHaveClass('dark:bg-gray-800')
+    })
+
+    it('should have border classes for clear widget outline', () => {
+      // Issue #412: Widgets should have visible borders for clear visual boundaries
+      const { container } = render(
+        <WidgetWrapper
+          widgetId="widget-1"
+          widgetType="balance-overview"
+          isEditing={false}
+          onRemove={mockOnRemove}
+        >
+          <div>Content</div>
+        </WidgetWrapper>
+      )
+
+      const wrapper = container.firstChild as HTMLElement
+      expect(wrapper).toHaveClass('border')
+      expect(wrapper).toHaveClass('border-gray-200')
+      expect(wrapper).toHaveClass('dark:border-gray-700')
     })
   })
 

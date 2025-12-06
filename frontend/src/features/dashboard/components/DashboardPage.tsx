@@ -1,7 +1,8 @@
 import { useState, useCallback, useMemo } from 'react'
-import { PlusIcon, PencilIcon, ArrowPathIcon } from '@heroicons/react/24/outline'
+import { PlusIcon, PencilIcon, ArrowPathIcon, XMarkIcon } from '@heroicons/react/24/outline'
 import { DashboardProvider, useDashboardContext } from '../context/DashboardContext'
 import { useDashboardLayout } from '../hooks/useDashboardLayout'
+import { useDashboardOnboarding } from '../hooks/useDashboardOnboarding'
 import { DashboardGrid, WidgetCatalog } from '../widgets'
 import { AccountTypeFilter } from './AccountTypeFilter'
 import { TimeframeSelector } from './TimeframeSelector'
@@ -29,6 +30,7 @@ import '../widgets'
 function DashboardContent() {
   const { filters, setFilters, isEditing, setIsEditing } = useDashboardContext()
   const { layout, loading, error, saving, updateLayout, addWidget, removeWidget, resetToDefault } = useDashboardLayout()
+  const { showHint, dismissHint } = useDashboardOnboarding()
   const [catalogOpen, setCatalogOpen] = useState(false)
 
   // Fetch account types for filter - useMemo to prevent infinite re-renders
@@ -106,6 +108,19 @@ function DashboardContent() {
             <p className="mt-2 text-gray-600 dark:text-gray-400">
               {isEditing ? 'Drag widgets to reorder, resize from corners' : 'Track your balance and cash flow'}
             </p>
+            {/* Onboarding hint for first-time users - Issue #412 */}
+            {showHint && !isEditing && (
+              <div className="mt-2 flex items-center gap-2 text-sm text-blue-600 dark:text-blue-400">
+                <span>Tip: Click "Edit" to customize your dashboard layout</span>
+                <button
+                  onClick={dismissHint}
+                  className="p-0.5 hover:bg-blue-100 dark:hover:bg-blue-900/30 rounded"
+                  aria-label="Dismiss tip"
+                >
+                  <XMarkIcon className="h-4 w-4" />
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-3">
