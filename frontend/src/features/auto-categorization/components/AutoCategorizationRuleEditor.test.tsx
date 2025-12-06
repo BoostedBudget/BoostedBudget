@@ -1063,10 +1063,13 @@ describe('AutoCategorizationRuleEditor', () => {
       const textInput = screen.getByPlaceholderText(/enter value/i)
       await user.type(textInput, "McDonald's & Co. <test>")
 
-      // Select category (SearchableSelect uses click-based selection)
+      // Select category - use fireEvent + waitFor for reliability in CI
       const categorySelect = screen.getByRole('combobox', { name: /target category/i })
-      await user.click(categorySelect)
-      await user.click(screen.getByText('Food & Drink > Coffee'))
+      fireEvent.click(categorySelect)
+      await waitFor(() => {
+        expect(screen.getByText('Food & Drink > Coffee')).toBeVisible()
+      })
+      fireEvent.click(screen.getByText('Food & Drink > Coffee'))
 
       const saveButton = screen.getByRole('button', { name: /save/i })
       fireEvent.click(saveButton)

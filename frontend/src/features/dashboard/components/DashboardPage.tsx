@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { PlusIcon, PencilIcon, ArrowPathIcon } from '@heroicons/react/24/outline'
 import { DashboardProvider, useDashboardContext } from '../context/DashboardContext'
 import { useDashboardLayout } from '../hooks/useDashboardLayout'
@@ -31,12 +31,12 @@ function DashboardContent() {
   const { layout, loading, error, saving, updateLayout, addWidget, removeWidget, resetToDefault } = useDashboardLayout()
   const [catalogOpen, setCatalogOpen] = useState(false)
 
-  // Fetch account types for filter
-  const dashboardFilters = {
+  // Fetch account types for filter - useMemo to prevent infinite re-renders
+  const dashboardFilters = useMemo(() => ({
     startDate: filters.startDate,
     endDate: filters.endDate,
     accountTypes: filters.accountTypes,
-  }
+  }), [filters.startDate, filters.endDate, filters.accountTypes])
   const { accountTypes } = useDashboardData(dashboardFilters)
 
   const handleAccountTypeChange = useCallback((types: string[]) => {
