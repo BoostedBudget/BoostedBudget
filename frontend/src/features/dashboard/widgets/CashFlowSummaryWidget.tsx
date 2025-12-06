@@ -160,7 +160,7 @@ function CashFlowSummaryWidget(_props: WidgetProps) {
   const comparison = data.period_comparison;
 
   return (
-    <div className="grid grid-cols-3 gap-4 h-full">
+    <div className="grid grid-cols-3 gap-4 h-full overflow-hidden">
       <SummaryCard
         title="Income"
         value={data.income}

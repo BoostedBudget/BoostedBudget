@@ -247,6 +247,43 @@ describe('WidgetWrapper', () => {
       expect(wrapper).toHaveClass('shadow')
     })
 
+    it('should have min-h-0 on content container to enable flex shrinking', () => {
+      // Issue #410: Content container needs min-h-0 to allow flex item to shrink
+      // below its content size, enabling overflow-auto to work correctly
+      const { container } = render(
+        <WidgetWrapper
+          widgetId="widget-1"
+          widgetType="balance-overview"
+          isEditing={false}
+          onRemove={mockOnRemove}
+        >
+          <div>Content</div>
+        </WidgetWrapper>
+      )
+
+      // Find the content container (the one with flex-1 and overflow-auto)
+      const contentContainer = container.querySelector('.flex-1.overflow-auto')
+      expect(contentContainer).toBeInTheDocument()
+      expect(contentContainer).toHaveClass('min-h-0')
+    })
+
+    it('should have overflow-auto on content container for scrollable content', () => {
+      const { container } = render(
+        <WidgetWrapper
+          widgetId="widget-1"
+          widgetType="balance-overview"
+          isEditing={false}
+          onRemove={mockOnRemove}
+        >
+          <div>Content</div>
+        </WidgetWrapper>
+      )
+
+      const contentContainer = container.querySelector('.flex-1')
+      expect(contentContainer).toBeInTheDocument()
+      expect(contentContainer).toHaveClass('overflow-auto')
+    })
+
     it('should have dark mode classes', () => {
       const { container } = render(
         <WidgetWrapper
