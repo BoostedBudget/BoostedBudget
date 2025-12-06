@@ -651,6 +651,7 @@ describe('DashboardPage', () => {
 
   describe('Widget Grid Layout', () => {
     // Issue #354: Customizable Dashboard Widget System
+    // Issue #414: Filters moved to header row
     beforeEach(() => {
       vi.mocked(useDashboardData).mockReturnValue({
         summary: mockSummary,
@@ -662,30 +663,21 @@ describe('DashboardPage', () => {
       })
     })
 
-    it('should render main grid layout with widget grid and sidebar', () => {
-      // Act
+    it('should render filters in header area above widgets', () => {
+      // Act - Issue #414: Filters now in header, not sidebar
       render(<DashboardPage />)
 
-      // Assert - Layout has main content (3 cols) and sidebar (1 col)
-      const gridContainer = document.querySelector('.grid.grid-cols-1.lg\\:grid-cols-4')
-      expect(gridContainer).toBeInTheDocument()
-    })
-
-    it('should render DashboardGrid in main content area', () => {
-      // Act
-      render(<DashboardPage />)
-
-      // Assert - DashboardGrid is rendered
-      expect(screen.getByTestId('dashboard-grid')).toBeInTheDocument()
-    })
-
-    it('should render filters in sidebar', () => {
-      // Act
-      render(<DashboardPage />)
-
-      // Assert - Filters are in the sidebar
+      // Assert - Filters are rendered
       expect(screen.getByTestId('timeframe-selector')).toBeInTheDocument()
       expect(screen.getByTestId('account-type-filter')).toBeInTheDocument()
+    })
+
+    it('should render DashboardGrid with full width', () => {
+      // Act
+      render(<DashboardPage />)
+
+      // Assert - DashboardGrid is rendered (now has full width, no sidebar)
+      expect(screen.getByTestId('dashboard-grid')).toBeInTheDocument()
     })
   })
 
