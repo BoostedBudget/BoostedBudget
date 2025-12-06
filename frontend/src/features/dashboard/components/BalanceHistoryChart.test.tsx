@@ -460,13 +460,16 @@ describe('BalanceHistoryChart', () => {
       expect(wrapper).toBeInTheDocument()
     })
 
-    it('should set chart height to 400px', () => {
-      // Act
+    it('should use responsive height (100%) instead of fixed pixels', () => {
+      // Issue #410: Chart should use height="100%" for responsive sizing
+      // instead of fixed pixels to properly fill widget container
       const { container } = render(<BalanceHistoryChart history={mockHistory} />)
 
-      // Assert - ResponsiveContainer has height prop
+      // Assert - ResponsiveContainer should be rendered and use 100% height
       const responsiveContainer = container.querySelector('.recharts-responsive-container')
       expect(responsiveContainer).toBeInTheDocument()
+      // Check that container has height: 100% style (not fixed pixels)
+      expect(responsiveContainer).toHaveStyle({ height: '100%' })
     })
   })
 

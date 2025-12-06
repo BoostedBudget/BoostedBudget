@@ -68,8 +68,8 @@ export function WidgetWrapper({
         )}
       </div>
 
-      {/* Widget content */}
-      <div className="flex-1 overflow-auto p-4">{children}</div>
+      {/* Widget content - min-h-0 enables flex shrinking below content size (Issue #410) */}
+      <div className="flex-1 min-h-0 overflow-auto p-4">{children}</div>
     </div>
   );
 }
