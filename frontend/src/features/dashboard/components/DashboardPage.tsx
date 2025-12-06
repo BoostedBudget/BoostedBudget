@@ -149,33 +149,25 @@ function DashboardContent() {
           </div>
         </div>
 
-        {/* Main Grid Layout */}
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-          {/* Main Content - Widget Grid */}
-          <div className="lg:col-span-3">
-            <DashboardGrid
-              layout={layout}
-              isEditing={isEditing}
-              onLayoutChange={updateLayout}
-              onRemoveWidget={handleRemoveWidget}
+        {/* Filters Row - Issue #414: Moved from sidebar to header */}
+        <div className="mb-6 flex flex-wrap items-start gap-4">
+          <TimeframeSelector onRangeChange={handleTimeframeChange} />
+          {accountTypes && (
+            <AccountTypeFilter
+              accountTypes={accountTypes}
+              selectedTypes={filters.accountTypes || []}
+              onChange={handleAccountTypeChange}
             />
-          </div>
-
-          {/* Right Column - Filters */}
-          <div className="space-y-6">
-            {/* Timeframe Selector */}
-            <TimeframeSelector onRangeChange={handleTimeframeChange} />
-
-            {/* Account Type Filter */}
-            {accountTypes && (
-              <AccountTypeFilter
-                accountTypes={accountTypes}
-                selectedTypes={filters.accountTypes || []}
-                onChange={handleAccountTypeChange}
-              />
-            )}
-          </div>
+          )}
         </div>
+
+        {/* Widget Grid - Full Width */}
+        <DashboardGrid
+          layout={layout}
+          isEditing={isEditing}
+          onLayoutChange={updateLayout}
+          onRemoveWidget={handleRemoveWidget}
+        />
       </div>
 
       {/* Widget Catalog Modal */}
