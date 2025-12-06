@@ -221,7 +221,8 @@ func TestWorker_RespectsContext(t *testing.T) {
 
 // TestWorker_GracefulShutdown tests graceful worker shutdown
 func TestWorker_GracefulShutdown(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	// Use longer timeouts to account for race detection overhead in CI
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	mockService := new(MockDeletionServiceForWorker)
@@ -240,11 +241,12 @@ func TestWorker_GracefulShutdown(t *testing.T) {
 	}()
 
 	// Wait for context timeout (worker should shut down)
+	// Use longer timeout to account for race detection overhead in CI
 	select {
 	case <-done:
 		// Worker shut down gracefully
 		assert.True(t, true)
-	case <-time.After(1 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("Worker did not shut down gracefully")
 	}
 }
