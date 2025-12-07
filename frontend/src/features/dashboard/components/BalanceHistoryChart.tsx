@@ -45,8 +45,8 @@ function CustomTooltip({ active, payload }: CustomTooltipProps) {
     const data = payload[0].payload as { fullDate: string }
 
     return (
-      <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3">
-        <p className="text-sm font-semibold text-gray-900 mb-2">
+      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg p-3">
+        <p className="text-sm font-semibold text-gray-900 dark:text-white mb-2">
           {format(parseISO(data.fullDate), 'MMMM d, yyyy')}
         </p>
         {payload.map((entry, index: number) => (
@@ -57,7 +57,7 @@ function CustomTooltip({ active, payload }: CustomTooltipProps) {
             >
               {entry.name}:
             </span>
-            <span className="text-sm font-semibold">
+            <span className="text-sm font-semibold text-gray-900 dark:text-white">
               {formatCurrency(entry.value as number)}
             </span>
           </div>
@@ -110,69 +110,71 @@ export function BalanceHistoryChart({
   }
 
   return (
-    <div className="bg-white rounded-lg shadow p-6">
-      <h2 className="text-lg font-semibold text-gray-900 mb-4">
+    <div className="h-full flex flex-col">
+      <h2 className="flex-shrink-0 text-lg font-semibold text-gray-900 dark:text-white mb-4">
         Balance History
       </h2>
 
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart
-          data={chartData}
-          margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
-        >
-          <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-          <XAxis
-            dataKey="date"
-            tick={{ fontSize: 12 }}
-            stroke="#6b7280"
-          />
-          <YAxis
-            tickFormatter={formatCurrency}
-            tick={{ fontSize: 12 }}
-            stroke="#6b7280"
-          />
-          <Tooltip content={<CustomTooltip />} />
-          <Legend
-            wrapperStyle={{ fontSize: '14px' }}
-            iconType="line"
-          />
+      {history.snapshots.length > 0 ? (
+        <div className="flex-1 min-h-0">
+          <ResponsiveContainer width="100%" height="100%" minHeight={200}>
+            <LineChart
+              data={chartData}
+              margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+              <XAxis
+                dataKey="date"
+                tick={{ fontSize: 12 }}
+                stroke="#6b7280"
+              />
+              <YAxis
+                tickFormatter={formatCurrency}
+                tick={{ fontSize: 12 }}
+                stroke="#6b7280"
+              />
+              <Tooltip content={<CustomTooltip />} />
+              <Legend
+                wrapperStyle={{ fontSize: '14px' }}
+                iconType="line"
+              />
 
-          {!showTypeBreakdown && (
-            <Line
-              type="monotone"
-              dataKey="balance"
-              stroke={typeColors.balance}
-              strokeWidth={2}
-              dot={{ r: 3 }}
-              activeDot={{ r: 5 }}
-              name="Total Balance"
-            />
-          )}
-
-          {showTypeBreakdown &&
-            history.snapshots.some((s) => s.by_type) &&
-            Object.keys(history.snapshots[0].by_type || {}).map(
-              (typeKey) => (
+              {!showTypeBreakdown && (
                 <Line
-                  key={typeKey}
                   type="monotone"
-                  dataKey={typeKey}
-                  stroke={typeColors[typeKey] || '#6b7280'}
+                  dataKey="balance"
+                  stroke={typeColors.balance}
                   strokeWidth={2}
                   dot={{ r: 3 }}
                   activeDot={{ r: 5 }}
-                  name={
-                    typeKey.charAt(0).toUpperCase() + typeKey.slice(1)
-                  }
+                  name="Total Balance"
                 />
-              )
-            )}
-        </LineChart>
-      </ResponsiveContainer>
+              )}
 
-      {history.snapshots.length === 0 && (
-        <div className="flex items-center justify-center h-64">
-          <p className="text-gray-500">No balance history available</p>
+              {showTypeBreakdown &&
+                history.snapshots.some((s) => s.by_type) &&
+                Object.keys(history.snapshots[0].by_type || {}).map(
+                  (typeKey) => (
+                    <Line
+                      key={typeKey}
+                      type="monotone"
+                      dataKey={typeKey}
+                      stroke={typeColors[typeKey] || '#6b7280'}
+                      strokeWidth={2}
+                      dot={{ r: 3 }}
+                      activeDot={{ r: 5 }}
+                      name={
+                        typeKey.charAt(0).toUpperCase() + typeKey.slice(1)
+                      }
+                    />
+                  )
+                )}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      ) : (
+        <div className="flex-1 flex items-center justify-center">
+          <p className="text-gray-500 dark:text-gray-400">No balance history available</p>
         </div>
       )}
     </div>
