@@ -423,43 +423,84 @@ describe('BalanceHistoryChart', () => {
     })
   })
 
+  /**
+   * Issue #416: Height Chain Fix Tests
+   *
+   * These tests verify the proper CSS height chain propagation so that
+   * ResponsiveContainer can calculate dimensions correctly within WidgetWrapper.
+   */
+  describe('Height Chain Fix - Issue #416', () => {
+    it('should have h-full on outer container for height propagation', () => {
+      // Act
+      const { container } = render(<BalanceHistoryChart history={mockHistory} />)
+
+      // Assert
+      const outerDiv = container.firstChild as HTMLElement
+      expect(outerDiv).toHaveClass('h-full')
+    })
+
+    it('should use flex flex-col layout for proper height distribution', () => {
+      // Act
+      const { container } = render(<BalanceHistoryChart history={mockHistory} />)
+
+      // Assert
+      const outerDiv = container.firstChild as HTMLElement
+      expect(outerDiv).toHaveClass('flex')
+      expect(outerDiv).toHaveClass('flex-col')
+    })
+
+    it('should have flex-shrink-0 on title to prevent compression', () => {
+      // Act
+      render(<BalanceHistoryChart history={mockHistory} />)
+
+      // Assert
+      const title = screen.getByRole('heading', { name: /balance history/i })
+      expect(title).toHaveClass('flex-shrink-0')
+    })
+
+    it('should have flex-1 min-h-0 on chart container for proper flex sizing', () => {
+      // Act
+      const { container } = render(<BalanceHistoryChart history={mockHistory} />)
+
+      // Assert
+      const chartContainer = container.querySelector('.flex-1.min-h-0')
+      expect(chartContainer).toBeInTheDocument()
+    })
+
+    it('should NOT have redundant bg-white shadow p-6 styling', () => {
+      // These styles are provided by WidgetWrapper, not the chart component
+      const { container } = render(<BalanceHistoryChart history={mockHistory} />)
+
+      // Assert
+      const outerDiv = container.firstChild as HTMLElement
+      expect(outerDiv).not.toHaveClass('bg-white')
+      expect(outerDiv).not.toHaveClass('shadow')
+      expect(outerDiv).not.toHaveClass('p-6')
+      expect(outerDiv).not.toHaveClass('rounded-lg')
+    })
+
+    it('should have dark mode support on title', () => {
+      // Act
+      render(<BalanceHistoryChart history={mockHistory} />)
+
+      // Assert
+      const title = screen.getByRole('heading', { name: /balance history/i })
+      expect(title).toHaveClass('dark:text-white')
+    })
+
+    it('should use flex-1 for empty state instead of fixed h-64', () => {
+      // Act
+      const { container } = render(<BalanceHistoryChart history={mockEmptyHistory} />)
+
+      // Assert - Should have flex-1 for proper flex layout
+      const emptyState = container.querySelector('.flex-1.flex.items-center.justify-center')
+      expect(emptyState).toBeInTheDocument()
+      // Should NOT have fixed h-64
+      expect(container.querySelector('.h-64')).not.toBeInTheDocument()
+    })
+  })
+
   describe('Layout and Styling', () => {
-    it('should use white background', () => {
-      // Act
-      const { container } = render(<BalanceHistoryChart history={mockHistory} />)
-
-      // Assert
-      const wrapper = container.querySelector('.bg-white')
-      expect(wrapper).toBeInTheDocument()
-    })
-
-    it('should have rounded corners', () => {
-      // Act
-      const { container } = render(<BalanceHistoryChart history={mockHistory} />)
-
-      // Assert
-      const wrapper = container.querySelector('.rounded-lg')
-      expect(wrapper).toBeInTheDocument()
-    })
-
-    it('should have shadow', () => {
-      // Act
-      const { container } = render(<BalanceHistoryChart history={mockHistory} />)
-
-      // Assert
-      const wrapper = container.querySelector('.shadow')
-      expect(wrapper).toBeInTheDocument()
-    })
-
-    it('should have padding', () => {
-      // Act
-      const { container } = render(<BalanceHistoryChart history={mockHistory} />)
-
-      // Assert
-      const wrapper = container.querySelector('.p-6')
-      expect(wrapper).toBeInTheDocument()
-    })
-
     it('should use responsive height (100%) instead of fixed pixels', () => {
       // Issue #410: Chart should use height="100%" for responsive sizing
       // instead of fixed pixels to properly fill widget container
@@ -491,12 +532,12 @@ describe('BalanceHistoryChart', () => {
       expect(emptyState).toBeInTheDocument()
     })
 
-    it('should set empty state height to h-64', () => {
-      // Act
+    it('should use flex-1 for empty state height instead of fixed h-64 (Issue #416)', () => {
+      // Issue #416: Empty state should use flex-1 for proper flex layout
       const { container } = render(<BalanceHistoryChart history={mockEmptyHistory} />)
 
-      // Assert
-      const emptyState = container.querySelector('.h-64')
+      // Assert - flex-1 provides flexible height within the flex container
+      const emptyState = container.querySelector('.flex-1')
       expect(emptyState).toBeInTheDocument()
     })
 
