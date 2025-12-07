@@ -370,41 +370,92 @@ describe('BalanceOverview', () => {
     })
   })
 
-  describe('Layout and Styling', () => {
-    it('should use white background', () => {
-      // Act
+  /**
+   * Widget Styling Compliance Tests - Issue #422
+   *
+   * BalanceOverview is rendered inside WidgetWrapper which already provides:
+   * - bg-white dark:bg-gray-800 (background)
+   * - rounded-lg (rounded corners)
+   * - shadow (box shadow)
+   * - p-4 (padding via content div)
+   *
+   * The component should NOT have its own card styling to avoid double-cards.
+   */
+  describe('Widget Styling Compliance - Issue #422', () => {
+    it('should NOT have redundant bg-white card styling', () => {
+      // WidgetWrapper provides bg-white, so component should not
       const { container } = render(<BalanceOverview summary={mockSummaryWithPositiveChange} />)
 
-      // Assert
-      const wrapper = container.querySelector('.bg-white')
-      expect(wrapper).toBeInTheDocument()
+      const outerDiv = container.firstChild as HTMLElement
+      expect(outerDiv).not.toHaveClass('bg-white')
     })
 
-    it('should have rounded corners', () => {
-      // Act
+    it('should NOT have redundant rounded-lg styling', () => {
+      // WidgetWrapper provides rounded corners, so component should not
       const { container } = render(<BalanceOverview summary={mockSummaryWithPositiveChange} />)
 
-      // Assert
-      const wrapper = container.querySelector('.rounded-lg')
-      expect(wrapper).toBeInTheDocument()
+      const outerDiv = container.firstChild as HTMLElement
+      expect(outerDiv).not.toHaveClass('rounded-lg')
     })
 
-    it('should have shadow', () => {
-      // Act
+    it('should NOT have redundant shadow styling', () => {
+      // WidgetWrapper provides shadow, so component should not
       const { container } = render(<BalanceOverview summary={mockSummaryWithPositiveChange} />)
 
-      // Assert
-      const wrapper = container.querySelector('.shadow')
-      expect(wrapper).toBeInTheDocument()
+      const outerDiv = container.firstChild as HTMLElement
+      expect(outerDiv).not.toHaveClass('shadow')
     })
 
-    it('should have padding', () => {
-      // Act
+    it('should NOT have redundant p-6 padding', () => {
+      // WidgetWrapper provides p-4 padding, so component should not add more
       const { container } = render(<BalanceOverview summary={mockSummaryWithPositiveChange} />)
 
-      // Assert
-      const wrapper = container.querySelector('.p-6')
-      expect(wrapper).toBeInTheDocument()
+      const outerDiv = container.firstChild as HTMLElement
+      expect(outerDiv).not.toHaveClass('p-6')
+    })
+
+    it('should have h-full for proper height in widget grid', () => {
+      const { container } = render(<BalanceOverview summary={mockSummaryWithPositiveChange} />)
+
+      const outerDiv = container.firstChild as HTMLElement
+      expect(outerDiv).toHaveClass('h-full')
+    })
+
+    it('should use flex layout for content distribution', () => {
+      const { container } = render(<BalanceOverview summary={mockSummaryWithPositiveChange} />)
+
+      const outerDiv = container.firstChild as HTMLElement
+      expect(outerDiv).toHaveClass('flex')
+      expect(outerDiv).toHaveClass('flex-col')
+    })
+  })
+
+  /**
+   * Dark Mode Support Tests - Issue #422
+   *
+   * Component must support dark mode since it's used in dashboard widgets.
+   */
+  describe('Dark Mode Support - Issue #422', () => {
+    it('should have dark mode class on Total Balance heading', () => {
+      render(<BalanceOverview summary={mockSummaryWithPositiveChange} />)
+
+      const heading = screen.getByText('Total Balance')
+      expect(heading).toHaveClass('dark:text-gray-400')
+    })
+
+    it('should have dark mode class on balance amount', () => {
+      render(<BalanceOverview summary={mockSummaryWithPositiveChange} />)
+
+      // Balance is the large text element
+      const balanceElement = screen.getByText('$15,000.50')
+      expect(balanceElement).toHaveClass('dark:text-white')
+    })
+
+    it('should have dark mode class on date text', () => {
+      render(<BalanceOverview summary={mockSummaryWithPositiveChange} />)
+
+      const dateText = screen.getByText(/as of Nov 15, 2025/)
+      expect(dateText).toHaveClass('dark:text-gray-500')
     })
   })
 })

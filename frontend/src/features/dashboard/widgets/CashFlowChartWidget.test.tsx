@@ -20,11 +20,19 @@ vi.mock('./registry', () => ({
   registerWidget: vi.fn(),
 }))
 
-// Mock recharts
+// Mock recharts - capture props for testing Issue #422
+// Use 'let' so we can reassign to a fresh array in beforeEach (allows GC of old array)
+let mockResponsiveContainerProps: { minHeight?: number }[] = []
+
 vi.mock('recharts', () => ({
-  ResponsiveContainer: ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="responsive-container">{children}</div>
-  ),
+  ResponsiveContainer: ({ children, minHeight }: { children: React.ReactNode; minHeight?: number }) => {
+    mockResponsiveContainerProps.push({ minHeight })
+    return (
+      <div data-testid="responsive-container" data-min-height={minHeight}>
+        {children}
+      </div>
+    )
+  },
   ComposedChart: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="composed-chart">{children}</div>
   ),
@@ -280,6 +288,64 @@ describe('CashFlowChartWidget', () => {
           enabled: true,
         })
       )
+    })
+  })
+
+  /**
+   * ResponsiveContainer Height Fallback Tests - Issue #422
+   *
+   * These tests verify that ResponsiveContainer has a minHeight prop
+   * to prevent -1 dimension calculations during initial render.
+   *
+   * Root cause: ResponsiveContainer calculates height="100%" before
+   * react-grid-layout applies dimensions, resulting in -1.
+   */
+  describe('ResponsiveContainer Height Fallback - Issue #422', () => {
+    beforeEach(() => {
+      // Create fresh array before each test (allows GC of old array contents)
+      // Using '= []' instead of '.length = 0' because .length=0 doesn't clear internal buffer
+      mockResponsiveContainerProps = []
+    })
+
+    it('should pass minHeight to ResponsiveContainer as render fallback', () => {
+      vi.mocked(useCashFlowHistory).mockReturnValue({
+        data: mockHistoryData,
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      })
+
+      render(
+        <TestWrapper contextValue={mockContextValue}>
+          <CashFlowChartWidget widgetId="test-1" onRemove={vi.fn()} />
+        </TestWrapper>
+      )
+
+      // Verify ResponsiveContainer received minHeight prop
+      const containerProps = mockResponsiveContainerProps[0]
+      expect(containerProps).toBeDefined()
+      expect(containerProps.minHeight).toBeDefined()
+      expect(containerProps.minHeight).toBeGreaterThanOrEqual(200)
+    })
+
+    it('should have minHeight attribute on ResponsiveContainer element', () => {
+      vi.mocked(useCashFlowHistory).mockReturnValue({
+        data: mockHistoryData,
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      })
+
+      render(
+        <TestWrapper contextValue={mockContextValue}>
+          <CashFlowChartWidget widgetId="test-1" onRemove={vi.fn()} />
+        </TestWrapper>
+      )
+
+      const container = screen.getByTestId('responsive-container')
+      const minHeight = container.getAttribute('data-min-height')
+      expect(minHeight).not.toBeNull()
+      expect(Number(minHeight)).toBeGreaterThanOrEqual(200)
     })
   })
 })

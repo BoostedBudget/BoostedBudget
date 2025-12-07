@@ -35,14 +35,14 @@ export function BalanceOverview({ summary }: BalanceOverviewProps) {
   const changeIcon = isPositiveChange ? '↑' : '↓'
 
   return (
-    <div className="bg-white rounded-lg shadow p-6">
+    <div className="h-full flex flex-col">
       <div className="mb-2">
-        <h2 className="text-sm font-medium text-gray-600">Total Balance</h2>
-        <p className="text-xs text-gray-500">as of {formattedDate}</p>
+        <h2 className="text-sm font-medium text-gray-600 dark:text-gray-400">Total Balance</h2>
+        <p className="text-xs text-gray-500 dark:text-gray-500">as of {formattedDate}</p>
       </div>
 
-      <div className="mb-4">
-        <p className="text-4xl font-bold text-gray-900">{formattedBalance}</p>
+      <div className="mb-4 flex-1 flex items-center">
+        <p className="text-4xl font-bold text-gray-900 dark:text-white">{formattedBalance}</p>
       </div>
 
       {hasComparison && (
@@ -55,15 +55,15 @@ export function BalanceOverview({ summary }: BalanceOverviewProps) {
               signDisplay: 'never',
             }).format(Math.abs(period_comparison.change_amount))}
           </span>
-          <span className="text-sm text-gray-600">
+          <span className="text-sm text-gray-600 dark:text-gray-400">
             ({period_comparison.change_percent.toFixed(2)}%)
           </span>
-          <span className="text-sm text-gray-500">vs 30 days ago</span>
+          <span className="text-sm text-gray-500 dark:text-gray-500">vs 30 days ago</span>
         </div>
       )}
 
       {!hasComparison && (
-        <p className="text-sm text-gray-500">
+        <p className="text-sm text-gray-500 dark:text-gray-400">
           No historical data for comparison
         </p>
       )}
