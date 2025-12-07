@@ -133,7 +133,7 @@ export function DashboardGrid({
         const WidgetComponent = Definition?.Component;
 
         return (
-          <div key={widget.i}>
+          <div key={widget.i} className="h-full">
             <WidgetWrapper
               widgetId={widget.i}
               widgetType={widget.type}

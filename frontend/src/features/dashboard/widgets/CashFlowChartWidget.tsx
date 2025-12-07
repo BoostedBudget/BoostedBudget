@@ -124,7 +124,7 @@ function CashFlowChartWidget(_props: WidgetProps) {
 
   return (
     <div className="h-full w-full overflow-hidden">
-      <ResponsiveContainer width="100%" height="100%">
+      <ResponsiveContainer width="100%" height="100%" minHeight={200}>
         <ComposedChart
           data={chartData}
           margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
