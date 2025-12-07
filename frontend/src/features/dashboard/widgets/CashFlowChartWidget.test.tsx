@@ -292,6 +292,63 @@ describe('CashFlowChartWidget', () => {
   })
 
   /**
+   * Flex Layout Structure Tests - Issue #420
+   *
+   * These tests verify that the widget uses the correct flex pattern
+   * (matching BalanceHistoryChart) to ensure ResponsiveContainer can
+   * properly calculate dimensions.
+   *
+   * Pattern: h-full flex flex-col -> flex-1 min-h-0 wrapper -> ResponsiveContainer
+   */
+  describe('Flex Layout Structure - Issue #420', () => {
+    beforeEach(() => {
+      mockResponsiveContainerProps = []
+    })
+
+    it('should have flex-col container for proper height propagation', () => {
+      vi.mocked(useCashFlowHistory).mockReturnValue({
+        data: mockHistoryData,
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      })
+
+      const { container } = render(
+        <TestWrapper contextValue={mockContextValue}>
+          <CashFlowChartWidget widgetId="test-1" onRemove={vi.fn()} />
+        </TestWrapper>
+      )
+
+      // Find the outer wrapper div
+      const outerWrapper = container.firstChild as HTMLElement
+      expect(outerWrapper).toHaveClass('h-full')
+      expect(outerWrapper).toHaveClass('flex')
+      expect(outerWrapper).toHaveClass('flex-col')
+    })
+
+    it('should have flex-1 min-h-0 wrapper around ResponsiveContainer', () => {
+      vi.mocked(useCashFlowHistory).mockReturnValue({
+        data: mockHistoryData,
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      })
+
+      render(
+        <TestWrapper contextValue={mockContextValue}>
+          <CashFlowChartWidget widgetId="test-1" onRemove={vi.fn()} />
+        </TestWrapper>
+      )
+
+      // The wrapper around ResponsiveContainer should have flex-1 min-h-0
+      const responsiveContainer = screen.getByTestId('responsive-container')
+      const chartWrapper = responsiveContainer.parentElement
+      expect(chartWrapper).toHaveClass('flex-1')
+      expect(chartWrapper).toHaveClass('min-h-0')
+    })
+  })
+
+  /**
    * ResponsiveContainer Height Fallback Tests - Issue #422
    *
    * These tests verify that ResponsiveContainer has a minHeight prop

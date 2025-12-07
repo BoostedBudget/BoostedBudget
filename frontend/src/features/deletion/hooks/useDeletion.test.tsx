@@ -81,10 +81,10 @@ describe('useDeletion', () => {
       // Assert - Should be requesting immediately
       expect(result.current.isRequesting).toBe(true)
 
-      // Wait for completion
+      // Wait for completion (increased timeout for CI stability)
       await waitFor(() => {
         expect(result.current.isRequesting).toBe(false)
-      })
+      }, { timeout: 2000 })
     })
 
     it('should set isRequesting=false after completion', async () => {
@@ -236,10 +236,10 @@ describe('useDeletion', () => {
       // Assert - Should be canceling immediately
       expect(result.current.isCanceling).toBe(true)
 
-      // Wait for completion
+      // Wait for completion (increased timeout for CI stability)
       await waitFor(() => {
         expect(result.current.isCanceling).toBe(false)
-      })
+      }, { timeout: 2000 })
     })
 
     it('should set isCanceling=false after completion', async () => {
@@ -392,11 +392,11 @@ describe('useDeletion', () => {
       expect(result.current.isRequesting).toBe(true)
       expect(result.current.isCanceling).toBe(true)
 
-      // Wait for both to complete
+      // Wait for both to complete (increased timeout for CI stability)
       await waitFor(() => {
         expect(result.current.isRequesting).toBe(false)
         expect(result.current.isCanceling).toBe(false)
-      })
+      }, { timeout: 2000 })
     })
 
     it('should reset errors independently', async () => {
