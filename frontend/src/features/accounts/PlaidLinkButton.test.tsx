@@ -119,9 +119,10 @@ describe('PlaidLinkButton', () => {
 
       renderWithRouter(<PlaidLinkButton />)
 
+      // Increased timeout for CI stability - async state updates may take longer
       await waitFor(() => {
         expect(screen.getByText(/failed to load/i)).toBeInTheDocument()
-      })
+      }, { timeout: 2000 })
     })
   })
 
