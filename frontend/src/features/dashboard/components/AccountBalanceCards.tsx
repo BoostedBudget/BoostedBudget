@@ -68,8 +68,8 @@ export function AccountBalanceCards({ summary }: AccountBalanceCardsProps) {
 
   if (accountTypes.length === 0) {
     return (
-      <div className="bg-white rounded-lg shadow p-6">
-        <p className="text-center text-gray-500">No accounts found</p>
+      <div className="flex items-center justify-center h-full">
+        <p className="text-center text-gray-500 dark:text-gray-400">No accounts found</p>
       </div>
     )
   }
@@ -106,12 +106,12 @@ export function AccountBalanceCards({ summary }: AccountBalanceCardsProps) {
               {typeData.accounts.map((account) => (
                 <div
                   key={account.id}
-                  className="flex items-center justify-between bg-white rounded-lg px-4 py-3 shadow-sm"
+                  className="flex items-center justify-between bg-white dark:bg-gray-800 rounded-lg px-4 py-3 shadow-sm"
                 >
-                  <span className="text-sm font-medium text-gray-900">
+                  <span className="text-sm font-medium text-gray-900 dark:text-white">
                     {account.name}
                   </span>
-                  <span className="text-sm font-semibold text-gray-700">
+                  <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">
                     {formatCurrency(account.balance)}
                   </span>
                 </div>

@@ -269,4 +269,56 @@ describe('DashboardGrid', () => {
       expect(registry.getWidget).toHaveBeenCalledWith('cash-flow-summary')
     })
   })
+
+  /**
+   * Grid Cell Height Propagation Tests - Issue #422
+   *
+   * These tests verify that grid cell wrappers have h-full class
+   * for proper height propagation to ResponsiveContainer widgets.
+   *
+   * Root cause: Without h-full, WidgetWrapper's h-full becomes 100% of 0 = 0px,
+   * causing Recharts ResponsiveContainer to calculate dimensions as -1.
+   */
+  describe('Grid Cell Height Propagation - Issue #422', () => {
+    it('should have h-full on grid cell wrapper divs for height propagation', () => {
+      render(
+        <DashboardGrid
+          layout={mockLayout}
+          isEditing={false}
+          onLayoutChange={mockOnLayoutChange}
+          onRemoveWidget={mockOnRemoveWidget}
+        />
+      )
+
+      // Find all direct children of the responsive-grid (these are the grid cell wrappers)
+      const responsiveGrid = screen.getByTestId('responsive-grid')
+      const gridCellWrappers = responsiveGrid.querySelectorAll(':scope > div')
+
+      // Each grid cell wrapper should have h-full for height propagation
+      expect(gridCellWrappers.length).toBe(mockLayout.widgets.length)
+      gridCellWrappers.forEach((wrapper) => {
+        expect(wrapper).toHaveClass('h-full')
+      })
+    })
+
+    it('should have h-full on each widget cell regardless of widget type', () => {
+      render(
+        <DashboardGrid
+          layout={mockLayout}
+          isEditing={false}
+          onLayoutChange={mockOnLayoutChange}
+          onRemoveWidget={mockOnRemoveWidget}
+        />
+      )
+
+      // Find cells by their keys (rendered as part of the structure)
+      const responsiveGrid = screen.getByTestId('responsive-grid')
+      const cells = responsiveGrid.children
+
+      for (let i = 0; i < cells.length; i++) {
+        const cell = cells[i] as HTMLElement
+        expect(cell.classList.contains('h-full')).toBe(true)
+      }
+    })
+  })
 })
