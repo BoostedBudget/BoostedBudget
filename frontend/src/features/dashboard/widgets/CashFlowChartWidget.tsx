@@ -123,8 +123,9 @@ function CashFlowChartWidget(_props: WidgetProps) {
   }
 
   return (
-    <div className="h-full w-full overflow-hidden">
-      <ResponsiveContainer width="100%" height="100%" minHeight={200}>
+    <div className="h-full flex flex-col">
+      <div className="flex-1 min-h-0">
+        <ResponsiveContainer width="100%" height="100%" minHeight={200}>
         <ComposedChart
           data={chartData}
           margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
@@ -194,7 +195,8 @@ function CashFlowChartWidget(_props: WidgetProps) {
             activeDot={{ r: 5, strokeWidth: 0 }}
           />
         </ComposedChart>
-      </ResponsiveContainer>
+        </ResponsiveContainer>
+      </div>
     </div>
   );
 }
