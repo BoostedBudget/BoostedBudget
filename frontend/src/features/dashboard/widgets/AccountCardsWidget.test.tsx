@@ -233,4 +233,51 @@ describe('AccountCardsWidget', () => {
       )
     })
   })
+
+  /**
+   * Widget Wrapper Styling Tests - Issue #420
+   *
+   * These tests verify that the widget wrapper does NOT have redundant
+   * styling that conflicts with WidgetWrapper (which already provides overflow-auto).
+   *
+   * Root cause: Double overflow-auto causes scrollbar issues.
+   */
+  describe('Widget Wrapper Styling - Issue #420', () => {
+    it('should NOT have overflow-auto on success wrapper (WidgetWrapper provides it)', () => {
+      vi.mocked(useDashboardData).mockReturnValue({
+        summary: mockSummary,
+        history: null,
+        accountTypes: null,
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      })
+
+      const { container } = render(
+        <AccountCardsWidget widgetId="test-1" onRemove={vi.fn()} />
+      )
+
+      const wrapper = container.firstChild as HTMLElement
+      expect(wrapper).toHaveClass('h-full')
+      expect(wrapper).not.toHaveClass('overflow-auto')
+    })
+
+    it('should have h-full for height propagation', () => {
+      vi.mocked(useDashboardData).mockReturnValue({
+        summary: mockSummary,
+        history: null,
+        accountTypes: null,
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      })
+
+      const { container } = render(
+        <AccountCardsWidget widgetId="test-1" onRemove={vi.fn()} />
+      )
+
+      const wrapper = container.firstChild as HTMLElement
+      expect(wrapper).toHaveClass('h-full')
+    })
+  })
 })

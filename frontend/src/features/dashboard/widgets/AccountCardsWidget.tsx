@@ -49,7 +49,7 @@ function AccountCardsWidget(_props: WidgetProps) {
   }
 
   return (
-    <div className="h-full overflow-auto">
+    <div className="h-full">
       <AccountBalanceCards summary={summary} />
     </div>
   );
