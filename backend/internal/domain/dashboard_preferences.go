@@ -132,20 +132,25 @@ func (p *DashboardPreferences) Validate() error {
 }
 
 // DefaultDashboardLayout returns the default widget layout for new users
+// NOTE: Keep in sync with frontend/src/features/dashboard/widgets/registry.ts DEFAULT_LAYOUT
+// Version 2: Reduced to 1 widget while fixing rendering issues (#417-419, #425-426)
 func DefaultDashboardLayout() *DashboardLayout {
-	minW3, minH2 := 3, 2
-	minW6, minH2Alt := 6, 2
 	minW4, minH3 := 4, 3
 
 	return &DashboardLayout{
 		Widgets: []WidgetConfig{
-			{ID: "balance-overview-1", Type: WidgetTypeBalanceOverview, X: 0, Y: 0, W: 4, H: 2, MinW: &minW3, MinH: &minH2},
-			{ID: "cash-flow-summary-1", Type: WidgetTypeCashFlowSummary, X: 4, Y: 0, W: 8, H: 2, MinW: &minW6, MinH: &minH2Alt},
-			{ID: "balance-history-1", Type: WidgetTypeBalanceHistory, X: 0, Y: 2, W: 6, H: 4, MinW: &minW4, MinH: &minH3},
-			{ID: "cash-flow-chart-1", Type: WidgetTypeCashFlowChart, X: 6, Y: 2, W: 6, H: 4, MinW: &minW4, MinH: &minH3},
-			{ID: "account-cards-1", Type: WidgetTypeAccountCards, X: 0, Y: 6, W: 12, H: 3, MinW: &minW6, MinH: &minH2Alt},
+			{
+				ID:   "cash-flow-chart-1",
+				Type: WidgetTypeCashFlowChart,
+				X:    0,
+				Y:    0,
+				W:    12,
+				H:    5,
+				MinW: &minW4,
+				MinH: &minH3,
+			},
 		},
-		Version: 1,
+		Version: 2,
 	}
 }
 

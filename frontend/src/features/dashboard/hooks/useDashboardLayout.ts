@@ -44,7 +44,25 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
     async function fetchLayout() {
       try {
         const response = await getDashboardPreferences();
-        setLayout(response.layout);
+
+        // Version-based migration: auto-reset if stored version is outdated
+        // This ensures users get working layouts when default changes
+        if (response.layout.version < DEFAULT_LAYOUT.version) {
+          console.log(
+            `Dashboard layout version ${response.layout.version} is outdated, ` +
+            `resetting to version ${DEFAULT_LAYOUT.version}`
+          );
+          try {
+            const resetResponse = await resetDashboardPreferences();
+            setLayout(resetResponse.layout);
+          } catch (resetErr) {
+            console.error('Failed to reset outdated layout:', resetErr);
+            // Fall back to default layout locally
+            setLayout(DEFAULT_LAYOUT);
+          }
+        } else {
+          setLayout(response.layout);
+        }
         setError(null);
       } catch (err) {
         console.error('Failed to load dashboard preferences:', err);
