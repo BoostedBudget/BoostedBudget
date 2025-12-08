@@ -220,9 +220,9 @@ func TestDashboardPreferencesService_ResetToDefault(t *testing.T) {
 			t.Errorf("expected %d widgets (default), got %d", len(defaultLayout.Widgets), len(result.Layout.Widgets))
 		}
 
-		// Verify it's the actual default layout
-		if result.Layout.Version != 1 {
-			t.Errorf("expected version 1, got %d", result.Layout.Version)
+		// Verify it's the actual default layout (version 2)
+		if result.Layout.Version != 2 {
+			t.Errorf("expected version 2, got %d", result.Layout.Version)
 		}
 	})
 }
