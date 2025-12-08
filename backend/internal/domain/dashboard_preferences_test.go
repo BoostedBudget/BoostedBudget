@@ -307,12 +307,13 @@ func TestDefaultDashboardLayout(t *testing.T) {
 		t.Error("DefaultDashboardLayout() returned nil")
 	}
 
-	if len(layout.Widgets) != 5 {
-		t.Errorf("DefaultDashboardLayout() widgets count = %v, expected 5", len(layout.Widgets))
+	// Version 2: Temporarily reduced to 1 widget while fixing rendering issues
+	if len(layout.Widgets) != 1 {
+		t.Errorf("DefaultDashboardLayout() widgets count = %v, expected 1", len(layout.Widgets))
 	}
 
-	if layout.Version != 1 {
-		t.Errorf("DefaultDashboardLayout() version = %v, expected 1", layout.Version)
+	if layout.Version != 2 {
+		t.Errorf("DefaultDashboardLayout() version = %v, expected 2", layout.Version)
 	}
 
 	// Verify the layout is valid
@@ -321,22 +322,14 @@ func TestDefaultDashboardLayout(t *testing.T) {
 		t.Errorf("DefaultDashboardLayout() produced invalid layout: %v", err)
 	}
 
-	// Check expected widget types
-	expectedTypes := map[WidgetType]bool{
-		WidgetTypeBalanceOverview: false,
-		WidgetTypeBalanceHistory:  false,
-		WidgetTypeCashFlowSummary: false,
-		WidgetTypeCashFlowChart:   false,
-		WidgetTypeAccountCards:    false,
-	}
-
-	for _, widget := range layout.Widgets {
-		expectedTypes[widget.Type] = true
-	}
-
-	for widgetType, found := range expectedTypes {
-		if !found {
-			t.Errorf("DefaultDashboardLayout() missing widget type: %v", widgetType)
+	// Verify the single widget is cash-flow-chart at full width
+	if len(layout.Widgets) > 0 {
+		widget := layout.Widgets[0]
+		if widget.Type != WidgetTypeCashFlowChart {
+			t.Errorf("DefaultDashboardLayout() expected cash-flow-chart widget, got %v", widget.Type)
+		}
+		if widget.W != 12 {
+			t.Errorf("DefaultDashboardLayout() widget width = %v, expected 12 (full width)", widget.W)
 		}
 	}
 }
