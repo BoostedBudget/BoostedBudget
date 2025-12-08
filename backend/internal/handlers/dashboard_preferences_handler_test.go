@@ -123,7 +123,7 @@ func TestGetPreferences_DefaultLayout(t *testing.T) {
 
 	var response domain.DashboardPreferencesResponse
 	json.Unmarshal(rec.Body.Bytes(), &response)
-	assert.Len(t, response.Layout.Widgets, 5) // Default has 5 widgets
+	assert.Len(t, response.Layout.Widgets, 1) // Default has 1 widget (version 2)
 
 	mockService.AssertExpectations(t)
 }
@@ -363,8 +363,8 @@ func TestResetPreferences_Success(t *testing.T) {
 
 	var response domain.DashboardPreferencesResponse
 	json.Unmarshal(rec.Body.Bytes(), &response)
-	assert.Len(t, response.Layout.Widgets, 5) // Default has 5 widgets
-	assert.Equal(t, 1, response.Layout.Version)
+	assert.Len(t, response.Layout.Widgets, 1) // Default has 1 widget (version 2)
+	assert.Equal(t, 2, response.Layout.Version)
 
 	mockService.AssertExpectations(t)
 }

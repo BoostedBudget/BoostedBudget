@@ -27,12 +27,13 @@ vi.mock('../widgets/registry', async () => {
 })
 
 describe('useDashboardLayout', () => {
+  // Use version 2 (current DEFAULT_LAYOUT version) to avoid triggering auto-reset
   const mockLayout: DashboardLayout = {
     widgets: [
       { i: 'widget-1', type: 'balance-overview', x: 0, y: 0, w: 4, h: 3, minW: 3, minH: 2 },
       { i: 'widget-2', type: 'cash-flow-summary', x: 4, y: 0, w: 8, h: 3, minW: 6, minH: 2 },
     ],
-    version: 1,
+    version: 2,
   }
 
   const mockPreferencesResponse: DashboardPreferencesResponse = {
@@ -155,6 +156,87 @@ describe('useDashboardLayout', () => {
       expect(result.current.layout).toEqual(registry.DEFAULT_LAYOUT)
       // Should set error for non-404
       expect(result.current.error).toBe('Failed to load dashboard preferences')
+    })
+  })
+
+  describe('Version-Based Auto-Reset', () => {
+    it('should auto-reset when stored version is older than DEFAULT_LAYOUT', async () => {
+      // Stored layout has version 1 (outdated)
+      const outdatedLayout: DashboardPreferencesResponse = {
+        layout: {
+          widgets: [
+            { i: 'old-widget', type: 'balance-overview', x: 0, y: 0, w: 4, h: 2, minW: 3, minH: 2 },
+          ],
+          version: 1, // Older than DEFAULT_LAYOUT.version (2)
+        },
+      }
+
+      vi.mocked(preferencesApi.getDashboardPreferences).mockResolvedValue(outdatedLayout)
+      vi.mocked(preferencesApi.resetDashboardPreferences).mockResolvedValue({
+        layout: registry.DEFAULT_LAYOUT,
+      })
+
+      const { result } = renderHook(() => useDashboardLayout())
+
+      await waitFor(() => {
+        expect(result.current.loading).toBe(false)
+      })
+
+      // Should have called reset due to version mismatch
+      expect(preferencesApi.resetDashboardPreferences).toHaveBeenCalledTimes(1)
+      // Layout should be the new default
+      expect(result.current.layout).toEqual(registry.DEFAULT_LAYOUT)
+    })
+
+    it('should NOT auto-reset when stored version matches DEFAULT_LAYOUT', async () => {
+      // Stored layout has same version as current
+      const currentVersionLayout: DashboardPreferencesResponse = {
+        layout: {
+          widgets: [
+            { i: 'custom-widget', type: 'cash-flow-chart', x: 0, y: 0, w: 8, h: 4, minW: 4, minH: 3 },
+          ],
+          version: registry.DEFAULT_LAYOUT.version, // Same as current
+        },
+      }
+
+      vi.mocked(preferencesApi.getDashboardPreferences).mockResolvedValue(currentVersionLayout)
+      vi.mocked(preferencesApi.resetDashboardPreferences).mockResolvedValue({
+        layout: registry.DEFAULT_LAYOUT,
+      })
+
+      const { result } = renderHook(() => useDashboardLayout())
+
+      await waitFor(() => {
+        expect(result.current.loading).toBe(false)
+      })
+
+      // Should NOT have called reset
+      expect(preferencesApi.resetDashboardPreferences).not.toHaveBeenCalled()
+      // Layout should be the user's custom layout (not reset to default)
+      expect(result.current.layout.widgets[0].w).toBe(8)
+    })
+
+    it('should fall back to DEFAULT_LAYOUT if reset fails during migration', async () => {
+      const outdatedLayout: DashboardPreferencesResponse = {
+        layout: {
+          widgets: [],
+          version: 1,
+        },
+      }
+
+      vi.mocked(preferencesApi.getDashboardPreferences).mockResolvedValue(outdatedLayout)
+      vi.mocked(preferencesApi.resetDashboardPreferences).mockRejectedValue(new Error('Reset failed'))
+
+      const { result } = renderHook(() => useDashboardLayout())
+
+      await waitFor(() => {
+        expect(result.current.loading).toBe(false)
+      })
+
+      // Should fall back to DEFAULT_LAYOUT
+      expect(result.current.layout).toEqual(registry.DEFAULT_LAYOUT)
+      // Should not set error (graceful fallback)
+      expect(result.current.error).toBeNull()
     })
   })
 
@@ -467,7 +549,7 @@ describe('useDashboardLayout', () => {
 
     it('should handle empty layout (y = 0)', async () => {
       const emptyLayout: DashboardPreferencesResponse = {
-        layout: { widgets: [], version: 1 },
+        layout: { widgets: [], version: 2 },
       }
       vi.mocked(preferencesApi.getDashboardPreferences).mockResolvedValue(emptyLayout)
       vi.mocked(registry.createWidgetConfig).mockReturnValue({ ...mockNewWidget, y: Infinity })
