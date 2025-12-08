@@ -16,10 +16,13 @@ export default mergeConfig(
       // Increase teardown timeout for pool cleanup with V8 coverage
       // V8 coverage provider can take >10s to cleanup in CI, especially with single fork mode
       teardownTimeout: 30000,
-      // Pool options for CI - use single fork to reduce overhead and prevent timeouts
+      // Pool options - use single fork to reduce overhead and prevent zombie processes
+      // Issue #422: isolate: false reuses same process, preventing worker accumulation
+      pool: 'forks',
       poolOptions: {
         forks: {
-          singleFork: true, // Use single fork for CI to reduce overhead
+          singleFork: true, // Use single fork to reduce overhead
+          isolate: false, // Reuse same process for all tests - prevents zombie workers
         },
         threads: {
           singleThread: true, // Use single thread as fallback
