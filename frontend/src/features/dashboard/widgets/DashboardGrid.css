@@ -1,158 +1,20 @@
 /**
  * Dashboard Grid Styles
- * Issue #435: Fix dashboard edit mode resize handles breaking layout
- * Issue #422: Fix dashboard widget height chain in edit mode
+ * Issue #441: Migrated to GridStack.js
  *
- * These styles ensure:
- * 1. Grid cell content fills entire grid item using absolute positioning
- * 2. React-resizable handles are positioned correctly
+ * GridStack.js provides its own height chain handling via .grid-stack-item-content
+ * with position: absolute; inset: 0, so we only need minimal customizations.
+ *
+ * The previous react-grid-layout workarounds have been removed.
  */
 
-/* Ensure react-grid-layout items have proper positioning context */
-.react-grid-item {
-  position: absolute;
-}
-
-/* Issue #422: Grid cell content fills entire grid item using absolute positioning
- *
- * Problem: Using h-full (height: 100%) on the grid cell wrapper depends on
- * parent having computed height. In edit mode, react-resizable adds resize
- * handles that can affect layout timing, causing h-full to compute incorrectly.
- * The chart content escapes its container and renders below the footer.
- *
- * Solution: Use absolute positioning with inset: 0 to fill the grid item space.
- * This works because .react-grid-item has explicit width/height from react-grid-layout.
- */
-.react-grid-item > .grid-cell-content {
-  position: absolute !important;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  overflow: hidden;
-}
-
-/* Fix react-resizable handles to be absolutely positioned */
-.react-grid-item > .react-resizable-handle {
-  position: absolute !important;
-  width: 20px;
-  height: 20px;
-  background: transparent;
+/* Custom resize handle styling (optional - GridStack has defaults) */
+.grid-stack-item > .ui-resizable-handle {
   z-index: 10;
 }
 
-/* Resize handle visual indicator */
-.react-grid-item > .react-resizable-handle::after {
-  content: '';
-  position: absolute;
-  right: 3px;
-  bottom: 3px;
-  width: 5px;
-  height: 5px;
-  border-right: 2px solid rgba(0, 0, 0, 0.4);
-  border-bottom: 2px solid rgba(0, 0, 0, 0.4);
-}
-
-/* Dark mode support for handle indicator */
-.dark .react-grid-item > .react-resizable-handle::after {
+/* Dark mode support for resize handle indicator */
+.dark .grid-stack-item > .ui-resizable-se::after {
   border-right-color: rgba(255, 255, 255, 0.4);
   border-bottom-color: rgba(255, 255, 255, 0.4);
-}
-
-/* Handle positions - Southeast (bottom-right, most common) */
-.react-grid-item > .react-resizable-handle-se {
-  bottom: 0;
-  right: 0;
-  cursor: se-resize;
-}
-
-/* Southwest (bottom-left) */
-.react-grid-item > .react-resizable-handle-sw {
-  bottom: 0;
-  left: 0;
-  cursor: sw-resize;
-}
-
-.react-grid-item > .react-resizable-handle-sw::after {
-  right: auto;
-  left: 3px;
-  border-right: none;
-  border-left: 2px solid rgba(0, 0, 0, 0.4);
-}
-
-.dark .react-grid-item > .react-resizable-handle-sw::after {
-  border-left-color: rgba(255, 255, 255, 0.4);
-}
-
-/* Northeast (top-right) */
-.react-grid-item > .react-resizable-handle-ne {
-  top: 0;
-  right: 0;
-  cursor: ne-resize;
-}
-
-.react-grid-item > .react-resizable-handle-ne::after {
-  bottom: auto;
-  top: 3px;
-  border-bottom: none;
-  border-top: 2px solid rgba(0, 0, 0, 0.4);
-}
-
-.dark .react-grid-item > .react-resizable-handle-ne::after {
-  border-top-color: rgba(255, 255, 255, 0.4);
-}
-
-/* Northwest (top-left) */
-.react-grid-item > .react-resizable-handle-nw {
-  top: 0;
-  left: 0;
-  cursor: nw-resize;
-}
-
-.react-grid-item > .react-resizable-handle-nw::after {
-  bottom: auto;
-  right: auto;
-  top: 3px;
-  left: 3px;
-  border-bottom: none;
-  border-right: none;
-  border-top: 2px solid rgba(0, 0, 0, 0.4);
-  border-left: 2px solid rgba(0, 0, 0, 0.4);
-}
-
-.dark .react-grid-item > .react-resizable-handle-nw::after {
-  border-top-color: rgba(255, 255, 255, 0.4);
-  border-left-color: rgba(255, 255, 255, 0.4);
-}
-
-/* North (top-center) */
-.react-grid-item > .react-resizable-handle-n {
-  top: 0;
-  left: 50%;
-  margin-left: -10px;
-  cursor: ns-resize;
-}
-
-/* South (bottom-center) */
-.react-grid-item > .react-resizable-handle-s {
-  bottom: 0;
-  left: 50%;
-  margin-left: -10px;
-  cursor: ns-resize;
-}
-
-/* East (right-center) */
-.react-grid-item > .react-resizable-handle-e {
-  right: 0;
-  top: 50%;
-  margin-top: -10px;
-  cursor: ew-resize;
-}
-
-/* West (left-center) */
-.react-grid-item > .react-resizable-handle-w {
-  left: 0;
-  top: 50%;
-  margin-top: -10px;
-  cursor: ew-resize;
 }
