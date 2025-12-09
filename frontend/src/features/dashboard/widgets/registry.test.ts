@@ -323,22 +323,23 @@ describe('Widget Registry', () => {
 
   describe('DEFAULT_LAYOUT', () => {
     /**
-     * NOTE: DEFAULT_LAYOUT temporarily reduced to 1 widget while fixing
-     * rendering issues. See issues #417-419, #425-426.
+     * NOTE: Re-enabled BalanceHistoryWidget after fresh rewrite (Issue #418).
+     * Other widgets still pending fixes: #419, #425, #426.
      */
-    it('should contain expected widgets (temporarily reduced)', async () => {
+    it('should contain expected widgets', async () => {
       const { DEFAULT_LAYOUT } = await import('./registry')
 
-      // Temporarily reduced to 1 widget while fixing rendering issues
-      expect(DEFAULT_LAYOUT.widgets).toHaveLength(1)
+      // Cash flow chart + balance history widget
+      expect(DEFAULT_LAYOUT.widgets).toHaveLength(2)
     })
 
     it('should have all valid widget types', async () => {
       const { DEFAULT_LAYOUT } = await import('./registry')
 
-      // Temporarily only cash-flow-chart enabled
+      // Enabled widgets: cash-flow-chart and balance-history
       const expectedTypes: WidgetType[] = [
         'cash-flow-chart',
+        'balance-history',
       ]
 
       const actualTypes = DEFAULT_LAYOUT.widgets.map((w) => w.type)
@@ -351,8 +352,8 @@ describe('Widget Registry', () => {
     it('should have correct version', async () => {
       const { DEFAULT_LAYOUT } = await import('./registry')
 
-      // Version bumped to 2 to force layout reset
-      expect(DEFAULT_LAYOUT.version).toBe(2)
+      // Version bumped to 3 after adding BalanceHistoryWidget
+      expect(DEFAULT_LAYOUT.version).toBe(3)
     })
 
     it('should have unique widget IDs', async () => {

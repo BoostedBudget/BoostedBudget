@@ -1,11 +1,10 @@
 /**
  * BalanceHistoryChart Component Tests
  *
- * Tests the interactive balance history chart using Plotly,
- * including data transformation, tooltips, and display modes.
+ * Tests the pure Plotly visualization component for balance history.
+ * No title - WidgetWrapper provides it.
  *
- * Issue #353: Balance Tracking Dashboard
- * Issue #445: Migrated from Recharts to Plotly
+ * Issue #418: Fresh implementation from scratch
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -131,14 +130,12 @@ describe('BalanceHistoryChart', () => {
   describe('Basic Rendering', () => {
     it('should render chart with balance history data', () => {
       render(<BalanceHistoryChart history={mockHistory} />);
-      expect(screen.getByText('Balance History')).toBeInTheDocument();
+      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
     });
 
-    it('should display chart title "Balance History"', () => {
+    it('should NOT render a title (WidgetWrapper provides it)', () => {
       render(<BalanceHistoryChart history={mockHistory} />);
-      const title = screen.getByText('Balance History');
-      expect(title).toBeInTheDocument();
-      expect(title.tagName).toBe('H2');
+      expect(screen.queryByRole('heading')).not.toBeInTheDocument();
     });
 
     it('should handle empty snapshots array gracefully', () => {
@@ -344,13 +341,7 @@ describe('BalanceHistoryChart', () => {
     });
   });
 
-  /**
-   * Issue #416: Height Chain Fix Tests
-   *
-   * These tests verify the proper CSS height chain propagation so that
-   * the chart can calculate dimensions correctly within WidgetWrapper.
-   */
-  describe('Height Chain Fix - Issue #416', () => {
+  describe('Height Chain', () => {
     it('should have h-full on outer container for height propagation', () => {
       const { container } = render(
         <BalanceHistoryChart history={mockHistory} />
@@ -359,30 +350,7 @@ describe('BalanceHistoryChart', () => {
       expect(outerDiv).toHaveClass('h-full');
     });
 
-    it('should use flex flex-col layout for proper height distribution', () => {
-      const { container } = render(
-        <BalanceHistoryChart history={mockHistory} />
-      );
-      const outerDiv = container.firstChild as HTMLElement;
-      expect(outerDiv).toHaveClass('flex');
-      expect(outerDiv).toHaveClass('flex-col');
-    });
-
-    it('should have flex-shrink-0 on title to prevent compression', () => {
-      render(<BalanceHistoryChart history={mockHistory} />);
-      const title = screen.getByRole('heading', { name: /balance history/i });
-      expect(title).toHaveClass('flex-shrink-0');
-    });
-
-    it('should have flex-1 min-h-0 on chart container for proper flex sizing', () => {
-      const { container } = render(
-        <BalanceHistoryChart history={mockHistory} />
-      );
-      const chartContainer = container.querySelector('.flex-1.min-h-0');
-      expect(chartContainer).toBeInTheDocument();
-    });
-
-    it('should NOT have redundant bg-white shadow p-6 styling', () => {
+    it('should NOT have redundant styling (bg-white, shadow, p-6, rounded-lg)', () => {
       // These styles are provided by WidgetWrapper, not the chart component
       const { container } = render(
         <BalanceHistoryChart history={mockHistory} />
@@ -392,23 +360,6 @@ describe('BalanceHistoryChart', () => {
       expect(outerDiv).not.toHaveClass('shadow');
       expect(outerDiv).not.toHaveClass('p-6');
       expect(outerDiv).not.toHaveClass('rounded-lg');
-    });
-
-    it('should have dark mode support on title', () => {
-      render(<BalanceHistoryChart history={mockHistory} />);
-      const title = screen.getByRole('heading', { name: /balance history/i });
-      expect(title).toHaveClass('dark:text-white');
-    });
-
-    it('should use flex-1 for empty state instead of fixed h-64', () => {
-      const { container } = render(
-        <BalanceHistoryChart history={mockEmptyHistory} />
-      );
-      const emptyState = container.querySelector(
-        '.flex-1.flex.items-center.justify-center'
-      );
-      expect(emptyState).toBeInTheDocument();
-      expect(container.querySelector('.h-64')).not.toBeInTheDocument();
     });
   });
 
@@ -444,15 +395,7 @@ describe('BalanceHistoryChart', () => {
       expect(emptyState).toBeInTheDocument();
     });
 
-    it('should use flex-1 for empty state height instead of fixed h-64 (Issue #416)', () => {
-      const { container } = render(
-        <BalanceHistoryChart history={mockEmptyHistory} />
-      );
-      const emptyState = container.querySelector('.flex-1');
-      expect(emptyState).toBeInTheDocument();
-    });
-
-    it('should style empty state text as gray', () => {
+    it('should style empty state text as gray with dark mode support', () => {
       const { container } = render(
         <BalanceHistoryChart history={mockEmptyHistory} />
       );
