@@ -1,9 +1,9 @@
 /**
  * Balance History Chart
- * Issue #353: Balance Tracking Dashboard
- * Issue #445: Migrated from Recharts to Plotly
+ * Issue #418: Fresh implementation from scratch
  *
- * Displays balance trends over time using an interactive line chart.
+ * Pure Plotly visualization component for balance trends over time.
+ * No title - WidgetWrapper provides it.
  * Supports single line (total balance) and multi-line breakdown by account type.
  */
 
@@ -26,7 +26,7 @@ interface BalanceHistoryChartProps {
 }
 
 /**
- * BalanceHistoryChart component displays balance trends over time
+ * BalanceHistoryChart - Pure visualization component
  *
  * Features:
  * - Interactive line chart with Plotly
@@ -36,7 +36,6 @@ interface BalanceHistoryChartProps {
  * - Date-based x-axis
  * - Hover tooltips with detailed information
  * - Dark mode support
- * - Zoom/pan toolbar on hover
  */
 export function BalanceHistoryChart({
   history,
@@ -91,7 +90,9 @@ export function BalanceHistoryChart({
     // Multiple lines for account type breakdown
     return accountTypes.map((typeKey) => ({
       x: chartData.map((d) => d.date),
-      y: chartData.map((d) => (d as Record<string, unknown>)[typeKey] as number ?? 0),
+      y: chartData.map(
+        (d) => ((d as Record<string, unknown>)[typeKey] as number) ?? 0
+      ),
       type: 'scatter' as const,
       mode: 'lines+markers' as const,
       name: typeKey.charAt(0).toUpperCase() + typeKey.slice(1),
@@ -104,7 +105,8 @@ export function BalanceHistoryChart({
       },
       marker: { size: 6 },
       hovertemplate: chartData.map((d) => {
-        const value = (d as Record<string, unknown>)[typeKey] as number ?? 0;
+        const value =
+          ((d as Record<string, unknown>)[typeKey] as number) ?? 0;
         return (
           `<b>${format(parseISO(d.fullDate), 'MMMM d, yyyy')}</b><br>` +
           `${typeKey.charAt(0).toUpperCase() + typeKey.slice(1)}: ${formatCurrency(value)}<extra></extra>`
@@ -123,43 +125,29 @@ export function BalanceHistoryChart({
         ...base.yaxis,
         tickformat: '$,.0f',
       },
-      legend: {
-        ...base.legend,
-        font: { ...base.legend?.font, size: 14 },
-      },
     };
   }, [isDark]);
 
+  // Empty state
   if (history.snapshots.length === 0) {
     return (
-      <div className="h-full flex flex-col">
-        <h2 className="flex-shrink-0 text-lg font-semibold text-gray-900 dark:text-white mb-4">
-          Balance History
-        </h2>
-        <div className="flex-1 flex items-center justify-center">
-          <p className="text-gray-500 dark:text-gray-400">
-            No balance history available
-          </p>
-        </div>
+      <div className="h-full flex items-center justify-center">
+        <p className="text-gray-500 dark:text-gray-400">
+          No balance history available
+        </p>
       </div>
     );
   }
 
   return (
-    <div className="h-full flex flex-col">
-      <h2 className="flex-shrink-0 text-lg font-semibold text-gray-900 dark:text-white mb-4">
-        Balance History
-      </h2>
-
-      <div className="flex-1 min-h-0">
-        <Plot
-          data={traces}
-          layout={layout}
-          config={DEFAULT_CONFIG}
-          style={{ width: '100%', height: '100%', minHeight: 200 }}
-          useResizeHandler={true}
-        />
-      </div>
+    <div className="h-full">
+      <Plot
+        data={traces}
+        layout={layout}
+        config={DEFAULT_CONFIG}
+        style={{ width: '100%', height: '100%', minHeight: 200 }}
+        useResizeHandler={true}
+      />
     </div>
   );
 }

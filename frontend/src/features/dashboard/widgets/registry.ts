@@ -50,10 +50,8 @@ export function isWidgetRegistered(type: WidgetType): boolean {
  * Default dashboard layout
  * Used for new users or when resetting to defaults
  *
- * NOTE: Temporarily reduced to only cash-flow-chart widget while fixing
- * rendering issues in other widgets. See issues:
- * - #417: CashFlowChartWidget (in progress)
- * - #418: BalanceHistoryWidget
+ * NOTE: Re-enabled BalanceHistoryWidget after fresh rewrite (Issue #418).
+ * Other widgets still pending fixes:
  * - #419: CashFlowSummaryWidget
  * - #425: BalanceOverviewWidget
  * - #426: AccountCardsWidget
@@ -70,8 +68,18 @@ export const DEFAULT_LAYOUT: DashboardLayout = {
       minW: 4,
       minH: 3,
     },
+    {
+      i: 'balance-history-1',
+      type: 'balance-history',
+      x: 0,
+      y: 5,
+      w: 12,
+      h: 4,
+      minW: 4,
+      minH: 3,
+    },
   ],
-  version: 2,
+  version: 3,
 };
 
 /**
