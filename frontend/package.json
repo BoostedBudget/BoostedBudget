@@ -34,13 +34,14 @@
     "date-fns": "^4.1.0",
     "gridstack": "^12.3.3",
     "js-cookie": "^3.0.5",
+    "plotly.js-basic-dist": "^3.3.0",
     "react": "^19.2.0",
     "react-datepicker": "^9.0.0",
     "react-dom": "^19.2.0",
     "react-plaid-link": "^4.1.1",
+    "react-plotly.js": "^2.6.0",
     "react-redux": "^9.2.0",
-    "react-router-dom": "^7.10.1",
-    "recharts": "^3.5.1"
+    "react-router-dom": "^7.10.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",
@@ -52,6 +53,7 @@
     "@types/js-yaml": "^4.0.9",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
+    "@types/react-plotly.js": "^2.6.3",
     "@typescript-eslint/eslint-plugin": "^8.49.0",
     "@typescript-eslint/parser": "^8.0.0",
     "@vitejs/plugin-react": "^5.1.2",
