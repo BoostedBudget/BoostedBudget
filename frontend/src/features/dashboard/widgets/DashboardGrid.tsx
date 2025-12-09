@@ -10,6 +10,7 @@ import { useMemo } from 'react';
 import { Responsive, WidthProvider, Layout } from 'react-grid-layout';
 import 'react-grid-layout/css/styles.css';
 import 'react-resizable/css/styles.css';
+import './DashboardGrid.css'; // Issue #435: Fix resize handle positioning
 
 import { WidgetWrapper } from './WidgetWrapper';
 import { getWidget } from './registry';
