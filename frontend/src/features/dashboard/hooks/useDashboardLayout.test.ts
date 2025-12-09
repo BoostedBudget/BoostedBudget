@@ -27,13 +27,13 @@ vi.mock('../widgets/registry', async () => {
 })
 
 describe('useDashboardLayout', () => {
-  // Use version 2 (current DEFAULT_LAYOUT version) to avoid triggering auto-reset
+  // Use version 3 (current DEFAULT_LAYOUT version) to avoid triggering auto-reset
   const mockLayout: DashboardLayout = {
     widgets: [
-      { i: 'widget-1', type: 'balance-overview', x: 0, y: 0, w: 4, h: 3, minW: 3, minH: 2 },
-      { i: 'widget-2', type: 'cash-flow-summary', x: 4, y: 0, w: 8, h: 3, minW: 6, minH: 2 },
+      { i: 'cash-flow-chart-1', type: 'cash-flow-chart', x: 0, y: 0, w: 12, h: 5, minW: 4, minH: 3 },
+      { i: 'balance-history-1', type: 'balance-history', x: 0, y: 5, w: 12, h: 4, minW: 4, minH: 3 },
     ],
-    version: 2,
+    version: 3,
   }
 
   const mockPreferencesResponse: DashboardPreferencesResponse = {
@@ -487,13 +487,13 @@ describe('useDashboardLayout', () => {
         expect(result.current.loading).toBe(false)
       })
 
-      // Current widgets: y=0, h=3 -> maxY should be 3
+      // Current widgets: y=0,h=5 and y=5,h=4 -> maxY should be 9
       act(() => {
         result.current.addWidget('balance-history')
       })
 
       const addedWidget = result.current.layout.widgets[2]
-      expect(addedWidget.y).toBe(3) // maxY = max(0+3, 0+3) = 3
+      expect(addedWidget.y).toBe(9) // maxY = max(0+5, 5+4) = 9
     })
 
     it('should use default size from definition', async () => {
@@ -601,11 +601,11 @@ describe('useDashboardLayout', () => {
       expect(result.current.layout.widgets).toHaveLength(2)
 
       act(() => {
-        result.current.removeWidget('widget-1')
+        result.current.removeWidget('cash-flow-chart-1')
       })
 
       expect(result.current.layout.widgets).toHaveLength(1)
-      expect(result.current.layout.widgets[0].i).toBe('widget-2')
+      expect(result.current.layout.widgets[0].i).toBe('balance-history-1')
     })
 
     it('should update layout immediately', async () => {
@@ -618,11 +618,11 @@ describe('useDashboardLayout', () => {
       })
 
       act(() => {
-        result.current.removeWidget('widget-2')
+        result.current.removeWidget('balance-history-1')
       })
 
       // Immediate update
-      expect(result.current.layout.widgets.some((w) => w.i === 'widget-2')).toBe(false)
+      expect(result.current.layout.widgets.some((w) => w.i === 'balance-history-1')).toBe(false)
     })
 
     it('should schedule save after remove', async () => {
@@ -636,7 +636,7 @@ describe('useDashboardLayout', () => {
       })
 
       act(() => {
-        result.current.removeWidget('widget-1')
+        result.current.removeWidget('cash-flow-chart-1')
       })
 
       await act(async () => {
@@ -645,7 +645,7 @@ describe('useDashboardLayout', () => {
 
       expect(preferencesApi.saveDashboardPreferences).toHaveBeenCalledWith(
         expect.objectContaining({
-          widgets: expect.not.arrayContaining([expect.objectContaining({ i: 'widget-1' })]),
+          widgets: expect.not.arrayContaining([expect.objectContaining({ i: 'cash-flow-chart-1' })]),
         })
       )
     })

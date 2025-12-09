@@ -1,8 +1,9 @@
 /**
  * Balance History Widget
- * Issue #354: Customizable Dashboard Widget System
+ * Issue #418: Fresh implementation from scratch
  *
- * Wraps the existing BalanceHistoryChart component for use in the widget system.
+ * Wraps the BalanceHistoryChart component for use in the widget system.
+ * Handles data fetching, loading/error/empty states, and breakdown toggle.
  */
 
 import { useState, useMemo } from 'react';
@@ -16,15 +17,19 @@ function BalanceHistoryWidget(_props: WidgetProps) {
   const { filters } = useDashboardContext();
   const [showTypeBreakdown, setShowTypeBreakdown] = useState(false);
 
-  // useMemo to prevent infinite re-renders from new object references
-  const dashboardFilters = useMemo(() => ({
-    startDate: filters.startDate,
-    endDate: filters.endDate,
-    accountTypes: filters.accountTypes,
-  }), [filters.startDate, filters.endDate, filters.accountTypes]);
+  // Memoize filters to prevent infinite re-renders
+  const dashboardFilters = useMemo(
+    () => ({
+      startDate: filters.startDate,
+      endDate: filters.endDate,
+      accountTypes: filters.accountTypes,
+    }),
+    [filters.startDate, filters.endDate, filters.accountTypes]
+  );
 
   const { history, loading, error } = useDashboardData(dashboardFilters);
 
+  // Loading state
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -33,6 +38,7 @@ function BalanceHistoryWidget(_props: WidgetProps) {
     );
   }
 
+  // Error state
   if (error) {
     return (
       <div className="flex items-center justify-center h-full text-red-500 text-sm">
@@ -41,6 +47,7 @@ function BalanceHistoryWidget(_props: WidgetProps) {
     );
   }
 
+  // Empty state
   if (!history) {
     return (
       <div className="flex items-center justify-center h-full text-gray-400 text-sm">
@@ -51,11 +58,14 @@ function BalanceHistoryWidget(_props: WidgetProps) {
 
   return (
     <div className="h-full relative">
-      <BalanceHistoryChart history={history} showTypeBreakdown={showTypeBreakdown} />
+      <BalanceHistoryChart
+        history={history}
+        showTypeBreakdown={showTypeBreakdown}
+      />
       <div className="absolute top-0 right-0">
         <button
           onClick={() => setShowTypeBreakdown(!showTypeBreakdown)}
-          className="px-2 py-1 text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-600"
+          className="px-2 py-1 text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
         >
           {showTypeBreakdown ? 'Total' : 'Breakdown'}
         </button>
@@ -68,11 +78,12 @@ function BalanceHistoryWidget(_props: WidgetProps) {
 registerWidget({
   type: 'balance-history',
   title: 'Balance History',
-  description: 'Historical balance trend chart',
+  description: 'Historical balance trend chart with account type breakdown',
   icon: 'chart-line',
   category: 'charts',
   defaultSize: { w: 6, h: 4 },
   minSize: { w: 4, h: 3 },
+  maxSize: { w: 12, h: 8 },
   Component: BalanceHistoryWidget,
 });
 
