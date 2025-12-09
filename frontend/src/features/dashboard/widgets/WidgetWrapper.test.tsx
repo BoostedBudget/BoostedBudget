@@ -71,38 +71,8 @@ describe('WidgetWrapper', () => {
       expect(screen.getByText('balance-overview')).toBeInTheDocument()
     })
 
-    it('should show drag handle in edit mode', () => {
-      render(
-        <WidgetWrapper
-          widgetId="widget-1"
-          widgetType="balance-overview"
-          isEditing={true}
-          onRemove={mockOnRemove}
-        >
-          <div>Content</div>
-        </WidgetWrapper>
-      )
-
-      // Drag handle has cursor-move class
-      const dragHandle = document.querySelector('.cursor-move')
-      expect(dragHandle).toBeInTheDocument()
-    })
-
-    it('should hide drag handle when not editing', () => {
-      render(
-        <WidgetWrapper
-          widgetId="widget-1"
-          widgetType="balance-overview"
-          isEditing={false}
-          onRemove={mockOnRemove}
-        >
-          <div>Content</div>
-        </WidgetWrapper>
-      )
-
-      const dragHandle = document.querySelector('.cursor-move')
-      expect(dragHandle).not.toBeInTheDocument()
-    })
+// Note: Drag handle SVG was removed in Issue #443 as it was redundant
+    // GridStack handles drag-and-drop via handleClass, no visual indicator needed
   })
 
   describe('Remove Button', () => {
@@ -429,13 +399,17 @@ describe('WidgetWrapper', () => {
   })
 
   /**
-   * Edit Mode Visual Outline Tests - Issue #439
+   * Edit Mode Visual Outline Tests - Issue #439, #443
    *
-   * In edit mode, widgets should display a visible ring outline
+   * In edit mode, widgets should display a visible outline
    * to clearly indicate draggable/droppable bounds.
+   *
+   * Issue #443: Changed from ring (box-shadow) to outline because
+   * ring was being clipped by parent overflow:hidden in grid libraries.
+   * Outline is not affected by overflow and renders correctly.
    */
-  describe('Edit Mode Visual Outline - Issue #439', () => {
-    it('should show ring outline when in edit mode', () => {
+  describe('Edit Mode Visual Outline - Issue #439, #443', () => {
+    it('should show outline when in edit mode', () => {
       const { container } = render(
         <WidgetWrapper
           widgetId="widget-1"
@@ -448,11 +422,13 @@ describe('WidgetWrapper', () => {
       )
 
       const wrapper = container.firstChild as HTMLElement
-      expect(wrapper).toHaveClass('ring-2')
-      expect(wrapper).toHaveClass('ring-blue-400')
+      expect(wrapper).toHaveClass('outline')
+      expect(wrapper).toHaveClass('outline-2')
+      expect(wrapper).toHaveClass('outline-blue-400')
+      expect(wrapper).toHaveClass('-outline-offset-2')
     })
 
-    it('should NOT show ring outline when not editing', () => {
+    it('should NOT show outline when not editing', () => {
       const { container } = render(
         <WidgetWrapper
           widgetId="widget-1"
@@ -465,8 +441,9 @@ describe('WidgetWrapper', () => {
       )
 
       const wrapper = container.firstChild as HTMLElement
-      expect(wrapper).not.toHaveClass('ring-2')
-      expect(wrapper).not.toHaveClass('ring-blue-400')
+      expect(wrapper).not.toHaveClass('outline')
+      expect(wrapper).not.toHaveClass('outline-2')
+      expect(wrapper).not.toHaveClass('outline-blue-400')
     })
 
     it('should maintain other styling classes in edit mode', () => {
@@ -482,13 +459,13 @@ describe('WidgetWrapper', () => {
       )
 
       const wrapper = container.firstChild as HTMLElement
-      // Ring outline should be added without removing other classes
+      // Outline should be added without removing other classes
       // Issue #441: Using h-full instead of absolute/inset-0 (GridStack provides positioning)
       expect(wrapper).toHaveClass('h-full')
       expect(wrapper).toHaveClass('bg-white')
       expect(wrapper).toHaveClass('rounded-lg')
-      expect(wrapper).toHaveClass('ring-2')
-      expect(wrapper).toHaveClass('ring-blue-400')
+      expect(wrapper).toHaveClass('outline')
+      expect(wrapper).toHaveClass('outline-blue-400')
     })
   })
 })
