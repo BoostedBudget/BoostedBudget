@@ -44,7 +44,9 @@ export function WidgetWrapper({
   };
 
   return (
-    <div className="h-full bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 overflow-hidden flex flex-col">
+    <div
+      className={`absolute inset-0 bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 overflow-hidden flex flex-col ${isEditing ? 'ring-2 ring-blue-400' : ''}`}
+    >
       {/* Header with title and actions */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 flex-shrink-0">
         <div className="flex items-center gap-2">

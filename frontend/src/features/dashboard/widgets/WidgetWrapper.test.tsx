@@ -314,7 +314,8 @@ describe('WidgetWrapper', () => {
   })
 
   describe('Styling', () => {
-    it('should have correct container classes', () => {
+    it('should have correct container classes with absolute positioning', () => {
+      // Issue #439: Changed from h-full to absolute inset-0 for proper height chain
       const { container } = render(
         <WidgetWrapper
           widgetId="widget-1"
@@ -327,7 +328,10 @@ describe('WidgetWrapper', () => {
       )
 
       const wrapper = container.firstChild as HTMLElement
-      expect(wrapper).toHaveClass('h-full')
+      // Issue #439: absolute inset-0 instead of h-full for content containment
+      expect(wrapper).toHaveClass('absolute')
+      expect(wrapper).toHaveClass('inset-0')
+      expect(wrapper).not.toHaveClass('h-full')
       expect(wrapper).toHaveClass('bg-white')
       expect(wrapper).toHaveClass('rounded-lg')
       expect(wrapper).toHaveClass('shadow')
@@ -420,6 +424,70 @@ describe('WidgetWrapper', () => {
       )
 
       expect(registry.getWidget).toHaveBeenCalledWith('cash-flow-summary')
+    })
+  })
+
+  /**
+   * Edit Mode Visual Outline Tests - Issue #439
+   *
+   * In edit mode, widgets should display a visible ring outline
+   * to clearly indicate draggable/droppable bounds.
+   */
+  describe('Edit Mode Visual Outline - Issue #439', () => {
+    it('should show ring outline when in edit mode', () => {
+      const { container } = render(
+        <WidgetWrapper
+          widgetId="widget-1"
+          widgetType="balance-overview"
+          isEditing={true}
+          onRemove={mockOnRemove}
+        >
+          <div>Content</div>
+        </WidgetWrapper>
+      )
+
+      const wrapper = container.firstChild as HTMLElement
+      expect(wrapper).toHaveClass('ring-2')
+      expect(wrapper).toHaveClass('ring-blue-400')
+    })
+
+    it('should NOT show ring outline when not editing', () => {
+      const { container } = render(
+        <WidgetWrapper
+          widgetId="widget-1"
+          widgetType="balance-overview"
+          isEditing={false}
+          onRemove={mockOnRemove}
+        >
+          <div>Content</div>
+        </WidgetWrapper>
+      )
+
+      const wrapper = container.firstChild as HTMLElement
+      expect(wrapper).not.toHaveClass('ring-2')
+      expect(wrapper).not.toHaveClass('ring-blue-400')
+    })
+
+    it('should maintain other styling classes in edit mode', () => {
+      const { container } = render(
+        <WidgetWrapper
+          widgetId="widget-1"
+          widgetType="balance-overview"
+          isEditing={true}
+          onRemove={mockOnRemove}
+        >
+          <div>Content</div>
+        </WidgetWrapper>
+      )
+
+      const wrapper = container.firstChild as HTMLElement
+      // Ring outline should be added without removing other classes
+      expect(wrapper).toHaveClass('absolute')
+      expect(wrapper).toHaveClass('inset-0')
+      expect(wrapper).toHaveClass('bg-white')
+      expect(wrapper).toHaveClass('rounded-lg')
+      expect(wrapper).toHaveClass('ring-2')
+      expect(wrapper).toHaveClass('ring-blue-400')
     })
   })
 })
