@@ -273,14 +273,19 @@ describe('DashboardGrid', () => {
   /**
    * Grid Cell Height Propagation Tests - Issue #422
    *
-   * These tests verify that grid cell wrappers have h-full class
-   * for proper height propagation to ResponsiveContainer widgets.
+   * These tests verify that grid cell wrappers use the grid-cell-content class
+   * which provides absolute positioning to fill the grid item.
    *
-   * Root cause: Without h-full, WidgetWrapper's h-full becomes 100% of 0 = 0px,
-   * causing Recharts ResponsiveContainer to calculate dimensions as -1.
+   * Root cause: Using h-full (percentage height) breaks when resize handles
+   * are added in edit mode. Absolute positioning with inset: 0 is more reliable.
+   *
+   * The .grid-cell-content class in DashboardGrid.css provides:
+   * - position: absolute
+   * - top: 0; left: 0; right: 0; bottom: 0
+   * - overflow: hidden
    */
-  describe('Grid Cell Height Propagation - Issue #422', () => {
-    it('should have h-full on grid cell wrapper divs for height propagation', () => {
+  describe('Grid Cell Height Chain Fix - Issue #422', () => {
+    it('should use grid-cell-content class on grid cell wrapper divs', () => {
       render(
         <DashboardGrid
           layout={mockLayout}
@@ -294,14 +299,14 @@ describe('DashboardGrid', () => {
       const responsiveGrid = screen.getByTestId('responsive-grid')
       const gridCellWrappers = responsiveGrid.querySelectorAll(':scope > div')
 
-      // Each grid cell wrapper should have h-full for height propagation
+      // Each grid cell wrapper should have grid-cell-content for absolute positioning
       expect(gridCellWrappers.length).toBe(mockLayout.widgets.length)
       gridCellWrappers.forEach((wrapper) => {
-        expect(wrapper).toHaveClass('h-full')
+        expect(wrapper).toHaveClass('grid-cell-content')
       })
     })
 
-    it('should have h-full on each widget cell regardless of widget type', () => {
+    it('should have grid-cell-content on each widget cell regardless of widget type', () => {
       render(
         <DashboardGrid
           layout={mockLayout}
@@ -317,8 +322,46 @@ describe('DashboardGrid', () => {
 
       for (let i = 0; i < cells.length; i++) {
         const cell = cells[i] as HTMLElement
-        expect(cell.classList.contains('h-full')).toBe(true)
+        expect(cell.classList.contains('grid-cell-content')).toBe(true)
       }
+    })
+
+    it('should have grid-cell-content class in edit mode', () => {
+      render(
+        <DashboardGrid
+          layout={mockLayout}
+          isEditing={true}
+          onLayoutChange={mockOnLayoutChange}
+          onRemoveWidget={mockOnRemoveWidget}
+        />
+      )
+
+      const responsiveGrid = screen.getByTestId('responsive-grid')
+      const gridCellWrappers = responsiveGrid.querySelectorAll(':scope > div')
+
+      // In edit mode, grid cells should still use grid-cell-content class
+      gridCellWrappers.forEach((wrapper) => {
+        expect(wrapper).toHaveClass('grid-cell-content')
+      })
+    })
+
+    it('should not use h-full class on grid cell wrappers (replaced by grid-cell-content)', () => {
+      render(
+        <DashboardGrid
+          layout={mockLayout}
+          isEditing={false}
+          onLayoutChange={mockOnLayoutChange}
+          onRemoveWidget={mockOnRemoveWidget}
+        />
+      )
+
+      const responsiveGrid = screen.getByTestId('responsive-grid')
+      const gridCellWrappers = responsiveGrid.querySelectorAll(':scope > div')
+
+      // h-full should NOT be used (it breaks in edit mode with resize handles)
+      gridCellWrappers.forEach((wrapper) => {
+        expect(wrapper).not.toHaveClass('h-full')
+      })
     })
   })
 })
