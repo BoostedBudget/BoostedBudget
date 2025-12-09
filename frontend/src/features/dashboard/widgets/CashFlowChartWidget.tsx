@@ -1,37 +1,28 @@
 /**
  * Cash Flow Chart Widget
  * Issue #354: Cash Flow Analysis & Income/Expense Visualization
+ * Issue #445: Migrated from Recharts to Plotly
  *
  * Displays a dual bar chart showing income and expenses per period
  * with a net cash flow trend line overlay.
  */
 
 import { useMemo, useContext } from 'react';
-import {
-  ComposedChart,
-  Bar,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-  ReferenceLine,
-} from 'recharts';
 import { format, parseISO } from 'date-fns';
+import type { Data, Layout } from 'plotly.js';
+import {
+  Plot,
+  useDarkMode,
+  getBarChartLayout,
+  createHorizontalReferenceLine,
+  DEFAULT_CONFIG,
+  CASH_FLOW_COLORS,
+  formatCurrencyFull,
+} from '@/shared/charts';
 import { useCashFlowHistory } from '../hooks/useCashFlowData';
 import { DashboardContext } from '../context/DashboardContext';
 import { registerWidget } from './registry';
 import type { WidgetProps, CashFlowPeriodData } from '../types';
-
-// Colorblind-safe palette
-const COLORS = {
-  income: '#3b82f6', // Blue
-  expenses: '#f97316', // Orange
-  net: '#10b981', // Green
-  negativeNet: '#ef4444', // Red
-};
 
 interface ChartDataPoint {
   label: string;
@@ -40,7 +31,10 @@ interface ChartDataPoint {
   net: number;
 }
 
-function formatPeriodLabel(period: CashFlowPeriodData, grouping: string): string {
+function formatPeriodLabel(
+  period: CashFlowPeriodData,
+  grouping: string
+): string {
   const date = parseISO(period.period_start);
 
   switch (grouping) {
@@ -55,15 +49,10 @@ function formatPeriodLabel(period: CashFlowPeriodData, grouping: string): string
   }
 }
 
-function formatCurrency(value: number): string {
-  if (Math.abs(value) >= 1000) {
-    return `$${(value / 1000).toFixed(1)}k`;
-  }
-  return `$${value.toFixed(0)}`;
-}
-
 function CashFlowChartWidget(_props: WidgetProps) {
   const context = useContext(DashboardContext);
+  const isDark = useDarkMode();
+
   const filters = useMemo(
     () => ({
       startDate: context?.filters.startDate || '',
@@ -89,6 +78,68 @@ function CashFlowChartWidget(_props: WidgetProps) {
       net: period.net_cash_flow,
     }));
   }, [data]);
+
+  // Build Plotly traces
+  const traces = useMemo((): Data[] => {
+    if (chartData.length === 0) return [];
+
+    return [
+      // Income bar
+      {
+        x: chartData.map((d) => d.label),
+        y: chartData.map((d) => d.income),
+        type: 'bar' as const,
+        name: 'Income',
+        marker: { color: CASH_FLOW_COLORS.income },
+        hovertemplate: chartData.map(
+          (d) => `<b>Income</b>: ${formatCurrencyFull(d.income)}<extra></extra>`
+        ),
+      },
+      // Expenses bar
+      {
+        x: chartData.map((d) => d.label),
+        y: chartData.map((d) => d.expenses),
+        type: 'bar' as const,
+        name: 'Expenses',
+        marker: { color: CASH_FLOW_COLORS.expenses },
+        hovertemplate: chartData.map(
+          (d) =>
+            `<b>Expenses</b>: ${formatCurrencyFull(d.expenses)}<extra></extra>`
+        ),
+      },
+      // Net cash flow line
+      {
+        x: chartData.map((d) => d.label),
+        y: chartData.map((d) => d.net),
+        type: 'scatter' as const,
+        mode: 'lines+markers' as const,
+        name: 'Net Cash Flow',
+        line: {
+          color: CASH_FLOW_COLORS.netPositive,
+          width: 2,
+        },
+        marker: { size: 6 },
+        hovertemplate: chartData.map((d) => {
+          const color = d.net >= 0 ? 'green' : 'red';
+          return `<b style="color:${color}">Net</b>: ${formatCurrencyFull(d.net)}<extra></extra>`;
+        }),
+      },
+    ];
+  }, [chartData]);
+
+  // Build layout with theme support
+  const layout = useMemo((): Partial<Layout> => {
+    const base = getBarChartLayout(isDark);
+    return {
+      ...base,
+      margin: { t: 10, r: 10, b: 40, l: 60 },
+      yaxis: {
+        ...base.yaxis,
+        tickformat: '$.2s', // Compact format like $1.2k
+      },
+      shapes: createHorizontalReferenceLine(0, isDark),
+    };
+  }, [isDark]);
 
   if (!context?.filters.startDate || !context?.filters.endDate) {
     return (
@@ -125,77 +176,13 @@ function CashFlowChartWidget(_props: WidgetProps) {
   return (
     <div className="h-full flex flex-col">
       <div className="flex-1 min-h-0">
-        <ResponsiveContainer width="100%" height="100%" minHeight={200}>
-        <ComposedChart
-          data={chartData}
-          margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
-        >
-          <CartesianGrid strokeDasharray="3 3" className="stroke-gray-200 dark:stroke-gray-700" />
-          <XAxis
-            dataKey="label"
-            tick={{ fontSize: 11, fill: 'currentColor' }}
-            tickLine={false}
-            axisLine={{ stroke: 'currentColor', strokeOpacity: 0.1 }}
-            className="text-gray-600 dark:text-gray-400"
-          />
-          <YAxis
-            tickFormatter={formatCurrency}
-            tick={{ fontSize: 11, fill: 'currentColor' }}
-            tickLine={false}
-            axisLine={false}
-            className="text-gray-600 dark:text-gray-400"
-          />
-          <Tooltip
-            contentStyle={{
-              backgroundColor: 'rgb(255 255 255 / 95%)',
-              border: '1px solid rgb(229 231 235)',
-              borderRadius: '0.5rem',
-              padding: '0.75rem',
-            }}
-            formatter={(value: number, name: string) => [
-              new Intl.NumberFormat('en-US', {
-                style: 'currency',
-                currency: 'USD',
-              }).format(value),
-              name.charAt(0).toUpperCase() + name.slice(1),
-            ]}
-            labelStyle={{ fontWeight: 600, marginBottom: '0.25rem' }}
-          />
-          <Legend
-            wrapperStyle={{ paddingTop: '0.5rem' }}
-            iconType="rect"
-            formatter={(value) => (
-              <span className="text-sm text-gray-700 dark:text-gray-300 capitalize">
-                {value}
-              </span>
-            )}
-          />
-          <ReferenceLine y={0} stroke="currentColor" strokeOpacity={0.2} />
-          <Bar
-            dataKey="income"
-            name="income"
-            fill={COLORS.income}
-            radius={[4, 4, 0, 0]}
-            maxBarSize={50}
-          />
-          <Bar
-            dataKey="expenses"
-            name="expenses"
-            fill={COLORS.expenses}
-            radius={[4, 4, 0, 0]}
-            maxBarSize={50}
-          />
-          <Line
-            type="monotone"
-            dataKey="net"
-            name="net cash flow"
-            stroke={COLORS.net}
-            strokeWidth={2}
-            dot={{ fill: COLORS.net, strokeWidth: 0, r: 3 }}
-            activeDot={{ r: 5, strokeWidth: 0 }}
-          />
-        </ComposedChart>
-        </ResponsiveContainer>
+        <Plot
+          data={traces}
+          layout={layout}
+          config={DEFAULT_CONFIG}
+          style={{ width: '100%', height: '100%', minHeight: 200 }}
+          useResizeHandler={true}
+        />
       </div>
     </div>
   );

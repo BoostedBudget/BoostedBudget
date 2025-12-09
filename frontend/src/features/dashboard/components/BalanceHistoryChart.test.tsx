@@ -1,16 +1,56 @@
 /**
  * BalanceHistoryChart Component Tests
  *
- * Tests the interactive balance history chart using Recharts,
+ * Tests the interactive balance history chart using Plotly,
  * including data transformation, tooltips, and display modes.
  *
  * Issue #353: Balance Tracking Dashboard
+ * Issue #445: Migrated from Recharts to Plotly
  */
 
-import { describe, it, expect } from 'vitest'
-import { render, screen } from '@testing-library/react'
-import { BalanceHistoryChart } from './BalanceHistoryChart'
-import type { BalanceHistory } from '../types'
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import { BalanceHistoryChart } from './BalanceHistoryChart';
+import type { BalanceHistory } from '../types';
+
+// Mock the shared charts module
+vi.mock('@/shared/charts', () => ({
+  Plot: vi.fn(({ data, config, style, useResizeHandler }) => (
+    <div
+      data-testid="plotly-chart"
+      data-trace-count={data.length}
+      data-trace-names={JSON.stringify(data.map((d: { name: string }) => d.name))}
+      data-use-resize-handler={useResizeHandler}
+      data-responsive={config?.responsive}
+      style={style}
+    >
+      Plotly Chart Mock
+    </div>
+  )),
+  useDarkMode: vi.fn(() => false),
+  getBaseLayout: vi.fn(() => ({
+    autosize: true,
+    margin: { t: 10, r: 10, b: 40, l: 60 },
+    xaxis: { gridcolor: '#e5e7eb' },
+    yaxis: { gridcolor: '#e5e7eb' },
+    legend: { font: {} },
+  })),
+  DEFAULT_CONFIG: {
+    responsive: true,
+    displayModeBar: 'hover',
+    scrollZoom: false,
+    modeBarButtonsToRemove: ['lasso2d', 'select2d'],
+    displaylogo: false,
+  },
+  ACCOUNT_TYPE_COLORS: {
+    balance: '#3b82f6',
+    depository: '#10b981',
+    credit: '#ef4444',
+    investment: '#8b5cf6',
+    loan: '#f59e0b',
+  },
+  formatCurrency: vi.fn((value: number) => `$${value.toLocaleString()}`),
+}));
 
 describe('BalanceHistoryChart', () => {
   const mockHistory: BalanceHistory = {
@@ -20,290 +60,191 @@ describe('BalanceHistoryChart', () => {
     snapshots: [
       {
         date: '2025-11-01',
-        balance: 10000.00,
+        balance: 10000.0,
         by_type: {
-          depository: 7000.00,
-          credit: -2000.00,
-          investment: 5000.00,
+          depository: 7000.0,
+          credit: -2000.0,
+          investment: 5000.0,
         },
       },
       {
         date: '2025-11-02',
-        balance: 10500.50,
+        balance: 10500.5,
         by_type: {
-          depository: 7200.00,
-          credit: -1900.00,
-          investment: 5200.50,
+          depository: 7200.0,
+          credit: -1900.0,
+          investment: 5200.5,
         },
       },
       {
         date: '2025-11-03',
-        balance: 9800.00,
+        balance: 9800.0,
         by_type: {
-          depository: 6800.00,
-          credit: -2200.00,
-          investment: 5200.00,
+          depository: 6800.0,
+          credit: -2200.0,
+          investment: 5200.0,
         },
       },
       {
         date: '2025-11-04',
-        balance: 11000.00,
+        balance: 11000.0,
         by_type: {
-          depository: 7500.00,
-          credit: -1800.00,
-          investment: 5300.00,
+          depository: 7500.0,
+          credit: -1800.0,
+          investment: 5300.0,
         },
       },
       {
         date: '2025-11-05',
         balance: 11200.25,
         by_type: {
-          depository: 7600.00,
-          credit: -1700.00,
+          depository: 7600.0,
+          credit: -1700.0,
           investment: 5300.25,
         },
       },
     ],
-  }
+  };
 
   const mockEmptyHistory: BalanceHistory = {
     start_date: '2025-11-01',
     end_date: '2025-11-05',
     granularity: 'daily',
     snapshots: [],
-  }
+  };
 
   const mockHistoryWithoutByType: BalanceHistory = {
     start_date: '2025-11-01',
     end_date: '2025-11-03',
     granularity: 'daily',
     snapshots: [
-      { date: '2025-11-01', balance: 10000.00 },
-      { date: '2025-11-02', balance: 10500.50 },
-      { date: '2025-11-03', balance: 9800.00 },
+      { date: '2025-11-01', balance: 10000.0 },
+      { date: '2025-11-02', balance: 10500.5 },
+      { date: '2025-11-03', balance: 9800.0 },
     ],
-  }
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
 
   describe('Basic Rendering', () => {
     it('should render chart with balance history data', () => {
-      // Act
-      render(<BalanceHistoryChart history={mockHistory} />)
-
-      // Assert
-      expect(screen.getByText('Balance History')).toBeInTheDocument()
-    })
+      render(<BalanceHistoryChart history={mockHistory} />);
+      expect(screen.getByText('Balance History')).toBeInTheDocument();
+    });
 
     it('should display chart title "Balance History"', () => {
-      // Act
-      render(<BalanceHistoryChart history={mockHistory} />)
-
-      // Assert
-      const title = screen.getByText('Balance History')
-      expect(title).toBeInTheDocument()
-      expect(title.tagName).toBe('H2')
-    })
+      render(<BalanceHistoryChart history={mockHistory} />);
+      const title = screen.getByText('Balance History');
+      expect(title).toBeInTheDocument();
+      expect(title.tagName).toBe('H2');
+    });
 
     it('should handle empty snapshots array gracefully', () => {
-      // Act
-      render(<BalanceHistoryChart history={mockEmptyHistory} />)
-
-      // Assert - Should show empty state message
-      expect(screen.getByText('No balance history available')).toBeInTheDocument()
-    })
+      render(<BalanceHistoryChart history={mockEmptyHistory} />);
+      expect(
+        screen.getByText('No balance history available')
+      ).toBeInTheDocument();
+    });
 
     it('should show "No balance history available" message when no data', () => {
-      // Act
-      render(<BalanceHistoryChart history={mockEmptyHistory} />)
+      render(<BalanceHistoryChart history={mockEmptyHistory} />);
+      const emptyMessage = screen.getByText('No balance history available');
+      expect(emptyMessage).toBeInTheDocument();
+    });
+  });
 
-      // Assert
-      const emptyMessage = screen.getByText('No balance history available')
-      expect(emptyMessage).toBeInTheDocument()
-    })
-  })
+  describe('Plotly Chart Rendering', () => {
+    it('should render Plotly chart component', () => {
+      render(<BalanceHistoryChart history={mockHistory} />);
+      const chart = screen.getByTestId('plotly-chart');
+      expect(chart).toBeInTheDocument();
+    });
 
-  describe('Data Transformation', () => {
-    it('should transform snapshots into chart-compatible format', () => {
-      // Act
-      const { container } = render(<BalanceHistoryChart history={mockHistory} />)
+    it('should pass responsive config to Plot', () => {
+      render(<BalanceHistoryChart history={mockHistory} />);
+      const chart = screen.getByTestId('plotly-chart');
+      expect(chart.getAttribute('data-responsive')).toBe('true');
+    });
 
-      // Assert - ResponsiveContainer should be rendered
-      const responsiveContainer = container.querySelector('.recharts-responsive-container')
-      expect(responsiveContainer).toBeInTheDocument()
-    })
+    it('should enable resize handler', () => {
+      render(<BalanceHistoryChart history={mockHistory} />);
+      const chart = screen.getByTestId('plotly-chart');
+      expect(chart.getAttribute('data-use-resize-handler')).toBe('true');
+    });
 
-    it('should format dates as "MMM d" for x-axis', () => {
-      // Act
-      render(<BalanceHistoryChart history={mockHistory} />)
-
-      // Assert - Check if Recharts rendered (we can't easily test internal data transformation,
-      // but we can verify the component renders without errors)
-      expect(screen.getByText('Balance History')).toBeInTheDocument()
-    })
-
-    it('should preserve full date for tooltip', () => {
-      // Act
-      render(<BalanceHistoryChart history={mockHistory} />)
-
-      // Assert - Component should render successfully
-      // (Tooltip testing requires user interaction simulation which is complex with Recharts)
-      expect(screen.getByText('Balance History')).toBeInTheDocument()
-    })
-  })
+    it('should use 100% width and height styling', () => {
+      render(<BalanceHistoryChart history={mockHistory} />);
+      const chart = screen.getByTestId('plotly-chart');
+      expect(chart).toHaveStyle({ width: '100%', height: '100%' });
+    });
+  });
 
   describe('Total Balance Mode (showTypeBreakdown=false)', () => {
-    it('should display single line for total balance', () => {
-      // Act
-      const { container } = render(
+    it('should display single trace for total balance', () => {
+      render(
         <BalanceHistoryChart history={mockHistory} showTypeBreakdown={false} />
-      )
+      );
+      const chart = screen.getByTestId('plotly-chart');
+      expect(chart.getAttribute('data-trace-count')).toBe('1');
+    });
 
-      // Assert - Component should render without errors
-      expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument()
-    })
-
-    it('should use blue color for balance line', () => {
-      // Act
-      render(<BalanceHistoryChart history={mockHistory} showTypeBreakdown={false} />)
-
-      // Assert - Component renders successfully (Recharts internals tested by library)
-      expect(screen.getByText('Balance History')).toBeInTheDocument()
-    })
-
-    it('should show "Total Balance" in legend', () => {
-      // Act
-      render(<BalanceHistoryChart history={mockHistory} showTypeBreakdown={false} />)
-
-      // Assert - Component renders successfully
-      expect(screen.getByText('Balance History')).toBeInTheDocument()
-    })
-  })
+    it('should name the trace "Total Balance"', () => {
+      render(
+        <BalanceHistoryChart history={mockHistory} showTypeBreakdown={false} />
+      );
+      const chart = screen.getByTestId('plotly-chart');
+      const traceNames = JSON.parse(
+        chart.getAttribute('data-trace-names') || '[]'
+      );
+      expect(traceNames).toContain('Total Balance');
+    });
+  });
 
   describe('Type Breakdown Mode (showTypeBreakdown=true)', () => {
-    it('should display multiple lines when showTypeBreakdown=true', () => {
-      // Act
-      const { container } = render(
+    it('should display multiple traces when showTypeBreakdown=true', () => {
+      render(
         <BalanceHistoryChart history={mockHistory} showTypeBreakdown={true} />
-      )
+      );
+      const chart = screen.getByTestId('plotly-chart');
+      // Should have 3 traces: depository, credit, investment
+      expect(chart.getAttribute('data-trace-count')).toBe('3');
+    });
 
-      // Assert - Component should render without errors
-      expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument()
-    })
-
-    it('should render line for each account type with correct colors', () => {
-      // Act
-      render(<BalanceHistoryChart history={mockHistory} showTypeBreakdown={true} />)
-
-      // Assert - Component renders successfully (color testing requires visual testing)
-      expect(screen.getByText('Balance History')).toBeInTheDocument()
-    })
-
-    it('should show depository line in green', () => {
-      // Act
-      render(<BalanceHistoryChart history={mockHistory} showTypeBreakdown={true} />)
-
-      // Assert - Component renders successfully
-      expect(screen.getByText('Balance History')).toBeInTheDocument()
-    })
-
-    it('should show credit line in red', () => {
-      // Act
-      render(<BalanceHistoryChart history={mockHistory} showTypeBreakdown={true} />)
-
-      // Assert - Component renders successfully
-      expect(screen.getByText('Balance History')).toBeInTheDocument()
-    })
-
-    it('should show investment line in purple', () => {
-      // Act
-      render(<BalanceHistoryChart history={mockHistory} showTypeBreakdown={true} />)
-
-      // Assert - Component renders successfully
-      expect(screen.getByText('Balance History')).toBeInTheDocument()
-    })
-
-    it('should capitalize type names in legend', () => {
-      // Act
-      render(<BalanceHistoryChart history={mockHistory} showTypeBreakdown={true} />)
-
-      // Assert - Component renders successfully
-      expect(screen.getByText('Balance History')).toBeInTheDocument()
-    })
-  })
-
-  describe('Chart Components', () => {
-    it('should render ResponsiveContainer', () => {
-      // Act
-      const { container } = render(<BalanceHistoryChart history={mockHistory} />)
-
-      // Assert
-      const responsiveContainer = container.querySelector('.recharts-responsive-container')
-      expect(responsiveContainer).toBeInTheDocument()
-    })
-
-    it('should render CartesianGrid', () => {
-      // Act
-      render(<BalanceHistoryChart history={mockHistory} />)
-
-      // Assert - Component renders successfully (Recharts internals tested by library)
-      expect(screen.getByText('Balance History')).toBeInTheDocument()
-    })
-
-    it('should render XAxis', () => {
-      // Act
-      render(<BalanceHistoryChart history={mockHistory} />)
-
-      // Assert - Component renders successfully
-      expect(screen.getByText('Balance History')).toBeInTheDocument()
-    })
-
-    it('should render YAxis', () => {
-      // Act
-      render(<BalanceHistoryChart history={mockHistory} />)
-
-      // Assert - Component renders successfully
-      expect(screen.getByText('Balance History')).toBeInTheDocument()
-    })
-
-    it('should render Legend', () => {
-      // Act
-      render(<BalanceHistoryChart history={mockHistory} />)
-
-      // Assert - Component renders successfully
-      expect(screen.getByText('Balance History')).toBeInTheDocument()
-    })
-  })
+    it('should capitalize type names for trace names', () => {
+      render(
+        <BalanceHistoryChart history={mockHistory} showTypeBreakdown={true} />
+      );
+      const chart = screen.getByTestId('plotly-chart');
+      const traceNames = JSON.parse(
+        chart.getAttribute('data-trace-names') || '[]'
+      );
+      expect(traceNames).toContain('Depository');
+      expect(traceNames).toContain('Credit');
+      expect(traceNames).toContain('Investment');
+    });
+  });
 
   describe('Edge Cases', () => {
     it('should handle single snapshot', () => {
-      // Arrange
       const singleSnapshot: BalanceHistory = {
         start_date: '2025-11-01',
         end_date: '2025-11-01',
         granularity: 'daily',
-        snapshots: [
-          { date: '2025-11-01', balance: 10000.00 },
-        ],
-      }
+        snapshots: [{ date: '2025-11-01', balance: 10000.0 }],
+      };
 
-      // Act
-      const { container } = render(<BalanceHistoryChart history={singleSnapshot} />)
-
-      // Assert - Should render without errors
-      expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument()
-    })
+      render(<BalanceHistoryChart history={singleSnapshot} />);
+      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
+    });
 
     it('should handle missing by_type data', () => {
-      // Act
-      const { container } = render(
-        <BalanceHistoryChart history={mockHistoryWithoutByType} />
-      )
-
-      // Assert - Should render without errors
-      expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument()
-    })
+      render(<BalanceHistoryChart history={mockHistoryWithoutByType} />);
+      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
+    });
 
     it('should handle mixed data (some snapshots with by_type, some without)', () => {
-      // Arrange
       const mixedHistory: BalanceHistory = {
         start_date: '2025-11-01',
         end_date: '2025-11-03',
@@ -311,244 +252,218 @@ describe('BalanceHistoryChart', () => {
         snapshots: [
           {
             date: '2025-11-01',
-            balance: 10000.00,
-            by_type: { depository: 7000.00 },
+            balance: 10000.0,
+            by_type: { depository: 7000.0 },
           },
           {
             date: '2025-11-02',
-            balance: 10500.00,
+            balance: 10500.0,
           },
           {
             date: '2025-11-03',
-            balance: 9800.00,
-            by_type: { depository: 6800.00 },
+            balance: 9800.0,
+            by_type: { depository: 6800.0 },
           },
         ],
-      }
+      };
 
-      // Act
-      const { container } = render(
+      render(
         <BalanceHistoryChart history={mixedHistory} showTypeBreakdown={true} />
-      )
-
-      // Assert - Should render without errors
-      expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument()
-    })
+      );
+      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
+    });
 
     it('should handle large balance amounts', () => {
-      // Arrange
       const largeBalances: BalanceHistory = {
         start_date: '2025-11-01',
         end_date: '2025-11-02',
         granularity: 'daily',
         snapshots: [
-          { date: '2025-11-01', balance: 1000000.00 },
-          { date: '2025-11-02', balance: 2500000.50 },
+          { date: '2025-11-01', balance: 1000000.0 },
+          { date: '2025-11-02', balance: 2500000.5 },
         ],
-      }
+      };
 
-      // Act
-      const { container } = render(<BalanceHistoryChart history={largeBalances} />)
-
-      // Assert - Should render without errors
-      expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument()
-    })
+      render(<BalanceHistoryChart history={largeBalances} />);
+      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
+    });
 
     it('should handle negative balances', () => {
-      // Arrange
       const negativeBalances: BalanceHistory = {
         start_date: '2025-11-01',
         end_date: '2025-11-02',
         granularity: 'daily',
         snapshots: [
-          { date: '2025-11-01', balance: -5000.00 },
-          { date: '2025-11-02', balance: -3000.00 },
+          { date: '2025-11-01', balance: -5000.0 },
+          { date: '2025-11-02', balance: -3000.0 },
         ],
-      }
+      };
 
-      // Act
-      const { container } = render(<BalanceHistoryChart history={negativeBalances} />)
-
-      // Assert - Should render without errors
-      expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument()
-    })
+      render(<BalanceHistoryChart history={negativeBalances} />);
+      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
+    });
 
     it('should handle zero balance', () => {
-      // Arrange
       const zeroBalance: BalanceHistory = {
         start_date: '2025-11-01',
         end_date: '2025-11-02',
         granularity: 'daily',
         snapshots: [
-          { date: '2025-11-01', balance: 0.00 },
-          { date: '2025-11-02', balance: 100.00 },
+          { date: '2025-11-01', balance: 0.0 },
+          { date: '2025-11-02', balance: 100.0 },
         ],
-      }
+      };
 
-      // Act
-      const { container } = render(<BalanceHistoryChart history={zeroBalance} />)
-
-      // Assert - Should render without errors
-      expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument()
-    })
-  })
+      render(<BalanceHistoryChart history={zeroBalance} />);
+      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
+    });
+  });
 
   describe('Prop Variations', () => {
     it('should default showTypeBreakdown to false when not provided', () => {
-      // Act
-      const { container } = render(<BalanceHistoryChart history={mockHistory} />)
-
-      // Assert - Should render as total balance mode
-      expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument()
-    })
+      render(<BalanceHistoryChart history={mockHistory} />);
+      const chart = screen.getByTestId('plotly-chart');
+      // Default is single trace for total balance
+      expect(chart.getAttribute('data-trace-count')).toBe('1');
+    });
 
     it('should respect showTypeBreakdown=false prop', () => {
-      // Act
-      const { container } = render(
+      render(
         <BalanceHistoryChart history={mockHistory} showTypeBreakdown={false} />
-      )
-
-      // Assert
-      expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument()
-    })
+      );
+      const chart = screen.getByTestId('plotly-chart');
+      expect(chart.getAttribute('data-trace-count')).toBe('1');
+    });
 
     it('should respect showTypeBreakdown=true prop', () => {
-      // Act
-      const { container } = render(
+      render(
         <BalanceHistoryChart history={mockHistory} showTypeBreakdown={true} />
-      )
-
-      // Assert - Renders without errors (breakdown logic tested via integration tests)
-      expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument()
-    })
-  })
+      );
+      const chart = screen.getByTestId('plotly-chart');
+      expect(chart.getAttribute('data-trace-count')).toBe('3');
+    });
+  });
 
   /**
    * Issue #416: Height Chain Fix Tests
    *
    * These tests verify the proper CSS height chain propagation so that
-   * ResponsiveContainer can calculate dimensions correctly within WidgetWrapper.
+   * the chart can calculate dimensions correctly within WidgetWrapper.
    */
   describe('Height Chain Fix - Issue #416', () => {
     it('should have h-full on outer container for height propagation', () => {
-      // Act
-      const { container } = render(<BalanceHistoryChart history={mockHistory} />)
-
-      // Assert
-      const outerDiv = container.firstChild as HTMLElement
-      expect(outerDiv).toHaveClass('h-full')
-    })
+      const { container } = render(
+        <BalanceHistoryChart history={mockHistory} />
+      );
+      const outerDiv = container.firstChild as HTMLElement;
+      expect(outerDiv).toHaveClass('h-full');
+    });
 
     it('should use flex flex-col layout for proper height distribution', () => {
-      // Act
-      const { container } = render(<BalanceHistoryChart history={mockHistory} />)
-
-      // Assert
-      const outerDiv = container.firstChild as HTMLElement
-      expect(outerDiv).toHaveClass('flex')
-      expect(outerDiv).toHaveClass('flex-col')
-    })
+      const { container } = render(
+        <BalanceHistoryChart history={mockHistory} />
+      );
+      const outerDiv = container.firstChild as HTMLElement;
+      expect(outerDiv).toHaveClass('flex');
+      expect(outerDiv).toHaveClass('flex-col');
+    });
 
     it('should have flex-shrink-0 on title to prevent compression', () => {
-      // Act
-      render(<BalanceHistoryChart history={mockHistory} />)
-
-      // Assert
-      const title = screen.getByRole('heading', { name: /balance history/i })
-      expect(title).toHaveClass('flex-shrink-0')
-    })
+      render(<BalanceHistoryChart history={mockHistory} />);
+      const title = screen.getByRole('heading', { name: /balance history/i });
+      expect(title).toHaveClass('flex-shrink-0');
+    });
 
     it('should have flex-1 min-h-0 on chart container for proper flex sizing', () => {
-      // Act
-      const { container } = render(<BalanceHistoryChart history={mockHistory} />)
-
-      // Assert
-      const chartContainer = container.querySelector('.flex-1.min-h-0')
-      expect(chartContainer).toBeInTheDocument()
-    })
+      const { container } = render(
+        <BalanceHistoryChart history={mockHistory} />
+      );
+      const chartContainer = container.querySelector('.flex-1.min-h-0');
+      expect(chartContainer).toBeInTheDocument();
+    });
 
     it('should NOT have redundant bg-white shadow p-6 styling', () => {
       // These styles are provided by WidgetWrapper, not the chart component
-      const { container } = render(<BalanceHistoryChart history={mockHistory} />)
-
-      // Assert
-      const outerDiv = container.firstChild as HTMLElement
-      expect(outerDiv).not.toHaveClass('bg-white')
-      expect(outerDiv).not.toHaveClass('shadow')
-      expect(outerDiv).not.toHaveClass('p-6')
-      expect(outerDiv).not.toHaveClass('rounded-lg')
-    })
+      const { container } = render(
+        <BalanceHistoryChart history={mockHistory} />
+      );
+      const outerDiv = container.firstChild as HTMLElement;
+      expect(outerDiv).not.toHaveClass('bg-white');
+      expect(outerDiv).not.toHaveClass('shadow');
+      expect(outerDiv).not.toHaveClass('p-6');
+      expect(outerDiv).not.toHaveClass('rounded-lg');
+    });
 
     it('should have dark mode support on title', () => {
-      // Act
-      render(<BalanceHistoryChart history={mockHistory} />)
-
-      // Assert
-      const title = screen.getByRole('heading', { name: /balance history/i })
-      expect(title).toHaveClass('dark:text-white')
-    })
+      render(<BalanceHistoryChart history={mockHistory} />);
+      const title = screen.getByRole('heading', { name: /balance history/i });
+      expect(title).toHaveClass('dark:text-white');
+    });
 
     it('should use flex-1 for empty state instead of fixed h-64', () => {
-      // Act
-      const { container } = render(<BalanceHistoryChart history={mockEmptyHistory} />)
-
-      // Assert - Should have flex-1 for proper flex layout
-      const emptyState = container.querySelector('.flex-1.flex.items-center.justify-center')
-      expect(emptyState).toBeInTheDocument()
-      // Should NOT have fixed h-64
-      expect(container.querySelector('.h-64')).not.toBeInTheDocument()
-    })
-  })
+      const { container } = render(
+        <BalanceHistoryChart history={mockEmptyHistory} />
+      );
+      const emptyState = container.querySelector(
+        '.flex-1.flex.items-center.justify-center'
+      );
+      expect(emptyState).toBeInTheDocument();
+      expect(container.querySelector('.h-64')).not.toBeInTheDocument();
+    });
+  });
 
   describe('Layout and Styling', () => {
     it('should use responsive height (100%) instead of fixed pixels', () => {
-      // Issue #410: Chart should use height="100%" for responsive sizing
-      // instead of fixed pixels to properly fill widget container
-      const { container } = render(<BalanceHistoryChart history={mockHistory} />)
+      render(<BalanceHistoryChart history={mockHistory} />);
+      const chart = screen.getByTestId('plotly-chart');
+      expect(chart).toHaveStyle({ height: '100%' });
+    });
 
-      // Assert - ResponsiveContainer should be rendered and use 100% height
-      const responsiveContainer = container.querySelector('.recharts-responsive-container')
-      expect(responsiveContainer).toBeInTheDocument()
-      // Check that container has height: 100% style (not fixed pixels)
-      expect(responsiveContainer).toHaveStyle({ height: '100%' })
-    })
-  })
+    it('should have minHeight of 200px', () => {
+      render(<BalanceHistoryChart history={mockHistory} />);
+      const chart = screen.getByTestId('plotly-chart');
+      expect(chart).toHaveStyle({ minHeight: '200px' });
+    });
+  });
 
   describe('Empty State Display', () => {
     it('should show empty state when snapshots.length === 0', () => {
-      // Act
-      render(<BalanceHistoryChart history={mockEmptyHistory} />)
-
-      // Assert
-      expect(screen.getByText('No balance history available')).toBeInTheDocument()
-    })
+      render(<BalanceHistoryChart history={mockEmptyHistory} />);
+      expect(
+        screen.getByText('No balance history available')
+      ).toBeInTheDocument();
+    });
 
     it('should center empty state message', () => {
-      // Act
-      const { container } = render(<BalanceHistoryChart history={mockEmptyHistory} />)
-
-      // Assert
-      const emptyState = container.querySelector('.flex.items-center.justify-center')
-      expect(emptyState).toBeInTheDocument()
-    })
+      const { container } = render(
+        <BalanceHistoryChart history={mockEmptyHistory} />
+      );
+      const emptyState = container.querySelector(
+        '.flex.items-center.justify-center'
+      );
+      expect(emptyState).toBeInTheDocument();
+    });
 
     it('should use flex-1 for empty state height instead of fixed h-64 (Issue #416)', () => {
-      // Issue #416: Empty state should use flex-1 for proper flex layout
-      const { container } = render(<BalanceHistoryChart history={mockEmptyHistory} />)
-
-      // Assert - flex-1 provides flexible height within the flex container
-      const emptyState = container.querySelector('.flex-1')
-      expect(emptyState).toBeInTheDocument()
-    })
+      const { container } = render(
+        <BalanceHistoryChart history={mockEmptyHistory} />
+      );
+      const emptyState = container.querySelector('.flex-1');
+      expect(emptyState).toBeInTheDocument();
+    });
 
     it('should style empty state text as gray', () => {
-      // Act
-      const { container } = render(<BalanceHistoryChart history={mockEmptyHistory} />)
+      const { container } = render(
+        <BalanceHistoryChart history={mockEmptyHistory} />
+      );
+      const emptyText = container.querySelector('.text-gray-500');
+      expect(emptyText).toBeInTheDocument();
+      expect(emptyText).toHaveTextContent('No balance history available');
+    });
 
-      // Assert
-      const emptyText = container.querySelector('.text-gray-500')
-      expect(emptyText).toBeInTheDocument()
-      expect(emptyText).toHaveTextContent('No balance history available')
-    })
-  })
-})
+    it('should not render Plotly chart when empty', () => {
+      render(<BalanceHistoryChart history={mockEmptyHistory} />);
+      expect(screen.queryByTestId('plotly-chart')).not.toBeInTheDocument();
+    });
+  });
+});
