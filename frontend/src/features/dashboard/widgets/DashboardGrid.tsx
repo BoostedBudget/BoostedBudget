@@ -1,22 +1,34 @@
 /**
  * Dashboard Grid Component
  * Issue #354: Customizable Dashboard Widget System
+ * Issue #441: Migrated from react-grid-layout to GridStack.js
  *
- * Uses react-grid-layout for drag-drop and resize functionality.
+ * Uses GridStack.js for drag-drop and resize functionality.
  * Renders widgets using WidgetWrapper and the widget registry.
+ *
+ * Key architecture difference from react-grid-layout:
+ * - GridStack creates a SEPARATE .grid-stack-item-content wrapper
+ *   with position: absolute; inset: 0, solving the height chain issue
+ * - Uses gs-* data attributes for widget configuration
+ * - Controlled pattern with _ignoreCB to prevent infinite update loops
  */
 
-import { useMemo } from 'react';
-import { Responsive, WidthProvider, Layout } from 'react-grid-layout';
-import 'react-grid-layout/css/styles.css';
-import 'react-resizable/css/styles.css';
-import './DashboardGrid.css'; // Issue #435: Fix resize handle positioning, Issue #422: Fix height chain
+import { useEffect, useRef, useLayoutEffect, createRef } from 'react';
+import { GridStack } from 'gridstack';
+import 'gridstack/dist/gridstack.min.css';
+import './DashboardGrid.css';
 
 import { WidgetWrapper } from './WidgetWrapper';
 import { getWidget } from './registry';
+import { toGridStackWidget, toWidgetConfig } from '../types/gridstack-utils';
 import type { WidgetConfig, WidgetType, DashboardLayout } from '../types';
 
-const ResponsiveGridLayout = WidthProvider(Responsive);
+// Extend GridStack type to include our _ignoreCB flag
+declare module 'gridstack' {
+  interface GridStack {
+    _ignoreCB?: boolean;
+  }
+}
 
 interface DashboardGridProps {
   layout: DashboardLayout;
@@ -26,39 +38,6 @@ interface DashboardGridProps {
   onDropWidget?: (widgetType: WidgetType, x: number, y: number) => void;
 }
 
-// Convert WidgetConfig to react-grid-layout Layout item
-function toLayoutItem(widget: WidgetConfig): Layout {
-  return {
-    i: widget.i,
-    x: widget.x,
-    y: widget.y,
-    w: widget.w,
-    h: widget.h,
-    minW: widget.minW,
-    minH: widget.minH,
-    maxW: widget.maxW,
-    maxH: widget.maxH,
-    static: widget.static,
-  };
-}
-
-// Convert react-grid-layout Layout item back to WidgetConfig
-function toWidgetConfig(
-  layoutItem: Layout,
-  widgets: WidgetConfig[]
-): WidgetConfig | null {
-  const originalWidget = widgets.find((w) => w.i === layoutItem.i);
-  if (!originalWidget) return null;
-
-  return {
-    ...originalWidget,
-    x: layoutItem.x,
-    y: layoutItem.y,
-    w: layoutItem.w,
-    h: layoutItem.h,
-  };
-}
-
 export function DashboardGrid({
   layout,
   isEditing,
@@ -66,95 +45,169 @@ export function DashboardGrid({
   onRemoveWidget,
   onDropWidget,
 }: DashboardGridProps) {
-  // Convert widgets to react-grid-layout format
-  const gridLayout = useMemo(
-    () => layout.widgets.map(toLayoutItem),
-    [layout.widgets]
-  );
+  const gridContainerRef = useRef<HTMLDivElement>(null);
+  const gridRef = useRef<GridStack | null>(null);
+  const widgetRefs = useRef<Record<string, React.RefObject<HTMLDivElement | null>>>({});
 
-  // Handle layout changes from react-grid-layout
-  const handleLayoutChange = (currentLayout: Layout[]) => {
-    const updatedWidgets = currentLayout
-      .map((item) => toWidgetConfig(item, layout.widgets))
-      .filter((w): w is WidgetConfig => w !== null);
+  // Create refs for each widget
+  layout.widgets.forEach((widget) => {
+    if (!widgetRefs.current[widget.i]) {
+      widgetRefs.current[widget.i] = createRef<HTMLDivElement>();
+    }
+  });
 
-    // Only update if positions actually changed
-    const hasChanges = updatedWidgets.some((widget) => {
-      const original = layout.widgets.find((w) => w.i === widget.i);
-      return (
-        original &&
-        (original.x !== widget.x ||
-          original.y !== widget.y ||
-          original.w !== widget.w ||
-          original.h !== widget.h)
+  // Initialize GridStack on mount
+  useLayoutEffect(() => {
+    if (!gridContainerRef.current) return;
+
+    if (!gridRef.current) {
+      // Initialize GridStack
+      gridRef.current = GridStack.init(
+        {
+          float: false,
+          cellHeight: 80,
+          column: 12,
+          margin: 16,
+          handleClass: 'cursor-move',
+          disableDrag: !isEditing,
+          disableResize: !isEditing,
+          acceptWidgets: true,
+        },
+        gridContainerRef.current
       );
-    });
 
-    if (hasChanges) {
-      onLayoutChange({
-        ...layout,
-        widgets: updatedWidgets,
+      // Handle layout changes from GridStack
+      gridRef.current.on('change', () => {
+        if (!gridRef.current || gridRef.current._ignoreCB) return;
+
+        const items = gridRef.current.save(false);
+        if (!Array.isArray(items)) return;
+
+        // Build a map of widget types by id
+        const typeMap = new Map<string, WidgetType>();
+        layout.widgets.forEach((w) => typeMap.set(w.i, w.type));
+
+        const updatedWidgets = items
+          .filter((item) => item.id && typeMap.has(item.id))
+          .map((item) => toWidgetConfig(item, typeMap.get(item.id!)!));
+
+        // Only update if positions actually changed
+        const hasChanges = updatedWidgets.some((widget) => {
+          const original = layout.widgets.find((w) => w.i === widget.i);
+          return (
+            original &&
+            (original.x !== widget.x ||
+              original.y !== widget.y ||
+              original.w !== widget.w ||
+              original.h !== widget.h)
+          );
+        });
+
+        if (hasChanges) {
+          onLayoutChange({
+            ...layout,
+            widgets: updatedWidgets,
+          });
+        }
+      });
+
+      // Handle drop of new widget from catalog
+      gridRef.current.on('dropped', (_event, _previousWidget, newWidget) => {
+        if (!newWidget || !onDropWidget) return;
+
+        // Get widget type from data transfer (set by widget catalog)
+        const widgetType = newWidget.el?.dataset?.widgetType as WidgetType;
+        if (widgetType) {
+          onDropWidget(widgetType, newWidget.x ?? 0, newWidget.y ?? 0);
+          // Remove the dropped placeholder - actual widget will be added via layout
+          gridRef.current?.removeWidget(newWidget.el!, false);
+        }
       });
     }
-  };
 
-  // Handle drop of new widget from catalog
-  const handleDrop = (
-    _layout: Layout[],
-    item: Layout,
-    e: DragEvent
-  ) => {
-    const widgetType = e.dataTransfer?.getData('widgetType') as WidgetType;
-    if (widgetType && onDropWidget) {
-      onDropWidget(widgetType, item.x, item.y);
-    }
-  };
+    return () => {
+      // Cleanup on unmount
+      if (gridRef.current) {
+        gridRef.current.destroy(false);
+        gridRef.current = null;
+      }
+    };
+  }, []); // Only run on mount
+
+  // Sync edit mode with GridStack
+  useEffect(() => {
+    if (!gridRef.current) return;
+
+    gridRef.current.enableMove(isEditing);
+    gridRef.current.enableResize(isEditing);
+  }, [isEditing]);
+
+  // Sync layout changes from React state to GridStack
+  useEffect(() => {
+    if (!gridRef.current) return;
+
+    // Prevent callback loop
+    gridRef.current._ignoreCB = true;
+
+    // Update GridStack with current layout
+    const gsWidgets = layout.widgets.map((widget) => {
+      const gsWidget = toGridStackWidget(widget);
+      const ref = widgetRefs.current[widget.i];
+      if (ref?.current) {
+        gsWidget.el = ref.current;
+      }
+      return gsWidget;
+    });
+
+    gridRef.current.load(gsWidgets);
+
+    // Re-enable callbacks
+    gridRef.current._ignoreCB = false;
+  }, [layout.widgets]);
 
   return (
-    <ResponsiveGridLayout
-      className="layout"
-      layouts={{ lg: gridLayout, md: gridLayout, sm: gridLayout }}
-      breakpoints={{ lg: 1200, md: 996, sm: 768 }}
-      cols={{ lg: 12, md: 10, sm: 6 }}
-      rowHeight={80}
-      onLayoutChange={handleLayoutChange}
-      isDraggable={isEditing}
-      isResizable={isEditing}
-      isDroppable={isEditing}
-      onDrop={handleDrop}
-      droppingItem={{ i: '__dropping__', w: 4, h: 3 }}
-      draggableHandle=".cursor-move"
-      margin={[16, 16]}
-      containerPadding={[0, 0]}
-      useCSSTransforms={true}
-      compactType="vertical"
-    >
+    <div ref={gridContainerRef} className="grid-stack">
       {layout.widgets.map((widget) => {
         const Definition = getWidget(widget.type);
         const WidgetComponent = Definition?.Component;
 
         return (
-          <div key={widget.i} className="grid-cell-content">
-            <WidgetWrapper
-              widgetId={widget.i}
-              widgetType={widget.type}
-              isEditing={isEditing}
-              onRemove={() => onRemoveWidget(widget.i)}
-            >
-              {WidgetComponent ? (
-                <WidgetComponent
-                  widgetId={widget.i}
-                  onRemove={() => onRemoveWidget(widget.i)}
-                />
-              ) : (
-                <div className="flex items-center justify-center h-full text-gray-400">
-                  Widget not found: {widget.type}
-                </div>
-              )}
-            </WidgetWrapper>
+          <div
+            key={widget.i}
+            ref={widgetRefs.current[widget.i]}
+            className="grid-stack-item"
+            gs-id={widget.i}
+            gs-x={String(widget.x)}
+            gs-y={String(widget.y)}
+            gs-w={String(widget.w)}
+            gs-h={String(widget.h)}
+            gs-min-w={widget.minW !== undefined ? String(widget.minW) : undefined}
+            gs-min-h={widget.minH !== undefined ? String(widget.minH) : undefined}
+            gs-max-w={widget.maxW !== undefined ? String(widget.maxW) : undefined}
+            gs-max-h={widget.maxH !== undefined ? String(widget.maxH) : undefined}
+          >
+            <div className="grid-stack-item-content">
+              <WidgetWrapper
+                widgetId={widget.i}
+                widgetType={widget.type}
+                isEditing={isEditing}
+                onRemove={() => onRemoveWidget(widget.i)}
+              >
+                {WidgetComponent ? (
+                  <WidgetComponent
+                    widgetId={widget.i}
+                    onRemove={() => onRemoveWidget(widget.i)}
+                  />
+                ) : (
+                  <div className="flex items-center justify-center h-full text-gray-400">
+                    Widget not found: {widget.type}
+                  </div>
+                )}
+              </WidgetWrapper>
+            </div>
           </div>
         );
       })}
-    </ResponsiveGridLayout>
+    </div>
   );
 }

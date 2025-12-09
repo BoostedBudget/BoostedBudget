@@ -1,42 +1,57 @@
 /**
  * Dashboard Grid Tests
  *
- * Tests the DashboardGrid component including widget rendering,
- * layout conversion, and widget removal.
+ * Tests the DashboardGrid component with GridStack.js
+ * Issue #441: Migrate from react-grid-layout to GridStack.js
  *
  * Issue #354: Customizable Dashboard Widget System
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
-import { DashboardGrid } from './DashboardGrid'
-import * as registry from './registry'
-import type { DashboardLayout, WidgetType, WidgetProps, WidgetDefinition } from '../types'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, act } from '@testing-library/react';
+import { DashboardGrid } from './DashboardGrid';
+import * as registry from './registry';
+import type {
+  DashboardLayout,
+  WidgetType,
+  WidgetProps,
+  WidgetDefinition,
+} from '../types';
 
-// Mock react-grid-layout to simplify testing
-vi.mock('react-grid-layout', () => ({
-  Responsive: ({ children, onLayoutChange }: {
-    children: React.ReactNode
-    onLayoutChange: (layout: unknown[]) => void
-  }) => (
-    <div data-testid="responsive-grid" onClick={() => onLayoutChange([])}>
-      {children}
-    </div>
-  ),
-  WidthProvider: (Component: React.ComponentType) => Component,
-}))
+// Mock GridStack
+const mockGridStackInstance = {
+  on: vi.fn(),
+  off: vi.fn(),
+  load: vi.fn(),
+  save: vi.fn(() => []),
+  enableMove: vi.fn(),
+  enableResize: vi.fn(),
+  removeWidget: vi.fn(),
+  destroy: vi.fn(),
+  _ignoreCB: false,
+};
+
+vi.mock('gridstack', () => ({
+  GridStack: {
+    init: vi.fn(() => mockGridStackInstance),
+  },
+}));
 
 // Mock the registry
 vi.mock('./registry', () => ({
   getWidget: vi.fn(),
-}))
+}));
 
 // Mock WidgetWrapper
 vi.mock('./WidgetWrapper', () => ({
-  WidgetWrapper: ({ children, onRemove, widgetType }: {
-    children: React.ReactNode
-    onRemove: () => void
-    widgetType: string
+  WidgetWrapper: ({
+    children,
+    onRemove,
+    widgetType,
+  }: {
+    children: React.ReactNode;
+    onRemove: () => void;
+    widgetType: string;
   }) => (
     <div data-testid={`widget-wrapper-${widgetType}`}>
       <button data-testid={`remove-${widgetType}`} onClick={onRemove}>
@@ -45,7 +60,7 @@ vi.mock('./WidgetWrapper', () => ({
       {children}
     </div>
   ),
-}))
+}));
 
 describe('DashboardGrid', () => {
   const mockLayout: DashboardLayout = {
@@ -72,19 +87,29 @@ describe('DashboardGrid', () => {
       },
     ],
     version: 1,
-  }
+  };
 
-  const mockOnLayoutChange = vi.fn()
-  const mockOnRemoveWidget = vi.fn()
-  const mockOnDropWidget = vi.fn()
+  const mockOnLayoutChange = vi.fn();
+  const mockOnRemoveWidget = vi.fn();
+  const mockOnDropWidget = vi.fn();
 
   // Mock widget component
   const MockWidgetComponent = ({ widgetId }: WidgetProps) => (
     <div data-testid={`widget-content-${widgetId}`}>Widget content</div>
-  )
+  );
 
   beforeEach(() => {
-    vi.clearAllMocks()
+    vi.clearAllMocks();
+
+    // Reset mock instance
+    mockGridStackInstance.on.mockClear();
+    mockGridStackInstance.off.mockClear();
+    mockGridStackInstance.load.mockClear();
+    mockGridStackInstance.save.mockClear();
+    mockGridStackInstance.enableMove.mockClear();
+    mockGridStackInstance.enableResize.mockClear();
+    mockGridStackInstance.destroy.mockClear();
+    mockGridStackInstance._ignoreCB = false;
 
     // Setup default mock registry behavior
     vi.mocked(registry.getWidget).mockImplementation((type: WidgetType) => {
@@ -109,24 +134,28 @@ describe('DashboardGrid', () => {
           minSize: { w: 6, h: 2 },
           Component: MockWidgetComponent,
         },
-      }
-      return definitions[type]
-    })
-  })
+      };
+      return definitions[type];
+    });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
 
   describe('Rendering', () => {
-    it('should render grid layout container', () => {
-      render(
+    it('should render grid-stack container', () => {
+      const { container } = render(
         <DashboardGrid
           layout={mockLayout}
           isEditing={false}
           onLayoutChange={mockOnLayoutChange}
           onRemoveWidget={mockOnRemoveWidget}
         />
-      )
+      );
 
-      expect(screen.getByTestId('responsive-grid')).toBeInTheDocument()
-    })
+      expect(container.querySelector('.grid-stack')).toBeInTheDocument();
+    });
 
     it('should render all widgets from layout', () => {
       render(
@@ -136,11 +165,15 @@ describe('DashboardGrid', () => {
           onLayoutChange={mockOnLayoutChange}
           onRemoveWidget={mockOnRemoveWidget}
         />
-      )
+      );
 
-      expect(screen.getByTestId('widget-wrapper-balance-overview')).toBeInTheDocument()
-      expect(screen.getByTestId('widget-wrapper-cash-flow-summary')).toBeInTheDocument()
-    })
+      expect(
+        screen.getByTestId('widget-wrapper-balance-overview')
+      ).toBeInTheDocument();
+      expect(
+        screen.getByTestId('widget-wrapper-cash-flow-summary')
+      ).toBeInTheDocument();
+    });
 
     it('should render widget content from registry component', () => {
       render(
@@ -150,14 +183,14 @@ describe('DashboardGrid', () => {
           onLayoutChange={mockOnLayoutChange}
           onRemoveWidget={mockOnRemoveWidget}
         />
-      )
+      );
 
-      expect(screen.getByTestId('widget-content-widget-1')).toBeInTheDocument()
-      expect(screen.getByTestId('widget-content-widget-2')).toBeInTheDocument()
-    })
+      expect(screen.getByTestId('widget-content-widget-1')).toBeInTheDocument();
+      expect(screen.getByTestId('widget-content-widget-2')).toBeInTheDocument();
+    });
 
     it('should show fallback for unregistered widget type', () => {
-      vi.mocked(registry.getWidget).mockReturnValue(undefined)
+      vi.mocked(registry.getWidget).mockReturnValue(undefined);
 
       render(
         <DashboardGrid
@@ -166,27 +199,78 @@ describe('DashboardGrid', () => {
           onLayoutChange={mockOnLayoutChange}
           onRemoveWidget={mockOnRemoveWidget}
         />
-      )
+      );
 
-      expect(screen.getByText(/Widget not found: balance-overview/)).toBeInTheDocument()
-    })
+      expect(
+        screen.getByText(/Widget not found: balance-overview/)
+      ).toBeInTheDocument();
+    });
 
     it('should render empty grid when no widgets', () => {
-      const emptyLayout: DashboardLayout = { widgets: [], version: 1 }
+      const emptyLayout: DashboardLayout = { widgets: [], version: 1 };
 
-      render(
+      const { container } = render(
         <DashboardGrid
           layout={emptyLayout}
           isEditing={false}
           onLayoutChange={mockOnLayoutChange}
           onRemoveWidget={mockOnRemoveWidget}
         />
-      )
+      );
 
-      expect(screen.getByTestId('responsive-grid')).toBeInTheDocument()
-      expect(screen.queryByTestId('widget-wrapper-balance-overview')).not.toBeInTheDocument()
-    })
-  })
+      expect(container.querySelector('.grid-stack')).toBeInTheDocument();
+      expect(
+        screen.queryByTestId('widget-wrapper-balance-overview')
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  describe('GridStack Initialization - Issue #441', () => {
+    it('should render widgets with gs-* data attributes', () => {
+      const { container } = render(
+        <DashboardGrid
+          layout={mockLayout}
+          isEditing={false}
+          onLayoutChange={mockOnLayoutChange}
+          onRemoveWidget={mockOnRemoveWidget}
+        />
+      );
+
+      const gridItems = container.querySelectorAll('.grid-stack-item');
+      expect(gridItems.length).toBe(2);
+
+      // First widget
+      const widget1 = gridItems[0] as HTMLElement;
+      expect(widget1.getAttribute('gs-id')).toBe('widget-1');
+      expect(widget1.getAttribute('gs-x')).toBe('0');
+      expect(widget1.getAttribute('gs-y')).toBe('0');
+      expect(widget1.getAttribute('gs-w')).toBe('4');
+      expect(widget1.getAttribute('gs-h')).toBe('3');
+      expect(widget1.getAttribute('gs-min-w')).toBe('3');
+      expect(widget1.getAttribute('gs-min-h')).toBe('2');
+
+      // Second widget
+      const widget2 = gridItems[1] as HTMLElement;
+      expect(widget2.getAttribute('gs-id')).toBe('widget-2');
+      expect(widget2.getAttribute('gs-x')).toBe('4');
+    });
+
+    it('should render grid-stack-item-content wrapper for each widget', () => {
+      const { container } = render(
+        <DashboardGrid
+          layout={mockLayout}
+          isEditing={false}
+          onLayoutChange={mockOnLayoutChange}
+          onRemoveWidget={mockOnRemoveWidget}
+        />
+      );
+
+      const contentWrappers = container.querySelectorAll(
+        '.grid-stack-item-content'
+      );
+      expect(contentWrappers.length).toBe(2);
+    });
+  });
 
   describe('Widget Removal', () => {
     it('should call onRemoveWidget when remove button clicked', () => {
@@ -197,12 +281,12 @@ describe('DashboardGrid', () => {
           onLayoutChange={mockOnLayoutChange}
           onRemoveWidget={mockOnRemoveWidget}
         />
-      )
+      );
 
-      fireEvent.click(screen.getByTestId('remove-balance-overview'))
+      fireEvent.click(screen.getByTestId('remove-balance-overview'));
 
-      expect(mockOnRemoveWidget).toHaveBeenCalledWith('widget-1')
-    })
+      expect(mockOnRemoveWidget).toHaveBeenCalledWith('widget-1');
+    });
 
     it('should call onRemoveWidget with correct widget id for each widget', () => {
       render(
@@ -212,13 +296,13 @@ describe('DashboardGrid', () => {
           onLayoutChange={mockOnLayoutChange}
           onRemoveWidget={mockOnRemoveWidget}
         />
-      )
+      );
 
-      fireEvent.click(screen.getByTestId('remove-cash-flow-summary'))
+      fireEvent.click(screen.getByTestId('remove-cash-flow-summary'));
 
-      expect(mockOnRemoveWidget).toHaveBeenCalledWith('widget-2')
-    })
-  })
+      expect(mockOnRemoveWidget).toHaveBeenCalledWith('widget-2');
+    });
+  });
 
   describe('Props Passing', () => {
     it('should pass widgetId to widget component', () => {
@@ -229,18 +313,18 @@ describe('DashboardGrid', () => {
           onLayoutChange={mockOnLayoutChange}
           onRemoveWidget={mockOnRemoveWidget}
         />
-      )
+      );
 
       // Widget content uses widgetId
-      expect(screen.getByTestId('widget-content-widget-1')).toBeInTheDocument()
-      expect(screen.getByTestId('widget-content-widget-2')).toBeInTheDocument()
-    })
-  })
+      expect(screen.getByTestId('widget-content-widget-1')).toBeInTheDocument();
+      expect(screen.getByTestId('widget-content-widget-2')).toBeInTheDocument();
+    });
+  });
 
   describe('Drop Handler', () => {
     it('should accept onDropWidget prop', () => {
       // Just verify it renders without error when prop is provided
-      render(
+      const { container } = render(
         <DashboardGrid
           layout={mockLayout}
           isEditing={true}
@@ -248,11 +332,11 @@ describe('DashboardGrid', () => {
           onRemoveWidget={mockOnRemoveWidget}
           onDropWidget={mockOnDropWidget}
         />
-      )
+      );
 
-      expect(screen.getByTestId('responsive-grid')).toBeInTheDocument()
-    })
-  })
+      expect(container.querySelector('.grid-stack')).toBeInTheDocument();
+    });
+  });
 
   describe('Registry Integration', () => {
     it('should call getWidget for each widget in layout', () => {
@@ -263,105 +347,84 @@ describe('DashboardGrid', () => {
           onLayoutChange={mockOnLayoutChange}
           onRemoveWidget={mockOnRemoveWidget}
         />
-      )
+      );
 
-      expect(registry.getWidget).toHaveBeenCalledWith('balance-overview')
-      expect(registry.getWidget).toHaveBeenCalledWith('cash-flow-summary')
-    })
-  })
+      expect(registry.getWidget).toHaveBeenCalledWith('balance-overview');
+      expect(registry.getWidget).toHaveBeenCalledWith('cash-flow-summary');
+    });
+  });
 
   /**
-   * Grid Cell Height Propagation Tests - Issue #422
+   * Grid Cell Height Propagation Tests - Issue #422, #441
    *
-   * These tests verify that grid cell wrappers use the grid-cell-content class
-   * which provides absolute positioning to fill the grid item.
+   * GridStack.js provides its own .grid-stack-item-content wrapper
+   * with position: absolute; inset: 0 - solving the height chain issue.
    *
-   * Root cause: Using h-full (percentage height) breaks when resize handles
-   * are added in edit mode. Absolute positioning with inset: 0 is more reliable.
-   *
-   * The .grid-cell-content class in DashboardGrid.css provides:
-   * - position: absolute
-   * - top: 0; left: 0; right: 0; bottom: 0
-   * - overflow: hidden
+   * Unlike react-grid-layout which merged classes onto the same element,
+   * GridStack creates a SEPARATE child wrapper with explicit positioning.
    */
-  describe('Grid Cell Height Chain Fix - Issue #422', () => {
-    it('should use grid-cell-content class on grid cell wrapper divs', () => {
-      render(
+  describe('Grid Cell Height Chain Fix - Issue #422, #441', () => {
+    it('should use grid-stack-item class for grid items', () => {
+      const { container } = render(
         <DashboardGrid
           layout={mockLayout}
           isEditing={false}
           onLayoutChange={mockOnLayoutChange}
           onRemoveWidget={mockOnRemoveWidget}
         />
-      )
+      );
 
-      // Find all direct children of the responsive-grid (these are the grid cell wrappers)
-      const responsiveGrid = screen.getByTestId('responsive-grid')
-      const gridCellWrappers = responsiveGrid.querySelectorAll(':scope > div')
+      const gridItems = container.querySelectorAll('.grid-stack-item');
+      expect(gridItems.length).toBe(mockLayout.widgets.length);
+    });
 
-      // Each grid cell wrapper should have grid-cell-content for absolute positioning
-      expect(gridCellWrappers.length).toBe(mockLayout.widgets.length)
-      gridCellWrappers.forEach((wrapper) => {
-        expect(wrapper).toHaveClass('grid-cell-content')
-      })
-    })
-
-    it('should have grid-cell-content on each widget cell regardless of widget type', () => {
-      render(
+    it('should have grid-stack-item-content on each widget for height propagation', () => {
+      const { container } = render(
         <DashboardGrid
           layout={mockLayout}
           isEditing={false}
           onLayoutChange={mockOnLayoutChange}
           onRemoveWidget={mockOnRemoveWidget}
         />
-      )
+      );
 
-      // Find cells by their keys (rendered as part of the structure)
-      const responsiveGrid = screen.getByTestId('responsive-grid')
-      const cells = responsiveGrid.children
+      const gridItems = container.querySelectorAll('.grid-stack-item');
+      gridItems.forEach((item) => {
+        const content = item.querySelector('.grid-stack-item-content');
+        expect(content).toBeInTheDocument();
+      });
+    });
 
-      for (let i = 0; i < cells.length; i++) {
-        const cell = cells[i] as HTMLElement
-        expect(cell.classList.contains('grid-cell-content')).toBe(true)
-      }
-    })
-
-    it('should have grid-cell-content class in edit mode', () => {
-      render(
+    it('should have grid-stack-item-content in edit mode', () => {
+      const { container } = render(
         <DashboardGrid
           layout={mockLayout}
           isEditing={true}
           onLayoutChange={mockOnLayoutChange}
           onRemoveWidget={mockOnRemoveWidget}
         />
-      )
+      );
 
-      const responsiveGrid = screen.getByTestId('responsive-grid')
-      const gridCellWrappers = responsiveGrid.querySelectorAll(':scope > div')
+      const gridItems = container.querySelectorAll('.grid-stack-item');
+      gridItems.forEach((item) => {
+        expect(item.querySelector('.grid-stack-item-content')).toBeInTheDocument();
+      });
+    });
 
-      // In edit mode, grid cells should still use grid-cell-content class
-      gridCellWrappers.forEach((wrapper) => {
-        expect(wrapper).toHaveClass('grid-cell-content')
-      })
-    })
-
-    it('should not use h-full class on grid cell wrappers (replaced by grid-cell-content)', () => {
-      render(
+    it('should NOT use h-full or grid-cell-content classes (GridStack provides height)', () => {
+      const { container } = render(
         <DashboardGrid
           layout={mockLayout}
           isEditing={false}
           onLayoutChange={mockOnLayoutChange}
           onRemoveWidget={mockOnRemoveWidget}
         />
-      )
+      );
 
-      const responsiveGrid = screen.getByTestId('responsive-grid')
-      const gridCellWrappers = responsiveGrid.querySelectorAll(':scope > div')
-
-      // h-full should NOT be used (it breaks in edit mode with resize handles)
-      gridCellWrappers.forEach((wrapper) => {
-        expect(wrapper).not.toHaveClass('h-full')
-      })
-    })
-  })
-})
+      // GridStack handles height via .grid-stack-item-content
+      // We should NOT have the old classes that caused issues
+      const oldClassElements = container.querySelectorAll('.grid-cell-content');
+      expect(oldClassElements.length).toBe(0);
+    });
+  });
+});
