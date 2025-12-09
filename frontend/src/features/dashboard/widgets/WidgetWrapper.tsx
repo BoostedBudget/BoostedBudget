@@ -1,9 +1,15 @@
 /**
  * Widget Wrapper Component
  * Issue #354: Customizable Dashboard Widget System
+ * Issue #441: Migrated to GridStack.js
  *
  * Wraps widget content with a consistent header and remove button.
  * Used by DashboardGrid to render all widgets uniformly.
+ *
+ * Height handling:
+ * - Uses h-full because GridStack's .grid-stack-item-content parent
+ *   provides explicit height via position: absolute; inset: 0
+ * - This solves the height chain issue that plagued react-grid-layout
  */
 
 import React, { useState } from 'react';
@@ -45,7 +51,7 @@ export function WidgetWrapper({
 
   return (
     <div
-      className={`absolute inset-0 bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 overflow-hidden flex flex-col ${isEditing ? 'ring-2 ring-blue-400' : ''}`}
+      className={`h-full bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 overflow-hidden flex flex-col ${isEditing ? 'ring-2 ring-blue-400' : ''}`}
     >
       {/* Header with title and actions */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 flex-shrink-0">

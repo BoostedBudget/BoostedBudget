@@ -314,8 +314,9 @@ describe('WidgetWrapper', () => {
   })
 
   describe('Styling', () => {
-    it('should have correct container classes with absolute positioning', () => {
-      // Issue #439: Changed from h-full to absolute inset-0 for proper height chain
+    it('should have correct container classes with h-full (GridStack provides positioning)', () => {
+      // Issue #441: Changed from absolute inset-0 back to h-full
+      // GridStack's .grid-stack-item-content provides the absolute positioning
       const { container } = render(
         <WidgetWrapper
           widgetId="widget-1"
@@ -328,10 +329,10 @@ describe('WidgetWrapper', () => {
       )
 
       const wrapper = container.firstChild as HTMLElement
-      // Issue #439: absolute inset-0 instead of h-full for content containment
-      expect(wrapper).toHaveClass('absolute')
-      expect(wrapper).toHaveClass('inset-0')
-      expect(wrapper).not.toHaveClass('h-full')
+      // Issue #441: h-full works now because GridStack parent has explicit height
+      expect(wrapper).toHaveClass('h-full')
+      expect(wrapper).not.toHaveClass('absolute')
+      expect(wrapper).not.toHaveClass('inset-0')
       expect(wrapper).toHaveClass('bg-white')
       expect(wrapper).toHaveClass('rounded-lg')
       expect(wrapper).toHaveClass('shadow')
@@ -482,8 +483,8 @@ describe('WidgetWrapper', () => {
 
       const wrapper = container.firstChild as HTMLElement
       // Ring outline should be added without removing other classes
-      expect(wrapper).toHaveClass('absolute')
-      expect(wrapper).toHaveClass('inset-0')
+      // Issue #441: Using h-full instead of absolute/inset-0 (GridStack provides positioning)
+      expect(wrapper).toHaveClass('h-full')
       expect(wrapper).toHaveClass('bg-white')
       expect(wrapper).toHaveClass('rounded-lg')
       expect(wrapper).toHaveClass('ring-2')
