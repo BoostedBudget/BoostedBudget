@@ -51,28 +51,11 @@ export function WidgetWrapper({
 
   return (
     <div
-      className={`h-full bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 overflow-hidden flex flex-col ${isEditing ? 'ring-2 ring-blue-400' : ''}`}
+      className={`h-full bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 overflow-hidden flex flex-col ${isEditing ? 'outline outline-2 outline-blue-400 -outline-offset-2' : ''}`}
     >
       {/* Header with title and actions */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 flex-shrink-0">
         <div className="flex items-center gap-2">
-          {isEditing && (
-            <div className="cursor-move text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
-              <svg
-                className="h-4 w-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M4 8h16M4 16h16"
-                />
-              </svg>
-            </div>
-          )}
           <span className="font-medium text-gray-700 dark:text-gray-200 text-sm">
             {definition?.title || widgetType}
           </span>
