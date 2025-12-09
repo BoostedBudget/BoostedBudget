@@ -12,7 +12,7 @@ import {
   toGridStackOptions,
 } from './gridstack-utils';
 import type { WidgetConfig } from './index';
-import type { GridStackWidget, GridStackOptions } from 'gridstack';
+import type { GridStackWidget } from 'gridstack';
 
 describe('GridStack Conversion Utilities - Issue #441', () => {
   describe('toGridStackWidget', () => {
