@@ -10,7 +10,7 @@ import { useMemo } from 'react';
 import { Responsive, WidthProvider, Layout } from 'react-grid-layout';
 import 'react-grid-layout/css/styles.css';
 import 'react-resizable/css/styles.css';
-import './DashboardGrid.css'; // Issue #435: Fix resize handle positioning
+import './DashboardGrid.css'; // Issue #435: Fix resize handle positioning, Issue #422: Fix height chain
 
 import { WidgetWrapper } from './WidgetWrapper';
 import { getWidget } from './registry';
@@ -134,7 +134,7 @@ export function DashboardGrid({
         const WidgetComponent = Definition?.Component;
 
         return (
-          <div key={widget.i} className="h-full">
+          <div key={widget.i} className="grid-cell-content">
             <WidgetWrapper
               widgetId={widget.i}
               widgetType={widget.type}
