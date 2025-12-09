@@ -13,7 +13,7 @@
  * - Controlled pattern with _ignoreCB to prevent infinite update loops
  */
 
-import { useEffect, useRef, useLayoutEffect, createRef } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import { GridStack } from 'gridstack';
 import 'gridstack/dist/gridstack.min.css';
 import './DashboardGrid.css';
@@ -21,7 +21,7 @@ import './DashboardGrid.css';
 import { WidgetWrapper } from './WidgetWrapper';
 import { getWidget } from './registry';
 import { toGridStackWidget, toWidgetConfig } from '../types/gridstack-utils';
-import type { WidgetConfig, WidgetType, DashboardLayout } from '../types';
+import type { WidgetType, DashboardLayout } from '../types';
 
 // Extend GridStack type to include our _ignoreCB flag
 declare module 'gridstack' {
@@ -47,17 +47,33 @@ export function DashboardGrid({
 }: DashboardGridProps) {
   const gridContainerRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<GridStack | null>(null);
-  const widgetRefs = useRef<Record<string, React.RefObject<HTMLDivElement | null>>>({});
+  // Store widget DOM elements by widget ID
+  const widgetElementsRef = useRef<Map<string, HTMLDivElement>>(new Map());
 
-  // Create refs for each widget
-  layout.widgets.forEach((widget) => {
-    if (!widgetRefs.current[widget.i]) {
-      widgetRefs.current[widget.i] = createRef<HTMLDivElement>();
-    }
-  });
+  // Stable references for callbacks used in effects
+  const layoutRef = useRef(layout);
+  const onLayoutChangeRef = useRef(onLayoutChange);
+  const onDropWidgetRef = useRef(onDropWidget);
+
+  // Keep refs updated
+  layoutRef.current = layout;
+  onLayoutChangeRef.current = onLayoutChange;
+  onDropWidgetRef.current = onDropWidget;
+
+  // Callback ref for widget elements - called by React when elements mount/unmount
+  const setWidgetRef = useCallback(
+    (widgetId: string) => (el: HTMLDivElement | null) => {
+      if (el) {
+        widgetElementsRef.current.set(widgetId, el);
+      } else {
+        widgetElementsRef.current.delete(widgetId);
+      }
+    },
+    []
+  );
 
   // Initialize GridStack on mount
-  useLayoutEffect(() => {
+  useEffect(() => {
     if (!gridContainerRef.current) return;
 
     if (!gridRef.current) {
@@ -83,9 +99,10 @@ export function DashboardGrid({
         const items = gridRef.current.save(false);
         if (!Array.isArray(items)) return;
 
-        // Build a map of widget types by id
+        // Build a map of widget types by id from current layout
+        const currentLayout = layoutRef.current;
         const typeMap = new Map<string, WidgetType>();
-        layout.widgets.forEach((w) => typeMap.set(w.i, w.type));
+        currentLayout.widgets.forEach((w) => typeMap.set(w.i, w.type));
 
         const updatedWidgets = items
           .filter((item) => item.id && typeMap.has(item.id))
@@ -93,7 +110,7 @@ export function DashboardGrid({
 
         // Only update if positions actually changed
         const hasChanges = updatedWidgets.some((widget) => {
-          const original = layout.widgets.find((w) => w.i === widget.i);
+          const original = currentLayout.widgets.find((w) => w.i === widget.i);
           return (
             original &&
             (original.x !== widget.x ||
@@ -104,8 +121,8 @@ export function DashboardGrid({
         });
 
         if (hasChanges) {
-          onLayoutChange({
-            ...layout,
+          onLayoutChangeRef.current({
+            ...currentLayout,
             widgets: updatedWidgets,
           });
         }
@@ -113,12 +130,12 @@ export function DashboardGrid({
 
       // Handle drop of new widget from catalog
       gridRef.current.on('dropped', (_event, _previousWidget, newWidget) => {
-        if (!newWidget || !onDropWidget) return;
+        if (!newWidget || !onDropWidgetRef.current) return;
 
         // Get widget type from data transfer (set by widget catalog)
         const widgetType = newWidget.el?.dataset?.widgetType as WidgetType;
         if (widgetType) {
-          onDropWidget(widgetType, newWidget.x ?? 0, newWidget.y ?? 0);
+          onDropWidgetRef.current(widgetType, newWidget.x ?? 0, newWidget.y ?? 0);
           // Remove the dropped placeholder - actual widget will be added via layout
           gridRef.current?.removeWidget(newWidget.el!, false);
         }
@@ -132,7 +149,9 @@ export function DashboardGrid({
         gridRef.current = null;
       }
     };
-  }, []); // Only run on mount
+    // Only run on mount - we use refs for callbacks to avoid re-initialization
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Sync edit mode with GridStack
   useEffect(() => {
@@ -152,9 +171,9 @@ export function DashboardGrid({
     // Update GridStack with current layout
     const gsWidgets = layout.widgets.map((widget) => {
       const gsWidget = toGridStackWidget(widget);
-      const ref = widgetRefs.current[widget.i];
-      if (ref?.current) {
-        gsWidget.el = ref.current;
+      const el = widgetElementsRef.current.get(widget.i);
+      if (el) {
+        gsWidget.el = el;
       }
       return gsWidget;
     });
@@ -174,7 +193,7 @@ export function DashboardGrid({
         return (
           <div
             key={widget.i}
-            ref={widgetRefs.current[widget.i]}
+            ref={setWidgetRef(widget.i)}
             className="grid-stack-item"
             gs-id={widget.i}
             gs-x={String(widget.x)}
