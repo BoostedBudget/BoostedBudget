@@ -1,14 +1,35 @@
 /**
  * Dashboard Grid Styles
  * Issue #435: Fix dashboard edit mode resize handles breaking layout
+ * Issue #422: Fix dashboard widget height chain in edit mode
  *
- * These styles ensure react-resizable handles are positioned correctly
- * regardless of global CSS resets or Tailwind utility conflicts.
+ * These styles ensure:
+ * 1. Grid cell content fills entire grid item using absolute positioning
+ * 2. React-resizable handles are positioned correctly
  */
 
 /* Ensure react-grid-layout items have proper positioning context */
 .react-grid-item {
   position: absolute;
+}
+
+/* Issue #422: Grid cell content fills entire grid item using absolute positioning
+ *
+ * Problem: Using h-full (height: 100%) on the grid cell wrapper depends on
+ * parent having computed height. In edit mode, react-resizable adds resize
+ * handles that can affect layout timing, causing h-full to compute incorrectly.
+ * The chart content escapes its container and renders below the footer.
+ *
+ * Solution: Use absolute positioning with inset: 0 to fill the grid item space.
+ * This works because .react-grid-item has explicit width/height from react-grid-layout.
+ */
+.react-grid-item > .grid-cell-content {
+  position: absolute !important;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
 }
 
 /* Fix react-resizable handles to be absolutely positioned */
