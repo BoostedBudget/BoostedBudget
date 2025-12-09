@@ -8,7 +8,7 @@
  * - WidgetConfig uses 'static' for lock, GridStack uses 'noMove'/'noResize'
  */
 
-import type { GridStackWidget, GridStackOptions } from 'gridstack';
+import type { GridStackWidget, GridStackNode, GridStackOptions } from 'gridstack';
 import type { WidgetConfig, WidgetType } from './index';
 
 /**
@@ -17,8 +17,8 @@ import type { WidgetConfig, WidgetType } from './index';
  * @param config - Our internal widget configuration
  * @returns GridStack-compatible widget object
  */
-export function toGridStackWidget(config: WidgetConfig): GridStackWidget {
-  const widget: GridStackWidget = {
+export function toGridStackWidget(config: WidgetConfig): GridStackNode {
+  const widget: GridStackNode = {
     id: config.i,
     x: config.x,
     y: config.y,
