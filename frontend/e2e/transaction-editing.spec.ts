@@ -264,10 +264,10 @@ test.describe('Transaction Editing - Protected Route', () => {
     page,
   }) => {
     await page.goto('/transactions')
-    await page.waitForLoadState('networkidle')
 
-    const currentUrl = page.url()
-    expect(currentUrl).not.toContain('/transactions')
+    // Wait for redirect to complete (to home or Auth0)
+    // Using Playwright's auto-retry assertion to handle redirect timing
+    await expect(page).not.toHaveURL(/\/transactions/, { timeout: 10000 })
   })
 })
 
