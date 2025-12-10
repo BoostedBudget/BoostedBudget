@@ -4,6 +4,7 @@ import type {
   BalanceHistory,
   AccountTypesResponse,
   DashboardFilters,
+  DashboardLayout,
 } from '../types'
 
 /**
@@ -104,6 +105,31 @@ export async function fetchBalanceHistory(
 export async function fetchAccountTypes(): Promise<AccountTypesResponse> {
   const response = await apiClient.get<AccountTypesResponse>(
     '/v1/dashboard/account-types'
+  )
+  return response.data
+}
+
+/**
+ * Fetch default dashboard layout configuration
+ * GET /api/v1/dashboard/default-layout
+ *
+ * Returns the centralized default dashboard layout from YAML configuration:
+ * - Widget configurations (positions, sizes, types)
+ * - Layout version (for auto-reset detection)
+ *
+ * This is a PUBLIC endpoint (no authentication required) - used for:
+ * - Initial dashboard setup for new users
+ * - Reset to defaults functionality
+ * - Version comparison to trigger auto-resets
+ *
+ * Issue #449: Centralize default dashboard layout configuration
+ *
+ * @returns Default dashboard layout from server config
+ * @throws Error if request fails (500 server error if config is missing)
+ */
+export async function fetchDefaultDashboardLayout(): Promise<DashboardLayout> {
+  const response = await apiClient.get<DashboardLayout>(
+    '/v1/dashboard/default-layout'
   )
   return response.data
 }

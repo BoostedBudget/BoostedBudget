@@ -83,6 +83,13 @@ func main() {
 	subscriptionTiersHandler := handlers.NewSubscriptionTiersHandler(tierConfig)
 	e.GET("/api/v1/subscription/tiers", subscriptionTiersHandler.GetSubscriptionTiers)
 
+	// Default dashboard layout endpoint (public - needed for initial dashboard setup)
+	// Issue #449: Centralize default dashboard layout configuration
+	// Note: dashboardHandler is created later with authenticated routes,
+	// but this endpoint doesn't need auth since it returns static config
+	publicDashboardHandler := handlers.NewDashboardHandler(nil) // No service needed for this endpoint
+	e.GET("/api/v1/dashboard/default-layout", publicDashboardHandler.GetDefaultLayout)
+
 	// Declare plaidService at package scope for use in both authenticated routes and webhook endpoint
 	var plaidService services.PlaidService
 
