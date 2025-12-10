@@ -1,9 +1,12 @@
 /**
  * Dashboard Layout Hook
  * Issue #354: Customizable Dashboard Widget System
+ * Issue #449: Centralize default dashboard layout configuration
  *
  * Manages dashboard layout state with persistence to the backend.
  * Includes debounced auto-save and optimistic updates.
+ *
+ * Uses centralized default layout from API (with hardcoded fallback).
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -13,6 +16,7 @@ import {
   resetDashboardPreferences,
 } from '../api/preferencesApi';
 import { DEFAULT_LAYOUT, createWidgetConfig } from '../widgets/registry';
+import { useDefaultDashboardLayout } from './useDefaultDashboardLayout';
 import type { DashboardLayout, WidgetType } from '../types';
 
 interface UseDashboardLayoutResult {
@@ -30,6 +34,10 @@ interface UseDashboardLayoutResult {
 const SAVE_DEBOUNCE_MS = 1000;
 
 export function useDashboardLayout(): UseDashboardLayoutResult {
+  // Fetch centralized default layout from API (Issue #449)
+  // Falls back to hardcoded DEFAULT_LAYOUT if API fails
+  const { defaultLayout, loading: defaultLayoutLoading } = useDefaultDashboardLayout();
+
   const [layout, setLayout] = useState<DashboardLayout>(DEFAULT_LAYOUT);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -40,25 +48,32 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
   const pendingLayoutRef = useRef<DashboardLayout | null>(null);
 
   // Load initial layout from backend
+  // Wait for default layout to be fetched first for accurate version comparison
   useEffect(() => {
+    // Wait for default layout to be fetched before comparing versions
+    if (defaultLayoutLoading) {
+      return;
+    }
+
     async function fetchLayout() {
       try {
         const response = await getDashboardPreferences();
 
         // Version-based migration: auto-reset if stored version is outdated
         // This ensures users get working layouts when default changes
-        if (response.layout.version < DEFAULT_LAYOUT.version) {
+        // Issue #449: Now uses fetched default layout for comparison
+        if (response.layout.version < defaultLayout.version) {
           console.log(
             `Dashboard layout version ${response.layout.version} is outdated, ` +
-            `resetting to version ${DEFAULT_LAYOUT.version}`
+            `resetting to version ${defaultLayout.version}`
           );
           try {
             const resetResponse = await resetDashboardPreferences();
             setLayout(resetResponse.layout);
           } catch (resetErr) {
             console.error('Failed to reset outdated layout:', resetErr);
-            // Fall back to default layout locally
-            setLayout(DEFAULT_LAYOUT);
+            // Fall back to fetched default layout
+            setLayout(defaultLayout);
           }
         } else {
           setLayout(response.layout);
@@ -66,8 +81,8 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
         setError(null);
       } catch (err) {
         console.error('Failed to load dashboard preferences:', err);
-        // Use default layout on error
-        setLayout(DEFAULT_LAYOUT);
+        // Use fetched default layout on error (Issue #449)
+        setLayout(defaultLayout);
         // Only set error for non-404 errors (404 means new user, use default)
         if (err instanceof Error && !err.message.includes('404')) {
           setError('Failed to load dashboard preferences');
@@ -78,7 +93,7 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
     }
 
     fetchLayout();
-  }, []);
+  }, [defaultLayout, defaultLayoutLoading]);
 
   // Save layout to backend (debounced)
   const saveLayout = useCallback(async (layoutToSave: DashboardLayout) => {
@@ -166,6 +181,7 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
   );
 
   // Reset to default layout
+  // Issue #449: Uses fetched default layout from API
   const resetToDefault = useCallback(async () => {
     // Clear any pending saves
     if (saveTimeoutRef.current) {
@@ -182,12 +198,12 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
     } catch (err) {
       console.error('Failed to reset dashboard preferences:', err);
       setError('Failed to reset layout');
-      // Still update local state to default
-      setLayout(DEFAULT_LAYOUT);
+      // Still update local state to fetched default (Issue #449)
+      setLayout(defaultLayout);
     } finally {
       setSaving(false);
     }
-  }, []);
+  }, [defaultLayout]);
 
   // Force immediate save
   const saveNow = useCallback(async () => {
