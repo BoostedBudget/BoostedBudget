@@ -22,13 +22,13 @@ test.describe('Privacy Settings', () => {
   test('should redirect unauthenticated users to login when accessing /profile', async ({ page }) => {
     // Navigate to profile page (requires auth)
     await page.goto('/profile')
-    await page.waitForLoadState('networkidle')
 
-    // Verify redirect occurred (Auth0 login or app-level redirect)
+    // Wait for redirect to complete (to home or Auth0)
+    // Using Playwright's auto-retry assertion to handle redirect timing
+    await expect(page).not.toHaveURL(/\/profile/, { timeout: 10000 })
+
+    // Verify landed somewhere valid (root or Auth0)
     const url = page.url()
-    expect(url).not.toContain('/profile')
-
-    // Should either be at root or Auth0 login page
     const isAtRoot = url.includes('localhost') && url.endsWith('/')
     const isAtAuth0 = url.includes('auth0.com')
     expect(isAtRoot || isAtAuth0).toBe(true)

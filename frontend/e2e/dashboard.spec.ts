@@ -212,12 +212,9 @@ test.describe('Dashboard - Protected Route', () => {
     // Act - Navigate to dashboard without authentication
     await page.goto('/dashboard')
 
-    // Wait for redirect
-    await page.waitForLoadState('networkidle')
-
-    // Assert - Should not be on dashboard (redirected to login or home)
-    const currentUrl = page.url()
-    expect(currentUrl).not.toContain('/dashboard')
+    // Assert - Should redirect away from dashboard (to home or Auth0)
+    // Using Playwright's auto-retry assertion to handle redirect timing
+    await expect(page).not.toHaveURL(/\/dashboard/, { timeout: 10000 })
   })
 
   test('should show dashboard in navigation only when authenticated', async ({
