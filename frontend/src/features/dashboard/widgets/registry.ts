@@ -47,8 +47,16 @@ export function isWidgetRegistered(type: WidgetType): boolean {
 }
 
 /**
- * Default dashboard layout
- * Used for new users or when resetting to defaults
+ * Default dashboard layout - FALLBACK ONLY
+ *
+ * Issue #449: This is now a FALLBACK for when the API is unavailable.
+ * The authoritative default layout is defined in:
+ *   config/default_dashboard_layout.yaml
+ *
+ * This layout is served via GET /api/v1/dashboard/default-layout
+ * and fetched by useDefaultDashboardLayout hook.
+ *
+ * Keep this in sync with the YAML config file!
  *
  * NOTE: Re-enabled BalanceHistoryWidget after fresh rewrite (Issue #418).
  * Other widgets still pending fixes:

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/middleware"
 )
@@ -147,4 +148,23 @@ func (h *DashboardHandler) parseFilters(c echo.Context) (*domain.DashboardFilter
 	}
 
 	return filters, nil
+}
+
+// GetDefaultLayout handles GET /api/v1/dashboard/default-layout
+// Returns the default dashboard layout configuration from YAML config
+// This endpoint is PUBLIC (no auth required) - used for initial dashboard setup
+// Issue #449: Centralize default dashboard layout configuration
+func (h *DashboardHandler) GetDefaultLayout(c echo.Context) error {
+	// Load the dashboard layout configuration
+	layoutConfig, err := config.LoadDashboardLayoutConfig()
+	if err != nil {
+		// Log the error but return a generic error to the client
+		c.Logger().Errorf("Failed to load dashboard layout config: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to load default layout configuration")
+	}
+
+	// Get the default layout as domain object
+	layout := layoutConfig.GetDefaultLayout()
+
+	return c.JSON(http.StatusOK, layout)
 }
