@@ -1,0 +1,106 @@
+/**
+ * BudgetProgressBar styles
+ *
+ * BEM naming convention following project patterns.
+ */
+
+.budget-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+/* Size variants */
+.budget-progress--small .budget-progress__bar {
+  height: 0.5rem;
+}
+
+.budget-progress--medium .budget-progress__bar {
+  height: 0.75rem;
+}
+
+.budget-progress--large .budget-progress__bar {
+  height: 1rem;
+}
+
+.budget-progress--small .budget-progress__amounts,
+.budget-progress--small .budget-progress__percentage {
+  font-size: 0.75rem;
+}
+
+.budget-progress--medium .budget-progress__amounts,
+.budget-progress--medium .budget-progress__percentage {
+  font-size: 0.875rem;
+}
+
+.budget-progress--large .budget-progress__amounts,
+.budget-progress--large .budget-progress__percentage {
+  font-size: 1rem;
+}
+
+/* Amounts display */
+.budget-progress__amounts {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.budget-progress__spent {
+  font-weight: 600;
+  color: var(--color-text-primary, #1a1a1a);
+}
+
+.budget-progress__total {
+  color: var(--color-text-secondary, #666);
+}
+
+/* Progress bar */
+.budget-progress__bar {
+  width: 100%;
+  background-color: var(--color-bg-secondary, #e5e7eb);
+  border-radius: 9999px;
+  overflow: hidden;
+}
+
+.budget-progress__fill {
+  height: 100%;
+  border-radius: 9999px;
+  transition: width 0.3s ease-in-out;
+}
+
+/* Status colors */
+.budget-progress--normal .budget-progress__fill {
+  background-color: var(--color-success, #22c55e);
+}
+
+.budget-progress--normal .budget-progress__spent {
+  color: var(--color-success-dark, #16a34a);
+}
+
+.budget-progress--warning .budget-progress__fill {
+  background-color: var(--color-warning, #f59e0b);
+}
+
+.budget-progress--warning .budget-progress__spent {
+  color: var(--color-warning-dark, #d97706);
+}
+
+.budget-progress--danger .budget-progress__fill {
+  background-color: var(--color-danger, #ef4444);
+}
+
+.budget-progress--danger .budget-progress__spent {
+  color: var(--color-danger-dark, #dc2626);
+}
+
+/* Percentage display */
+.budget-progress__percentage {
+  text-align: right;
+  font-weight: 600;
+  color: var(--color-text-secondary, #666);
+}
+
+.budget-progress--danger .budget-progress__percentage {
+  color: var(--color-danger-dark, #dc2626);
+}

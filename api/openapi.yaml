@@ -1035,6 +1035,447 @@ paths:
         '404':
           description: Category not found
 
+  # Issue #29: Budget Management Endpoints
+  /api/v1/budgets:
+    get:
+      summary: Get All Budgets
+      description: Retrieve all budgets for the authenticated user
+      operationId: getBudgets
+      tags:
+        - Budgets
+      responses:
+        '200':
+          description: Budgets retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Budget'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    post:
+      summary: Create Budget
+      description: Create a new budget for the authenticated user
+      operationId: createBudget
+      tags:
+        - Budgets
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBudgetRequest'
+      responses:
+        '201':
+          description: Budget created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Budget'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: A budget with this name already exists
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/v1/budgets/current:
+    get:
+      summary: Get Current Budget
+      description: Retrieve the currently active budget (where today is within the budget period)
+      operationId: getCurrentBudget
+      tags:
+        - Budgets
+      responses:
+        '200':
+          description: Current budget retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Budget'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No current budget found
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/v1/budgets/categories/available:
+    get:
+      summary: Get Available Categories
+      description: |
+        Get merged list of available categories for budget allocation.
+        Includes both custom categories and Plaid categories.
+      operationId: getAvailableCategories
+      tags:
+        - Budgets
+      responses:
+        '200':
+          description: Available categories retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/v1/budgets/{id}:
+    get:
+      summary: Get Budget by ID
+      description: Retrieve a specific budget by its ID
+      operationId: getBudgetById
+      tags:
+        - Budgets
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Budget retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Budget'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Budget not found
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    put:
+      summary: Update Budget
+      description: Update an existing budget
+      operationId: updateBudget
+      tags:
+        - Budgets
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateBudgetRequest'
+      responses:
+        '200':
+          description: Budget updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Budget'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Budget not found
+        '409':
+          description: A budget with this name already exists
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    delete:
+      summary: Delete Budget
+      description: Delete an existing budget
+      operationId: deleteBudget
+      tags:
+        - Budgets
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Budget deleted successfully
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Budget not found
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/v1/budgets/{id}/categories:
+    post:
+      summary: Add Category to Budget
+      description: Add a category allocation to an existing budget
+      operationId: addBudgetCategory
+      tags:
+        - Budgets
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBudgetCategoryRequest'
+      responses:
+        '201':
+          description: Category added successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BudgetCategory'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Budget not found
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/v1/budgets/{id}/categories/{categoryId}:
+    put:
+      summary: Update Budget Category
+      description: Update a category allocation in a budget
+      operationId: updateBudgetCategory
+      tags:
+        - Budgets
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: categoryId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateBudgetCategoryRequest'
+      responses:
+        '200':
+          description: Category updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BudgetCategory'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Budget or category not found
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    delete:
+      summary: Delete Budget Category
+      description: Remove a category allocation from a budget
+      operationId: deleteBudgetCategory
+      tags:
+        - Budgets
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: categoryId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Category deleted successfully
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Budget or category not found
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  # Issue #29: Savings Goal Endpoints
+  /api/v1/savings-goals:
+    get:
+      summary: Get All Savings Goals
+      description: Retrieve all savings goals for the authenticated user
+      operationId: getSavingsGoals
+      tags:
+        - SavingsGoals
+      responses:
+        '200':
+          description: Savings goals retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SavingsGoal'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    post:
+      summary: Create Savings Goal
+      description: Create a new savings goal linked to an account
+      operationId: createSavingsGoal
+      tags:
+        - SavingsGoals
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSavingsGoalRequest'
+      responses:
+        '201':
+          description: Savings goal created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SavingsGoal'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: A savings goal with this name already exists
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/v1/savings-goals/active:
+    get:
+      summary: Get Active Savings Goals
+      description: Retrieve all active (not completed) savings goals for the authenticated user
+      operationId: getActiveSavingsGoals
+      tags:
+        - SavingsGoals
+      responses:
+        '200':
+          description: Active savings goals retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SavingsGoal'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/v1/savings-goals/{id}:
+    get:
+      summary: Get Savings Goal by ID
+      description: Retrieve a specific savings goal by its ID
+      operationId: getSavingsGoalById
+      tags:
+        - SavingsGoals
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Savings goal retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SavingsGoal'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Savings goal not found
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    put:
+      summary: Update Savings Goal
+      description: Update an existing savings goal
+      operationId: updateSavingsGoal
+      tags:
+        - SavingsGoals
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSavingsGoalRequest'
+      responses:
+        '200':
+          description: Savings goal updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SavingsGoal'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Savings goal not found
+        '409':
+          description: A savings goal with this name already exists
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    delete:
+      summary: Delete Savings Goal
+      description: Delete an existing savings goal
+      operationId: deleteSavingsGoal
+      tags:
+        - SavingsGoals
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Savings goal deleted successfully
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Savings goal not found
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
 components:
   securitySchemes:
     auth0:
@@ -2002,6 +2443,345 @@ components:
           type: string
           pattern: '^#[0-9A-Fa-f]{6}$'
 
+    # Issue #29: Budget and Savings Goal schemas
+    Budget:
+      type: object
+      required:
+        - id
+        - user_id
+        - name
+        - period
+        - start_date
+        - amount
+        - currency_code
+        - is_active
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique budget identifier
+        user_id:
+          type: string
+          description: User who owns this budget
+        name:
+          type: string
+          maxLength: 100
+          description: Budget name
+        description:
+          type: string
+          nullable: true
+          description: Optional budget description
+        period:
+          type: string
+          enum: [weekly, monthly, quarterly, yearly, custom]
+          description: Budget period type
+        start_date:
+          type: string
+          format: date-time
+          description: When the budget period starts
+        end_date:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the budget period ends (required for custom period)
+        amount:
+          type: number
+          format: double
+          minimum: 0.01
+          description: Total budget amount
+        currency_code:
+          type: string
+          description: ISO 4217 currency code
+          pattern: "^[A-Z]{3}$"
+        is_active:
+          type: boolean
+          description: Whether the budget is currently active
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/BudgetCategory'
+          description: Category allocations within this budget
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    BudgetCategory:
+      type: object
+      required:
+        - id
+        - budget_id
+        - category
+        - allocated_amount
+        - spent_amount
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique category allocation identifier
+        budget_id:
+          type: string
+          format: uuid
+          description: Parent budget ID
+        category:
+          type: array
+          items:
+            type: string
+          description: Hierarchical category (e.g., ["Food and Drink", "Restaurants"])
+        allocated_amount:
+          type: number
+          format: double
+          minimum: 0
+          description: Amount allocated to this category
+        spent_amount:
+          type: number
+          format: double
+          description: Amount spent in this category (auto-calculated from transactions)
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateBudgetRequest:
+      type: object
+      required:
+        - name
+        - period
+        - start_date
+        - amount
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          description: Budget name
+        description:
+          type: string
+          nullable: true
+          description: Optional budget description
+        period:
+          type: string
+          enum: [weekly, monthly, quarterly, yearly, custom]
+          description: Budget period type
+        start_date:
+          type: string
+          format: date-time
+          description: When the budget period starts
+        end_date:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the budget period ends (required for custom period)
+        amount:
+          type: number
+          format: double
+          minimum: 0.01
+          description: Total budget amount
+        currency_code:
+          type: string
+          description: ISO 4217 currency code (defaults to USD)
+          pattern: "^[A-Z]{3}$"
+        is_active:
+          type: boolean
+          default: true
+          description: Whether the budget is currently active
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/CreateBudgetCategoryRequest'
+          description: Initial category allocations
+
+    UpdateBudgetRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 100
+        description:
+          type: string
+          nullable: true
+        period:
+          type: string
+          enum: [weekly, monthly, quarterly, yearly, custom]
+        start_date:
+          type: string
+          format: date-time
+        end_date:
+          type: string
+          format: date-time
+          nullable: true
+        amount:
+          type: number
+          format: double
+          minimum: 0.01
+        currency_code:
+          type: string
+          pattern: "^[A-Z]{3}$"
+        is_active:
+          type: boolean
+
+    CreateBudgetCategoryRequest:
+      type: object
+      required:
+        - category
+        - allocated_amount
+      properties:
+        category:
+          type: array
+          items:
+            type: string
+          description: Hierarchical category (e.g., ["Food and Drink", "Restaurants"])
+        allocated_amount:
+          type: number
+          format: double
+          minimum: 0
+          description: Amount allocated to this category
+
+    UpdateBudgetCategoryRequest:
+      type: object
+      properties:
+        allocated_amount:
+          type: number
+          format: double
+          minimum: 0
+          description: Updated allocation amount
+
+    SavingsGoal:
+      type: object
+      required:
+        - id
+        - user_id
+        - name
+        - target_amount
+        - current_amount
+        - currency_code
+        - account_id
+        - is_completed
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique savings goal identifier
+        user_id:
+          type: string
+          description: User who owns this goal
+        name:
+          type: string
+          maxLength: 100
+          description: Savings goal name
+        description:
+          type: string
+          nullable: true
+          description: Optional goal description
+        target_amount:
+          type: number
+          format: double
+          minimum: 0.01
+          description: Target amount to save
+        current_amount:
+          type: number
+          format: double
+          description: Current saved amount (synced from linked account)
+        currency_code:
+          type: string
+          description: ISO 4217 currency code
+          pattern: "^[A-Z]{3}$"
+        account_id:
+          type: string
+          format: uuid
+          description: Linked account ID for tracking balance
+        deadline:
+          type: string
+          format: date-time
+          nullable: true
+          description: Optional deadline for the goal
+        is_completed:
+          type: boolean
+          description: Whether the goal has been completed
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the goal was completed
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateSavingsGoalRequest:
+      type: object
+      required:
+        - name
+        - target_amount
+        - account_id
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          description: Savings goal name
+        description:
+          type: string
+          nullable: true
+          description: Optional goal description
+        target_amount:
+          type: number
+          format: double
+          minimum: 0.01
+          description: Target amount to save
+        current_amount:
+          type: number
+          format: double
+          default: 0
+          description: Initial current amount (defaults to 0)
+        currency_code:
+          type: string
+          description: ISO 4217 currency code (defaults to USD)
+          pattern: "^[A-Z]{3}$"
+        account_id:
+          type: string
+          format: uuid
+          description: Linked account ID for tracking balance
+        deadline:
+          type: string
+          format: date-time
+          nullable: true
+          description: Optional deadline for the goal
+
+    UpdateSavingsGoalRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 100
+        description:
+          type: string
+          nullable: true
+        target_amount:
+          type: number
+          format: double
+          minimum: 0.01
+        current_amount:
+          type: number
+          format: double
+        account_id:
+          type: string
+          format: uuid
+        deadline:
+          type: string
+          format: date-time
+          nullable: true
+
   responses:
     BadRequest:
       description: Invalid request parameters
@@ -2074,3 +2854,7 @@ tags:
     description: Custom category management (Issue #345)
   - name: Admin
     description: Admin endpoints (staging only)
+  - name: Budgets
+    description: Budget management (Issue #29)
+  - name: SavingsGoals
+    description: Savings goal management (Issue #29)
