@@ -1,4 +1,4 @@
-h1:FGQ2GpLPidzZL3d1tlYE74ITLf93RGljloUulV48BAI=
+h1:/jhbPoBKxmwV+Lu2qnpPoNRH4hF4Lnra6o7kKcU1wwQ=
 000001_create_users_table.up.sql h1:yLRXvyF/CMBakERSQ+AtUhi7PwM2FE7Accl3PYwNohc=
 000002_create_privacy_settings_table.up.sql h1:PCNdCyla6SD17iu74ZQfRGqu45htbLl2DQ8MtjRpw1s=
 000003_create_audit_logs_table.up.sql h1:9VxaVOzvjrH8wJq5rKcJ8hL9FzoVV81mGhxOULA5iSM=
@@ -20,3 +20,4 @@ h1:FGQ2GpLPidzZL3d1tlYE74ITLf93RGljloUulV48BAI=
 000019_backfill_original_category.up.sql h1:zkjDZWmXW1Cd4vZPEEH//+wGegygAuBSz1ZjxW105a8=
 000020_create_categorization_rules.up.sql h1:zZzr1oap8G8QXXC6UdDZhUKsaMrhSG/5lLIlTRML8Bw=
 000021_create_dashboard_preferences.up.sql h1:CQbmB/cwQhdhEDjlbM1ZGj2BJ3PL+GGLOPBSl0wNL0o=
+000022_create_budgets_and_savings_goals.up.sql h1:ve7FmJ5Cn1U+SG2eZamOsUeSfc5OF9HFFKB+mrN+4o4=
