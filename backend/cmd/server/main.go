@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"time"
@@ -117,6 +118,8 @@ func main() {
 		customCategoryRepo := repository.NewCustomCategoryRepository(db) // Issue #345: Custom categories
 		categorizationRuleRepo := repository.NewCategorizationRuleRepository(db) // Issue #346: Categorization rules
 		analyticsRepo := repository.NewAnalyticsRepository(db) // Issue #354: Cash flow analytics
+		budgetRepo := repository.NewBudgetRepository(db) // Issue #28: Budget management
+		savingsGoalRepo := repository.NewSavingsGoalRepository(db) // Issue #28: Savings goals
 		dashboardPrefsRepo := repository.NewDashboardPreferencesRepository(db) // Issue #354: Dashboard preferences
 
 		// Create mock audit logger (will be replaced with real implementation later)
@@ -142,6 +145,10 @@ func main() {
 		// Issue #354: Cash flow analytics and dashboard preferences services
 		analyticsService := services.NewAnalyticsService(analyticsRepo)
 		dashboardPrefsService := services.NewDashboardPreferencesService(dashboardPrefsRepo)
+		// Issue #28: Budget and savings goal services
+		budgetLogger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+		budgetService := services.NewBudgetService(budgetRepo, customCategoryRepo, transactionRepo, budgetLogger)
+		savingsGoalService := services.NewSavingsGoalService(savingsGoalRepo, accountRepo, budgetLogger)
 
 		// Initialize Email service (needed by deletion service and item error service)
 		// Optional - uses no-op mock if not configured
@@ -281,6 +288,8 @@ func main() {
 		ruleHandler := handlers.NewCategorizationRuleHandler(categorizationRuleService) // Issue #346: Categorization rules
 		analyticsHandler := handlers.NewAnalyticsHandler(analyticsService)        // Issue #354: Cash flow analytics
 		dashboardPrefsHandler := handlers.NewDashboardPreferencesHandler(dashboardPrefsService) // Issue #354: Dashboard preferences
+		budgetHandler := handlers.NewBudgetHandler(budgetService)                // Issue #28: Budget management
+		savingsGoalHandler := handlers.NewSavingsGoalHandler(savingsGoalService) // Issue #28: Savings goals
 
 		// Create admin handler (Issue #308: Admin API for Manual Webhook Firing)
 		// Requires plaidService and encryptionService, so declared here
@@ -353,6 +362,26 @@ func main() {
 		api.GET("/dashboard/preferences", dashboardPrefsHandler.GetPreferences)
 		api.PUT("/dashboard/preferences", dashboardPrefsHandler.SavePreferences)
 		api.POST("/dashboard/preferences/reset", dashboardPrefsHandler.ResetPreferences)
+
+		// Budget routes (Issue #28: Budget management)
+		api.POST("/budgets", budgetHandler.CreateBudget)
+		api.GET("/budgets", budgetHandler.GetBudgets)
+		api.GET("/budgets/current", budgetHandler.GetCurrentBudget)
+		api.GET("/budgets/categories/available", budgetHandler.GetAvailableCategories)
+		api.GET("/budgets/:id", budgetHandler.GetBudget)
+		api.PUT("/budgets/:id", budgetHandler.UpdateBudget)
+		api.DELETE("/budgets/:id", budgetHandler.DeleteBudget)
+		api.POST("/budgets/:id/categories", budgetHandler.AddCategory)
+		api.PUT("/budgets/:id/categories/:categoryId", budgetHandler.UpdateCategory)
+		api.DELETE("/budgets/:id/categories/:categoryId", budgetHandler.DeleteCategory)
+
+		// Savings Goal routes (Issue #28: Savings goals)
+		api.POST("/savings-goals", savingsGoalHandler.CreateGoal)
+		api.GET("/savings-goals", savingsGoalHandler.GetGoals)
+		api.GET("/savings-goals/active", savingsGoalHandler.GetActiveGoals)
+		api.GET("/savings-goals/:id", savingsGoalHandler.GetGoal)
+		api.PUT("/savings-goals/:id", savingsGoalHandler.UpdateGoal)
+		api.DELETE("/savings-goals/:id", savingsGoalHandler.DeleteGoal)
 
 		// Plaid routes (if enabled)
 		if plaidHandler != nil {
