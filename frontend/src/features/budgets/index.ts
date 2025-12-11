@@ -72,3 +72,18 @@ export { SavingsGoalCard } from './components/SavingsGoalCard';
 export type { SavingsGoalCardProps } from './components/SavingsGoalCard';
 
 export { BudgetsPage } from './components/BudgetsPage';
+
+export { CreateSavingsGoalDialog } from './components/CreateSavingsGoalDialog';
+export type { CreateSavingsGoalDialogProps } from './components/CreateSavingsGoalDialog';
+
+export { CreateBudgetDialog } from './components/CreateBudgetDialog';
+export type { CreateBudgetDialogProps } from './components/CreateBudgetDialog';
+
+export { MilestoneIndicator } from './components/MilestoneIndicator';
+export type { MilestoneIndicatorProps } from './components/MilestoneIndicator';
+
+export { useMilestoneTracking } from './hooks/useMilestoneTracking';
+export type { UseMilestoneTrackingResult } from './hooks/useMilestoneTracking';
+
+export { GOAL_TEMPLATES, getGoalTemplate, calculateDeadlineFromTemplate } from './goalTemplates';
+export type { GoalTemplate } from './goalTemplates';
