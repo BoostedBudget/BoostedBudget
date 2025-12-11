@@ -189,12 +189,19 @@ describe('BudgetsPage', () => {
       createBudget: vi.fn(),
       updateBudget: vi.fn(),
       deleteBudget: vi.fn(),
+      getAvailableCategories: vi.fn(),
+      addCategory: vi.fn(),
+      updateCategory: vi.fn(),
+      deleteCategory: vi.fn(),
     });
 
     vi.mocked(useSavingsGoalsHook.useSavingsGoals).mockReturnValue({
       goals: overrides?.goals ?? [],
+      goalsWithProgress: [],
       loading: overrides?.goalsLoading ?? false,
       error: overrides?.goalsError ?? null,
+      totalTarget: 0,
+      totalSaved: 0,
       refetch: mockRefetchGoals,
       createGoal: vi.fn(),
       updateGoal: vi.fn(),
