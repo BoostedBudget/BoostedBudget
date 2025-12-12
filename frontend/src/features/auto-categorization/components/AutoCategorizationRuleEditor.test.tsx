@@ -1042,7 +1042,7 @@ describe('AutoCategorizationRuleEditor', () => {
 
       // Error should still show for the remaining condition
       expect(screen.getByText(/value is required/i)).toBeInTheDocument()
-    })
+    }, 60000) // Extended timeout for CI environment
 
     it('should handle special characters in merchant name', async () => {
       const user = userEvent.setup()

@@ -257,7 +257,8 @@ describe('AutoCategorizationRuleCard', () => {
         />
       )
 
-      const disableButton = screen.getByRole('button', { name: 'Disable' })
+      // Use findByRole to wait for button to appear in CI
+      const disableButton = await screen.findByRole('button', { name: 'Disable' })
       fireEvent.click(disableButton)
 
       expect(screen.getByRole('button', { name: 'Saving...' })).toBeInTheDocument()
