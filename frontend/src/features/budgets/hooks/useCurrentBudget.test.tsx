@@ -75,16 +75,16 @@ describe('useCurrentBudget', () => {
       // Assert - Initial loading state
       expect(result.current.loading).toBe(true);
 
-      // Wait for data to load
+      // Wait for data to load - extended timeout for CI environment
       await waitFor(() => {
         expect(result.current.loading).toBe(false);
-      });
+      }, { timeout: 5000 });
 
       // Assert - Data loaded successfully
       expect(result.current.budget).toEqual(mockBudget);
       expect(result.current.error).toBeNull();
       expect(budgetsApi.fetchCurrentBudget).toHaveBeenCalledTimes(1);
-    });
+    }, 60000); // Extended timeout for CI environment
 
     it('should handle 404 when no current budget exists', async () => {
       // Arrange

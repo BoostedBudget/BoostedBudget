@@ -1,19 +1,26 @@
 /**
  * Widget Catalog Component
  * Issue #354: Customizable Dashboard Widget System
+ * Issue #462: Migrated from HeadlessUI to shadcn/ui
  *
  * Modal/drawer showing available widgets that can be added to the dashboard.
+ * Uses shadcn/ui Dialog built on Radix UI.
  */
 
-import { Fragment, useMemo } from 'react';
-import { Dialog, Transition } from '@headlessui/react';
-import { XMarkIcon, PlusIcon } from '@heroicons/react/24/outline';
+import { useMemo, useCallback } from 'react';
+import { XIcon, Plus } from 'lucide-react';
 import {
-  ChartBarIcon,
-  CurrencyDollarIcon,
-  CreditCardIcon,
-  PresentationChartLineIcon,
-} from '@heroicons/react/24/solid';
+  BarChart3,
+  DollarSign,
+  CreditCard,
+  TrendingUp,
+} from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { getAllWidgets } from './registry';
 import type { WidgetDefinition, WidgetType } from '../types';
 
@@ -28,14 +35,14 @@ interface WidgetCatalogProps {
 function WidgetIcon({ iconName, className }: { iconName: string; className?: string }) {
   switch (iconName) {
     case 'chart-line':
-      return <PresentationChartLineIcon className={className} />;
+      return <TrendingUp className={className} />;
     case 'banknotes':
-      return <CurrencyDollarIcon className={className} />;
+      return <DollarSign className={className} />;
     case 'credit-card':
-      return <CreditCardIcon className={className} />;
+      return <CreditCard className={className} />;
     case 'chart-bar':
     default:
-      return <ChartBarIcon className={className} />;
+      return <BarChart3 className={className} />;
   }
 }
 
@@ -82,7 +89,7 @@ function WidgetCard({ definition, onAdd, isAdded }: WidgetCardProps) {
 
       {!isAdded && (
         <div className="absolute top-2 right-2">
-          <PlusIcon className="h-5 w-5 text-gray-400" />
+          <Plus className="h-5 w-5 text-gray-400" />
         </div>
       )}
 
@@ -113,10 +120,23 @@ export function WidgetCatalog({
     return Array.from(categoryMap.entries());
   }, []);
 
-  const handleAddWidget = (type: WidgetType) => {
-    onAddWidget(type);
-    onClose();
-  };
+  const handleAddWidget = useCallback(
+    (type: WidgetType) => {
+      onAddWidget(type);
+      onClose();
+    },
+    [onAddWidget, onClose]
+  );
+
+  // Handle dialog open state changes - click outside closes the dialog
+  const handleOpenChange = useCallback(
+    (open: boolean) => {
+      if (!open) {
+        onClose();
+      }
+    },
+    [onClose]
+  );
 
   const categoryLabels: Record<string, string> = {
     overview: 'Overview',
@@ -125,74 +145,49 @@ export function WidgetCatalog({
   };
 
   return (
-    <Transition appear show={isOpen} as={Fragment}>
-      <Dialog as="div" className="relative z-50" onClose={onClose}>
-        <Transition.Child
-          as={Fragment}
-          enter="ease-out duration-300"
-          enterFrom="opacity-0"
-          enterTo="opacity-100"
-          leave="ease-in duration-200"
-          leaveFrom="opacity-100"
-          leaveTo="opacity-0"
-        >
-          <div className="fixed inset-0 bg-black/25 dark:bg-black/50" />
-        </Transition.Child>
+    <Dialog open={isOpen} onOpenChange={handleOpenChange}>
+      <DialogContent
+        className="w-full max-w-2xl p-6 bg-white dark:bg-gray-900 rounded-2xl"
+        showCloseButton={false}
+      >
+        <DialogHeader className="flex flex-row items-center justify-between mb-6">
+          <DialogTitle className="text-lg font-semibold text-gray-900 dark:text-white">
+            Add Widget
+          </DialogTitle>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+          >
+            <XIcon className="h-6 w-6" />
+          </button>
+        </DialogHeader>
 
-        <div className="fixed inset-0 overflow-y-auto">
-          <div className="flex min-h-full items-center justify-center p-4">
-            <Transition.Child
-              as={Fragment}
-              enter="ease-out duration-300"
-              enterFrom="opacity-0 scale-95"
-              enterTo="opacity-100 scale-100"
-              leave="ease-in duration-200"
-              leaveFrom="opacity-100 scale-100"
-              leaveTo="opacity-0 scale-95"
-            >
-              <Dialog.Panel className="w-full max-w-2xl transform overflow-hidden rounded-2xl bg-white dark:bg-gray-900 p-6 shadow-xl transition-all">
-                <div className="flex items-center justify-between mb-6">
-                  <Dialog.Title className="text-lg font-semibold text-gray-900 dark:text-white">
-                    Add Widget
-                  </Dialog.Title>
-                  <button
-                    onClick={onClose}
-                    className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
-                  >
-                    <XMarkIcon className="h-6 w-6" />
-                  </button>
-                </div>
-
-                <div className="space-y-6">
-                  {categories.map(([category, widgets]) => (
-                    <div key={category}>
-                      <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-3">
-                        {categoryLabels[category] || category}
-                      </h3>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        {widgets.map((widget) => (
-                          <WidgetCard
-                            key={widget.type}
-                            definition={widget}
-                            onAdd={() => handleAddWidget(widget.type)}
-                            isAdded={existingWidgetTypes.includes(widget.type)}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="mt-6 pt-4 border-t border-gray-200 dark:border-gray-700">
-                  <p className="text-xs text-gray-500 dark:text-gray-400 text-center">
-                    Drag widgets to reorder • Resize from corners • Click × to remove
-                  </p>
-                </div>
-              </Dialog.Panel>
-            </Transition.Child>
-          </div>
+        <div className="space-y-6">
+          {categories.map(([category, widgets]) => (
+            <div key={category}>
+              <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-3">
+                {categoryLabels[category] || category}
+              </h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {widgets.map((widget) => (
+                  <WidgetCard
+                    key={widget.type}
+                    definition={widget}
+                    onAdd={() => handleAddWidget(widget.type)}
+                    isAdded={existingWidgetTypes.includes(widget.type)}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
-      </Dialog>
-    </Transition>
+
+        <div className="mt-6 pt-4 border-t border-gray-200 dark:border-gray-700">
+          <p className="text-xs text-gray-500 dark:text-gray-400 text-center">
+            Drag widgets to reorder • Resize from corners • Click × to remove
+          </p>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

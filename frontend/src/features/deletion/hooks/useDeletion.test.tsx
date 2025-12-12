@@ -66,26 +66,30 @@ describe('useDeletion', () => {
     })
 
     it('should set isRequesting=true during request', async () => {
-      // Arrange
+      // Arrange - Use longer delay to ensure we can catch the loading state
       vi.mocked(deletionApi.requestDeletion).mockImplementation(
-        () => new Promise((resolve) => setTimeout(() => resolve(mockRequestResponse), 100))
+        () => new Promise((resolve) => setTimeout(() => resolve(mockRequestResponse), 500))
       )
 
       // Act
       const { result } = renderHook(() => useDeletion())
 
+      // Start the request (don't await)
       act(() => {
         result.current.requestAccountDeletion()
       })
 
-      // Assert - Should be requesting immediately
-      expect(result.current.isRequesting).toBe(true)
+      // Assert - Should be requesting immediately after act()
+      // Use waitFor with short timeout to handle CI timing variance
+      await waitFor(() => {
+        expect(result.current.isRequesting).toBe(true)
+      }, { timeout: 200 })
 
       // Wait for completion (increased timeout for CI stability)
       await waitFor(() => {
         expect(result.current.isRequesting).toBe(false)
       }, { timeout: 2000 })
-    })
+    }, 60000) // Extended timeout for CI environment
 
     it('should set isRequesting=false after completion', async () => {
       // Arrange

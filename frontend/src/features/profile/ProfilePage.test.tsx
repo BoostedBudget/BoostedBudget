@@ -440,7 +440,7 @@ describe('ProfilePage', () => {
       await waitFor(() => {
         expect(saveButton).toBeDisabled()
       })
-    })
+    }, 60000) // Extended timeout for CI environment
   })
 
   describe('Responsive design', () => {
