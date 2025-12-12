@@ -11,6 +11,16 @@ import type {
   UpdateSavingsGoalRequest,
 } from '../types';
 
+// Helper to convert YYYY-MM-DD date strings to RFC3339 format for Go backend
+// If already in RFC3339 format (contains 'T'), returns as-is
+function toRFC3339(date: string | undefined): string | undefined {
+  if (!date) return undefined;
+  // If already in RFC3339 format, return as-is
+  if (date.includes('T')) return date;
+  // Otherwise, convert YYYY-MM-DD to RFC3339
+  return `${date}T00:00:00Z`;
+}
+
 // Budget CRUD operations
 export async function fetchBudgets(): Promise<Budget[]> {
   const response = await apiClient.get<Budget[]>('/v1/budgets');
@@ -28,12 +38,22 @@ export async function fetchBudget(id: string): Promise<Budget> {
 }
 
 export async function createBudget(req: CreateBudgetRequest): Promise<Budget> {
-  const response = await apiClient.post<Budget>('/v1/budgets', req);
+  const payload = {
+    ...req,
+    start_date: toRFC3339(req.start_date),
+    end_date: toRFC3339(req.end_date),
+  };
+  const response = await apiClient.post<Budget>('/v1/budgets', payload);
   return response.data;
 }
 
 export async function updateBudget(id: string, req: UpdateBudgetRequest): Promise<Budget> {
-  const response = await apiClient.put<Budget>(`/v1/budgets/${id}`, req);
+  const payload = {
+    ...req,
+    start_date: req.start_date ? toRFC3339(req.start_date) : undefined,
+    end_date: req.end_date ? toRFC3339(req.end_date) : undefined,
+  };
+  const response = await apiClient.put<Budget>(`/v1/budgets/${id}`, payload);
   return response.data;
 }
 
@@ -94,7 +114,11 @@ export async function fetchSavingsGoal(id: string): Promise<SavingsGoal> {
 }
 
 export async function createSavingsGoal(req: CreateSavingsGoalRequest): Promise<SavingsGoal> {
-  const response = await apiClient.post<SavingsGoal>('/v1/savings-goals', req);
+  const payload = {
+    ...req,
+    deadline: toRFC3339(req.deadline),
+  };
+  const response = await apiClient.post<SavingsGoal>('/v1/savings-goals', payload);
   return response.data;
 }
 
@@ -102,7 +126,11 @@ export async function updateSavingsGoal(
   id: string,
   req: UpdateSavingsGoalRequest
 ): Promise<SavingsGoal> {
-  const response = await apiClient.put<SavingsGoal>(`/v1/savings-goals/${id}`, req);
+  const payload = {
+    ...req,
+    deadline: req.deadline ? toRFC3339(req.deadline) : undefined,
+  };
+  const response = await apiClient.put<SavingsGoal>(`/v1/savings-goals/${id}`, payload);
   return response.data;
 }
 
