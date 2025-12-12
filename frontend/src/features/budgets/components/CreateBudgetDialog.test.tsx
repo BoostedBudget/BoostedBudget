@@ -377,7 +377,6 @@ describe('CreateBudgetDialog', () => {
     });
 
     it('resets form when reopened after cancel', async () => {
-      const user = userEvent.setup({ delay: null });
       const { rerender } = render(
         <CreateBudgetDialog
           isOpen={true}
