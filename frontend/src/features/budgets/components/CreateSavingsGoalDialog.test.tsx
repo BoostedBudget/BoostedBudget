@@ -521,7 +521,6 @@ describe('CreateSavingsGoalDialog', () => {
     });
 
     it('resets form when reopened after cancel', async () => {
-      const user = userEvent.setup({ delay: null });
       const { rerender } = render(
         <CreateSavingsGoalDialog
           isOpen={true}
