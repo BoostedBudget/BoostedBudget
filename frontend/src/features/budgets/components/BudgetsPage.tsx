@@ -2,6 +2,7 @@
  * Budgets Page
  * Issue #30: Budget Dashboard UI
  * Issue #111: Goals Dashboard & Progress Visualization
+ * Issue #462: shadcn/ui Migration - Mutual exclusion for dialogs
  *
  * Main page for viewing and managing budgets and savings goals.
  */
@@ -17,24 +18,30 @@ import { CreateSavingsGoalDialog } from './CreateSavingsGoalDialog';
 import type { Budget, SavingsGoal } from '../types';
 import './BudgetsPage.css';
 
+// Issue #462: Use single state for mutual exclusion - only one dialog can be open at a time
+type ActiveDialog = 'budget' | 'goal' | null;
+
 export function BudgetsPage() {
   const { budgets, loading: budgetsLoading, error: budgetsError, refetch: refetchBudgets } = useBudgets();
   const { goals, loading: goalsLoading, error: goalsError, refetch: refetchGoals } = useSavingsGoals();
 
-  // Dialog state
-  const [isCreateBudgetOpen, setIsCreateBudgetOpen] = useState(false);
-  const [isCreateGoalOpen, setIsCreateGoalOpen] = useState(false);
+  // Dialog state - single state ensures only one dialog open at a time
+  const [activeDialog, setActiveDialog] = useState<ActiveDialog>(null);
 
   // Dialog handlers
+  const openBudgetDialog = useCallback(() => setActiveDialog('budget'), []);
+  const openGoalDialog = useCallback(() => setActiveDialog('goal'), []);
+  const closeDialog = useCallback(() => setActiveDialog(null), []);
+
   const handleBudgetCreated = useCallback((_budget: Budget) => {
-    setIsCreateBudgetOpen(false);
+    closeDialog();
     refetchBudgets();
-  }, [refetchBudgets]);
+  }, [closeDialog, refetchBudgets]);
 
   const handleGoalCreated = useCallback((_goal: SavingsGoal) => {
-    setIsCreateGoalOpen(false);
+    closeDialog();
     refetchGoals();
-  }, [refetchGoals]);
+  }, [closeDialog, refetchGoals]);
 
   const loading = budgetsLoading || goalsLoading;
   const error = budgetsError || goalsError;
@@ -83,7 +90,7 @@ export function BudgetsPage() {
           {activeBudgets.length > 0 && (
             <button
               type="button"
-              onClick={() => setIsCreateBudgetOpen(true)}
+              onClick={openBudgetDialog}
               className="budgets-page__create-button"
               aria-label="Create budget"
             >
@@ -97,7 +104,7 @@ export function BudgetsPage() {
             <p>No active budgets. Create one to start tracking your spending.</p>
             <button
               type="button"
-              onClick={() => setIsCreateBudgetOpen(true)}
+              onClick={openBudgetDialog}
               className="budgets-page__empty-button"
             >
               <PlusIcon className="h-5 w-5" />
@@ -130,7 +137,7 @@ export function BudgetsPage() {
           {(activeGoals.length > 0 || completedGoals.length > 0) && (
             <button
               type="button"
-              onClick={() => setIsCreateGoalOpen(true)}
+              onClick={openGoalDialog}
               className="budgets-page__create-button"
               aria-label="Create savings goal"
             >
@@ -144,7 +151,7 @@ export function BudgetsPage() {
             <p>No savings goals yet. Create one to track your progress.</p>
             <button
               type="button"
-              onClick={() => setIsCreateGoalOpen(true)}
+              onClick={openGoalDialog}
               className="budgets-page__empty-button"
             >
               <PlusIcon className="h-5 w-5" />
@@ -174,15 +181,15 @@ export function BudgetsPage() {
         )}
       </section>
 
-      {/* Creation Dialogs */}
+      {/* Creation Dialogs - Only one can be open at a time (Issue #462) */}
       <CreateBudgetDialog
-        isOpen={isCreateBudgetOpen}
-        onCancel={() => setIsCreateBudgetOpen(false)}
+        isOpen={activeDialog === 'budget'}
+        onCancel={closeDialog}
         onBudgetCreated={handleBudgetCreated}
       />
       <CreateSavingsGoalDialog
-        isOpen={isCreateGoalOpen}
-        onCancel={() => setIsCreateGoalOpen(false)}
+        isOpen={activeDialog === 'goal'}
+        onCancel={closeDialog}
         onGoalCreated={handleGoalCreated}
       />
     </div>
