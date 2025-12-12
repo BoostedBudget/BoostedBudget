@@ -89,7 +89,7 @@ describe('useDeletion', () => {
       await waitFor(() => {
         expect(result.current.isRequesting).toBe(false)
       }, { timeout: 2000 })
-    }, 60000) // Extended timeout for CI environment
+    }, 15000)
 
     it('should set isRequesting=false after completion', async () => {
       // Arrange
