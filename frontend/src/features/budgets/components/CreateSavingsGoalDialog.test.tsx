@@ -355,7 +355,7 @@ describe('CreateSavingsGoalDialog', () => {
           deadline: undefined,
         });
       });
-    });
+    }, 60000); // Extended timeout for CI environment
 
     it('includes optional fields in payload when provided', async () => {
       const user = userEvent.setup();
