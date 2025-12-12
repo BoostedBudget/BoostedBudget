@@ -123,29 +123,24 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Cache npm dependencies
+      - name: Cache node_modules
+        id: cache-node-modules
         uses: actions/cache@v4
         with:
-          path: ~/.npm
-          key: ${{ runner.os }}-npm-${{ hashFiles('**/package-lock.json') }}
+          path: ${{ env.UNIQUE_WORKSPACE }}/frontend/node_modules
+          key: node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('**/frontend/package-lock.json') }}
           restore-keys: |
-            ${{ runner.os }}-npm-
+            node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-
 
       - name: Install frontend dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
-          echo "📦 Installing frontend dependencies..."
-          for i in 1 2 3 4; do
-            echo "npm ci attempt $i/4..."
-            npm ci --prefer-offline --no-audit && {
-              echo "✅ Dependencies installed"
-              break
-            } || {
-              echo "⚠️ npm ci attempt $i/4 failed"
-              npm cache clean --force
-              [ $i -lt 4 ] && sleep 10
-            }
-          done
+          if [ "${{ steps.cache-node-modules.outputs.cache-hit }}" == "true" ]; then
+            echo "✅ node_modules restored from cache, skipping install"
+          else
+            echo "📦 Cache miss, running npm ci..."
+            npm ci --prefer-offline --no-audit
+          fi
 
       - name: Run ESLint (only on shard 1)
         if: matrix.shard == 1
@@ -199,13 +194,14 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Cache npm dependencies
+      - name: Cache node_modules
+        id: cache-node-modules
         uses: actions/cache@v4
         with:
-          path: ~/.npm
-          key: ${{ runner.os }}-npm-${{ hashFiles('**/package-lock.json') }}
+          path: ${{ env.UNIQUE_WORKSPACE }}/frontend/node_modules
+          key: node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('**/frontend/package-lock.json') }}
           restore-keys: |
-            ${{ runner.os }}-npm-
+            node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-
 
       - name: Download all coverage artifacts
         uses: actions/download-artifact@v6
@@ -214,12 +210,21 @@ jobs:
           path: ${{ env.UNIQUE_WORKSPACE }}/coverage-parts/
           merge-multiple: true
 
+      - name: Install frontend dependencies (if cache miss)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        run: |
+          if [ "${{ steps.cache-node-modules.outputs.cache-hit }}" == "true" ]; then
+            echo "✅ node_modules restored from cache, skipping install"
+          else
+            echo "📦 Cache miss, running npm ci..."
+            npm ci --prefer-offline --no-audit
+          fi
+
       - name: Merge coverage reports
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: |
           echo "::group::Merging Coverage Reports"
           cd frontend
-          npm ci --prefer-offline --no-audit
 
           # Install nyc for coverage merging
           npm install --save-dev nyc
@@ -267,29 +272,24 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Cache npm dependencies
+      - name: Cache node_modules
+        id: cache-node-modules
         uses: actions/cache@v4
         with:
-          path: ~/.npm
-          key: ${{ runner.os }}-npm-${{ hashFiles('**/package-lock.json') }}
+          path: ${{ env.UNIQUE_WORKSPACE }}/frontend/node_modules
+          key: node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('**/frontend/package-lock.json') }}
           restore-keys: |
-            ${{ runner.os }}-npm-
+            node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-
 
       - name: Install frontend dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
-          echo "📦 Installing frontend dependencies..."
-          for i in 1 2 3 4; do
-            echo "npm ci attempt $i/4..."
-            npm ci --prefer-offline --no-audit && {
-              echo "✅ Dependencies installed"
-              break
-            } || {
-              echo "⚠️ npm ci attempt $i/4 failed"
-              npm cache clean --force
-              [ $i -lt 4 ] && sleep 10
-            }
-          done
+          if [ "${{ steps.cache-node-modules.outputs.cache-hit }}" == "true" ]; then
+            echo "✅ node_modules restored from cache, skipping install"
+          else
+            echo "📦 Cache miss, running npm ci..."
+            npm ci --prefer-offline --no-audit
+          fi
 
       - name: Install Playwright browsers
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
