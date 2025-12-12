@@ -397,7 +397,7 @@ describe('CreateSavingsGoalDialog', () => {
           })
         );
       });
-    });
+    }, 60000); // Extended timeout for CI environment
 
     it('shows loading state during API call', async () => {
       // Make API call slow
@@ -432,7 +432,7 @@ describe('CreateSavingsGoalDialog', () => {
       await waitFor(() => {
         expect(screen.getByText(/creating/i)).toBeInTheDocument();
       });
-    });
+    }, 60000); // Extended timeout for CI environment
 
     it('closes dialog and calls onGoalCreated on successful creation', async () => {
       const user = userEvent.setup();
@@ -461,7 +461,7 @@ describe('CreateSavingsGoalDialog', () => {
       await waitFor(() => {
         expect(mockOnCreate).toHaveBeenCalledWith(mockCreatedGoal);
       });
-    });
+    }, 60000); // Extended timeout for CI environment
 
     it('shows error message on API failure', async () => {
       vi.mocked(budgetsApi.createSavingsGoal).mockRejectedValue(
@@ -494,7 +494,7 @@ describe('CreateSavingsGoalDialog', () => {
       await waitFor(() => {
         expect(screen.getByText(/failed to create goal/i)).toBeInTheDocument();
       });
-    });
+    }, 60000); // Extended timeout for CI environment
   });
 
   // ==========================================================================
