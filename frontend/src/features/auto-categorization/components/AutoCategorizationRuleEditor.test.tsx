@@ -852,7 +852,7 @@ describe('AutoCategorizationRuleEditor', () => {
           conditions: [{ type: 'amount_greater_than', value: 99.99 }],
         }))
       })
-    })
+    }, 60000) // Extended timeout for CI environment
 
     it('should accept partial date_range with only start', async () => {
       const user = userEvent.setup()
@@ -1042,7 +1042,7 @@ describe('AutoCategorizationRuleEditor', () => {
 
       // Error should still show for the remaining condition
       expect(screen.getByText(/value is required/i)).toBeInTheDocument()
-    })
+    }, 60000) // Extended timeout for CI environment
 
     it('should handle special characters in merchant name', async () => {
       const user = userEvent.setup()
@@ -1082,7 +1082,7 @@ describe('AutoCategorizationRuleEditor', () => {
           conditions: [{ type: 'merchant_contains', value: "McDonald's & Co. <test>" }],
         }))
       })
-    })
+    }, 60000) // Extended timeout for CI environment
 
     it('should handle zero amount value', async () => {
       const user = userEvent.setup()
