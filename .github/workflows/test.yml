@@ -201,8 +201,8 @@ jobs:
         id: cache-node-modules
         uses: actions/cache/restore@v4
         with:
-          path: ${{ env.UNIQUE_WORKSPACE }}/frontend/node_modules
-          key: node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('**/frontend/package-lock.json') }}
+          path: ~/.cache/boostedbudget/frontend-node-modules
+          key: node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('frontend/package-lock.json') }}
           restore-keys: |
             node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-
 
@@ -210,10 +210,15 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
           if [ "${{ steps.cache-node-modules.outputs.cache-hit }}" == "true" ]; then
-            echo "✅ node_modules restored from cache, skipping install"
+            echo "✅ Restoring node_modules from cache..."
+            cp -a ~/.cache/boostedbudget/frontend-node-modules ./node_modules
+            echo "✅ node_modules restored from cache"
           else
             echo "📦 Cache miss, running npm ci..."
             npm ci --prefer-offline --no-audit
+            # Save to fixed location for cache
+            mkdir -p ~/.cache/boostedbudget
+            cp -a ./node_modules ~/.cache/boostedbudget/frontend-node-modules
           fi
 
       - name: Run ESLint (only on shard 1)
@@ -242,8 +247,8 @@ jobs:
         if: always() && steps.cache-node-modules.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: ${{ env.UNIQUE_WORKSPACE }}/frontend/node_modules
-          key: node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('**/frontend/package-lock.json') }}
+          path: ~/.cache/boostedbudget/frontend-node-modules
+          key: node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('frontend/package-lock.json') }}
 
       - name: Final workspace cleanup
         if: always()
@@ -280,8 +285,8 @@ jobs:
         id: cache-node-modules
         uses: actions/cache/restore@v4
         with:
-          path: ${{ env.UNIQUE_WORKSPACE }}/frontend/node_modules
-          key: node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('**/frontend/package-lock.json') }}
+          path: ~/.cache/boostedbudget/frontend-node-modules
+          key: node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('frontend/package-lock.json') }}
           restore-keys: |
             node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-
 
@@ -296,10 +301,15 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
           if [ "${{ steps.cache-node-modules.outputs.cache-hit }}" == "true" ]; then
-            echo "✅ node_modules restored from cache, skipping install"
+            echo "✅ Restoring node_modules from cache..."
+            cp -a ~/.cache/boostedbudget/frontend-node-modules ./node_modules
+            echo "✅ node_modules restored from cache"
           else
             echo "📦 Cache miss, running npm ci..."
             npm ci --prefer-offline --no-audit
+            # Save to fixed location for cache
+            mkdir -p ~/.cache/boostedbudget
+            cp -a ./node_modules ~/.cache/boostedbudget/frontend-node-modules
           fi
 
       - name: Merge coverage reports
@@ -329,8 +339,8 @@ jobs:
         if: always() && steps.cache-node-modules.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: ${{ env.UNIQUE_WORKSPACE }}/frontend/node_modules
-          key: node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('**/frontend/package-lock.json') }}
+          path: ~/.cache/boostedbudget/frontend-node-modules
+          key: node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('frontend/package-lock.json') }}
 
       - name: Final workspace cleanup
         if: always()
@@ -367,8 +377,8 @@ jobs:
         id: cache-node-modules
         uses: actions/cache/restore@v4
         with:
-          path: ${{ env.UNIQUE_WORKSPACE }}/frontend/node_modules
-          key: node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('**/frontend/package-lock.json') }}
+          path: ~/.cache/boostedbudget/frontend-node-modules
+          key: node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('frontend/package-lock.json') }}
           restore-keys: |
             node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-
 
@@ -376,10 +386,15 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
           if [ "${{ steps.cache-node-modules.outputs.cache-hit }}" == "true" ]; then
-            echo "✅ node_modules restored from cache, skipping install"
+            echo "✅ Restoring node_modules from cache..."
+            cp -a ~/.cache/boostedbudget/frontend-node-modules ./node_modules
+            echo "✅ node_modules restored from cache"
           else
             echo "📦 Cache miss, running npm ci..."
             npm ci --prefer-offline --no-audit
+            # Save to fixed location for cache
+            mkdir -p ~/.cache/boostedbudget
+            cp -a ./node_modules ~/.cache/boostedbudget/frontend-node-modules
           fi
 
       - name: Install Playwright browsers
@@ -452,8 +467,8 @@ jobs:
         if: always() && steps.cache-node-modules.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: ${{ env.UNIQUE_WORKSPACE }}/frontend/node_modules
-          key: node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('**/frontend/package-lock.json') }}
+          path: ~/.cache/boostedbudget/frontend-node-modules
+          key: node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('frontend/package-lock.json') }}
 
       - name: Final workspace cleanup
         if: always()
