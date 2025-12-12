@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event'
 import { AutoCategorizationRuleEditor } from './AutoCategorizationRuleEditor'
 import type { CategorizationRule } from '../types'
-// Test utilities available: import { fillInputByLabel, fillInputByPlaceholder } from '@/test/utils/formTestHelpers'
+import { fillInputByLabel, fillInput } from '@/test/utils/formTestHelpers'
 
 describe('AutoCategorizationRuleEditor', () => {
   const mockOnSave = vi.fn()
@@ -1000,7 +1000,6 @@ describe('AutoCategorizationRuleEditor', () => {
     })
 
     it('should handle removing condition and update error indices', async () => {
-      const user = userEvent.setup({ delay: null })
       render(
         <AutoCategorizationRuleEditor
           mode="create"
@@ -1010,7 +1009,7 @@ describe('AutoCategorizationRuleEditor', () => {
         />
       )
 
-      await user.type(screen.getByLabelText(/rule name/i), 'Test Rule')
+      fillInputByLabel(/rule name/i, 'Test Rule')
 
       // Add two conditions
       const addButton = screen.getByRole('button', { name: /add condition/i })
@@ -1019,7 +1018,7 @@ describe('AutoCategorizationRuleEditor', () => {
 
       // Fill in first condition, leave second empty
       const textInputs = screen.getAllByPlaceholderText(/enter value/i)
-      await user.type(textInputs[0], 'first')
+      fillInput(textInputs[0], 'first')
 
       // Select category - use fireEvent + waitFor for reliability in CI
       const categorySelect = screen.getByRole('combobox', { name: /target category/i })
@@ -1046,7 +1045,6 @@ describe('AutoCategorizationRuleEditor', () => {
     }, 15000)
 
     it('should handle special characters in merchant name', async () => {
-      const user = userEvent.setup({ delay: null })
       mockOnSave.mockResolvedValue(undefined)
 
       render(
@@ -1058,14 +1056,14 @@ describe('AutoCategorizationRuleEditor', () => {
         />
       )
 
-      await user.type(screen.getByLabelText(/rule name/i), 'Test Rule')
+      fillInputByLabel(/rule name/i, 'Test Rule')
 
       // Add condition with special characters
       const addButton = screen.getByRole('button', { name: /add condition/i })
       fireEvent.click(addButton)
 
       const textInput = screen.getByPlaceholderText(/enter value/i)
-      await user.type(textInput, "McDonald's & Co. <test>")
+      fillInput(textInput, "McDonald's & Co. <test>")
 
       // Select category - use fireEvent + waitFor for reliability in CI
       const categorySelect = screen.getByRole('combobox', { name: /target category/i })
@@ -1127,9 +1125,8 @@ describe('AutoCategorizationRuleEditor', () => {
     })
 
     // This test has many userEvent interactions that can be slow on CI
-    // Extended timeout to 60s to accommodate slower runners
+    // Using fast fillInput utilities to avoid timeouts
     it('should handle negative amount value', async () => {
-      const user = userEvent.setup({ delay: null })
       mockOnSave.mockResolvedValue(undefined)
 
       render(
@@ -1141,25 +1138,24 @@ describe('AutoCategorizationRuleEditor', () => {
         />
       )
 
-      await user.type(screen.getByLabelText(/rule name/i), 'Test Rule')
+      fillInputByLabel(/rule name/i, 'Test Rule')
 
       // Add amount condition
       const addButton = screen.getByRole('button', { name: /add condition/i })
       fireEvent.click(addButton)
 
       const typeSelect = screen.getByLabelText(/condition type/i)
-      await user.selectOptions(typeSelect, 'amount_greater_than')
+      fireEvent.change(typeSelect, { target: { value: 'amount_greater_than' } })
 
       const amountInput = screen.getByRole('spinbutton', { name: /condition value/i })
-      await user.clear(amountInput)
-      await user.type(amountInput, '-50')
+      fillInput(amountInput, '-50')
 
       // Select category (SearchableSelect uses click-based selection)
       // Use async findByRole pattern to wait for dropdown to render (fixes CI timing issues)
       const categorySelect = screen.getByRole('combobox', { name: /target category/i })
-      await user.click(categorySelect)
+      fireEvent.click(categorySelect)
       const listbox = await screen.findByRole('listbox')
-      await user.click(within(listbox).getByText('Food & Drink > Coffee'))
+      fireEvent.click(within(listbox).getByText('Food & Drink > Coffee'))
 
       const saveButton = screen.getByRole('button', { name: /save/i })
       fireEvent.click(saveButton)

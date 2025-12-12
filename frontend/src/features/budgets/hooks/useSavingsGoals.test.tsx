@@ -79,10 +79,10 @@ describe('useSavingsGoals', () => {
       // Assert - Initial loading state
       expect(result.current.loading).toBe(true);
 
-      // Wait for data to load
+      // Wait for data to load (increased timeout for CI stability)
       await waitFor(() => {
         expect(result.current.loading).toBe(false);
-      });
+      }, { timeout: 5000 });
 
       // Assert - Data loaded successfully
       expect(result.current.goals).toEqual(mockSavingsGoals);

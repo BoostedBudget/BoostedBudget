@@ -95,13 +95,17 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
-  # Frontend Tests (runs in parallel with backend)
+  # Frontend Tests (Parallelized with 3 shards)
   # =============================================================================
   frontend-test:
-    name: Frontend Tests
+    name: Frontend Tests (Shard ${{ matrix.shard }}/3)
     runs-on: [self-hosted, macOS, mac-mini]
+    strategy:
+      fail-fast: false  # Continue other shards if one fails
+      matrix:
+        shard: [1, 2, 3]
     env:
-      UNIQUE_WORKSPACE: workspace-frontend-test-${{ github.run_id }}
+      UNIQUE_WORKSPACE: workspace-frontend-test-shard-${{ matrix.shard }}-${{ github.run_id }}
 
     steps:
       - name: Clean workspace (fix permission issues)
@@ -143,26 +147,95 @@ jobs:
             }
           done
 
-      - name: Run ESLint (fail on warnings)
+      - name: Run ESLint (only on shard 1)
+        if: matrix.shard == 1
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
           echo "::group::Running ESLint"
           npm run lint
           echo "::endgroup::"
 
-      - name: Run frontend unit tests with coverage
+      - name: Run frontend unit tests (shard ${{ matrix.shard }}/3)
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
-          echo "::group::Running Unit Tests"
-          npm run test:ci
+          echo "::group::Running Unit Tests (Shard ${{ matrix.shard }}/3)"
+          npm run test:ci -- --shard=${{ matrix.shard }}/3
           echo "::endgroup::"
 
-      - name: Upload frontend coverage report
+      - name: Upload partial coverage report
+        uses: actions/upload-artifact@v5
+        with:
+          name: frontend-coverage-shard-${{ matrix.shard }}
+          path: ${{ env.UNIQUE_WORKSPACE }}/frontend/coverage/
+          retention-days: 1
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+  # =============================================================================
+  # Frontend Coverage Merge (runs after all shards complete)
+  # =============================================================================
+  frontend-coverage:
+    name: Merge Frontend Coverage
+    needs: frontend-test
+    runs-on: [self-hosted, macOS, mac-mini]
+    env:
+      UNIQUE_WORKSPACE: workspace-frontend-coverage-${{ github.run_id }}
+
+    steps:
+      - name: Clean workspace (fix permission issues)
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          clean: false
+          fetch-depth: 1
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
+
+      - name: Download all coverage artifacts
+        uses: actions/download-artifact@v6
+        with:
+          pattern: frontend-coverage-shard-*
+          path: ${{ env.UNIQUE_WORKSPACE }}/coverage-parts/
+          merge-multiple: true
+
+      - name: Merge coverage reports
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: |
+          echo "::group::Merging Coverage Reports"
+          cd frontend
+          npm ci --prefer-offline --no-audit
+
+          # Install nyc for coverage merging
+          npm install --save-dev nyc
+
+          # Merge all coverage files
+          npx nyc merge ../coverage-parts coverage/coverage-final.json
+
+          # Generate merged HTML report
+          npx nyc report --reporter=html --reporter=text --reporter=lcov
+          echo "::endgroup::"
+
+      - name: Upload merged coverage report
         uses: actions/upload-artifact@v5
         with:
           name: frontend-coverage
-          path: |
-            ${{ env.UNIQUE_WORKSPACE }}/frontend/coverage/
+          path: ${{ env.UNIQUE_WORKSPACE }}/frontend/coverage/
           retention-days: 30
 
       - name: Final workspace cleanup
