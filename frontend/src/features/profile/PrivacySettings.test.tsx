@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { PrivacySettings } from './PrivacySettings'
 import * as privacyApi from './api/privacyApi'
 import type { PrivacySettings as PrivacySettingsType } from './types'
+// Test utilities available: import { createFastUser } from '@/test/utils/formTestHelpers'
 
 // Mock the privacy API
 vi.mock('./api/privacyApi')
@@ -62,7 +63,7 @@ describe('PrivacySettings', () => {
 
       // Check for Data Sharing section
       expect(screen.getByRole('heading', { name: /Data Sharing/i })).toBeInTheDocument()
-    }, 60000) // Extended timeout for CI environment
+    }, 15000)
 
     it('should display correct toggle states', async () => {
       vi.mocked(privacyApi.fetchPrivacySettings).mockResolvedValue(mockSettings)
@@ -116,7 +117,7 @@ describe('PrivacySettings', () => {
   describe('Toggle functionality', () => {
     it('should toggle analytics consent', async () => {
       vi.mocked(privacyApi.fetchPrivacySettings).mockResolvedValue(mockSettings)
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
 
       render(<PrivacySettings />)
 
@@ -134,7 +135,7 @@ describe('PrivacySettings', () => {
 
     it('should toggle advertising consent', async () => {
       vi.mocked(privacyApi.fetchPrivacySettings).mockResolvedValue(mockSettings)
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
 
       render(<PrivacySettings />)
 
@@ -152,7 +153,7 @@ describe('PrivacySettings', () => {
 
     it('should toggle email preferences', async () => {
       vi.mocked(privacyApi.fetchPrivacySettings).mockResolvedValue(mockSettings)
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
 
       render(<PrivacySettings />)
 
@@ -170,7 +171,7 @@ describe('PrivacySettings', () => {
 
     it('should not allow toggling necessary consent', async () => {
       vi.mocked(privacyApi.fetchPrivacySettings).mockResolvedValue(mockSettings)
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
 
       render(<PrivacySettings />)
 
@@ -186,7 +187,7 @@ describe('PrivacySettings', () => {
       await user.click(necessaryCheckbox)
 
       expect(necessaryCheckbox).toBeChecked()
-    }, 60000) // Extended timeout for CI environment
+    }, 15000)
   })
 
   describe('Save functionality', () => {
@@ -195,7 +196,7 @@ describe('PrivacySettings', () => {
       const updatedSettings = { ...mockSettings, gdpr_advertising_consent: true }
       vi.mocked(privacyApi.updatePrivacySettings).mockResolvedValue(updatedSettings)
 
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
 
       render(<PrivacySettings />)
 
@@ -223,7 +224,7 @@ describe('PrivacySettings', () => {
       const updatedSettings = { ...mockSettings, gdpr_analytics_consent: false }
       vi.mocked(privacyApi.updatePrivacySettings).mockResolvedValue(updatedSettings)
 
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
 
       render(<PrivacySettings />)
 
@@ -255,7 +256,7 @@ describe('PrivacySettings', () => {
       vi.mocked(privacyApi.updatePrivacySettings).mockResolvedValue(updatedSettings)
 
       const onSettingsChange = vi.fn()
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
 
       render(<PrivacySettings onSettingsChange={onSettingsChange} />)
 
@@ -280,7 +281,7 @@ describe('PrivacySettings', () => {
       vi.mocked(privacyApi.fetchPrivacySettings).mockResolvedValue(mockSettings)
       vi.mocked(privacyApi.updatePrivacySettings).mockRejectedValue(new Error('Save failed'))
 
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
 
       render(<PrivacySettings />)
 
@@ -307,7 +308,7 @@ describe('PrivacySettings', () => {
         () => new Promise(() => {}) // Never resolves
       )
 
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
 
       render(<PrivacySettings />)
 
@@ -332,7 +333,7 @@ describe('PrivacySettings', () => {
       vi.mocked(privacyApi.fetchPrivacySettings).mockResolvedValue(mockSettings)
       vi.mocked(privacyApi.updatePrivacySettings).mockResolvedValue(mockSettings)
 
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
 
       render(<PrivacySettings />)
 

@@ -11,6 +11,7 @@ import userEvent from '@testing-library/user-event';
 import { CreateBudgetDialog } from './CreateBudgetDialog';
 import * as budgetsApi from '../api/budgetsApi';
 import type { Budget } from '../types';
+// Test utilities available: import { fillInputByLabel, selectOptionByLabel } from '@/test/utils/formTestHelpers';
 
 // Mock APIs
 vi.mock('../api/budgetsApi');
@@ -117,7 +118,7 @@ describe('CreateBudgetDialog', () => {
     });
 
     it('shows end date field when custom period is selected', async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ delay: null });
       render(
         <CreateBudgetDialog
           isOpen={true}
@@ -150,7 +151,7 @@ describe('CreateBudgetDialog', () => {
 
   describe('Validation', () => {
     it('shows error when name is empty', async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ delay: null });
       render(
         <CreateBudgetDialog
           isOpen={true}
@@ -173,7 +174,7 @@ describe('CreateBudgetDialog', () => {
     });
 
     it('shows error when amount is invalid', async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ delay: null });
       render(
         <CreateBudgetDialog
           isOpen={true}
@@ -197,7 +198,7 @@ describe('CreateBudgetDialog', () => {
     });
 
     it('shows error when end date is missing for custom period', async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ delay: null });
       render(
         <CreateBudgetDialog
           isOpen={true}
@@ -222,7 +223,7 @@ describe('CreateBudgetDialog', () => {
       await user.click(screen.getByRole('button', { name: /create budget/i }));
 
       expect(screen.getByText(/end date is required for custom period/i)).toBeInTheDocument();
-    }, 60000); // Extended timeout for CI environment
+    }, 15000);
   });
 
   // ==========================================================================
@@ -231,7 +232,7 @@ describe('CreateBudgetDialog', () => {
 
   describe('Submission', () => {
     it('calls createBudget with correct payload on submit', async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ delay: null });
       render(
         <CreateBudgetDialog
           isOpen={true}
@@ -264,7 +265,7 @@ describe('CreateBudgetDialog', () => {
           })
         );
       });
-    }, 60000); // Extended timeout for CI environment
+    }, 15000);
 
     it('shows loading state during API call', async () => {
       // Make API call slow - use longer delay to ensure loading state is visible
@@ -272,7 +273,7 @@ describe('CreateBudgetDialog', () => {
         () => new Promise((resolve) => setTimeout(() => resolve(mockCreatedBudget), 3000))
       );
 
-      const user = userEvent.setup();
+      const user = userEvent.setup({ delay: null });
       render(
         <CreateBudgetDialog
           isOpen={true}
@@ -297,10 +298,10 @@ describe('CreateBudgetDialog', () => {
       await waitFor(() => {
         expect(screen.getByText(/creating/i)).toBeInTheDocument();
       });
-    }, 60000); // Extended timeout for CI environment
+    }, 15000);
 
     it('closes dialog and calls onBudgetCreated on successful creation', async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ delay: null });
       render(
         <CreateBudgetDialog
           isOpen={true}
@@ -324,14 +325,14 @@ describe('CreateBudgetDialog', () => {
       await waitFor(() => {
         expect(mockOnCreate).toHaveBeenCalledWith(mockCreatedBudget);
       });
-    }, 60000); // Extended timeout for CI environment
+    }, 15000);
 
     it('shows error message on API failure', async () => {
       vi.mocked(budgetsApi.createBudget).mockRejectedValue(
         new Error('Failed to create budget')
       );
 
-      const user = userEvent.setup();
+      const user = userEvent.setup({ delay: null });
       render(
         <CreateBudgetDialog
           isOpen={true}
@@ -355,10 +356,10 @@ describe('CreateBudgetDialog', () => {
       await waitFor(() => {
         expect(screen.getByText(/failed to create budget/i)).toBeInTheDocument();
       });
-    }, 60000); // Extended timeout for CI environment
+    }, 15000);
 
     it('calls onCancel when cancel button clicked', async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ delay: null });
       render(
         <CreateBudgetDialog
           isOpen={true}
@@ -377,7 +378,7 @@ describe('CreateBudgetDialog', () => {
     });
 
     it('resets form when reopened after cancel', async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ delay: null });
       const { rerender } = render(
         <CreateBudgetDialog
           isOpen={true}
@@ -426,7 +427,7 @@ describe('CreateBudgetDialog', () => {
 
   describe('Dialog Close Behavior (Issue #460)', () => {
     it('does not close when clicking outside the dialog (on backdrop)', async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ delay: null });
       render(
         <CreateBudgetDialog
           isOpen={true}
@@ -454,7 +455,7 @@ describe('CreateBudgetDialog', () => {
     });
 
     it('closes when X button is clicked', async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ delay: null });
       render(
         <CreateBudgetDialog
           isOpen={true}
@@ -481,7 +482,7 @@ describe('CreateBudgetDialog', () => {
     });
 
     it('closes when Cancel button is clicked', async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ delay: null });
       render(
         <CreateBudgetDialog
           isOpen={true}

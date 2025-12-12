@@ -84,7 +84,7 @@ describe('useCurrentBudget', () => {
       expect(result.current.budget).toEqual(mockBudget);
       expect(result.current.error).toBeNull();
       expect(budgetsApi.fetchCurrentBudget).toHaveBeenCalledTimes(1);
-    }, 60000); // Extended timeout for CI environment
+    }, 15000);
 
     it('should handle 404 when no current budget exists', async () => {
       // Arrange
