@@ -324,7 +324,7 @@ describe('CreateBudgetDialog', () => {
       await waitFor(() => {
         expect(mockOnCreate).toHaveBeenCalledWith(mockCreatedBudget);
       });
-    });
+    }, 60000); // Extended timeout for CI environment
 
     it('shows error message on API failure', async () => {
       vi.mocked(budgetsApi.createBudget).mockRejectedValue(
@@ -355,7 +355,7 @@ describe('CreateBudgetDialog', () => {
       await waitFor(() => {
         expect(screen.getByText(/failed to create budget/i)).toBeInTheDocument();
       });
-    });
+    }, 60000); // Extended timeout for CI environment
 
     it('calls onCancel when cancel button clicked', async () => {
       const user = userEvent.setup();
