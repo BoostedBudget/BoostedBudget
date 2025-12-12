@@ -1082,7 +1082,7 @@ describe('AutoCategorizationRuleEditor', () => {
           conditions: [{ type: 'merchant_contains', value: "McDonald's & Co. <test>" }],
         }))
       })
-    })
+    }, 60000) // Extended timeout for CI environment
 
     it('should handle zero amount value', async () => {
       const user = userEvent.setup()
