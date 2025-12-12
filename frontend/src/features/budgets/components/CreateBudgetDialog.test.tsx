@@ -11,7 +11,7 @@ import userEvent from '@testing-library/user-event';
 import { CreateBudgetDialog } from './CreateBudgetDialog';
 import * as budgetsApi from '../api/budgetsApi';
 import type { Budget } from '../types';
-// Test utilities available: import { fillInputByLabel, selectOptionByLabel } from '@/test/utils/formTestHelpers';
+import { fillInputByLabel } from '@/test/utils/formTestHelpers';
 
 // Mock APIs
 vi.mock('../api/budgetsApi');
@@ -345,10 +345,9 @@ describe('CreateBudgetDialog', () => {
         expect(screen.getByLabelText(/name/i)).toBeInTheDocument();
       });
 
-      // Fill form
-      await user.type(screen.getByLabelText(/name/i), 'Test Budget');
-      await user.clear(screen.getByLabelText(/amount/i));
-      await user.type(screen.getByLabelText(/amount/i), '1000');
+      // Fill form using fast utilities
+      fillInputByLabel(/name/i, 'Test Budget');
+      fillInputByLabel(/amount/i, '1000');
 
       // Submit
       await user.click(screen.getByRole('button', { name: /create budget/i }));
@@ -391,8 +390,8 @@ describe('CreateBudgetDialog', () => {
         expect(screen.getByLabelText(/name/i)).toBeInTheDocument();
       });
 
-      // Fill name
-      await user.type(screen.getByLabelText(/name/i), 'Test Budget');
+      // Fill name using fast utility
+      fillInputByLabel(/name/i, 'Test Budget');
 
       // Close dialog
       rerender(
