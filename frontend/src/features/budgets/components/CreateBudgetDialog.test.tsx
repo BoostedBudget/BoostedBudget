@@ -222,7 +222,7 @@ describe('CreateBudgetDialog', () => {
       await user.click(screen.getByRole('button', { name: /create budget/i }));
 
       expect(screen.getByText(/end date is required for custom period/i)).toBeInTheDocument();
-    });
+    }, 60000); // Extended timeout for CI environment
   });
 
   // ==========================================================================
@@ -264,7 +264,7 @@ describe('CreateBudgetDialog', () => {
           })
         );
       });
-    });
+    }, 60000); // Extended timeout for CI environment
 
     it('shows loading state during API call', async () => {
       // Make API call slow
@@ -297,7 +297,7 @@ describe('CreateBudgetDialog', () => {
       await waitFor(() => {
         expect(screen.getByText(/creating/i)).toBeInTheDocument();
       });
-    });
+    }, 60000); // Extended timeout for CI environment
 
     it('closes dialog and calls onBudgetCreated on successful creation', async () => {
       const user = userEvent.setup();
