@@ -193,30 +193,44 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Restore node_modules cache
-        id: cache-node-modules
-        uses: actions/cache/restore@v4
-        with:
-          path: ~/.cache/boostedbudget/frontend-node-modules
-          key: node-modules-v2-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('frontend/package-lock.json') }}
-          restore-keys: |
-            node-modules-v2-${{ runner.os }}-node${{ env.NODE_VERSION }}-
-
       - name: Install frontend dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
-          if [ "${{ steps.cache-node-modules.outputs.cache-hit }}" == "true" ]; then
-            echo "✅ Restoring node_modules from cache..."
-            # Use rsync to handle symlinks properly (cp -a fails with existing symlinks)
-            rsync -a --delete ~/.cache/boostedbudget/frontend-node-modules/ ./node_modules/
-            echo "✅ node_modules restored from cache"
+          set -e
+          CACHE_BASE="$HOME/.cache/boostedbudget"
+          CACHE_DIR="$CACHE_BASE/node-modules"
+          CACHE_HASH_FILE="$CACHE_BASE/node-modules.sha"
+
+          # Cleanup old cache files (>48 hours) to prevent disk bloat
+          echo "🧹 Cleaning up stale cache files..."
+          find "$CACHE_BASE" -maxdepth 1 -name "node-modules*" -mmin +2880 -exec rm -rf {} \; 2>/dev/null || true
+
+          # Compute current package-lock.json hash
+          CURRENT_HASH=$(shasum -a 256 package-lock.json | cut -d' ' -f1)
+
+          # Check if cache exists AND hash matches
+          if [ -d "$CACHE_DIR" ] && [ -f "$CACHE_HASH_FILE" ] && [ "$(cat "$CACHE_HASH_FILE")" == "$CURRENT_HASH" ]; then
+            echo "✅ Local cache hit! Restoring node_modules..."
+            START_TIME=$(date +%s)
+            rsync -a --delete "$CACHE_DIR/" ./node_modules/
+            END_TIME=$(date +%s)
+            echo "✅ Restored in $((END_TIME - START_TIME))s"
           else
             echo "📦 Cache miss, running npm ci..."
+            [ -f "$CACHE_HASH_FILE" ] && echo "  Previous hash: $(cat "$CACHE_HASH_FILE")"
+            echo "  Current hash:  $CURRENT_HASH"
             npm ci --prefer-offline --no-audit
-            # Save to fixed location for cache
-            rm -rf ~/.cache/boostedbudget/frontend-node-modules
-            mkdir -p ~/.cache/boostedbudget
-            rsync -a ./node_modules/ ~/.cache/boostedbudget/frontend-node-modules/
+
+            # Atomic cache update
+            echo "💾 Updating local cache..."
+            TEMP_DIR="$CACHE_BASE/node-modules.tmp.$$"
+            rm -rf "$TEMP_DIR"
+            mkdir -p "$TEMP_DIR"
+            rsync -a ./node_modules/ "$TEMP_DIR/"
+            rm -rf "$CACHE_DIR"
+            mv "$TEMP_DIR" "$CACHE_DIR"
+            echo "$CURRENT_HASH" > "$CACHE_HASH_FILE"
+            echo "✅ Cache updated ($(du -sh "$CACHE_DIR" | cut -f1))"
           fi
 
       - name: Run ESLint
@@ -239,13 +253,6 @@ jobs:
           name: frontend-coverage
           path: ${{ env.UNIQUE_WORKSPACE }}/frontend/coverage/
           retention-days: 30
-
-      - name: Save node_modules cache
-        if: always() && steps.cache-node-modules.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ~/.cache/boostedbudget/frontend-node-modules
-          key: node-modules-v2-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('frontend/package-lock.json') }}
 
       - name: Final workspace cleanup
         if: always()
@@ -278,30 +285,44 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Restore node_modules cache
-        id: cache-node-modules
-        uses: actions/cache/restore@v4
-        with:
-          path: ~/.cache/boostedbudget/frontend-node-modules
-          key: node-modules-v2-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('frontend/package-lock.json') }}
-          restore-keys: |
-            node-modules-v2-${{ runner.os }}-node${{ env.NODE_VERSION }}-
-
       - name: Install frontend dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
-          if [ "${{ steps.cache-node-modules.outputs.cache-hit }}" == "true" ]; then
-            echo "✅ Restoring node_modules from cache..."
-            # Use rsync to handle symlinks properly (cp -a fails with existing symlinks)
-            rsync -a --delete ~/.cache/boostedbudget/frontend-node-modules/ ./node_modules/
-            echo "✅ node_modules restored from cache"
+          set -e
+          CACHE_BASE="$HOME/.cache/boostedbudget"
+          CACHE_DIR="$CACHE_BASE/node-modules"
+          CACHE_HASH_FILE="$CACHE_BASE/node-modules.sha"
+
+          # Cleanup old cache files (>48 hours) to prevent disk bloat
+          echo "🧹 Cleaning up stale cache files..."
+          find "$CACHE_BASE" -maxdepth 1 -name "node-modules*" -mmin +2880 -exec rm -rf {} \; 2>/dev/null || true
+
+          # Compute current package-lock.json hash
+          CURRENT_HASH=$(shasum -a 256 package-lock.json | cut -d' ' -f1)
+
+          # Check if cache exists AND hash matches
+          if [ -d "$CACHE_DIR" ] && [ -f "$CACHE_HASH_FILE" ] && [ "$(cat "$CACHE_HASH_FILE")" == "$CURRENT_HASH" ]; then
+            echo "✅ Local cache hit! Restoring node_modules..."
+            START_TIME=$(date +%s)
+            rsync -a --delete "$CACHE_DIR/" ./node_modules/
+            END_TIME=$(date +%s)
+            echo "✅ Restored in $((END_TIME - START_TIME))s"
           else
             echo "📦 Cache miss, running npm ci..."
+            [ -f "$CACHE_HASH_FILE" ] && echo "  Previous hash: $(cat "$CACHE_HASH_FILE")"
+            echo "  Current hash:  $CURRENT_HASH"
             npm ci --prefer-offline --no-audit
-            # Save to fixed location for cache
-            rm -rf ~/.cache/boostedbudget/frontend-node-modules
-            mkdir -p ~/.cache/boostedbudget
-            rsync -a ./node_modules/ ~/.cache/boostedbudget/frontend-node-modules/
+
+            # Atomic cache update
+            echo "💾 Updating local cache..."
+            TEMP_DIR="$CACHE_BASE/node-modules.tmp.$$"
+            rm -rf "$TEMP_DIR"
+            mkdir -p "$TEMP_DIR"
+            rsync -a ./node_modules/ "$TEMP_DIR/"
+            rm -rf "$CACHE_DIR"
+            mv "$TEMP_DIR" "$CACHE_DIR"
+            echo "$CURRENT_HASH" > "$CACHE_HASH_FILE"
+            echo "✅ Cache updated ($(du -sh "$CACHE_DIR" | cut -f1))"
           fi
 
       - name: Install Playwright browsers
@@ -384,13 +405,6 @@ jobs:
           name: playwright-videos
           path: ${{ env.UNIQUE_WORKSPACE }}/frontend/test-results/
           retention-days: 7
-
-      - name: Save node_modules cache
-        if: always() && steps.cache-node-modules.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ~/.cache/boostedbudget/frontend-node-modules
-          key: node-modules-v2-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('frontend/package-lock.json') }}
 
       - name: Final workspace cleanup
         if: always()
