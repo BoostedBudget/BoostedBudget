@@ -80,15 +80,17 @@ export function BudgetsPage() {
       <section className="budgets-page__section">
         <div className="budgets-page__section-header">
           <h2>Active Budgets</h2>
-          <button
-            type="button"
-            onClick={() => setIsCreateBudgetOpen(true)}
-            className="budgets-page__create-button"
-            aria-label="Create budget"
-          >
-            <PlusIcon className="h-5 w-5" />
-            <span>Create Budget</span>
-          </button>
+          {activeBudgets.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setIsCreateBudgetOpen(true)}
+              className="budgets-page__create-button"
+              aria-label="Create budget"
+            >
+              <PlusIcon className="h-5 w-5" />
+              <span>Create Budget</span>
+            </button>
+          )}
         </div>
         {activeBudgets.length === 0 ? (
           <div className="budgets-page__empty">
@@ -125,15 +127,17 @@ export function BudgetsPage() {
       <section className="budgets-page__section">
         <div className="budgets-page__section-header">
           <h2>Savings Goals</h2>
-          <button
-            type="button"
-            onClick={() => setIsCreateGoalOpen(true)}
-            className="budgets-page__create-button"
-            aria-label="Create savings goal"
-          >
-            <PlusIcon className="h-5 w-5" />
-            <span>Create Goal</span>
-          </button>
+          {(activeGoals.length > 0 || completedGoals.length > 0) && (
+            <button
+              type="button"
+              onClick={() => setIsCreateGoalOpen(true)}
+              className="budgets-page__create-button"
+              aria-label="Create savings goal"
+            >
+              <PlusIcon className="h-5 w-5" />
+              <span>Create Goal</span>
+            </button>
+          )}
         </div>
         {activeGoals.length === 0 && completedGoals.length === 0 ? (
           <div className="budgets-page__empty">
