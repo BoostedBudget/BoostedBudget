@@ -267,9 +267,9 @@ describe('CreateBudgetDialog', () => {
     }, 60000); // Extended timeout for CI environment
 
     it('shows loading state during API call', async () => {
-      // Make API call slow
+      // Make API call slow - use longer delay to ensure loading state is visible
       vi.mocked(budgetsApi.createBudget).mockImplementation(
-        () => new Promise((resolve) => setTimeout(() => resolve(mockCreatedBudget), 1000))
+        () => new Promise((resolve) => setTimeout(() => resolve(mockCreatedBudget), 3000))
       );
 
       const user = userEvent.setup();
