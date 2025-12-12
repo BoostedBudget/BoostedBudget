@@ -327,6 +327,21 @@ jobs:
           restore-keys: |
             backend-binary-${{ runner.os }}-
 
+      - name: Set up Go (for building backend if needed)
+        if: steps.cache-backend-binary.outputs.cache-hit != 'true' && needs.backend-test.result == 'skipped'
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build backend binary (cache miss fallback)
+        if: steps.cache-backend-binary.outputs.cache-hit != 'true' && needs.backend-test.result == 'skipped'
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        run: |
+          echo "📦 Building backend binary (cache miss, backend-test skipped)..."
+          mkdir -p bin
+          go build -o bin/server ./cmd/server
+          echo "✅ Backend binary built successfully"
+
       - name: Download backend binary artifact (fallback)
         if: steps.cache-backend-binary.outputs.cache-hit != 'true' && needs.backend-test.result == 'success'
         uses: actions/download-artifact@v6
