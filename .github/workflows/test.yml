@@ -207,15 +207,16 @@ jobs:
         run: |
           if [ "${{ steps.cache-node-modules.outputs.cache-hit }}" == "true" ]; then
             echo "✅ Restoring node_modules from cache..."
-            cp -a ~/.cache/boostedbudget/frontend-node-modules ./node_modules
+            # Use rsync to handle symlinks properly (cp -a fails with existing symlinks)
+            rsync -a --delete ~/.cache/boostedbudget/frontend-node-modules/ ./node_modules/
             echo "✅ node_modules restored from cache"
           else
             echo "📦 Cache miss, running npm ci..."
             npm ci --prefer-offline --no-audit
-            # Save to fixed location for cache (remove existing first to avoid symlink conflicts)
+            # Save to fixed location for cache
             rm -rf ~/.cache/boostedbudget/frontend-node-modules
             mkdir -p ~/.cache/boostedbudget
-            cp -a ./node_modules ~/.cache/boostedbudget/frontend-node-modules
+            rsync -a ./node_modules/ ~/.cache/boostedbudget/frontend-node-modules/
           fi
 
       - name: Run ESLint
@@ -291,15 +292,16 @@ jobs:
         run: |
           if [ "${{ steps.cache-node-modules.outputs.cache-hit }}" == "true" ]; then
             echo "✅ Restoring node_modules from cache..."
-            cp -a ~/.cache/boostedbudget/frontend-node-modules ./node_modules
+            # Use rsync to handle symlinks properly (cp -a fails with existing symlinks)
+            rsync -a --delete ~/.cache/boostedbudget/frontend-node-modules/ ./node_modules/
             echo "✅ node_modules restored from cache"
           else
             echo "📦 Cache miss, running npm ci..."
             npm ci --prefer-offline --no-audit
-            # Save to fixed location for cache (remove existing first to avoid symlink conflicts)
+            # Save to fixed location for cache
             rm -rf ~/.cache/boostedbudget/frontend-node-modules
             mkdir -p ~/.cache/boostedbudget
-            cp -a ./node_modules ~/.cache/boostedbudget/frontend-node-modules
+            rsync -a ./node_modules/ ~/.cache/boostedbudget/frontend-node-modules/
           fi
 
       - name: Install Playwright browsers
