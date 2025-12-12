@@ -198,9 +198,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ~/.cache/boostedbudget/frontend-node-modules
-          key: node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('frontend/package-lock.json') }}
+          key: node-modules-v2-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('frontend/package-lock.json') }}
           restore-keys: |
-            node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-
+            node-modules-v2-${{ runner.os }}-node${{ env.NODE_VERSION }}-
 
       - name: Install frontend dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
@@ -245,7 +245,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ~/.cache/boostedbudget/frontend-node-modules
-          key: node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('frontend/package-lock.json') }}
+          key: node-modules-v2-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('frontend/package-lock.json') }}
 
       - name: Final workspace cleanup
         if: always()
@@ -283,9 +283,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ~/.cache/boostedbudget/frontend-node-modules
-          key: node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('frontend/package-lock.json') }}
+          key: node-modules-v2-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('frontend/package-lock.json') }}
           restore-keys: |
-            node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-
+            node-modules-v2-${{ runner.os }}-node${{ env.NODE_VERSION }}-
 
       - name: Install frontend dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
@@ -375,7 +375,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ~/.cache/boostedbudget/frontend-node-modules
-          key: node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('frontend/package-lock.json') }}
+          key: node-modules-v2-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('frontend/package-lock.json') }}
 
       - name: Final workspace cleanup
         if: always()
