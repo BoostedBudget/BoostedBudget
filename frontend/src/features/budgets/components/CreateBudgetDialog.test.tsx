@@ -419,4 +419,84 @@ describe('CreateBudgetDialog', () => {
       expect(screen.getByLabelText(/name/i)).toHaveValue('');
     });
   });
+
+  // ==========================================================================
+  // Issue #460: Dialog Close Behavior
+  // ==========================================================================
+
+  describe('Dialog Close Behavior (Issue #460)', () => {
+    it('does not close when clicking outside the dialog (on backdrop)', async () => {
+      const user = userEvent.setup();
+      render(
+        <CreateBudgetDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onBudgetCreated={mockOnCreate}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+
+      // Click on the backdrop (the overlay element)
+      // The backdrop is the element with bg-black/25 class
+      const backdrop = document.querySelector('.fixed.inset-0.bg-black\\/25');
+      if (backdrop) {
+        await user.click(backdrop);
+      }
+
+      // onCancel should NOT have been called
+      expect(mockOnCancel).not.toHaveBeenCalled();
+
+      // Dialog should still be visible
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+    });
+
+    it('closes when X button is clicked', async () => {
+      const user = userEvent.setup();
+      render(
+        <CreateBudgetDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onBudgetCreated={mockOnCreate}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+
+      // Find and click the X button (it's a button with XMarkIcon)
+      const closeButtons = screen.getAllByRole('button');
+      const xButton = closeButtons.find(btn =>
+        btn.querySelector('svg') && !btn.textContent?.includes('Cancel') && !btn.textContent?.includes('Create')
+      );
+
+      if (xButton) {
+        await user.click(xButton);
+      }
+
+      expect(mockOnCancel).toHaveBeenCalled();
+    });
+
+    it('closes when Cancel button is clicked', async () => {
+      const user = userEvent.setup();
+      render(
+        <CreateBudgetDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onBudgetCreated={mockOnCreate}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /cancel/i })).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByRole('button', { name: /cancel/i }));
+
+      expect(mockOnCancel).toHaveBeenCalled();
+    });
+  });
 });
