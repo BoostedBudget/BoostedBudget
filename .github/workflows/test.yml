@@ -167,19 +167,15 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
-  # Frontend Tests (Parallelized with 3 shards)
+  # Frontend Tests (Single job - no sharding)
   # =============================================================================
   frontend-test:
-    name: Frontend Tests (Shard ${{ matrix.shard }}/3)
+    name: Frontend Tests
     needs: detect-changes
     if: needs.detect-changes.outputs.frontend == 'true'
     runs-on: [self-hosted, macOS, mac-mini]
-    strategy:
-      fail-fast: false  # Continue other shards if one fails
-      matrix:
-        shard: [1, 2, 3]
     env:
-      UNIQUE_WORKSPACE: workspace-frontend-test-shard-${{ matrix.shard }}-${{ github.run_id }}
+      UNIQUE_WORKSPACE: workspace-frontend-test-${{ github.run_id }}
 
     steps:
       - name: Clean workspace (fix permission issues)
@@ -216,119 +212,27 @@ jobs:
           else
             echo "📦 Cache miss, running npm ci..."
             npm ci --prefer-offline --no-audit
-            # Save to fixed location for cache
+            # Save to fixed location for cache (remove existing first to avoid symlink conflicts)
+            rm -rf ~/.cache/boostedbudget/frontend-node-modules
             mkdir -p ~/.cache/boostedbudget
             cp -a ./node_modules ~/.cache/boostedbudget/frontend-node-modules
           fi
 
-      - name: Run ESLint (only on shard 1)
-        if: matrix.shard == 1
+      - name: Run ESLint
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
           echo "::group::Running ESLint"
           npm run lint
           echo "::endgroup::"
 
-      - name: Run frontend unit tests (shard ${{ matrix.shard }}/3)
+      - name: Run frontend unit tests
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
-          echo "::group::Running Unit Tests (Shard ${{ matrix.shard }}/3)"
-          npm run test:ci -- --shard=${{ matrix.shard }}/3
+          echo "::group::Running Unit Tests"
+          npm run test:ci
           echo "::endgroup::"
 
-      - name: Upload partial coverage report
-        uses: actions/upload-artifact@v5
-        with:
-          name: frontend-coverage-shard-${{ matrix.shard }}
-          path: ${{ env.UNIQUE_WORKSPACE }}/frontend/coverage/
-          retention-days: 1
-
-      - name: Save node_modules cache
-        if: always() && steps.cache-node-modules.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ~/.cache/boostedbudget/frontend-node-modules
-          key: node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('frontend/package-lock.json') }}
-
-      - name: Final workspace cleanup
-        if: always()
-        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
-
-  # =============================================================================
-  # Frontend Coverage Merge (runs after all shards complete)
-  # =============================================================================
-  frontend-coverage:
-    name: Merge Frontend Coverage
-    needs: [detect-changes, frontend-test]
-    if: needs.detect-changes.outputs.frontend == 'true'
-    runs-on: [self-hosted, macOS, mac-mini]
-    env:
-      UNIQUE_WORKSPACE: workspace-frontend-coverage-${{ github.run_id }}
-
-    steps:
-      - name: Clean workspace (fix permission issues)
-        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
-
-      - name: Checkout code
-        uses: actions/checkout@v6
-        with:
-          path: ${{ env.UNIQUE_WORKSPACE }}
-          clean: false
-          fetch-depth: 1
-
-      - name: Set up Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Restore node_modules cache
-        id: cache-node-modules
-        uses: actions/cache/restore@v4
-        with:
-          path: ~/.cache/boostedbudget/frontend-node-modules
-          key: node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('frontend/package-lock.json') }}
-          restore-keys: |
-            node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-
-
-      - name: Download all coverage artifacts
-        uses: actions/download-artifact@v6
-        with:
-          pattern: frontend-coverage-shard-*
-          path: ${{ env.UNIQUE_WORKSPACE }}/coverage-parts/
-          merge-multiple: true
-
-      - name: Install frontend dependencies (if cache miss)
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
-        run: |
-          if [ "${{ steps.cache-node-modules.outputs.cache-hit }}" == "true" ]; then
-            echo "✅ Restoring node_modules from cache..."
-            cp -a ~/.cache/boostedbudget/frontend-node-modules ./node_modules
-            echo "✅ node_modules restored from cache"
-          else
-            echo "📦 Cache miss, running npm ci..."
-            npm ci --prefer-offline --no-audit
-            # Save to fixed location for cache
-            mkdir -p ~/.cache/boostedbudget
-            cp -a ./node_modules ~/.cache/boostedbudget/frontend-node-modules
-          fi
-
-      - name: Merge coverage reports
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
-        run: |
-          echo "::group::Merging Coverage Reports"
-          cd frontend
-
-          # Install nyc for coverage merging
-          npm install --save-dev nyc
-
-          # Merge all coverage files
-          npx nyc merge ../coverage-parts coverage/coverage-final.json
-
-          # Generate merged HTML report
-          npx nyc report --reporter=html --reporter=text --reporter=lcov
-          echo "::endgroup::"
-
-      - name: Upload merged coverage report
+      - name: Upload coverage report
         uses: actions/upload-artifact@v5
         with:
           name: frontend-coverage
@@ -392,7 +296,8 @@ jobs:
           else
             echo "📦 Cache miss, running npm ci..."
             npm ci --prefer-offline --no-audit
-            # Save to fixed location for cache
+            # Save to fixed location for cache (remove existing first to avoid symlink conflicts)
+            rm -rf ~/.cache/boostedbudget/frontend-node-modules
             mkdir -p ~/.cache/boostedbudget
             cp -a ./node_modules ~/.cache/boostedbudget/frontend-node-modules
           fi
