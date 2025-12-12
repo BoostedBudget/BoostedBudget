@@ -16,10 +16,40 @@ env:
 
 jobs:
   # =============================================================================
+  # Detect Changes (determines which jobs to run based on file changes)
+  # =============================================================================
+  detect-changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      migrations: ${{ steps.filter.outputs.migrations }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - 'go.mod'
+              - 'go.sum'
+            frontend:
+              - 'frontend/**'
+              - 'package.json'
+              - 'package-lock.json'
+            migrations:
+              - 'backend/migrations/**'
+
+  # =============================================================================
   # Backend Tests (runs in parallel with frontend)
   # =============================================================================
   backend-test:
     name: Backend Tests
+    needs: detect-changes
+    if: needs.detect-changes.outputs.backend == 'true'
     runs-on: [self-hosted, macOS, mac-mini]
     env:
       UNIQUE_WORKSPACE: workspace-backend-test-${{ github.run_id }}
@@ -38,6 +68,25 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
+
+      - name: Restore Go modules cache
+        id: cache-go-modules
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/go/pkg/mod
+          key: go-modules-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-modules-${{ runner.os }}-
+
+      - name: Download Go dependencies
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        run: |
+          if [ "${{ steps.cache-go-modules.outputs.cache-hit }}" == "true" ]; then
+            echo "✅ Go modules restored from cache"
+          else
+            echo "📦 Cache miss, downloading Go modules..."
+          fi
+          go mod download
 
       - name: Run Go tests with coverage
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
@@ -67,10 +116,19 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
         run: go tool cover -html=coverage.out -o coverage.html
 
+      - name: Restore backend binary cache
+        id: cache-backend-binary
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
+          key: backend-binary-${{ runner.os }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', 'backend/go.sum') }}
+
       - name: Build backend binary (for E2E tests)
+        if: steps.cache-backend-binary.outputs.cache-hit != 'true'
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
         run: |
           echo "::group::Building backend binary"
+          mkdir -p bin
           go build -o bin/server ./cmd/server
           echo "::endgroup::"
 
@@ -90,6 +148,20 @@ jobs:
             ${{ env.UNIQUE_WORKSPACE }}/backend/coverage.html
           retention-days: 30
 
+      - name: Save Go modules cache
+        if: always() && steps.cache-go-modules.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/go/pkg/mod
+          key: go-modules-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+
+      - name: Save backend binary cache
+        if: always() && steps.cache-backend-binary.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
+          key: backend-binary-${{ runner.os }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', 'backend/go.sum') }}
+
       - name: Final workspace cleanup
         if: always()
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
@@ -99,6 +171,8 @@ jobs:
   # =============================================================================
   frontend-test:
     name: Frontend Tests (Shard ${{ matrix.shard }}/3)
+    needs: detect-changes
+    if: needs.detect-changes.outputs.frontend == 'true'
     runs-on: [self-hosted, macOS, mac-mini]
     strategy:
       fail-fast: false  # Continue other shards if one fails
@@ -180,7 +254,8 @@ jobs:
   # =============================================================================
   frontend-coverage:
     name: Merge Frontend Coverage
-    needs: frontend-test
+    needs: [detect-changes, frontend-test]
+    if: needs.detect-changes.outputs.frontend == 'true'
     runs-on: [self-hosted, macOS, mac-mini]
     env:
       UNIQUE_WORKSPACE: workspace-frontend-coverage-${{ github.run_id }}
@@ -266,7 +341,9 @@ jobs:
   # =============================================================================
   e2e-test:
     name: E2E Tests
-    needs: backend-test
+    needs: [detect-changes, backend-test]
+    # Run if backend-test succeeded OR was skipped (frontend-only changes)
+    if: always() && !cancelled() && (needs.backend-test.result == 'success' || needs.backend-test.result == 'skipped')
     runs-on: [self-hosted, macOS, mac-mini]
     env:
       UNIQUE_WORKSPACE: workspace-e2e-test-${{ github.run_id }}
@@ -319,11 +396,29 @@ jobs:
             }
           done
 
-      - name: Download backend binary
+      - name: Restore backend binary from cache
+        id: cache-backend-binary
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
+          key: backend-binary-${{ runner.os }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', 'backend/go.sum') }}
+          restore-keys: |
+            backend-binary-${{ runner.os }}-
+
+      - name: Download backend binary artifact (fallback)
+        if: steps.cache-backend-binary.outputs.cache-hit != 'true' && needs.backend-test.result == 'success'
         uses: actions/download-artifact@v6
         with:
           name: backend-binary
           path: ${{ env.UNIQUE_WORKSPACE }}/backend/bin
+
+      - name: Verify backend binary exists
+        run: |
+          if [ ! -f "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}/backend/bin/server" ]; then
+            echo "::error::Backend binary not found. Run backend tests first to populate cache."
+            exit 1
+          fi
+          echo "✅ Backend binary found"
 
       - name: Make backend binary executable
         run: chmod +x $GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
@@ -369,6 +464,8 @@ jobs:
   # =============================================================================
   migration-tests:
     name: Migration Tests
+    needs: detect-changes
+    if: needs.detect-changes.outputs.migrations == 'true' || needs.detect-changes.outputs.backend == 'true'
     runs-on: [self-hosted, macOS, mac-mini]
     env:
       UNIQUE_WORKSPACE: workspace-migration-tests-${{ github.run_id }}
