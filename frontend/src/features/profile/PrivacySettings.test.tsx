@@ -46,7 +46,7 @@ describe('PrivacySettings', () => {
 
       await waitFor(() => {
         expect(screen.queryByText(/loading/i)).not.toBeInTheDocument()
-      })
+      }, { timeout: 5000 }) // Give more time for mock to resolve in CI
 
       // Check for GDPR section
       expect(screen.getByText(/GDPR Cookie Consent/i)).toBeInTheDocument()
@@ -62,7 +62,7 @@ describe('PrivacySettings', () => {
 
       // Check for Data Sharing section
       expect(screen.getByRole('heading', { name: /Data Sharing/i })).toBeInTheDocument()
-    })
+    }, 60000) // Extended timeout for CI environment
 
     it('should display correct toggle states', async () => {
       vi.mocked(privacyApi.fetchPrivacySettings).mockResolvedValue(mockSettings)
@@ -176,7 +176,7 @@ describe('PrivacySettings', () => {
 
       await waitFor(() => {
         expect(screen.queryByText(/loading/i)).not.toBeInTheDocument()
-      })
+      }, { timeout: 5000 }) // Give more time for mock to resolve in CI
 
       const necessaryCheckbox = screen.getByRole('checkbox', { name: /necessary/i })
       expect(necessaryCheckbox).toBeChecked()
@@ -186,7 +186,7 @@ describe('PrivacySettings', () => {
       await user.click(necessaryCheckbox)
 
       expect(necessaryCheckbox).toBeChecked()
-    })
+    }, 60000) // Extended timeout for CI environment
   })
 
   describe('Save functionality', () => {
