@@ -123,9 +123,9 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Cache node_modules
+      - name: Restore node_modules cache
         id: cache-node-modules
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}/frontend/node_modules
           key: node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('**/frontend/package-lock.json') }}
@@ -164,6 +164,13 @@ jobs:
           path: ${{ env.UNIQUE_WORKSPACE }}/frontend/coverage/
           retention-days: 1
 
+      - name: Save node_modules cache
+        if: always() && steps.cache-node-modules.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}/frontend/node_modules
+          key: node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('**/frontend/package-lock.json') }}
+
       - name: Final workspace cleanup
         if: always()
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
@@ -194,9 +201,9 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Cache node_modules
+      - name: Restore node_modules cache
         id: cache-node-modules
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}/frontend/node_modules
           key: node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('**/frontend/package-lock.json') }}
@@ -243,6 +250,13 @@ jobs:
           path: ${{ env.UNIQUE_WORKSPACE }}/frontend/coverage/
           retention-days: 30
 
+      - name: Save node_modules cache
+        if: always() && steps.cache-node-modules.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}/frontend/node_modules
+          key: node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('**/frontend/package-lock.json') }}
+
       - name: Final workspace cleanup
         if: always()
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
@@ -272,9 +286,9 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Cache node_modules
+      - name: Restore node_modules cache
         id: cache-node-modules
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}/frontend/node_modules
           key: node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('**/frontend/package-lock.json') }}
@@ -338,6 +352,13 @@ jobs:
           name: playwright-videos
           path: ${{ env.UNIQUE_WORKSPACE }}/frontend/test-results/
           retention-days: 7
+
+      - name: Save node_modules cache
+        if: always() && steps.cache-node-modules.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}/frontend/node_modules
+          key: node-modules-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('**/frontend/package-lock.json') }}
 
       - name: Final workspace cleanup
         if: always()
