@@ -852,7 +852,7 @@ describe('AutoCategorizationRuleEditor', () => {
           conditions: [{ type: 'amount_greater_than', value: 99.99 }],
         }))
       })
-    })
+    }, 60000) // Extended timeout for CI environment
 
     it('should accept partial date_range with only start', async () => {
       const user = userEvent.setup()

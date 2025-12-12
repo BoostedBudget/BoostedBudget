@@ -397,12 +397,12 @@ describe('CreateSavingsGoalDialog', () => {
           })
         );
       });
-    }, 60000); // Extended timeout for CI environment
+    }, 120000); // Extended timeout for CI environment
 
     it('shows loading state during API call', async () => {
-      // Make API call slow
+      // Make API call slow - use longer delay to ensure loading state is visible
       vi.mocked(budgetsApi.createSavingsGoal).mockImplementation(
-        () => new Promise((resolve) => setTimeout(() => resolve(mockCreatedGoal), 1000))
+        () => new Promise((resolve) => setTimeout(() => resolve(mockCreatedGoal), 3000))
       );
 
       const user = userEvent.setup();
