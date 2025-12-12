@@ -362,7 +362,8 @@ describe('BudgetsPage', () => {
   describe('Create Budget Dialog', () => {
     it('opens create budget dialog when header button clicked', async () => {
       const user = userEvent.setup();
-      setupMocks();
+      // Need at least one budget for header button to be visible
+      setupMocks({ budgets: [mockActiveBudget] });
 
       render(<BudgetsPage />);
 
@@ -388,7 +389,8 @@ describe('BudgetsPage', () => {
 
     it('closes create budget dialog on cancel', async () => {
       const user = userEvent.setup();
-      setupMocks();
+      // Need at least one budget for header button to be visible
+      setupMocks({ budgets: [mockActiveBudget] });
 
       render(<BudgetsPage />);
 
@@ -406,7 +408,8 @@ describe('BudgetsPage', () => {
 
     it('closes dialog and refetches on budget created', async () => {
       const user = userEvent.setup();
-      setupMocks();
+      // Need at least one budget for header button to be visible
+      setupMocks({ budgets: [mockActiveBudget] });
 
       render(<BudgetsPage />);
 
@@ -432,7 +435,8 @@ describe('BudgetsPage', () => {
   describe('Create Goal Dialog', () => {
     it('opens create goal dialog when header button clicked', async () => {
       const user = userEvent.setup();
-      setupMocks();
+      // Need at least one goal for header button to be visible
+      setupMocks({ goals: [mockActiveGoal] });
 
       render(<BudgetsPage />);
 
@@ -458,7 +462,8 @@ describe('BudgetsPage', () => {
 
     it('closes create goal dialog on cancel', async () => {
       const user = userEvent.setup();
-      setupMocks();
+      // Need at least one goal for header button to be visible
+      setupMocks({ goals: [mockActiveGoal] });
 
       render(<BudgetsPage />);
 
@@ -476,7 +481,8 @@ describe('BudgetsPage', () => {
 
     it('closes dialog and refetches on goal created', async () => {
       const user = userEvent.setup();
-      setupMocks();
+      // Need at least one goal for header button to be visible
+      setupMocks({ goals: [mockActiveGoal] });
 
       render(<BudgetsPage />);
 
@@ -500,8 +506,9 @@ describe('BudgetsPage', () => {
   // ==========================================================================
 
   describe('Header Buttons', () => {
-    it('renders create budget button in section header', () => {
-      setupMocks();
+    it('renders create budget button in section header when budgets exist', () => {
+      // Need at least one budget for header button to be visible
+      setupMocks({ budgets: [mockActiveBudget] });
 
       render(<BudgetsPage />);
 
@@ -509,13 +516,80 @@ describe('BudgetsPage', () => {
       expect(createButton).toBeInTheDocument();
     });
 
-    it('renders create goal button in savings goals section', () => {
-      setupMocks();
+    it('renders create goal button in savings goals section when goals exist', () => {
+      // Need at least one goal for header button to be visible
+      setupMocks({ goals: [mockActiveGoal] });
 
       render(<BudgetsPage />);
 
       const createButton = screen.getByRole('button', { name: /create savings goal/i });
       expect(createButton).toBeInTheDocument();
+    });
+  });
+
+  // ==========================================================================
+  // Issue #460: Conditional Header Button Visibility
+  // ==========================================================================
+
+  describe('Conditional Header Button Visibility (Issue #460)', () => {
+    it('hides Create Budget header button when no active budgets exist', () => {
+      setupMocks({ budgets: [], goals: [] });
+
+      render(<BudgetsPage />);
+
+      // Empty state button should be visible
+      expect(screen.getByText(/create your first budget/i)).toBeInTheDocument();
+
+      // Header button should NOT be visible (aria-label="Create budget")
+      expect(screen.queryByRole('button', { name: /^create budget$/i })).not.toBeInTheDocument();
+    });
+
+    it('shows Create Budget header button when active budgets exist', () => {
+      setupMocks({ budgets: [mockActiveBudget], goals: [] });
+
+      render(<BudgetsPage />);
+
+      // Header button should be visible
+      expect(screen.getByRole('button', { name: /create budget/i })).toBeInTheDocument();
+
+      // Empty state should NOT be visible
+      expect(screen.queryByText(/create your first budget/i)).not.toBeInTheDocument();
+    });
+
+    it('hides Create Goal header button when no goals exist', () => {
+      setupMocks({ budgets: [], goals: [] });
+
+      render(<BudgetsPage />);
+
+      // Empty state button should be visible
+      expect(screen.getByText(/create your first goal/i)).toBeInTheDocument();
+
+      // Header button should NOT be visible (aria-label="Create savings goal")
+      expect(screen.queryByRole('button', { name: /^create savings goal$/i })).not.toBeInTheDocument();
+    });
+
+    it('shows Create Goal header button when active goals exist', () => {
+      setupMocks({ budgets: [], goals: [mockActiveGoal] });
+
+      render(<BudgetsPage />);
+
+      // Header button should be visible
+      expect(screen.getByRole('button', { name: /create savings goal/i })).toBeInTheDocument();
+
+      // Empty state should NOT be visible
+      expect(screen.queryByText(/create your first goal/i)).not.toBeInTheDocument();
+    });
+
+    it('shows Create Goal header button when only completed goals exist', () => {
+      setupMocks({ budgets: [], goals: [mockCompletedGoal] });
+
+      render(<BudgetsPage />);
+
+      // Header button should be visible even with only completed goals
+      expect(screen.getByRole('button', { name: /create savings goal/i })).toBeInTheDocument();
+
+      // Empty state should NOT be visible
+      expect(screen.queryByText(/create your first goal/i)).not.toBeInTheDocument();
     });
   });
 });
