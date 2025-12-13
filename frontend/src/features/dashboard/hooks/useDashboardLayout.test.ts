@@ -5,6 +5,7 @@
  * saving, debounce behavior, widget operations, and error handling.
  *
  * Issue #354: Customizable Dashboard Widget System
+ * Issue #472: Tests for isFromApi fallback behavior
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -12,6 +13,7 @@ import { renderHook, act, waitFor } from '@testing-library/react'
 import { useDashboardLayout } from './useDashboardLayout'
 import * as preferencesApi from '../api/preferencesApi'
 import * as registry from '../widgets/registry'
+import * as useDefaultDashboardLayoutModule from './useDefaultDashboardLayout'
 import type { DashboardLayout, DashboardPreferencesResponse, WidgetConfig } from '../types'
 
 // Mock the API module
@@ -23,6 +25,15 @@ vi.mock('../widgets/registry', async () => {
   return {
     ...actual,
     createWidgetConfig: vi.fn(),
+  }
+})
+
+// Mock useDefaultDashboardLayout for Issue #472 tests
+vi.mock('./useDefaultDashboardLayout', async () => {
+  const actual = await vi.importActual('./useDefaultDashboardLayout')
+  return {
+    ...actual,
+    useDefaultDashboardLayout: vi.fn(),
   }
 })
 
@@ -55,6 +66,16 @@ describe('useDashboardLayout', () => {
     vi.clearAllMocks()
     // Use fake timers but allow setImmediate to work for waitFor()
     vi.useFakeTimers({ shouldAdvanceTime: true })
+
+    // Default mock for useDefaultDashboardLayout - Issue #472
+    // By default, simulate successful API fetch (isFromApi = true)
+    vi.mocked(useDefaultDashboardLayoutModule.useDefaultDashboardLayout).mockReturnValue({
+      defaultLayout: registry.DEFAULT_LAYOUT,
+      loading: false,
+      error: null,
+      refetch: vi.fn(),
+      isFromApi: true,
+    })
   })
 
   afterEach(() => {
@@ -1108,6 +1129,139 @@ describe('useDashboardLayout', () => {
       expect(navigator.sendBeacon).not.toHaveBeenCalled()
 
       navigator.sendBeacon = originalSendBeacon
+    })
+  })
+
+  describe('Fallback behavior - isFromApi flag (Issue #472)', () => {
+    it('should NOT auto-reset when using fallback layout (isFromApi = false)', async () => {
+      // Simulate API failure - using fallback layout
+      vi.mocked(useDefaultDashboardLayoutModule.useDefaultDashboardLayout).mockReturnValue({
+        defaultLayout: registry.DEFAULT_LAYOUT, // version 4
+        loading: false,
+        error: new Error('API failed'),
+        refetch: vi.fn(),
+        isFromApi: false, // KEY: Using fallback, not from API
+      })
+
+      // User has older version 2 layout
+      const outdatedLayout: DashboardPreferencesResponse = {
+        layout: {
+          widgets: [
+            { i: 'user-widget', type: 'balance-overview', x: 0, y: 0, w: 4, h: 2, minW: 3, minH: 2 },
+          ],
+          version: 2, // Older than DEFAULT_LAYOUT.version (4)
+        },
+      }
+
+      vi.mocked(preferencesApi.getDashboardPreferences).mockResolvedValue(outdatedLayout)
+      vi.mocked(preferencesApi.resetDashboardPreferences).mockResolvedValue({
+        layout: registry.DEFAULT_LAYOUT,
+      })
+
+      const { result } = renderHook(() => useDashboardLayout())
+
+      await waitFor(() => {
+        expect(result.current.loading).toBe(false)
+      })
+
+      // Should NOT have called reset when using fallback
+      expect(preferencesApi.resetDashboardPreferences).not.toHaveBeenCalled()
+
+      // Should preserve user's layout (not reset to default)
+      expect(result.current.layout.widgets[0].i).toBe('user-widget')
+      expect(result.current.layout.version).toBe(2)
+    })
+
+    it('should auto-reset when layout from API shows newer version (isFromApi = true)', async () => {
+      // Simulate successful API fetch
+      vi.mocked(useDefaultDashboardLayoutModule.useDefaultDashboardLayout).mockReturnValue({
+        defaultLayout: registry.DEFAULT_LAYOUT, // version 4
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+        isFromApi: true, // From API, so version comparison is valid
+      })
+
+      // User has older version 2 layout
+      const outdatedLayout: DashboardPreferencesResponse = {
+        layout: {
+          widgets: [
+            { i: 'old-widget', type: 'balance-overview', x: 0, y: 0, w: 4, h: 2, minW: 3, minH: 2 },
+          ],
+          version: 2,
+        },
+      }
+
+      vi.mocked(preferencesApi.getDashboardPreferences).mockResolvedValue(outdatedLayout)
+      vi.mocked(preferencesApi.resetDashboardPreferences).mockResolvedValue({
+        layout: registry.DEFAULT_LAYOUT,
+      })
+
+      const { result } = renderHook(() => useDashboardLayout())
+
+      await waitFor(() => {
+        expect(result.current.loading).toBe(false)
+      })
+
+      // SHOULD have called reset because API confirmed newer version
+      expect(preferencesApi.resetDashboardPreferences).toHaveBeenCalledTimes(1)
+
+      // Layout should be reset to default
+      expect(result.current.layout).toEqual(registry.DEFAULT_LAYOUT)
+    })
+
+    it('should preserve user layout when version matches even with isFromApi = true', async () => {
+      vi.mocked(useDefaultDashboardLayoutModule.useDefaultDashboardLayout).mockReturnValue({
+        defaultLayout: registry.DEFAULT_LAYOUT, // version 4
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+        isFromApi: true,
+      })
+
+      // User has same version layout with customizations
+      const customLayout: DashboardPreferencesResponse = {
+        layout: {
+          widgets: [
+            { i: 'custom-widget', type: 'cash-flow-chart', x: 0, y: 0, w: 8, h: 6, minW: 4, minH: 4 },
+          ],
+          version: 4, // Same as DEFAULT_LAYOUT.version
+        },
+      }
+
+      vi.mocked(preferencesApi.getDashboardPreferences).mockResolvedValue(customLayout)
+
+      const { result } = renderHook(() => useDashboardLayout())
+
+      await waitFor(() => {
+        expect(result.current.loading).toBe(false)
+      })
+
+      // Should NOT reset when versions match
+      expect(preferencesApi.resetDashboardPreferences).not.toHaveBeenCalled()
+
+      // Should preserve user's custom layout
+      expect(result.current.layout.widgets[0].w).toBe(8) // User's custom width
+      expect(result.current.layout.widgets[0].h).toBe(6) // User's custom height
+    })
+
+    it('should handle loading state from useDefaultDashboardLayout', async () => {
+      // Simulate loading state
+      vi.mocked(useDefaultDashboardLayoutModule.useDefaultDashboardLayout).mockReturnValue({
+        defaultLayout: registry.DEFAULT_LAYOUT,
+        loading: true, // Still loading
+        error: null,
+        refetch: vi.fn(),
+        isFromApi: false,
+      })
+
+      vi.mocked(preferencesApi.getDashboardPreferences).mockResolvedValue(mockPreferencesResponse)
+
+      const { result } = renderHook(() => useDashboardLayout())
+
+      // Should not call API while default layout is loading
+      expect(preferencesApi.getDashboardPreferences).not.toHaveBeenCalled()
+      expect(result.current.loading).toBe(true)
     })
   })
 })
