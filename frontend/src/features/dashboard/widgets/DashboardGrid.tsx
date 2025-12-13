@@ -228,17 +228,40 @@ export function DashboardGrid({
     // Use batchUpdate to prevent multiple relayouts during sync
     gridRef.current.batchUpdate(true);
 
-    // Explicitly update each widget's position
-    // This works correctly with React-managed DOM elements
+    // Get IDs of widgets GridStack currently tracks
+    // New widgets (rendered by React after init) won't be in this list
+    const gridItems = gridRef.current.getGridItems();
+    const trackedIds = new Set(
+      gridItems.map((el) => el.getAttribute('gs-id')).filter(Boolean)
+    );
+    const layoutIds = new Set(layout.widgets.map((w) => w.i));
+
+    // Process each widget in the layout
     layout.widgets.forEach((widget) => {
       const el = widgetElementsRef.current.get(widget.i);
-      if (el) {
-        gridRef.current!.update(el, {
-          x: widget.x,
-          y: widget.y,
-          w: widget.w,
-          h: widget.h,
-        });
+      if (!el) return;
+
+      if (!trackedIds.has(widget.i)) {
+        // NEW widget - register with GridStack first
+        // makeWidget reads from gs-* attributes set by React
+        gridRef.current!.makeWidget(el);
+      }
+
+      // Update position (works for both new and existing widgets)
+      gridRef.current!.update(el, {
+        x: widget.x,
+        y: widget.y,
+        w: widget.w,
+        h: widget.h,
+      });
+    });
+
+    // Clean up removed widgets (GridStack still tracking but not in layout)
+    // This prevents stale references and potential memory leaks
+    gridItems.forEach((el) => {
+      const id = el.getAttribute('gs-id');
+      if (id && !layoutIds.has(id)) {
+        gridRef.current!.removeWidget(el, false); // false = don't remove from DOM (React handles that)
       }
     });
 

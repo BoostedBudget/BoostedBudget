@@ -31,6 +31,9 @@ const mockGridStackInstance = {
   // Issue #478: Added batchUpdate and update for new layout sync pattern
   batchUpdate: vi.fn(),
   update: vi.fn(),
+  // New widget rendering fix: Added getGridItems and makeWidget
+  getGridItems: vi.fn(() => []), // Returns empty array initially (no widgets tracked yet)
+  makeWidget: vi.fn(),
   _ignoreCB: false,
 };
 
@@ -115,6 +118,10 @@ describe('DashboardGrid', () => {
     // Issue #478: Clear new mock methods
     mockGridStackInstance.batchUpdate.mockClear();
     mockGridStackInstance.update.mockClear();
+    // New widget rendering fix: Clear new mock methods
+    mockGridStackInstance.getGridItems.mockClear();
+    mockGridStackInstance.getGridItems.mockReturnValue([]); // Reset to return empty array
+    mockGridStackInstance.makeWidget.mockClear();
     mockGridStackInstance._ignoreCB = false;
 
     // Setup default mock registry behavior
