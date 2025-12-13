@@ -20,7 +20,7 @@ import './DashboardGrid.css';
 
 import { WidgetWrapper } from './WidgetWrapper';
 import { getWidget } from './registry';
-import { toWidgetConfig } from '../types/gridstack-utils';
+// toWidgetConfig removed - Issue #478: We now read directly from DOM attributes
 import type { WidgetType, DashboardLayout, WidgetConfig } from '../types';
 
 // Extend GridStack type to include our _ignoreCB flag
@@ -94,30 +94,62 @@ export function DashboardGrid({
       );
 
       /**
-       * Issue #476: Helper function to process GridStack items and update layout
-       * Filters out invalid intermediate resize states (null from toWidgetConfig)
+       * Issue #476, #478: Helper function to process GridStack items and update layout
+       *
+       * Issue #478: Fixed to read positions from DOM attributes instead of save(false).
+       * GridStack's save(false) returns incorrect x-positions for React-managed elements,
+       * but GridStack correctly updates gs-x/gs-y DOM attributes after drag.
        */
       const processLayoutUpdate = () => {
         if (!gridRef.current || gridRef.current._ignoreCB) return;
-
-        const items = gridRef.current.save(false);
-        if (!Array.isArray(items)) return;
 
         // Build a map of widget types by id from current layout
         const currentLayout = layoutRef.current;
         const typeMap = new Map<string, WidgetType>();
         currentLayout.widgets.forEach((w) => typeMap.set(w.i, w.type));
 
-        const validItems = items.filter((item) => item.id && typeMap.has(item.id));
+        // Issue #478: Read positions directly from DOM attributes that GridStack updates after drag
+        // This fixes the bug where save(false) returns x=0 for React-managed elements
+        const gridItems = gridRef.current.getGridItems();
+        const updatedWidgets: WidgetConfig[] = [];
 
-        // Issue #476: Convert to WidgetConfig, filtering out invalid intermediate states
-        const updatedWidgets = validItems
-          .map((item) => toWidgetConfig(item, typeMap.get(item.id!)!))
-          .filter((widget): widget is WidgetConfig => widget !== null);
+        gridItems.forEach((el: HTMLElement) => {
+          const id = el.getAttribute('gs-id');
+          if (!id || !typeMap.has(id)) return;
 
-        // Issue #476: Skip update if any widget had invalid dimensions (intermediate resize state)
-        // This prevents 400 errors during resize drag
-        if (updatedWidgets.length !== validItems.length) {
+          // Read actual positions from DOM attributes
+          const x = parseInt(el.getAttribute('gs-x') || '0', 10);
+          const y = parseInt(el.getAttribute('gs-y') || '0', 10);
+          const w = parseInt(el.getAttribute('gs-w') || '1', 10);
+          const h = parseInt(el.getAttribute('gs-h') || '1', 10);
+
+          // Issue #476: Skip invalid intermediate states (e.g., during resize drag)
+          if (w < 1 || h < 1) return;
+
+          const widget: WidgetConfig = {
+            i: id,
+            type: typeMap.get(id)!,
+            x,
+            y,
+            w,
+            h,
+          };
+
+          // Preserve min/max constraints from DOM attributes
+          const minW = el.getAttribute('gs-min-w');
+          const minH = el.getAttribute('gs-min-h');
+          const maxW = el.getAttribute('gs-max-w');
+          const maxH = el.getAttribute('gs-max-h');
+          if (minW) widget.minW = parseInt(minW, 10);
+          if (minH) widget.minH = parseInt(minH, 10);
+          if (maxW) widget.maxW = parseInt(maxW, 10);
+          if (maxH) widget.maxH = parseInt(maxH, 10);
+
+          updatedWidgets.push(widget);
+        });
+
+        // Skip update if we couldn't get all widgets
+        if (updatedWidgets.length !== currentLayout.widgets.length) {
           return;
         }
 
