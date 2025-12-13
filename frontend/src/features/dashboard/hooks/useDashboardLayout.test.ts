@@ -268,6 +268,7 @@ describe('useDashboardLayout', () => {
       expect(preferencesApi.saveDashboardPreferences).toHaveBeenCalledWith(newLayout)
     })
 
+    // Issue #470: Updated timings for 500ms debounce (was 1000ms)
     it('should collapse multiple rapid changes into one save', async () => {
       vi.mocked(preferencesApi.getDashboardPreferences).mockResolvedValue(mockPreferencesResponse)
       vi.mocked(preferencesApi.saveDashboardPreferences).mockResolvedValue(mockPreferencesResponse)
@@ -278,13 +279,13 @@ describe('useDashboardLayout', () => {
         expect(result.current.loading).toBe(false)
       })
 
-      // Make multiple updates in quick succession
+      // Make multiple updates in quick succession (all within 500ms debounce window)
       act(() => {
         result.current.updateLayout({ ...mockLayout, version: 2 })
       })
 
       act(() => {
-        vi.advanceTimersByTime(500) // Half the debounce time
+        vi.advanceTimersByTime(200) // Less than 500ms debounce
       })
 
       act(() => {
@@ -292,7 +293,7 @@ describe('useDashboardLayout', () => {
       })
 
       act(() => {
-        vi.advanceTimersByTime(500) // Another half
+        vi.advanceTimersByTime(200) // Still within debounce window
       })
 
       act(() => {
@@ -301,7 +302,7 @@ describe('useDashboardLayout', () => {
 
       // Fast forward past debounce time
       await act(async () => {
-        vi.advanceTimersByTime(1000)
+        vi.advanceTimersByTime(500)
       })
 
       // Should only save once with the last layout
@@ -311,7 +312,8 @@ describe('useDashboardLayout', () => {
       )
     })
 
-    it('should save after SAVE_DEBOUNCE_MS (1000ms)', async () => {
+    // Issue #470: Debounce reduced from 1000ms to 500ms
+    it('should save after SAVE_DEBOUNCE_MS (500ms)', async () => {
       vi.mocked(preferencesApi.getDashboardPreferences).mockResolvedValue(mockPreferencesResponse)
       vi.mocked(preferencesApi.saveDashboardPreferences).mockResolvedValue(mockPreferencesResponse)
 
@@ -325,19 +327,20 @@ describe('useDashboardLayout', () => {
         result.current.updateLayout({ ...mockLayout, version: 2 })
       })
 
-      // Not saved at 999ms
+      // Not saved at 499ms
       act(() => {
-        vi.advanceTimersByTime(999)
+        vi.advanceTimersByTime(499)
       })
       expect(preferencesApi.saveDashboardPreferences).not.toHaveBeenCalled()
 
-      // Saved at 1000ms
+      // Saved at 500ms
       await act(async () => {
         vi.advanceTimersByTime(1)
       })
       expect(preferencesApi.saveDashboardPreferences).toHaveBeenCalledTimes(1)
     })
 
+    // Issue #470: Updated timings for 500ms debounce (was 1000ms)
     it('should cancel pending save on new update', async () => {
       vi.mocked(preferencesApi.getDashboardPreferences).mockResolvedValue(mockPreferencesResponse)
       vi.mocked(preferencesApi.saveDashboardPreferences).mockResolvedValue(mockPreferencesResponse)
@@ -353,9 +356,9 @@ describe('useDashboardLayout', () => {
         result.current.updateLayout({ ...mockLayout, version: 2 })
       })
 
-      // Wait 900ms
+      // Wait 400ms (less than 500ms debounce)
       act(() => {
-        vi.advanceTimersByTime(900)
+        vi.advanceTimersByTime(400)
       })
 
       // Second update (cancels first)
@@ -363,15 +366,15 @@ describe('useDashboardLayout', () => {
         result.current.updateLayout({ ...mockLayout, version: 3 })
       })
 
-      // Wait another 900ms (only 900ms since second update)
+      // Wait another 400ms (only 400ms since second update, total 800ms)
       act(() => {
-        vi.advanceTimersByTime(900)
+        vi.advanceTimersByTime(400)
       })
 
-      // First save should NOT have fired
+      // First save should NOT have fired (debounce resets on each update)
       expect(preferencesApi.saveDashboardPreferences).not.toHaveBeenCalled()
 
-      // Wait the remaining 100ms
+      // Wait the remaining 100ms (500ms since second update)
       await act(async () => {
         vi.advanceTimersByTime(100)
       })
@@ -926,6 +929,185 @@ describe('useDashboardLayout', () => {
       })
 
       expect(result.current.error).toBeNull()
+    })
+  })
+
+  describe('getAccessToken option (Issue #470)', () => {
+    it('should accept getAccessToken option', async () => {
+      vi.mocked(preferencesApi.getDashboardPreferences).mockResolvedValue(mockPreferencesResponse)
+      const mockGetToken = vi.fn().mockResolvedValue('test-token')
+
+      const { result } = renderHook(() => useDashboardLayout({ getAccessToken: mockGetToken }))
+
+      await waitFor(() => {
+        expect(result.current.loading).toBe(false)
+      })
+
+      // Hook should work normally with the option
+      expect(result.current.layout).toEqual(mockLayout)
+    })
+  })
+
+  describe('visibilitychange handler (Issue #470)', () => {
+    it('should save pending layout when tab becomes hidden', async () => {
+      vi.mocked(preferencesApi.getDashboardPreferences).mockResolvedValue(mockPreferencesResponse)
+      vi.mocked(preferencesApi.saveDashboardPreferences).mockResolvedValue(mockPreferencesResponse)
+
+      const { result } = renderHook(() => useDashboardLayout())
+
+      await waitFor(() => {
+        expect(result.current.loading).toBe(false)
+      })
+
+      // Schedule a save (won't complete due to debounce)
+      const newLayout = { ...mockLayout, version: 6 }
+      act(() => {
+        result.current.updateLayout(newLayout)
+      })
+
+      // Simulate tab becoming hidden (before debounce completes)
+      await act(async () => {
+        Object.defineProperty(document, 'visibilityState', {
+          value: 'hidden',
+          configurable: true,
+        })
+        document.dispatchEvent(new Event('visibilitychange'))
+      })
+
+      // Should have saved the pending layout
+      expect(preferencesApi.saveDashboardPreferences).toHaveBeenCalledWith(newLayout)
+    })
+
+    it('should not save when tab becomes visible', async () => {
+      vi.mocked(preferencesApi.getDashboardPreferences).mockResolvedValue(mockPreferencesResponse)
+      vi.mocked(preferencesApi.saveDashboardPreferences).mockResolvedValue(mockPreferencesResponse)
+
+      const { result } = renderHook(() => useDashboardLayout())
+
+      await waitFor(() => {
+        expect(result.current.loading).toBe(false)
+      })
+
+      // Schedule a save
+      act(() => {
+        result.current.updateLayout({ ...mockLayout, version: 7 })
+      })
+
+      // Simulate tab becoming visible (shouldn't trigger save)
+      await act(async () => {
+        Object.defineProperty(document, 'visibilityState', {
+          value: 'visible',
+          configurable: true,
+        })
+        document.dispatchEvent(new Event('visibilitychange'))
+      })
+
+      // Should NOT have saved (only saves when hidden)
+      expect(preferencesApi.saveDashboardPreferences).not.toHaveBeenCalled()
+    })
+
+    it('should not save when no pending layout on visibility change', async () => {
+      vi.mocked(preferencesApi.getDashboardPreferences).mockResolvedValue(mockPreferencesResponse)
+      vi.mocked(preferencesApi.saveDashboardPreferences).mockResolvedValue(mockPreferencesResponse)
+
+      renderHook(() => useDashboardLayout())
+
+      await waitFor(() => {
+        expect(preferencesApi.getDashboardPreferences).toHaveBeenCalled()
+      })
+
+      // No pending changes, just trigger visibility change
+      await act(async () => {
+        Object.defineProperty(document, 'visibilityState', {
+          value: 'hidden',
+          configurable: true,
+        })
+        document.dispatchEvent(new Event('visibilitychange'))
+      })
+
+      // Should NOT have called save (no pending layout)
+      expect(preferencesApi.saveDashboardPreferences).not.toHaveBeenCalled()
+    })
+  })
+
+  // Note: Reduced debounce time test is covered in 'Debounced Save' section
+  // Test: 'should save after SAVE_DEBOUNCE_MS (500ms)'
+
+  describe('beforeunload with fetch keepalive (Issue #470)', () => {
+    let originalFetch: typeof globalThis.fetch
+
+    beforeEach(() => {
+      originalFetch = globalThis.fetch
+      globalThis.fetch = vi.fn().mockResolvedValue({ ok: true })
+    })
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch
+    })
+
+    it('should use fetch with keepalive on beforeunload when token available', async () => {
+      const mockGetToken = vi.fn().mockResolvedValue('test-token-123')
+      vi.mocked(preferencesApi.getDashboardPreferences).mockResolvedValue(mockPreferencesResponse)
+
+      const { result } = renderHook(() => useDashboardLayout({ getAccessToken: mockGetToken }))
+
+      await waitFor(() => {
+        expect(result.current.loading).toBe(false)
+      })
+
+      // Schedule a save
+      const newLayout = { ...mockLayout, version: 9 }
+      act(() => {
+        result.current.updateLayout(newLayout)
+      })
+
+      // Trigger beforeunload
+      await act(async () => {
+        window.dispatchEvent(new Event('beforeunload'))
+        // Allow microtasks to complete
+        await new Promise((r) => setTimeout(r, 0))
+      })
+
+      // Should have called fetch with keepalive and auth header
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/v1/dashboard/preferences'),
+        expect.objectContaining({
+          method: 'PUT',
+          keepalive: true,
+          headers: expect.objectContaining({
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer test-token-123',
+          }),
+        })
+      )
+    })
+
+    it('should not use sendBeacon (replaced with fetch)', async () => {
+      const originalSendBeacon = navigator.sendBeacon
+      navigator.sendBeacon = vi.fn()
+
+      const mockGetToken = vi.fn().mockResolvedValue('test-token')
+      vi.mocked(preferencesApi.getDashboardPreferences).mockResolvedValue(mockPreferencesResponse)
+
+      const { result } = renderHook(() => useDashboardLayout({ getAccessToken: mockGetToken }))
+
+      await waitFor(() => {
+        expect(result.current.loading).toBe(false)
+      })
+
+      act(() => {
+        result.current.updateLayout({ ...mockLayout, version: 10 })
+      })
+
+      await act(async () => {
+        window.dispatchEvent(new Event('beforeunload'))
+        await new Promise((r) => setTimeout(r, 0))
+      })
+
+      // sendBeacon should NOT be called (replaced with fetch)
+      expect(navigator.sendBeacon).not.toHaveBeenCalled()
+
+      navigator.sendBeacon = originalSendBeacon
     })
   })
 })
