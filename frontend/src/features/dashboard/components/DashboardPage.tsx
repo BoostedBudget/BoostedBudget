@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo } from 'react'
+import { useAuth0 } from '@auth0/auth0-react'
 import { PlusIcon, PencilIcon, ArrowPathIcon, XMarkIcon } from '@heroicons/react/24/outline'
 import { DashboardProvider, useDashboardContext } from '../context/DashboardContext'
 import { useDashboardLayout } from '../hooks/useDashboardLayout'
@@ -28,8 +29,20 @@ import '../widgets'
  */
 
 function DashboardContent() {
+  const { getAccessTokenSilently } = useAuth0()
   const { filters, setFilters, isEditing, setIsEditing } = useDashboardContext()
-  const { layout, loading, error, saving, updateLayout, addWidget, removeWidget, resetToDefault } = useDashboardLayout()
+
+  // Issue #470: Pass getAccessToken for authenticated save on beforeunload
+  const { layout, loading, error, saving, updateLayout, addWidget, removeWidget, resetToDefault, saveNow } = useDashboardLayout({
+    getAccessToken: async () => {
+      try {
+        return await getAccessTokenSilently()
+      } catch {
+        return null
+      }
+    }
+  })
+
   const { showHint, dismissHint } = useDashboardOnboarding()
   const [catalogOpen, setCatalogOpen] = useState(false)
 
@@ -61,6 +74,13 @@ function DashboardContent() {
     await resetToDefault()
     setIsEditing(false)
   }, [resetToDefault, setIsEditing])
+
+  // Issue #470: Save pending changes immediately when exiting edit mode
+  // This ensures changes are persisted before the user can navigate away
+  const handleExitEditMode = useCallback(async () => {
+    await saveNow()
+    setIsEditing(false)
+  }, [saveNow, setIsEditing])
 
   // Get existing widget types for catalog
   const existingWidgetTypes = layout.widgets.map(w => w.type)
@@ -150,8 +170,9 @@ function DashboardContent() {
               </>
             )}
 
+            {/* Issue #470: Use handleExitEditMode to save on Done click */}
             <button
-              onClick={() => setIsEditing(!isEditing)}
+              onClick={() => isEditing ? handleExitEditMode() : setIsEditing(true)}
               className={`inline-flex items-center gap-1.5 px-4 py-2 font-medium rounded-lg transition-colors ${
                 isEditing
                   ? 'bg-green-600 text-white hover:bg-green-700'

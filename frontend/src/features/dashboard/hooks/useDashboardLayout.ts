@@ -2,6 +2,7 @@
  * Dashboard Layout Hook
  * Issue #354: Customizable Dashboard Widget System
  * Issue #449: Centralize default dashboard layout configuration
+ * Issue #470: Fix dashboard persistence - replace sendBeacon with fetch keepalive
  *
  * Manages dashboard layout state with persistence to the backend.
  * Includes debounced auto-save and optimistic updates.
@@ -17,7 +18,17 @@ import {
 } from '../api/preferencesApi';
 import { DEFAULT_LAYOUT, createWidgetConfig } from '../widgets/registry';
 import { useDefaultDashboardLayout } from './useDefaultDashboardLayout';
+import { getApiUrl } from '../../../api/axiosConfig';
 import type { DashboardLayout, WidgetType } from '../types';
+
+/**
+ * Options for the useDashboardLayout hook
+ * Issue #470: Added getAccessToken to support authenticated fetch in beforeunload
+ */
+export interface UseDashboardLayoutOptions {
+  /** Function to get the current auth token for API calls */
+  getAccessToken?: () => Promise<string | null>;
+}
 
 interface UseDashboardLayoutResult {
   layout: DashboardLayout;
@@ -31,9 +42,11 @@ interface UseDashboardLayoutResult {
   saveNow: () => Promise<void>;
 }
 
-const SAVE_DEBOUNCE_MS = 1000;
+// Issue #470: Reduced from 1000ms to 500ms to minimize data loss window
+const SAVE_DEBOUNCE_MS = 500;
 
-export function useDashboardLayout(): UseDashboardLayoutResult {
+export function useDashboardLayout(options?: UseDashboardLayoutOptions): UseDashboardLayoutResult {
+  const { getAccessToken } = options || {};
   // Fetch centralized default layout from API (Issue #449)
   // Falls back to hardcoded DEFAULT_LAYOUT if API fails
   const { defaultLayout, loading: defaultLayoutLoading } = useDefaultDashboardLayout();
@@ -237,23 +250,53 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
     };
   }, [saveLayout]);
 
-  // Handle page unload - use sendBeacon for reliable non-blocking save
-  // Issue #468: Ensures changes persist even when closing browser tab
+  // Handle page unload - use fetch with keepalive for reliable authenticated save
+  // Issue #470: Replaced sendBeacon with fetch + keepalive to support auth headers
+  // sendBeacon cannot include custom headers, causing 401 failures
   useEffect(() => {
-    const handleBeforeUnload = () => {
-      if (pendingLayoutRef.current) {
-        // Use sendBeacon for non-blocking save on page close
-        // Note: sendBeacon requires JSON content type workaround via Blob
-        const data = JSON.stringify({ layout: pendingLayoutRef.current });
-        const blob = new Blob([data], { type: 'application/json' });
-        navigator.sendBeacon('/api/v1/dashboard/preferences', blob);
-        pendingLayoutRef.current = null;
+    const handleBeforeUnload = async () => {
+      if (pendingLayoutRef.current && getAccessToken) {
+        try {
+          const token = await getAccessToken();
+          const apiUrl = getApiUrl();
+
+          // Use fetch with keepalive - allows headers unlike sendBeacon
+          fetch(`${apiUrl}/v1/dashboard/preferences`, {
+            method: 'PUT',
+            keepalive: true,
+            headers: {
+              'Content-Type': 'application/json',
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify({ layout: pendingLayoutRef.current }),
+          });
+          // Fire-and-forget - don't await in beforeunload
+          pendingLayoutRef.current = null;
+        } catch {
+          // Silently fail - best effort save
+        }
       }
     };
 
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, []);
+  }, [getAccessToken]);
+
+  // Handle visibility change - save when tab loses focus
+  // Issue #470: Provides another save opportunity with full async/auth support
+  // Unlike beforeunload, this event allows awaiting promises
+  useEffect(() => {
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState === 'hidden' && pendingLayoutRef.current) {
+        // We can await here unlike in beforeunload
+        await saveLayout(pendingLayoutRef.current);
+        pendingLayoutRef.current = null;
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [saveLayout]);
 
   return {
     layout,
