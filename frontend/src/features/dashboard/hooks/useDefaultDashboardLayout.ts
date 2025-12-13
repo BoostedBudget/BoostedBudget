@@ -5,6 +5,7 @@
  * Uses in-memory cache (for single session) and localStorage (for cache persistence).
  *
  * Issue #449: Centralize default dashboard layout configuration
+ * Issue #472: Added isFromApi flag to prevent resets when using fallback
  *
  * The default layout is fetched from the backend API which loads it from
  * the centralized YAML config file (config/default_dashboard_layout.yaml).
@@ -79,6 +80,11 @@ export interface UseDefaultDashboardLayoutResult {
   loading: boolean
   error: Error | null
   refetch: () => void
+  /**
+   * Issue #472: True if layout came from API (or valid cache), false if using fallback.
+   * Used to prevent version-based resets when backend is unavailable.
+   */
+  isFromApi: boolean
 }
 
 /**
@@ -108,6 +114,8 @@ export function useDefaultDashboardLayout(): UseDefaultDashboardLayoutResult {
   const [defaultLayout, setDefaultLayout] = useState<DashboardLayout>(DEFAULT_LAYOUT)
   const [loading, setLoading] = useState<boolean>(true)
   const [error, setError] = useState<Error | null>(null)
+  // Issue #472: Track whether layout came from API/cache or fallback
+  const [isFromApi, setIsFromApi] = useState<boolean>(false)
 
   const loadLayout = useCallback(async (forceRefresh = false) => {
     try {
@@ -117,6 +125,7 @@ export function useDefaultDashboardLayout(): UseDefaultDashboardLayoutResult {
       // Check memory cache first if not forcing refresh
       if (!forceRefresh && memoryCache && isCacheValid()) {
         setDefaultLayout(memoryCache)
+        setIsFromApi(true) // Cache came from successful API call
         setLoading(false)
         return
       }
@@ -127,6 +136,7 @@ export function useDefaultDashboardLayout(): UseDefaultDashboardLayoutResult {
         if (localStorageData) {
           memoryCache = localStorageData
           setDefaultLayout(localStorageData)
+          setIsFromApi(true) // Cache came from successful API call
           setLoading(false)
           return
         }
@@ -138,11 +148,13 @@ export function useDefaultDashboardLayout(): UseDefaultDashboardLayoutResult {
       // Update cache and state
       updateCache(data)
       setDefaultLayout(data)
+      setIsFromApi(true) // Successfully fetched from API
     } catch (err) {
       // Log error but use fallback silently
       console.warn('Failed to fetch default dashboard layout, using fallback:', err)
       setError(err instanceof Error ? err : new Error('Failed to fetch default dashboard layout'))
       // Keep using fallback DEFAULT_LAYOUT - don't set to null
+      setIsFromApi(false) // Using fallback, not from API
     } finally {
       setLoading(false)
     }
@@ -163,5 +175,6 @@ export function useDefaultDashboardLayout(): UseDefaultDashboardLayoutResult {
     loading,
     error,
     refetch,
+    isFromApi,
   }
 }
