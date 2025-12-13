@@ -28,6 +28,9 @@ const mockGridStackInstance = {
   enableResize: vi.fn(),
   removeWidget: vi.fn(),
   destroy: vi.fn(),
+  // Issue #478: Added batchUpdate and update for new layout sync pattern
+  batchUpdate: vi.fn(),
+  update: vi.fn(),
   _ignoreCB: false,
 };
 
@@ -109,6 +112,9 @@ describe('DashboardGrid', () => {
     mockGridStackInstance.enableMove.mockClear();
     mockGridStackInstance.enableResize.mockClear();
     mockGridStackInstance.destroy.mockClear();
+    // Issue #478: Clear new mock methods
+    mockGridStackInstance.batchUpdate.mockClear();
+    mockGridStackInstance.update.mockClear();
     mockGridStackInstance._ignoreCB = false;
 
     // Setup default mock registry behavior
