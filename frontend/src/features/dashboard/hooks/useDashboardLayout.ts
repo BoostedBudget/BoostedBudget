@@ -3,6 +3,7 @@
  * Issue #354: Customizable Dashboard Widget System
  * Issue #449: Centralize default dashboard layout configuration
  * Issue #470: Fix dashboard persistence - replace sendBeacon with fetch keepalive
+ * Issue #472: Only reset layout version if default came from API (not fallback)
  *
  * Manages dashboard layout state with persistence to the backend.
  * Includes debounced auto-save and optimistic updates.
@@ -49,7 +50,8 @@ export function useDashboardLayout(options?: UseDashboardLayoutOptions): UseDash
   const { getAccessToken } = options || {};
   // Fetch centralized default layout from API (Issue #449)
   // Falls back to hardcoded DEFAULT_LAYOUT if API fails
-  const { defaultLayout, loading: defaultLayoutLoading } = useDefaultDashboardLayout();
+  // Issue #472: isFromApi tracks whether layout came from API or fallback
+  const { defaultLayout, loading: defaultLayoutLoading, isFromApi } = useDefaultDashboardLayout();
 
   const [layout, setLayout] = useState<DashboardLayout>(DEFAULT_LAYOUT);
   const [loading, setLoading] = useState(true);
@@ -75,7 +77,9 @@ export function useDashboardLayout(options?: UseDashboardLayoutOptions): UseDash
         // Version-based migration: auto-reset if stored version is outdated
         // This ensures users get working layouts when default changes
         // Issue #449: Now uses fetched default layout for comparison
-        if (response.layout.version < defaultLayout.version) {
+        // Issue #472: ONLY reset if defaultLayout came from API (not fallback)
+        // Resetting based on fallback version would cause data loss when backend fails
+        if (isFromApi && response.layout.version < defaultLayout.version) {
           console.log(
             `Dashboard layout version ${response.layout.version} is outdated, ` +
             `resetting to version ${defaultLayout.version}`
@@ -89,6 +93,8 @@ export function useDashboardLayout(options?: UseDashboardLayoutOptions): UseDash
             setLayout(defaultLayout);
           }
         } else {
+          // Either versions match, user version is newer, or using fallback
+          // In all cases, preserve user's saved layout
           setLayout(response.layout);
         }
         setError(null);
@@ -106,7 +112,7 @@ export function useDashboardLayout(options?: UseDashboardLayoutOptions): UseDash
     }
 
     fetchLayout();
-  }, [defaultLayout, defaultLayoutLoading]);
+  }, [defaultLayout, defaultLayoutLoading, isFromApi]);
 
   // Save layout to backend (debounced)
   const saveLayout = useCallback(async (layoutToSave: DashboardLayout) => {

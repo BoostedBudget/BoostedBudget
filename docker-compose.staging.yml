@@ -85,8 +85,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
-    volumes:
-      - ./config:/app/config  # Mount config directory from project root
+    # Issue #472: Config is baked into Docker image - no volume mount needed
+    # The previous mount shadowed the baked-in config after CI workspace cleanup
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 10s
