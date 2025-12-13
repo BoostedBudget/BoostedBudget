@@ -132,10 +132,20 @@ func (p *DashboardPreferences) Validate() error {
 }
 
 // DefaultDashboardLayout returns the default widget layout for new users
-// NOTE: Keep in sync with frontend/src/features/dashboard/widgets/registry.ts DEFAULT_LAYOUT
-// Version 2: Reduced to 1 widget while fixing rendering issues (#417-419, #425-426)
+// NOTE: Keep in sync with:
+//   - config/default_dashboard_layout.yaml (SOURCE OF TRUTH)
+//   - frontend/src/features/dashboard/widgets/registry.ts DEFAULT_LAYOUT
+//
+// Issue #474: This function is now only used as a fallback when YAML config fails to load.
+// The primary source of truth is the YAML config file.
+//
+// CRITICAL: If you update this, you MUST also update:
+//  1. config/default_dashboard_layout.yaml (layout_version field)
+//  2. frontend/src/features/dashboard/widgets/registry.ts (DEFAULT_LAYOUT.version)
+//
+// Version 4: Issue #468 - Increased minH values for proper chart rendering
 func DefaultDashboardLayout() *DashboardLayout {
-	minW4, minH3 := 4, 3
+	minW4, minH4 := 4, 4
 
 	return &DashboardLayout{
 		Widgets: []WidgetConfig{
@@ -147,10 +157,20 @@ func DefaultDashboardLayout() *DashboardLayout {
 				W:    12,
 				H:    5,
 				MinW: &minW4,
-				MinH: &minH3,
+				MinH: &minH4,
+			},
+			{
+				ID:   "balance-history-1",
+				Type: WidgetTypeBalanceHistory,
+				X:    0,
+				Y:    5,
+				W:    12,
+				H:    4,
+				MinW: &minW4,
+				MinH: &minH4,
 			},
 		},
-		Version: 2,
+		Version: 4,
 	}
 }
 

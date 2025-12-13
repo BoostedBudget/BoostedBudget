@@ -7,9 +7,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
+
+// createTestLayoutConfig creates a mock config for testing
+// Issue #474: Service now requires layoutConfig dependency
+func createTestLayoutConfig() *config.DashboardLayoutConfig {
+	// Load actual config to ensure tests use real version
+	cfg, err := config.LoadDashboardLayoutConfig()
+	if err != nil {
+		// Fallback to nil - tests should work with actual config
+		return nil
+	}
+	return cfg
+}
 
 // mockDashboardPreferencesRepository is a mock implementation for testing
 type mockDashboardPreferencesRepository struct {
@@ -66,7 +79,9 @@ func TestDashboardPreferencesService_GetPreferences(t *testing.T) {
 			},
 		}
 
-		service := NewDashboardPreferencesService(mockRepo)
+		// Issue #474: Pass layoutConfig to service
+		layoutConfig := createTestLayoutConfig()
+		service := NewDashboardPreferencesService(mockRepo, layoutConfig)
 		result, err := service.GetPreferences(ctx, "user-123")
 
 		if err != nil {
@@ -90,16 +105,22 @@ func TestDashboardPreferencesService_GetPreferences(t *testing.T) {
 			},
 		}
 
-		service := NewDashboardPreferencesService(mockRepo)
+		// Issue #474: Pass layoutConfig to service
+		layoutConfig := createTestLayoutConfig()
+		service := NewDashboardPreferencesService(mockRepo, layoutConfig)
 		result, err := service.GetPreferences(ctx, "new-user")
 
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		defaultLayout := domain.DefaultDashboardLayout()
-		if len(result.Layout.Widgets) != len(defaultLayout.Widgets) {
-			t.Errorf("expected %d widgets (default), got %d", len(defaultLayout.Widgets), len(result.Layout.Widgets))
+		// Issue #474: Now uses YAML config, which has 2 widgets (cash-flow + balance-history)
+		expectedWidgetCount := 2
+		if layoutConfig != nil {
+			expectedWidgetCount = len(layoutConfig.GetDefaultLayout().Widgets)
+		}
+		if len(result.Layout.Widgets) != expectedWidgetCount {
+			t.Errorf("expected %d widgets (from config), got %d", expectedWidgetCount, len(result.Layout.Widgets))
 		}
 		if result.UpdatedAt != (time.Time{}) {
 			t.Errorf("expected zero UpdatedAt for default layout, got %v", result.UpdatedAt)
@@ -113,7 +134,9 @@ func TestDashboardPreferencesService_GetPreferences(t *testing.T) {
 			},
 		}
 
-		service := NewDashboardPreferencesService(mockRepo)
+		// Issue #474: Pass layoutConfig to service
+		layoutConfig := createTestLayoutConfig()
+		service := NewDashboardPreferencesService(mockRepo, layoutConfig)
 		_, err := service.GetPreferences(ctx, "user-123")
 
 		if err == nil {
@@ -133,7 +156,9 @@ func TestDashboardPreferencesService_SavePreferences(t *testing.T) {
 			},
 		}
 
-		service := NewDashboardPreferencesService(mockRepo)
+		// Issue #474: Pass layoutConfig to service
+		layoutConfig := createTestLayoutConfig()
+		service := NewDashboardPreferencesService(mockRepo, layoutConfig)
 
 		layout := domain.DashboardLayout{
 			Widgets: []domain.WidgetConfig{
@@ -157,7 +182,9 @@ func TestDashboardPreferencesService_SavePreferences(t *testing.T) {
 
 	t.Run("rejects invalid layout", func(t *testing.T) {
 		mockRepo := &mockDashboardPreferencesRepository{}
-		service := NewDashboardPreferencesService(mockRepo)
+		// Issue #474: Pass layoutConfig to service
+		layoutConfig := createTestLayoutConfig()
+		service := NewDashboardPreferencesService(mockRepo, layoutConfig)
 
 		layout := domain.DashboardLayout{
 			Widgets: []domain.WidgetConfig{
@@ -180,7 +207,9 @@ func TestDashboardPreferencesService_SavePreferences(t *testing.T) {
 			},
 		}
 
-		service := NewDashboardPreferencesService(mockRepo)
+		// Issue #474: Pass layoutConfig to service
+		layoutConfig := createTestLayoutConfig()
+		service := NewDashboardPreferencesService(mockRepo, layoutConfig)
 
 		layout := domain.DashboardLayout{
 			Widgets: []domain.WidgetConfig{
@@ -200,7 +229,7 @@ func TestDashboardPreferencesService_SavePreferences(t *testing.T) {
 func TestDashboardPreferencesService_ResetToDefault(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("resets to default layout", func(t *testing.T) {
+	t.Run("resets to default layout from YAML config", func(t *testing.T) {
 		mockRepo := &mockDashboardPreferencesRepository{
 			upsertFn: func(ctx context.Context, prefs *domain.DashboardPreferences) error {
 				prefs.UpdatedAt = time.Now()
@@ -208,21 +237,26 @@ func TestDashboardPreferencesService_ResetToDefault(t *testing.T) {
 			},
 		}
 
-		service := NewDashboardPreferencesService(mockRepo)
+		// Issue #474: Pass layoutConfig to service - this is the key fix
+		layoutConfig := createTestLayoutConfig()
+		service := NewDashboardPreferencesService(mockRepo, layoutConfig)
 		result, err := service.ResetToDefault(ctx, "user-123")
 
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		defaultLayout := domain.DefaultDashboardLayout()
-		if len(result.Layout.Widgets) != len(defaultLayout.Widgets) {
-			t.Errorf("expected %d widgets (default), got %d", len(defaultLayout.Widgets), len(result.Layout.Widgets))
+		// Issue #474: Now uses YAML config, which has 2 widgets and version 4
+		expectedLayout := layoutConfig.GetDefaultLayout()
+		if len(result.Layout.Widgets) != len(expectedLayout.Widgets) {
+			t.Errorf("expected %d widgets (from YAML config), got %d", len(expectedLayout.Widgets), len(result.Layout.Widgets))
 		}
 
-		// Verify it's the actual default layout (version 2)
-		if result.Layout.Version != 2 {
-			t.Errorf("expected version 2, got %d", result.Layout.Version)
+		// Issue #474: Verify version matches YAML config (currently 4)
+		// This is the critical fix - previously returned version 2 causing infinite reset loop
+		expectedVersion := expectedLayout.Version
+		if result.Layout.Version != expectedVersion {
+			t.Errorf("expected version %d (from YAML config), got %d", expectedVersion, result.Layout.Version)
 		}
 	})
 }

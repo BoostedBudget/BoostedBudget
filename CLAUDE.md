@@ -533,6 +533,32 @@ atlas migrate lint --dir file://migrations --dev-url "docker://postgres/15/test"
 - [ ] Privacy policy (USA storage)
 - [ ] EU user GDPR rights
 
+## Dashboard Layout Version Sync (CRITICAL)
+
+**These three locations MUST have the same version number:**
+
+| Location | File | Field |
+|----------|------|-------|
+| YAML Config (SOURCE OF TRUTH) | `config/default_dashboard_layout.yaml` | `layout_version` |
+| Frontend fallback | `frontend/src/features/dashboard/widgets/registry.ts` | `DEFAULT_LAYOUT.version` |
+| Backend fallback | `backend/internal/domain/dashboard_preferences.go` | `DefaultDashboardLayout().Version` |
+
+**What happens if out of sync:**
+- Users experience infinite dashboard reset loops
+- Dashboard customizations are lost on every page reload
+- Console shows: "Dashboard layout version X is outdated, resetting to version Y"
+
+**When to increment version:**
+- When adding/removing/reordering default widgets
+- When changing widget default positions or sizes
+- NOT when users customize their own dashboards
+
+**Update process:**
+1. Update `config/default_dashboard_layout.yaml` (source of truth)
+2. Update `frontend/src/features/dashboard/widgets/registry.ts` to match
+3. Update `backend/internal/domain/dashboard_preferences.go` to match
+4. Deploy backend first, then frontend
+
 ## Security Patterns
 
 **Auth0**: JWT validation middleware, Auth0Provider wraps app, metadata includes tier, GDPR consent tracking, no geo-routing (Phase 7+)
