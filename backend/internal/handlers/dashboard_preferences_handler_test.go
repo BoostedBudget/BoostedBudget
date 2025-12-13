@@ -123,7 +123,8 @@ func TestGetPreferences_DefaultLayout(t *testing.T) {
 
 	var response domain.DashboardPreferencesResponse
 	json.Unmarshal(rec.Body.Bytes(), &response)
-	assert.Len(t, response.Layout.Widgets, 1) // Default has 1 widget (version 2)
+	// Issue #474: Default now has 2 widgets (version 4) - synced with YAML config
+	assert.Len(t, response.Layout.Widgets, 2)
 
 	mockService.AssertExpectations(t)
 }
@@ -363,8 +364,9 @@ func TestResetPreferences_Success(t *testing.T) {
 
 	var response domain.DashboardPreferencesResponse
 	json.Unmarshal(rec.Body.Bytes(), &response)
-	assert.Len(t, response.Layout.Widgets, 1) // Default has 1 widget (version 2)
-	assert.Equal(t, 2, response.Layout.Version)
+	// Issue #474: Default now has 2 widgets (version 4) - synced with YAML config
+	assert.Len(t, response.Layout.Widgets, 2)
+	assert.Equal(t, 4, response.Layout.Version)
 
 	mockService.AssertExpectations(t)
 }
