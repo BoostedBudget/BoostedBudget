@@ -10,11 +10,111 @@ import {
   toGridStackWidget,
   toWidgetConfig,
   toGridStackOptions,
+  isValidGridStackWidget,
 } from './gridstack-utils';
 import type { WidgetConfig } from './index';
 import type { GridStackWidget } from 'gridstack';
 
 describe('GridStack Conversion Utilities - Issue #441', () => {
+  /**
+   * Issue #476: Validate GridStack widget dimensions to prevent 400 errors
+   * during resize operations where intermediate states may have invalid dimensions
+   */
+  describe('isValidGridStackWidget - Issue #476', () => {
+    it('should return true for widget with valid dimensions', () => {
+      const gs: GridStackWidget = {
+        id: 'widget-1',
+        x: 0,
+        y: 0,
+        w: 4,
+        h: 3,
+      };
+
+      expect(isValidGridStackWidget(gs)).toBe(true);
+    });
+
+    it('should return false for widget with w=0', () => {
+      const gs: GridStackWidget = {
+        id: 'widget-1',
+        x: 0,
+        y: 0,
+        w: 0,
+        h: 3,
+      };
+
+      expect(isValidGridStackWidget(gs)).toBe(false);
+    });
+
+    it('should return false for widget with h=0', () => {
+      const gs: GridStackWidget = {
+        id: 'widget-1',
+        x: 0,
+        y: 0,
+        w: 4,
+        h: 0,
+      };
+
+      expect(isValidGridStackWidget(gs)).toBe(false);
+    });
+
+    it('should return false for widget with undefined w', () => {
+      const gs: GridStackWidget = {
+        id: 'widget-1',
+        x: 0,
+        y: 0,
+        h: 3,
+      };
+
+      expect(isValidGridStackWidget(gs)).toBe(false);
+    });
+
+    it('should return false for widget with undefined h', () => {
+      const gs: GridStackWidget = {
+        id: 'widget-1',
+        x: 0,
+        y: 0,
+        w: 4,
+      };
+
+      expect(isValidGridStackWidget(gs)).toBe(false);
+    });
+
+    it('should return false for widget with undefined id', () => {
+      const gs: GridStackWidget = {
+        x: 0,
+        y: 0,
+        w: 4,
+        h: 3,
+      };
+
+      expect(isValidGridStackWidget(gs)).toBe(false);
+    });
+
+    it('should return true for widget with minimum valid dimensions (w=1, h=1)', () => {
+      const gs: GridStackWidget = {
+        id: 'widget-1',
+        x: 0,
+        y: 0,
+        w: 1,
+        h: 1,
+      };
+
+      expect(isValidGridStackWidget(gs)).toBe(true);
+    });
+
+    it('should return false for widget with negative dimensions', () => {
+      const gs: GridStackWidget = {
+        id: 'widget-1',
+        x: 0,
+        y: 0,
+        w: -1,
+        h: 3,
+      };
+
+      expect(isValidGridStackWidget(gs)).toBe(false);
+    });
+  });
+
   describe('toGridStackWidget', () => {
     it('should convert i to id', () => {
       const config: WidgetConfig = {
@@ -155,7 +255,8 @@ describe('GridStack Conversion Utilities - Issue #441', () => {
 
       const result = toWidgetConfig(gs, 'balance-overview');
 
-      expect(result.i).toBe('widget-1');
+      expect(result).not.toBeNull();
+      expect(result!.i).toBe('widget-1');
       expect(result).not.toHaveProperty('id');
     });
 
@@ -170,7 +271,8 @@ describe('GridStack Conversion Utilities - Issue #441', () => {
 
       const result = toWidgetConfig(gs, 'cash-flow-chart');
 
-      expect(result.type).toBe('cash-flow-chart');
+      expect(result).not.toBeNull();
+      expect(result!.type).toBe('cash-flow-chart');
     });
 
     it('should preserve position and size properties', () => {
@@ -184,10 +286,11 @@ describe('GridStack Conversion Utilities - Issue #441', () => {
 
       const result = toWidgetConfig(gs, 'balance-overview');
 
-      expect(result.x).toBe(4);
-      expect(result.y).toBe(2);
-      expect(result.w).toBe(6);
-      expect(result.h).toBe(4);
+      expect(result).not.toBeNull();
+      expect(result!.x).toBe(4);
+      expect(result!.y).toBe(2);
+      expect(result!.w).toBe(6);
+      expect(result!.h).toBe(4);
     });
 
     it('should convert min/max constraints', () => {
@@ -205,10 +308,11 @@ describe('GridStack Conversion Utilities - Issue #441', () => {
 
       const result = toWidgetConfig(gs, 'balance-overview');
 
-      expect(result.minW).toBe(2);
-      expect(result.minH).toBe(2);
-      expect(result.maxW).toBe(8);
-      expect(result.maxH).toBe(5);
+      expect(result).not.toBeNull();
+      expect(result!.minW).toBe(2);
+      expect(result!.minH).toBe(2);
+      expect(result!.maxW).toBe(8);
+      expect(result!.maxH).toBe(5);
     });
 
     it('should convert noMove to static', () => {
@@ -223,7 +327,8 @@ describe('GridStack Conversion Utilities - Issue #441', () => {
 
       const result = toWidgetConfig(gs, 'balance-overview');
 
-      expect(result.static).toBe(true);
+      expect(result).not.toBeNull();
+      expect(result!.static).toBe(true);
     });
 
     it('should convert noResize to static', () => {
@@ -238,7 +343,8 @@ describe('GridStack Conversion Utilities - Issue #441', () => {
 
       const result = toWidgetConfig(gs, 'balance-overview');
 
-      expect(result.static).toBe(true);
+      expect(result).not.toBeNull();
+      expect(result!.static).toBe(true);
     });
 
     it('should set static to true when either noMove or noResize is true', () => {
@@ -254,7 +360,8 @@ describe('GridStack Conversion Utilities - Issue #441', () => {
 
       const result = toWidgetConfig(gs, 'balance-overview');
 
-      expect(result.static).toBe(true);
+      expect(result).not.toBeNull();
+      expect(result!.static).toBe(true);
     });
 
     it('should handle undefined optional fields', () => {
@@ -268,27 +375,57 @@ describe('GridStack Conversion Utilities - Issue #441', () => {
 
       const result = toWidgetConfig(gs, 'balance-overview');
 
-      expect(result.minW).toBeUndefined();
-      expect(result.minH).toBeUndefined();
-      expect(result.maxW).toBeUndefined();
-      expect(result.maxH).toBeUndefined();
-      expect(result.static).toBeUndefined();
+      expect(result).not.toBeNull();
+      expect(result!.minW).toBeUndefined();
+      expect(result!.minH).toBeUndefined();
+      expect(result!.maxW).toBeUndefined();
+      expect(result!.maxH).toBeUndefined();
+      expect(result!.static).toBeUndefined();
     });
 
-    it('should default x, y, w, h to 0 if undefined in GridStack widget', () => {
+    /**
+     * Issue #476: toWidgetConfig should return null for invalid intermediate resize states
+     * instead of defaulting to 0 which causes 400 errors from backend validation
+     */
+    it('should return null for widget with undefined dimensions (invalid intermediate state)', () => {
       const gs: GridStackWidget = {
         id: 'widget-1',
       };
 
       const result = toWidgetConfig(gs, 'balance-overview');
 
-      expect(result.x).toBe(0);
-      expect(result.y).toBe(0);
-      expect(result.w).toBe(0);
-      expect(result.h).toBe(0);
+      expect(result).toBeNull();
     });
 
-    it('should throw error if id is undefined', () => {
+    it('should return null for widget with w=0 (invalid intermediate state)', () => {
+      const gs: GridStackWidget = {
+        id: 'widget-1',
+        x: 0,
+        y: 0,
+        w: 0,
+        h: 3,
+      };
+
+      const result = toWidgetConfig(gs, 'balance-overview');
+
+      expect(result).toBeNull();
+    });
+
+    it('should return null for widget with h=0 (invalid intermediate state)', () => {
+      const gs: GridStackWidget = {
+        id: 'widget-1',
+        x: 0,
+        y: 0,
+        w: 4,
+        h: 0,
+      };
+
+      const result = toWidgetConfig(gs, 'balance-overview');
+
+      expect(result).toBeNull();
+    });
+
+    it('should return null for widget with undefined id', () => {
       const gs: GridStackWidget = {
         x: 0,
         y: 0,
@@ -296,9 +433,25 @@ describe('GridStack Conversion Utilities - Issue #441', () => {
         h: 3,
       };
 
-      expect(() => toWidgetConfig(gs, 'balance-overview')).toThrow(
-        'GridStack widget must have an id'
-      );
+      const result = toWidgetConfig(gs, 'balance-overview');
+
+      expect(result).toBeNull();
+    });
+
+    it('should default x, y to 0 when undefined but w, h are valid', () => {
+      const gs: GridStackWidget = {
+        id: 'widget-1',
+        w: 4,
+        h: 3,
+      };
+
+      const result = toWidgetConfig(gs, 'balance-overview');
+
+      expect(result).not.toBeNull();
+      expect(result!.x).toBe(0);
+      expect(result!.y).toBe(0);
+      expect(result!.w).toBe(4);
+      expect(result!.h).toBe(3);
     });
   });
 
@@ -358,17 +511,18 @@ describe('GridStack Conversion Utilities - Issue #441', () => {
       const gsWidget = toGridStackWidget(original);
       const restored = toWidgetConfig(gsWidget, original.type);
 
-      expect(restored.i).toBe(original.i);
-      expect(restored.type).toBe(original.type);
-      expect(restored.x).toBe(original.x);
-      expect(restored.y).toBe(original.y);
-      expect(restored.w).toBe(original.w);
-      expect(restored.h).toBe(original.h);
-      expect(restored.minW).toBe(original.minW);
-      expect(restored.minH).toBe(original.minH);
-      expect(restored.maxW).toBe(original.maxW);
-      expect(restored.maxH).toBe(original.maxH);
-      expect(restored.static).toBe(original.static);
+      expect(restored).not.toBeNull();
+      expect(restored!.i).toBe(original.i);
+      expect(restored!.type).toBe(original.type);
+      expect(restored!.x).toBe(original.x);
+      expect(restored!.y).toBe(original.y);
+      expect(restored!.w).toBe(original.w);
+      expect(restored!.h).toBe(original.h);
+      expect(restored!.minW).toBe(original.minW);
+      expect(restored!.minH).toBe(original.minH);
+      expect(restored!.maxW).toBe(original.maxW);
+      expect(restored!.maxH).toBe(original.maxH);
+      expect(restored!.static).toBe(original.static);
     });
 
     it('should preserve data for widget without optional fields', () => {
@@ -384,12 +538,13 @@ describe('GridStack Conversion Utilities - Issue #441', () => {
       const gsWidget = toGridStackWidget(original);
       const restored = toWidgetConfig(gsWidget, original.type);
 
-      expect(restored.i).toBe(original.i);
-      expect(restored.type).toBe(original.type);
-      expect(restored.x).toBe(original.x);
-      expect(restored.y).toBe(original.y);
-      expect(restored.w).toBe(original.w);
-      expect(restored.h).toBe(original.h);
+      expect(restored).not.toBeNull();
+      expect(restored!.i).toBe(original.i);
+      expect(restored!.type).toBe(original.type);
+      expect(restored!.x).toBe(original.x);
+      expect(restored!.y).toBe(original.y);
+      expect(restored!.w).toBe(original.w);
+      expect(restored!.h).toBe(original.h);
     });
   });
 });
