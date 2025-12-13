@@ -207,8 +207,8 @@ func TestDashboardLayoutConfig_MatchesExpectedLayout(t *testing.T) {
 	config, err := LoadDashboardLayoutConfig()
 	require.NoError(t, err)
 
-	// Issue #449: Verify the expected default layout (version 3, 2 widgets)
-	assert.Equal(t, 3, config.LayoutVersion, "layout version should be 3")
+	// Issue #474: Verify the expected default layout (version 4, 2 widgets)
+	assert.Equal(t, 4, config.LayoutVersion, "layout version should be 4")
 	assert.Equal(t, 2, len(config.Widgets), "should have 2 widgets")
 
 	// Verify first widget is cash-flow-chart

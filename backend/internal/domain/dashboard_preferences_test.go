@@ -307,13 +307,13 @@ func TestDefaultDashboardLayout(t *testing.T) {
 		t.Error("DefaultDashboardLayout() returned nil")
 	}
 
-	// Version 2: Temporarily reduced to 1 widget while fixing rendering issues
-	if len(layout.Widgets) != 1 {
-		t.Errorf("DefaultDashboardLayout() widgets count = %v, expected 1", len(layout.Widgets))
+	// Issue #474: Version 4 with 2 widgets (synced with config/default_dashboard_layout.yaml)
+	if len(layout.Widgets) != 2 {
+		t.Errorf("DefaultDashboardLayout() widgets count = %v, expected 2", len(layout.Widgets))
 	}
 
-	if layout.Version != 2 {
-		t.Errorf("DefaultDashboardLayout() version = %v, expected 2", layout.Version)
+	if layout.Version != 4 {
+		t.Errorf("DefaultDashboardLayout() version = %v, expected 4", layout.Version)
 	}
 
 	// Verify the layout is valid
@@ -322,7 +322,7 @@ func TestDefaultDashboardLayout(t *testing.T) {
 		t.Errorf("DefaultDashboardLayout() produced invalid layout: %v", err)
 	}
 
-	// Verify the single widget is cash-flow-chart at full width
+	// Verify the first widget is cash-flow-chart at full width
 	if len(layout.Widgets) > 0 {
 		widget := layout.Widgets[0]
 		if widget.Type != WidgetTypeCashFlowChart {
@@ -330,6 +330,14 @@ func TestDefaultDashboardLayout(t *testing.T) {
 		}
 		if widget.W != 12 {
 			t.Errorf("DefaultDashboardLayout() widget width = %v, expected 12 (full width)", widget.W)
+		}
+	}
+
+	// Issue #474: Verify second widget is balance-history
+	if len(layout.Widgets) > 1 {
+		widget := layout.Widgets[1]
+		if widget.Type != WidgetTypeBalanceHistory {
+			t.Errorf("DefaultDashboardLayout() expected balance-history widget as second widget, got %v", widget.Type)
 		}
 	}
 }

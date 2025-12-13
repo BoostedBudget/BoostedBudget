@@ -144,7 +144,13 @@ func main() {
 		ruleApplicationService := services.NewRuleApplicationService(categorizationRuleRepo)
 		// Issue #354: Cash flow analytics and dashboard preferences services
 		analyticsService := services.NewAnalyticsService(analyticsRepo)
-		dashboardPrefsService := services.NewDashboardPreferencesService(dashboardPrefsRepo)
+		// Issue #474: Load dashboard layout config for preferences service
+		// This ensures reset-to-default uses YAML config version, not hardcoded version 2
+		dashboardLayoutConfig, err := config.LoadDashboardLayoutConfig()
+		if err != nil {
+			log.Fatal("Failed to load dashboard layout config:", err)
+		}
+		dashboardPrefsService := services.NewDashboardPreferencesService(dashboardPrefsRepo, dashboardLayoutConfig)
 		// Issue #28: Budget and savings goal services
 		budgetLogger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 		budgetService := services.NewBudgetService(budgetRepo, customCategoryRepo, transactionRepo, budgetLogger)

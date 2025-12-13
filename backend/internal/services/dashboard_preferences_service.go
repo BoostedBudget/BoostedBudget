@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
@@ -24,13 +25,19 @@ type DashboardPreferencesService interface {
 }
 
 type dashboardPreferencesService struct {
-	prefsRepo repository.DashboardPreferencesRepository
+	prefsRepo    repository.DashboardPreferencesRepository
+	layoutConfig *config.DashboardLayoutConfig
 }
 
 // NewDashboardPreferencesService creates a new DashboardPreferencesService instance
-func NewDashboardPreferencesService(prefsRepo repository.DashboardPreferencesRepository) DashboardPreferencesService {
+// Issue #474: Added layoutConfig dependency to use YAML config instead of hardcoded defaults
+func NewDashboardPreferencesService(
+	prefsRepo repository.DashboardPreferencesRepository,
+	layoutConfig *config.DashboardLayoutConfig,
+) DashboardPreferencesService {
 	return &dashboardPreferencesService{
-		prefsRepo: prefsRepo,
+		prefsRepo:    prefsRepo,
+		layoutConfig: layoutConfig,
 	}
 }
 
@@ -38,8 +45,9 @@ func NewDashboardPreferencesService(prefsRepo repository.DashboardPreferencesRep
 func (s *dashboardPreferencesService) GetPreferences(ctx context.Context, userID string) (*domain.DashboardPreferencesResponse, error) {
 	prefs, err := s.prefsRepo.GetByUserID(ctx, userID)
 	if err == repository.ErrDashboardPreferencesNotFound {
-		// Return default layout for new users
-		defaultLayout := domain.DefaultDashboardLayout()
+		// Issue #474: Return default layout from YAML config for new users
+		// This ensures version matches what frontend expects from /api/v1/dashboard/default-layout
+		defaultLayout := s.layoutConfig.GetDefaultLayout()
 		return &domain.DashboardPreferencesResponse{
 			Layout: *defaultLayout,
 			// UpdatedAt is zero time for default layout (no saved preferences)
@@ -92,8 +100,11 @@ func (s *dashboardPreferencesService) SavePreferences(ctx context.Context, userI
 }
 
 // ResetToDefault resets dashboard preferences to the default layout
+// Issue #474: Uses YAML config to ensure version matches frontend expectations
 func (s *dashboardPreferencesService) ResetToDefault(ctx context.Context, userID string) (*domain.DashboardPreferencesResponse, error) {
-	defaultLayout := domain.DefaultDashboardLayout()
+	// Issue #474: Use YAML config instead of hardcoded domain.DefaultDashboardLayout()
+	// This prevents infinite reset loops caused by version mismatch
+	defaultLayout := s.layoutConfig.GetDefaultLayout()
 
 	// Save the default layout
 	return s.SavePreferences(ctx, userID, *defaultLayout)
