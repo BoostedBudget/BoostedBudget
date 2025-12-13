@@ -20,7 +20,7 @@ import './DashboardGrid.css';
 
 import { WidgetWrapper } from './WidgetWrapper';
 import { getWidget } from './registry';
-import { toGridStackWidget, toWidgetConfig } from '../types/gridstack-utils';
+import { toWidgetConfig } from '../types/gridstack-utils';
 import type { WidgetType, DashboardLayout, WidgetConfig } from '../types';
 
 // Extend GridStack type to include our _ignoreCB flag
@@ -185,23 +185,32 @@ export function DashboardGrid({
   }, [isEditing]);
 
   // Sync layout changes from React state to GridStack
+  // Issue #478: Use update() instead of load() for React-managed DOM
+  // load() doesn't properly update positions when DOM is controlled by React
   useEffect(() => {
     if (!gridRef.current) return;
 
     // Prevent callback loop
     gridRef.current._ignoreCB = true;
 
-    // Update GridStack with current layout
-    const gsWidgets = layout.widgets.map((widget) => {
-      const gsWidget = toGridStackWidget(widget);
+    // Use batchUpdate to prevent multiple relayouts during sync
+    gridRef.current.batchUpdate(true);
+
+    // Explicitly update each widget's position
+    // This works correctly with React-managed DOM elements
+    layout.widgets.forEach((widget) => {
       const el = widgetElementsRef.current.get(widget.i);
       if (el) {
-        gsWidget.el = el;
+        gridRef.current!.update(el, {
+          x: widget.x,
+          y: widget.y,
+          w: widget.w,
+          h: widget.h,
+        });
       }
-      return gsWidget;
     });
 
-    gridRef.current.load(gsWidgets);
+    gridRef.current.batchUpdate(false);
 
     // Re-enable callbacks
     gridRef.current._ignoreCB = false;
