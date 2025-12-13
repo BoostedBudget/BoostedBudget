@@ -228,11 +228,12 @@ export function DashboardGrid({
     // Use batchUpdate to prevent multiple relayouts during sync
     gridRef.current.batchUpdate(true);
 
-    // Get IDs of widgets GridStack currently tracks
-    // New widgets (rendered by React after init) won't be in this list
+    // Get IDs of widgets GridStack is actually managing (in engine.nodes)
+    // NOTE: getGridItems() returns ALL .grid-stack-item DOM children, not just tracked ones!
+    // We must use engine.nodes to know which widgets are registered with GridStack
     const gridItems = gridRef.current.getGridItems();
     const trackedIds = new Set(
-      gridItems.map((el) => el.getAttribute('gs-id')).filter(Boolean)
+      gridRef.current.engine.nodes.map((n) => n.id).filter(Boolean) as string[]
     );
     const layoutIds = new Set(layout.widgets.map((w) => w.i));
 

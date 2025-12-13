@@ -31,9 +31,13 @@ const mockGridStackInstance = {
   // Issue #478: Added batchUpdate and update for new layout sync pattern
   batchUpdate: vi.fn(),
   update: vi.fn(),
-  // New widget rendering fix: Added getGridItems and makeWidget
-  getGridItems: vi.fn(() => []), // Returns empty array initially (no widgets tracked yet)
+  // Issue #482: Fix new widget detection using engine.nodes instead of getGridItems
+  // getGridItems returns ALL DOM children, engine.nodes contains only tracked widgets
+  getGridItems: vi.fn(() => []),
   makeWidget: vi.fn(),
+  engine: {
+    nodes: [] as Array<{ id?: string }>, // Internal tracking array - empty means all widgets are "new"
+  },
   _ignoreCB: false,
 };
 
