@@ -21,7 +21,7 @@ import './DashboardGrid.css';
 import { WidgetWrapper } from './WidgetWrapper';
 import { getWidget } from './registry';
 import { toGridStackWidget, toWidgetConfig } from '../types/gridstack-utils';
-import type { WidgetType, DashboardLayout } from '../types';
+import type { WidgetType, DashboardLayout, WidgetConfig } from '../types';
 
 // Extend GridStack type to include our _ignoreCB flag
 declare module 'gridstack' {
@@ -92,8 +92,11 @@ export function DashboardGrid({
         gridContainerRef.current
       );
 
-      // Handle layout changes from GridStack
-      gridRef.current.on('change', () => {
+      /**
+       * Issue #476: Helper function to process GridStack items and update layout
+       * Filters out invalid intermediate resize states (null from toWidgetConfig)
+       */
+      const processLayoutUpdate = () => {
         if (!gridRef.current || gridRef.current._ignoreCB) return;
 
         const items = gridRef.current.save(false);
@@ -104,9 +107,18 @@ export function DashboardGrid({
         const typeMap = new Map<string, WidgetType>();
         currentLayout.widgets.forEach((w) => typeMap.set(w.i, w.type));
 
-        const updatedWidgets = items
-          .filter((item) => item.id && typeMap.has(item.id))
-          .map((item) => toWidgetConfig(item, typeMap.get(item.id!)!));
+        const validItems = items.filter((item) => item.id && typeMap.has(item.id));
+
+        // Issue #476: Convert to WidgetConfig, filtering out invalid intermediate states
+        const updatedWidgets = validItems
+          .map((item) => toWidgetConfig(item, typeMap.get(item.id!)!))
+          .filter((widget): widget is WidgetConfig => widget !== null);
+
+        // Issue #476: Skip update if any widget had invalid dimensions (intermediate resize state)
+        // This prevents 400 errors during resize drag
+        if (updatedWidgets.length !== validItems.length) {
+          return;
+        }
 
         // Only update if positions actually changed
         const hasChanges = updatedWidgets.some((widget) => {
@@ -126,7 +138,17 @@ export function DashboardGrid({
             widgets: updatedWidgets,
           });
         }
-      });
+      };
+
+      // Handle layout changes from GridStack (programmatic changes, constraint adjustments)
+      gridRef.current.on('change', processLayoutUpdate);
+
+      // Issue #476: Handle resize completion - fires AFTER user finishes resizing
+      // This ensures we capture the final valid dimensions, not intermediate states
+      gridRef.current.on('resizestop', processLayoutUpdate);
+
+      // Issue #476: Handle drag completion - fires AFTER user finishes dragging
+      gridRef.current.on('dragstop', processLayoutUpdate);
 
       // Handle drop of new widget from catalog
       gridRef.current.on('dropped', (_event, _previousWidget, newWidget) => {
