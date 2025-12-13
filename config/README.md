@@ -74,6 +74,46 @@ trial:
 - Invalid configs prevent server startup
 - Frontend receives validated data via API
 
+### `default_dashboard_layout.yaml`
+
+**Primary configuration** for the default dashboard layout (widget arrangement).
+
+**CRITICAL: Version Sync Requirement**
+
+This config's `layout_version` MUST be kept in sync with:
+- `frontend/src/features/dashboard/widgets/registry.ts` - `DEFAULT_LAYOUT.version`
+- `backend/internal/domain/dashboard_preferences.go` - `DefaultDashboardLayout().Version`
+
+**If versions are out of sync, users experience infinite dashboard reset loops!**
+
+**Used by**:
+- **Backend** (`backend/internal/config/dashboard_layout_config.go`): Loaded at runtime, served via `GET /api/v1/dashboard/default-layout`
+- **Backend** (`backend/internal/services/dashboard_preferences_service.go`): Used for new users and reset-to-default
+- **Frontend** (`frontend/src/features/dashboard/hooks/useDefaultDashboardLayout.ts`): Fetched from API with 1hr caching
+
+**Structure**:
+```yaml
+layout_version: 4  # INCREMENT when changing default widgets
+
+widgets:
+  - id: "cash-flow-chart-1"
+    type: "cash-flow-chart"
+    x: 0
+    y: 0
+    w: 12
+    h: 5
+    minW: 4
+    minH: 4
+```
+
+**Editing**:
+1. Update `layout_version` (increment by 1)
+2. Modify widgets array as needed
+3. Update matching version in:
+   - `frontend/src/features/dashboard/widgets/registry.ts`
+   - `backend/internal/domain/dashboard_preferences.go`
+4. Deploy and verify with: `curl /api/v1/dashboard/default-layout | jq .version`
+
 ## Design Decisions
 
 ### Why YAML?
