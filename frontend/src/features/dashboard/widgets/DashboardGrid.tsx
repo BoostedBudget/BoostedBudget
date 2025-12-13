@@ -80,7 +80,8 @@ export function DashboardGrid({
       // Initialize GridStack
       gridRef.current = GridStack.init(
         {
-          float: false,
+          // Issue #478: true to preserve inline widget x-positions
+          float: true,
           cellHeight: 80,
           column: 12,
           margin: 16,

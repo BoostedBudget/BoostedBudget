@@ -476,7 +476,8 @@ describe('GridStack Conversion Utilities - Issue #441', () => {
       expect(result.column).toBe(12);
       expect(result.cellHeight).toBe(80);
       expect(result.margin).toBe(16);
-      expect(result.float).toBe(false);
+      // Issue #478: Changed to true to preserve inline widget x-positions
+      expect(result.float).toBe(true);
     });
 
     it('should set handleClass for drag handle', () => {
