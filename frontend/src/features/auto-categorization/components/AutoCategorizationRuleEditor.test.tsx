@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event'
 import { AutoCategorizationRuleEditor } from './AutoCategorizationRuleEditor'
 import type { CategorizationRule } from '../types'
+import { fillInputByLabel, fillInput } from '@/test/utils/formTestHelpers'
 
 describe('AutoCategorizationRuleEditor', () => {
   const mockOnSave = vi.fn()
@@ -94,7 +95,7 @@ describe('AutoCategorizationRuleEditor', () => {
     })
 
     it('should require at least one condition', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(
         <AutoCategorizationRuleEditor
           mode="create"
@@ -114,7 +115,7 @@ describe('AutoCategorizationRuleEditor', () => {
     })
 
     it('should require target category or tags', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(
         <AutoCategorizationRuleEditor
           mode="create"
@@ -141,7 +142,7 @@ describe('AutoCategorizationRuleEditor', () => {
     })
 
     it('should call onSave with valid data', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       mockOnSave.mockResolvedValue(undefined)
 
       render(
@@ -243,7 +244,7 @@ describe('AutoCategorizationRuleEditor', () => {
     })
 
     it('should call onSave with updated data', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       mockOnSave.mockResolvedValue(undefined)
 
       render(
@@ -306,7 +307,7 @@ describe('AutoCategorizationRuleEditor', () => {
     })
 
     it('should change condition type', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(
         <AutoCategorizationRuleEditor
           mode="create"
@@ -328,7 +329,7 @@ describe('AutoCategorizationRuleEditor', () => {
 
   describe('Tags', () => {
     it('should add a tag', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(
         <AutoCategorizationRuleEditor
           mode="create"
@@ -425,7 +426,7 @@ describe('AutoCategorizationRuleEditor', () => {
 
   describe('Priority', () => {
     it('should allow setting priority', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(
         <AutoCategorizationRuleEditor
           mode="create"
@@ -468,7 +469,7 @@ describe('AutoCategorizationRuleEditor', () => {
 
   describe('Input type rendering', () => {
     it('should render number input for amount_greater_than', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(
         <AutoCategorizationRuleEditor
           mode="create"
@@ -490,7 +491,7 @@ describe('AutoCategorizationRuleEditor', () => {
     })
 
     it('should render number input for amount_less_than', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(
         <AutoCategorizationRuleEditor
           mode="create"
@@ -512,7 +513,7 @@ describe('AutoCategorizationRuleEditor', () => {
     })
 
     it('should render number input for amount_equals', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(
         <AutoCategorizationRuleEditor
           mode="create"
@@ -534,7 +535,7 @@ describe('AutoCategorizationRuleEditor', () => {
     })
 
     it('should render two number inputs for amount_range', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(
         <AutoCategorizationRuleEditor
           mode="create"
@@ -559,7 +560,7 @@ describe('AutoCategorizationRuleEditor', () => {
     })
 
     it('should render date inputs for date_range', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(
         <AutoCategorizationRuleEditor
           mode="create"
@@ -603,7 +604,7 @@ describe('AutoCategorizationRuleEditor', () => {
     })
 
     it('should render searchable category dropdown for existing_category', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(
         <AutoCategorizationRuleEditor
           mode="create"
@@ -627,7 +628,7 @@ describe('AutoCategorizationRuleEditor', () => {
     })
 
     it('should render payment channel select for payment_channel', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(
         <AutoCategorizationRuleEditor
           mode="create"
@@ -649,7 +650,7 @@ describe('AutoCategorizationRuleEditor', () => {
     })
 
     it('should render searchable account dropdown for account_id', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       const mockAccounts = [
         { id: 'acc-1', name: 'Checking', type: 'depository' as const, linked_item_id: 'item-1', user_id: 'user-1', plaid_account_id: 'plaid-1', currency_code: 'USD', created_at: '2024-01-01', updated_at: '2024-01-01' },
         { id: 'acc-2', name: 'Savings', type: 'depository' as const, linked_item_id: 'item-1', user_id: 'user-1', plaid_account_id: 'plaid-2', currency_code: 'USD', created_at: '2024-01-01', updated_at: '2024-01-01' },
@@ -677,7 +678,7 @@ describe('AutoCategorizationRuleEditor', () => {
     })
 
     it('should render checkboxes for account_type', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(
         <AutoCategorizationRuleEditor
           mode="create"
@@ -701,7 +702,7 @@ describe('AutoCategorizationRuleEditor', () => {
 
   describe('Input validation', () => {
     it('should show error for empty condition value on save', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(
         <AutoCategorizationRuleEditor
           mode="create"
@@ -733,7 +734,7 @@ describe('AutoCategorizationRuleEditor', () => {
     })
 
     it('should show error when amount_range min > max', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(
         <AutoCategorizationRuleEditor
           mode="create"
@@ -775,7 +776,7 @@ describe('AutoCategorizationRuleEditor', () => {
     })
 
     it('should show error when date_range start > end', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(
         <AutoCategorizationRuleEditor
           mode="create"
@@ -815,7 +816,7 @@ describe('AutoCategorizationRuleEditor', () => {
     })
 
     it('should accept decimal values for amount conditions', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       mockOnSave.mockResolvedValue(undefined)
 
       render(
@@ -852,10 +853,10 @@ describe('AutoCategorizationRuleEditor', () => {
           conditions: [{ type: 'amount_greater_than', value: 99.99 }],
         }))
       })
-    }, 60000) // Extended timeout for CI environment
+    }, 15000)
 
     it('should accept partial date_range with only start', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       mockOnSave.mockResolvedValue(undefined)
 
       render(
@@ -894,7 +895,7 @@ describe('AutoCategorizationRuleEditor', () => {
     })
 
     it('should require at least one account type when account_type selected', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(
         <AutoCategorizationRuleEditor
           mode="create"
@@ -930,7 +931,7 @@ describe('AutoCategorizationRuleEditor', () => {
     })
 
     it('should clear condition error when value is updated', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(
         <AutoCategorizationRuleEditor
           mode="create"
@@ -970,7 +971,7 @@ describe('AutoCategorizationRuleEditor', () => {
 
   describe('Edge cases', () => {
     it('should handle switching condition type and reset value', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(
         <AutoCategorizationRuleEditor
           mode="create"
@@ -999,7 +1000,6 @@ describe('AutoCategorizationRuleEditor', () => {
     })
 
     it('should handle removing condition and update error indices', async () => {
-      const user = userEvent.setup()
       render(
         <AutoCategorizationRuleEditor
           mode="create"
@@ -1009,7 +1009,7 @@ describe('AutoCategorizationRuleEditor', () => {
         />
       )
 
-      await user.type(screen.getByLabelText(/rule name/i), 'Test Rule')
+      fillInputByLabel(/rule name/i, 'Test Rule')
 
       // Add two conditions
       const addButton = screen.getByRole('button', { name: /add condition/i })
@@ -1018,7 +1018,7 @@ describe('AutoCategorizationRuleEditor', () => {
 
       // Fill in first condition, leave second empty
       const textInputs = screen.getAllByPlaceholderText(/enter value/i)
-      await user.type(textInputs[0], 'first')
+      fillInput(textInputs[0], 'first')
 
       // Select category - use fireEvent + waitFor for reliability in CI
       const categorySelect = screen.getByRole('combobox', { name: /target category/i })
@@ -1042,10 +1042,9 @@ describe('AutoCategorizationRuleEditor', () => {
 
       // Error should still show for the remaining condition
       expect(screen.getByText(/value is required/i)).toBeInTheDocument()
-    }, 60000) // Extended timeout for CI environment
+    }, 15000)
 
     it('should handle special characters in merchant name', async () => {
-      const user = userEvent.setup()
       mockOnSave.mockResolvedValue(undefined)
 
       render(
@@ -1057,14 +1056,14 @@ describe('AutoCategorizationRuleEditor', () => {
         />
       )
 
-      await user.type(screen.getByLabelText(/rule name/i), 'Test Rule')
+      fillInputByLabel(/rule name/i, 'Test Rule')
 
       // Add condition with special characters
       const addButton = screen.getByRole('button', { name: /add condition/i })
       fireEvent.click(addButton)
 
       const textInput = screen.getByPlaceholderText(/enter value/i)
-      await user.type(textInput, "McDonald's & Co. <test>")
+      fillInput(textInput, "McDonald's & Co. <test>")
 
       // Select category - use fireEvent + waitFor for reliability in CI
       const categorySelect = screen.getByRole('combobox', { name: /target category/i })
@@ -1082,10 +1081,10 @@ describe('AutoCategorizationRuleEditor', () => {
           conditions: [{ type: 'merchant_contains', value: "McDonald's & Co. <test>" }],
         }))
       })
-    }, 60000) // Extended timeout for CI environment
+    }, 15000)
 
     it('should handle zero amount value', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       mockOnSave.mockResolvedValue(undefined)
 
       render(
@@ -1126,9 +1125,8 @@ describe('AutoCategorizationRuleEditor', () => {
     })
 
     // This test has many userEvent interactions that can be slow on CI
-    // Extended timeout to 60s to accommodate slower runners
+    // Using fast fillInput utilities to avoid timeouts
     it('should handle negative amount value', async () => {
-      const user = userEvent.setup()
       mockOnSave.mockResolvedValue(undefined)
 
       render(
@@ -1140,25 +1138,24 @@ describe('AutoCategorizationRuleEditor', () => {
         />
       )
 
-      await user.type(screen.getByLabelText(/rule name/i), 'Test Rule')
+      fillInputByLabel(/rule name/i, 'Test Rule')
 
       // Add amount condition
       const addButton = screen.getByRole('button', { name: /add condition/i })
       fireEvent.click(addButton)
 
       const typeSelect = screen.getByLabelText(/condition type/i)
-      await user.selectOptions(typeSelect, 'amount_greater_than')
+      fireEvent.change(typeSelect, { target: { value: 'amount_greater_than' } })
 
       const amountInput = screen.getByRole('spinbutton', { name: /condition value/i })
-      await user.clear(amountInput)
-      await user.type(amountInput, '-50')
+      fillInput(amountInput, '-50')
 
       // Select category (SearchableSelect uses click-based selection)
       // Use async findByRole pattern to wait for dropdown to render (fixes CI timing issues)
       const categorySelect = screen.getByRole('combobox', { name: /target category/i })
-      await user.click(categorySelect)
+      fireEvent.click(categorySelect)
       const listbox = await screen.findByRole('listbox')
-      await user.click(within(listbox).getByText('Food & Drink > Coffee'))
+      fireEvent.click(within(listbox).getByText('Food & Drink > Coffee'))
 
       const saveButton = screen.getByRole('button', { name: /save/i })
       fireEvent.click(saveButton)
@@ -1168,7 +1165,7 @@ describe('AutoCategorizationRuleEditor', () => {
           conditions: [{ type: 'amount_greater_than', value: -50 }],
         }))
       })
-    }, 60000)
+    }, 15000)
   })
 
   describe('Searchable Dropdowns', () => {
@@ -1180,7 +1177,7 @@ describe('AutoCategorizationRuleEditor', () => {
 
     describe('existing_category condition', () => {
       it('should show searchable dropdown for Plaid category selection', async () => {
-        const user = userEvent.setup()
+        const user = userEvent.setup({ delay: null })
 
         render(
           <AutoCategorizationRuleEditor
@@ -1205,7 +1202,7 @@ describe('AutoCategorizationRuleEditor', () => {
       })
 
       it('should filter Plaid categories as user types', async () => {
-        const user = userEvent.setup()
+        const user = userEvent.setup({ delay: null })
 
         render(
           <AutoCategorizationRuleEditor
@@ -1237,7 +1234,7 @@ describe('AutoCategorizationRuleEditor', () => {
       })
 
       it('should update condition value on selection', async () => {
-        const user = userEvent.setup()
+        const user = userEvent.setup({ delay: null })
         mockOnSave.mockResolvedValue(undefined)
 
         render(
@@ -1283,7 +1280,7 @@ describe('AutoCategorizationRuleEditor', () => {
 
     describe('account_id condition', () => {
       it('should show searchable dropdown for account selection', async () => {
-        const user = userEvent.setup()
+        const user = userEvent.setup({ delay: null })
 
         render(
           <AutoCategorizationRuleEditor
@@ -1307,7 +1304,7 @@ describe('AutoCategorizationRuleEditor', () => {
       })
 
       it('should display account name with type and mask', async () => {
-        const user = userEvent.setup()
+        const user = userEvent.setup({ delay: null })
 
         render(
           <AutoCategorizationRuleEditor
@@ -1335,7 +1332,7 @@ describe('AutoCategorizationRuleEditor', () => {
       })
 
       it('should filter accounts as user types', async () => {
-        const user = userEvent.setup()
+        const user = userEvent.setup({ delay: null })
 
         render(
           <AutoCategorizationRuleEditor
@@ -1367,7 +1364,7 @@ describe('AutoCategorizationRuleEditor', () => {
       })
 
       it('should update condition value with account ID', async () => {
-        const user = userEvent.setup()
+        const user = userEvent.setup({ delay: null })
         mockOnSave.mockResolvedValue(undefined)
 
         render(
@@ -1425,7 +1422,7 @@ describe('AutoCategorizationRuleEditor', () => {
       })
 
       it('should show "No category change" as first option', async () => {
-        const user = userEvent.setup()
+        const user = userEvent.setup({ delay: null })
 
         render(
           <AutoCategorizationRuleEditor
@@ -1444,7 +1441,7 @@ describe('AutoCategorizationRuleEditor', () => {
       })
 
       it('should filter categories as user types', async () => {
-        const user = userEvent.setup()
+        const user = userEvent.setup({ delay: null })
 
         render(
           <AutoCategorizationRuleEditor
@@ -1467,7 +1464,7 @@ describe('AutoCategorizationRuleEditor', () => {
       })
 
       it('should show both custom and Plaid categories in dropdown', async () => {
-        const user = userEvent.setup()
+        const user = userEvent.setup({ delay: null })
 
         render(
           <AutoCategorizationRuleEditor
@@ -1497,7 +1494,7 @@ describe('AutoCategorizationRuleEditor', () => {
       })
 
       it('should sort combined categories alphabetically', async () => {
-        const user = userEvent.setup()
+        const user = userEvent.setup({ delay: null })
 
         render(
           <AutoCategorizationRuleEditor
@@ -1521,7 +1518,7 @@ describe('AutoCategorizationRuleEditor', () => {
       })
 
       it('should store Plaid category as single-element array when selected', async () => {
-        const user = userEvent.setup()
+        const user = userEvent.setup({ delay: null })
         mockOnSave.mockResolvedValue(undefined)
 
         render(
@@ -1563,7 +1560,7 @@ describe('AutoCategorizationRuleEditor', () => {
   // Issue #404: Uncategorized target category option
   describe('Uncategorized target category (Issue #404)', () => {
     it('should show "Uncategorized" as an option in the dropdown', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
 
       render(
         <AutoCategorizationRuleEditor
@@ -1582,7 +1579,7 @@ describe('AutoCategorizationRuleEditor', () => {
     })
 
     it('should set targetCategory to empty array when Uncategorized selected', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       mockOnSave.mockResolvedValue(undefined)
 
       render(
@@ -1641,7 +1638,7 @@ describe('AutoCategorizationRuleEditor', () => {
     })
 
     it('should distinguish null (no action) from empty array (clear category)', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       mockOnSave.mockResolvedValue(undefined)
 
       // Rule with null target_category = no category action
@@ -1681,7 +1678,7 @@ describe('AutoCategorizationRuleEditor', () => {
     })
 
     it('should allow rule with only Uncategorized action (no tags)', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       mockOnSave.mockResolvedValue(undefined)
 
       render(
@@ -1718,7 +1715,7 @@ describe('AutoCategorizationRuleEditor', () => {
     })
 
     it('should clear to null (no action) when using "No category change"', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       mockOnSave.mockResolvedValue(undefined)
 
       // Start with a rule that has a category

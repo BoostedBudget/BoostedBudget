@@ -52,7 +52,7 @@ describe('ProfileForm', () => {
 
   describe('Email validation', () => {
     it('should show error for empty email', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<ProfileForm user={mockUser} />)
 
       const emailInput = screen.getByLabelText(/email/i) as HTMLInputElement
@@ -69,7 +69,7 @@ describe('ProfileForm', () => {
     })
 
     it('should show error for invalid email format', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<ProfileForm user={mockUser} />)
 
       const emailInput = screen.getByLabelText(/email/i)
@@ -92,7 +92,7 @@ describe('ProfileForm', () => {
         email: 'newemail@example.com',
       })
 
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<ProfileForm user={mockUser} />)
 
       const emailInput = screen.getByLabelText(/email/i)
@@ -114,7 +114,7 @@ describe('ProfileForm', () => {
       const updatedUser = { ...mockUser, email: 'updated@example.com' }
       vi.mocked(profileApi.updateProfile).mockResolvedValue(updatedUser)
 
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<ProfileForm user={mockUser} />)
 
       const emailInput = screen.getByLabelText(/email/i)
@@ -136,7 +136,7 @@ describe('ProfileForm', () => {
       const updatedUser = { ...mockUser, primary_region: 'lhr' }
       vi.mocked(profileApi.updateProfile).mockResolvedValue(updatedUser)
 
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<ProfileForm user={mockUser} />)
 
       const regionSelect = screen.getByLabelText(/primary region/i)
@@ -154,7 +154,7 @@ describe('ProfileForm', () => {
     })
 
     it('should not submit if no changes', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<ProfileForm user={mockUser} />)
 
       const saveButton = screen.getByRole('button', { name: /save changes/i })
@@ -167,7 +167,7 @@ describe('ProfileForm', () => {
       const updatedUser = { ...mockUser, email: 'updated@example.com' }
       vi.mocked(profileApi.updateProfile).mockResolvedValue(updatedUser)
 
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<ProfileForm user={mockUser} />)
 
       const emailInput = screen.getByLabelText(/email/i)
@@ -186,7 +186,7 @@ describe('ProfileForm', () => {
     it('should show error message on update failure', async () => {
       vi.mocked(profileApi.updateProfile).mockRejectedValue(new Error('Update failed'))
 
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<ProfileForm user={mockUser} />)
 
       const emailInput = screen.getByLabelText(/email/i)
@@ -207,7 +207,7 @@ describe('ProfileForm', () => {
         () => new Promise(() => {}) // Never resolves
       )
 
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<ProfileForm user={mockUser} />)
 
       const emailInput = screen.getByLabelText(/email/i)
@@ -231,7 +231,7 @@ describe('ProfileForm', () => {
       vi.mocked(profileApi.updateProfile).mockResolvedValue(updatedUser)
 
       const onProfileUpdate = vi.fn()
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<ProfileForm user={mockUser} onProfileUpdate={onProfileUpdate} />)
 
       const emailInput = screen.getByLabelText(/email/i)
@@ -250,7 +250,7 @@ describe('ProfileForm', () => {
 
   describe('Form state management', () => {
     it('should update local state when editing email', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<ProfileForm user={mockUser} />)
 
       const emailInput = screen.getByLabelText(/email/i) as HTMLInputElement
@@ -263,7 +263,7 @@ describe('ProfileForm', () => {
     })
 
     it('should update local state when selecting region', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<ProfileForm user={mockUser} />)
 
       const regionSelect = screen.getByLabelText(/primary region/i)
@@ -277,7 +277,7 @@ describe('ProfileForm', () => {
       const updatedUser = { ...mockUser, email: 'final@example.com' }
       vi.mocked(profileApi.updateProfile).mockResolvedValue(updatedUser)
 
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<ProfileForm user={mockUser} />)
 
       const emailInput = screen.getByLabelText(/email/i)

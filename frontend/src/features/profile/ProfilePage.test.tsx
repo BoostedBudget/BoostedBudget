@@ -7,6 +7,7 @@ import * as profileApi from './api/profileApi'
 import type { User } from './types'
 import * as useSubscriptionTiersHook from '../subscription/hooks/useSubscriptionTiers'
 import type { SubscriptionTiersResponse } from '../subscription/types'
+// Test utilities available: import { fillInputByLabel } from '@/test/utils/formTestHelpers'
 
 // Mock the profile API
 vi.mock('./api/profileApi')
@@ -226,7 +227,7 @@ describe('ProfilePage', () => {
         expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
       })
 
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       const retryButton = screen.getByRole('button', { name: /retry/i })
       await user.click(retryButton)
 
@@ -248,7 +249,7 @@ describe('ProfilePage', () => {
         expect(screen.getByDisplayValue('test@example.com')).toBeInTheDocument()
       })
 
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       const emailInput = screen.getByLabelText(/email/i) as HTMLInputElement
 
       // Triple-click to select all, then type to replace (more reliable than clear() in vitest 4.x)
@@ -287,7 +288,7 @@ describe('ProfilePage', () => {
         expect(screen.getByDisplayValue('test@example.com')).toBeInTheDocument()
       })
 
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       const emailInput = screen.getByLabelText(/email/i)
 
       // Use tripleClick + Backspace to reliably clear controlled input
@@ -317,7 +318,7 @@ describe('ProfilePage', () => {
         expect(screen.getByDisplayValue('test@example.com')).toBeInTheDocument()
       })
 
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       const emailInput = screen.getByLabelText(/email/i) as HTMLInputElement
 
       // Triple-click to select all, then type to replace (more reliable than clear() in vitest 4.x)
@@ -347,7 +348,7 @@ describe('ProfilePage', () => {
         expect(screen.getByDisplayValue('test@example.com')).toBeInTheDocument()
       })
 
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       const regionSelect = screen.getByLabelText(/region/i)
 
       await user.selectOptions(regionSelect, 'lhr')
@@ -376,7 +377,7 @@ describe('ProfilePage', () => {
         expect(screen.getByDisplayValue('test@example.com')).toBeInTheDocument()
       })
 
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       const emailInput = screen.getByLabelText(/email/i)
 
       await user.tripleClick(emailInput)
@@ -400,7 +401,7 @@ describe('ProfilePage', () => {
         expect(screen.getByDisplayValue('test@example.com')).toBeInTheDocument()
       })
 
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       const emailInput = screen.getByLabelText(/email/i) as HTMLInputElement
 
       // Triple-click to select all, then type to replace (more reliable than clear() in vitest 4.x)
@@ -427,7 +428,7 @@ describe('ProfilePage', () => {
         expect(screen.getByDisplayValue('test@example.com')).toBeInTheDocument()
       })
 
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       const emailInput = screen.getByLabelText(/email/i) as HTMLInputElement
 
       // Triple-click to select all, then type to replace (more reliable than clear() in vitest 4.x)
@@ -440,7 +441,7 @@ describe('ProfilePage', () => {
       await waitFor(() => {
         expect(saveButton).toBeDisabled()
       })
-    }, 60000) // Extended timeout for CI environment
+    }, 15000)
   })
 
   describe('Responsive design', () => {
@@ -528,7 +529,7 @@ describe('ProfilePage', () => {
       })
 
       // Click Privacy Settings tab
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       const privacyTabButton = screen.getByRole('button', { name: /Privacy Settings/i })
       await user.click(privacyTabButton)
 

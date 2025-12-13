@@ -63,7 +63,7 @@ describe('SearchableSelect', () => {
     })
 
     it('should show dropdown when input is focused', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<SearchableSelect {...defaultProps} />)
 
       const input = screen.getByRole('combobox')
@@ -74,7 +74,7 @@ describe('SearchableSelect', () => {
     })
 
     it('should hide dropdown when clicking outside', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(
         <div>
           <SearchableSelect {...defaultProps} />
@@ -95,7 +95,7 @@ describe('SearchableSelect', () => {
     })
 
     it('should render options with sublabels when provided', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<SearchableSelect {...defaultProps} options={mockAccountOptions} />)
 
       const input = screen.getByRole('combobox')
@@ -108,7 +108,7 @@ describe('SearchableSelect', () => {
 
   describe('Filtering', () => {
     it('should filter options based on search text', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<SearchableSelect {...defaultProps} />)
 
       const input = screen.getByRole('combobox')
@@ -122,7 +122,7 @@ describe('SearchableSelect', () => {
     })
 
     it('should show all options when search is empty', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<SearchableSelect {...defaultProps} />)
 
       const input = screen.getByRole('combobox')
@@ -132,7 +132,7 @@ describe('SearchableSelect', () => {
     })
 
     it('should show "No results" when filter matches nothing', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<SearchableSelect {...defaultProps} />)
 
       const input = screen.getByRole('combobox')
@@ -145,7 +145,7 @@ describe('SearchableSelect', () => {
     })
 
     it('should be case-insensitive when filtering', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<SearchableSelect {...defaultProps} />)
 
       const input = screen.getByRole('combobox')
@@ -160,7 +160,7 @@ describe('SearchableSelect', () => {
     })
 
     it('should filter by sublabel as well', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<SearchableSelect {...defaultProps} options={mockAccountOptions} />)
 
       const input = screen.getByRole('combobox')
@@ -177,7 +177,7 @@ describe('SearchableSelect', () => {
   describe('Selection', () => {
     it('should call onChange with selected value on click', async () => {
       const onChange = vi.fn()
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<SearchableSelect {...defaultProps} onChange={onChange} />)
 
       const input = screen.getByRole('combobox')
@@ -188,7 +188,7 @@ describe('SearchableSelect', () => {
     })
 
     it('should close dropdown after selection', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<SearchableSelect {...defaultProps} />)
 
       const input = screen.getByRole('combobox')
@@ -201,7 +201,7 @@ describe('SearchableSelect', () => {
     })
 
     it('should clear search text after selection', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       // Use controlled wrapper to properly test selection updating the value
       render(<ControlledSearchableSelect options={mockOptions} placeholder="Search..." />)
 
@@ -218,7 +218,7 @@ describe('SearchableSelect', () => {
 
     it('should allow clearing selection with empty option', async () => {
       const onChange = vi.fn()
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(
         <SearchableSelect
           {...defaultProps}
@@ -239,7 +239,7 @@ describe('SearchableSelect', () => {
 
   describe('Keyboard Navigation', () => {
     it('should navigate options with arrow keys', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<SearchableSelect {...defaultProps} />)
 
       const input = screen.getByRole('combobox')
@@ -262,7 +262,7 @@ describe('SearchableSelect', () => {
 
     it('should select highlighted option on Enter', async () => {
       const onChange = vi.fn()
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<SearchableSelect {...defaultProps} onChange={onChange} />)
 
       const input = screen.getByRole('combobox')
@@ -274,7 +274,7 @@ describe('SearchableSelect', () => {
     })
 
     it('should close dropdown on Escape', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<SearchableSelect {...defaultProps} />)
 
       const input = screen.getByRole('combobox')
@@ -294,7 +294,7 @@ describe('SearchableSelect', () => {
         { value: '1', label: 'First' },
         { value: '2', label: 'Second' },
       ]
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<SearchableSelect {...defaultProps} options={shortOptions} />)
 
       const input = screen.getByRole('combobox')
@@ -314,7 +314,7 @@ describe('SearchableSelect', () => {
 
   describe('Accessibility', () => {
     it('should have proper ARIA roles', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<SearchableSelect {...defaultProps} aria-label="Select category" />)
 
       const input = screen.getByRole('combobox')
@@ -329,7 +329,7 @@ describe('SearchableSelect', () => {
     })
 
     it('should have aria-activedescendant when option is highlighted', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<SearchableSelect {...defaultProps} />)
 
       const input = screen.getByRole('combobox')
@@ -340,7 +340,7 @@ describe('SearchableSelect', () => {
     })
 
     it('should mark selected option with aria-selected', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<SearchableSelect {...defaultProps} value="cat-2" />)
 
       const input = screen.getByRole('combobox')
@@ -353,7 +353,7 @@ describe('SearchableSelect', () => {
 
   describe('Edge Cases', () => {
     it('should handle empty options array', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<SearchableSelect {...defaultProps} options={[]} />)
 
       const input = screen.getByRole('combobox')
@@ -370,7 +370,7 @@ describe('SearchableSelect', () => {
     })
 
     it('should not open dropdown when disabled', async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<SearchableSelect {...defaultProps} disabled />)
 
       const input = screen.getByRole('combobox')
@@ -383,7 +383,7 @@ describe('SearchableSelect', () => {
       const longOptions = [
         { value: '1', label: 'This is a very long category name that should be handled properly without breaking the layout' },
       ]
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<SearchableSelect {...defaultProps} options={longOptions} />)
 
       const input = screen.getByRole('combobox')
@@ -405,7 +405,7 @@ describe('SearchableSelect', () => {
         { value: '1', label: 'Food & Drink' },
         { value: '2', label: 'ATM/Cash' },
       ]
-      const user = userEvent.setup()
+      const user = userEvent.setup({ delay: null })
       render(<SearchableSelect {...defaultProps} options={specialOptions} />)
 
       const input = screen.getByRole('combobox')

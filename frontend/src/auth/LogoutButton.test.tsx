@@ -30,7 +30,7 @@ describe('LogoutButton', () => {
       logout: mockLogout,
     })
 
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     render(<LogoutButton />)
 
     const button = screen.getByRole('button', { name: /log out/i })

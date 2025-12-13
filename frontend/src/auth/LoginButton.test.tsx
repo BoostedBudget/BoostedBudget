@@ -30,7 +30,7 @@ describe('LoginButton', () => {
       loginWithRedirect: mockLoginWithRedirect,
     })
 
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     render(<LoginButton />)
 
     const button = screen.getByRole('button', { name: /log in/i })

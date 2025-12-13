@@ -16,10 +16,40 @@ env:
 
 jobs:
   # =============================================================================
+  # Detect Changes (determines which jobs to run based on file changes)
+  # =============================================================================
+  detect-changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      migrations: ${{ steps.filter.outputs.migrations }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - 'go.mod'
+              - 'go.sum'
+            frontend:
+              - 'frontend/**'
+              - 'package.json'
+              - 'package-lock.json'
+            migrations:
+              - 'backend/migrations/**'
+
+  # =============================================================================
   # Backend Tests (runs in parallel with frontend)
   # =============================================================================
   backend-test:
     name: Backend Tests
+    needs: detect-changes
+    if: needs.detect-changes.outputs.backend == 'true'
     runs-on: [self-hosted, macOS, mac-mini]
     env:
       UNIQUE_WORKSPACE: workspace-backend-test-${{ github.run_id }}
@@ -38,6 +68,25 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
+
+      - name: Restore Go modules cache
+        id: cache-go-modules
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/go/pkg/mod
+          key: go-modules-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-modules-${{ runner.os }}-
+
+      - name: Download Go dependencies
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        run: |
+          if [ "${{ steps.cache-go-modules.outputs.cache-hit }}" == "true" ]; then
+            echo "✅ Go modules restored from cache"
+          else
+            echo "📦 Cache miss, downloading Go modules..."
+          fi
+          go mod download
 
       - name: Run Go tests with coverage
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
@@ -67,10 +116,19 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
         run: go tool cover -html=coverage.out -o coverage.html
 
+      - name: Restore backend binary cache
+        id: cache-backend-binary
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
+          key: backend-binary-${{ runner.os }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', 'backend/go.sum') }}
+
       - name: Build backend binary (for E2E tests)
+        if: steps.cache-backend-binary.outputs.cache-hit != 'true'
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
         run: |
           echo "::group::Building backend binary"
+          mkdir -p bin
           go build -o bin/server ./cmd/server
           echo "::endgroup::"
 
@@ -90,15 +148,31 @@ jobs:
             ${{ env.UNIQUE_WORKSPACE }}/backend/coverage.html
           retention-days: 30
 
+      - name: Save Go modules cache
+        if: always() && steps.cache-go-modules.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/go/pkg/mod
+          key: go-modules-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+
+      - name: Save backend binary cache
+        if: always() && steps.cache-backend-binary.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
+          key: backend-binary-${{ runner.os }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', 'backend/go.sum') }}
+
       - name: Final workspace cleanup
         if: always()
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
-  # Frontend Tests (runs in parallel with backend)
+  # Frontend Tests (Single job - no sharding)
   # =============================================================================
   frontend-test:
     name: Frontend Tests
+    needs: detect-changes
+    if: needs.detect-changes.outputs.frontend == 'true'
     runs-on: [self-hosted, macOS, mac-mini]
     env:
       UNIQUE_WORKSPACE: workspace-frontend-test-${{ github.run_id }}
@@ -122,39 +196,62 @@ jobs:
       - name: Install frontend dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
-          echo "📦 Installing frontend dependencies..."
-          for i in 1 2 3 4; do
-            echo "npm ci attempt $i/4..."
-            npm ci --prefer-offline --no-audit && {
-              echo "✅ Dependencies installed"
-              break
-            } || {
-              echo "⚠️ npm ci attempt $i/4 failed"
-              npm cache clean --force
-              [ $i -lt 4 ] && sleep 10
-            }
-          done
+          set -e
+          CACHE_BASE="$HOME/.cache/boostedbudget"
+          CACHE_DIR="$CACHE_BASE/node-modules"
+          CACHE_HASH_FILE="$CACHE_BASE/node-modules.sha"
 
-      - name: Run ESLint (fail on warnings)
+          # Cleanup old cache files (>48 hours) to prevent disk bloat
+          echo "🧹 Cleaning up stale cache files..."
+          find "$CACHE_BASE" -maxdepth 1 -name "node-modules*" -mmin +2880 -exec rm -rf {} \; 2>/dev/null || true
+
+          # Compute current package-lock.json hash
+          CURRENT_HASH=$(shasum -a 256 package-lock.json | cut -d' ' -f1)
+
+          # Check if cache exists AND hash matches
+          if [ -d "$CACHE_DIR" ] && [ -f "$CACHE_HASH_FILE" ] && [ "$(cat "$CACHE_HASH_FILE")" == "$CURRENT_HASH" ]; then
+            echo "✅ Local cache hit! Restoring node_modules..."
+            START_TIME=$(date +%s)
+            rsync -a --delete "$CACHE_DIR/" ./node_modules/
+            END_TIME=$(date +%s)
+            echo "✅ Restored in $((END_TIME - START_TIME))s"
+          else
+            echo "📦 Cache miss, running npm ci..."
+            [ -f "$CACHE_HASH_FILE" ] && echo "  Previous hash: $(cat "$CACHE_HASH_FILE")"
+            echo "  Current hash:  $CURRENT_HASH"
+            npm ci --prefer-offline --no-audit
+
+            # Atomic cache update
+            echo "💾 Updating local cache..."
+            TEMP_DIR="$CACHE_BASE/node-modules.tmp.$$"
+            rm -rf "$TEMP_DIR"
+            mkdir -p "$TEMP_DIR"
+            rsync -a ./node_modules/ "$TEMP_DIR/"
+            rm -rf "$CACHE_DIR"
+            mv "$TEMP_DIR" "$CACHE_DIR"
+            echo "$CURRENT_HASH" > "$CACHE_HASH_FILE"
+            echo "✅ Cache updated ($(du -sh "$CACHE_DIR" | cut -f1))"
+          fi
+
+      - name: Run ESLint
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
           echo "::group::Running ESLint"
           npm run lint
           echo "::endgroup::"
 
-      - name: Run frontend unit tests with coverage
+      - name: Run frontend unit tests
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
           echo "::group::Running Unit Tests"
           npm run test:ci
           echo "::endgroup::"
 
-      - name: Upload frontend coverage report
+      - name: Upload coverage report
         uses: actions/upload-artifact@v5
         with:
           name: frontend-coverage
-          path: |
-            ${{ env.UNIQUE_WORKSPACE }}/frontend/coverage/
+          path: ${{ env.UNIQUE_WORKSPACE }}/frontend/coverage/
           retention-days: 30
 
       - name: Final workspace cleanup
@@ -166,7 +263,9 @@ jobs:
   # =============================================================================
   e2e-test:
     name: E2E Tests
-    needs: backend-test
+    needs: [detect-changes, backend-test]
+    # Run if backend-test succeeded OR was skipped (frontend-only changes)
+    if: always() && !cancelled() && (needs.backend-test.result == 'success' || needs.backend-test.result == 'skipped')
     runs-on: [self-hosted, macOS, mac-mini]
     env:
       UNIQUE_WORKSPACE: workspace-e2e-test-${{ github.run_id }}
@@ -189,18 +288,42 @@ jobs:
       - name: Install frontend dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
-          echo "📦 Installing frontend dependencies..."
-          for i in 1 2 3 4; do
-            echo "npm ci attempt $i/4..."
-            npm ci --prefer-offline --no-audit && {
-              echo "✅ Dependencies installed"
-              break
-            } || {
-              echo "⚠️ npm ci attempt $i/4 failed"
-              npm cache clean --force
-              [ $i -lt 4 ] && sleep 10
-            }
-          done
+          set -e
+          CACHE_BASE="$HOME/.cache/boostedbudget"
+          CACHE_DIR="$CACHE_BASE/node-modules"
+          CACHE_HASH_FILE="$CACHE_BASE/node-modules.sha"
+
+          # Cleanup old cache files (>48 hours) to prevent disk bloat
+          echo "🧹 Cleaning up stale cache files..."
+          find "$CACHE_BASE" -maxdepth 1 -name "node-modules*" -mmin +2880 -exec rm -rf {} \; 2>/dev/null || true
+
+          # Compute current package-lock.json hash
+          CURRENT_HASH=$(shasum -a 256 package-lock.json | cut -d' ' -f1)
+
+          # Check if cache exists AND hash matches
+          if [ -d "$CACHE_DIR" ] && [ -f "$CACHE_HASH_FILE" ] && [ "$(cat "$CACHE_HASH_FILE")" == "$CURRENT_HASH" ]; then
+            echo "✅ Local cache hit! Restoring node_modules..."
+            START_TIME=$(date +%s)
+            rsync -a --delete "$CACHE_DIR/" ./node_modules/
+            END_TIME=$(date +%s)
+            echo "✅ Restored in $((END_TIME - START_TIME))s"
+          else
+            echo "📦 Cache miss, running npm ci..."
+            [ -f "$CACHE_HASH_FILE" ] && echo "  Previous hash: $(cat "$CACHE_HASH_FILE")"
+            echo "  Current hash:  $CURRENT_HASH"
+            npm ci --prefer-offline --no-audit
+
+            # Atomic cache update
+            echo "💾 Updating local cache..."
+            TEMP_DIR="$CACHE_BASE/node-modules.tmp.$$"
+            rm -rf "$TEMP_DIR"
+            mkdir -p "$TEMP_DIR"
+            rsync -a ./node_modules/ "$TEMP_DIR/"
+            rm -rf "$CACHE_DIR"
+            mv "$TEMP_DIR" "$CACHE_DIR"
+            echo "$CURRENT_HASH" > "$CACHE_HASH_FILE"
+            echo "✅ Cache updated ($(du -sh "$CACHE_DIR" | cut -f1))"
+          fi
 
       - name: Install Playwright browsers
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
@@ -216,11 +339,44 @@ jobs:
             }
           done
 
-      - name: Download backend binary
+      - name: Restore backend binary from cache
+        id: cache-backend-binary
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
+          key: backend-binary-${{ runner.os }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', 'backend/go.sum') }}
+          restore-keys: |
+            backend-binary-${{ runner.os }}-
+
+      - name: Set up Go (for building backend if needed)
+        if: steps.cache-backend-binary.outputs.cache-hit != 'true' && needs.backend-test.result == 'skipped'
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build backend binary (cache miss fallback)
+        if: steps.cache-backend-binary.outputs.cache-hit != 'true' && needs.backend-test.result == 'skipped'
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        run: |
+          echo "📦 Building backend binary (cache miss, backend-test skipped)..."
+          mkdir -p bin
+          go build -o bin/server ./cmd/server
+          echo "✅ Backend binary built successfully"
+
+      - name: Download backend binary artifact (fallback)
+        if: steps.cache-backend-binary.outputs.cache-hit != 'true' && needs.backend-test.result == 'success'
         uses: actions/download-artifact@v6
         with:
           name: backend-binary
           path: ${{ env.UNIQUE_WORKSPACE }}/backend/bin
+
+      - name: Verify backend binary exists
+        run: |
+          if [ ! -f "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}/backend/bin/server" ]; then
+            echo "::error::Backend binary not found. Run backend tests first to populate cache."
+            exit 1
+          fi
+          echo "✅ Backend binary found"
 
       - name: Make backend binary executable
         run: chmod +x $GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
@@ -259,6 +415,8 @@ jobs:
   # =============================================================================
   migration-tests:
     name: Migration Tests
+    needs: detect-changes
+    if: needs.detect-changes.outputs.migrations == 'true' || needs.detect-changes.outputs.backend == 'true'
     runs-on: [self-hosted, macOS, mac-mini]
     env:
       UNIQUE_WORKSPACE: workspace-migration-tests-${{ github.run_id }}
