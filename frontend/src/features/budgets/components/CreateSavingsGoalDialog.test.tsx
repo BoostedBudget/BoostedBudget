@@ -13,6 +13,7 @@ import * as budgetsApi from '../api/budgetsApi';
 import * as plaidApi from '../../accounts/api/plaidApi';
 import type { Account } from '../../accounts/types';
 import type { SavingsGoal } from '../types';
+import { fillInputByLabel, selectOptionByLabel } from '@/test/utils/formTestHelpers';
 
 // Mock APIs
 vi.mock('../api/budgetsApi');
@@ -193,7 +194,7 @@ describe('CreateSavingsGoalDialog', () => {
 
   describe('Template Selection', () => {
     it('pre-fills form when template is selected', async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ delay: null });
       render(
         <CreateSavingsGoalDialog
           isOpen={true}
@@ -215,7 +216,7 @@ describe('CreateSavingsGoalDialog', () => {
     });
 
     it('allows editing pre-filled values after template selection', async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ delay: null });
       render(
         <CreateSavingsGoalDialog
           isOpen={true}
@@ -246,7 +247,7 @@ describe('CreateSavingsGoalDialog', () => {
 
   describe('Validation', () => {
     it('shows error when name is empty on submit', async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ delay: null });
       render(
         <CreateSavingsGoalDialog
           isOpen={true}
@@ -266,7 +267,7 @@ describe('CreateSavingsGoalDialog', () => {
     });
 
     it('shows error when target amount is zero or negative', async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ delay: null });
       render(
         <CreateSavingsGoalDialog
           isOpen={true}
@@ -290,7 +291,7 @@ describe('CreateSavingsGoalDialog', () => {
     });
 
     it('shows error when no account is selected', async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ delay: null });
       render(
         <CreateSavingsGoalDialog
           isOpen={true}
@@ -320,7 +321,7 @@ describe('CreateSavingsGoalDialog', () => {
 
   describe('Submission', () => {
     it('calls createSavingsGoal with correct payload on submit', async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ delay: null });
       render(
         <CreateSavingsGoalDialog
           isOpen={true}
@@ -355,10 +356,10 @@ describe('CreateSavingsGoalDialog', () => {
           deadline: undefined,
         });
       });
-    }, 60000); // Extended timeout for CI environment
+    }, 15000);
 
     it('includes optional fields in payload when provided', async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ delay: null });
       render(
         <CreateSavingsGoalDialog
           isOpen={true}
@@ -397,7 +398,7 @@ describe('CreateSavingsGoalDialog', () => {
           })
         );
       });
-    }, 120000); // Extended timeout for CI environment
+    }, 15000);
 
     it('shows loading state during API call', async () => {
       // Make API call slow - use longer delay to ensure loading state is visible
@@ -405,7 +406,7 @@ describe('CreateSavingsGoalDialog', () => {
         () => new Promise((resolve) => setTimeout(() => resolve(mockCreatedGoal), 3000))
       );
 
-      const user = userEvent.setup();
+      const user = userEvent.setup({ delay: null });
       render(
         <CreateSavingsGoalDialog
           isOpen={true}
@@ -432,10 +433,10 @@ describe('CreateSavingsGoalDialog', () => {
       await waitFor(() => {
         expect(screen.getByText(/creating/i)).toBeInTheDocument();
       });
-    }, 60000); // Extended timeout for CI environment
+    }, 15000);
 
     it('closes dialog and calls onGoalCreated on successful creation', async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ delay: null });
       render(
         <CreateSavingsGoalDialog
           isOpen={true}
@@ -461,14 +462,14 @@ describe('CreateSavingsGoalDialog', () => {
       await waitFor(() => {
         expect(mockOnCreate).toHaveBeenCalledWith(mockCreatedGoal);
       });
-    }, 60000); // Extended timeout for CI environment
+    }, 15000);
 
     it('shows error message on API failure', async () => {
       vi.mocked(budgetsApi.createSavingsGoal).mockRejectedValue(
         new Error('Failed to create goal')
       );
 
-      const user = userEvent.setup();
+      const user = userEvent.setup({ delay: null });
       render(
         <CreateSavingsGoalDialog
           isOpen={true}
@@ -481,12 +482,10 @@ describe('CreateSavingsGoalDialog', () => {
         expect(screen.getByLabelText(/name/i)).toBeInTheDocument();
       });
 
-      // Fill form
-      await user.type(screen.getByLabelText(/name/i), 'Test Goal');
-      await user.clear(screen.getByLabelText(/target amount/i));
-      await user.type(screen.getByLabelText(/target amount/i), '1000');
-      const accountSelect = screen.getByLabelText(/account/i) as HTMLSelectElement;
-      await user.selectOptions(accountSelect, 'acc-1');
+      // Fill form using fast utilities
+      fillInputByLabel(/name/i, 'Test Goal');
+      fillInputByLabel(/target amount/i, '1000');
+      selectOptionByLabel(/account/i, 'acc-1');
 
       // Submit
       await user.click(screen.getByRole('button', { name: /create goal/i }));
@@ -494,7 +493,7 @@ describe('CreateSavingsGoalDialog', () => {
       await waitFor(() => {
         expect(screen.getByText(/failed to create goal/i)).toBeInTheDocument();
       });
-    }, 60000); // Extended timeout for CI environment
+    }, 15000);
   });
 
   // ==========================================================================
@@ -503,7 +502,7 @@ describe('CreateSavingsGoalDialog', () => {
 
   describe('Cancel', () => {
     it('calls onCancel when cancel button clicked', async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ delay: null });
       render(
         <CreateSavingsGoalDialog
           isOpen={true}
@@ -522,7 +521,6 @@ describe('CreateSavingsGoalDialog', () => {
     });
 
     it('resets form when reopened after cancel', async () => {
-      const user = userEvent.setup();
       const { rerender } = render(
         <CreateSavingsGoalDialog
           isOpen={true}
@@ -535,8 +533,8 @@ describe('CreateSavingsGoalDialog', () => {
         expect(screen.getByLabelText(/name/i)).toBeInTheDocument();
       });
 
-      // Fill some data
-      await user.type(screen.getByLabelText(/name/i), 'Test Goal');
+      // Fill some data using fast utility
+      fillInputByLabel(/name/i, 'Test Goal');
 
       // Close dialog (simulate cancel changing isOpen to false)
       rerender(
@@ -569,7 +567,7 @@ describe('CreateSavingsGoalDialog', () => {
 
   describe('Dialog Close Behavior (Issue #460)', () => {
     it('does not close when clicking outside the dialog (on backdrop)', async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ delay: null });
       render(
         <CreateSavingsGoalDialog
           isOpen={true}
@@ -597,7 +595,7 @@ describe('CreateSavingsGoalDialog', () => {
     });
 
     it('closes when X button is clicked', async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ delay: null });
       render(
         <CreateSavingsGoalDialog
           isOpen={true}
@@ -624,7 +622,7 @@ describe('CreateSavingsGoalDialog', () => {
     });
 
     it('closes when Cancel button is clicked', async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ delay: null });
       render(
         <CreateSavingsGoalDialog
           isOpen={true}

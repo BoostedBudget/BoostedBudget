@@ -132,7 +132,9 @@ describe('AutoCategorizationPageWrapper', () => {
       expect(screen.getByTestId('auto-categorization-page')).toBeInTheDocument()
     })
 
-    expect(screen.getByTestId('categories-count')).toHaveTextContent('2')
+    await waitFor(() => {
+      expect(screen.getByTestId('categories-count')).toHaveTextContent('2')
+    })
   })
 
   it('should convert categories to string[][] format', async () => {
