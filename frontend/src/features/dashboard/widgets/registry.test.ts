@@ -352,8 +352,8 @@ describe('Widget Registry', () => {
     it('should have correct version', async () => {
       const { DEFAULT_LAYOUT } = await import('./registry')
 
-      // Version bumped to 3 after adding BalanceHistoryWidget
-      expect(DEFAULT_LAYOUT.version).toBe(3)
+      // Version bumped to 4 for Issue #468 (increased minH values)
+      expect(DEFAULT_LAYOUT.version).toBe(4)
     })
 
     it('should have unique widget IDs', async () => {

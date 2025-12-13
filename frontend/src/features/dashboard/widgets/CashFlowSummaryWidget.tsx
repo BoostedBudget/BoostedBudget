@@ -192,6 +192,7 @@ function CashFlowSummaryWidget(_props: WidgetProps) {
 }
 
 // Register the widget
+// Issue #468: Increased minSize.h from 2 to 3 for proper content rendering
 registerWidget({
   type: 'cash-flow-summary',
   title: 'Cash Flow Summary',
@@ -199,7 +200,7 @@ registerWidget({
   icon: 'chart-bar',
   category: 'overview',
   defaultSize: { w: 8, h: 3 },
-  minSize: { w: 6, h: 2 },
+  minSize: { w: 6, h: 3 },
   Component: CashFlowSummaryWidget,
 });
 

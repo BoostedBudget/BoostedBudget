@@ -75,6 +75,8 @@ function BalanceHistoryWidget(_props: WidgetProps) {
 }
 
 // Register the widget
+// Issue #468: Increased minSize.h from 3 to 4 for proper chart rendering
+// cellHeight=80px, so h=4 gives 320px total, ~244px for chart content
 registerWidget({
   type: 'balance-history',
   title: 'Balance History',
@@ -82,7 +84,7 @@ registerWidget({
   icon: 'chart-line',
   category: 'charts',
   defaultSize: { w: 6, h: 4 },
-  minSize: { w: 4, h: 3 },
+  minSize: { w: 4, h: 4 },
   maxSize: { w: 12, h: 8 },
   Component: BalanceHistoryWidget,
 });
