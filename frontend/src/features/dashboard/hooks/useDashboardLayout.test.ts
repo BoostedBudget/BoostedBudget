@@ -27,13 +27,13 @@ vi.mock('../widgets/registry', async () => {
 })
 
 describe('useDashboardLayout', () => {
-  // Use version 3 (current DEFAULT_LAYOUT version) to avoid triggering auto-reset
+  // Use version 4 (current DEFAULT_LAYOUT version per Issue #468) to avoid triggering auto-reset
   const mockLayout: DashboardLayout = {
     widgets: [
-      { i: 'cash-flow-chart-1', type: 'cash-flow-chart', x: 0, y: 0, w: 12, h: 5, minW: 4, minH: 3 },
-      { i: 'balance-history-1', type: 'balance-history', x: 0, y: 5, w: 12, h: 4, minW: 4, minH: 3 },
+      { i: 'cash-flow-chart-1', type: 'cash-flow-chart', x: 0, y: 0, w: 12, h: 5, minW: 4, minH: 4 },
+      { i: 'balance-history-1', type: 'balance-history', x: 0, y: 5, w: 12, h: 4, minW: 4, minH: 4 },
     ],
-    version: 3,
+    version: 4,
   }
 
   const mockPreferencesResponse: DashboardPreferencesResponse = {
@@ -48,7 +48,7 @@ describe('useDashboardLayout', () => {
     w: 6,
     h: 4,
     minW: 4,
-    minH: 3,
+    minH: 4,
   }
 
   beforeEach(() => {
@@ -383,7 +383,7 @@ describe('useDashboardLayout', () => {
       )
     })
 
-    it('should cleanup timeout on unmount', async () => {
+    it('should flush pending saves on unmount (Issue #468)', async () => {
       vi.mocked(preferencesApi.getDashboardPreferences).mockResolvedValue(mockPreferencesResponse)
       vi.mocked(preferencesApi.saveDashboardPreferences).mockResolvedValue(mockPreferencesResponse)
 
@@ -394,20 +394,17 @@ describe('useDashboardLayout', () => {
       })
 
       // Schedule a save
+      const newLayout = { ...mockLayout, version: 5 }
       act(() => {
-        result.current.updateLayout({ ...mockLayout, version: 2 })
+        result.current.updateLayout(newLayout)
       })
 
-      // Unmount before debounce completes
+      // Unmount before debounce completes - should flush pending save
       unmount()
 
-      // Fast forward
-      await act(async () => {
-        vi.advanceTimersByTime(2000)
-      })
-
-      // Save should NOT have been called
-      expect(preferencesApi.saveDashboardPreferences).not.toHaveBeenCalled()
+      // Save SHOULD have been called on unmount to prevent data loss (Issue #468)
+      expect(preferencesApi.saveDashboardPreferences).toHaveBeenCalledTimes(1)
+      expect(preferencesApi.saveDashboardPreferences).toHaveBeenCalledWith(newLayout)
     })
   })
 
