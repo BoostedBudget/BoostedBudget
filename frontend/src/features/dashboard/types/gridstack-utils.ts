@@ -117,7 +117,8 @@ export function toGridStackOptions(isEditing: boolean): GridStackOptions {
     column: 12,
     cellHeight: 80,
     margin: 16,
-    float: false,
+    // Issue #478: Changed to true to preserve inline widget x-positions
+    float: true,
 
     // Edit mode controls
     disableDrag: !isEditing,
