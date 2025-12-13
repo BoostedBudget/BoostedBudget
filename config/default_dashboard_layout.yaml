@@ -30,7 +30,8 @@
 
 # Layout version - INCREMENT when widgets change to trigger user resets
 # Existing users with saved layouts < this version will auto-reset
-layout_version: 3
+# Issue #468: Version 4 - Increased minH values for proper chart/content rendering
+layout_version: 4
 
 # Widget configurations
 # Each widget needs: id, type, position (x,y), size (w,h), and constraints (minW, minH)
@@ -42,7 +43,7 @@ widgets:
     w: 12
     h: 5
     minW: 4
-    minH: 3
+    minH: 4  # Issue #468: Increased from 3 for proper chart rendering
 
   - id: "balance-history-1"
     type: "balance-history"
@@ -51,7 +52,7 @@ widgets:
     w: 12
     h: 4
     minW: 4
-    minH: 3
+    minH: 4  # Issue #468: Increased from 3 for proper chart rendering
 
 # Future widgets can be added here when their issues are resolved:
 # - #419: CashFlowSummaryWidget
