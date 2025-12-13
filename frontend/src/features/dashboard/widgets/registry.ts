@@ -64,6 +64,8 @@ export function isWidgetRegistered(type: WidgetType): boolean {
  * - #425: BalanceOverviewWidget
  * - #426: AccountCardsWidget
  */
+// Issue #468: Updated minH values for proper chart/content rendering
+// Version 4 triggers auto-reset for existing users with outdated layouts
 export const DEFAULT_LAYOUT: DashboardLayout = {
   widgets: [
     {
@@ -74,7 +76,7 @@ export const DEFAULT_LAYOUT: DashboardLayout = {
       w: 12,
       h: 5,
       minW: 4,
-      minH: 3,
+      minH: 4,
     },
     {
       i: 'balance-history-1',
@@ -84,10 +86,10 @@ export const DEFAULT_LAYOUT: DashboardLayout = {
       w: 12,
       h: 4,
       minW: 4,
-      minH: 3,
+      minH: 4,
     },
   ],
-  version: 3,
+  version: 4,
 };
 
 /**

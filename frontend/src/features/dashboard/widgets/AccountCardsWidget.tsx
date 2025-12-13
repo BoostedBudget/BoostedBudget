@@ -56,6 +56,7 @@ function AccountCardsWidget(_props: WidgetProps) {
 }
 
 // Register the widget
+// Issue #468: Increased minSize.h from 2 to 3 for proper content rendering
 registerWidget({
   type: 'account-cards',
   title: 'Account Cards',
@@ -63,7 +64,7 @@ registerWidget({
   icon: 'credit-card',
   category: 'accounts',
   defaultSize: { w: 12, h: 3 },
-  minSize: { w: 6, h: 2 },
+  minSize: { w: 6, h: 3 },
   Component: AccountCardsWidget,
 });
 

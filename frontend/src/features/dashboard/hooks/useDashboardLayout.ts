@@ -220,13 +220,39 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
     await saveLayout(layoutToSave);
   }, [layout, saveLayout]);
 
-  // Cleanup on unmount
+  // Cleanup on unmount - flush any pending saves
+  // Issue #468: Previously only cleared timeout without saving, causing data loss
   useEffect(() => {
     return () => {
+      // Clear any pending timeout
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = null;
+      }
+      // Flush any pending layout changes
+      if (pendingLayoutRef.current) {
+        saveLayout(pendingLayoutRef.current);
+        pendingLayoutRef.current = null;
       }
     };
+  }, [saveLayout]);
+
+  // Handle page unload - use sendBeacon for reliable non-blocking save
+  // Issue #468: Ensures changes persist even when closing browser tab
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (pendingLayoutRef.current) {
+        // Use sendBeacon for non-blocking save on page close
+        // Note: sendBeacon requires JSON content type workaround via Blob
+        const data = JSON.stringify({ layout: pendingLayoutRef.current });
+        const blob = new Blob([data], { type: 'application/json' });
+        navigator.sendBeacon('/api/v1/dashboard/preferences', blob);
+        pendingLayoutRef.current = null;
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, []);
 
   return {
