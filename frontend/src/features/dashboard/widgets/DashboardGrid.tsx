@@ -248,12 +248,18 @@ export function DashboardGrid({
         gridRef.current!.makeWidget(el);
       }
 
-      // Update position (works for both new and existing widgets)
+      // Update position and constraints (works for both new and existing widgets)
+      // Issue #486: MUST pass minW/minH/maxW/maxH to enforce size constraints
+      // Without these, GridStack loses constraint info and allows any resize
       gridRef.current!.update(el, {
         x: widget.x,
         y: widget.y,
         w: widget.w,
         h: widget.h,
+        minW: widget.minW,
+        minH: widget.minH,
+        maxW: widget.maxW,
+        maxH: widget.maxH,
       });
     });
 
