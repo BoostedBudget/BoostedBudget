@@ -82,6 +82,9 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 		IsActive:     true,
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
+		// Envelope budgeting fields (Issue #491)
+		IncomeAmount:  req.IncomeAmount,
+		IncomeSources: req.IncomeSources,
 	}
 
 	// Default currency if not provided
@@ -117,6 +120,9 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 			SpentAmount:     0,
 			CreatedAt:       time.Now(),
 			UpdatedAt:       time.Now(),
+			// Flexible matching fields (Issue #491)
+			Tags:       catReq.Tags,
+			MatchLogic: catReq.MatchLogic,
 		}
 
 		if err := s.budgetRepo.CreateCategory(ctx, category); err != nil {
@@ -254,6 +260,13 @@ func (s *budgetService) UpdateBudget(ctx context.Context, userID, budgetID strin
 	if req.IsActive != nil {
 		budget.IsActive = *req.IsActive
 	}
+	// Envelope budgeting fields (Issue #491)
+	if req.IncomeAmount != nil {
+		budget.IncomeAmount = *req.IncomeAmount
+	}
+	if req.IncomeSources != nil {
+		budget.IncomeSources = *req.IncomeSources
+	}
 
 	// Validate
 	if err := budget.Validate(); err != nil {
@@ -368,6 +381,9 @@ func (s *budgetService) AddCategory(ctx context.Context, userID, budgetID string
 		SpentAmount:     0,
 		CreatedAt:       time.Now(),
 		UpdatedAt:       time.Now(),
+		// Flexible matching fields (Issue #491)
+		Tags:       req.Tags,
+		MatchLogic: req.MatchLogic,
 	}
 
 	// Validate
@@ -426,6 +442,13 @@ func (s *budgetService) UpdateCategory(ctx context.Context, userID, budgetID, ca
 	// Apply updates
 	if req.AllocatedAmount != nil {
 		category.AllocatedAmount = *req.AllocatedAmount
+	}
+	// Flexible matching fields (Issue #491)
+	if req.Tags != nil {
+		category.Tags = *req.Tags
+	}
+	if req.MatchLogic != nil {
+		category.MatchLogic = *req.MatchLogic
 	}
 
 	// Validate

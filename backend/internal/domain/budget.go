@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -31,6 +32,74 @@ func (bp BudgetPeriod) IsValid() bool {
 	return validBudgetPeriods[bp]
 }
 
+// =============================================================================
+// Issue #491: Envelope Budgeting Types
+// =============================================================================
+
+// IncomeSourceType represents the type of income source for envelope budgeting.
+type IncomeSourceType string
+
+// Supported income source types.
+const (
+	IncomeSourceTypePlaidCategory IncomeSourceType = "plaid_category"
+	IncomeSourceTypeTag           IncomeSourceType = "tag"
+	IncomeSourceTypeManual        IncomeSourceType = "manual"
+)
+
+// validIncomeSourceTypes is a set of all valid income source types.
+var validIncomeSourceTypes = map[IncomeSourceType]bool{
+	IncomeSourceTypePlaidCategory: true,
+	IncomeSourceTypeTag:           true,
+	IncomeSourceTypeManual:        true,
+}
+
+// IsValid checks if the income source type is valid.
+func (ist IncomeSourceType) IsValid() bool {
+	return validIncomeSourceTypes[ist]
+}
+
+// IncomeSource represents a tracked source of income for envelope budgeting.
+type IncomeSource struct {
+	Type        IncomeSourceType `json:"type"`
+	Value       string           `json:"value"`                 // Category name, tag name, or description
+	Description string           `json:"description,omitempty"` // Optional user-friendly label
+}
+
+// Validate checks that the IncomeSource has valid fields.
+func (is *IncomeSource) Validate() error {
+	if !is.Type.IsValid() {
+		return errors.New("invalid income source type")
+	}
+	if is.Value == "" {
+		return errors.New("income source value is required")
+	}
+	return nil
+}
+
+// MatchLogic represents how a budget category matches transactions.
+type MatchLogic string
+
+// Supported match logic values.
+const (
+	MatchLogicCategoryOnly MatchLogic = "category_only"
+	MatchLogicTagOnly      MatchLogic = "tag_only"
+	MatchLogicAnd          MatchLogic = "and"
+	MatchLogicOr           MatchLogic = "or"
+)
+
+// validMatchLogicValues is a set of all valid match logic values.
+var validMatchLogicValues = map[MatchLogic]bool{
+	MatchLogicCategoryOnly: true,
+	MatchLogicTagOnly:      true,
+	MatchLogicAnd:          true,
+	MatchLogicOr:           true,
+}
+
+// IsValid checks if the match logic value is valid.
+func (ml MatchLogic) IsValid() bool {
+	return validMatchLogicValues[ml]
+}
+
 // Budget represents a user-defined budget for expense tracking.
 // Budgets are FREE for all subscription tiers (Issue #27).
 type Budget struct {
@@ -46,6 +115,10 @@ type Budget struct {
 	IsActive     bool         `json:"is_active" db:"is_active"`
 	CreatedAt    time.Time    `json:"created_at" db:"created_at"`
 	UpdatedAt    time.Time    `json:"updated_at" db:"updated_at"`
+
+	// Envelope budgeting fields (Issue #491)
+	IncomeAmount  float64        `json:"income_amount" db:"income_amount"`
+	IncomeSources []IncomeSource `json:"income_sources" db:"-"` // JSONB, populated from DB
 
 	// Associated data (populated on demand, not stored in DB)
 	Categories []BudgetCategory `json:"categories,omitempty" db:"-"`
@@ -91,6 +164,19 @@ func (b *Budget) Validate() error {
 		return errors.New("end_date must be after start_date")
 	}
 
+	// Envelope budgeting validation (Issue #491)
+	// Income amount can be 0 for traditional budgets, but not negative
+	if b.IncomeAmount < 0 {
+		return errors.New("income_amount cannot be negative")
+	}
+
+	// Validate each income source
+	for i, source := range b.IncomeSources {
+		if err := source.Validate(); err != nil {
+			return fmt.Errorf("income_sources[%d]: %w", i, err)
+		}
+	}
+
 	return nil
 }
 
@@ -133,6 +219,20 @@ func (b *Budget) PercentUsed() float64 {
 	return (b.TotalSpent() / b.Amount) * 100
 }
 
+// UnallocatedAmount returns the income amount minus total allocated to categories.
+// This is used for envelope budgeting to show how much income remains to be allocated.
+// Issue #491
+func (b *Budget) UnallocatedAmount() float64 {
+	return b.IncomeAmount - b.TotalAllocated()
+}
+
+// IsFullyAllocated returns true if all income has been allocated to categories.
+// Returns true if IncomeAmount is 0 (no income to allocate) or if allocations >= income.
+// Issue #491
+func (b *Budget) IsFullyAllocated() bool {
+	return b.TotalAllocated() >= b.IncomeAmount
+}
+
 // BudgetCategory represents a category allocation within a budget.
 type BudgetCategory struct {
 	ID              string    `json:"id" db:"id"`
@@ -142,6 +242,10 @@ type BudgetCategory struct {
 	SpentAmount     float64   `json:"spent_amount" db:"spent_amount"` // Denormalized, updated via Issue #451
 	CreatedAt       time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at" db:"updated_at"`
+
+	// Flexible matching fields (Issue #491)
+	Tags       []string   `json:"tags" db:"-"`             // JSONB array of tags to match
+	MatchLogic MatchLogic `json:"match_logic" db:"match_logic"` // How to combine category and tags
 }
 
 // Validate checks that the BudgetCategory has all required fields.
@@ -150,7 +254,21 @@ func (bc *BudgetCategory) Validate() error {
 		return errors.New("budget_id is required")
 	}
 
-	if len(bc.Category) == 0 {
+	// Validate match_logic if set (Issue #491)
+	// Empty match_logic is valid and treated as category_only
+	if bc.MatchLogic != "" && !bc.MatchLogic.IsValid() {
+		return errors.New("invalid match_logic value")
+	}
+
+	// If match_logic is tag_only or and, tags are required
+	if bc.MatchLogic == MatchLogicTagOnly || bc.MatchLogic == MatchLogicAnd {
+		if len(bc.Tags) == 0 {
+			return errors.New("tags are required when match_logic is tag_only or and")
+		}
+	}
+
+	// Category is required unless match_logic is tag_only
+	if len(bc.Category) == 0 && bc.MatchLogic != MatchLogicTagOnly {
 		return errors.New("category is required")
 	}
 
@@ -196,12 +314,20 @@ type CreateBudgetRequest struct {
 	Amount       float64                       `json:"amount" validate:"required,gt=0"`
 	CurrencyCode string                        `json:"currency_code,omitempty"`
 	Categories   []CreateBudgetCategoryRequest `json:"categories,omitempty"`
+
+	// Envelope budgeting fields (Issue #491)
+	IncomeAmount  float64        `json:"income_amount,omitempty"`
+	IncomeSources []IncomeSource `json:"income_sources,omitempty"`
 }
 
 // CreateBudgetCategoryRequest represents a category allocation in a budget creation request.
 type CreateBudgetCategoryRequest struct {
 	Category        []string `json:"category" validate:"required,min=1"`
 	AllocatedAmount float64  `json:"allocated_amount" validate:"required,gte=0"`
+
+	// Flexible matching fields (Issue #491)
+	Tags       []string   `json:"tags,omitempty"`
+	MatchLogic MatchLogic `json:"match_logic,omitempty"` // defaults to category_only
 }
 
 // UpdateBudgetRequest represents the request to update a budget.
@@ -213,11 +339,19 @@ type UpdateBudgetRequest struct {
 	EndDate     *time.Time    `json:"end_date,omitempty"`
 	Amount      *float64      `json:"amount,omitempty" validate:"omitempty,gt=0"`
 	IsActive    *bool         `json:"is_active,omitempty"`
+
+	// Envelope budgeting fields (Issue #491)
+	IncomeAmount  *float64        `json:"income_amount,omitempty" validate:"omitempty,gte=0"`
+	IncomeSources *[]IncomeSource `json:"income_sources,omitempty"`
 }
 
 // UpdateBudgetCategoryRequest represents the request to update a budget category.
 type UpdateBudgetCategoryRequest struct {
 	AllocatedAmount *float64 `json:"allocated_amount,omitempty" validate:"omitempty,gte=0"`
+
+	// Flexible matching fields (Issue #491)
+	Tags       *[]string   `json:"tags,omitempty"`
+	MatchLogic *MatchLogic `json:"match_logic,omitempty"`
 }
 
 // Budget-related errors.
