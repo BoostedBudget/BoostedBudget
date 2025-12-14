@@ -105,6 +105,22 @@ func (m *MockBudgetRepository) GetCategoriesMatchingTransaction(ctx context.Cont
 	return args.Get(0).([]domain.BudgetCategory), args.Error(1)
 }
 
+// Envelope budgeting methods (Issue #491)
+func (m *MockBudgetRepository) UpdateBudgetIncome(ctx context.Context, budgetID string, incomeAmount float64) error {
+	args := m.Called(ctx, budgetID, incomeAmount)
+	return args.Error(0)
+}
+
+func (m *MockBudgetRepository) AddIncomeSource(ctx context.Context, budgetID string, source domain.IncomeSource) error {
+	args := m.Called(ctx, budgetID, source)
+	return args.Error(0)
+}
+
+func (m *MockBudgetRepository) RemoveIncomeSource(ctx context.Context, budgetID string, sourceIndex int) error {
+	args := m.Called(ctx, budgetID, sourceIndex)
+	return args.Error(0)
+}
+
 // MockTransactionRepositoryForBudget is a minimal mock for transaction repository
 // Only mocking methods needed by BudgetService
 type MockTransactionRepositoryForBudget struct {
