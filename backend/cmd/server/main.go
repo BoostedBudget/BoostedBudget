@@ -156,6 +156,17 @@ func main() {
 		budgetService := services.NewBudgetService(budgetRepo, customCategoryRepo, transactionRepo, budgetLogger)
 		savingsGoalService := services.NewSavingsGoalService(savingsGoalRepo, accountRepo, budgetLogger)
 
+		// Issue #494: Budget Sync Service for Envelope Budgeting
+		// Recalculates budget income and category spent amounts after transaction sync
+		budgetIncomeService := services.NewBudgetIncomeService(transactionRepo, budgetLogger)
+		budgetCategoryMatchingService := services.NewBudgetCategoryMatchingService(transactionRepo)
+		budgetSyncService := services.NewBudgetSyncService(
+			budgetRepo,
+			budgetIncomeService,
+			budgetCategoryMatchingService,
+			budgetLogger,
+		)
+
 		// Initialize Email service (needed by deletion service and item error service)
 		// Optional - uses no-op mock if not configured
 		var emailService services.EmailService
@@ -243,6 +254,7 @@ func main() {
 				// Issue #256: Transaction Sync Service
 				// Issue #242: Monthly sync limits integration
 				// Issue #346: Categorization rules integration
+				// Issue #494: Budget sync integration
 				transactionSyncService := services.NewTransactionSyncService(
 					webhookRepo,
 					linkedItemRepo,
@@ -254,6 +266,7 @@ func main() {
 					encryptionService,
 					syncLimitService,
 					ruleApplicationService,
+					budgetSyncService,
 				)
 
 				// Initialize Item Error Service for ITEM webhook processing
@@ -294,7 +307,7 @@ func main() {
 		ruleHandler := handlers.NewCategorizationRuleHandler(categorizationRuleService) // Issue #346: Categorization rules
 		analyticsHandler := handlers.NewAnalyticsHandler(analyticsService)        // Issue #354: Cash flow analytics
 		dashboardPrefsHandler := handlers.NewDashboardPreferencesHandler(dashboardPrefsService) // Issue #354: Dashboard preferences
-		budgetHandler := handlers.NewBudgetHandler(budgetService)                // Issue #28: Budget management
+		budgetHandler := handlers.NewBudgetHandler(budgetService, budgetSyncService) // Issue #28, #494: Budget management + sync
 		savingsGoalHandler := handlers.NewSavingsGoalHandler(savingsGoalService) // Issue #28: Savings goals
 
 		// Create admin handler (Issue #308: Admin API for Manual Webhook Firing)
@@ -377,6 +390,7 @@ func main() {
 		api.GET("/budgets/:id", budgetHandler.GetBudget)
 		api.PUT("/budgets/:id", budgetHandler.UpdateBudget)
 		api.DELETE("/budgets/:id", budgetHandler.DeleteBudget)
+		api.POST("/budgets/:id/sync", budgetHandler.SyncBudget) // Issue #494: Manual budget sync
 		api.POST("/budgets/:id/categories", budgetHandler.AddCategory)
 		api.PUT("/budgets/:id/categories/:categoryId", budgetHandler.UpdateCategory)
 		api.DELETE("/budgets/:id/categories/:categoryId", budgetHandler.DeleteCategory)
