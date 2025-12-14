@@ -1264,3 +1264,268 @@ func TestTransactionRepository_GetIncomeSumByTag_DBError(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// =============================================================================
+// Issue #493: GetSpentSumForBudgetCategory Tests
+// =============================================================================
+
+// TestTransactionRepository_GetSpentSumForBudgetCategory_CategoryOnly tests
+// category_only match logic - matches transactions by category containment
+func TestTransactionRepository_GetSpentSumForBudgetCategory_CategoryOnly(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-123"
+	category := []string{"Food and Drink"}
+	tags := []string{} // Not used for category_only
+	matchLogic := domain.MatchLogicCategoryOnly
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+	expectedSum := 250.50
+
+	rows := sqlmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+
+	// Match the category_only SQL query pattern
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
+		WithArgs(userID, startDate, endDate, `["Food and Drink"]`).
+		WillReturnRows(rows)
+
+	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, category, tags, matchLogic, startDate, endDate)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedSum, sum)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetSpentSumForBudgetCategory_TagOnly tests
+// tag_only match logic - matches transactions by tag existence
+func TestTransactionRepository_GetSpentSumForBudgetCategory_TagOnly(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-123"
+	category := []string{} // Not used for tag_only
+	tags := []string{"groceries", "food"}
+	matchLogic := domain.MatchLogicTagOnly
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+	expectedSum := 175.25
+
+	rows := sqlmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+
+	// Match the tag_only SQL query pattern with pq.Array
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
+		WithArgs(userID, startDate, endDate, sqlmock.AnyArg()). // pq.Array produces custom type
+		WillReturnRows(rows)
+
+	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, category, tags, matchLogic, startDate, endDate)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedSum, sum)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetSpentSumForBudgetCategory_And tests
+// and match logic - requires BOTH category AND tag to match
+func TestTransactionRepository_GetSpentSumForBudgetCategory_And(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-123"
+	category := []string{"Food and Drink", "Restaurants"}
+	tags := []string{"dinner", "date-night"}
+	matchLogic := domain.MatchLogicAnd
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+	expectedSum := 125.00
+
+	rows := sqlmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+
+	// Match the and SQL query pattern with both category and tags
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
+		WithArgs(userID, startDate, endDate, `["Food and Drink","Restaurants"]`, sqlmock.AnyArg()). // category JSON + pq.Array
+		WillReturnRows(rows)
+
+	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, category, tags, matchLogic, startDate, endDate)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedSum, sum)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetSpentSumForBudgetCategory_Or tests
+// or match logic - matches if EITHER category OR tag matches
+func TestTransactionRepository_GetSpentSumForBudgetCategory_Or(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-123"
+	category := []string{"Entertainment"}
+	tags := []string{"streaming", "subscriptions"}
+	matchLogic := domain.MatchLogicOr
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+	expectedSum := 89.97
+
+	rows := sqlmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+
+	// Match the or SQL query pattern with both category and tags
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
+		WithArgs(userID, startDate, endDate, `["Entertainment"]`, sqlmock.AnyArg()). // category JSON + pq.Array
+		WillReturnRows(rows)
+
+	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, category, tags, matchLogic, startDate, endDate)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedSum, sum)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetSpentSumForBudgetCategory_EmptyMatchLogic tests
+// that empty match_logic defaults to category_only behavior
+func TestTransactionRepository_GetSpentSumForBudgetCategory_EmptyMatchLogic(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-123"
+	category := []string{"Shopping"}
+	tags := []string{}
+	matchLogic := domain.MatchLogic("") // Empty defaults to category_only
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+	expectedSum := 500.00
+
+	rows := sqlmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+
+	// Should use category_only query pattern
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
+		WithArgs(userID, startDate, endDate, `["Shopping"]`).
+		WillReturnRows(rows)
+
+	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, category, tags, matchLogic, startDate, endDate)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedSum, sum)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetSpentSumForBudgetCategory_NoMatches tests
+// that COALESCE returns 0 when no transactions match
+func TestTransactionRepository_GetSpentSumForBudgetCategory_NoMatches(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-123"
+	category := []string{"NonExistentCategory"}
+	tags := []string{}
+	matchLogic := domain.MatchLogicCategoryOnly
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+
+	// COALESCE ensures 0 is returned for no matches
+	rows := sqlmock.NewRows([]string{"sum"}).AddRow(0.0)
+
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
+		WithArgs(userID, startDate, endDate, `["NonExistentCategory"]`).
+		WillReturnRows(rows)
+
+	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, category, tags, matchLogic, startDate, endDate)
+	assert.NoError(t, err)
+	assert.Equal(t, 0.0, sum)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetSpentSumForBudgetCategory_DBError tests
+// database error handling
+func TestTransactionRepository_GetSpentSumForBudgetCategory_DBError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-123"
+	category := []string{"Food and Drink"}
+	tags := []string{}
+	matchLogic := domain.MatchLogicCategoryOnly
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
+		WithArgs(userID, startDate, endDate, `["Food and Drink"]`).
+		WillReturnError(sql.ErrConnDone)
+
+	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, category, tags, matchLogic, startDate, endDate)
+	assert.Error(t, err)
+	assert.Equal(t, 0.0, sum)
+	assert.Contains(t, err.Error(), "failed to get spent sum for budget category")
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetSpentSumForBudgetCategory_HierarchicalCategory tests
+// that hierarchical categories (e.g., ["Food and Drink", "Restaurants"]) work correctly
+func TestTransactionRepository_GetSpentSumForBudgetCategory_HierarchicalCategory(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-123"
+	// Budget category with full hierarchy
+	category := []string{"Food and Drink", "Restaurants"}
+	tags := []string{}
+	matchLogic := domain.MatchLogicCategoryOnly
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+	expectedSum := 350.00
+
+	rows := sqlmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+
+	// Category should be marshaled as full JSON array
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
+		WithArgs(userID, startDate, endDate, `["Food and Drink","Restaurants"]`).
+		WillReturnRows(rows)
+
+	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, category, tags, matchLogic, startDate, endDate)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedSum, sum)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+

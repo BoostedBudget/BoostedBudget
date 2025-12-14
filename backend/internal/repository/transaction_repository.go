@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -89,6 +90,18 @@ type TransactionRepository interface {
 	// GetIncomeSumByTag returns the sum of income (positive amount) transactions
 	// with the given tag within the date range.
 	GetIncomeSumByTag(ctx context.Context, userID string, tag string, startDate, endDate time.Time) (float64, error)
+
+	// Issue #493: Budget Category Matching Service
+
+	// GetSpentSumForBudgetCategory returns the sum of expenses (negative amount) transactions
+	// matching the given category and/or tags based on match logic.
+	// Supports four match logic types:
+	//   - category_only: Match transactions where category contains the budget category
+	//   - tag_only: Match transactions where tags contain ANY of the budget tags
+	//   - and: Match transactions where BOTH category AND tags match
+	//   - or: Match transactions where EITHER category OR tags match
+	// Checks both category and category_override fields for category matching.
+	GetSpentSumForBudgetCategory(ctx context.Context, userID string, category []string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (float64, error)
 }
 
 // transactionRepository implements TransactionRepository using PostgreSQL
@@ -864,6 +877,91 @@ func (r *transactionRepository) GetIncomeSumByTag(ctx context.Context, userID st
 	err := r.db.QueryRowContext(ctx, query, userID, startDate, endDate, tag).Scan(&sum)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get income sum by tag: %w", err)
+	}
+
+	return sum, nil
+}
+
+// =============================================================================
+// Issue #493: Budget Category Matching Service
+// =============================================================================
+
+// GetSpentSumForBudgetCategory returns the sum of expenses (negative amount) transactions
+// matching the given category and/or tags based on match logic.
+// Supports four match logic types:
+//   - category_only: Match transactions where category contains the budget category
+//   - tag_only: Match transactions where tags contain ANY of the budget tags
+//   - and: Match transactions where BOTH category AND tags match
+//   - or: Match transactions where EITHER category OR tags match
+func (r *transactionRepository) GetSpentSumForBudgetCategory(ctx context.Context, userID string, category []string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (float64, error) {
+	// Default to category_only if empty
+	if matchLogic == "" {
+		matchLogic = domain.MatchLogicCategoryOnly
+	}
+
+	// Build query based on match logic
+	var query string
+	var args []interface{}
+
+	// Marshal category to JSON for JSONB containment operator
+	categoryJSON, err := json.Marshal(category)
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal category: %w", err)
+	}
+
+	switch matchLogic {
+	case domain.MatchLogicCategoryOnly:
+		query = `
+			SELECT COALESCE(ABS(SUM(amount)), 0)
+			FROM transactions
+			WHERE user_id = $1 AND amount < 0
+			  AND date BETWEEN $2 AND $3
+			  AND (category @> $4::jsonb OR category_override @> $4::jsonb)
+		`
+		args = []interface{}{userID, startDate, endDate, string(categoryJSON)}
+
+	case domain.MatchLogicTagOnly:
+		query = `
+			SELECT COALESCE(ABS(SUM(amount)), 0)
+			FROM transactions
+			WHERE user_id = $1 AND amount < 0
+			  AND date BETWEEN $2 AND $3
+			  AND tags ?| $4
+		`
+		args = []interface{}{userID, startDate, endDate, pq.Array(tags)}
+
+	case domain.MatchLogicAnd:
+		query = `
+			SELECT COALESCE(ABS(SUM(amount)), 0)
+			FROM transactions
+			WHERE user_id = $1 AND amount < 0
+			  AND date BETWEEN $2 AND $3
+			  AND (category @> $4::jsonb OR category_override @> $4::jsonb)
+			  AND tags ?| $5
+		`
+		args = []interface{}{userID, startDate, endDate, string(categoryJSON), pq.Array(tags)}
+
+	case domain.MatchLogicOr:
+		query = `
+			SELECT COALESCE(ABS(SUM(amount)), 0)
+			FROM transactions
+			WHERE user_id = $1 AND amount < 0
+			  AND date BETWEEN $2 AND $3
+			  AND (
+				(category @> $4::jsonb OR category_override @> $4::jsonb)
+				OR tags ?| $5
+			  )
+		`
+		args = []interface{}{userID, startDate, endDate, string(categoryJSON), pq.Array(tags)}
+
+	default:
+		return 0, fmt.Errorf("unsupported match logic: %s", matchLogic)
+	}
+
+	var sum float64
+	err = r.db.QueryRowContext(ctx, query, args...).Scan(&sum)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get spent sum for budget category: %w", err)
 	}
 
 	return sum, nil
