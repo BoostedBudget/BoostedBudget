@@ -248,18 +248,22 @@ export function DashboardGrid({
         gridRef.current!.makeWidget(el);
       }
 
+      // Issue #488: Get widget definition from registry for constraint fallback
+      // If layout doesn't have minW/minH (legacy data or save bug), use registry values
+      const definition = getWidget(widget.type);
+
       // Update position and constraints (works for both new and existing widgets)
       // Issue #486: MUST pass minW/minH/maxW/maxH to enforce size constraints
-      // Without these, GridStack loses constraint info and allows any resize
+      // Issue #488: Fall back to registry's minSize when layout values are undefined
       gridRef.current!.update(el, {
         x: widget.x,
         y: widget.y,
         w: widget.w,
         h: widget.h,
-        minW: widget.minW,
-        minH: widget.minH,
-        maxW: widget.maxW,
-        maxH: widget.maxH,
+        minW: widget.minW ?? definition?.minSize.w,
+        minH: widget.minH ?? definition?.minSize.h,
+        maxW: widget.maxW ?? definition?.maxSize?.w,
+        maxH: widget.maxH ?? definition?.maxSize?.h,
       });
     });
 
