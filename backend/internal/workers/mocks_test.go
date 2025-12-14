@@ -173,6 +173,12 @@ func (m *MockTransactionRepository) GetIncomeSumByTag(ctx context.Context, userI
 	return args.Get(0).(float64), args.Error(1)
 }
 
+// Issue #493: Budget Category Matching Service method
+func (m *MockTransactionRepository) GetSpentSumForBudgetCategory(ctx context.Context, userID string, category []string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (float64, error) {
+	args := m.Called(ctx, userID, category, tags, matchLogic, startDate, endDate)
+	return args.Get(0).(float64), args.Error(1)
+}
+
 // MockPlaidClient is a mock for Plaid API client
 type MockPlaidClient struct {
 	mock.Mock
