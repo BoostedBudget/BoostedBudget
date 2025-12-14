@@ -12,12 +12,16 @@ import (
 
 // BudgetHandler handles budget-related HTTP requests
 type BudgetHandler struct {
-	service services.BudgetService
+	service     services.BudgetService
+	syncService services.BudgetSyncService // Issue #494: Budget sync service
 }
 
 // NewBudgetHandler creates a new BudgetHandler instance
-func NewBudgetHandler(service services.BudgetService) *BudgetHandler {
-	return &BudgetHandler{service: service}
+func NewBudgetHandler(service services.BudgetService, syncService services.BudgetSyncService) *BudgetHandler {
+	return &BudgetHandler{
+		service:     service,
+		syncService: syncService,
+	}
 }
 
 // CreateBudget handles POST /budgets
@@ -285,4 +289,41 @@ func (h *BudgetHandler) GetAvailableCategories(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, categories)
+}
+
+// SyncBudget handles POST /budgets/:id/sync
+// Manually triggers recalculation of budget income and spent amounts
+// Issue #494: Budget Sync Service
+func (h *BudgetHandler) SyncBudget(c echo.Context) error {
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "User not authenticated")
+	}
+
+	budgetID := c.Param("id")
+	if budgetID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Budget ID is required")
+	}
+
+	// Get the budget to verify ownership and pass to sync service
+	budget, err := h.service.GetBudget(c.Request().Context(), userID, budgetID)
+	if err != nil {
+		if errors.Is(err, domain.ErrBudgetNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "Budget not found")
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get budget")
+	}
+
+	// Recalculate budget amounts
+	if err := h.syncService.RecalculateBudget(c.Request().Context(), budget); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to sync budget")
+	}
+
+	// Re-fetch to get updated amounts
+	budget, err = h.service.GetBudget(c.Request().Context(), userID, budgetID)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get updated budget")
+	}
+
+	return c.JSON(http.StatusOK, budget)
 }
