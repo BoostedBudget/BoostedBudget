@@ -1090,3 +1090,177 @@ func TestTransactionRepository_GetDistinctPlaidCategories_Empty(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// =============================================================================
+// Issue #492: Income Source Matching Service Tests
+// =============================================================================
+
+// TestTransactionRepository_GetIncomeSumByCategory_Success tests successful sum calculation for matching category
+func TestTransactionRepository_GetIncomeSumByCategory_Success(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-123"
+	category := "Paycheck"
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+	expectedSum := 5000.00
+
+	// Category is formatted as JSON array: ["Paycheck"]
+	rows := sqlmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+
+	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount\), 0\)`).
+		WithArgs(userID, startDate, endDate, `["Paycheck"]`).
+		WillReturnRows(rows)
+
+	sum, err := repo.GetIncomeSumByCategory(ctx, userID, category, startDate, endDate)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedSum, sum)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetIncomeSumByCategory_NoMatches tests returning 0 when no transactions match
+func TestTransactionRepository_GetIncomeSumByCategory_NoMatches(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-123"
+	category := "NonExistentCategory"
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+
+	// COALESCE ensures 0 is returned for no matches
+	rows := sqlmock.NewRows([]string{"sum"}).AddRow(0.0)
+
+	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount\), 0\)`).
+		WithArgs(userID, startDate, endDate, `["NonExistentCategory"]`).
+		WillReturnRows(rows)
+
+	sum, err := repo.GetIncomeSumByCategory(ctx, userID, category, startDate, endDate)
+	assert.NoError(t, err)
+	assert.Equal(t, 0.0, sum)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetIncomeSumByCategory_DBError tests database error handling
+func TestTransactionRepository_GetIncomeSumByCategory_DBError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-123"
+	category := "Paycheck"
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+
+	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount\), 0\)`).
+		WithArgs(userID, startDate, endDate, `["Paycheck"]`).
+		WillReturnError(sql.ErrConnDone)
+
+	sum, err := repo.GetIncomeSumByCategory(ctx, userID, category, startDate, endDate)
+	assert.Error(t, err)
+	assert.Equal(t, 0.0, sum)
+	assert.Contains(t, err.Error(), "failed to get income sum by category")
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetIncomeSumByTag_Success tests successful sum calculation for matching tag
+func TestTransactionRepository_GetIncomeSumByTag_Success(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-123"
+	tag := "salary"
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+	expectedSum := 3000.00
+
+	rows := sqlmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+
+	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount\), 0\)`).
+		WithArgs(userID, startDate, endDate, tag).
+		WillReturnRows(rows)
+
+	sum, err := repo.GetIncomeSumByTag(ctx, userID, tag, startDate, endDate)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedSum, sum)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetIncomeSumByTag_NoMatches tests returning 0 when no transactions have the tag
+func TestTransactionRepository_GetIncomeSumByTag_NoMatches(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-123"
+	tag := "nonexistent-tag"
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+
+	rows := sqlmock.NewRows([]string{"sum"}).AddRow(0.0)
+
+	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount\), 0\)`).
+		WithArgs(userID, startDate, endDate, tag).
+		WillReturnRows(rows)
+
+	sum, err := repo.GetIncomeSumByTag(ctx, userID, tag, startDate, endDate)
+	assert.NoError(t, err)
+	assert.Equal(t, 0.0, sum)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetIncomeSumByTag_DBError tests database error handling
+func TestTransactionRepository_GetIncomeSumByTag_DBError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-123"
+	tag := "salary"
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+
+	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount\), 0\)`).
+		WithArgs(userID, startDate, endDate, tag).
+		WillReturnError(sql.ErrConnDone)
+
+	sum, err := repo.GetIncomeSumByTag(ctx, userID, tag, startDate, endDate)
+	assert.Error(t, err)
+	assert.Equal(t, 0.0, sum)
+	assert.Contains(t, err.Error(), "failed to get income sum by tag")
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+

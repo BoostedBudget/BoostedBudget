@@ -78,6 +78,17 @@ type TransactionRepository interface {
 	// Falls back to primary category (index 0) when secondary is not available
 	// Used by the rule editor to populate the "existing_category" dropdown
 	GetDistinctPlaidCategories(ctx context.Context, userID string) ([]string, error)
+
+	// Issue #492: Income Source Matching Service
+
+	// GetIncomeSumByCategory returns the sum of income (positive amount) transactions
+	// matching the given category within the date range.
+	// Checks both category and category_override fields using JSONB containment.
+	GetIncomeSumByCategory(ctx context.Context, userID string, category string, startDate, endDate time.Time) (float64, error)
+
+	// GetIncomeSumByTag returns the sum of income (positive amount) transactions
+	// with the given tag within the date range.
+	GetIncomeSumByTag(ctx context.Context, userID string, tag string, startDate, endDate time.Time) (float64, error)
 }
 
 // transactionRepository implements TransactionRepository using PostgreSQL
@@ -804,4 +815,56 @@ func (r *transactionRepository) GetDistinctPlaidCategories(ctx context.Context, 
 	}
 
 	return categories, nil
+}
+
+// =============================================================================
+// Issue #492: Income Source Matching Service
+// =============================================================================
+
+// GetIncomeSumByCategory returns the sum of income (positive amount) transactions
+// matching the given category within the date range.
+// Checks both category and category_override fields using JSONB containment operator (@>).
+func (r *transactionRepository) GetIncomeSumByCategory(ctx context.Context, userID string, category string, startDate, endDate time.Time) (float64, error) {
+	// Format category as JSON array for JSONB containment operator
+	// e.g., "Paycheck" -> ["Paycheck"]
+	categoryJSON := fmt.Sprintf(`["%s"]`, category)
+
+	query := `
+		SELECT COALESCE(SUM(amount), 0)
+		FROM transactions
+		WHERE user_id = $1
+		  AND amount > 0
+		  AND date BETWEEN $2 AND $3
+		  AND (category @> $4::jsonb OR category_override @> $4::jsonb)
+	`
+
+	var sum float64
+	err := r.db.QueryRowContext(ctx, query, userID, startDate, endDate, categoryJSON).Scan(&sum)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get income sum by category: %w", err)
+	}
+
+	return sum, nil
+}
+
+// GetIncomeSumByTag returns the sum of income (positive amount) transactions
+// with the given tag within the date range.
+// Uses JSONB ? operator to check if tags array contains the tag.
+func (r *transactionRepository) GetIncomeSumByTag(ctx context.Context, userID string, tag string, startDate, endDate time.Time) (float64, error) {
+	query := `
+		SELECT COALESCE(SUM(amount), 0)
+		FROM transactions
+		WHERE user_id = $1
+		  AND amount > 0
+		  AND date BETWEEN $2 AND $3
+		  AND tags ? $4
+	`
+
+	var sum float64
+	err := r.db.QueryRowContext(ctx, query, userID, startDate, endDate, tag).Scan(&sum)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get income sum by tag: %w", err)
+	}
+
+	return sum, nil
 }
