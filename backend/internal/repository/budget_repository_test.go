@@ -72,6 +72,8 @@ func TestBudgetRepository_Create(t *testing.T) {
 		budget.IsActive,
 		sqlmock.AnyArg(), // created_at
 		sqlmock.AnyArg(), // updated_at
+		budget.IncomeAmount,    // income_amount (Issue #491)
+		sqlmock.AnyArg(),       // income_sources JSON (Issue #491)
 	).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	err := repo.Create(ctx, budget)
@@ -102,6 +104,8 @@ func TestBudgetRepository_Create_DuplicateName(t *testing.T) {
 		sqlmock.AnyArg(),
 		sqlmock.AnyArg(),
 		sqlmock.AnyArg(),
+		sqlmock.AnyArg(), // income_amount (Issue #491)
+		sqlmock.AnyArg(), // income_sources JSON (Issue #491)
 	).WillReturnError(sql.ErrNoRows) // Simulating constraint violation
 
 	err := repo.Create(ctx, budget)
@@ -121,10 +125,11 @@ func TestBudgetRepository_GetByID(t *testing.T) {
 	now := time.Now()
 	desc := "Test budget"
 
-	// Mock the main budget query
+	// Mock the main budget query (Issue #491: added income_amount, income_sources)
 	budgetColumns := []string{
 		"id", "user_id", "name", "description", "period", "start_date",
 		"end_date", "amount", "currency_code", "is_active", "created_at", "updated_at",
+		"income_amount", "income_sources",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
@@ -142,12 +147,14 @@ func TestBudgetRepository_GetByID(t *testing.T) {
 			true,
 			now,
 			now,
+			0.00,   // income_amount (Issue #491)
+			`[]`,   // income_sources JSON (Issue #491)
 		))
 
-	// Mock the categories query
+	// Mock the categories query (Issue #491: added tags, match_logic)
 	categoryColumns := []string{
 		"id", "budget_id", "category", "allocated_amount", "spent_amount",
-		"created_at", "updated_at",
+		"created_at", "updated_at", "tags", "match_logic",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
@@ -160,6 +167,8 @@ func TestBudgetRepository_GetByID(t *testing.T) {
 			150.00,
 			now,
 			now,
+			`[]`,            // tags (Issue #491)
+			"category_only", // match_logic (Issue #491)
 		))
 
 	budget, err := repo.GetByID(ctx, budgetID)
@@ -202,9 +211,11 @@ func TestBudgetRepository_GetByUserID(t *testing.T) {
 	userID := uuid.New().String()
 	now := time.Now()
 
+	// Issue #491: added income_amount, income_sources
 	columns := []string{
 		"id", "user_id", "name", "description", "period", "start_date",
 		"end_date", "amount", "currency_code", "is_active", "created_at", "updated_at",
+		"income_amount", "income_sources",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
@@ -223,6 +234,8 @@ func TestBudgetRepository_GetByUserID(t *testing.T) {
 				true,
 				now,
 				now,
+				0.00, // income_amount
+				`[]`, // income_sources
 			).
 			AddRow(
 				uuid.New().String(),
@@ -237,6 +250,8 @@ func TestBudgetRepository_GetByUserID(t *testing.T) {
 				true,
 				now,
 				now,
+				0.00, // income_amount
+				`[]`, // income_sources
 			))
 
 	budgets, err := repo.GetByUserID(ctx, userID)
@@ -255,9 +270,11 @@ func TestBudgetRepository_GetActiveByUserID(t *testing.T) {
 	userID := uuid.New().String()
 	now := time.Now()
 
+	// Issue #491: added income_amount, income_sources
 	columns := []string{
 		"id", "user_id", "name", "description", "period", "start_date",
 		"end_date", "amount", "currency_code", "is_active", "created_at", "updated_at",
+		"income_amount", "income_sources",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
@@ -275,6 +292,8 @@ func TestBudgetRepository_GetActiveByUserID(t *testing.T) {
 			true,
 			now,
 			now,
+			0.00, // income_amount
+			`[]`, // income_sources
 		))
 
 	budgets, err := repo.GetActiveByUserID(ctx, userID)
@@ -295,6 +314,7 @@ func TestBudgetRepository_Update(t *testing.T) {
 	budget.ID = uuid.New().String()
 	budget.Name = "Updated Name"
 
+	// Issue #491: added income_amount, income_sources
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE budgets`)).
 		WithArgs(
 			budget.Name,
@@ -306,6 +326,8 @@ func TestBudgetRepository_Update(t *testing.T) {
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
+			sqlmock.AnyArg(), // income_amount
+			sqlmock.AnyArg(), // income_sources JSON
 			budget.ID,
 			budget.UserID,
 		).WillReturnResult(sqlmock.NewResult(0, 1))
@@ -325,6 +347,7 @@ func TestBudgetRepository_Update_NotFound(t *testing.T) {
 	budget := createTestBudget(uuid.New().String())
 	budget.ID = uuid.New().String()
 
+	// Issue #491: added income_amount, income_sources
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE budgets`)).
 		WithArgs(
 			sqlmock.AnyArg(),
@@ -336,6 +359,8 @@ func TestBudgetRepository_Update_NotFound(t *testing.T) {
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
+			sqlmock.AnyArg(), // income_amount
+			sqlmock.AnyArg(), // income_sources JSON
 			budget.ID,
 			budget.UserID,
 		).WillReturnResult(sqlmock.NewResult(0, 0))
@@ -414,6 +439,7 @@ func TestBudgetRepository_CreateCategory(t *testing.T) {
 	budgetID := uuid.New().String()
 	category := createTestBudgetCategory(budgetID)
 
+	// Issue #491: added tags, match_logic
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO budget_categories`)).WithArgs(
 		sqlmock.AnyArg(), // id
 		category.BudgetID,
@@ -422,6 +448,8 @@ func TestBudgetRepository_CreateCategory(t *testing.T) {
 		category.SpentAmount,
 		sqlmock.AnyArg(), // created_at
 		sqlmock.AnyArg(), // updated_at
+		sqlmock.AnyArg(), // tags JSON
+		sqlmock.AnyArg(), // match_logic
 	).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	err := repo.CreateCategory(ctx, category)
@@ -440,9 +468,10 @@ func TestBudgetRepository_GetCategoriesByBudgetID(t *testing.T) {
 	budgetID := uuid.New().String()
 	now := time.Now()
 
+	// Issue #491: added tags, match_logic
 	columns := []string{
 		"id", "budget_id", "category", "allocated_amount", "spent_amount",
-		"created_at", "updated_at",
+		"created_at", "updated_at", "tags", "match_logic",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
@@ -456,6 +485,8 @@ func TestBudgetRepository_GetCategoriesByBudgetID(t *testing.T) {
 				150.00,
 				now,
 				now,
+				`[]`,            // tags
+				"category_only", // match_logic
 			).
 			AddRow(
 				uuid.New().String(),
@@ -465,6 +496,8 @@ func TestBudgetRepository_GetCategoriesByBudgetID(t *testing.T) {
 				25.00,
 				now,
 				now,
+				`[]`,            // tags
+				"category_only", // match_logic
 			))
 
 	categories, err := repo.GetCategoriesByBudgetID(ctx, budgetID)
@@ -485,12 +518,15 @@ func TestBudgetRepository_UpdateCategory(t *testing.T) {
 	category.ID = uuid.New().String()
 	category.AllocatedAmount = 400.00
 
+	// Issue #491: added tags, match_logic
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE budget_categories`)).
 		WithArgs(
 			sqlmock.AnyArg(), // category JSON
 			category.AllocatedAmount,
 			category.SpentAmount,
 			sqlmock.AnyArg(), // updated_at
+			sqlmock.AnyArg(), // tags JSON
+			sqlmock.AnyArg(), // match_logic
 			category.ID,
 			category.BudgetID,
 		).WillReturnResult(sqlmock.NewResult(0, 1))
@@ -510,12 +546,15 @@ func TestBudgetRepository_UpdateCategory_NotFound(t *testing.T) {
 	category := createTestBudgetCategory(uuid.New().String())
 	category.ID = uuid.New().String()
 
+	// Issue #491: added tags, match_logic
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE budget_categories`)).
 		WithArgs(
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
+			sqlmock.AnyArg(), // tags JSON
+			sqlmock.AnyArg(), // match_logic
 			category.ID,
 			category.BudgetID,
 		).WillReturnResult(sqlmock.NewResult(0, 0))
@@ -614,9 +653,10 @@ func TestBudgetRepository_GetCategoriesMatchingTransaction(t *testing.T) {
 	transactionCategory := []string{"Food & Drink", "Coffee"}
 	now := time.Now()
 
+	// Issue #491: added tags, match_logic columns
 	columns := []string{
 		"id", "budget_id", "category", "allocated_amount", "spent_amount",
-		"created_at", "updated_at",
+		"created_at", "updated_at", "tags", "match_logic",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT bc.id`)).
@@ -629,6 +669,8 @@ func TestBudgetRepository_GetCategoriesMatchingTransaction(t *testing.T) {
 			50.00,
 			now,
 			now,
+			`[]`,             // tags JSON
+			"category_only", // match_logic
 		))
 
 	categories, err := repo.GetCategoriesMatchingTransaction(ctx, userID, transactionCategory)
@@ -648,9 +690,10 @@ func TestBudgetRepository_GetCategoriesMatchingTransaction_NoMatches(t *testing.
 	userID := uuid.New().String()
 	transactionCategory := []string{"Entertainment"}
 
+	// Issue #491: added tags, match_logic columns
 	columns := []string{
 		"id", "budget_id", "category", "allocated_amount", "spent_amount",
-		"created_at", "updated_at",
+		"created_at", "updated_at", "tags", "match_logic",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT bc.id`)).
