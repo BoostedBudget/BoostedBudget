@@ -2,6 +2,7 @@ package workers
 
 import (
 	"context"
+	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/events"
@@ -159,6 +160,17 @@ func (m *MockTransactionRepository) GetDistinctPlaidCategories(ctx context.Conte
 		return nil, args.Error(1)
 	}
 	return args.Get(0).([]string), args.Error(1)
+}
+
+// Issue #492: Income Source Matching Service methods
+func (m *MockTransactionRepository) GetIncomeSumByCategory(ctx context.Context, userID string, category string, startDate, endDate time.Time) (float64, error) {
+	args := m.Called(ctx, userID, category, startDate, endDate)
+	return args.Get(0).(float64), args.Error(1)
+}
+
+func (m *MockTransactionRepository) GetIncomeSumByTag(ctx context.Context, userID string, tag string, startDate, endDate time.Time) (float64, error) {
+	args := m.Called(ctx, userID, tag, startDate, endDate)
+	return args.Get(0).(float64), args.Error(1)
 }
 
 // MockPlaidClient is a mock for Plaid API client
