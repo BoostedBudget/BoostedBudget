@@ -18,6 +18,9 @@ import {
   createSavingsGoal,
   updateSavingsGoal,
   deleteSavingsGoal,
+  // Issue #495: Envelope budgeting
+  syncBudget,
+  fetchBudgetTransactions,
 } from './budgetsApi';
 import type { Budget, BudgetCategory, SavingsGoal } from '../types';
 
@@ -315,6 +318,141 @@ describe('budgetsApi', () => {
       mock.onDelete('/v1/savings-goals/goal-123').reply(204);
 
       await expect(deleteSavingsGoal('goal-123')).resolves.toBeUndefined();
+    });
+  });
+
+  // =============================================================================
+  // Issue #495: Envelope Budgeting - Sync and Transaction APIs
+  // =============================================================================
+
+  describe('syncBudget', () => {
+    it('should call POST /v1/budgets/:id/sync and return updated budget', async () => {
+      const syncedBudget = {
+        ...mockBudget,
+        categories: [
+          {
+            ...mockBudgetCategory,
+            spent_amount: 350, // Updated spent amount after sync
+          },
+        ],
+      };
+
+      mock.onPost('/v1/budgets/budget-123/sync').reply(200, syncedBudget);
+
+      const result = await syncBudget('budget-123');
+
+      expect(result).toEqual(syncedBudget);
+      expect(mock.history.post.length).toBe(1);
+      expect(mock.history.post[0].url).toBe('/v1/budgets/budget-123/sync');
+    });
+
+    it('should handle 404 when budget not found', async () => {
+      mock.onPost('/v1/budgets/nonexistent/sync').reply(404, { message: 'Budget not found' });
+
+      await expect(syncBudget('nonexistent')).rejects.toThrow();
+    });
+
+    it('should handle API errors during sync', async () => {
+      mock.onPost('/v1/budgets/budget-123/sync').reply(500, { message: 'Internal server error' });
+
+      await expect(syncBudget('budget-123')).rejects.toThrow();
+    });
+  });
+
+  describe('fetchBudgetTransactions', () => {
+    const mockTransactionsResponse = {
+      transactions: [
+        {
+          id: 'tx-1',
+          account_id: 'acc-1',
+          amount: -25.99,
+          date: '2025-01-15T00:00:00Z',
+          name: 'Restaurant ABC',
+          category: '["Food and Drink", "Restaurants"]',
+        },
+        {
+          id: 'tx-2',
+          account_id: 'acc-1',
+          amount: -12.50,
+          date: '2025-01-16T00:00:00Z',
+          name: 'Coffee Shop',
+          category: '["Food and Drink", "Coffee Shops"]',
+        },
+      ],
+      total_count: 2,
+      has_more: false,
+    };
+
+    it('should call GET /v1/transactions with budget date range', async () => {
+      mock.onGet('/v1/transactions').reply(200, mockTransactionsResponse);
+
+      const result = await fetchBudgetTransactions('budget-123', {
+        startDate: '2025-01-01',
+        endDate: '2025-01-31',
+      });
+
+      expect(result).toEqual(mockTransactionsResponse);
+      expect(mock.history.get.length).toBe(1);
+      expect(mock.history.get[0].params).toEqual({
+        start_date: '2025-01-01',
+        end_date: '2025-01-31',
+      });
+    });
+
+    it('should include optional limit and offset parameters', async () => {
+      mock.onGet('/v1/transactions').reply(200, mockTransactionsResponse);
+
+      await fetchBudgetTransactions('budget-123', {
+        startDate: '2025-01-01',
+        endDate: '2025-01-31',
+        limit: 50,
+        offset: 100,
+      });
+
+      expect(mock.history.get[0].params).toEqual({
+        start_date: '2025-01-01',
+        end_date: '2025-01-31',
+        limit: 50,
+        offset: 100,
+      });
+    });
+
+    it('should work without optional parameters', async () => {
+      mock.onGet('/v1/transactions').reply(200, mockTransactionsResponse);
+
+      const result = await fetchBudgetTransactions('budget-123');
+
+      expect(result).toEqual(mockTransactionsResponse);
+      expect(mock.history.get[0].params).toEqual({});
+    });
+
+    it('should handle API errors', async () => {
+      mock.onGet('/v1/transactions').reply(500, { message: 'Internal server error' });
+
+      await expect(
+        fetchBudgetTransactions('budget-123', {
+          startDate: '2025-01-01',
+          endDate: '2025-01-31',
+        })
+      ).rejects.toThrow();
+    });
+
+    it('should handle empty transactions response', async () => {
+      const emptyResponse = {
+        transactions: [],
+        total_count: 0,
+        has_more: false,
+      };
+
+      mock.onGet('/v1/transactions').reply(200, emptyResponse);
+
+      const result = await fetchBudgetTransactions('budget-123', {
+        startDate: '2025-01-01',
+        endDate: '2025-01-31',
+      });
+
+      expect(result.transactions).toEqual([]);
+      expect(result.total_count).toBe(0);
     });
   });
 });

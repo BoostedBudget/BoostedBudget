@@ -1,7 +1,29 @@
-// Budget feature types - Issue #29 & #30
+// Budget feature types - Issue #29 & #30 & #495
+
+// Re-export shared matching types for convenience
+import { MatchLogic } from '../../shared/types/matching';
+export { MatchLogic } from '../../shared/types/matching';
 
 // Budget period type matching backend domain
 export type BudgetPeriod = 'weekly' | 'monthly' | 'quarterly' | 'yearly' | 'custom';
+
+// =============================================================================
+// Issue #495: Envelope Budgeting - Income Source Types
+// =============================================================================
+
+/**
+ * Income source type - matches backend domain.IncomeSourceType
+ */
+export type IncomeSourceType = 'plaid_category' | 'tag' | 'manual';
+
+/**
+ * Income source configuration - matches backend domain.IncomeSource
+ */
+export interface IncomeSource {
+  type: IncomeSourceType;
+  value: string; // Category name, tag, or amount string
+  description?: string; // Optional user-friendly label
+}
 
 // Budget category allocation within a budget
 export interface BudgetCategory {
@@ -12,6 +34,9 @@ export interface BudgetCategory {
   spent_amount: number;
   created_at: string;
   updated_at: string;
+  // Issue #495: Envelope budgeting - flexible matching
+  tags: string[];
+  match_logic: MatchLogic;
 }
 
 // Budget entity
@@ -29,6 +54,9 @@ export interface Budget {
   categories?: BudgetCategory[];
   created_at: string;
   updated_at: string;
+  // Issue #495: Envelope budgeting - income tracking
+  income_amount: number;
+  income_sources: IncomeSource[];
 }
 
 // Computed metrics for budget display
@@ -38,6 +66,9 @@ export interface BudgetWithMetrics extends Budget {
   remaining_amount: number;
   percent_used: number;
   is_over_budget: boolean;
+  // Issue #495: Envelope budgeting metrics
+  unallocated_funds: number;
+  is_fully_allocated: boolean;
 }
 
 // Savings goal entity
@@ -68,6 +99,9 @@ export interface CreateBudgetRequest {
   currency_code?: string;
   is_active?: boolean;
   categories?: CreateBudgetCategoryRequest[];
+  // Issue #495: Envelope budgeting
+  income_amount?: number;
+  income_sources?: IncomeSource[];
 }
 
 export interface UpdateBudgetRequest {
@@ -79,15 +113,24 @@ export interface UpdateBudgetRequest {
   amount?: number;
   currency_code?: string;
   is_active?: boolean;
+  // Issue #495: Envelope budgeting
+  income_amount?: number;
+  income_sources?: IncomeSource[];
 }
 
 export interface CreateBudgetCategoryRequest {
   category: string[];
   allocated_amount: number;
+  // Issue #495: Envelope budgeting
+  tags?: string[];
+  match_logic?: MatchLogic;
 }
 
 export interface UpdateBudgetCategoryRequest {
   allocated_amount?: number;
+  // Issue #495: Envelope budgeting
+  tags?: string[];
+  match_logic?: MatchLogic;
 }
 
 export interface CreateSavingsGoalRequest {
@@ -118,6 +161,11 @@ export function computeBudgetMetrics(budget: Budget): BudgetWithMetrics {
   const percent_used = budget.amount > 0 ? (total_spent / budget.amount) * 100 : 0;
   const is_over_budget = total_spent > budget.amount;
 
+  // Issue #495: Envelope budgeting metrics
+  const income_amount = budget.income_amount || 0;
+  const unallocated_funds = income_amount - total_allocated;
+  const is_fully_allocated = total_allocated >= income_amount;
+
   return {
     ...budget,
     total_allocated,
@@ -125,6 +173,8 @@ export function computeBudgetMetrics(budget: Budget): BudgetWithMetrics {
     remaining_amount,
     percent_used,
     is_over_budget,
+    unallocated_funds,
+    is_fully_allocated,
   };
 }
 

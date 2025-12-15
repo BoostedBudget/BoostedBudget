@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/matching"
 )
 
 // =============================================================================
@@ -102,7 +102,7 @@ func (s *budgetCategoryMatchingService) matchesCategory(tx *domain.Transaction, 
 	if tx.CategoryOverride != nil {
 		var override []string
 		if err := json.Unmarshal([]byte(*tx.CategoryOverride), &override); err == nil {
-			if containsAll(override, budgetCategory) {
+			if matching.ContainsAll(override, budgetCategory) {
 				return true
 			}
 		}
@@ -112,7 +112,7 @@ func (s *budgetCategoryMatchingService) matchesCategory(tx *domain.Transaction, 
 	if tx.Category != nil {
 		var category []string
 		if err := json.Unmarshal([]byte(*tx.Category), &category); err == nil {
-			return containsAll(category, budgetCategory)
+			return matching.ContainsAll(category, budgetCategory)
 		}
 	}
 
@@ -120,43 +120,9 @@ func (s *budgetCategoryMatchingService) matchesCategory(tx *domain.Transaction, 
 }
 
 // matchesTags checks if transaction has ANY of the budget category's tags.
-// Case-insensitive matching.
+// Case-insensitive matching. Uses matching.ContainsAny (Issue #495).
 func (s *budgetCategoryMatchingService) matchesTags(tx *domain.Transaction, budgetTags []string) bool {
-	if len(tx.Tags) == 0 || len(budgetTags) == 0 {
-		return false
-	}
-
-	// Build a set of budget tags for O(1) lookup
-	tagSet := make(map[string]bool)
-	for _, tag := range budgetTags {
-		tagSet[strings.ToLower(tag)] = true
-	}
-
-	// Check if any transaction tag matches
-	for _, txTag := range tx.Tags {
-		if tagSet[strings.ToLower(txTag)] {
-			return true
-		}
-	}
-	return false
+	return matching.ContainsAny(tx.Tags, budgetTags)
 }
 
-// containsAll checks if slice a contains all elements of slice b.
-// Case-insensitive comparison.
-func containsAll(a, b []string) bool {
-	if len(b) == 0 {
-		return true
-	}
-
-	aSet := make(map[string]bool)
-	for _, item := range a {
-		aSet[strings.ToLower(item)] = true
-	}
-
-	for _, item := range b {
-		if !aSet[strings.ToLower(item)] {
-			return false
-		}
-	}
-	return true
-}
+// Note: containsAll moved to internal/matching package (Issue #495)
