@@ -1,6 +1,7 @@
 /**
  * Budgets Feature Module
  * Issue #30: Budget Dashboard UI
+ * Issue #495: Enhanced Budget Types and API Layer for Envelope Budgeting
  *
  * Exports all public APIs for the budgets feature.
  */
@@ -18,6 +19,10 @@ export type {
   UpdateBudgetCategoryRequest,
   CreateSavingsGoalRequest,
   UpdateSavingsGoalRequest,
+  // Issue #495: Envelope budgeting types
+  IncomeSource,
+  IncomeSourceType,
+  MatchLogic,
 } from './types';
 
 export {
@@ -45,7 +50,11 @@ export {
   createSavingsGoal,
   updateSavingsGoal,
   deleteSavingsGoal,
+  // Issue #495: Envelope budgeting APIs
+  syncBudget,
+  fetchBudgetTransactions,
 } from './api/budgetsApi';
+export type { BudgetTransactionsResponse } from './api/budgetsApi';
 
 // Hooks
 export { useBudgets } from './hooks/useBudgets';

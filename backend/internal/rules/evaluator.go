@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/matching"
 )
 
 // ConditionEvaluator evaluates a single condition against a transaction.
@@ -79,7 +80,7 @@ func (e *MerchantContainsEvaluator) Evaluate(tx *domain.Transaction, condition d
 	}
 
 	// Handle both single string and array of strings
-	values := extractStringValues(condition.Value)
+	values := matching.ExtractStringValues(condition.Value)
 	if len(values) == 0 {
 		return false, nil
 	}
@@ -102,7 +103,7 @@ func (e *MerchantEqualsEvaluator) Evaluate(tx *domain.Transaction, condition dom
 		return false, nil
 	}
 
-	values := extractStringValues(condition.Value)
+	values := matching.ExtractStringValues(condition.Value)
 	if len(values) == 0 {
 		return false, nil
 	}
@@ -125,7 +126,7 @@ func (e *MerchantStartsWithEvaluator) Evaluate(tx *domain.Transaction, condition
 		return false, nil
 	}
 
-	values := extractStringValues(condition.Value)
+	values := matching.ExtractStringValues(condition.Value)
 	if len(values) == 0 {
 		return false, nil
 	}
@@ -148,7 +149,7 @@ func (e *MerchantEndsWithEvaluator) Evaluate(tx *domain.Transaction, condition d
 		return false, nil
 	}
 
-	values := extractStringValues(condition.Value)
+	values := matching.ExtractStringValues(condition.Value)
 	if len(values) == 0 {
 		return false, nil
 	}
@@ -239,7 +240,7 @@ func (e *PaymentChannelEvaluator) Evaluate(tx *domain.Transaction, condition dom
 		return false, nil
 	}
 
-	values := extractStringValues(condition.Value)
+	values := matching.ExtractStringValues(condition.Value)
 	if len(values) == 0 {
 		return false, nil
 	}
@@ -265,7 +266,7 @@ func (e *AccountIDEvaluator) Evaluate(tx *domain.Transaction, condition domain.R
 		return false, nil
 	}
 
-	values := extractStringValues(condition.Value)
+	values := matching.ExtractStringValues(condition.Value)
 	for _, v := range values {
 		if tx.AccountID == v {
 			return true, nil
@@ -280,7 +281,7 @@ func (e *AccountTypeEvaluator) Evaluate(tx *domain.Transaction, condition domain
 		return false, nil
 	}
 
-	values := extractStringValues(condition.Value)
+	values := matching.ExtractStringValues(condition.Value)
 	if len(values) == 0 {
 		return false, nil
 	}
@@ -315,7 +316,7 @@ func (e *ExistingCategoryEvaluator) Evaluate(tx *domain.Transaction, condition d
 		return false, nil
 	}
 
-	values := extractStringValues(condition.Value)
+	values := matching.ExtractStringValues(condition.Value)
 	if len(values) == 0 {
 		return false, nil
 	}
@@ -391,26 +392,7 @@ func getMerchantName(tx *domain.Transaction) string {
 	return ""
 }
 
-// extractStringValues extracts string(s) from interface{}.
-// Handles single string or []interface{} of strings.
-func extractStringValues(v interface{}) []string {
-	switch val := v.(type) {
-	case string:
-		return []string{val}
-	case []interface{}:
-		result := make([]string, 0, len(val))
-		for _, item := range val {
-			if s, ok := item.(string); ok {
-				result = append(result, s)
-			}
-		}
-		return result
-	case []string:
-		return val
-	default:
-		return nil
-	}
-}
+// Note: extractStringValues moved to internal/matching package (Issue #495)
 
 // extractFloat extracts a float64 from interface{}.
 func extractFloat(v interface{}) (float64, bool) {
