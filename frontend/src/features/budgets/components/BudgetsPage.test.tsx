@@ -57,6 +57,9 @@ vi.mock('./CreateBudgetDialog', () => ({
               is_active: true,
               created_at: '2025-01-01T00:00:00Z',
               updated_at: '2025-01-01T00:00:00Z',
+              // Issue #495: Envelope budgeting fields
+              income_amount: 0,
+              income_sources: [],
             })
           }
         >
@@ -118,6 +121,9 @@ describe('BudgetsPage', () => {
     is_active: true,
     created_at: '2025-01-01T00:00:00Z',
     updated_at: '2025-01-01T00:00:00Z',
+    // Issue #495: Envelope budgeting fields
+    income_amount: 0,
+    income_sources: [],
   };
 
   const mockInactiveBudget: Budget = {
@@ -132,6 +138,9 @@ describe('BudgetsPage', () => {
     is_active: false,
     created_at: '2024-12-01T00:00:00Z',
     updated_at: '2024-12-01T00:00:00Z',
+    // Issue #495: Envelope budgeting fields
+    income_amount: 0,
+    income_sources: [],
   };
 
   const mockActiveGoal: SavingsGoal = {

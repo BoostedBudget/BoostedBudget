@@ -137,3 +137,59 @@ export async function updateSavingsGoal(
 export async function deleteSavingsGoal(id: string): Promise<void> {
   await apiClient.delete(`/v1/savings-goals/${id}`);
 }
+
+// =============================================================================
+// Issue #495: Envelope Budgeting - Sync and Transaction APIs
+// =============================================================================
+
+/**
+ * Response type for GET /v1/transactions
+ * Using a local minimal interface to avoid circular dependency with transactions feature
+ */
+export interface BudgetTransactionsResponse {
+  transactions: unknown[]; // We don't need full typing for the budget feature
+  total_count: number;
+  has_more: boolean;
+}
+
+/**
+ * Trigger a manual sync of budget category spending amounts.
+ * This recalculates spent_amount for all categories in the budget
+ * based on current transactions within the budget period.
+ *
+ * @param budgetId - The budget ID to sync
+ * @returns The updated budget with recalculated spending
+ */
+export async function syncBudget(budgetId: string): Promise<Budget> {
+  const response = await apiClient.post<Budget>(`/v1/budgets/${budgetId}/sync`);
+  return response.data;
+}
+
+/**
+ * Fetch transactions relevant to a budget's date range.
+ * This uses the existing transactions API with budget-specific filtering.
+ *
+ * @param budgetId - The budget ID (for future filtering by budget-specific categories)
+ * @param params - Optional query parameters
+ * @returns Transactions within the budget's date range
+ */
+export async function fetchBudgetTransactions(
+  _budgetId: string,
+  params?: {
+    startDate?: string;
+    endDate?: string;
+    limit?: number;
+    offset?: number;
+  }
+): Promise<BudgetTransactionsResponse> {
+  const queryParams: Record<string, string | number> = {};
+  if (params?.startDate) queryParams.start_date = params.startDate;
+  if (params?.endDate) queryParams.end_date = params.endDate;
+  if (params?.limit) queryParams.limit = params.limit;
+  if (params?.offset) queryParams.offset = params.offset;
+
+  const response = await apiClient.get<BudgetTransactionsResponse>('/v1/transactions', {
+    params: queryParams,
+  });
+  return response.data;
+}
