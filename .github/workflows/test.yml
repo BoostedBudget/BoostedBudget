@@ -201,9 +201,11 @@ jobs:
           CACHE_DIR="$CACHE_BASE/node-modules"
           CACHE_HASH_FILE="$CACHE_BASE/node-modules.sha"
 
-          # Cleanup old cache files (>48 hours) to prevent disk bloat
+          # Cleanup old cache files (>48 hours) and stale temp directories
           echo "🧹 Cleaning up stale cache files..."
           find "$CACHE_BASE" -maxdepth 1 -name "node-modules*" -mmin +2880 -exec rm -rf {} \; 2>/dev/null || true
+          # Clean up any leftover temp directories from interrupted operations
+          find "$CACHE_BASE" -maxdepth 1 -name "node-modules.tmp.*" -exec sudo rm -rf {} \; 2>/dev/null || true
 
           # Compute current package-lock.json hash
           CURRENT_HASH=$(shasum -a 256 package-lock.json | cut -d' ' -f1)
@@ -221,13 +223,14 @@ jobs:
             echo "  Current hash:  $CURRENT_HASH"
             npm ci --prefer-offline --no-audit
 
-            # Atomic cache update
+            # Atomic cache update with permission handling
             echo "💾 Updating local cache..."
             TEMP_DIR="$CACHE_BASE/node-modules.tmp.$$"
-            rm -rf "$TEMP_DIR"
+            rm -rf "$TEMP_DIR" 2>/dev/null || sudo rm -rf "$TEMP_DIR" 2>/dev/null || true
             mkdir -p "$TEMP_DIR"
             rsync -a ./node_modules/ "$TEMP_DIR/"
-            rm -rf "$CACHE_DIR"
+            # Remove old cache (handle permission issues from different runners)
+            sudo rm -rf "$CACHE_DIR" 2>/dev/null || rm -rf "$CACHE_DIR" 2>/dev/null || true
             mv "$TEMP_DIR" "$CACHE_DIR"
             echo "$CURRENT_HASH" > "$CACHE_HASH_FILE"
             echo "✅ Cache updated ($(du -sh "$CACHE_DIR" | cut -f1))"
@@ -293,9 +296,11 @@ jobs:
           CACHE_DIR="$CACHE_BASE/node-modules"
           CACHE_HASH_FILE="$CACHE_BASE/node-modules.sha"
 
-          # Cleanup old cache files (>48 hours) to prevent disk bloat
+          # Cleanup old cache files (>48 hours) and stale temp directories
           echo "🧹 Cleaning up stale cache files..."
           find "$CACHE_BASE" -maxdepth 1 -name "node-modules*" -mmin +2880 -exec rm -rf {} \; 2>/dev/null || true
+          # Clean up any leftover temp directories from interrupted operations
+          find "$CACHE_BASE" -maxdepth 1 -name "node-modules.tmp.*" -exec sudo rm -rf {} \; 2>/dev/null || true
 
           # Compute current package-lock.json hash
           CURRENT_HASH=$(shasum -a 256 package-lock.json | cut -d' ' -f1)
@@ -313,13 +318,14 @@ jobs:
             echo "  Current hash:  $CURRENT_HASH"
             npm ci --prefer-offline --no-audit
 
-            # Atomic cache update
+            # Atomic cache update with permission handling
             echo "💾 Updating local cache..."
             TEMP_DIR="$CACHE_BASE/node-modules.tmp.$$"
-            rm -rf "$TEMP_DIR"
+            rm -rf "$TEMP_DIR" 2>/dev/null || sudo rm -rf "$TEMP_DIR" 2>/dev/null || true
             mkdir -p "$TEMP_DIR"
             rsync -a ./node_modules/ "$TEMP_DIR/"
-            rm -rf "$CACHE_DIR"
+            # Remove old cache (handle permission issues from different runners)
+            sudo rm -rf "$CACHE_DIR" 2>/dev/null || rm -rf "$CACHE_DIR" 2>/dev/null || true
             mv "$TEMP_DIR" "$CACHE_DIR"
             echo "$CURRENT_HASH" > "$CACHE_HASH_FILE"
             echo "✅ Cache updated ($(du -sh "$CACHE_DIR" | cut -f1))"
