@@ -36,10 +36,16 @@ describe('useBudgets', () => {
           spent_amount: 150,
           created_at: '2025-01-01T00:00:00Z',
           updated_at: '2025-01-01T00:00:00Z',
+          // Issue #495: Envelope budgeting fields
+          tags: [],
+          match_logic: 'category_only',
         },
       ],
       created_at: '2025-01-01T00:00:00Z',
       updated_at: '2025-01-01T00:00:00Z',
+      // Issue #495: Envelope budgeting fields
+      income_amount: 0,
+      income_sources: [],
     },
     {
       id: 'budget-2',
@@ -53,6 +59,9 @@ describe('useBudgets', () => {
       categories: [],
       created_at: '2025-01-06T00:00:00Z',
       updated_at: '2025-01-06T00:00:00Z',
+      // Issue #495: Envelope budgeting fields
+      income_amount: 0,
+      income_sources: [],
     },
   ];
 
@@ -399,6 +408,9 @@ describe('useBudgets', () => {
         spent_amount: 0,
         created_at: '2025-01-15T00:00:00Z',
         updated_at: '2025-01-15T00:00:00Z',
+        // Issue #495: Envelope budgeting fields
+        tags: [],
+        match_logic: 'category_only' as const,
       };
       vi.mocked(budgetsApi.fetchBudgets).mockResolvedValue(mockBudgets);
       vi.mocked(budgetsApi.addBudgetCategory).mockResolvedValue(newCategory);

@@ -35,10 +35,16 @@ describe('useCurrentBudget', () => {
         spent_amount: 150,
         created_at: '2025-01-01T00:00:00Z',
         updated_at: '2025-01-01T00:00:00Z',
+        // Issue #495: Envelope budgeting fields
+        tags: [],
+        match_logic: 'category_only',
       },
     ],
     created_at: '2025-01-01T00:00:00Z',
     updated_at: '2025-01-01T00:00:00Z',
+    // Issue #495: Envelope budgeting fields
+    income_amount: 0,
+    income_sources: [],
   };
 
   beforeEach(() => {
@@ -138,6 +144,9 @@ describe('useCurrentBudget', () => {
             spent_amount: 200,
             created_at: '2025-01-01T00:00:00Z',
             updated_at: '2025-01-01T00:00:00Z',
+            // Issue #495: Envelope budgeting fields
+            tags: [],
+            match_logic: 'category_only',
           },
           {
             id: 'cat-2',
@@ -147,6 +156,9 @@ describe('useCurrentBudget', () => {
             spent_amount: 100,
             created_at: '2025-01-01T00:00:00Z',
             updated_at: '2025-01-01T00:00:00Z',
+            // Issue #495: Envelope budgeting fields
+            tags: [],
+            match_logic: 'category_only',
           },
         ],
       };
@@ -182,6 +194,9 @@ describe('useCurrentBudget', () => {
             spent_amount: 600,
             created_at: '2025-01-01T00:00:00Z',
             updated_at: '2025-01-01T00:00:00Z',
+            // Issue #495: Envelope budgeting fields
+            tags: [],
+            match_logic: 'category_only',
           },
         ],
       };

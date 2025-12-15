@@ -41,6 +41,9 @@ describe('budgetsApi', () => {
     categories: [],
     created_at: '2025-01-01T00:00:00Z',
     updated_at: '2025-01-01T00:00:00Z',
+    // Issue #495: Envelope budgeting fields
+    income_amount: 0,
+    income_sources: [],
   };
 
   const mockBudgetCategory: BudgetCategory = {
@@ -51,6 +54,9 @@ describe('budgetsApi', () => {
     spent_amount: 150,
     created_at: '2025-01-01T00:00:00Z',
     updated_at: '2025-01-01T00:00:00Z',
+    // Issue #495: Envelope budgeting fields
+    tags: [],
+    match_logic: 'category_only',
   };
 
   const mockSavingsGoal: SavingsGoal = {
