@@ -34,6 +34,9 @@ describe('BudgetOverviewWidget', () => {
         spent_amount: 250,
         created_at: '2025-01-01T00:00:00Z',
         updated_at: '2025-01-01T00:00:00Z',
+        // Issue #495: Envelope budgeting fields
+        tags: [],
+        match_logic: 'category_only',
       },
       {
         id: 'cat-2',
@@ -43,10 +46,16 @@ describe('BudgetOverviewWidget', () => {
         spent_amount: 100,
         created_at: '2025-01-01T00:00:00Z',
         updated_at: '2025-01-01T00:00:00Z',
+        // Issue #495: Envelope budgeting fields
+        tags: [],
+        match_logic: 'category_only',
       },
     ],
     created_at: '2025-01-01T00:00:00Z',
     updated_at: '2025-01-01T00:00:00Z',
+    // Issue #495: Envelope budgeting fields
+    income_amount: 0,
+    income_sources: [],
   };
 
   const defaultProps = {

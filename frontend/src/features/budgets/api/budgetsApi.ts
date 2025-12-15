@@ -174,7 +174,7 @@ export async function syncBudget(budgetId: string): Promise<Budget> {
  * @returns Transactions within the budget's date range
  */
 export async function fetchBudgetTransactions(
-  budgetId: string,
+  _budgetId: string,
   params?: {
     startDate?: string;
     endDate?: string;

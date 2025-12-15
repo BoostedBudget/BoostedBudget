@@ -2,7 +2,7 @@
 
 // Re-export shared matching types for convenience
 import { MatchLogic } from '../../shared/types/matching';
-export { MatchLogic } from '../../shared/types/matching';
+export type { MatchLogic } from '../../shared/types/matching';
 
 // Budget period type matching backend domain
 export type BudgetPeriod = 'weekly' | 'monthly' | 'quarterly' | 'yearly' | 'custom';
