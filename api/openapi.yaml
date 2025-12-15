@@ -1214,6 +1214,44 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
 
+  /api/v1/budgets/{id}/sync:
+    post:
+      summary: Trigger Budget Recalculation
+      description: |
+        Manually trigger recalculation of budget income and spent amounts based on current transactions.
+        This endpoint is useful when you want to immediately see updated budget amounts without waiting
+        for the next automatic sync triggered by a Plaid webhook.
+      operationId: syncBudget
+      tags:
+        - Budgets
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Budget ID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Budget recalculated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Budget'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Budget not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
   /api/v1/budgets/{id}/categories:
     post:
       summary: Add Category to Budget

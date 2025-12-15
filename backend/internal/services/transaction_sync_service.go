@@ -67,6 +67,7 @@ type transactionSyncService struct {
 	encryptionService      EncryptionService
 	syncLimitService       SyncLimitService       // Issue #242: Monthly sync limits and tier-based historical depth
 	ruleApplicationService RuleApplicationService // Issue #346: Apply categorization rules to new transactions
+	budgetSyncService      BudgetSyncService      // Issue #494: Sync budget amounts after transaction sync
 }
 
 // NewTransactionSyncService creates a new TransactionSyncService instance
@@ -81,6 +82,7 @@ func NewTransactionSyncService(
 	encryptionService EncryptionService,
 	syncLimitService SyncLimitService,
 	ruleApplicationService RuleApplicationService,
+	budgetSyncService BudgetSyncService, // Issue #494: Sync budget amounts
 ) TransactionSyncService {
 	return &transactionSyncService{
 		webhookRepo:            webhookRepo,
@@ -93,6 +95,7 @@ func NewTransactionSyncService(
 		encryptionService:      encryptionService,
 		syncLimitService:       syncLimitService,
 		ruleApplicationService: ruleApplicationService,
+		budgetSyncService:      budgetSyncService,
 	}
 }
 
@@ -307,6 +310,19 @@ func (s *transactionSyncService) SyncTransactions(
 		log.Printf("Warning: Failed to create balance snapshots for item %s: %v", linkedItem.ID, err)
 		// Don't fail the entire sync - snapshots are non-critical
 		// Will retry on next webhook
+	}
+
+	// ========================================================================
+	// Issue #494: Sync Budget Amounts
+	// Recalculate budget income and category spent amounts after transactions change
+	// ========================================================================
+
+	// Sync budget amounts for the user (non-blocking)
+	if s.budgetSyncService != nil {
+		if err := s.budgetSyncService.RecalculateBudgetAmounts(ctx, linkedItem.UserID); err != nil {
+			log.Printf("Warning: Failed to sync budget amounts for user %s: %v", linkedItem.UserID, err)
+			// Don't fail the entire sync - budget sync is non-critical
+		}
 	}
 
 	// ========================================================================
