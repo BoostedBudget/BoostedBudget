@@ -1,9 +1,24 @@
 name: Deploy to Staging
 
 # Trigger on pushes to staging branch (after PR merge or direct push)
+# Also allow manual triggering to deploy a specific PR branch
 on:
   push:
     branches: [staging]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to deploy (leave empty to deploy staging branch)'
+        required: false
+        type: string
+      skip_security_scan:
+        description: 'Skip security scan (not recommended)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 # Only allow one staging deployment at a time
 concurrency:
@@ -19,10 +34,67 @@ env:
 
 jobs:
   # =============================================================================
+  # Fetch PR Metadata (only for manual PR deployments)
+  # =============================================================================
+  pr-metadata:
+    name: Fetch PR Metadata
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number != '' }}
+    runs-on: [self-hosted, macOS, mac-mini]
+    outputs:
+      head_sha: ${{ steps.pr-info.outputs.head_sha }}
+      head_ref: ${{ steps.pr-info.outputs.head_ref }}
+      pr_title: ${{ steps.pr-info.outputs.pr_title }}
+      pr_author: ${{ steps.pr-info.outputs.pr_author }}
+      tag_prefix: ${{ steps.pr-info.outputs.tag_prefix }}
+
+    steps:
+      - name: Fetch PR information
+        id: pr-info
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Fetching metadata for PR #${{ github.event.inputs.pr_number }}..."
+
+          PR_DATA=$(gh pr view ${{ github.event.inputs.pr_number }} --repo ${{ github.repository }} --json headRefOid,headRefName,title,author,state)
+
+          PR_STATE=$(echo "$PR_DATA" | jq -r '.state')
+          if [ "$PR_STATE" = "MERGED" ] || [ "$PR_STATE" = "CLOSED" ]; then
+            echo "::error::PR #${{ github.event.inputs.pr_number }} is $PR_STATE. Can only deploy open PRs."
+            exit 1
+          fi
+
+          HEAD_SHA=$(echo "$PR_DATA" | jq -r '.headRefOid')
+          HEAD_REF=$(echo "$PR_DATA" | jq -r '.headRefName')
+          PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
+          PR_AUTHOR=$(echo "$PR_DATA" | jq -r '.author.login')
+
+          echo "head_sha=${HEAD_SHA}" >> $GITHUB_OUTPUT
+          echo "head_ref=${HEAD_REF}" >> $GITHUB_OUTPUT
+          echo "pr_title=${PR_TITLE}" >> $GITHUB_OUTPUT
+          echo "pr_author=${PR_AUTHOR}" >> $GITHUB_OUTPUT
+          echo "tag_prefix=pr-${{ github.event.inputs.pr_number }}" >> $GITHUB_OUTPUT
+
+          echo "::notice::PR #${{ github.event.inputs.pr_number }}: ${PR_TITLE}"
+          echo "::notice::Branch: ${HEAD_REF} (${HEAD_SHA})"
+          echo "::notice::Author: @${PR_AUTHOR}"
+
+      - name: PR metadata summary
+        run: |
+          echo "### 📋 PR Metadata" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**PR:** #${{ github.event.inputs.pr_number }} - ${{ steps.pr-info.outputs.pr_title }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Author:** @${{ steps.pr-info.outputs.pr_author }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** \`${{ steps.pr-info.outputs.head_ref }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${{ steps.pr-info.outputs.head_sha }}\`" >> $GITHUB_STEP_SUMMARY
+
+  # =============================================================================
   # Build and Push Images to GHCR (Parallelized via Matrix)
   # =============================================================================
   build-images:
     name: Build ${{ matrix.component }} Image
+    needs: [pr-metadata]
+    # Run if pr-metadata succeeded (PR deploy) or was skipped (staging branch deploy)
+    if: ${{ always() && (needs.pr-metadata.result == 'success' || needs.pr-metadata.result == 'skipped') }}
     runs-on: [self-hosted, macOS, mac-mini]
     strategy:
       matrix:
@@ -30,6 +102,11 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      # Pass through the build target info to downstream jobs
+      tag_prefix: ${{ steps.build-target.outputs.tag_prefix }}
+      sha: ${{ steps.build-target.outputs.sha }}
+      ref: ${{ steps.build-target.outputs.ref }}
     env:
       UNIQUE_WORKSPACE: workspace-build-images-${{ matrix.component }}-${{ github.run_id }}
 
@@ -40,11 +117,26 @@ jobs:
           # This prevents "permission denied" errors during checkout cleanup
           sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
-      - name: Checkout staging branch
+      - name: Determine build target
+        id: build-target
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.pr_number }}" ]; then
+            echo "ref=${{ needs.pr-metadata.outputs.head_ref }}" >> $GITHUB_OUTPUT
+            echo "sha=${{ needs.pr-metadata.outputs.head_sha }}" >> $GITHUB_OUTPUT
+            echo "tag_prefix=${{ needs.pr-metadata.outputs.tag_prefix }}" >> $GITHUB_OUTPUT
+            echo "::notice::Building PR #${{ github.event.inputs.pr_number }} branch: ${{ needs.pr-metadata.outputs.head_ref }}"
+          else
+            echo "ref=staging" >> $GITHUB_OUTPUT
+            echo "sha=${{ github.sha }}" >> $GITHUB_OUTPUT
+            echo "tag_prefix=staging" >> $GITHUB_OUTPUT
+            echo "::notice::Building staging branch"
+          fi
+
+      - name: Checkout code
         uses: actions/checkout@v6
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}
-          ref: staging
+          ref: ${{ steps.build-target.outputs.ref }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -122,7 +214,7 @@ jobs:
             IMAGE_NAME="${{ env.FRONTEND_IMAGE_NAME }}"
           fi
           echo "image-name=${IMAGE_NAME}" >> $GITHUB_OUTPUT
-          echo "Building: ${{ env.REGISTRY }}/${IMAGE_NAME}:staging-${{ github.sha }}"
+          echo "Building: ${{ env.REGISTRY }}/${IMAGE_NAME}:${{ steps.build-target.outputs.tag_prefix }}-${{ steps.build-target.outputs.sha }}"
 
       - name: Build and push ${{ matrix.component }} image
         id: build
@@ -133,12 +225,12 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:staging-${{ github.sha }}
-            ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:staging-latest
+            ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ steps.build-target.outputs.tag_prefix }}-${{ steps.build-target.outputs.sha }}
+            ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ steps.build-target.outputs.tag_prefix }}-latest
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache,mode=max
           build-args: |
-            VERSION=staging-${{ github.sha }}
+            VERSION=${{ steps.build-target.outputs.tag_prefix }}-${{ steps.build-target.outputs.sha }}
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
           provenance: false
 
@@ -146,7 +238,7 @@ jobs:
         run: |
           echo "### 🐳 ${{ matrix.component }} Image Built" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Image:** \`${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:staging-${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ steps.build-target.outputs.tag_prefix }}-${{ steps.build-target.outputs.sha }}\`" >> $GITHUB_STEP_SUMMARY
 
       - name: Final workspace cleanup
         if: always()
@@ -157,7 +249,9 @@ jobs:
   # =============================================================================
   image-security-scan:
     name: Security Scan (${{ matrix.component }} Image)
-    needs: build-images
+    needs: [pr-metadata, build-images]
+    # Skip if security scan disabled (manual trigger only) or build failed
+    if: ${{ github.event.inputs.skip_security_scan != 'true' && needs.build-images.result == 'success' }}
     runs-on: [self-hosted, macOS, mac-mini]
     strategy:
       matrix:
@@ -221,7 +315,12 @@ jobs:
           else
             IMAGE_NAME="${{ env.FRONTEND_IMAGE_NAME }}"
           fi
-          IMAGE_REF="${{ env.REGISTRY }}/${IMAGE_NAME}:staging-${{ github.sha }}"
+
+          # Use outputs from build-images job
+          TAG_PREFIX="${{ needs.build-images.outputs.tag_prefix }}"
+          SHA="${{ needs.build-images.outputs.sha }}"
+
+          IMAGE_REF="${{ env.REGISTRY }}/${IMAGE_NAME}:${TAG_PREFIX}-${SHA}"
           echo "image-ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
           echo "Scanning image: ${IMAGE_REF}"
 
@@ -332,7 +431,9 @@ jobs:
   # =============================================================================
   deploy-to-mac-mini:
     name: Deploy to Mac Mini
-    needs: [build-images, image-security-scan]
+    needs: [pr-metadata, build-images, image-security-scan]
+    # Run if build succeeded and either security scan passed OR was skipped
+    if: ${{ always() && needs.build-images.result == 'success' && (needs.image-security-scan.result == 'success' || needs.image-security-scan.result == 'skipped') }}
     runs-on: [self-hosted, macOS, mac-mini]
     environment:
       name: staging
@@ -345,11 +446,11 @@ jobs:
         run: |
           sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
-      - name: Checkout staging branch
+      - name: Checkout code
         uses: actions/checkout@v6
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}
-          ref: staging
+          ref: ${{ needs.build-images.outputs.ref }}
 
       - name: Restore SSL certificates from secrets
         run: |
@@ -361,13 +462,17 @@ jobs:
 
       - name: Create .env.staging from secrets
         run: |
+          # Use outputs from build-images job for image tags
+          TAG_PREFIX="${{ needs.build-images.outputs.tag_prefix }}"
+          SHA="${{ needs.build-images.outputs.sha }}"
+
           cat > ${{ env.UNIQUE_WORKSPACE }}/.env.staging << EOF
           # Application Settings
           COMPOSE_PROJECT_NAME=boostedbudget-staging
           NODE_ENV=staging
           GO_ENV=staging
           ENVIRONMENT=staging
-          VERSION=staging-${{ github.sha }}
+          VERSION=${TAG_PREFIX}-${SHA}
           PRIMARY_REGION=iad
 
           # CORS Configuration
@@ -375,8 +480,8 @@ jobs:
 
           # Docker Image Configuration (pull from GHCR)
           PULL_FROM_GHCR=true
-          BACKEND_IMAGE=${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:staging-${{ github.sha }}
-          FRONTEND_IMAGE=${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:staging-${{ github.sha }}
+          BACKEND_IMAGE=${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${TAG_PREFIX}-${SHA}
+          FRONTEND_IMAGE=${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${TAG_PREFIX}-${SHA}
 
           # URLs
           BACKEND_URL=http://localhost:8080
@@ -462,7 +567,7 @@ jobs:
   # =============================================================================
   smoke-tests:
     name: Staging Smoke Tests
-    needs: deploy-to-mac-mini
+    needs: [pr-metadata, build-images, deploy-to-mac-mini]
     runs-on: [self-hosted, macOS, mac-mini]
     env:
       UNIQUE_WORKSPACE: workspace-smoke-tests-${{ github.run_id }}
@@ -521,22 +626,36 @@ jobs:
   # =============================================================================
   deployment-summary:
     name: Deployment Summary
-    needs: [deploy-to-mac-mini, smoke-tests]
+    needs: [pr-metadata, build-images, deploy-to-mac-mini, smoke-tests]
     runs-on: [self-hosted, macOS, mac-mini]
     if: success()
 
     steps:
       - name: Create deployment summary
         run: |
-          echo "### 🚀 Staging Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          TAG_PREFIX="${{ needs.build-images.outputs.tag_prefix }}"
+          SHA="${{ needs.build-images.outputs.sha }}"
+
+          # Different summary for PR deployments vs staging deployments
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.pr_number }}" ]; then
+            echo "### 🚀 PR #${{ github.event.inputs.pr_number }} Deployed to Staging" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**PR:** #${{ github.event.inputs.pr_number }} - ${{ needs.pr-metadata.outputs.pr_title }}" >> $GITHUB_STEP_SUMMARY
+            echo "**Author:** @${{ needs.pr-metadata.outputs.pr_author }}" >> $GITHUB_STEP_SUMMARY
+            echo "**Branch:** \`${{ needs.pr-metadata.outputs.head_ref }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "**Triggered by:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### 🚀 Staging Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          fi
+
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Environment:** Staging (Mac Mini)" >> $GITHUB_STEP_SUMMARY
-          echo "**Version:** \`staging-${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** \`${TAG_PREFIX}-${SHA}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${SHA}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Images:**" >> $GITHUB_STEP_SUMMARY
-          echo "- Backend: \`${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:staging-${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Frontend: \`${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:staging-${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Backend: \`${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${TAG_PREFIX}-${SHA}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Frontend: \`${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${TAG_PREFIX}-${SHA}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Access (Local Network):**" >> $GITHUB_STEP_SUMMARY
           echo "- Frontend: https://localhost:3000" >> $GITHUB_STEP_SUMMARY
@@ -551,3 +670,44 @@ jobs:
           echo "**Tests:** ✅ Security scans passed, smoke tests passed" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Deployed at:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+
+  # =============================================================================
+  # Notify PR (only for PR deployments)
+  # =============================================================================
+  notify-pr:
+    name: Comment on PR
+    needs: [pr-metadata, build-images, smoke-tests]
+    # Only run for PR deployments and when smoke tests pass
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number != '' && needs.smoke-tests.result == 'success' }}
+    runs-on: [self-hosted, macOS, mac-mini]
+
+    steps:
+      - name: Comment on PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_PREFIX="${{ needs.build-images.outputs.tag_prefix }}"
+          SHA="${{ needs.build-images.outputs.sha }}"
+
+          gh pr comment ${{ github.event.inputs.pr_number }} --repo ${{ github.repository }} --body "## 🚀 Staging Deployment Successful
+
+          This PR has been deployed to the staging environment for testing.
+
+          | Field | Value |
+          |-------|-------|
+          | **Version** | \`${TAG_PREFIX}-${SHA}\` |
+          | **Branch** | \`${{ needs.pr-metadata.outputs.head_ref }}\` |
+          | **Commit** | \`${SHA}\` |
+          | **Triggered by** | @${{ github.actor }} |
+
+          ### Access URLs
+          - **Frontend:** https://localhost:3000 (or via Tailscale)
+          - **Backend API:** http://localhost:8080
+
+          ### Workflow Run
+          [View deployment logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+          ---
+          *This is an automated comment from the staging deployment workflow.*"
+
+          echo "::notice::✅ Comment added to PR #${{ github.event.inputs.pr_number }}"
