@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { AutoCategorizationRuleCard } from './AutoCategorizationRuleCard'
 import type { CategorizationRule } from '../types'
 
@@ -263,7 +263,10 @@ describe('AutoCategorizationRuleCard', () => {
 
       expect(screen.getByRole('button', { name: 'Saving...' })).toBeInTheDocument()
 
-      resolveToggle!()
+      // Wrap promise resolution in act() to ensure React processes the state update
+      await act(async () => {
+        resolveToggle!()
+      })
       await waitFor(() => {
         expect(screen.getByRole('button', { name: 'Disable' })).toBeInTheDocument()
       })
