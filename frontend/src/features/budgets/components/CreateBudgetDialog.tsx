@@ -379,6 +379,19 @@ export function CreateBudgetDialog({
                 disabled={isSubmitting}
                 showTotal
               />
+              {/* Issue #496: Track actual income checkbox */}
+              <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={formData.track_actual_income}
+                  onChange={(e) =>
+                    setFormData((prev) => ({ ...prev, track_actual_income: e.target.checked }))
+                  }
+                  disabled={isSubmitting}
+                  className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800"
+                />
+                Track actual income vs expected
+              </label>
             </TabsContent>
           </Tabs>
 
