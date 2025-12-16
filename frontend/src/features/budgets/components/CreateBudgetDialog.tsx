@@ -2,9 +2,10 @@
  * CreateBudgetDialog
  * Issue #111: Goals Dashboard & Progress Visualization
  * Issue #462: Migrated from HeadlessUI to shadcn/ui
+ * Issue #496: Income Source Configuration UI for Envelope Budgeting
  *
- * Modal dialog for creating budgets with period selection.
- * Uses shadcn/ui Dialog built on Radix UI.
+ * Modal dialog for creating budgets with period selection and income sources.
+ * Uses shadcn/ui Dialog and Tabs built on Radix UI.
  */
 
 import { useState, useEffect, useCallback } from 'react';
@@ -15,8 +16,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { createBudget } from '../api/budgetsApi';
-import type { Budget, BudgetPeriod, CreateBudgetRequest } from '../types';
+import { fetchPlaidCategories } from '@/features/categories/api/categoriesApi';
+import { fetchTags } from '@/features/tags/api/tagsApi';
+import type { UserTag } from '@/features/tags/types';
+import type { Budget, BudgetPeriod, CreateBudgetRequest, IncomeSource } from '../types';
+import { IncomeSourceConfig } from './income';
 import './CreateBudgetDialog.css';
 
 export interface CreateBudgetDialogProps {
@@ -32,6 +38,9 @@ interface FormData {
   amount: string;
   start_date: string;
   end_date: string;
+  // Issue #496: Income source fields
+  income_sources: IncomeSource[];
+  track_actual_income: boolean;
 }
 
 interface FormErrors {
@@ -59,6 +68,9 @@ const initialFormData: FormData = {
   amount: '',
   start_date: getDefaultStartDate(),
   end_date: '',
+  // Issue #496: Income source defaults
+  income_sources: [],
+  track_actual_income: false,
 };
 
 export function CreateBudgetDialog({
@@ -70,6 +82,18 @@ export function CreateBudgetDialog({
   const [errors, setErrors] = useState<FormErrors>({});
   const [apiError, setApiError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Issue #496: State for income source options
+  const [plaidCategories, setPlaidCategories] = useState<string[]>([]);
+  const [userTags, setUserTags] = useState<UserTag[]>([]);
+  const [activeTab, setActiveTab] = useState<string>('budget');
+
+  // Issue #496: Load categories and tags when dialog opens
+  useEffect(() => {
+    if (isOpen) {
+      fetchPlaidCategories().then(setPlaidCategories).catch(console.error);
+      fetchTags().then(setUserTags).catch(console.error);
+    }
+  }, [isOpen]);
 
   // Reset form when dialog closes
   useEffect(() => {
@@ -77,6 +101,7 @@ export function CreateBudgetDialog({
       setFormData({ ...initialFormData, start_date: getDefaultStartDate() });
       setErrors({});
       setApiError(null);
+      setActiveTab('budget'); // Issue #496: Reset to budget tab
     }
   }, [isOpen]);
 
@@ -91,6 +116,11 @@ export function CreateBudgetDialog({
     },
     [errors]
   );
+
+  // Issue #496: Handler for income sources
+  const handleIncomeSourcesChange = useCallback((sources: IncomeSource[]) => {
+    setFormData((prev) => ({ ...prev, income_sources: sources }));
+  }, []);
 
   const validate = useCallback((): boolean => {
     const newErrors: FormErrors = {};
@@ -131,6 +161,8 @@ export function CreateBudgetDialog({
           start_date: formData.start_date,
           end_date: formData.period === 'custom' ? formData.end_date : undefined,
           amount: parseFloat(formData.amount),
+          // Issue #496: Include income sources
+          income_sources: formData.income_sources.length > 0 ? formData.income_sources : undefined,
         };
 
         const newBudget = await createBudget(request);
@@ -177,152 +209,178 @@ export function CreateBudgetDialog({
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Name Field */}
-          <div>
-            <label
-              htmlFor="name"
-              className="block text-sm font-medium text-gray-700 dark:text-gray-300"
-            >
-              Name
-            </label>
-            <input
-              type="text"
-              id="name"
-              name="name"
-              value={formData.name}
-              onChange={handleInputChange}
-              className={`create-budget-dialog__input ${
-                errors.name ? 'create-budget-dialog__input--error' : ''
-              }`}
-              placeholder="e.g., Monthly Budget"
-            />
-            {errors.name && (
-              <p className="mt-1 text-sm text-red-600 dark:text-red-400">
-                {errors.name}
-              </p>
-            )}
-          </div>
+          {/* Issue #496: Tabbed interface for Budget and Income */}
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
+            <TabsList className="w-full">
+              <TabsTrigger value="budget" className="flex-1">Budget</TabsTrigger>
+              <TabsTrigger value="income" className="flex-1">Income</TabsTrigger>
+            </TabsList>
 
-          {/* Description Field */}
-          <div>
-            <label
-              htmlFor="description"
-              className="block text-sm font-medium text-gray-700 dark:text-gray-300"
-            >
-              Description
-            </label>
-            <textarea
-              id="description"
-              name="description"
-              value={formData.description}
-              onChange={handleInputChange}
-              rows={2}
-              className="create-budget-dialog__input"
-              placeholder="What is this budget for?"
-            />
-          </div>
+            {/* Budget Tab */}
+            <TabsContent value="budget" className="space-y-4">
+              {/* Name Field */}
+              <div>
+                <label
+                  htmlFor="name"
+                  className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+                >
+                  Name
+                </label>
+                <input
+                  type="text"
+                  id="name"
+                  name="name"
+                  value={formData.name}
+                  onChange={handleInputChange}
+                  className={`create-budget-dialog__input ${
+                    errors.name ? 'create-budget-dialog__input--error' : ''
+                  }`}
+                  placeholder="e.g., Monthly Budget"
+                />
+                {errors.name && (
+                  <p className="mt-1 text-sm text-red-600 dark:text-red-400">
+                    {errors.name}
+                  </p>
+                )}
+              </div>
 
-          {/* Period Field */}
-          <div>
-            <label
-              htmlFor="period"
-              className="block text-sm font-medium text-gray-700 dark:text-gray-300"
-            >
-              Period
-            </label>
-            <select
-              id="period"
-              name="period"
-              value={formData.period}
-              onChange={handleInputChange}
-              className="create-budget-dialog__input"
-            >
-              {PERIOD_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </div>
+              {/* Description Field */}
+              <div>
+                <label
+                  htmlFor="description"
+                  className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+                >
+                  Description
+                </label>
+                <textarea
+                  id="description"
+                  name="description"
+                  value={formData.description}
+                  onChange={handleInputChange}
+                  rows={2}
+                  className="create-budget-dialog__input"
+                  placeholder="What is this budget for?"
+                />
+              </div>
 
-          {/* Amount Field */}
-          <div>
-            <label
-              htmlFor="amount"
-              className="block text-sm font-medium text-gray-700 dark:text-gray-300"
-            >
-              Amount
-            </label>
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">
-                $
-              </span>
-              <input
-                type="number"
-                id="amount"
-                name="amount"
-                value={formData.amount}
-                onChange={handleInputChange}
-                min="0"
-                step="0.01"
-                className={`create-budget-dialog__input pl-7 ${
-                  errors.amount ? 'create-budget-dialog__input--error' : ''
-                }`}
-                placeholder="0.00"
-              />
-            </div>
-            {errors.amount && (
-              <p className="mt-1 text-sm text-red-600 dark:text-red-400">
-                {errors.amount}
-              </p>
-            )}
-          </div>
+              {/* Period Field */}
+              <div>
+                <label
+                  htmlFor="period"
+                  className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+                >
+                  Period
+                </label>
+                <select
+                  id="period"
+                  name="period"
+                  value={formData.period}
+                  onChange={handleInputChange}
+                  className="create-budget-dialog__input"
+                >
+                  {PERIOD_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-          {/* Start Date Field */}
-          <div>
-            <label
-              htmlFor="start_date"
-              className="block text-sm font-medium text-gray-700 dark:text-gray-300"
-            >
-              Start Date
-            </label>
-            <input
-              type="date"
-              id="start_date"
-              name="start_date"
-              value={formData.start_date}
-              onChange={handleInputChange}
-              className="create-budget-dialog__input"
-            />
-          </div>
+              {/* Amount Field */}
+              <div>
+                <label
+                  htmlFor="amount"
+                  className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+                >
+                  Amount
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">
+                    $
+                  </span>
+                  <input
+                    type="number"
+                    id="amount"
+                    name="amount"
+                    value={formData.amount}
+                    onChange={handleInputChange}
+                    min="0"
+                    step="0.01"
+                    className={`create-budget-dialog__input pl-7 ${
+                      errors.amount ? 'create-budget-dialog__input--error' : ''
+                    }`}
+                    placeholder="0.00"
+                  />
+                </div>
+                {errors.amount && (
+                  <p className="mt-1 text-sm text-red-600 dark:text-red-400">
+                    {errors.amount}
+                  </p>
+                )}
+              </div>
 
-          {/* End Date Field (only for custom period) */}
-          {formData.period === 'custom' && (
-            <div>
-              <label
-                htmlFor="end_date"
-                className="block text-sm font-medium text-gray-700 dark:text-gray-300"
-              >
-                End Date
-              </label>
-              <input
-                type="date"
-                id="end_date"
-                name="end_date"
-                value={formData.end_date}
-                onChange={handleInputChange}
-                min={formData.start_date}
-                className={`create-budget-dialog__input ${
-                  errors.end_date ? 'create-budget-dialog__input--error' : ''
-                }`}
-              />
-              {errors.end_date && (
-                <p className="mt-1 text-sm text-red-600 dark:text-red-400">
-                  {errors.end_date}
-                </p>
+              {/* Start Date Field */}
+              <div>
+                <label
+                  htmlFor="start_date"
+                  className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+                >
+                  Start Date
+                </label>
+                <input
+                  type="date"
+                  id="start_date"
+                  name="start_date"
+                  value={formData.start_date}
+                  onChange={handleInputChange}
+                  className="create-budget-dialog__input"
+                />
+              </div>
+
+              {/* End Date Field (only for custom period) */}
+              {formData.period === 'custom' && (
+                <div>
+                  <label
+                    htmlFor="end_date"
+                    className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    End Date
+                  </label>
+                  <input
+                    type="date"
+                    id="end_date"
+                    name="end_date"
+                    value={formData.end_date}
+                    onChange={handleInputChange}
+                    min={formData.start_date}
+                    className={`create-budget-dialog__input ${
+                      errors.end_date ? 'create-budget-dialog__input--error' : ''
+                    }`}
+                  />
+                  {errors.end_date && (
+                    <p className="mt-1 text-sm text-red-600 dark:text-red-400">
+                      {errors.end_date}
+                    </p>
+                  )}
+                </div>
               )}
-            </div>
-          )}
+            </TabsContent>
+
+            {/* Issue #496: Income Tab */}
+            <TabsContent value="income" className="space-y-4">
+              <p className="text-sm text-gray-600 dark:text-gray-400">
+                Configure income sources to track expected vs actual income for this budget.
+              </p>
+              <IncomeSourceConfig
+                sources={formData.income_sources}
+                onChange={handleIncomeSourcesChange}
+                availableCategories={plaidCategories}
+                availableTags={userTags}
+                disabled={isSubmitting}
+                showTotal
+              />
+            </TabsContent>
+          </Tabs>
 
           {/* API Error */}
           {apiError && (
