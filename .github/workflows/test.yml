@@ -213,30 +213,46 @@ jobs:
           # Compute current package-lock.json hash
           CURRENT_HASH=$(shasum -a 256 package-lock.json | cut -d' ' -f1)
 
+          # Helper function to update cache
+          update_cache() {
+            echo "💾 Updating local cache..."
+            TEMP_DIR="$CACHE_BASE/node-modules.tmp.$$"
+            rm -rf "$TEMP_DIR" 2>/dev/null || sudo rm -rf "$TEMP_DIR" 2>/dev/null || true
+            mkdir -p "$TEMP_DIR"
+            rsync -a ./node_modules/ "$TEMP_DIR/"
+            sudo rm -rf "$CACHE_DIR" 2>/dev/null || rm -rf "$CACHE_DIR" 2>/dev/null || true
+            mv "$TEMP_DIR" "$CACHE_DIR"
+            echo "$CURRENT_HASH" > "$CACHE_HASH_FILE"
+            echo "✅ Cache updated ($(du -sh "$CACHE_DIR" | cut -f1))"
+          }
+
           # Check if cache exists AND hash matches
+          CACHE_VALID=false
           if [ -d "$CACHE_DIR" ] && [ -f "$CACHE_HASH_FILE" ] && [ "$(cat "$CACHE_HASH_FILE")" == "$CURRENT_HASH" ]; then
             echo "✅ Local cache hit! Restoring node_modules..."
             START_TIME=$(date +%s)
             rsync -a --delete "$CACHE_DIR/" ./node_modules/
             END_TIME=$(date +%s)
             echo "✅ Restored in $((END_TIME - START_TIME))s"
-          else
-            echo "📦 Cache miss, running npm ci..."
+
+            # Validate restored cache - check critical binaries exist
+            if [ -d "./node_modules/.bin" ] && [ -L "./node_modules/.bin/eslint" ]; then
+              echo "✅ Cache validation passed - eslint binary found"
+              CACHE_VALID=true
+            else
+              echo "⚠️ Cache validation failed - .bin/eslint missing or not a symlink"
+              echo "📊 Debug: .bin contents: $(ls -la ./node_modules/.bin 2>&1 | head -5 || echo 'dir missing')"
+            fi
+          fi
+
+          # If no valid cache, run npm ci
+          if [ "$CACHE_VALID" != "true" ]; then
+            echo "📦 Running npm ci..."
             [ -f "$CACHE_HASH_FILE" ] && echo "  Previous hash: $(cat "$CACHE_HASH_FILE")"
             echo "  Current hash:  $CURRENT_HASH"
+            rm -rf ./node_modules 2>/dev/null || true
             npm ci --prefer-offline --no-audit
-
-            # Atomic cache update with permission handling
-            echo "💾 Updating local cache..."
-            TEMP_DIR="$CACHE_BASE/node-modules.tmp.$$"
-            rm -rf "$TEMP_DIR" 2>/dev/null || sudo rm -rf "$TEMP_DIR" 2>/dev/null || true
-            mkdir -p "$TEMP_DIR"
-            rsync -a ./node_modules/ "$TEMP_DIR/"
-            # Remove old cache (handle permission issues from different runners)
-            sudo rm -rf "$CACHE_DIR" 2>/dev/null || rm -rf "$CACHE_DIR" 2>/dev/null || true
-            mv "$TEMP_DIR" "$CACHE_DIR"
-            echo "$CURRENT_HASH" > "$CACHE_HASH_FILE"
-            echo "✅ Cache updated ($(du -sh "$CACHE_DIR" | cut -f1))"
+            update_cache
           fi
 
       - name: Run ESLint
@@ -308,30 +324,46 @@ jobs:
           # Compute current package-lock.json hash
           CURRENT_HASH=$(shasum -a 256 package-lock.json | cut -d' ' -f1)
 
+          # Helper function to update cache
+          update_cache() {
+            echo "💾 Updating local cache..."
+            TEMP_DIR="$CACHE_BASE/node-modules.tmp.$$"
+            rm -rf "$TEMP_DIR" 2>/dev/null || sudo rm -rf "$TEMP_DIR" 2>/dev/null || true
+            mkdir -p "$TEMP_DIR"
+            rsync -a ./node_modules/ "$TEMP_DIR/"
+            sudo rm -rf "$CACHE_DIR" 2>/dev/null || rm -rf "$CACHE_DIR" 2>/dev/null || true
+            mv "$TEMP_DIR" "$CACHE_DIR"
+            echo "$CURRENT_HASH" > "$CACHE_HASH_FILE"
+            echo "✅ Cache updated ($(du -sh "$CACHE_DIR" | cut -f1))"
+          }
+
           # Check if cache exists AND hash matches
+          CACHE_VALID=false
           if [ -d "$CACHE_DIR" ] && [ -f "$CACHE_HASH_FILE" ] && [ "$(cat "$CACHE_HASH_FILE")" == "$CURRENT_HASH" ]; then
             echo "✅ Local cache hit! Restoring node_modules..."
             START_TIME=$(date +%s)
             rsync -a --delete "$CACHE_DIR/" ./node_modules/
             END_TIME=$(date +%s)
             echo "✅ Restored in $((END_TIME - START_TIME))s"
-          else
-            echo "📦 Cache miss, running npm ci..."
+
+            # Validate restored cache - check critical binaries exist
+            if [ -d "./node_modules/.bin" ] && [ -L "./node_modules/.bin/eslint" ]; then
+              echo "✅ Cache validation passed - eslint binary found"
+              CACHE_VALID=true
+            else
+              echo "⚠️ Cache validation failed - .bin/eslint missing or not a symlink"
+              echo "📊 Debug: .bin contents: $(ls -la ./node_modules/.bin 2>&1 | head -5 || echo 'dir missing')"
+            fi
+          fi
+
+          # If no valid cache, run npm ci
+          if [ "$CACHE_VALID" != "true" ]; then
+            echo "📦 Running npm ci..."
             [ -f "$CACHE_HASH_FILE" ] && echo "  Previous hash: $(cat "$CACHE_HASH_FILE")"
             echo "  Current hash:  $CURRENT_HASH"
+            rm -rf ./node_modules 2>/dev/null || true
             npm ci --prefer-offline --no-audit
-
-            # Atomic cache update with permission handling
-            echo "💾 Updating local cache..."
-            TEMP_DIR="$CACHE_BASE/node-modules.tmp.$$"
-            rm -rf "$TEMP_DIR" 2>/dev/null || sudo rm -rf "$TEMP_DIR" 2>/dev/null || true
-            mkdir -p "$TEMP_DIR"
-            rsync -a ./node_modules/ "$TEMP_DIR/"
-            # Remove old cache (handle permission issues from different runners)
-            sudo rm -rf "$CACHE_DIR" 2>/dev/null || rm -rf "$CACHE_DIR" 2>/dev/null || true
-            mv "$TEMP_DIR" "$CACHE_DIR"
-            echo "$CURRENT_HASH" > "$CACHE_HASH_FILE"
-            echo "✅ Cache updated ($(du -sh "$CACHE_DIR" | cut -f1))"
+            update_cache
           fi
 
       - name: Install Playwright browsers
