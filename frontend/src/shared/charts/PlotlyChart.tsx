@@ -24,6 +24,7 @@ import createPlotlyComponent from 'react-plotly.js/factory';
  * Plot component created using the factory pattern with basic-dist bundle.
  * This provides access to cartesian chart types: scatter, bar, and related.
  */
+// eslint-disable-next-line react-refresh/only-export-components -- Intentional: This file exports both the Plot component and the Plotly library for direct API access
 export const Plot = createPlotlyComponent(Plotly);
 
 /**
