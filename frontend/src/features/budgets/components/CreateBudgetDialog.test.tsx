@@ -16,6 +16,18 @@ import { fillInputByLabel } from '@/test/utils/formTestHelpers';
 // Mock APIs
 vi.mock('../api/budgetsApi');
 
+// Issue #496: Mock APIs for income sources
+vi.mock('@/features/categories/api/categoriesApi', () => ({
+  fetchPlaidCategories: vi.fn().mockResolvedValue(['INCOME', 'TRANSFER_IN', 'LOAN_PAYMENTS']),
+}));
+
+vi.mock('@/features/tags/api/tagsApi', () => ({
+  fetchTags: vi.fn().mockResolvedValue([
+    { id: '1', user_id: 'user-1', name: 'Salary', color: '#22c55e', usage_count: 5, created_at: '', updated_at: '' },
+    { id: '2', user_id: 'user-1', name: 'Freelance', color: '#3b82f6', usage_count: 2, created_at: '', updated_at: '' },
+  ]),
+}));
+
 const mockCreatedBudget: Budget = {
   id: 'budget-1',
   user_id: 'user-1',
@@ -500,5 +512,241 @@ describe('CreateBudgetDialog', () => {
 
       expect(mockOnCancel).toHaveBeenCalled();
     });
+  });
+
+  // ==========================================================================
+  // Issue #496: Income Tab Tests
+  // ==========================================================================
+
+  describe('Income Tab (Issue #496)', () => {
+    it('renders Budget and Income tabs', async () => {
+      render(
+        <CreateBudgetDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onBudgetCreated={mockOnCreate}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+
+      // Both tabs should be visible
+      expect(screen.getByRole('tab', { name: /budget/i })).toBeInTheDocument();
+      expect(screen.getByRole('tab', { name: /income/i })).toBeInTheDocument();
+    });
+
+    it('switches between Budget and Income tabs', async () => {
+      const user = userEvent.setup({ delay: null });
+      render(
+        <CreateBudgetDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onBudgetCreated={mockOnCreate}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+
+      // Budget tab should be active by default, form fields visible
+      expect(screen.getByLabelText(/name/i)).toBeInTheDocument();
+
+      // Click Income tab
+      await user.click(screen.getByRole('tab', { name: /income/i }));
+
+      // Income tab content should be visible (empty state message)
+      await waitFor(() => {
+        expect(screen.getByText(/no income sources configured/i)).toBeInTheDocument();
+      });
+
+      // Click back to Budget tab
+      await user.click(screen.getByRole('tab', { name: /budget/i }));
+
+      // Budget form fields should be visible again
+      await waitFor(() => {
+        expect(screen.getByLabelText(/name/i)).toBeInTheDocument();
+      });
+    });
+
+    it('renders IncomeSourceConfig in Income tab', async () => {
+      const user = userEvent.setup({ delay: null });
+      render(
+        <CreateBudgetDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onBudgetCreated={mockOnCreate}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+
+      // Navigate to Income tab
+      await user.click(screen.getByRole('tab', { name: /income/i }));
+
+      // Should see the IncomeSourceConfig component (empty state)
+      await waitFor(() => {
+        expect(screen.getByText(/no income sources configured/i)).toBeInTheDocument();
+      });
+
+      // Should see the type selector for adding income sources
+      expect(screen.getByLabelText(/source type/i)).toBeInTheDocument();
+    });
+
+    it('renders track actual income checkbox', async () => {
+      const user = userEvent.setup({ delay: null });
+      render(
+        <CreateBudgetDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onBudgetCreated={mockOnCreate}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+
+      // Navigate to Income tab
+      await user.click(screen.getByRole('tab', { name: /income/i }));
+
+      // Should see the track actual income checkbox
+      await waitFor(() => {
+        expect(screen.getByLabelText(/track actual income/i)).toBeInTheDocument();
+      });
+
+      // Should be unchecked by default
+      expect(screen.getByLabelText(/track actual income/i)).not.toBeChecked();
+    });
+
+    it('includes income_sources in submission payload when sources are added', async () => {
+      const user = userEvent.setup({ delay: null });
+      render(
+        <CreateBudgetDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onBudgetCreated={mockOnCreate}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+
+      // Fill required budget fields first
+      await user.type(screen.getByLabelText(/name/i), 'Test Budget');
+      await user.clear(screen.getByLabelText(/amount/i));
+      await user.type(screen.getByLabelText(/amount/i), '2000');
+
+      // Navigate to Income tab
+      await user.click(screen.getByRole('tab', { name: /income/i }));
+
+      // Wait for Income tab content
+      await waitFor(() => {
+        expect(screen.getByLabelText(/source type/i)).toBeInTheDocument();
+      });
+
+      // Select Manual type and add an income source
+      const typeSelector = screen.getByLabelText(/source type/i);
+      await user.selectOptions(typeSelector, 'manual');
+
+      // Fill manual amount
+      const amountInput = screen.getByLabelText(/amount/i);
+      await user.type(amountInput, '3000');
+
+      // Click Add button
+      await user.click(screen.getByRole('button', { name: /add income source/i }));
+
+      // Submit the form
+      await user.click(screen.getByRole('button', { name: /create budget/i }));
+
+      // Verify createBudget was called with income_sources
+      await waitFor(() => {
+        expect(budgetsApi.createBudget).toHaveBeenCalledWith(
+          expect.objectContaining({
+            name: 'Test Budget',
+            amount: 2000,
+            income_sources: [
+              expect.objectContaining({
+                type: 'manual',
+                value: '3000',
+              }),
+            ],
+          })
+        );
+      });
+    }, 20000);
+
+    it('resets Income tab when dialog reopens', async () => {
+      const user = userEvent.setup({ delay: null });
+      const { rerender } = render(
+        <CreateBudgetDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onBudgetCreated={mockOnCreate}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+
+      // Navigate to Income tab
+      await user.click(screen.getByRole('tab', { name: /income/i }));
+
+      // Wait for Income tab content
+      await waitFor(() => {
+        expect(screen.getByLabelText(/source type/i)).toBeInTheDocument();
+      });
+
+      // Add a manual income source
+      const typeSelector = screen.getByLabelText(/source type/i);
+      await user.selectOptions(typeSelector, 'manual');
+      const amountInput = screen.getByLabelText(/amount/i);
+      await user.type(amountInput, '1000');
+      await user.click(screen.getByRole('button', { name: /add income source/i }));
+
+      // Verify income source was added (no longer shows empty state)
+      await waitFor(() => {
+        expect(screen.queryByText(/no income sources configured/i)).not.toBeInTheDocument();
+      });
+
+      // Close dialog
+      rerender(
+        <CreateBudgetDialog
+          isOpen={false}
+          onCancel={mockOnCancel}
+          onBudgetCreated={mockOnCreate}
+        />
+      );
+
+      // Reopen dialog
+      rerender(
+        <CreateBudgetDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onBudgetCreated={mockOnCreate}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+
+      // Should be back on Budget tab (reset)
+      expect(screen.getByLabelText(/name/i)).toBeInTheDocument();
+
+      // Navigate to Income tab
+      await user.click(screen.getByRole('tab', { name: /income/i }));
+
+      // Income sources should be reset (empty state)
+      await waitFor(() => {
+        expect(screen.getByText(/no income sources configured/i)).toBeInTheDocument();
+      });
+    }, 20000);
   });
 });
