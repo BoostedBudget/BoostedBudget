@@ -25,6 +25,7 @@ jobs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
       migrations: ${{ steps.filter.outputs.migrations }}
+      workflow: ${{ steps.filter.outputs.workflow }}
     steps:
       - uses: actions/checkout@v6
 
@@ -42,6 +43,8 @@ jobs:
               - 'package-lock.json'
             migrations:
               - 'backend/migrations/**'
+            workflow:
+              - '.github/workflows/**'
 
   # =============================================================================
   # Backend Tests (runs in parallel with frontend)
@@ -49,7 +52,7 @@ jobs:
   backend-test:
     name: Backend Tests
     needs: detect-changes
-    if: needs.detect-changes.outputs.backend == 'true'
+    if: needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.workflow == 'true'
     runs-on: [self-hosted, macOS, mac-mini]
     env:
       UNIQUE_WORKSPACE: workspace-backend-test-${{ github.run_id }}
@@ -172,7 +175,7 @@ jobs:
   frontend-test:
     name: Frontend Tests
     needs: detect-changes
-    if: needs.detect-changes.outputs.frontend == 'true'
+    if: needs.detect-changes.outputs.frontend == 'true' || needs.detect-changes.outputs.workflow == 'true'
     runs-on: [self-hosted, macOS, mac-mini]
     env:
       UNIQUE_WORKSPACE: workspace-frontend-test-${{ github.run_id }}
@@ -422,7 +425,7 @@ jobs:
   migration-tests:
     name: Migration Tests
     needs: detect-changes
-    if: needs.detect-changes.outputs.migrations == 'true' || needs.detect-changes.outputs.backend == 'true'
+    if: needs.detect-changes.outputs.migrations == 'true' || needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.workflow == 'true'
     runs-on: [self-hosted, macOS, mac-mini]
     env:
       UNIQUE_WORKSPACE: workspace-migration-tests-${{ github.run_id }}
