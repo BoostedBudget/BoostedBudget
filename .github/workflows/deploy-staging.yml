@@ -250,8 +250,9 @@ jobs:
   image-security-scan:
     name: Security Scan (${{ matrix.component }} Image)
     needs: [pr-metadata, build-images]
-    # Skip if security scan disabled (manual trigger only) or build failed
-    if: ${{ github.event.inputs.skip_security_scan != 'true' && needs.build-images.result == 'success' }}
+    # Run if build succeeded and security scan not disabled
+    # Use always() because pr-metadata is skipped for regular staging deploys
+    if: ${{ always() && needs.build-images.result == 'success' && github.event.inputs.skip_security_scan != 'true' }}
     runs-on: [self-hosted, macOS, mac-mini]
     strategy:
       matrix:
@@ -568,6 +569,8 @@ jobs:
   smoke-tests:
     name: Staging Smoke Tests
     needs: [pr-metadata, build-images, deploy-to-mac-mini]
+    # Use always() because pr-metadata is skipped for regular staging deploys
+    if: ${{ always() && needs.deploy-to-mac-mini.result == 'success' }}
     runs-on: [self-hosted, macOS, mac-mini]
     env:
       UNIQUE_WORKSPACE: workspace-smoke-tests-${{ github.run_id }}
@@ -628,7 +631,8 @@ jobs:
     name: Deployment Summary
     needs: [pr-metadata, build-images, deploy-to-mac-mini, smoke-tests]
     runs-on: [self-hosted, macOS, mac-mini]
-    if: success()
+    # Use always() because pr-metadata is skipped for regular staging deploys
+    if: ${{ always() && needs.smoke-tests.result == 'success' }}
 
     steps:
       - name: Create deployment summary
