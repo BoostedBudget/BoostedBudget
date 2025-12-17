@@ -11,6 +11,7 @@ import userEvent from '@testing-library/user-event';
 import { BudgetCategoryForm } from './BudgetCategoryForm';
 import type { BudgetCategory } from '../../types';
 import type { UserTag } from '@/features/tags/types';
+import * as usePreviewCategoriesModule from '../../hooks/usePreviewCategories';
 
 // Mock CategoryMatchConfig
 vi.mock('./CategoryMatchConfig', () => ({
@@ -37,6 +38,15 @@ vi.mock('./CategoryMatchConfig', () => ({
       </select>
     </div>
   ),
+}));
+
+// Mock usePreviewCategories hook
+vi.mock('../../hooks/usePreviewCategories', () => ({
+  usePreviewCategories: vi.fn(() => ({
+    preview: null,
+    loading: false,
+    error: null,
+  })),
 }));
 
 describe('BudgetCategoryForm', () => {
@@ -524,6 +534,202 @@ describe('BudgetCategoryForm', () => {
       );
 
       expect(screen.queryByText(/add.*category/i)).not.toBeInTheDocument();
+    });
+  });
+
+  // Issue #497: Category Preview Feature Tests
+  describe('Category Preview', () => {
+    const mockUsePreviewCategories = vi.mocked(usePreviewCategoriesModule.usePreviewCategories);
+
+    beforeEach(() => {
+      // Reset mock to default state
+      mockUsePreviewCategories.mockReturnValue({
+        preview: null,
+        loading: false,
+        error: null,
+      });
+    });
+
+    it('should show preview when category selected and budget dates provided', async () => {
+      const user = userEvent.setup({ delay: null });
+      mockUsePreviewCategories.mockReturnValue({
+        preview: { transaction_count: 5, total_amount: 250.50 },
+        loading: false,
+        error: null,
+      });
+
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+          budgetStartDate="2024-01-01"
+          budgetEndDate="2024-01-31"
+        />
+      );
+
+      // Select a category
+      const categorySelect = screen.getByRole('combobox', { name: /^category$/i });
+      await user.selectOptions(categorySelect, 'Food and Drink > Restaurants');
+
+      // Preview should be visible
+      await waitFor(() => {
+        expect(screen.getByTestId('category-preview')).toBeInTheDocument();
+        expect(screen.getByText(/matches/i)).toBeInTheDocument();
+        expect(screen.getByText('5')).toBeInTheDocument();
+        expect(screen.getByText(/\$250\.50/)).toBeInTheDocument();
+      });
+    });
+
+    it('should show loading state while fetching preview', async () => {
+      const user = userEvent.setup({ delay: null });
+      mockUsePreviewCategories.mockReturnValue({
+        preview: null,
+        loading: true,
+        error: null,
+      });
+
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+          budgetStartDate="2024-01-01"
+          budgetEndDate="2024-01-31"
+        />
+      );
+
+      // Select a category
+      const categorySelect = screen.getByRole('combobox', { name: /^category$/i });
+      await user.selectOptions(categorySelect, 'Food and Drink > Restaurants');
+
+      // Should show loading text
+      await waitFor(() => {
+        expect(screen.getByText(/calculating/i)).toBeInTheDocument();
+      });
+    });
+
+    it('should show error message when preview fails', async () => {
+      const user = userEvent.setup({ delay: null });
+      mockUsePreviewCategories.mockReturnValue({
+        preview: null,
+        loading: false,
+        error: new Error('Network error'),
+      });
+
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+          budgetStartDate="2024-01-01"
+          budgetEndDate="2024-01-31"
+        />
+      );
+
+      // Select a category
+      const categorySelect = screen.getByRole('combobox', { name: /^category$/i });
+      await user.selectOptions(categorySelect, 'Food and Drink > Restaurants');
+
+      // Should show error message
+      await waitFor(() => {
+        expect(screen.getByText(/unable to load preview/i)).toBeInTheDocument();
+      });
+    });
+
+    it('should not show preview when no category selected', () => {
+      mockUsePreviewCategories.mockReturnValue({
+        preview: { transaction_count: 5, total_amount: 250.50 },
+        loading: false,
+        error: null,
+      });
+
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+          budgetStartDate="2024-01-01"
+          budgetEndDate="2024-01-31"
+        />
+      );
+
+      // Preview should not be visible without category selected
+      expect(screen.queryByTestId('category-preview')).not.toBeInTheDocument();
+    });
+
+    it('should not show preview when budget dates not provided', async () => {
+      const user = userEvent.setup({ delay: null });
+      mockUsePreviewCategories.mockReturnValue({
+        preview: { transaction_count: 5, total_amount: 250.50 },
+        loading: false,
+        error: null,
+      });
+
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+          // No budgetStartDate or budgetEndDate
+        />
+      );
+
+      // Select a category
+      const categorySelect = screen.getByRole('combobox', { name: /^category$/i });
+      await user.selectOptions(categorySelect, 'Food and Drink > Restaurants');
+
+      // Preview should not be visible without dates
+      expect(screen.queryByTestId('category-preview')).not.toBeInTheDocument();
+    });
+
+    it('should show singular transaction text when count is 1', async () => {
+      const user = userEvent.setup({ delay: null });
+      mockUsePreviewCategories.mockReturnValue({
+        preview: { transaction_count: 1, total_amount: 50.00 },
+        loading: false,
+        error: null,
+      });
+
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+          budgetStartDate="2024-01-01"
+          budgetEndDate="2024-01-31"
+        />
+      );
+
+      // Select a category
+      const categorySelect = screen.getByRole('combobox', { name: /^category$/i });
+      await user.selectOptions(categorySelect, 'Food and Drink > Restaurants');
+
+      // Should show singular "transaction" (not "transactions")
+      await waitFor(() => {
+        const preview = screen.getByTestId('category-preview');
+        // Check it shows singular "transaction" not "transactions"
+        expect(preview).toHaveTextContent(/transaction totaling/i);
+        expect(preview).not.toHaveTextContent(/transactions totaling/i);
+      });
     });
   });
 });

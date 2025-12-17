@@ -541,4 +541,262 @@ describe('BudgetCategoryManager', () => {
       expect(within(breakdown).getByTestId('breakdown-category-count')).toHaveTextContent('2');
     });
   });
+
+  describe('Keyboard Navigation (Phase 4 Accessibility)', () => {
+    it('should have role="list" on category list container', () => {
+      const categories = [createMockCategory()];
+
+      render(
+        <BudgetCategoryManager
+          budgetId="budget-1"
+          categories={categories}
+          totalIncome={3000}
+          onAddCategory={mockOnAddCategory}
+          onUpdateCategory={mockOnUpdateCategory}
+          onDeleteCategory={mockOnDeleteCategory}
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      );
+
+      expect(screen.getByRole('list')).toBeInTheDocument();
+    });
+
+    it('should have role="listitem" and tabIndex=0 on category items', () => {
+      const categories = [
+        createMockCategory({ id: 'cat-1' }),
+        createMockCategory({ id: 'cat-2' }),
+      ];
+
+      render(
+        <BudgetCategoryManager
+          budgetId="budget-1"
+          categories={categories}
+          totalIncome={3000}
+          onAddCategory={mockOnAddCategory}
+          onUpdateCategory={mockOnUpdateCategory}
+          onDeleteCategory={mockOnDeleteCategory}
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      );
+
+      const items = screen.getAllByRole('listitem');
+      expect(items).toHaveLength(2);
+      items.forEach((item) => {
+        expect(item).toHaveAttribute('tabindex', '0');
+      });
+    });
+
+    it('should move focus to next item on ArrowDown', async () => {
+      const user = userEvent.setup({ delay: null });
+      const categories = [
+        createMockCategory({ id: 'cat-1' }),
+        createMockCategory({ id: 'cat-2' }),
+        createMockCategory({ id: 'cat-3' }),
+      ];
+
+      render(
+        <BudgetCategoryManager
+          budgetId="budget-1"
+          categories={categories}
+          totalIncome={3000}
+          onAddCategory={mockOnAddCategory}
+          onUpdateCategory={mockOnUpdateCategory}
+          onDeleteCategory={mockOnDeleteCategory}
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      );
+
+      const items = screen.getAllByRole('listitem');
+
+      // Focus first item and press ArrowDown
+      items[0].focus();
+      expect(document.activeElement).toBe(items[0]);
+
+      await user.keyboard('{ArrowDown}');
+      expect(document.activeElement).toBe(items[1]);
+
+      await user.keyboard('{ArrowDown}');
+      expect(document.activeElement).toBe(items[2]);
+    });
+
+    it('should move focus to previous item on ArrowUp', async () => {
+      const user = userEvent.setup({ delay: null });
+      const categories = [
+        createMockCategory({ id: 'cat-1' }),
+        createMockCategory({ id: 'cat-2' }),
+        createMockCategory({ id: 'cat-3' }),
+      ];
+
+      render(
+        <BudgetCategoryManager
+          budgetId="budget-1"
+          categories={categories}
+          totalIncome={3000}
+          onAddCategory={mockOnAddCategory}
+          onUpdateCategory={mockOnUpdateCategory}
+          onDeleteCategory={mockOnDeleteCategory}
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      );
+
+      const items = screen.getAllByRole('listitem');
+
+      // Focus last item and press ArrowUp
+      items[2].focus();
+      expect(document.activeElement).toBe(items[2]);
+
+      await user.keyboard('{ArrowUp}');
+      expect(document.activeElement).toBe(items[1]);
+
+      await user.keyboard('{ArrowUp}');
+      expect(document.activeElement).toBe(items[0]);
+    });
+
+    it('should open edit dialog on Enter key', async () => {
+      const user = userEvent.setup({ delay: null });
+      const categories = [createMockCategory({ id: 'cat-1' })];
+
+      render(
+        <BudgetCategoryManager
+          budgetId="budget-1"
+          categories={categories}
+          totalIncome={3000}
+          onAddCategory={mockOnAddCategory}
+          onUpdateCategory={mockOnUpdateCategory}
+          onDeleteCategory={mockOnDeleteCategory}
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      );
+
+      const items = screen.getAllByRole('listitem');
+      items[0].focus();
+
+      await user.keyboard('{Enter}');
+
+      await waitFor(() => {
+        expect(screen.getByTestId('category-form-dialog')).toBeInTheDocument();
+        expect(screen.getByTestId('form-mode')).toHaveTextContent('edit');
+      });
+    });
+
+    it('should open edit dialog on Space key', async () => {
+      const user = userEvent.setup({ delay: null });
+      const categories = [createMockCategory({ id: 'cat-1' })];
+
+      render(
+        <BudgetCategoryManager
+          budgetId="budget-1"
+          categories={categories}
+          totalIncome={3000}
+          onAddCategory={mockOnAddCategory}
+          onUpdateCategory={mockOnUpdateCategory}
+          onDeleteCategory={mockOnDeleteCategory}
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      );
+
+      const items = screen.getAllByRole('listitem');
+      items[0].focus();
+
+      await user.keyboard(' ');
+
+      await waitFor(() => {
+        expect(screen.getByTestId('category-form-dialog')).toBeInTheDocument();
+        expect(screen.getByTestId('form-mode')).toHaveTextContent('edit');
+      });
+    });
+
+    it('should open delete dialog on Delete key', async () => {
+      const user = userEvent.setup({ delay: null });
+      const categories = [createMockCategory({ id: 'cat-1' })];
+
+      render(
+        <BudgetCategoryManager
+          budgetId="budget-1"
+          categories={categories}
+          totalIncome={3000}
+          onAddCategory={mockOnAddCategory}
+          onUpdateCategory={mockOnUpdateCategory}
+          onDeleteCategory={mockOnDeleteCategory}
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      );
+
+      const items = screen.getAllByRole('listitem');
+      items[0].focus();
+
+      await user.keyboard('{Delete}');
+
+      await waitFor(() => {
+        expect(screen.getByText(/confirm.*delete/i)).toBeInTheDocument();
+      });
+    });
+
+    it('should not navigate past first item on ArrowUp', async () => {
+      const user = userEvent.setup({ delay: null });
+      const categories = [
+        createMockCategory({ id: 'cat-1' }),
+        createMockCategory({ id: 'cat-2' }),
+      ];
+
+      render(
+        <BudgetCategoryManager
+          budgetId="budget-1"
+          categories={categories}
+          totalIncome={3000}
+          onAddCategory={mockOnAddCategory}
+          onUpdateCategory={mockOnUpdateCategory}
+          onDeleteCategory={mockOnDeleteCategory}
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      );
+
+      const items = screen.getAllByRole('listitem');
+
+      // Focus first item and try to go up
+      items[0].focus();
+      await user.keyboard('{ArrowUp}');
+
+      // Focus should stay on first item
+      expect(document.activeElement).toBe(items[0]);
+    });
+
+    it('should not navigate past last item on ArrowDown', async () => {
+      const user = userEvent.setup({ delay: null });
+      const categories = [
+        createMockCategory({ id: 'cat-1' }),
+        createMockCategory({ id: 'cat-2' }),
+      ];
+
+      render(
+        <BudgetCategoryManager
+          budgetId="budget-1"
+          categories={categories}
+          totalIncome={3000}
+          onAddCategory={mockOnAddCategory}
+          onUpdateCategory={mockOnUpdateCategory}
+          onDeleteCategory={mockOnDeleteCategory}
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      );
+
+      const items = screen.getAllByRole('listitem');
+
+      // Focus last item and try to go down
+      items[1].focus();
+      await user.keyboard('{ArrowDown}');
+
+      // Focus should stay on last item
+      expect(document.activeElement).toBe(items[1]);
+    });
+  });
 });

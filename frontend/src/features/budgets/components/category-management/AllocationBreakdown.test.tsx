@@ -102,7 +102,9 @@ describe('AllocationBreakdown', () => {
         />
       );
 
-      expect(screen.getByText(/unallocated/i)).toBeInTheDocument();
+      // Unallocated now appears in multiple places (legend, stats section)
+      const unallocatedElements = screen.getAllByText(/unallocated/i);
+      expect(unallocatedElements.length).toBeGreaterThanOrEqual(1);
       expect(screen.getByText('$200.00')).toBeInTheDocument();
     });
   });
@@ -122,8 +124,9 @@ describe('AllocationBreakdown', () => {
         />
       );
 
-      // Should show warning for over-allocation
-      expect(screen.getByText(/over.*allocated/i)).toBeInTheDocument();
+      // Should show warning for over-allocation (appears in both warning div and live region)
+      const overAllocatedElements = screen.getAllByText(/over.*allocated/i);
+      expect(overAllocatedElements.length).toBeGreaterThanOrEqual(1);
     });
 
     it('should handle zero income gracefully', () => {
@@ -206,6 +209,75 @@ describe('AllocationBreakdown', () => {
 
       expect(screen.getByRole('img', { name: /allocation/i })).toBeInTheDocument();
     });
+
+    it('should have aria-live region for screen reader announcements', () => {
+      const categories = [
+        createMockCategory({ id: 'cat-1', allocated_amount: 750 }),
+      ];
+
+      render(
+        <AllocationBreakdown
+          categories={categories}
+          totalIncome={1000}
+          unallocated={250}
+        />
+      );
+
+      const liveRegion = screen.getByRole('status');
+      expect(liveRegion).toHaveAttribute('aria-live', 'polite');
+      expect(liveRegion).toHaveAttribute('aria-atomic', 'true');
+    });
+
+    it('should announce allocation percentage in live region', () => {
+      const categories = [
+        createMockCategory({ id: 'cat-1', allocated_amount: 750 }),
+      ];
+
+      render(
+        <AllocationBreakdown
+          categories={categories}
+          totalIncome={1000}
+          unallocated={250}
+        />
+      );
+
+      const liveRegion = screen.getByRole('status');
+      expect(liveRegion).toHaveTextContent(/75%.*allocated/i);
+    });
+
+    it('should announce over-allocated state in live region', () => {
+      const categories = [
+        createMockCategory({ id: 'cat-1', allocated_amount: 1500 }),
+      ];
+
+      render(
+        <AllocationBreakdown
+          categories={categories}
+          totalIncome={1000}
+          unallocated={-500}
+        />
+      );
+
+      const liveRegion = screen.getByRole('status');
+      expect(liveRegion).toHaveTextContent(/over-allocated/i);
+    });
+
+    it('should announce remaining funds in live region when not over-allocated', () => {
+      const categories = [
+        createMockCategory({ id: 'cat-1', allocated_amount: 600 }),
+      ];
+
+      render(
+        <AllocationBreakdown
+          categories={categories}
+          totalIncome={1000}
+          unallocated={400}
+        />
+      );
+
+      const liveRegion = screen.getByRole('status');
+      expect(liveRegion).toHaveTextContent(/\$400.*remaining/i);
+    });
   });
 
   describe('Visual Display', () => {
@@ -221,7 +293,7 @@ describe('AllocationBreakdown', () => {
       expect(screen.getByText(/total income.*\$2,?500/i)).toBeInTheDocument();
     });
 
-    it('should display percentage allocated', () => {
+    it('should display percentage allocated in header', () => {
       const categories = [
         createMockCategory({ id: 'cat-1', allocated_amount: 750 }),
       ];
@@ -234,8 +306,80 @@ describe('AllocationBreakdown', () => {
         />
       );
 
-      // Should show 75% allocated
-      expect(screen.getByText(/75%/)).toBeInTheDocument();
+      // Should show 75% allocated in the visible header
+      // Use getAllByText since it now appears in both header and live region
+      const percentageElements = screen.getAllByText(/75%.*allocated/i);
+      expect(percentageElements.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  describe('Allocation Display Fixes (Phase 5)', () => {
+    it('should show "Total Budget" label instead of "Total Income"', () => {
+      render(
+        <AllocationBreakdown
+          categories={[]}
+          totalIncome={3000}
+          unallocated={3000}
+        />
+      );
+
+      // Should show "Total Budget" terminology
+      expect(screen.getByText(/total budget/i)).toBeInTheDocument();
+    });
+
+    it('should show allocated amount and percentage', () => {
+      const categories = [
+        createMockCategory({ id: 'cat-1', allocated_amount: 600 }),
+        createMockCategory({ id: 'cat-2', allocated_amount: 400 }),
+      ];
+
+      render(
+        <AllocationBreakdown
+          categories={categories}
+          totalIncome={2000}
+          unallocated={1000}
+        />
+      );
+
+      // Should show allocated amount with percentage (appears in multiple places)
+      const allocatedElements = screen.getAllByText(/allocated.*\$1,?000/i);
+      expect(allocatedElements.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('should show unallocated amount prominently when not over-allocated', () => {
+      const categories = [
+        createMockCategory({ id: 'cat-1', allocated_amount: 500 }),
+      ];
+
+      render(
+        <AllocationBreakdown
+          categories={categories}
+          totalIncome={1000}
+          unallocated={500}
+        />
+      );
+
+      // Should show unallocated amount
+      const unallocatedElements = screen.getAllByText(/unallocated.*\$500/i);
+      expect(unallocatedElements.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('should show over-allocated warning with amount when over budget', () => {
+      const categories = [
+        createMockCategory({ id: 'cat-1', allocated_amount: 1200 }),
+      ];
+
+      render(
+        <AllocationBreakdown
+          categories={categories}
+          totalIncome={1000}
+          unallocated={-200}
+        />
+      );
+
+      // Should show over-allocated warning
+      const overElements = screen.getAllByText(/over-allocated.*\$200/i);
+      expect(overElements.length).toBeGreaterThanOrEqual(1);
     });
   });
 });
