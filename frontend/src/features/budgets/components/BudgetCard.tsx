@@ -6,6 +6,7 @@
  * TDD GREEN: Implementation to pass all tests.
  */
 
+import { Link } from 'react-router-dom';
 import { BudgetProgressBar } from './BudgetProgressBar';
 import { computeBudgetMetrics } from '../types';
 import type { Budget } from '../types';
@@ -121,6 +122,13 @@ export function BudgetCard({ budget, onEdit, onDelete }: BudgetCardProps) {
           {categoryCount} {categoryCount === 1 ? 'category' : 'categories'}
         </span>
       </div>
+
+      <Link
+        to={`/budgets/${budget.id}`}
+        className="budget-card__manage-link"
+      >
+        Manage Categories
+      </Link>
 
       {(onEdit || onDelete) && (
         <div className="budget-card__actions">
