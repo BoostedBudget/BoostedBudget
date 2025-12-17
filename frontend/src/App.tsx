@@ -23,7 +23,7 @@ import type { PrivacySettings as PrivacySettingsType } from './features/profile/
 import { PrivacyPolicy } from './legal/PrivacyPolicy'
 import { CancelDeletionPage } from './features/deletion/components/CancelDeletionPage'
 import { AutoCategorizationPageWrapper } from './features/auto-categorization/components/AutoCategorizationPageWrapper'
-import { BudgetsPage } from './features/budgets'
+import { BudgetsPage, BudgetDetailPage } from './features/budgets'
 import './App.css'
 
 interface HealthCheck {
@@ -246,6 +246,14 @@ function App() {
               element={
                 <ProtectedRoute>
                   <BudgetsPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/budgets/:budgetId"
+              element={
+                <ProtectedRoute>
+                  <BudgetDetailPage />
                 </ProtectedRoute>
               }
             />

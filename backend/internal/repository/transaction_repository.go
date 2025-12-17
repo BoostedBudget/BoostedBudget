@@ -102,6 +102,18 @@ type TransactionRepository interface {
 	//   - or: Match transactions where EITHER category OR tags match
 	// Checks both category and category_override fields for category matching.
 	GetSpentSumForBudgetCategory(ctx context.Context, userID string, category []string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (float64, error)
+
+	// Issue #497: Category Preview Feature
+
+	// GetMatchingTransactionStats returns the count and sum of expenses (negative amount) transactions
+	// matching the given categories and/or tags based on match logic.
+	// Supports multiple categories (OR across categories) and four match logic types:
+	//   - category_only: Match transactions where category contains ANY of the provided categories
+	//   - tag_only: Match transactions where tags contain ANY of the budget tags
+	//   - and: Match transactions where BOTH category AND tags match
+	//   - or: Match transactions where EITHER category OR tags match
+	// Used for previewing how many transactions would match a budget category configuration.
+	GetMatchingTransactionStats(ctx context.Context, userID string, categories [][]string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (count int, totalAmount float64, err error)
 }
 
 // transactionRepository implements TransactionRepository using PostgreSQL
@@ -965,4 +977,114 @@ func (r *transactionRepository) GetSpentSumForBudgetCategory(ctx context.Context
 	}
 
 	return sum, nil
+}
+
+// GetMatchingTransactionStats returns the count and sum of expenses (negative amount) transactions
+// matching the given categories and/or tags based on match logic.
+// Issue #497: Transaction preview feature
+func (r *transactionRepository) GetMatchingTransactionStats(ctx context.Context, userID string, categories [][]string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (int, float64, error) {
+	// Default to category_only if empty
+	if matchLogic == "" {
+		matchLogic = domain.MatchLogicCategoryOnly
+	}
+
+	// Build query based on match logic
+	var query string
+	var args []interface{}
+
+	switch matchLogic {
+	case domain.MatchLogicCategoryOnly:
+		// Build OR clause for multiple categories
+		categoryConditions, categoryArgs := r.buildCategoryConditions(categories)
+		query = `
+			SELECT COUNT(*), COALESCE(ABS(SUM(amount)), 0)
+			FROM transactions
+			WHERE user_id = $1 AND amount < 0
+			  AND date BETWEEN $2 AND $3
+			  AND (` + categoryConditions + `)
+		`
+		args = append([]interface{}{userID, startDate, endDate}, categoryArgs...)
+
+	case domain.MatchLogicTagOnly:
+		query = `
+			SELECT COUNT(*), COALESCE(ABS(SUM(amount)), 0)
+			FROM transactions
+			WHERE user_id = $1 AND amount < 0
+			  AND date BETWEEN $2 AND $3
+			  AND tags ?| $4
+		`
+		args = []interface{}{userID, startDate, endDate, pq.Array(tags)}
+
+	case domain.MatchLogicAnd:
+		// Build OR clause for multiple categories
+		categoryConditions, categoryArgs := r.buildCategoryConditions(categories)
+		nextArgNum := 4 + len(categoryArgs)
+		query = fmt.Sprintf(`
+			SELECT COUNT(*), COALESCE(ABS(SUM(amount)), 0)
+			FROM transactions
+			WHERE user_id = $1 AND amount < 0
+			  AND date BETWEEN $2 AND $3
+			  AND (%s)
+			  AND tags ?| $%d
+		`, categoryConditions, nextArgNum)
+		args = append([]interface{}{userID, startDate, endDate}, categoryArgs...)
+		args = append(args, pq.Array(tags))
+
+	case domain.MatchLogicOr:
+		// Build OR clause for multiple categories
+		categoryConditions, categoryArgs := r.buildCategoryConditions(categories)
+		nextArgNum := 4 + len(categoryArgs)
+		query = fmt.Sprintf(`
+			SELECT COUNT(*), COALESCE(ABS(SUM(amount)), 0)
+			FROM transactions
+			WHERE user_id = $1 AND amount < 0
+			  AND date BETWEEN $2 AND $3
+			  AND (
+				(%s)
+				OR tags ?| $%d
+			  )
+		`, categoryConditions, nextArgNum)
+		args = append([]interface{}{userID, startDate, endDate}, categoryArgs...)
+		args = append(args, pq.Array(tags))
+
+	default:
+		return 0, 0, fmt.Errorf("unsupported match logic: %s", matchLogic)
+	}
+
+	var count int
+	var sum float64
+	err := r.db.QueryRowContext(ctx, query, args...).Scan(&count, &sum)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to get matching transaction stats: %w", err)
+	}
+
+	return count, sum, nil
+}
+
+// buildCategoryConditions builds SQL OR conditions for multiple categories
+// Returns the condition string and the arguments for the query
+func (r *transactionRepository) buildCategoryConditions(categories [][]string) (string, []interface{}) {
+	if len(categories) == 0 {
+		return "1=0", nil // No categories means no matches
+	}
+
+	var conditions []string
+	var args []interface{}
+	argNum := 4 // Start after $1, $2, $3 (userID, startDate, endDate)
+
+	for _, category := range categories {
+		categoryJSON, err := json.Marshal(category)
+		if err != nil {
+			continue // Skip invalid categories
+		}
+		conditions = append(conditions, fmt.Sprintf("(category @> $%d::jsonb OR category_override @> $%d::jsonb)", argNum, argNum))
+		args = append(args, string(categoryJSON))
+		argNum++
+	}
+
+	if len(conditions) == 0 {
+		return "1=0", nil
+	}
+
+	return strings.Join(conditions, " OR "), args
 }
