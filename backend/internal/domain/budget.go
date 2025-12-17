@@ -354,6 +354,23 @@ type UpdateBudgetCategoryRequest struct {
 	MatchLogic *MatchLogic `json:"match_logic,omitempty"`
 }
 
+// CategoryPreviewRequest represents the request to preview matching transactions for a category config.
+// Issue #497: Transaction preview feature
+type CategoryPreviewRequest struct {
+	Categories [][]string `json:"categories" validate:"required,min=1"`
+	Tags       []string   `json:"tags,omitempty"`
+	MatchLogic MatchLogic `json:"match_logic" validate:"required,oneof=category_only tag_only and or"`
+	StartDate  string     `json:"start_date" validate:"required"`
+	EndDate    string     `json:"end_date" validate:"required"`
+}
+
+// CategoryPreviewResponse represents the response with matching transaction stats.
+// Issue #497: Transaction preview feature
+type CategoryPreviewResponse struct {
+	TransactionCount int     `json:"transaction_count"`
+	TotalAmount      float64 `json:"total_amount"`
+}
+
 // Budget-related errors.
 var (
 	ErrBudgetNotFound         = errors.New("budget not found")

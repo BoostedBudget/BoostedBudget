@@ -70,6 +70,12 @@ export type {
   UseSavingsGoalsResult,
 } from './hooks/useSavingsGoals';
 
+export { useBudgetDetail } from './hooks/useBudgetDetail';
+export type { UseBudgetDetailResult } from './hooks/useBudgetDetail';
+
+export { useAvailableCategories } from './hooks/useAvailableCategories';
+export type { UseAvailableCategoriesResult } from './hooks/useAvailableCategories';
+
 // Components
 export { BudgetProgressBar } from './components/BudgetProgressBar';
 export type { BudgetProgressBarProps } from './components/BudgetProgressBar';
@@ -81,6 +87,8 @@ export { SavingsGoalCard } from './components/SavingsGoalCard';
 export type { SavingsGoalCardProps } from './components/SavingsGoalCard';
 
 export { BudgetsPage } from './components/BudgetsPage';
+
+export { BudgetDetailPage } from './components/BudgetDetailPage';
 
 export { CreateSavingsGoalDialog } from './components/CreateSavingsGoalDialog';
 export type { CreateSavingsGoalDialogProps } from './components/CreateSavingsGoalDialog';

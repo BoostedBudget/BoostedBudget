@@ -6,8 +6,23 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { BudgetCard } from './BudgetCard';
 import type { Budget } from '../types';
+
+/**
+ * Helper to render with router context
+ */
+function renderWithRouter(ui: React.ReactElement) {
+  return render(
+    <MemoryRouter initialEntries={['/budgets']}>
+      <Routes>
+        <Route path="/budgets" element={ui} />
+        <Route path="/budgets/:budgetId" element={<div data-testid="budget-detail-page">Budget Detail</div>} />
+      </Routes>
+    </MemoryRouter>
+  );
+}
 
 describe('BudgetCard', () => {
   const mockBudget: Budget = {
@@ -56,38 +71,38 @@ describe('BudgetCard', () => {
 
   describe('Rendering', () => {
     it('should render budget name', () => {
-      render(<BudgetCard budget={mockBudget} />);
+      renderWithRouter(<BudgetCard budget={mockBudget} />);
 
       expect(screen.getByText('Monthly Budget')).toBeInTheDocument();
     });
 
     it('should render budget description', () => {
-      render(<BudgetCard budget={mockBudget} />);
+      renderWithRouter(<BudgetCard budget={mockBudget} />);
 
       expect(screen.getByText('My monthly budget')).toBeInTheDocument();
     });
 
     it('should render budget period', () => {
-      render(<BudgetCard budget={mockBudget} />);
+      renderWithRouter(<BudgetCard budget={mockBudget} />);
 
       expect(screen.getByText('Monthly')).toBeInTheDocument();
     });
 
     it('should render budget amount', () => {
-      render(<BudgetCard budget={mockBudget} />);
+      renderWithRouter(<BudgetCard budget={mockBudget} />);
 
       expect(screen.getByText('$2,000.00')).toBeInTheDocument();
     });
 
     it('should show active badge when budget is active', () => {
-      render(<BudgetCard budget={mockBudget} />);
+      renderWithRouter(<BudgetCard budget={mockBudget} />);
 
       expect(screen.getByText('Active')).toBeInTheDocument();
     });
 
     it('should not show active badge when budget is inactive', () => {
       const inactiveBudget = { ...mockBudget, is_active: false };
-      render(<BudgetCard budget={inactiveBudget} />);
+      renderWithRouter(<BudgetCard budget={inactiveBudget} />);
 
       expect(screen.queryByText('Active')).not.toBeInTheDocument();
     });
@@ -95,21 +110,21 @@ describe('BudgetCard', () => {
 
   describe('Progress Display', () => {
     it('should show total spent amount', () => {
-      render(<BudgetCard budget={mockBudget} />);
+      renderWithRouter(<BudgetCard budget={mockBudget} />);
 
       // Total spent: 150 + 100 = 250
       expect(screen.getByText('$250.00')).toBeInTheDocument();
     });
 
     it('should show progress percentage', () => {
-      render(<BudgetCard budget={mockBudget} />);
+      renderWithRouter(<BudgetCard budget={mockBudget} />);
 
       // 250 / 2000 * 100 = 12.5%, rounded to 13%
       expect(screen.getByText('13%')).toBeInTheDocument();
     });
 
     it('should show remaining amount', () => {
-      render(<BudgetCard budget={mockBudget} />);
+      renderWithRouter(<BudgetCard budget={mockBudget} />);
 
       // 2000 - 250 = 1750
       expect(screen.getByText(/\$1,750\.00.*remaining/i)).toBeInTheDocument();
@@ -118,14 +133,14 @@ describe('BudgetCard', () => {
 
   describe('Categories', () => {
     it('should show category count', () => {
-      render(<BudgetCard budget={mockBudget} />);
+      renderWithRouter(<BudgetCard budget={mockBudget} />);
 
       expect(screen.getByText(/2 categories/i)).toBeInTheDocument();
     });
 
     it('should handle budget with no categories', () => {
       const budgetNoCategories = { ...mockBudget, categories: [] };
-      render(<BudgetCard budget={budgetNoCategories} />);
+      renderWithRouter(<BudgetCard budget={budgetNoCategories} />);
 
       expect(screen.getByText(/0 categories/i)).toBeInTheDocument();
     });
@@ -133,7 +148,7 @@ describe('BudgetCard', () => {
 
   describe('Date Display', () => {
     it('should show date range', () => {
-      render(<BudgetCard budget={mockBudget} />);
+      renderWithRouter(<BudgetCard budget={mockBudget} />);
 
       // Check that dates element exists (exact format depends on timezone)
       const datesElement = document.querySelector('.budget-card__dates');
@@ -145,7 +160,7 @@ describe('BudgetCard', () => {
   describe('Interactions', () => {
     it('should call onEdit when edit button is clicked', () => {
       const onEdit = vi.fn();
-      render(<BudgetCard budget={mockBudget} onEdit={onEdit} />);
+      renderWithRouter(<BudgetCard budget={mockBudget} onEdit={onEdit} />);
 
       const editButton = screen.getByRole('button', { name: /edit/i });
       fireEvent.click(editButton);
@@ -155,7 +170,7 @@ describe('BudgetCard', () => {
 
     it('should call onDelete when delete button is clicked', () => {
       const onDelete = vi.fn();
-      render(<BudgetCard budget={mockBudget} onDelete={onDelete} />);
+      renderWithRouter(<BudgetCard budget={mockBudget} onDelete={onDelete} />);
 
       const deleteButton = screen.getByRole('button', { name: /delete/i });
       fireEvent.click(deleteButton);
@@ -164,10 +179,29 @@ describe('BudgetCard', () => {
     });
 
     it('should not show action buttons when callbacks not provided', () => {
-      render(<BudgetCard budget={mockBudget} />);
+      renderWithRouter(<BudgetCard budget={mockBudget} />);
 
       expect(screen.queryByRole('button', { name: /edit/i })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /delete/i })).not.toBeInTheDocument();
+    });
+  });
+
+  describe('Navigation', () => {
+    it('should have a link to budget detail page', () => {
+      renderWithRouter(<BudgetCard budget={mockBudget} />);
+
+      const link = screen.getByRole('link', { name: /manage categories/i });
+      expect(link).toBeInTheDocument();
+      expect(link).toHaveAttribute('href', '/budgets/budget-1');
+    });
+
+    it('should navigate to budget detail when "Manage Categories" is clicked', async () => {
+      renderWithRouter(<BudgetCard budget={mockBudget} />);
+
+      const link = screen.getByRole('link', { name: /manage categories/i });
+      fireEvent.click(link);
+
+      expect(screen.getByTestId('budget-detail-page')).toBeInTheDocument();
     });
   });
 });

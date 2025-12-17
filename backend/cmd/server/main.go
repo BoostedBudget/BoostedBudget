@@ -308,6 +308,8 @@ func main() {
 		analyticsHandler := handlers.NewAnalyticsHandler(analyticsService)        // Issue #354: Cash flow analytics
 		dashboardPrefsHandler := handlers.NewDashboardPreferencesHandler(dashboardPrefsService) // Issue #354: Dashboard preferences
 		budgetHandler := handlers.NewBudgetHandler(budgetService, budgetSyncService) // Issue #28, #494: Budget management + sync
+		categoryPreviewService := services.NewCategoryPreviewService(transactionRepo) // Issue #497: Category preview
+		categoryPreviewHandler := handlers.NewCategoryPreviewHandler(categoryPreviewService) // Issue #497: Category preview
 		savingsGoalHandler := handlers.NewSavingsGoalHandler(savingsGoalService) // Issue #28: Savings goals
 
 		// Create admin handler (Issue #308: Admin API for Manual Webhook Firing)
@@ -387,6 +389,7 @@ func main() {
 		api.GET("/budgets", budgetHandler.GetBudgets)
 		api.GET("/budgets/current", budgetHandler.GetCurrentBudget)
 		api.GET("/budgets/categories/available", budgetHandler.GetAvailableCategories)
+		api.POST("/budgets/categories/preview", categoryPreviewHandler.PreviewCategoryMatches) // Issue #497: Category preview
 		api.GET("/budgets/:id", budgetHandler.GetBudget)
 		api.PUT("/budgets/:id", budgetHandler.UpdateBudget)
 		api.DELETE("/budgets/:id", budgetHandler.DeleteBudget)

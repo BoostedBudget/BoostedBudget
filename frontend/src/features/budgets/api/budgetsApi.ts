@@ -10,6 +10,7 @@ import type {
   CreateSavingsGoalRequest,
   UpdateSavingsGoalRequest,
 } from '../types';
+import type { MatchLogic } from '@/shared/types/matching';
 
 // Helper to convert YYYY-MM-DD date strings to RFC3339 format for Go backend
 // If already in RFC3339 format (contains 'T'), returns as-is
@@ -136,6 +137,51 @@ export async function updateSavingsGoal(
 
 export async function deleteSavingsGoal(id: string): Promise<void> {
   await apiClient.delete(`/v1/savings-goals/${id}`);
+}
+
+// =============================================================================
+// Issue #497: Category Preview API
+// =============================================================================
+
+/**
+ * Request type for category preview endpoint
+ */
+export interface CategoryPreviewRequest {
+  categories: string[][];
+  tags: string[];
+  match_logic: MatchLogic;
+  start_date: string;
+  end_date: string;
+}
+
+/**
+ * Response type for category preview endpoint
+ */
+export interface CategoryPreviewResponse {
+  transaction_count: number;
+  total_amount: number;
+}
+
+/**
+ * Preview how many transactions match a category configuration.
+ * Returns count and total amount of matching transactions.
+ *
+ * @param req - The preview request with categories, tags, match logic, and date range
+ * @returns Count and total amount of matching transactions
+ */
+export async function previewCategoryMatches(
+  req: CategoryPreviewRequest
+): Promise<CategoryPreviewResponse> {
+  const payload = {
+    ...req,
+    start_date: toRFC3339(req.start_date),
+    end_date: toRFC3339(req.end_date),
+  };
+  const response = await apiClient.post<CategoryPreviewResponse>(
+    '/v1/budgets/categories/preview',
+    payload
+  );
+  return response.data;
 }
 
 // =============================================================================

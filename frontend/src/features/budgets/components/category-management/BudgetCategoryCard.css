@@ -1,0 +1,197 @@
+/**
+ * BudgetCategoryCard Styles
+ * Issue #497: Budget Category Manager + Match Config UI
+ */
+
+.budget-category-card {
+  background-color: var(--color-bg-card, #ffffff);
+  border: 1px solid var(--color-border, #e5e7eb);
+  border-radius: 0.5rem;
+  padding: 1rem;
+  transition: box-shadow 0.2s ease;
+}
+
+.budget-category-card:hover {
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.budget-category-card--over-budget {
+  border-color: var(--color-danger, #ef4444);
+  background-color: rgba(239, 68, 68, 0.02);
+}
+
+/* Header */
+.budget-category-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.budget-category-card__title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--color-text-primary, #111827);
+  margin: 0;
+  line-height: 1.4;
+}
+
+.budget-category-card__badge {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--color-primary, #3b82f6);
+  background-color: var(--color-primary-bg, rgba(59, 130, 246, 0.1));
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Amounts */
+.budget-category-card__amounts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+}
+
+.budget-category-card__amount-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.budget-category-card__label {
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary, #6b7280);
+}
+
+.budget-category-card__value {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-text-primary, #111827);
+}
+
+.budget-category-card__value--over {
+  color: var(--color-danger, #ef4444);
+}
+
+/* Progress */
+.budget-category-card__progress {
+  margin-bottom: 0.75rem;
+}
+
+/* Tags */
+.budget-category-card__tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  margin-bottom: 0.75rem;
+}
+
+.budget-category-card__tags-label {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary, #6b7280);
+  margin-right: 0.25rem;
+}
+
+.budget-category-card__tags-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.budget-category-card__tag {
+  font-size: 0.6875rem;
+  color: var(--color-text-secondary, #6b7280);
+  background-color: var(--color-bg-secondary, #f3f4f6);
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+}
+
+/* Actions */
+.budget-category-card__actions {
+  display: flex;
+  gap: 0.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--color-border, #e5e7eb);
+}
+
+.budget-category-card__action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.375rem 0.625rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--color-text-secondary, #6b7280);
+  background-color: transparent;
+  border: 1px solid var(--color-border, #e5e7eb);
+  border-radius: 0.375rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.budget-category-card__action-btn:hover:not(:disabled) {
+  background-color: var(--color-bg-secondary, #f3f4f6);
+  color: var(--color-text-primary, #111827);
+}
+
+.budget-category-card__action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.budget-category-card__action-btn--delete:hover:not(:disabled) {
+  background-color: rgba(239, 68, 68, 0.05);
+  border-color: var(--color-danger, #ef4444);
+  color: var(--color-danger, #ef4444);
+}
+
+.budget-category-card__action-icon {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+/* Dark mode support */
+:global(.dark) .budget-category-card {
+  background-color: #1f2937;
+  border-color: #374151;
+}
+
+:global(.dark) .budget-category-card--over-budget {
+  background-color: rgba(239, 68, 68, 0.05);
+}
+
+:global(.dark) .budget-category-card__title {
+  color: #f9fafb;
+}
+
+:global(.dark) .budget-category-card__label {
+  color: #9ca3af;
+}
+
+:global(.dark) .budget-category-card__value {
+  color: #f9fafb;
+}
+
+:global(.dark) .budget-category-card__tag {
+  background-color: #374151;
+  color: #d1d5db;
+}
+
+:global(.dark) .budget-category-card__actions {
+  border-color: #374151;
+}
+
+:global(.dark) .budget-category-card__action-btn {
+  border-color: #374151;
+  color: #9ca3af;
+}
+
+:global(.dark) .budget-category-card__action-btn:hover:not(:disabled) {
+  background-color: #374151;
+  color: #f9fafb;
+}
