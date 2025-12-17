@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BudgetCategoryForm } from './BudgetCategoryForm';
 import type { BudgetCategory } from '../../types';
@@ -436,7 +436,15 @@ describe('BudgetCategoryForm', () => {
   describe('Submit Behavior', () => {
     it('should disable submit button while submitting', async () => {
       const user = userEvent.setup({ delay: null });
-      mockOnSubmit.mockImplementation(() => new Promise((resolve) => setTimeout(resolve, 100)));
+
+      // Use a deferred promise that doesn't auto-resolve to avoid timing issues in CI
+      let resolveSubmit: () => void;
+      mockOnSubmit.mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveSubmit = resolve;
+          })
+      );
 
       render(
         <BudgetCategoryForm
@@ -461,9 +469,14 @@ describe('BudgetCategoryForm', () => {
       const submitButton = screen.getByRole('button', { name: /save|add|create/i });
       await user.click(submitButton);
 
-      // Button should be disabled
+      // Button should be disabled while promise is pending
       await waitFor(() => {
         expect(submitButton).toBeDisabled();
+      });
+
+      // Clean up: resolve the promise to avoid hanging
+      await act(async () => {
+        resolveSubmit!();
       });
     });
 
