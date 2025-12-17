@@ -387,7 +387,7 @@ export function BudgetCategoryForm({
                     }`}
                     style={
                       formData.tags.includes(tag.name)
-                        ? { backgroundColor: tag.color, borderColor: tag.color }
+                        ? { backgroundColor: tag.color ?? undefined, borderColor: tag.color ?? undefined }
                         : undefined
                     }
                   >
