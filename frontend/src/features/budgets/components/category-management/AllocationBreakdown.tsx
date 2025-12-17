@@ -52,10 +52,11 @@ export function AllocationBreakdown({
   unallocated,
 }: AllocationBreakdownProps) {
   // Calculate totals
-  const { percentAllocated, isOverAllocated } = useMemo(() => {
+  const { totalAllocated, percentAllocated, isOverAllocated } = useMemo(() => {
     const total = categories.reduce((sum, cat) => sum + cat.allocated_amount, 0);
     const percent = totalIncome > 0 ? Math.round((total / totalIncome) * 100) : 0;
     return {
+      totalAllocated: total,
       percentAllocated: percent,
       isOverAllocated: total > totalIncome,
     };
@@ -104,6 +105,20 @@ export function AllocationBreakdown({
 
   return (
     <div className="allocation-breakdown">
+      {/* Screen reader live region (Phase 4 Accessibility) */}
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+      >
+        {`${percentAllocated}% of budget allocated. ${
+          isOverAllocated
+            ? `Over-allocated by ${formatCurrency(Math.abs(unallocated))}`
+            : `${formatCurrency(unallocated)} remaining`
+        }`}
+      </div>
+
       {/* Header with summary */}
       <div className="allocation-breakdown__header">
         <span className="allocation-breakdown__label">Allocation Overview</span>
@@ -179,9 +194,25 @@ export function AllocationBreakdown({
         )}
       </div>
 
-      {/* Total summary */}
+      {/* Total summary (Phase 5: Updated terminology and display) */}
       <div className="allocation-breakdown__total">
-        <span>Total Income: {formatCurrency(totalIncome)}</span>
+        <div className="allocation-breakdown__summary">
+          <span className="allocation-breakdown__total-label">
+            Total Budget: {formatCurrency(totalIncome)}
+          </span>
+          <div className="allocation-breakdown__stats">
+            <span>Allocated: {formatCurrency(totalAllocated)} ({percentAllocated}%)</span>
+            <span className="allocation-breakdown__divider">|</span>
+            <span className={isOverAllocated ? 'allocation-breakdown__over' : ''}>
+              {isOverAllocated
+                ? `Over-allocated: ${formatCurrency(Math.abs(unallocated))}`
+                : `Unallocated: ${formatCurrency(unallocated)} (${100 - percentAllocated}%)`
+              }
+            </span>
+          </div>
+        </div>
+        {/* Keep legacy for backwards compatibility */}
+        <span className="sr-only">Total Income: {formatCurrency(totalIncome)}</span>
       </div>
     </div>
   );

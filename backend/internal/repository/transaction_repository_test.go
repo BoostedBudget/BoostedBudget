@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lib/pq"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1524,6 +1525,247 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_HierarchicalCategory
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, category, tags, matchLogic, startDate, endDate)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedSum, sum)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// =============================================================================
+// Issue #497: GetMatchingTransactionStats Tests (Preview Feature)
+// =============================================================================
+
+// TestTransactionRepository_GetMatchingTransactionStats_SingleCategory tests
+// preview with a single category using category_only match logic
+func TestTransactionRepository_GetMatchingTransactionStats_SingleCategory(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-123"
+	categories := [][]string{{"Food and Drink", "Restaurants"}}
+	tags := []string{}
+	matchLogic := domain.MatchLogicCategoryOnly
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+	expectedCount := 5
+	expectedSum := 250.00
+
+	rows := sqlmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
+
+	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
+		WithArgs(userID, startDate, endDate, `["Food and Drink","Restaurants"]`).
+		WillReturnRows(rows)
+
+	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, categories, tags, matchLogic, startDate, endDate)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedCount, count)
+	assert.Equal(t, expectedSum, sum)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetMatchingTransactionStats_MultipleCategories tests
+// preview with multiple categories (OR across categories)
+func TestTransactionRepository_GetMatchingTransactionStats_MultipleCategories(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-123"
+	categories := [][]string{
+		{"Food and Drink", "Restaurants"},
+		{"Food and Drink", "Groceries"},
+	}
+	tags := []string{}
+	matchLogic := domain.MatchLogicCategoryOnly
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+	expectedCount := 12
+	expectedSum := 650.00
+
+	rows := sqlmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
+
+	// Expect query with OR for multiple categories
+	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
+		WithArgs(userID, startDate, endDate, sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(rows)
+
+	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, categories, tags, matchLogic, startDate, endDate)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedCount, count)
+	assert.Equal(t, expectedSum, sum)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetMatchingTransactionStats_TagOnly tests
+// preview with tag_only match logic
+func TestTransactionRepository_GetMatchingTransactionStats_TagOnly(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-123"
+	categories := [][]string{}
+	tags := []string{"Essential", "groceries"}
+	matchLogic := domain.MatchLogicTagOnly
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+	expectedCount := 8
+	expectedSum := 400.00
+
+	rows := sqlmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
+
+	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
+		WithArgs(userID, startDate, endDate, pq.Array(tags)).
+		WillReturnRows(rows)
+
+	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, categories, tags, matchLogic, startDate, endDate)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedCount, count)
+	assert.Equal(t, expectedSum, sum)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetMatchingTransactionStats_And tests
+// preview with AND match logic (both category and tags must match)
+func TestTransactionRepository_GetMatchingTransactionStats_And(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-123"
+	categories := [][]string{{"Food and Drink", "Restaurants"}}
+	tags := []string{"Essential"}
+	matchLogic := domain.MatchLogicAnd
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+	expectedCount := 3
+	expectedSum := 150.00
+
+	rows := sqlmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
+
+	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
+		WithArgs(userID, startDate, endDate, `["Food and Drink","Restaurants"]`, pq.Array(tags)).
+		WillReturnRows(rows)
+
+	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, categories, tags, matchLogic, startDate, endDate)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedCount, count)
+	assert.Equal(t, expectedSum, sum)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetMatchingTransactionStats_Or tests
+// preview with OR match logic (either category or tags match)
+func TestTransactionRepository_GetMatchingTransactionStats_Or(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-123"
+	categories := [][]string{{"Food and Drink", "Restaurants"}}
+	tags := []string{"Essential"}
+	matchLogic := domain.MatchLogicOr
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+	expectedCount := 10
+	expectedSum := 500.00
+
+	rows := sqlmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
+
+	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
+		WithArgs(userID, startDate, endDate, `["Food and Drink","Restaurants"]`, pq.Array(tags)).
+		WillReturnRows(rows)
+
+	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, categories, tags, matchLogic, startDate, endDate)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedCount, count)
+	assert.Equal(t, expectedSum, sum)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetMatchingTransactionStats_NoMatches tests
+// that no matching transactions returns 0, 0
+func TestTransactionRepository_GetMatchingTransactionStats_NoMatches(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-123"
+	categories := [][]string{{"Nonexistent", "Category"}}
+	tags := []string{}
+	matchLogic := domain.MatchLogicCategoryOnly
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+
+	rows := sqlmock.NewRows([]string{"count", "sum"}).AddRow(0, 0)
+
+	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
+		WithArgs(userID, startDate, endDate, `["Nonexistent","Category"]`).
+		WillReturnRows(rows)
+
+	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, categories, tags, matchLogic, startDate, endDate)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count)
+	assert.Equal(t, 0.0, sum)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetMatchingTransactionStats_DBError tests
+// database error handling
+func TestTransactionRepository_GetMatchingTransactionStats_DBError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo := NewTransactionRepository(db)
+	ctx := context.Background()
+
+	userID := "user-123"
+	categories := [][]string{{"Food and Drink"}}
+	tags := []string{}
+	matchLogic := domain.MatchLogicCategoryOnly
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+
+	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
+		WithArgs(userID, startDate, endDate, `["Food and Drink"]`).
+		WillReturnError(sql.ErrConnDone)
+
+	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, categories, tags, matchLogic, startDate, endDate)
+	assert.Error(t, err)
+	assert.Equal(t, 0, count)
+	assert.Equal(t, 0.0, sum)
+	assert.Contains(t, err.Error(), "failed to get matching transaction stats")
 
 	err = mock.ExpectationsWereMet()
 	assert.NoError(t, err)

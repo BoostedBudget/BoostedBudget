@@ -6,7 +6,7 @@
  * Includes add/edit form dialog, delete confirmation, and allocation breakdown.
  */
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useRef } from 'react';
 import { PlusIcon } from 'lucide-react';
 import {
   Dialog,
@@ -81,6 +81,9 @@ export function BudgetCategoryManager({
   });
 
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Refs for keyboard navigation (Phase 4 Accessibility)
+  const categoryRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   // Calculate unallocated funds
   const unallocatedFunds = useMemo(() => {
@@ -162,6 +165,36 @@ export function BudgetCategoryManager({
     }
   }, [deleteDialog.category, onDeleteCategory, handleCloseDeleteDialog]);
 
+  // Keyboard navigation handler (Phase 4 Accessibility)
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent, index: number, category: BudgetCategory) => {
+      switch (e.key) {
+        case 'ArrowDown':
+          e.preventDefault();
+          if (index < categories.length - 1) {
+            categoryRefs.current[index + 1]?.focus();
+          }
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          if (index > 0) {
+            categoryRefs.current[index - 1]?.focus();
+          }
+          break;
+        case 'Enter':
+        case ' ':
+          e.preventDefault();
+          handleOpenEditForm(category);
+          break;
+        case 'Delete':
+          e.preventDefault();
+          handleOpenDeleteDialog(category);
+          break;
+      }
+    },
+    [categories.length, handleOpenEditForm, handleOpenDeleteDialog]
+  );
+
   const hasCategories = categories.length > 0;
 
   return (
@@ -192,14 +225,24 @@ export function BudgetCategoryManager({
       {/* Categories list or empty state */}
       {hasCategories ? (
         <div className="budget-category-manager__list" role="list">
-          {categories.map((category) => (
-            <BudgetCategoryCard
+          {categories.map((category, index) => (
+            <div
               key={category.id}
-              category={category}
-              onEdit={() => handleOpenEditForm(category)}
-              onDelete={() => handleOpenDeleteDialog(category)}
-              disabled={disabled}
-            />
+              role="listitem"
+              tabIndex={0}
+              onKeyDown={(e) => handleKeyDown(e, index, category)}
+              ref={(el) => {
+                categoryRefs.current[index] = el;
+              }}
+              className="budget-category-manager__list-item"
+            >
+              <BudgetCategoryCard
+                category={category}
+                onEdit={() => handleOpenEditForm(category)}
+                onDelete={() => handleOpenDeleteDialog(category)}
+                disabled={disabled}
+              />
+            </div>
           ))}
         </div>
       ) : (

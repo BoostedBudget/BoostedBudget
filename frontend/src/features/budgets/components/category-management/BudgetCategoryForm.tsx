@@ -7,7 +7,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { XIcon } from 'lucide-react';
+import { XIcon, Loader2Icon } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -20,6 +20,7 @@ import type { MatchLogic } from '@/shared/types/matching';
 import { DEFAULT_MATCH_LOGIC } from '@/shared/types/matching';
 import type { UserTag } from '@/features/tags/types';
 import { CategoryMatchConfig } from './CategoryMatchConfig';
+import { usePreviewCategories } from '../../hooks/usePreviewCategories';
 import './BudgetCategoryForm.css';
 
 export interface BudgetCategoryFormProps {
@@ -39,6 +40,10 @@ export interface BudgetCategoryFormProps {
   availableTags: UserTag[];
   /** Categories already used in this budget (to filter from dropdown) */
   existingCategories?: string[][];
+  /** Budget start date for preview (YYYY-MM-DD) */
+  budgetStartDate?: string;
+  /** Budget end date for preview (YYYY-MM-DD) */
+  budgetEndDate?: string;
 }
 
 interface FormData {
@@ -69,6 +74,8 @@ export function BudgetCategoryForm({
   initialData,
   availableCategories,
   availableTags,
+  budgetStartDate,
+  budgetEndDate,
 }: BudgetCategoryFormProps) {
   const [formData, setFormData] = useState<FormData>(initialFormData);
   const [errors, setErrors] = useState<FormErrors>({});
@@ -106,6 +113,32 @@ export function BudgetCategoryForm({
   const showTagPicker = useMemo(() => {
     return formData.match_logic !== 'category_only';
   }, [formData.match_logic]);
+
+  // Issue #497: Category preview - show matching transaction count and total
+  const previewEnabled = useMemo(() => {
+    return isOpen && formData.category.length > 0 && !!budgetStartDate && !!budgetEndDate;
+  }, [isOpen, formData.category, budgetStartDate, budgetEndDate]);
+
+  const previewCategories = useMemo(() => {
+    return formData.category.length > 0 ? [formData.category] : [];
+  }, [formData.category]);
+
+  const { preview, loading: previewLoading, error: previewError } = usePreviewCategories(
+    previewCategories,
+    formData.tags,
+    formData.match_logic,
+    budgetStartDate || '',
+    budgetEndDate || '',
+    previewEnabled
+  );
+
+  // Format currency for preview display
+  const formatCurrency = (amount: number): string => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+    }).format(amount);
+  };
 
   const handleCategoryChange = useCallback(
     (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -367,6 +400,32 @@ export function BudgetCategoryForm({
                   {errors.tags}
                 </p>
               )}
+            </div>
+          )}
+
+          {/* Issue #497: Transaction Preview */}
+          {previewEnabled && (
+            <div
+              className="budget-category-form__preview p-3 rounded-lg bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-sm"
+              data-testid="category-preview"
+              role="status"
+              aria-live="polite"
+            >
+              {previewLoading ? (
+                <span className="flex items-center gap-2">
+                  <Loader2Icon className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  <span>Calculating matches...</span>
+                </span>
+              ) : previewError ? (
+                <span className="text-amber-600 dark:text-amber-400">
+                  Unable to load preview
+                </span>
+              ) : preview ? (
+                <span>
+                  Matches <strong>{preview.transaction_count}</strong> transaction{preview.transaction_count !== 1 ? 's' : ''} totaling{' '}
+                  <strong>{formatCurrency(preview.total_amount)}</strong>
+                </span>
+              ) : null}
             </div>
           )}
 

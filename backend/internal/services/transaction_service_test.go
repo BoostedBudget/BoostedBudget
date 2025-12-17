@@ -125,6 +125,11 @@ func (m *MockTransactionRepository) GetSpentSumForBudgetCategory(ctx context.Con
 	return args.Get(0).(float64), args.Error(1)
 }
 
+func (m *MockTransactionRepository) GetMatchingTransactionStats(ctx context.Context, userID string, categories [][]string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (int, float64, error) {
+	args := m.Called(ctx, userID, categories, tags, matchLogic, startDate, endDate)
+	return args.Int(0), args.Get(1).(float64), args.Error(2)
+}
+
 // TestTransactionService_ListTransactions_EnforcesMaxLimit tests that the service enforces a maximum limit of 100
 func TestTransactionService_ListTransactions_EnforcesMaxLimit(t *testing.T) {
 	mockRepo := new(MockTransactionRepository)
