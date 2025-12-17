@@ -50,23 +50,39 @@ jobs:
     steps:
       - name: Fetch PR information
         id: pr-info
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Fetching metadata for PR #${{ github.event.inputs.pr_number }}..."
 
-          PR_DATA=$(gh pr view ${{ github.event.inputs.pr_number }} --repo ${{ github.repository }} --json headRefOid,headRefName,title,author,state)
+          # Use curl + GitHub API instead of gh CLI (gh not available on self-hosted runners)
+          PR_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.inputs.pr_number }}")
 
-          PR_STATE=$(echo "$PR_DATA" | jq -r '.state')
-          if [ "$PR_STATE" = "MERGED" ] || [ "$PR_STATE" = "CLOSED" ]; then
-            echo "::error::PR #${{ github.event.inputs.pr_number }} is $PR_STATE. Can only deploy open PRs."
+          # Check for API errors
+          if echo "$PR_DATA" | jq -e '.message' > /dev/null 2>&1; then
+            echo "::error::Failed to fetch PR: $(echo "$PR_DATA" | jq -r '.message')"
             exit 1
           fi
 
-          HEAD_SHA=$(echo "$PR_DATA" | jq -r '.headRefOid')
-          HEAD_REF=$(echo "$PR_DATA" | jq -r '.headRefName')
+          # GitHub API returns state as lowercase: "open", "closed"
+          # and merged as boolean
+          PR_STATE=$(echo "$PR_DATA" | jq -r '.state')
+          PR_MERGED=$(echo "$PR_DATA" | jq -r '.merged')
+          if [ "$PR_MERGED" = "true" ]; then
+            echo "::error::PR #${{ github.event.inputs.pr_number }} is merged. Can only deploy open PRs."
+            exit 1
+          fi
+          if [ "$PR_STATE" = "closed" ]; then
+            echo "::error::PR #${{ github.event.inputs.pr_number }} is closed. Can only deploy open PRs."
+            exit 1
+          fi
+
+          # GitHub API field names differ from gh CLI:
+          # .head.sha (not .headRefOid), .head.ref (not .headRefName), .user.login (not .author.login)
+          HEAD_SHA=$(echo "$PR_DATA" | jq -r '.head.sha')
+          HEAD_REF=$(echo "$PR_DATA" | jq -r '.head.ref')
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
-          PR_AUTHOR=$(echo "$PR_DATA" | jq -r '.author.login')
+          PR_AUTHOR=$(echo "$PR_DATA" | jq -r '.user.login')
 
           echo "head_sha=${HEAD_SHA}" >> $GITHUB_OUTPUT
           echo "head_ref=${HEAD_REF}" >> $GITHUB_OUTPUT
@@ -687,21 +703,22 @@ jobs:
 
     steps:
       - name: Comment on PR
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG_PREFIX="${{ needs.build-images.outputs.tag_prefix }}"
           SHA="${{ needs.build-images.outputs.sha }}"
 
-          gh pr comment ${{ github.event.inputs.pr_number }} --repo ${{ github.repository }} --body "## 🚀 Staging Deployment Successful
+          # Use curl + GitHub API instead of gh CLI (gh not available on self-hosted runners)
+          # GitHub API uses /issues/{number}/comments endpoint for PR comments (PRs are a type of issue)
+          COMMENT_BODY=$(cat << 'EOF'
+          ## 🚀 Staging Deployment Successful
 
           This PR has been deployed to the staging environment for testing.
 
           | Field | Value |
           |-------|-------|
-          | **Version** | \`${TAG_PREFIX}-${SHA}\` |
-          | **Branch** | \`${{ needs.pr-metadata.outputs.head_ref }}\` |
-          | **Commit** | \`${SHA}\` |
+          | **Version** | `TAG_PREFIX_PLACEHOLDER-SHA_PLACEHOLDER` |
+          | **Branch** | `${{ needs.pr-metadata.outputs.head_ref }}` |
+          | **Commit** | `SHA_PLACEHOLDER` |
           | **Triggered by** | @${{ github.actor }} |
 
           ### Access URLs
@@ -712,6 +729,26 @@ jobs:
           [View deployment logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
           ---
-          *This is an automated comment from the staging deployment workflow.*"
+          *This is an automated comment from the staging deployment workflow.*
+          EOF
+          )
 
-          echo "::notice::✅ Comment added to PR #${{ github.event.inputs.pr_number }}"
+          # Replace placeholders with actual values
+          COMMENT_BODY="${COMMENT_BODY//TAG_PREFIX_PLACEHOLDER/$TAG_PREFIX}"
+          COMMENT_BODY="${COMMENT_BODY//SHA_PLACEHOLDER/$SHA}"
+
+          # Post comment via GitHub API
+          HTTP_STATUS=$(curl -s -o /tmp/comment_response.json -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.inputs.pr_number }}/comments" \
+            -d "$(jq -n --arg body "$COMMENT_BODY" '{body: $body}')")
+
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
+            echo "::notice::✅ Comment added to PR #${{ github.event.inputs.pr_number }}"
+          else
+            echo "::error::Failed to post comment. HTTP status: $HTTP_STATUS"
+            cat /tmp/comment_response.json
+            exit 1
+          fi
