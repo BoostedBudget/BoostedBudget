@@ -24,6 +24,7 @@ import { PrivacyPolicy } from './legal/PrivacyPolicy'
 import { CancelDeletionPage } from './features/deletion/components/CancelDeletionPage'
 import { AutoCategorizationPageWrapper } from './features/auto-categorization/components/AutoCategorizationPageWrapper'
 import { BudgetsPage, BudgetDetailPage } from './features/budgets'
+import { Toaster } from 'sonner'
 import './App.css'
 
 interface HealthCheck {
@@ -286,6 +287,9 @@ function App() {
 
         {/* Cookie Consent Banner */}
         <CookieConsent onConsentChange={handleConsentChange} />
+
+        {/* Toast Notifications - Issue #521 */}
+        <Toaster position="bottom-right" richColors />
       </div>
   )
 }
