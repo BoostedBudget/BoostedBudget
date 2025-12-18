@@ -307,7 +307,7 @@ func main() {
 		ruleHandler := handlers.NewCategorizationRuleHandler(categorizationRuleService) // Issue #346: Categorization rules
 		analyticsHandler := handlers.NewAnalyticsHandler(analyticsService)        // Issue #354: Cash flow analytics
 		dashboardPrefsHandler := handlers.NewDashboardPreferencesHandler(dashboardPrefsService) // Issue #354: Dashboard preferences
-		budgetHandler := handlers.NewBudgetHandler(budgetService, budgetSyncService) // Issue #28, #494: Budget management + sync
+		budgetHandler := handlers.NewBudgetHandler(budgetService, budgetSyncService, transactionRepo) // Issue #28, #494, #499: Budget management + sync + category transactions
 		categoryPreviewService := services.NewCategoryPreviewService(transactionRepo) // Issue #497: Category preview
 		categoryPreviewHandler := handlers.NewCategoryPreviewHandler(categoryPreviewService) // Issue #497: Category preview
 		savingsGoalHandler := handlers.NewSavingsGoalHandler(savingsGoalService) // Issue #28: Savings goals
@@ -397,6 +397,7 @@ func main() {
 		api.POST("/budgets/:id/categories", budgetHandler.AddCategory)
 		api.PUT("/budgets/:id/categories/:categoryId", budgetHandler.UpdateCategory)
 		api.DELETE("/budgets/:id/categories/:categoryId", budgetHandler.DeleteCategory)
+		api.GET("/budgets/:id/categories/:categoryId/transactions", budgetHandler.GetCategoryTransactions) // Issue #499: Category transactions
 
 		// Savings Goal routes (Issue #28: Savings goals)
 		api.POST("/savings-goals", savingsGoalHandler.CreateGoal)

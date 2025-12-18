@@ -1,22 +1,27 @@
 /**
  * BudgetCategoryCard
  * Issue #497: Budget Category Manager + Match Config UI
+ * Issue #499: Transaction-Budget Linking UI - Collapsible transactions
  *
  * Displays a single budget category with its allocation, spending, and match configuration.
  * Supports edit and delete actions.
+ * Optionally shows collapsible transaction list when budgetId is provided.
  */
 
-import { useMemo } from 'react';
-import { PencilIcon, TrashIcon } from 'lucide-react';
+import { useState, useMemo } from 'react';
+import { PencilIcon, TrashIcon, ChevronDownIcon, ChevronUpIcon } from 'lucide-react';
 import type { BudgetCategory } from '../../types';
 import { formatCategoryPath } from '../../types';
 import { MATCH_LOGIC_LABELS } from '@/shared/types/matching';
 import { BudgetProgressBar } from '../BudgetProgressBar';
+import { BudgetTransactionList } from '../transaction-link/BudgetTransactionList';
 import './BudgetCategoryCard.css';
 
 export interface BudgetCategoryCardProps {
   /** The budget category to display */
   category: BudgetCategory;
+  /** Budget ID for fetching transactions (enables collapsible transactions when provided) */
+  budgetId?: string;
   /** Callback when edit button is clicked */
   onEdit?: () => void;
   /** Callback when delete button is clicked */
@@ -37,10 +42,13 @@ function formatCurrency(amount: number): string {
 
 export function BudgetCategoryCard({
   category,
+  budgetId,
   onEdit,
   onDelete,
   disabled = false,
 }: BudgetCategoryCardProps) {
+  const [isTransactionsExpanded, setIsTransactionsExpanded] = useState(false);
+
   const categoryPath = useMemo(
     () => formatCategoryPath(category.category),
     [category.category]
@@ -49,6 +57,7 @@ export function BudgetCategoryCard({
   const isOverBudget = category.spent_amount > category.allocated_amount;
   const hasTags = category.tags && category.tags.length > 0;
   const matchLogicLabel = MATCH_LOGIC_LABELS[category.match_logic];
+  const showTransactionsToggle = !!budgetId;
 
   return (
     <article
@@ -102,7 +111,7 @@ export function BudgetCategoryCard({
       )}
 
       {/* Actions */}
-      {(onEdit || onDelete) && (
+      {(onEdit || onDelete || showTransactionsToggle) && (
         <div className="budget-category-card__actions">
           {onEdit && (
             <button
@@ -128,6 +137,34 @@ export function BudgetCategoryCard({
               Delete
             </button>
           )}
+          {showTransactionsToggle && (
+            <button
+              type="button"
+              className="budget-category-card__action-btn budget-category-card__action-btn--transactions"
+              onClick={() => setIsTransactionsExpanded(!isTransactionsExpanded)}
+              aria-expanded={isTransactionsExpanded}
+              aria-label={isTransactionsExpanded ? `Hide transactions for ${categoryPath}` : `View transactions for ${categoryPath}`}
+            >
+              {isTransactionsExpanded ? (
+                <>
+                  <ChevronUpIcon className="budget-category-card__action-icon" />
+                  Hide Transactions
+                </>
+              ) : (
+                <>
+                  <ChevronDownIcon className="budget-category-card__action-icon" />
+                  View Transactions
+                </>
+              )}
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Collapsible Transactions List */}
+      {showTransactionsToggle && isTransactionsExpanded && budgetId && (
+        <div className="budget-category-card__transactions">
+          <BudgetTransactionList budgetId={budgetId} categoryId={category.id} />
         </div>
       )}
     </article>

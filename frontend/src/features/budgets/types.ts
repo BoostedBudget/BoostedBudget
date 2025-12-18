@@ -194,3 +194,20 @@ export function computeSavingsRemaining(goal: SavingsGoal): number {
 export function formatCategoryPath(category: string[]): string {
   return category.join(' > ');
 }
+
+// =============================================================================
+// Issue #499: Transaction-Budget Linking UI
+// =============================================================================
+
+import type { Transaction } from '../../transactions/types';
+
+/**
+ * Response type for GET /budgets/:id/categories/:categoryId/transactions
+ * Returns paginated transactions matching a budget category
+ */
+export interface CategoryTransactionsResponse {
+  transactions: Transaction[];
+  total_count: number;
+  total_amount: number;
+  has_more: boolean;
+}
