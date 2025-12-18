@@ -104,3 +104,10 @@ export type { UseMilestoneTrackingResult } from './hooks/useMilestoneTracking';
 
 export { GOAL_TEMPLATES, getGoalTemplate, calculateDeadlineFromTemplate } from './goalTemplates';
 export type { GoalTemplate } from './goalTemplates';
+
+// Issue #498: Budget Detail Components
+export { BudgetIncomeSection } from './components/budget-detail/BudgetIncomeSection';
+export type { BudgetIncomeSectionProps } from './components/budget-detail/BudgetIncomeSection';
+
+export { UnallocatedFundsCard } from './components/budget-detail/UnallocatedFundsCard';
+export type { UnallocatedFundsCardProps } from './components/budget-detail/UnallocatedFundsCard';
