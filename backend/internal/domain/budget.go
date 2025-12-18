@@ -371,6 +371,15 @@ type CategoryPreviewResponse struct {
 	TotalAmount      float64 `json:"total_amount"`
 }
 
+// CategoryTransactionsResponse represents the paginated response with transactions matching a budget category.
+// Issue #499: Transaction-Budget Linking UI
+type CategoryTransactionsResponse struct {
+	Transactions []*Transaction `json:"transactions"`
+	TotalCount   int            `json:"total_count"`
+	TotalAmount  float64        `json:"total_amount"`
+	HasMore      bool           `json:"has_more"`
+}
+
 // Budget-related errors.
 var (
 	ErrBudgetNotFound         = errors.New("budget not found")

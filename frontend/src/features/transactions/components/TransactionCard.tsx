@@ -1,9 +1,13 @@
 import type { Transaction, CategorySource } from '../types'
+import { TransactionBudgetBadge } from '../../budgets/components/transaction-link'
+import type { BudgetCategoryMatch } from '../../budgets/utils/transactionBudgetMatcher'
 import './TransactionCard.css'
 
 interface TransactionCardProps {
   transaction: Transaction
   onEdit?: (transaction: Transaction) => void
+  /** Issue #499: Budget category match for displaying budget badge */
+  budgetMatch?: BudgetCategoryMatch | null
 }
 
 /**
@@ -144,7 +148,7 @@ function formatDate(dateStr: string | null | undefined): string {
   }).format(transactionDate)
 }
 
-export function TransactionCard({ transaction, onEdit }: TransactionCardProps) {
+export function TransactionCard({ transaction, onEdit, budgetMatch }: TransactionCardProps) {
   const {
     id,
     name,
@@ -218,6 +222,7 @@ export function TransactionCard({ transaction, onEdit }: TransactionCardProps) {
         <div className="transaction-card__info">
           <div className="transaction-card__name">{displayName}</div>
           <div className="transaction-card__meta">
+            <TransactionBudgetBadge match={budgetMatch} />
             <span className="transaction-card__category">
               {showUncategorizedWarning && (
                 <span className="transaction-card__uncategorized-warning" title="Uncategorized">⚠️</span>

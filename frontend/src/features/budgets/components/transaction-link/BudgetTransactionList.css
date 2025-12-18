@@ -1,0 +1,135 @@
+/**
+ * BudgetTransactionList Styles
+ * Issue #499: Transaction-Budget Linking UI
+ */
+
+.budget-transaction-list {
+  width: 100%;
+}
+
+/* Header */
+.budget-transaction-list__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--color-border, #e5e7eb);
+  margin-bottom: 0.5rem;
+}
+
+.budget-transaction-list__title {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-text, #1f2937);
+}
+
+.budget-transaction-list__total {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-text-secondary, #6b7280);
+}
+
+/* Transaction list */
+.budget-transaction-list__items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.budget-transaction-list__item {
+  border-bottom: 1px solid var(--color-border-light, #f3f4f6);
+}
+
+.budget-transaction-list__item:last-child {
+  border-bottom: none;
+}
+
+/* Footer with Load More */
+.budget-transaction-list__footer {
+  display: flex;
+  justify-content: center;
+  padding: 1rem 0;
+}
+
+.budget-transaction-list__load-more {
+  padding: 0.5rem 1.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-primary, #3b82f6);
+  background-color: transparent;
+  border: 1px solid var(--color-primary, #3b82f6);
+  border-radius: 0.375rem;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.budget-transaction-list__load-more:hover:not(:disabled) {
+  background-color: var(--color-primary, #3b82f6);
+  color: white;
+}
+
+.budget-transaction-list__load-more:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Loading state */
+.budget-transaction-list--loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 2rem;
+  color: var(--color-text-secondary, #6b7280);
+}
+
+.budget-transaction-list__spinner {
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid var(--color-border, #e5e7eb);
+  border-top-color: var(--color-primary, #3b82f6);
+  border-radius: 50%;
+  animation: budget-transaction-list-spin 0.6s linear infinite;
+}
+
+@keyframes budget-transaction-list-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Empty state */
+.budget-transaction-list--empty {
+  padding: 2rem;
+  text-align: center;
+  color: var(--color-text-secondary, #6b7280);
+}
+
+/* Error state */
+.budget-transaction-list--error {
+  padding: 1.5rem;
+  text-align: center;
+}
+
+.budget-transaction-list__error-message {
+  margin: 0 0 1rem;
+  color: var(--color-error, #dc2626);
+}
+
+.budget-transaction-list__retry-button {
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-error, #dc2626);
+  background-color: transparent;
+  border: 1px solid var(--color-error, #dc2626);
+  border-radius: 0.375rem;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.budget-transaction-list__retry-button:hover {
+  background-color: var(--color-error, #dc2626);
+  color: white;
+}

@@ -150,9 +150,26 @@
   color: var(--color-danger, #ef4444);
 }
 
+.budget-category-card__action-btn--transactions {
+  margin-left: auto;
+}
+
+.budget-category-card__action-btn--transactions:hover:not(:disabled) {
+  background-color: rgba(59, 130, 246, 0.05);
+  border-color: var(--color-primary, #3b82f6);
+  color: var(--color-primary, #3b82f6);
+}
+
 .budget-category-card__action-icon {
   width: 0.875rem;
   height: 0.875rem;
+}
+
+/* Collapsible Transactions Section */
+.budget-category-card__transactions {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--color-border, #e5e7eb);
 }
 
 /* Dark mode support */
@@ -194,4 +211,8 @@
 :global(.dark) .budget-category-card__action-btn:hover:not(:disabled) {
   background-color: #374151;
   color: #f9fafb;
+}
+
+:global(.dark) .budget-category-card__transactions {
+  border-color: #374151;
 }

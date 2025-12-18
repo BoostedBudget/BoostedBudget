@@ -1358,6 +1358,63 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
 
+  # Issue #499: Transaction-Budget Linking UI
+  /api/v1/budgets/{id}/categories/{categoryId}/transactions:
+    get:
+      summary: Get Category Transactions
+      description: |
+        Retrieve paginated transactions matching a budget category.
+        Returns transactions that match the category's JSONB filter criteria
+        (categories, tags, and match logic) within the budget's date range.
+      operationId: getCategoryTransactions
+      tags:
+        - Budgets
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Budget ID
+          schema:
+            type: string
+            format: uuid
+        - name: categoryId
+          in: path
+          required: true
+          description: Category ID within the budget
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of transactions to return (1-100, default 20)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: offset
+          in: query
+          required: false
+          description: Number of transactions to skip (default 0)
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Transactions retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryTransactionsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Budget or category not found
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
   # Issue #29: Savings Goal Endpoints
   /api/v1/savings-goals:
     get:
@@ -2587,6 +2644,33 @@ components:
         updated_at:
           type: string
           format: date-time
+
+    # Issue #499: Transaction-Budget Linking UI
+    CategoryTransactionsResponse:
+      type: object
+      required:
+        - transactions
+        - total_count
+        - total_amount
+        - has_more
+      description: Paginated response for transactions matching a budget category
+      properties:
+        transactions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Transaction'
+          description: List of matching transactions
+        total_count:
+          type: integer
+          minimum: 0
+          description: Total number of matching transactions (not just this page)
+        total_amount:
+          type: number
+          format: double
+          description: Total amount of all matching transactions (absolute value sum)
+        has_more:
+          type: boolean
+          description: Whether more transactions are available for pagination
 
     CreateBudgetRequest:
       type: object
