@@ -1,12 +1,13 @@
 /**
  * BudgetDetailPage
  * Issue #497: Budget Category Manager + Match Config UI
+ * Issue #498: Budget Detail Page for Envelope Budgeting
  *
  * Page component for viewing and managing a single budget's details and categories.
  */
 
-import { useCallback } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useCallback, useMemo } from 'react';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { ArrowLeftIcon } from '@heroicons/react/24/outline';
 import { useBudgetDetail } from '../hooks/useBudgetDetail';
 import { useAvailableCategories } from '../hooks/useAvailableCategories';
@@ -22,6 +23,8 @@ import type {
   BudgetCategory,
 } from '../types';
 import { BudgetCategoryManager } from './category-management/BudgetCategoryManager';
+import { BudgetIncomeSection } from './budget-detail/BudgetIncomeSection';
+import { UnallocatedFundsCard } from './budget-detail/UnallocatedFundsCard';
 import './BudgetDetailPage.css';
 
 /**
@@ -54,9 +57,39 @@ function capitalize(str: string): string {
 
 export function BudgetDetailPage() {
   const { budgetId } = useParams<{ budgetId: string }>();
+  const navigate = useNavigate();
   const { budget, loading, error, refetch } = useBudgetDetail(budgetId || '');
   const { categories: availableCategories } = useAvailableCategories();
   const { tags: availableTags } = useTags();
+
+  // Issue #498: Calculate income and allocation metrics
+  const incomeMetrics = useMemo(() => {
+    if (!budget) return { expectedIncome: 0, actualIncome: 0, unallocated: 0, totalAllocated: 0 };
+
+    // Calculate expected income from manual income sources
+    const expectedIncome = (budget.income_sources || [])
+      .filter((src) => src.type === 'manual')
+      .reduce((sum, src) => sum + parseFloat(src.value || '0'), 0);
+
+    // Use budget.income_amount as actual income (or fall back to expected)
+    const actualIncome = budget.income_amount || expectedIncome || budget.amount;
+
+    // Calculate total allocated from categories
+    const totalAllocated = (budget.categories || []).reduce(
+      (sum, cat) => sum + cat.allocated_amount,
+      0
+    );
+
+    // Calculate unallocated funds
+    const unallocated = actualIncome - totalAllocated;
+
+    return { expectedIncome, actualIncome, unallocated, totalAllocated };
+  }, [budget]);
+
+  // Handler for navigating to create savings goal
+  const handleCreateSavingsGoal = useCallback(() => {
+    navigate('/budgets', { state: { openSavingsGoal: true } });
+  }, [navigate]);
 
   // Handler for adding a new category
   const handleAddCategory = useCallback(
@@ -182,6 +215,28 @@ export function BudgetDetailPage() {
           )}
         </div>
       </header>
+
+      {/* Issue #498: Income Section - shows expected vs actual income */}
+      {(budget.income_sources?.length > 0 || incomeMetrics.expectedIncome > 0) && (
+        <section className="budget-detail-page__income-section">
+          <BudgetIncomeSection
+            expectedIncome={incomeMetrics.expectedIncome}
+            actualIncome={incomeMetrics.actualIncome}
+            incomeSources={budget.income_sources || []}
+            currencyCode={budget.currency_code}
+          />
+        </section>
+      )}
+
+      {/* Issue #498: Unallocated Funds Card */}
+      <section className="budget-detail-page__unallocated-section">
+        <UnallocatedFundsCard
+          unallocatedAmount={incomeMetrics.unallocated}
+          totalIncome={incomeMetrics.actualIncome}
+          currencyCode={budget.currency_code}
+          onCreateSavingsGoal={handleCreateSavingsGoal}
+        />
+      </section>
 
       {/* Category Manager */}
       <section className="budget-detail-page__content">
