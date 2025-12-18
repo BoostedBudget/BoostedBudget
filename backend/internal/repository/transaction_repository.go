@@ -114,6 +114,14 @@ type TransactionRepository interface {
 	//   - or: Match transactions where EITHER category OR tags match
 	// Used for previewing how many transactions would match a budget category configuration.
 	GetMatchingTransactionStats(ctx context.Context, userID string, categories [][]string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (count int, totalAmount float64, err error)
+
+	// Issue #499: Transaction-Budget Linking UI
+
+	// GetTransactionsForBudgetCategory returns paginated transactions matching the given category
+	// and/or tags based on match logic, along with total count and amount.
+	// Uses the same matching logic as GetSpentSumForBudgetCategory.
+	// Returns transactions ordered by date DESC.
+	GetTransactionsForBudgetCategory(ctx context.Context, userID string, category []string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time, limit, offset int) (transactions []domain.Transaction, totalCount int, totalAmount float64, err error)
 }
 
 // transactionRepository implements TransactionRepository using PostgreSQL
@@ -1087,4 +1095,104 @@ func (r *transactionRepository) buildCategoryConditions(categories [][]string) (
 	}
 
 	return strings.Join(conditions, " OR "), args
+}
+
+// =============================================================================
+// Issue #499: Transaction-Budget Linking UI
+// =============================================================================
+
+// GetTransactionsForBudgetCategory returns paginated transactions matching the given category
+// and/or tags based on match logic, along with total count and amount.
+// Uses the same matching logic as GetSpentSumForBudgetCategory.
+// Returns transactions ordered by date DESC.
+func (r *transactionRepository) GetTransactionsForBudgetCategory(ctx context.Context, userID string, category []string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time, limit, offset int) ([]domain.Transaction, int, float64, error) {
+	// Default to category_only if empty
+	if matchLogic == "" {
+		matchLogic = domain.MatchLogicCategoryOnly
+	}
+
+	// Marshal category to JSON for JSONB containment operator
+	categoryJSON, err := json.Marshal(category)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("failed to marshal category: %w", err)
+	}
+
+	// Build WHERE clause based on match logic
+	var whereClause string
+	var baseArgs []interface{}
+
+	switch matchLogic {
+	case domain.MatchLogicCategoryOnly:
+		whereClause = `user_id = $1 AND amount < 0
+			  AND date BETWEEN $2 AND $3
+			  AND (category @> $4::jsonb OR category_override @> $4::jsonb)`
+		baseArgs = []interface{}{userID, startDate, endDate, string(categoryJSON)}
+
+	case domain.MatchLogicTagOnly:
+		whereClause = `user_id = $1 AND amount < 0
+			  AND date BETWEEN $2 AND $3
+			  AND tags ?| $4`
+		baseArgs = []interface{}{userID, startDate, endDate, pq.Array(tags)}
+
+	case domain.MatchLogicAnd:
+		whereClause = `user_id = $1 AND amount < 0
+			  AND date BETWEEN $2 AND $3
+			  AND (category @> $4::jsonb OR category_override @> $4::jsonb)
+			  AND tags ?| $5`
+		baseArgs = []interface{}{userID, startDate, endDate, string(categoryJSON), pq.Array(tags)}
+
+	case domain.MatchLogicOr:
+		whereClause = `user_id = $1 AND amount < 0
+			  AND date BETWEEN $2 AND $3
+			  AND (
+				(category @> $4::jsonb OR category_override @> $4::jsonb)
+				OR tags ?| $5
+			  )`
+		baseArgs = []interface{}{userID, startDate, endDate, string(categoryJSON), pq.Array(tags)}
+
+	default:
+		return nil, 0, 0, fmt.Errorf("unsupported match logic: %s", matchLogic)
+	}
+
+	// First, get total count and sum
+	countQuery := fmt.Sprintf(`
+		SELECT COUNT(*), COALESCE(ABS(SUM(amount)), 0)
+		FROM transactions
+		WHERE %s
+	`, whereClause)
+
+	var totalCount int
+	var totalAmount float64
+	err = r.db.QueryRowContext(ctx, countQuery, baseArgs...).Scan(&totalCount, &totalAmount)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("failed to get transaction count: %w", err)
+	}
+
+	// Then, get the paginated transactions
+	nextArgNum := len(baseArgs) + 1
+	selectQuery := fmt.Sprintf(`
+		SELECT id, user_id, account_id, linked_item_id, source, external_transaction_id,
+			   external_metadata, amount, date, authorized_date, name, merchant_name,
+			   category, personal_finance_category, payment_channel, pending, user_notes,
+			   created_at, updated_at, tags, tags_source,
+			   category_override, category_source, category_override_date, original_category
+		FROM transactions
+		WHERE %s
+		ORDER BY date DESC, created_at DESC
+		LIMIT $%d OFFSET $%d
+	`, whereClause, nextArgNum, nextArgNum+1)
+
+	selectArgs := append(baseArgs, limit, offset)
+	rows, err := r.db.QueryContext(ctx, selectQuery, selectArgs...)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("failed to query transactions: %w", err)
+	}
+	defer rows.Close()
+
+	transactions, err := r.scanTransactions(rows)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+
+	return transactions, totalCount, totalAmount, nil
 }

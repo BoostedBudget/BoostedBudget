@@ -133,7 +133,7 @@ func TestBudgetHandler_CreateBudget_Success(t *testing.T) {
 			return createTestBudgetForHandler(userID), nil
 		},
 	}
-	handler := NewBudgetHandler(mockService, nil)
+	handler := NewBudgetHandler(mockService, nil, nil)
 
 	reqBody := `{"name": "Monthly Expenses", "period": "monthly", "start_date": "2024-01-01T00:00:00Z", "amount": 1000}`
 	req := httptest.NewRequest(http.MethodPost, "/budgets", strings.NewReader(reqBody))
@@ -156,7 +156,7 @@ func TestBudgetHandler_CreateBudget_Success(t *testing.T) {
 func TestBudgetHandler_CreateBudget_BadRequest(t *testing.T) {
 	e := echo.New()
 	mockService := &mockBudgetService{}
-	handler := NewBudgetHandler(mockService, nil)
+	handler := NewBudgetHandler(mockService, nil, nil)
 
 	reqBody := `{"invalid json`
 	req := httptest.NewRequest(http.MethodPost, "/budgets", strings.NewReader(reqBody))
@@ -179,7 +179,7 @@ func TestBudgetHandler_CreateBudget_Conflict(t *testing.T) {
 			return nil, domain.ErrBudgetAlreadyExists
 		},
 	}
-	handler := NewBudgetHandler(mockService, nil)
+	handler := NewBudgetHandler(mockService, nil, nil)
 
 	reqBody := `{"name": "Duplicate", "period": "monthly", "start_date": "2024-01-01T00:00:00Z", "amount": 1000}`
 	req := httptest.NewRequest(http.MethodPost, "/budgets", strings.NewReader(reqBody))
@@ -202,7 +202,7 @@ func TestBudgetHandler_GetBudgets_Success(t *testing.T) {
 			return []*domain.Budget{createTestBudgetForHandler(userID)}, nil
 		},
 	}
-	handler := NewBudgetHandler(mockService, nil)
+	handler := NewBudgetHandler(mockService, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/budgets", nil)
 	rec := httptest.NewRecorder()
@@ -227,7 +227,7 @@ func TestBudgetHandler_GetBudget_Success(t *testing.T) {
 			return createTestBudgetForHandler(userID), nil
 		},
 	}
-	handler := NewBudgetHandler(mockService, nil)
+	handler := NewBudgetHandler(mockService, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/budgets/budget-123", nil)
 	rec := httptest.NewRecorder()
@@ -249,7 +249,7 @@ func TestBudgetHandler_GetBudget_NotFound(t *testing.T) {
 			return nil, domain.ErrBudgetNotFound
 		},
 	}
-	handler := NewBudgetHandler(mockService, nil)
+	handler := NewBudgetHandler(mockService, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/budgets/nonexistent", nil)
 	rec := httptest.NewRecorder()
@@ -272,7 +272,7 @@ func TestBudgetHandler_GetCurrentBudget_Success(t *testing.T) {
 			return createTestBudgetForHandler(userID), nil
 		},
 	}
-	handler := NewBudgetHandler(mockService, nil)
+	handler := NewBudgetHandler(mockService, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/budgets/current", nil)
 	rec := httptest.NewRecorder()
@@ -296,7 +296,7 @@ func TestBudgetHandler_UpdateBudget_Success(t *testing.T) {
 			return budget, nil
 		},
 	}
-	handler := NewBudgetHandler(mockService, nil)
+	handler := NewBudgetHandler(mockService, nil, nil)
 
 	reqBody := `{"name": "Updated Budget"}`
 	req := httptest.NewRequest(http.MethodPut, "/budgets/budget-123", strings.NewReader(reqBody))
@@ -320,7 +320,7 @@ func TestBudgetHandler_DeleteBudget_Success(t *testing.T) {
 			return nil
 		},
 	}
-	handler := NewBudgetHandler(mockService, nil)
+	handler := NewBudgetHandler(mockService, nil, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/budgets/budget-123", nil)
 	rec := httptest.NewRecorder()
@@ -351,7 +351,7 @@ func TestBudgetHandler_AddCategory_Success(t *testing.T) {
 			}, nil
 		},
 	}
-	handler := NewBudgetHandler(mockService, nil)
+	handler := NewBudgetHandler(mockService, nil, nil)
 
 	reqBody := `{"category": ["Food", "Dining"], "allocated_amount": 300}`
 	req := httptest.NewRequest(http.MethodPost, "/budgets/budget-123/categories", strings.NewReader(reqBody))
@@ -379,7 +379,7 @@ func TestBudgetHandler_UpdateCategory_Success(t *testing.T) {
 			}, nil
 		},
 	}
-	handler := NewBudgetHandler(mockService, nil)
+	handler := NewBudgetHandler(mockService, nil, nil)
 
 	reqBody := `{"allocated_amount": 500}`
 	req := httptest.NewRequest(http.MethodPut, "/budgets/budget-123/categories/cat-123", strings.NewReader(reqBody))
@@ -403,7 +403,7 @@ func TestBudgetHandler_DeleteCategory_Success(t *testing.T) {
 			return nil
 		},
 	}
-	handler := NewBudgetHandler(mockService, nil)
+	handler := NewBudgetHandler(mockService, nil, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/budgets/budget-123/categories/cat-123", nil)
 	rec := httptest.NewRecorder()
@@ -425,7 +425,7 @@ func TestBudgetHandler_GetAvailableCategories_Success(t *testing.T) {
 			return []string{"Food And Drink", "Transportation", "Groceries"}, nil
 		},
 	}
-	handler := NewBudgetHandler(mockService, nil)
+	handler := NewBudgetHandler(mockService, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/budgets/categories/available", nil)
 	rec := httptest.NewRecorder()
@@ -446,7 +446,7 @@ func TestBudgetHandler_GetAvailableCategories_Success(t *testing.T) {
 func TestBudgetHandler_Unauthorized(t *testing.T) {
 	e := echo.New()
 	mockService := &mockBudgetService{}
-	handler := NewBudgetHandler(mockService, nil)
+	handler := NewBudgetHandler(mockService, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/budgets", nil)
 	rec := httptest.NewRecorder()
