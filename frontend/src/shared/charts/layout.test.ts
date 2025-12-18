@@ -1,11 +1,13 @@
 /**
  * Chart Layout Tests
  * Issue #445: Recharts to Plotly Migration
+ * Issue #525: Auto-scale chart axes on filter changes
  */
 
 import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_CONFIG,
+  CHART_TRANSITION,
   getBaseLayout,
   getCurrencyLayout,
   getBarChartLayout,
@@ -33,6 +35,21 @@ describe('DEFAULT_CONFIG', () => {
 
   it('hides Plotly logo', () => {
     expect(DEFAULT_CONFIG.displaylogo).toBe(false);
+  });
+});
+
+// Issue #525: CHART_TRANSITION tests
+describe('CHART_TRANSITION', () => {
+  it('has 400ms duration', () => {
+    expect(CHART_TRANSITION.duration).toBe(400);
+  });
+
+  it('uses cubic-in-out easing', () => {
+    expect(CHART_TRANSITION.easing).toBe('cubic-in-out');
+  });
+
+  it('has layout first ordering', () => {
+    expect(CHART_TRANSITION.ordering).toBe('layout first');
   });
 });
 
@@ -96,6 +113,24 @@ describe('getBaseLayout', () => {
   it('uses Inter font family', () => {
     const layout = getBaseLayout(false);
     expect(layout.font?.family).toContain('Inter');
+  });
+
+  // Issue #525: Transition and autorange tests
+  it('includes transition configuration', () => {
+    const layout = getBaseLayout(false);
+    expect(layout.transition).toBeDefined();
+    expect(layout.transition?.duration).toBe(400);
+    expect(layout.transition?.easing).toBe('cubic-in-out');
+  });
+
+  it('has autorange enabled on x-axis', () => {
+    const layout = getBaseLayout(false);
+    expect(layout.xaxis?.autorange).toBe(true);
+  });
+
+  it('has autorange enabled on y-axis', () => {
+    const layout = getBaseLayout(false);
+    expect(layout.yaxis?.autorange).toBe(true);
   });
 });
 
