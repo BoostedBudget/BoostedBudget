@@ -3,11 +3,13 @@
  * Issue #30: Budget Dashboard UI
  * Issue #111: Goals Dashboard & Progress Visualization
  * Issue #462: shadcn/ui Migration - Mutual exclusion for dialogs
+ * Issue #521: Enable Budget and Savings Goal Deletion in UI
  *
  * Main page for viewing and managing budgets and savings goals.
  */
 
 import { useState, useCallback } from 'react';
+import { toast } from 'sonner';
 import { PlusIcon } from '@heroicons/react/24/outline';
 import { useBudgets } from '../hooks/useBudgets';
 import { useSavingsGoals } from '../hooks/useSavingsGoals';
@@ -15,23 +17,34 @@ import { BudgetCard } from './BudgetCard';
 import { SavingsGoalCard } from './SavingsGoalCard';
 import { CreateBudgetDialog } from './CreateBudgetDialog';
 import { CreateSavingsGoalDialog } from './CreateSavingsGoalDialog';
+import { DeleteBudgetDialog } from './DeleteBudgetDialog';
+import { DeleteSavingsGoalDialog } from './DeleteSavingsGoalDialog';
 import type { Budget, SavingsGoal } from '../types';
 import './BudgetsPage.css';
 
-// Issue #462: Use single state for mutual exclusion - only one dialog can be open at a time
-type ActiveDialog = 'budget' | 'goal' | null;
+// Issue #462, #521: Use single state for mutual exclusion - only one dialog can be open at a time
+type ActiveDialog = 'budget' | 'goal' | 'delete-budget' | 'delete-goal' | null;
 
 export function BudgetsPage() {
-  const { budgets, loading: budgetsLoading, error: budgetsError, refetch: refetchBudgets } = useBudgets();
-  const { goals, loading: goalsLoading, error: goalsError, refetch: refetchGoals } = useSavingsGoals();
+  const { budgets, loading: budgetsLoading, error: budgetsError, refetch: refetchBudgets, deleteBudget } = useBudgets();
+  const { goals, loading: goalsLoading, error: goalsError, refetch: refetchGoals, deleteGoal } = useSavingsGoals();
 
   // Dialog state - single state ensures only one dialog open at a time
   const [activeDialog, setActiveDialog] = useState<ActiveDialog>(null);
 
+  // Issue #521: Delete state
+  const [deletingBudget, setDeletingBudget] = useState<Budget | null>(null);
+  const [deletingGoal, setDeletingGoal] = useState<SavingsGoal | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
   // Dialog handlers
   const openBudgetDialog = useCallback(() => setActiveDialog('budget'), []);
   const openGoalDialog = useCallback(() => setActiveDialog('goal'), []);
-  const closeDialog = useCallback(() => setActiveDialog(null), []);
+  const closeDialog = useCallback(() => {
+    setActiveDialog(null);
+    setDeletingBudget(null);
+    setDeletingGoal(null);
+  }, []);
 
   const handleBudgetCreated = useCallback((_budget: Budget) => {
     closeDialog();
@@ -42,6 +55,70 @@ export function BudgetsPage() {
     closeDialog();
     refetchGoals();
   }, [closeDialog, refetchGoals]);
+
+  // Issue #521: Delete budget handlers
+  const handleDeleteBudgetClick = useCallback((budgetId: string) => {
+    const budget = budgets.find((b) => b.id === budgetId);
+    if (budget) {
+      setDeletingBudget(budget);
+      setActiveDialog('delete-budget');
+    }
+  }, [budgets]);
+
+  const handleConfirmDeleteBudget = useCallback(async () => {
+    if (!deletingBudget) return;
+
+    setIsDeleting(true);
+    try {
+      await deleteBudget(deletingBudget.id);
+      toast.success(`Budget "${deletingBudget.name}" deleted successfully`);
+      closeDialog();
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('404')) {
+        toast.error('Budget was already deleted');
+        closeDialog();
+        refetchBudgets();
+      } else if (error instanceof Error && error.message.includes('401')) {
+        toast.error('Session expired. Please log in again.');
+      } else {
+        toast.error('Failed to delete budget. Please try again.');
+      }
+    } finally {
+      setIsDeleting(false);
+    }
+  }, [deletingBudget, deleteBudget, closeDialog, refetchBudgets]);
+
+  // Issue #521: Delete goal handlers
+  const handleDeleteGoalClick = useCallback((goalId: string) => {
+    const goal = goals.find((g) => g.id === goalId);
+    if (goal) {
+      setDeletingGoal(goal);
+      setActiveDialog('delete-goal');
+    }
+  }, [goals]);
+
+  const handleConfirmDeleteGoal = useCallback(async () => {
+    if (!deletingGoal) return;
+
+    setIsDeleting(true);
+    try {
+      await deleteGoal(deletingGoal.id);
+      toast.success(`Savings goal "${deletingGoal.name}" deleted successfully`);
+      closeDialog();
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('404')) {
+        toast.error('Savings goal was already deleted');
+        closeDialog();
+        refetchGoals();
+      } else if (error instanceof Error && error.message.includes('401')) {
+        toast.error('Session expired. Please log in again.');
+      } else {
+        toast.error('Failed to delete savings goal. Please try again.');
+      }
+    } finally {
+      setIsDeleting(false);
+    }
+  }, [deletingGoal, deleteGoal, closeDialog, refetchGoals]);
 
   const loading = budgetsLoading || goalsLoading;
   const error = budgetsError || goalsError;
@@ -114,7 +191,7 @@ export function BudgetsPage() {
         ) : (
           <div className="budgets-page__grid">
             {activeBudgets.map((budget) => (
-              <BudgetCard key={budget.id} budget={budget} />
+              <BudgetCard key={budget.id} budget={budget} onDelete={handleDeleteBudgetClick} />
             ))}
           </div>
         )}
@@ -125,7 +202,7 @@ export function BudgetsPage() {
           <h2>Past Budgets</h2>
           <div className="budgets-page__grid">
             {inactiveBudgets.map((budget) => (
-              <BudgetCard key={budget.id} budget={budget} />
+              <BudgetCard key={budget.id} budget={budget} onDelete={handleDeleteBudgetClick} />
             ))}
           </div>
         </section>
@@ -163,7 +240,7 @@ export function BudgetsPage() {
             {activeGoals.length > 0 && (
               <div className="budgets-page__grid">
                 {activeGoals.map((goal) => (
-                  <SavingsGoalCard key={goal.id} goal={goal} />
+                  <SavingsGoalCard key={goal.id} goal={goal} onDelete={handleDeleteGoalClick} />
                 ))}
               </div>
             )}
@@ -172,7 +249,7 @@ export function BudgetsPage() {
                 <h3>Completed Goals</h3>
                 <div className="budgets-page__grid">
                   {completedGoals.map((goal) => (
-                    <SavingsGoalCard key={goal.id} goal={goal} />
+                    <SavingsGoalCard key={goal.id} goal={goal} onDelete={handleDeleteGoalClick} />
                   ))}
                 </div>
               </>
@@ -191,6 +268,26 @@ export function BudgetsPage() {
         isOpen={activeDialog === 'goal'}
         onCancel={closeDialog}
         onGoalCreated={handleGoalCreated}
+      />
+
+      {/* Deletion Dialogs (Issue #521) */}
+      <DeleteBudgetDialog
+        isOpen={activeDialog === 'delete-budget'}
+        budgetName={deletingBudget?.name ?? ''}
+        categoryCount={deletingBudget?.categories?.length ?? 0}
+        onConfirm={handleConfirmDeleteBudget}
+        onCancel={closeDialog}
+        isDeleting={isDeleting}
+      />
+      <DeleteSavingsGoalDialog
+        isOpen={activeDialog === 'delete-goal'}
+        goalName={deletingGoal?.name ?? ''}
+        currentAmount={deletingGoal?.current_amount ?? 0}
+        targetAmount={deletingGoal?.target_amount ?? 0}
+        currencyCode={deletingGoal?.currency_code ?? 'USD'}
+        onConfirm={handleConfirmDeleteGoal}
+        onCancel={closeDialog}
+        isDeleting={isDeleting}
       />
     </div>
   );

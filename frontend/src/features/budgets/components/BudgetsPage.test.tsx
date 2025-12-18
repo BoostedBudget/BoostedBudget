@@ -19,15 +19,108 @@ vi.mock('../hooks/useSavingsGoals');
 
 // Mock child components to simplify testing
 vi.mock('./BudgetCard', () => ({
-  BudgetCard: ({ budget }: { budget: Budget }) => (
-    <div data-testid={`budget-card-${budget.id}`}>{budget.name}</div>
+  BudgetCard: ({
+    budget,
+    onDelete,
+  }: {
+    budget: Budget;
+    onDelete?: (budgetId: string) => void;
+  }) => (
+    <div data-testid={`budget-card-${budget.id}`}>
+      {budget.name}
+      {onDelete && (
+        <button
+          data-testid={`delete-budget-${budget.id}`}
+          onClick={() => onDelete(budget.id)}
+        >
+          Delete Budget
+        </button>
+      )}
+    </div>
   ),
 }));
 
 vi.mock('./SavingsGoalCard', () => ({
-  SavingsGoalCard: ({ goal }: { goal: SavingsGoal }) => (
-    <div data-testid={`goal-card-${goal.id}`}>{goal.name}</div>
+  SavingsGoalCard: ({
+    goal,
+    onDelete,
+  }: {
+    goal: SavingsGoal;
+    onDelete?: (goalId: string) => void;
+  }) => (
+    <div data-testid={`goal-card-${goal.id}`}>
+      {goal.name}
+      {onDelete && (
+        <button
+          data-testid={`delete-goal-${goal.id}`}
+          onClick={() => onDelete(goal.id)}
+        >
+          Delete Goal
+        </button>
+      )}
+    </div>
   ),
+}));
+
+// Issue #521: Delete dialogs
+vi.mock('./DeleteBudgetDialog', () => ({
+  DeleteBudgetDialog: ({
+    isOpen,
+    budgetName,
+    categoryCount,
+    onConfirm,
+    onCancel,
+    isDeleting,
+  }: {
+    isOpen: boolean;
+    budgetName: string;
+    categoryCount: number;
+    onConfirm: () => void;
+    onCancel: () => void;
+    isDeleting: boolean;
+  }) => {
+    if (!isOpen) return null;
+    return (
+      <div data-testid="delete-budget-dialog">
+        <span>Delete {budgetName}</span>
+        <span>{categoryCount} categories</span>
+        <button onClick={onCancel}>Cancel Delete Budget</button>
+        <button onClick={onConfirm} disabled={isDeleting}>
+          {isDeleting ? 'Deleting Budget...' : 'Confirm Delete Budget'}
+        </button>
+      </div>
+    );
+  },
+}));
+
+vi.mock('./DeleteSavingsGoalDialog', () => ({
+  DeleteSavingsGoalDialog: ({
+    isOpen,
+    goalName,
+    onConfirm,
+    onCancel,
+    isDeleting,
+  }: {
+    isOpen: boolean;
+    goalName: string;
+    currentAmount: number;
+    targetAmount: number;
+    currencyCode: string;
+    onConfirm: () => void;
+    onCancel: () => void;
+    isDeleting: boolean;
+  }) => {
+    if (!isOpen) return null;
+    return (
+      <div data-testid="delete-goal-dialog">
+        <span>Delete {goalName}</span>
+        <button onClick={onCancel}>Cancel Delete Goal</button>
+        <button onClick={onConfirm} disabled={isDeleting}>
+          {isDeleting ? 'Deleting Goal...' : 'Confirm Delete Goal'}
+        </button>
+      </div>
+    );
+  },
 }));
 
 vi.mock('./CreateBudgetDialog', () => ({
@@ -599,6 +692,252 @@ describe('BudgetsPage', () => {
 
       // Empty state should NOT be visible
       expect(screen.queryByText(/create your first goal/i)).not.toBeInTheDocument();
+    });
+  });
+
+  // ==========================================================================
+  // Issue #521: Delete Budget Functionality
+  // ==========================================================================
+
+  describe('Delete Budget (Issue #521)', () => {
+    it('opens delete budget dialog when delete button clicked', async () => {
+      const user = userEvent.setup();
+      setupMocks({ budgets: [mockActiveBudget] });
+
+      render(<BudgetsPage />);
+
+      // Click delete button on the budget card
+      const deleteButton = screen.getByTestId('delete-budget-budget-1');
+      await user.click(deleteButton);
+
+      expect(screen.getByTestId('delete-budget-dialog')).toBeInTheDocument();
+      expect(screen.getByText('Delete Monthly Budget')).toBeInTheDocument();
+    });
+
+    it('closes delete budget dialog on cancel', async () => {
+      const user = userEvent.setup();
+      setupMocks({ budgets: [mockActiveBudget] });
+
+      render(<BudgetsPage />);
+
+      // Open dialog
+      await user.click(screen.getByTestId('delete-budget-budget-1'));
+      expect(screen.getByTestId('delete-budget-dialog')).toBeInTheDocument();
+
+      // Cancel
+      await user.click(screen.getByText('Cancel Delete Budget'));
+
+      expect(screen.queryByTestId('delete-budget-dialog')).not.toBeInTheDocument();
+    });
+
+    it('calls deleteBudget when confirm clicked', async () => {
+      const user = userEvent.setup();
+      const mockDeleteBudget = vi.fn().mockResolvedValue(undefined);
+
+      vi.mocked(useBudgetsHook.useBudgets).mockReturnValue({
+        budgets: [mockActiveBudget],
+        loading: false,
+        error: null,
+        refetch: mockRefetchBudgets,
+        createBudget: vi.fn(),
+        updateBudget: vi.fn(),
+        deleteBudget: mockDeleteBudget,
+        getAvailableCategories: vi.fn(),
+        addCategory: vi.fn(),
+        updateCategory: vi.fn(),
+        deleteCategory: vi.fn(),
+      });
+
+      vi.mocked(useSavingsGoalsHook.useSavingsGoals).mockReturnValue({
+        goals: [],
+        goalsWithProgress: [],
+        loading: false,
+        error: null,
+        totalTarget: 0,
+        totalSaved: 0,
+        refetch: mockRefetchGoals,
+        createGoal: vi.fn(),
+        updateGoal: vi.fn(),
+        deleteGoal: vi.fn(),
+      });
+
+      render(<BudgetsPage />);
+
+      // Open dialog
+      await user.click(screen.getByTestId('delete-budget-budget-1'));
+
+      // Confirm delete
+      await user.click(screen.getByText('Confirm Delete Budget'));
+
+      expect(mockDeleteBudget).toHaveBeenCalledWith('budget-1');
+    });
+
+    it('can delete past/inactive budget', async () => {
+      const user = userEvent.setup();
+      const mockDeleteBudget = vi.fn().mockResolvedValue(undefined);
+
+      vi.mocked(useBudgetsHook.useBudgets).mockReturnValue({
+        budgets: [mockActiveBudget, mockInactiveBudget],
+        loading: false,
+        error: null,
+        refetch: mockRefetchBudgets,
+        createBudget: vi.fn(),
+        updateBudget: vi.fn(),
+        deleteBudget: mockDeleteBudget,
+        getAvailableCategories: vi.fn(),
+        addCategory: vi.fn(),
+        updateCategory: vi.fn(),
+        deleteCategory: vi.fn(),
+      });
+
+      vi.mocked(useSavingsGoalsHook.useSavingsGoals).mockReturnValue({
+        goals: [],
+        goalsWithProgress: [],
+        loading: false,
+        error: null,
+        totalTarget: 0,
+        totalSaved: 0,
+        refetch: mockRefetchGoals,
+        createGoal: vi.fn(),
+        updateGoal: vi.fn(),
+        deleteGoal: vi.fn(),
+      });
+
+      render(<BudgetsPage />);
+
+      // Open dialog for inactive budget
+      await user.click(screen.getByTestId('delete-budget-budget-2'));
+
+      // Verify dialog shows correct budget name
+      expect(screen.getByText('Delete Past Budget')).toBeInTheDocument();
+
+      // Confirm delete
+      await user.click(screen.getByText('Confirm Delete Budget'));
+
+      expect(mockDeleteBudget).toHaveBeenCalledWith('budget-2');
+    });
+  });
+
+  // ==========================================================================
+  // Issue #521: Delete Savings Goal Functionality
+  // ==========================================================================
+
+  describe('Delete Savings Goal (Issue #521)', () => {
+    it('opens delete goal dialog when delete button clicked', async () => {
+      const user = userEvent.setup();
+      setupMocks({ goals: [mockActiveGoal] });
+
+      render(<BudgetsPage />);
+
+      // Click delete button on the goal card
+      const deleteButton = screen.getByTestId('delete-goal-goal-1');
+      await user.click(deleteButton);
+
+      expect(screen.getByTestId('delete-goal-dialog')).toBeInTheDocument();
+      expect(screen.getByText('Delete Vacation Fund')).toBeInTheDocument();
+    });
+
+    it('closes delete goal dialog on cancel', async () => {
+      const user = userEvent.setup();
+      setupMocks({ goals: [mockActiveGoal] });
+
+      render(<BudgetsPage />);
+
+      // Open dialog
+      await user.click(screen.getByTestId('delete-goal-goal-1'));
+      expect(screen.getByTestId('delete-goal-dialog')).toBeInTheDocument();
+
+      // Cancel
+      await user.click(screen.getByText('Cancel Delete Goal'));
+
+      expect(screen.queryByTestId('delete-goal-dialog')).not.toBeInTheDocument();
+    });
+
+    it('calls deleteGoal when confirm clicked', async () => {
+      const user = userEvent.setup();
+      const mockDeleteGoal = vi.fn().mockResolvedValue(undefined);
+
+      vi.mocked(useBudgetsHook.useBudgets).mockReturnValue({
+        budgets: [],
+        loading: false,
+        error: null,
+        refetch: mockRefetchBudgets,
+        createBudget: vi.fn(),
+        updateBudget: vi.fn(),
+        deleteBudget: vi.fn(),
+        getAvailableCategories: vi.fn(),
+        addCategory: vi.fn(),
+        updateCategory: vi.fn(),
+        deleteCategory: vi.fn(),
+      });
+
+      vi.mocked(useSavingsGoalsHook.useSavingsGoals).mockReturnValue({
+        goals: [mockActiveGoal],
+        goalsWithProgress: [],
+        loading: false,
+        error: null,
+        totalTarget: 0,
+        totalSaved: 0,
+        refetch: mockRefetchGoals,
+        createGoal: vi.fn(),
+        updateGoal: vi.fn(),
+        deleteGoal: mockDeleteGoal,
+      });
+
+      render(<BudgetsPage />);
+
+      // Open dialog
+      await user.click(screen.getByTestId('delete-goal-goal-1'));
+
+      // Confirm delete
+      await user.click(screen.getByText('Confirm Delete Goal'));
+
+      expect(mockDeleteGoal).toHaveBeenCalledWith('goal-1');
+    });
+
+    it('can delete completed goal', async () => {
+      const user = userEvent.setup();
+      const mockDeleteGoal = vi.fn().mockResolvedValue(undefined);
+
+      vi.mocked(useBudgetsHook.useBudgets).mockReturnValue({
+        budgets: [],
+        loading: false,
+        error: null,
+        refetch: mockRefetchBudgets,
+        createBudget: vi.fn(),
+        updateBudget: vi.fn(),
+        deleteBudget: vi.fn(),
+        getAvailableCategories: vi.fn(),
+        addCategory: vi.fn(),
+        updateCategory: vi.fn(),
+        deleteCategory: vi.fn(),
+      });
+
+      vi.mocked(useSavingsGoalsHook.useSavingsGoals).mockReturnValue({
+        goals: [mockActiveGoal, mockCompletedGoal],
+        goalsWithProgress: [],
+        loading: false,
+        error: null,
+        totalTarget: 0,
+        totalSaved: 0,
+        refetch: mockRefetchGoals,
+        createGoal: vi.fn(),
+        updateGoal: vi.fn(),
+        deleteGoal: mockDeleteGoal,
+      });
+
+      render(<BudgetsPage />);
+
+      // Open dialog for completed goal
+      await user.click(screen.getByTestId('delete-goal-goal-2'));
+
+      // Verify dialog shows correct goal name
+      expect(screen.getByText('Delete Emergency Fund')).toBeInTheDocument();
+
+      // Confirm delete
+      await user.click(screen.getByText('Confirm Delete Goal'));
+
+      expect(mockDeleteGoal).toHaveBeenCalledWith('goal-2');
     });
   });
 });
