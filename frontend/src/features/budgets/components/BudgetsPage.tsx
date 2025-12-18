@@ -57,10 +57,13 @@ export function BudgetsPage() {
   }, [closeDialog, refetchGoals]);
 
   // Issue #521: Delete budget handlers
-  const handleDeleteBudgetClick = useCallback((budget: Budget) => {
-    setDeletingBudget(budget);
-    setActiveDialog('delete-budget');
-  }, []);
+  const handleDeleteBudgetClick = useCallback((budgetId: string) => {
+    const budget = budgets.find((b) => b.id === budgetId);
+    if (budget) {
+      setDeletingBudget(budget);
+      setActiveDialog('delete-budget');
+    }
+  }, [budgets]);
 
   const handleConfirmDeleteBudget = useCallback(async () => {
     if (!deletingBudget) return;
@@ -86,10 +89,13 @@ export function BudgetsPage() {
   }, [deletingBudget, deleteBudget, closeDialog, refetchBudgets]);
 
   // Issue #521: Delete goal handlers
-  const handleDeleteGoalClick = useCallback((goal: SavingsGoal) => {
-    setDeletingGoal(goal);
-    setActiveDialog('delete-goal');
-  }, []);
+  const handleDeleteGoalClick = useCallback((goalId: string) => {
+    const goal = goals.find((g) => g.id === goalId);
+    if (goal) {
+      setDeletingGoal(goal);
+      setActiveDialog('delete-goal');
+    }
+  }, [goals]);
 
   const handleConfirmDeleteGoal = useCallback(async () => {
     if (!deletingGoal) return;

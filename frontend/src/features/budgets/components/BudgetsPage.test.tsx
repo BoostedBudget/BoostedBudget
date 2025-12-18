@@ -24,14 +24,14 @@ vi.mock('./BudgetCard', () => ({
     onDelete,
   }: {
     budget: Budget;
-    onDelete?: (budget: Budget) => void;
+    onDelete?: (budgetId: string) => void;
   }) => (
     <div data-testid={`budget-card-${budget.id}`}>
       {budget.name}
       {onDelete && (
         <button
           data-testid={`delete-budget-${budget.id}`}
-          onClick={() => onDelete(budget)}
+          onClick={() => onDelete(budget.id)}
         >
           Delete Budget
         </button>
@@ -46,14 +46,14 @@ vi.mock('./SavingsGoalCard', () => ({
     onDelete,
   }: {
     goal: SavingsGoal;
-    onDelete?: (goal: SavingsGoal) => void;
+    onDelete?: (goalId: string) => void;
   }) => (
     <div data-testid={`goal-card-${goal.id}`}>
       {goal.name}
       {onDelete && (
         <button
           data-testid={`delete-goal-${goal.id}`}
-          onClick={() => onDelete(goal)}
+          onClick={() => onDelete(goal.id)}
         >
           Delete Goal
         </button>
