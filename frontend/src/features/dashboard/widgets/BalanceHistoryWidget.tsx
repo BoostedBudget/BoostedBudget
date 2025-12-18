@@ -1,6 +1,7 @@
 /**
  * Balance History Widget
  * Issue #418: Fresh implementation from scratch
+ * Issue #525: Auto-scale axes on filter timeframe changes
  *
  * Wraps the BalanceHistoryChart component for use in the widget system.
  * Handles data fetching, loading/error/empty states, and breakdown toggle.
@@ -25,6 +26,12 @@ function BalanceHistoryWidget(_props: WidgetProps) {
       accountTypes: filters.accountTypes,
     }),
     [filters.startDate, filters.endDate, filters.accountTypes]
+  );
+
+  // Issue #525: Generate filter key for uirevision to reset zoom on filter changes
+  const filterKey = useMemo(
+    () => JSON.stringify(dashboardFilters),
+    [dashboardFilters]
   );
 
   const { history, loading, error } = useDashboardData(dashboardFilters);
@@ -61,6 +68,7 @@ function BalanceHistoryWidget(_props: WidgetProps) {
       <BalanceHistoryChart
         history={history}
         showTypeBreakdown={showTypeBreakdown}
+        filterKey={filterKey}
       />
       <div className="absolute top-0 right-0">
         <button
