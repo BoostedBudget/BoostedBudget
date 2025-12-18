@@ -1,6 +1,7 @@
 /**
  * Balance History Chart
  * Issue #418: Fresh implementation from scratch
+ * Issue #525: Auto-scale axes on filter timeframe changes
  *
  * Pure Plotly visualization component for balance trends over time.
  * No title - WidgetWrapper provides it.
@@ -23,6 +24,8 @@ import type { BalanceHistory } from '../types';
 interface BalanceHistoryChartProps {
   history: BalanceHistory;
   showTypeBreakdown?: boolean;
+  /** Issue #525: Key for uirevision to reset zoom on filter changes */
+  filterKey?: string;
 }
 
 /**
@@ -40,6 +43,7 @@ interface BalanceHistoryChartProps {
 export function BalanceHistoryChart({
   history,
   showTypeBreakdown = false,
+  filterKey,
 }: BalanceHistoryChartProps) {
   const isDark = useDarkMode();
 
@@ -116,17 +120,19 @@ export function BalanceHistoryChart({
   }, [chartData, showTypeBreakdown, accountTypes]);
 
   // Build layout with theme support
+  // Issue #525: Added uirevision to reset zoom on filter changes
   const layout = useMemo((): Partial<Layout> => {
     const base = getBaseLayout(isDark);
     return {
       ...base,
       margin: { t: 10, r: 20, b: 40, l: 70 },
+      uirevision: filterKey, // Issue #525: Resets user zoom when filters change
       yaxis: {
         ...base.yaxis,
         tickformat: '$,.0f',
       },
     };
-  }, [isDark]);
+  }, [isDark, filterKey]);
 
   // Empty state
   if (history.snapshots.length === 0) {

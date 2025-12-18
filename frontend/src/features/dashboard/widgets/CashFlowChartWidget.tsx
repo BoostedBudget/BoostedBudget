@@ -2,6 +2,7 @@
  * Cash Flow Chart Widget
  * Issue #354: Cash Flow Analysis & Income/Expense Visualization
  * Issue #445: Migrated from Recharts to Plotly
+ * Issue #525: Auto-scale axes on filter timeframe changes
  *
  * Displays a dual bar chart showing income and expenses per period
  * with a net cash flow trend line overlay.
@@ -61,6 +62,17 @@ function CashFlowChartWidget(_props: WidgetProps) {
       includeTransfers: false,
     }),
     [context?.filters]
+  );
+
+  // Issue #525: Generate filter key for uirevision to reset zoom on filter changes
+  const filterKey = useMemo(
+    () =>
+      JSON.stringify({
+        startDate: filters.startDate,
+        endDate: filters.endDate,
+        accountTypes: filters.accountTypes,
+      }),
+    [filters.startDate, filters.endDate, filters.accountTypes]
   );
 
   const { data, loading, error } = useCashFlowHistory({
@@ -128,18 +140,20 @@ function CashFlowChartWidget(_props: WidgetProps) {
   }, [chartData]);
 
   // Build layout with theme support
+  // Issue #525: Added uirevision to reset zoom on filter changes
   const layout = useMemo((): Partial<Layout> => {
     const base = getBarChartLayout(isDark);
     return {
       ...base,
       margin: { t: 10, r: 10, b: 40, l: 60 },
+      uirevision: filterKey, // Issue #525: Resets user zoom when filters change
       yaxis: {
         ...base.yaxis,
         tickformat: '$.2s', // Compact format like $1.2k
       },
       shapes: createHorizontalReferenceLine(0, isDark),
     };
-  }, [isDark]);
+  }, [isDark, filterKey]);
 
   if (!context?.filters.startDate || !context?.filters.endDate) {
     return (

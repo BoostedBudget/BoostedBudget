@@ -1,12 +1,23 @@
 /**
  * Chart Layout Configuration
  * Issue #445: Recharts to Plotly Migration
+ * Issue #525: Auto-scale chart axes on filter changes
  *
  * Provides theme-aware Plotly layout defaults and configuration.
  */
 
-import type { Layout, Config } from 'plotly.js';
+import type { Layout, Config, Transition } from 'plotly.js';
 import { THEME_COLORS } from './colors';
+
+/**
+ * Default chart transition configuration
+ * Issue #525: Smooth animation when filter timeframe changes
+ */
+export const CHART_TRANSITION: Transition = {
+  duration: 400,
+  easing: 'cubic-in-out',
+  ordering: 'layout first',
+};
 
 /**
  * Default Plotly configuration
@@ -58,6 +69,8 @@ export function getBaseLayout(isDark: boolean): Partial<Layout> {
       family: 'Inter, system-ui, -apple-system, sans-serif',
       size: 12,
     },
+    // Issue #525: Add transition for smooth axis rescaling on filter changes
+    transition: CHART_TRANSITION,
     xaxis: {
       gridcolor: theme.grid,
       linecolor: theme.grid,
@@ -65,6 +78,7 @@ export function getBaseLayout(isDark: boolean): Partial<Layout> {
       zeroline: false,
       showgrid: true,
       gridwidth: 1,
+      autorange: true, // Issue #525: Explicit autorange for axis rescaling
     },
     yaxis: {
       gridcolor: theme.grid,
@@ -73,6 +87,7 @@ export function getBaseLayout(isDark: boolean): Partial<Layout> {
       zeroline: false,
       showgrid: true,
       gridwidth: 1,
+      autorange: true, // Issue #525: Explicit autorange for axis rescaling
     },
     legend: {
       font: { size: 12, color: theme.text },
