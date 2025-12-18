@@ -9,6 +9,7 @@ import type {
   UpdateBudgetCategoryRequest,
   CreateSavingsGoalRequest,
   UpdateSavingsGoalRequest,
+  CategoryTransactionsResponse,
 } from '../types';
 import type { MatchLogic } from '@/shared/types/matching';
 
@@ -237,5 +238,37 @@ export async function fetchBudgetTransactions(
   const response = await apiClient.get<BudgetTransactionsResponse>('/v1/transactions', {
     params: queryParams,
   });
+  return response.data;
+}
+
+// =============================================================================
+// Issue #499: Transaction-Budget Linking UI - Category Transactions API
+// =============================================================================
+
+/**
+ * Fetch transactions matching a specific budget category.
+ * Returns paginated transactions with total count and amount.
+ *
+ * @param budgetId - The budget ID
+ * @param categoryId - The category ID within the budget
+ * @param params - Optional pagination parameters
+ * @returns Paginated transactions matching the category
+ */
+export async function fetchCategoryTransactions(
+  budgetId: string,
+  categoryId: string,
+  params?: {
+    limit?: number;
+    offset?: number;
+  }
+): Promise<CategoryTransactionsResponse> {
+  const queryParams: Record<string, number> = {};
+  if (params?.limit) queryParams.limit = params.limit;
+  if (params?.offset) queryParams.offset = params.offset;
+
+  const response = await apiClient.get<CategoryTransactionsResponse>(
+    `/v1/budgets/${budgetId}/categories/${categoryId}/transactions`,
+    { params: queryParams }
+  );
   return response.data;
 }

@@ -130,6 +130,15 @@ func (m *MockTransactionRepository) GetMatchingTransactionStats(ctx context.Cont
 	return args.Int(0), args.Get(1).(float64), args.Error(2)
 }
 
+// Issue #499: Transaction-Budget Linking UI
+func (m *MockTransactionRepository) GetTransactionsForBudgetCategory(ctx context.Context, userID string, category []string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time, limit, offset int) ([]domain.Transaction, int, float64, error) {
+	args := m.Called(ctx, userID, category, tags, matchLogic, startDate, endDate, limit, offset)
+	if args.Get(0) == nil {
+		return nil, args.Int(1), args.Get(2).(float64), args.Error(3)
+	}
+	return args.Get(0).([]domain.Transaction), args.Int(1), args.Get(2).(float64), args.Error(3)
+}
+
 // TestTransactionService_ListTransactions_EnforcesMaxLimit tests that the service enforces a maximum limit of 100
 func TestTransactionService_ListTransactions_EnforcesMaxLimit(t *testing.T) {
 	mockRepo := new(MockTransactionRepository)

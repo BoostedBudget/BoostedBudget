@@ -7,8 +7,38 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { TransactionCard } from './TransactionCard'
 import type { Transaction } from '../types'
+import type { BudgetCategoryMatch } from '../../budgets/utils/transactionBudgetMatcher'
+import type { BudgetCategory } from '../../budgets/types'
+
+// Helper to create budget category match for tests
+function createBudgetCategoryMatch(
+  matchReason: 'category' | 'tag' | 'both' = 'category',
+  categoryOverrides: Partial<BudgetCategory> = {}
+): BudgetCategoryMatch {
+  return {
+    category: {
+      id: 'cat-1',
+      budget_id: 'budget-1',
+      category: ['Food and Drink', 'Restaurants'],
+      allocated_amount: 500,
+      spent_amount: 250,
+      created_at: '2025-01-01T00:00:00Z',
+      updated_at: '2025-01-01T00:00:00Z',
+      tags: ['dining'],
+      match_logic: 'category_only',
+      ...categoryOverrides,
+    },
+    matchReason,
+  }
+}
+
+// Helper to render with router (needed for Link component in badge)
+function renderWithRouter(ui: React.ReactElement) {
+  return render(<MemoryRouter>{ui}</MemoryRouter>)
+}
 
 describe('TransactionCard', () => {
   const mockTransaction: Transaction = {
@@ -560,6 +590,115 @@ describe('TransactionCard', () => {
       render(<TransactionCard transaction={multiCategoryTransaction} />)
       // Should show primary category for consistency
       expect(screen.getByText(/Food and Drink/i)).toBeInTheDocument()
+    })
+  })
+
+  // Issue #499: Budget Badge Integration Tests
+  describe('Budget Badge Integration', () => {
+    it('should render TransactionBudgetBadge when budgetMatch prop is provided', () => {
+      const budgetMatch = createBudgetCategoryMatch('category')
+
+      renderWithRouter(
+        <TransactionCard transaction={mockTransaction} budgetMatch={budgetMatch} />
+      )
+
+      // Badge should be present with the category name
+      expect(screen.getByRole('link', { name: /Budget: Food and Drink/i })).toBeInTheDocument()
+    })
+
+    it('should not render badge when budgetMatch is null', () => {
+      renderWithRouter(
+        <TransactionCard transaction={mockTransaction} budgetMatch={null} />
+      )
+
+      // No badge link should be present
+      expect(screen.queryByRole('link', { name: /Budget:/i })).not.toBeInTheDocument()
+    })
+
+    it('should not render badge when budgetMatch is undefined', () => {
+      renderWithRouter(
+        <TransactionCard transaction={mockTransaction} budgetMatch={undefined} />
+      )
+
+      expect(screen.queryByRole('link', { name: /Budget:/i })).not.toBeInTheDocument()
+    })
+
+    it('should render badge without budgetMatch prop (backwards compatible)', () => {
+      // Component should work without the new prop
+      render(<TransactionCard transaction={mockTransaction} />)
+
+      expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
+      expect(screen.queryByRole('link', { name: /Budget:/i })).not.toBeInTheDocument()
+    })
+
+    it('should position badge before category text in meta section', () => {
+      const budgetMatch = createBudgetCategoryMatch('category')
+
+      const { container } = renderWithRouter(
+        <TransactionCard transaction={mockTransaction} budgetMatch={budgetMatch} />
+      )
+
+      const meta = container.querySelector('.transaction-card__meta')
+      expect(meta).toBeInTheDocument()
+
+      // Badge should be a direct child of meta and come before category
+      const badge = meta?.querySelector('.transaction-budget-badge')
+      const category = meta?.querySelector('.transaction-card__category')
+
+      expect(badge).toBeInTheDocument()
+      expect(category).toBeInTheDocument()
+
+      // Verify badge comes before category in DOM order
+      if (badge && category) {
+        const children = Array.from(meta!.children)
+        const badgeIndex = children.indexOf(badge)
+        const categoryIndex = children.indexOf(category)
+        expect(badgeIndex).toBeLessThan(categoryIndex)
+      }
+    })
+
+    it('should link badge to correct budget page', () => {
+      const budgetMatch = createBudgetCategoryMatch('category', { budget_id: 'budget-456' })
+
+      renderWithRouter(
+        <TransactionCard transaction={mockTransaction} budgetMatch={budgetMatch} />
+      )
+
+      const link = screen.getByRole('link', { name: /Budget:/i })
+      expect(link).toHaveAttribute('href', '/budgets/budget-456')
+    })
+
+    it('should show correct tooltip for category match', () => {
+      const budgetMatch = createBudgetCategoryMatch('category')
+
+      renderWithRouter(
+        <TransactionCard transaction={mockTransaction} budgetMatch={budgetMatch} />
+      )
+
+      const link = screen.getByRole('link', { name: /Budget:/i })
+      expect(link).toHaveAttribute('title', 'Matched by category')
+    })
+
+    it('should show correct tooltip for tag match', () => {
+      const budgetMatch = createBudgetCategoryMatch('tag')
+
+      renderWithRouter(
+        <TransactionCard transaction={mockTransaction} budgetMatch={budgetMatch} />
+      )
+
+      const link = screen.getByRole('link', { name: /Budget:/i })
+      expect(link).toHaveAttribute('title', 'Matched by tag')
+    })
+
+    it('should show correct tooltip for both match', () => {
+      const budgetMatch = createBudgetCategoryMatch('both')
+
+      renderWithRouter(
+        <TransactionCard transaction={mockTransaction} budgetMatch={budgetMatch} />
+      )
+
+      const link = screen.getByRole('link', { name: /Budget:/i })
+      expect(link).toHaveAttribute('title', 'Matched by category and tag')
     })
   })
 })

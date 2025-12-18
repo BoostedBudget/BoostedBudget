@@ -3,24 +3,28 @@ package handlers
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/labstack/echo/v4"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/middleware"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
 // BudgetHandler handles budget-related HTTP requests
 type BudgetHandler struct {
-	service     services.BudgetService
-	syncService services.BudgetSyncService // Issue #494: Budget sync service
+	service         services.BudgetService
+	syncService     services.BudgetSyncService        // Issue #494: Budget sync service
+	transactionRepo repository.TransactionRepository // Issue #499: Transaction-Budget Linking UI
 }
 
 // NewBudgetHandler creates a new BudgetHandler instance
-func NewBudgetHandler(service services.BudgetService, syncService services.BudgetSyncService) *BudgetHandler {
+func NewBudgetHandler(service services.BudgetService, syncService services.BudgetSyncService, transactionRepo repository.TransactionRepository) *BudgetHandler {
 	return &BudgetHandler{
-		service:     service,
-		syncService: syncService,
+		service:         service,
+		syncService:     syncService,
+		transactionRepo: transactionRepo,
 	}
 }
 
@@ -326,4 +330,106 @@ func (h *BudgetHandler) SyncBudget(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, budget)
+}
+
+// GetCategoryTransactions handles GET /budgets/:id/categories/:categoryId/transactions
+// Returns paginated transactions matching a budget category
+// Issue #499: Transaction-Budget Linking UI
+func (h *BudgetHandler) GetCategoryTransactions(c echo.Context) error {
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "User not authenticated")
+	}
+
+	budgetID := c.Param("id")
+	if budgetID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Budget ID is required")
+	}
+
+	categoryID := c.Param("categoryId")
+	if categoryID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Category ID is required")
+	}
+
+	// Parse query params
+	limit := 20 // default
+	if l := c.QueryParam("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil {
+			limit = parsed
+			if limit < 1 {
+				limit = 1
+			}
+			if limit > 100 {
+				limit = 100
+			}
+		}
+	}
+
+	offset := 0 // default
+	if o := c.QueryParam("offset"); o != "" {
+		if parsed, err := strconv.Atoi(o); err == nil {
+			offset = parsed
+			if offset < 0 {
+				offset = 0
+			}
+		}
+	}
+
+	// Get the budget to verify ownership and get the date range
+	budget, err := h.service.GetBudget(c.Request().Context(), userID, budgetID)
+	if err != nil {
+		if errors.Is(err, domain.ErrBudgetNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "Budget not found")
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get budget")
+	}
+
+	// Find the category
+	var category *domain.BudgetCategory
+	for i := range budget.Categories {
+		if budget.Categories[i].ID == categoryID {
+			category = &budget.Categories[i]
+			break
+		}
+	}
+	if category == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Category not found")
+	}
+
+	// Determine end date (use EndDate if set, otherwise use current time)
+	endDate := budget.StartDate // fallback
+	if budget.EndDate != nil {
+		endDate = *budget.EndDate
+	}
+
+	// Get transactions matching the category
+	transactions, totalCount, totalAmount, err := h.transactionRepo.GetTransactionsForBudgetCategory(
+		c.Request().Context(),
+		userID,
+		category.Category,
+		category.Tags,
+		category.MatchLogic,
+		budget.StartDate,
+		endDate,
+		limit,
+		offset,
+	)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get transactions")
+	}
+
+	// Convert to pointer slice for response
+	transactionPtrs := make([]*domain.Transaction, len(transactions))
+	for i := range transactions {
+		transactionPtrs[i] = &transactions[i]
+	}
+
+	response := domain.CategoryTransactionsResponse{
+		Transactions: transactionPtrs,
+		TotalCount:   totalCount,
+		TotalAmount:  totalAmount,
+		HasMore:      offset+len(transactions) < totalCount,
+	}
+
+	return c.JSON(http.StatusOK, response)
 }

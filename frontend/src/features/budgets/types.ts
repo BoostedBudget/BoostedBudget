@@ -2,6 +2,7 @@
 
 // Re-export shared matching types for convenience
 import { MatchLogic } from '../../shared/types/matching';
+import type { Transaction } from '../transactions/types';
 export type { MatchLogic } from '../../shared/types/matching';
 
 // Budget period type matching backend domain
@@ -193,4 +194,19 @@ export function computeSavingsRemaining(goal: SavingsGoal): number {
 // Format category hierarchy for display
 export function formatCategoryPath(category: string[]): string {
   return category.join(' > ');
+}
+
+// =============================================================================
+// Issue #499: Transaction-Budget Linking UI
+// =============================================================================
+
+/**
+ * Response type for GET /budgets/:id/categories/:categoryId/transactions
+ * Returns paginated transactions matching a budget category
+ */
+export interface CategoryTransactionsResponse {
+  transactions: Transaction[];
+  total_count: number;
+  total_amount: number;
+  has_more: boolean;
 }
