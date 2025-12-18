@@ -2,6 +2,7 @@
 
 // Re-export shared matching types for convenience
 import { MatchLogic } from '../../shared/types/matching';
+import type { Transaction } from '../transactions/types';
 export type { MatchLogic } from '../../shared/types/matching';
 
 // Budget period type matching backend domain
@@ -198,8 +199,6 @@ export function formatCategoryPath(category: string[]): string {
 // =============================================================================
 // Issue #499: Transaction-Budget Linking UI
 // =============================================================================
-
-import type { Transaction } from '../../transactions/types';
 
 /**
  * Response type for GET /budgets/:id/categories/:categoryId/transactions
