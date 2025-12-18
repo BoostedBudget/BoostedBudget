@@ -172,6 +172,16 @@
   color: var(--gray-100, #f3f4f6);
 }
 
+/* Issue #498: Income Section */
+.budget-detail-page__income-section {
+  margin-top: 1.5rem;
+}
+
+/* Issue #498: Unallocated Funds Section */
+.budget-detail-page__unallocated-section {
+  margin-top: 1.5rem;
+}
+
 /* Content section */
 .budget-detail-page__content {
   margin-top: 2rem;
