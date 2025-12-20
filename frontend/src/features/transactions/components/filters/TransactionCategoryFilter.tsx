@@ -105,7 +105,7 @@ export function TransactionCategoryFilter({
 
       {/* Dropdown menu */}
       {isOpen && !loading && (
-        <div className="absolute z-10 mt-1 w-full max-h-72 bg-white border border-gray-200 rounded-lg shadow-lg top-full">
+        <div className="absolute left-0 z-10 mt-1 min-w-full max-w-xs max-h-72 bg-white border border-gray-200 rounded-lg shadow-lg top-full">
           {/* Search input */}
           <div className="p-2 border-b border-gray-100">
             <input

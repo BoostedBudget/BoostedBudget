@@ -74,7 +74,7 @@ export function TransactionAccountFilter({
   }
 
   return (
-    <div className="flex flex-col gap-1" ref={dropdownRef}>
+    <div className="flex flex-col gap-1 relative" ref={dropdownRef}>
       <label className="text-sm font-medium text-gray-700">Accounts</label>
 
       {/* Dropdown trigger */}
@@ -101,7 +101,7 @@ export function TransactionAccountFilter({
 
       {/* Dropdown menu */}
       {isOpen && !loading && (
-        <div className="absolute z-10 mt-1 w-full max-h-60 overflow-auto bg-white border border-gray-200 rounded-lg shadow-lg">
+        <div className="absolute left-0 z-10 mt-1 min-w-full max-w-xs max-h-60 overflow-auto bg-white border border-gray-200 rounded-lg shadow-lg">
           {/* Select All / Clear All */}
           <div className="flex justify-between p-2 border-b border-gray-100">
             <button
