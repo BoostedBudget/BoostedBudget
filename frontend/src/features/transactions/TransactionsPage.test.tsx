@@ -8,10 +8,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { BrowserRouter } from 'react-router-dom'
 import { TransactionsPage } from './TransactionsPage'
 import * as transactionsApi from './api/transactionsApi'
 import * as tagsApi from '../tags/api/tagsApi'
 import * as categoriesApi from '../categories/api/categoriesApi'
+import * as plaidApi from '../accounts/api/plaidApi'
 import type { GetTransactionsResponse } from './types'
 import type { UserTag } from '../tags/types'
 import type { CustomCategory } from '../categories/types'
@@ -20,6 +22,12 @@ import type { CustomCategory } from '../categories/types'
 vi.mock('./api/transactionsApi')
 vi.mock('../tags/api/tagsApi')
 vi.mock('../categories/api/categoriesApi')
+vi.mock('../accounts/api/plaidApi')
+
+// Wrapper component with Router
+function renderWithRouter(ui: React.ReactElement) {
+  return render(<BrowserRouter>{ui}</BrowserRouter>)
+}
 
 describe('TransactionsPage', () => {
   const mockTransactionsResponse: GetTransactionsResponse = {
@@ -110,6 +118,13 @@ describe('TransactionsPage', () => {
     // Default mocks for tags and categories
     vi.mocked(tagsApi.fetchTags).mockResolvedValue(mockTags)
     vi.mocked(categoriesApi.fetchCategories).mockResolvedValue(mockCategories)
+    // Mock plaid API for filter panel accounts
+    vi.mocked(plaidApi.fetchAccounts).mockResolvedValue({
+      accounts: [],
+      total_count: 0,
+    })
+    // Mock Plaid categories for filter panel
+    vi.mocked(categoriesApi.fetchPlaidCategories).mockResolvedValue([])
   })
 
   describe('Initial Loading', () => {
@@ -118,14 +133,14 @@ describe('TransactionsPage', () => {
         () => new Promise(() => {}) // Never resolves
       )
 
-      render(<TransactionsPage />)
+      renderWithRouter(<TransactionsPage />)
       expect(screen.getByText(/loading/i)).toBeInTheDocument()
     })
 
     it('should load and display transactions on mount', async () => {
       vi.mocked(transactionsApi.fetchTransactions).mockResolvedValue(mockTransactionsResponse)
 
-      render(<TransactionsPage />)
+      renderWithRouter(<TransactionsPage />)
 
       await waitFor(() => {
         expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
@@ -141,7 +156,7 @@ describe('TransactionsPage', () => {
         new Error('Network error')
       )
 
-      render(<TransactionsPage />)
+      renderWithRouter(<TransactionsPage />)
 
       await waitFor(() => {
         expect(screen.getByText(/failed to load/i)).toBeInTheDocument()
@@ -153,7 +168,7 @@ describe('TransactionsPage', () => {
         new Error('Network error')
       )
 
-      render(<TransactionsPage />)
+      renderWithRouter(<TransactionsPage />)
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
@@ -167,7 +182,7 @@ describe('TransactionsPage', () => {
         .mockRejectedValueOnce(new Error('Network error'))
         .mockResolvedValueOnce(mockTransactionsResponse)
 
-      render(<TransactionsPage />)
+      renderWithRouter(<TransactionsPage />)
 
       await waitFor(() => {
         expect(screen.getByText(/failed to load/i)).toBeInTheDocument()
@@ -192,7 +207,7 @@ describe('TransactionsPage', () => {
         has_more: false,
       })
 
-      render(<TransactionsPage />)
+      renderWithRouter(<TransactionsPage />)
 
       await waitFor(() => {
         expect(screen.getByText(/no transactions/i)).toBeInTheDocument()
@@ -204,7 +219,7 @@ describe('TransactionsPage', () => {
     it('should display all transactions in a list', async () => {
       vi.mocked(transactionsApi.fetchTransactions).mockResolvedValue(mockTransactionsResponse)
 
-      render(<TransactionsPage />)
+      renderWithRouter(<TransactionsPage />)
 
       await waitFor(() => {
         expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
@@ -216,7 +231,7 @@ describe('TransactionsPage', () => {
     it('should show total count', async () => {
       vi.mocked(transactionsApi.fetchTransactions).mockResolvedValue(mockTransactionsResponse)
 
-      render(<TransactionsPage />)
+      renderWithRouter(<TransactionsPage />)
 
       await waitFor(() => {
         expect(screen.getByText(/25.*transaction/i)).toBeInTheDocument()
@@ -231,7 +246,7 @@ describe('TransactionsPage', () => {
         has_more: false,
       })
 
-      render(<TransactionsPage />)
+      renderWithRouter(<TransactionsPage />)
 
       await waitFor(() => {
         expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
@@ -246,7 +261,7 @@ describe('TransactionsPage', () => {
         has_more: true,
       })
 
-      render(<TransactionsPage />)
+      renderWithRouter(<TransactionsPage />)
 
       await waitFor(() => {
         expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
@@ -258,7 +273,7 @@ describe('TransactionsPage', () => {
     it('should not show previous button on first page', async () => {
       vi.mocked(transactionsApi.fetchTransactions).mockResolvedValue(mockTransactionsResponse)
 
-      render(<TransactionsPage />)
+      renderWithRouter(<TransactionsPage />)
 
       await waitFor(() => {
         expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
@@ -289,7 +304,7 @@ describe('TransactionsPage', () => {
           has_more: false,
         })
 
-      render(<TransactionsPage />)
+      renderWithRouter(<TransactionsPage />)
 
       await waitFor(() => {
         expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
@@ -308,7 +323,7 @@ describe('TransactionsPage', () => {
     it('should have search input', async () => {
       vi.mocked(transactionsApi.fetchTransactions).mockResolvedValue(mockTransactionsResponse)
 
-      render(<TransactionsPage />)
+      renderWithRouter(<TransactionsPage />)
 
       await waitFor(() => {
         expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
@@ -328,7 +343,7 @@ describe('TransactionsPage', () => {
           total_count: 1,
         })
 
-      render(<TransactionsPage />)
+      renderWithRouter(<TransactionsPage />)
 
       await waitFor(() => {
         expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
@@ -357,7 +372,7 @@ describe('TransactionsPage', () => {
     it('should have proper heading structure', async () => {
       vi.mocked(transactionsApi.fetchTransactions).mockResolvedValue(mockTransactionsResponse)
 
-      render(<TransactionsPage />)
+      renderWithRouter(<TransactionsPage />)
 
       await waitFor(() => {
         expect(screen.getByRole('heading', { name: /transactions/i })).toBeInTheDocument()
@@ -367,7 +382,7 @@ describe('TransactionsPage', () => {
     it('should have main landmark', async () => {
       vi.mocked(transactionsApi.fetchTransactions).mockResolvedValue(mockTransactionsResponse)
 
-      const { container } = render(<TransactionsPage />)
+      const { container } = renderWithRouter(<TransactionsPage />)
 
       await waitFor(() => {
         expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
@@ -381,7 +396,7 @@ describe('TransactionsPage', () => {
     it('should fetch tags and categories on mount', async () => {
       vi.mocked(transactionsApi.fetchTransactions).mockResolvedValue(mockTransactionsResponse)
 
-      render(<TransactionsPage />)
+      renderWithRouter(<TransactionsPage />)
 
       await waitFor(() => {
         expect(tagsApi.fetchTags).toHaveBeenCalled()
@@ -393,7 +408,7 @@ describe('TransactionsPage', () => {
       const user = userEvent.setup()
       vi.mocked(transactionsApi.fetchTransactions).mockResolvedValue(mockTransactionsResponse)
 
-      render(<TransactionsPage />)
+      renderWithRouter(<TransactionsPage />)
 
       await waitFor(() => {
         expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
@@ -414,7 +429,7 @@ describe('TransactionsPage', () => {
       const user = userEvent.setup()
       vi.mocked(transactionsApi.fetchTransactions).mockResolvedValue(mockTransactionsResponse)
 
-      render(<TransactionsPage />)
+      renderWithRouter(<TransactionsPage />)
 
       await waitFor(() => {
         expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
@@ -434,7 +449,7 @@ describe('TransactionsPage', () => {
       const user = userEvent.setup()
       vi.mocked(transactionsApi.fetchTransactions).mockResolvedValue(mockTransactionsResponse)
 
-      render(<TransactionsPage />)
+      renderWithRouter(<TransactionsPage />)
 
       await waitFor(() => {
         expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
@@ -463,7 +478,7 @@ describe('TransactionsPage', () => {
       vi.mocked(categoriesApi.fetchCategories).mockRejectedValue(new Error('Failed to fetch categories'))
 
       // Should not crash
-      render(<TransactionsPage />)
+      renderWithRouter(<TransactionsPage />)
 
       await waitFor(() => {
         expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
@@ -473,7 +488,7 @@ describe('TransactionsPage', () => {
     it('should make transaction cards clickable', async () => {
       vi.mocked(transactionsApi.fetchTransactions).mockResolvedValue(mockTransactionsResponse)
 
-      render(<TransactionsPage />)
+      renderWithRouter(<TransactionsPage />)
 
       await waitFor(() => {
         expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()

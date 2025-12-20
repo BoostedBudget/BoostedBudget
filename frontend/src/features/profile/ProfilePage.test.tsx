@@ -353,6 +353,11 @@ describe('ProfilePage', () => {
 
       await user.selectOptions(regionSelect, 'lhr')
 
+      // Wait for form state to update after selection
+      await waitFor(() => {
+        expect((regionSelect as HTMLSelectElement).value).toBe('lhr')
+      })
+
       const saveButton = screen.getByRole('button', { name: /save/i })
       await user.click(saveButton)
 

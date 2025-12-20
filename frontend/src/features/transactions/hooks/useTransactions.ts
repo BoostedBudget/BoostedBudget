@@ -105,12 +105,30 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
 
         // Sanitize filters - remove empty strings
         const sanitizedFilters: TransactionFilters = {}
+        // Legacy single-value filters (backward compatibility)
         if (filters.account_id) sanitizedFilters.account_id = filters.account_id
         if (filters.start_date) sanitizedFilters.start_date = filters.start_date
         if (filters.end_date) sanitizedFilters.end_date = filters.end_date
         if (filters.category) sanitizedFilters.category = filters.category
         if (filters.search) sanitizedFilters.search = filters.search
         if (filters.pending !== undefined) sanitizedFilters.pending = filters.pending
+
+        // Issue #529: New multi-value and range filters
+        if (filters.account_ids && filters.account_ids.length > 0) {
+          sanitizedFilters.account_ids = filters.account_ids
+        }
+        if (filters.categories && filters.categories.length > 0) {
+          sanitizedFilters.categories = filters.categories
+        }
+        if (filters.min_amount !== undefined) {
+          sanitizedFilters.min_amount = filters.min_amount
+        }
+        if (filters.max_amount !== undefined) {
+          sanitizedFilters.max_amount = filters.max_amount
+        }
+        if (filters.amount_type && filters.amount_type !== 'all') {
+          sanitizedFilters.amount_type = filters.amount_type
+        }
 
         const result = await fetchTransactions({
           limit,

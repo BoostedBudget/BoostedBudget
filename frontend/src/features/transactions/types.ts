@@ -60,13 +60,33 @@ export interface Transaction {
  * All fields are optional - null/undefined means no filter
  */
 export interface TransactionFilters {
+  // Existing (deprecated single-value filters)
   account_id?: string
   start_date?: string // ISO 8601 date (YYYY-MM-DD)
   end_date?: string // ISO 8601 date (YYYY-MM-DD)
-  category?: string // Partial match, case-insensitive
+  category?: string // Partial match, case-insensitive (deprecated: use categories)
   search?: string // Search in name or merchant_name, case-insensitive
   pending?: boolean // Filter by pending status
+
+  // Issue #529: Extended filter support
+  account_ids?: string[] // Multiple account IDs
+  categories?: string[] // Multiple categories
+  min_amount?: number // Minimum absolute transaction amount
+  max_amount?: number // Maximum absolute transaction amount
+  amount_type?: 'income' | 'expense' | 'all' // Transaction type filter
 }
+
+/**
+ * Date range preset options for quick filtering
+ * Issue #529: Transaction page filtering
+ */
+export type DatePreset = '7d' | '30d' | '90d' | '1y' | 'all' | 'custom'
+
+/**
+ * Status filter options
+ * Issue #529: Transaction page filtering
+ */
+export type StatusFilter = 'all' | 'posted' | 'pending'
 
 /**
  * Response from GET /v1/transactions

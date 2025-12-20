@@ -1,32 +1,94 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import type { CSSProperties, ReactElement } from 'react'
+import { List } from 'react-window'
 import { useTransactions } from './hooks/useTransactions'
+import { useTransactionFilters } from './hooks/useTransactionFilters'
 import { TransactionCard } from './components/TransactionCard'
 import { TransactionEditor } from './components/TransactionEditor'
+import { TransactionFilterPanel } from './components/TransactionFilterPanel'
 import { fetchTags } from '../tags/api/tagsApi'
 import { fetchCategories } from '../categories/api/categoriesApi'
-import type { Transaction, TransactionFilters } from './types'
+import type { Transaction } from './types'
 import type { UserTag } from '../tags/types'
 import type { CustomCategory } from '../categories/types'
 import './TransactionsPage.css'
 
+/** Height of each transaction item in the virtualized list (in pixels) */
+const ITEM_HEIGHT = 96
+
+/** Height of the virtualized list container */
+const LIST_HEIGHT = 600
+
+/** Props for the virtualized list row component */
+interface TransactionRowProps {
+  transactions: Transaction[]
+  onEdit: (transaction: Transaction) => void
+}
+
+/**
+ * Row component for the virtualized transaction list
+ * react-window v2 uses a component-based API for rows
+ */
+function TransactionRow({
+  index,
+  style,
+  transactions,
+  onEdit,
+}: {
+  ariaAttributes: {
+    'aria-posinset': number
+    'aria-setsize': number
+    role: 'listitem'
+  }
+  index: number
+  style: CSSProperties
+} & TransactionRowProps): ReactElement {
+  const transaction = transactions[index]
+  return (
+    <div style={style} className="virtualized-list-item">
+      <TransactionCard transaction={transaction} onEdit={onEdit} />
+    </div>
+  )
+}
+
 /**
  * Transactions Page
  *
- * Displays a list of transactions with search and pagination.
+ * Displays a list of transactions with comprehensive filtering and pagination.
  *
  * Features:
+ * - Multi-filter support (date, account, category, type, amount, status)
+ * - URL state sync for shareable/bookmarkable filters
  * - Search transactions with 300ms debounce
  * - Pagination with Next/Previous buttons
- * - Total count display
+ * - Total count display showing filtered vs total
  * - Loading and error states
  * - Empty state when no transactions
+ *
+ * Issue #529: Transaction page filtering
  */
 export function TransactionsPage() {
-  const [filters, setFilters] = useState<TransactionFilters>({})
+  const {
+    filters,
+    datePreset,
+    statusFilter,
+    activeFilterCount,
+    hasActiveFilters,
+    setFilter,
+    setFilters,
+    clearFilter,
+    clearAllFilters,
+    setDatePreset,
+    setCustomDateRange,
+    setStatusFilter,
+  } = useTransactionFilters()
+
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null)
   const [isEditorOpen, setIsEditorOpen] = useState(false)
   const [availableTags, setAvailableTags] = useState<UserTag[]>([])
   const [availableCategories, setAvailableCategories] = useState<CustomCategory[]>([])
+  const [listWidth, setListWidth] = useState(0)
+  const listContainerRef = useRef<HTMLDivElement>(null)
 
   const {
     data,
@@ -56,6 +118,19 @@ export function TransactionsPage() {
       }
     }
     loadMetadata()
+  }, [])
+
+  // Measure list container width for virtualized list
+  useEffect(() => {
+    const updateWidth = () => {
+      if (listContainerRef.current) {
+        setListWidth(listContainerRef.current.offsetWidth)
+      }
+    }
+
+    updateWidth()
+    window.addEventListener('resize', updateWidth)
+    return () => window.removeEventListener('resize', updateWidth)
   }, [])
 
   // Handle opening the transaction editor
@@ -89,11 +164,11 @@ export function TransactionsPage() {
   // Handle search input change
   function handleSearchChange(event: React.ChangeEvent<HTMLInputElement>) {
     const searchValue = event.target.value
-    setFilters((prev) => ({
-      ...prev,
-      search: searchValue || undefined, // Remove if empty
-    }))
+    setFilter('search', searchValue || undefined) // Remove if empty
   }
+
+  // Calculate pending count from transactions data
+  const pendingCount = data?.transactions?.filter((t) => t.pending).length ?? 0
 
   // Loading state
   if (loading && !data) {
@@ -135,29 +210,89 @@ export function TransactionsPage() {
         />
       </div>
 
+      {/* Filter Panel - Issue #529 */}
+      <TransactionFilterPanel
+        filters={filters}
+        datePreset={datePreset}
+        statusFilter={statusFilter}
+        activeFilterCount={activeFilterCount}
+        hasActiveFilters={hasActiveFilters}
+        pendingCount={pendingCount}
+        onFilterChange={setFilter}
+        onFiltersChange={setFilters}
+        onDatePresetChange={setDatePreset}
+        onCustomDateChange={setCustomDateRange}
+        onStatusFilterChange={setStatusFilter}
+        onClearFilter={clearFilter}
+        onClearAllFilters={clearAllFilters}
+        disabled={loading}
+      />
+
       {isEmpty ? (
         <div className="empty-state">
           <p className="empty-state__message">
             No transactions found.
-            {filters.search && ' Try adjusting your search.'}
+            {hasActiveFilters && ' Try adjusting your filters.'}
+            {filters.search && !hasActiveFilters && ' Try adjusting your search.'}
           </p>
+          {hasActiveFilters && (
+            <button
+              onClick={clearAllFilters}
+              className="btn-clear-filters"
+            >
+              Clear all filters
+            </button>
+          )}
         </div>
       ) : (
         <>
           <div className="transactions-info">
             <p className="transactions-count">
-              {totalCount} {totalCount === 1 ? 'transaction' : 'transactions'} total
+              {hasActiveFilters ? (
+                <>
+                  Showing {transactions.length} of {totalCount}{' '}
+                  {totalCount === 1 ? 'transaction' : 'transactions'}
+                </>
+              ) : (
+                <>
+                  {totalCount} {totalCount === 1 ? 'transaction' : 'transactions'} total
+                </>
+              )}
             </p>
           </div>
 
-          <div className="transactions-list">
-            {transactions.map((transaction) => (
-              <TransactionCard
-                key={transaction.id}
-                transaction={transaction}
-                onEdit={handleEditTransaction}
+          <div className="transactions-list" ref={listContainerRef}>
+            {/*
+              For smaller lists (< 20 items) or when width isn't measured yet (tests),
+              use simple rendering for better test compatibility.
+              For larger lists, use virtualization for performance.
+            */}
+            {transactions.length < 20 || listWidth === 0 ? (
+              // Simple list for small datasets or test environments
+              transactions.map((transaction) => (
+                <TransactionCard
+                  key={transaction.id}
+                  transaction={transaction}
+                  onEdit={handleEditTransaction}
+                />
+              ))
+            ) : (
+              // Virtualized list for large datasets
+              <List<TransactionRowProps>
+                style={{
+                  height: Math.min(LIST_HEIGHT, transactions.length * ITEM_HEIGHT),
+                  width: listWidth,
+                }}
+                className="virtualized-list"
+                rowComponent={TransactionRow}
+                rowCount={transactions.length}
+                rowHeight={ITEM_HEIGHT}
+                rowProps={{
+                  transactions,
+                  onEdit: handleEditTransaction,
+                }}
               />
-            ))}
+            )}
           </div>
 
           {(hasMore || currentPage > 0) && (
