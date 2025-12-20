@@ -31,6 +31,19 @@ export interface ExchangePublicTokenResponse {
 }
 
 /**
+ * Valid icon identifiers for account customization (Issue #307)
+ */
+export const VALID_ACCOUNT_ICONS = [
+  'wallet', 'piggy-bank', 'credit-card', 'bank', 'building',
+  'briefcase', 'dollar', 'euro', 'pound', 'yen',
+  'chart', 'trending-up', 'trending-down', 'lock', 'unlock',
+  'star', 'heart', 'home', 'car', 'plane',
+  'shopping-cart', 'gift', 'coffee', 'utensils', 'graduation-cap',
+] as const
+
+export type AccountIcon = typeof VALID_ACCOUNT_ICONS[number]
+
+/**
  * Bank account with details and institution information
  * Returned from GET /v1/accounts
  */
@@ -48,8 +61,59 @@ export interface Account {
   available_balance?: number
   currency_code: string
   institution_name?: string // From linked_items JOIN (optional)
+
+  // Customization fields (Issue #307)
+  nickname?: string // User-defined display name
+  custom_color?: string // Hex color #RRGGBB
+  custom_icon?: AccountIcon // Predefined icon identifier
+  custom_emoji?: string // UTF-8 emoji
+  display_order?: number // Sort order
+  is_hidden?: boolean // Hidden from default views
+
   created_at: string // ISO 8601 date-time
   updated_at: string // ISO 8601 date-time
+}
+
+/**
+ * Request body for PATCH /v1/accounts/:id (Issue #307)
+ * All fields optional - omit to keep current value, empty string to clear
+ */
+export interface UpdateAccountRequest {
+  nickname?: string | null
+  custom_color?: string | null
+  custom_icon?: AccountIcon | string | null
+  custom_emoji?: string | null
+  display_order?: number | null
+  is_hidden?: boolean | null
+}
+
+/**
+ * Response from PATCH /v1/accounts/:id (Issue #307)
+ */
+export interface UpdateAccountResponse {
+  account: Account
+}
+
+/**
+ * Single account order for reordering (Issue #307)
+ */
+export interface AccountOrder {
+  account_id: string
+  display_order: number
+}
+
+/**
+ * Request body for PATCH /v1/accounts/reorder (Issue #307)
+ */
+export interface ReorderAccountsRequest {
+  account_orders: AccountOrder[]
+}
+
+/**
+ * Response from PATCH /v1/accounts/reorder (Issue #307)
+ */
+export interface ReorderAccountsResponse {
+  success: boolean
 }
 
 /**

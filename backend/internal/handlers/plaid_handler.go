@@ -120,6 +120,8 @@ type GetAccountsResponse struct {
 
 // GetAccounts handles GET /accounts
 // Retrieves all linked bank accounts for the authenticated user with institution information
+// Query params:
+//   - include_hidden (optional): If "true", includes hidden accounts. Default: false
 func (h *PlaidHandler) GetAccounts(c echo.Context) error {
 	// Extract user_id from context (set by Auth0 middleware)
 	userID, err := middleware.GetUserID(c)
@@ -127,8 +129,11 @@ func (h *PlaidHandler) GetAccounts(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusUnauthorized, "User not authenticated")
 	}
 
-	// Get accounts via service
-	accounts, err := h.accountService.GetAccounts(c.Request().Context(), userID)
+	// Check for include_hidden query param (Issue #307)
+	includeHidden := c.QueryParam("include_hidden") == "true"
+
+	// Get accounts via service with hidden filter
+	accounts, err := h.accountService.GetAccountsFiltered(c.Request().Context(), userID, includeHidden)
 	if err != nil {
 		// Log error details server-side (don't expose internals to client)
 		c.Logger().Errorf("Failed to get accounts for user %s: %v", userID, err)
@@ -199,4 +204,100 @@ func (h *PlaidHandler) DisconnectInstitution(c echo.Context) error {
 
 	// Return 204 No Content on success
 	return c.NoContent(http.StatusNoContent)
+}
+
+// UpdateAccountResponse represents the response when updating an account
+type UpdateAccountResponse struct {
+	Account domain.Account `json:"account"`
+}
+
+// UpdateAccount handles PATCH /accounts/:id
+// Updates account customization fields (Issue #307)
+// Supports: nickname, custom_color, custom_icon, custom_emoji, display_order, is_hidden
+func (h *PlaidHandler) UpdateAccount(c echo.Context) error {
+	// Extract user_id from context (set by Auth0 middleware)
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "User not authenticated")
+	}
+
+	// Get account ID from URL parameter
+	accountID := c.Param("id")
+
+	// Parse request body
+	var req domain.UpdateAccountRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
+	}
+
+	// Update account via service (validates ownership and fields)
+	account, err := h.accountService.UpdateAccount(c.Request().Context(), accountID, userID, &req)
+	if err != nil {
+		// Handle specific error types
+		if err == repository.ErrAccountNotFound {
+			return echo.NewHTTPError(http.StatusNotFound, "Account not found")
+		}
+		// Check for validation errors (returned from domain.UpdateAccountRequest.Validate())
+		if err.Error() == "custom_color must be a valid hex color (format: #RRGGBB)" ||
+			err.Error() == "custom_icon must be one of the allowed icons" ||
+			err.Error() == "nickname must not exceed 255 characters" ||
+			err.Error() == "custom_emoji must not exceed 10 characters" {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		// Log error details server-side (don't expose internals to client)
+		c.Logger().Errorf("Failed to update account %s for user %s: %v", accountID, userID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update account")
+	}
+
+	// Build response
+	response := UpdateAccountResponse{
+		Account: *account,
+	}
+
+	return c.JSON(http.StatusOK, response)
+}
+
+// ReorderAccountsResponse represents the response when reordering accounts
+type ReorderAccountsResponse struct {
+	Success bool `json:"success"`
+}
+
+// ReorderAccounts handles PATCH /accounts/reorder
+// Bulk updates display_order for multiple accounts (Issue #307)
+// Used for drag-and-drop reordering
+func (h *PlaidHandler) ReorderAccounts(c echo.Context) error {
+	// Extract user_id from context (set by Auth0 middleware)
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "User not authenticated")
+	}
+
+	// Parse request body
+	var req domain.ReorderAccountsRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
+	}
+
+	// Reorder accounts via service
+	err = h.accountService.ReorderAccounts(c.Request().Context(), userID, &req)
+	if err != nil {
+		// Handle specific error types
+		if err == repository.ErrAccountNotFound {
+			return echo.NewHTTPError(http.StatusNotFound, "One or more accounts not found")
+		}
+		// Check for empty list error
+		if err.Error() == "account orders cannot be empty" {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		// Log error details server-side (don't expose internals to client)
+		c.Logger().Errorf("Failed to reorder accounts for user %s: %v", userID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to reorder accounts")
+	}
+
+	// Build response
+	response := ReorderAccountsResponse{
+		Success: true,
+	}
+
+	return c.JSON(http.StatusOK, response)
 }

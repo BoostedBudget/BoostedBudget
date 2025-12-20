@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -29,6 +30,21 @@ type AccountService interface {
 	// GetAccounts retrieves all linked bank accounts for a user with institution information
 	// NOTE: After PR #197, this accepts internal user UUID, not Auth0 ID
 	GetAccounts(ctx context.Context, userID string) ([]domain.Account, error)
+
+	// GetAccountsFiltered retrieves accounts with optional hidden filter (Issue #307)
+	// includeHidden=false: Returns only visible accounts (default view)
+	// includeHidden=true: Returns all accounts including hidden ones
+	GetAccountsFiltered(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error)
+
+	// UpdateAccount updates account customization fields (Issue #307)
+	// Supports: nickname, custom_color, custom_icon, custom_emoji, display_order, is_hidden
+	// nil = no change, empty string = clear field
+	// Returns the updated account
+	UpdateAccount(ctx context.Context, accountID, userID string, req *domain.UpdateAccountRequest) (*domain.Account, error)
+
+	// ReorderAccounts bulk updates display_order for multiple accounts (Issue #307)
+	// Used for drag-and-drop reordering
+	ReorderAccounts(ctx context.Context, userID string, req *domain.ReorderAccountsRequest) error
 
 	// DeleteAccount deletes a single account with ownership validation.
 	// Only the account owner can delete their account.
@@ -326,6 +342,129 @@ func (s *accountService) DisconnectInstitution(ctx context.Context, linkedItemID
 	err = s.linkedItemRepo.DeleteByUser(ctx, linkedItemID, userID)
 	if err != nil {
 		return err // Returns ErrLinkedItemNotFound if deletion fails
+	}
+
+	return nil
+}
+
+// GetAccountsFiltered retrieves accounts with optional hidden filter (Issue #307)
+// Similar to GetAccounts but supports filtering hidden accounts.
+func (s *accountService) GetAccountsFiltered(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error) {
+	// Fetch user by internal UUID to verify user exists
+	_, err := s.userRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		if err == repository.ErrUserNotFound {
+			// User authenticated via Auth0 but not yet in our database
+			// Return empty list instead of error (user hasn't linked any accounts yet)
+			return []domain.Account{}, nil
+		}
+		// For other errors, also return empty list for consistency with GetAccounts
+		return []domain.Account{}, nil
+	}
+
+	// Query accounts with hidden filter using internal UUID
+	accounts, err := s.accountRepo.GetAccountsWithInstitutionFiltered(ctx, userID, includeHidden)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get accounts: %w", err)
+	}
+
+	return accounts, nil
+}
+
+// UpdateAccount updates account customization fields (Issue #307)
+//
+// Flow:
+// 1. Validate the request (hex color, icon, nickname length, etc.)
+// 2. Fetch existing account with ownership validation
+// 3. Apply updates to account (nil = no change, empty string = clear)
+// 4. Persist updated account to database
+// 5. Return updated account
+func (s *accountService) UpdateAccount(
+	ctx context.Context,
+	accountID, userID string,
+	req *domain.UpdateAccountRequest,
+) (*domain.Account, error) {
+	// Step 1: Validate the request
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
+
+	// Step 2: Fetch existing account with ownership validation
+	account, err := s.accountRepo.GetByIDAndUser(ctx, accountID, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Step 3: Apply updates (nil = no change, empty string = clear)
+	if req.Nickname != nil {
+		trimmed := strings.TrimSpace(*req.Nickname)
+		if trimmed == "" {
+			account.Nickname = nil // Clear the field
+		} else {
+			account.Nickname = &trimmed
+		}
+	}
+
+	if req.CustomColor != nil {
+		if *req.CustomColor == "" {
+			account.CustomColor = nil // Clear the field
+		} else {
+			// Uppercase hex color for consistency
+			upper := strings.ToUpper(*req.CustomColor)
+			account.CustomColor = &upper
+		}
+	}
+
+	if req.CustomIcon != nil {
+		if *req.CustomIcon == "" {
+			account.CustomIcon = nil // Clear the field
+		} else {
+			account.CustomIcon = req.CustomIcon
+		}
+	}
+
+	if req.CustomEmoji != nil {
+		if *req.CustomEmoji == "" {
+			account.CustomEmoji = nil // Clear the field
+		} else {
+			account.CustomEmoji = req.CustomEmoji
+		}
+	}
+
+	if req.DisplayOrder != nil {
+		account.DisplayOrder = req.DisplayOrder
+	}
+
+	if req.IsHidden != nil {
+		account.IsHidden = *req.IsHidden
+	}
+
+	// Step 4: Persist updated account
+	if err := s.accountRepo.Update(ctx, account, userID); err != nil {
+		return nil, fmt.Errorf("failed to update account: %w", err)
+	}
+
+	// Step 5: Return updated account
+	return account, nil
+}
+
+// ReorderAccounts bulk updates display_order for multiple accounts (Issue #307)
+//
+// Used for drag-and-drop reordering. Validates that order list is not empty
+// and delegates to repository for atomic updates.
+func (s *accountService) ReorderAccounts(
+	ctx context.Context,
+	userID string,
+	req *domain.ReorderAccountsRequest,
+) error {
+	// Validate that order list is not empty
+	if len(req.AccountOrders) == 0 {
+		return errors.New("account orders cannot be empty")
+	}
+
+	// Delegate to repository for atomic update
+	if err := s.accountRepo.UpdateDisplayOrders(ctx, userID, req.AccountOrders); err != nil {
+		return fmt.Errorf("failed to reorder accounts: %w", err)
 	}
 
 	return nil
