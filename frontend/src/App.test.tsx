@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App'
 
@@ -94,7 +95,7 @@ describe('App', () => {
       })
     })
 
-    it('should render logout button', async () => {
+    it('should render user menu button', async () => {
       render(
         <BrowserRouter>
           <App />
@@ -102,7 +103,7 @@ describe('App', () => {
       )
 
       await waitFor(() => {
-        expect(screen.getByText(/log out/i)).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: /user menu/i })).toBeInTheDocument()
       })
     })
 
@@ -118,24 +119,38 @@ describe('App', () => {
       })
     })
 
-    it('should display user name', async () => {
+    it('should display user name in dropdown when opened', async () => {
+      const user = userEvent.setup()
       render(
         <BrowserRouter>
           <App />
         </BrowserRouter>
       )
+
+      // Open the user dropdown
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /user menu/i })).toBeInTheDocument()
+      })
+      await user.click(screen.getByRole('button', { name: /user menu/i }))
 
       await waitFor(() => {
         expect(screen.getByText(mockUser.name)).toBeInTheDocument()
       })
     })
 
-    it('should display user email', async () => {
+    it('should display user email in dropdown when opened', async () => {
+      const user = userEvent.setup()
       render(
         <BrowserRouter>
           <App />
         </BrowserRouter>
       )
+
+      // Open the user dropdown
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /user menu/i })).toBeInTheDocument()
+      })
+      await user.click(screen.getByRole('button', { name: /user menu/i }))
 
       await waitFor(() => {
         expect(screen.getByText(mockUser.email)).toBeInTheDocument()
