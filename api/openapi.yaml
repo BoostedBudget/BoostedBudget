@@ -691,6 +691,39 @@ paths:
           in: query
           schema:
             type: boolean
+        # Issue #529: Extended filter parameters
+        - name: account_ids
+          in: query
+          description: Comma-separated list of account UUIDs to filter by (supports multiple accounts)
+          schema:
+            type: string
+            example: "uuid1,uuid2,uuid3"
+        - name: categories
+          in: query
+          description: Comma-separated list of category names to filter by (searches both category_override and original category)
+          schema:
+            type: string
+            example: "Food and Drink,Shopping"
+        - name: min_amount
+          in: query
+          description: Minimum absolute amount filter (e.g., 10.00 matches transactions with |amount| >= 10.00)
+          schema:
+            type: number
+            format: double
+            minimum: 0
+        - name: max_amount
+          in: query
+          description: Maximum absolute amount filter (e.g., 100.00 matches transactions with |amount| <= 100.00)
+          schema:
+            type: number
+            format: double
+            minimum: 0
+        - name: amount_type
+          in: query
+          description: Filter by transaction type (income = positive amounts, expense = negative amounts)
+          schema:
+            type: string
+            enum: [income, expense]
       responses:
         '200':
           description: Transactions retrieved successfully

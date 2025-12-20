@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -31,12 +32,17 @@ func NewTransactionHandler(transactionService services.TransactionService) *Tran
 // Query Parameters:
 //   - limit (optional): Number of transactions to return (1-100, default 50)
 //   - offset (optional): Number of transactions to skip for pagination (default 0)
-//   - account_id (optional): Filter by specific account ID
+//   - account_id (optional): Filter by specific account ID (deprecated: use account_ids)
+//   - account_ids (optional): Filter by multiple account IDs (comma-separated)
 //   - start_date (optional): Filter transactions on or after this date (format: YYYY-MM-DD)
 //   - end_date (optional): Filter transactions on or before this date (format: YYYY-MM-DD)
-//   - category (optional): Filter by category string (case-insensitive partial match)
+//   - category (optional): Filter by category string (case-insensitive partial match, deprecated: use categories)
+//   - categories (optional): Filter by multiple categories (comma-separated)
 //   - search (optional): Search in merchant name or transaction name (case-insensitive)
 //   - pending (optional): Filter by pending status (true/false)
+//   - min_amount (optional): Filter by minimum absolute transaction amount
+//   - max_amount (optional): Filter by maximum absolute transaction amount
+//   - amount_type (optional): Filter by transaction type (income/expense/all)
 //
 // Response: JSON with transactions array and pagination metadata
 func (h *TransactionHandler) GetTransactions(c echo.Context) error {
@@ -68,9 +74,25 @@ func (h *TransactionHandler) GetTransactions(c echo.Context) error {
 	// Parse filter parameters
 	filters := domain.TransactionFilters{}
 
-	// Account ID filter
+	// Account ID filter (single, deprecated)
 	if accountID := c.QueryParam("account_id"); accountID != "" {
 		filters.AccountID = &accountID
+	}
+
+	// Account IDs filter (multi-value, Issue #529)
+	if accountIDsStr := c.QueryParam("account_ids"); accountIDsStr != "" {
+		accountIDs := strings.Split(accountIDsStr, ",")
+		// Filter out empty strings
+		validIDs := make([]string, 0, len(accountIDs))
+		for _, id := range accountIDs {
+			trimmed := strings.TrimSpace(id)
+			if trimmed != "" {
+				validIDs = append(validIDs, trimmed)
+			}
+		}
+		if len(validIDs) > 0 {
+			filters.AccountIDs = validIDs
+		}
 	}
 
 	// Date range filters
@@ -90,9 +112,25 @@ func (h *TransactionHandler) GetTransactions(c echo.Context) error {
 		filters.EndDate = &endDate
 	}
 
-	// Category filter
+	// Category filter (single, deprecated)
 	if category := c.QueryParam("category"); category != "" {
 		filters.Category = &category
+	}
+
+	// Categories filter (multi-value, Issue #529)
+	if categoriesStr := c.QueryParam("categories"); categoriesStr != "" {
+		categories := strings.Split(categoriesStr, ",")
+		// Filter out empty strings
+		validCategories := make([]string, 0, len(categories))
+		for _, cat := range categories {
+			trimmed := strings.TrimSpace(cat)
+			if trimmed != "" {
+				validCategories = append(validCategories, trimmed)
+			}
+		}
+		if len(validCategories) > 0 {
+			filters.Categories = validCategories
+		}
 	}
 
 	// Search filter
@@ -107,6 +145,36 @@ func (h *TransactionHandler) GetTransactions(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusBadRequest, "Invalid pending parameter (expected true or false)")
 		}
 		filters.Pending = &pending
+	}
+
+	// Min amount filter (Issue #529)
+	if minAmountStr := c.QueryParam("min_amount"); minAmountStr != "" {
+		minAmount, err := strconv.ParseFloat(minAmountStr, 64)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "Invalid min_amount parameter (expected number)")
+		}
+		filters.MinAmount = &minAmount
+	}
+
+	// Max amount filter (Issue #529)
+	if maxAmountStr := c.QueryParam("max_amount"); maxAmountStr != "" {
+		maxAmount, err := strconv.ParseFloat(maxAmountStr, 64)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "Invalid max_amount parameter (expected number)")
+		}
+		filters.MaxAmount = &maxAmount
+	}
+
+	// Amount type filter (Issue #529)
+	if amountType := c.QueryParam("amount_type"); amountType != "" {
+		validTypes := map[string]bool{"income": true, "expense": true, "all": true}
+		if !validTypes[amountType] {
+			return echo.NewHTTPError(http.StatusBadRequest, "Invalid amount_type parameter (expected income, expense, or all)")
+		}
+		// Don't set filter for "all" - it's the default behavior
+		if amountType != "all" {
+			filters.AmountType = &amountType
+		}
 	}
 
 	// Call service layer to fetch transactions
@@ -127,6 +195,8 @@ func (h *TransactionHandler) GetTransactions(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusBadRequest, "Offset must be non-negative")
 		case errors.Is(err, services.ErrInvalidDateRange):
 			return echo.NewHTTPError(http.StatusBadRequest, "Start date must be before or equal to end date")
+		case errors.Is(err, services.ErrInvalidAmountRange):
+			return echo.NewHTTPError(http.StatusBadRequest, "min_amount must be less than or equal to max_amount")
 		default:
 			c.Logger().Errorf("Failed to fetch transactions for user %s: %v", userID, err)
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to fetch transactions")

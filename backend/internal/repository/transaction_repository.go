@@ -538,11 +538,23 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 	args = append(args, userID)
 	argIndex++
 
-	// Optional filter: account_id
+	// Optional filter: account_id (single, deprecated)
 	if filters.AccountID != nil {
 		conditions = append(conditions, fmt.Sprintf("account_id = $%d", argIndex))
 		args = append(args, *filters.AccountID)
 		argIndex++
+	}
+
+	// Optional filter: account_ids (multi-value, Issue #529)
+	// Takes precedence over single account_id if both provided
+	if len(filters.AccountIDs) > 0 {
+		placeholders := make([]string, len(filters.AccountIDs))
+		for i, id := range filters.AccountIDs {
+			placeholders[i] = fmt.Sprintf("$%d", argIndex)
+			args = append(args, id)
+			argIndex++
+		}
+		conditions = append(conditions, fmt.Sprintf("account_id IN (%s)", strings.Join(placeholders, ", ")))
 	}
 
 	// Optional filter: start_date
@@ -559,11 +571,30 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 		argIndex++
 	}
 
-	// Optional filter: category (JSONB text search)
+	// Optional filter: category (JSONB text search, deprecated)
 	if filters.Category != nil {
 		conditions = append(conditions, fmt.Sprintf("category::text ILIKE $%d", argIndex))
 		args = append(args, "%"+*filters.Category+"%")
 		argIndex++
+	}
+
+	// Optional filter: categories (multi-value, Issue #529)
+	// Searches in both category_override and original category fields
+	if len(filters.Categories) > 0 {
+		var categoryConditions []string
+		for _, cat := range filters.Categories {
+			// Check category_override first (user-set category)
+			categoryConditions = append(categoryConditions,
+				fmt.Sprintf("(category_override IS NOT NULL AND category_override::text ILIKE $%d)", argIndex))
+			args = append(args, "%"+cat+"%")
+			argIndex++
+			// Also check original category
+			categoryConditions = append(categoryConditions,
+				fmt.Sprintf("category::text ILIKE $%d", argIndex))
+			args = append(args, "%"+cat+"%")
+			argIndex++
+		}
+		conditions = append(conditions, "("+strings.Join(categoryConditions, " OR ")+")")
 	}
 
 	// Optional filter: search (name OR merchant_name)
@@ -580,6 +611,33 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 		conditions = append(conditions, fmt.Sprintf("pending = $%d", argIndex))
 		args = append(args, *filters.Pending)
 		argIndex++
+	}
+
+	// Optional filter: min_amount (Issue #529)
+	// Filters by absolute amount (users see positive amounts in UI)
+	if filters.MinAmount != nil {
+		conditions = append(conditions, fmt.Sprintf("ABS(amount) >= $%d", argIndex))
+		args = append(args, *filters.MinAmount)
+		argIndex++
+	}
+
+	// Optional filter: max_amount (Issue #529)
+	if filters.MaxAmount != nil {
+		conditions = append(conditions, fmt.Sprintf("ABS(amount) <= $%d", argIndex))
+		args = append(args, *filters.MaxAmount)
+		argIndex++
+	}
+
+	// Optional filter: amount_type (Issue #529)
+	// income = positive amounts, expense = negative amounts
+	if filters.AmountType != nil {
+		switch *filters.AmountType {
+		case "income":
+			conditions = append(conditions, "amount > 0")
+		case "expense":
+			conditions = append(conditions, "amount < 0")
+		// "all" means no filter - handled in handler by not setting AmountType
+		}
 	}
 
 	// Combine all conditions with AND
