@@ -727,4 +727,190 @@ describeTransactionFiltering('Transaction Filtering - Authenticated User', () =>
       await expect(page.getByText(/4.*transactions.*total/i)).toBeVisible()
     })
   })
+
+  // ==========================================================================
+  // Performance Tests
+  // ==========================================================================
+
+  test.describe('Performance', () => {
+    /**
+     * Generate mock transactions for performance testing
+     */
+    function generateMockTransactions(count: number) {
+      const transactions = []
+      for (let i = 0; i < count; i++) {
+        transactions.push({
+          id: `txn-perf-${i}`,
+          user_id: 'user-123',
+          account_id: i % 2 === 0 ? 'acc-1' : 'acc-2',
+          linked_item_id: 'item-1',
+          source: 'plaid',
+          external_transaction_id: `plaid-txn-${i}`,
+          amount: i % 3 === 0 ? 100 + i : -(50 + i),
+          date: `2025-${String((i % 12) + 1).padStart(2, '0')}-15`,
+          name: `Transaction ${i}`,
+          merchant_name: `Merchant ${i}`,
+          category: i % 2 === 0 ? '["Food and Drink"]' : '["Shopping"]',
+          pending: i % 5 === 0,
+          tags: [],
+          created_at: '2025-01-01T00:00:00Z',
+          updated_at: '2025-01-01T00:00:00Z',
+        })
+      }
+      return transactions
+    }
+
+    test('should handle 1000 transactions with acceptable performance', async ({ page }) => {
+      // Generate 1000 mock transactions
+      const largeTransactionSet = generateMockTransactions(1000)
+
+      // Mock API with large dataset
+      await page.route('**/api/v1/transactions*', async (route) => {
+        const url = new URL(route.request().url())
+        const amountType = url.searchParams.get('amount_type')
+
+        // Filter based on amount_type if provided
+        let filtered = largeTransactionSet
+        if (amountType === 'expense') {
+          filtered = largeTransactionSet.filter((t) => t.amount < 0)
+        } else if (amountType === 'income') {
+          filtered = largeTransactionSet.filter((t) => t.amount > 0)
+        }
+
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            transactions: filtered.slice(0, 50), // Paginate to 50
+            total_count: filtered.length,
+            limit: 50,
+            offset: 0,
+            has_more: filtered.length > 50,
+          }),
+        })
+      })
+
+      // Mock other required APIs
+      await page.route('**/api/v1/accounts', async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ accounts: mockAccounts }),
+        })
+      })
+
+      await page.route('**/api/v1/categories/plaid', async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ categories: mockCategories }),
+        })
+      })
+
+      await page.route('**/api/v1/tags*', async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ tags: [] }),
+        })
+      })
+
+      // Navigate to transactions page
+      await page.goto('/transactions')
+      await page.waitForLoadState('networkidle')
+
+      // Verify initial load shows 1000 transactions
+      await expect(page.getByText('1000 transactions total')).toBeVisible()
+
+      // Measure filter application time
+      const filterStart = Date.now()
+
+      // Expand filters and click Expenses
+      await page.getByText('Filters').click()
+      await page.getByRole('button', { name: 'Expenses' }).click()
+
+      // Wait for filtered response
+      await page.waitForResponse(
+        (response) =>
+          response.url().includes('/api/v1/transactions') &&
+          response.url().includes('amount_type=expense')
+      )
+
+      const filterDuration = Date.now() - filterStart
+
+      // Verify filter was applied (should show "Showing X of Y transactions")
+      await expect(page.getByText(/showing.*of.*transaction/i)).toBeVisible()
+
+      // Log performance metric (useful for debugging)
+      console.log(`Filter application took ${filterDuration}ms`)
+
+      // Performance assertion: Filter should complete within 500ms
+      // (relaxed from 100ms to account for network simulation and rendering)
+      expect(filterDuration).toBeLessThan(500)
+    })
+
+    test('should render initial page with 1000 transactions within performance budget', async ({
+      page,
+    }) => {
+      // Generate 1000 mock transactions
+      const largeTransactionSet = generateMockTransactions(1000)
+
+      // Mock API with large dataset
+      await page.route('**/api/v1/transactions*', async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            transactions: largeTransactionSet.slice(0, 50),
+            total_count: 1000,
+            limit: 50,
+            offset: 0,
+            has_more: true,
+          }),
+        })
+      })
+
+      // Mock other required APIs
+      await page.route('**/api/v1/accounts', async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ accounts: mockAccounts }),
+        })
+      })
+
+      await page.route('**/api/v1/categories/plaid', async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ categories: mockCategories }),
+        })
+      })
+
+      await page.route('**/api/v1/tags*', async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ tags: [] }),
+        })
+      })
+
+      // Measure page load time
+      const loadStart = Date.now()
+
+      await page.goto('/transactions')
+      await page.waitForLoadState('networkidle')
+
+      // Wait for transactions to render
+      await expect(page.getByText('1000 transactions total')).toBeVisible()
+
+      const loadDuration = Date.now() - loadStart
+
+      // Log performance metric
+      console.log(`Initial page load with 1000 transactions took ${loadDuration}ms`)
+
+      // Page should load within 2000ms (generous budget for CI environments)
+      expect(loadDuration).toBeLessThan(2000)
+    })
+  })
 })
