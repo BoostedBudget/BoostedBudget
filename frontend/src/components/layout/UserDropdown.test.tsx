@@ -90,10 +90,12 @@ describe('UserDropdown', () => {
 
     await user.click(screen.getByRole('button', { name: /user menu/i }))
 
-    await waitFor(async () => {
-      const logoutItem = screen.getByRole('menuitem', { name: /log out/i })
-      await user.click(logoutItem)
+    await waitFor(() => {
+      expect(screen.getByRole('menuitem', { name: /log out/i })).toBeInTheDocument()
     })
+
+    const logoutItem = screen.getByRole('menuitem', { name: /log out/i })
+    await user.click(logoutItem)
 
     expect(mockOnLogout).toHaveBeenCalledTimes(1)
   })
