@@ -137,10 +137,12 @@ describe('MobileNav', () => {
 
     await user.click(screen.getByRole('button', { name: /open menu/i }))
 
-    await waitFor(async () => {
-      const logoutBtn = screen.getByRole('button', { name: /log out/i })
-      await user.click(logoutBtn)
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /log out/i })).toBeInTheDocument()
     })
+
+    const logoutBtn = screen.getByRole('button', { name: /log out/i })
+    await user.click(logoutBtn)
 
     expect(mockOnLogout).toHaveBeenCalledTimes(1)
   })
@@ -151,10 +153,12 @@ describe('MobileNav', () => {
 
     await user.click(screen.getByRole('button', { name: /open menu/i }))
 
-    await waitFor(async () => {
-      const loginBtn = screen.getByRole('button', { name: /log in/i })
-      await user.click(loginBtn)
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /log in/i })).toBeInTheDocument()
     })
+
+    const loginBtn = screen.getByRole('button', { name: /log in/i })
+    await user.click(loginBtn)
 
     expect(mockOnLogin).toHaveBeenCalledTimes(1)
   })
@@ -165,10 +169,12 @@ describe('MobileNav', () => {
 
     await user.click(screen.getByRole('button', { name: /open menu/i }))
 
-    await waitFor(async () => {
-      const dashboardLink = screen.getByRole('link', { name: /dashboard/i })
-      await user.click(dashboardLink)
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: /dashboard/i })).toBeInTheDocument()
     })
+
+    const dashboardLink = screen.getByRole('link', { name: /dashboard/i })
+    await user.click(dashboardLink)
 
     // Sheet should close - dialog should not be visible
     await waitFor(() => {

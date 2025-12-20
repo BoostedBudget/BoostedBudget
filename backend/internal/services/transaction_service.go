@@ -19,6 +19,9 @@ var (
 	ErrInvalidOffset = errors.New("offset must be non-negative")
 	// ErrInvalidDateRange is returned when start date is after end date
 	ErrInvalidDateRange = errors.New("start date must be before or equal to end date")
+	// ErrInvalidAmountRange is returned when min_amount is greater than max_amount
+	// Issue #529: Amount range filter validation
+	ErrInvalidAmountRange = errors.New("min_amount must be less than or equal to max_amount")
 )
 
 const (
@@ -116,6 +119,13 @@ func (s *transactionService) ListTransactions(
 	if filters.StartDate != nil && filters.EndDate != nil {
 		if filters.StartDate.After(*filters.EndDate) {
 			return nil, ErrInvalidDateRange
+		}
+	}
+
+	// Validate amount range (Issue #529)
+	if filters.MinAmount != nil && filters.MaxAmount != nil {
+		if *filters.MinAmount > *filters.MaxAmount {
+			return nil, ErrInvalidAmountRange
 		}
 	}
 
