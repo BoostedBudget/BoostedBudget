@@ -27,7 +27,7 @@ test.describe('Navigation - Unauthenticated', () => {
     });
 
     test('should show logo', async ({ page }) => {
-      await expect(page.getByText('BoostedBudget')).toBeVisible();
+      await expect(page.locator('header').getByText('BoostedBudget')).toBeVisible();
     });
 
     test('should show rocket emoji', async ({ page }) => {
@@ -82,7 +82,7 @@ test.describe('Navigation - Unauthenticated', () => {
       await expect(page.getByRole('dialog')).toBeVisible();
 
       // Click close button (X) in the sheet
-      await page.click('[role="dialog"] button[aria-label="Close"]');
+      await page.locator('[role="dialog"]').getByRole('button', { name: 'Close' }).click();
 
       await expect(page.getByRole('dialog')).not.toBeVisible();
     });
