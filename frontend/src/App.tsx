@@ -1,4 +1,4 @@
-import { Routes, Route, Link, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
 import { useCookieState } from './shared/hooks/useCookieState'
 import {
@@ -12,7 +12,8 @@ import {
   COOKIE_CONSENT_EXPIRES_DAYS,
   type CookieConsentData
 } from './privacy'
-import { LoginButton, LogoutButton, ProtectedRoute } from './auth'
+import { ProtectedRoute } from './auth'
+import { Header } from './components/layout'
 import { ProfilePage } from './features/profile/ProfilePage'
 import { AccountsPage } from './features/accounts/AccountsPage'
 import { PlaidOAuthCallback } from './features/accounts/PlaidOAuthCallback'
@@ -78,7 +79,7 @@ function HomePage({ health, loading }: { health: HealthCheck | null; loading: bo
 }
 
 function App() {
-  const { isAuthenticated, user } = useAuth0()
+  const { isAuthenticated } = useAuth0()
   const [, setConsentCookie] = useCookieState<CookieConsentData>(COOKIE_CONSENT_NAME)
 
   // Health check removed - was calling frontend /health which returns text/plain
@@ -156,46 +157,7 @@ function App() {
 
   return (
     <div className="app">
-        <header className="app-header">
-          <div>
-            <h1>🚀 BoostedBudget</h1>
-            <p>Supercharge your finances with intelligent automation</p>
-          </div>
-          <nav className="main-nav">
-            {isAuthenticated ? (
-              <>
-                <Link to="/dashboard">Dashboard</Link>
-                <Link to="/accounts">Accounts</Link>
-                <Link to="/transactions">Transactions</Link>
-                <Link to="/budgets">Budgets</Link>
-                <Link to="/auto-categorization">Auto-Cat</Link>
-                <Link to="/profile">Profile</Link>
-              </>
-            ) : (
-              <Link to="/">Home</Link>
-            )}
-          </nav>
-          <div className="auth-section">
-            {isAuthenticated ? (
-              <div className="user-profile">
-                {user?.picture && (
-                  <img
-                    src={user.picture}
-                    alt={user.name || 'User'}
-                    className="user-avatar"
-                  />
-                )}
-                <div className="user-info">
-                  <p className="user-name">{user?.name}</p>
-                  <p className="user-email">{user?.email}</p>
-                </div>
-                <LogoutButton className="btn-auth" />
-              </div>
-            ) : (
-              <LoginButton className="btn-auth" />
-            )}
-          </div>
-        </header>
+        <Header />
 
         <main className="app-main">
           <Routes>
