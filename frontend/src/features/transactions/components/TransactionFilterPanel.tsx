@@ -38,6 +38,7 @@ interface TransactionFilterPanelProps {
   hasActiveFilters: boolean
   pendingCount?: number
   onFilterChange: <K extends keyof TransactionFilters>(key: K, value: TransactionFilters[K]) => void
+  onFiltersChange: (updates: Partial<TransactionFilters>) => void
   onDatePresetChange: (preset: DatePreset) => void
   onCustomDateChange: (startDate: string, endDate: string) => void
   onStatusFilterChange: (status: StatusFilter) => void
@@ -74,6 +75,7 @@ export function TransactionFilterPanel({
   hasActiveFilters,
   pendingCount,
   onFilterChange,
+  onFiltersChange,
   onDatePresetChange,
   onCustomDateChange,
   onStatusFilterChange,
@@ -143,13 +145,15 @@ export function TransactionFilterPanel({
     [onFilterChange]
   )
 
-  // Handle amount filter changes
+  // Handle amount filter changes - uses batch update to avoid race condition
   const handleAmountChange = useCallback(
     (min?: number, max?: number) => {
-      onFilterChange('min_amount', min)
-      onFilterChange('max_amount', max)
+      onFiltersChange({
+        min_amount: min,
+        max_amount: max,
+      })
     },
-    [onFilterChange]
+    [onFiltersChange]
   )
 
   // Get display values for filter pills
