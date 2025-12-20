@@ -59,10 +59,13 @@ func (m *mockPlaidService) FireWebhook(ctx context.Context, accessToken string, 
 
 // mockAccountService is a mock implementation of AccountService for testing
 type mockAccountService struct {
-	linkAccountsFunc         func(ctx context.Context, userID, publicToken, institutionID, institutionName string) (*services.LinkAccountsResult, error)
-	getAccountsFunc          func(ctx context.Context, userID string) ([]domain.Account, error)
-	deleteAccountFunc        func(ctx context.Context, accountID, userID string) error
-	disconnectInstitutionFunc func(ctx context.Context, linkedItemID, userID string) error
+	linkAccountsFunc           func(ctx context.Context, userID, publicToken, institutionID, institutionName string) (*services.LinkAccountsResult, error)
+	getAccountsFunc            func(ctx context.Context, userID string) ([]domain.Account, error)
+	getAccountsFilteredFunc    func(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error)
+	updateAccountFunc          func(ctx context.Context, accountID, userID string, req *domain.UpdateAccountRequest) (*domain.Account, error)
+	reorderAccountsFunc        func(ctx context.Context, userID string, req *domain.ReorderAccountsRequest) error
+	deleteAccountFunc          func(ctx context.Context, accountID, userID string) error
+	disconnectInstitutionFunc  func(ctx context.Context, linkedItemID, userID string) error
 }
 
 func (m *mockAccountService) LinkAccounts(ctx context.Context, userID, publicToken, institutionID, institutionName string) (*services.LinkAccountsResult, error) {
@@ -89,6 +92,27 @@ func (m *mockAccountService) DeleteAccount(ctx context.Context, accountID, userI
 func (m *mockAccountService) DisconnectInstitution(ctx context.Context, linkedItemID, userID string) error {
 	if m.disconnectInstitutionFunc != nil {
 		return m.disconnectInstitutionFunc(ctx, linkedItemID, userID)
+	}
+	return errors.New("not implemented")
+}
+
+func (m *mockAccountService) GetAccountsFiltered(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error) {
+	if m.getAccountsFilteredFunc != nil {
+		return m.getAccountsFilteredFunc(ctx, userID, includeHidden)
+	}
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockAccountService) UpdateAccount(ctx context.Context, accountID, userID string, req *domain.UpdateAccountRequest) (*domain.Account, error) {
+	if m.updateAccountFunc != nil {
+		return m.updateAccountFunc(ctx, accountID, userID, req)
+	}
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockAccountService) ReorderAccounts(ctx context.Context, userID string, req *domain.ReorderAccountsRequest) error {
+	if m.reorderAccountsFunc != nil {
+		return m.reorderAccountsFunc(ctx, userID, req)
 	}
 	return errors.New("not implemented")
 }
@@ -205,8 +229,9 @@ func TestGetAccounts_Success(t *testing.T) {
 	}
 
 	mockService := &mockAccountService{
-		getAccountsFunc: func(ctx context.Context, userID string) ([]domain.Account, error) {
+		getAccountsFilteredFunc: func(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error) {
 			assert.Equal(t, "auth0|test-user-123", userID, "Should pass correct user ID")
+			assert.False(t, includeHidden, "Should not include hidden by default")
 			return expectedAccounts, nil
 		},
 	}
@@ -261,7 +286,7 @@ func TestGetAccounts_Unauthorized(t *testing.T) {
 func TestGetAccounts_ServiceError(t *testing.T) {
 	// Given: Mock service that returns an error
 	mockService := &mockAccountService{
-		getAccountsFunc: func(ctx context.Context, userID string) ([]domain.Account, error) {
+		getAccountsFilteredFunc: func(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error) {
 			return nil, errors.New("database connection failed")
 		},
 	}
@@ -288,7 +313,7 @@ func TestGetAccounts_ServiceError(t *testing.T) {
 func TestGetAccounts_EmptyResponse(t *testing.T) {
 	// Given: Mock service that returns empty accounts slice
 	mockService := &mockAccountService{
-		getAccountsFunc: func(ctx context.Context, userID string) ([]domain.Account, error) {
+		getAccountsFilteredFunc: func(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error) {
 			return []domain.Account{}, nil
 		},
 	}
@@ -638,4 +663,228 @@ func TestExchangePublicToken_PremiumAllowsMoreAccounts(t *testing.T) {
 	assert.True(t, response.Success, "Success should be true")
 	assert.Equal(t, expectedItemID, response.ItemID, "Should return correct item ID")
 	assert.Equal(t, 3, response.Accounts, "Should return count of linked accounts")
+}
+
+// ===========================================================================
+// Account Customization Handler Tests (Issue #307)
+// ===========================================================================
+
+// TestGetAccounts_IncludeHidden tests that hidden accounts are included when param is set
+func TestGetAccounts_IncludeHidden(t *testing.T) {
+	// Given: Mock service that returns all accounts including hidden
+	allAccounts := []domain.Account{
+		{ID: uuid.New().String(), Name: "Visible Account", IsHidden: false},
+		{ID: uuid.New().String(), Name: "Hidden Account", IsHidden: true},
+	}
+
+	mockService := &mockAccountService{
+		getAccountsFilteredFunc: func(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error) {
+			assert.True(t, includeHidden, "Should include hidden when param is true")
+			return allAccounts, nil
+		},
+	}
+
+	handler := NewPlaidHandler(nil, mockService)
+
+	// When: Making GET request with include_hidden=true
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/accounts?include_hidden=true", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set("user_id", "auth0|test-user-123")
+
+	err := handler.GetAccounts(c)
+
+	// Then: Returns 200 with all accounts including hidden
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "Visible Account")
+	assert.Contains(t, rec.Body.String(), "Hidden Account")
+	assert.Contains(t, rec.Body.String(), "\"total_count\":2")
+}
+
+// TestUpdateAccount_Success tests successful account customization update
+func TestUpdateAccount_Success(t *testing.T) {
+	accountID := uuid.New().String()
+	nickname := "My Primary Account"
+
+	updatedAccount := &domain.Account{
+		ID:       accountID,
+		Name:     "Chase Checking",
+		Nickname: &nickname,
+	}
+
+	mockService := &mockAccountService{
+		updateAccountFunc: func(ctx context.Context, acctID, userID string, req *domain.UpdateAccountRequest) (*domain.Account, error) {
+			assert.Equal(t, accountID, acctID)
+			assert.Equal(t, "auth0|test-user-123", userID)
+			assert.NotNil(t, req.Nickname)
+			return updatedAccount, nil
+		},
+	}
+
+	handler := NewPlaidHandler(nil, mockService)
+
+	e := echo.New()
+	reqBody := `{"nickname":"My Primary Account"}`
+	req := httptest.NewRequest(http.MethodPatch, "/accounts/"+accountID, strings.NewReader(reqBody))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set("user_id", "auth0|test-user-123")
+	c.SetParamNames("id")
+	c.SetParamValues(accountID)
+
+	err := handler.UpdateAccount(c)
+
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "My Primary Account")
+}
+
+// TestUpdateAccount_Unauthorized tests update without authentication
+func TestUpdateAccount_Unauthorized(t *testing.T) {
+	mockService := &mockAccountService{}
+	handler := NewPlaidHandler(nil, mockService)
+
+	e := echo.New()
+	accountID := uuid.New().String()
+	req := httptest.NewRequest(http.MethodPatch, "/accounts/"+accountID, strings.NewReader(`{}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("id")
+	c.SetParamValues(accountID)
+
+	err := handler.UpdateAccount(c)
+
+	require.Error(t, err)
+	httpErr := err.(*echo.HTTPError)
+	assert.Equal(t, http.StatusUnauthorized, httpErr.Code)
+}
+
+// TestUpdateAccount_NotFound tests update of non-existent account
+func TestUpdateAccount_NotFound(t *testing.T) {
+	accountID := uuid.New().String()
+
+	mockService := &mockAccountService{
+		updateAccountFunc: func(ctx context.Context, acctID, userID string, req *domain.UpdateAccountRequest) (*domain.Account, error) {
+			return nil, repository.ErrAccountNotFound
+		},
+	}
+
+	handler := NewPlaidHandler(nil, mockService)
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPatch, "/accounts/"+accountID, strings.NewReader(`{"nickname":"Test"}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set("user_id", "auth0|test-user-123")
+	c.SetParamNames("id")
+	c.SetParamValues(accountID)
+
+	err := handler.UpdateAccount(c)
+
+	require.Error(t, err)
+	httpErr := err.(*echo.HTTPError)
+	assert.Equal(t, http.StatusNotFound, httpErr.Code)
+}
+
+// TestUpdateAccount_ValidationError tests update with invalid color
+func TestUpdateAccount_ValidationError(t *testing.T) {
+	accountID := uuid.New().String()
+
+	mockService := &mockAccountService{
+		updateAccountFunc: func(ctx context.Context, acctID, userID string, req *domain.UpdateAccountRequest) (*domain.Account, error) {
+			return nil, errors.New("custom_color must be a valid hex color (format: #RRGGBB)")
+		},
+	}
+
+	handler := NewPlaidHandler(nil, mockService)
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPatch, "/accounts/"+accountID, strings.NewReader(`{"custom_color":"invalid"}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set("user_id", "auth0|test-user-123")
+	c.SetParamNames("id")
+	c.SetParamValues(accountID)
+
+	err := handler.UpdateAccount(c)
+
+	require.Error(t, err)
+	httpErr := err.(*echo.HTTPError)
+	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
+}
+
+// TestReorderAccounts_Success tests successful bulk reorder
+func TestReorderAccounts_Success(t *testing.T) {
+	mockService := &mockAccountService{
+		reorderAccountsFunc: func(ctx context.Context, userID string, req *domain.ReorderAccountsRequest) error {
+			assert.Equal(t, "auth0|test-user-123", userID)
+			assert.Len(t, req.AccountOrders, 2)
+			return nil
+		},
+	}
+
+	handler := NewPlaidHandler(nil, mockService)
+
+	e := echo.New()
+	reqBody := `{"account_orders":[{"account_id":"acc-1","display_order":0},{"account_id":"acc-2","display_order":1}]}`
+	req := httptest.NewRequest(http.MethodPatch, "/accounts/reorder", strings.NewReader(reqBody))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set("user_id", "auth0|test-user-123")
+
+	err := handler.ReorderAccounts(c)
+
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"success":true`)
+}
+
+// TestReorderAccounts_Unauthorized tests reorder without authentication
+func TestReorderAccounts_Unauthorized(t *testing.T) {
+	mockService := &mockAccountService{}
+	handler := NewPlaidHandler(nil, mockService)
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPatch, "/accounts/reorder", strings.NewReader(`{}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := handler.ReorderAccounts(c)
+
+	require.Error(t, err)
+	httpErr := err.(*echo.HTTPError)
+	assert.Equal(t, http.StatusUnauthorized, httpErr.Code)
+}
+
+// TestReorderAccounts_EmptyList tests reorder with empty list
+func TestReorderAccounts_EmptyList(t *testing.T) {
+	mockService := &mockAccountService{
+		reorderAccountsFunc: func(ctx context.Context, userID string, req *domain.ReorderAccountsRequest) error {
+			return errors.New("account orders cannot be empty")
+		},
+	}
+
+	handler := NewPlaidHandler(nil, mockService)
+
+	e := echo.New()
+	reqBody := `{"account_orders":[]}`
+	req := httptest.NewRequest(http.MethodPatch, "/accounts/reorder", strings.NewReader(reqBody))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set("user_id", "auth0|test-user-123")
+
+	err := handler.ReorderAccounts(c)
+
+	require.Error(t, err)
+	httpErr := err.(*echo.HTTPError)
+	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
 }
