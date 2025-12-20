@@ -75,6 +75,7 @@ export function TransactionsPage() {
     activeFilterCount,
     hasActiveFilters,
     setFilter,
+    setFilters,
     clearFilter,
     clearAllFilters,
     setDatePreset,
@@ -218,6 +219,7 @@ export function TransactionsPage() {
         hasActiveFilters={hasActiveFilters}
         pendingCount={pendingCount}
         onFilterChange={setFilter}
+        onFiltersChange={setFilters}
         onDatePresetChange={setDatePreset}
         onCustomDateChange={setCustomDateRange}
         onStatusFilterChange={setStatusFilter}
