@@ -416,3 +416,394 @@ func TestGetTransactions_PaginationMetadata(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "\"offset\":0", "Response should contain offset")
 	assert.Contains(t, rec.Body.String(), "\"has_more\":true", "Response should contain has_more flag")
 }
+
+// =============================================================================
+// Issue #529: Extended Filter Parameters Tests
+// =============================================================================
+
+// TestGetTransactions_ParsesAccountIdsQueryParam tests that comma-separated account IDs are parsed correctly
+func TestGetTransactions_ParsesAccountIdsQueryParam(t *testing.T) {
+	// Given: Mock service that captures account_ids filter
+	mockService := &mockTransactionService{
+		listTransactionsFunc: func(ctx context.Context, userID string, filters domain.TransactionFilters, limit, offset int) (*services.TransactionListResponse, error) {
+			require.NotNil(t, filters.AccountIDs, "Should have account_ids filter")
+			assert.Len(t, filters.AccountIDs, 3, "Should have 3 account IDs")
+			assert.Contains(t, filters.AccountIDs, "acc-1")
+			assert.Contains(t, filters.AccountIDs, "acc-2")
+			assert.Contains(t, filters.AccountIDs, "acc-3")
+			return &services.TransactionListResponse{
+				Transactions: []domain.Transaction{},
+				TotalCount:   0,
+				Limit:        50,
+				Offset:       0,
+				HasMore:      false,
+			}, nil
+		},
+	}
+
+	handler := NewTransactionHandler(mockService)
+
+	// When: Making GET request with comma-separated account_ids
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/transactions?account_ids=acc-1,acc-2,acc-3", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set("user_id", "user-123")
+
+	err := handler.GetTransactions(c)
+
+	// Then: Returns 200 with account_ids filter applied
+	require.NoError(t, err, "Expected no error from handler")
+	assert.Equal(t, http.StatusOK, rec.Code, "Expected 200 OK")
+}
+
+// TestGetTransactions_ParsesCategoriesQueryParam tests that comma-separated categories are parsed correctly
+func TestGetTransactions_ParsesCategoriesQueryParam(t *testing.T) {
+	// Given: Mock service that captures categories filter
+	mockService := &mockTransactionService{
+		listTransactionsFunc: func(ctx context.Context, userID string, filters domain.TransactionFilters, limit, offset int) (*services.TransactionListResponse, error) {
+			require.NotNil(t, filters.Categories, "Should have categories filter")
+			assert.Len(t, filters.Categories, 2, "Should have 2 categories")
+			assert.Contains(t, filters.Categories, "Food and Drink")
+			assert.Contains(t, filters.Categories, "Transportation")
+			return &services.TransactionListResponse{
+				Transactions: []domain.Transaction{},
+				TotalCount:   0,
+				Limit:        50,
+				Offset:       0,
+				HasMore:      false,
+			}, nil
+		},
+	}
+
+	handler := NewTransactionHandler(mockService)
+
+	// When: Making GET request with comma-separated categories
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/transactions?categories=Food+and+Drink,Transportation", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set("user_id", "user-123")
+
+	err := handler.GetTransactions(c)
+
+	// Then: Returns 200 with categories filter applied
+	require.NoError(t, err, "Expected no error from handler")
+	assert.Equal(t, http.StatusOK, rec.Code, "Expected 200 OK")
+}
+
+// TestGetTransactions_ParsesMinAmountQueryParam tests that min_amount is parsed correctly
+func TestGetTransactions_ParsesMinAmountQueryParam(t *testing.T) {
+	// Given: Mock service that captures min_amount filter
+	mockService := &mockTransactionService{
+		listTransactionsFunc: func(ctx context.Context, userID string, filters domain.TransactionFilters, limit, offset int) (*services.TransactionListResponse, error) {
+			require.NotNil(t, filters.MinAmount, "Should have min_amount filter")
+			assert.Equal(t, 10.50, *filters.MinAmount, "min_amount should be 10.50")
+			return &services.TransactionListResponse{
+				Transactions: []domain.Transaction{},
+				TotalCount:   0,
+				Limit:        50,
+				Offset:       0,
+				HasMore:      false,
+			}, nil
+		},
+	}
+
+	handler := NewTransactionHandler(mockService)
+
+	// When: Making GET request with min_amount
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/transactions?min_amount=10.50", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set("user_id", "user-123")
+
+	err := handler.GetTransactions(c)
+
+	// Then: Returns 200 with min_amount filter applied
+	require.NoError(t, err, "Expected no error from handler")
+	assert.Equal(t, http.StatusOK, rec.Code, "Expected 200 OK")
+}
+
+// TestGetTransactions_ParsesMaxAmountQueryParam tests that max_amount is parsed correctly
+func TestGetTransactions_ParsesMaxAmountQueryParam(t *testing.T) {
+	// Given: Mock service that captures max_amount filter
+	mockService := &mockTransactionService{
+		listTransactionsFunc: func(ctx context.Context, userID string, filters domain.TransactionFilters, limit, offset int) (*services.TransactionListResponse, error) {
+			require.NotNil(t, filters.MaxAmount, "Should have max_amount filter")
+			assert.Equal(t, 500.00, *filters.MaxAmount, "max_amount should be 500.00")
+			return &services.TransactionListResponse{
+				Transactions: []domain.Transaction{},
+				TotalCount:   0,
+				Limit:        50,
+				Offset:       0,
+				HasMore:      false,
+			}, nil
+		},
+	}
+
+	handler := NewTransactionHandler(mockService)
+
+	// When: Making GET request with max_amount
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/transactions?max_amount=500.00", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set("user_id", "user-123")
+
+	err := handler.GetTransactions(c)
+
+	// Then: Returns 200 with max_amount filter applied
+	require.NoError(t, err, "Expected no error from handler")
+	assert.Equal(t, http.StatusOK, rec.Code, "Expected 200 OK")
+}
+
+// TestGetTransactions_ParsesAmountRangeQueryParams tests that both min and max amount are parsed
+func TestGetTransactions_ParsesAmountRangeQueryParams(t *testing.T) {
+	// Given: Mock service that captures amount range filters
+	mockService := &mockTransactionService{
+		listTransactionsFunc: func(ctx context.Context, userID string, filters domain.TransactionFilters, limit, offset int) (*services.TransactionListResponse, error) {
+			require.NotNil(t, filters.MinAmount, "Should have min_amount filter")
+			require.NotNil(t, filters.MaxAmount, "Should have max_amount filter")
+			assert.Equal(t, 25.00, *filters.MinAmount)
+			assert.Equal(t, 100.00, *filters.MaxAmount)
+			return &services.TransactionListResponse{
+				Transactions: []domain.Transaction{},
+				TotalCount:   0,
+				Limit:        50,
+				Offset:       0,
+				HasMore:      false,
+			}, nil
+		},
+	}
+
+	handler := NewTransactionHandler(mockService)
+
+	// When: Making GET request with min_amount and max_amount
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/transactions?min_amount=25&max_amount=100", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set("user_id", "user-123")
+
+	err := handler.GetTransactions(c)
+
+	// Then: Returns 200 with amount range filter applied
+	require.NoError(t, err, "Expected no error from handler")
+	assert.Equal(t, http.StatusOK, rec.Code, "Expected 200 OK")
+}
+
+// TestGetTransactions_ParsesAmountTypeIncome tests amount_type=income is parsed correctly
+func TestGetTransactions_ParsesAmountTypeIncome(t *testing.T) {
+	// Given: Mock service that captures amount_type filter
+	mockService := &mockTransactionService{
+		listTransactionsFunc: func(ctx context.Context, userID string, filters domain.TransactionFilters, limit, offset int) (*services.TransactionListResponse, error) {
+			require.NotNil(t, filters.AmountType, "Should have amount_type filter")
+			assert.Equal(t, "income", *filters.AmountType)
+			return &services.TransactionListResponse{
+				Transactions: []domain.Transaction{},
+				TotalCount:   0,
+				Limit:        50,
+				Offset:       0,
+				HasMore:      false,
+			}, nil
+		},
+	}
+
+	handler := NewTransactionHandler(mockService)
+
+	// When: Making GET request with amount_type=income
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/transactions?amount_type=income", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set("user_id", "user-123")
+
+	err := handler.GetTransactions(c)
+
+	// Then: Returns 200 with amount_type filter applied
+	require.NoError(t, err, "Expected no error from handler")
+	assert.Equal(t, http.StatusOK, rec.Code, "Expected 200 OK")
+}
+
+// TestGetTransactions_ParsesAmountTypeExpense tests amount_type=expense is parsed correctly
+func TestGetTransactions_ParsesAmountTypeExpense(t *testing.T) {
+	// Given: Mock service that captures amount_type filter
+	mockService := &mockTransactionService{
+		listTransactionsFunc: func(ctx context.Context, userID string, filters domain.TransactionFilters, limit, offset int) (*services.TransactionListResponse, error) {
+			require.NotNil(t, filters.AmountType, "Should have amount_type filter")
+			assert.Equal(t, "expense", *filters.AmountType)
+			return &services.TransactionListResponse{
+				Transactions: []domain.Transaction{},
+				TotalCount:   0,
+				Limit:        50,
+				Offset:       0,
+				HasMore:      false,
+			}, nil
+		},
+	}
+
+	handler := NewTransactionHandler(mockService)
+
+	// When: Making GET request with amount_type=expense
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/transactions?amount_type=expense", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set("user_id", "user-123")
+
+	err := handler.GetTransactions(c)
+
+	// Then: Returns 200 with amount_type filter applied
+	require.NoError(t, err, "Expected no error from handler")
+	assert.Equal(t, http.StatusOK, rec.Code, "Expected 200 OK")
+}
+
+// TestGetTransactions_InvalidMinAmount tests that invalid min_amount returns 400
+func TestGetTransactions_InvalidMinAmount(t *testing.T) {
+	// Given: Handler with mock service
+	mockService := &mockTransactionService{}
+	handler := NewTransactionHandler(mockService)
+
+	// When: Making GET request with invalid min_amount
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/transactions?min_amount=not-a-number", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set("user_id", "user-123")
+
+	err := handler.GetTransactions(c)
+
+	// Then: Returns 400 Bad Request
+	require.Error(t, err, "Expected error for invalid min_amount")
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok, "Expected echo.HTTPError")
+	assert.Equal(t, http.StatusBadRequest, httpErr.Code, "Expected 400 Bad Request")
+}
+
+// TestGetTransactions_InvalidMaxAmount tests that invalid max_amount returns 400
+func TestGetTransactions_InvalidMaxAmount(t *testing.T) {
+	// Given: Handler with mock service
+	mockService := &mockTransactionService{}
+	handler := NewTransactionHandler(mockService)
+
+	// When: Making GET request with invalid max_amount
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/transactions?max_amount=abc", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set("user_id", "user-123")
+
+	err := handler.GetTransactions(c)
+
+	// Then: Returns 400 Bad Request
+	require.Error(t, err, "Expected error for invalid max_amount")
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok, "Expected echo.HTTPError")
+	assert.Equal(t, http.StatusBadRequest, httpErr.Code, "Expected 400 Bad Request")
+}
+
+// TestGetTransactions_InvalidAmountType tests that invalid amount_type returns 400
+func TestGetTransactions_InvalidAmountType(t *testing.T) {
+	// Given: Handler with mock service
+	mockService := &mockTransactionService{}
+	handler := NewTransactionHandler(mockService)
+
+	// When: Making GET request with invalid amount_type
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/transactions?amount_type=invalid", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set("user_id", "user-123")
+
+	err := handler.GetTransactions(c)
+
+	// Then: Returns 400 Bad Request
+	require.Error(t, err, "Expected error for invalid amount_type")
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok, "Expected echo.HTTPError")
+	assert.Equal(t, http.StatusBadRequest, httpErr.Code, "Expected 400 Bad Request")
+}
+
+// TestGetTransactions_InvalidAmountRange tests that min > max returns 400
+func TestGetTransactions_InvalidAmountRange(t *testing.T) {
+	// Given: Mock service that returns error for invalid amount range
+	mockService := &mockTransactionService{
+		listTransactionsFunc: func(ctx context.Context, userID string, filters domain.TransactionFilters, limit, offset int) (*services.TransactionListResponse, error) {
+			return nil, services.ErrInvalidAmountRange
+		},
+	}
+
+	handler := NewTransactionHandler(mockService)
+
+	// When: Making GET request with min > max
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/transactions?min_amount=100&max_amount=50", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set("user_id", "user-123")
+
+	err := handler.GetTransactions(c)
+
+	// Then: Returns 400 Bad Request
+	require.Error(t, err, "Expected error for invalid amount range")
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok, "Expected echo.HTTPError")
+	assert.Equal(t, http.StatusBadRequest, httpErr.Code, "Expected 400 Bad Request")
+}
+
+// TestGetTransactions_CombinedExtendedFilters tests all new filters combined with existing filters
+func TestGetTransactions_CombinedExtendedFilters(t *testing.T) {
+	// Given: Mock service that captures all filters
+	mockService := &mockTransactionService{
+		listTransactionsFunc: func(ctx context.Context, userID string, filters domain.TransactionFilters, limit, offset int) (*services.TransactionListResponse, error) {
+			// Check new multi-value filters
+			require.NotNil(t, filters.AccountIDs, "Should have account_ids filter")
+			assert.Len(t, filters.AccountIDs, 2)
+
+			require.NotNil(t, filters.Categories, "Should have categories filter")
+			assert.Len(t, filters.Categories, 1)
+			assert.Equal(t, "Food", filters.Categories[0])
+
+			// Check amount filters
+			require.NotNil(t, filters.MinAmount, "Should have min_amount filter")
+			assert.Equal(t, 10.00, *filters.MinAmount)
+
+			require.NotNil(t, filters.MaxAmount, "Should have max_amount filter")
+			assert.Equal(t, 200.00, *filters.MaxAmount)
+
+			require.NotNil(t, filters.AmountType, "Should have amount_type filter")
+			assert.Equal(t, "expense", *filters.AmountType)
+
+			// Check existing filters still work
+			require.NotNil(t, filters.Search, "Should have search filter")
+			assert.Equal(t, "coffee", *filters.Search)
+
+			require.NotNil(t, filters.StartDate, "Should have start_date filter")
+			require.NotNil(t, filters.EndDate, "Should have end_date filter")
+
+			return &services.TransactionListResponse{
+				Transactions: []domain.Transaction{},
+				TotalCount:   0,
+				Limit:        50,
+				Offset:       0,
+				HasMore:      false,
+			}, nil
+		},
+	}
+
+	handler := NewTransactionHandler(mockService)
+
+	// When: Making GET request with all filter types
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/transactions?account_ids=acc-1,acc-2&categories=Food&min_amount=10&max_amount=200&amount_type=expense&search=coffee&start_date=2025-01-01&end_date=2025-12-31", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set("user_id", "user-123")
+
+	err := handler.GetTransactions(c)
+
+	// Then: Returns 200 with all filters applied
+	require.NoError(t, err, "Expected no error from handler")
+	assert.Equal(t, http.StatusOK, rec.Code, "Expected 200 OK")
+}

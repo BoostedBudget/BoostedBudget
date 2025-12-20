@@ -161,8 +161,12 @@ func (t *Transaction) Validate() error {
 // All fields are optional pointers - nil means no filter applied for that field.
 // Used by repository layer to build dynamic WHERE clauses.
 type TransactionFilters struct {
-	// AccountID filters transactions by specific account
+	// AccountID filters transactions by specific account (deprecated: use AccountIDs)
 	AccountID *string
+
+	// AccountIDs filters transactions by multiple accounts (OR logic within)
+	// Issue #529: Multi-account filter support
+	AccountIDs []string
 
 	// StartDate filters transactions on or after this date (inclusive)
 	StartDate *time.Time
@@ -170,9 +174,14 @@ type TransactionFilters struct {
 	// EndDate filters transactions on or before this date (inclusive)
 	EndDate *time.Time
 
-	// Category filters transactions containing this category string
+	// Category filters transactions containing this category string (deprecated: use Categories)
 	// Uses ILIKE for case-insensitive partial matching against JSONB category field
 	Category *string
+
+	// Categories filters transactions matching any of these categories (OR logic within)
+	// Matches against both category_override and original category fields
+	// Issue #529: Multi-category filter support
+	Categories []string
 
 	// Search filters transactions by merchant name or transaction name
 	// Uses ILIKE for case-insensitive partial matching
@@ -181,4 +190,16 @@ type TransactionFilters struct {
 	// Pending filters transactions by pending status
 	// True = only pending, False = only settled, nil = both
 	Pending *bool
+
+	// MinAmount filters transactions with absolute amount >= this value
+	// Issue #529: Amount range filter support
+	MinAmount *float64
+
+	// MaxAmount filters transactions with absolute amount <= this value
+	// Issue #529: Amount range filter support
+	MaxAmount *float64
+
+	// AmountType filters transactions by direction: "income" (positive), "expense" (negative), or nil for both
+	// Issue #529: Transaction type filter support
+	AmountType *string
 }

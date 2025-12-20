@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react'
 import { useTransactions } from './hooks/useTransactions'
+import { useTransactionFilters } from './hooks/useTransactionFilters'
 import { TransactionCard } from './components/TransactionCard'
 import { TransactionEditor } from './components/TransactionEditor'
+import { TransactionFilterPanel } from './components/TransactionFilterPanel'
 import { fetchTags } from '../tags/api/tagsApi'
 import { fetchCategories } from '../categories/api/categoriesApi'
-import type { Transaction, TransactionFilters } from './types'
+import type { Transaction } from './types'
 import type { UserTag } from '../tags/types'
 import type { CustomCategory } from '../categories/types'
 import './TransactionsPage.css'
@@ -12,17 +14,34 @@ import './TransactionsPage.css'
 /**
  * Transactions Page
  *
- * Displays a list of transactions with search and pagination.
+ * Displays a list of transactions with comprehensive filtering and pagination.
  *
  * Features:
+ * - Multi-filter support (date, account, category, type, amount, status)
+ * - URL state sync for shareable/bookmarkable filters
  * - Search transactions with 300ms debounce
  * - Pagination with Next/Previous buttons
- * - Total count display
+ * - Total count display showing filtered vs total
  * - Loading and error states
  * - Empty state when no transactions
+ *
+ * Issue #529: Transaction page filtering
  */
 export function TransactionsPage() {
-  const [filters, setFilters] = useState<TransactionFilters>({})
+  const {
+    filters,
+    datePreset,
+    statusFilter,
+    activeFilterCount,
+    hasActiveFilters,
+    setFilter,
+    clearFilter,
+    clearAllFilters,
+    setDatePreset,
+    setCustomDateRange,
+    setStatusFilter,
+  } = useTransactionFilters()
+
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null)
   const [isEditorOpen, setIsEditorOpen] = useState(false)
   const [availableTags, setAvailableTags] = useState<UserTag[]>([])
@@ -89,11 +108,11 @@ export function TransactionsPage() {
   // Handle search input change
   function handleSearchChange(event: React.ChangeEvent<HTMLInputElement>) {
     const searchValue = event.target.value
-    setFilters((prev) => ({
-      ...prev,
-      search: searchValue || undefined, // Remove if empty
-    }))
+    setFilter('search', searchValue || undefined) // Remove if empty
   }
+
+  // Calculate pending count from transactions data
+  const pendingCount = data?.transactions?.filter((t) => t.pending).length ?? 0
 
   // Loading state
   if (loading && !data) {
@@ -135,18 +154,53 @@ export function TransactionsPage() {
         />
       </div>
 
+      {/* Filter Panel - Issue #529 */}
+      <TransactionFilterPanel
+        filters={filters}
+        datePreset={datePreset}
+        statusFilter={statusFilter}
+        activeFilterCount={activeFilterCount}
+        hasActiveFilters={hasActiveFilters}
+        pendingCount={pendingCount}
+        onFilterChange={setFilter}
+        onDatePresetChange={setDatePreset}
+        onCustomDateChange={setCustomDateRange}
+        onStatusFilterChange={setStatusFilter}
+        onClearFilter={clearFilter}
+        onClearAllFilters={clearAllFilters}
+        disabled={loading}
+      />
+
       {isEmpty ? (
         <div className="empty-state">
           <p className="empty-state__message">
             No transactions found.
-            {filters.search && ' Try adjusting your search.'}
+            {hasActiveFilters && ' Try adjusting your filters.'}
+            {filters.search && !hasActiveFilters && ' Try adjusting your search.'}
           </p>
+          {hasActiveFilters && (
+            <button
+              onClick={clearAllFilters}
+              className="btn-clear-filters"
+            >
+              Clear all filters
+            </button>
+          )}
         </div>
       ) : (
         <>
           <div className="transactions-info">
             <p className="transactions-count">
-              {totalCount} {totalCount === 1 ? 'transaction' : 'transactions'} total
+              {hasActiveFilters ? (
+                <>
+                  Showing {transactions.length} of {totalCount}{' '}
+                  {totalCount === 1 ? 'transaction' : 'transactions'}
+                </>
+              ) : (
+                <>
+                  {totalCount} {totalCount === 1 ? 'transaction' : 'transactions'} total
+                </>
+              )}
             </p>
           </div>
 
