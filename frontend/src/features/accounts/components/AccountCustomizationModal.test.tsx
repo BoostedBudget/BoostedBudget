@@ -430,7 +430,7 @@ describe('AccountCustomizationModal', () => {
     it('shows icon in preview when icon is selected', () => {
       const accountWithIcon = {
         ...mockAccount,
-        custom_icon: 'wallet',
+        custom_icon: 'wallet' as const,
       }
 
       render(
