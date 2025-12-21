@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import type { CSSProperties, ReactElement } from 'react'
 import { List } from 'react-window'
 import { useTransactions } from './hooks/useTransactions'
@@ -8,7 +8,9 @@ import { TransactionEditor } from './components/TransactionEditor'
 import { TransactionFilterPanel } from './components/TransactionFilterPanel'
 import { fetchTags } from '../tags/api/tagsApi'
 import { fetchCategories } from '../categories/api/categoriesApi'
+import { fetchAccounts } from '../accounts/api/plaidApi'
 import type { Transaction } from './types'
+import type { Account } from '../accounts/types'
 import type { UserTag } from '../tags/types'
 import type { CustomCategory } from '../categories/types'
 import './TransactionsPage.css'
@@ -22,7 +24,9 @@ const LIST_HEIGHT = 600
 /** Props for the virtualized list row component */
 interface TransactionRowProps {
   transactions: Transaction[]
+  accountsMap: Record<string, Account>
   onEdit: (transaction: Transaction) => void
+  onCategorize: (transaction: Transaction) => void
 }
 
 /**
@@ -33,7 +37,9 @@ function TransactionRow({
   index,
   style,
   transactions,
+  accountsMap,
   onEdit,
+  onCategorize,
 }: {
   ariaAttributes: {
     'aria-posinset': number
@@ -46,7 +52,12 @@ function TransactionRow({
   const transaction = transactions[index]
   return (
     <div style={style} className="virtualized-list-item">
-      <TransactionCard transaction={transaction} onEdit={onEdit} />
+      <TransactionCard
+        transaction={transaction}
+        account={accountsMap[transaction.account_id]}
+        onEdit={onEdit}
+        onCategorize={onCategorize}
+      />
     </div>
   )
 }
@@ -87,8 +98,18 @@ export function TransactionsPage() {
   const [isEditorOpen, setIsEditorOpen] = useState(false)
   const [availableTags, setAvailableTags] = useState<UserTag[]>([])
   const [availableCategories, setAvailableCategories] = useState<CustomCategory[]>([])
+  const [accounts, setAccounts] = useState<Account[]>([])
   const [listWidth, setListWidth] = useState(0)
   const listContainerRef = useRef<HTMLDivElement>(null)
+
+  // Issue #531: Create accounts lookup map for O(1) access
+  const accountsMap = useMemo(() => {
+    const map: Record<string, Account> = {}
+    accounts.forEach((acc) => {
+      map[acc.id] = acc
+    })
+    return map
+  }, [accounts])
 
   const {
     data,
@@ -103,18 +124,20 @@ export function TransactionsPage() {
     currentPage,
   } = useTransactions({ filters, limit: 50 })
 
-  // Fetch available tags and categories for the editor
+  // Fetch available tags, categories, and accounts
   useEffect(() => {
     const loadMetadata = async () => {
       try {
-        const [tags, categories] = await Promise.all([
+        const [tags, categories, accountsResponse] = await Promise.all([
           fetchTags(),
           fetchCategories(),
+          fetchAccounts(),
         ])
         setAvailableTags(tags)
         setAvailableCategories(categories)
+        setAccounts(accountsResponse.accounts)
       } catch (err) {
-        console.error('Failed to load tags/categories:', err)
+        console.error('Failed to load metadata:', err)
       }
     }
     loadMetadata()
@@ -159,6 +182,12 @@ export function TransactionsPage() {
   // Handle category creation - add to available categories
   const handleCategoryCreated = (category: CustomCategory) => {
     setAvailableCategories((prev) => [...prev, category])
+  }
+
+  // Issue #531: Handle categorize quick action (opens editor focused on category)
+  const handleCategorizeTransaction = (transaction: Transaction) => {
+    setSelectedTransaction(transaction)
+    setIsEditorOpen(true)
   }
 
   // Handle search input change
@@ -273,7 +302,9 @@ export function TransactionsPage() {
                 <TransactionCard
                   key={transaction.id}
                   transaction={transaction}
+                  account={accountsMap[transaction.account_id]}
                   onEdit={handleEditTransaction}
+                  onCategorize={handleCategorizeTransaction}
                 />
               ))
             ) : (
@@ -289,7 +320,9 @@ export function TransactionsPage() {
                 rowHeight={ITEM_HEIGHT}
                 rowProps={{
                   transactions,
+                  accountsMap,
                   onEdit: handleEditTransaction,
+                  onCategorize: handleCategorizeTransaction,
                 }}
               />
             )}
