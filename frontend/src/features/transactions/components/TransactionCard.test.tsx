@@ -6,12 +6,14 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { TransactionCard } from './TransactionCard'
 import type { Transaction } from '../types'
+import type { Account } from '../../accounts/types'
 import type { BudgetCategoryMatch } from '../../budgets/utils/transactionBudgetMatcher'
 import type { BudgetCategory } from '../../budgets/types'
+import { CATEGORY_COLORS, DEFAULT_CATEGORY_COLOR } from '@/lib/category-colors'
 
 // Helper to create budget category match for tests
 function createBudgetCategoryMatch(
@@ -38,6 +40,28 @@ function createBudgetCategoryMatch(
 // Helper to render with router (needed for Link component in badge)
 function renderWithRouter(ui: React.ReactElement) {
   return render(<MemoryRouter>{ui}</MemoryRouter>)
+}
+
+// Helper to create mock account for Issue #531 tests
+function createMockAccount(overrides: Partial<Account> = {}): Account {
+  return {
+    id: 'account-456',
+    linked_item_id: 'item-789',
+    user_id: 'user-123',
+    plaid_account_id: 'plaid-acc-123',
+    name: 'Chase Checking',
+    official_name: 'CHASE TOTAL CHECKING',
+    type: 'depository',
+    subtype: 'checking',
+    mask: '1234',
+    current_balance: 5000,
+    available_balance: 4500,
+    currency_code: 'USD',
+    institution_name: 'Chase',
+    created_at: '2025-01-01T00:00:00Z',
+    updated_at: '2025-01-01T00:00:00Z',
+    ...overrides,
+  }
 }
 
 describe('TransactionCard', () => {
@@ -699,6 +723,305 @@ describe('TransactionCard', () => {
 
       const link = screen.getByRole('link', { name: /Budget:/i })
       expect(link).toHaveAttribute('title', 'Matched by category and tag')
+    })
+  })
+
+  // Issue #531: Transaction List Visual Enhancements
+  describe('Account Badge Display (Issue #531)', () => {
+    it('should render account name when account prop is provided', () => {
+      const account = createMockAccount()
+
+      renderWithRouter(
+        <TransactionCard transaction={mockTransaction} account={account} />
+      )
+
+      expect(screen.getByText('Chase Checking')).toBeInTheDocument()
+    })
+
+    it('should render account nickname when available', () => {
+      const account = createMockAccount({ nickname: 'Main Checking' })
+
+      renderWithRouter(
+        <TransactionCard transaction={mockTransaction} account={account} />
+      )
+
+      expect(screen.getByText('Main Checking')).toBeInTheDocument()
+      // Should not show the original name
+      expect(screen.queryByText('Chase Checking')).not.toBeInTheDocument()
+    })
+
+    it('should apply account custom_color as background', () => {
+      const account = createMockAccount({ custom_color: '#EF4444' })
+
+      const { container } = renderWithRouter(
+        <TransactionCard transaction={mockTransaction} account={account} />
+      )
+
+      const badge = container.querySelector('.transaction-card__account-badge')
+      expect(badge).toBeInTheDocument()
+      expect(badge).toHaveStyle({ backgroundColor: '#EF4444' })
+    })
+
+    it('should show account emoji when custom_emoji is set', () => {
+      const account = createMockAccount({ custom_emoji: '💰' })
+
+      renderWithRouter(
+        <TransactionCard transaction={mockTransaction} account={account} />
+      )
+
+      expect(screen.getByText('💰')).toBeInTheDocument()
+    })
+
+    it('should not render account badge when account prop is undefined', () => {
+      const { container } = render(<TransactionCard transaction={mockTransaction} />)
+
+      const accountSection = container.querySelector('.transaction-card__account')
+      expect(accountSection).not.toBeInTheDocument()
+    })
+
+    it('should not render account badge when account prop is null', () => {
+      const { container } = render(
+        <TransactionCard transaction={mockTransaction} account={null} />
+      )
+
+      const accountSection = container.querySelector('.transaction-card__account')
+      expect(accountSection).not.toBeInTheDocument()
+    })
+
+    it('should use default background color when custom_color is not set', () => {
+      const account = createMockAccount({ custom_color: undefined })
+
+      const { container } = renderWithRouter(
+        <TransactionCard transaction={mockTransaction} account={account} />
+      )
+
+      const badge = container.querySelector('.transaction-card__account-badge')
+      expect(badge).toBeInTheDocument()
+      // Should have a default background (gray)
+      expect(badge).toHaveStyle({ backgroundColor: '#E5E7EB' })
+    })
+  })
+
+  describe('Category Color Dot (Issue #531)', () => {
+    it('should render category color dot before category text', () => {
+      const { container } = render(<TransactionCard transaction={mockTransaction} />)
+
+      const colorDot = container.querySelector('.transaction-card__category-dot')
+      expect(colorDot).toBeInTheDocument()
+    })
+
+    it('should apply correct color for known category', () => {
+      const transactionWithKnownCategory: Transaction = {
+        ...mockTransaction,
+        category: '["Food and Drink", "Restaurants"]',
+      }
+
+      const { container } = render(<TransactionCard transaction={transactionWithKnownCategory} />)
+
+      const colorDot = container.querySelector('.transaction-card__category-dot')
+      expect(colorDot).toBeInTheDocument()
+      expect(colorDot).toHaveStyle({ backgroundColor: CATEGORY_COLORS['Food and Drink'] })
+    })
+
+    it('should apply fallback color for unknown category', () => {
+      const transactionWithUnknownCategory: Transaction = {
+        ...mockTransaction,
+        category: '["Random Unknown Category"]',
+      }
+
+      const { container } = render(<TransactionCard transaction={transactionWithUnknownCategory} />)
+
+      const colorDot = container.querySelector('.transaction-card__category-dot')
+      expect(colorDot).toBeInTheDocument()
+      expect(colorDot).toHaveStyle({ backgroundColor: DEFAULT_CATEGORY_COLOR })
+    })
+
+    it('should apply fallback color for uncategorized transactions', () => {
+      const uncategorizedTransaction: Transaction = {
+        ...mockTransaction,
+        category: null,
+      }
+
+      const { container } = render(<TransactionCard transaction={uncategorizedTransaction} />)
+
+      const colorDot = container.querySelector('.transaction-card__category-dot')
+      expect(colorDot).toBeInTheDocument()
+      expect(colorDot).toHaveStyle({ backgroundColor: DEFAULT_CATEGORY_COLOR })
+    })
+  })
+
+  describe('Income/Expense Arrows (Issue #531)', () => {
+    it('should display up arrow for income (positive amount)', () => {
+      const incomeTransaction: Transaction = {
+        ...mockTransaction,
+        amount: 1000.00,
+      }
+
+      render(<TransactionCard transaction={incomeTransaction} />)
+
+      expect(screen.getByTestId('income-arrow')).toBeInTheDocument()
+      expect(screen.queryByTestId('expense-arrow')).not.toBeInTheDocument()
+    })
+
+    it('should display down arrow for expense (negative amount)', () => {
+      render(<TransactionCard transaction={mockTransaction} />) // amount is -25.50
+
+      expect(screen.getByTestId('expense-arrow')).toBeInTheDocument()
+      expect(screen.queryByTestId('income-arrow')).not.toBeInTheDocument()
+    })
+
+    it('should not display any arrow for zero amount', () => {
+      const zeroTransaction: Transaction = {
+        ...mockTransaction,
+        amount: 0,
+      }
+
+      render(<TransactionCard transaction={zeroTransaction} />)
+
+      expect(screen.queryByTestId('income-arrow')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('expense-arrow')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('Enhanced Pending Badge (Issue #531)', () => {
+    it('should display clock icon in pending badge', () => {
+      const pendingTransaction: Transaction = {
+        ...mockTransaction,
+        pending: true,
+      }
+
+      render(<TransactionCard transaction={pendingTransaction} />)
+
+      expect(screen.getByTestId('pending-icon')).toBeInTheDocument()
+    })
+
+    it('should display tooltip explaining pending status', () => {
+      const pendingTransaction: Transaction = {
+        ...mockTransaction,
+        pending: true,
+      }
+
+      const { container } = render(<TransactionCard transaction={pendingTransaction} />)
+
+      const badge = container.querySelector('.transaction-card__pending-badge')
+      expect(badge).toHaveAttribute('title')
+      expect(badge?.getAttribute('title')).toContain('pending')
+    })
+
+    it('should not display pending icon for posted transactions', () => {
+      render(<TransactionCard transaction={mockTransaction} />) // pending: false
+
+      expect(screen.queryByTestId('pending-icon')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('Hover Quick Actions (Issue #531)', () => {
+    it('should render quick actions container', () => {
+      const onEdit = vi.fn()
+
+      const { container } = render(
+        <TransactionCard transaction={mockTransaction} onEdit={onEdit} />
+      )
+
+      const quickActions = container.querySelector('.transaction-card__quick-actions')
+      expect(quickActions).toBeInTheDocument()
+    })
+
+    it('should render edit button when onEdit is provided', () => {
+      const onEdit = vi.fn()
+
+      render(
+        <TransactionCard transaction={mockTransaction} onEdit={onEdit} />
+      )
+
+      const editButton = screen.getByRole('button', { name: /edit transaction/i })
+      expect(editButton).toBeInTheDocument()
+    })
+
+    it('should render categorize button when onCategorize is provided', () => {
+      const onCategorize = vi.fn()
+
+      render(
+        <TransactionCard transaction={mockTransaction} onCategorize={onCategorize} />
+      )
+
+      const categorizeButton = screen.getByRole('button', { name: /categorize transaction/i })
+      expect(categorizeButton).toBeInTheDocument()
+    })
+
+    it('should call onEdit when edit button is clicked', () => {
+      const onEdit = vi.fn()
+
+      render(
+        <TransactionCard transaction={mockTransaction} onEdit={onEdit} />
+      )
+
+      const editButton = screen.getByRole('button', { name: /edit transaction/i })
+      fireEvent.click(editButton)
+
+      expect(onEdit).toHaveBeenCalledWith(mockTransaction)
+    })
+
+    it('should call onCategorize when categorize button is clicked', () => {
+      const onCategorize = vi.fn()
+
+      render(
+        <TransactionCard transaction={mockTransaction} onCategorize={onCategorize} />
+      )
+
+      const categorizeButton = screen.getByRole('button', { name: /categorize transaction/i })
+      fireEvent.click(categorizeButton)
+
+      expect(onCategorize).toHaveBeenCalledWith(mockTransaction)
+    })
+
+    it('should not call card onClick when quick action button is clicked', () => {
+      const onCardClick = vi.fn()
+
+      // Render card with onEdit handler
+      render(
+        <TransactionCard
+          transaction={mockTransaction}
+          onEdit={onCardClick}
+        />
+      )
+
+      const editButton = screen.getByRole('button', { name: /edit transaction/i })
+      fireEvent.click(editButton)
+
+      // onEdit callback should be called once
+      expect(onCardClick).toHaveBeenCalledTimes(1)
+    })
+
+    it('should not render edit button when onEdit is not provided', () => {
+      render(<TransactionCard transaction={mockTransaction} />)
+
+      expect(screen.queryByRole('button', { name: /edit transaction/i })).not.toBeInTheDocument()
+    })
+
+    it('should not render categorize button when onCategorize is not provided', () => {
+      render(<TransactionCard transaction={mockTransaction} />)
+
+      expect(screen.queryByRole('button', { name: /categorize transaction/i })).not.toBeInTheDocument()
+    })
+
+    it('should have accessible labels on quick action buttons', () => {
+      const onEdit = vi.fn()
+      const onCategorize = vi.fn()
+
+      render(
+        <TransactionCard
+          transaction={mockTransaction}
+          onEdit={onEdit}
+          onCategorize={onCategorize}
+        />
+      )
+
+      const editButton = screen.getByRole('button', { name: /edit transaction/i })
+      const categorizeButton = screen.getByRole('button', { name: /categorize transaction/i })
+
+      expect(editButton).toHaveAttribute('aria-label')
+      expect(categorizeButton).toHaveAttribute('aria-label')
     })
   })
 })
