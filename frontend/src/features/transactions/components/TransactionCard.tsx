@@ -1,11 +1,18 @@
 import type { Transaction, CategorySource } from '../types'
+import type { Account } from '../../accounts/types'
 import { TransactionBudgetBadge } from '../../budgets/components/transaction-link'
 import type { BudgetCategoryMatch } from '../../budgets/utils/transactionBudgetMatcher'
+import { getCategoryColor } from '@/lib/category-colors'
+import { ArrowUpRight, ArrowDownRight, Clock, Pencil, Tag } from 'lucide-react'
 import './TransactionCard.css'
 
 interface TransactionCardProps {
   transaction: Transaction
+  /** Account this transaction belongs to (for context display) */
+  account?: Account | null
   onEdit?: (transaction: Transaction) => void
+  /** Called when user clicks categorize quick action */
+  onCategorize?: (transaction: Transaction) => void
   /** Issue #499: Budget category match for displaying budget badge */
   budgetMatch?: BudgetCategoryMatch | null
 }
@@ -148,7 +155,7 @@ function formatDate(dateStr: string | null | undefined): string {
   }).format(transactionDate)
 }
 
-export function TransactionCard({ transaction, onEdit, budgetMatch }: TransactionCardProps) {
+export function TransactionCard({ transaction, account, onEdit, onCategorize, budgetMatch }: TransactionCardProps) {
   const {
     id,
     name,
@@ -206,6 +213,24 @@ export function TransactionCard({ transaction, onEdit, budgetMatch }: Transactio
 
   const ariaLabel = `${displayName}, ${amountFormatted}, ${displayDate}${pending ? ', pending' : ''}`
 
+  // Issue #531: Get category color for the dot
+  const categoryColor = getCategoryColor(categoryLabel)
+
+  // Issue #531: Account display name (nickname takes precedence)
+  const accountDisplayName = account ? (account.nickname || account.name) : null
+  const accountBackgroundColor = account?.custom_color || '#E5E7EB'
+
+  // Issue #531: Handle quick action clicks (prevent card click propagation)
+  const handleEditClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    onEdit?.(transaction)
+  }
+
+  const handleCategorizeClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    onCategorize?.(transaction)
+  }
+
   return (
     <article
       className={`transaction-card${pending ? ' pending' : ''}${onEdit ? ' clickable' : ''}`}
@@ -221,9 +246,26 @@ export function TransactionCard({ transaction, onEdit, budgetMatch }: Transactio
       <div className="transaction-card__header">
         <div className="transaction-card__info">
           <div className="transaction-card__name">{displayName}</div>
+          {/* Issue #531: Account badge */}
+          {account && (
+            <div className="transaction-card__account">
+              <span
+                className="transaction-card__account-badge"
+                style={{ backgroundColor: accountBackgroundColor }}
+              >
+                {account.custom_emoji && <span>{account.custom_emoji}</span>}
+                {accountDisplayName}
+              </span>
+            </div>
+          )}
           <div className="transaction-card__meta">
             <TransactionBudgetBadge match={budgetMatch} />
             <span className="transaction-card__category">
+              {/* Issue #531: Category color dot */}
+              <span
+                className="transaction-card__category-dot"
+                style={{ backgroundColor: categoryColor }}
+              />
               {showUncategorizedWarning && (
                 <span className="transaction-card__uncategorized-warning" title="Uncategorized">⚠️</span>
               )}
@@ -242,11 +284,51 @@ export function TransactionCard({ transaction, onEdit, budgetMatch }: Transactio
           )}
         </div>
         <div className="transaction-card__amount-container">
-          <div className={amountClass}>{amountFormatted}</div>
+          <div className={amountClass}>
+            {/* Issue #531: Income/Expense arrows */}
+            {amount > 0 ? (
+              <ArrowUpRight className="transaction-card__amount-arrow" data-testid="income-arrow" />
+            ) : amount < 0 ? (
+              <ArrowDownRight className="transaction-card__amount-arrow" data-testid="expense-arrow" />
+            ) : null}
+            {amountFormatted}
+          </div>
+          {/* Issue #531: Enhanced pending badge */}
           {pending && (
-            <div className="transaction-card__pending-badge">Pending</div>
+            <div
+              className="transaction-card__pending-badge"
+              title="This transaction is still pending and may be updated by your bank"
+            >
+              <Clock className="transaction-card__pending-icon" data-testid="pending-icon" />
+              Pending
+            </div>
           )}
         </div>
+        {/* Issue #531: Quick action buttons */}
+        {(onEdit || onCategorize) && (
+          <div className="transaction-card__quick-actions">
+            {onEdit && (
+              <button
+                className="transaction-card__action-btn"
+                onClick={handleEditClick}
+                aria-label="Edit transaction"
+                type="button"
+              >
+                <Pencil className="transaction-card__action-icon" />
+              </button>
+            )}
+            {onCategorize && (
+              <button
+                className="transaction-card__action-btn"
+                onClick={handleCategorizeClick}
+                aria-label="Categorize transaction"
+                type="button"
+              >
+                <Tag className="transaction-card__action-icon" />
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </article>
   )
