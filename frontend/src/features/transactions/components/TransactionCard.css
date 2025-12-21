@@ -117,7 +117,11 @@
   color: #16a34a;
 }
 
+/* Issue #531: Enhanced pending badge */
 .transaction-card__pending-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 12px;
   font-weight: 600;
   color: #ca8a04;
@@ -126,6 +130,94 @@
   border-radius: 12px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+.transaction-card__pending-icon {
+  width: 12px;
+  height: 12px;
+}
+
+/* Issue #531: Account badge */
+.transaction-card__account {
+  margin-top: 2px;
+}
+
+.transaction-card__account-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: white;
+}
+
+/* Issue #531: Category color dot */
+.transaction-card__category-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-right: 4px;
+}
+
+/* Issue #531: Amount arrows */
+.transaction-card__amount-arrow {
+  width: 16px;
+  height: 16px;
+  vertical-align: middle;
+  margin-right: 2px;
+  display: inline-block;
+}
+
+/* Issue #531: Quick actions */
+.transaction-card__quick-actions {
+  display: none;
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  gap: 4px;
+}
+
+.transaction-card {
+  position: relative;
+}
+
+.transaction-card:hover .transaction-card__quick-actions,
+.transaction-card:focus-within .transaction-card__quick-actions {
+  display: flex;
+}
+
+.transaction-card__action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: white;
+  color: #6b7280;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.transaction-card__action-btn:hover {
+  background: #f3f4f6;
+  color: #374151;
+  border-color: #d1d5db;
+}
+
+.transaction-card__action-btn:focus {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+}
+
+.transaction-card__action-icon {
+  width: 14px;
+  height: 14px;
 }
 
 /* Responsive adjustments */

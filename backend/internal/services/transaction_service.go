@@ -2,11 +2,9 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -258,26 +256,21 @@ func (s *transactionService) UpdateTransactionTags(ctx context.Context, userID, 
 
 // UpdateTransactionCategory updates the category override on a transaction
 func (s *transactionService) UpdateTransactionCategory(ctx context.Context, userID, transactionID string, category []string) (*domain.Transaction, error) {
-	// Get existing transaction to verify ownership
-	tx, err := s.GetTransactionByID(ctx, userID, transactionID)
-	if err != nil {
+	// Verify ownership before update
+	if _, err := s.GetTransactionByID(ctx, userID, transactionID); err != nil {
 		return nil, err
 	}
 
 	// Update category in database
+	// Note: The repo UPDATE sets original_category = COALESCE(original_category, category)
+	// to preserve the original Plaid category on first manual edit
 	if err := s.repo.UpdateCategory(ctx, transactionID, userID, category, domain.CategorySourceManual); err != nil {
 		return nil, fmt.Errorf("failed to update transaction category: %w", err)
 	}
 
-	// Update the transaction object
-	categoryJSON, _ := json.Marshal(category)
-	categoryStr := string(categoryJSON)
-	tx.CategoryOverride = &categoryStr
-	tx.CategorySourceField = domain.CategorySourceManual
-	now := time.Now()
-	tx.CategoryOverrideDate = &now
-
-	return tx, nil
+	// Re-fetch the transaction to get all updated fields including original_category
+	// This ensures the API response includes the original_category set by the DB update
+	return s.GetTransactionByID(ctx, userID, transactionID)
 }
 
 // GetDistinctPlaidCategories returns distinct Plaid categories from user's transactions
