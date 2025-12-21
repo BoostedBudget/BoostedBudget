@@ -174,13 +174,15 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
   }, [offset, loadTransactions])
 
   // Update a single transaction in the current data
+  // Uses merge strategy to preserve immutable fields (like original_category)
+  // that may not be included in partial API responses
   const updateTransaction = useCallback((updatedTransaction: import('../types').Transaction) => {
     setData((prevData) => {
       if (!prevData) return prevData
       return {
         ...prevData,
         transactions: prevData.transactions.map((txn) =>
-          txn.id === updatedTransaction.id ? updatedTransaction : txn
+          txn.id === updatedTransaction.id ? { ...txn, ...updatedTransaction } : txn
         ),
       }
     })
