@@ -4,6 +4,10 @@ import type {
   ExchangePublicTokenRequest,
   ExchangePublicTokenResponse,
   GetAccountsResponse,
+  UpdateAccountRequest,
+  UpdateAccountResponse,
+  ReorderAccountsRequest,
+  ReorderAccountsResponse,
 } from '../types'
 
 /**
@@ -52,12 +56,15 @@ export async function exchangePublicToken(
  *
  * Returns all accounts with institution information from linked_items.
  * Includes account details like balances, type, name, and institution.
+ * Accounts are sorted by display_order (nulls last), then created_at.
  *
+ * @param includeHidden - If true, includes hidden accounts. Default: false (Issue #307)
  * @returns List of accounts with total count
  * @throws Error if request fails (401 unauthorized, 500 server error)
  */
-export async function fetchAccounts(): Promise<GetAccountsResponse> {
-  const response = await apiClient.get<GetAccountsResponse>('/v1/accounts')
+export async function fetchAccounts(includeHidden = false): Promise<GetAccountsResponse> {
+  const params = includeHidden ? { include_hidden: 'true' } : {}
+  const response = await apiClient.get<GetAccountsResponse>('/v1/accounts', { params })
   return response.data
 }
 
@@ -91,4 +98,54 @@ export async function deleteAccount(accountId: string): Promise<void> {
  */
 export async function disconnectInstitution(linkedItemId: string): Promise<void> {
   await apiClient.delete(`/v1/linked-items/${linkedItemId}`)
+}
+
+/**
+ * Update account customization fields (Issue #307)
+ * PATCH /v1/accounts/:id
+ *
+ * Supports partial updates - only include fields to update.
+ * Set a field to null/empty string to clear it.
+ * Validates:
+ * - nickname: max 255 characters
+ * - custom_color: hex format #RRGGBB
+ * - custom_icon: one of predefined icons
+ * - custom_emoji: max 10 characters
+ *
+ * @param accountId - UUID of the account to update
+ * @param data - Partial update fields
+ * @returns Updated account with all fields
+ * @throws Error if request fails (400 validation error, 401 unauthorized, 404 not found, 500 server error)
+ */
+export async function updateAccount(
+  accountId: string,
+  data: UpdateAccountRequest
+): Promise<UpdateAccountResponse> {
+  const response = await apiClient.patch<UpdateAccountResponse>(
+    `/v1/accounts/${accountId}`,
+    data
+  )
+  return response.data
+}
+
+/**
+ * Bulk update display order for multiple accounts (Issue #307)
+ * PATCH /v1/accounts/reorder
+ *
+ * Used for drag-and-drop reordering. All accounts must belong
+ * to the authenticated user. Order values should be sequential
+ * starting from 0.
+ *
+ * @param accountOrders - Array of account IDs with their new display order
+ * @returns Success status
+ * @throws Error if request fails (400 empty list, 401 unauthorized, 404 account not found, 500 server error)
+ */
+export async function reorderAccounts(
+  accountOrders: ReorderAccountsRequest['account_orders']
+): Promise<ReorderAccountsResponse> {
+  const response = await apiClient.patch<ReorderAccountsResponse>(
+    '/v1/accounts/reorder',
+    { account_orders: accountOrders }
+  )
+  return response.data
 }

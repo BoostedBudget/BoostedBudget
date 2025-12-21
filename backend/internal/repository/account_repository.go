@@ -47,6 +47,24 @@ type AccountRepository interface {
 	//   - The account doesn't exist
 	//   - The account exists but belongs to a different user (ownership check fails)
 	Delete(ctx context.Context, accountID, userID string) error
+
+	// GetByIDAndUser retrieves an account by ID with ownership validation.
+	// Returns ErrAccountNotFound if the account doesn't exist or belongs to a different user.
+	GetByIDAndUser(ctx context.Context, accountID, userID string) (*domain.Account, error)
+
+	// Update updates account customization fields with ownership validation.
+	// Returns ErrAccountNotFound if the account doesn't exist or user doesn't own it.
+	Update(ctx context.Context, account *domain.Account, userID string) error
+
+	// UpdateDisplayOrders updates the display_order for multiple accounts atomically.
+	// All accounts must belong to the specified user.
+	// Returns ErrAccountNotFound if any account doesn't exist or user doesn't own it.
+	UpdateDisplayOrders(ctx context.Context, userID string, orders []domain.AccountOrder) error
+
+	// GetAccountsWithInstitutionFiltered retrieves accounts with institution names and hidden filtering.
+	// If includeHidden is false, only returns accounts where is_hidden = false.
+	// Results are sorted by display_order ASC (nulls last), then created_at ASC.
+	GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error)
 }
 
 // accountRepository implements AccountRepository using PostgreSQL
@@ -391,4 +409,162 @@ func (r *accountRepository) Delete(ctx context.Context, accountID, userID string
 	}
 
 	return nil
+}
+
+// GetByIDAndUser retrieves an account by ID with ownership validation.
+func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userID string) (*domain.Account, error) {
+	query := `
+		SELECT id, linked_item_id, user_id, plaid_account_id,
+		       name, official_name, type, subtype, mask,
+		       current_balance, available_balance, currency_code,
+		       nickname, custom_color, custom_icon, custom_emoji,
+		       display_order, is_hidden,
+		       created_at, updated_at
+		FROM accounts
+		WHERE id = $1 AND user_id = $2
+	`
+
+	var account domain.Account
+	err := r.db.QueryRowContext(ctx, query, accountID, userID).Scan(
+		&account.ID, &account.LinkedItemID, &account.UserID, &account.PlaidAccountID,
+		&account.Name, &account.OfficialName, &account.Type, &account.Subtype, &account.Mask,
+		&account.CurrentBalance, &account.AvailableBalance, &account.CurrencyCode,
+		&account.Nickname, &account.CustomColor, &account.CustomIcon, &account.CustomEmoji,
+		&account.DisplayOrder, &account.IsHidden,
+		&account.CreatedAt, &account.UpdatedAt,
+	)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, ErrAccountNotFound
+		}
+		return nil, err
+	}
+
+	return &account, nil
+}
+
+// Update updates account customization fields with ownership validation.
+func (r *accountRepository) Update(ctx context.Context, account *domain.Account, userID string) error {
+	account.UpdatedAt = time.Now()
+
+	query := `
+		UPDATE accounts
+		SET nickname = $1, custom_color = $2, custom_icon = $3,
+		    custom_emoji = $4, display_order = $5, is_hidden = $6, updated_at = $7
+		WHERE id = $8 AND user_id = $9
+	`
+
+	result, err := r.db.ExecContext(ctx, query,
+		account.Nickname, account.CustomColor, account.CustomIcon,
+		account.CustomEmoji, account.DisplayOrder, account.IsHidden, account.UpdatedAt,
+		account.ID, userID,
+	)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return ErrAccountNotFound
+	}
+
+	return nil
+}
+
+// UpdateDisplayOrders updates the display_order for multiple accounts atomically.
+func (r *accountRepository) UpdateDisplayOrders(ctx context.Context, userID string, orders []domain.AccountOrder) error {
+	if len(orders) == 0 {
+		return nil
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	query := `
+		UPDATE accounts
+		SET display_order = $1, updated_at = $2
+		WHERE id = $3 AND user_id = $4
+	`
+
+	now := time.Now()
+
+	for _, order := range orders {
+		result, err := tx.ExecContext(ctx, query, order.DisplayOrder, now, order.AccountID, userID)
+		if err != nil {
+			return err
+		}
+
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+
+		if rowsAffected == 0 {
+			return ErrAccountNotFound
+		}
+	}
+
+	return tx.Commit()
+}
+
+// GetAccountsWithInstitutionFiltered retrieves accounts with institution names and hidden filtering.
+func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error) {
+	query := `
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       a.current_balance, a.available_balance, a.currency_code,
+		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
+		       a.display_order, a.is_hidden,
+		       a.created_at, a.updated_at, l.institution_name
+		FROM accounts a
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id
+		WHERE a.user_id = $1
+	`
+
+	if !includeHidden {
+		query += " AND a.is_hidden = FALSE"
+	}
+
+	query += " ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC"
+
+	rows, err := r.db.QueryContext(ctx, query, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var accounts []domain.Account
+	for rows.Next() {
+		var account domain.Account
+		err := rows.Scan(
+			&account.ID, &account.LinkedItemID, &account.UserID, &account.PlaidAccountID,
+			&account.Name, &account.OfficialName, &account.Type, &account.Subtype, &account.Mask,
+			&account.CurrentBalance, &account.AvailableBalance, &account.CurrencyCode,
+			&account.Nickname, &account.CustomColor, &account.CustomIcon, &account.CustomEmoji,
+			&account.DisplayOrder, &account.IsHidden,
+			&account.CreatedAt, &account.UpdatedAt, &account.InstitutionName,
+		)
+		if err != nil {
+			return nil, err
+		}
+		accounts = append(accounts, account)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if accounts == nil {
+		accounts = []domain.Account{}
+	}
+
+	return accounts, nil
 }

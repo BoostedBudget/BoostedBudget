@@ -412,6 +412,8 @@ func main() {
 			api.POST("/plaid/link-token", plaidHandler.CreateLinkToken)
 			api.POST("/plaid/exchange-token", plaidHandler.ExchangePublicToken)
 			api.GET("/accounts", plaidHandler.GetAccounts)
+			api.PATCH("/accounts/reorder", plaidHandler.ReorderAccounts)  // Issue #307: Must be before :id route
+			api.PATCH("/accounts/:id", plaidHandler.UpdateAccount)        // Issue #307: Account customization
 			api.DELETE("/accounts/:id", plaidHandler.DeleteAccount)
 			api.DELETE("/linked-items/:id", plaidHandler.DisconnectInstitution)
 		}
