@@ -184,6 +184,32 @@ func (m *MockAccountRepository) Delete(ctx context.Context, accountID, userID st
 	return args.Error(0)
 }
 
+func (m *MockAccountRepository) GetByIDAndUser(ctx context.Context, accountID, userID string) (*domain.Account, error) {
+	args := m.Called(ctx, accountID, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.Account), args.Error(1)
+}
+
+func (m *MockAccountRepository) Update(ctx context.Context, account *domain.Account, userID string) error {
+	args := m.Called(ctx, account, userID)
+	return args.Error(0)
+}
+
+func (m *MockAccountRepository) UpdateDisplayOrders(ctx context.Context, userID string, orders []domain.AccountOrder) error {
+	args := m.Called(ctx, userID, orders)
+	return args.Error(0)
+}
+
+func (m *MockAccountRepository) GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error) {
+	args := m.Called(ctx, userID, includeHidden)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.Account), args.Error(1)
+}
+
 type MockUserRepository struct {
 	mock.Mock
 }
@@ -872,4 +898,429 @@ func TestDisconnectInstitution_DatabaseDeletionError(t *testing.T) {
 	mockLinkedItemRepo.AssertExpectations(t)
 	mockEncryptionSvc.AssertExpectations(t)
 	mockPlaidService.AssertExpectations(t)
+}
+
+// ===========================================================================
+// Account Customization Tests (Issue #307)
+// ===========================================================================
+
+// TestUpdateAccount_Success tests successful account customization update
+func TestUpdateAccount_Success(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+
+	service := &accountService{
+		accountRepo: mockAccountRepo,
+	}
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+
+	existingAccount := &domain.Account{
+		ID:           accountID,
+		UserID:       userID,
+		Name:         "Chase Checking",
+		Type:         "depository",
+		CurrencyCode: "USD",
+	}
+
+	nickname := "My Primary Account"
+	color := "#3B82F6"
+	icon := "wallet"
+	emoji := "💰"
+	isHidden := false
+
+	updateReq := &domain.UpdateAccountRequest{
+		Nickname:    &nickname,
+		CustomColor: &color,
+		CustomIcon:  &icon,
+		CustomEmoji: &emoji,
+		IsHidden:    &isHidden,
+	}
+
+	// Mock GetByIDAndUser to return existing account
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(existingAccount, nil)
+
+	// Mock Update to succeed
+	mockAccountRepo.On("Update", ctx, mock.MatchedBy(func(acc *domain.Account) bool {
+		return acc.ID == accountID &&
+			acc.Nickname != nil && *acc.Nickname == nickname &&
+			acc.CustomColor != nil && *acc.CustomColor == "#3B82F6" && // Should be uppercased
+			acc.CustomIcon != nil && *acc.CustomIcon == icon &&
+			acc.CustomEmoji != nil && *acc.CustomEmoji == emoji &&
+			acc.IsHidden == isHidden
+	}), userID).Return(nil)
+
+	// Execute
+	result, err := service.UpdateAccount(ctx, accountID, userID, updateReq)
+
+	// Assert
+	require.NoError(t, err, "UpdateAccount should succeed")
+	require.NotNil(t, result)
+	assert.Equal(t, accountID, result.ID)
+	assert.Equal(t, nickname, *result.Nickname)
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestUpdateAccount_NotFound tests update when account doesn't exist
+func TestUpdateAccount_NotFound(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+
+	service := &accountService{
+		accountRepo: mockAccountRepo,
+	}
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+
+	nickname := "New Nickname"
+	updateReq := &domain.UpdateAccountRequest{
+		Nickname: &nickname,
+	}
+
+	// Mock GetByIDAndUser to return not found
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(nil, assert.AnError)
+
+	// Execute
+	result, err := service.UpdateAccount(ctx, accountID, userID, updateReq)
+
+	// Assert
+	require.Error(t, err, "UpdateAccount should fail for non-existent account")
+	assert.Nil(t, result)
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestUpdateAccount_ValidationError tests update with invalid data
+func TestUpdateAccount_ValidationError(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+
+	service := &accountService{
+		accountRepo: mockAccountRepo,
+	}
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+
+	// Invalid hex color (no # prefix)
+	invalidColor := "3B82F6"
+	updateReq := &domain.UpdateAccountRequest{
+		CustomColor: &invalidColor,
+	}
+
+	// Execute - should fail validation before hitting repository
+	result, err := service.UpdateAccount(ctx, accountID, userID, updateReq)
+
+	// Assert
+	require.Error(t, err, "UpdateAccount should fail for invalid color")
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "custom_color")
+}
+
+// TestUpdateAccount_PartialUpdate tests updating only some fields
+func TestUpdateAccount_PartialUpdate(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+
+	service := &accountService{
+		accountRepo: mockAccountRepo,
+	}
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+
+	existingNickname := "Old Nickname"
+	existingColor := "#FF0000"
+	existingAccount := &domain.Account{
+		ID:          accountID,
+		UserID:      userID,
+		Name:        "Chase Checking",
+		Nickname:    &existingNickname,
+		CustomColor: &existingColor,
+	}
+
+	// Only update nickname, leave color unchanged
+	newNickname := "New Nickname"
+	updateReq := &domain.UpdateAccountRequest{
+		Nickname: &newNickname,
+		// CustomColor is nil - should not change
+	}
+
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(existingAccount, nil)
+
+	// Should preserve existing color
+	mockAccountRepo.On("Update", ctx, mock.MatchedBy(func(acc *domain.Account) bool {
+		return acc.Nickname != nil && *acc.Nickname == newNickname &&
+			acc.CustomColor != nil && *acc.CustomColor == existingColor
+	}), userID).Return(nil)
+
+	// Execute
+	result, err := service.UpdateAccount(ctx, accountID, userID, updateReq)
+
+	// Assert
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, newNickname, *result.Nickname)
+	assert.Equal(t, existingColor, *result.CustomColor)
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestUpdateAccount_ClearField tests clearing a field by setting empty string
+func TestUpdateAccount_ClearField(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+
+	service := &accountService{
+		accountRepo: mockAccountRepo,
+	}
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+
+	existingNickname := "My Nickname"
+	existingAccount := &domain.Account{
+		ID:       accountID,
+		UserID:   userID,
+		Name:     "Chase Checking",
+		Nickname: &existingNickname,
+	}
+
+	// Empty string means clear the field
+	emptyNickname := ""
+	updateReq := &domain.UpdateAccountRequest{
+		Nickname: &emptyNickname,
+	}
+
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(existingAccount, nil)
+
+	// Nickname should be nil (cleared)
+	mockAccountRepo.On("Update", ctx, mock.MatchedBy(func(acc *domain.Account) bool {
+		return acc.Nickname == nil
+	}), userID).Return(nil)
+
+	// Execute
+	result, err := service.UpdateAccount(ctx, accountID, userID, updateReq)
+
+	// Assert
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Nil(t, result.Nickname)
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestUpdateAccount_TrimNickname tests that nickname whitespace is trimmed
+func TestUpdateAccount_TrimNickname(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+
+	service := &accountService{
+		accountRepo: mockAccountRepo,
+	}
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+
+	existingAccount := &domain.Account{
+		ID:     accountID,
+		UserID: userID,
+		Name:   "Chase Checking",
+	}
+
+	// Nickname with leading/trailing whitespace
+	nicknameWithSpaces := "  My Account  "
+	updateReq := &domain.UpdateAccountRequest{
+		Nickname: &nicknameWithSpaces,
+	}
+
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(existingAccount, nil)
+
+	// Nickname should be trimmed
+	mockAccountRepo.On("Update", ctx, mock.MatchedBy(func(acc *domain.Account) bool {
+		return acc.Nickname != nil && *acc.Nickname == "My Account"
+	}), userID).Return(nil)
+
+	// Execute
+	result, err := service.UpdateAccount(ctx, accountID, userID, updateReq)
+
+	// Assert
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, "My Account", *result.Nickname)
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestReorderAccounts_Success tests successful bulk reorder
+func TestReorderAccounts_Success(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+
+	service := &accountService{
+		accountRepo: mockAccountRepo,
+	}
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	reorderReq := &domain.ReorderAccountsRequest{
+		AccountOrders: []domain.AccountOrder{
+			{AccountID: uuid.New().String(), DisplayOrder: 0},
+			{AccountID: uuid.New().String(), DisplayOrder: 1},
+			{AccountID: uuid.New().String(), DisplayOrder: 2},
+		},
+	}
+
+	// Mock UpdateDisplayOrders to succeed
+	mockAccountRepo.On("UpdateDisplayOrders", ctx, userID, reorderReq.AccountOrders).Return(nil)
+
+	// Execute
+	err := service.ReorderAccounts(ctx, userID, reorderReq)
+
+	// Assert
+	require.NoError(t, err, "ReorderAccounts should succeed")
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestReorderAccounts_EmptyList tests reorder with empty list
+func TestReorderAccounts_EmptyList(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+
+	service := &accountService{
+		accountRepo: mockAccountRepo,
+	}
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	reorderReq := &domain.ReorderAccountsRequest{
+		AccountOrders: []domain.AccountOrder{},
+	}
+
+	// Execute - should return error for empty list
+	err := service.ReorderAccounts(ctx, userID, reorderReq)
+
+	// Assert
+	require.Error(t, err, "ReorderAccounts should fail for empty list")
+	assert.Contains(t, err.Error(), "empty")
+}
+
+// TestReorderAccounts_AccountNotFound tests reorder when an account doesn't belong to user
+func TestReorderAccounts_AccountNotFound(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+
+	service := &accountService{
+		accountRepo: mockAccountRepo,
+	}
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	reorderReq := &domain.ReorderAccountsRequest{
+		AccountOrders: []domain.AccountOrder{
+			{AccountID: uuid.New().String(), DisplayOrder: 0},
+		},
+	}
+
+	// Mock UpdateDisplayOrders to return error (account not found)
+	mockAccountRepo.On("UpdateDisplayOrders", ctx, userID, reorderReq.AccountOrders).Return(assert.AnError)
+
+	// Execute
+	err := service.ReorderAccounts(ctx, userID, reorderReq)
+
+	// Assert
+	require.Error(t, err, "ReorderAccounts should fail when account not found")
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestGetAccountsFiltered_ExcludeHidden tests getting accounts without hidden ones
+func TestGetAccountsFiltered_ExcludeHidden(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+	mockUserRepo := &MockUserRepository{}
+
+	service := &accountService{
+		accountRepo: mockAccountRepo,
+		userRepo:    mockUserRepo,
+	}
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	// Mock user lookup
+	user := &domain.User{ID: userID}
+	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
+
+	// Mock accounts (only visible ones)
+	visibleAccounts := []domain.Account{
+		{ID: uuid.New().String(), UserID: userID, Name: "Checking", IsHidden: false},
+		{ID: uuid.New().String(), UserID: userID, Name: "Savings", IsHidden: false},
+	}
+	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID, false).Return(visibleAccounts, nil)
+
+	// Execute - don't include hidden
+	result, err := service.GetAccountsFiltered(ctx, userID, false)
+
+	// Assert
+	require.NoError(t, err)
+	assert.Len(t, result, 2)
+	mockAccountRepo.AssertExpectations(t)
+	mockUserRepo.AssertExpectations(t)
+}
+
+// TestGetAccountsFiltered_IncludeHidden tests getting all accounts including hidden
+func TestGetAccountsFiltered_IncludeHidden(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+	mockUserRepo := &MockUserRepository{}
+
+	service := &accountService{
+		accountRepo: mockAccountRepo,
+		userRepo:    mockUserRepo,
+	}
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	// Mock user lookup
+	user := &domain.User{ID: userID}
+	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
+
+	// Mock all accounts (including hidden)
+	allAccounts := []domain.Account{
+		{ID: uuid.New().String(), UserID: userID, Name: "Checking", IsHidden: false},
+		{ID: uuid.New().String(), UserID: userID, Name: "Savings", IsHidden: false},
+		{ID: uuid.New().String(), UserID: userID, Name: "Hidden Card", IsHidden: true},
+	}
+	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID, true).Return(allAccounts, nil)
+
+	// Execute - include hidden
+	result, err := service.GetAccountsFiltered(ctx, userID, true)
+
+	// Assert
+	require.NoError(t, err)
+	assert.Len(t, result, 3)
+	mockAccountRepo.AssertExpectations(t)
+	mockUserRepo.AssertExpectations(t)
+}
+
+// TestGetAccountsFiltered_UserNotFound tests when user doesn't exist
+func TestGetAccountsFiltered_UserNotFound(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+	mockUserRepo := &MockUserRepository{}
+
+	service := &accountService{
+		accountRepo: mockAccountRepo,
+		userRepo:    mockUserRepo,
+	}
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	// Mock user not found
+	mockUserRepo.On("GetUserByID", ctx, userID).Return(nil, assert.AnError)
+
+	// Execute
+	result, err := service.GetAccountsFiltered(ctx, userID, false)
+
+	// Assert - should return empty list for non-existent user (consistent with GetAccounts)
+	require.NoError(t, err)
+	assert.Empty(t, result)
+	mockUserRepo.AssertExpectations(t)
 }

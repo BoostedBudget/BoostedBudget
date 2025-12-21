@@ -1,8 +1,25 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import MockAdapter from 'axios-mock-adapter'
 import { apiClient } from '../../../api/axiosConfig'
-import { fetchLinkToken, exchangePublicToken, fetchAccounts, deleteAccount, disconnectInstitution } from './plaidApi'
-import type { LinkTokenResponse, ExchangePublicTokenRequest, ExchangePublicTokenResponse, GetAccountsResponse } from '../types'
+import {
+  fetchLinkToken,
+  exchangePublicToken,
+  fetchAccounts,
+  deleteAccount,
+  disconnectInstitution,
+  updateAccount,
+  reorderAccounts,
+} from './plaidApi'
+import type {
+  LinkTokenResponse,
+  ExchangePublicTokenRequest,
+  ExchangePublicTokenResponse,
+  GetAccountsResponse,
+  UpdateAccountRequest,
+  UpdateAccountResponse,
+  ReorderAccountsResponse,
+  Account,
+} from '../types'
 
 describe('plaidApi', () => {
   let mock: MockAdapter
@@ -366,6 +383,307 @@ describe('plaidApi', () => {
       mock.onDelete(`/v1/linked-items/${linkedItemId}`).networkError()
 
       await expect(disconnectInstitution(linkedItemId)).rejects.toThrow()
+    })
+  })
+
+  // Issue #307: Account customization tests
+  describe('fetchAccounts with includeHidden', () => {
+    it('should not include include_hidden param when false (default)', async () => {
+      const mockResponse: GetAccountsResponse = {
+        accounts: [],
+        total_count: 0,
+      }
+
+      mock.onGet('/v1/accounts').reply((config) => {
+        expect(config.params).toEqual({})
+        return [200, mockResponse]
+      })
+
+      await fetchAccounts()
+    })
+
+    it('should not include include_hidden param when explicitly false', async () => {
+      const mockResponse: GetAccountsResponse = {
+        accounts: [],
+        total_count: 0,
+      }
+
+      mock.onGet('/v1/accounts').reply((config) => {
+        expect(config.params).toEqual({})
+        return [200, mockResponse]
+      })
+
+      await fetchAccounts(false)
+    })
+
+    it('should include include_hidden=true when includeHidden is true', async () => {
+      const mockResponse: GetAccountsResponse = {
+        accounts: [],
+        total_count: 0,
+      }
+
+      mock.onGet('/v1/accounts').reply((config) => {
+        expect(config.params).toEqual({ include_hidden: 'true' })
+        return [200, mockResponse]
+      })
+
+      await fetchAccounts(true)
+    })
+  })
+
+  describe('updateAccount', () => {
+    const mockAccount: Account = {
+      id: '550e8400-e29b-41d4-a716-446655440000',
+      linked_item_id: '770e9511-f3ac-52e5-b827-557766551112',
+      user_id: 'auth0|507f1f77bcf86cd799439011',
+      plaid_account_id: 'plaid-acc-1',
+      name: 'Chase Checking',
+      official_name: 'Chase Total Checking',
+      type: 'depository',
+      subtype: 'checking',
+      mask: '0000',
+      current_balance: 2500.50,
+      available_balance: 2300.50,
+      currency_code: 'USD',
+      institution_name: 'Chase',
+      nickname: 'My Primary Account',
+      custom_color: '#3B82F6',
+      custom_icon: 'wallet',
+      display_order: 0,
+      is_hidden: false,
+      created_at: '2025-10-18T14:30:00Z',
+      updated_at: '2025-10-20T10:15:00Z',
+    }
+
+    it('should call PATCH /v1/accounts/:id with request body', async () => {
+      const accountId = '550e8400-e29b-41d4-a716-446655440000'
+      const updateData: UpdateAccountRequest = {
+        nickname: 'My Primary Account',
+        custom_color: '#3B82F6',
+      }
+
+      const mockResponse: UpdateAccountResponse = {
+        account: mockAccount,
+      }
+
+      mock.onPatch(`/v1/accounts/${accountId}`, updateData).reply(200, mockResponse)
+
+      const result = await updateAccount(accountId, updateData)
+
+      expect(result).toEqual(mockResponse)
+      expect(mock.history.patch.length).toBe(1)
+      expect(mock.history.patch[0].url).toBe(`/v1/accounts/${accountId}`)
+      expect(JSON.parse(mock.history.patch[0].data)).toEqual(updateData)
+    })
+
+    it('should handle partial updates (single field)', async () => {
+      const accountId = '550e8400-e29b-41d4-a716-446655440000'
+      const updateData: UpdateAccountRequest = {
+        is_hidden: true,
+      }
+
+      const mockResponse: UpdateAccountResponse = {
+        account: { ...mockAccount, is_hidden: true },
+      }
+
+      mock.onPatch(`/v1/accounts/${accountId}`).reply(200, mockResponse)
+
+      const result = await updateAccount(accountId, updateData)
+
+      expect(result.account.is_hidden).toBe(true)
+    })
+
+    it('should handle clearing fields with null', async () => {
+      const accountId = '550e8400-e29b-41d4-a716-446655440000'
+      const updateData: UpdateAccountRequest = {
+        nickname: null,
+        custom_color: null,
+      }
+
+      const mockResponse: UpdateAccountResponse = {
+        account: { ...mockAccount, nickname: undefined, custom_color: undefined },
+      }
+
+      mock.onPatch(`/v1/accounts/${accountId}`).reply(200, mockResponse)
+
+      const result = await updateAccount(accountId, updateData)
+
+      expect(result.account.nickname).toBeUndefined()
+      expect(result.account.custom_color).toBeUndefined()
+    })
+
+    it('should include Authorization header from apiClient interceptor', async () => {
+      const accountId = '550e8400-e29b-41d4-a716-446655440000'
+      const updateData: UpdateAccountRequest = {
+        nickname: 'Test',
+      }
+
+      mock.onPatch(`/v1/accounts/${accountId}`).reply((config) => {
+        expect(config.headers).toBeDefined()
+        return [200, { account: mockAccount }]
+      })
+
+      await updateAccount(accountId, updateData)
+    })
+
+    it('should handle 400 validation error (invalid color)', async () => {
+      const accountId = '550e8400-e29b-41d4-a716-446655440000'
+      const updateData: UpdateAccountRequest = {
+        custom_color: 'invalid-color',
+      }
+
+      mock.onPatch(`/v1/accounts/${accountId}`).reply(400, {
+        error: 'custom_color must be a valid hex color (format: #RRGGBB)',
+      })
+
+      await expect(updateAccount(accountId, updateData)).rejects.toThrow()
+    })
+
+    it('should handle 400 validation error (invalid icon)', async () => {
+      const accountId = '550e8400-e29b-41d4-a716-446655440000'
+      const updateData: UpdateAccountRequest = {
+        custom_icon: 'invalid-icon',
+      }
+
+      mock.onPatch(`/v1/accounts/${accountId}`).reply(400, {
+        error: 'custom_icon must be one of the allowed icons',
+      })
+
+      await expect(updateAccount(accountId, updateData)).rejects.toThrow()
+    })
+
+    it('should handle 404 not found error', async () => {
+      const accountId = 'non-existent-account-id'
+      const updateData: UpdateAccountRequest = {
+        nickname: 'Test',
+      }
+
+      mock.onPatch(`/v1/accounts/${accountId}`).reply(404, { error: 'Account not found' })
+
+      await expect(updateAccount(accountId, updateData)).rejects.toThrow()
+    })
+
+    it('should handle 401 unauthorized error', async () => {
+      const accountId = '550e8400-e29b-41d4-a716-446655440000'
+      const updateData: UpdateAccountRequest = {
+        nickname: 'Test',
+      }
+
+      mock.onPatch(`/v1/accounts/${accountId}`).reply(401, { error: 'Unauthorized' })
+
+      await expect(updateAccount(accountId, updateData)).rejects.toThrow()
+    })
+
+    it('should handle 500 server error', async () => {
+      const accountId = '550e8400-e29b-41d4-a716-446655440000'
+      const updateData: UpdateAccountRequest = {
+        nickname: 'Test',
+      }
+
+      mock.onPatch(`/v1/accounts/${accountId}`).reply(500, { error: 'Internal server error' })
+
+      await expect(updateAccount(accountId, updateData)).rejects.toThrow()
+    })
+
+    it('should handle network errors', async () => {
+      const accountId = '550e8400-e29b-41d4-a716-446655440000'
+      const updateData: UpdateAccountRequest = {
+        nickname: 'Test',
+      }
+
+      mock.onPatch(`/v1/accounts/${accountId}`).networkError()
+
+      await expect(updateAccount(accountId, updateData)).rejects.toThrow()
+    })
+  })
+
+  describe('reorderAccounts', () => {
+    it('should call PATCH /v1/accounts/reorder with account orders', async () => {
+      const accountOrders = [
+        { account_id: 'acc-1', display_order: 0 },
+        { account_id: 'acc-2', display_order: 1 },
+        { account_id: 'acc-3', display_order: 2 },
+      ]
+
+      const mockResponse: ReorderAccountsResponse = {
+        success: true,
+      }
+
+      mock.onPatch('/v1/accounts/reorder').reply(200, mockResponse)
+
+      const result = await reorderAccounts(accountOrders)
+
+      expect(result).toEqual(mockResponse)
+      expect(mock.history.patch.length).toBe(1)
+      expect(mock.history.patch[0].url).toBe('/v1/accounts/reorder')
+      expect(JSON.parse(mock.history.patch[0].data)).toEqual({
+        account_orders: accountOrders,
+      })
+    })
+
+    it('should include Authorization header from apiClient interceptor', async () => {
+      const accountOrders = [
+        { account_id: 'acc-1', display_order: 0 },
+      ]
+
+      mock.onPatch('/v1/accounts/reorder').reply((config) => {
+        expect(config.headers).toBeDefined()
+        return [200, { success: true }]
+      })
+
+      await reorderAccounts(accountOrders)
+    })
+
+    it('should handle 400 empty list error', async () => {
+      const accountOrders: { account_id: string; display_order: number }[] = []
+
+      mock.onPatch('/v1/accounts/reorder').reply(400, {
+        error: 'account orders cannot be empty',
+      })
+
+      await expect(reorderAccounts(accountOrders)).rejects.toThrow()
+    })
+
+    it('should handle 404 account not found error', async () => {
+      const accountOrders = [
+        { account_id: 'non-existent-acc', display_order: 0 },
+      ]
+
+      mock.onPatch('/v1/accounts/reorder').reply(404, {
+        error: 'One or more accounts not found',
+      })
+
+      await expect(reorderAccounts(accountOrders)).rejects.toThrow()
+    })
+
+    it('should handle 401 unauthorized error', async () => {
+      const accountOrders = [
+        { account_id: 'acc-1', display_order: 0 },
+      ]
+
+      mock.onPatch('/v1/accounts/reorder').reply(401, { error: 'Unauthorized' })
+
+      await expect(reorderAccounts(accountOrders)).rejects.toThrow()
+    })
+
+    it('should handle 500 server error', async () => {
+      const accountOrders = [
+        { account_id: 'acc-1', display_order: 0 },
+      ]
+
+      mock.onPatch('/v1/accounts/reorder').reply(500, { error: 'Internal server error' })
+
+      await expect(reorderAccounts(accountOrders)).rejects.toThrow()
+    })
+
+    it('should handle network errors', async () => {
+      const accountOrders = [
+        { account_id: 'acc-1', display_order: 0 },
+      ]
+
+      mock.onPatch('/v1/accounts/reorder').networkError()
+
+      await expect(reorderAccounts(accountOrders)).rejects.toThrow()
     })
   })
 })
