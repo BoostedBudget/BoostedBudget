@@ -8,7 +8,7 @@ import * as profileApi from '../profile/api/profileApi'
 import { useSubscriptionTiers } from '../subscription/hooks/useSubscriptionTiers'
 import type { GetAccountsResponse, Account } from './types'
 import type { User } from '../profile/types'
-import type { SubscriptionTiersResponse } from '../subscription/types'
+import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
 
 // Mock the Plaid API
 vi.mock('./api/plaidApi')
@@ -46,101 +46,12 @@ function renderWithRouter(ui: React.ReactElement) {
 }
 
 describe('AccountsPage', () => {
-  // Default tier mock data used in ALL tests
-  const defaultMockTiers: SubscriptionTiersResponse = {
-    tiers: {
-      free: {
-        display_name: 'Free',
-        description: 'Full budgeting with basic automation',
-        pricing: {
-          price_monthly: 0,
-          price_yearly: 0,
-          stripe_price_id_monthly: null,
-          stripe_price_id_yearly: null,
-        },
-        limits: {
-          accounts: 3,
-          rules: 1,
-          executions_per_day: 1,
-          min_execution_interval_minutes: 1440,
-        },
-        features: {
-          ads_enabled: true,
-          ai_insights: false,
-        },
-      },
-      premium_lite: {
-        display_name: 'Premium Lite',
-        description: 'Perfect for couples and light automation',
-        pricing: {
-          price_monthly: 4.99,
-          price_yearly: 49.99,
-          stripe_price_id_monthly: 'price_premium_lite_monthly',
-          stripe_price_id_yearly: 'price_premium_lite_yearly',
-        },
-        limits: {
-          accounts: 15,
-          rules: 5,
-          executions_per_day: 2,
-          min_execution_interval_minutes: 720,
-        },
-        features: {
-          ads_enabled: false,
-          ai_insights: false,
-        },
-      },
-      premium: {
-        display_name: 'Premium',
-        description: 'Power users with complex finances',
-        pricing: {
-          price_monthly: 9.99,
-          price_yearly: 99.99,
-          stripe_price_id_monthly: 'price_premium_monthly',
-          stripe_price_id_yearly: 'price_premium_yearly',
-        },
-        limits: {
-          accounts: 30,
-          rules: 15,
-          executions_per_day: 6,
-          min_execution_interval_minutes: 240,
-        },
-        features: {
-          ads_enabled: false,
-          ai_insights: false,
-        },
-      },
-      premium_plus: {
-        display_name: 'Premium+',
-        description: 'Unlimited everything with AI and API access',
-        pricing: {
-          price_monthly: 19.99,
-          price_yearly: 199.99,
-          stripe_price_id_monthly: 'price_premium_plus_monthly',
-          stripe_price_id_yearly: 'price_premium_plus_yearly',
-        },
-        limits: {
-          accounts: -1, // Unlimited
-          rules: -1,
-          executions_per_day: 144,
-          min_execution_interval_minutes: 10,
-        },
-        features: {
-          ads_enabled: false,
-          ai_insights: true,
-          api_access: true,
-          priority_support: true,
-        },
-      },
-    },
-    default_tier: 'free',
-  }
-
   beforeEach(() => {
     vi.restoreAllMocks()
 
     // Default mocks for hooks used in ALL tests
     vi.mocked(useSubscriptionTiers).mockReturnValue({
-      tiers: defaultMockTiers,
+      tiers: mockSubscriptionTiersResponse,
       loading: false,
       error: null,
       refetch: vi.fn(),
@@ -391,7 +302,7 @@ describe('AccountsPage', () => {
 
     it('should show account usage (X/Y accounts used) for free tier', async () => {
       vi.mocked(useSubscriptionTiers).mockReturnValue({
-        tiers: defaultMockTiers,
+        tiers: mockSubscriptionTiersResponse,
         loading: false,
         error: null,
         refetch: vi.fn(),
@@ -415,7 +326,7 @@ describe('AccountsPage', () => {
 
     it('should disable PlaidLinkButton when at account limit', async () => {
       vi.mocked(useSubscriptionTiers).mockReturnValue({
-        tiers: defaultMockTiers,
+        tiers: mockSubscriptionTiersResponse,
         loading: false,
         error: null,
         refetch: vi.fn(),
@@ -443,7 +354,7 @@ describe('AccountsPage', () => {
 
     it('should show upgrade banner when at account limit', async () => {
       vi.mocked(useSubscriptionTiers).mockReturnValue({
-        tiers: defaultMockTiers,
+        tiers: mockSubscriptionTiersResponse,
         loading: false,
         error: null,
         refetch: vi.fn(),
@@ -471,7 +382,7 @@ describe('AccountsPage', () => {
 
     it('should enable PlaidLinkButton when under account limit', async () => {
       vi.mocked(useSubscriptionTiers).mockReturnValue({
-        tiers: defaultMockTiers,
+        tiers: mockSubscriptionTiersResponse,
         loading: false,
         error: null,
         refetch: vi.fn(),
@@ -496,7 +407,7 @@ describe('AccountsPage', () => {
 
     it('should show "X accounts" for unlimited tier (no limit display)', async () => {
       vi.mocked(useSubscriptionTiers).mockReturnValue({
-        tiers: defaultMockTiers,
+        tiers: mockSubscriptionTiersResponse,
         loading: false,
         error: null,
         refetch: vi.fn(),
@@ -522,7 +433,7 @@ describe('AccountsPage', () => {
 
     it('should not show upgrade banner for premium_plus tier even with many accounts', async () => {
       vi.mocked(useSubscriptionTiers).mockReturnValue({
-        tiers: defaultMockTiers,
+        tiers: mockSubscriptionTiersResponse,
         loading: false,
         error: null,
         refetch: vi.fn(),
@@ -547,7 +458,7 @@ describe('AccountsPage', () => {
 
     it('should show correct limit for premium tier (30 accounts)', async () => {
       vi.mocked(useSubscriptionTiers).mockReturnValue({
-        tiers: defaultMockTiers,
+        tiers: mockSubscriptionTiersResponse,
         loading: false,
         error: null,
         refetch: vi.fn(),

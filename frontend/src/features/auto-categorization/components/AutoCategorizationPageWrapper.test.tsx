@@ -15,6 +15,7 @@ import * as useProfileHook from '../../profile/hooks/useProfile'
 import * as useSubscriptionTiersHook from '../../subscription/hooks/useSubscriptionTiers'
 import type { Account } from '../../accounts/types'
 import type { UserTag } from '../../tags/types'
+import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
 
 // Mock dependencies
 vi.mock('../../categories/api/categoriesApi')
@@ -67,39 +68,6 @@ describe('AutoCategorizationPageWrapper', () => {
     last_login_at: '2025-01-01T00:00:00Z',
   }
 
-  const mockTiers = {
-    tiers: {
-      free: {
-        display_name: 'Free',
-        description: 'Free tier',
-        pricing: { price_monthly: 0, price_yearly: 0 },
-        limits: { accounts: 3, rules: 1, executions_per_day: 1, min_execution_interval_minutes: 1440 },
-        features: { ads_enabled: true, ai_insights: false },
-      },
-      premium_lite: {
-        display_name: 'Premium Lite',
-        description: 'Premium Lite tier',
-        pricing: { price_monthly: 4.99, price_yearly: 49.99 },
-        limits: { accounts: 15, rules: 5, executions_per_day: 2, min_execution_interval_minutes: 720 },
-        features: { ads_enabled: false, ai_insights: false },
-      },
-      premium: {
-        display_name: 'Premium',
-        description: 'Premium tier',
-        pricing: { price_monthly: 9.99, price_yearly: 99.99 },
-        limits: { accounts: 30, rules: 15, executions_per_day: 6, min_execution_interval_minutes: 240 },
-        features: { ads_enabled: false, ai_insights: false },
-      },
-      premium_plus: {
-        display_name: 'Premium+',
-        description: 'Premium+ tier',
-        pricing: { price_monthly: 19.99, price_yearly: 199.99 },
-        limits: { accounts: -1, rules: -1, executions_per_day: 144, min_execution_interval_minutes: 10 },
-        features: { ads_enabled: false, ai_insights: true, api_access: true },
-      },
-    },
-    default_tier: 'free' as const,
-  }
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -114,7 +82,7 @@ describe('AutoCategorizationPageWrapper', () => {
       refetch: vi.fn(),
     })
     vi.mocked(useSubscriptionTiersHook.useSubscriptionTiers).mockReturnValue({
-      tiers: mockTiers,
+      tiers: mockSubscriptionTiersResponse,
       loading: false,
       error: null,
       refetch: vi.fn(),

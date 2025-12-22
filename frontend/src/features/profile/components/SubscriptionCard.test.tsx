@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { SubscriptionCard } from './SubscriptionCard'
 import type { User } from '../types'
 import * as useSubscriptionTiersHook from '../../subscription/hooks/useSubscriptionTiers'
-import type { SubscriptionTiersResponse } from '../../subscription/types'
+import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
 
 // Mock the hook
 vi.mock('../../subscription/hooks/useSubscriptionTiers')
@@ -14,92 +14,11 @@ function renderWithRouter(ui: React.ReactElement) {
   return render(<MemoryRouter>{ui}</MemoryRouter>)
 }
 
-// Mock tier data matching backend response
-const mockTiersResponse: SubscriptionTiersResponse = {
-  tiers: {
-    free: {
-      display_name: 'Free',
-      description: 'Full budgeting with basic automation',
-      pricing: {
-        price_monthly: 0,
-        price_yearly: 0,
-      },
-      limits: {
-        accounts: 3,
-        rules: 1,
-        executions_per_day: 1,
-        min_execution_interval_minutes: 1440,
-      },
-      features: {
-        ads_enabled: true,
-        ai_insights: false,
-      },
-    },
-    premium_lite: {
-      display_name: 'Premium Lite',
-      description: 'Perfect for couples and light automation',
-      pricing: {
-        price_monthly: 4.99,
-        price_yearly: 49.99,
-      },
-      limits: {
-        accounts: 15,
-        rules: 5,
-        executions_per_day: 2,
-        min_execution_interval_minutes: 720,
-      },
-      features: {
-        ads_enabled: false,
-        ai_insights: false,
-      },
-    },
-    premium: {
-      display_name: 'Premium',
-      description: 'Power users with complex finances',
-      pricing: {
-        price_monthly: 9.99,
-        price_yearly: 99.99,
-      },
-      limits: {
-        accounts: 30,
-        rules: 15,
-        executions_per_day: 6,
-        min_execution_interval_minutes: 240,
-      },
-      features: {
-        ads_enabled: false,
-        ai_insights: false,
-      },
-    },
-    premium_plus: {
-      display_name: 'Premium+',
-      description: 'Unlimited everything with AI and API access',
-      pricing: {
-        price_monthly: 19.99,
-        price_yearly: 199.99,
-      },
-      limits: {
-        accounts: -1,
-        rules: -1,
-        executions_per_day: 144,
-        min_execution_interval_minutes: 10,
-      },
-      features: {
-        ads_enabled: false,
-        ai_insights: true,
-        api_access: true,
-        priority_support: true,
-      },
-    },
-  },
-  default_tier: 'free',
-}
-
 describe('SubscriptionCard', () => {
   beforeEach(() => {
     // Mock successful hook response by default
     vi.mocked(useSubscriptionTiersHook.useSubscriptionTiers).mockReturnValue({
-      tiers: mockTiersResponse,
+      tiers: mockSubscriptionTiersResponse,
       loading: false,
       error: null,
       refetch: vi.fn(),
