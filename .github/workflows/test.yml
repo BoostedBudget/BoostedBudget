@@ -24,6 +24,7 @@ jobs:
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
+      api: ${{ steps.filter.outputs.api }}
       migrations: ${{ steps.filter.outputs.migrations }}
       workflow: ${{ steps.filter.outputs.workflow }}
     steps:
@@ -41,10 +42,75 @@ jobs:
               - 'frontend/**'
               - 'package.json'
               - 'package-lock.json'
+            api:
+              - 'api/**'
+              - 'api/openapi.yaml'
             migrations:
               - 'backend/migrations/**'
             workflow:
               - '.github/workflows/**'
+
+  # =============================================================================
+  # OpenAPI Spec Validation (ensures spec is committed when backend changes)
+  # =============================================================================
+  openapi-validate:
+    name: OpenAPI Spec Validation
+    needs: detect-changes
+    if: needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.workflow == 'true'
+    runs-on: [self-hosted, macOS, mac-mini]
+    env:
+      UNIQUE_WORKSPACE: workspace-openapi-validate-${{ github.run_id }}
+
+    steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          clean: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Restore Go modules cache
+        id: cache-go-modules
+        uses: actions/cache/restore@v5
+        with:
+          path: ~/go/pkg/mod
+          key: go-modules-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-modules-${{ runner.os }}-
+
+      - name: Download Go dependencies
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        run: go mod download
+
+      - name: Generate OpenAPI spec
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        run: go run scripts/generate-openapi/main.go
+
+      - name: Check if spec is up to date
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: |
+          if git diff --exit-code api/openapi.yaml; then
+            echo "::notice::OpenAPI spec is up to date"
+          else
+            echo "::error::OpenAPI spec is outdated!"
+            echo "The generated spec differs from the committed version."
+            echo "Run 'make generate-openapi' locally and commit the changes."
+            echo ""
+            echo "Diff (first 100 lines):"
+            git diff api/openapi.yaml | head -100
+            exit 1
+          fi
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
   # Backend Tests (runs in parallel with frontend)
@@ -52,7 +118,7 @@ jobs:
   backend-test:
     name: Backend Tests
     needs: detect-changes
-    if: needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.workflow == 'true'
+    if: needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.api == 'true' || needs.detect-changes.outputs.workflow == 'true'
     runs-on: [self-hosted, macOS, mac-mini]
     env:
       UNIQUE_WORKSPACE: workspace-backend-test-${{ github.run_id }}
@@ -175,7 +241,7 @@ jobs:
   frontend-test:
     name: Frontend Tests
     needs: detect-changes
-    if: needs.detect-changes.outputs.frontend == 'true' || needs.detect-changes.outputs.workflow == 'true'
+    if: needs.detect-changes.outputs.frontend == 'true' || needs.detect-changes.outputs.api == 'true' || needs.detect-changes.outputs.workflow == 'true'
     runs-on: [self-hosted, macOS, mac-mini]
     env:
       UNIQUE_WORKSPACE: workspace-frontend-test-${{ github.run_id }}

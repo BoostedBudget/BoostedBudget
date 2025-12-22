@@ -10,11 +10,14 @@ import (
 	"os/signal"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2/adapters/humaecho"
 	_ "github.com/lib/pq"
 	"github.com/labstack/echo/v4"
 	echomiddleware "github.com/labstack/echo/v4/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
-	"github.com/maxnussbaum/BoostedBudget/internal/handlers"
+	humaconfig "github.com/maxnussbaum/BoostedBudget/internal/huma"
+	humamiddleware "github.com/maxnussbaum/BoostedBudget/internal/huma/middleware"
+	"github.com/maxnussbaum/BoostedBudget/internal/huma/operations"
 	"github.com/maxnussbaum/BoostedBudget/internal/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
@@ -59,18 +62,24 @@ func main() {
 	e.Use(echomiddleware.Recover())                    // 4. Panic recovery
 	e.Use(echomiddleware.CORSWithConfig(middleware.GetCORSConfig(cfg.CORSAllowedOrigins))) // 5. CORS handling with configured origins
 
-	// Health check handler (no auth required)
-	healthHandler := &handlers.HealthHandler{
-		DBCheck:    createDBCheck(),
-		RedisCheck: createRedisCheck(),
-		Auth0Check: createAuth0Check(),
-		Version:    cfg.Version,
-	}
-	e.GET("/health", healthHandler.GetHealth)
+	// Initialize Huma API wrapping Echo for OpenAPI generation
+	// Huma provides automatic OpenAPI 3.1 spec generation from Go code
+	humaAPI := humaecho.New(e, humaconfig.NewAPIConfig(cfg.Version, cfg.Environment))
+	log.Println("✅ Huma API initialized - OpenAPI at /openapi.json, Docs at /docs")
 
-	// Metrics endpoint (Prometheus format)
-	metricsHandler := &handlers.MetricsHandler{}
-	e.GET("/metrics", metricsHandler.GetMetrics)
+	// Health check handler (no auth required) - Huma operation
+	healthHandler := operations.NewHealthHandler(
+		createDBCheck(),
+		createRedisCheck(),
+		createAuth0Check(),
+		cfg.Version,
+	)
+	operations.RegisterHealthRoutes(humaAPI, healthHandler)
+
+	// Metrics endpoint (Prometheus format) - Huma operation
+	humaMetricsHandler := operations.NewMetricsHandler()
+	operations.RegisterMetricsRoutes(humaAPI, humaMetricsHandler)
+	log.Println("✅ Huma metrics route registered")
 
 	// Load tier configuration (used by both public and authenticated endpoints)
 	tierConfig, err := config.LoadTierConfig()
@@ -80,23 +89,19 @@ func main() {
 	}
 	log.Println("✅ Tier configuration loaded")
 
-	// Subscription tiers endpoint (public - needed for pricing page)
-	subscriptionTiersHandler := handlers.NewSubscriptionTiersHandler(tierConfig)
-	e.GET("/api/v1/subscription/tiers", subscriptionTiersHandler.GetSubscriptionTiers)
+	// Subscription tiers endpoint (public - needed for pricing page) - Huma operation
+	subscriptionTiersHandler := operations.NewSubscriptionTiersHandler(tierConfig)
+	operations.RegisterSubscriptionTiersRoutes(humaAPI, subscriptionTiersHandler)
 
-	// Default dashboard layout endpoint (public - needed for initial dashboard setup)
-	// Issue #449: Centralize default dashboard layout configuration
-	// Note: dashboardHandler is created later with authenticated routes,
-	// but this endpoint doesn't need auth since it returns static config
-	publicDashboardHandler := handlers.NewDashboardHandler(nil) // No service needed for this endpoint
-	e.GET("/api/v1/dashboard/default-layout", publicDashboardHandler.GetDefaultLayout)
+	// Default dashboard layout endpoint migrated to Huma (see humaDashboardHandler) - Issue #559
 
 	// Declare plaidService at package scope for use in both authenticated routes and webhook endpoint
 	var plaidService services.PlaidService
+	// Declare accountService at package scope for Huma handler registration
+	var accountService services.AccountService
 
 	// Authenticated routes (requires database and Auth0)
-	// Declare deletion components at package scope for graceful shutdown
-	var deletionHandler *handlers.DeletionHandler
+	// Declare deletion worker at package scope for graceful shutdown
 	var deletionWorker *workers.DeletionWorker
 
 	// Declare webhook processor at package scope for graceful shutdown
@@ -199,8 +204,13 @@ func main() {
 			)
 			log.Println("✅ Deletion service initialized (30-day grace period)")
 
-			// Create deletion handler
-			deletionHandler = handlers.NewDeletionHandler(deletionService)
+			// deletionHandler (Echo) no longer needed - migrated to Huma
+			_ = deletionService // Used by Huma handler below
+
+			// Register Huma deletion routes (Issue #559: Huma migration)
+			humaDeletionHandler := operations.NewDeletionHandler(deletionService)
+			operations.RegisterDeletionRoutes(humaAPI, humaDeletionHandler)
+			log.Println("✅ Huma deletion routes registered")
 
 			// Create deletion worker with configured interval
 			workerInterval, err := time.ParseDuration(cfg.DeletionWorkerInterval)
@@ -228,7 +238,8 @@ func main() {
 		}
 
 		// Create Plaid service and account linking (if configured)
-		var plaidHandler *handlers.PlaidHandler
+		// plaidHandler migrated to Huma (see humaPlaidHandler) - Issue #559
+		// var plaidHandler *handlers.PlaidHandler
 		if cfg.PlaidClientID != "" && cfg.PlaidSecret != "" {
 			var err error
 			plaidService, err = services.NewPlaidService(cfg)
@@ -236,7 +247,7 @@ func main() {
 				log.Printf("⚠️  Failed to initialize Plaid service: %v", err)
 			} else {
 				// Create account service with all dependencies
-				accountService := services.NewAccountService(
+				accountService = services.NewAccountService(
 					plaidService,
 					subscriptionService,
 					encryptionService,
@@ -246,7 +257,9 @@ func main() {
 					db,
 				)
 
-				plaidHandler = handlers.NewPlaidHandler(plaidService, accountService)
+				// plaidHandler migrated to Huma - Issue #559
+				_ = plaidService   // Silence unused variable (used by Huma handler)
+				_ = accountService // Silence unused variable (used by Huma handler)
 				log.Println("✅ Plaid service initialized")
 				log.Println("✅ Account linking service initialized")
 
@@ -296,28 +309,31 @@ func main() {
 		}
 
 		// Create handlers
-		profileHandler := handlers.NewProfileHandler(profileService)
-		privacyHandler := handlers.NewPrivacyHandler(privacyService, profileService)
-		transactionHandler := handlers.NewTransactionHandler(transactionService)
-		notificationHandler := handlers.NewNotificationHandler(notificationRepo) // Issue #257: Notification API
-		syncStatsHandler := handlers.NewSyncStatsHandler(syncLimitService)       // Issue #242: Monthly sync limits API
-		dashboardHandler := handlers.NewDashboardHandler(dashboardService)       // Issue #353: Balance tracking dashboard
-		tagHandler := handlers.NewTagHandler(userTagService)                      // Issue #345: User tag management
-		categoryHandler := handlers.NewCategoryHandler(customCategoryService)     // Issue #345: Custom category management
-		ruleHandler := handlers.NewCategorizationRuleHandler(categorizationRuleService) // Issue #346: Categorization rules
-		analyticsHandler := handlers.NewAnalyticsHandler(analyticsService)        // Issue #354: Cash flow analytics
-		dashboardPrefsHandler := handlers.NewDashboardPreferencesHandler(dashboardPrefsService) // Issue #354: Dashboard preferences
-		budgetHandler := handlers.NewBudgetHandler(budgetService, budgetSyncService, transactionRepo) // Issue #28, #494, #499: Budget management + sync + category transactions
+		// profileHandler migrated to Huma (see humaProfileHandler below) - Issue #559
+		_ = profileService // Used by Huma handler below
+		// privacyHandler migrated to Huma (see humaPrivacyHandler below) - Issue #559
+		_ = privacyService // Used by Huma handler below
+		// transactionHandler migrated to Huma (see humaTransactionHandler below)
+		// notificationHandler migrated to Huma (see humaNotificationHandler below) - Issue #559
+		// syncStatsHandler migrated to Huma (see humaSyncStatsHandler below) - Issue #559
+		_ = syncLimitService // Used by Huma handler below
+		// dashboardHandler migrated to Huma (see humaDashboardHandler below) - Issue #559
+		// tagHandler migrated to Huma (see humaTagHandler below)
+		// categoryHandler migrated to Huma (see humaCategoryHandler below)
+		// ruleHandler migrated to Huma (see humaRuleHandler below) - Issue #559
+		// analyticsHandler migrated to Huma (see humaAnalyticsHandler below) - Issue #559
+		// dashboardPrefsHandler migrated to Huma (see humaDashboardPrefsHandler below) - Issue #559
+		// budgetHandler migrated to Huma (see humaBudgetHandler below) - Issue #559
+		_ = budgetService      // Used by Huma handler below
+		_ = budgetSyncService  // Used by Huma handler below
 		categoryPreviewService := services.NewCategoryPreviewService(transactionRepo) // Issue #497: Category preview
-		categoryPreviewHandler := handlers.NewCategoryPreviewHandler(categoryPreviewService) // Issue #497: Category preview
-		savingsGoalHandler := handlers.NewSavingsGoalHandler(savingsGoalService) // Issue #28: Savings goals
+		// categoryPreviewHandler migrated to Huma (see humaCategoryPreviewHandler below) - Issue #559
+		_ = categoryPreviewService // Used by Huma handler below
+		// savingsGoalHandler migrated to Huma (see humaSavingsGoalHandler below) - Issue #559
+		_ = savingsGoalService // Used by Huma handler below
 
-		// Create admin handler (Issue #308: Admin API for Manual Webhook Firing)
-		// Requires plaidService and encryptionService, so declared here
-		var adminHandler *handlers.AdminHandler
-		if plaidService != nil && encryptionService != nil {
-			adminHandler = handlers.NewAdminHandler(plaidService, linkedItemRepo, encryptionService)
-		}
+		// Admin handler dependencies used by Huma admin routes - Issue #559
+		// plaidService, linkedItemRepo, and encryptionService are used in the Huma admin handler registration below
 
 		// Create Auth0 middleware with identity resolution and auto-registration
 		auth0Middleware := middleware.Auth0Middleware(
@@ -327,151 +343,185 @@ func main() {
 			registrationService,  // Auto-registers new users on first login
 		)
 
-		// API v1 routes
+		// Apply Huma Auth0 middleware for authenticated Huma routes
+		humaAuth0Middleware := humamiddleware.NewAuth0Middleware(
+			"https://"+cfg.Auth0Domain+"/",
+			cfg.Auth0Audience,
+			identityRepo,
+			registrationService,
+		)
+		humaAPI.UseMiddleware(humaAuth0Middleware)
+		log.Println("✅ Huma Auth0 middleware applied")
+
+		// Register Huma tag routes (Issue #345: User tag management)
+		humaTagHandler := operations.NewTagHandler(userTagService)
+		operations.RegisterTagRoutes(humaAPI, humaTagHandler)
+		log.Println("✅ Huma tag routes registered")
+
+		// Register Huma transaction routes (Issue #559: Huma migration)
+		humaTransactionHandler := operations.NewTransactionHandler(transactionService)
+		operations.RegisterTransactionRoutes(humaAPI, humaTransactionHandler)
+		log.Println("✅ Huma transaction routes registered")
+
+		// Register Huma category routes (Issue #559: Huma migration)
+		humaCategoryHandler := operations.NewCategoryHandler(customCategoryService)
+		operations.RegisterCategoryRoutes(humaAPI, humaCategoryHandler)
+		log.Println("✅ Huma category routes registered")
+
+		// Register Huma categorization rule routes (Issue #559: Huma migration)
+		humaRuleHandler := operations.NewCategorizationRuleHandler(categorizationRuleService)
+		operations.RegisterCategorizationRuleRoutes(humaAPI, humaRuleHandler)
+		log.Println("✅ Huma categorization rule routes registered")
+
+		// Register Huma notification routes (Issue #559: Huma migration)
+		humaNotificationHandler := operations.NewNotificationHandler(notificationRepo)
+		operations.RegisterNotificationRoutes(humaAPI, humaNotificationHandler)
+		log.Println("✅ Huma notification routes registered")
+
+		// Register Huma dashboard routes (Issue #559: Huma migration)
+		humaDashboardHandler := operations.NewDashboardHandler(dashboardService)
+		operations.RegisterDashboardRoutes(humaAPI, humaDashboardHandler)
+		log.Println("✅ Huma dashboard routes registered")
+
+		// Register Huma analytics routes (Issue #559: Huma migration)
+		humaAnalyticsHandler := operations.NewAnalyticsHandler(analyticsService)
+		operations.RegisterAnalyticsRoutes(humaAPI, humaAnalyticsHandler)
+		log.Println("✅ Huma analytics routes registered")
+
+		// Register Huma dashboard preferences routes (Issue #559: Huma migration)
+		humaDashboardPrefsHandler := operations.NewDashboardPreferencesHandler(dashboardPrefsService)
+		operations.RegisterDashboardPreferencesRoutes(humaAPI, humaDashboardPrefsHandler)
+		log.Println("✅ Huma dashboard preferences routes registered")
+
+		// Register Huma sync stats routes (Issue #559: Huma migration)
+		humaSyncStatsHandler := operations.NewSyncStatsHandler(syncLimitService)
+		operations.RegisterSyncStatsRoutes(humaAPI, humaSyncStatsHandler)
+		log.Println("✅ Huma sync stats routes registered")
+
+		// Register Huma budget routes (Issue #559: Huma migration)
+		humaBudgetHandler := operations.NewBudgetHandler(budgetService, budgetSyncService, transactionRepo)
+		operations.RegisterBudgetRoutes(humaAPI, humaBudgetHandler)
+		log.Println("✅ Huma budget routes registered")
+
+		// Register Huma savings goal routes (Issue #559: Huma migration)
+		humaSavingsGoalHandler := operations.NewSavingsGoalHandler(savingsGoalService)
+		operations.RegisterSavingsGoalRoutes(humaAPI, humaSavingsGoalHandler)
+		log.Println("✅ Huma savings goal routes registered")
+
+		// Register Huma plaid routes (Issue #559: Huma migration)
+		if plaidService != nil && accountService != nil {
+			humaPlaidHandler := operations.NewPlaidHandler(plaidService, accountService)
+			operations.RegisterPlaidRoutes(humaAPI, humaPlaidHandler)
+			log.Println("✅ Huma plaid routes registered")
+		}
+
+		// Register Huma profile routes (Issue #559: Huma migration)
+		humaProfileHandler := operations.NewProfileHandler(profileService)
+		operations.RegisterProfileRoutes(humaAPI, humaProfileHandler)
+		log.Println("✅ Huma profile routes registered")
+
+		// Register Huma privacy routes (Issue #559: Huma migration)
+		humaPrivacyHandler := operations.NewPrivacyHandler(privacyService)
+		operations.RegisterPrivacyRoutes(humaAPI, humaPrivacyHandler)
+		log.Println("✅ Huma privacy routes registered")
+
+		// Register Huma category preview routes (Issue #559: Huma migration)
+		humaCategoryPreviewHandler := operations.NewCategoryPreviewHandler(categoryPreviewService)
+		operations.RegisterCategoryPreviewRoutes(humaAPI, humaCategoryPreviewHandler)
+		log.Println("✅ Huma category preview routes registered")
+
+		// Register Huma admin routes (Issue #559: Huma migration) - staging only
+		// Security: Only registered in staging environment
+		if plaidService != nil && encryptionService != nil && cfg.Environment == "staging" {
+			humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, encryptionService)
+			operations.RegisterAdminRoutes(humaAPI, humaAdminHandler)
+			log.Println("✅ Huma admin routes registered (staging only)")
+		}
+
+		// API v1 routes (Echo - to be migrated to Huma incrementally)
 		api := e.Group("/api/v1")
 		api.Use(auth0Middleware)
-		api.GET("/user/profile", profileHandler.GetProfile)
-		api.PUT("/user/profile", profileHandler.UpdateProfile)
-		api.GET("/user/privacy", privacyHandler.GetPrivacySettings)
-		api.PUT("/user/privacy", privacyHandler.UpdatePrivacySettings)
-		api.GET("/transactions", transactionHandler.GetTransactions)
-		api.GET("/transactions/:id", transactionHandler.GetTransactionByID)
-		api.PUT("/transactions/:id/tags", transactionHandler.UpdateTransactionTags)
-		api.PUT("/transactions/:id/category", transactionHandler.UpdateTransactionCategory)
+		// Profile and privacy routes migrated to Huma (see humaProfileHandler and humaPrivacyHandler above)
+		// api.GET("/user/profile", profileHandler.GetProfile)
+		// api.PUT("/user/profile", profileHandler.UpdateProfile)
+		// api.GET("/user/privacy", privacyHandler.GetPrivacySettings)
+		// api.PUT("/user/privacy", privacyHandler.UpdatePrivacySettings)
 
-		// Tag routes (Issue #345: User tag management)
-		api.POST("/tags", tagHandler.CreateTag)
-		api.GET("/tags", tagHandler.GetUserTags)
-		api.GET("/tags/:id", tagHandler.GetTagByID)
-		api.PUT("/tags/:id", tagHandler.UpdateTag)
-		api.DELETE("/tags/:id", tagHandler.DeleteTag)
+		// Transaction routes migrated to Huma (see humaTransactionHandler above)
+		// Tag routes migrated to Huma (see humaTagHandler above)
+		// Category routes migrated to Huma (see humaCategoryHandler above)
+		// Auto-categorization routes migrated to Huma (see humaRuleHandler above)
 
-		// Category routes (Issue #345: Custom category management)
-		api.POST("/categories", categoryHandler.CreateCategory)
-		api.GET("/categories", categoryHandler.GetUserCategories)
-		api.GET("/categories/plaid", transactionHandler.GetPlaidCategories) // Issue #397: Plaid categories for rule editor
-		api.GET("/categories/:id", categoryHandler.GetCategoryByID)
-		api.PUT("/categories/:id", categoryHandler.UpdateCategory)
-		api.DELETE("/categories/:id", categoryHandler.DeleteCategory)
+		// Notification routes migrated to Huma (see humaNotificationHandler above)
 
-		// Auto-categorization rule routes (Issue #346: Categorization rules)
-		api.POST("/auto-categorization", ruleHandler.CreateRule)
-		api.GET("/auto-categorization", ruleHandler.GetUserRules)
-		api.GET("/auto-categorization/:id", ruleHandler.GetRuleByID)
-		api.PUT("/auto-categorization/:id", ruleHandler.UpdateRule)
-		api.DELETE("/auto-categorization/:id", ruleHandler.DeleteRule)
-		api.POST("/auto-categorization/:id/toggle", ruleHandler.ToggleRule)
+		// Sync statistics route migrated to Huma (see humaSyncStatsHandler above) - Issue #559
 
-		// Notification routes (Issue #257: User Notifications)
-		api.GET("/notifications", notificationHandler.GetNotifications)
-		api.PATCH("/notifications/:id/read", notificationHandler.MarkNotificationAsRead)
-		api.GET("/notifications/unread/count", notificationHandler.GetUnreadCount)
+		// Dashboard routes migrated to Huma (see humaDashboardHandler above)
 
-		// Sync statistics route (Issue #242: Monthly sync limits)
-		api.GET("/sync-stats", syncStatsHandler.GetSyncStats)
+		// Analytics routes migrated to Huma (see humaAnalyticsHandler above)
 
-		// Dashboard routes (Issue #353: Balance tracking dashboard)
-		api.GET("/dashboard/balance-summary", dashboardHandler.GetBalanceSummary)
-		api.GET("/dashboard/balance-history", dashboardHandler.GetBalanceHistory)
-		api.GET("/dashboard/account-types", dashboardHandler.GetAccountTypes)
+		// Dashboard preferences routes migrated to Huma (see humaDashboardPrefsHandler above)
 
-		// Analytics routes (Issue #354: Cash flow analysis)
-		api.GET("/analytics/cash-flow-summary", analyticsHandler.GetCashFlowSummary)
-		api.GET("/analytics/cash-flow-history", analyticsHandler.GetCashFlowHistory)
+		// Budget routes migrated to Huma (see humaBudgetHandler above) - Issue #559
+		// Category preview route migrated to Huma (see humaCategoryPreviewHandler above) - Issue #559
+		// api.POST("/budgets/categories/preview", categoryPreviewHandler.PreviewCategoryMatches) // Issue #497: Category preview
 
-		// Dashboard preferences routes (Issue #354: Customizable dashboard)
-		api.GET("/dashboard/preferences", dashboardPrefsHandler.GetPreferences)
-		api.PUT("/dashboard/preferences", dashboardPrefsHandler.SavePreferences)
-		api.POST("/dashboard/preferences/reset", dashboardPrefsHandler.ResetPreferences)
+		// Savings Goal routes migrated to Huma (see humaSavingsGoalHandler above) - Issue #559
 
-		// Budget routes (Issue #28: Budget management)
-		api.POST("/budgets", budgetHandler.CreateBudget)
-		api.GET("/budgets", budgetHandler.GetBudgets)
-		api.GET("/budgets/current", budgetHandler.GetCurrentBudget)
-		api.GET("/budgets/categories/available", budgetHandler.GetAvailableCategories)
-		api.POST("/budgets/categories/preview", categoryPreviewHandler.PreviewCategoryMatches) // Issue #497: Category preview
-		api.GET("/budgets/:id", budgetHandler.GetBudget)
-		api.PUT("/budgets/:id", budgetHandler.UpdateBudget)
-		api.DELETE("/budgets/:id", budgetHandler.DeleteBudget)
-		api.POST("/budgets/:id/sync", budgetHandler.SyncBudget) // Issue #494: Manual budget sync
-		api.POST("/budgets/:id/categories", budgetHandler.AddCategory)
-		api.PUT("/budgets/:id/categories/:categoryId", budgetHandler.UpdateCategory)
-		api.DELETE("/budgets/:id/categories/:categoryId", budgetHandler.DeleteCategory)
-		api.GET("/budgets/:id/categories/:categoryId/transactions", budgetHandler.GetCategoryTransactions) // Issue #499: Category transactions
+		// Plaid routes migrated to Huma (see humaPlaidHandler above) - Issue #559
+		// Old Echo routes commented out:
+		// if plaidHandler != nil {
+		// 	api.POST("/plaid/link-token", plaidHandler.CreateLinkToken)
+		// 	api.POST("/plaid/exchange-token", plaidHandler.ExchangePublicToken)
+		// 	api.GET("/accounts", plaidHandler.GetAccounts)
+		// 	api.PATCH("/accounts/reorder", plaidHandler.ReorderAccounts)  // Issue #307: Must be before :id route
+		// 	api.PATCH("/accounts/:id", plaidHandler.UpdateAccount)        // Issue #307: Account customization
+		// 	api.DELETE("/accounts/:id", plaidHandler.DeleteAccount)
+		// 	api.DELETE("/linked-items/:id", plaidHandler.DisconnectInstitution)
+		// }
 
-		// Savings Goal routes (Issue #28: Savings goals)
-		api.POST("/savings-goals", savingsGoalHandler.CreateGoal)
-		api.GET("/savings-goals", savingsGoalHandler.GetGoals)
-		api.GET("/savings-goals/active", savingsGoalHandler.GetActiveGoals)
-		api.GET("/savings-goals/:id", savingsGoalHandler.GetGoal)
-		api.PUT("/savings-goals/:id", savingsGoalHandler.UpdateGoal)
-		api.DELETE("/savings-goals/:id", savingsGoalHandler.DeleteGoal)
+		// Admin routes migrated to Huma (see humaAdminHandler above) - Issue #559
+		// Note: Security maintained - routes only registered in staging environment
+		// if adminHandler != nil && cfg.Environment == "staging" {
+		// 	admin := api.Group("/admin", middleware.AdminMiddleware(cfg))
+		// 	admin.POST("/plaid/fire-webhook", adminHandler.FireWebhook)
+		// 	log.Println("✅ Admin endpoints enabled (staging only)")
+		// }
 
-		// Plaid routes (if enabled)
-		if plaidHandler != nil {
-			api.POST("/plaid/link-token", plaidHandler.CreateLinkToken)
-			api.POST("/plaid/exchange-token", plaidHandler.ExchangePublicToken)
-			api.GET("/accounts", plaidHandler.GetAccounts)
-			api.PATCH("/accounts/reorder", plaidHandler.ReorderAccounts)  // Issue #307: Must be before :id route
-			api.PATCH("/accounts/:id", plaidHandler.UpdateAccount)        // Issue #307: Account customization
-			api.DELETE("/accounts/:id", plaidHandler.DeleteAccount)
-			api.DELETE("/linked-items/:id", plaidHandler.DisconnectInstitution)
-		}
-
-		// Admin routes (Issue #308: staging-only admin endpoints)
-		// Triple-layer security:
-		//   1. Route registration only in staging (here)
-		//   2. AdminMiddleware returns 404 in production
-		//   3. Service-level validations (e.g., sandbox-only webhook firing)
-		// Future (Issue #309): Add role-based access control requiring "admin" role
-		if adminHandler != nil && cfg.Environment == "staging" {
-			admin := api.Group("/admin", middleware.AdminMiddleware(cfg))
-			admin.POST("/plaid/fire-webhook", adminHandler.FireWebhook)
-			log.Println("✅ Admin endpoints enabled (staging only)")
-		}
-
-		// Deletion routes (if enabled)
-		if deletionHandler != nil {
-			api.POST("/user/delete", deletionHandler.RequestDeletion)
-			api.GET("/user/delete/cancel/:token", deletionHandler.CancelDeletion)
-		}
+		// Deletion routes migrated to Huma (see humaDeletionHandler below) - Issue #559
+		// Old Echo routes commented out:
+		// if deletionHandler != nil {
+		// 	api.POST("/user/delete", deletionHandler.RequestDeletion)
+		// 	api.GET("/user/delete/cancel/:token", deletionHandler.CancelDeletion)
+		// }
 
 		log.Println("✅ Authenticated routes enabled (Auth0 + Database)")
 	}
 
-	// Plaid webhook endpoint (public - no auth required)
+	// Plaid webhook endpoint (public - no auth required) - Migrated to Huma (Issue #559)
 	// Plaid servers need to POST to this endpoint without authentication
 	// Issue #202: Enhanced with JWT signature verification and database storage
 	// Issue #256: Webhook repository created in auth block above for webhook processor
 	if db != nil && plaidService != nil {
-		// Webhook repository already created in auth block (used by webhook processor)
-		// Re-create if not available (shouldn't happen since plaidService requires auth block)
-		var webhookRepoForHandler repository.WebhookRepository
-		if webhookProcessor != nil {
-			// Webhook repo already created in auth block - reuse from there
-			// Create a new instance to avoid coupling
-			webhookRepoForHandler = repository.NewWebhookRepository(db)
-		} else {
-			// Fallback: create webhook repo if processor not initialized
-			webhookRepoForHandler = repository.NewWebhookRepository(db)
-		}
+		// Webhook repository for audit trail
+		webhookRepoForHandler := repository.NewWebhookRepository(db)
 
 		// Initialize webhook service for JWT signature verification
 		webhookService := services.NewWebhookService(plaidService.GetClient())
 
-		// Create webhook handler with full dependencies
-		webhookHandler := handlers.NewPlaidWebhookHandlerWithDeps(webhookService, webhookRepoForHandler)
-		e.POST("/webhooks/plaid", webhookHandler.HandlePlaidWebhook)
+		// Register Huma plaid webhook route (Issue #559: Huma migration)
+		humaPlaidWebhookHandler := operations.NewPlaidWebhookHandler(webhookService, webhookRepoForHandler)
+		operations.RegisterPlaidWebhookRoutes(humaAPI, humaPlaidWebhookHandler)
 
-		log.Println("✅ Plaid webhook endpoint registered at POST /webhooks/plaid")
+		log.Println("✅ Huma Plaid webhook route registered at POST /webhooks/plaid")
 		log.Println("✅ Webhook signature verification enabled (ES256 JWT)")
 		log.Println("✅ Webhook audit trail enabled (database storage)")
 	} else if db != nil {
 		// Fallback: Basic webhook handler without signature verification
 		// Used when Plaid credentials are not configured (e.g., local development)
-		webhookHandler := handlers.NewPlaidWebhookHandler()
-		e.POST("/webhooks/plaid", webhookHandler.HandlePlaidWebhook)
-		log.Println("✅ Plaid webhook endpoint registered at POST /webhooks/plaid (verification disabled)")
+		humaPlaidWebhookHandler := operations.NewPlaidWebhookHandler(nil, repository.NewWebhookRepository(db))
+		operations.RegisterPlaidWebhookRoutes(humaAPI, humaPlaidWebhookHandler)
+		log.Println("✅ Huma Plaid webhook route registered at POST /webhooks/plaid (verification disabled)")
 		log.Println("⚠️  Webhook signature verification disabled (Plaid credentials not configured)")
 	} else {
 		log.Println("⚠️  Webhook endpoint disabled (requires DATABASE_URL)")
