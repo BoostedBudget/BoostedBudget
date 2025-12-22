@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react'
+import { Mail, CheckCircle2, Globe, Shield, Copy } from 'lucide-react'
 import { SubscriptionCard } from './components/SubscriptionCard'
 import { ProfileForm } from './ProfileForm'
 import { PrivacySettings } from './PrivacySettings'
 import { fetchProfile } from './api/profileApi'
-import { getRegionDisplay } from '../../config/regions'
-import { useTabState } from '../../shared/hooks'
+import { getRegionWithFlag } from '../../config/regions'
+import { useTabState, useCopyToClipboard } from '../../shared/hooks'
+import { abbreviateUUID } from '../../shared/utils'
 import type { User, PrivacySettings as PrivacySettingsType } from './types'
 import './ProfilePage.css'
 
@@ -17,6 +19,7 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useTabState('tab', 'profile', ['profile', 'privacy'] as const)
+  const { copy, copied } = useCopyToClipboard()
 
   // Load user profile on mount
   useEffect(() => {
@@ -77,8 +80,8 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
     )
   }
 
-  // Get region display name with proper geographic labels
-  const regionDisplay = getRegionDisplay(user.primary_region)
+  // Get region display name with flag emoji
+  const regionDisplay = getRegionWithFlag(user.primary_region)
 
   return (
     <div className="profile-page responsive">
@@ -108,24 +111,54 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
             <h2>Account Information</h2>
             <div className="info-grid">
               <div className="info-item">
-                <label>User ID:</label>
-                <span>{user.id}</span>
+                <div className="info-item-header">
+                  <Mail className="info-icon" aria-hidden="true" />
+                  <span className="info-label">Email</span>
+                </div>
+                <div className="info-item-value">
+                  <span>{user.email}</span>
+                  {user.email_verified && (
+                    <span title="Email verified">
+                      <CheckCircle2
+                        className="verified-icon"
+                        aria-label="Verified"
+                      />
+                    </span>
+                  )}
+                </div>
               </div>
               <div className="info-item">
-                <label>Email:</label>
-                <span>{user.email}</span>
+                <div className="info-item-header">
+                  <Globe className="info-icon" aria-hidden="true" />
+                  <span className="info-label">Data Region</span>
+                </div>
+                <span className="info-item-value">{regionDisplay}</span>
               </div>
               <div className="info-item">
-                <label>Email Verified:</label>
-                <span>{user.email_verified ? '✅ Yes' : '❌ No'}</span>
+                <div className="info-item-header">
+                  <CheckCircle2 className="info-icon" aria-hidden="true" />
+                  <span className="info-label">Account Status</span>
+                </div>
+                <span className="info-item-value">
+                  {user.is_active ? 'Active' : 'Inactive'}
+                </span>
               </div>
               <div className="info-item">
-                <label>Data Region:</label>
-                <span>{regionDisplay}</span>
-              </div>
-              <div className="info-item">
-                <label>Account Status:</label>
-                <span>{user.is_active ? '✅ Active' : '❌ Inactive'}</span>
+                <div className="info-item-header">
+                  <Shield className="info-icon" aria-hidden="true" />
+                  <span className="info-label">User ID</span>
+                </div>
+                <div className="info-item-value user-id-row">
+                  <span className="user-id">{abbreviateUUID(user.id)}</span>
+                  <button
+                    onClick={() => copy(user.id, 'User ID copied!')}
+                    className="copy-button"
+                    aria-label="Copy User ID to clipboard"
+                    title={copied ? 'Copied!' : 'Copy User ID'}
+                  >
+                    <Copy className="copy-icon" aria-hidden="true" />
+                  </button>
+                </div>
               </div>
             </div>
           </section>

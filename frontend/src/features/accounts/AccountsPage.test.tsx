@@ -52,10 +52,12 @@ describe('AccountsPage', () => {
       free: {
         display_name: 'Free',
         description: 'Full budgeting with basic automation',
-        price_monthly: 0,
-        price_yearly: 0,
-        stripe_price_id_monthly: null,
-        stripe_price_id_yearly: null,
+        pricing: {
+          price_monthly: 0,
+          price_yearly: 0,
+          stripe_price_id_monthly: null,
+          stripe_price_id_yearly: null,
+        },
         limits: {
           accounts: 3,
           rules: 1,
@@ -70,10 +72,12 @@ describe('AccountsPage', () => {
       premium_lite: {
         display_name: 'Premium Lite',
         description: 'Perfect for couples and light automation',
-        price_monthly: 4.99,
-        price_yearly: 49.99,
-        stripe_price_id_monthly: 'price_premium_lite_monthly',
-        stripe_price_id_yearly: 'price_premium_lite_yearly',
+        pricing: {
+          price_monthly: 4.99,
+          price_yearly: 49.99,
+          stripe_price_id_monthly: 'price_premium_lite_monthly',
+          stripe_price_id_yearly: 'price_premium_lite_yearly',
+        },
         limits: {
           accounts: 15,
           rules: 5,
@@ -88,10 +92,12 @@ describe('AccountsPage', () => {
       premium: {
         display_name: 'Premium',
         description: 'Power users with complex finances',
-        price_monthly: 9.99,
-        price_yearly: 99.99,
-        stripe_price_id_monthly: 'price_premium_monthly',
-        stripe_price_id_yearly: 'price_premium_yearly',
+        pricing: {
+          price_monthly: 9.99,
+          price_yearly: 99.99,
+          stripe_price_id_monthly: 'price_premium_monthly',
+          stripe_price_id_yearly: 'price_premium_yearly',
+        },
         limits: {
           accounts: 30,
           rules: 15,
@@ -106,10 +112,12 @@ describe('AccountsPage', () => {
       premium_plus: {
         display_name: 'Premium+',
         description: 'Unlimited everything with AI and API access',
-        price_monthly: 19.99,
-        price_yearly: 199.99,
-        stripe_price_id_monthly: 'price_premium_plus_monthly',
-        stripe_price_id_yearly: 'price_premium_plus_yearly',
+        pricing: {
+          price_monthly: 19.99,
+          price_yearly: 199.99,
+          stripe_price_id_monthly: 'price_premium_plus_monthly',
+          stripe_price_id_yearly: 'price_premium_plus_yearly',
+        },
         limits: {
           accounts: -1, // Unlimited
           rules: -1,
