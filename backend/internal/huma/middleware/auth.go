@@ -207,6 +207,14 @@ func NewAuth0Middleware(
 	}
 
 	return func(ctx huma.Context, next func(huma.Context)) {
+		// Skip auth for routes without Security annotation (public routes)
+		// This allows public routes like /health, /metrics, /docs to work without auth
+		// while still enforcing auth for routes that have Security configured
+		if len(ctx.Operation().Security) == 0 {
+			next(ctx)
+			return
+		}
+
 		// Extract Authorization header
 		authHeader := ctx.Header("Authorization")
 		if authHeader == "" {
