@@ -3,3 +3,4 @@
  */
 
 export { useTabState } from './useTabState'
+export { useCopyToClipboard } from './useCopyToClipboard'

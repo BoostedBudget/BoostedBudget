@@ -15,6 +15,7 @@ import {
 import { ProtectedRoute } from './auth'
 import { Header } from './components/layout'
 import { ProfilePage } from './features/profile/ProfilePage'
+import { PricingPage } from './features/pricing/PricingPage'
 import { AccountsPage } from './features/accounts/AccountsPage'
 import { PlaidOAuthCallback } from './features/accounts/PlaidOAuthCallback'
 import { TransactionsPage } from './features/transactions/TransactionsPage'
@@ -238,6 +239,7 @@ function App() {
             />
             <Route path="/legal/privacy-policy" element={<PrivacyPolicy />} />
             <Route path="/privacy" element={<PrivacyPolicy />} />
+            <Route path="/pricing" element={<PricingPage />} />
             {/* Public route - JWT token validation handled by backend API */}
             <Route path="/cancel-deletion/:token?" element={<CancelDeletionPage />} />
           </Routes>

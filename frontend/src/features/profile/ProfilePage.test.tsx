@@ -15,6 +15,15 @@ vi.mock('./api/profileApi')
 // Mock the subscription tiers hook
 vi.mock('../subscription/hooks/useSubscriptionTiers')
 
+// Mock sonner toast
+const mockToast = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn(),
+}))
+vi.mock('sonner', () => ({
+  toast: mockToast,
+}))
+
 // Mock Auth0
 const mockUseAuth0 = vi.hoisted(() => vi.fn())
 vi.mock('@auth0/auth0-react', () => ({
@@ -159,8 +168,10 @@ describe('ProfilePage', () => {
         expect(screen.getByText('test@example.com')).toBeInTheDocument()
       })
 
-      // Check for new geographic display format
-      expect(screen.getByText(/USA \(Virginia\)/i)).toBeInTheDocument()
+      // Check for new geographic display format with flag emoji
+      // Multiple elements may match (account info + dropdown options)
+      const regionElements = screen.getAllByText(/🇺🇸\s*USA \(Virginia\)/i)
+      expect(regionElements.length).toBeGreaterThan(0)
     })
 
     it('should display user email from profile', async () => {
@@ -179,8 +190,10 @@ describe('ProfilePage', () => {
       renderWithRouter(<ProfilePage />)
 
       await waitFor(() => {
-        // Check for new geographic display format (iad maps to "USA (Virginia)")
-        expect(screen.getByText(/USA \(Virginia\)/i)).toBeInTheDocument()
+        // Check for new geographic display format with flag (iad maps to "🇺🇸 USA (Virginia)")
+        // Multiple elements may match (account info + dropdown options)
+        const regionElements = screen.getAllByText(/🇺🇸\s*USA \(Virginia\)/i)
+        expect(regionElements.length).toBeGreaterThan(0)
       })
     })
 
@@ -335,7 +348,7 @@ describe('ProfilePage', () => {
       })
     })
 
-    it('should submit updated region via API', async () => {
+    it('should submit updated region via API after confirmation', async () => {
       vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
       vi.mocked(profileApi.updateProfile).mockResolvedValue({
         ...mockUser,
@@ -361,6 +374,15 @@ describe('ProfilePage', () => {
       const saveButton = screen.getByRole('button', { name: /save/i })
       await user.click(saveButton)
 
+      // Confirmation dialog should appear for region change
+      await waitFor(() => {
+        expect(screen.getByText(/change data region/i)).toBeInTheDocument()
+      })
+
+      // Click confirm button in dialog
+      const confirmButton = screen.getByRole('button', { name: /confirm change/i })
+      await user.click(confirmButton)
+
       await waitFor(() => {
         expect(profileApi.updateProfile).toHaveBeenCalledWith({
           email: 'test@example.com',
@@ -369,12 +391,13 @@ describe('ProfilePage', () => {
       })
     })
 
-    it('should show success message after update', async () => {
+    it('should show success toast after update', async () => {
       vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
       vi.mocked(profileApi.updateProfile).mockResolvedValue({
         ...mockUser,
         email: 'newemail@example.com',
       })
+      mockToast.success.mockClear()
 
       renderWithRouter(<ProfilePage />)
 
@@ -392,13 +415,14 @@ describe('ProfilePage', () => {
       await user.click(saveButton)
 
       await waitFor(() => {
-        expect(screen.getByText(/profile updated successfully/i)).toBeInTheDocument()
+        expect(mockToast.success).toHaveBeenCalledWith('Profile updated successfully!')
       })
     })
 
-    it('should show error message when update fails', async () => {
+    it('should show error toast when update fails', async () => {
       vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
       vi.mocked(profileApi.updateProfile).mockRejectedValue(new Error('Update failed'))
+      mockToast.error.mockClear()
 
       renderWithRouter(<ProfilePage />)
 
@@ -417,7 +441,7 @@ describe('ProfilePage', () => {
       await user.click(saveButton)
 
       await waitFor(() => {
-        expect(screen.getByText(/failed to update profile/i)).toBeInTheDocument()
+        expect(mockToast.error).toHaveBeenCalledWith('Failed to update profile. Please try again.')
       })
     })
 
