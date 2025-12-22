@@ -32,10 +32,14 @@ help:
 	@echo "  make migrate-status   - Check current database schema"
 	@echo ""
 	@echo "Tools:"
-	@echo "  make generate-openapi - Generate api/openapi.yaml from Huma routes"
-	@echo "  make validate-openapi - Verify spec is up to date (for CI)"
-	@echo "  make lint             - Run linters"
-	@echo "  make clean            - Clean build artifacts"
+	@echo "  make generate-openapi     - Generate api/openapi.yaml from Huma routes"
+	@echo "  make validate-openapi     - Verify spec is up to date (for CI)"
+	@echo "  make generate-api-client  - Generate TypeScript client from OpenAPI"
+	@echo "  make validate-api-client  - Verify TypeScript client is up to date"
+	@echo "  make generate-all         - Generate OpenAPI spec + TypeScript client"
+	@echo "  make validate-all         - Verify all generated code is up to date"
+	@echo "  make lint                 - Run linters"
+	@echo "  make clean                - Clean build artifacts"
 
 # Development
 dev: docker-up
@@ -255,13 +259,40 @@ validate-openapi: generate-openapi
 		exit 1; \
 	fi
 
+# TypeScript API client generation from OpenAPI spec
+.PHONY: generate-api-client validate-api-client generate-all validate-all
+generate-api-client:
+	@echo "Generating TypeScript API client from OpenAPI spec..."
+	@cd frontend && npm run generate:api
+	@echo "✅ Generated frontend/src/api/generated/"
+
+validate-api-client: generate-api-client
+	@echo "Checking if TypeScript client is up to date..."
+	@if git diff --exit-code frontend/src/api/generated > /dev/null 2>&1; then \
+		echo "✅ TypeScript API client is up to date"; \
+	else \
+		echo "❌ ERROR: TypeScript API client is outdated!"; \
+		echo "The generated client differs from the committed version."; \
+		echo "Run 'make generate-api-client' and commit the changes."; \
+		git diff frontend/src/api/generated | head -50; \
+		exit 1; \
+	fi
+
+# Generate all (OpenAPI spec + TypeScript client)
+generate-all: generate-openapi generate-api-client
+	@echo "✅ All code generation complete!"
+
+# Validate all generated code
+validate-all: validate-openapi validate-api-client
+	@echo "✅ All generated code is up to date!"
+
 # Code generation (deprecated - use generate-openapi)
 generate:
 	@echo "Generating OpenAPI spec from Huma..."
 	@cd backend && go run scripts/generate-openapi/main.go
 	@echo "✅ Generated api/openapi.yaml"
 	@echo ""
-	@echo "Note: For TypeScript client generation, see Issue #560"
+	@echo "Note: For TypeScript client generation, use 'make generate-api-client'"
 
 # Linting
 lint:
