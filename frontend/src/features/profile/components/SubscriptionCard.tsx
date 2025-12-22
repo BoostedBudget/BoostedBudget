@@ -1,11 +1,28 @@
+import { Link } from 'react-router-dom'
+import { Star, Award, Gem, Check } from 'lucide-react'
 import { useSubscriptionTiers } from '../../subscription/hooks/useSubscriptionTiers'
 import type { User } from '../types'
-import type { SubscriptionTier } from '../../subscription/types'
+import type { SubscriptionTier, TierName } from '../../subscription/types'
 import './SubscriptionCard.css'
 
 interface SubscriptionCardProps {
   tier: User['subscription_tier']
   status: User['subscription_status']
+}
+
+/**
+ * Render the icon for a tier
+ */
+function renderTierIcon(tier: TierName) {
+  const iconProps = { className: 'tier-icon', 'aria-hidden': true as const }
+  switch (tier) {
+    case 'free':
+      return <Star {...iconProps} />
+    case 'premium_plus':
+      return <Gem {...iconProps} />
+    default:
+      return <Award {...iconProps} />
+  }
 }
 
 /**
@@ -122,16 +139,26 @@ export function SubscriptionCard({ tier, status }: SubscriptionCardProps) {
   return (
     <div className={`subscription-card tier-${tierClassName}`}>
       <div className="subscription-header">
-        <h3 className="tier-name">{displayName}</h3>
-        <p className="tier-price">{displayPrice}</p>
+        <div className="tier-info">
+          {renderTierIcon(tier)}
+          <h3 className="tier-name">{displayName}</h3>
+        </div>
+        <div className="tier-pricing">
+          <span className="tier-price">{displayPrice}</span>
+          {tierInfo.price_monthly > 0 && (
+            <span className="price-period">/month</span>
+          )}
+        </div>
         <span className={`status-badge status-${status}`}>{status}</span>
       </div>
 
       <div className="subscription-features">
-        <h4>Features:</h4>
         <ul>
           {features.map((feature, index) => (
-            <li key={index}>{feature}</li>
+            <li key={index}>
+              <Check className="feature-check" aria-hidden="true" />
+              <span>{feature}</span>
+            </li>
           ))}
         </ul>
       </div>
@@ -142,6 +169,9 @@ export function SubscriptionCard({ tier, status }: SubscriptionCardProps) {
         ) : (
           <button className="btn-upgrade">Upgrade to Premium</button>
         )}
+        <Link to="/pricing" className="compare-plans-link">
+          Compare Plans →
+        </Link>
       </div>
     </div>
   )
