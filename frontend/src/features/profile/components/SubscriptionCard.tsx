@@ -133,7 +133,7 @@ export function SubscriptionCard({ tier, status }: SubscriptionCardProps) {
 
   // Format data for display
   const displayName = tierInfo.display_name
-  const displayPrice = formatPrice(tierInfo.price_monthly)
+  const displayPrice = formatPrice(tierInfo.pricing.price_monthly)
   const features = buildFeatureList(tierInfo)
 
   return (
@@ -145,7 +145,7 @@ export function SubscriptionCard({ tier, status }: SubscriptionCardProps) {
         </div>
         <div className="tier-pricing">
           <span className="tier-price">{displayPrice}</span>
-          {tierInfo.price_monthly > 0 && (
+          {tierInfo.pricing.price_monthly > 0 && (
             <span className="price-period">/month</span>
           )}
         </div>
