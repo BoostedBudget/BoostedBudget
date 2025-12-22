@@ -20,8 +20,10 @@ const mockTiersResponse: SubscriptionTiersResponse = {
     free: {
       display_name: 'Free',
       description: 'Full budgeting with basic automation',
-      price_monthly: 0,
-      price_yearly: 0,
+      pricing: {
+        price_monthly: 0,
+        price_yearly: 0,
+      },
       limits: {
         accounts: 3,
         rules: 1,
@@ -36,8 +38,10 @@ const mockTiersResponse: SubscriptionTiersResponse = {
     premium_lite: {
       display_name: 'Premium Lite',
       description: 'Perfect for couples and light automation',
-      price_monthly: 4.99,
-      price_yearly: 49.99,
+      pricing: {
+        price_monthly: 4.99,
+        price_yearly: 49.99,
+      },
       limits: {
         accounts: 15,
         rules: 5,
@@ -52,8 +56,10 @@ const mockTiersResponse: SubscriptionTiersResponse = {
     premium: {
       display_name: 'Premium',
       description: 'Power users with complex finances',
-      price_monthly: 9.99,
-      price_yearly: 99.99,
+      pricing: {
+        price_monthly: 9.99,
+        price_yearly: 99.99,
+      },
       limits: {
         accounts: 30,
         rules: 15,
@@ -68,8 +74,10 @@ const mockTiersResponse: SubscriptionTiersResponse = {
     premium_plus: {
       display_name: 'Premium+',
       description: 'Unlimited everything with AI and API access',
-      price_monthly: 19.99,
-      price_yearly: 199.99,
+      pricing: {
+        price_monthly: 19.99,
+        price_yearly: 199.99,
+      },
       limits: {
         accounts: -1,
         rules: -1,

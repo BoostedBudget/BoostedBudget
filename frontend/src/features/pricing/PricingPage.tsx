@@ -120,8 +120,8 @@ function TierCard({ tierKey, tierData, isCurrentTier }: TierCardProps) {
       </div>
 
       <div className="pricing-card-price">
-        <span className="price-amount">{formatPrice(tierData.price_monthly)}</span>
-        {tierData.price_monthly > 0 && (
+        <span className="price-amount">{formatPrice(tierData.pricing.price_monthly)}</span>
+        {tierData.pricing.price_monthly > 0 && (
           <span className="price-period">/month</span>
         )}
       </div>
