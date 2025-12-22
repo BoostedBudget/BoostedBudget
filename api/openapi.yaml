@@ -1,0 +1,4518 @@
+components:
+  schemas:
+    Account:
+      additionalProperties: false
+      properties:
+        available_balance:
+          format: double
+          type: number
+        created_at:
+          format: date-time
+          type: string
+        currency_code:
+          type: string
+        current_balance:
+          format: double
+          type: number
+        custom_color:
+          type: string
+        custom_emoji:
+          type: string
+        custom_icon:
+          type: string
+        display_order:
+          format: int64
+          type: integer
+        id:
+          type: string
+        institution_name:
+          type: string
+        is_hidden:
+          type: boolean
+        linked_item_id:
+          type: string
+        mask:
+          type: string
+        name:
+          type: string
+        nickname:
+          type: string
+        official_name:
+          type: string
+        plaid_account_id:
+          type: string
+        subtype:
+          type: string
+        type:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+        user_id:
+          type: string
+      required:
+        - id
+        - linked_item_id
+        - user_id
+        - plaid_account_id
+        - name
+        - type
+        - currency_code
+        - is_hidden
+        - created_at
+        - updated_at
+      type: object
+    AccountBalanceDetail:
+      additionalProperties: false
+      properties:
+        balance:
+          format: double
+          type: number
+        id:
+          type: string
+        name:
+          type: string
+      required:
+        - id
+        - name
+        - balance
+      type: object
+    AccountOrder:
+      additionalProperties: false
+      properties:
+        account_id:
+          type: string
+        display_order:
+          format: int64
+          type: integer
+      required:
+        - account_id
+        - display_order
+      type: object
+    AccountTypeBalance:
+      additionalProperties: false
+      properties:
+        account_count:
+          format: int64
+          type: integer
+        accounts:
+          items:
+            $ref: "#/components/schemas/AccountBalanceDetail"
+          type:
+            - array
+            - "null"
+        balance:
+          format: double
+          type: number
+      required:
+        - balance
+        - account_count
+        - accounts
+      type: object
+    AccountTypeInfo:
+      additionalProperties: false
+      properties:
+        count:
+          format: int64
+          type: integer
+        key:
+          type: string
+        label:
+          type: string
+        total_balance:
+          format: double
+          type: number
+      required:
+        - key
+        - label
+        - count
+        - total_balance
+      type: object
+    AccountTypesResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/AccountTypesResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        types:
+          items:
+            $ref: "#/components/schemas/AccountTypeInfo"
+          type:
+            - array
+            - "null"
+      required:
+        - types
+      type: object
+    BalanceHistoryResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/BalanceHistoryResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        end_date:
+          format: date-time
+          type: string
+        granularity:
+          type: string
+        snapshots:
+          items:
+            $ref: "#/components/schemas/BalanceHistorySnapshot"
+          type:
+            - array
+            - "null"
+        start_date:
+          format: date-time
+          type: string
+      required:
+        - start_date
+        - end_date
+        - granularity
+        - snapshots
+      type: object
+    BalanceHistorySnapshot:
+      additionalProperties: false
+      properties:
+        balance:
+          format: double
+          type: number
+        by_type:
+          additionalProperties:
+            format: double
+            type: number
+          type: object
+        date:
+          format: date-time
+          type: string
+      required:
+        - date
+        - balance
+      type: object
+    BalanceSummaryResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/BalanceSummaryResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        as_of_date:
+          format: date-time
+          type: string
+        by_type:
+          additionalProperties:
+            $ref: "#/components/schemas/AccountTypeBalance"
+          type: object
+        period_comparison:
+          $ref: "#/components/schemas/PeriodComparisonData"
+        total_balance:
+          format: double
+          type: number
+      required:
+        - as_of_date
+        - total_balance
+        - by_type
+      type: object
+    Budget:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/Budget.json
+          format: uri
+          readOnly: true
+          type: string
+        amount:
+          format: double
+          type: number
+        categories:
+          items:
+            $ref: "#/components/schemas/BudgetCategory"
+          type:
+            - array
+            - "null"
+        created_at:
+          format: date-time
+          type: string
+        currency_code:
+          type: string
+        description:
+          type: string
+        end_date:
+          format: date-time
+          type: string
+        id:
+          type: string
+        income_amount:
+          format: double
+          type: number
+        income_sources:
+          items:
+            $ref: "#/components/schemas/IncomeSource"
+          type:
+            - array
+            - "null"
+        is_active:
+          type: boolean
+        name:
+          type: string
+        period:
+          type: string
+        start_date:
+          format: date-time
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+        user_id:
+          type: string
+      required:
+        - id
+        - user_id
+        - name
+        - period
+        - start_date
+        - amount
+        - currency_code
+        - is_active
+        - created_at
+        - updated_at
+        - income_amount
+        - income_sources
+      type: object
+    BudgetCategory:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/BudgetCategory.json
+          format: uri
+          readOnly: true
+          type: string
+        allocated_amount:
+          format: double
+          type: number
+        budget_id:
+          type: string
+        category:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        created_at:
+          format: date-time
+          type: string
+        id:
+          type: string
+        match_logic:
+          type: string
+        spent_amount:
+          format: double
+          type: number
+        tags:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        updated_at:
+          format: date-time
+          type: string
+      required:
+        - id
+        - budget_id
+        - category
+        - allocated_amount
+        - spent_amount
+        - created_at
+        - updated_at
+        - tags
+        - match_logic
+      type: object
+    CancelDeletionResponseBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CancelDeletionResponseBody.json
+          format: uri
+          readOnly: true
+          type: string
+        message:
+          description: Status message
+          type: string
+      required:
+        - message
+      type: object
+    CashFlowHistoryResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CashFlowHistoryResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        end_date:
+          format: date-time
+          type: string
+        grouping:
+          type: string
+        periods:
+          items:
+            $ref: "#/components/schemas/CashFlowPeriodData"
+          type:
+            - array
+            - "null"
+        start_date:
+          format: date-time
+          type: string
+      required:
+        - start_date
+        - end_date
+        - grouping
+        - periods
+      type: object
+    CashFlowPeriodComparison:
+      additionalProperties: false
+      properties:
+        expense_change_amount:
+          format: double
+          type: number
+        expense_change_percent:
+          format: double
+          type: number
+        income_change_amount:
+          format: double
+          type: number
+        income_change_percent:
+          format: double
+          type: number
+        net_change_amount:
+          format: double
+          type: number
+        net_change_percent:
+          format: double
+          type: number
+        previous_expenses:
+          format: double
+          type: number
+        previous_income:
+          format: double
+          type: number
+        previous_net_cash_flow:
+          format: double
+          type: number
+      required:
+        - previous_income
+        - previous_expenses
+        - previous_net_cash_flow
+        - income_change_amount
+        - income_change_percent
+        - expense_change_amount
+        - expense_change_percent
+        - net_change_amount
+        - net_change_percent
+      type: object
+    CashFlowPeriodData:
+      additionalProperties: false
+      properties:
+        expenses:
+          format: double
+          type: number
+        income:
+          format: double
+          type: number
+        net_cash_flow:
+          format: double
+          type: number
+        period_end:
+          format: date-time
+          type: string
+        period_start:
+          format: date-time
+          type: string
+        transaction_count:
+          format: int64
+          type: integer
+      required:
+        - period_start
+        - period_end
+        - income
+        - expenses
+        - net_cash_flow
+        - transaction_count
+      type: object
+    CashFlowSummaryResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CashFlowSummaryResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        end_date:
+          format: date-time
+          type: string
+        expense_count:
+          format: int64
+          type: integer
+        expenses:
+          format: double
+          type: number
+        income:
+          format: double
+          type: number
+        income_count:
+          format: int64
+          type: integer
+        net_cash_flow:
+          format: double
+          type: number
+        period_comparison:
+          $ref: "#/components/schemas/CashFlowPeriodComparison"
+        start_date:
+          format: date-time
+          type: string
+      required:
+        - start_date
+        - end_date
+        - income
+        - expenses
+        - net_cash_flow
+        - income_count
+        - expense_count
+      type: object
+    CategorizationRule:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CategorizationRule.json
+          format: uri
+          readOnly: true
+          type: string
+        condition_logic:
+          type: string
+        conditions:
+          items:
+            $ref: "#/components/schemas/RuleCondition"
+          type:
+            - array
+            - "null"
+        created_at:
+          format: date-time
+          type: string
+        description:
+          type: string
+        enabled:
+          type: boolean
+        id:
+          type: string
+        last_matched_at:
+          format: date-time
+          type: string
+        match_count:
+          format: int64
+          type: integer
+        name:
+          type: string
+        override_count:
+          format: int64
+          type: integer
+        priority:
+          format: int64
+          type: integer
+        source:
+          type: string
+        tag_behavior:
+          type: string
+        target_category:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        target_tags:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        updated_at:
+          format: date-time
+          type: string
+        user_id:
+          type: string
+      required:
+        - id
+        - user_id
+        - name
+        - enabled
+        - priority
+        - conditions
+        - condition_logic
+        - tag_behavior
+        - source
+        - match_count
+        - override_count
+        - created_at
+        - updated_at
+      type: object
+    CategoryPreviewRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CategoryPreviewRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        categories:
+          items:
+            items:
+              type: string
+            type:
+              - array
+              - "null"
+          type:
+            - array
+            - "null"
+        end_date:
+          type: string
+        match_logic:
+          type: string
+        start_date:
+          type: string
+        tags:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - categories
+        - match_logic
+        - start_date
+        - end_date
+      type: object
+    CategoryPreviewResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CategoryPreviewResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        total_amount:
+          format: double
+          type: number
+        transaction_count:
+          format: int64
+          type: integer
+      required:
+        - transaction_count
+        - total_amount
+      type: object
+    CategoryTransactionsResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CategoryTransactionsResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        has_more:
+          type: boolean
+        total_amount:
+          format: double
+          type: number
+        total_count:
+          format: int64
+          type: integer
+        transactions:
+          items:
+            $ref: "#/components/schemas/Transaction"
+          type:
+            - array
+            - "null"
+      required:
+        - transactions
+        - total_count
+        - total_amount
+        - has_more
+      type: object
+    CreateBudgetCategoryRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CreateBudgetCategoryRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        allocated_amount:
+          format: double
+          type: number
+        category:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        match_logic:
+          type: string
+        tags:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - category
+        - allocated_amount
+      type: object
+    CreateBudgetRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CreateBudgetRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        amount:
+          format: double
+          type: number
+        categories:
+          items:
+            $ref: "#/components/schemas/CreateBudgetCategoryRequest"
+          type:
+            - array
+            - "null"
+        currency_code:
+          type: string
+        description:
+          type: string
+        end_date:
+          format: date-time
+          type: string
+        income_amount:
+          format: double
+          type: number
+        income_sources:
+          items:
+            $ref: "#/components/schemas/IncomeSource"
+          type:
+            - array
+            - "null"
+        name:
+          type: string
+        period:
+          type: string
+        start_date:
+          format: date-time
+          type: string
+      required:
+        - name
+        - period
+        - start_date
+        - amount
+      type: object
+    CreateCategorizationRuleRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CreateCategorizationRuleRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        condition_logic:
+          type: string
+        conditions:
+          items:
+            $ref: "#/components/schemas/RuleCondition"
+          type:
+            - array
+            - "null"
+        description:
+          type: string
+        name:
+          type: string
+        priority:
+          format: int64
+          type: integer
+        tag_behavior:
+          type: string
+        target_category:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        target_tags:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - name
+        - conditions
+      type: object
+    CreateCustomCategoryRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CreateCustomCategoryRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        color:
+          type: string
+        icon:
+          type: string
+        name:
+          type: string
+        parent_category:
+          type: string
+      required:
+        - name
+      type: object
+    CreateSavingsGoalRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CreateSavingsGoalRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        account_id:
+          type: string
+        currency_code:
+          type: string
+        current_amount:
+          format: double
+          type: number
+        deadline:
+          format: date-time
+          type: string
+        description:
+          type: string
+        name:
+          type: string
+        target_amount:
+          format: double
+          type: number
+      required:
+        - name
+        - target_amount
+        - account_id
+      type: object
+    CreateUserTagRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CreateUserTagRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        color:
+          type: string
+        name:
+          type: string
+      required:
+        - name
+      type: object
+    CustomCategory:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CustomCategory.json
+          format: uri
+          readOnly: true
+          type: string
+        color:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        icon:
+          type: string
+        id:
+          type: string
+        name:
+          type: string
+        parent_category:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+        usage_count:
+          format: int64
+          type: integer
+        user_id:
+          type: string
+      required:
+        - id
+        - user_id
+        - name
+        - usage_count
+        - created_at
+        - updated_at
+      type: object
+    DashboardLayout:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/DashboardLayout.json
+          format: uri
+          readOnly: true
+          type: string
+        version:
+          format: int64
+          type: integer
+        widgets:
+          items:
+            $ref: "#/components/schemas/WidgetConfig"
+          type:
+            - array
+            - "null"
+      required:
+        - widgets
+        - version
+      type: object
+    DashboardPreferencesResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/DashboardPreferencesResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        layout:
+          $ref: "#/components/schemas/DashboardLayout"
+        updated_at:
+          format: date-time
+          type: string
+      required:
+        - layout
+        - updated_at
+      type: object
+    ErrorDetail:
+      additionalProperties: false
+      properties:
+        location:
+          description: Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id'
+          type: string
+        message:
+          description: Error message text
+          type: string
+        value:
+          description: The value at the given location
+      type: object
+    ErrorModel:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/ErrorModel.json
+          format: uri
+          readOnly: true
+          type: string
+        detail:
+          description: A human-readable explanation specific to this occurrence of the problem.
+          examples:
+            - Property foo is required but is missing.
+          type: string
+        errors:
+          description: Optional list of individual error details
+          items:
+            $ref: "#/components/schemas/ErrorDetail"
+          type:
+            - array
+            - "null"
+        instance:
+          description: A URI reference that identifies the specific occurrence of the problem.
+          examples:
+            - https://example.com/error-log/abc123
+          format: uri
+          type: string
+        status:
+          description: HTTP status code
+          examples:
+            - 400
+          format: int64
+          type: integer
+        title:
+          description: A short, human-readable summary of the problem type. This value should not change between occurrences of the error.
+          examples:
+            - Bad Request
+          type: string
+        type:
+          default: about:blank
+          description: A URI reference to human-readable documentation for the error.
+          examples:
+            - https://example.com/errors/example
+          format: uri
+          type: string
+      type: object
+    ExchangePublicTokenInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/ExchangePublicTokenInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        institution_id:
+          description: The institution ID
+          type: string
+        institution_name:
+          description: The institution name
+          type: string
+        public_token:
+          description: The public token from Plaid Link
+          type: string
+      required:
+        - public_token
+        - institution_id
+        - institution_name
+      type: object
+    ExchangePublicTokenOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/ExchangePublicTokenOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        accounts_linked:
+          format: int64
+          type: integer
+        item_id:
+          type: string
+        success:
+          type: boolean
+      required:
+        - success
+        - item_id
+        - accounts_linked
+      type: object
+    FireWebhookRequestBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/FireWebhookRequestBody.json
+          format: uri
+          readOnly: true
+          type: string
+        item_id:
+          description: The Plaid item ID (UUID)
+          type: string
+        webhook_code:
+          description: The webhook code to fire
+          type: string
+      required:
+        - item_id
+        - webhook_code
+      type: object
+    FireWebhookResponseBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/FireWebhookResponseBody.json
+          format: uri
+          readOnly: true
+          type: string
+        item_id:
+          description: The Plaid item ID
+          type: string
+        request_id:
+          description: The request ID from Plaid
+          type: string
+        webhook_code:
+          description: The webhook code that was fired
+          type: string
+        webhook_fired:
+          description: Whether the webhook was fired successfully
+          type: boolean
+      required:
+        - webhook_fired
+        - request_id
+        - item_id
+        - webhook_code
+      type: object
+    GetAccountsOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/GetAccountsOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        accounts:
+          items:
+            $ref: "#/components/schemas/Account"
+          type:
+            - array
+            - "null"
+        total_count:
+          format: int64
+          type: integer
+      required:
+        - accounts
+        - total_count
+      type: object
+    GetUnreadCountOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/GetUnreadCountOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        count:
+          format: int64
+          type: integer
+      required:
+        - count
+      type: object
+    HealthChecks:
+      additionalProperties: false
+      properties:
+        auth0:
+          $ref: "#/components/schemas/ServiceCheck"
+          description: Auth0 authentication service status
+        database:
+          $ref: "#/components/schemas/ServiceCheck"
+          description: Database connection status
+        redis:
+          $ref: "#/components/schemas/ServiceCheck"
+          description: Redis cache status
+      required:
+        - database
+        - redis
+        - auth0
+      type: object
+    HealthResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/HealthResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        checks:
+          $ref: "#/components/schemas/HealthChecks"
+          description: Individual service health checks
+        status:
+          description: "Overall system health status: healthy, degraded, or unhealthy"
+          type: string
+        timestamp:
+          description: ISO 8601 timestamp of the health check
+          type: string
+        version:
+          description: API version
+          type: string
+      required:
+        - status
+        - version
+        - timestamp
+        - checks
+      type: object
+    IncomeSource:
+      additionalProperties: false
+      properties:
+        description:
+          type: string
+        type:
+          type: string
+        value:
+          type: string
+      required:
+        - type
+        - value
+      type: object
+    LinkTokenResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/LinkTokenResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        expiration:
+          format: date-time
+          type: string
+        link_token:
+          type: string
+        request_id:
+          type: string
+      required:
+        - link_token
+        - expiration
+        - request_id
+      type: object
+    MarkNotificationReadOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/MarkNotificationReadOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        message:
+          type: string
+      required:
+        - message
+      type: object
+    Notification:
+      additionalProperties: false
+      properties:
+        action_label:
+          type: string
+        action_url:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        email_sent_at:
+          format: date-time
+          type: string
+        id:
+          type: string
+        message:
+          type: string
+        read:
+          type: boolean
+        sent_email:
+          type: boolean
+        title:
+          type: string
+        type:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+        user_id:
+          type: string
+      required:
+        - id
+        - user_id
+        - type
+        - title
+        - message
+        - read
+        - sent_email
+        - created_at
+        - updated_at
+      type: object
+    PeriodComparisonData:
+      additionalProperties: false
+      properties:
+        change_amount:
+          format: double
+          type: number
+        change_percent:
+          format: double
+          type: number
+        previous_balance:
+          format: double
+          type: number
+      required:
+        - previous_balance
+        - change_amount
+        - change_percent
+      type: object
+    PlaidWebhookResponseBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/PlaidWebhookResponseBody.json
+          format: uri
+          readOnly: true
+          type: string
+        message:
+          description: Status message
+          type: string
+        status:
+          description: Processing status (ok or error)
+          type: string
+      required:
+        - status
+        - message
+      type: object
+    PrivacySettings:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/PrivacySettings.json
+          format: uri
+          readOnly: true
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        data_sharing_enabled:
+          type: boolean
+        gdpr_advertising_consent:
+          type: boolean
+        gdpr_analytics_consent:
+          type: boolean
+        gdpr_consent_timestamp:
+          format: date-time
+          type: string
+        gdpr_necessary_consent:
+          type: boolean
+        id:
+          type: string
+        marketing_emails_enabled:
+          type: boolean
+        product_updates_enabled:
+          type: boolean
+        security_alerts_enabled:
+          type: boolean
+        updated_at:
+          format: date-time
+          type: string
+        user_id:
+          type: string
+      required:
+        - id
+        - user_id
+        - gdpr_necessary_consent
+        - gdpr_analytics_consent
+        - gdpr_advertising_consent
+        - gdpr_consent_timestamp
+        - marketing_emails_enabled
+        - product_updates_enabled
+        - security_alerts_enabled
+        - data_sharing_enabled
+        - created_at
+        - updated_at
+      type: object
+    ReorderAccountsOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/ReorderAccountsOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        success:
+          type: boolean
+      required:
+        - success
+      type: object
+    ReorderAccountsRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/ReorderAccountsRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        account_orders:
+          items:
+            $ref: "#/components/schemas/AccountOrder"
+          type:
+            - array
+            - "null"
+      required:
+        - account_orders
+      type: object
+    RequestDeletionResponseBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/RequestDeletionResponseBody.json
+          format: uri
+          readOnly: true
+          type: string
+        cancellation_token:
+          description: Token to cancel deletion
+          type: string
+        message:
+          description: Status message
+          type: string
+        scheduled_at:
+          description: When deletion is scheduled (ISO 8601)
+          type: string
+      required:
+        - message
+        - scheduled_at
+        - cancellation_token
+      type: object
+    RuleCondition:
+      additionalProperties: false
+      properties:
+        operator:
+          type: string
+        type:
+          type: string
+        value: {}
+      required:
+        - type
+        - value
+      type: object
+    SaveDashboardPreferencesInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/SaveDashboardPreferencesInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        layout:
+          $ref: "#/components/schemas/DashboardLayout"
+          description: Dashboard layout configuration
+      required:
+        - layout
+      type: object
+    SavingsGoal:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/SavingsGoal.json
+          format: uri
+          readOnly: true
+          type: string
+        account:
+          $ref: "#/components/schemas/Account"
+        account_id:
+          type: string
+        completed_at:
+          format: date-time
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        currency_code:
+          type: string
+        current_amount:
+          format: double
+          type: number
+        deadline:
+          format: date-time
+          type: string
+        description:
+          type: string
+        id:
+          type: string
+        is_completed:
+          type: boolean
+        name:
+          type: string
+        target_amount:
+          format: double
+          type: number
+        updated_at:
+          format: date-time
+          type: string
+        user_id:
+          type: string
+      required:
+        - id
+        - user_id
+        - name
+        - target_amount
+        - current_amount
+        - currency_code
+        - account_id
+        - is_completed
+        - created_at
+        - updated_at
+      type: object
+    ServiceCheck:
+      additionalProperties: false
+      properties:
+        message:
+          description: Error message if service is down
+          type: string
+        response_time_ms:
+          description: Response time in milliseconds
+          format: int64
+          type: integer
+        status:
+          description: "Service status: up or down"
+          type: string
+      required:
+        - status
+        - response_time_ms
+      type: object
+    SubscriptionFeatures:
+      additionalProperties: false
+      properties:
+        ads_enabled:
+          type: boolean
+        advanced_reports:
+          type: boolean
+        ai_insights:
+          type: boolean
+        api_access:
+          type: boolean
+        custom_categories:
+          type: boolean
+        custom_tags:
+          type: boolean
+        priority_support:
+          type: boolean
+      required:
+        - ads_enabled
+        - ai_insights
+        - api_access
+        - priority_support
+        - custom_categories
+        - custom_tags
+        - advanced_reports
+      type: object
+    SubscriptionLimits:
+      additionalProperties: false
+      properties:
+        accounts:
+          format: int64
+          type: integer
+        accounts_synced_per_month:
+          format: int64
+          type: integer
+        api_calls_per_month:
+          format: int64
+          type: integer
+        custom_categories_max:
+          format: int64
+          type: integer
+        custom_tags_max:
+          format: int64
+          type: integer
+        data_export_requests_per_month:
+          format: int64
+          type: integer
+        executions_per_day:
+          format: int64
+          type: integer
+        min_execution_interval_minutes:
+          format: int64
+          type: integer
+        rules:
+          format: int64
+          type: integer
+        transaction_history_days:
+          format: int64
+          type: integer
+      required:
+        - accounts
+        - rules
+        - executions_per_day
+        - min_execution_interval_minutes
+        - api_calls_per_month
+        - data_export_requests_per_month
+        - accounts_synced_per_month
+        - transaction_history_days
+        - custom_categories_max
+        - custom_tags_max
+      type: object
+    SubscriptionPricing:
+      additionalProperties: false
+      properties:
+        price_monthly:
+          format: double
+          type: number
+        price_yearly:
+          format: double
+          type: number
+        stripe_price_id_monthly:
+          type: string
+        stripe_price_id_yearly:
+          type: string
+      required:
+        - price_monthly
+        - price_yearly
+      type: object
+    SubscriptionTier:
+      additionalProperties: false
+      properties:
+        description:
+          type: string
+        display_name:
+          type: string
+        features:
+          $ref: "#/components/schemas/SubscriptionFeatures"
+        limits:
+          $ref: "#/components/schemas/SubscriptionLimits"
+        name:
+          type: string
+        pricing:
+          $ref: "#/components/schemas/SubscriptionPricing"
+      required:
+        - name
+        - display_name
+        - description
+        - limits
+        - features
+        - pricing
+      type: object
+    SubscriptionTiersResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/SubscriptionTiersResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        default_tier:
+          description: The default tier for new users
+          type: string
+        tiers:
+          additionalProperties:
+            $ref: "#/components/schemas/SubscriptionTier"
+          description: Map of tier names to tier configurations
+          type: object
+      required:
+        - tiers
+        - default_tier
+      type: object
+    SyncStats:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/SyncStats.json
+          format: uri
+          readOnly: true
+          type: string
+        accounts_limit:
+          format: int64
+          type: integer
+        accounts_synced:
+          format: int64
+          type: integer
+        can_sync_more:
+          type: boolean
+        month:
+          type: string
+        reset_date:
+          format: date-time
+          type: string
+        total_transactions:
+          format: int64
+          type: integer
+        user_id:
+          type: string
+      required:
+        - user_id
+        - month
+        - accounts_synced
+        - accounts_limit
+        - total_transactions
+        - can_sync_more
+        - reset_date
+      type: object
+    TagSource:
+      additionalProperties: false
+      properties:
+        rule_id:
+          type: string
+        source:
+          type: string
+        tag:
+          type: string
+      required:
+        - tag
+        - source
+      type: object
+    ToggleCategorizationRuleRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/ToggleCategorizationRuleRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        enabled:
+          type: boolean
+      required:
+        - enabled
+      type: object
+    Transaction:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/Transaction.json
+          format: uri
+          readOnly: true
+          type: string
+        account:
+          $ref: "#/components/schemas/Account"
+        account_id:
+          type: string
+        amount:
+          format: double
+          type: number
+        authorized_date:
+          format: date-time
+          type: string
+        category:
+          type: string
+        category_override:
+          type: string
+        category_override_date:
+          format: date-time
+          type: string
+        category_source:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        date:
+          format: date-time
+          type: string
+        external_metadata:
+          type: string
+        external_transaction_id:
+          type: string
+        id:
+          type: string
+        linked_item_id:
+          type: string
+        merchant_name:
+          type: string
+        name:
+          type: string
+        original_category:
+          type: string
+        payment_channel:
+          type: string
+        pending:
+          type: boolean
+        personal_finance_category:
+          type: string
+        source:
+          type: string
+        tags:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        tags_source:
+          items:
+            $ref: "#/components/schemas/TagSource"
+          type:
+            - array
+            - "null"
+        updated_at:
+          format: date-time
+          type: string
+        user_id:
+          type: string
+        user_notes:
+          type: string
+      required:
+        - id
+        - user_id
+        - account_id
+        - linked_item_id
+        - source
+        - amount
+        - date
+        - name
+        - pending
+        - category_source
+        - tags
+        - tags_source
+        - created_at
+        - updated_at
+      type: object
+    TransactionListResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/TransactionListResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        has_more:
+          type: boolean
+        limit:
+          format: int64
+          type: integer
+        offset:
+          format: int64
+          type: integer
+        total_count:
+          format: int64
+          type: integer
+        transactions:
+          items:
+            $ref: "#/components/schemas/Transaction"
+          type:
+            - array
+            - "null"
+      required:
+        - transactions
+        - total_count
+        - limit
+        - offset
+        - has_more
+      type: object
+    UpdateAccountOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/UpdateAccountOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        account:
+          $ref: "#/components/schemas/Account"
+      required:
+        - account
+      type: object
+    UpdateAccountRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/UpdateAccountRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        custom_color:
+          type:
+            - string
+            - "null"
+        custom_emoji:
+          type:
+            - string
+            - "null"
+        custom_icon:
+          type:
+            - string
+            - "null"
+        display_order:
+          format: int64
+          type:
+            - integer
+            - "null"
+        is_hidden:
+          type:
+            - boolean
+            - "null"
+        nickname:
+          type:
+            - string
+            - "null"
+      required:
+        - nickname
+        - custom_color
+        - custom_icon
+        - custom_emoji
+        - display_order
+        - is_hidden
+      type: object
+    UpdateBudgetCategoryRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/UpdateBudgetCategoryRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        allocated_amount:
+          format: double
+          type: number
+        match_logic:
+          type: string
+        tags:
+          items:
+            type: string
+          type: array
+      type: object
+    UpdateBudgetRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/UpdateBudgetRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        amount:
+          format: double
+          type: number
+        description:
+          type: string
+        end_date:
+          format: date-time
+          type: string
+        income_amount:
+          format: double
+          type: number
+        income_sources:
+          items:
+            $ref: "#/components/schemas/IncomeSource"
+          type: array
+        is_active:
+          type: boolean
+        name:
+          type: string
+        period:
+          type: string
+        start_date:
+          format: date-time
+          type: string
+      type: object
+    UpdateCategorizationRuleRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/UpdateCategorizationRuleRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        condition_logic:
+          type: string
+        conditions:
+          items:
+            $ref: "#/components/schemas/RuleCondition"
+          type: array
+        description:
+          type: string
+        enabled:
+          type: boolean
+        name:
+          type: string
+        priority:
+          format: int64
+          type: integer
+        tag_behavior:
+          type: string
+        target_category:
+          items:
+            type: string
+          type: array
+        target_tags:
+          items:
+            type: string
+          type: array
+      type: object
+    UpdateCustomCategoryRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/UpdateCustomCategoryRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        color:
+          type: string
+        icon:
+          type: string
+        name:
+          type: string
+        parent_category:
+          type: string
+      type: object
+    UpdatePrivacySettingsRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/UpdatePrivacySettingsRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        data_sharing_enabled:
+          type: boolean
+        gdpr_advertising_consent:
+          type: boolean
+        gdpr_analytics_consent:
+          type: boolean
+        gdpr_necessary_consent:
+          type: boolean
+        marketing_emails_enabled:
+          type: boolean
+        product_updates_enabled:
+          type: boolean
+        security_alerts_enabled:
+          type: boolean
+      type: object
+    UpdateProfileRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/UpdateProfileRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        email:
+          type: string
+        primary_region:
+          type: string
+      type: object
+    UpdateSavingsGoalRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/UpdateSavingsGoalRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        account_id:
+          type: string
+        current_amount:
+          format: double
+          type: number
+        deadline:
+          format: date-time
+          type: string
+        description:
+          type: string
+        name:
+          type: string
+        target_amount:
+          format: double
+          type: number
+      type: object
+    UpdateTransactionCategoryBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/UpdateTransactionCategoryBody.json
+          format: uri
+          readOnly: true
+          type: string
+        category:
+          description: Category hierarchy as string array
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - category
+      type: object
+    UpdateTransactionTagsBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/UpdateTransactionTagsBody.json
+          format: uri
+          readOnly: true
+          type: string
+        tags:
+          description: Array of tag names to set on the transaction
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - tags
+      type: object
+    UpdateUserTagRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/UpdateUserTagRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        color:
+          type: string
+        name:
+          type: string
+      type: object
+    User:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/User.json
+          format: uri
+          readOnly: true
+          type: string
+        auth0_user_id:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        deletion_requested_at:
+          format: date-time
+          type: string
+        deletion_scheduled_at:
+          format: date-time
+          type: string
+        email:
+          type: string
+        email_verified:
+          type: boolean
+        id:
+          type: string
+        is_active:
+          type: boolean
+        is_deleted:
+          type: boolean
+        last_login_at:
+          format: date-time
+          type: string
+        primary_region:
+          type: string
+        stripe_customer_id:
+          type: string
+        subscription_ends_at:
+          format: date-time
+          type: string
+        subscription_started_at:
+          format: date-time
+          type: string
+        subscription_status:
+          type: string
+        subscription_tier:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+        - id
+        - auth0_user_id
+        - email
+        - email_verified
+        - subscription_tier
+        - subscription_status
+        - primary_region
+        - is_active
+        - is_deleted
+        - created_at
+        - updated_at
+      type: object
+    UserTag:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/UserTag.json
+          format: uri
+          readOnly: true
+          type: string
+        color:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        id:
+          type: string
+        name:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+        usage_count:
+          format: int64
+          type: integer
+        user_id:
+          type: string
+      required:
+        - id
+        - user_id
+        - name
+        - usage_count
+        - created_at
+        - updated_at
+      type: object
+    WidgetConfig:
+      additionalProperties: false
+      properties:
+        h:
+          format: int64
+          type: integer
+        i:
+          type: string
+        maxH:
+          format: int64
+          type: integer
+        maxW:
+          format: int64
+          type: integer
+        minH:
+          format: int64
+          type: integer
+        minW:
+          format: int64
+          type: integer
+        type:
+          type: string
+        w:
+          format: int64
+          type: integer
+        x:
+          format: int64
+          type: integer
+        "y":
+          format: int64
+          type: integer
+      required:
+        - i
+        - type
+        - x
+        - "y"
+        - w
+        - h
+      type: object
+  securitySchemes:
+    auth0:
+      bearerFormat: JWT
+      description: Auth0 JWT Bearer token. Obtain from Auth0 after authentication.
+      scheme: bearer
+      type: http
+info:
+  contact:
+    email: support@boostedbudget.com
+    name: BoostedBudget Support
+    url: https://boostedbudget.com/support
+  description: |
+    BoostedBudget API - Global budgeting platform with intelligent automation rules and GDPR compliance.
+
+    ## Authentication
+
+    All protected endpoints require Auth0 JWT Bearer token in the Authorization header:
+    ```
+    Authorization: Bearer <your-jwt-token>
+    ```
+
+    ## Subscription Tiers
+
+    | Tier | Rules | Accounts | Sync Frequency | Price |
+    |------|-------|----------|----------------|-------|
+    | free | 1 | 3 | 1x/day | $0 (ad-supported) |
+    | premium_lite | 5 | 15 | 2x/day | $4.99/mo |
+    | premium | 15 | 30 | 6x/day | $9.99/mo |
+    | premium_plus | Unlimited | Unlimited | every 10min | $19.99/mo |
+
+    ## Regions
+
+    All data is stored in the us-east-1 (iad) region. Multi-region support planned for Phase 7+.
+  license:
+    name: Proprietary
+    url: https://boostedbudget.com/terms
+  title: BoostedBudget API
+  version: 1.0.0
+openapi: 3.1.0
+paths:
+  /api/v1/accounts:
+    get:
+      description: Retrieves all linked bank accounts for the authenticated user.
+      operationId: getAccounts
+      parameters:
+        - description: If 'true', includes hidden accounts
+          explode: false
+          in: query
+          name: include_hidden
+          schema:
+            description: If 'true', includes hidden accounts
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetAccountsOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get accounts
+      tags:
+        - Accounts
+  /api/v1/accounts/reorder:
+    patch:
+      description: Bulk updates display_order for multiple accounts.
+      operationId: reorderAccounts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReorderAccountsRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReorderAccountsOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Reorder accounts
+      tags:
+        - Accounts
+  /api/v1/accounts/{id}:
+    delete:
+      description: Deletes a single account with ownership validation.
+      operationId: deleteAccount
+      parameters:
+        - description: Account ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Account ID
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Delete account
+      tags:
+        - Accounts
+    patch:
+      description: Updates account customization fields.
+      operationId: updateAccount
+      parameters:
+        - description: Account ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Account ID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAccountRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdateAccountOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Update account
+      tags:
+        - Accounts
+  /api/v1/admin/plaid/fire-webhook:
+    post:
+      description: Fires a Plaid webhook for testing in staging environment. Requires Auth0 authentication.
+      operationId: fireWebhook
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FireWebhookRequestBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FireWebhookResponseBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Fire a Plaid webhook (staging only)
+      tags:
+        - Admin
+  /api/v1/analytics/cash-flow-history:
+    get:
+      description: Returns time series cash flow data grouped by period for charts.
+      operationId: getCashFlowHistory
+      parameters:
+        - description: Start of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: start_date
+          required: true
+          schema:
+            description: Start of date range (YYYY-MM-DD)
+            type: string
+        - description: End of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: end_date
+          required: true
+          schema:
+            description: End of date range (YYYY-MM-DD)
+            type: string
+        - description: "Time grouping: daily, weekly, or monthly (auto-selected if not provided)"
+          explode: false
+          in: query
+          name: grouping
+          schema:
+            description: "Time grouping: daily, weekly, or monthly (auto-selected if not provided)"
+            type: string
+        - description: Comma-separated account types to filter
+          explode: false
+          in: query
+          name: account_types
+          schema:
+            description: Comma-separated account types to filter
+            type: string
+        - description: Include transfer transactions (true/false, default false)
+          explode: false
+          in: query
+          name: include_transfers
+          schema:
+            description: Include transfer transactions (true/false, default false)
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CashFlowHistoryResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get cash flow history
+      tags:
+        - Analytics
+  /api/v1/analytics/cash-flow-summary:
+    get:
+      description: Returns aggregated cash flow data (income, expenses, net) for a date range.
+      operationId: getCashFlowSummary
+      parameters:
+        - description: Start of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: start_date
+          required: true
+          schema:
+            description: Start of date range (YYYY-MM-DD)
+            type: string
+        - description: End of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: end_date
+          required: true
+          schema:
+            description: End of date range (YYYY-MM-DD)
+            type: string
+        - description: Comma-separated account types to filter
+          explode: false
+          in: query
+          name: account_types
+          schema:
+            description: Comma-separated account types to filter
+            type: string
+        - description: Include transfer transactions (true/false, default false)
+          explode: false
+          in: query
+          name: include_transfers
+          schema:
+            description: Include transfer transactions (true/false, default false)
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CashFlowSummaryResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get cash flow summary
+      tags:
+        - Analytics
+  /api/v1/auto-categorization:
+    get:
+      description: Retrieves all categorization rules for the authenticated user, ordered by priority.
+      operationId: getUserRules
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/CategorizationRule"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get user categorization rules
+      tags:
+        - Auto-Categorization
+    post:
+      description: Creates a new categorization rule for the authenticated user.
+      operationId: createRule
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCategorizationRuleRequest"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CategorizationRule"
+          description: Created
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Create a new categorization rule
+      tags:
+        - Auto-Categorization
+  /api/v1/auto-categorization/{id}:
+    delete:
+      description: Removes a categorization rule.
+      operationId: deleteRule
+      parameters:
+        - description: Rule UUID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Rule UUID
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Delete a rule
+      tags:
+        - Auto-Categorization
+    get:
+      description: Retrieves a specific categorization rule by its UUID.
+      operationId: getRuleByID
+      parameters:
+        - description: Rule UUID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Rule UUID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CategorizationRule"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get rule by ID
+      tags:
+        - Auto-Categorization
+    put:
+      description: Updates a categorization rule's configuration.
+      operationId: updateRule
+      parameters:
+        - description: Rule UUID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Rule UUID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCategorizationRuleRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CategorizationRule"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Update a rule
+      tags:
+        - Auto-Categorization
+  /api/v1/auto-categorization/{id}/toggle:
+    post:
+      description: Enables or disables a categorization rule.
+      operationId: toggleRule
+      parameters:
+        - description: Rule UUID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Rule UUID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ToggleCategorizationRuleRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CategorizationRule"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Toggle a rule
+      tags:
+        - Auto-Categorization
+  /api/v1/budgets:
+    get:
+      description: Retrieves all budgets for the authenticated user.
+      operationId: getBudgets
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/Budget"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get budgets
+      tags:
+        - Budgets
+    post:
+      description: Creates a new budget for the authenticated user.
+      operationId: createBudget
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBudgetRequest"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Budget"
+          description: Created
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Create budget
+      tags:
+        - Budgets
+  /api/v1/budgets/categories/available:
+    get:
+      description: Returns the merged list of available categories (custom + Plaid).
+      operationId: getAvailableCategories
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  type: string
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get available categories
+      tags:
+        - Budgets
+  /api/v1/budgets/categories/preview:
+    post:
+      description: Returns the count and total amount of transactions matching the given category configuration within the date range.
+      operationId: previewCategoryMatches
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CategoryPreviewRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CategoryPreviewResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Preview category matches
+      tags:
+        - Budget
+  /api/v1/budgets/current:
+    get:
+      description: Retrieves the current active budget (where today is within the period).
+      operationId: getCurrentBudget
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Budget"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get current budget
+      tags:
+        - Budgets
+  /api/v1/budgets/{id}:
+    delete:
+      description: Removes a budget from the user's collection.
+      operationId: deleteBudget
+      parameters:
+        - description: Budget ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Budget ID
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Delete budget
+      tags:
+        - Budgets
+    get:
+      description: Retrieves a specific budget by ID.
+      operationId: getBudget
+      parameters:
+        - description: Budget ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Budget ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Budget"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get budget
+      tags:
+        - Budgets
+    put:
+      description: Updates a budget's properties.
+      operationId: updateBudget
+      parameters:
+        - description: Budget ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Budget ID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateBudgetRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Budget"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Update budget
+      tags:
+        - Budgets
+  /api/v1/budgets/{id}/categories:
+    post:
+      description: Adds a category to a budget.
+      operationId: addBudgetCategory
+      parameters:
+        - description: Budget ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Budget ID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBudgetCategoryRequest"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BudgetCategory"
+          description: Created
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Add budget category
+      tags:
+        - Budgets
+  /api/v1/budgets/{id}/categories/{categoryId}:
+    delete:
+      description: Removes a category from a budget.
+      operationId: deleteBudgetCategory
+      parameters:
+        - description: Budget ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Budget ID
+            type: string
+        - description: Category ID
+          in: path
+          name: categoryId
+          required: true
+          schema:
+            description: Category ID
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Delete budget category
+      tags:
+        - Budgets
+    put:
+      description: Updates a budget category.
+      operationId: updateBudgetCategory
+      parameters:
+        - description: Budget ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Budget ID
+            type: string
+        - description: Category ID
+          in: path
+          name: categoryId
+          required: true
+          schema:
+            description: Category ID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateBudgetCategoryRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BudgetCategory"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Update budget category
+      tags:
+        - Budgets
+  /api/v1/budgets/{id}/categories/{categoryId}/transactions:
+    get:
+      description: Returns paginated transactions matching a budget category.
+      operationId: getCategoryTransactions
+      parameters:
+        - description: Budget ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Budget ID
+            type: string
+        - description: Category ID
+          in: path
+          name: categoryId
+          required: true
+          schema:
+            description: Category ID
+            type: string
+        - description: Number of transactions to return
+          explode: false
+          in: query
+          name: limit
+          schema:
+            default: 20
+            description: Number of transactions to return
+            format: int64
+            maximum: 100
+            minimum: 1
+            type: integer
+        - description: Offset for pagination
+          explode: false
+          in: query
+          name: offset
+          schema:
+            default: 0
+            description: Offset for pagination
+            format: int64
+            minimum: 0
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CategoryTransactionsResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get category transactions
+      tags:
+        - Budgets
+  /api/v1/budgets/{id}/sync:
+    post:
+      description: Manually triggers recalculation of budget income and spent amounts.
+      operationId: syncBudget
+      parameters:
+        - description: Budget ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Budget ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Budget"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Sync budget
+      tags:
+        - Budgets
+  /api/v1/categories:
+    get:
+      description: Retrieves all custom categories for the authenticated user.
+      operationId: getUserCategories
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/CustomCategory"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get user categories
+      tags:
+        - Categories
+    post:
+      description: Creates a new custom category for the authenticated user.
+      operationId: createCategory
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCustomCategoryRequest"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomCategory"
+          description: Created
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Create a new category
+      tags:
+        - Categories
+  /api/v1/categories/plaid:
+    get:
+      description: Returns distinct Plaid category names from the user's transactions.
+      operationId: getPlaidCategories
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  type: string
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get Plaid categories
+      tags:
+        - Categories
+  /api/v1/categories/{id}:
+    delete:
+      description: Removes a category from the user's collection.
+      operationId: deleteCategory
+      parameters:
+        - description: Category UUID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Category UUID
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Delete a category
+      tags:
+        - Categories
+    get:
+      description: Retrieves a specific category by its UUID.
+      operationId: getCategoryByID
+      parameters:
+        - description: Category UUID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Category UUID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomCategory"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get category by ID
+      tags:
+        - Categories
+    put:
+      description: Updates a category's name, icon, or color.
+      operationId: updateCategory
+      parameters:
+        - description: Category UUID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Category UUID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCustomCategoryRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomCategory"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Update a category
+      tags:
+        - Categories
+  /api/v1/dashboard/account-types:
+    get:
+      description: Returns available account types for the user with counts and totals.
+      operationId: getAccountTypes
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountTypesResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get account types
+      tags:
+        - Dashboard
+  /api/v1/dashboard/balance-history:
+    get:
+      description: Returns time series balance data for charts with optional account type breakdown.
+      operationId: getBalanceHistory
+      parameters:
+        - description: Comma-separated account types to filter
+          explode: false
+          in: query
+          name: account_types
+          schema:
+            description: Comma-separated account types to filter
+            type: string
+        - description: Start of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: start_date
+          schema:
+            description: Start of date range (YYYY-MM-DD)
+            type: string
+        - description: End of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: end_date
+          schema:
+            description: End of date range (YYYY-MM-DD)
+            type: string
+        - description: "Time granularity: daily, weekly, or monthly"
+          explode: false
+          in: query
+          name: granularity
+          schema:
+            description: "Time granularity: daily, weekly, or monthly"
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BalanceHistoryResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get balance history
+      tags:
+        - Dashboard
+  /api/v1/dashboard/balance-summary:
+    get:
+      description: Returns current balance overview with breakdown by account type and period comparison.
+      operationId: getBalanceSummary
+      parameters:
+        - description: Comma-separated account types to filter (investment, checking, savings, credit, loan)
+          explode: false
+          in: query
+          name: account_types
+          schema:
+            description: Comma-separated account types to filter (investment, checking, savings, credit, loan)
+            type: string
+        - description: Get balance as of specific date (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: as_of_date
+          schema:
+            description: Get balance as of specific date (YYYY-MM-DD)
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BalanceSummaryResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get balance summary
+      tags:
+        - Dashboard
+  /api/v1/dashboard/default-layout:
+    get:
+      description: Returns the default dashboard layout configuration. Public endpoint.
+      operationId: getDefaultLayout
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardLayout"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Get default dashboard layout
+      tags:
+        - Dashboard
+  /api/v1/dashboard/preferences:
+    get:
+      description: Returns the user's dashboard layout preferences (or default if none exist).
+      operationId: getDashboardPreferences
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardPreferencesResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get dashboard preferences
+      tags:
+        - Dashboard
+    put:
+      description: Saves the user's dashboard layout preferences.
+      operationId: saveDashboardPreferences
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SaveDashboardPreferencesInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardPreferencesResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Save dashboard preferences
+      tags:
+        - Dashboard
+  /api/v1/dashboard/preferences/reset:
+    post:
+      description: Resets the user's dashboard layout to the default configuration.
+      operationId: resetDashboardPreferences
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardPreferencesResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Reset dashboard preferences
+      tags:
+        - Dashboard
+  /api/v1/linked-items/{id}:
+    delete:
+      description: Disconnects an institution and all associated accounts.
+      operationId: disconnectInstitution
+      parameters:
+        - description: Linked item ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Linked item ID
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Disconnect institution
+      tags:
+        - Accounts
+  /api/v1/notifications:
+    get:
+      description: Retrieves notifications for the authenticated user, ordered by created_at DESC.
+      operationId: getNotifications
+      parameters:
+        - description: Number of notifications to return (1-100, default 50)
+          explode: false
+          in: query
+          name: limit
+          schema:
+            default: 50
+            description: Number of notifications to return (1-100, default 50)
+            format: int64
+            maximum: 100
+            minimum: 1
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/Notification"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get user notifications
+      tags:
+        - Notifications
+  /api/v1/notifications/unread/count:
+    get:
+      description: Returns the count of unread notifications for the authenticated user.
+      operationId: getUnreadNotificationCount
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetUnreadCountOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get unread notification count
+      tags:
+        - Notifications
+  /api/v1/notifications/{id}/read:
+    patch:
+      description: Marks a specific notification as read for the authenticated user.
+      operationId: markNotificationAsRead
+      parameters:
+        - description: Notification UUID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Notification UUID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarkNotificationReadOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Mark notification as read
+      tags:
+        - Notifications
+  /api/v1/plaid/exchange-token:
+    post:
+      description: Exchanges a Plaid public token for an access token and links bank accounts.
+      operationId: exchangePublicToken
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExchangePublicTokenInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExchangePublicTokenOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Exchange public token
+      tags:
+        - Plaid
+  /api/v1/plaid/link-token:
+    post:
+      description: Generates a Plaid Link token for initiating bank account connection flow.
+      operationId: createLinkToken
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LinkTokenResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Create Plaid link token
+      tags:
+        - Plaid
+  /api/v1/savings-goals:
+    get:
+      description: Retrieves all savings goals for the authenticated user.
+      operationId: getSavingsGoals
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/SavingsGoal"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get savings goals
+      tags:
+        - Savings Goals
+    post:
+      description: Creates a new savings goal for the authenticated user.
+      operationId: createSavingsGoal
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSavingsGoalRequest"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavingsGoal"
+          description: Created
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Create savings goal
+      tags:
+        - Savings Goals
+  /api/v1/savings-goals/active:
+    get:
+      description: Retrieves all active (not completed) savings goals for the authenticated user.
+      operationId: getActiveSavingsGoals
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/SavingsGoal"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get active savings goals
+      tags:
+        - Savings Goals
+  /api/v1/savings-goals/{id}:
+    delete:
+      description: Removes a savings goal from the user's collection.
+      operationId: deleteSavingsGoal
+      parameters:
+        - description: Savings goal ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Savings goal ID
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Delete savings goal
+      tags:
+        - Savings Goals
+    get:
+      description: Retrieves a specific savings goal by ID.
+      operationId: getSavingsGoal
+      parameters:
+        - description: Savings goal ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Savings goal ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavingsGoal"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get savings goal
+      tags:
+        - Savings Goals
+    put:
+      description: Updates a savings goal's properties.
+      operationId: updateSavingsGoal
+      parameters:
+        - description: Savings goal ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Savings goal ID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSavingsGoalRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavingsGoal"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Update savings goal
+      tags:
+        - Savings Goals
+  /api/v1/subscription/tiers:
+    get:
+      description: Returns all available subscription tiers with their limits, features, and pricing. This is a public endpoint for displaying pricing information.
+      operationId: getSubscriptionTiers
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionTiersResponse"
+          description: OK
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Get subscription tiers
+      tags:
+        - Subscription
+  /api/v1/sync-stats:
+    get:
+      description: Returns monthly sync usage statistics for the authenticated user.
+      operationId: getSyncStats
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncStats"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get sync statistics
+      tags:
+        - Sync
+  /api/v1/tags:
+    get:
+      description: Retrieves all tags for the authenticated user.
+      operationId: getUserTags
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/UserTag"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get user tags
+      tags:
+        - Tags
+    post:
+      description: Creates a new tag for the authenticated user.
+      operationId: createTag
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserTagRequest"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserTag"
+          description: Created
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Create a new tag
+      tags:
+        - Tags
+  /api/v1/tags/{id}:
+    delete:
+      description: Removes a tag from the user's collection.
+      operationId: deleteTag
+      parameters:
+        - description: Tag UUID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Tag UUID
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Delete a tag
+      tags:
+        - Tags
+    get:
+      description: Retrieves a specific tag by its UUID.
+      operationId: getTagByID
+      parameters:
+        - description: Tag UUID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Tag UUID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserTag"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get tag by ID
+      tags:
+        - Tags
+    put:
+      description: Updates a tag's name or color.
+      operationId: updateTag
+      parameters:
+        - description: Tag UUID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Tag UUID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserTagRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserTag"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Update a tag
+      tags:
+        - Tags
+  /api/v1/transactions:
+    get:
+      description: Retrieves transactions for the authenticated user with optional filters and pagination.
+      operationId: getTransactions
+      parameters:
+        - description: Number of items to return (1-100)
+          explode: false
+          in: query
+          name: limit
+          schema:
+            default: 50
+            description: Number of items to return (1-100)
+            format: int64
+            maximum: 100
+            minimum: 1
+            type: integer
+        - description: Number of items to skip for pagination
+          explode: false
+          in: query
+          name: offset
+          schema:
+            default: 0
+            description: Number of items to skip for pagination
+            format: int64
+            minimum: 0
+            type: integer
+        - description: "Filter by specific account ID (deprecated: use account_ids)"
+          explode: false
+          in: query
+          name: account_id
+          schema:
+            description: "Filter by specific account ID (deprecated: use account_ids)"
+            type: string
+        - description: Filter by multiple account IDs (comma-separated UUIDs)
+          explode: false
+          in: query
+          name: account_ids
+          schema:
+            description: Filter by multiple account IDs (comma-separated UUIDs)
+            type: string
+        - description: Filter transactions on or after this date (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: start_date
+          schema:
+            description: Filter transactions on or after this date (YYYY-MM-DD)
+            type: string
+        - description: Filter transactions on or before this date (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: end_date
+          schema:
+            description: Filter transactions on or before this date (YYYY-MM-DD)
+            type: string
+        - description: "Filter by category (deprecated: use categories)"
+          explode: false
+          in: query
+          name: category
+          schema:
+            description: "Filter by category (deprecated: use categories)"
+            type: string
+        - description: Filter by multiple categories (comma-separated)
+          explode: false
+          in: query
+          name: categories
+          schema:
+            description: Filter by multiple categories (comma-separated)
+            type: string
+        - description: Search in merchant name or transaction name
+          explode: false
+          in: query
+          name: search
+          schema:
+            description: Search in merchant name or transaction name
+            type: string
+        - description: Filter by pending status (true/false)
+          explode: false
+          in: query
+          name: pending
+          schema:
+            description: Filter by pending status (true/false)
+            type: string
+        - description: Filter by minimum absolute amount
+          explode: false
+          in: query
+          name: min_amount
+          schema:
+            description: Filter by minimum absolute amount
+            type: string
+        - description: Filter by maximum absolute amount
+          explode: false
+          in: query
+          name: max_amount
+          schema:
+            description: Filter by maximum absolute amount
+            type: string
+        - description: Filter by transaction type
+          explode: false
+          in: query
+          name: amount_type
+          schema:
+            description: Filter by transaction type
+            enum:
+              - income
+              - expense
+              - all
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransactionListResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: List transactions
+      tags:
+        - Transactions
+  /api/v1/transactions/{id}:
+    get:
+      description: Retrieves a specific transaction by its UUID.
+      operationId: getTransactionByID
+      parameters:
+        - description: Transaction UUID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Transaction UUID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transaction"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get transaction by ID
+      tags:
+        - Transactions
+  /api/v1/transactions/{id}/category:
+    put:
+      description: Updates the category override on a specific transaction.
+      operationId: updateTransactionCategory
+      parameters:
+        - description: Transaction UUID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Transaction UUID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTransactionCategoryBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transaction"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Update transaction category
+      tags:
+        - Transactions
+  /api/v1/transactions/{id}/tags:
+    put:
+      description: Updates the tags on a specific transaction.
+      operationId: updateTransactionTags
+      parameters:
+        - description: Transaction UUID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Transaction UUID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTransactionTagsBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transaction"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Update transaction tags
+      tags:
+        - Transactions
+  /api/v1/user/delete:
+    post:
+      description: Initiates account deletion with 30-day grace period. User will receive email with cancellation link.
+      operationId: requestDeletion
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestDeletionResponseBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Request account deletion
+      tags:
+        - User
+  /api/v1/user/delete/cancel/{token}:
+    get:
+      description: Cancels a pending account deletion using the cancellation token from the email.
+      operationId: cancelDeletion
+      parameters:
+        - description: Cancellation token from email
+          in: path
+          name: token
+          required: true
+          schema:
+            description: Cancellation token from email
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelDeletionResponseBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Cancel account deletion
+      tags:
+        - User
+  /api/v1/user/privacy:
+    get:
+      description: Retrieves the authenticated user's privacy settings, creating defaults if none exist.
+      operationId: getPrivacySettings
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PrivacySettings"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get privacy settings
+      tags:
+        - Privacy
+    put:
+      description: Updates the authenticated user's privacy settings with GDPR validation.
+      operationId: updatePrivacySettings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePrivacySettingsRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PrivacySettings"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Update privacy settings
+      tags:
+        - Privacy
+  /api/v1/user/profile:
+    get:
+      description: Retrieves the authenticated user's profile, creating one if it's their first login.
+      operationId: getUserProfile
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Get user profile
+      tags:
+        - Profile
+    put:
+      description: Updates the authenticated user's profile with validated data.
+      operationId: updateUserProfile
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProfileRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - auth0: []
+      summary: Update user profile
+      tags:
+        - Profile
+  /health:
+    get:
+      description: Returns the health status of the API and its dependencies (database, Redis, Auth0).
+      operationId: getHealth
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Health check
+      tags:
+        - Health
+  /metrics:
+    get:
+      description: Returns Prometheus metrics in text format for monitoring.
+      operationId: getMetrics
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                contentEncoding: base64
+                type: string
+          description: OK
+          headers:
+            Content-Type:
+              schema:
+                type: string
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Get Prometheus metrics
+      tags:
+        - Monitoring
+  /webhooks/plaid:
+    post:
+      description: Receives and processes webhook notifications from Plaid. Validates JWT signature and stores for async processing.
+      operationId: handlePlaidWebhook
+      parameters:
+        - description: JWT signature from Plaid for verification
+          in: header
+          name: Plaid-Verification
+          schema:
+            description: JWT signature from Plaid for verification
+            type: string
+      requestBody:
+        content:
+          application/octet-stream:
+            schema:
+              contentMediaType: application/octet-stream
+              format: binary
+              type: string
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlaidWebhookResponseBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Handle Plaid webhook
+      tags:
+        - Webhooks
+servers:
+  - description: Production (iad/us-east-1)
+    url: https://api.boostedbudget.com
+  - description: Staging (iad/us-east-1)
+    url: https://api-staging.boostedbudget.com
+  - description: Local development
+    url: http://localhost:8080
