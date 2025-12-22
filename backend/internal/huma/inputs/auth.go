@@ -3,6 +3,7 @@ package inputs
 
 import (
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // ContextKey is a custom type for context keys to avoid collisions.
@@ -67,7 +68,8 @@ func (a *AuthenticatedWithEmailInput) Resolve(ctx huma.Context) []error {
 	}
 
 	// Then extract email from claims
-	claims, ok := ctx.Context().Value(ClaimsKey).(map[string]interface{})
+	// Note: Must use jwt.MapClaims (not map[string]interface{}) because Go type assertions are strict
+	claims, ok := ctx.Context().Value(ClaimsKey).(jwt.MapClaims)
 	if !ok {
 		return []error{huma.Error401Unauthorized("Claims not found in context")}
 	}
