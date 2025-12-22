@@ -20,8 +20,7 @@ describe('useSubscriptionTiers', () => {
       free: {
         display_name: 'Free',
         description: 'Basic plan',
-        price_monthly: 0,
-        price_yearly: 0,
+        pricing: { price_monthly: 0, price_yearly: 0 },
         limits: {
           accounts: 3,
           rules: 1,
@@ -36,8 +35,7 @@ describe('useSubscriptionTiers', () => {
       premium_lite: {
         display_name: 'Premium Lite',
         description: 'Lite plan',
-        price_monthly: 4.99,
-        price_yearly: 49.99,
+        pricing: { price_monthly: 4.99, price_yearly: 49.99 },
         limits: {
           accounts: 15,
           rules: 5,
@@ -52,8 +50,7 @@ describe('useSubscriptionTiers', () => {
       premium: {
         display_name: 'Premium',
         description: 'Premium plan',
-        price_monthly: 9.99,
-        price_yearly: 99.99,
+        pricing: { price_monthly: 9.99, price_yearly: 99.99 },
         limits: {
           accounts: 30,
           rules: 15,
@@ -68,8 +65,7 @@ describe('useSubscriptionTiers', () => {
       premium_plus: {
         display_name: 'Premium+',
         description: 'Premium plus plan',
-        price_monthly: 19.99,
-        price_yearly: 199.99,
+        pricing: { price_monthly: 19.99, price_yearly: 199.99 },
         limits: {
           accounts: -1,
           rules: -1,

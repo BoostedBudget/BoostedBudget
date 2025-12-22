@@ -8,6 +8,15 @@ import type { User } from './types'
 // Mock the profile API
 vi.mock('./api/profileApi')
 
+// Mock sonner toast
+const mockToast = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn(),
+}))
+vi.mock('sonner', () => ({
+  toast: mockToast,
+}))
+
 describe('ProfileForm', () => {
   const mockUser: User = {
     id: 'user-123',
@@ -132,7 +141,7 @@ describe('ProfileForm', () => {
       })
     })
 
-    it('should update region when changed', async () => {
+    it('should update region when changed after confirmation', async () => {
       const updatedUser = { ...mockUser, primary_region: 'lhr' }
       vi.mocked(profileApi.updateProfile).mockResolvedValue(updatedUser)
 
@@ -144,6 +153,15 @@ describe('ProfileForm', () => {
 
       await user.selectOptions(regionSelect, 'lhr')
       await user.click(saveButton)
+
+      // Confirmation dialog should appear
+      await waitFor(() => {
+        expect(screen.getByText(/change data region/i)).toBeInTheDocument()
+      })
+
+      // Click confirm button
+      const confirmButton = screen.getByRole('button', { name: /confirm change/i })
+      await user.click(confirmButton)
 
       await waitFor(() => {
         expect(profileApi.updateProfile).toHaveBeenCalledWith({
@@ -163,9 +181,10 @@ describe('ProfileForm', () => {
       expect(profileApi.updateProfile).not.toHaveBeenCalled()
     })
 
-    it('should show success message after successful update', async () => {
+    it('should show success toast after successful update', async () => {
       const updatedUser = { ...mockUser, email: 'updated@example.com' }
       vi.mocked(profileApi.updateProfile).mockResolvedValue(updatedUser)
+      mockToast.success.mockClear()
 
       const user = userEvent.setup({ delay: null })
       render(<ProfileForm user={mockUser} />)
@@ -179,12 +198,13 @@ describe('ProfileForm', () => {
       await user.click(saveButton)
 
       await waitFor(() => {
-        expect(screen.getByText(/profile updated successfully/i)).toBeInTheDocument()
+        expect(mockToast.success).toHaveBeenCalledWith('Profile updated successfully!')
       })
     })
 
-    it('should show error message on update failure', async () => {
+    it('should show error toast on update failure', async () => {
       vi.mocked(profileApi.updateProfile).mockRejectedValue(new Error('Update failed'))
+      mockToast.error.mockClear()
 
       const user = userEvent.setup({ delay: null })
       render(<ProfileForm user={mockUser} />)
@@ -198,7 +218,7 @@ describe('ProfileForm', () => {
       await user.click(saveButton)
 
       await waitFor(() => {
-        expect(screen.getByText(/failed to update profile/i)).toBeInTheDocument()
+        expect(mockToast.error).toHaveBeenCalledWith('Failed to update profile. Please try again.')
       })
     })
 

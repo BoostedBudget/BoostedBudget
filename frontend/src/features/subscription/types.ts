@@ -25,15 +25,19 @@ export interface TierFeatures {
   advanced_reports?: boolean
 }
 
-export interface SubscriptionTier {
-  display_name: string
-  description: string
+export interface TierPricing {
   price_monthly: number
   price_yearly: number
   stripe_price_id_monthly?: string | null
   stripe_price_id_yearly?: string | null
+}
+
+export interface SubscriptionTier {
+  display_name: string
+  description: string
   limits: TierLimits
   features: TierFeatures
+  pricing: TierPricing
 }
 
 export interface SubscriptionTiersResponse {
