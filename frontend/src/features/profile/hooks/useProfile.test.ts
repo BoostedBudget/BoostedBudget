@@ -227,13 +227,14 @@ describe('useProfile', () => {
         result.current.refetch()
       })
 
-      // Wait for refetch to complete
+      // Wait for refetch to complete (wait for user to be set, not just error to be null)
       await waitFor(() => {
-        expect(result.current.error).toBeNull()
+        expect(result.current.loading).toBe(false)
+        expect(result.current.user).toEqual(mockUser)
       })
 
-      // Assert
-      expect(result.current.user).toEqual(mockUser)
+      // Assert - error should be cleared
+      expect(result.current.error).toBeNull()
     })
 
     it('should set loading state during refetch', async () => {

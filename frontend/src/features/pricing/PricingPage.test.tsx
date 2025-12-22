@@ -11,20 +11,15 @@ import { PricingPage } from './PricingPage'
 import * as useSubscriptionTiersHook from '../subscription/hooks/useSubscriptionTiers'
 import type { SubscriptionTiersResponse } from '../subscription/types'
 
-// Mock useAuth0
+// Mock useAuth0 using vi.hoisted pattern (avoids strict type checking)
+const mockUseAuth0 = vi.hoisted(() => vi.fn())
+
 vi.mock('@auth0/auth0-react', () => ({
-  useAuth0: vi.fn(() => ({
-    user: null,
-    isAuthenticated: false,
-    isLoading: false,
-  })),
+  useAuth0: mockUseAuth0,
 }))
 
 // Mock useSubscriptionTiers
 vi.mock('../subscription/hooks/useSubscriptionTiers')
-
-// Import mocked useAuth0 for manipulation in tests
-import { useAuth0 } from '@auth0/auth0-react'
 
 // Mock tier data matching backend response
 const mockTiersResponse: SubscriptionTiersResponse = {
@@ -109,17 +104,10 @@ describe('PricingPage', () => {
       error: null,
       refetch: vi.fn(),
     })
-    vi.mocked(useAuth0).mockReturnValue({
-      user: null,
+    mockUseAuth0.mockReturnValue({
+      user: undefined,
       isAuthenticated: false,
       isLoading: false,
-      loginWithRedirect: vi.fn(),
-      logout: vi.fn(),
-      getAccessTokenSilently: vi.fn(),
-      getAccessTokenWithPopup: vi.fn(),
-      getIdTokenClaims: vi.fn(),
-      loginWithPopup: vi.fn(),
-      handleRedirectCallback: vi.fn(),
     })
   })
 
@@ -247,19 +235,12 @@ describe('PricingPage', () => {
   describe('Current plan highlighting', () => {
     it('should show "Current Plan" badge for user\'s tier', () => {
       // Mock authenticated user with premium tier
-      vi.mocked(useAuth0).mockReturnValue({
+      mockUseAuth0.mockReturnValue({
         user: {
           'https://boostedbudget.com/subscription_tier': 'premium',
         },
         isAuthenticated: true,
         isLoading: false,
-        loginWithRedirect: vi.fn(),
-        logout: vi.fn(),
-        getAccessTokenSilently: vi.fn(),
-        getAccessTokenWithPopup: vi.fn(),
-        getIdTokenClaims: vi.fn(),
-        loginWithPopup: vi.fn(),
-        handleRedirectCallback: vi.fn(),
       })
 
       render(<PricingPage />)
@@ -271,19 +252,12 @@ describe('PricingPage', () => {
 
     it('should show "Select Plan" for non-current tiers', () => {
       // Mock authenticated user with free tier
-      vi.mocked(useAuth0).mockReturnValue({
+      mockUseAuth0.mockReturnValue({
         user: {
           'https://boostedbudget.com/subscription_tier': 'free',
         },
         isAuthenticated: true,
         isLoading: false,
-        loginWithRedirect: vi.fn(),
-        logout: vi.fn(),
-        getAccessTokenSilently: vi.fn(),
-        getAccessTokenWithPopup: vi.fn(),
-        getIdTokenClaims: vi.fn(),
-        loginWithPopup: vi.fn(),
-        handleRedirectCallback: vi.fn(),
       })
 
       render(<PricingPage />)
@@ -296,19 +270,12 @@ describe('PricingPage', () => {
 
     it('should disable button for current tier', () => {
       // Mock authenticated user with premium tier
-      vi.mocked(useAuth0).mockReturnValue({
+      mockUseAuth0.mockReturnValue({
         user: {
           'https://boostedbudget.com/subscription_tier': 'premium',
         },
         isAuthenticated: true,
         isLoading: false,
-        loginWithRedirect: vi.fn(),
-        logout: vi.fn(),
-        getAccessTokenSilently: vi.fn(),
-        getAccessTokenWithPopup: vi.fn(),
-        getIdTokenClaims: vi.fn(),
-        loginWithPopup: vi.fn(),
-        handleRedirectCallback: vi.fn(),
       })
 
       render(<PricingPage />)
