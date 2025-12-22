@@ -32,7 +32,8 @@ help:
 	@echo "  make migrate-status   - Check current database schema"
 	@echo ""
 	@echo "Tools:"
-	@echo "  make generate         - Generate code from OpenAPI spec"
+	@echo "  make generate-openapi - Generate api/openapi.yaml from Huma routes"
+	@echo "  make validate-openapi - Verify spec is up to date (for CI)"
 	@echo "  make lint             - Run linters"
 	@echo "  make clean            - Clean build artifacts"
 
@@ -235,11 +236,32 @@ migrate-status:
 	@echo "Checking database schema..."
 	@docker-compose exec -T postgres psql -U devuser -d boostedbudget -c "\dt" 2>/dev/null || echo "No tables found"
 
-# Code generation
+# OpenAPI spec generation from Huma
+.PHONY: generate-openapi validate-openapi
+generate-openapi:
+	@echo "Generating OpenAPI spec from Huma..."
+	@cd backend && go run scripts/generate-openapi/main.go
+	@echo "✅ Generated api/openapi.yaml"
+
+validate-openapi: generate-openapi
+	@echo "Checking if OpenAPI spec is up to date..."
+	@if git diff --exit-code api/openapi.yaml > /dev/null 2>&1; then \
+		echo "✅ OpenAPI spec is up to date"; \
+	else \
+		echo "❌ ERROR: OpenAPI spec is outdated!"; \
+		echo "The generated spec differs from the committed version."; \
+		echo "Run 'make generate-openapi' and commit the changes."; \
+		git diff api/openapi.yaml | head -50; \
+		exit 1; \
+	fi
+
+# Code generation (deprecated - use generate-openapi)
 generate:
-	@echo "Generating code from OpenAPI spec..."
-	@echo "TODO: Implement oapi-codegen for backend"
-	@echo "TODO: Implement openapi-typescript-codegen for frontend"
+	@echo "Generating OpenAPI spec from Huma..."
+	@cd backend && go run scripts/generate-openapi/main.go
+	@echo "✅ Generated api/openapi.yaml"
+	@echo ""
+	@echo "Note: For TypeScript client generation, see Issue #560"
 
 # Linting
 lint:
