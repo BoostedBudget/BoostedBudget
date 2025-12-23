@@ -1,9 +1,24 @@
+/**
+ * TransactionEditor Component Tests
+ * Issue #564: Added mocks for generated React Query hooks used by CategoryEditor
+ */
+
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
 import { TransactionEditor } from './TransactionEditor'
 import type { Transaction } from '../types'
 import type { UserTag } from '../../tags/types'
 import type { CustomCategory } from '../../categories/types'
+
+// Mock the useCreateCategory hook that CategoryEditor uses
+vi.mock('@/api/generated/endpoints/categories/categories', () => ({
+  useCreateCategory: vi.fn(() => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  })),
+}))
 
 // Mock the API functions
 vi.mock('../api/transactionsApi', () => ({
@@ -12,6 +27,20 @@ vi.mock('../api/transactionsApi', () => ({
 }))
 
 import { updateTransactionTags, updateTransactionCategory } from '../api/transactionsApi'
+
+// Helper to create wrapper with QueryClient
+function createWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  })
+  return function Wrapper({ children }: { children: ReactNode }) {
+    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  }
+}
 
 describe('TransactionEditor', () => {
   const mockTransaction: Transaction = {
@@ -90,32 +119,37 @@ describe('TransactionEditor', () => {
 
   describe('Rendering', () => {
     it('should render modal when open', () => {
-      render(<TransactionEditor {...defaultProps} />)
+      const Wrapper = createWrapper()
+      render(<TransactionEditor {...defaultProps} />, { wrapper: Wrapper })
 
       expect(screen.getByText('Edit Transaction')).toBeInTheDocument()
     })
 
     it('should not render when closed', () => {
-      render(<TransactionEditor {...defaultProps} isOpen={false} />)
+      const Wrapper = createWrapper()
+      render(<TransactionEditor {...defaultProps} isOpen={false} />, { wrapper: Wrapper })
 
       expect(screen.queryByText('Edit Transaction')).not.toBeInTheDocument()
     })
 
     it('should display transaction details', () => {
-      render(<TransactionEditor {...defaultProps} />)
+      const Wrapper = createWrapper()
+      render(<TransactionEditor {...defaultProps} />, { wrapper: Wrapper })
 
       expect(screen.getByText('Test Merchant')).toBeInTheDocument()
       expect(screen.getByText('$50.00')).toBeInTheDocument()
     })
 
     it('should show Tags section', () => {
-      render(<TransactionEditor {...defaultProps} />)
+      const Wrapper = createWrapper()
+      render(<TransactionEditor {...defaultProps} />, { wrapper: Wrapper })
 
       expect(screen.getByText('Tags')).toBeInTheDocument()
     })
 
     it('should show Category section', () => {
-      render(<TransactionEditor {...defaultProps} />)
+      const Wrapper = createWrapper()
+      render(<TransactionEditor {...defaultProps} />, { wrapper: Wrapper })
 
       expect(screen.getByText('Category')).toBeInTheDocument()
     })
@@ -123,13 +157,15 @@ describe('TransactionEditor', () => {
 
   describe('Tags editing', () => {
     it('should display existing tags', () => {
-      render(<TransactionEditor {...defaultProps} />)
+      const Wrapper = createWrapper()
+      render(<TransactionEditor {...defaultProps} />, { wrapper: Wrapper })
 
       expect(screen.getByText('Food')).toBeInTheDocument()
     })
 
     it('should allow removing tags', async () => {
-      render(<TransactionEditor {...defaultProps} />)
+      const Wrapper = createWrapper()
+      render(<TransactionEditor {...defaultProps} />, { wrapper: Wrapper })
 
       const removeButton = screen.getByRole('button', { name: /remove food/i })
       fireEvent.click(removeButton)
@@ -142,7 +178,8 @@ describe('TransactionEditor', () => {
 
   describe('Category editing', () => {
     it('should display current category', () => {
-      render(<TransactionEditor {...defaultProps} />)
+      const Wrapper = createWrapper()
+      render(<TransactionEditor {...defaultProps} />, { wrapper: Wrapper })
 
       expect(screen.getByText('Food & Dining')).toBeInTheDocument()
     })
@@ -150,7 +187,8 @@ describe('TransactionEditor', () => {
 
   describe('Save functionality', () => {
     it('should call API when save button clicked with tag changes', async () => {
-      render(<TransactionEditor {...defaultProps} />)
+      const Wrapper = createWrapper()
+      render(<TransactionEditor {...defaultProps} />, { wrapper: Wrapper })
 
       // Remove a tag
       const removeButton = screen.getByRole('button', { name: /remove food/i })
@@ -167,7 +205,8 @@ describe('TransactionEditor', () => {
 
     it('should call onSave callback after successful save', async () => {
       const onSave = vi.fn()
-      render(<TransactionEditor {...defaultProps} onSave={onSave} />)
+      const Wrapper = createWrapper()
+      render(<TransactionEditor {...defaultProps} onSave={onSave} />, { wrapper: Wrapper })
 
       // Remove a tag to make a change
       const removeButton = screen.getByRole('button', { name: /remove food/i })
@@ -190,7 +229,8 @@ describe('TransactionEditor', () => {
       }
       vi.mocked(updateTransactionTags).mockResolvedValue(updatedTxn)
 
-      render(<TransactionEditor {...defaultProps} onSave={onSave} />)
+      const Wrapper = createWrapper()
+      render(<TransactionEditor {...defaultProps} onSave={onSave} />, { wrapper: Wrapper })
 
       // Remove tag
       const removeButton = screen.getByRole('button', { name: /remove food/i })
@@ -218,12 +258,14 @@ describe('TransactionEditor', () => {
       }
       vi.mocked(updateTransactionCategory).mockResolvedValue(updatedTxn)
 
+      const Wrapper = createWrapper()
       render(
         <TransactionEditor
           {...defaultProps}
           transaction={txnNoTags}
           onSave={onSave}
-        />
+        />,
+        { wrapper: Wrapper }
       )
 
       // Change category
@@ -257,7 +299,8 @@ describe('TransactionEditor', () => {
       vi.mocked(updateTransactionTags).mockResolvedValue(afterTagUpdate)
       vi.mocked(updateTransactionCategory).mockResolvedValue(afterCategoryUpdate)
 
-      render(<TransactionEditor {...defaultProps} onSave={onSave} />)
+      const Wrapper = createWrapper()
+      render(<TransactionEditor {...defaultProps} onSave={onSave} />, { wrapper: Wrapper })
 
       // Remove tag
       const removeButton = screen.getByRole('button', { name: /remove food/i })
@@ -283,7 +326,8 @@ describe('TransactionEditor', () => {
 
     it('should show error message on save failure', async () => {
       vi.mocked(updateTransactionTags).mockRejectedValue(new Error('Save failed'))
-      render(<TransactionEditor {...defaultProps} />)
+      const Wrapper = createWrapper()
+      render(<TransactionEditor {...defaultProps} />, { wrapper: Wrapper })
 
       // Remove a tag to make a change
       const removeButton = screen.getByRole('button', { name: /remove food/i })
@@ -306,7 +350,8 @@ describe('TransactionEditor', () => {
         })
       )
 
-      render(<TransactionEditor {...defaultProps} />)
+      const Wrapper = createWrapper()
+      render(<TransactionEditor {...defaultProps} />, { wrapper: Wrapper })
 
       // Remove a tag
       const removeButton = screen.getByRole('button', { name: /remove food/i })
@@ -327,7 +372,8 @@ describe('TransactionEditor', () => {
   describe('Cancel functionality', () => {
     it('should call onClose when cancel button clicked', () => {
       const onClose = vi.fn()
-      render(<TransactionEditor {...defaultProps} onClose={onClose} />)
+      const Wrapper = createWrapper()
+      render(<TransactionEditor {...defaultProps} onClose={onClose} />, { wrapper: Wrapper })
 
       const cancelButton = screen.getByRole('button', { name: /cancel/i })
       fireEvent.click(cancelButton)
@@ -345,11 +391,13 @@ describe('TransactionEditor', () => {
         category: '["Food & Dining"]',
       }
 
+      const Wrapper = createWrapper()
       render(
         <TransactionEditor
           {...defaultProps}
           transaction={txnNoTags}
-        />
+        />,
+        { wrapper: Wrapper }
       )
 
       // Change category
@@ -372,7 +420,8 @@ describe('TransactionEditor', () => {
     })
 
     it('should save both tag and category changes', async () => {
-      render(<TransactionEditor {...defaultProps} />)
+      const Wrapper = createWrapper()
+      render(<TransactionEditor {...defaultProps} />, { wrapper: Wrapper })
 
       // Remove a tag
       const removeButton = screen.getByRole('button', { name: /remove food/i })
@@ -405,11 +454,13 @@ describe('TransactionEditor', () => {
         category: null,
       }
 
+      const Wrapper = createWrapper()
       render(
         <TransactionEditor
           {...defaultProps}
           transaction={txnNullCategory}
-        />
+        />,
+        { wrapper: Wrapper }
       )
 
       // Should show Uncategorized
@@ -423,11 +474,13 @@ describe('TransactionEditor', () => {
         category_override: '["Shopping"]',
       }
 
+      const Wrapper = createWrapper()
       render(
         <TransactionEditor
           {...defaultProps}
           transaction={txnWithOverride}
-        />
+        />,
+        { wrapper: Wrapper }
       )
 
       // Should display the override category
@@ -437,7 +490,8 @@ describe('TransactionEditor', () => {
 
   describe('Uncategorized option', () => {
     it('should show Uncategorized as first option in category dropdown', async () => {
-      render(<TransactionEditor {...defaultProps} />)
+      const Wrapper = createWrapper()
+      render(<TransactionEditor {...defaultProps} />, { wrapper: Wrapper })
 
       // Open category dropdown
       const changeButton = screen.getByRole('button', { name: /change category/i })
@@ -450,14 +504,16 @@ describe('TransactionEditor', () => {
     })
 
     it('should have a clear button to remove category', () => {
-      render(<TransactionEditor {...defaultProps} />)
+      const Wrapper = createWrapper()
+      render(<TransactionEditor {...defaultProps} />, { wrapper: Wrapper })
 
       const clearButton = screen.getByRole('button', { name: /clear category/i })
       expect(clearButton).toBeInTheDocument()
     })
 
     it('should set category to empty array when clear button is clicked', async () => {
-      render(<TransactionEditor {...defaultProps} />)
+      const Wrapper = createWrapper()
+      render(<TransactionEditor {...defaultProps} />, { wrapper: Wrapper })
 
       const clearButton = screen.getByRole('button', { name: /clear category/i })
       fireEvent.click(clearButton)
@@ -471,7 +527,8 @@ describe('TransactionEditor', () => {
     })
 
     it('should set category to empty when Uncategorized option is selected', async () => {
-      render(<TransactionEditor {...defaultProps} />)
+      const Wrapper = createWrapper()
+      render(<TransactionEditor {...defaultProps} />, { wrapper: Wrapper })
 
       // Open category dropdown
       const changeButton = screen.getByRole('button', { name: /change category/i })
@@ -499,11 +556,13 @@ describe('TransactionEditor', () => {
         original_category: '["Food & Dining"]',
       }
 
+      const Wrapper = createWrapper()
       render(
         <TransactionEditor
           {...defaultProps}
           transaction={txnWithOriginal}
-        />
+        />,
+        { wrapper: Wrapper }
       )
 
       // Should see a reset option
@@ -520,11 +579,13 @@ describe('TransactionEditor', () => {
         original_category: '["Food & Dining"]',
       }
 
+      const Wrapper = createWrapper()
       render(
         <TransactionEditor
           {...defaultProps}
           transaction={txnWithOriginal}
-        />
+        />,
+        { wrapper: Wrapper }
       )
 
       const resetButton = screen.getByRole('button', { name: /reset to original/i })

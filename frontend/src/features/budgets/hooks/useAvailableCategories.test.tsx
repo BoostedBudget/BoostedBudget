@@ -1,17 +1,40 @@
 /**
  * useAvailableCategories Hook Tests
  * Issue #497: Budget Category Manager + Match Config UI
+ * Issue #564: Migrated to generated React Query hooks
  *
  * TDD RED Phase: Write failing tests first
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { ReactNode } from 'react';
 import { useAvailableCategories } from './useAvailableCategories';
-import * as budgetsApi from '../api/budgetsApi';
 
-// Mock the API module
-vi.mock('../api/budgetsApi');
+// Mock the generated hook
+const mockRefetch = vi.fn();
+vi.mock('@/api/generated/endpoints/budgets/budgets', () => ({
+  useGetAvailableCategories: vi.fn(),
+  getGetAvailableCategoriesQueryKey: vi.fn(() => ['budgets', 'available-categories']),
+}));
+
+// Import the mock after vi.mock
+import { useGetAvailableCategories } from '@/api/generated/endpoints/budgets/budgets';
+
+// Helper to create wrapper with QueryClient
+function createWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+  return function Wrapper({ children }: { children: ReactNode }) {
+    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+  };
+}
 
 describe('useAvailableCategories', () => {
   // API returns flat strings like "Food and Drink > Restaurants"
@@ -34,19 +57,47 @@ describe('useAvailableCategories', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRefetch.mockClear();
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  // Helper to configure the mock for loading state
+  function configureLoading() {
+    vi.mocked(useGetAvailableCategories).mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      error: null,
+      refetch: mockRefetch,
+    } as unknown as ReturnType<typeof useGetAvailableCategories>);
+  }
+
+  // Helper to configure the mock for success state
+  // Generated hook returns string[] directly, not { categories: string[] }
+  function configureSuccess(categories: string[]) {
+    vi.mocked(useGetAvailableCategories).mockReturnValue({
+      data: categories,
+      isLoading: false,
+      error: null,
+      refetch: mockRefetch,
+    } as unknown as ReturnType<typeof useGetAvailableCategories>);
+  }
+
+  // Helper to configure the mock for error state
+  function configureError(error: Error) {
+    vi.mocked(useGetAvailableCategories).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error,
+      refetch: mockRefetch,
+    } as unknown as ReturnType<typeof useGetAvailableCategories>);
+  }
 
   describe('Initial State', () => {
     it('should return loading=true initially', () => {
-      vi.mocked(budgetsApi.fetchAvailableCategories).mockImplementation(
-        () => new Promise(() => {}) // Never resolves
-      );
+      configureLoading();
 
-      const { result } = renderHook(() => useAvailableCategories());
+      const { result } = renderHook(() => useAvailableCategories(), {
+        wrapper: createWrapper(),
+      });
 
       expect(result.current.loading).toBe(true);
       expect(result.current.categories).toEqual([]);
@@ -55,29 +106,23 @@ describe('useAvailableCategories', () => {
   });
 
   describe('Fetching Categories', () => {
-    it('should return categories on successful fetch', async () => {
-      vi.mocked(budgetsApi.fetchAvailableCategories).mockResolvedValue(mockFlatCategories);
+    it('should return categories on successful fetch', () => {
+      configureSuccess(mockFlatCategories);
 
-      const { result } = renderHook(() => useAvailableCategories());
-
-      await waitFor(() => {
-        expect(result.current.loading).toBe(false);
+      const { result } = renderHook(() => useAvailableCategories(), {
+        wrapper: createWrapper(),
       });
 
-      expect(budgetsApi.fetchAvailableCategories).toHaveBeenCalledTimes(1);
+      expect(result.current.loading).toBe(false);
       expect(result.current.categories).toEqual(expectedCategories);
       expect(result.current.error).toBeNull();
     });
 
-    it('should transform flat strings to string[][] format', async () => {
-      vi.mocked(budgetsApi.fetchAvailableCategories).mockResolvedValue([
-        'Level1 > Level2 > Level3',
-      ]);
+    it('should transform flat strings to string[][] format', () => {
+      configureSuccess(['Level1 > Level2 > Level3']);
 
-      const { result } = renderHook(() => useAvailableCategories());
-
-      await waitFor(() => {
-        expect(result.current.loading).toBe(false);
+      const { result } = renderHook(() => useAvailableCategories(), {
+        wrapper: createWrapper(),
       });
 
       expect(result.current.categories).toEqual([
@@ -85,29 +130,21 @@ describe('useAvailableCategories', () => {
       ]);
     });
 
-    it('should handle single-level categories', async () => {
-      vi.mocked(budgetsApi.fetchAvailableCategories).mockResolvedValue([
-        'SingleCategory',
-      ]);
+    it('should handle single-level categories', () => {
+      configureSuccess(['SingleCategory']);
 
-      const { result } = renderHook(() => useAvailableCategories());
-
-      await waitFor(() => {
-        expect(result.current.loading).toBe(false);
+      const { result } = renderHook(() => useAvailableCategories(), {
+        wrapper: createWrapper(),
       });
 
       expect(result.current.categories).toEqual([['SingleCategory']]);
     });
 
-    it('should trim whitespace from category parts', async () => {
-      vi.mocked(budgetsApi.fetchAvailableCategories).mockResolvedValue([
-        '  Food and Drink  >  Restaurants  ',
-      ]);
+    it('should trim whitespace from category parts', () => {
+      configureSuccess(['  Food and Drink  >  Restaurants  ']);
 
-      const { result } = renderHook(() => useAvailableCategories());
-
-      await waitFor(() => {
-        expect(result.current.loading).toBe(false);
+      const { result } = renderHook(() => useAvailableCategories(), {
+        wrapper: createWrapper(),
       });
 
       expect(result.current.categories).toEqual([
@@ -117,28 +154,30 @@ describe('useAvailableCategories', () => {
   });
 
   describe('Error Handling', () => {
-    it('should return error on failed fetch', async () => {
+    it('should return error on failed fetch', () => {
       const testError = new Error('Network error');
-      vi.mocked(budgetsApi.fetchAvailableCategories).mockRejectedValue(testError);
+      configureError(testError);
 
-      const { result } = renderHook(() => useAvailableCategories());
-
-      await waitFor(() => {
-        expect(result.current.loading).toBe(false);
+      const { result } = renderHook(() => useAvailableCategories(), {
+        wrapper: createWrapper(),
       });
 
+      expect(result.current.loading).toBe(false);
       expect(result.current.error).toBeTruthy();
       expect(result.current.error?.message).toBe('Network error');
       expect(result.current.categories).toEqual([]);
     });
 
-    it('should wrap non-Error objects in Error', async () => {
-      vi.mocked(budgetsApi.fetchAvailableCategories).mockRejectedValue('String error');
+    it('should wrap non-Error objects in Error', () => {
+      vi.mocked(useGetAvailableCategories).mockReturnValue({
+        data: undefined,
+        isLoading: false,
+        error: 'String error' as unknown as Error,
+        refetch: mockRefetch,
+      } as unknown as ReturnType<typeof useGetAvailableCategories>);
 
-      const { result } = renderHook(() => useAvailableCategories());
-
-      await waitFor(() => {
-        expect(result.current.loading).toBe(false);
+      const { result } = renderHook(() => useAvailableCategories(), {
+        wrapper: createWrapper(),
       });
 
       expect(result.current.error).toBeTruthy();
@@ -147,94 +186,76 @@ describe('useAvailableCategories', () => {
   });
 
   describe('Refetch', () => {
-    it('should provide refetch function', async () => {
-      vi.mocked(budgetsApi.fetchAvailableCategories).mockResolvedValue(mockFlatCategories);
+    it('should provide refetch function', () => {
+      configureSuccess(mockFlatCategories);
 
-      const { result } = renderHook(() => useAvailableCategories());
-
-      await waitFor(() => {
-        expect(result.current.loading).toBe(false);
+      const { result } = renderHook(() => useAvailableCategories(), {
+        wrapper: createWrapper(),
       });
 
       expect(typeof result.current.refetch).toBe('function');
     });
 
-    it('should refetch data when called', async () => {
-      const updatedCategories = [...mockFlatCategories, 'Entertainment > Movies'];
+    it('should call query refetch when refetch is called', async () => {
+      configureSuccess(mockFlatCategories);
 
-      vi.mocked(budgetsApi.fetchAvailableCategories)
-        .mockResolvedValueOnce(mockFlatCategories)
-        .mockResolvedValueOnce(updatedCategories);
-
-      const { result } = renderHook(() => useAvailableCategories());
-
-      // Wait for initial load
-      await waitFor(() => {
-        expect(result.current.categories.length).toBe(5);
+      const { result } = renderHook(() => useAvailableCategories(), {
+        wrapper: createWrapper(),
       });
 
-      // Call refetch
       await act(async () => {
         await result.current.refetch();
       });
 
-      expect(result.current.categories.length).toBe(6);
-      expect(budgetsApi.fetchAvailableCategories).toHaveBeenCalledTimes(2);
-    });
-
-    it('should clear error on successful refetch', async () => {
-      vi.mocked(budgetsApi.fetchAvailableCategories)
-        .mockRejectedValueOnce(new Error('First error'))
-        .mockResolvedValueOnce(mockFlatCategories);
-
-      const { result } = renderHook(() => useAvailableCategories());
-
-      // Wait for error
       await waitFor(() => {
-        expect(result.current.error).toBeTruthy();
+        expect(mockRefetch).toHaveBeenCalled();
       });
-
-      // Refetch
-      await act(async () => {
-        await result.current.refetch();
-      });
-
-      expect(result.current.error).toBeNull();
-      expect(result.current.categories).toEqual(expectedCategories);
     });
   });
 
   describe('Edge Cases', () => {
-    it('should handle empty categories array', async () => {
-      vi.mocked(budgetsApi.fetchAvailableCategories).mockResolvedValue([]);
+    it('should handle empty categories array', () => {
+      configureSuccess([]);
 
-      const { result } = renderHook(() => useAvailableCategories());
-
-      await waitFor(() => {
-        expect(result.current.loading).toBe(false);
+      const { result } = renderHook(() => useAvailableCategories(), {
+        wrapper: createWrapper(),
       });
 
       expect(result.current.categories).toEqual([]);
       expect(result.current.error).toBeNull();
     });
 
-    it('should filter out empty strings', async () => {
-      vi.mocked(budgetsApi.fetchAvailableCategories).mockResolvedValue([
+    it('should filter out empty strings', () => {
+      configureSuccess([
         'Food and Drink > Restaurants',
         '',
         'Transportation > Gas',
       ]);
 
-      const { result } = renderHook(() => useAvailableCategories());
-
-      await waitFor(() => {
-        expect(result.current.loading).toBe(false);
+      const { result } = renderHook(() => useAvailableCategories(), {
+        wrapper: createWrapper(),
       });
 
       expect(result.current.categories).toEqual([
         ['Food and Drink', 'Restaurants'],
         ['Transportation', 'Gas'],
       ]);
+    });
+
+    it('should handle undefined data', () => {
+      vi.mocked(useGetAvailableCategories).mockReturnValue({
+        data: undefined,
+        isLoading: false,
+        error: null,
+        refetch: mockRefetch,
+      } as unknown as ReturnType<typeof useGetAvailableCategories>);
+
+      const { result } = renderHook(() => useAvailableCategories(), {
+        wrapper: createWrapper(),
+      });
+
+      expect(result.current.categories).toEqual([]);
+      expect(result.current.error).toBeNull();
     });
   });
 });

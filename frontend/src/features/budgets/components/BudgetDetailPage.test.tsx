@@ -9,15 +9,25 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { ReactNode } from 'react';
 import { BudgetDetailPage } from './BudgetDetailPage';
 import * as budgetsApi from '../api/budgetsApi';
 import * as tagsApi from '../../tags/api/tagsApi';
 import type { Budget, BudgetCategory } from '../types';
 import type { UserTag } from '../../tags/types';
 
-// Mock the API modules
+// Mock the API modules (still needed for category operations)
 vi.mock('../api/budgetsApi');
 vi.mock('../../tags/api/tagsApi');
+
+// Mock the budget hooks to avoid React Query provider issues
+vi.mock('../hooks/useBudgetDetail');
+vi.mock('../hooks/useAvailableCategories');
+
+// Import the mocked hooks
+import { useBudgetDetail } from '../hooks/useBudgetDetail';
+import { useAvailableCategories } from '../hooks/useAvailableCategories';
 
 // Mock the useTags hook to avoid React Query provider issues
 vi.mock('../../tags/hooks/useTags', () => ({
@@ -66,17 +76,34 @@ vi.mock('./category-management/BudgetCategoryManager', () => ({
   ),
 }));
 
+// Helper to create QueryClient wrapper
+function createWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+  return function Wrapper({ children }: { children: ReactNode }) {
+    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+  };
+}
+
 /**
  * Helper to render with router context
  */
 function renderWithRouter(budgetId = 'budget-1') {
+  const Wrapper = createWrapper();
   return render(
-    <MemoryRouter initialEntries={[`/budgets/${budgetId}`]}>
-      <Routes>
-        <Route path="/budgets/:budgetId" element={<BudgetDetailPage />} />
-        <Route path="/budgets" element={<div data-testid="budgets-page">Budgets Page</div>} />
-      </Routes>
-    </MemoryRouter>
+    <Wrapper>
+      <MemoryRouter initialEntries={[`/budgets/${budgetId}`]}>
+        <Routes>
+          <Route path="/budgets/:budgetId" element={<BudgetDetailPage />} />
+          <Route path="/budgets" element={<div data-testid="budgets-page">Budgets Page</div>} />
+        </Routes>
+      </MemoryRouter>
+    </Wrapper>
   );
 }
 
@@ -142,8 +169,21 @@ describe('BudgetDetailPage', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    // Default successful responses
-    vi.mocked(budgetsApi.fetchBudget).mockResolvedValue(mockBudget);
+    // Configure default mocks for hooks
+    vi.mocked(useBudgetDetail).mockReturnValue({
+      budget: mockBudget,
+      metrics: null,
+      loading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    vi.mocked(useAvailableCategories).mockReturnValue({
+      categories: mockAvailableCategories.map(c => c.split(' > ')),
+      loading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    // Keep API mocks for category operations
     vi.mocked(budgetsApi.fetchAvailableCategories).mockResolvedValue(mockAvailableCategories);
     vi.mocked(tagsApi.fetchTags).mockResolvedValue(mockTags);
   });
@@ -154,9 +194,13 @@ describe('BudgetDetailPage', () => {
 
   describe('Loading State', () => {
     it('should show loading spinner while fetching budget', async () => {
-      vi.mocked(budgetsApi.fetchBudget).mockImplementation(
-        () => new Promise(() => {}) // Never resolves
-      );
+      vi.mocked(useBudgetDetail).mockReturnValue({
+        budget: null,
+        metrics: null,
+        loading: true,
+        error: null,
+        refetch: vi.fn(),
+      });
 
       renderWithRouter();
 
@@ -166,7 +210,13 @@ describe('BudgetDetailPage', () => {
 
   describe('Error State', () => {
     it('should show error message on fetch failure', async () => {
-      vi.mocked(budgetsApi.fetchBudget).mockRejectedValue(new Error('Network error'));
+      vi.mocked(useBudgetDetail).mockReturnValue({
+        budget: null,
+        metrics: null,
+        loading: false,
+        error: new Error('Network error'),
+        refetch: vi.fn(),
+      });
 
       renderWithRouter();
 
@@ -177,11 +227,24 @@ describe('BudgetDetailPage', () => {
     });
 
     it('should provide retry button on error', async () => {
-      vi.mocked(budgetsApi.fetchBudget)
-        .mockRejectedValueOnce(new Error('Network error'))
-        .mockResolvedValueOnce(mockBudget);
+      const mockRefetch = vi.fn();
+      vi.mocked(useBudgetDetail)
+        .mockReturnValueOnce({
+          budget: null,
+          metrics: null,
+          loading: false,
+          error: new Error('Network error'),
+          refetch: mockRefetch,
+        })
+        .mockReturnValue({
+          budget: mockBudget,
+          metrics: null,
+          loading: false,
+          error: null,
+          refetch: mockRefetch,
+        });
 
-      renderWithRouter();
+      const { rerender } = renderWithRouter();
 
       await waitFor(() => {
         expect(screen.getByText(/error/i)).toBeInTheDocument();
@@ -189,6 +252,18 @@ describe('BudgetDetailPage', () => {
 
       const retryButton = screen.getByRole('button', { name: /retry/i });
       await userEvent.click(retryButton);
+
+      // Trigger a re-render to simulate the refetch
+      rerender(
+        <QueryClientProvider client={new QueryClient()}>
+          <MemoryRouter initialEntries={['/budgets/budget-1']}>
+            <Routes>
+              <Route path="/budgets/:budgetId" element={<BudgetDetailPage />} />
+              <Route path="/budgets" element={<div data-testid="budgets-page">Budgets Page</div>} />
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>
+      );
 
       await waitFor(() => {
         expect(screen.getByText('Monthly Budget')).toBeInTheDocument();
@@ -250,6 +325,7 @@ describe('BudgetDetailPage', () => {
   describe('Category CRUD Operations', () => {
     it('should add category and refetch budget', async () => {
       const user = userEvent.setup();
+      const mockRefetch = vi.fn().mockResolvedValue({});
       const newCategory: BudgetCategory = {
         id: 'cat-3',
         budget_id: 'budget-1',
@@ -263,14 +339,13 @@ describe('BudgetDetailPage', () => {
       };
 
       vi.mocked(budgetsApi.addBudgetCategory).mockResolvedValue(newCategory);
-
-      const updatedBudget = {
-        ...mockBudget,
-        categories: [...mockBudget.categories!, newCategory],
-      };
-      vi.mocked(budgetsApi.fetchBudget)
-        .mockResolvedValueOnce(mockBudget)
-        .mockResolvedValueOnce(updatedBudget);
+      vi.mocked(useBudgetDetail).mockReturnValue({
+        budget: mockBudget,
+        metrics: null,
+        loading: false,
+        error: null,
+        refetch: mockRefetch,
+      });
 
       renderWithRouter();
 
@@ -281,18 +356,26 @@ describe('BudgetDetailPage', () => {
       await user.click(screen.getByTestId('add-category-btn'));
 
       await waitFor(() => {
-        expect(budgetsApi.fetchBudget).toHaveBeenCalledTimes(2);
+        expect(mockRefetch).toHaveBeenCalled();
       });
     });
 
     it('should update category and refetch budget', async () => {
       const user = userEvent.setup();
+      const mockRefetch = vi.fn().mockResolvedValue({});
       const updatedCategory = {
         ...mockBudget.categories![0],
         allocated_amount: 600,
       };
 
       vi.mocked(budgetsApi.updateBudgetCategory).mockResolvedValue(updatedCategory);
+      vi.mocked(useBudgetDetail).mockReturnValue({
+        budget: mockBudget,
+        metrics: null,
+        loading: false,
+        error: null,
+        refetch: mockRefetch,
+      });
 
       renderWithRouter();
 
@@ -303,21 +386,22 @@ describe('BudgetDetailPage', () => {
       await user.click(screen.getByTestId('update-category-btn'));
 
       await waitFor(() => {
-        expect(budgetsApi.fetchBudget).toHaveBeenCalledTimes(2);
+        expect(mockRefetch).toHaveBeenCalled();
       });
     });
 
     it('should delete category and refetch budget', async () => {
       const user = userEvent.setup();
-      vi.mocked(budgetsApi.deleteBudgetCategory).mockResolvedValue();
+      const mockRefetch = vi.fn().mockResolvedValue({});
 
-      const updatedBudget = {
-        ...mockBudget,
-        categories: [mockBudget.categories![1]],
-      };
-      vi.mocked(budgetsApi.fetchBudget)
-        .mockResolvedValueOnce(mockBudget)
-        .mockResolvedValueOnce(updatedBudget);
+      vi.mocked(budgetsApi.deleteBudgetCategory).mockResolvedValue();
+      vi.mocked(useBudgetDetail).mockReturnValue({
+        budget: mockBudget,
+        metrics: null,
+        loading: false,
+        error: null,
+        refetch: mockRefetch,
+      });
 
       renderWithRouter();
 
@@ -328,7 +412,7 @@ describe('BudgetDetailPage', () => {
       await user.click(screen.getByTestId('delete-category-btn'));
 
       await waitFor(() => {
-        expect(budgetsApi.fetchBudget).toHaveBeenCalledTimes(2);
+        expect(mockRefetch).toHaveBeenCalled();
       });
     });
   });

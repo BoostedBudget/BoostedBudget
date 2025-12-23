@@ -1,12 +1,17 @@
 /**
  * useBudgetDetail Hook
  * Issue #497: Budget Category Manager + Match Config UI
+ * Issue #564: Migrated to generated React Query hooks
  *
  * React hook for fetching a single budget with computed metrics.
  */
 
-import { useState, useEffect, useCallback } from 'react';
-import { fetchBudget } from '../api/budgetsApi';
+import { useMemo, useCallback } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import {
+  useGetBudget,
+  getGetBudgetQueryKey,
+} from '@/api/generated/endpoints/budgets/budgets';
 import { computeBudgetMetrics } from '../types';
 import type { Budget, BudgetWithMetrics } from '../types';
 
@@ -49,42 +54,48 @@ export interface UseBudgetDetailResult {
  * ```
  */
 export function useBudgetDetail(budgetId: string): UseBudgetDetailResult {
-  const [budget, setBudget] = useState<Budget | null>(null);
-  const [metrics, setMetrics] = useState<BudgetWithMetrics | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<Error | null>(null);
+  const queryClient = useQueryClient();
 
-  // Load budget function
-  const loadBudget = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const result = await fetchBudget(budgetId);
-      setBudget(result);
-      setMetrics(computeBudgetMetrics(result));
-    } catch (err) {
-      setError(err instanceof Error ? err : new Error('Failed to fetch budget'));
-      setBudget(null);
-      setMetrics(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [budgetId]);
+  const {
+    data,
+    isLoading,
+    error: queryError,
+    refetch: queryRefetch,
+  } = useGetBudget(budgetId, {
+    query: {
+      staleTime: 30 * 1000, // 30 seconds
+      enabled: !!budgetId, // Only fetch if budgetId is provided
+    },
+  });
 
-  // Initial load and refetch when budgetId changes
-  useEffect(() => {
-    loadBudget();
-  }, [loadBudget]);
+  // Convert error to Error instance
+  const error = queryError
+    ? queryError instanceof Error
+      ? queryError
+      : new Error('Failed to fetch budget')
+    : null;
 
-  // Refetch function
+  // Convert generated type to local type
+  const budget: Budget | null = data ? (data as unknown as Budget) : null;
+
+  // Compute metrics from budget
+  const metrics = useMemo<BudgetWithMetrics | null>(() => {
+    if (!budget) return null;
+    return computeBudgetMetrics(budget);
+  }, [budget]);
+
+  // Refetch function that invalidates the cache
   const refetch = useCallback(async () => {
-    await loadBudget();
-  }, [loadBudget]);
+    await queryClient.invalidateQueries({
+      queryKey: getGetBudgetQueryKey(budgetId),
+    });
+    await queryRefetch();
+  }, [queryClient, queryRefetch, budgetId]);
 
   return {
     budget,
     metrics,
-    loading,
+    loading: isLoading,
     error,
     refetch,
   };

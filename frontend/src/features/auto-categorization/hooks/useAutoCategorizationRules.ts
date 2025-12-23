@@ -3,22 +3,25 @@
  *
  * React hook for managing auto-categorization rules - fetching, creating, updating, deleting, and toggling.
  * Issue #346: Custom Transaction Categorization Rules
+ * Issue #564: Migrated to generated React Query hooks
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useMemo, useCallback } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
-  fetchAutoCategorizationRules,
-  createAutoCategorizationRule as apiCreateRule,
-  updateAutoCategorizationRule as apiUpdateRule,
-  deleteAutoCategorizationRule as apiDeleteRule,
-  toggleAutoCategorizationRule as apiToggleRule,
-} from '../api/autoCategorizationApi'
+  useGetUserRules,
+  useCreateRule,
+  useUpdateRule,
+  useDeleteRule,
+  useToggleRule,
+  getGetUserRulesQueryKey,
+} from '@/api/generated/endpoints/auto-categorization/auto-categorization';
 import type {
   CategorizationRule,
   CreateRuleRequest,
   UpdateRuleRequest,
   UseAutoCategorizationRulesResult,
-} from '../types'
+} from '../types';
 
 /**
  * Hook for managing auto-categorization rules
@@ -65,102 +68,115 @@ import type {
  * ```
  */
 export function useAutoCategorizationRules(): UseAutoCategorizationRulesResult {
-  const [rules, setRules] = useState<CategorizationRule[]>([])
-  const [loading, setLoading] = useState<boolean>(true)
-  const [error, setError] = useState<string | null>(null)
+  const queryClient = useQueryClient();
 
-  // Load rules function
-  const loadRules = useCallback(async () => {
-    try {
-      setLoading(true)
-      setError(null)
-      const result = await fetchAutoCategorizationRules()
-      // Sort by priority (higher first), then by created_at (newer first)
-      const sorted = result.sort((a, b) => {
-        if (b.priority !== a.priority) {
-          return b.priority - a.priority
-        }
-        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      })
-      setRules(sorted)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to fetch rules'
-      setError(message)
-      setRules([])
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  // Use generated query hook for fetching rules
+  const {
+    data,
+    isLoading,
+    error: queryError,
+    refetch: queryRefetch,
+  } = useGetUserRules({
+    query: {
+      staleTime: 30 * 1000, // 30 seconds
+    },
+  });
+
+  // Use generated mutation hooks
+  const createMutation = useCreateRule();
+  const updateMutation = useUpdateRule();
+  const deleteMutation = useDeleteRule();
+  const toggleMutation = useToggleRule();
+
+  // Sort by priority (higher first), then by created_at (newer first)
+  const rules = useMemo(() => {
+    if (!data) return [];
+    const ruleList = data as unknown as CategorizationRule[];
+    return [...ruleList].sort((a, b) => {
+      if (b.priority !== a.priority) {
+        return b.priority - a.priority;
+      }
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    });
+  }, [data]);
+
+  // Convert error to string
+  const error = useMemo<string | null>(() => {
+    if (!queryError) return null;
+    return queryError instanceof Error ? queryError.message : 'Failed to fetch rules';
+  }, [queryError]);
 
   // Create a new rule
-  const createRule = useCallback(async (request: CreateRuleRequest): Promise<CategorizationRule> => {
-    const newRule = await apiCreateRule(request)
-    setRules((prev) => {
-      const updated = [newRule, ...prev]
-      // Re-sort after adding
-      return updated.sort((a, b) => {
-        if (b.priority !== a.priority) {
-          return b.priority - a.priority
-        }
-        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      })
-    })
-    return newRule
-  }, [])
+  const createRule = useCallback(
+    async (request: CreateRuleRequest): Promise<CategorizationRule> => {
+      const result = await createMutation.mutateAsync({
+        data: request as never,
+      });
+      await queryClient.invalidateQueries({
+        queryKey: getGetUserRulesQueryKey(),
+      });
+      return result as unknown as CategorizationRule;
+    },
+    [createMutation, queryClient]
+  );
 
   // Update an existing rule
   const updateRule = useCallback(
     async (ruleId: string, request: UpdateRuleRequest): Promise<CategorizationRule> => {
-      const updatedRule = await apiUpdateRule(ruleId, request)
-      setRules((prev) => {
-        const updated = prev.map((rule) => (rule.id === ruleId ? updatedRule : rule))
-        // Re-sort in case priority changed
-        return updated.sort((a, b) => {
-          if (b.priority !== a.priority) {
-            return b.priority - a.priority
-          }
-          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-        })
-      })
-      return updatedRule
+      const result = await updateMutation.mutateAsync({
+        id: ruleId,
+        data: request as never,
+      });
+      await queryClient.invalidateQueries({
+        queryKey: getGetUserRulesQueryKey(),
+      });
+      return result as unknown as CategorizationRule;
     },
-    []
-  )
+    [updateMutation, queryClient]
+  );
 
   // Delete a rule
-  const deleteRule = useCallback(async (ruleId: string): Promise<void> => {
-    await apiDeleteRule(ruleId)
-    setRules((prev) => prev.filter((rule) => rule.id !== ruleId))
-  }, [])
+  const deleteRule = useCallback(
+    async (ruleId: string): Promise<void> => {
+      await deleteMutation.mutateAsync({ id: ruleId });
+      await queryClient.invalidateQueries({
+        queryKey: getGetUserRulesQueryKey(),
+      });
+    },
+    [deleteMutation, queryClient]
+  );
 
   // Toggle rule enabled status
   const toggleRule = useCallback(
     async (ruleId: string, enabled: boolean): Promise<CategorizationRule> => {
-      const updatedRule = await apiToggleRule(ruleId, enabled)
-      setRules((prev) => prev.map((rule) => (rule.id === ruleId ? updatedRule : rule)))
-      return updatedRule
+      const result = await toggleMutation.mutateAsync({
+        id: ruleId,
+        data: { enabled },
+      });
+      await queryClient.invalidateQueries({
+        queryKey: getGetUserRulesQueryKey(),
+      });
+      return result as unknown as CategorizationRule;
     },
-    []
-  )
+    [toggleMutation, queryClient]
+  );
 
   // Refresh rules
   const refresh = useCallback(async (): Promise<void> => {
-    await loadRules()
-  }, [loadRules])
-
-  // Load on mount
-  useEffect(() => {
-    loadRules()
-  }, [loadRules])
+    await queryClient.invalidateQueries({
+      queryKey: getGetUserRulesQueryKey(),
+    });
+    await queryRefetch();
+  }, [queryClient, queryRefetch]);
 
   return {
     rules,
-    loading,
+    loading: isLoading,
     error,
     createRule,
     updateRule,
     deleteRule,
     toggleRule,
     refresh,
-  }
+  };
 }

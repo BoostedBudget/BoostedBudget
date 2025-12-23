@@ -1,18 +1,60 @@
 /**
  * useSavingsGoals Hook Tests
+ * Issue #564: Migrated to mock generated React Query hooks
  *
- * TDD RED: These tests are written first and will initially fail.
  * Tests the React hook for savings goal CRUD operations.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { ReactNode } from 'react';
 import { useSavingsGoals } from './useSavingsGoals';
-import * as budgetsApi from '../api/budgetsApi';
 import type { SavingsGoal, CreateSavingsGoalRequest, UpdateSavingsGoalRequest } from '../types';
 
-// Mock the API module
-vi.mock('../api/budgetsApi');
+// Mock mutation functions
+const mockCreateMutateAsync = vi.fn();
+const mockUpdateMutateAsync = vi.fn();
+const mockDeleteMutateAsync = vi.fn();
+const mockAllRefetch = vi.fn().mockResolvedValue({});
+const mockActiveRefetch = vi.fn().mockResolvedValue({});
+
+// Mock the generated hooks
+vi.mock('@/api/generated/endpoints/savings-goals/savings-goals', () => ({
+  useGetSavingsGoals: vi.fn(),
+  useGetActiveSavingsGoals: vi.fn(),
+  useCreateSavingsGoal: vi.fn(() => ({
+    mutateAsync: mockCreateMutateAsync,
+  })),
+  useUpdateSavingsGoal: vi.fn(() => ({
+    mutateAsync: mockUpdateMutateAsync,
+  })),
+  useDeleteSavingsGoal: vi.fn(() => ({
+    mutateAsync: mockDeleteMutateAsync,
+  })),
+  getGetSavingsGoalsQueryKey: vi.fn(() => ['savings-goals']),
+  getGetActiveSavingsGoalsQueryKey: vi.fn(() => ['savings-goals', 'active']),
+}));
+
+// Import the mocked hooks
+import {
+  useGetSavingsGoals,
+  useGetActiveSavingsGoals,
+} from '@/api/generated/endpoints/savings-goals/savings-goals';
+
+// Helper to create wrapper with QueryClient
+function createWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+  return function Wrapper({ children }: { children: ReactNode }) {
+    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+  };
+}
 
 describe('useSavingsGoals', () => {
   const mockSavingsGoals: SavingsGoal[] = [
@@ -47,79 +89,100 @@ describe('useSavingsGoals', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockCreateMutateAsync.mockReset();
+    mockUpdateMutateAsync.mockReset();
+    mockDeleteMutateAsync.mockReset();
+    mockAllRefetch.mockClear();
+    mockActiveRefetch.mockClear();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
+  // Helper to configure query states
+  function configureAllGoalsQuery(config: {
+    data?: SavingsGoal[] | null;
+    isLoading?: boolean;
+    error?: Error | null;
+  }) {
+    vi.mocked(useGetSavingsGoals).mockReturnValue({
+      data: config.data ?? undefined,
+      isLoading: config.isLoading ?? false,
+      error: config.error ?? null,
+      refetch: mockAllRefetch,
+    } as unknown as ReturnType<typeof useGetSavingsGoals>);
+  }
+
+  function configureActiveGoalsQuery(config: {
+    data?: SavingsGoal[] | null;
+    isLoading?: boolean;
+    error?: Error | null;
+  }) {
+    vi.mocked(useGetActiveSavingsGoals).mockReturnValue({
+      data: config.data ?? undefined,
+      isLoading: config.isLoading ?? false,
+      error: config.error ?? null,
+      refetch: mockActiveRefetch,
+    } as unknown as ReturnType<typeof useGetActiveSavingsGoals>);
+  }
+
   describe('Initial State', () => {
     it('should return loading state initially', () => {
-      // Arrange
-      vi.mocked(budgetsApi.fetchSavingsGoals).mockImplementation(
-        () => new Promise(() => {}) // Never resolves
-      );
+      configureAllGoalsQuery({ isLoading: true });
+      configureActiveGoalsQuery({ isLoading: false, data: [] });
 
-      // Act
-      const { result } = renderHook(() => useSavingsGoals());
+      const { result } = renderHook(() => useSavingsGoals(), {
+        wrapper: createWrapper(),
+      });
 
-      // Assert
       expect(result.current.loading).toBe(true);
       expect(result.current.goals).toEqual([]);
       expect(result.current.error).toBeNull();
     });
 
     it('should fetch and return savings goals on mount', async () => {
-      // Arrange
-      vi.mocked(budgetsApi.fetchSavingsGoals).mockResolvedValue(mockSavingsGoals);
+      configureAllGoalsQuery({ data: mockSavingsGoals });
+      configureActiveGoalsQuery({ data: [] });
 
-      // Act
-      const { result } = renderHook(() => useSavingsGoals());
+      const { result } = renderHook(() => useSavingsGoals(), {
+        wrapper: createWrapper(),
+      });
 
-      // Assert - Initial loading state
-      expect(result.current.loading).toBe(true);
-
-      // Wait for data to load (increased timeout for CI stability)
-      await waitFor(() => {
-        expect(result.current.loading).toBe(false);
-      }, { timeout: 5000 });
-
-      // Assert - Data loaded successfully
-      expect(result.current.goals).toEqual(mockSavingsGoals);
-      expect(result.current.error).toBeNull();
-      expect(budgetsApi.fetchSavingsGoals).toHaveBeenCalledTimes(1);
-    });
-
-    it('should handle fetch errors gracefully', async () => {
-      // Arrange
-      const error = new Error('Failed to fetch savings goals');
-      vi.mocked(budgetsApi.fetchSavingsGoals).mockRejectedValue(error);
-
-      // Act
-      const { result } = renderHook(() => useSavingsGoals());
-
-      // Wait for error state
       await waitFor(() => {
         expect(result.current.loading).toBe(false);
       });
 
-      // Assert
+      expect(result.current.goals).toEqual(mockSavingsGoals);
+      expect(result.current.error).toBeNull();
+    });
+
+    it('should handle fetch errors gracefully', async () => {
+      const error = new Error('Failed to fetch savings goals');
+      configureAllGoalsQuery({ error });
+      configureActiveGoalsQuery({ data: [] });
+
+      const { result } = renderHook(() => useSavingsGoals(), {
+        wrapper: createWrapper(),
+      });
+
+      expect(result.current.loading).toBe(false);
       expect(result.current.error).toEqual(error);
       expect(result.current.goals).toEqual([]);
     });
 
     it('should return empty array when no goals exist', async () => {
-      // Arrange
-      vi.mocked(budgetsApi.fetchSavingsGoals).mockResolvedValue([]);
+      configureAllGoalsQuery({ data: [] });
+      configureActiveGoalsQuery({ data: [] });
 
-      // Act
-      const { result } = renderHook(() => useSavingsGoals());
+      const { result } = renderHook(() => useSavingsGoals(), {
+        wrapper: createWrapper(),
+      });
 
       await waitFor(() => {
         expect(result.current.loading).toBe(false);
       });
 
-      // Assert
       expect(result.current.goals).toEqual([]);
       expect(result.current.error).toBeNull();
     });
@@ -127,52 +190,48 @@ describe('useSavingsGoals', () => {
 
   describe('Active Goals Filter', () => {
     it('should filter active goals when activeOnly option is true', async () => {
-      // Arrange
       const activeGoals = [mockSavingsGoals[0]];
-      vi.mocked(budgetsApi.fetchActiveSavingsGoals).mockResolvedValue(activeGoals);
+      configureAllGoalsQuery({ data: [] });
+      configureActiveGoalsQuery({ data: activeGoals });
 
-      // Act
-      const { result } = renderHook(() => useSavingsGoals({ activeOnly: true }));
+      const { result } = renderHook(() => useSavingsGoals({ activeOnly: true }), {
+        wrapper: createWrapper(),
+      });
 
       await waitFor(() => {
         expect(result.current.loading).toBe(false);
       });
 
-      // Assert
-      expect(budgetsApi.fetchActiveSavingsGoals).toHaveBeenCalledTimes(1);
       expect(result.current.goals).toEqual(activeGoals);
     });
   });
 
   describe('Refetch', () => {
     it('should provide refetch function to reload data', async () => {
-      // Arrange
-      vi.mocked(budgetsApi.fetchSavingsGoals).mockResolvedValue(mockSavingsGoals);
+      configureAllGoalsQuery({ data: mockSavingsGoals });
+      configureActiveGoalsQuery({ data: [] });
 
-      // Act
-      const { result } = renderHook(() => useSavingsGoals());
+      const { result } = renderHook(() => useSavingsGoals(), {
+        wrapper: createWrapper(),
+      });
 
       await waitFor(() => {
         expect(result.current.loading).toBe(false);
       });
 
-      expect(budgetsApi.fetchSavingsGoals).toHaveBeenCalledTimes(1);
-
-      // Call refetch
       await act(async () => {
         await result.current.refetch();
       });
 
-      // Assert
-      expect(budgetsApi.fetchSavingsGoals).toHaveBeenCalledTimes(2);
+      expect(mockAllRefetch).toHaveBeenCalled();
     });
   });
 
   describe('Create Savings Goal', () => {
-    it('should create a new savings goal and add it to the list', async () => {
-      // Arrange
-      vi.mocked(budgetsApi.fetchSavingsGoals).mockResolvedValue([]);
-      vi.mocked(budgetsApi.createSavingsGoal).mockResolvedValue(mockSavingsGoals[0]);
+    it('should create a new savings goal', async () => {
+      configureAllGoalsQuery({ data: [] });
+      configureActiveGoalsQuery({ data: [] });
+      mockCreateMutateAsync.mockResolvedValue(mockSavingsGoals[0]);
 
       const createRequest: CreateSavingsGoalRequest = {
         name: 'Vacation Fund',
@@ -180,33 +239,28 @@ describe('useSavingsGoals', () => {
         account_id: 'account-789',
       };
 
-      // Act
-      const { result } = renderHook(() => useSavingsGoals());
+      const { result } = renderHook(() => useSavingsGoals(), {
+        wrapper: createWrapper(),
+      });
 
       await waitFor(() => {
         expect(result.current.loading).toBe(false);
       });
 
-      expect(result.current.goals).toHaveLength(0);
-
-      // Create goal
       let createdGoal: SavingsGoal | undefined;
       await act(async () => {
         createdGoal = await result.current.createGoal(createRequest);
       });
 
-      // Assert
-      expect(budgetsApi.createSavingsGoal).toHaveBeenCalledWith(createRequest);
+      expect(mockCreateMutateAsync).toHaveBeenCalledWith({ data: createRequest });
       expect(createdGoal).toEqual(mockSavingsGoals[0]);
-      expect(result.current.goals).toHaveLength(1);
-      expect(result.current.goals[0]).toEqual(mockSavingsGoals[0]);
     });
 
-    it('should handle create errors and not add goal to list', async () => {
-      // Arrange
+    it('should handle create errors', async () => {
       const error = new Error('Failed to create savings goal');
-      vi.mocked(budgetsApi.fetchSavingsGoals).mockResolvedValue([]);
-      vi.mocked(budgetsApi.createSavingsGoal).mockRejectedValue(error);
+      configureAllGoalsQuery({ data: [] });
+      configureActiveGoalsQuery({ data: [] });
+      mockCreateMutateAsync.mockRejectedValue(error);
 
       const createRequest: CreateSavingsGoalRequest = {
         name: 'Vacation Fund',
@@ -214,164 +268,146 @@ describe('useSavingsGoals', () => {
         account_id: 'account-789',
       };
 
-      // Act
-      const { result } = renderHook(() => useSavingsGoals());
+      const { result } = renderHook(() => useSavingsGoals(), {
+        wrapper: createWrapper(),
+      });
 
       await waitFor(() => {
         expect(result.current.loading).toBe(false);
       });
 
-      // Try to create goal
       await act(async () => {
         await expect(result.current.createGoal(createRequest)).rejects.toThrow(error);
       });
-
-      // Assert - goals list should remain empty
-      expect(result.current.goals).toHaveLength(0);
     });
   });
 
   describe('Update Savings Goal', () => {
-    it('should update an existing savings goal in the list', async () => {
-      // Arrange
+    it('should update an existing savings goal', async () => {
       const updatedGoal: SavingsGoal = {
         ...mockSavingsGoals[0],
         current_amount: 2000,
       };
-      vi.mocked(budgetsApi.fetchSavingsGoals).mockResolvedValue(mockSavingsGoals);
-      vi.mocked(budgetsApi.updateSavingsGoal).mockResolvedValue(updatedGoal);
+      configureAllGoalsQuery({ data: mockSavingsGoals });
+      configureActiveGoalsQuery({ data: [] });
+      mockUpdateMutateAsync.mockResolvedValue(updatedGoal);
 
       const updateRequest: UpdateSavingsGoalRequest = {
         current_amount: 2000,
       };
 
-      // Act
-      const { result } = renderHook(() => useSavingsGoals());
+      const { result } = renderHook(() => useSavingsGoals(), {
+        wrapper: createWrapper(),
+      });
 
       await waitFor(() => {
         expect(result.current.loading).toBe(false);
       });
 
-      // Update goal
       let returnedGoal: SavingsGoal | undefined;
       await act(async () => {
         returnedGoal = await result.current.updateGoal('goal-1', updateRequest);
       });
 
-      // Assert
-      expect(budgetsApi.updateSavingsGoal).toHaveBeenCalledWith('goal-1', updateRequest);
+      expect(mockUpdateMutateAsync).toHaveBeenCalledWith({ id: 'goal-1', data: updateRequest });
       expect(returnedGoal).toEqual(updatedGoal);
-      expect(result.current.goals[0].current_amount).toBe(2000);
-      // Other goals should remain unchanged
-      expect(result.current.goals[1]).toEqual(mockSavingsGoals[1]);
     });
 
-    it('should handle update errors without modifying the list', async () => {
-      // Arrange
+    it('should handle update errors', async () => {
       const error = new Error('Failed to update savings goal');
-      vi.mocked(budgetsApi.fetchSavingsGoals).mockResolvedValue(mockSavingsGoals);
-      vi.mocked(budgetsApi.updateSavingsGoal).mockRejectedValue(error);
+      configureAllGoalsQuery({ data: mockSavingsGoals });
+      configureActiveGoalsQuery({ data: [] });
+      mockUpdateMutateAsync.mockRejectedValue(error);
 
       const updateRequest: UpdateSavingsGoalRequest = {
         current_amount: 2000,
       };
 
-      // Act
-      const { result } = renderHook(() => useSavingsGoals());
+      const { result } = renderHook(() => useSavingsGoals(), {
+        wrapper: createWrapper(),
+      });
 
       await waitFor(() => {
         expect(result.current.loading).toBe(false);
       });
 
-      // Try to update goal
       await act(async () => {
         await expect(result.current.updateGoal('goal-1', updateRequest)).rejects.toThrow(error);
       });
-
-      // Assert - goal should remain unchanged
-      expect(result.current.goals[0].current_amount).toBe(1500);
     });
   });
 
   describe('Delete Savings Goal', () => {
-    it('should delete a savings goal and remove it from the list', async () => {
-      // Arrange
-      vi.mocked(budgetsApi.fetchSavingsGoals).mockResolvedValue(mockSavingsGoals);
-      vi.mocked(budgetsApi.deleteSavingsGoal).mockResolvedValue(undefined);
+    it('should delete a savings goal', async () => {
+      configureAllGoalsQuery({ data: mockSavingsGoals });
+      configureActiveGoalsQuery({ data: [] });
+      mockDeleteMutateAsync.mockResolvedValue(undefined);
 
-      // Act
-      const { result } = renderHook(() => useSavingsGoals());
+      const { result } = renderHook(() => useSavingsGoals(), {
+        wrapper: createWrapper(),
+      });
 
       await waitFor(() => {
         expect(result.current.loading).toBe(false);
       });
 
-      expect(result.current.goals).toHaveLength(2);
-
-      // Delete goal
       await act(async () => {
         await result.current.deleteGoal('goal-1');
       });
 
-      // Assert
-      expect(budgetsApi.deleteSavingsGoal).toHaveBeenCalledWith('goal-1');
-      expect(result.current.goals).toHaveLength(1);
-      expect(result.current.goals[0].id).toBe('goal-2');
+      expect(mockDeleteMutateAsync).toHaveBeenCalledWith({ id: 'goal-1' });
     });
 
-    it('should handle delete errors without removing goal from list', async () => {
-      // Arrange
+    it('should handle delete errors', async () => {
       const error = new Error('Failed to delete savings goal');
-      vi.mocked(budgetsApi.fetchSavingsGoals).mockResolvedValue(mockSavingsGoals);
-      vi.mocked(budgetsApi.deleteSavingsGoal).mockRejectedValue(error);
+      configureAllGoalsQuery({ data: mockSavingsGoals });
+      configureActiveGoalsQuery({ data: [] });
+      mockDeleteMutateAsync.mockRejectedValue(error);
 
-      // Act
-      const { result } = renderHook(() => useSavingsGoals());
+      const { result } = renderHook(() => useSavingsGoals(), {
+        wrapper: createWrapper(),
+      });
 
       await waitFor(() => {
         expect(result.current.loading).toBe(false);
       });
 
-      // Try to delete goal
       await act(async () => {
         await expect(result.current.deleteGoal('goal-1')).rejects.toThrow(error);
       });
-
-      // Assert - goal should still be in the list
-      expect(result.current.goals).toHaveLength(2);
     });
   });
 
   describe('Computed Values', () => {
     it('should compute progress percentage for each goal', async () => {
-      // Arrange
-      vi.mocked(budgetsApi.fetchSavingsGoals).mockResolvedValue(mockSavingsGoals);
+      configureAllGoalsQuery({ data: mockSavingsGoals });
+      configureActiveGoalsQuery({ data: [] });
 
-      // Act
-      const { result } = renderHook(() => useSavingsGoals());
+      const { result } = renderHook(() => useSavingsGoals(), {
+        wrapper: createWrapper(),
+      });
 
       await waitFor(() => {
         expect(result.current.loading).toBe(false);
       });
 
-      // Assert
       expect(result.current.goalsWithProgress).toBeDefined();
       expect(result.current.goalsWithProgress[0].progress).toBe(30); // 1500/5000 * 100
       expect(result.current.goalsWithProgress[1].progress).toBe(80); // 8000/10000 * 100
     });
 
     it('should compute total progress across all goals', async () => {
-      // Arrange
-      vi.mocked(budgetsApi.fetchSavingsGoals).mockResolvedValue(mockSavingsGoals);
+      configureAllGoalsQuery({ data: mockSavingsGoals });
+      configureActiveGoalsQuery({ data: [] });
 
-      // Act
-      const { result } = renderHook(() => useSavingsGoals());
+      const { result } = renderHook(() => useSavingsGoals(), {
+        wrapper: createWrapper(),
+      });
 
       await waitFor(() => {
         expect(result.current.loading).toBe(false);
       });
 
-      // Assert
       expect(result.current.totalTarget).toBe(15000); // 5000 + 10000
       expect(result.current.totalSaved).toBe(9500); // 1500 + 8000
     });

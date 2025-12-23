@@ -1,14 +1,15 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import type { CSSProperties, ReactElement } from 'react'
 import { List } from 'react-window'
+import { useQueryClient } from '@tanstack/react-query'
 import { useTransactions } from './hooks/useTransactions'
 import { useTransactionFilters } from './hooks/useTransactionFilters'
 import { TransactionCard } from './components/TransactionCard'
 import { TransactionEditor } from './components/TransactionEditor'
 import { TransactionFilterPanel } from './components/TransactionFilterPanel'
-import { fetchTags } from '../tags/api/tagsApi'
-import { fetchCategories } from '../categories/api/categoriesApi'
-import { fetchAccounts } from '../accounts/api/plaidApi'
+import { useGetUserTags, getGetUserTagsQueryKey } from '@/api/generated/endpoints/tags/tags'
+import { useGetUserCategories, getGetUserCategoriesQueryKey } from '@/api/generated/endpoints/categories/categories'
+import { useGetAccounts } from '@/api/generated/endpoints/accounts/accounts'
 import type { Transaction } from './types'
 import type { Account } from '../accounts/types'
 import type { UserTag } from '../tags/types'
@@ -96,11 +97,18 @@ export function TransactionsPage() {
 
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null)
   const [isEditorOpen, setIsEditorOpen] = useState(false)
-  const [availableTags, setAvailableTags] = useState<UserTag[]>([])
-  const [availableCategories, setAvailableCategories] = useState<CustomCategory[]>([])
-  const [accounts, setAccounts] = useState<Account[]>([])
   const [listWidth, setListWidth] = useState(0)
   const listContainerRef = useRef<HTMLDivElement>(null)
+  const queryClient = useQueryClient()
+
+  // Fetch available tags, categories, and accounts using generated hooks
+  const { data: tagsData } = useGetUserTags()
+  const { data: categoriesData } = useGetUserCategories()
+  const { data: accountsData } = useGetAccounts()
+
+  const availableTags = (tagsData as unknown as UserTag[]) ?? []
+  const availableCategories = (categoriesData as unknown as CustomCategory[]) ?? []
+  const accounts = accountsData?.accounts ?? []
 
   // Issue #531: Create accounts lookup map for O(1) access
   const accountsMap = useMemo(() => {
@@ -123,25 +131,6 @@ export function TransactionsPage() {
     totalCount,
     currentPage,
   } = useTransactions({ filters, limit: 50 })
-
-  // Fetch available tags, categories, and accounts
-  useEffect(() => {
-    const loadMetadata = async () => {
-      try {
-        const [tags, categories, accountsResponse] = await Promise.all([
-          fetchTags(),
-          fetchCategories(),
-          fetchAccounts(),
-        ])
-        setAvailableTags(tags)
-        setAvailableCategories(categories)
-        setAccounts(accountsResponse.accounts ?? [])
-      } catch (err) {
-        console.error('Failed to load metadata:', err)
-      }
-    }
-    loadMetadata()
-  }, [])
 
   // Measure list container width for virtualized list
   useEffect(() => {
@@ -174,15 +163,21 @@ export function TransactionsPage() {
     handleEditorClose()
   }
 
-  // Handle tag creation - add to available tags
-  const handleTagCreated = (tag: UserTag) => {
-    setAvailableTags((prev) => [...prev, tag])
-  }
+  // Handle tag creation - invalidate query to refetch tags
+  const handleTagCreated = useCallback(
+    (_tag: UserTag) => {
+      queryClient.invalidateQueries({ queryKey: getGetUserTagsQueryKey() })
+    },
+    [queryClient]
+  )
 
-  // Handle category creation - add to available categories
-  const handleCategoryCreated = (category: CustomCategory) => {
-    setAvailableCategories((prev) => [...prev, category])
-  }
+  // Handle category creation - invalidate query to refetch categories
+  const handleCategoryCreated = useCallback(
+    (_category: CustomCategory) => {
+      queryClient.invalidateQueries({ queryKey: getGetUserCategoriesQueryKey() })
+    },
+    [queryClient]
+  )
 
   // Issue #531: Handle categorize quick action (opens editor focused on category)
   const handleCategorizeTransaction = (transaction: Transaction) => {

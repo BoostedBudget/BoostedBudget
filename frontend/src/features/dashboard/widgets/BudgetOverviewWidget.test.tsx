@@ -2,16 +2,19 @@
  * BudgetOverviewWidget Tests
  *
  * TDD RED: Tests for the budget overview dashboard widget.
+ * Issue #564: Migrated to mock useCurrentBudget hook instead of API
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { BudgetOverviewWidget } from './BudgetOverviewWidget';
-import * as budgetsApi from '../../budgets/api/budgetsApi';
-import type { Budget } from '../../budgets/types';
+import type { Budget, BudgetWithMetrics } from '../../budgets/types';
 
-// Mock the API module
-vi.mock('../../budgets/api/budgetsApi');
+// Mock the useCurrentBudget hook
+vi.mock('../../budgets/hooks/useCurrentBudget');
+
+// Import the mocked hook
+import { useCurrentBudget } from '../../budgets/hooks/useCurrentBudget';
 
 describe('BudgetOverviewWidget', () => {
   const mockBudget: Budget = {
@@ -58,6 +61,23 @@ describe('BudgetOverviewWidget', () => {
     income_sources: [],
   };
 
+  // Computed metrics for the mock budget (extends Budget with metrics)
+  const mockMetrics: BudgetWithMetrics = {
+    ...mockBudget,
+    total_allocated: 800, // 500 + 300
+    total_spent: 350, // 250 + 100
+    remaining_amount: 1650, // 2000 - 350
+    percent_used: 18, // (350 / 2000) * 100 = 17.5% -> 18%
+    is_over_budget: false,
+    unallocated_funds: 1200, // 2000 - 800
+    is_fully_allocated: false,
+    categories: mockBudget.categories!.map((cat) => ({
+      ...cat,
+      percent_used: cat.spent_amount / cat.allocated_amount * 100,
+      remaining_amount: cat.allocated_amount - cat.spent_amount,
+    })),
+  };
+
   const defaultProps = {
     widgetId: 'widget-1',
     onRemove: vi.fn(),
@@ -73,9 +93,14 @@ describe('BudgetOverviewWidget', () => {
 
   describe('Loading State', () => {
     it('should show loading spinner initially', () => {
-      vi.mocked(budgetsApi.fetchCurrentBudget).mockImplementation(
-        () => new Promise(() => {}) // Never resolves
-      );
+      vi.mocked(useCurrentBudget).mockReturnValue({
+        budget: null,
+        metrics: null,
+        loading: true,
+        error: null,
+        hasNoBudget: false,
+        refetch: vi.fn(),
+      });
 
       render(<BudgetOverviewWidget {...defaultProps} />);
 
@@ -87,7 +112,14 @@ describe('BudgetOverviewWidget', () => {
 
   describe('Success State', () => {
     it('should render budget name', async () => {
-      vi.mocked(budgetsApi.fetchCurrentBudget).mockResolvedValue(mockBudget);
+      vi.mocked(useCurrentBudget).mockReturnValue({
+        budget: mockBudget,
+        metrics: mockMetrics,
+        loading: false,
+        error: null,
+        hasNoBudget: false,
+        refetch: vi.fn(),
+      });
 
       render(<BudgetOverviewWidget {...defaultProps} />);
 
@@ -97,7 +129,14 @@ describe('BudgetOverviewWidget', () => {
     });
 
     it('should render budget amount', async () => {
-      vi.mocked(budgetsApi.fetchCurrentBudget).mockResolvedValue(mockBudget);
+      vi.mocked(useCurrentBudget).mockReturnValue({
+        budget: mockBudget,
+        metrics: mockMetrics,
+        loading: false,
+        error: null,
+        hasNoBudget: false,
+        refetch: vi.fn(),
+      });
 
       render(<BudgetOverviewWidget {...defaultProps} />);
 
@@ -107,7 +146,14 @@ describe('BudgetOverviewWidget', () => {
     });
 
     it('should render spent amount', async () => {
-      vi.mocked(budgetsApi.fetchCurrentBudget).mockResolvedValue(mockBudget);
+      vi.mocked(useCurrentBudget).mockReturnValue({
+        budget: mockBudget,
+        metrics: mockMetrics,
+        loading: false,
+        error: null,
+        hasNoBudget: false,
+        refetch: vi.fn(),
+      });
 
       render(<BudgetOverviewWidget {...defaultProps} />);
 
@@ -118,7 +164,14 @@ describe('BudgetOverviewWidget', () => {
     });
 
     it('should render progress bar', async () => {
-      vi.mocked(budgetsApi.fetchCurrentBudget).mockResolvedValue(mockBudget);
+      vi.mocked(useCurrentBudget).mockReturnValue({
+        budget: mockBudget,
+        metrics: mockMetrics,
+        loading: false,
+        error: null,
+        hasNoBudget: false,
+        refetch: vi.fn(),
+      });
 
       render(<BudgetOverviewWidget {...defaultProps} />);
 
@@ -128,7 +181,14 @@ describe('BudgetOverviewWidget', () => {
     });
 
     it('should show percentage used', async () => {
-      vi.mocked(budgetsApi.fetchCurrentBudget).mockResolvedValue(mockBudget);
+      vi.mocked(useCurrentBudget).mockReturnValue({
+        budget: mockBudget,
+        metrics: mockMetrics,
+        loading: false,
+        error: null,
+        hasNoBudget: false,
+        refetch: vi.fn(),
+      });
 
       render(<BudgetOverviewWidget {...defaultProps} />);
 
@@ -140,9 +200,15 @@ describe('BudgetOverviewWidget', () => {
   });
 
   describe('No Budget State', () => {
-    it('should show "no budget" message when 404', async () => {
-      const error = { response: { status: 404 } };
-      vi.mocked(budgetsApi.fetchCurrentBudget).mockRejectedValue(error);
+    it('should show "no budget" message when hasNoBudget is true', async () => {
+      vi.mocked(useCurrentBudget).mockReturnValue({
+        budget: null,
+        metrics: null,
+        loading: false,
+        error: null,
+        hasNoBudget: true,
+        refetch: vi.fn(),
+      });
 
       render(<BudgetOverviewWidget {...defaultProps} />);
 
@@ -152,8 +218,14 @@ describe('BudgetOverviewWidget', () => {
     });
 
     it('should show create budget prompt when no budget', async () => {
-      const error = { response: { status: 404 } };
-      vi.mocked(budgetsApi.fetchCurrentBudget).mockRejectedValue(error);
+      vi.mocked(useCurrentBudget).mockReturnValue({
+        budget: null,
+        metrics: null,
+        loading: false,
+        error: null,
+        hasNoBudget: true,
+        refetch: vi.fn(),
+      });
 
       render(<BudgetOverviewWidget {...defaultProps} />);
 
@@ -168,8 +240,14 @@ describe('BudgetOverviewWidget', () => {
 
   describe('Error State', () => {
     it('should show error message on failure', async () => {
-      const error = new Error('Network error');
-      vi.mocked(budgetsApi.fetchCurrentBudget).mockRejectedValue(error);
+      vi.mocked(useCurrentBudget).mockReturnValue({
+        budget: null,
+        metrics: null,
+        loading: false,
+        error: new Error('Network error'),
+        hasNoBudget: false,
+        refetch: vi.fn(),
+      });
 
       render(<BudgetOverviewWidget {...defaultProps} />);
 
