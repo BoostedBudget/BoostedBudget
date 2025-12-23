@@ -135,7 +135,7 @@ export function TransactionsPage() {
         ])
         setAvailableTags(tags)
         setAvailableCategories(categories)
-        setAccounts(accountsResponse.accounts)
+        setAccounts(accountsResponse.accounts ?? [])
       } catch (err) {
         console.error('Failed to load metadata:', err)
       }

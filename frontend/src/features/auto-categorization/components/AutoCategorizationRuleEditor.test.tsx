@@ -652,8 +652,8 @@ describe('AutoCategorizationRuleEditor', () => {
     it('should render searchable account dropdown for account_id', async () => {
       const user = userEvent.setup({ delay: null })
       const mockAccounts = [
-        { id: 'acc-1', name: 'Checking', type: 'depository' as const, linked_item_id: 'item-1', user_id: 'user-1', plaid_account_id: 'plaid-1', currency_code: 'USD', created_at: '2024-01-01', updated_at: '2024-01-01' },
-        { id: 'acc-2', name: 'Savings', type: 'depository' as const, linked_item_id: 'item-1', user_id: 'user-1', plaid_account_id: 'plaid-2', currency_code: 'USD', created_at: '2024-01-01', updated_at: '2024-01-01' },
+        { id: 'acc-1', name: 'Checking', type: 'depository' as const, linked_item_id: 'item-1', user_id: 'user-1', plaid_account_id: 'plaid-1', currency_code: 'USD', is_hidden: false, created_at: '2024-01-01', updated_at: '2024-01-01' },
+        { id: 'acc-2', name: 'Savings', type: 'depository' as const, linked_item_id: 'item-1', user_id: 'user-1', plaid_account_id: 'plaid-2', currency_code: 'USD', is_hidden: false, created_at: '2024-01-01', updated_at: '2024-01-01' },
       ]
       render(
         <AutoCategorizationRuleEditor
@@ -1170,9 +1170,9 @@ describe('AutoCategorizationRuleEditor', () => {
 
   describe('Searchable Dropdowns', () => {
     const mockAccounts = [
-      { id: 'acc-1', name: 'Checking', type: 'depository' as const, mask: '1234', linked_item_id: 'item-1', user_id: 'user-1', plaid_account_id: 'plaid-1', currency_code: 'USD', created_at: '2024-01-01', updated_at: '2024-01-01' },
-      { id: 'acc-2', name: 'Savings', type: 'depository' as const, mask: '5678', linked_item_id: 'item-1', user_id: 'user-1', plaid_account_id: 'plaid-2', currency_code: 'USD', created_at: '2024-01-01', updated_at: '2024-01-01' },
-      { id: 'acc-3', name: 'Credit Card', type: 'credit' as const, mask: '9012', linked_item_id: 'item-2', user_id: 'user-1', plaid_account_id: 'plaid-3', currency_code: 'USD', created_at: '2024-01-01', updated_at: '2024-01-01' },
+      { id: 'acc-1', name: 'Checking', type: 'depository' as const, mask: '1234', linked_item_id: 'item-1', user_id: 'user-1', plaid_account_id: 'plaid-1', currency_code: 'USD', is_hidden: false, created_at: '2024-01-01', updated_at: '2024-01-01' },
+      { id: 'acc-2', name: 'Savings', type: 'depository' as const, mask: '5678', linked_item_id: 'item-1', user_id: 'user-1', plaid_account_id: 'plaid-2', currency_code: 'USD', is_hidden: false, created_at: '2024-01-01', updated_at: '2024-01-01' },
+      { id: 'acc-3', name: 'Credit Card', type: 'credit' as const, mask: '9012', linked_item_id: 'item-2', user_id: 'user-1', plaid_account_id: 'plaid-3', currency_code: 'USD', is_hidden: false, created_at: '2024-01-01', updated_at: '2024-01-01' },
     ]
 
     describe('existing_category condition', () => {

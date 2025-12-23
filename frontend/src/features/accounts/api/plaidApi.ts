@@ -119,7 +119,7 @@ export async function disconnectInstitution(linkedItemId: string): Promise<void>
  */
 export async function updateAccount(
   accountId: string,
-  data: UpdateAccountRequest
+  data: Partial<UpdateAccountRequest>
 ): Promise<UpdateAccountResponse> {
   const response = await apiClient.patch<UpdateAccountResponse>(
     `/v1/accounts/${accountId}`,

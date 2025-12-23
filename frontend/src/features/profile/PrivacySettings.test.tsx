@@ -9,6 +9,18 @@ import type { PrivacySettings as PrivacySettingsType } from './types'
 // Mock the privacy API
 vi.mock('./api/privacyApi')
 
+// Mock the deletion hooks to avoid React Query provider issues
+vi.mock('../deletion/hooks/useDeletion', () => ({
+  useDeletion: vi.fn().mockReturnValue({
+    requestDeletion: vi.fn(),
+    cancelDeletion: vi.fn(),
+    isRequesting: false,
+    isCancelling: false,
+    requestError: null,
+    cancelError: null,
+  }),
+}))
+
 describe('PrivacySettings', () => {
   const mockSettings: PrivacySettingsType = {
     id: '123e4567-e89b-12d3-a456-426614174000',

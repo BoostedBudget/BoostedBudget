@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { AccountsPage } from './AccountsPage'
 import * as plaidApi from './api/plaidApi'
-import * as profileApi from '../profile/api/profileApi'
+import * as useProfileHook from '../profile/hooks/useProfile'
 import { useSubscriptionTiers } from '../subscription/hooks/useSubscriptionTiers'
 import type { GetAccountsResponse, Account } from './types'
 import type { User } from '../profile/types'
@@ -13,12 +13,26 @@ import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtu
 // Mock the Plaid API
 vi.mock('./api/plaidApi')
 
-// Mock the Profile API
-vi.mock('../profile/api/profileApi')
-
 // Mock the subscription tiers hook - MUST be hoisted before component imports
 vi.mock('../subscription/hooks/useSubscriptionTiers', () => ({
   useSubscriptionTiers: vi.fn(),
+}))
+
+// Mock the account customization hook to avoid React Query provider issues
+vi.mock('./hooks/useAccountCustomization', () => ({
+  useAccountCustomization: vi.fn().mockReturnValue({
+    updateAccount: vi.fn().mockResolvedValue(null),
+    isUpdating: false,
+    updateError: null,
+    reorderAccounts: vi.fn().mockResolvedValue(undefined),
+    isReordering: false,
+    reorderError: null,
+  }),
+}))
+
+// Mock the useProfile hook to avoid React Query provider issues
+vi.mock('../profile/hooks/useProfile', () => ({
+  useProfile: vi.fn(),
 }))
 
 // Mock PlaidLinkButton component to simplify testing
@@ -46,6 +60,21 @@ function renderWithRouter(ui: React.ReactElement) {
 }
 
 describe('AccountsPage', () => {
+  const mockUser: User = {
+    id: '550e8400-e29b-41d4-a716-446655440000',
+    auth0_user_id: 'auth0|507f1f77bcf86cd799439011',
+    email: 'user@example.com',
+    email_verified: true,
+    subscription_tier: 'premium_plus', // Default to unlimited to not affect old tests
+    subscription_status: 'active',
+    primary_region: 'iad',
+    is_active: true,
+    is_deleted: false,
+    created_at: '2025-10-18T14:30:00Z',
+    updated_at: '2025-10-20T10:15:00Z',
+    last_login_at: '2025-10-25T08:00:00Z',
+  }
+
   beforeEach(() => {
     vi.restoreAllMocks()
 
@@ -57,19 +86,12 @@ describe('AccountsPage', () => {
       refetch: vi.fn(),
     })
 
-    vi.mocked(profileApi.fetchProfile).mockResolvedValue({
-      id: '550e8400-e29b-41d4-a716-446655440000',
-      auth0_user_id: 'auth0|507f1f77bcf86cd799439011',
-      email: 'user@example.com',
-      email_verified: true,
-      subscription_tier: 'premium_plus', // Default to unlimited to not affect old tests
-      subscription_status: 'active',
-      primary_region: 'iad',
-      is_active: true,
-      is_deleted: false,
-      created_at: '2025-10-18T14:30:00Z',
-      updated_at: '2025-10-20T10:15:00Z',
-      last_login_at: '2025-10-25T08:00:00Z',
+    // Mock useProfile hook
+    vi.mocked(useProfileHook.useProfile).mockReturnValue({
+      user: mockUser,
+      loading: false,
+      error: null,
+      refetch: vi.fn(),
     })
   })
 
@@ -88,6 +110,7 @@ describe('AccountsPage', () => {
       available_balance: 2300.50,
       currency_code: 'USD',
       institution_name: 'Chase',
+      is_hidden: false,
       created_at: '2025-10-18T14:30:00Z',
       updated_at: '2025-10-20T10:15:00Z',
     },
@@ -104,6 +127,7 @@ describe('AccountsPage', () => {
       available_balance: 10000.00,
       currency_code: 'USD',
       institution_name: 'Wells Fargo',
+      is_hidden: false,
       created_at: '2025-10-19T09:20:00Z',
       updated_at: '2025-10-20T10:15:00Z',
     },
@@ -308,7 +332,12 @@ describe('AccountsPage', () => {
         refetch: vi.fn(),
       })
 
-      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockFreeUser)
+      vi.mocked(useProfileHook.useProfile).mockReturnValue({
+        user: mockFreeUser,
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      })
       vi.mocked(plaidApi.fetchAccounts).mockResolvedValue({
         accounts: mockAccounts,
         total_count: 2,
@@ -335,7 +364,12 @@ describe('AccountsPage', () => {
       // User has 3 accounts (at limit for free tier)
       const threeAccounts = [...mockAccounts, { ...mockAccounts[0], id: 'third-account' }]
 
-      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockFreeUser)
+      vi.mocked(useProfileHook.useProfile).mockReturnValue({
+        user: mockFreeUser,
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      })
       vi.mocked(plaidApi.fetchAccounts).mockResolvedValue({
         accounts: threeAccounts,
         total_count: 3,
@@ -363,7 +397,12 @@ describe('AccountsPage', () => {
       // User has 3 accounts (at limit for free tier)
       const threeAccounts = [...mockAccounts, { ...mockAccounts[0], id: 'third-account' }]
 
-      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockFreeUser)
+      vi.mocked(useProfileHook.useProfile).mockReturnValue({
+        user: mockFreeUser,
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      })
       vi.mocked(plaidApi.fetchAccounts).mockResolvedValue({
         accounts: threeAccounts,
         total_count: 3,
@@ -388,7 +427,12 @@ describe('AccountsPage', () => {
         refetch: vi.fn(),
       })
 
-      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockFreeUser)
+      vi.mocked(useProfileHook.useProfile).mockReturnValue({
+        user: mockFreeUser,
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      })
       vi.mocked(plaidApi.fetchAccounts).mockResolvedValue({
         accounts: mockAccounts, // 2 accounts, under limit of 3
         total_count: 2,
@@ -413,7 +457,12 @@ describe('AccountsPage', () => {
         refetch: vi.fn(),
       })
 
-      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockPremiumPlusUser)
+      vi.mocked(useProfileHook.useProfile).mockReturnValue({
+        user: mockPremiumPlusUser,
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      })
       vi.mocked(plaidApi.fetchAccounts).mockResolvedValue({
         accounts: mockAccounts,
         total_count: 2,
@@ -439,7 +488,12 @@ describe('AccountsPage', () => {
         refetch: vi.fn(),
       })
 
-      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockPremiumPlusUser)
+      vi.mocked(useProfileHook.useProfile).mockReturnValue({
+        user: mockPremiumPlusUser,
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      })
       vi.mocked(plaidApi.fetchAccounts).mockResolvedValue({
         accounts: mockAccounts,
         total_count: 2,
@@ -464,7 +518,12 @@ describe('AccountsPage', () => {
         refetch: vi.fn(),
       })
 
-      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockPremiumUser)
+      vi.mocked(useProfileHook.useProfile).mockReturnValue({
+        user: mockPremiumUser,
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      })
       vi.mocked(plaidApi.fetchAccounts).mockResolvedValue({
         accounts: mockAccounts,
         total_count: 2,

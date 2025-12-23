@@ -2,22 +2,23 @@
  * useTags Hook
  * Issue #497: Budget Category Manager + Match Config UI
  *
- * React hook for fetching user tags with loading and error states.
+ * React hook for fetching user tags.
+ * Uses generated React Query hook from OpenAPI spec with built-in caching.
  */
 
-import { useState, useEffect, useCallback } from 'react';
-import { fetchTags } from '../api/tagsApi';
-import type { UserTag } from '../types';
+import { useMemo } from 'react';
+import { useGetUserTags } from '@/api/generated/endpoints/tags/tags';
+import type { UserTag } from '@/api/generated/models';
 
 export interface UseTagsResult {
-  /** List of user tags */
+  /** List of user tags (sorted alphabetically) */
   tags: UserTag[];
   /** Whether the tags are currently loading */
   loading: boolean;
   /** Any error that occurred during fetching */
   error: Error | null;
   /** Function to refetch the tags */
-  refetch: () => Promise<void>;
+  refetch: () => void;
 }
 
 /**
@@ -44,41 +45,23 @@ export interface UseTagsResult {
  * ```
  */
 export function useTags(): UseTagsResult {
-  const [tags, setTags] = useState<UserTag[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<Error | null>(null);
+  const { data, isLoading, error, refetch: queryRefetch } = useGetUserTags({
+    query: {
+      staleTime: 5 * 60 * 1000, // 5 minutes cache
+      gcTime: 5 * 60 * 1000,
+    },
+  });
 
-  // Load tags function
-  const loadTags = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const result = await fetchTags();
-      // Sort tags alphabetically by name
-      const sortedTags = [...result].sort((a, b) => a.name.localeCompare(b.name));
-      setTags(sortedTags);
-    } catch (err) {
-      setError(err instanceof Error ? err : new Error('Failed to fetch tags'));
-      setTags([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Initial load
-  useEffect(() => {
-    loadTags();
-  }, [loadTags]);
-
-  // Refetch function
-  const refetch = useCallback(async () => {
-    await loadTags();
-  }, [loadTags]);
+  // Sort tags alphabetically by name
+  const sortedTags = useMemo(() => {
+    if (!data) return [];
+    return [...data].sort((a, b) => a.name.localeCompare(b.name));
+  }, [data]);
 
   return {
-    tags,
-    loading,
-    error,
-    refetch,
+    tags: sortedTags,
+    loading: isLoading,
+    error: error ? (error instanceof Error ? error : new Error('Failed to fetch tags')) : null,
+    refetch: queryRefetch,
   };
 }

@@ -2,14 +2,11 @@
  * useProfile Hook
  *
  * React hook for fetching user profile data.
- * Simple hook without caching (profile changes infrequently, fetched on demand).
- *
- * TDD GREEN: Implementation to pass AccountsPage tests.
+ * Uses generated React Query hook from OpenAPI spec with built-in caching.
  */
 
-import { useState, useEffect } from 'react'
-import { fetchProfile } from '../api/profileApi'
-import type { User } from '../types'
+import { useGetUserProfile } from '@/api/generated/endpoints/profile/profile'
+import type { User } from '@/api/generated/models'
 
 export interface UseProfileResult {
   user: User | null
@@ -36,37 +33,17 @@ export interface UseProfileResult {
  * ```
  */
 export function useProfile(): UseProfileResult {
-  const [user, setUser] = useState<User | null>(null)
-  const [loading, setLoading] = useState<boolean>(true)
-  const [error, setError] = useState<Error | null>(null)
-
-  async function loadProfile() {
-    try {
-      setLoading(true)
-      setError(null)
-      const data = await fetchProfile()
-      setUser(data)
-    } catch (err) {
-      setError(err instanceof Error ? err : new Error('Failed to fetch user profile'))
-      setUser(null)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  function refetch() {
-    loadProfile()
-  }
-
-  // Fetch on mount
-  useEffect(() => {
-    loadProfile()
-  }, [])
+  const { data, isLoading, error, refetch: queryRefetch } = useGetUserProfile({
+    query: {
+      staleTime: 5 * 60 * 1000, // 5 minutes cache
+      gcTime: 5 * 60 * 1000,
+    },
+  })
 
   return {
-    user,
-    loading,
-    error,
-    refetch,
+    user: data ?? null,
+    loading: isLoading,
+    error: error ? (error instanceof Error ? error : new Error('Failed to fetch user profile')) : null,
+    refetch: queryRefetch,
   }
 }
