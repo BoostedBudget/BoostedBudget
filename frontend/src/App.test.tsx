@@ -25,6 +25,47 @@ vi.mock('./features/dashboard/hooks/useDefaultDashboardLayout', () => ({
   })),
 }))
 
+// Mock useDashboardLayout hook to avoid QueryClient requirement
+vi.mock('./features/dashboard/hooks/useDashboardLayout', () => ({
+  useDashboardLayout: vi.fn(() => ({
+    layout: {
+      widgets: [
+        { id: '1', type: 'balance-summary', position: { x: 0, y: 0 }, size: { width: 4, height: 2 } },
+      ],
+      version: 1,
+    },
+    loading: false,
+    error: null,
+    saveLayout: vi.fn(),
+    resetLayout: vi.fn(),
+    isModified: false,
+    isSaving: false,
+  })),
+}))
+
+// Mock useDashboardData hook to avoid QueryClient requirement
+vi.mock('./features/dashboard/hooks/useDashboardData', () => ({
+  useDashboardData: vi.fn(() => ({
+    balanceSummary: null,
+    balanceHistory: [],
+    accountTypes: { types: [] },
+    loading: false,
+    error: null,
+    refetch: vi.fn(),
+  })),
+}))
+
+// Mock useCashFlowData hook to avoid QueryClient requirement
+vi.mock('./features/dashboard/hooks/useCashFlowData', () => ({
+  useCashFlowData: vi.fn(() => ({
+    summary: null,
+    history: [],
+    loading: false,
+    error: null,
+    refetch: vi.fn(),
+  })),
+}))
+
 // Mock fetch globally
 globalThis.fetch = vi.fn() as typeof fetch
 

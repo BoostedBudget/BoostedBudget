@@ -6,10 +6,10 @@
  * Issue #529: Transaction page filtering
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { ChevronDownIcon, XMarkIcon, FunnelIcon } from '@heroicons/react/24/outline'
-import { fetchAccounts } from '../../accounts/api/plaidApi'
-import { fetchPlaidCategories } from '../../categories/api/categoriesApi'
+import { useGetAccounts } from '@/api/generated/endpoints/accounts/accounts'
+import { useGetPlaidCategories } from '@/api/generated/endpoints/categories/categories'
 import {
   Sheet,
   SheetContent,
@@ -18,7 +18,6 @@ import {
   SheetFooter,
   SheetTrigger,
 } from '@/components/ui/sheet'
-import type { Account } from '../../accounts/types'
 import type { TransactionFilters, DatePreset, StatusFilter } from '../types'
 import {
   TransactionAccountFilter,
@@ -85,41 +84,15 @@ export function TransactionFilterPanel({
 }: TransactionFilterPanelProps) {
   const [isExpanded, setIsExpanded] = useState(false)
   const [isSheetOpen, setIsSheetOpen] = useState(false)
-  const [accounts, setAccounts] = useState<Account[]>([])
-  const [categories, setCategories] = useState<string[]>([])
-  const [loadingAccounts, setLoadingAccounts] = useState(true)
-  const [loadingCategories, setLoadingCategories] = useState(true)
   const isMobile = useIsMobile()
 
-  // Fetch accounts for the filter dropdown
-  useEffect(() => {
-    const loadAccounts = async () => {
-      try {
-        const response = await fetchAccounts()
-        setAccounts(response.accounts ?? [])
-      } catch (err) {
-        console.error('Failed to load accounts for filter:', err)
-      } finally {
-        setLoadingAccounts(false)
-      }
-    }
-    loadAccounts()
-  }, [])
+  // Fetch accounts for the filter dropdown using generated hook
+  const { data: accountsData, isLoading: loadingAccounts } = useGetAccounts()
+  const accounts = accountsData?.accounts ?? []
 
-  // Fetch categories for the filter dropdown
-  useEffect(() => {
-    const loadCategories = async () => {
-      try {
-        const result = await fetchPlaidCategories()
-        setCategories(result)
-      } catch (err) {
-        console.error('Failed to load categories for filter:', err)
-      } finally {
-        setLoadingCategories(false)
-      }
-    }
-    loadCategories()
-  }, [])
+  // Fetch categories for the filter dropdown using generated hook
+  const { data: categoriesData, isLoading: loadingCategories } = useGetPlaidCategories()
+  const categories = (categoriesData as unknown as string[]) ?? []
 
   // Handle account filter changes
   const handleAccountsChange = useCallback(

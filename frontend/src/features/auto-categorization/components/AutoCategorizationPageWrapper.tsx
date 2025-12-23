@@ -15,53 +15,39 @@
  * Issue #399: Add tags autocomplete for target tags
  */
 
-import { useState, useEffect } from 'react'
+import { useMemo } from 'react'
 import { AutoCategorizationPage } from './AutoCategorizationPage'
-import { fetchCategories, fetchPlaidCategories } from '../../categories/api/categoriesApi'
-import { fetchAccounts } from '../../accounts/api/plaidApi'
-import { fetchTags } from '../../tags/api/tagsApi'
+import { useGetUserCategories, useGetPlaidCategories } from '@/api/generated/endpoints/categories/categories'
+import { useGetAccounts } from '@/api/generated/endpoints/accounts/accounts'
+import { useGetUserTags } from '@/api/generated/endpoints/tags/tags'
 import { useSubscriptionTiers } from '../../subscription/hooks/useSubscriptionTiers'
 import { useProfile } from '../../profile/hooks/useProfile'
 import type { CustomCategory } from '../../categories/types'
-import type { Account } from '../../accounts/types'
 import type { UserTag } from '../../tags/types'
 
 export function AutoCategorizationPageWrapper() {
-  const [categories, setCategories] = useState<string[][]>([])
-  const [plaidCategories, setPlaidCategories] = useState<string[]>([])
-  const [accounts, setAccounts] = useState<Account[]>([])
-  const [tags, setTags] = useState<UserTag[]>([])
-
   const { user } = useProfile()
   const { tiers } = useSubscriptionTiers()
 
-  useEffect(() => {
-    const loadData = async () => {
-      try {
-        // Fetch categories, Plaid categories, accounts, and tags in parallel
-        const [customCategories, plaidCats, accountsResponse, userTags] = await Promise.all([
-          fetchCategories(),
-          fetchPlaidCategories(),
-          fetchAccounts(),
-          fetchTags(),
-        ])
+  // Fetch data using generated hooks
+  const { data: customCategoriesData } = useGetUserCategories()
+  const { data: plaidCategoriesData } = useGetPlaidCategories()
+  const { data: accountsData } = useGetAccounts()
+  const { data: userTagsData } = useGetUserTags()
 
-        // Convert CustomCategory[] to string[][] format for AutoCategorizationPage
-        const categoryPaths = customCategories.map((cat: CustomCategory) =>
-          cat.parent_category
-            ? [cat.parent_category, cat.name]
-            : [cat.name]
-        )
-        setCategories(categoryPaths)
-        setPlaidCategories(plaidCats)
-        setAccounts(accountsResponse.accounts ?? [])
-        setTags(userTags)
-      } catch (err) {
-        console.error('Failed to load data:', err)
-      }
-    }
-    loadData()
-  }, [])
+  // Convert CustomCategory[] to string[][] format for AutoCategorizationPage
+  const categories = useMemo(() => {
+    const customCategories = (customCategoriesData as unknown as CustomCategory[]) ?? []
+    return customCategories.map((cat: CustomCategory) =>
+      cat.parent_category
+        ? [cat.parent_category, cat.name]
+        : [cat.name]
+    )
+  }, [customCategoriesData])
+
+  const plaidCategories = (plaidCategoriesData as unknown as string[]) ?? []
+  const accounts = accountsData?.accounts ?? []
+  const tags = (userTagsData as unknown as UserTag[]) ?? []
 
   // Get max rules from tier config based on user's subscription tier
   const userTier = user?.subscription_tier ?? 'free'

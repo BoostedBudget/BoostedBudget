@@ -2,13 +2,18 @@
  * useTransactions Hook
  *
  * React hook for fetching transactions with filtering, pagination, and debounced search.
+ * Issue #564: Migrated to generated React Query hooks
  *
  * TDD GREEN: Implementation to pass all 27 tests.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { fetchTransactions } from '../api/transactionsApi'
-import type { GetTransactionsResponse, TransactionFilters } from '../types'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import {
+  useGetTransactions,
+  getGetTransactionsQueryKey,
+} from '@/api/generated/endpoints/transactions/transactions';
+import type { GetTransactionsResponse, TransactionFilters, Transaction } from '../types';
 
 // Constants
 const DEFAULT_LIMIT = 50
@@ -83,163 +88,176 @@ export interface UseTransactionsResult {
  * ```
  */
 export function useTransactions(options: UseTransactionsOptions = {}): UseTransactionsResult {
-  const { filters = {}, limit = DEFAULT_LIMIT, initialOffset = 0 } = options
+  const { filters = {}, limit = DEFAULT_LIMIT, initialOffset = 0 } = options;
+  const queryClient = useQueryClient();
 
   // State
-  const [data, setData] = useState<GetTransactionsResponse | null>(null)
-  const [loading, setLoading] = useState<boolean>(true)
-  const [error, setError] = useState<Error | null>(null)
-  const [offset, setOffset] = useState<number>(initialOffset)
+  const [offset, setOffset] = useState<number>(initialOffset);
+  const [localData, setLocalData] = useState<GetTransactionsResponse | null>(null);
 
   // Refs for debouncing search
-  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const previousFiltersRef = useRef<TransactionFilters>(filters)
-  const isFirstRenderRef = useRef<boolean>(true)
+  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const previousFiltersRef = useRef<TransactionFilters>(filters);
+  const isFirstRenderRef = useRef<boolean>(true);
+  const [debouncedSearch, setDebouncedSearch] = useState<string | undefined>(filters.search);
 
-  // Load transactions function
-  const loadTransactions = useCallback(
-    async (currentOffset: number) => {
-      try {
-        setLoading(true)
-        setError(null)
+  // Build query params from filters
+  const queryParams = useMemo(() => {
+    // Sanitize filters - remove empty strings
+    const params: Record<string, string | number | boolean | undefined> = {
+      limit,
+      offset,
+    };
 
-        // Sanitize filters - remove empty strings
-        const sanitizedFilters: TransactionFilters = {}
-        // Legacy single-value filters (backward compatibility)
-        if (filters.account_id) sanitizedFilters.account_id = filters.account_id
-        if (filters.start_date) sanitizedFilters.start_date = filters.start_date
-        if (filters.end_date) sanitizedFilters.end_date = filters.end_date
-        if (filters.category) sanitizedFilters.category = filters.category
-        if (filters.search) sanitizedFilters.search = filters.search
-        if (filters.pending !== undefined) sanitizedFilters.pending = filters.pending
+    // Legacy single-value filters (backward compatibility)
+    if (filters.account_id) params.account_id = filters.account_id;
+    if (filters.start_date) params.start_date = filters.start_date;
+    if (filters.end_date) params.end_date = filters.end_date;
+    if (filters.category) params.category = filters.category;
+    if (debouncedSearch) params.search = debouncedSearch;
+    if (filters.pending !== undefined) params.pending = filters.pending;
 
-        // Issue #529: New multi-value and range filters
-        if (filters.account_ids && filters.account_ids.length > 0) {
-          sanitizedFilters.account_ids = filters.account_ids
-        }
-        if (filters.categories && filters.categories.length > 0) {
-          sanitizedFilters.categories = filters.categories
-        }
-        if (filters.min_amount !== undefined) {
-          sanitizedFilters.min_amount = filters.min_amount
-        }
-        if (filters.max_amount !== undefined) {
-          sanitizedFilters.max_amount = filters.max_amount
-        }
-        if (filters.amount_type && filters.amount_type !== 'all') {
-          sanitizedFilters.amount_type = filters.amount_type
-        }
+    // Issue #529: New multi-value and range filters
+    if (filters.account_ids && filters.account_ids.length > 0) {
+      params.account_ids = filters.account_ids.join(',');
+    }
+    if (filters.categories && filters.categories.length > 0) {
+      params.categories = filters.categories.join(',');
+    }
+    if (filters.min_amount !== undefined) {
+      params.min_amount = filters.min_amount;
+    }
+    if (filters.max_amount !== undefined) {
+      params.max_amount = filters.max_amount;
+    }
+    if (filters.amount_type && filters.amount_type !== 'all') {
+      params.amount_type = filters.amount_type;
+    }
 
-        const result = await fetchTransactions({
-          limit,
-          offset: currentOffset,
-          filters: sanitizedFilters,
-        })
+    return params;
+  }, [limit, offset, filters, debouncedSearch]);
 
-        setData(result)
-      } catch (err) {
-        setError(err instanceof Error ? err : new Error('Failed to fetch transactions'))
-        setData(null)
-      } finally {
-        setLoading(false)
-      }
+  // Use generated query hook
+  const {
+    data: queryData,
+    isLoading,
+    error: queryError,
+    refetch: queryRefetch,
+  } = useGetTransactions(queryParams as never, {
+    query: {
+      staleTime: 30 * 1000, // 30 seconds
     },
-    [limit, filters]
-  )
+  });
 
-  // Pagination controls
-  const nextPage = useCallback(() => {
-    setOffset((prevOffset) => {
-      const newOffset = prevOffset + limit
-      loadTransactions(newOffset)
-      return newOffset
-    })
-  }, [limit, loadTransactions])
-
-  const previousPage = useCallback(() => {
-    setOffset((prevOffset) => {
-      if (prevOffset === 0) {
-        // Already at first page, don't go negative
-        return prevOffset
-      }
-
-      const newOffset = Math.max(0, prevOffset - limit)
-      loadTransactions(newOffset)
-      return newOffset
-    })
-  }, [limit, loadTransactions])
-
-  const refetch = useCallback(() => {
-    loadTransactions(offset)
-  }, [offset, loadTransactions])
-
-  // Update a single transaction in the current data
-  // Uses merge strategy to preserve immutable fields (like original_category)
-  // that may not be included in partial API responses
-  const updateTransaction = useCallback((updatedTransaction: import('../types').Transaction) => {
-    setData((prevData) => {
-      if (!prevData) return prevData
-      return {
-        ...prevData,
-        transactions: prevData.transactions.map((txn) =>
-          txn.id === updatedTransaction.id ? { ...txn, ...updatedTransaction } : txn
-        ),
-      }
-    })
-  }, [])
+  // Sync query data with local state for optimistic updates
+  // This is intentional - we need to sync server state to local state for optimistic updates
+  useEffect(() => {
+    if (queryData) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setLocalData(queryData as unknown as GetTransactionsResponse);
+    }
+  }, [queryData]);
 
   // Effect: Handle filter changes with search debouncing
   useEffect(() => {
     // Clear any pending search timeout
     if (searchTimeoutRef.current) {
-      clearTimeout(searchTimeoutRef.current)
+      clearTimeout(searchTimeoutRef.current);
     }
 
     // Detect if filters changed (excluding first render)
     const filtersChanged =
       !isFirstRenderRef.current &&
-      JSON.stringify(previousFiltersRef.current) !== JSON.stringify(filters)
+      JSON.stringify(previousFiltersRef.current) !== JSON.stringify(filters);
 
     // Reset offset to 0 if filters changed
+    // This is intentional - pagination should reset when filters change
     if (filtersChanged) {
-      setOffset(0)
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setOffset(0);
     }
 
     // Check if search filter changed (needs debouncing)
     const searchChanged =
       previousFiltersRef.current.search !== filters.search ||
-      (isFirstRenderRef.current && filters.search)
+      (isFirstRenderRef.current && filters.search);
 
     if (searchChanged) {
-      // Debounce search input - always reset to offset 0 on search
+      // Debounce search input
       searchTimeoutRef.current = setTimeout(() => {
-        loadTransactions(filtersChanged ? 0 : 0) // Always 0 for search changes
-      }, SEARCH_DEBOUNCE_MS)
-    } else if (filtersChanged || isFirstRenderRef.current) {
-      // Non-search filter changed or first render - fetch immediately at offset 0
-      loadTransactions(0)
+        setDebouncedSearch(filters.search);
+        if (filtersChanged) {
+          setOffset(0);
+        }
+      }, SEARCH_DEBOUNCE_MS);
+    } else if (filtersChanged) {
+      // Non-search filter changed - update debounced search immediately
+      setDebouncedSearch(filters.search);
     }
 
     // Update refs
-    previousFiltersRef.current = filters
-    isFirstRenderRef.current = false
+    previousFiltersRef.current = filters;
+    isFirstRenderRef.current = false;
 
     // Cleanup timeout on unmount
     return () => {
       if (searchTimeoutRef.current) {
-        clearTimeout(searchTimeoutRef.current)
+        clearTimeout(searchTimeoutRef.current);
       }
-    }
-  }, [filters, loadTransactions])
+    };
+  }, [filters]);
+
+  // Pagination controls
+  const nextPage = useCallback(() => {
+    setOffset((prevOffset) => prevOffset + limit);
+  }, [limit]);
+
+  const previousPage = useCallback(() => {
+    setOffset((prevOffset) => {
+      if (prevOffset === 0) {
+        // Already at first page, don't go negative
+        return prevOffset;
+      }
+      return Math.max(0, prevOffset - limit);
+    });
+  }, [limit]);
+
+  const refetch = useCallback(async () => {
+    await queryClient.invalidateQueries({
+      queryKey: getGetTransactionsQueryKey(queryParams as never),
+    });
+    await queryRefetch();
+  }, [queryClient, queryRefetch, queryParams]);
+
+  // Update a single transaction in the current data
+  // Uses merge strategy to preserve immutable fields (like original_category)
+  // that may not be included in partial API responses
+  const updateTransaction = useCallback((updatedTransaction: Transaction) => {
+    setLocalData((prevData) => {
+      if (!prevData) return prevData;
+      return {
+        ...prevData,
+        transactions: prevData.transactions.map((txn) =>
+          txn.id === updatedTransaction.id ? { ...txn, ...updatedTransaction } : txn
+        ),
+      };
+    });
+  }, []);
+
+  // Convert error
+  const error = useMemo<Error | null>(() => {
+    if (!queryError) return null;
+    return queryError instanceof Error ? queryError : new Error('Failed to fetch transactions');
+  }, [queryError]);
 
   // Computed values
-  const hasMore = data?.has_more ?? false
-  const totalCount = data?.total_count ?? 0
-  const currentPage = limit > 0 ? Math.floor(offset / limit) : 0
+  const hasMore = localData?.has_more ?? false;
+  const totalCount = localData?.total_count ?? 0;
+  const currentPage = limit > 0 ? Math.floor(offset / limit) : 0;
 
   return {
-    data,
-    loading,
+    data: localData,
+    loading: isLoading,
     error,
     nextPage,
     previousPage,
@@ -248,5 +266,5 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
     hasMore,
     totalCount,
     currentPage,
-  }
+  };
 }

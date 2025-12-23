@@ -17,9 +17,9 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { createBudget } from '../api/budgetsApi';
-import { fetchPlaidCategories } from '@/features/categories/api/categoriesApi';
-import { fetchTags } from '@/features/tags/api/tagsApi';
+import { useCreateBudget } from '@/api/generated/endpoints/budgets/budgets';
+import { useGetPlaidCategories } from '@/api/generated/endpoints/categories/categories';
+import { useGetUserTags } from '@/api/generated/endpoints/tags/tags';
 import type { UserTag } from '@/features/tags/types';
 import type { Budget, BudgetPeriod, CreateBudgetRequest, IncomeSource } from '../types';
 import { IncomeSourceConfig } from './income';
@@ -82,18 +82,20 @@ export function CreateBudgetDialog({
   const [errors, setErrors] = useState<FormErrors>({});
   const [apiError, setApiError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  // Issue #496: State for income source options
-  const [plaidCategories, setPlaidCategories] = useState<string[]>([]);
-  const [userTags, setUserTags] = useState<UserTag[]>([]);
   const [activeTab, setActiveTab] = useState<string>('budget');
 
-  // Issue #496: Load categories and tags when dialog opens
-  useEffect(() => {
-    if (isOpen) {
-      fetchPlaidCategories().then(setPlaidCategories).catch(console.error);
-      fetchTags().then(setUserTags).catch(console.error);
-    }
-  }, [isOpen]);
+  // Use generated hooks for data fetching
+  const createBudgetMutation = useCreateBudget();
+  const { data: plaidCategoriesData } = useGetPlaidCategories({
+    query: { enabled: isOpen },
+  });
+  const { data: userTagsData } = useGetUserTags({
+    query: { enabled: isOpen },
+  });
+
+  // Issue #496: Derived state for income source options
+  const plaidCategories = (plaidCategoriesData as unknown as string[]) ?? [];
+  const userTags = (userTagsData as unknown as UserTag[]) ?? [];
 
   // Reset form when dialog closes
   useEffect(() => {
@@ -165,15 +167,17 @@ export function CreateBudgetDialog({
           income_sources: formData.income_sources.length > 0 ? formData.income_sources : undefined,
         };
 
-        const newBudget = await createBudget(request);
-        onBudgetCreated(newBudget);
+        const newBudget = await createBudgetMutation.mutateAsync({
+          data: request as never,
+        });
+        onBudgetCreated(newBudget as unknown as Budget);
       } catch (err) {
         setApiError(err instanceof Error ? err.message : 'Failed to create budget');
       } finally {
         setIsSubmitting(false);
       }
     },
-    [formData, validate, onBudgetCreated]
+    [formData, validate, onBudgetCreated, createBudgetMutation]
   );
 
   // Handle dialog open state changes

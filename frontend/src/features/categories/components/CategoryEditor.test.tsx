@@ -1,11 +1,41 @@
+/**
+ * CategoryEditor Component Tests
+ * Issue #564: Migrated to mock generated React Query hooks
+ */
+
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
 import { CategoryEditor } from './CategoryEditor'
-import * as categoriesApi from '../api/categoriesApi'
 import type { CustomCategory } from '../types'
 
-// Mock the categories API
-vi.mock('../api/categoriesApi')
+// Use vi.hoisted for mock functions
+const { mockCreateCategoryMutateAsync } = vi.hoisted(() => ({
+  mockCreateCategoryMutateAsync: vi.fn(),
+}))
+
+// Mock the generated hooks
+vi.mock('@/api/generated/endpoints/categories/categories', () => ({
+  useCreateCategory: vi.fn(() => ({
+    mutateAsync: mockCreateCategoryMutateAsync,
+    isPending: false,
+  })),
+}))
+
+// Helper to create wrapper with QueryClient
+function createWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  })
+  return function Wrapper({ children }: { children: ReactNode }) {
+    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  }
+}
 
 describe('CategoryEditor', () => {
   const mockCategories: CustomCategory[] = [
@@ -48,11 +78,11 @@ describe('CategoryEditor', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     // Mock createCategory to return the new category with an id
-    vi.mocked(categoriesApi.createCategory).mockImplementation(async (request) => ({
+    mockCreateCategoryMutateAsync.mockImplementation(async ({ data }: { data: { name: string; color?: string } }) => ({
       id: 'new-cat-id',
       user_id: 'user-1',
-      name: request.name,
-      color: request.color || '#6B7280',
+      name: data.name,
+      color: data.color || '#6B7280',
       usage_count: 0,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -61,19 +91,22 @@ describe('CategoryEditor', () => {
 
   describe('Rendering', () => {
     it('should render selected category', () => {
-      render(<CategoryEditor {...defaultProps} />)
+      const Wrapper = createWrapper()
+      render(<CategoryEditor {...defaultProps} />, { wrapper: Wrapper })
 
       expect(screen.getByText('Food & Dining')).toBeInTheDocument()
     })
 
     it('should show dropdown button', () => {
-      render(<CategoryEditor {...defaultProps} />)
+      const Wrapper = createWrapper()
+      render(<CategoryEditor {...defaultProps} />, { wrapper: Wrapper })
 
       expect(screen.getByRole('button', { name: /change category/i })).toBeInTheDocument()
     })
 
     it('should show empty state when no category selected', () => {
-      render(<CategoryEditor {...defaultProps} selectedCategory={[]} />)
+      const Wrapper = createWrapper()
+      render(<CategoryEditor {...defaultProps} selectedCategory={[]} />, { wrapper: Wrapper })
 
       expect(screen.getByText(/uncategorized/i)).toBeInTheDocument()
     })
@@ -81,7 +114,8 @@ describe('CategoryEditor', () => {
 
   describe('Category selection', () => {
     it('should show dropdown with all categories when button clicked', async () => {
-      render(<CategoryEditor {...defaultProps} />)
+      const Wrapper = createWrapper()
+      render(<CategoryEditor {...defaultProps} />, { wrapper: Wrapper })
 
       const button = screen.getByRole('button', { name: /change category/i })
       fireEvent.click(button)
@@ -95,7 +129,8 @@ describe('CategoryEditor', () => {
 
     it('should call onChange when selecting a different category', async () => {
       const onChange = vi.fn()
-      render(<CategoryEditor {...defaultProps} onChange={onChange} />)
+      const Wrapper = createWrapper()
+      render(<CategoryEditor {...defaultProps} onChange={onChange} />, { wrapper: Wrapper })
 
       const button = screen.getByRole('button', { name: /change category/i })
       fireEvent.click(button)
@@ -109,7 +144,8 @@ describe('CategoryEditor', () => {
     })
 
     it('should close dropdown after selection', async () => {
-      render(<CategoryEditor {...defaultProps} />)
+      const Wrapper = createWrapper()
+      render(<CategoryEditor {...defaultProps} />, { wrapper: Wrapper })
 
       const button = screen.getByRole('button', { name: /change category/i })
       fireEvent.click(button)
@@ -125,7 +161,8 @@ describe('CategoryEditor', () => {
     })
 
     it('should highlight currently selected category in dropdown', async () => {
-      render(<CategoryEditor {...defaultProps} />)
+      const Wrapper = createWrapper()
+      render(<CategoryEditor {...defaultProps} />, { wrapper: Wrapper })
 
       const button = screen.getByRole('button', { name: /change category/i })
       fireEvent.click(button)
@@ -139,14 +176,16 @@ describe('CategoryEditor', () => {
 
   describe('Clear category', () => {
     it('should show clear button when category is selected', () => {
-      render(<CategoryEditor {...defaultProps} />)
+      const Wrapper = createWrapper()
+      render(<CategoryEditor {...defaultProps} />, { wrapper: Wrapper })
 
       expect(screen.getByRole('button', { name: /clear category/i })).toBeInTheDocument()
     })
 
     it('should call onChange with empty array when clear button clicked', () => {
       const onChange = vi.fn()
-      render(<CategoryEditor {...defaultProps} onChange={onChange} />)
+      const Wrapper = createWrapper()
+      render(<CategoryEditor {...defaultProps} onChange={onChange} />, { wrapper: Wrapper })
 
       const clearButton = screen.getByRole('button', { name: /clear category/i })
       fireEvent.click(clearButton)
@@ -155,7 +194,8 @@ describe('CategoryEditor', () => {
     })
 
     it('should not show clear button when no category selected', () => {
-      render(<CategoryEditor {...defaultProps} selectedCategory={[]} />)
+      const Wrapper = createWrapper()
+      render(<CategoryEditor {...defaultProps} selectedCategory={[]} />, { wrapper: Wrapper })
 
       expect(screen.queryByRole('button', { name: /clear category/i })).not.toBeInTheDocument()
     })
@@ -163,14 +203,16 @@ describe('CategoryEditor', () => {
 
   describe('Disabled state', () => {
     it('should disable dropdown button when disabled', () => {
-      render(<CategoryEditor {...defaultProps} disabled={true} />)
+      const Wrapper = createWrapper()
+      render(<CategoryEditor {...defaultProps} disabled={true} />, { wrapper: Wrapper })
 
       const button = screen.getByRole('button', { name: /change category/i })
       expect(button).toBeDisabled()
     })
 
     it('should disable clear button when disabled', () => {
-      render(<CategoryEditor {...defaultProps} disabled={true} />)
+      const Wrapper = createWrapper()
+      render(<CategoryEditor {...defaultProps} disabled={true} />, { wrapper: Wrapper })
 
       const clearButton = screen.getByRole('button', { name: /clear category/i })
       expect(clearButton).toBeDisabled()
@@ -179,7 +221,8 @@ describe('CategoryEditor', () => {
 
   describe('Category colors', () => {
     it('should display color indicator for selected category', () => {
-      render(<CategoryEditor {...defaultProps} />)
+      const Wrapper = createWrapper()
+      render(<CategoryEditor {...defaultProps} />, { wrapper: Wrapper })
 
       const colorIndicator = screen.getByTestId('category-color')
       expect(colorIndicator).toHaveStyle({ backgroundColor: '#FF5733' })
@@ -194,11 +237,13 @@ describe('CategoryEditor', () => {
         ...mockCategories.slice(1),
       ]
 
+      const Wrapper = createWrapper()
       render(
         <CategoryEditor
           {...defaultProps}
           availableCategories={categoriesWithNoColor}
-        />
+        />,
+        { wrapper: Wrapper }
       )
 
       const colorIndicator = screen.getByTestId('category-color')
@@ -208,7 +253,8 @@ describe('CategoryEditor', () => {
 
   describe('Inline category creation', () => {
     it('should show "Create new category" option in dropdown even when availableCategories is empty', async () => {
-      render(<CategoryEditor {...defaultProps} availableCategories={[]} selectedCategory={[]} />)
+      const Wrapper = createWrapper()
+      render(<CategoryEditor {...defaultProps} availableCategories={[]} selectedCategory={[]} />, { wrapper: Wrapper })
 
       const button = screen.getByRole('button', { name: /change category/i })
       fireEvent.click(button)
@@ -219,7 +265,8 @@ describe('CategoryEditor', () => {
     })
 
     it('should show "Create new category" option at bottom of dropdown with existing categories', async () => {
-      render(<CategoryEditor {...defaultProps} />)
+      const Wrapper = createWrapper()
+      render(<CategoryEditor {...defaultProps} />, { wrapper: Wrapper })
 
       const button = screen.getByRole('button', { name: /change category/i })
       fireEvent.click(button)
@@ -231,7 +278,8 @@ describe('CategoryEditor', () => {
     })
 
     it('should show creation form when "Create new category" is clicked', async () => {
-      render(<CategoryEditor {...defaultProps} />)
+      const Wrapper = createWrapper()
+      render(<CategoryEditor {...defaultProps} />, { wrapper: Wrapper })
 
       const button = screen.getByRole('button', { name: /change category/i })
       fireEvent.click(button)
@@ -250,7 +298,8 @@ describe('CategoryEditor', () => {
 
     it('should call onCategoryCreated with new category after creation', async () => {
       const onCategoryCreated = vi.fn()
-      render(<CategoryEditor {...defaultProps} onCategoryCreated={onCategoryCreated} />)
+      const Wrapper = createWrapper()
+      render(<CategoryEditor {...defaultProps} onCategoryCreated={onCategoryCreated} />, { wrapper: Wrapper })
 
       const button = screen.getByRole('button', { name: /change category/i })
       fireEvent.click(button)
@@ -276,12 +325,14 @@ describe('CategoryEditor', () => {
     it('should auto-select newly created category', async () => {
       const onChange = vi.fn()
       const onCategoryCreated = vi.fn()
+      const Wrapper = createWrapper()
       render(
         <CategoryEditor
           {...defaultProps}
           onChange={onChange}
           onCategoryCreated={onCategoryCreated}
-        />
+        />,
+        { wrapper: Wrapper }
       )
 
       const button = screen.getByRole('button', { name: /change category/i })
@@ -305,7 +356,8 @@ describe('CategoryEditor', () => {
 
     it('should close creation form and dropdown after successful creation', async () => {
       const onCategoryCreated = vi.fn()
-      render(<CategoryEditor {...defaultProps} onCategoryCreated={onCategoryCreated} />)
+      const Wrapper = createWrapper()
+      render(<CategoryEditor {...defaultProps} onCategoryCreated={onCategoryCreated} />, { wrapper: Wrapper })
 
       const button = screen.getByRole('button', { name: /change category/i })
       fireEvent.click(button)
@@ -329,7 +381,8 @@ describe('CategoryEditor', () => {
 
     it('should allow creating category with custom color', async () => {
       const onCategoryCreated = vi.fn()
-      render(<CategoryEditor {...defaultProps} onCategoryCreated={onCategoryCreated} />)
+      const Wrapper = createWrapper()
+      render(<CategoryEditor {...defaultProps} onCategoryCreated={onCategoryCreated} />, { wrapper: Wrapper })
 
       const button = screen.getByRole('button', { name: /change category/i })
       fireEvent.click(button)
@@ -357,7 +410,8 @@ describe('CategoryEditor', () => {
     })
 
     it('should disable create button when category name is empty', async () => {
-      render(<CategoryEditor {...defaultProps} />)
+      const Wrapper = createWrapper()
+      render(<CategoryEditor {...defaultProps} />, { wrapper: Wrapper })
 
       const button = screen.getByRole('button', { name: /change category/i })
       fireEvent.click(button)
@@ -372,7 +426,8 @@ describe('CategoryEditor', () => {
     })
 
     it('should have cancel button to close creation form', async () => {
-      render(<CategoryEditor {...defaultProps} />)
+      const Wrapper = createWrapper()
+      render(<CategoryEditor {...defaultProps} />, { wrapper: Wrapper })
 
       const button = screen.getByRole('button', { name: /change category/i })
       fireEvent.click(button)
@@ -395,7 +450,8 @@ describe('CategoryEditor', () => {
 
   describe('Edge cases', () => {
     it('should not toggle dropdown when clicking button while disabled', () => {
-      render(<CategoryEditor {...defaultProps} disabled={true} />)
+      const Wrapper = createWrapper()
+      render(<CategoryEditor {...defaultProps} disabled={true} />, { wrapper: Wrapper })
 
       const button = screen.getByRole('button', { name: /change category/i })
       fireEvent.click(button)
@@ -405,11 +461,13 @@ describe('CategoryEditor', () => {
     })
 
     it('should handle category not found in availableCategories', () => {
+      const Wrapper = createWrapper()
       render(
         <CategoryEditor
           {...defaultProps}
           selectedCategory={['Unknown Category']}
-        />
+        />,
+        { wrapper: Wrapper }
       )
 
       // Should still render with default color

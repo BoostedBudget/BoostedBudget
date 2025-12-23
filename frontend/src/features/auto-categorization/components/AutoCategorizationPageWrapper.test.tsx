@@ -3,24 +3,37 @@
  *
  * Issue #393: Integrate AutoCategorizationPage into App Router and Navigation
  * Issue #399: Add tags autocomplete for target tags
+ * Issue #564: Migrated to mock generated React Query hooks
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
 import { AutoCategorizationPageWrapper } from './AutoCategorizationPageWrapper'
-import * as categoriesApi from '../../categories/api/categoriesApi'
-import * as plaidApi from '../../accounts/api/plaidApi'
-import * as tagsApi from '../../tags/api/tagsApi'
 import * as useProfileHook from '../../profile/hooks/useProfile'
 import * as useSubscriptionTiersHook from '../../subscription/hooks/useSubscriptionTiers'
 import type { Account } from '../../accounts/types'
 import type { UserTag } from '../../tags/types'
+import type { CustomCategory } from '../../categories/types'
 import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
 
-// Mock dependencies
-vi.mock('../../categories/api/categoriesApi')
-vi.mock('../../accounts/api/plaidApi')
-vi.mock('../../tags/api/tagsApi')
+// Mock the generated hooks
+vi.mock('@/api/generated/endpoints/categories/categories', () => ({
+  useGetUserCategories: vi.fn(),
+  useGetPlaidCategories: vi.fn(),
+}))
+vi.mock('@/api/generated/endpoints/accounts/accounts', () => ({
+  useGetAccounts: vi.fn(),
+}))
+vi.mock('@/api/generated/endpoints/tags/tags', () => ({
+  useGetUserTags: vi.fn(),
+}))
+
+import { useGetUserCategories, useGetPlaidCategories } from '@/api/generated/endpoints/categories/categories'
+import { useGetAccounts } from '@/api/generated/endpoints/accounts/accounts'
+import { useGetUserTags } from '@/api/generated/endpoints/tags/tags'
+
 vi.mock('../../profile/hooks/useProfile')
 vi.mock('../../subscription/hooks/useSubscriptionTiers')
 vi.mock('./AutoCategorizationPage', () => ({
@@ -35,8 +48,22 @@ vi.mock('./AutoCategorizationPage', () => ({
   ),
 }))
 
+// Helper to create wrapper with QueryClient
+function createWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  })
+  return function Wrapper({ children }: { children: ReactNode }) {
+    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  }
+}
+
 describe('AutoCategorizationPageWrapper', () => {
-  const mockCategories = [
+  const mockCategories: CustomCategory[] = [
     { id: '1', user_id: 'user-1', name: 'Coffee', parent_category: 'Food & Drink', color: null, icon: null, usage_count: 5, created_at: '2025-01-01', updated_at: '2025-01-01' },
     { id: '2', user_id: 'user-1', name: 'Groceries', parent_category: null, color: null, icon: null, usage_count: 10, created_at: '2025-01-01', updated_at: '2025-01-01' },
   ]
@@ -68,29 +95,63 @@ describe('AutoCategorizationPageWrapper', () => {
     last_login_at: '2025-01-01T00:00:00Z',
   }
 
+  // Helper to configure all hooks with defaults
+  function configureHooks(overrides?: {
+    categories?: CustomCategory[] | null
+    categoriesError?: Error | null
+    plaidCategories?: string[] | null
+    accounts?: Account[] | null
+    tags?: UserTag[] | null
+    user?: typeof mockUser | null
+    tiers?: typeof mockSubscriptionTiersResponse | null
+  }) {
+    vi.mocked(useGetUserCategories).mockReturnValue({
+      data: overrides?.categories === undefined ? mockCategories : (overrides?.categories as unknown),
+      isLoading: false,
+      error: overrides?.categoriesError ?? null,
+    } as ReturnType<typeof useGetUserCategories>)
+
+    vi.mocked(useGetPlaidCategories).mockReturnValue({
+      data: overrides?.plaidCategories === undefined ? mockPlaidCategories : (overrides?.plaidCategories as unknown),
+      isLoading: false,
+      error: null,
+    } as ReturnType<typeof useGetPlaidCategories>)
+
+    vi.mocked(useGetAccounts).mockReturnValue({
+      data: { accounts: overrides?.accounts === undefined ? mockAccounts : (overrides?.accounts ?? []) },
+      isLoading: false,
+      error: null,
+    } as ReturnType<typeof useGetAccounts>)
+
+    vi.mocked(useGetUserTags).mockReturnValue({
+      data: overrides?.tags === undefined ? mockTags : (overrides?.tags as unknown),
+      isLoading: false,
+      error: null,
+    } as ReturnType<typeof useGetUserTags>)
+
+    vi.mocked(useProfileHook.useProfile).mockReturnValue({
+      user: overrides?.user === undefined ? mockUser : overrides?.user,
+      loading: false,
+      error: null,
+      refetch: vi.fn(),
+    })
+
+    vi.mocked(useSubscriptionTiersHook.useSubscriptionTiers).mockReturnValue({
+      tiers: overrides?.tiers === undefined ? mockSubscriptionTiersResponse : overrides?.tiers,
+      loading: false,
+      error: null,
+      refetch: vi.fn(),
+    })
+  }
 
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.mocked(categoriesApi.fetchCategories).mockResolvedValue(mockCategories)
-    vi.mocked(categoriesApi.fetchPlaidCategories).mockResolvedValue(mockPlaidCategories)
-    vi.mocked(plaidApi.fetchAccounts).mockResolvedValue({ accounts: mockAccounts, total_count: mockAccounts.length })
-    vi.mocked(tagsApi.fetchTags).mockResolvedValue(mockTags)
-    vi.mocked(useProfileHook.useProfile).mockReturnValue({
-      user: mockUser,
-      loading: false,
-      error: null,
-      refetch: vi.fn(),
-    })
-    vi.mocked(useSubscriptionTiersHook.useSubscriptionTiers).mockReturnValue({
-      tiers: mockSubscriptionTiersResponse,
-      loading: false,
-      error: null,
-      refetch: vi.fn(),
-    })
+    configureHooks()
   })
 
   it('should render AutoCategorizationPage with fetched categories', async () => {
-    render(<AutoCategorizationPageWrapper />)
+    const Wrapper = createWrapper()
+    render(<AutoCategorizationPageWrapper />, { wrapper: Wrapper })
 
     await waitFor(() => {
       expect(screen.getByTestId('auto-categorization-page')).toBeInTheDocument()
@@ -102,23 +163,20 @@ describe('AutoCategorizationPageWrapper', () => {
   })
 
   it('should convert categories to string[][] format', async () => {
-    render(<AutoCategorizationPageWrapper />)
-
-    await waitFor(() => {
-      expect(categoriesApi.fetchCategories).toHaveBeenCalledTimes(1)
-    })
+    const Wrapper = createWrapper()
+    render(<AutoCategorizationPageWrapper />, { wrapper: Wrapper })
 
     // The mock AutoCategorizationPage receives the converted categories
     // Coffee has parent_category so it becomes ['Food & Drink', 'Coffee']
     // Groceries has no parent so it becomes ['Groceries']
-    // Wait for state update to be flushed to the UI
     await waitFor(() => {
       expect(screen.getByTestId('categories-count')).toHaveTextContent('2')
     })
   })
 
   it('should pass maxRules from tier config based on user subscription', async () => {
-    render(<AutoCategorizationPageWrapper />)
+    const Wrapper = createWrapper()
+    render(<AutoCategorizationPageWrapper />, { wrapper: Wrapper })
 
     await waitFor(() => {
       expect(screen.getByTestId('auto-categorization-page')).toBeInTheDocument()
@@ -129,7 +187,8 @@ describe('AutoCategorizationPageWrapper', () => {
   })
 
   it('should pass currentTier from user profile', async () => {
-    render(<AutoCategorizationPageWrapper />)
+    const Wrapper = createWrapper()
+    render(<AutoCategorizationPageWrapper />, { wrapper: Wrapper })
 
     await waitFor(() => {
       expect(screen.getByTestId('auto-categorization-page')).toBeInTheDocument()
@@ -139,14 +198,10 @@ describe('AutoCategorizationPageWrapper', () => {
   })
 
   it('should default to free tier when user is null', async () => {
-    vi.mocked(useProfileHook.useProfile).mockReturnValue({
-      user: null,
-      loading: false,
-      error: null,
-      refetch: vi.fn(),
-    })
+    configureHooks({ user: null })
 
-    render(<AutoCategorizationPageWrapper />)
+    const Wrapper = createWrapper()
+    render(<AutoCategorizationPageWrapper />, { wrapper: Wrapper })
 
     await waitFor(() => {
       expect(screen.getByTestId('auto-categorization-page')).toBeInTheDocument()
@@ -157,10 +212,11 @@ describe('AutoCategorizationPageWrapper', () => {
   })
 
   it('should handle data fetch error gracefully', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
-    vi.mocked(categoriesApi.fetchCategories).mockRejectedValue(new Error('Network error'))
+    // When useGetUserCategories returns null/undefined, component should handle gracefully
+    configureHooks({ categories: null, accounts: null })
 
-    render(<AutoCategorizationPageWrapper />)
+    const Wrapper = createWrapper()
+    render(<AutoCategorizationPageWrapper />, { wrapper: Wrapper })
 
     await waitFor(() => {
       expect(screen.getByTestId('auto-categorization-page')).toBeInTheDocument()
@@ -169,35 +225,28 @@ describe('AutoCategorizationPageWrapper', () => {
     // Should still render with empty categories and accounts
     expect(screen.getByTestId('categories-count')).toHaveTextContent('0')
     expect(screen.getByTestId('accounts-count')).toHaveTextContent('0')
-    expect(consoleError).toHaveBeenCalledWith('Failed to load data:', expect.any(Error))
-
-    consoleError.mockRestore()
   })
 
   it('should fetch both categories and accounts', async () => {
-    render(<AutoCategorizationPageWrapper />)
+    const Wrapper = createWrapper()
+    render(<AutoCategorizationPageWrapper />, { wrapper: Wrapper })
 
     await waitFor(() => {
       expect(screen.getByTestId('auto-categorization-page')).toBeInTheDocument()
     })
 
-    expect(categoriesApi.fetchCategories).toHaveBeenCalledTimes(1)
-    expect(plaidApi.fetchAccounts).toHaveBeenCalledTimes(1)
-    // Wait for async state update to be flushed to the UI
+    expect(useGetUserCategories).toHaveBeenCalled()
+    expect(useGetAccounts).toHaveBeenCalled()
     await waitFor(() => {
       expect(screen.getByTestId('accounts-count')).toHaveTextContent('2')
     })
   })
 
   it('should handle undefined tiers gracefully', async () => {
-    vi.mocked(useSubscriptionTiersHook.useSubscriptionTiers).mockReturnValue({
-      tiers: null,
-      loading: false,
-      error: null,
-      refetch: vi.fn(),
-    })
+    configureHooks({ tiers: null })
 
-    render(<AutoCategorizationPageWrapper />)
+    const Wrapper = createWrapper()
+    render(<AutoCategorizationPageWrapper />, { wrapper: Wrapper })
 
     await waitFor(() => {
       expect(screen.getByTestId('auto-categorization-page')).toBeInTheDocument()
