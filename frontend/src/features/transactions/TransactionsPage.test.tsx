@@ -34,6 +34,7 @@ vi.mock('@/api/generated/endpoints/transactions/transactions', () => ({
 
 vi.mock('@/api/generated/endpoints/tags/tags', () => ({
   useGetUserTags: vi.fn(),
+  useCreateTag: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
   getGetUserTagsQueryKey: vi.fn(() => ['user-tags']),
 }))
 

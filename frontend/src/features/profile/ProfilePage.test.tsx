@@ -47,6 +47,30 @@ vi.mock('@/api/generated/endpoints/profile/profile', () => ({
   })),
 }))
 
+// Mock the generated privacy hooks used by PrivacySettings component
+vi.mock('@/api/generated/endpoints/privacy/privacy', () => ({
+  useGetPrivacySettings: vi.fn(() => ({
+    data: {
+      analytics_enabled: true,
+      data_sharing_enabled: false,
+      ad_personalization_enabled: true,
+    },
+    isLoading: false,
+    error: null,
+    refetch: vi.fn(),
+  })),
+  useUpdatePrivacySettings: vi.fn(() => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn(),
+    isPending: false,
+    isError: false,
+    isSuccess: false,
+    error: null,
+    data: null,
+    reset: vi.fn(),
+  })),
+}))
+
 // Mock sonner toast
 const mockToast = vi.hoisted(() => ({
   success: vi.fn(),

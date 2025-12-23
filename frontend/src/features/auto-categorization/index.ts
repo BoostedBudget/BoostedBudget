@@ -23,16 +23,6 @@ export type {
 
 export { CONDITION_TYPE_LABELS } from './types'
 
-// API
-export {
-  fetchAutoCategorizationRules,
-  fetchAutoCategorizationRuleById,
-  createAutoCategorizationRule,
-  updateAutoCategorizationRule,
-  deleteAutoCategorizationRule,
-  toggleAutoCategorizationRule,
-} from './api/autoCategorizationApi'
-
 // Hooks
 export { useAutoCategorizationRules } from './hooks/useAutoCategorizationRules'
 

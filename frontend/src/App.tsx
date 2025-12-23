@@ -20,7 +20,7 @@ import { AccountsPage } from './features/accounts/AccountsPage'
 import { PlaidOAuthCallback } from './features/accounts/PlaidOAuthCallback'
 import { TransactionsPage } from './features/transactions/TransactionsPage'
 import { DashboardPage } from './features/dashboard/components/DashboardPage'
-import { updatePrivacySettings } from './features/profile/api/privacyApi'
+import { useUpdatePrivacySettings } from '@/api/generated/endpoints/privacy/privacy'
 import type { PrivacySettings as PrivacySettingsType } from './features/profile/types'
 import { PrivacyPolicy } from './legal/PrivacyPolicy'
 import { CancelDeletionPage } from './features/deletion/components/CancelDeletionPage'
@@ -83,6 +83,9 @@ function App() {
   const { isAuthenticated } = useAuth0()
   const [, setConsentCookie] = useCookieState<CookieConsentData>(COOKIE_CONSENT_NAME)
 
+  // Use generated mutation hook for privacy settings
+  const updatePrivacyMutation = useUpdatePrivacySettings()
+
   // Health check removed - was calling frontend /health which returns text/plain
   // Backend health is checked by workflow smoke tests
   const health = null
@@ -115,7 +118,7 @@ function App() {
     if (isAuthenticated) {
       try {
         const privacyUpdate = cookieToPrivacySettings(consents)
-        await updatePrivacySettings(privacyUpdate)
+        await updatePrivacyMutation.mutateAsync({ data: privacyUpdate })
         console.log('Cookie consent synced to backend')
       } catch (error) {
         console.error('Failed to sync cookie consent to backend:', error)

@@ -7,7 +7,6 @@ import { BrowserRouter } from 'react-router-dom'
 import App from './App'
 import { store } from './store/store'
 import { AuthWrapper } from './auth'
-import { setupAuthInterceptor } from './api/axiosConfig'
 import { setAuthTokenProvider } from './api/client'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import './index.css'
@@ -73,10 +72,7 @@ const InitializeAuth = () => {
       }
     }
 
-    // Setup legacy axios interceptor (for existing API calls during migration)
-    setupAuthInterceptor(tokenProvider)
-
-    // Setup new client auth provider (for generated API calls)
+    // Setup auth token provider for generated API calls
     setAuthTokenProvider(tokenProvider)
   }, [getAccessTokenSilently])
 

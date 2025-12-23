@@ -69,6 +69,26 @@ vi.mock('./features/dashboard/hooks/useCashFlowData', () => ({
 // Mock fetch globally
 globalThis.fetch = vi.fn() as typeof fetch
 
+// Mock the generated privacy hooks used by App.tsx
+vi.mock('@/api/generated/endpoints/privacy/privacy', () => ({
+  useGetPrivacySettings: vi.fn(() => ({
+    data: null,
+    isLoading: false,
+    error: null,
+    refetch: vi.fn(),
+  })),
+  useUpdatePrivacySettings: vi.fn(() => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn(),
+    isPending: false,
+    isError: false,
+    isSuccess: false,
+    error: null,
+    data: null,
+    reset: vi.fn(),
+  })),
+}))
+
 describe('App', () => {
   beforeEach(() => {
     vi.clearAllMocks()
