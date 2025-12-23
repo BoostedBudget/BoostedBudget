@@ -159,7 +159,7 @@ describe('TimeframeSelector', () => {
       fireEvent.click(screen.getByText('Custom'))
 
       // Get date inputs by their type attribute
-      const dateInputs = container.querySelectorAll('input[type="date"]') as NodeListOf<HTMLInputElement>
+      const dateInputs = Array.from(container.querySelectorAll('input[type="date"]')) as HTMLInputElement[]
       fireEvent.change(dateInputs[0], { target: { value: '2025-01-01' } })
 
       const applyButton = screen.getByText('Apply Custom Range')
@@ -171,7 +171,7 @@ describe('TimeframeSelector', () => {
 
       fireEvent.click(screen.getByText('Custom'))
 
-      const dateInputs = container.querySelectorAll('input[type="date"]') as NodeListOf<HTMLInputElement>
+      const dateInputs = Array.from(container.querySelectorAll('input[type="date"]')) as HTMLInputElement[]
       fireEvent.change(dateInputs[1], { target: { value: '2025-01-15' } })
 
       const applyButton = screen.getByText('Apply Custom Range')
@@ -183,7 +183,7 @@ describe('TimeframeSelector', () => {
 
       fireEvent.click(screen.getByText('Custom'))
 
-      const dateInputs = container.querySelectorAll('input[type="date"]') as NodeListOf<HTMLInputElement>
+      const dateInputs = Array.from(container.querySelectorAll('input[type="date"]')) as HTMLInputElement[]
 
       fireEvent.change(dateInputs[0], { target: { value: '2025-01-01' } })
       fireEvent.change(dateInputs[1], { target: { value: '2025-01-15' } })
@@ -197,7 +197,7 @@ describe('TimeframeSelector', () => {
 
       fireEvent.click(screen.getByText('Custom'))
 
-      const dateInputs = container.querySelectorAll('input[type="date"]') as NodeListOf<HTMLInputElement>
+      const dateInputs = Array.from(container.querySelectorAll('input[type="date"]')) as HTMLInputElement[]
 
       fireEvent.change(dateInputs[0], { target: { value: '2025-01-01' } })
       fireEvent.change(dateInputs[1], { target: { value: '2025-01-15' } })
@@ -226,7 +226,7 @@ describe('TimeframeSelector', () => {
 
       fireEvent.click(screen.getByText('Custom'))
 
-      const dateInputs = container.querySelectorAll('input[type="date"]') as NodeListOf<HTMLInputElement>
+      const dateInputs = Array.from(container.querySelectorAll('input[type="date"]')) as HTMLInputElement[]
       const startInput = dateInputs[0]
       const endInput = dateInputs[1]
 
@@ -240,7 +240,7 @@ describe('TimeframeSelector', () => {
 
       fireEvent.click(screen.getByText('Custom'))
 
-      const dateInputs = container.querySelectorAll('input[type="date"]') as NodeListOf<HTMLInputElement>
+      const dateInputs = Array.from(container.querySelectorAll('input[type="date"]')) as HTMLInputElement[]
       const startInput = dateInputs[0]
       const endInput = dateInputs[1]
 
@@ -254,7 +254,7 @@ describe('TimeframeSelector', () => {
 
       fireEvent.click(screen.getByText('Custom'))
 
-      const dateInputs = container.querySelectorAll('input[type="date"]') as NodeListOf<HTMLInputElement>
+      const dateInputs = Array.from(container.querySelectorAll('input[type="date"]')) as HTMLInputElement[]
       const endInput = dateInputs[1]
 
       expect(endInput.max).toBe('2025-01-15')
