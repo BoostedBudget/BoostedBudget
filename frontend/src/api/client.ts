@@ -22,7 +22,8 @@ export function getApiUrl(): string {
   }
 
   // Fallback for local dev with Vite proxy
-  return '/api'
+  // Note: Empty string because generated endpoints already include /api/v1 prefix
+  return ''
 }
 
 // Create axios instance with base configuration
