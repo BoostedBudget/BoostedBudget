@@ -538,7 +538,7 @@ describe('ProfilePage', () => {
       expect(profileTabButton).toHaveClass('active')
 
       // Privacy tab should not be active
-      const privacyTabButton = screen.getByRole('button', { name: /Privacy Settings/i })
+      const privacyTabButton = screen.getByRole('button', { name: 'Privacy Settings' })
       expect(privacyTabButton).not.toHaveClass('active')
 
       // Profile content should be visible
@@ -554,16 +554,16 @@ describe('ProfilePage', () => {
         expect(screen.getByText('My Profile')).toBeInTheDocument()
       })
 
-      // Privacy tab should be active
-      const privacyTabButton = screen.getByRole('button', { name: /Privacy Settings/i })
+      // Privacy tab should be active (use exact match to avoid matching "Save Privacy Settings" button)
+      const privacyTabButton = screen.getByRole('button', { name: 'Privacy Settings' })
       expect(privacyTabButton).toHaveClass('active')
 
       // Profile tab should not be active
       const profileTabButton = screen.getByRole('button', { name: /^Profile$/i })
       expect(profileTabButton).not.toHaveClass('active')
 
-      // Privacy Settings content should be visible
-      expect(screen.getByText('Privacy Settings')).toBeInTheDocument()
+      // Privacy Settings content should be visible (use heading role to avoid matching tab button)
+      expect(screen.getByRole('heading', { name: 'Privacy Settings' })).toBeInTheDocument()
     })
 
     it('should fallback to Profile tab for invalid URL tab param', async () => {
@@ -594,7 +594,7 @@ describe('ProfilePage', () => {
 
       // Click Privacy Settings tab
       const user = userEvent.setup({ delay: null })
-      const privacyTabButton = screen.getByRole('button', { name: /Privacy Settings/i })
+      const privacyTabButton = screen.getByRole('button', { name: 'Privacy Settings' })
       await user.click(privacyTabButton)
 
       // Privacy tab should now be active
@@ -602,8 +602,8 @@ describe('ProfilePage', () => {
         expect(privacyTabButton).toHaveClass('active')
       })
 
-      // Privacy content should be visible
-      expect(screen.getByText('Privacy Settings')).toBeInTheDocument()
+      // Privacy content should be visible (use heading role to avoid matching tab button)
+      expect(screen.getByRole('heading', { name: 'Privacy Settings' })).toBeInTheDocument()
     })
   })
 })

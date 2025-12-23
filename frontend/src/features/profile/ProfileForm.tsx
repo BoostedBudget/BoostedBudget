@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { toast } from 'sonner'
 import { useUpdateUserProfile } from '@/api/generated/endpoints/profile/profile'
 import { REGIONS, getRegionWithFlag } from '../../config/regions'
@@ -26,15 +26,11 @@ export function ProfileForm({ user, onProfileUpdate }: ProfileFormProps) {
   const updateProfileMutation = useUpdateUserProfile()
   const submitting = updateProfileMutation.isPending
 
-  // Form state
+  // Form state - initialized from user prop
+  // Note: If user prop can change (e.g., after profile update elsewhere),
+  // add key={user.id} at the parent component to force remount
   const [email, setEmail] = useState(user.email)
   const [primaryRegion, setPrimaryRegion] = useState(user.primary_region)
-
-  // Update form state when user prop changes
-  useEffect(() => {
-    setEmail(user.email)
-    setPrimaryRegion(user.primary_region)
-  }, [user.email, user.primary_region])
 
   // Check if form has changes
   const hasChanges =
