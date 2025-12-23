@@ -32,7 +32,7 @@ import type { Account, AccountIcon, UpdateAccountRequest } from '../types'
 // Internal component to handle modal content with its own state
 interface ModalContentProps {
   account: Account
-  onSave: (accountId: string, changes: UpdateAccountRequest) => Promise<void>
+  onSave: (accountId: string, changes: Partial<UpdateAccountRequest>) => Promise<void>
   onCancel: () => void
   isSaving: boolean
 }
@@ -51,7 +51,7 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
 
   // Handle save
   const handleSave = useCallback(async () => {
-    const changes: UpdateAccountRequest = {}
+    const changes: Partial<UpdateAccountRequest> = {}
 
     // Only include changed fields
     if (nickname !== (account.nickname || '')) {
@@ -254,7 +254,7 @@ export interface AccountCustomizationModalProps {
   /** Callback when modal should close */
   onOpenChange: (open: boolean) => void
   /** Callback when save is clicked */
-  onSave: (accountId: string, changes: UpdateAccountRequest) => Promise<void>
+  onSave: (accountId: string, changes: Partial<UpdateAccountRequest>) => Promise<void>
   /** Whether save is in progress */
   isSaving?: boolean
 }
@@ -284,7 +284,7 @@ export function AccountCustomizationModal({
     onOpenChange(false)
   }, [onOpenChange])
 
-  const handleSave = useCallback(async (accountId: string, changes: UpdateAccountRequest) => {
+  const handleSave = useCallback(async (accountId: string, changes: Partial<UpdateAccountRequest>) => {
     await onSave(accountId, changes)
     onOpenChange(false)
   }, [onSave, onOpenChange])

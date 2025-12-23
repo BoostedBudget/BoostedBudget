@@ -55,7 +55,7 @@ describe('profileApi', () => {
         is_deleted: false,
         created_at: '2025-01-01T00:00:00Z',
         updated_at: '2025-01-01T00:00:00Z',
-        last_login_at: null,
+        last_login_at: undefined,
       }
 
       mock.onGet('/v1/user/profile').reply((config) => {

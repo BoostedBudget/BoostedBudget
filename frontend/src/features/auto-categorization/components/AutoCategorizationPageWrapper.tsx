@@ -54,7 +54,7 @@ export function AutoCategorizationPageWrapper() {
         )
         setCategories(categoryPaths)
         setPlaidCategories(plaidCats)
-        setAccounts(accountsResponse.accounts)
+        setAccounts(accountsResponse.accounts ?? [])
         setTags(userTags)
       } catch (err) {
         console.error('Failed to load data:', err)

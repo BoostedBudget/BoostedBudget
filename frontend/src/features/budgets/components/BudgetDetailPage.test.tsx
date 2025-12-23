@@ -19,6 +19,19 @@ import type { UserTag } from '../../tags/types';
 vi.mock('../api/budgetsApi');
 vi.mock('../../tags/api/tagsApi');
 
+// Mock the useTags hook to avoid React Query provider issues
+vi.mock('../../tags/hooks/useTags', () => ({
+  useTags: vi.fn().mockReturnValue({
+    tags: [],
+    loading: false,
+    error: null,
+    createTag: vi.fn(),
+    updateTag: vi.fn(),
+    deleteTag: vi.fn(),
+    refetch: vi.fn(),
+  }),
+}));
+
 // Mock BudgetCategoryManager to simplify testing
 vi.mock('./category-management/BudgetCategoryManager', () => ({
   BudgetCategoryManager: ({

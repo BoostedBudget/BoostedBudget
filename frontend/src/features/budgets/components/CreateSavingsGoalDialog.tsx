@@ -71,7 +71,7 @@ export function CreateSavingsGoalDialog({
       fetchAccounts()
         .then((response) => {
           // Filter to depository accounts only
-          const depositoryAccounts = response.accounts.filter(
+          const depositoryAccounts = (response.accounts ?? []).filter(
             (acc) => acc.type === 'depository'
           );
           setAccounts(depositoryAccounts);

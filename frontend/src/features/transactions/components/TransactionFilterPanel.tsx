@@ -96,7 +96,7 @@ export function TransactionFilterPanel({
     const loadAccounts = async () => {
       try {
         const response = await fetchAccounts()
-        setAccounts(response.accounts)
+        setAccounts(response.accounts ?? [])
       } catch (err) {
         console.error('Failed to load accounts for filter:', err)
       } finally {

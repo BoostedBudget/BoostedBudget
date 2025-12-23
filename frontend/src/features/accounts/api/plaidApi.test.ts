@@ -190,6 +190,7 @@ describe('plaidApi', () => {
             available_balance: 2300.50,
             currency_code: 'USD',
             institution_name: 'Chase',
+            is_hidden: false,
             created_at: '2025-10-18T14:30:00Z',
             updated_at: '2025-10-20T10:15:00Z',
           },
@@ -206,6 +207,7 @@ describe('plaidApi', () => {
             available_balance: 10000.00,
             currency_code: 'USD',
             institution_name: 'Wells Fargo',
+            is_hidden: false,
             created_at: '2025-10-19T09:20:00Z',
             updated_at: '2025-10-20T10:15:00Z',
           },
@@ -457,7 +459,7 @@ describe('plaidApi', () => {
 
     it('should call PATCH /v1/accounts/:id with request body', async () => {
       const accountId = '550e8400-e29b-41d4-a716-446655440000'
-      const updateData: UpdateAccountRequest = {
+      const updateData: Partial<UpdateAccountRequest> = {
         nickname: 'My Primary Account',
         custom_color: '#3B82F6',
       }
@@ -478,7 +480,7 @@ describe('plaidApi', () => {
 
     it('should handle partial updates (single field)', async () => {
       const accountId = '550e8400-e29b-41d4-a716-446655440000'
-      const updateData: UpdateAccountRequest = {
+      const updateData: Partial<UpdateAccountRequest> = {
         is_hidden: true,
       }
 
@@ -495,7 +497,7 @@ describe('plaidApi', () => {
 
     it('should handle clearing fields with null', async () => {
       const accountId = '550e8400-e29b-41d4-a716-446655440000'
-      const updateData: UpdateAccountRequest = {
+      const updateData: Partial<UpdateAccountRequest> = {
         nickname: null,
         custom_color: null,
       }
@@ -514,7 +516,7 @@ describe('plaidApi', () => {
 
     it('should include Authorization header from apiClient interceptor', async () => {
       const accountId = '550e8400-e29b-41d4-a716-446655440000'
-      const updateData: UpdateAccountRequest = {
+      const updateData: Partial<UpdateAccountRequest> = {
         nickname: 'Test',
       }
 
@@ -528,7 +530,7 @@ describe('plaidApi', () => {
 
     it('should handle 400 validation error (invalid color)', async () => {
       const accountId = '550e8400-e29b-41d4-a716-446655440000'
-      const updateData: UpdateAccountRequest = {
+      const updateData: Partial<UpdateAccountRequest> = {
         custom_color: 'invalid-color',
       }
 
@@ -541,7 +543,7 @@ describe('plaidApi', () => {
 
     it('should handle 400 validation error (invalid icon)', async () => {
       const accountId = '550e8400-e29b-41d4-a716-446655440000'
-      const updateData: UpdateAccountRequest = {
+      const updateData: Partial<UpdateAccountRequest> = {
         custom_icon: 'invalid-icon',
       }
 
@@ -554,7 +556,7 @@ describe('plaidApi', () => {
 
     it('should handle 404 not found error', async () => {
       const accountId = 'non-existent-account-id'
-      const updateData: UpdateAccountRequest = {
+      const updateData: Partial<UpdateAccountRequest> = {
         nickname: 'Test',
       }
 
@@ -565,7 +567,7 @@ describe('plaidApi', () => {
 
     it('should handle 401 unauthorized error', async () => {
       const accountId = '550e8400-e29b-41d4-a716-446655440000'
-      const updateData: UpdateAccountRequest = {
+      const updateData: Partial<UpdateAccountRequest> = {
         nickname: 'Test',
       }
 
@@ -576,7 +578,7 @@ describe('plaidApi', () => {
 
     it('should handle 500 server error', async () => {
       const accountId = '550e8400-e29b-41d4-a716-446655440000'
-      const updateData: UpdateAccountRequest = {
+      const updateData: Partial<UpdateAccountRequest> = {
         nickname: 'Test',
       }
 
@@ -587,7 +589,7 @@ describe('plaidApi', () => {
 
     it('should handle network errors', async () => {
       const accountId = '550e8400-e29b-41d4-a716-446655440000'
-      const updateData: UpdateAccountRequest = {
+      const updateData: Partial<UpdateAccountRequest> = {
         nickname: 'Test',
       }
 

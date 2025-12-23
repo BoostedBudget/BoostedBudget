@@ -201,7 +201,7 @@ describe('TagEditor', () => {
       const tagsWithNoColor = [
         {
           ...mockTags[0],
-          color: null,
+          color: undefined,
         },
         ...mockTags.slice(1),
       ]

@@ -3,17 +3,49 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { ProfilePage } from './ProfilePage'
-import * as profileApi from './api/profileApi'
+import * as useProfileHook from './hooks/useProfile'
 import type { User } from './types'
 import * as useSubscriptionTiersHook from '../subscription/hooks/useSubscriptionTiers'
 import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
 // Test utilities available: import { fillInputByLabel } from '@/test/utils/formTestHelpers'
 
-// Mock the profile API
-vi.mock('./api/profileApi')
-
 // Mock the subscription tiers hook
 vi.mock('../subscription/hooks/useSubscriptionTiers')
+
+// Mock the deletion hooks to avoid React Query provider issues
+vi.mock('../deletion/hooks/useDeletion', () => ({
+  useDeletion: vi.fn().mockReturnValue({
+    requestDeletion: vi.fn(),
+    cancelDeletion: vi.fn(),
+    isRequesting: false,
+    isCancelling: false,
+    requestError: null,
+    cancelError: null,
+  }),
+}))
+
+// Mock the profile hook to avoid React Query provider issues
+vi.mock('./hooks/useProfile', () => ({
+  useProfile: vi.fn(),
+}))
+
+// Mock the generated useUpdateUserProfile hook used by ProfileForm
+const mockMutate = vi.fn()
+let mockIsPending = false
+vi.mock('@/api/generated/endpoints/profile/profile', () => ({
+  useUpdateUserProfile: vi.fn(() => ({
+    mutate: mockMutate,
+    mutateAsync: vi.fn(),
+    get isPending() {
+      return mockIsPending
+    },
+    isError: false,
+    isSuccess: false,
+    error: null,
+    data: null,
+    reset: vi.fn(),
+  })),
+}))
 
 // Mock sonner toast
 const mockToast = vi.hoisted(() => ({
@@ -62,6 +94,7 @@ describe('ProfilePage', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    mockIsPending = false
     mockUseAuth0.mockReturnValue({
       isAuthenticated: true,
       user: { email: 'test@example.com' },
@@ -74,13 +107,38 @@ describe('ProfilePage', () => {
       error: null,
       refetch: vi.fn(),
     })
+
+    // Mock useProfile hook to return user data
+    vi.mocked(useProfileHook.useProfile).mockReturnValue({
+      user: mockUser,
+      loading: false,
+      error: null,
+      refetch: vi.fn(),
+    })
   })
+
+  // Helper to make mockMutate call onSuccess with the given result
+  function configureMutateSuccess(result: User) {
+    mockMutate.mockImplementation((_data: unknown, options?: { onSuccess?: (data: User) => void }) => {
+      options?.onSuccess?.(result)
+    })
+  }
+
+  // Helper to make mockMutate call onError with the given error
+  function configureMutateError(error: Error) {
+    mockMutate.mockImplementation((_data: unknown, options?: { onError?: (err: Error) => void }) => {
+      options?.onError?.(error)
+    })
+  }
 
   describe('Loading and data display', () => {
     it('should show loading state initially', () => {
-      vi.mocked(profileApi.fetchProfile).mockImplementationOnce(
-        () => new Promise(() => {}) // Never resolves
-      )
+      vi.mocked(useProfileHook.useProfile).mockReturnValue({
+        user: null,
+        loading: true,
+        error: null,
+        refetch: vi.fn(),
+      })
 
       renderWithRouter(<ProfilePage />)
 
@@ -88,7 +146,7 @@ describe('ProfilePage', () => {
     })
 
     it('should render user profile data after loading', async () => {
-      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
+      // Uses default mock from beforeEach
 
       renderWithRouter(<ProfilePage />)
 
@@ -103,7 +161,7 @@ describe('ProfilePage', () => {
     })
 
     it('should display user email from profile', async () => {
-      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
+      // Uses default mock from beforeEach
 
       renderWithRouter(<ProfilePage />)
 
@@ -113,7 +171,7 @@ describe('ProfilePage', () => {
     })
 
     it('should show data region correctly', async () => {
-      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
+      // Uses default mock from beforeEach
 
       renderWithRouter(<ProfilePage />)
 
@@ -126,7 +184,7 @@ describe('ProfilePage', () => {
     })
 
     it('should show current subscription tier', async () => {
-      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
+      // Uses default mock from beforeEach
 
       renderWithRouter(<ProfilePage />)
 
@@ -138,17 +196,28 @@ describe('ProfilePage', () => {
 
   describe('Error handling', () => {
     it('should show error message when API fails', async () => {
-      vi.mocked(profileApi.fetchProfile).mockRejectedValue(new Error('API Error'))
+      vi.mocked(useProfileHook.useProfile).mockReturnValue({
+        user: null,
+        loading: false,
+        error: new Error('API Error'),
+        refetch: vi.fn(),
+      })
 
       renderWithRouter(<ProfilePage />)
 
       await waitFor(() => {
-        expect(screen.getByText(/failed to load profile/i)).toBeInTheDocument()
+        // The component shows error.message if available
+        expect(screen.getByText('API Error')).toBeInTheDocument()
       })
     })
 
     it('should show retry button on error', async () => {
-      vi.mocked(profileApi.fetchProfile).mockRejectedValue(new Error('API Error'))
+      vi.mocked(useProfileHook.useProfile).mockReturnValue({
+        user: null,
+        loading: false,
+        error: new Error('API Error'),
+        refetch: vi.fn(),
+      })
 
       renderWithRouter(<ProfilePage />)
 
@@ -158,9 +227,15 @@ describe('ProfilePage', () => {
     })
 
     it('should retry fetching profile when retry button clicked', async () => {
-      const fetchProfileMock = vi.mocked(profileApi.fetchProfile)
-      fetchProfileMock.mockRejectedValueOnce(new Error('API Error'))
-      fetchProfileMock.mockResolvedValueOnce(mockUser)
+      const mockRefetch = vi.fn()
+
+      // Render shows error state
+      vi.mocked(useProfileHook.useProfile).mockReturnValue({
+        user: null,
+        loading: false,
+        error: new Error('API Error'),
+        refetch: mockRefetch,
+      })
 
       renderWithRouter(<ProfilePage />)
 
@@ -172,17 +247,14 @@ describe('ProfilePage', () => {
       const retryButton = screen.getByRole('button', { name: /retry/i })
       await user.click(retryButton)
 
-      await waitFor(() => {
-        expect(screen.getByText('test@example.com')).toBeInTheDocument()
-      })
-
-      expect(fetchProfileMock).toHaveBeenCalledTimes(2)
+      // Verify that refetch was called
+      expect(mockRefetch).toHaveBeenCalled()
     })
   })
 
   describe('Edit form validation', () => {
     it('should validate email format', async () => {
-      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
+      // Uses default mock from beforeEach
 
       renderWithRouter(<ProfilePage />)
 
@@ -206,7 +278,7 @@ describe('ProfilePage', () => {
     })
 
     it('should require valid region selection', async () => {
-      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
+      // Uses default mock from beforeEach
 
       renderWithRouter(<ProfilePage />)
 
@@ -221,7 +293,7 @@ describe('ProfilePage', () => {
     })
 
     it('should show validation error for empty email', async () => {
-      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
+      // Uses default mock from beforeEach
 
       renderWithRouter(<ProfilePage />)
 
@@ -247,8 +319,8 @@ describe('ProfilePage', () => {
 
   describe('Form submission', () => {
     it('should submit updated email via API', async () => {
-      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
-      vi.mocked(profileApi.updateProfile).mockResolvedValue({
+      // Uses default mock from beforeEach
+      configureMutateSuccess({
         ...mockUser,
         email: 'newemail@example.com',
       })
@@ -270,15 +342,16 @@ describe('ProfilePage', () => {
       await user.click(saveButton)
 
       await waitFor(() => {
-        expect(profileApi.updateProfile).toHaveBeenCalledWith({
-          email: 'newemail@example.com',
-        })
+        expect(mockMutate).toHaveBeenCalledWith(
+          { data: { email: 'newemail@example.com' } },
+          expect.any(Object)
+        )
       })
     })
 
     it('should submit updated region via API after confirmation', async () => {
-      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
-      vi.mocked(profileApi.updateProfile).mockResolvedValue({
+      // Uses default mock from beforeEach
+      configureMutateSuccess({
         ...mockUser,
         primary_region: 'lhr',
       })
@@ -312,16 +385,16 @@ describe('ProfilePage', () => {
       await user.click(confirmButton)
 
       await waitFor(() => {
-        expect(profileApi.updateProfile).toHaveBeenCalledWith({
-          email: 'test@example.com',
-          primary_region: 'lhr',
-        })
+        expect(mockMutate).toHaveBeenCalledWith(
+          { data: { email: 'test@example.com', primary_region: 'lhr' } },
+          expect.any(Object)
+        )
       })
     })
 
     it('should show success toast after update', async () => {
-      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
-      vi.mocked(profileApi.updateProfile).mockResolvedValue({
+      // Uses default mock from beforeEach
+      configureMutateSuccess({
         ...mockUser,
         email: 'newemail@example.com',
       })
@@ -348,8 +421,8 @@ describe('ProfilePage', () => {
     })
 
     it('should show error toast when update fails', async () => {
-      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
-      vi.mocked(profileApi.updateProfile).mockRejectedValue(new Error('Update failed'))
+      // Uses default mock from beforeEach
+      configureMutateError(new Error('Update failed'))
       mockToast.error.mockClear()
 
       renderWithRouter(<ProfilePage />)
@@ -374,12 +447,12 @@ describe('ProfilePage', () => {
     })
 
     it('should disable save button while submitting', async () => {
-      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
-      vi.mocked(profileApi.updateProfile).mockImplementationOnce(
-        () => new Promise(() => {}) // Never resolves
-      )
+      // Configure mutate to set isPending flag when called
+      mockMutate.mockImplementation(() => {
+        mockIsPending = true
+      })
 
-      renderWithRouter(<ProfilePage />)
+      const { rerender } = renderWithRouter(<ProfilePage />)
 
       await waitFor(() => {
         expect(screen.getByDisplayValue('test@example.com')).toBeInTheDocument()
@@ -395,15 +468,25 @@ describe('ProfilePage', () => {
       const saveButton = screen.getByRole('button', { name: /save/i })
       await user.click(saveButton)
 
+      // Rerender to reflect the pending state
+      rerender(
+        <MemoryRouter initialEntries={['/profile']}>
+          <Routes>
+            <Route path="/profile" element={<ProfilePage />} />
+          </Routes>
+        </MemoryRouter>
+      )
+
+      // The button text changes to "Saving..." when pending
       await waitFor(() => {
-        expect(saveButton).toBeDisabled()
+        expect(screen.getByRole('button', { name: /saving/i })).toBeDisabled()
       })
     }, 15000)
   })
 
   describe('Responsive design', () => {
     it('should render mobile layout on small screens', async () => {
-      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
+      // Uses default mock from beforeEach
 
       const { container } = renderWithRouter(<ProfilePage />)
 
@@ -418,7 +501,7 @@ describe('ProfilePage', () => {
 
   describe('Tab state persistence', () => {
     it('should default to Profile tab when no URL param is present', async () => {
-      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
+      // Uses default mock from beforeEach
 
       renderWithRouter(<ProfilePage />, { initialUrl: '/profile' })
 
@@ -439,7 +522,7 @@ describe('ProfilePage', () => {
     })
 
     it('should activate Privacy tab when URL has ?tab=privacy', async () => {
-      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
+      // Uses default mock from beforeEach
 
       renderWithRouter(<ProfilePage />, { initialUrl: '/profile?tab=privacy' })
 
@@ -460,7 +543,7 @@ describe('ProfilePage', () => {
     })
 
     it('should fallback to Profile tab for invalid URL tab param', async () => {
-      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
+      // Uses default mock from beforeEach
 
       renderWithRouter(<ProfilePage />, { initialUrl: '/profile?tab=invalid' })
 
@@ -477,7 +560,7 @@ describe('ProfilePage', () => {
     })
 
     it('should update URL when switching tabs', async () => {
-      vi.mocked(profileApi.fetchProfile).mockResolvedValue(mockUser)
+      // Uses default mock from beforeEach
 
       renderWithRouter(<ProfilePage />, { initialUrl: '/profile' })
 

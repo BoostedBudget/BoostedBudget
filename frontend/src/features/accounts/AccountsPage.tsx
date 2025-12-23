@@ -23,12 +23,11 @@ import { UpgradeBanner } from './UpgradeBanner'
 import { SyncStatsCard } from './SyncStatsCard'
 import { AccountCustomizationModal } from './components/AccountCustomizationModal'
 import { fetchAccounts, deleteAccount } from './api/plaidApi'
-import { fetchProfile } from '../profile/api/profileApi'
+import { useProfile } from '../profile/hooks/useProfile'
 import { useSubscriptionTiers } from '../subscription/hooks/useSubscriptionTiers'
 import { useTierLimits } from '../subscription/hooks/useTierLimits'
 import { useAccountCustomization } from './hooks/useAccountCustomization'
 import type { Account, UpdateAccountRequest } from './types'
-import type { User } from '../profile/types'
 import './AccountsPage.css'
 
 // Sortable wrapper for AccountCard
@@ -68,8 +67,7 @@ function SortableAccountCard({ account, onDelete, onEdit }: SortableAccountCardP
 
 export function AccountsPage() {
   const [accounts, setAccounts] = useState<Account[]>([])
-  const [user, setUser] = useState<User | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [accountsLoading, setAccountsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   // Issue #307: Show/hide hidden accounts toggle
@@ -79,8 +77,14 @@ export function AccountsPage() {
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
 
+  // Fetch user profile using the hook
+  const { user, loading: userLoading, refetch: refetchProfile } = useProfile()
+
   // Fetch subscription tiers for limit enforcement
   const { tiers, loading: tiersLoading } = useSubscriptionTiers()
+
+  // Combined loading state
+  const loading = accountsLoading || userLoading
 
   // Issue #307: Account customization hook
   const {
@@ -102,36 +106,31 @@ export function AccountsPage() {
     })
   )
 
-  // Load accounts and user profile on mount
+  // Load accounts on mount (user profile is loaded via useProfile hook)
   useEffect(() => {
-    loadAccountsAndProfile()
+    loadAccounts()
   }, [])
 
-  async function loadAccountsAndProfile() {
+  async function loadAccounts() {
     try {
-      setLoading(true)
+      setAccountsLoading(true)
       setError(null)
 
-      // Fetch both accounts and user profile in parallel
       // Always fetch all accounts including hidden (for toggle and counts)
-      const [accountsResponse, userProfile] = await Promise.all([
-        fetchAccounts(true), // include_hidden = true
-        fetchProfile(),
-      ])
-
-      setAccounts(accountsResponse.accounts)
-      setUser(userProfile)
+      const accountsResponse = await fetchAccounts(true) // include_hidden = true
+      setAccounts(accountsResponse.accounts ?? [])
     } catch (err) {
       console.error('Failed to load accounts:', err)
       setError('Failed to load accounts. Please try again.')
     } finally {
-      setLoading(false)
+      setAccountsLoading(false)
     }
   }
 
   // Handle successful account linking - reload accounts and profile
   function handleAccountsLinked() {
-    loadAccountsAndProfile()
+    loadAccounts()
+    refetchProfile()
   }
 
   // Handle account deletion
@@ -139,7 +138,7 @@ export function AccountsPage() {
     try {
       await deleteAccount(accountId)
       // Reload accounts after successful deletion
-      await loadAccountsAndProfile()
+      await loadAccounts()
     } catch (err) {
       console.error('Failed to delete account:', err)
       setError('Failed to delete account. Please try again.')
@@ -153,7 +152,7 @@ export function AccountsPage() {
   }, [])
 
   // Issue #307: Handle save from modal
-  const handleSaveAccount = useCallback(async (accountId: string, changes: UpdateAccountRequest) => {
+  const handleSaveAccount = useCallback(async (accountId: string, changes: Partial<UpdateAccountRequest>) => {
     const updatedAccount = await updateAccount(accountId, changes)
     if (updatedAccount) {
       // Update local state with the new account data
@@ -248,7 +247,7 @@ export function AccountsPage() {
       <div className="accounts-page responsive">
         <div className="error-state">
           <p className="error-message">{error}</p>
-          <button onClick={loadAccountsAndProfile} className="btn-retry">
+          <button onClick={() => loadAccounts()} className="btn-retry">
             Retry
           </button>
         </div>
