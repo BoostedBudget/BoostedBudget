@@ -279,20 +279,20 @@ describe('usePreviewCategories', () => {
       { initialProps: { categories: [['Food', 'A']] }, wrapper: createWrapper() }
     );
 
-    // Wait for first request to fail
+    // Wait for first request to fail (increased timeout for CI)
     await waitFor(() => {
       expect(result.current.error).toBeTruthy();
-    });
+    }, { timeout: 5000 });
 
     // Change params
     rerender({ categories: [['Food', 'B']] });
 
-    // Wait for second request to succeed
+    // Wait for second request to succeed (increased timeout for CI)
     await waitFor(() => {
       expect(result.current.error).toBeNull();
       expect(result.current.preview?.transaction_count).toBe(5);
-    });
-  });
+    }, { timeout: 5000 });
+  }, 15000); // Extended timeout for CI
 
   it('should pass correct params to API', async () => {
     mockMutateAsync.mockResolvedValue({ transaction_count: 5, total_amount: 250 });

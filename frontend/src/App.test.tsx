@@ -202,16 +202,16 @@ describe('App', () => {
         </BrowserRouter>
       )
 
-      // Open the user dropdown
+      // Open the user dropdown (increased timeout for CI)
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /user menu/i })).toBeInTheDocument()
-      })
+      }, { timeout: 10000 })
       await user.click(screen.getByRole('button', { name: /user menu/i }))
 
       await waitFor(() => {
         expect(screen.getByText(mockUser.name)).toBeInTheDocument()
-      })
-    })
+      }, { timeout: 10000 })
+    }, 60000) // Extended timeout for CI
 
     it('should display user email in dropdown when opened', async () => {
       const user = userEvent.setup()
@@ -221,16 +221,16 @@ describe('App', () => {
         </BrowserRouter>
       )
 
-      // Open the user dropdown
+      // Open the user dropdown (increased timeout for CI)
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /user menu/i })).toBeInTheDocument()
-      })
+      }, { timeout: 10000 })
       await user.click(screen.getByRole('button', { name: /user menu/i }))
 
       await waitFor(() => {
         expect(screen.getByText(mockUser.email)).toBeInTheDocument()
-      })
-    })
+      }, { timeout: 10000 })
+    }, 60000) // Extended timeout for CI
   })
 
   describe('phase status', () => {

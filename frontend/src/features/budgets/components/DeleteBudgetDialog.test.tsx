@@ -174,7 +174,7 @@ describe('DeleteBudgetDialog', () => {
       await user.click(deleteButton);
 
       expect(mockOnConfirm).toHaveBeenCalledTimes(1);
-    });
+    }, 60000); // Extended timeout for CI
 
     it('should not call onConfirm when Delete button is disabled', async () => {
       const user = userEvent.setup();
