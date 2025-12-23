@@ -4,7 +4,10 @@ import type { UserTag } from '../../tags/types'
 import type { CustomCategory } from '../../categories/types'
 import { TagEditor } from '../../tags/components/TagEditor'
 import { CategoryEditor } from '../../categories/components/CategoryEditor'
-import { updateTransactionTags, updateTransactionCategory } from '../api/transactionsApi'
+import {
+  useUpdateTransactionTags,
+  useUpdateTransactionCategory,
+} from '@/api/generated/endpoints/transactions/transactions'
 import './TransactionEditor.css'
 
 interface TransactionEditorProps {
@@ -74,6 +77,10 @@ export function TransactionEditor({
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Use generated mutation hooks
+  const updateTagsMutation = useUpdateTransactionTags()
+  const updateCategoryMutation = useUpdateTransactionCategory()
+
   const initialTags = transaction.tags || []
   const initialCategory = transaction.category_override
     ? parseCategory(transaction.category_override)
@@ -93,12 +100,18 @@ export function TransactionEditor({
 
       // Save tag changes
       if (hasTagChanges) {
-        updatedTransaction = await updateTransactionTags(transaction.id, { tags })
+        updatedTransaction = (await updateTagsMutation.mutateAsync({
+          id: transaction.id,
+          data: { tags },
+        })) as Transaction
       }
 
       // Save category changes
       if (hasCategoryChanges) {
-        updatedTransaction = await updateTransactionCategory(transaction.id, { category })
+        updatedTransaction = (await updateCategoryMutation.mutateAsync({
+          id: transaction.id,
+          data: { category },
+        })) as Transaction
       }
 
       // Pass the updated transaction to parent for immediate state update

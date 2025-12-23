@@ -22,7 +22,10 @@ import { AccountCard } from './AccountCard'
 import { UpgradeBanner } from './UpgradeBanner'
 import { SyncStatsCard } from './SyncStatsCard'
 import { AccountCustomizationModal } from './components/AccountCustomizationModal'
-import { fetchAccounts, deleteAccount } from './api/plaidApi'
+import {
+  useGetAccounts,
+  useDeleteAccount,
+} from '@/api/generated/endpoints/accounts/accounts'
 import { useProfile } from '../profile/hooks/useProfile'
 import { useSubscriptionTiers } from '../subscription/hooks/useSubscriptionTiers'
 import { useTierLimits } from '../subscription/hooks/useTierLimits'
@@ -66,9 +69,8 @@ function SortableAccountCard({ account, onDelete, onEdit }: SortableAccountCardP
 }
 
 export function AccountsPage() {
+  // Local state for optimistic updates
   const [accounts, setAccounts] = useState<Account[]>([])
-  const [accountsLoading, setAccountsLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
 
   // Issue #307: Show/hide hidden accounts toggle
   const [showHidden, setShowHidden] = useState(false)
@@ -76,6 +78,24 @@ export function AccountsPage() {
   // Issue #307: Modal state
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
+
+  // Use generated query hook for fetching accounts (always include hidden for toggle/counts)
+  const {
+    data: accountsData,
+    isLoading: accountsLoading,
+    error: accountsError,
+    refetch: refetchAccounts,
+  } = useGetAccounts({ include_hidden: 'true' })
+
+  // Use generated mutation hook for deleting accounts
+  const deleteAccountMutation = useDeleteAccount()
+
+  // Sync local state with query data
+  useEffect(() => {
+    if (accountsData?.accounts) {
+      setAccounts(accountsData.accounts)
+    }
+  }, [accountsData])
 
   // Fetch user profile using the hook
   const { user, loading: userLoading, refetch: refetchProfile } = useProfile()
@@ -85,6 +105,9 @@ export function AccountsPage() {
 
   // Combined loading state
   const loading = accountsLoading || userLoading
+
+  // Error message
+  const error = accountsError ? 'Failed to load accounts. Please try again.' : null
 
   // Issue #307: Account customization hook
   const {
@@ -106,42 +129,21 @@ export function AccountsPage() {
     })
   )
 
-  // Load accounts on mount (user profile is loaded via useProfile hook)
-  useEffect(() => {
-    loadAccounts()
-  }, [])
-
-  async function loadAccounts() {
-    try {
-      setAccountsLoading(true)
-      setError(null)
-
-      // Always fetch all accounts including hidden (for toggle and counts)
-      const accountsResponse = await fetchAccounts(true) // include_hidden = true
-      setAccounts(accountsResponse.accounts ?? [])
-    } catch (err) {
-      console.error('Failed to load accounts:', err)
-      setError('Failed to load accounts. Please try again.')
-    } finally {
-      setAccountsLoading(false)
-    }
-  }
-
   // Handle successful account linking - reload accounts and profile
   function handleAccountsLinked() {
-    loadAccounts()
+    refetchAccounts()
     refetchProfile()
   }
 
   // Handle account deletion
   async function handleDeleteAccount(accountId: string) {
     try {
-      await deleteAccount(accountId)
-      // Reload accounts after successful deletion
-      await loadAccounts()
+      await deleteAccountMutation.mutateAsync({ id: accountId })
+      // Refetch accounts after successful deletion
+      await refetchAccounts()
     } catch (err) {
       console.error('Failed to delete account:', err)
-      setError('Failed to delete account. Please try again.')
+      // Error will be shown from query error state
     }
   }
 
@@ -247,7 +249,7 @@ export function AccountsPage() {
       <div className="accounts-page responsive">
         <div className="error-state">
           <p className="error-message">{error}</p>
-          <button onClick={() => loadAccounts()} className="btn-retry">
+          <button onClick={() => refetchAccounts()} className="btn-retry">
             Retry
           </button>
         </div>
