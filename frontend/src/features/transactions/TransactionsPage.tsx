@@ -108,16 +108,17 @@ export function TransactionsPage() {
 
   const availableTags = (tagsData as unknown as UserTag[]) ?? []
   const availableCategories = (categoriesData as unknown as CustomCategory[]) ?? []
-  const accounts = accountsData?.accounts ?? []
 
   // Issue #531: Create accounts lookup map for O(1) access
+  // Use accountsData?.accounts directly to avoid unstable reference in deps
   const accountsMap = useMemo(() => {
     const map: Record<string, Account> = {}
-    accounts.forEach((acc) => {
+    const accs = accountsData?.accounts ?? []
+    accs.forEach((acc) => {
       map[acc.id] = acc
     })
     return map
-  }, [accounts])
+  }, [accountsData?.accounts])
 
   const {
     data,

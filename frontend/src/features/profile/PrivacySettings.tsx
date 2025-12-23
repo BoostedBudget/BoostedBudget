@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useMemo } from 'react'
 import {
   useGetPrivacySettings,
   useUpdatePrivacySettings,
@@ -26,23 +26,22 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
   // Use generated mutation hook for updating settings
   const updateMutation = useUpdatePrivacySettings()
 
-  // Local form state (modified values)
-  const [formState, setFormState] = useState<Partial<PrivacySettingsType>>({})
+  // Track only user modifications (not the full state)
+  const [modifications, setModifications] = useState<Partial<PrivacySettingsType>>({})
 
-  // Initialize form state when settings load
-  useEffect(() => {
-    if (settings) {
-      setFormState(settings as PrivacySettingsType)
-    }
-  }, [settings])
+  // Derive form state from settings merged with user modifications
+  const formState = useMemo<Partial<PrivacySettingsType>>(() => ({
+    ...(settings as PrivacySettingsType | undefined),
+    ...modifications,
+  }), [settings, modifications])
 
   // Compute loading error message
   const error = queryError ? 'Failed to load privacy settings. Please try again.' : saveError
 
   function handleToggle(field: keyof PrivacySettingsType) {
-    setFormState(prev => ({
+    setModifications(prev => ({
       ...prev,
-      [field]: !(prev[field] as boolean),
+      [field]: !(formState[field] as boolean),
     }))
     // Clear success message when user makes changes
     setSuccessMessage(null)
@@ -89,7 +88,8 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
 
       const updatedSettings = await updateMutation.mutateAsync({ data: updates })
 
-      setFormState(updatedSettings as PrivacySettingsType)
+      // Clear modifications since they're now saved
+      setModifications({})
       setSuccessMessage('Settings saved successfully!')
 
       // Notify parent component

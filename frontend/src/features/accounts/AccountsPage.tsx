@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   DndContext,
   closestCenter,
@@ -25,6 +26,7 @@ import { AccountCustomizationModal } from './components/AccountCustomizationModa
 import {
   useGetAccounts,
   useDeleteAccount,
+  getGetAccountsQueryKey,
 } from '@/api/generated/endpoints/accounts/accounts'
 import { useProfile } from '../profile/hooks/useProfile'
 import { useSubscriptionTiers } from '../subscription/hooks/useSubscriptionTiers'
@@ -69,8 +71,8 @@ function SortableAccountCard({ account, onDelete, onEdit }: SortableAccountCardP
 }
 
 export function AccountsPage() {
-  // Local state for optimistic updates
-  const [accounts, setAccounts] = useState<Account[]>([])
+  // Query client for optimistic updates
+  const queryClient = useQueryClient()
 
   // Issue #307: Show/hide hidden accounts toggle
   const [showHidden, setShowHidden] = useState(false)
@@ -90,12 +92,11 @@ export function AccountsPage() {
   // Use generated mutation hook for deleting accounts
   const deleteAccountMutation = useDeleteAccount()
 
-  // Sync local state with query data
-  useEffect(() => {
-    if (accountsData?.accounts) {
-      setAccounts(accountsData.accounts)
-    }
-  }, [accountsData])
+  // Derive accounts from query data (no local state sync needed)
+  const accounts = accountsData?.accounts ?? []
+
+  // Query key for optimistic updates
+  const accountsQueryKey = getGetAccountsQueryKey({ include_hidden: 'true' })
 
   // Fetch user profile using the hook
   const { user, loading: userLoading, refetch: refetchProfile } = useProfile()
@@ -157,20 +158,28 @@ export function AccountsPage() {
   const handleSaveAccount = useCallback(async (accountId: string, changes: Partial<UpdateAccountRequest>) => {
     const updatedAccount = await updateAccount(accountId, changes)
     if (updatedAccount) {
-      // Update local state with the new account data
-      setAccounts(prev => prev.map(acc =>
-        acc.id === accountId ? updatedAccount : acc
-      ))
+      // Optimistically update the query cache
+      queryClient.setQueryData(accountsQueryKey, (oldData: { accounts: Account[] } | undefined) => {
+        if (!oldData) return oldData
+        return {
+          ...oldData,
+          accounts: oldData.accounts.map(acc =>
+            acc.id === accountId ? updatedAccount : acc
+          ),
+        }
+      })
     }
-  }, [updateAccount])
+  }, [updateAccount, queryClient, accountsQueryKey])
 
   // Issue #307: Filter and sort accounts
+  // Use accountsData?.accounts directly in deps to avoid unstable reference
   const displayedAccounts = useMemo(() => {
-    let filtered = accounts
+    const accs = accountsData?.accounts ?? []
+    let filtered = accs
 
     // Filter hidden accounts unless showHidden is true
     if (!showHidden) {
-      filtered = accounts.filter(acc => !acc.is_hidden)
+      filtered = accs.filter(acc => !acc.is_hidden)
     }
 
     // Sort by display_order (nulls last), then created_at
@@ -185,12 +194,13 @@ export function AccountsPage() {
       // Fallback to created_at
       return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
     })
-  }, [accounts, showHidden])
+  }, [accountsData?.accounts, showHidden])
 
   // Count of hidden accounts
   const hiddenCount = useMemo(() => {
-    return accounts.filter(acc => acc.is_hidden).length
-  }, [accounts])
+    const accs = accountsData?.accounts ?? []
+    return accs.filter(acc => acc.is_hidden).length
+  }, [accountsData?.accounts])
 
   // Issue #307: Handle drag end for reordering
   const handleDragEnd = useCallback(async (event: DragEndEvent) => {
@@ -211,23 +221,24 @@ export function AccountsPage() {
           display_order: index,
         }))
 
-        // Update local state optimistically
-        setAccounts(prev => {
-          const updated = [...prev]
-          accountOrders.forEach(order => {
-            const acc = updated.find(a => a.id === order.account_id)
-            if (acc) {
-              acc.display_order = order.display_order
+        // Optimistically update query cache
+        queryClient.setQueryData(accountsQueryKey, (oldData: { accounts: Account[] } | undefined) => {
+          if (!oldData) return oldData
+          const updated = oldData.accounts.map(acc => {
+            const order = accountOrders.find(o => o.account_id === acc.id)
+            if (order) {
+              return { ...acc, display_order: order.display_order }
             }
+            return acc
           })
-          return updated
+          return { ...oldData, accounts: updated }
         })
 
         // Call API
         await reorderAccounts(accountOrders)
       }
     }
-  }, [displayedAccounts, reorderAccounts])
+  }, [displayedAccounts, reorderAccounts, queryClient, accountsQueryKey])
 
   // Calculate tier limits using hook
   const { isAtLimit, shouldShowUpgradeBanner, accountCountDisplay } = useTierLimits({

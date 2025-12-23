@@ -7,7 +7,7 @@
  * Uses shadcn/ui Dialog built on Radix UI.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { XIcon } from 'lucide-react';
 import {
   Dialog,
@@ -81,15 +81,13 @@ export function CreateSavingsGoalDialog({
   // Derive submitting state from mutation
   const isSubmitting = createSavingsGoalMutation.isPending;
 
-  // Reset form when dialog closes
-  useEffect(() => {
-    if (!isOpen) {
-      setFormData(initialFormData);
-      setErrors({});
-      setApiError(null);
-      setSelectedTemplate(null);
-    }
-  }, [isOpen]);
+  // Reset form state (called when dialog closes)
+  const resetForm = useCallback(() => {
+    setFormData(initialFormData);
+    setErrors({});
+    setApiError(null);
+    setSelectedTemplate(null);
+  }, []);
 
   const handleTemplateSelect = useCallback((template: GoalTemplate) => {
     setSelectedTemplate(template.id);
@@ -163,10 +161,11 @@ export function CreateSavingsGoalDialog({
   const handleOpenChange = useCallback(
     (open: boolean) => {
       if (!open) {
+        resetForm();
         onCancel();
       }
     },
-    [onCancel]
+    [onCancel, resetForm]
   );
 
   return (
