@@ -11,6 +11,20 @@ vi.mock('@auth0/auth0-react', () => ({
   useAuth0: mockUseAuth0,
 }))
 
+// Mock useDefaultDashboardLayout hook to avoid QueryClient requirement
+vi.mock('./features/dashboard/hooks/useDefaultDashboardLayout', () => ({
+  useDefaultDashboardLayout: vi.fn(() => ({
+    defaultLayout: {
+      widgets: [],
+      version: 1,
+    },
+    loading: false,
+    error: null,
+    refetch: vi.fn(),
+    isFromApi: false,
+  })),
+}))
+
 // Mock fetch globally
 globalThis.fetch = vi.fn() as typeof fetch
 
