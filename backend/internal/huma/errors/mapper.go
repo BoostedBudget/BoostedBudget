@@ -44,6 +44,10 @@ func MapError(err error) error {
 		return huma.Error404NotFound("Categorization rule not found")
 	case errors.Is(err, domain.ErrSavingsGoalNotFound):
 		return huma.Error404NotFound("Savings goal not found")
+	case errors.Is(err, domain.ErrAutomationRuleNotFound):
+		return huma.Error404NotFound("Automation rule not found")
+	case errors.Is(err, domain.ErrTransferSuggestionNotFound):
+		return huma.Error404NotFound("Transfer suggestion not found")
 
 	// Repository errors
 	case errors.Is(err, repository.ErrTransactionNotFound):
@@ -102,6 +106,17 @@ func MapError(err error) error {
 		return huma.Error403Forbidden("You are not allowed to update this field")
 	case errors.Is(err, repository.ErrNotificationAccessDenied):
 		return huma.Error403Forbidden("Access denied to this notification")
+	case errors.Is(err, domain.ErrAutomationRuleLimitExceeded):
+		return huma.Error403Forbidden("Automation rule limit exceeded for your subscription tier. Upgrade to add more rules.")
+	case errors.Is(err, domain.ErrEventTriggersNotAllowed):
+		return huma.Error403Forbidden("Event-based triggers require a premium subscription. Upgrade to enable real-time rule execution.")
+
+	// ================================
+	// 429 Too Many Requests - Rate/execution limits
+	// ================================
+
+	case errors.Is(err, domain.ErrExecutionLimitExceeded):
+		return huma.NewError(429, "Daily rule execution limit exceeded for your subscription tier. Try again tomorrow or upgrade.")
 
 	// ================================
 	// 400 Bad Request - Validation errors
