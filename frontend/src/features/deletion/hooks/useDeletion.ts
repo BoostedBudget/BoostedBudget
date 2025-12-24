@@ -2,23 +2,29 @@
  * useDeletion Hook
  *
  * React hook for managing account deletion and cancellation.
- * Provides methods to request and cancel account deletion.
+ * Uses generated React Query hooks from OpenAPI spec.
  *
  * Issue #18: Account Deletion Flow (GDPR Article 17)
  */
 
-import { useState } from 'react'
-import { requestDeletion, cancelDeletion } from '../api/deletionApi'
-import type { RequestDeletionResponse, CancelDeletionResponse } from '../types'
+import { useMutation } from '@tanstack/react-query'
+import {
+  useRequestDeletion,
+  cancelDeletion,
+} from '@/api/generated/endpoints/user/user'
+import type {
+  RequestDeletionResponseBody,
+  CancelDeletionResponseBody,
+} from '@/api/generated/models'
 
 export interface UseDeletionResult {
   // Request deletion
-  requestAccountDeletion: () => Promise<RequestDeletionResponse | null>
+  requestAccountDeletion: () => Promise<RequestDeletionResponseBody | null>
   isRequesting: boolean
   requestError: Error | null
 
   // Cancel deletion
-  cancelAccountDeletion: (token: string) => Promise<CancelDeletionResponse | null>
+  cancelAccountDeletion: (token: string) => Promise<CancelDeletionResponseBody | null>
   isCanceling: boolean
   cancelError: Error | null
 }
@@ -50,51 +56,51 @@ export interface UseDeletionResult {
  * ```
  */
 export function useDeletion(): UseDeletionResult {
-  // Request deletion state
-  const [isRequesting, setIsRequesting] = useState<boolean>(false)
-  const [requestError, setRequestError] = useState<Error | null>(null)
+  // Use generated mutation for requesting deletion
+  const requestMutation = useRequestDeletion()
 
-  // Cancel deletion state
-  const [isCanceling, setIsCanceling] = useState<boolean>(false)
-  const [cancelError, setCancelError] = useState<Error | null>(null)
+  // Create a mutation for canceling deletion (wrapping the generated GET function)
+  const cancelMutation = useMutation({
+    mutationFn: (token: string) => cancelDeletion(token),
+  })
 
-  async function requestAccountDeletion(): Promise<RequestDeletionResponse | null> {
+  async function requestAccountDeletion(): Promise<RequestDeletionResponseBody | null> {
     try {
-      setIsRequesting(true)
-      setRequestError(null)
-      const response = await requestDeletion()
+      const response = await requestMutation.mutateAsync(undefined)
       return response
-    } catch (err) {
-      const error = err instanceof Error ? err : new Error('Failed to request account deletion')
-      setRequestError(error)
+    } catch {
       return null
-    } finally {
-      setIsRequesting(false)
     }
   }
 
-  async function cancelAccountDeletion(token: string): Promise<CancelDeletionResponse | null> {
+  async function cancelAccountDeletion(token: string): Promise<CancelDeletionResponseBody | null> {
     try {
-      setIsCanceling(true)
-      setCancelError(null)
-      const response = await cancelDeletion(token)
+      const response = await cancelMutation.mutateAsync(token)
       return response
-    } catch (err) {
-      const error =
-        err instanceof Error ? err : new Error('Failed to cancel account deletion')
-      setCancelError(error)
+    } catch {
       return null
-    } finally {
-      setIsCanceling(false)
     }
   }
+
+  // Convert errors to Error instances
+  const requestError = requestMutation.error
+    ? (requestMutation.error instanceof Error
+        ? requestMutation.error
+        : new Error('Failed to request account deletion'))
+    : null
+
+  const cancelError = cancelMutation.error
+    ? (cancelMutation.error instanceof Error
+        ? cancelMutation.error
+        : new Error('Failed to cancel account deletion'))
+    : null
 
   return {
     requestAccountDeletion,
-    isRequesting,
+    isRequesting: requestMutation.isPending,
     requestError,
     cancelAccountDeletion,
-    isCanceling,
+    isCanceling: cancelMutation.isPending,
     cancelError,
   }
 }

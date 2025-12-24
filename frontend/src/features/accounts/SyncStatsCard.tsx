@@ -1,6 +1,4 @@
-import { useState, useEffect } from 'react'
-import { fetchSyncStats } from './api/syncStatsApi'
-import type { SyncStats } from './types'
+import { useGetSyncStats } from '@/api/generated/endpoints/sync/sync'
 import './SyncStatsCard.css'
 
 /**
@@ -16,27 +14,7 @@ import './SyncStatsCard.css'
  * - Unlimited tier badge
  */
 export function SyncStatsCard() {
-  const [stats, setStats] = useState<SyncStats | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    loadSyncStats()
-  }, [])
-
-  async function loadSyncStats() {
-    try {
-      setIsLoading(true)
-      setError(null)
-      const data = await fetchSyncStats()
-      setStats(data)
-    } catch (err) {
-      console.error('Failed to load sync stats:', err)
-      setError('Failed to load sync statistics')
-    } finally {
-      setIsLoading(false)
-    }
-  }
+  const { data: stats, isLoading, error } = useGetSyncStats()
 
   if (isLoading) {
     return (

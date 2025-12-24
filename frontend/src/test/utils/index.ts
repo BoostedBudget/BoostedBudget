@@ -3,3 +3,4 @@
  */
 
 export * from './formTestHelpers'
+export * from './queryTestUtils'

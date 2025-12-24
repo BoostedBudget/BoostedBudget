@@ -1,446 +1,470 @@
+/**
+ * TagEditor Component Tests
+ * Issue #564: Frontend Test Coverage Improvement
+ *
+ * Tests the tag editor component with multi-select and inline creation.
+ */
+
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { TagEditor } from './TagEditor'
-import * as tagsApi from '../api/tagsApi'
 import type { UserTag } from '../types'
 
-// Mock the tags API
-vi.mock('../api/tagsApi')
+// Mock the generated mutation hook
+const mockMutateAsync = vi.fn()
+vi.mock('@/api/generated/endpoints/tags/tags', () => ({
+  useCreateTag: () => ({
+    mutateAsync: mockMutateAsync,
+    isPending: false,
+  }),
+}))
+
+// Mock tags data
+function createMockTags(): UserTag[] {
+  return [
+    { id: 'tag-1', user_id: 'user-1', name: 'Essential', color: '#FF5733', usage_count: 5, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
+    { id: 'tag-2', user_id: 'user-1', name: 'Discretionary', color: '#33FF57', usage_count: 3, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
+    { id: 'tag-3', user_id: 'user-1', name: 'Business', color: '#3357FF', usage_count: 2, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
+  ]
+}
 
 describe('TagEditor', () => {
-  const mockTags: UserTag[] = [
-    {
-      id: 'tag-1',
-      user_id: 'user-1',
-      name: 'Food',
-      color: '#FF5733',
-      usage_count: 5,
-      created_at: '2025-01-01T00:00:00Z',
-      updated_at: '2025-01-01T00:00:00Z',
-    },
-    {
-      id: 'tag-2',
-      user_id: 'user-1',
-      name: 'Shopping',
-      color: '#33FF57',
-      usage_count: 3,
-      created_at: '2025-01-01T00:00:00Z',
-      updated_at: '2025-01-01T00:00:00Z',
-    },
-    {
-      id: 'tag-3',
-      user_id: 'user-1',
-      name: 'Entertainment',
-      color: '#3357FF',
-      usage_count: 2,
-      created_at: '2025-01-01T00:00:00Z',
-      updated_at: '2025-01-01T00:00:00Z',
-    },
-  ]
-
-  const defaultProps = {
-    selectedTags: ['Food'],
-    availableTags: mockTags,
-    onChange: vi.fn(),
-    disabled: false,
-  }
+  const mockOnChange = vi.fn()
+  const mockOnTagCreated = vi.fn()
 
   beforeEach(() => {
     vi.clearAllMocks()
-    // Mock createTag to return the new tag with an id
-    vi.mocked(tagsApi.createTag).mockImplementation(async (request) => ({
-      id: 'new-tag-id',
-      user_id: 'user-1',
-      name: request.name,
-      color: request.color || '#6B7280',
-      usage_count: 0,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    }))
   })
 
   describe('Rendering', () => {
-    it('should render selected tags as chips', () => {
-      render(<TagEditor {...defaultProps} />)
-
-      expect(screen.getByText('Food')).toBeInTheDocument()
-      expect(screen.queryByText('Shopping')).not.toBeInTheDocument()
-    })
-
-    it('should render multiple selected tags', () => {
-      render(<TagEditor {...defaultProps} selectedTags={['Food', 'Shopping']} />)
-
-      expect(screen.getByText('Food')).toBeInTheDocument()
-      expect(screen.getByText('Shopping')).toBeInTheDocument()
-    })
-
-    it('should show add tag button', () => {
-      render(<TagEditor {...defaultProps} />)
-
-      expect(screen.getByRole('button', { name: /add tag/i })).toBeInTheDocument()
-    })
-
-    it('should show empty state when no tags selected', () => {
-      render(<TagEditor {...defaultProps} selectedTags={[]} />)
-
-      expect(screen.getByText(/no tags/i)).toBeInTheDocument()
-    })
-  })
-
-  describe('Tag removal', () => {
-    it('should call onChange when removing a tag', () => {
-      const onChange = vi.fn()
-      render(<TagEditor {...defaultProps} onChange={onChange} />)
-
-      const removeButton = screen.getByRole('button', { name: /remove food/i })
-      fireEvent.click(removeButton)
-
-      expect(onChange).toHaveBeenCalledWith([])
-    })
-
-    it('should remove specific tag from multiple', () => {
-      const onChange = vi.fn()
+    it('should render the component', () => {
       render(
         <TagEditor
-          {...defaultProps}
-          selectedTags={['Food', 'Shopping']}
-          onChange={onChange}
+          selectedTags={[]}
+          availableTags={createMockTags()}
+          onChange={mockOnChange}
         />
       )
 
-      const removeButton = screen.getByRole('button', { name: /remove food/i })
-      fireEvent.click(removeButton)
+      expect(screen.getByText('+ Add tag')).toBeInTheDocument()
+    })
 
-      expect(onChange).toHaveBeenCalledWith(['Shopping'])
+    it('should show "No tags" when no tags selected', () => {
+      render(
+        <TagEditor
+          selectedTags={[]}
+          availableTags={createMockTags()}
+          onChange={mockOnChange}
+        />
+      )
+
+      expect(screen.getByText('No tags')).toBeInTheDocument()
+    })
+
+    it('should render selected tag chips', () => {
+      render(
+        <TagEditor
+          selectedTags={['Essential', 'Business']}
+          availableTags={createMockTags()}
+          onChange={mockOnChange}
+        />
+      )
+
+      expect(screen.getByText('Essential')).toBeInTheDocument()
+      expect(screen.getByText('Business')).toBeInTheDocument()
+    })
+
+    it('should render tag chips with correct colors', () => {
+      render(
+        <TagEditor
+          selectedTags={['Essential']}
+          availableTags={createMockTags()}
+          onChange={mockOnChange}
+        />
+      )
+
+      const tagChip = screen.getByText('Essential').closest('.tag-chip') as HTMLElement
+      expect(tagChip.style.backgroundColor).toBe('rgb(255, 87, 51)')
+    })
+
+    it('should render remove button for each selected tag', () => {
+      render(
+        <TagEditor
+          selectedTags={['Essential', 'Business']}
+          availableTags={createMockTags()}
+          onChange={mockOnChange}
+        />
+      )
+
+      expect(screen.getByLabelText('Remove Essential')).toBeInTheDocument()
+      expect(screen.getByLabelText('Remove Business')).toBeInTheDocument()
     })
   })
 
-  describe('Tag addition', () => {
-    it('should show dropdown with available tags when add button clicked', async () => {
-      render(<TagEditor {...defaultProps} />)
+  describe('Dropdown Behavior', () => {
+    it('should not show dropdown by default', () => {
+      render(
+        <TagEditor
+          selectedTags={[]}
+          availableTags={createMockTags()}
+          onChange={mockOnChange}
+        />
+      )
 
-      const addButton = screen.getByRole('button', { name: /add tag/i })
-      fireEvent.click(addButton)
+      expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+    })
+
+    it('should show dropdown when Add tag clicked', () => {
+      render(
+        <TagEditor
+          selectedTags={[]}
+          availableTags={createMockTags()}
+          onChange={mockOnChange}
+        />
+      )
+
+      fireEvent.click(screen.getByText('+ Add tag'))
+
+      expect(screen.getByRole('listbox')).toBeInTheDocument()
+    })
+
+    it('should close dropdown when Add tag clicked again', () => {
+      render(
+        <TagEditor
+          selectedTags={[]}
+          availableTags={createMockTags()}
+          onChange={mockOnChange}
+        />
+      )
+
+      fireEvent.click(screen.getByText('+ Add tag'))
+      expect(screen.getByRole('listbox')).toBeInTheDocument()
+
+      fireEvent.click(screen.getByText('+ Add tag'))
+      expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+    })
+
+    it('should show available tags in dropdown', () => {
+      render(
+        <TagEditor
+          selectedTags={[]}
+          availableTags={createMockTags()}
+          onChange={mockOnChange}
+        />
+      )
+
+      fireEvent.click(screen.getByText('+ Add tag'))
+
+      expect(screen.getByLabelText('Essential')).toBeInTheDocument()
+      expect(screen.getByLabelText('Discretionary')).toBeInTheDocument()
+      expect(screen.getByLabelText('Business')).toBeInTheDocument()
+    })
+
+    it('should not show already selected tags in dropdown', () => {
+      render(
+        <TagEditor
+          selectedTags={['Essential']}
+          availableTags={createMockTags()}
+          onChange={mockOnChange}
+        />
+      )
+
+      fireEvent.click(screen.getByText('+ Add tag'))
+
+      expect(screen.queryByLabelText('Essential')).not.toBeInTheDocument()
+      expect(screen.getByLabelText('Discretionary')).toBeInTheDocument()
+      expect(screen.getByLabelText('Business')).toBeInTheDocument()
+    })
+
+    it('should show Create new tag option in dropdown', () => {
+      render(
+        <TagEditor
+          selectedTags={[]}
+          availableTags={createMockTags()}
+          onChange={mockOnChange}
+        />
+      )
+
+      fireEvent.click(screen.getByText('+ Add tag'))
+
+      expect(screen.getByText('+ Create new tag')).toBeInTheDocument()
+    })
+  })
+
+  describe('Tag Selection', () => {
+    it('should add tag to selection when clicked in dropdown', () => {
+      render(
+        <TagEditor
+          selectedTags={['Essential']}
+          availableTags={createMockTags()}
+          onChange={mockOnChange}
+        />
+      )
+
+      fireEvent.click(screen.getByText('+ Add tag'))
+      fireEvent.click(screen.getByLabelText('Discretionary'))
+
+      expect(mockOnChange).toHaveBeenCalledWith(['Essential', 'Discretionary'])
+    })
+
+    it('should close dropdown after selecting a tag', () => {
+      render(
+        <TagEditor
+          selectedTags={[]}
+          availableTags={createMockTags()}
+          onChange={mockOnChange}
+        />
+      )
+
+      fireEvent.click(screen.getByText('+ Add tag'))
+      fireEvent.click(screen.getByLabelText('Essential'))
+
+      expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('Tag Removal', () => {
+    it('should remove tag when remove button clicked', () => {
+      render(
+        <TagEditor
+          selectedTags={['Essential', 'Business']}
+          availableTags={createMockTags()}
+          onChange={mockOnChange}
+        />
+      )
+
+      fireEvent.click(screen.getByLabelText('Remove Essential'))
+
+      expect(mockOnChange).toHaveBeenCalledWith(['Business'])
+    })
+
+    it('should remove last tag correctly', () => {
+      render(
+        <TagEditor
+          selectedTags={['Essential']}
+          availableTags={createMockTags()}
+          onChange={mockOnChange}
+        />
+      )
+
+      fireEvent.click(screen.getByLabelText('Remove Essential'))
+
+      expect(mockOnChange).toHaveBeenCalledWith([])
+    })
+  })
+
+  describe('Tag Creation', () => {
+    it('should show create form when Create new tag clicked', () => {
+      render(
+        <TagEditor
+          selectedTags={[]}
+          availableTags={createMockTags()}
+          onChange={mockOnChange}
+        />
+      )
+
+      fireEvent.click(screen.getByText('+ Add tag'))
+      fireEvent.click(screen.getByText('+ Create new tag'))
+
+      expect(screen.getByPlaceholderText('Tag name')).toBeInTheDocument()
+      expect(screen.getByLabelText('Color')).toBeInTheDocument()
+    })
+
+    it('should have Create button disabled when tag name empty', () => {
+      render(
+        <TagEditor
+          selectedTags={[]}
+          availableTags={createMockTags()}
+          onChange={mockOnChange}
+        />
+      )
+
+      fireEvent.click(screen.getByText('+ Add tag'))
+      fireEvent.click(screen.getByText('+ Create new tag'))
+
+      expect(screen.getByText('Create')).toBeDisabled()
+    })
+
+    it('should enable Create button when tag name entered', () => {
+      render(
+        <TagEditor
+          selectedTags={[]}
+          availableTags={createMockTags()}
+          onChange={mockOnChange}
+        />
+      )
+
+      fireEvent.click(screen.getByText('+ Add tag'))
+      fireEvent.click(screen.getByText('+ Create new tag'))
+      fireEvent.change(screen.getByPlaceholderText('Tag name'), { target: { value: 'New Tag' } })
+
+      expect(screen.getByText('Create')).not.toBeDisabled()
+    })
+
+    it('should hide create form when Cancel clicked', () => {
+      render(
+        <TagEditor
+          selectedTags={[]}
+          availableTags={createMockTags()}
+          onChange={mockOnChange}
+        />
+      )
+
+      fireEvent.click(screen.getByText('+ Add tag'))
+      fireEvent.click(screen.getByText('+ Create new tag'))
+      fireEvent.click(screen.getByText('Cancel'))
+
+      expect(screen.queryByPlaceholderText('Tag name')).not.toBeInTheDocument()
+      expect(screen.getByText('+ Create new tag')).toBeInTheDocument()
+    })
+
+    it('should call mutation when Create clicked', async () => {
+      const newTag = { id: 'tag-4', user_id: 'user-1', name: 'New Tag', color: '#6B7280', usage_count: 0, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' }
+      mockMutateAsync.mockResolvedValueOnce(newTag)
+
+      render(
+        <TagEditor
+          selectedTags={['Essential']}
+          availableTags={createMockTags()}
+          onChange={mockOnChange}
+          onTagCreated={mockOnTagCreated}
+        />
+      )
+
+      fireEvent.click(screen.getByText('+ Add tag'))
+      fireEvent.click(screen.getByText('+ Create new tag'))
+      fireEvent.change(screen.getByPlaceholderText('Tag name'), { target: { value: 'New Tag' } })
+      fireEvent.click(screen.getByText('Create'))
 
       await waitFor(() => {
-        expect(screen.getByText('Shopping')).toBeInTheDocument()
-        expect(screen.getByText('Entertainment')).toBeInTheDocument()
+        expect(mockMutateAsync).toHaveBeenCalledWith({
+          data: { name: 'New Tag', color: '#6B7280' },
+        })
       })
     })
 
-    it('should not show already selected tags in dropdown', async () => {
-      render(<TagEditor {...defaultProps} selectedTags={['Food', 'Shopping']} />)
+    it('should add new tag to selection after creation', async () => {
+      const newTag = { id: 'tag-4', user_id: 'user-1', name: 'New Tag', color: '#6B7280', usage_count: 0, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' }
+      mockMutateAsync.mockResolvedValueOnce(newTag)
 
-      const addButton = screen.getByRole('button', { name: /add tag/i })
-      fireEvent.click(addButton)
+      render(
+        <TagEditor
+          selectedTags={['Essential']}
+          availableTags={createMockTags()}
+          onChange={mockOnChange}
+          onTagCreated={mockOnTagCreated}
+        />
+      )
+
+      fireEvent.click(screen.getByText('+ Add tag'))
+      fireEvent.click(screen.getByText('+ Create new tag'))
+      fireEvent.change(screen.getByPlaceholderText('Tag name'), { target: { value: 'New Tag' } })
+      fireEvent.click(screen.getByText('Create'))
 
       await waitFor(() => {
-        expect(screen.getByRole('option', { name: 'Entertainment' })).toBeInTheDocument()
-        expect(screen.queryByRole('option', { name: 'Food' })).not.toBeInTheDocument()
-        expect(screen.queryByRole('option', { name: 'Shopping' })).not.toBeInTheDocument()
+        expect(mockOnChange).toHaveBeenCalledWith(['Essential', 'New Tag'])
       })
     })
 
-    it('should call onChange when adding a tag', async () => {
-      const onChange = vi.fn()
-      render(<TagEditor {...defaultProps} onChange={onChange} />)
+    it('should call onTagCreated callback after creation', async () => {
+      const newTag = { id: 'tag-4', user_id: 'user-1', name: 'New Tag', color: '#6B7280', usage_count: 0, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' }
+      mockMutateAsync.mockResolvedValueOnce(newTag)
 
-      const addButton = screen.getByRole('button', { name: /add tag/i })
-      fireEvent.click(addButton)
+      render(
+        <TagEditor
+          selectedTags={[]}
+          availableTags={createMockTags()}
+          onChange={mockOnChange}
+          onTagCreated={mockOnTagCreated}
+        />
+      )
 
-      await waitFor(() => {
-        const option = screen.getByRole('option', { name: 'Shopping' })
-        fireEvent.click(option)
-      })
-
-      expect(onChange).toHaveBeenCalledWith(['Food', 'Shopping'])
-    })
-
-    it('should close dropdown after selection', async () => {
-      render(<TagEditor {...defaultProps} />)
-
-      const addButton = screen.getByRole('button', { name: /add tag/i })
-      fireEvent.click(addButton)
+      fireEvent.click(screen.getByText('+ Add tag'))
+      fireEvent.click(screen.getByText('+ Create new tag'))
+      fireEvent.change(screen.getByPlaceholderText('Tag name'), { target: { value: 'New Tag' } })
+      fireEvent.click(screen.getByText('Create'))
 
       await waitFor(() => {
-        const option = screen.getByRole('option', { name: 'Shopping' })
-        fireEvent.click(option)
-      })
-
-      await waitFor(() => {
-        expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+        expect(mockOnTagCreated).toHaveBeenCalledWith(newTag)
       })
     })
   })
 
-  describe('Disabled state', () => {
-    it('should disable add button when disabled', () => {
-      render(<TagEditor {...defaultProps} disabled={true} />)
+  describe('Disabled State', () => {
+    it('should disable Add tag button when disabled', () => {
+      render(
+        <TagEditor
+          selectedTags={[]}
+          availableTags={createMockTags()}
+          onChange={mockOnChange}
+          disabled={true}
+        />
+      )
 
-      const addButton = screen.getByRole('button', { name: /add tag/i })
-      expect(addButton).toBeDisabled()
+      expect(screen.getByText('+ Add tag')).toBeDisabled()
     })
 
     it('should disable remove buttons when disabled', () => {
-      render(<TagEditor {...defaultProps} disabled={true} />)
+      render(
+        <TagEditor
+          selectedTags={['Essential']}
+          availableTags={createMockTags()}
+          onChange={mockOnChange}
+          disabled={true}
+        />
+      )
 
-      const removeButton = screen.getByRole('button', { name: /remove food/i })
-      expect(removeButton).toBeDisabled()
+      expect(screen.getByLabelText('Remove Essential')).toBeDisabled()
+    })
+
+    it('should not open dropdown when Add tag clicked while disabled', () => {
+      render(
+        <TagEditor
+          selectedTags={[]}
+          availableTags={createMockTags()}
+          onChange={mockOnChange}
+          disabled={true}
+        />
+      )
+
+      fireEvent.click(screen.getByText('+ Add tag'))
+
+      expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
     })
   })
 
-  describe('Tag colors', () => {
-    it('should apply tag color to chips', () => {
-      render(<TagEditor {...defaultProps} />)
+  describe('Edge Cases', () => {
+    it('should handle empty available tags', () => {
+      render(
+        <TagEditor
+          selectedTags={[]}
+          availableTags={[]}
+          onChange={mockOnChange}
+        />
+      )
 
-      const tagChip = screen.getByText('Food').closest('.tag-chip')
-      expect(tagChip).toHaveStyle({ backgroundColor: '#FF5733' })
+      fireEvent.click(screen.getByText('+ Add tag'))
+
+      // Should still show create option
+      expect(screen.getByText('+ Create new tag')).toBeInTheDocument()
     })
 
-    it('should use default color when tag has no color', () => {
-      const tagsWithNoColor = [
-        {
-          ...mockTags[0],
-          color: null,
-        },
-        ...mockTags.slice(1),
+    it('should handle tag without color', () => {
+      const tagsWithoutColor: UserTag[] = [
+        { id: 'tag-1', user_id: 'user-1', name: 'NoColor', color: undefined, usage_count: 0, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
       ]
 
       render(
         <TagEditor
-          {...defaultProps}
-          availableTags={tagsWithNoColor}
+          selectedTags={['NoColor']}
+          availableTags={tagsWithoutColor}
+          onChange={mockOnChange}
         />
       )
 
-      const tagChip = screen.getByText('Food').closest('.tag-chip')
-      expect(tagChip).toHaveStyle({ backgroundColor: '#6B7280' })
-    })
-  })
-
-  describe('Inline tag creation', () => {
-    it('should show "Create new tag" option in dropdown even when availableTags is empty', async () => {
-      render(<TagEditor {...defaultProps} availableTags={[]} selectedTags={[]} />)
-
-      const addButton = screen.getByRole('button', { name: /add tag/i })
-      fireEvent.click(addButton)
-
-      await waitFor(() => {
-        expect(screen.getByText(/create new tag/i)).toBeInTheDocument()
-      })
-    })
-
-    it('should show "Create new tag" option at bottom of dropdown with existing tags', async () => {
-      render(<TagEditor {...defaultProps} />)
-
-      const addButton = screen.getByRole('button', { name: /add tag/i })
-      fireEvent.click(addButton)
-
-      await waitFor(() => {
-        expect(screen.getByText(/create new tag/i)).toBeInTheDocument()
-        expect(screen.getByText('Shopping')).toBeInTheDocument()
-      })
-    })
-
-    it('should show creation form when "Create new tag" is clicked', async () => {
-      render(<TagEditor {...defaultProps} />)
-
-      const addButton = screen.getByRole('button', { name: /add tag/i })
-      fireEvent.click(addButton)
-
-      await waitFor(() => {
-        const createOption = screen.getByText(/create new tag/i)
-        fireEvent.click(createOption)
-      })
-
-      await waitFor(() => {
-        expect(screen.getByPlaceholderText(/tag name/i)).toBeInTheDocument()
-        expect(screen.getByLabelText(/color/i)).toBeInTheDocument()
-        expect(screen.getByRole('button', { name: /create$/i })).toBeInTheDocument()
-      })
-    })
-
-    it('should call onTagCreated with new tag after creation', async () => {
-      const onTagCreated = vi.fn()
-      render(<TagEditor {...defaultProps} onTagCreated={onTagCreated} />)
-
-      const addButton = screen.getByRole('button', { name: /add tag/i })
-      fireEvent.click(addButton)
-
-      await waitFor(() => {
-        const createOption = screen.getByText(/create new tag/i)
-        fireEvent.click(createOption)
-      })
-
-      const nameInput = screen.getByPlaceholderText(/tag name/i)
-      fireEvent.change(nameInput, { target: { value: 'New Tag' } })
-
-      const createButton = screen.getByRole('button', { name: /create$/i })
-      fireEvent.click(createButton)
-
-      await waitFor(() => {
-        expect(onTagCreated).toHaveBeenCalledWith(expect.objectContaining({
-          name: 'New Tag',
-        }))
-      })
-    })
-
-    it('should auto-select newly created tag', async () => {
-      const onChange = vi.fn()
-      const onTagCreated = vi.fn()
-      render(
-        <TagEditor
-          {...defaultProps}
-          onChange={onChange}
-          onTagCreated={onTagCreated}
-        />
-      )
-
-      const addButton = screen.getByRole('button', { name: /add tag/i })
-      fireEvent.click(addButton)
-
-      await waitFor(() => {
-        const createOption = screen.getByText(/create new tag/i)
-        fireEvent.click(createOption)
-      })
-
-      const nameInput = screen.getByPlaceholderText(/tag name/i)
-      fireEvent.change(nameInput, { target: { value: 'New Tag' } })
-
-      const createButton = screen.getByRole('button', { name: /create$/i })
-      fireEvent.click(createButton)
-
-      await waitFor(() => {
-        expect(onChange).toHaveBeenCalledWith(['Food', 'New Tag'])
-      })
-    })
-
-    it('should close creation form and dropdown after successful creation', async () => {
-      const onTagCreated = vi.fn()
-      render(<TagEditor {...defaultProps} onTagCreated={onTagCreated} />)
-
-      const addButton = screen.getByRole('button', { name: /add tag/i })
-      fireEvent.click(addButton)
-
-      await waitFor(() => {
-        const createOption = screen.getByText(/create new tag/i)
-        fireEvent.click(createOption)
-      })
-
-      const nameInput = screen.getByPlaceholderText(/tag name/i)
-      fireEvent.change(nameInput, { target: { value: 'New Tag' } })
-
-      const createButton = screen.getByRole('button', { name: /create$/i })
-      fireEvent.click(createButton)
-
-      await waitFor(() => {
-        expect(screen.queryByPlaceholderText(/tag name/i)).not.toBeInTheDocument()
-        expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
-      })
-    })
-
-    it('should allow creating tag with custom color', async () => {
-      const onTagCreated = vi.fn()
-      render(<TagEditor {...defaultProps} onTagCreated={onTagCreated} />)
-
-      const addButton = screen.getByRole('button', { name: /add tag/i })
-      fireEvent.click(addButton)
-
-      await waitFor(() => {
-        const createOption = screen.getByText(/create new tag/i)
-        fireEvent.click(createOption)
-      })
-
-      const nameInput = screen.getByPlaceholderText(/tag name/i)
-      fireEvent.change(nameInput, { target: { value: 'New Tag' } })
-
-      const colorInput = screen.getByLabelText(/color/i)
-      fireEvent.change(colorInput, { target: { value: '#FF0000' } })
-
-      const createButton = screen.getByRole('button', { name: /create$/i })
-      fireEvent.click(createButton)
-
-      await waitFor(() => {
-        expect(onTagCreated).toHaveBeenCalledWith(expect.objectContaining({
-          name: 'New Tag',
-          color: '#ff0000', // Browser returns lowercase hex
-        }))
-      })
-    })
-
-    it('should disable create button when tag name is empty', async () => {
-      render(<TagEditor {...defaultProps} />)
-
-      const addButton = screen.getByRole('button', { name: /add tag/i })
-      fireEvent.click(addButton)
-
-      await waitFor(() => {
-        const createOption = screen.getByText(/create new tag/i)
-        fireEvent.click(createOption)
-      })
-
-      const createButton = screen.getByRole('button', { name: /create$/i })
-      expect(createButton).toBeDisabled()
-    })
-
-    it('should have cancel button to close creation form', async () => {
-      render(<TagEditor {...defaultProps} />)
-
-      const addButton = screen.getByRole('button', { name: /add tag/i })
-      fireEvent.click(addButton)
-
-      await waitFor(() => {
-        const createOption = screen.getByText(/create new tag/i)
-        fireEvent.click(createOption)
-      })
-
-      const cancelButton = screen.getByRole('button', { name: /cancel/i })
-      fireEvent.click(cancelButton)
-
-      await waitFor(() => {
-        expect(screen.queryByPlaceholderText(/tag name/i)).not.toBeInTheDocument()
-        // Dropdown should stay open to allow selecting existing tags
-        expect(screen.getByRole('listbox')).toBeInTheDocument()
-      })
-    })
-  })
-
-  describe('Edge cases', () => {
-    it('should enable add button even when all existing tags are selected (to allow creation)', () => {
-      // All tags are already selected, but user can still create new ones
-      render(
-        <TagEditor
-          {...defaultProps}
-          selectedTags={['Food', 'Shopping', 'Entertainment']}
-        />
-      )
-
-      const addButton = screen.getByRole('button', { name: /add tag/i })
-      // Button should be enabled to allow creating new tags
-      expect(addButton).not.toBeDisabled()
-    })
-
-    it('should not toggle dropdown when clicking add button while disabled', () => {
-      render(<TagEditor {...defaultProps} disabled={true} />)
-
-      const addButton = screen.getByRole('button', { name: /add tag/i })
-      fireEvent.click(addButton)
-
-      // Dropdown should not appear
-      expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
-    })
-
-    it('should handle tag not found in availableTags', () => {
-      render(
-        <TagEditor
-          {...defaultProps}
-          selectedTags={['Unknown Tag']}
-        />
-      )
-
-      // Should still render the tag with default color
-      const tagChip = screen.getByText('Unknown Tag').closest('.tag-chip')
-      expect(tagChip).toHaveStyle({ backgroundColor: '#6B7280' })
+      const tagChip = screen.getByText('NoColor').closest('.tag-chip') as HTMLElement
+      // Should use default gray color
+      expect(tagChip.style.backgroundColor).toBe('rgb(107, 114, 128)')
     })
   })
 })

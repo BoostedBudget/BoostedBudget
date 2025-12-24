@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   DndContext,
   closestCenter,
@@ -22,13 +23,16 @@ import { AccountCard } from './AccountCard'
 import { UpgradeBanner } from './UpgradeBanner'
 import { SyncStatsCard } from './SyncStatsCard'
 import { AccountCustomizationModal } from './components/AccountCustomizationModal'
-import { fetchAccounts, deleteAccount } from './api/plaidApi'
-import { fetchProfile } from '../profile/api/profileApi'
+import {
+  useGetAccounts,
+  useDeleteAccount,
+  getGetAccountsQueryKey,
+} from '@/api/generated/endpoints/accounts/accounts'
+import { useProfile } from '../profile/hooks/useProfile'
 import { useSubscriptionTiers } from '../subscription/hooks/useSubscriptionTiers'
 import { useTierLimits } from '../subscription/hooks/useTierLimits'
 import { useAccountCustomization } from './hooks/useAccountCustomization'
 import type { Account, UpdateAccountRequest } from './types'
-import type { User } from '../profile/types'
 import './AccountsPage.css'
 
 // Sortable wrapper for AccountCard
@@ -67,10 +71,8 @@ function SortableAccountCard({ account, onDelete, onEdit }: SortableAccountCardP
 }
 
 export function AccountsPage() {
-  const [accounts, setAccounts] = useState<Account[]>([])
-  const [user, setUser] = useState<User | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  // Query client for optimistic updates
+  const queryClient = useQueryClient()
 
   // Issue #307: Show/hide hidden accounts toggle
   const [showHidden, setShowHidden] = useState(false)
@@ -79,8 +81,34 @@ export function AccountsPage() {
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
 
+  // Use generated query hook for fetching accounts (always include hidden for toggle/counts)
+  const {
+    data: accountsData,
+    isLoading: accountsLoading,
+    error: accountsError,
+    refetch: refetchAccounts,
+  } = useGetAccounts({ include_hidden: 'true' })
+
+  // Use generated mutation hook for deleting accounts
+  const deleteAccountMutation = useDeleteAccount()
+
+  // Derive accounts from query data (no local state sync needed)
+  const accounts = accountsData?.accounts ?? []
+
+  // Query key for optimistic updates
+  const accountsQueryKey = getGetAccountsQueryKey({ include_hidden: 'true' })
+
+  // Fetch user profile using the hook
+  const { user, loading: userLoading, refetch: refetchProfile } = useProfile()
+
   // Fetch subscription tiers for limit enforcement
   const { tiers, loading: tiersLoading } = useSubscriptionTiers()
+
+  // Combined loading state
+  const loading = accountsLoading || userLoading
+
+  // Error message
+  const error = accountsError ? 'Failed to load accounts. Please try again.' : null
 
   // Issue #307: Account customization hook
   const {
@@ -102,47 +130,21 @@ export function AccountsPage() {
     })
   )
 
-  // Load accounts and user profile on mount
-  useEffect(() => {
-    loadAccountsAndProfile()
-  }, [])
-
-  async function loadAccountsAndProfile() {
-    try {
-      setLoading(true)
-      setError(null)
-
-      // Fetch both accounts and user profile in parallel
-      // Always fetch all accounts including hidden (for toggle and counts)
-      const [accountsResponse, userProfile] = await Promise.all([
-        fetchAccounts(true), // include_hidden = true
-        fetchProfile(),
-      ])
-
-      setAccounts(accountsResponse.accounts)
-      setUser(userProfile)
-    } catch (err) {
-      console.error('Failed to load accounts:', err)
-      setError('Failed to load accounts. Please try again.')
-    } finally {
-      setLoading(false)
-    }
-  }
-
   // Handle successful account linking - reload accounts and profile
   function handleAccountsLinked() {
-    loadAccountsAndProfile()
+    refetchAccounts()
+    refetchProfile()
   }
 
   // Handle account deletion
   async function handleDeleteAccount(accountId: string) {
     try {
-      await deleteAccount(accountId)
-      // Reload accounts after successful deletion
-      await loadAccountsAndProfile()
+      await deleteAccountMutation.mutateAsync({ id: accountId })
+      // Refetch accounts after successful deletion
+      await refetchAccounts()
     } catch (err) {
       console.error('Failed to delete account:', err)
-      setError('Failed to delete account. Please try again.')
+      // Error will be shown from query error state
     }
   }
 
@@ -153,23 +155,31 @@ export function AccountsPage() {
   }, [])
 
   // Issue #307: Handle save from modal
-  const handleSaveAccount = useCallback(async (accountId: string, changes: UpdateAccountRequest) => {
+  const handleSaveAccount = useCallback(async (accountId: string, changes: Partial<UpdateAccountRequest>) => {
     const updatedAccount = await updateAccount(accountId, changes)
     if (updatedAccount) {
-      // Update local state with the new account data
-      setAccounts(prev => prev.map(acc =>
-        acc.id === accountId ? updatedAccount : acc
-      ))
+      // Optimistically update the query cache
+      queryClient.setQueryData(accountsQueryKey, (oldData: { accounts: Account[] } | undefined) => {
+        if (!oldData) return oldData
+        return {
+          ...oldData,
+          accounts: oldData.accounts.map(acc =>
+            acc.id === accountId ? updatedAccount : acc
+          ),
+        }
+      })
     }
-  }, [updateAccount])
+  }, [updateAccount, queryClient, accountsQueryKey])
 
   // Issue #307: Filter and sort accounts
+  // Use accountsData?.accounts directly in deps to avoid unstable reference
   const displayedAccounts = useMemo(() => {
-    let filtered = accounts
+    const accs = accountsData?.accounts ?? []
+    let filtered = accs
 
     // Filter hidden accounts unless showHidden is true
     if (!showHidden) {
-      filtered = accounts.filter(acc => !acc.is_hidden)
+      filtered = accs.filter(acc => !acc.is_hidden)
     }
 
     // Sort by display_order (nulls last), then created_at
@@ -184,12 +194,13 @@ export function AccountsPage() {
       // Fallback to created_at
       return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
     })
-  }, [accounts, showHidden])
+  }, [accountsData?.accounts, showHidden])
 
   // Count of hidden accounts
   const hiddenCount = useMemo(() => {
-    return accounts.filter(acc => acc.is_hidden).length
-  }, [accounts])
+    const accs = accountsData?.accounts ?? []
+    return accs.filter(acc => acc.is_hidden).length
+  }, [accountsData?.accounts])
 
   // Issue #307: Handle drag end for reordering
   const handleDragEnd = useCallback(async (event: DragEndEvent) => {
@@ -210,23 +221,24 @@ export function AccountsPage() {
           display_order: index,
         }))
 
-        // Update local state optimistically
-        setAccounts(prev => {
-          const updated = [...prev]
-          accountOrders.forEach(order => {
-            const acc = updated.find(a => a.id === order.account_id)
-            if (acc) {
-              acc.display_order = order.display_order
+        // Optimistically update query cache
+        queryClient.setQueryData(accountsQueryKey, (oldData: { accounts: Account[] } | undefined) => {
+          if (!oldData) return oldData
+          const updated = oldData.accounts.map(acc => {
+            const order = accountOrders.find(o => o.account_id === acc.id)
+            if (order) {
+              return { ...acc, display_order: order.display_order }
             }
+            return acc
           })
-          return updated
+          return { ...oldData, accounts: updated }
         })
 
         // Call API
         await reorderAccounts(accountOrders)
       }
     }
-  }, [displayedAccounts, reorderAccounts])
+  }, [displayedAccounts, reorderAccounts, queryClient, accountsQueryKey])
 
   // Calculate tier limits using hook
   const { isAtLimit, shouldShowUpgradeBanner, accountCountDisplay } = useTierLimits({
@@ -248,7 +260,7 @@ export function AccountsPage() {
       <div className="accounts-page responsive">
         <div className="error-state">
           <p className="error-message">{error}</p>
-          <button onClick={loadAccountsAndProfile} className="btn-retry">
+          <button onClick={() => refetchAccounts()} className="btn-retry">
             Retry
           </button>
         </div>

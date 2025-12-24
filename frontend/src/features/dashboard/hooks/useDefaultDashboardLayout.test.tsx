@@ -3,16 +3,25 @@
  *
  * Tests the React hook for fetching default dashboard layout with 1hr caching.
  * Issue #449: Centralize default dashboard layout configuration
+ * Issue #564: Migrated to generated React Query hooks
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
-import { useDefaultDashboardLayout, clearDefaultLayoutCache } from './useDefaultDashboardLayout'
-import * as dashboardApi from '../api/dashboardApi'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
+import { useDefaultDashboardLayout } from './useDefaultDashboardLayout'
 import type { DashboardLayout } from '../types'
 
-// Mock the API module
-vi.mock('../api/dashboardApi')
+// Mock the generated hook
+const mockRefetch = vi.fn()
+vi.mock('@/api/generated/endpoints/dashboard/dashboard', () => ({
+  useGetDefaultLayout: vi.fn(),
+  getGetDefaultLayoutQueryKey: vi.fn(() => ['dashboard', 'default-layout']),
+}))
+
+// Import the mock after vi.mock
+import { useGetDefaultLayout } from '@/api/generated/endpoints/dashboard/dashboard'
 
 // Mock the registry to avoid circular dependency issues
 vi.mock('../widgets/registry', () => ({
@@ -32,6 +41,20 @@ vi.mock('../widgets/registry', () => ({
     version: 1,
   },
 }))
+
+// Helper to create wrapper with QueryClient
+function createWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  })
+  return function Wrapper({ children }: { children: ReactNode }) {
+    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  }
+}
 
 describe('useDefaultDashboardLayout', () => {
   const mockLayoutResponse: DashboardLayout = {
@@ -62,23 +85,50 @@ describe('useDefaultDashboardLayout', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-    // Clear cache (both memory and localStorage) before each test
-    clearDefaultLayoutCache()
+    mockRefetch.mockClear()
   })
 
-  afterEach(() => {
-    vi.restoreAllMocks()
-    localStorage.clear()
-  })
+  // Helper to configure the mock for loading state
+  function configureLoading() {
+    vi.mocked(useGetDefaultLayout).mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      error: null,
+      refetch: mockRefetch,
+      isSuccess: false,
+    } as unknown as ReturnType<typeof useGetDefaultLayout>)
+  }
+
+  // Helper to configure the mock for success state
+  function configureSuccess(data: DashboardLayout) {
+    vi.mocked(useGetDefaultLayout).mockReturnValue({
+      data,
+      isLoading: false,
+      error: null,
+      refetch: mockRefetch,
+      isSuccess: true,
+    } as unknown as ReturnType<typeof useGetDefaultLayout>)
+  }
+
+  // Helper to configure the mock for error state
+  function configureError(error: Error) {
+    vi.mocked(useGetDefaultLayout).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error,
+      refetch: mockRefetch,
+      isSuccess: false,
+    } as unknown as ReturnType<typeof useGetDefaultLayout>)
+  }
 
   it('should return loading state initially', () => {
     // Arrange
-    vi.mocked(dashboardApi.fetchDefaultDashboardLayout).mockImplementation(
-      () => new Promise(() => {}) // Never resolves
-    )
+    configureLoading()
 
     // Act
-    const { result } = renderHook(() => useDefaultDashboardLayout())
+    const { result } = renderHook(() => useDefaultDashboardLayout(), {
+      wrapper: createWrapper(),
+    })
 
     // Assert
     expect(result.current.loading).toBe(true)
@@ -87,152 +137,79 @@ describe('useDefaultDashboardLayout', () => {
     expect(result.current.error).toBeNull()
   })
 
-  it('should fetch and return default layout on mount', async () => {
+  it('should return default layout when loaded successfully', () => {
     // Arrange
-    vi.mocked(dashboardApi.fetchDefaultDashboardLayout).mockResolvedValue(mockLayoutResponse)
+    configureSuccess(mockLayoutResponse)
 
     // Act
-    const { result } = renderHook(() => useDefaultDashboardLayout())
-
-    // Assert - Initial loading state
-    expect(result.current.loading).toBe(true)
-
-    // Wait for data to load
-    await waitFor(() => {
-      expect(result.current.loading).toBe(false)
+    const { result } = renderHook(() => useDefaultDashboardLayout(), {
+      wrapper: createWrapper(),
     })
 
     // Assert - Data loaded successfully
+    expect(result.current.loading).toBe(false)
     expect(result.current.defaultLayout).toEqual(mockLayoutResponse)
     expect(result.current.error).toBeNull()
-    expect(dashboardApi.fetchDefaultDashboardLayout).toHaveBeenCalledTimes(1)
+    expect(result.current.isFromApi).toBe(true)
   })
 
-  it('should fall back to hardcoded layout on fetch error', async () => {
+  it('should fall back to hardcoded layout on fetch error', () => {
     // Arrange
     const error = new Error('Failed to fetch layout')
-    vi.mocked(dashboardApi.fetchDefaultDashboardLayout).mockRejectedValue(error)
+    configureError(error)
 
     // Act
-    const { result } = renderHook(() => useDefaultDashboardLayout())
-
-    // Wait for error state
-    await waitFor(() => {
-      expect(result.current.loading).toBe(false)
+    const { result } = renderHook(() => useDefaultDashboardLayout(), {
+      wrapper: createWrapper(),
     })
 
     // Assert - Should have error but still have a default layout (fallback)
+    expect(result.current.loading).toBe(false)
     expect(result.current.error).toBeDefined()
+    expect(result.current.error?.message).toBe('Failed to fetch layout')
     expect(result.current.defaultLayout).toBeDefined()
     expect(result.current.defaultLayout.version).toBe(1) // Fallback version
+    expect(result.current.isFromApi).toBe(false)
   })
 
-  it('should cache layout in memory for 1 hour', async () => {
+  it('should provide refetch function', () => {
     // Arrange
-    vi.mocked(dashboardApi.fetchDefaultDashboardLayout).mockResolvedValue(mockLayoutResponse)
-
-    // Act - First render
-    const { result: result1, unmount: unmount1 } = renderHook(() => useDefaultDashboardLayout())
-
-    await waitFor(() => {
-      expect(result1.current.loading).toBe(false)
-    })
-
-    expect(dashboardApi.fetchDefaultDashboardLayout).toHaveBeenCalledTimes(1)
-
-    // Unmount - cache remains in memory
-    unmount1()
-
-    // Re-render immediately (still within cache window)
-    const { result: result2 } = renderHook(() => useDefaultDashboardLayout())
-
-    await waitFor(() => {
-      expect(result2.current.loading).toBe(false)
-    })
-
-    // Assert - Should use cached data, not fetch again
-    expect(dashboardApi.fetchDefaultDashboardLayout).toHaveBeenCalledTimes(1) // Still only 1 call
-    expect(result2.current.defaultLayout).toEqual(mockLayoutResponse)
-  })
-
-  it('should refetch after 1 hour cache expires', async () => {
-    // Arrange
-    vi.mocked(dashboardApi.fetchDefaultDashboardLayout).mockResolvedValue(mockLayoutResponse)
-
-    // Simulate expired cache by setting old timestamp
-    const twoHoursAgo = Date.now() - (2 * 60 * 60 * 1000)
-    localStorage.setItem('default_dashboard_layout_cache_timestamp', String(twoHoursAgo))
-
-    // Act - Render with expired cache
-    const { result } = renderHook(() => useDefaultDashboardLayout())
-
-    await waitFor(() => {
-      expect(result.current.loading).toBe(false)
-    })
-
-    // Assert - Should fetch fresh data (cache expired)
-    expect(dashboardApi.fetchDefaultDashboardLayout).toHaveBeenCalledTimes(1)
-    expect(result.current.defaultLayout).toEqual(mockLayoutResponse)
-  })
-
-  it('should provide refetch function to force cache invalidation', async () => {
-    // Arrange
-    vi.mocked(dashboardApi.fetchDefaultDashboardLayout).mockResolvedValue(mockLayoutResponse)
+    configureSuccess(mockLayoutResponse)
 
     // Act
-    const { result } = renderHook(() => useDefaultDashboardLayout())
-
-    await waitFor(() => {
-      expect(result.current.loading).toBe(false)
+    const { result } = renderHook(() => useDefaultDashboardLayout(), {
+      wrapper: createWrapper(),
     })
 
-    expect(dashboardApi.fetchDefaultDashboardLayout).toHaveBeenCalledTimes(1)
+    // Assert - refetch function is available
+    expect(typeof result.current.refetch).toBe('function')
+  })
 
-    // Act - Call refetch
+  it('should call query refetch when refetch is called', async () => {
+    // Arrange
+    configureSuccess(mockLayoutResponse)
+
+    // Act
+    const { result } = renderHook(() => useDefaultDashboardLayout(), {
+      wrapper: createWrapper(),
+    })
+
+    // Call refetch
     result.current.refetch()
 
+    // Assert
     await waitFor(() => {
-      expect(dashboardApi.fetchDefaultDashboardLayout).toHaveBeenCalledTimes(2)
+      expect(mockRefetch).toHaveBeenCalled()
     })
-
-    // Assert - Should have fetched again
-    expect(result.current.defaultLayout).toEqual(mockLayoutResponse)
   })
 
-  it('should store cache data in localStorage', async () => {
+  it('should return version 3 with 2 widgets from API', () => {
     // Arrange
-    vi.mocked(dashboardApi.fetchDefaultDashboardLayout).mockResolvedValue(mockLayoutResponse)
+    configureSuccess(mockLayoutResponse)
 
     // Act
-    renderHook(() => useDefaultDashboardLayout())
-
-    await waitFor(() => {
-      expect(dashboardApi.fetchDefaultDashboardLayout).toHaveBeenCalledTimes(1)
-    })
-
-    // Assert - Check timestamp
-    const cachedTimestamp = localStorage.getItem('default_dashboard_layout_cache_timestamp')
-    expect(cachedTimestamp).toBeTruthy()
-
-    const timestamp = Number(cachedTimestamp)
-    expect(timestamp).toBeGreaterThan(0)
-    expect(timestamp).toBeLessThanOrEqual(Date.now())
-
-    // Assert - Check data
-    const cachedData = localStorage.getItem('default_dashboard_layout_cache_data')
-    expect(cachedData).toBeTruthy()
-    expect(JSON.parse(cachedData!)).toEqual(mockLayoutResponse)
-  })
-
-  it('should return version 3 with 2 widgets from API', async () => {
-    // Arrange
-    vi.mocked(dashboardApi.fetchDefaultDashboardLayout).mockResolvedValue(mockLayoutResponse)
-
-    // Act
-    const { result } = renderHook(() => useDefaultDashboardLayout())
-
-    await waitFor(() => {
-      expect(result.current.loading).toBe(false)
+    const { result } = renderHook(() => useDefaultDashboardLayout(), {
+      wrapper: createWrapper(),
     })
 
     // Assert - Issue #449: Verify expected layout from API
@@ -242,34 +219,83 @@ describe('useDefaultDashboardLayout', () => {
     expect(result.current.defaultLayout.widgets[1].type).toBe('balance-history')
   })
 
-  it('should load from localStorage cache when memory cache is empty', async () => {
+  it('should set isFromApi to true when data comes from API', () => {
     // Arrange
-    vi.mocked(dashboardApi.fetchDefaultDashboardLayout).mockResolvedValue(mockLayoutResponse)
+    configureSuccess(mockLayoutResponse)
 
-    // First render - populate cache
-    const { unmount } = renderHook(() => useDefaultDashboardLayout())
-
-    await waitFor(() => {
-      expect(dashboardApi.fetchDefaultDashboardLayout).toHaveBeenCalledTimes(1)
+    // Act
+    const { result } = renderHook(() => useDefaultDashboardLayout(), {
+      wrapper: createWrapper(),
     })
 
-    unmount()
+    // Assert - Issue #472: isFromApi should be true
+    expect(result.current.isFromApi).toBe(true)
+  })
 
-    // Clear memory cache but keep localStorage
-    clearDefaultLayoutCache()
-    // Restore localStorage data (simulating browser persistence)
-    localStorage.setItem('default_dashboard_layout_cache_timestamp', String(Date.now()))
-    localStorage.setItem('default_dashboard_layout_cache_data', JSON.stringify(mockLayoutResponse))
+  it('should set isFromApi to false when using fallback', () => {
+    // Arrange
+    configureError(new Error('Network error'))
 
-    // Act - New render should use localStorage cache
-    const { result } = renderHook(() => useDefaultDashboardLayout())
-
-    await waitFor(() => {
-      expect(result.current.loading).toBe(false)
+    // Act
+    const { result } = renderHook(() => useDefaultDashboardLayout(), {
+      wrapper: createWrapper(),
     })
 
-    // Assert - Should not make another API call (using localStorage cache)
-    expect(dashboardApi.fetchDefaultDashboardLayout).toHaveBeenCalledTimes(1)
-    expect(result.current.defaultLayout).toEqual(mockLayoutResponse)
+    // Assert - Issue #472: isFromApi should be false when using fallback
+    expect(result.current.isFromApi).toBe(false)
+  })
+
+  it('should set isFromApi to false during loading', () => {
+    // Arrange
+    configureLoading()
+
+    // Act
+    const { result } = renderHook(() => useDefaultDashboardLayout(), {
+      wrapper: createWrapper(),
+    })
+
+    // Assert - isFromApi should be false while loading
+    expect(result.current.isFromApi).toBe(false)
+  })
+
+  it('should use staleTime for caching (configured in hook)', () => {
+    // Arrange
+    configureSuccess(mockLayoutResponse)
+
+    // Act
+    renderHook(() => useDefaultDashboardLayout(), {
+      wrapper: createWrapper(),
+    })
+
+    // Assert - Verify useGetDefaultLayout was called with query options
+    expect(useGetDefaultLayout).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: expect.objectContaining({
+          staleTime: 60 * 60 * 1000, // 1 hour
+          gcTime: 60 * 60 * 1000 * 2, // 2 hours
+          retry: 2,
+        }),
+      })
+    )
+  })
+
+  it('should convert non-Error objects to Error', () => {
+    // Arrange - Pass a non-Error object as error
+    vi.mocked(useGetDefaultLayout).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: 'String error' as unknown as Error,
+      refetch: mockRefetch,
+      isSuccess: false,
+    } as unknown as ReturnType<typeof useGetDefaultLayout>)
+
+    // Act
+    const { result } = renderHook(() => useDefaultDashboardLayout(), {
+      wrapper: createWrapper(),
+    })
+
+    // Assert - Should convert to Error instance
+    expect(result.current.error).toBeInstanceOf(Error)
+    expect(result.current.error?.message).toBe('Failed to fetch default dashboard layout')
   })
 })

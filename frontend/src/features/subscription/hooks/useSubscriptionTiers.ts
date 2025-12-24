@@ -1,55 +1,14 @@
 /**
  * useSubscriptionTiers Hook
  *
- * React hook for fetching subscription tier configuration with 24hr caching.
- * Uses in-memory cache (for single session) and localStorage (for cache persistence).
- *
- * TDD GREEN: Implementation to pass all tests.
+ * React hook for fetching subscription tier configuration.
+ * Uses generated React Query hook from OpenAPI spec with built-in caching.
  */
 
-import { useState, useEffect, useCallback } from 'react'
-import { fetchSubscriptionTiers } from '../api/subscriptionApi'
-import type { SubscriptionTiersResponse } from '../types'
-
-// Constants
-const CACHE_KEY_TIMESTAMP = 'subscription_tiers_cache_timestamp'
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000 // 24 hours in milliseconds
-
-// Module-level in-memory cache
-let memoryCache: SubscriptionTiersResponse | null = null
-
-/**
- * Check if cached data is still valid based on timestamp
- */
-function isCacheValid(): boolean {
-  const cachedTimestamp = localStorage.getItem(CACHE_KEY_TIMESTAMP)
-  if (!cachedTimestamp) {
-    return false
-  }
-
-  const timestamp = Number(cachedTimestamp)
-  const now = Date.now()
-  const age = now - timestamp
-
-  return age < CACHE_TTL_MS
-}
-
-/**
- * Update cache with fresh data
- */
-function updateCache(data: SubscriptionTiersResponse): void {
-  memoryCache = data
-  localStorage.setItem(CACHE_KEY_TIMESTAMP, String(Date.now()))
-}
-
-/**
- * Clear the cache
- * @internal Exported for testing purposes
- */
-export function clearCache(): void {
-  memoryCache = null
-  localStorage.removeItem(CACHE_KEY_TIMESTAMP)
-}
+import {
+  useGetSubscriptionTiers,
+} from '@/api/generated/endpoints/subscription/subscription'
+import type { SubscriptionTiersResponse } from '@/api/generated/models'
 
 export interface UseSubscriptionTiersResult {
   tiers: SubscriptionTiersResponse | null
@@ -76,51 +35,26 @@ export interface UseSubscriptionTiersResult {
  * ```
  */
 export function useSubscriptionTiers(): UseSubscriptionTiersResult {
-  const [tiers, setTiers] = useState<SubscriptionTiersResponse | null>(null)
-  const [loading, setLoading] = useState<boolean>(true)
-  const [error, setError] = useState<Error | null>(null)
-
-  const loadTiers = useCallback(async (forceRefresh = false) => {
-    try {
-      setLoading(true)
-      setError(null)
-
-      // Check cache if not forcing refresh
-      if (!forceRefresh && memoryCache && isCacheValid()) {
-        // Use cached data
-        setTiers(memoryCache)
-        setLoading(false)
-        return
-      }
-
-      // Fetch fresh data
-      const data = await fetchSubscriptionTiers()
-
-      // Update cache and state
-      updateCache(data)
-      setTiers(data)
-    } catch (err) {
-      setError(err instanceof Error ? err : new Error('Failed to fetch subscription tiers'))
-      setTiers(null)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  const refetch = useCallback(() => {
-    clearCache()
-    loadTiers(true)
-  }, [loadTiers])
-
-  // Fetch on mount
-  useEffect(() => {
-    loadTiers()
-  }, [loadTiers])
+  const { data, isLoading, error, refetch: queryRefetch } = useGetSubscriptionTiers({
+    query: {
+      staleTime: 24 * 60 * 60 * 1000, // 24 hours cache
+      gcTime: 24 * 60 * 60 * 1000,
+    },
+  })
 
   return {
-    tiers,
-    loading,
-    error,
-    refetch,
+    tiers: data ?? null,
+    loading: isLoading,
+    error: error ? (error instanceof Error ? error : new Error('Failed to fetch subscription tiers')) : null,
+    refetch: queryRefetch,
   }
+}
+
+/**
+ * Clear the cache - for testing purposes
+ * @internal
+ */
+export function clearCache(): void {
+  // No-op: React Query handles cache automatically
+  // Kept for backward compatibility with tests
 }

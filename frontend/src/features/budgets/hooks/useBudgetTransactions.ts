@@ -1,12 +1,18 @@
 /**
  * useBudgetTransactions Hook
  * Issue #499: Transaction-Budget Linking UI
+ * Issue #564: Migrated to generated React Query hooks
  *
  * Fetches paginated transactions matching a budget category.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { fetchCategoryTransactions } from '../api/budgetsApi';
+import { useState, useCallback, useRef, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import {
+  useGetCategoryTransactions,
+  getGetCategoryTransactionsQueryKey,
+  getCategoryTransactions,
+} from '@/api/generated/endpoints/budgets/budgets';
 import type { Transaction } from '../../transactions/types';
 
 interface UseBudgetTransactionsOptions {
@@ -39,86 +45,94 @@ export function useBudgetTransactions(
   options?: UseBudgetTransactionsOptions
 ): UseBudgetTransactionsResult {
   const pageSize = options?.pageSize ?? 20;
+  const queryClient = useQueryClient();
 
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  // State for accumulated transactions (for load more)
+  const [allTransactions, setAllTransactions] = useState<Transaction[]>([]);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [totalCount, setTotalCount] = useState(0);
   const [totalAmount, setTotalAmount] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
-  const [hasMore, setHasMore] = useState(false);
 
   // Track current offset for pagination
   const offsetRef = useRef(0);
 
-  // Fetch initial data
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    offsetRef.current = 0;
+  // Initial query
+  const {
+    data,
+    isLoading,
+    error: queryError,
+    refetch: queryRefetch,
+  } = useGetCategoryTransactions(budgetId, categoryId, { limit: pageSize, offset: 0 }, {
+    query: {
+      staleTime: 30 * 1000, // 30 seconds
+      enabled: !!budgetId && !!categoryId,
+    },
+  });
 
-    try {
-      const response = await fetchCategoryTransactions(budgetId, categoryId, {
-        limit: pageSize,
-        offset: 0,
-      });
+  // Convert error to Error instance
+  const error = queryError
+    ? queryError instanceof Error
+      ? queryError
+      : new Error('Failed to fetch transactions')
+    : null;
 
-      setTransactions(response.transactions);
-      setTotalCount(response.total_count);
-      setTotalAmount(response.total_amount);
-      setHasMore(response.has_more);
-      // Track offset based on page size for consistent pagination
+  // Update state when initial data arrives
+  useEffect(() => {
+    if (data) {
+      // Cast transactions to local type
+      const transactions = data.transactions as unknown as Transaction[];
+      setAllTransactions(transactions);
+      setTotalCount(data.total_count);
+      setTotalAmount(data.total_amount);
+      setHasMore(data.has_more);
       offsetRef.current = pageSize;
-    } catch (err) {
-      setError(err instanceof Error ? err : new Error('Failed to fetch transactions'));
-      setTransactions([]);
-    } finally {
-      setLoading(false);
     }
-  }, [budgetId, categoryId, pageSize]);
+  }, [data, pageSize]);
 
   // Load more transactions
   const loadMore = useCallback(async () => {
-    if (loading || loadingMore || !hasMore) {
+    if (isLoading || loadingMore || !hasMore) {
       return;
     }
 
     setLoadingMore(true);
 
     try {
-      const response = await fetchCategoryTransactions(budgetId, categoryId, {
+      const response = await getCategoryTransactions(budgetId, categoryId, {
         limit: pageSize,
         offset: offsetRef.current,
       });
 
-      setTransactions((prev) => [...prev, ...response.transactions]);
+      // Cast transactions to local type
+      const newTransactions = response.transactions as unknown as Transaction[];
+      setAllTransactions((prev) => [...prev, ...newTransactions]);
       setTotalCount(response.total_count);
       setTotalAmount(response.total_amount);
       setHasMore(response.has_more);
-      // Increment offset by pageSize for consistent pagination
       offsetRef.current += pageSize;
     } catch (err) {
-      setError(err instanceof Error ? err : new Error('Failed to load more transactions'));
+      // Error is handled but we don't update the main error state for loadMore
+      console.error('Failed to load more transactions:', err);
     } finally {
       setLoadingMore(false);
     }
-  }, [budgetId, categoryId, pageSize, loading, loadingMore, hasMore]);
+  }, [budgetId, categoryId, pageSize, isLoading, loadingMore, hasMore]);
 
   // Refetch from start
   const refetch = useCallback(async () => {
-    await fetchData();
-  }, [fetchData]);
-
-  // Fetch on mount and when parameters change
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    offsetRef.current = 0;
+    await queryClient.invalidateQueries({
+      queryKey: getGetCategoryTransactionsQueryKey(budgetId, categoryId, { limit: pageSize, offset: 0 }),
+    });
+    await queryRefetch();
+  }, [queryClient, queryRefetch, budgetId, categoryId, pageSize]);
 
   return {
-    transactions,
+    transactions: allTransactions,
     totalCount,
     totalAmount,
-    loading,
+    loading: isLoading,
     loadingMore,
     error,
     hasMore,

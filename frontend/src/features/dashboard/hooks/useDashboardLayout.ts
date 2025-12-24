@@ -4,6 +4,7 @@
  * Issue #449: Centralize default dashboard layout configuration
  * Issue #470: Fix dashboard persistence - replace sendBeacon with fetch keepalive
  * Issue #472: Only reset layout version if default came from API (not fallback)
+ * Issue #564: Migrated to generated React Query hooks
  *
  * Manages dashboard layout state with persistence to the backend.
  * Includes debounced auto-save and optimistic updates.
@@ -13,14 +14,14 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  getDashboardPreferences,
-  saveDashboardPreferences,
-  resetDashboardPreferences,
-} from '../api/preferencesApi';
+  useGetDashboardPreferences,
+  useSaveDashboardPreferences,
+  useResetDashboardPreferences,
+} from '@/api/generated/endpoints/dashboard/dashboard';
 import { DEFAULT_LAYOUT, createWidgetConfig } from '../widgets/registry';
 import { useDefaultDashboardLayout } from './useDefaultDashboardLayout';
-import { getApiUrl } from '../../../api/axiosConfig';
-import type { DashboardLayout, WidgetType } from '../types';
+import { getApiUrl } from '../../../api/client';
+import type { DashboardLayout, WidgetType, DashboardPreferencesResponse } from '../types';
 
 /**
  * Options for the useDashboardLayout hook
@@ -57,23 +58,36 @@ export function useDashboardLayout(options?: UseDashboardLayoutOptions): UseDash
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [hasProcessedInitialLoad, setHasProcessedInitialLoad] = useState(false);
 
   // Track pending save to debounce
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingLayoutRef = useRef<DashboardLayout | null>(null);
 
-  // Load initial layout from backend
+  // Use generated query hook for fetching preferences
+  const preferencesQuery = useGetDashboardPreferences({
+    query: {
+      enabled: !defaultLayoutLoading,
+      staleTime: 30 * 1000, // 30 seconds
+    },
+  });
+
+  // Use generated mutation hooks
+  const saveMutation = useSaveDashboardPreferences();
+  const resetMutation = useResetDashboardPreferences();
+
+  // Process initial load with version migration
   // Wait for default layout to be fetched first for accurate version comparison
   useEffect(() => {
-    // Wait for default layout to be fetched before comparing versions
-    if (defaultLayoutLoading) {
+    // Wait for both default layout and preferences to load
+    if (defaultLayoutLoading || preferencesQuery.isLoading || hasProcessedInitialLoad) {
       return;
     }
 
-    async function fetchLayout() {
-      try {
-        const response = await getDashboardPreferences();
+    async function processInitialLoad() {
+      const response = preferencesQuery.data as DashboardPreferencesResponse | undefined;
 
+      if (response) {
         // Version-based migration: auto-reset if stored version is outdated
         // This ensures users get working layouts when default changes
         // Issue #449: Now uses fetched default layout for comparison
@@ -85,8 +99,8 @@ export function useDashboardLayout(options?: UseDashboardLayoutOptions): UseDash
             `resetting to version ${defaultLayout.version}`
           );
           try {
-            const resetResponse = await resetDashboardPreferences();
-            setLayout(resetResponse.layout);
+            const resetResponse = await resetMutation.mutateAsync();
+            setLayout((resetResponse as DashboardPreferencesResponse).layout);
           } catch (resetErr) {
             console.error('Failed to reset outdated layout:', resetErr);
             // Fall back to fetched default layout
@@ -98,27 +112,34 @@ export function useDashboardLayout(options?: UseDashboardLayoutOptions): UseDash
           setLayout(response.layout);
         }
         setError(null);
-      } catch (err) {
-        console.error('Failed to load dashboard preferences:', err);
+      } else if (preferencesQuery.error) {
+        console.error('Failed to load dashboard preferences:', preferencesQuery.error);
         // Use fetched default layout on error (Issue #449)
         setLayout(defaultLayout);
         // Only set error for non-404 errors (404 means new user, use default)
-        if (err instanceof Error && !err.message.includes('404')) {
+        const errorMessage = preferencesQuery.error instanceof Error
+          ? preferencesQuery.error.message
+          : '';
+        if (!errorMessage.includes('404')) {
           setError('Failed to load dashboard preferences');
         }
-      } finally {
-        setLoading(false);
+      } else {
+        // No data and no error - use default layout
+        setLayout(defaultLayout);
       }
+
+      setLoading(false);
+      setHasProcessedInitialLoad(true);
     }
 
-    fetchLayout();
-  }, [defaultLayout, defaultLayoutLoading, isFromApi]);
+    processInitialLoad();
+  }, [defaultLayout, defaultLayoutLoading, isFromApi, preferencesQuery.data, preferencesQuery.isLoading, preferencesQuery.error, hasProcessedInitialLoad, resetMutation]);
 
-  // Save layout to backend (debounced)
+  // Save layout to backend (debounced) - uses mutation
   const saveLayout = useCallback(async (layoutToSave: DashboardLayout) => {
     setSaving(true);
     try {
-      await saveDashboardPreferences(layoutToSave);
+      await saveMutation.mutateAsync({ data: { layout: layoutToSave } });
       setError(null);
     } catch (err) {
       console.error('Failed to save dashboard preferences:', err);
@@ -126,7 +147,7 @@ export function useDashboardLayout(options?: UseDashboardLayoutOptions): UseDash
     } finally {
       setSaving(false);
     }
-  }, []);
+  }, [saveMutation]);
 
   // Schedule debounced save
   const scheduleSave = useCallback(
@@ -199,7 +220,7 @@ export function useDashboardLayout(options?: UseDashboardLayoutOptions): UseDash
     [layout, updateLayout]
   );
 
-  // Reset to default layout
+  // Reset to default layout - uses mutation
   // Issue #449: Uses fetched default layout from API
   const resetToDefault = useCallback(async () => {
     // Clear any pending saves
@@ -211,8 +232,8 @@ export function useDashboardLayout(options?: UseDashboardLayoutOptions): UseDash
 
     setSaving(true);
     try {
-      const response = await resetDashboardPreferences();
-      setLayout(response.layout);
+      const response = await resetMutation.mutateAsync();
+      setLayout((response as DashboardPreferencesResponse).layout);
       setError(null);
     } catch (err) {
       console.error('Failed to reset dashboard preferences:', err);
@@ -222,7 +243,7 @@ export function useDashboardLayout(options?: UseDashboardLayoutOptions): UseDash
     } finally {
       setSaving(false);
     }
-  }, [defaultLayout]);
+  }, [defaultLayout, resetMutation]);
 
   // Force immediate save
   const saveNow = useCallback(async () => {

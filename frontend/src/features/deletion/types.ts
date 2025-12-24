@@ -1,26 +1,19 @@
 /**
  * Account Deletion Feature Types
  * Issue #18: Account Deletion Flow (GDPR Article 17 - Right to Erasure)
+ *
+ * Re-exports generated types from OpenAPI spec for backward compatibility.
+ * The backend API spec is the single source of truth.
  */
 
-/**
- * Response from requesting account deletion
- */
-export interface RequestDeletionResponse {
-  message: string
-  scheduled_at: string // ISO 8601 timestamp
-  cancellation_token: string // JWT token for cancellation
-}
+// Re-export generated types
+export type {
+  RequestDeletionResponseBody as RequestDeletionResponse,
+  CancelDeletionResponseBody as CancelDeletionResponse,
+} from '@/api/generated/models'
 
 /**
- * Response from canceling account deletion
- */
-export interface CancelDeletionResponse {
-  message: string
-}
-
-/**
- * Account deletion status
+ * Account deletion status (local type for UI state)
  */
 export interface DeletionStatus {
   isScheduled: boolean

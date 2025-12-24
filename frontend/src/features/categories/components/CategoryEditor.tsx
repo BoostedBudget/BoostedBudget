@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { CustomCategory } from '../types'
-import { createCategory } from '../api/categoriesApi'
+import { useCreateCategory } from '@/api/generated/endpoints/categories/categories'
 import './CategoryEditor.css'
 
 interface CategoryEditorProps {
@@ -22,6 +22,9 @@ export function CategoryEditor({
   const [isCreating, setIsCreating] = useState(false)
   const [newCategoryName, setNewCategoryName] = useState('')
   const [newCategoryColor, setNewCategoryColor] = useState('#6B7280')
+
+  // Use generated mutation hook
+  const createCategoryMutation = useCreateCategory()
 
   const currentCategory = selectedCategory[0] || null
   const currentCategoryObj = availableCategories.find(
@@ -57,12 +60,14 @@ export function CategoryEditor({
     if (!newCategoryName.trim()) return
 
     try {
-      const newCategory = await createCategory({
-        name: newCategoryName.trim(),
-        color: newCategoryColor,
+      const newCategory = await createCategoryMutation.mutateAsync({
+        data: {
+          name: newCategoryName.trim(),
+          color: newCategoryColor,
+        },
       })
 
-      onCategoryCreated?.(newCategory)
+      onCategoryCreated?.(newCategory as unknown as CustomCategory)
       onChange([newCategory.name])
       setIsCreating(false)
       setIsDropdownOpen(false)

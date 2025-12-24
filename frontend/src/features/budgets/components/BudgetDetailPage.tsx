@@ -13,10 +13,10 @@ import { useBudgetDetail } from '../hooks/useBudgetDetail';
 import { useAvailableCategories } from '../hooks/useAvailableCategories';
 import { useTags } from '../../tags/hooks/useTags';
 import {
-  addBudgetCategory,
-  updateBudgetCategory,
-  deleteBudgetCategory,
-} from '../api/budgetsApi';
+  useAddBudgetCategory,
+  useUpdateBudgetCategory,
+  useDeleteBudgetCategory,
+} from '@/api/generated/endpoints/budgets/budgets';
 import type {
   CreateBudgetCategoryRequest,
   UpdateBudgetCategoryRequest,
@@ -62,6 +62,11 @@ export function BudgetDetailPage() {
   const { categories: availableCategories } = useAvailableCategories();
   const { tags: availableTags } = useTags();
 
+  // Use generated mutation hooks for budget category operations
+  const addCategoryMutation = useAddBudgetCategory();
+  const updateCategoryMutation = useUpdateBudgetCategory();
+  const deleteCategoryMutation = useDeleteBudgetCategory();
+
   // Issue #498: Calculate income and allocation metrics
   const incomeMetrics = useMemo(() => {
     if (!budget) return { expectedIncome: 0, actualIncome: 0, unallocated: 0, totalAllocated: 0 };
@@ -94,30 +99,40 @@ export function BudgetDetailPage() {
   // Handler for adding a new category
   const handleAddCategory = useCallback(
     async (req: CreateBudgetCategoryRequest): Promise<BudgetCategory> => {
-      const result = await addBudgetCategory(budgetId || '', req);
+      const result = await addCategoryMutation.mutateAsync({
+        id: budgetId || '',
+        data: req,
+      });
       await refetch();
-      return result;
+      return result as BudgetCategory;
     },
-    [budgetId, refetch]
+    [budgetId, refetch, addCategoryMutation]
   );
 
   // Handler for updating a category
   const handleUpdateCategory = useCallback(
     async (categoryId: string, req: UpdateBudgetCategoryRequest): Promise<BudgetCategory> => {
-      const result = await updateBudgetCategory(budgetId || '', categoryId, req);
+      const result = await updateCategoryMutation.mutateAsync({
+        id: budgetId || '',
+        categoryId,
+        data: req,
+      });
       await refetch();
-      return result;
+      return result as BudgetCategory;
     },
-    [budgetId, refetch]
+    [budgetId, refetch, updateCategoryMutation]
   );
 
   // Handler for deleting a category
   const handleDeleteCategory = useCallback(
     async (categoryId: string): Promise<void> => {
-      await deleteBudgetCategory(budgetId || '', categoryId);
+      await deleteCategoryMutation.mutateAsync({
+        id: budgetId || '',
+        categoryId,
+      });
       await refetch();
     },
-    [budgetId, refetch]
+    [budgetId, refetch, deleteCategoryMutation]
   );
 
   // Loading state

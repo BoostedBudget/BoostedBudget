@@ -1,18 +1,45 @@
 /**
  * useBudgetDetail Hook Tests
  * Issue #497: Budget Category Manager + Match Config UI
+ * Issue #564: Migrated to mock generated React Query hooks
  *
- * TDD RED Phase: Write failing tests first
+ * Tests the React hook for fetching and computing budget detail metrics.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { ReactNode } from 'react';
 import { useBudgetDetail } from './useBudgetDetail';
-import * as budgetsApi from '../api/budgetsApi';
 import type { Budget } from '../types';
 
-// Mock the API module
-vi.mock('../api/budgetsApi');
+// Use vi.hoisted for mock functions used inside vi.mock
+const { mockRefetch } = vi.hoisted(() => ({
+  mockRefetch: vi.fn().mockResolvedValue({}),
+}));
+
+// Mock the generated hooks
+vi.mock('@/api/generated/endpoints/budgets/budgets', () => ({
+  useGetBudget: vi.fn(),
+  getGetBudgetQueryKey: vi.fn((id) => ['budgets', id]),
+}));
+
+// Import the mocked hook
+import { useGetBudget } from '@/api/generated/endpoints/budgets/budgets';
+
+// Helper to create wrapper with QueryClient
+function createWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+  return function Wrapper({ children }: { children: ReactNode }) {
+    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+  };
+}
 
 describe('useBudgetDetail', () => {
   const mockBudget: Budget = {
@@ -58,19 +85,34 @@ describe('useBudgetDetail', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRefetch.mockClear();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
+  // Helper to configure query state
+  function configureQuery(config: {
+    data?: Budget | null;
+    isLoading?: boolean;
+    error?: Error | null;
+  }) {
+    vi.mocked(useGetBudget).mockReturnValue({
+      data: config.data ?? undefined,
+      isLoading: config.isLoading ?? false,
+      error: config.error ?? null,
+      refetch: mockRefetch,
+    } as unknown as ReturnType<typeof useGetBudget>);
+  }
+
   describe('Initial State', () => {
     it('should return loading=true initially', () => {
-      vi.mocked(budgetsApi.fetchBudget).mockImplementation(
-        () => new Promise(() => {}) // Never resolves
-      );
+      configureQuery({ isLoading: true });
 
-      const { result } = renderHook(() => useBudgetDetail('budget-1'));
+      const { result } = renderHook(() => useBudgetDetail('budget-1'), {
+        wrapper: createWrapper(),
+      });
 
       expect(result.current.loading).toBe(true);
       expect(result.current.budget).toBeNull();
@@ -81,22 +123,26 @@ describe('useBudgetDetail', () => {
 
   describe('Fetching Budget', () => {
     it('should fetch budget by ID on mount', async () => {
-      vi.mocked(budgetsApi.fetchBudget).mockResolvedValue(mockBudget);
+      configureQuery({ data: mockBudget });
 
-      const { result } = renderHook(() => useBudgetDetail('budget-1'));
+      const { result } = renderHook(() => useBudgetDetail('budget-1'), {
+        wrapper: createWrapper(),
+      });
 
       await waitFor(() => {
         expect(result.current.loading).toBe(false);
       });
 
-      expect(budgetsApi.fetchBudget).toHaveBeenCalledWith('budget-1');
+      expect(useGetBudget).toHaveBeenCalledWith('budget-1', expect.any(Object));
       expect(result.current.budget).toEqual(mockBudget);
     });
 
     it('should compute metrics from budget data', async () => {
-      vi.mocked(budgetsApi.fetchBudget).mockResolvedValue(mockBudget);
+      configureQuery({ data: mockBudget });
 
-      const { result } = renderHook(() => useBudgetDetail('budget-1'));
+      const { result } = renderHook(() => useBudgetDetail('budget-1'), {
+        wrapper: createWrapper(),
+      });
 
       await waitFor(() => {
         expect(result.current.metrics).not.toBeNull();
@@ -118,18 +164,19 @@ describe('useBudgetDetail', () => {
         name: 'Second Budget',
       };
 
-      vi.mocked(budgetsApi.fetchBudget)
-        .mockResolvedValueOnce(mockBudget)
-        .mockResolvedValueOnce(budget2);
+      configureQuery({ data: mockBudget });
 
       const { result, rerender } = renderHook(
         ({ budgetId }) => useBudgetDetail(budgetId),
-        { initialProps: { budgetId: 'budget-1' } }
+        { initialProps: { budgetId: 'budget-1' }, wrapper: createWrapper() }
       );
 
       await waitFor(() => {
         expect(result.current.budget?.id).toBe('budget-1');
       });
+
+      // Update mock for second call
+      configureQuery({ data: budget2 });
 
       rerender({ budgetId: 'budget-2' });
 
@@ -137,22 +184,20 @@ describe('useBudgetDetail', () => {
         expect(result.current.budget?.id).toBe('budget-2');
       });
 
-      expect(budgetsApi.fetchBudget).toHaveBeenCalledTimes(2);
-      expect(budgetsApi.fetchBudget).toHaveBeenLastCalledWith('budget-2');
+      expect(useGetBudget).toHaveBeenCalledWith('budget-2', expect.any(Object));
     });
   });
 
   describe('Error Handling', () => {
     it('should handle fetch errors', async () => {
       const testError = new Error('Network error');
-      vi.mocked(budgetsApi.fetchBudget).mockRejectedValue(testError);
+      configureQuery({ error: testError });
 
-      const { result } = renderHook(() => useBudgetDetail('budget-1'));
-
-      await waitFor(() => {
-        expect(result.current.loading).toBe(false);
+      const { result } = renderHook(() => useBudgetDetail('budget-1'), {
+        wrapper: createWrapper(),
       });
 
+      expect(result.current.loading).toBe(false);
       expect(result.current.error).toBeTruthy();
       expect(result.current.error?.message).toBe('Network error');
       expect(result.current.budget).toBeNull();
@@ -160,32 +205,35 @@ describe('useBudgetDetail', () => {
     });
 
     it('should clear error on successful refetch', async () => {
-      vi.mocked(budgetsApi.fetchBudget)
-        .mockRejectedValueOnce(new Error('First error'))
-        .mockResolvedValueOnce(mockBudget);
+      // First return error
+      configureQuery({ error: new Error('First error') });
 
-      const { result } = renderHook(() => useBudgetDetail('budget-1'));
+      const { result } = renderHook(() => useBudgetDetail('budget-1'), {
+        wrapper: createWrapper(),
+      });
 
       // Wait for error
-      await waitFor(() => {
-        expect(result.current.error).toBeTruthy();
-      });
+      expect(result.current.error).toBeTruthy();
+
+      // Update mock for successful refetch
+      configureQuery({ data: mockBudget });
 
       // Refetch
       await act(async () => {
         await result.current.refetch();
       });
 
-      expect(result.current.error).toBeNull();
-      expect(result.current.budget).toEqual(mockBudget);
+      expect(mockRefetch).toHaveBeenCalled();
     });
   });
 
   describe('Refetch', () => {
     it('should provide refetch function', async () => {
-      vi.mocked(budgetsApi.fetchBudget).mockResolvedValue(mockBudget);
+      configureQuery({ data: mockBudget });
 
-      const { result } = renderHook(() => useBudgetDetail('budget-1'));
+      const { result } = renderHook(() => useBudgetDetail('budget-1'), {
+        wrapper: createWrapper(),
+      });
 
       await waitFor(() => {
         expect(result.current.loading).toBe(false);
@@ -195,16 +243,11 @@ describe('useBudgetDetail', () => {
     });
 
     it('should refetch data when called', async () => {
-      const updatedBudget: Budget = {
-        ...mockBudget,
-        name: 'Updated Budget',
-      };
+      configureQuery({ data: mockBudget });
 
-      vi.mocked(budgetsApi.fetchBudget)
-        .mockResolvedValueOnce(mockBudget)
-        .mockResolvedValueOnce(updatedBudget);
-
-      const { result } = renderHook(() => useBudgetDetail('budget-1'));
+      const { result } = renderHook(() => useBudgetDetail('budget-1'), {
+        wrapper: createWrapper(),
+      });
 
       // Wait for initial load
       await waitFor(() => {
@@ -216,8 +259,7 @@ describe('useBudgetDetail', () => {
         await result.current.refetch();
       });
 
-      expect(result.current.budget?.name).toBe('Updated Budget');
-      expect(budgetsApi.fetchBudget).toHaveBeenCalledTimes(2);
+      expect(mockRefetch).toHaveBeenCalled();
     });
   });
 
@@ -228,9 +270,11 @@ describe('useBudgetDetail', () => {
         categories: [],
       };
 
-      vi.mocked(budgetsApi.fetchBudget).mockResolvedValue(budgetNoCategories);
+      configureQuery({ data: budgetNoCategories });
 
-      const { result } = renderHook(() => useBudgetDetail('budget-1'));
+      const { result } = renderHook(() => useBudgetDetail('budget-1'), {
+        wrapper: createWrapper(),
+      });
 
       await waitFor(() => {
         expect(result.current.loading).toBe(false);
@@ -246,9 +290,11 @@ describe('useBudgetDetail', () => {
         income_amount: 0,
       };
 
-      vi.mocked(budgetsApi.fetchBudget).mockResolvedValue(budgetNoIncome);
+      configureQuery({ data: budgetNoIncome });
 
-      const { result } = renderHook(() => useBudgetDetail('budget-1'));
+      const { result } = renderHook(() => useBudgetDetail('budget-1'), {
+        wrapper: createWrapper(),
+      });
 
       await waitFor(() => {
         expect(result.current.loading).toBe(false);

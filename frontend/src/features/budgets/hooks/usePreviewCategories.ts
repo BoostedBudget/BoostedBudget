@@ -1,6 +1,7 @@
 /**
  * usePreviewCategories Hook
  * Issue #497: Budget Category Manager + Match Config UI
+ * Issue #564: Migrated to generated React Query hooks
  *
  * Hook for fetching category preview (transaction count and total amount)
  * with debouncing and request cancellation support.
@@ -8,7 +9,10 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import type { MatchLogic } from '@/shared/types/matching';
-import { previewCategoryMatches, type CategoryPreviewResponse } from '../api/budgetsApi';
+import {
+  usePreviewCategoryMatches,
+} from '@/api/generated/endpoints/budget/budget';
+import type { CategoryPreviewResponse } from '@/api/generated/models';
 
 export interface UsePreviewCategoriesResult {
   preview: CategoryPreviewResponse | null;
@@ -47,6 +51,9 @@ export function usePreviewCategories(
   const [preview, setPreview] = useState<CategoryPreviewResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+
+  // Use the generated mutation hook
+  const mutation = usePreviewCategoryMatches();
 
   // Track the current request to handle cancellation
   const requestIdRef = useRef(0);
@@ -87,12 +94,14 @@ export function usePreviewCategories(
       setError(null);
 
       try {
-        const result = await previewCategoryMatches({
-          categories: capturedCategories,
-          tags: capturedTags,
-          match_logic: capturedMatchLogic,
-          start_date: capturedStartDate,
-          end_date: capturedEndDate,
+        const result = await mutation.mutateAsync({
+          data: {
+            categories: capturedCategories,
+            tags: capturedTags.length > 0 ? capturedTags : undefined,
+            match_logic: capturedMatchLogic,
+            start_date: capturedStartDate,
+            end_date: capturedEndDate,
+          },
         });
 
         // Only update state if this is still the current request
@@ -117,6 +126,7 @@ export function usePreviewCategories(
         debounceTimeoutRef.current = null;
       }
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [categories, tags, matchLogic, startDate, endDate, shouldSkip]);
 
   // Return empty state when skipping (avoids setState in effect)
