@@ -38,9 +38,9 @@ End-to-end testing suite for BoostedBudget using Playwright. These tests verify 
 ## Prerequisites
 
 ### Required
-- Node.js 18+ and npm
+- Node.js 18+ and pnpm
 - Backend server running (`./bin/server` in `../backend/`)
-- Frontend development server (`npm run dev`)
+- Frontend development server (`pnpm run dev`)
 
 ### Optional (for full Auth0 tests)
 - Auth0 test tenant with test user
@@ -51,7 +51,7 @@ End-to-end testing suite for BoostedBudget using Playwright. These tests verify 
 ### 1. Install Dependencies
 ```bash
 cd frontend
-npm install
+pnpm install
 ```
 
 ### 2. Install Playwright Browsers
@@ -79,22 +79,22 @@ VITE_AUTH0_AUDIENCE=https://api.boostedbudget.com
 
 ### Run All E2E Tests
 ```bash
-npm run test:e2e
+pnpm run test:e2e
 ```
 
 ### Run Tests with UI Mode (Interactive)
 ```bash
-npm run test:e2e:ui
+pnpm run test:e2e:ui
 ```
 
 ### Run Tests in Headed Mode (See Browser)
 ```bash
-npm run test:e2e:headed
+pnpm run test:e2e:headed
 ```
 
 ### Run Tests in Debug Mode
 ```bash
-npm run test:e2e:debug
+pnpm run test:e2e:debug
 ```
 
 ### Run Specific Test File
@@ -104,7 +104,7 @@ npx playwright test health.spec.ts
 
 ### View Test Report
 ```bash
-npm run test:e2e:report
+pnpm run test:e2e:report
 ```
 
 ## Test Structure
@@ -153,7 +153,7 @@ These tests are designed to run in GitHub Actions CI/CD pipeline:
 - name: Run E2E Tests
   run: |
     cd frontend
-    npm run test:e2e
+    pnpm run test:e2e
 ```
 
 ### Recommended CI Configuration
@@ -196,7 +196,7 @@ npx playwright show-trace trace.zip
 
 ### 4. Run in Debug Mode
 ```bash
-npm run test:e2e:debug
+pnpm run test:e2e:debug
 ```
 
 ## Best Practices
@@ -234,7 +234,7 @@ npm run test:e2e:debug
 
 ### Tests Fail: "Target closed"
 - Ensure backend server is running: `cd ../backend && ./bin/server`
-- Ensure frontend dev server is running: `npm run dev`
+- Ensure frontend dev server is running: `pnpm run dev`
 
 ### Tests Fail: "Timeout waiting for Auth0"
 - Check Auth0 configuration in `.env`
@@ -247,7 +247,7 @@ npm run test:e2e:debug
 - Cookie banner might be blocking element
 
 ### Slow Test Execution
-- Use headed mode only for debugging: `npm run test:e2e:headed`
+- Use headed mode only for debugging: `pnpm run test:e2e:headed`
 - Run specific test files instead of entire suite
 - Increase workers in `playwright.config.ts` (parallel execution)
 

@@ -31,9 +31,9 @@ updates:
           - "patch"
 
   # =============================================================================
-  # Frontend - npm
+  # Frontend - pnpm
   # =============================================================================
-  - package-ecosystem: "npm"
+  - package-ecosystem: "pnpm"
     directory: "/frontend"
     schedule:
       interval: "weekly"

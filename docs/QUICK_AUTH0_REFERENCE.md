@@ -111,7 +111,7 @@ go run cmd/server/main.go
 
 # Start frontend
 cd frontend
-npm run dev
+pnpm run dev
 
 # Open http://localhost:3000
 # Click "Log In" button

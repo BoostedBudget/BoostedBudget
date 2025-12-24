@@ -73,7 +73,7 @@ test-ci:
 	cd backend && go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
 	@echo "Checking backend coverage threshold..."
 	./scripts/check-coverage.sh backend/coverage.out 60
-	cd frontend && npm run test:ci
+	cd frontend && pnpm run test:ci
 	@echo "All CI tests passed!"
 
 # Fast Tests (No E2E) - For rapid iteration during development
@@ -122,11 +122,11 @@ test-fast:
 	@echo "✅ Backend coverage: backend/coverage.html"
 	@echo ""
 	@echo "3️⃣  Frontend Tests..."
-	@cd frontend && npm run test:ci
+	@cd frontend && pnpm run test:ci
 	@echo "✅ Frontend coverage: frontend/coverage/index.html"
 	@echo ""
 	@echo "4️⃣  Linting..."
-	@cd frontend && npm run lint
+	@cd frontend && pnpm run lint
 	@echo "✅ Linting passed"
 	@echo ""
 	@echo "========================================"
@@ -182,7 +182,7 @@ test-all:
 	@echo "✅ Backend coverage: backend/coverage.html"
 	@echo ""
 	@echo "3️⃣  Frontend Tests..."
-	@cd frontend && npm run test:ci
+	@cd frontend && pnpm run test:ci
 	@echo "✅ Frontend coverage: frontend/coverage/index.html"
 	@echo ""
 	@echo "4️⃣  Building Backend Binary for E2E Tests..."
@@ -190,7 +190,7 @@ test-all:
 	@echo "✅ Backend binary: backend/bin/server"
 	@echo ""
 	@echo "5️⃣  E2E Tests..."
-	@cd frontend && npm run test:e2e -- --reporter=line
+	@cd frontend && pnpm run test:e2e -- --reporter=line
 	@echo ""
 	@echo "========================================"
 	@echo "✅ All tests complete!"
@@ -206,16 +206,16 @@ test-all:
 
 # Frontend
 frontend-install:
-	cd frontend && npm install
+	cd frontend && pnpm install
 
 frontend-dev:
-	cd frontend && npm run dev
+	cd frontend && pnpm run dev
 
 frontend-build: frontend-test
-	cd frontend && npm run build
+	cd frontend && pnpm run build
 
 frontend-test:
-	cd frontend && npm run test:ci
+	cd frontend && pnpm run test:ci
 
 # Database migrations
 migrate-up:
@@ -263,7 +263,7 @@ validate-openapi: generate-openapi
 .PHONY: generate-api-client validate-api-client generate-all validate-all
 generate-api-client:
 	@echo "Generating TypeScript API client from OpenAPI spec..."
-	@cd frontend && npm run generate:api
+	@cd frontend && pnpm run generate:api
 	@echo "✅ Generated frontend/src/api/generated/"
 
 validate-api-client: generate-api-client
@@ -297,7 +297,7 @@ generate:
 # Linting
 lint:
 	cd backend && golangci-lint run
-	cd frontend && npm run lint
+	cd frontend && pnpm run lint
 
 # Cleanup
 clean:

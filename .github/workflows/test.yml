@@ -41,7 +41,7 @@ jobs:
             frontend:
               - 'frontend/**'
               - 'package.json'
-              - 'package-lock.json'
+              - 'pnpm-lock.yaml'
             api:
               - 'api/**'
               - 'api/openapi.yaml'
@@ -137,20 +137,36 @@ jobs:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
 
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: ${{ env.UNIQUE_WORKSPACE }}/frontend/package-lock.json
+          cache: 'pnpm'
+          cache-dependency-path: ${{ env.UNIQUE_WORKSPACE }}/frontend/pnpm-lock.yaml
 
       - name: Install frontend dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
-        run: npm ci
+        run: |
+          for i in 1 2 3; do
+            echo "📦 pnpm install attempt $i/3..."
+            pnpm install --frozen-lockfile && {
+              echo "✅ Dependencies installed"
+              break
+            } || {
+              echo "⚠️ Install failed, cleaning pnpm store..."
+              pnpm store prune
+              [ $i -lt 3 ] && sleep 5
+            }
+          done
 
       - name: Generate TypeScript client
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
-        run: npm run generate:api
+        run: pnpm run generate:api
 
       - name: Check if generated client is up to date
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
@@ -160,7 +176,7 @@ jobs:
           else
             echo "::error::Generated TypeScript client is outdated!"
             echo "The generated client differs from the committed version."
-            echo "Run 'cd frontend && npm run generate:api' locally and commit the changes."
+            echo "Run 'cd frontend && pnpm run generate:api' locally and commit the changes."
             echo ""
             echo "Diff (first 100 lines):"
             git diff frontend/src/api/generated | head -100
@@ -316,82 +332,45 @@ jobs:
           clean: false
           fetch-depth: 1
 
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - name: Set up Node
         uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          cache-dependency-path: ${{ env.UNIQUE_WORKSPACE }}/frontend/pnpm-lock.yaml
 
       - name: Install frontend dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
-          set -e
-          CACHE_BASE="$HOME/.cache/boostedbudget"
-          CACHE_DIR="$CACHE_BASE/node-modules"
-          CACHE_HASH_FILE="$CACHE_BASE/node-modules.sha"
-
-          # Cleanup old cache files (>48 hours) and stale temp directories
-          echo "🧹 Cleaning up stale cache files..."
-          find "$CACHE_BASE" -maxdepth 1 -name "node-modules*" -mmin +2880 -exec rm -rf {} \; 2>/dev/null || true
-          # Clean up any leftover temp directories from interrupted operations
-          find "$CACHE_BASE" -maxdepth 1 -name "node-modules.tmp.*" -exec sudo rm -rf {} \; 2>/dev/null || true
-
-          # Compute current package-lock.json hash
-          CURRENT_HASH=$(shasum -a 256 package-lock.json | cut -d' ' -f1)
-
-          # Helper function to update cache
-          update_cache() {
-            echo "💾 Updating local cache..."
-            TEMP_DIR="$CACHE_BASE/node-modules.tmp.$$"
-            rm -rf "$TEMP_DIR" 2>/dev/null || sudo rm -rf "$TEMP_DIR" 2>/dev/null || true
-            mkdir -p "$TEMP_DIR"
-            rsync -a ./node_modules/ "$TEMP_DIR/"
-            sudo rm -rf "$CACHE_DIR" 2>/dev/null || rm -rf "$CACHE_DIR" 2>/dev/null || true
-            mv "$TEMP_DIR" "$CACHE_DIR"
-            echo "$CURRENT_HASH" > "$CACHE_HASH_FILE"
-            echo "✅ Cache updated ($(du -sh "$CACHE_DIR" | cut -f1))"
-          }
-
-          # Check if cache exists AND hash matches
-          CACHE_VALID=false
-          if [ -d "$CACHE_DIR" ] && [ -f "$CACHE_HASH_FILE" ] && [ "$(cat "$CACHE_HASH_FILE")" == "$CURRENT_HASH" ]; then
-            echo "✅ Local cache hit! Restoring node_modules..."
-            START_TIME=$(date +%s)
-            rsync -a --delete "$CACHE_DIR/" ./node_modules/
-            END_TIME=$(date +%s)
-            echo "✅ Restored in $((END_TIME - START_TIME))s"
-
-            # Validate restored cache - check critical binaries exist
-            if [ -d "./node_modules/.bin" ] && [ -L "./node_modules/.bin/eslint" ]; then
-              echo "✅ Cache validation passed - eslint binary found"
-              CACHE_VALID=true
-            else
-              echo "⚠️ Cache validation failed - .bin/eslint missing or not a symlink"
-              echo "📊 Debug: .bin contents: $(ls -la ./node_modules/.bin 2>&1 | head -5 || echo 'dir missing')"
-            fi
-          fi
-
-          # If no valid cache, run npm ci
-          if [ "$CACHE_VALID" != "true" ]; then
-            echo "📦 Running npm ci..."
-            [ -f "$CACHE_HASH_FILE" ] && echo "  Previous hash: $(cat "$CACHE_HASH_FILE")"
-            echo "  Current hash:  $CURRENT_HASH"
-            rm -rf ./node_modules 2>/dev/null || true
-            npm ci --prefer-offline --no-audit
-            update_cache
-          fi
+          for i in 1 2 3; do
+            echo "📦 pnpm install attempt $i/3..."
+            pnpm install --frozen-lockfile && {
+              echo "✅ Dependencies installed"
+              break
+            } || {
+              echo "⚠️ Install failed, cleaning pnpm store..."
+              pnpm store prune
+              [ $i -lt 3 ] && sleep 5
+            }
+          done
 
       - name: Run ESLint
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
           echo "::group::Running ESLint"
-          npm run lint
+          pnpm run lint
           echo "::endgroup::"
 
       - name: Run frontend unit tests
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
           echo "::group::Running Unit Tests"
-          npm run test:ci
+          pnpm run test:ci
           echo "::endgroup::"
 
       - name: Upload coverage report
@@ -427,80 +406,43 @@ jobs:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
 
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - name: Set up Node
         uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          cache-dependency-path: ${{ env.UNIQUE_WORKSPACE }}/frontend/pnpm-lock.yaml
 
       - name: Install frontend dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
-          set -e
-          CACHE_BASE="$HOME/.cache/boostedbudget"
-          CACHE_DIR="$CACHE_BASE/node-modules"
-          CACHE_HASH_FILE="$CACHE_BASE/node-modules.sha"
-
-          # Cleanup old cache files (>48 hours) and stale temp directories
-          echo "🧹 Cleaning up stale cache files..."
-          find "$CACHE_BASE" -maxdepth 1 -name "node-modules*" -mmin +2880 -exec rm -rf {} \; 2>/dev/null || true
-          # Clean up any leftover temp directories from interrupted operations
-          find "$CACHE_BASE" -maxdepth 1 -name "node-modules.tmp.*" -exec sudo rm -rf {} \; 2>/dev/null || true
-
-          # Compute current package-lock.json hash
-          CURRENT_HASH=$(shasum -a 256 package-lock.json | cut -d' ' -f1)
-
-          # Helper function to update cache
-          update_cache() {
-            echo "💾 Updating local cache..."
-            TEMP_DIR="$CACHE_BASE/node-modules.tmp.$$"
-            rm -rf "$TEMP_DIR" 2>/dev/null || sudo rm -rf "$TEMP_DIR" 2>/dev/null || true
-            mkdir -p "$TEMP_DIR"
-            rsync -a ./node_modules/ "$TEMP_DIR/"
-            sudo rm -rf "$CACHE_DIR" 2>/dev/null || rm -rf "$CACHE_DIR" 2>/dev/null || true
-            mv "$TEMP_DIR" "$CACHE_DIR"
-            echo "$CURRENT_HASH" > "$CACHE_HASH_FILE"
-            echo "✅ Cache updated ($(du -sh "$CACHE_DIR" | cut -f1))"
-          }
-
-          # Check if cache exists AND hash matches
-          CACHE_VALID=false
-          if [ -d "$CACHE_DIR" ] && [ -f "$CACHE_HASH_FILE" ] && [ "$(cat "$CACHE_HASH_FILE")" == "$CURRENT_HASH" ]; then
-            echo "✅ Local cache hit! Restoring node_modules..."
-            START_TIME=$(date +%s)
-            rsync -a --delete "$CACHE_DIR/" ./node_modules/
-            END_TIME=$(date +%s)
-            echo "✅ Restored in $((END_TIME - START_TIME))s"
-
-            # Validate restored cache - check critical binaries exist
-            if [ -d "./node_modules/.bin" ] && [ -L "./node_modules/.bin/eslint" ]; then
-              echo "✅ Cache validation passed - eslint binary found"
-              CACHE_VALID=true
-            else
-              echo "⚠️ Cache validation failed - .bin/eslint missing or not a symlink"
-              echo "📊 Debug: .bin contents: $(ls -la ./node_modules/.bin 2>&1 | head -5 || echo 'dir missing')"
-            fi
-          fi
-
-          # If no valid cache, run npm ci
-          if [ "$CACHE_VALID" != "true" ]; then
-            echo "📦 Running npm ci..."
-            [ -f "$CACHE_HASH_FILE" ] && echo "  Previous hash: $(cat "$CACHE_HASH_FILE")"
-            echo "  Current hash:  $CURRENT_HASH"
-            rm -rf ./node_modules 2>/dev/null || true
-            npm ci --prefer-offline --no-audit
-            update_cache
-          fi
+          for i in 1 2 3; do
+            echo "📦 pnpm install attempt $i/3..."
+            pnpm install --frozen-lockfile && {
+              echo "✅ Dependencies installed"
+              break
+            } || {
+              echo "⚠️ Install failed, cleaning pnpm store..."
+              pnpm store prune
+              [ $i -lt 3 ] && sleep 5
+            }
+          done
 
       - name: Install Playwright browsers
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
-          echo "🎭 Installing Playwright browsers..."
+          echo "Installing Playwright browsers..."
           for i in 1 2 3; do
-            npx playwright install --with-deps chromium && {
-              echo "✅ Browsers installed"
+            pnpm exec playwright install --with-deps chromium && {
+              echo "Browsers installed"
               break
             } || {
-              echo "⚠️ Install attempt $i/3 failed"
+              echo "Install attempt $i/3 failed"
               [ $i -lt 3 ] && sleep 15
             }
           done
@@ -553,7 +495,7 @@ jobs:
           CI: true
         run: |
           echo "::group::Running Playwright E2E tests"
-          npm run test:e2e
+          pnpm run test:e2e
           echo "::endgroup::"
 
       - name: Upload E2E test results
