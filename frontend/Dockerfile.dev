@@ -1,26 +1,25 @@
 # Development Dockerfile for Frontend
 FROM node:25-alpine
 
+# Install pnpm globally
+RUN npm install -g pnpm@10
+
 # Install curl for health checks
-RUN echo "📦 Installing curl..." && \
-    for i in 1 2 3; do \
-      apk add --no-cache curl && break || \
-      { echo "⚠ apk add attempt $i/3 failed"; [ $i -lt 3 ] && sleep 5; }; \
-    done
+RUN apk add --no-cache curl
 
 WORKDIR /app
 
 # Copy package files
-COPY package.json package-lock.json* ./
+COPY package.json pnpm-lock.yaml ./
 
 # Install dependencies
-RUN echo "📦 Installing development dependencies..." && \
+RUN echo "Installing development dependencies..." && \
     for i in 1 2 3 4; do \
-      echo "npm install attempt $i/4..." && \
-      npm install --prefer-offline --no-audit && \
-      echo "✓ Dependencies installed" && break || \
-      { echo "⚠ npm install attempt $i/4 failed"; \
-        npm cache clean --force; \
+      echo "pnpm install attempt $i/4..." && \
+      pnpm install && \
+      echo "Dependencies installed" && break || \
+      { echo "pnpm install attempt $i/4 failed"; \
+        pnpm store prune; \
         [ $i -lt 4 ] && sleep 10; }; \
     done
 
@@ -35,4 +34,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:3000/ || exit 1
 
 # Run Vite dev server with hot reload
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+CMD ["pnpm", "run", "dev", "--", "--host", "0.0.0.0"]

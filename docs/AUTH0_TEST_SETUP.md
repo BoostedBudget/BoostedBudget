@@ -268,7 +268,7 @@ HEADLESS=true
 2. Start frontend dev server:
    ```bash
    cd frontend
-   npm run dev
+   pnpm run dev
    ```
 
 3. Open browser to http://localhost:3000
@@ -287,10 +287,10 @@ Enable skipped tests by removing `test.skip()` from `frontend/e2e/auth.spec.ts`:
 cd frontend
 
 # Run E2E tests with test credentials
-npm run test:e2e
+pnpm run test:e2e
 
 # Or run in headed mode to see the browser
-npm run test:e2e:headed
+pnpm run test:e2e:headed
 ```
 
 **Expected Results**:
@@ -336,22 +336,27 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '18'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
+          cache: 'pnpm'
+          cache-dependency-path: frontend/pnpm-lock.yaml
 
       - name: Install dependencies
         run: |
           cd frontend
-          npm ci
+          pnpm install --frozen-lockfile
 
       - name: Install Playwright
         run: |
           cd frontend
-          npx playwright install chromium
+          pnpm exec playwright install chromium
 
       - name: Create .env.test
         run: |
@@ -376,7 +381,7 @@ jobs:
       - name: Run E2E tests
         run: |
           cd frontend
-          npm run test:e2e
+          pnpm run test:e2e
 
       - name: Upload test results
         if: always()

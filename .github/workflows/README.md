@@ -150,10 +150,10 @@ cd backend && go test -v -race -coverprofile=coverage.out ./...
 ./scripts/check-coverage.sh backend/coverage.out 80
 
 # Frontend only
-cd frontend && npm run test:ci
+cd frontend && pnpm run test:ci
 
 # E2E only
-cd frontend && npm run test:e2e
+cd frontend && pnpm run test:e2e
 ```
 
 ### Build Docker images locally

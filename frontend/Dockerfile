@@ -2,19 +2,22 @@
 # Stage 1: Builder
 FROM node:25-alpine AS builder
 
+# Install pnpm globally
+RUN npm install -g pnpm@10
+
 WORKDIR /build
 
 # Copy package files
-COPY frontend/package*.json ./
+COPY frontend/package.json frontend/pnpm-lock.yaml ./
 
 # Install ALL dependencies (including devDependencies for build)
-RUN echo "📦 Installing production dependencies..." && \
+RUN echo "Installing production dependencies..." && \
     for i in 1 2 3 4; do \
-      echo "npm ci attempt $i/4..." && \
-      npm ci --prefer-offline --no-audit && \
-      echo "✓ Dependencies installed" && break || \
-      { echo "⚠ npm ci attempt $i/4 failed"; \
-        npm cache clean --force; \
+      echo "pnpm install attempt $i/4..." && \
+      pnpm install --frozen-lockfile && \
+      echo "Dependencies installed" && break || \
+      { echo "pnpm install attempt $i/4 failed"; \
+        pnpm store prune; \
         [ $i -lt 4 ] && sleep 10; }; \
     done
 
@@ -25,7 +28,7 @@ COPY config/ /config/
 COPY frontend/ .
 
 # Build the application
-RUN npm run build
+RUN pnpm run build
 
 # Stage 2: Runtime with Nginx (Debian-based)
 FROM nginx:stable

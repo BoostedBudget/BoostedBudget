@@ -172,7 +172,7 @@ cd backend && go test ./internal/handlers/... -v
 cd backend && go test ./... -cover
 
 # Frontend tests
-cd frontend && npm test
+cd frontend && pnpm test
 ```
 
 ### API Testing
