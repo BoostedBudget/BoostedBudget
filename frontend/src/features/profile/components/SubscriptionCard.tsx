@@ -1,13 +1,12 @@
 import { Link } from 'react-router-dom'
 import { Star, Award, Gem, Check } from 'lucide-react'
 import { useSubscriptionTiers } from '../../subscription/hooks/useSubscriptionTiers'
-import type { User } from '../types'
 import type { SubscriptionTier, TierName } from '../../subscription/types'
 import './SubscriptionCard.css'
 
 interface SubscriptionCardProps {
-  tier: User['subscription_tier']
-  status: User['subscription_status']
+  tier: string // User's subscription_tier from API
+  status: string // User's subscription_status from API
 }
 
 /**
@@ -140,7 +139,7 @@ export function SubscriptionCard({ tier, status }: SubscriptionCardProps) {
     <div className={`subscription-card tier-${tierClassName}`}>
       <div className="subscription-header">
         <div className="tier-info">
-          {renderTierIcon(tier)}
+          {renderTierIcon(tier as TierName)}
           <h3 className="tier-name">{displayName}</h3>
         </div>
         <div className="tier-pricing">

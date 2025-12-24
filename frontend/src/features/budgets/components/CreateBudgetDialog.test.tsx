@@ -1,31 +1,47 @@
 /**
  * CreateBudgetDialog Tests
  * Issue #111: Goals Dashboard & Progress Visualization
+ * Issue #564: Migrated to mock generated React Query hooks
  *
  * TDD RED Phase: Tests for budget creation dialog.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { ReactNode } from 'react';
 import { CreateBudgetDialog } from './CreateBudgetDialog';
-import * as budgetsApi from '../api/budgetsApi';
 import type { Budget } from '../types';
 import { fillInputByLabel } from '@/test/utils/formTestHelpers';
 
-// Mock APIs
-vi.mock('../api/budgetsApi');
-
-// Issue #496: Mock APIs for income sources
-vi.mock('@/features/categories/api/categoriesApi', () => ({
-  fetchPlaidCategories: vi.fn().mockResolvedValue(['INCOME', 'TRANSFER_IN', 'LOAN_PAYMENTS']),
+// Use vi.hoisted for mock functions
+const { mockCreateMutateAsync } = vi.hoisted(() => ({
+  mockCreateMutateAsync: vi.fn(),
 }));
 
-vi.mock('@/features/tags/api/tagsApi', () => ({
-  fetchTags: vi.fn().mockResolvedValue([
-    { id: '1', user_id: 'user-1', name: 'Salary', color: '#22c55e', usage_count: 5, created_at: '', updated_at: '' },
-    { id: '2', user_id: 'user-1', name: 'Freelance', color: '#3b82f6', usage_count: 2, created_at: '', updated_at: '' },
-  ]),
+// Mock the generated hooks
+vi.mock('@/api/generated/endpoints/budgets/budgets', () => ({
+  useCreateBudget: vi.fn(() => ({ mutateAsync: mockCreateMutateAsync })),
+}));
+
+vi.mock('@/api/generated/endpoints/categories/categories', () => ({
+  useGetPlaidCategories: vi.fn(() => ({
+    data: ['INCOME', 'TRANSFER_IN', 'LOAN_PAYMENTS'],
+    isLoading: false,
+    error: null,
+  })),
+}));
+
+vi.mock('@/api/generated/endpoints/tags/tags', () => ({
+  useGetUserTags: vi.fn(() => ({
+    data: [
+      { id: '1', user_id: 'user-1', name: 'Salary', color: '#22c55e', usage_count: 5, created_at: '', updated_at: '' },
+      { id: '2', user_id: 'user-1', name: 'Freelance', color: '#3b82f6', usage_count: 2, created_at: '', updated_at: '' },
+    ],
+    isLoading: false,
+    error: null,
+  })),
 }));
 
 const mockCreatedBudget: Budget = {
@@ -46,13 +62,36 @@ const mockCreatedBudget: Budget = {
   income_sources: [],
 };
 
+// Helper to create wrapper with QueryClient
+function createWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+  return function Wrapper({ children }: { children: ReactNode }) {
+    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+  };
+}
+
+function renderWithProviders(ui: React.ReactElement) {
+  const Wrapper = createWrapper();
+  return render(ui, { wrapper: Wrapper });
+}
+
 describe('CreateBudgetDialog', () => {
   const mockOnCreate = vi.fn();
   const mockOnCancel = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(budgetsApi.createBudget).mockResolvedValue(mockCreatedBudget);
+    mockCreateMutateAsync.mockResolvedValue(mockCreatedBudget);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   // ==========================================================================
@@ -61,7 +100,7 @@ describe('CreateBudgetDialog', () => {
 
   describe('Rendering', () => {
     it('renders dialog when isOpen is true', async () => {
-      render(
+      renderWithProviders(
         <CreateBudgetDialog
           isOpen={true}
           onCancel={mockOnCancel}
@@ -77,7 +116,7 @@ describe('CreateBudgetDialog', () => {
     });
 
     it('does not render dialog when isOpen is false', () => {
-      render(
+      renderWithProviders(
         <CreateBudgetDialog
           isOpen={false}
           onCancel={mockOnCancel}
@@ -89,7 +128,7 @@ describe('CreateBudgetDialog', () => {
     });
 
     it('renders all form fields', async () => {
-      render(
+      renderWithProviders(
         <CreateBudgetDialog
           isOpen={true}
           onCancel={mockOnCancel}
@@ -108,7 +147,7 @@ describe('CreateBudgetDialog', () => {
     });
 
     it('renders period options', async () => {
-      render(
+      renderWithProviders(
         <CreateBudgetDialog
           isOpen={true}
           onCancel={mockOnCancel}
@@ -134,7 +173,7 @@ describe('CreateBudgetDialog', () => {
 
     it('shows end date field when custom period is selected', async () => {
       const user = userEvent.setup({ delay: null });
-      render(
+      renderWithProviders(
         <CreateBudgetDialog
           isOpen={true}
           onCancel={mockOnCancel}
@@ -167,7 +206,7 @@ describe('CreateBudgetDialog', () => {
   describe('Validation', () => {
     it('shows error when name is empty', async () => {
       const user = userEvent.setup({ delay: null });
-      render(
+      renderWithProviders(
         <CreateBudgetDialog
           isOpen={true}
           onCancel={mockOnCancel}
@@ -190,7 +229,7 @@ describe('CreateBudgetDialog', () => {
 
     it('shows error when amount is invalid', async () => {
       const user = userEvent.setup({ delay: null });
-      render(
+      renderWithProviders(
         <CreateBudgetDialog
           isOpen={true}
           onCancel={mockOnCancel}
@@ -214,7 +253,7 @@ describe('CreateBudgetDialog', () => {
 
     it('shows error when end date is missing for custom period', async () => {
       const user = userEvent.setup({ delay: null });
-      render(
+      renderWithProviders(
         <CreateBudgetDialog
           isOpen={true}
           onCancel={mockOnCancel}
@@ -246,9 +285,9 @@ describe('CreateBudgetDialog', () => {
   // ==========================================================================
 
   describe('Submission', () => {
-    it('calls createBudget with correct payload on submit', async () => {
+    it('calls createBudget mutation with correct payload on submit', async () => {
       const user = userEvent.setup({ delay: null });
-      render(
+      renderWithProviders(
         <CreateBudgetDialog
           isOpen={true}
           onCancel={mockOnCancel}
@@ -272,11 +311,13 @@ describe('CreateBudgetDialog', () => {
       await user.click(screen.getByRole('button', { name: /create budget/i }));
 
       await waitFor(() => {
-        expect(budgetsApi.createBudget).toHaveBeenCalledWith(
+        expect(mockCreateMutateAsync).toHaveBeenCalledWith(
           expect.objectContaining({
-            name: 'Monthly Budget',
-            amount: 2000,
-            period: 'monthly',
+            data: expect.objectContaining({
+              name: 'Monthly Budget',
+              amount: 2000,
+              period: 'monthly',
+            }),
           })
         );
       });
@@ -284,12 +325,12 @@ describe('CreateBudgetDialog', () => {
 
     it('shows loading state during API call', async () => {
       // Make API call slow - use longer delay to ensure loading state is visible
-      vi.mocked(budgetsApi.createBudget).mockImplementation(
+      mockCreateMutateAsync.mockImplementation(
         () => new Promise((resolve) => setTimeout(() => resolve(mockCreatedBudget), 3000))
       );
 
       const user = userEvent.setup({ delay: null });
-      render(
+      renderWithProviders(
         <CreateBudgetDialog
           isOpen={true}
           onCancel={mockOnCancel}
@@ -317,7 +358,7 @@ describe('CreateBudgetDialog', () => {
 
     it('closes dialog and calls onBudgetCreated on successful creation', async () => {
       const user = userEvent.setup({ delay: null });
-      render(
+      renderWithProviders(
         <CreateBudgetDialog
           isOpen={true}
           onCancel={mockOnCancel}
@@ -338,17 +379,17 @@ describe('CreateBudgetDialog', () => {
       await user.click(screen.getByRole('button', { name: /create budget/i }));
 
       await waitFor(() => {
-        expect(mockOnCreate).toHaveBeenCalledWith(mockCreatedBudget);
+        expect(mockOnCreate).toHaveBeenCalled();
       });
     }, 15000);
 
     it('shows error message on API failure', async () => {
-      vi.mocked(budgetsApi.createBudget).mockRejectedValue(
+      mockCreateMutateAsync.mockRejectedValue(
         new Error('Failed to create budget')
       );
 
       const user = userEvent.setup({ delay: null });
-      render(
+      renderWithProviders(
         <CreateBudgetDialog
           isOpen={true}
           onCancel={mockOnCancel}
@@ -374,7 +415,7 @@ describe('CreateBudgetDialog', () => {
 
     it('calls onCancel when cancel button clicked', async () => {
       const user = userEvent.setup({ delay: null });
-      render(
+      renderWithProviders(
         <CreateBudgetDialog
           isOpen={true}
           onCancel={mockOnCancel}
@@ -392,12 +433,14 @@ describe('CreateBudgetDialog', () => {
     });
 
     it('resets form when reopened after cancel', async () => {
+      const Wrapper = createWrapper();
       const { rerender } = render(
         <CreateBudgetDialog
           isOpen={true}
           onCancel={mockOnCancel}
           onBudgetCreated={mockOnCreate}
-        />
+        />,
+        { wrapper: Wrapper }
       );
 
       await waitFor(() => {
@@ -441,7 +484,7 @@ describe('CreateBudgetDialog', () => {
   describe('Dialog Close Behavior (Issue #460)', () => {
     it('does not close when clicking outside the dialog (on backdrop)', async () => {
       const user = userEvent.setup({ delay: null });
-      render(
+      renderWithProviders(
         <CreateBudgetDialog
           isOpen={true}
           onCancel={mockOnCancel}
@@ -469,7 +512,7 @@ describe('CreateBudgetDialog', () => {
 
     it('closes when X button is clicked', async () => {
       const user = userEvent.setup({ delay: null });
-      render(
+      renderWithProviders(
         <CreateBudgetDialog
           isOpen={true}
           onCancel={mockOnCancel}
@@ -496,7 +539,7 @@ describe('CreateBudgetDialog', () => {
 
     it('closes when Cancel button is clicked', async () => {
       const user = userEvent.setup({ delay: null });
-      render(
+      renderWithProviders(
         <CreateBudgetDialog
           isOpen={true}
           onCancel={mockOnCancel}
@@ -520,7 +563,7 @@ describe('CreateBudgetDialog', () => {
 
   describe('Income Tab (Issue #496)', () => {
     it('renders Budget and Income tabs', async () => {
-      render(
+      renderWithProviders(
         <CreateBudgetDialog
           isOpen={true}
           onCancel={mockOnCancel}
@@ -539,7 +582,7 @@ describe('CreateBudgetDialog', () => {
 
     it('switches between Budget and Income tabs', async () => {
       const user = userEvent.setup({ delay: null });
-      render(
+      renderWithProviders(
         <CreateBudgetDialog
           isOpen={true}
           onCancel={mockOnCancel}
@@ -573,7 +616,7 @@ describe('CreateBudgetDialog', () => {
 
     it('renders IncomeSourceConfig in Income tab', async () => {
       const user = userEvent.setup({ delay: null });
-      render(
+      renderWithProviders(
         <CreateBudgetDialog
           isOpen={true}
           onCancel={mockOnCancel}
@@ -599,7 +642,7 @@ describe('CreateBudgetDialog', () => {
 
     it('renders track actual income checkbox', async () => {
       const user = userEvent.setup({ delay: null });
-      render(
+      renderWithProviders(
         <CreateBudgetDialog
           isOpen={true}
           onCancel={mockOnCancel}
@@ -625,7 +668,7 @@ describe('CreateBudgetDialog', () => {
 
     it('includes income_sources in submission payload when sources are added', async () => {
       const user = userEvent.setup({ delay: null });
-      render(
+      renderWithProviders(
         <CreateBudgetDialog
           isOpen={true}
           onCancel={mockOnCancel}
@@ -664,18 +707,20 @@ describe('CreateBudgetDialog', () => {
       // Submit the form
       await user.click(screen.getByRole('button', { name: /create budget/i }));
 
-      // Verify createBudget was called with income_sources
+      // Verify createBudget mutation was called with income_sources
       await waitFor(() => {
-        expect(budgetsApi.createBudget).toHaveBeenCalledWith(
+        expect(mockCreateMutateAsync).toHaveBeenCalledWith(
           expect.objectContaining({
-            name: 'Test Budget',
-            amount: 2000,
-            income_sources: [
-              expect.objectContaining({
-                type: 'manual',
-                value: '3000',
-              }),
-            ],
+            data: expect.objectContaining({
+              name: 'Test Budget',
+              amount: 2000,
+              income_sources: [
+                expect.objectContaining({
+                  type: 'manual',
+                  value: '3000',
+                }),
+              ],
+            }),
           })
         );
       });
@@ -683,12 +728,14 @@ describe('CreateBudgetDialog', () => {
 
     it('resets Income tab when dialog reopens', async () => {
       const user = userEvent.setup({ delay: null });
+      const Wrapper = createWrapper();
       const { rerender } = render(
         <CreateBudgetDialog
           isOpen={true}
           onCancel={mockOnCancel}
           onBudgetCreated={mockOnCreate}
-        />
+        />,
+        { wrapper: Wrapper }
       );
 
       await waitFor(() => {

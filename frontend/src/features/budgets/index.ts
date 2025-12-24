@@ -32,30 +32,6 @@ export {
   formatCategoryPath,
 } from './types';
 
-// API
-export {
-  fetchBudgets,
-  fetchCurrentBudget,
-  fetchBudget,
-  createBudget,
-  updateBudget,
-  deleteBudget,
-  fetchAvailableCategories,
-  addBudgetCategory,
-  updateBudgetCategory,
-  deleteBudgetCategory,
-  fetchSavingsGoals,
-  fetchActiveSavingsGoals,
-  fetchSavingsGoal,
-  createSavingsGoal,
-  updateSavingsGoal,
-  deleteSavingsGoal,
-  // Issue #495: Envelope budgeting APIs
-  syncBudget,
-  fetchBudgetTransactions,
-} from './api/budgetsApi';
-export type { BudgetTransactionsResponse } from './api/budgetsApi';
-
 // Hooks
 export { useBudgets } from './hooks/useBudgets';
 export type { UseBudgetsResult } from './hooks/useBudgets';

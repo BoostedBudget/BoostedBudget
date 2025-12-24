@@ -12,19 +12,23 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { usePlaidLink } from 'react-plaid-link'
-import { fetchLinkToken } from './api/plaidApi'
+import { useCreateLinkToken } from '@/api/generated/endpoints/plaid/plaid'
 
 export function PlaidOAuthCallback() {
   const navigate = useNavigate()
   const [linkToken, setLinkToken] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  // Use generated mutation hook
+  const createLinkTokenMutation = useCreateLinkToken()
+
   // Get the full redirect URI including OAuth parameters
   const receivedRedirectUri = window.location.href
 
   // Fetch link token on mount
   useEffect(() => {
-    fetchLinkToken()
+    createLinkTokenMutation
+      .mutateAsync()
       .then(response => {
         setLinkToken(response.link_token)
       })
@@ -32,6 +36,7 @@ export function PlaidOAuthCallback() {
         console.error('Failed to fetch link token for OAuth callback:', err)
         setError('Failed to continue bank connection. Please try again.')
       })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Initialize Plaid Link with receivedRedirectUri to continue OAuth flow

@@ -1,9 +1,8 @@
-import { useState, useEffect } from 'react'
 import { Mail, CheckCircle2, Globe, Shield, Copy } from 'lucide-react'
 import { SubscriptionCard } from './components/SubscriptionCard'
 import { ProfileForm } from './ProfileForm'
 import { PrivacySettings } from './PrivacySettings'
-import { fetchProfile } from './api/profileApi'
+import { useProfile } from './hooks/useProfile'
 import { getRegionWithFlag } from '../../config/regions'
 import { useTabState, useCopyToClipboard } from '../../shared/hooks'
 import { abbreviateUUID } from '../../shared/utils'
@@ -15,33 +14,13 @@ interface ProfilePageProps {
 }
 
 export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
-  const [user, setUser] = useState<User | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const { user, loading, error, refetch } = useProfile()
   const [activeTab, setActiveTab] = useTabState('tab', 'profile', ['profile', 'privacy'] as const)
   const { copy, copied } = useCopyToClipboard()
 
-  // Load user profile on mount
-  useEffect(() => {
-    loadProfile()
-  }, [])
-
-  async function loadProfile() {
-    try {
-      setLoading(true)
-      setError(null)
-      const profileData = await fetchProfile()
-      setUser(profileData)
-    } catch (err) {
-      console.error('Failed to load profile:', err)
-      setError('Failed to load profile. Please try again.')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  function handleProfileUpdate(updatedUser: User) {
-    setUser(updatedUser)
+  function handleProfileUpdate(_updatedUser: User) {
+    // Refetch to get the updated user data from server
+    refetch()
   }
 
   if (loading) {
@@ -56,8 +35,8 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
     return (
       <div className="profile-page responsive">
         <div className="error-state">
-          <p className="error-message">{error}</p>
-          <button onClick={loadProfile} className="btn-retry">
+          <p className="error-message">{error.message || 'Failed to load profile. Please try again.'}</p>
+          <button onClick={() => refetch()} className="btn-retry">
             Retry
           </button>
         </div>
@@ -72,7 +51,7 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
       <div className="profile-page responsive">
         <div className="error-state">
           <p className="error-message">Failed to load profile data</p>
-          <button onClick={loadProfile} className="btn-retry">
+          <button onClick={() => refetch()} className="btn-retry">
             Retry
           </button>
         </div>

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { UserTag } from '../types'
-import { createTag } from '../api/tagsApi'
+import { useCreateTag } from '@/api/generated/endpoints/tags/tags'
 import './TagEditor.css'
 
 interface TagEditorProps {
@@ -22,6 +22,9 @@ export function TagEditor({
   const [isCreating, setIsCreating] = useState(false)
   const [newTagName, setNewTagName] = useState('')
   const [newTagColor, setNewTagColor] = useState('#6B7280')
+
+  // Use generated mutation hook
+  const createTagMutation = useCreateTag()
 
   // Get tag object by name
   const getTagByName = (name: string): UserTag | undefined => {
@@ -63,12 +66,14 @@ export function TagEditor({
     if (!newTagName.trim()) return
 
     try {
-      const newTag = await createTag({
-        name: newTagName.trim(),
-        color: newTagColor,
+      const newTag = await createTagMutation.mutateAsync({
+        data: {
+          name: newTagName.trim(),
+          color: newTagColor,
+        },
       })
 
-      onTagCreated?.(newTag)
+      onTagCreated?.(newTag as UserTag)
       onChange([...selectedTags, newTag.name])
       setIsCreating(false)
       setIsDropdownOpen(false)

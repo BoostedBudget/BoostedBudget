@@ -1,14 +1,26 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { Auth0Provider, useAuth0 } from '@auth0/auth0-react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Provider } from 'react-redux'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App'
 import { store } from './store/store'
 import { AuthWrapper } from './auth'
-import { setupAuthInterceptor } from './api/axiosConfig'
+import { setAuthTokenProvider } from './api/client'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import './index.css'
+
+// Create React Query client with sensible defaults
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 5 * 60 * 1000, // 5 minutes
+      retry: 1,
+      refetchOnWindowFocus: false,
+    },
+  },
+})
 
 // Get Auth0 configuration from runtime config (injected by docker-entrypoint.sh)
 // Falls back to build-time env vars for local development
@@ -52,13 +64,16 @@ const InitializeAuth = () => {
   const { getAccessTokenSilently } = useAuth0()
 
   React.useEffect(() => {
-    setupAuthInterceptor(async () => {
+    const tokenProvider = async () => {
       try {
         return await getAccessTokenSilently()
       } catch {
         return null
       }
-    })
+    }
+
+    // Setup auth token provider for generated API calls
+    setAuthTokenProvider(tokenProvider)
   }, [getAccessTokenSilently])
 
   return null
@@ -67,25 +82,27 @@ const InitializeAuth = () => {
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ErrorBoundary>
-      <Auth0Provider
-        domain={auth0Domain}
-        clientId={auth0ClientId}
-        authorizationParams={{
-          redirect_uri: `${window.location.origin}/callback`,
-          audience: auth0Audience,
-        }}
-        useRefreshTokens={true}
-        cacheLocation="localstorage"
-      >
-        <Provider store={store}>
-          <BrowserRouter>
-            <AuthWrapper>
-              <InitializeAuth />
-              <App />
-            </AuthWrapper>
-          </BrowserRouter>
-        </Provider>
-      </Auth0Provider>
+      <QueryClientProvider client={queryClient}>
+        <Auth0Provider
+          domain={auth0Domain}
+          clientId={auth0ClientId}
+          authorizationParams={{
+            redirect_uri: `${window.location.origin}/callback`,
+            audience: auth0Audience,
+          }}
+          useRefreshTokens={true}
+          cacheLocation="localstorage"
+        >
+          <Provider store={store}>
+            <BrowserRouter>
+              <AuthWrapper>
+                <InitializeAuth />
+                <App />
+              </AuthWrapper>
+            </BrowserRouter>
+          </Provider>
+        </Auth0Provider>
+      </QueryClientProvider>
     </ErrorBoundary>
   </React.StrictMode>,
 )

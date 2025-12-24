@@ -113,6 +113,65 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
+  # TypeScript Client Validation (ensures generated client is committed)
+  # =============================================================================
+  typescript-client-validate:
+    name: TypeScript Client Validation
+    needs: [detect-changes, openapi-validate]
+    if: |
+      always() &&
+      (needs.detect-changes.outputs.api == 'true' ||
+       needs.detect-changes.outputs.frontend == 'true' ||
+       needs.detect-changes.outputs.workflow == 'true')
+    runs-on: [self-hosted, macOS, mac-mini]
+    env:
+      UNIQUE_WORKSPACE: workspace-ts-client-validate-${{ github.run_id }}
+
+    steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          clean: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: ${{ env.UNIQUE_WORKSPACE }}/frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        run: npm ci
+
+      - name: Generate TypeScript client
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        run: npm run generate:api
+
+      - name: Check if generated client is up to date
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: |
+          if git diff --exit-code frontend/src/api/generated; then
+            echo "::notice::Generated TypeScript client is up to date"
+          else
+            echo "::error::Generated TypeScript client is outdated!"
+            echo "The generated client differs from the committed version."
+            echo "Run 'cd frontend && npm run generate:api' locally and commit the changes."
+            echo ""
+            echo "Diff (first 100 lines):"
+            git diff frontend/src/api/generated | head -100
+            exit 1
+          fi
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+  # =============================================================================
   # Backend Tests (runs in parallel with frontend)
   # =============================================================================
   backend-test:

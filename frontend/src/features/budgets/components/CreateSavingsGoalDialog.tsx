@@ -7,7 +7,7 @@
  * Uses shadcn/ui Dialog built on Radix UI.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { XIcon } from 'lucide-react';
 import {
   Dialog,
@@ -15,8 +15,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { createSavingsGoal } from '../api/budgetsApi';
-import { fetchAccounts } from '../../accounts/api/plaidApi';
+import { useCreateSavingsGoal } from '@/api/generated/endpoints/savings-goals/savings-goals';
+import { useGetAccounts } from '@/api/generated/endpoints/accounts/accounts';
 import { GOAL_TEMPLATES, calculateDeadlineFromTemplate } from '../goalTemplates';
 import type { GoalTemplate } from '../goalTemplates';
 import type { Account } from '../../accounts/types';
@@ -59,42 +59,35 @@ export function CreateSavingsGoalDialog({
   const [formData, setFormData] = useState<FormData>(initialFormData);
   const [errors, setErrors] = useState<FormErrors>({});
   const [apiError, setApiError] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [accounts, setAccounts] = useState<Account[]>([]);
-  const [accountsLoading, setAccountsLoading] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
 
-  // Load accounts when dialog opens
-  useEffect(() => {
-    if (isOpen) {
-      setAccountsLoading(true);
-      fetchAccounts()
-        .then((response) => {
-          // Filter to depository accounts only
-          const depositoryAccounts = response.accounts.filter(
-            (acc) => acc.type === 'depository'
-          );
-          setAccounts(depositoryAccounts);
-        })
-        .catch((err) => {
-          console.error('Failed to fetch accounts:', err);
-          setAccounts([]);
-        })
-        .finally(() => {
-          setAccountsLoading(false);
-        });
-    }
-  }, [isOpen]);
+  // Use generated query hook for fetching accounts (only when dialog is open)
+  const {
+    data: accountsData,
+    isLoading: accountsLoading,
+  } = useGetAccounts(undefined, {
+    query: {
+      enabled: isOpen,
+    },
+  });
 
-  // Reset form when dialog closes
-  useEffect(() => {
-    if (!isOpen) {
-      setFormData(initialFormData);
-      setErrors({});
-      setApiError(null);
-      setSelectedTemplate(null);
-    }
-  }, [isOpen]);
+  // Use generated mutation hook for creating savings goal
+  const createSavingsGoalMutation = useCreateSavingsGoal();
+
+  // Filter to depository accounts only
+  const accounts: Account[] = (accountsData?.accounts ?? [])
+    .filter((acc) => acc.type === 'depository') as Account[];
+
+  // Derive submitting state from mutation
+  const isSubmitting = createSavingsGoalMutation.isPending;
+
+  // Reset form state (called when dialog closes)
+  const resetForm = useCallback(() => {
+    setFormData(initialFormData);
+    setErrors({});
+    setApiError(null);
+    setSelectedTemplate(null);
+  }, []);
 
   const handleTemplateSelect = useCallback((template: GoalTemplate) => {
     setSelectedTemplate(template.id);
@@ -146,8 +139,6 @@ export function CreateSavingsGoalDialog({
         return;
       }
 
-      setIsSubmitting(true);
-
       try {
         const request: CreateSavingsGoalRequest = {
           name: formData.name.trim(),
@@ -157,25 +148,24 @@ export function CreateSavingsGoalDialog({
           deadline: formData.deadline || undefined,
         };
 
-        const newGoal = await createSavingsGoal(request);
-        onGoalCreated(newGoal);
+        const newGoal = await createSavingsGoalMutation.mutateAsync({ data: request });
+        onGoalCreated(newGoal as SavingsGoal);
       } catch (err) {
         setApiError(err instanceof Error ? err.message : 'Failed to create goal');
-      } finally {
-        setIsSubmitting(false);
       }
     },
-    [formData, validate, onGoalCreated]
+    [formData, validate, onGoalCreated, createSavingsGoalMutation]
   );
 
   // Handle dialog open state changes
   const handleOpenChange = useCallback(
     (open: boolean) => {
       if (!open) {
+        resetForm();
         onCancel();
       }
     },
-    [onCancel]
+    [onCancel, resetForm]
   );
 
   return (

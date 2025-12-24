@@ -1,643 +1,587 @@
 /**
- * CreateSavingsGoalDialog Tests
- * Issue #111: Goals Dashboard & Progress Visualization
+ * CreateSavingsGoalDialog Component Tests
+ * Issue #564: Frontend Test Coverage Improvement
  *
- * TDD RED Phase: Tests for savings goal creation dialog.
+ * Tests the savings goal creation dialog with form validation and API integration.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { CreateSavingsGoalDialog } from './CreateSavingsGoalDialog';
-import * as budgetsApi from '../api/budgetsApi';
-import * as plaidApi from '../../accounts/api/plaidApi';
-import type { Account } from '../../accounts/types';
-import type { SavingsGoal } from '../types';
-import { fillInputByLabel, selectOptionByLabel } from '@/test/utils/formTestHelpers';
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { CreateSavingsGoalDialog } from './CreateSavingsGoalDialog'
 
-// Mock APIs
-vi.mock('../api/budgetsApi');
-vi.mock('../../accounts/api/plaidApi');
+// Mock mutation and query hooks
+const mockMutateAsync = vi.fn()
+const mockUseCreateSavingsGoal = vi.fn()
+const mockUseGetAccounts = vi.fn()
 
-const mockAccounts: Account[] = [
-  {
-    id: 'acc-1',
-    linked_item_id: 'item-1',
-    user_id: 'user-1',
-    plaid_account_id: 'plaid-acc-1',
-    name: 'Checking Account',
-    type: 'depository',
-    subtype: 'checking',
-    mask: '1234',
-    current_balance: 5000,
-    currency_code: 'USD',
-    institution_name: 'Chase',
-    created_at: '2024-01-01T00:00:00Z',
-    updated_at: '2024-01-01T00:00:00Z',
-  },
-  {
-    id: 'acc-2',
-    linked_item_id: 'item-1',
-    user_id: 'user-1',
-    plaid_account_id: 'plaid-acc-2',
-    name: 'Savings Account',
-    type: 'depository',
-    subtype: 'savings',
-    mask: '5678',
-    current_balance: 10000,
-    currency_code: 'USD',
-    institution_name: 'Chase',
-    created_at: '2024-01-01T00:00:00Z',
-    updated_at: '2024-01-01T00:00:00Z',
-  },
-  {
-    id: 'acc-3',
-    linked_item_id: 'item-2',
-    user_id: 'user-1',
-    plaid_account_id: 'plaid-acc-3',
-    name: 'Credit Card',
-    type: 'credit',
-    subtype: 'credit card',
-    mask: '9999',
-    current_balance: -2000,
-    currency_code: 'USD',
-    institution_name: 'AmEx',
-    created_at: '2024-01-01T00:00:00Z',
-    updated_at: '2024-01-01T00:00:00Z',
-  },
-];
+vi.mock('@/api/generated/endpoints/savings-goals/savings-goals', () => ({
+  useCreateSavingsGoal: () => mockUseCreateSavingsGoal(),
+}))
 
-const mockCreatedGoal: SavingsGoal = {
-  id: 'goal-1',
-  user_id: 'user-1',
-  name: 'Vacation Fund',
-  description: 'Save for summer vacation',
-  target_amount: 5000,
-  current_amount: 0,
-  currency_code: 'USD',
-  account_id: 'acc-2',
-  deadline: '2025-06-01',
-  is_completed: false,
-  created_at: '2024-01-01T00:00:00Z',
-  updated_at: '2024-01-01T00:00:00Z',
-};
+vi.mock('@/api/generated/endpoints/accounts/accounts', () => ({
+  useGetAccounts: (_params: unknown, options: { query: { enabled: boolean } }) => mockUseGetAccounts(options),
+}))
+
+// Mock goal templates
+vi.mock('../goalTemplates', () => ({
+  GOAL_TEMPLATES: [
+    { id: 'emergency', name: 'Emergency Fund', defaultMonths: 12 },
+    { id: 'vacation', name: 'Vacation', defaultMonths: 6 },
+    { id: 'custom', name: 'Custom', defaultMonths: null },
+  ],
+  calculateDeadlineFromTemplate: (template: { id: string; defaultMonths: number | null }) => {
+    if (!template.defaultMonths) return null
+    const date = new Date()
+    date.setMonth(date.getMonth() + template.defaultMonths)
+    return date.toISOString().split('T')[0]
+  },
+}))
+
+// Mock accounts data
+const mockAccounts = [
+  { id: 'acc-1', name: 'Checking', type: 'depository', mask: '1234', institution_name: 'Test Bank' },
+  { id: 'acc-2', name: 'Savings', type: 'depository', mask: '5678', institution_name: 'Test Bank' },
+  { id: 'acc-3', name: 'Credit Card', type: 'credit', mask: '9012', institution_name: 'Test Bank' },
+]
+
+function renderWithQueryClient(ui: React.ReactNode) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+    },
+  })
+
+  return render(
+    <QueryClientProvider client={queryClient}>
+      {ui}
+    </QueryClientProvider>
+  )
+}
 
 describe('CreateSavingsGoalDialog', () => {
-  const mockOnCreate = vi.fn();
-  const mockOnCancel = vi.fn();
+  const mockOnCancel = vi.fn()
+  const mockOnGoalCreated = vi.fn()
 
   beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(plaidApi.fetchAccounts).mockResolvedValue({
-      accounts: mockAccounts,
-      total_count: mockAccounts.length,
-    });
-    vi.mocked(budgetsApi.createSavingsGoal).mockResolvedValue(mockCreatedGoal);
-  });
-
-  // ==========================================================================
-  // Rendering Tests
-  // ==========================================================================
+    vi.clearAllMocks()
+    mockUseCreateSavingsGoal.mockReturnValue({
+      mutateAsync: mockMutateAsync,
+      isPending: false,
+    })
+    mockUseGetAccounts.mockReturnValue({
+      data: { accounts: mockAccounts },
+      isLoading: false,
+    })
+  })
 
   describe('Rendering', () => {
-    it('renders dialog when isOpen is true', async () => {
-      render(
+    it('should render dialog when open', () => {
+      renderWithQueryClient(
         <CreateSavingsGoalDialog
           isOpen={true}
           onCancel={mockOnCancel}
-          onGoalCreated={mockOnCreate}
+          onGoalCreated={mockOnGoalCreated}
         />
-      );
+      )
 
-      await waitFor(() => {
-        expect(screen.getByRole('dialog')).toBeInTheDocument();
-      });
-      expect(screen.getByText('Create Savings Goal')).toBeInTheDocument();
-    });
+      expect(screen.getByText('Create Savings Goal')).toBeInTheDocument()
+    })
 
-    it('does not render dialog when isOpen is false', () => {
-      render(
+    it('should not render dialog when closed', () => {
+      renderWithQueryClient(
         <CreateSavingsGoalDialog
           isOpen={false}
           onCancel={mockOnCancel}
-          onGoalCreated={mockOnCreate}
+          onGoalCreated={mockOnGoalCreated}
         />
-      );
+      )
 
-      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    });
+      expect(screen.queryByText('Create Savings Goal')).not.toBeInTheDocument()
+    })
 
-    it('displays all required form fields', async () => {
-      render(
+    it('should render template options', () => {
+      renderWithQueryClient(
         <CreateSavingsGoalDialog
           isOpen={true}
           onCancel={mockOnCancel}
-          onGoalCreated={mockOnCreate}
+          onGoalCreated={mockOnGoalCreated}
         />
-      );
+      )
 
-      await waitFor(() => {
-        expect(screen.getByLabelText(/name/i)).toBeInTheDocument();
-      });
-      expect(screen.getByLabelText(/target amount/i)).toBeInTheDocument();
-      expect(screen.getByLabelText(/account/i)).toBeInTheDocument();
-      expect(screen.getByLabelText(/description/i)).toBeInTheDocument();
-      expect(screen.getByLabelText(/deadline/i)).toBeInTheDocument();
-    });
+      expect(screen.getByText('Emergency Fund')).toBeInTheDocument()
+      expect(screen.getByText('Vacation')).toBeInTheDocument()
+      expect(screen.getByText('Custom')).toBeInTheDocument()
+    })
 
-    it('displays goal templates', async () => {
-      render(
+    it('should render form fields', () => {
+      renderWithQueryClient(
         <CreateSavingsGoalDialog
           isOpen={true}
           onCancel={mockOnCancel}
-          onGoalCreated={mockOnCreate}
+          onGoalCreated={mockOnGoalCreated}
         />
-      );
+      )
 
-      await waitFor(() => {
-        expect(screen.getByText('Emergency Fund')).toBeInTheDocument();
-      });
-      expect(screen.getByText('Vacation Fund')).toBeInTheDocument();
-      expect(screen.getByText('Home Down Payment')).toBeInTheDocument();
-      expect(screen.getByText('Car Purchase')).toBeInTheDocument();
-    });
+      expect(screen.getByLabelText('Name')).toBeInTheDocument()
+      expect(screen.getByLabelText('Description')).toBeInTheDocument()
+      expect(screen.getByLabelText('Target Amount')).toBeInTheDocument()
+      expect(screen.getByLabelText('Account')).toBeInTheDocument()
+      expect(screen.getByLabelText('Deadline (optional)')).toBeInTheDocument()
+    })
 
-    it('only shows depository accounts in account selector', async () => {
-      render(
+    it('should render only depository accounts in dropdown', () => {
+      renderWithQueryClient(
         <CreateSavingsGoalDialog
           isOpen={true}
           onCancel={mockOnCancel}
-          onGoalCreated={mockOnCreate}
+          onGoalCreated={mockOnGoalCreated}
         />
-      );
+      )
 
-      await waitFor(() => {
-        expect(screen.getByLabelText(/account/i)).toBeInTheDocument();
-      });
+      const accountSelect = screen.getByLabelText('Account')
+      expect(accountSelect).toBeInTheDocument()
 
-      // Open the account dropdown
-      const accountSelect = screen.getByLabelText(/account/i);
-      await userEvent.click(accountSelect);
-
-      // Should see depository accounts
-      expect(screen.getByText(/Checking Account/)).toBeInTheDocument();
-      expect(screen.getByText(/Savings Account/)).toBeInTheDocument();
-
-      // Should NOT see credit account
-      expect(screen.queryByText(/Credit Card/)).not.toBeInTheDocument();
-    });
-  });
-
-  // ==========================================================================
-  // Template Selection Tests
-  // ==========================================================================
+      // Check that depository accounts are present
+      expect(screen.getByText(/Checking.*1234.*Test Bank/)).toBeInTheDocument()
+      expect(screen.getByText(/Savings.*5678.*Test Bank/)).toBeInTheDocument()
+    })
+  })
 
   describe('Template Selection', () => {
-    it('pre-fills form when template is selected', async () => {
-      const user = userEvent.setup({ delay: null });
-      render(
+    it('should update name when template selected', () => {
+      renderWithQueryClient(
         <CreateSavingsGoalDialog
           isOpen={true}
           onCancel={mockOnCancel}
-          onGoalCreated={mockOnCreate}
+          onGoalCreated={mockOnGoalCreated}
         />
-      );
+      )
 
-      await waitFor(() => {
-        expect(screen.getByText('Emergency Fund')).toBeInTheDocument();
-      });
+      fireEvent.click(screen.getByText('Emergency Fund'))
 
-      // Click on Emergency Fund template
-      await user.click(screen.getByText('Emergency Fund'));
+      const nameInput = screen.getByLabelText('Name') as HTMLInputElement
+      expect(nameInput.value).toBe('Emergency Fund')
+    })
 
-      // Name should be pre-filled
-      const nameInput = screen.getByLabelText(/name/i) as HTMLInputElement;
-      expect(nameInput.value).toBe('Emergency Fund');
-    });
-
-    it('allows editing pre-filled values after template selection', async () => {
-      const user = userEvent.setup({ delay: null });
-      render(
+    it('should not update name when Custom template selected', () => {
+      renderWithQueryClient(
         <CreateSavingsGoalDialog
           isOpen={true}
           onCancel={mockOnCancel}
-          onGoalCreated={mockOnCreate}
+          onGoalCreated={mockOnGoalCreated}
         />
-      );
+      )
 
-      await waitFor(() => {
-        expect(screen.getByText('Vacation Fund')).toBeInTheDocument();
-      });
+      // First set a custom name
+      const nameInput = screen.getByLabelText('Name') as HTMLInputElement
+      fireEvent.change(nameInput, { target: { value: 'My Custom Goal' } })
 
-      // Select template
-      await user.click(screen.getByText('Vacation Fund'));
+      // Select Custom template
+      fireEvent.click(screen.getByText('Custom'))
 
-      // Modify the name
-      const nameInput = screen.getByLabelText(/name/i);
-      await user.clear(nameInput);
-      await user.type(nameInput, 'Hawaii Trip 2025');
+      // Name should remain unchanged
+      expect(nameInput.value).toBe('My Custom Goal')
+    })
 
-      expect(nameInput).toHaveValue('Hawaii Trip 2025');
-    });
-  });
-
-  // ==========================================================================
-  // Validation Tests
-  // ==========================================================================
-
-  describe('Validation', () => {
-    it('shows error when name is empty on submit', async () => {
-      const user = userEvent.setup({ delay: null });
-      render(
+    it('should highlight selected template', () => {
+      renderWithQueryClient(
         <CreateSavingsGoalDialog
           isOpen={true}
           onCancel={mockOnCancel}
-          onGoalCreated={mockOnCreate}
+          onGoalCreated={mockOnGoalCreated}
         />
-      );
+      )
 
-      await waitFor(() => {
-        expect(screen.getByRole('button', { name: /create goal/i })).toBeInTheDocument();
-      });
+      const emergencyButton = screen.getByText('Emergency Fund').closest('button')
+      fireEvent.click(emergencyButton!)
 
-      // Try to submit without filling name
-      await user.click(screen.getByRole('button', { name: /create goal/i }));
+      expect(emergencyButton?.className).toContain('selected')
+    })
+  })
 
-      expect(screen.getByText(/name is required/i)).toBeInTheDocument();
-    });
-
-    it('shows error when target amount is zero or negative', async () => {
-      const user = userEvent.setup({ delay: null });
-      render(
+  describe('Form Input', () => {
+    it('should update form values on input change', () => {
+      renderWithQueryClient(
         <CreateSavingsGoalDialog
           isOpen={true}
           onCancel={mockOnCancel}
-          onGoalCreated={mockOnCreate}
+          onGoalCreated={mockOnGoalCreated}
         />
-      );
+      )
 
-      await waitFor(() => {
-        expect(screen.getByLabelText(/target amount/i)).toBeInTheDocument();
-      });
+      const nameInput = screen.getByLabelText('Name') as HTMLInputElement
+      const amountInput = screen.getByLabelText('Target Amount') as HTMLInputElement
 
-      // Fill name but enter 0 for amount
-      await user.type(screen.getByLabelText(/name/i), 'Test Goal');
-      await user.clear(screen.getByLabelText(/target amount/i));
-      await user.type(screen.getByLabelText(/target amount/i), '0');
+      fireEvent.change(nameInput, { target: { value: 'New Car' } })
+      fireEvent.change(amountInput, { target: { value: '15000' } })
 
-      await user.click(screen.getByRole('button', { name: /create goal/i }));
+      expect(nameInput.value).toBe('New Car')
+      expect(amountInput.value).toBe('15000')
+    })
 
-      expect(screen.getByText(/amount must be greater than 0/i)).toBeInTheDocument();
-    });
-
-    it('shows error when no account is selected', async () => {
-      const user = userEvent.setup({ delay: null });
-      render(
+    it('should update description field', () => {
+      renderWithQueryClient(
         <CreateSavingsGoalDialog
           isOpen={true}
           onCancel={mockOnCancel}
-          onGoalCreated={mockOnCreate}
+          onGoalCreated={mockOnGoalCreated}
         />
-      );
+      )
 
-      await waitFor(() => {
-        expect(screen.getByLabelText(/name/i)).toBeInTheDocument();
-      });
+      const descInput = screen.getByLabelText('Description') as HTMLTextAreaElement
+      fireEvent.change(descInput, { target: { value: 'For my dream vacation' } })
 
-      // Fill name and amount but not account
-      await user.type(screen.getByLabelText(/name/i), 'Test Goal');
-      await user.clear(screen.getByLabelText(/target amount/i));
-      await user.type(screen.getByLabelText(/target amount/i), '1000');
+      expect(descInput.value).toBe('For my dream vacation')
+    })
 
-      await user.click(screen.getByRole('button', { name: /create goal/i }));
-
-      expect(screen.getByText(/please select an account/i)).toBeInTheDocument();
-    });
-  });
-
-  // ==========================================================================
-  // Submission Tests
-  // ==========================================================================
-
-  describe('Submission', () => {
-    it('calls createSavingsGoal with correct payload on submit', async () => {
-      const user = userEvent.setup({ delay: null });
-      render(
+    it('should update account selection', () => {
+      renderWithQueryClient(
         <CreateSavingsGoalDialog
           isOpen={true}
           onCancel={mockOnCancel}
-          onGoalCreated={mockOnCreate}
+          onGoalCreated={mockOnGoalCreated}
         />
-      );
+      )
 
-      await waitFor(() => {
-        expect(screen.getByLabelText(/name/i)).toBeInTheDocument();
-      });
+      const accountSelect = screen.getByLabelText('Account') as HTMLSelectElement
+      fireEvent.change(accountSelect, { target: { value: 'acc-1' } })
 
-      // Fill form - same pattern as passing tests
-      await user.type(screen.getByLabelText(/name/i), 'Vacation Fund');
-      await user.clear(screen.getByLabelText(/target amount/i));
-      await user.type(screen.getByLabelText(/target amount/i), '5000');
+      expect(accountSelect.value).toBe('acc-1')
+    })
+  })
 
-      // Select account
-      const accountSelect = screen.getByLabelText(/account/i) as HTMLSelectElement;
-      await user.selectOptions(accountSelect, 'acc-2');
-
-      // Submit
-      await user.click(screen.getByRole('button', { name: /create goal/i }));
-
-      // API should be called with required fields (description and deadline are undefined when not provided)
-      await waitFor(() => {
-        expect(budgetsApi.createSavingsGoal).toHaveBeenCalledWith({
-          name: 'Vacation Fund',
-          description: undefined,
-          target_amount: 5000,
-          account_id: 'acc-2',
-          deadline: undefined,
-        });
-      });
-    }, 15000);
-
-    it('includes optional fields in payload when provided', async () => {
-      const user = userEvent.setup({ delay: null });
-      render(
+  describe('Form Validation', () => {
+    it('should show error when name is empty', async () => {
+      renderWithQueryClient(
         <CreateSavingsGoalDialog
           isOpen={true}
           onCancel={mockOnCancel}
-          onGoalCreated={mockOnCreate}
+          onGoalCreated={mockOnGoalCreated}
         />
-      );
+      )
+
+      fireEvent.click(screen.getByText('Create Goal'))
 
       await waitFor(() => {
-        expect(screen.getByLabelText(/name/i)).toBeInTheDocument();
-      });
+        expect(screen.getByText('Name is required')).toBeInTheDocument()
+      })
+    })
 
-      // Fill required fields
-      await user.type(screen.getByLabelText(/name/i), 'Vacation Fund');
-      await user.clear(screen.getByLabelText(/target amount/i));
-      await user.type(screen.getByLabelText(/target amount/i), '5000');
+    it('should show error when target amount is invalid', async () => {
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
 
-      // Fill optional fields
-      await user.type(screen.getByLabelText(/description/i), 'Save for summer vacation');
+      const nameInput = screen.getByLabelText('Name')
+      fireEvent.change(nameInput, { target: { value: 'Test Goal' } })
 
-      // Select account
-      const accountSelect = screen.getByLabelText(/account/i) as HTMLSelectElement;
-      await user.selectOptions(accountSelect, 'acc-2');
+      fireEvent.click(screen.getByText('Create Goal'))
 
-      // Submit
-      await user.click(screen.getByRole('button', { name: /create goal/i }));
-
-      // API should be called with description included
       await waitFor(() => {
-        expect(budgetsApi.createSavingsGoal).toHaveBeenCalledWith(
-          expect.objectContaining({
-            name: 'Vacation Fund',
-            description: 'Save for summer vacation',
-            target_amount: 5000,
+        expect(screen.getByText('Amount must be greater than 0')).toBeInTheDocument()
+      })
+    })
+
+    it('should show error when account not selected', async () => {
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      const nameInput = screen.getByLabelText('Name')
+      const amountInput = screen.getByLabelText('Target Amount')
+
+      fireEvent.change(nameInput, { target: { value: 'Test Goal' } })
+      fireEvent.change(amountInput, { target: { value: '1000' } })
+
+      fireEvent.click(screen.getByText('Create Goal'))
+
+      await waitFor(() => {
+        expect(screen.getByText('Please select an account')).toBeInTheDocument()
+      })
+    })
+
+    it('should clear error when field is corrected', async () => {
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      fireEvent.click(screen.getByText('Create Goal'))
+
+      await waitFor(() => {
+        expect(screen.getByText('Name is required')).toBeInTheDocument()
+      })
+
+      const nameInput = screen.getByLabelText('Name')
+      fireEvent.change(nameInput, { target: { value: 'Fixed Name' } })
+
+      expect(screen.queryByText('Name is required')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('Form Submission', () => {
+    it('should call mutateAsync on valid submission', async () => {
+      const newGoal = { id: 'goal-1', name: 'Test Goal', target_amount: 1000 }
+      mockMutateAsync.mockResolvedValueOnce(newGoal)
+
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Test Goal' } })
+      fireEvent.change(screen.getByLabelText('Target Amount'), { target: { value: '1000' } })
+      fireEvent.change(screen.getByLabelText('Account'), { target: { value: 'acc-1' } })
+
+      fireEvent.click(screen.getByText('Create Goal'))
+
+      await waitFor(() => {
+        expect(mockMutateAsync).toHaveBeenCalledWith({
+          data: {
+            name: 'Test Goal',
+            target_amount: 1000,
+            account_id: 'acc-1',
+            description: undefined,
+            deadline: undefined,
+          },
+        })
+      })
+    })
+
+    it('should call onGoalCreated after successful submission', async () => {
+      const newGoal = { id: 'goal-1', name: 'Test Goal', target_amount: 1000 }
+      mockMutateAsync.mockResolvedValueOnce(newGoal)
+
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Test Goal' } })
+      fireEvent.change(screen.getByLabelText('Target Amount'), { target: { value: '1000' } })
+      fireEvent.change(screen.getByLabelText('Account'), { target: { value: 'acc-1' } })
+
+      fireEvent.click(screen.getByText('Create Goal'))
+
+      await waitFor(() => {
+        expect(mockOnGoalCreated).toHaveBeenCalledWith(newGoal)
+      })
+    })
+
+    it('should show API error on submission failure', async () => {
+      mockMutateAsync.mockRejectedValueOnce(new Error('Network error'))
+
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Test Goal' } })
+      fireEvent.change(screen.getByLabelText('Target Amount'), { target: { value: '1000' } })
+      fireEvent.change(screen.getByLabelText('Account'), { target: { value: 'acc-1' } })
+
+      fireEvent.click(screen.getByText('Create Goal'))
+
+      await waitFor(() => {
+        expect(screen.getByText('Network error')).toBeInTheDocument()
+      })
+    })
+
+    it('should show Creating... when submitting', () => {
+      mockUseCreateSavingsGoal.mockReturnValue({
+        mutateAsync: mockMutateAsync,
+        isPending: true,
+      })
+
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      expect(screen.getByText('Creating...')).toBeInTheDocument()
+    })
+
+    it('should disable submit button when submitting', () => {
+      mockUseCreateSavingsGoal.mockReturnValue({
+        mutateAsync: mockMutateAsync,
+        isPending: true,
+      })
+
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      expect(screen.getByText('Creating...')).toBeDisabled()
+    })
+  })
+
+  describe('Dialog Actions', () => {
+    it('should call onCancel when Cancel button clicked', () => {
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      fireEvent.click(screen.getByText('Cancel'))
+
+      expect(mockOnCancel).toHaveBeenCalled()
+    })
+
+    it('should call onCancel when X button clicked', () => {
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      // Find the X button (close icon)
+      const closeButton = screen.getByRole('button', { name: '' })
+      fireEvent.click(closeButton)
+
+      expect(mockOnCancel).toHaveBeenCalled()
+    })
+  })
+
+  describe('Loading States', () => {
+    it('should show Loading accounts... when accounts are loading', () => {
+      mockUseGetAccounts.mockReturnValue({
+        data: null,
+        isLoading: true,
+      })
+
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      expect(screen.getByText('Loading accounts...')).toBeInTheDocument()
+    })
+
+    it('should disable account select when loading', () => {
+      mockUseGetAccounts.mockReturnValue({
+        data: null,
+        isLoading: true,
+      })
+
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      expect(screen.getByLabelText('Account')).toBeDisabled()
+    })
+
+    it('should show warning when no accounts available', () => {
+      mockUseGetAccounts.mockReturnValue({
+        data: { accounts: [] },
+        isLoading: false,
+      })
+
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      expect(screen.getByText('No savings accounts found. Link an account first.')).toBeInTheDocument()
+    })
+  })
+
+  describe('Edge Cases', () => {
+    it('should include description and deadline when provided', async () => {
+      const newGoal = { id: 'goal-1', name: 'Test', target_amount: 500 }
+      mockMutateAsync.mockResolvedValueOnce(newGoal)
+
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Vacation' } })
+      fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Beach trip' } })
+      fireEvent.change(screen.getByLabelText('Target Amount'), { target: { value: '2000' } })
+      fireEvent.change(screen.getByLabelText('Account'), { target: { value: 'acc-2' } })
+      fireEvent.change(screen.getByLabelText('Deadline (optional)'), { target: { value: '2025-12-31' } })
+
+      fireEvent.click(screen.getByText('Create Goal'))
+
+      await waitFor(() => {
+        expect(mockMutateAsync).toHaveBeenCalledWith({
+          data: {
+            name: 'Vacation',
+            description: 'Beach trip',
+            target_amount: 2000,
             account_id: 'acc-2',
-          })
-        );
-      });
-    }, 15000);
+            deadline: '2025-12-31',
+          },
+        })
+      })
+    })
 
-    it('shows loading state during API call', async () => {
-      // Make API call slow - use longer delay to ensure loading state is visible
-      vi.mocked(budgetsApi.createSavingsGoal).mockImplementation(
-        () => new Promise((resolve) => setTimeout(() => resolve(mockCreatedGoal), 3000))
-      );
+    it('should handle non-Error rejection', async () => {
+      mockMutateAsync.mockRejectedValueOnce('Unknown error')
 
-      const user = userEvent.setup({ delay: null });
-      render(
+      renderWithQueryClient(
         <CreateSavingsGoalDialog
           isOpen={true}
           onCancel={mockOnCancel}
-          onGoalCreated={mockOnCreate}
+          onGoalCreated={mockOnGoalCreated}
         />
-      );
+      )
+
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Test' } })
+      fireEvent.change(screen.getByLabelText('Target Amount'), { target: { value: '100' } })
+      fireEvent.change(screen.getByLabelText('Account'), { target: { value: 'acc-1' } })
+
+      fireEvent.click(screen.getByText('Create Goal'))
 
       await waitFor(() => {
-        expect(screen.getByLabelText(/name/i)).toBeInTheDocument();
-      });
-
-      // Fill minimal valid form
-      await user.type(screen.getByLabelText(/name/i), 'Test Goal');
-      await user.clear(screen.getByLabelText(/target amount/i));
-      await user.type(screen.getByLabelText(/target amount/i), '1000');
-      const accountSelect = screen.getByLabelText(/account/i) as HTMLSelectElement;
-      await user.selectOptions(accountSelect, 'acc-1');
-
-      // Submit
-      await user.click(screen.getByRole('button', { name: /create goal/i }));
-
-      // Should show loading state
-      await waitFor(() => {
-        expect(screen.getByText(/creating/i)).toBeInTheDocument();
-      });
-    }, 15000);
-
-    it('closes dialog and calls onGoalCreated on successful creation', async () => {
-      const user = userEvent.setup({ delay: null });
-      render(
-        <CreateSavingsGoalDialog
-          isOpen={true}
-          onCancel={mockOnCancel}
-          onGoalCreated={mockOnCreate}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByLabelText(/name/i)).toBeInTheDocument();
-      });
-
-      // Fill form
-      await user.type(screen.getByLabelText(/name/i), 'Vacation Fund');
-      await user.clear(screen.getByLabelText(/target amount/i));
-      await user.type(screen.getByLabelText(/target amount/i), '5000');
-      const accountSelect = screen.getByLabelText(/account/i) as HTMLSelectElement;
-      await user.selectOptions(accountSelect, 'acc-2');
-
-      // Submit
-      await user.click(screen.getByRole('button', { name: /create goal/i }));
-
-      await waitFor(() => {
-        expect(mockOnCreate).toHaveBeenCalledWith(mockCreatedGoal);
-      });
-    }, 15000);
-
-    it('shows error message on API failure', async () => {
-      vi.mocked(budgetsApi.createSavingsGoal).mockRejectedValue(
-        new Error('Failed to create goal')
-      );
-
-      const user = userEvent.setup({ delay: null });
-      render(
-        <CreateSavingsGoalDialog
-          isOpen={true}
-          onCancel={mockOnCancel}
-          onGoalCreated={mockOnCreate}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByLabelText(/name/i)).toBeInTheDocument();
-      });
-
-      // Fill form using fast utilities
-      fillInputByLabel(/name/i, 'Test Goal');
-      fillInputByLabel(/target amount/i, '1000');
-      selectOptionByLabel(/account/i, 'acc-1');
-
-      // Submit
-      await user.click(screen.getByRole('button', { name: /create goal/i }));
-
-      await waitFor(() => {
-        expect(screen.getByText(/failed to create goal/i)).toBeInTheDocument();
-      });
-    }, 15000);
-  });
-
-  // ==========================================================================
-  // Cancel Tests
-  // ==========================================================================
-
-  describe('Cancel', () => {
-    it('calls onCancel when cancel button clicked', async () => {
-      const user = userEvent.setup({ delay: null });
-      render(
-        <CreateSavingsGoalDialog
-          isOpen={true}
-          onCancel={mockOnCancel}
-          onGoalCreated={mockOnCreate}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByRole('button', { name: /cancel/i })).toBeInTheDocument();
-      });
-
-      await user.click(screen.getByRole('button', { name: /cancel/i }));
-
-      expect(mockOnCancel).toHaveBeenCalled();
-    });
-
-    it('resets form when reopened after cancel', async () => {
-      const { rerender } = render(
-        <CreateSavingsGoalDialog
-          isOpen={true}
-          onCancel={mockOnCancel}
-          onGoalCreated={mockOnCreate}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByLabelText(/name/i)).toBeInTheDocument();
-      });
-
-      // Fill some data using fast utility
-      fillInputByLabel(/name/i, 'Test Goal');
-
-      // Close dialog (simulate cancel changing isOpen to false)
-      rerender(
-        <CreateSavingsGoalDialog
-          isOpen={false}
-          onCancel={mockOnCancel}
-          onGoalCreated={mockOnCreate}
-        />
-      );
-
-      // Reopen dialog
-      rerender(
-        <CreateSavingsGoalDialog
-          isOpen={true}
-          onCancel={mockOnCancel}
-          onGoalCreated={mockOnCreate}
-        />
-      );
-
-      await waitFor(() => {
-        const nameInput = screen.getByLabelText(/name/i) as HTMLInputElement;
-        expect(nameInput.value).toBe('');
-      });
-    });
-  });
-
-  // ==========================================================================
-  // Issue #460: Dialog Close Behavior
-  // ==========================================================================
-
-  describe('Dialog Close Behavior (Issue #460)', () => {
-    it('does not close when clicking outside the dialog (on backdrop)', async () => {
-      const user = userEvent.setup({ delay: null });
-      render(
-        <CreateSavingsGoalDialog
-          isOpen={true}
-          onCancel={mockOnCancel}
-          onGoalCreated={mockOnCreate}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByRole('dialog')).toBeInTheDocument();
-      });
-
-      // Click on the backdrop (the overlay element)
-      // The backdrop is the element with bg-black/25 class
-      const backdrop = document.querySelector('.fixed.inset-0.bg-black\\/25');
-      if (backdrop) {
-        await user.click(backdrop);
-      }
-
-      // onCancel should NOT have been called
-      expect(mockOnCancel).not.toHaveBeenCalled();
-
-      // Dialog should still be visible
-      expect(screen.getByRole('dialog')).toBeInTheDocument();
-    });
-
-    it('closes when X button is clicked', async () => {
-      const user = userEvent.setup({ delay: null });
-      render(
-        <CreateSavingsGoalDialog
-          isOpen={true}
-          onCancel={mockOnCancel}
-          onGoalCreated={mockOnCreate}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByRole('dialog')).toBeInTheDocument();
-      });
-
-      // Find and click the X button (it's a button with XMarkIcon)
-      const closeButtons = screen.getAllByRole('button');
-      const xButton = closeButtons.find(btn =>
-        btn.querySelector('svg') && !btn.textContent?.includes('Cancel') && !btn.textContent?.includes('Create')
-      );
-
-      if (xButton) {
-        await user.click(xButton);
-      }
-
-      expect(mockOnCancel).toHaveBeenCalled();
-    });
-
-    it('closes when Cancel button is clicked', async () => {
-      const user = userEvent.setup({ delay: null });
-      render(
-        <CreateSavingsGoalDialog
-          isOpen={true}
-          onCancel={mockOnCancel}
-          onGoalCreated={mockOnCreate}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByRole('button', { name: /cancel/i })).toBeInTheDocument();
-      });
-
-      await user.click(screen.getByRole('button', { name: /cancel/i }));
-
-      expect(mockOnCancel).toHaveBeenCalled();
-    });
-  });
-});
+        expect(screen.getByText('Failed to create goal')).toBeInTheDocument()
+      })
+    })
+  })
+})

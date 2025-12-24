@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { toast } from 'sonner'
-import { updateProfile } from './api/profileApi'
+import { useUpdateUserProfile } from '@/api/generated/endpoints/profile/profile'
 import { REGIONS, getRegionWithFlag } from '../../config/regions'
 import {
   Dialog,
@@ -19,19 +19,18 @@ interface ProfileFormProps {
 }
 
 export function ProfileForm({ user, onProfileUpdate }: ProfileFormProps) {
-  const [submitting, setSubmitting] = useState(false)
   const [validationError, setValidationError] = useState<string | null>(null)
   const [showRegionConfirm, setShowRegionConfirm] = useState(false)
 
-  // Form state
+  // Use the generated mutation hook
+  const updateProfileMutation = useUpdateUserProfile()
+  const submitting = updateProfileMutation.isPending
+
+  // Form state - initialized from user prop
+  // Note: If user prop can change (e.g., after profile update elsewhere),
+  // add key={user.id} at the parent component to force remount
   const [email, setEmail] = useState(user.email)
   const [primaryRegion, setPrimaryRegion] = useState(user.primary_region)
-
-  // Update form state when user prop changes
-  useEffect(() => {
-    setEmail(user.email)
-    setPrimaryRegion(user.primary_region)
-  }, [user.email, user.primary_region])
 
   // Check if form has changes
   const hasChanges =
@@ -56,40 +55,41 @@ export function ProfileForm({ user, onProfileUpdate }: ProfileFormProps) {
   }
 
   async function performSave() {
-    try {
-      setSubmitting(true)
+    // Build update data - only send changed fields
+    const updateData: UpdateProfileRequest = {}
 
-      // Build update data - only send changed fields
-      const updateData: UpdateProfileRequest = {}
-
-      if (email !== user.email) {
-        updateData.email = email
-      }
-
-      if (primaryRegion !== user.primary_region) {
-        // When updating region, include email as well
-        updateData.email = email
-        updateData.primary_region = primaryRegion
-      }
-
-      const updatedUser = await updateProfile(updateData)
-
-      // Update form state with saved values
-      setEmail(updatedUser.email)
-      setPrimaryRegion(updatedUser.primary_region)
-
-      // Show success toast
-      toast.success('Profile updated successfully!')
-
-      // Notify parent component
-      onProfileUpdate?.(updatedUser)
-    } catch (err) {
-      console.error('Failed to update profile:', err)
-      toast.error('Failed to update profile. Please try again.')
-    } finally {
-      setSubmitting(false)
-      setShowRegionConfirm(false)
+    if (email !== user.email) {
+      updateData.email = email
     }
+
+    if (primaryRegion !== user.primary_region) {
+      // When updating region, include email as well
+      updateData.email = email
+      updateData.primary_region = primaryRegion
+    }
+
+    updateProfileMutation.mutate(
+      { data: updateData },
+      {
+        onSuccess: (updatedUser) => {
+          // Update form state with saved values
+          setEmail(updatedUser.email)
+          setPrimaryRegion(updatedUser.primary_region)
+
+          // Show success toast
+          toast.success('Profile updated successfully!')
+
+          // Notify parent component
+          onProfileUpdate?.(updatedUser)
+          setShowRegionConfirm(false)
+        },
+        onError: (err) => {
+          console.error('Failed to update profile:', err)
+          toast.error('Failed to update profile. Please try again.')
+          setShowRegionConfirm(false)
+        },
+      }
+    )
   }
 
   async function handleSubmit(e: React.FormEvent) {

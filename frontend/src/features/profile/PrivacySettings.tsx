@@ -1,5 +1,8 @@
-import { useState, useEffect } from 'react'
-import { fetchPrivacySettings, updatePrivacySettings } from './api/privacyApi'
+import { useState, useMemo } from 'react'
+import {
+  useGetPrivacySettings,
+  useUpdatePrivacySettings,
+} from '@/api/generated/endpoints/privacy/privacy'
 import type { PrivacySettings as PrivacySettingsType, UpdatePrivacySettingsRequest } from './types'
 import { DeleteAccountSection } from '../deletion/components/DeleteAccountSection'
 import './PrivacySettings.css'
@@ -9,40 +12,36 @@ interface PrivacySettingsProps {
 }
 
 export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
-  const [settings, setSettings] = useState<PrivacySettingsType | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [submitting, setSubmitting] = useState(false)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
-  // Local form state (modified values)
-  const [formState, setFormState] = useState<Partial<PrivacySettingsType>>({})
+  // Use generated query hook for loading settings
+  const {
+    data: settings,
+    isLoading: loading,
+    error: queryError,
+    refetch,
+  } = useGetPrivacySettings()
 
-  // Load privacy settings on mount
-  useEffect(() => {
-    loadSettings()
-  }, [])
+  // Use generated mutation hook for updating settings
+  const updateMutation = useUpdatePrivacySettings()
 
-  async function loadSettings() {
-    try {
-      setLoading(true)
-      setError(null)
-      const data = await fetchPrivacySettings()
-      setSettings(data)
-      // Initialize form state with loaded settings
-      setFormState(data)
-    } catch (err) {
-      console.error('Failed to load privacy settings:', err)
-      setError('Failed to load privacy settings. Please try again.')
-    } finally {
-      setLoading(false)
-    }
-  }
+  // Track only user modifications (not the full state)
+  const [modifications, setModifications] = useState<Partial<PrivacySettingsType>>({})
+
+  // Derive form state from settings merged with user modifications
+  const formState = useMemo<Partial<PrivacySettingsType>>(() => ({
+    ...(settings as PrivacySettingsType | undefined),
+    ...modifications,
+  }), [settings, modifications])
+
+  // Compute loading error message
+  const error = queryError ? 'Failed to load privacy settings. Please try again.' : saveError
 
   function handleToggle(field: keyof PrivacySettingsType) {
-    setFormState(prev => ({
+    setModifications(prev => ({
       ...prev,
-      [field]: !(prev[field] as boolean),
+      [field]: !(formState[field] as boolean),
     }))
     // Clear success message when user makes changes
     setSuccessMessage(null)
@@ -84,25 +83,25 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
     }
 
     try {
-      setSubmitting(true)
-      setError(null)
+      setSaveError(null)
       setSuccessMessage(null)
 
-      const updatedSettings = await updatePrivacySettings(updates)
+      const updatedSettings = await updateMutation.mutateAsync({ data: updates })
 
-      setSettings(updatedSettings)
-      setFormState(updatedSettings)
+      // Clear modifications since they're now saved
+      setModifications({})
       setSuccessMessage('Settings saved successfully!')
 
       // Notify parent component
-      onSettingsChange?.(updatedSettings)
+      onSettingsChange?.(updatedSettings as PrivacySettingsType)
     } catch (err) {
       console.error('Failed to save privacy settings:', err)
-      setError('Failed to save privacy settings. Please try again.')
-    } finally {
-      setSubmitting(false)
+      setSaveError('Failed to save privacy settings. Please try again.')
     }
   }
+
+  // Derive submitting state from mutation
+  const submitting = updateMutation.isPending
 
   if (loading) {
     return (
@@ -116,7 +115,7 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
     return (
       <div className="privacy-settings">
         <p className="error">{error}</p>
-        <button onClick={loadSettings}>Retry</button>
+        <button onClick={() => refetch()}>Retry</button>
       </div>
     )
   }

@@ -1,22 +1,23 @@
 /**
  * useBudgets Hook
+ * Issue #564: Migrated to generated React Query hooks
  *
  * React hook for budget CRUD operations.
- *
- * TDD GREEN: Implementation to pass all tests.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
-  fetchBudgets,
-  createBudget as apiCreateBudget,
-  updateBudget as apiUpdateBudget,
-  deleteBudget as apiDeleteBudget,
-  fetchAvailableCategories,
-  addBudgetCategory,
-  updateBudgetCategory,
-  deleteBudgetCategory,
-} from '../api/budgetsApi';
+  useGetBudgets,
+  useCreateBudget as useCreateBudgetMutation,
+  useUpdateBudget as useUpdateBudgetMutation,
+  useDeleteBudget as useDeleteBudgetMutation,
+  useAddBudgetCategory,
+  useUpdateBudgetCategory,
+  useDeleteBudgetCategory,
+  getGetBudgetsQueryKey,
+  getAvailableCategories,
+} from '@/api/generated/endpoints/budgets/budgets';
 import type {
   Budget,
   BudgetCategory,
@@ -48,107 +49,98 @@ export interface UseBudgetsResult {
  * Hook for managing budgets with full CRUD operations
  *
  * @returns Object containing budgets data, loading state, error, and CRUD functions
- *
- * @example
- * ```tsx
- * function BudgetsList() {
- *   const {
- *     budgets,
- *     loading,
- *     error,
- *     createBudget,
- *     updateBudget,
- *     deleteBudget,
- *     refetch
- *   } = useBudgets();
- *
- *   if (loading) return <LoadingSpinner />;
- *   if (error) return <ErrorMessage error={error} onRetry={refetch} />;
- *
- *   return (
- *     <>
- *       {budgets.map(budget => <BudgetCard key={budget.id} data={budget} />)}
- *     </>
- *   );
- * }
- * ```
  */
 export function useBudgets(): UseBudgetsResult {
-  const [budgets, setBudgets] = useState<Budget[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<Error | null>(null);
+  const queryClient = useQueryClient();
 
-  // Load budgets function
-  const loadBudgets = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const result = await fetchBudgets();
-      setBudgets(result);
-    } catch (err) {
-      setError(err instanceof Error ? err : new Error('Failed to fetch budgets'));
-      setBudgets([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  // Query for fetching budgets
+  const {
+    data,
+    isLoading,
+    error: queryError,
+    refetch: queryRefetch,
+  } = useGetBudgets({
+    query: {
+      staleTime: 30 * 1000, // 30 seconds
+    },
+  });
 
-  // Initial load
-  useEffect(() => {
-    loadBudgets();
-  }, [loadBudgets]);
+  // Convert error to Error instance
+  const error = queryError
+    ? queryError instanceof Error
+      ? queryError
+      : new Error('Failed to fetch budgets')
+    : null;
+
+  // Convert generated type to local type (safely handle null/undefined)
+  const budgets: Budget[] = useMemo(() => {
+    if (!data) return [];
+    return (Array.isArray(data) ? data : []) as unknown as Budget[];
+  }, [data]);
+
+  // Mutation hooks
+  const createMutation = useCreateBudgetMutation();
+  const updateMutation = useUpdateBudgetMutation();
+  const deleteMutation = useDeleteBudgetMutation();
+  const addCategoryMutation = useAddBudgetCategory();
+  const updateCategoryMutation = useUpdateBudgetCategory();
+  const deleteCategoryMutation = useDeleteBudgetCategory();
 
   // Refetch function
   const refetch = useCallback(async () => {
-    await loadBudgets();
-  }, [loadBudgets]);
+    await queryClient.invalidateQueries({
+      queryKey: getGetBudgetsQueryKey(),
+    });
+    await queryRefetch();
+  }, [queryClient, queryRefetch]);
 
   // Create budget
-  const createBudget = useCallback(async (req: CreateBudgetRequest): Promise<Budget> => {
-    const newBudget = await apiCreateBudget(req);
-    setBudgets((prev) => [...prev, newBudget]);
-    return newBudget;
-  }, []);
+  const createBudget = useCallback(
+    async (req: CreateBudgetRequest): Promise<Budget> => {
+      const result = await createMutation.mutateAsync({ data: req as never });
+      await refetch();
+      return result as unknown as Budget;
+    },
+    [createMutation, refetch]
+  );
 
   // Update budget
   const updateBudget = useCallback(
     async (id: string, req: UpdateBudgetRequest): Promise<Budget> => {
-      const updatedBudget = await apiUpdateBudget(id, req);
-      setBudgets((prev) => prev.map((b) => (b.id === id ? updatedBudget : b)));
-      return updatedBudget;
+      const result = await updateMutation.mutateAsync({ id, data: req as never });
+      await refetch();
+      return result as unknown as Budget;
     },
-    []
+    [updateMutation, refetch]
   );
 
   // Delete budget
-  const deleteBudget = useCallback(async (id: string): Promise<void> => {
-    await apiDeleteBudget(id);
-    setBudgets((prev) => prev.filter((b) => b.id !== id));
-  }, []);
+  const deleteBudget = useCallback(
+    async (id: string): Promise<void> => {
+      await deleteMutation.mutateAsync({ id });
+      await refetch();
+    },
+    [deleteMutation, refetch]
+  );
 
-  // Get available categories
-  const getAvailableCategories = useCallback(async (): Promise<string[]> => {
-    return fetchAvailableCategories();
+  // Get available categories (uses the generated function directly)
+  // Generated type is string[] | null (not { categories: string[] })
+  const getAvailableCategoriesFunc = useCallback(async (): Promise<string[]> => {
+    const result = await getAvailableCategories();
+    return result ?? [];
   }, []);
 
   // Add category to budget
   const addCategory = useCallback(
     async (budgetId: string, req: CreateBudgetCategoryRequest): Promise<BudgetCategory> => {
-      const newCategory = await addBudgetCategory(budgetId, req);
-      setBudgets((prev) =>
-        prev.map((b) => {
-          if (b.id === budgetId) {
-            return {
-              ...b,
-              categories: [...(b.categories || []), newCategory],
-            };
-          }
-          return b;
-        })
-      );
-      return newCategory;
+      const result = await addCategoryMutation.mutateAsync({
+        id: budgetId,
+        data: req as never,
+      });
+      await refetch();
+      return result as unknown as BudgetCategory;
     },
-    []
+    [addCategoryMutation, refetch]
   );
 
   // Update category in budget
@@ -158,53 +150,35 @@ export function useBudgets(): UseBudgetsResult {
       categoryId: string,
       req: UpdateBudgetCategoryRequest
     ): Promise<BudgetCategory> => {
-      const updatedCategory = await updateBudgetCategory(budgetId, categoryId, req);
-      setBudgets((prev) =>
-        prev.map((b) => {
-          if (b.id === budgetId) {
-            return {
-              ...b,
-              categories: (b.categories || []).map((c) =>
-                c.id === categoryId ? updatedCategory : c
-              ),
-            };
-          }
-          return b;
-        })
-      );
-      return updatedCategory;
+      const result = await updateCategoryMutation.mutateAsync({
+        id: budgetId,
+        categoryId,
+        data: req as never,
+      });
+      await refetch();
+      return result as unknown as BudgetCategory;
     },
-    []
+    [updateCategoryMutation, refetch]
   );
 
   // Delete category from budget
   const deleteCategory = useCallback(
     async (budgetId: string, categoryId: string): Promise<void> => {
-      await deleteBudgetCategory(budgetId, categoryId);
-      setBudgets((prev) =>
-        prev.map((b) => {
-          if (b.id === budgetId) {
-            return {
-              ...b,
-              categories: (b.categories || []).filter((c) => c.id !== categoryId),
-            };
-          }
-          return b;
-        })
-      );
+      await deleteCategoryMutation.mutateAsync({ id: budgetId, categoryId });
+      await refetch();
     },
-    []
+    [deleteCategoryMutation, refetch]
   );
 
   return {
     budgets,
-    loading,
+    loading: isLoading,
     error,
     refetch,
     createBudget,
     updateBudget,
     deleteBudget,
-    getAvailableCategories,
+    getAvailableCategories: getAvailableCategoriesFunc,
     addCategory,
     updateCategory,
     deleteCategory,

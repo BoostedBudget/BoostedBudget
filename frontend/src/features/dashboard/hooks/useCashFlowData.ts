@@ -1,12 +1,19 @@
 /**
  * Cash Flow Data Hook
  * Issue #354: Cash Flow Analysis & Income/Expense Visualization
+ * Issue #564: Migrated to generated React Query hooks
  *
  * Provides cash flow data fetching with loading and error states.
  */
 
-import { useState, useEffect, useCallback } from 'react';
-import { getCashFlowSummary, getCashFlowHistory } from '../api/analyticsApi';
+import { useMemo, useCallback } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import {
+  useGetCashFlowSummary as useGetCashFlowSummaryQuery,
+  useGetCashFlowHistory as useGetCashFlowHistoryQuery,
+  getGetCashFlowSummaryQueryKey,
+  getGetCashFlowHistoryQueryKey,
+} from '@/api/generated/endpoints/analytics/analytics';
 import type { CashFlowSummary, CashFlowHistory, CashFlowFilters } from '../types';
 
 interface UseCashFlowDataOptions {
@@ -35,34 +42,64 @@ export function useCashFlowSummary(
   options: UseCashFlowDataOptions
 ): UseCashFlowSummaryResult {
   const { filters, enabled = true } = options;
-  const [data, setData] = useState<CashFlowSummary | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
-  const fetchData = useCallback(async () => {
-    if (!enabled || !filters.startDate || !filters.endDate) {
-      return;
+  // Convert filters to API params
+  const params = useMemo(() => {
+    if (!filters.startDate || !filters.endDate) {
+      return undefined;
     }
+    return {
+      start_date: filters.startDate,
+      end_date: filters.endDate,
+      account_types: filters.accountTypes?.join(','),
+    };
+  }, [filters]);
 
-    setLoading(true);
-    setError(null);
+  const shouldFetch = enabled && !!params;
 
-    try {
-      const result = await getCashFlowSummary(filters);
-      setData(result);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch cash flow summary');
-      setData(null);
-    } finally {
-      setLoading(false);
+  const {
+    data: queryData,
+    isLoading,
+    error: queryError,
+    refetch: queryRefetch,
+  } = useGetCashFlowSummaryQuery(params!, {
+    query: {
+      enabled: shouldFetch,
+      staleTime: 30 * 1000, // 30 seconds
+    },
+  });
+
+  // Convert query data to local type
+  const data = useMemo<CashFlowSummary | null>(() => {
+    if (!queryData) return null;
+    return queryData as unknown as CashFlowSummary;
+  }, [queryData]);
+
+  // Convert error to string
+  const error = useMemo<string | null>(() => {
+    if (!queryError) return null;
+    return queryError instanceof Error
+      ? queryError.message
+      : 'Failed to fetch cash flow summary';
+  }, [queryError]);
+
+  // Refetch function
+  const refetch = useCallback(async () => {
+    if (params) {
+      await queryClient.invalidateQueries({
+        queryKey: getGetCashFlowSummaryQueryKey(params),
+      });
+      await queryRefetch();
     }
-  }, [filters, enabled]);
+  }, [queryClient, queryRefetch, params]);
 
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-
-  return { data, loading, error, refetch: fetchData };
+  return {
+    data,
+    loading: shouldFetch ? isLoading : false,
+    error,
+    refetch,
+  };
 }
 
 /**
@@ -72,32 +109,63 @@ export function useCashFlowHistory(
   options: UseCashFlowDataOptions
 ): UseCashFlowHistoryResult {
   const { filters, enabled = true } = options;
-  const [data, setData] = useState<CashFlowHistory | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
-  const fetchData = useCallback(async () => {
-    if (!enabled || !filters.startDate || !filters.endDate) {
-      return;
+  // Convert filters to API params
+  const params = useMemo(() => {
+    if (!filters.startDate || !filters.endDate) {
+      return undefined;
     }
+    return {
+      start_date: filters.startDate,
+      end_date: filters.endDate,
+      account_types: filters.accountTypes?.join(','),
+      grouping: filters.grouping,
+    };
+  }, [filters]);
 
-    setLoading(true);
-    setError(null);
+  const shouldFetch = enabled && !!params;
 
-    try {
-      const result = await getCashFlowHistory(filters);
-      setData(result);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch cash flow history');
-      setData(null);
-    } finally {
-      setLoading(false);
+  const {
+    data: queryData,
+    isLoading,
+    error: queryError,
+    refetch: queryRefetch,
+  } = useGetCashFlowHistoryQuery(params!, {
+    query: {
+      enabled: shouldFetch,
+      staleTime: 30 * 1000, // 30 seconds
+    },
+  });
+
+  // Convert query data to local type
+  const data = useMemo<CashFlowHistory | null>(() => {
+    if (!queryData) return null;
+    return queryData as unknown as CashFlowHistory;
+  }, [queryData]);
+
+  // Convert error to string
+  const error = useMemo<string | null>(() => {
+    if (!queryError) return null;
+    return queryError instanceof Error
+      ? queryError.message
+      : 'Failed to fetch cash flow history';
+  }, [queryError]);
+
+  // Refetch function
+  const refetch = useCallback(async () => {
+    if (params) {
+      await queryClient.invalidateQueries({
+        queryKey: getGetCashFlowHistoryQueryKey(params),
+      });
+      await queryRefetch();
     }
-  }, [filters, enabled]);
+  }, [queryClient, queryRefetch, params]);
 
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-
-  return { data, loading, error, refetch: fetchData };
+  return {
+    data,
+    loading: shouldFetch ? isLoading : false,
+    error,
+    refetch,
+  };
 }

@@ -1,7 +1,10 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { usePlaidLink, PlaidLinkOnSuccessMetadata } from 'react-plaid-link'
-import { fetchLinkToken, exchangePublicToken } from './api/plaidApi'
+import {
+  useCreateLinkToken,
+  useExchangePublicToken,
+} from '@/api/generated/endpoints/plaid/plaid'
 import type { ExchangePublicTokenResponse } from './types'
 import './PlaidLinkButton.css'
 
@@ -59,7 +62,13 @@ export function PlaidLinkButton({ onSuccess, onExit, className, disabled = false
   const [linkToken, setLinkToken] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [exchanging, setExchanging] = useState(false)
+
+  // Use generated mutation hooks
+  const createLinkTokenMutation = useCreateLinkToken()
+  const exchangePublicTokenMutation = useExchangePublicToken()
+
+  // Derive exchanging state from mutation
+  const exchanging = exchangePublicTokenMutation.isPending
 
   // Fetch link token on mount (eager loading for better UX)
   useEffect(() => {
@@ -67,7 +76,7 @@ export function PlaidLinkButton({ onSuccess, onExit, className, disabled = false
       try {
         setLoading(true)
         setError(null)
-        const response = await fetchLinkToken()
+        const response = await createLinkTokenMutation.mutateAsync()
         setLinkToken(response.link_token)
       } catch (err) {
         console.error('Failed to fetch link token:', err)
@@ -78,30 +87,30 @@ export function PlaidLinkButton({ onSuccess, onExit, className, disabled = false
     }
 
     loadLinkToken()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Handle successful Plaid Link flow
   const handleOnSuccess = async (public_token: string, metadata: PlaidLinkOnSuccessMetadata) => {
     try {
-      setExchanging(true)
       setError(null)
 
-      const response = await exchangePublicToken({
-        public_token,
-        institution_id: metadata.institution?.institution_id || '',
-        institution_name: metadata.institution?.name || '',
+      const response = await exchangePublicTokenMutation.mutateAsync({
+        data: {
+          public_token,
+          institution_id: metadata.institution?.institution_id || '',
+          institution_name: metadata.institution?.name || '',
+        },
       })
 
       // Notify parent component if callback provided
-      onSuccess?.(response)
+      onSuccess?.(response as ExchangePublicTokenResponse)
 
       // Navigate to accounts page
       navigate('/accounts')
     } catch (err) {
       console.error('Failed to exchange public token:', err)
       setError(mapErrorToMessage(err))
-    } finally {
-      setExchanging(false)
     }
   }
 

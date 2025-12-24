@@ -6,10 +6,10 @@
  * Issue #529: Transaction page filtering
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { ChevronDownIcon, XMarkIcon, FunnelIcon } from '@heroicons/react/24/outline'
-import { fetchAccounts } from '../../accounts/api/plaidApi'
-import { fetchPlaidCategories } from '../../categories/api/categoriesApi'
+import { useGetAccounts } from '@/api/generated/endpoints/accounts/accounts'
+import { useGetPlaidCategories } from '@/api/generated/endpoints/categories/categories'
 import {
   Sheet,
   SheetContent,
@@ -18,7 +18,6 @@ import {
   SheetFooter,
   SheetTrigger,
 } from '@/components/ui/sheet'
-import type { Account } from '../../accounts/types'
 import type { TransactionFilters, DatePreset, StatusFilter } from '../types'
 import {
   TransactionAccountFilter,
@@ -45,6 +44,82 @@ interface TransactionFilterPanelProps {
   onClearFilter: (key: keyof TransactionFilters) => void
   onClearAllFilters: () => void
   disabled?: boolean
+}
+
+// Props interface for FilterPillsSection component
+interface FilterPillsSectionProps {
+  dateDisplayValue: string | null
+  accountsDisplayValue: string | null
+  categoriesDisplayValue: string | null
+  typeDisplayValue: string | null
+  amountDisplayValue: string | null
+  statusDisplayValue: string | null
+  onDatePresetChange: (preset: DatePreset) => void
+  onClearFilter: (key: keyof TransactionFilters) => void
+  onStatusFilterChange: (status: StatusFilter) => void
+}
+
+// Extracted module-level component for filter pills
+function FilterPillsSection({
+  dateDisplayValue,
+  accountsDisplayValue,
+  categoriesDisplayValue,
+  typeDisplayValue,
+  amountDisplayValue,
+  statusDisplayValue,
+  onDatePresetChange,
+  onClearFilter,
+  onStatusFilterChange,
+}: FilterPillsSectionProps) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {dateDisplayValue && (
+        <FilterPill
+          label="Date"
+          value={dateDisplayValue}
+          onRemove={() => onDatePresetChange('all')}
+        />
+      )}
+      {accountsDisplayValue && (
+        <FilterPill
+          label="Accounts"
+          value={accountsDisplayValue}
+          onRemove={() => onClearFilter('account_ids')}
+        />
+      )}
+      {categoriesDisplayValue && (
+        <FilterPill
+          label="Categories"
+          value={categoriesDisplayValue}
+          onRemove={() => onClearFilter('categories')}
+        />
+      )}
+      {typeDisplayValue && (
+        <FilterPill
+          label="Type"
+          value={typeDisplayValue}
+          onRemove={() => onClearFilter('amount_type')}
+        />
+      )}
+      {amountDisplayValue && (
+        <FilterPill
+          label="Amount"
+          value={amountDisplayValue}
+          onRemove={() => {
+            onClearFilter('min_amount')
+            onClearFilter('max_amount')
+          }}
+        />
+      )}
+      {statusDisplayValue && (
+        <FilterPill
+          label="Status"
+          value={statusDisplayValue}
+          onRemove={() => onStatusFilterChange('all')}
+        />
+      )}
+    </div>
+  )
 }
 
 // Custom hook for detecting mobile viewport
@@ -85,41 +160,15 @@ export function TransactionFilterPanel({
 }: TransactionFilterPanelProps) {
   const [isExpanded, setIsExpanded] = useState(false)
   const [isSheetOpen, setIsSheetOpen] = useState(false)
-  const [accounts, setAccounts] = useState<Account[]>([])
-  const [categories, setCategories] = useState<string[]>([])
-  const [loadingAccounts, setLoadingAccounts] = useState(true)
-  const [loadingCategories, setLoadingCategories] = useState(true)
   const isMobile = useIsMobile()
 
-  // Fetch accounts for the filter dropdown
-  useEffect(() => {
-    const loadAccounts = async () => {
-      try {
-        const response = await fetchAccounts()
-        setAccounts(response.accounts)
-      } catch (err) {
-        console.error('Failed to load accounts for filter:', err)
-      } finally {
-        setLoadingAccounts(false)
-      }
-    }
-    loadAccounts()
-  }, [])
+  // Fetch accounts for the filter dropdown using generated hook
+  const { data: accountsData, isLoading: loadingAccounts } = useGetAccounts()
+  const accounts = accountsData?.accounts ?? []
 
-  // Fetch categories for the filter dropdown
-  useEffect(() => {
-    const loadCategories = async () => {
-      try {
-        const result = await fetchPlaidCategories()
-        setCategories(result)
-      } catch (err) {
-        console.error('Failed to load categories for filter:', err)
-      } finally {
-        setLoadingCategories(false)
-      }
-    }
-    loadCategories()
-  }, [])
+  // Fetch categories for the filter dropdown using generated hook
+  const { data: categoriesData, isLoading: loadingCategories } = useGetPlaidCategories()
+  const categories = (categoriesData as unknown as string[]) ?? []
 
   // Handle account filter changes
   const handleAccountsChange = useCallback(
@@ -209,118 +258,27 @@ export function TransactionFilterPanel({
     return statusFilter === 'posted' ? 'Posted' : 'Pending'
   }
 
-  // Shared filter controls grid (used in both mobile and desktop)
-  const FilterControlsGrid = () => (
-    <div className="grid grid-cols-1 gap-4">
-      {/* Date Filter */}
-      <TransactionDateFilter
-        preset={datePreset}
-        startDate={filters.start_date}
-        endDate={filters.end_date}
-        onPresetChange={onDatePresetChange}
-        onCustomRangeChange={onCustomDateChange}
-        disabled={disabled}
-      />
+  // Prepare account data for filters
+  const accountsForFilter = accounts.map((a) => ({
+    id: a.id,
+    name: a.name,
+    official_name: a.official_name,
+    institution_name: a.institution_name,
+    type: a.type,
+  }))
 
-      {/* Account Filter */}
-      <TransactionAccountFilter
-        accounts={accounts.map((a) => ({
-          id: a.id,
-          name: a.name,
-          official_name: a.official_name,
-          institution_name: a.institution_name,
-          type: a.type,
-        }))}
-        selectedIds={filters.account_ids || []}
-        onChange={handleAccountsChange}
-        loading={loadingAccounts}
-        disabled={disabled}
-      />
-
-      {/* Category Filter */}
-      <TransactionCategoryFilter
-        categories={categories}
-        selectedCategories={filters.categories || []}
-        onChange={handleCategoriesChange}
-        loading={loadingCategories}
-        disabled={disabled}
-      />
-
-      {/* Type Filter */}
-      <TransactionTypeFilter
-        value={filters.amount_type || 'all'}
-        onChange={handleTypeChange}
-        disabled={disabled}
-      />
-
-      {/* Amount Filter */}
-      <TransactionAmountFilter
-        minAmount={filters.min_amount}
-        maxAmount={filters.max_amount}
-        onChange={handleAmountChange}
-        disabled={disabled}
-      />
-
-      {/* Status Filter */}
-      <TransactionStatusFilter
-        value={statusFilter}
-        onChange={onStatusFilterChange}
-        pendingCount={pendingCount}
-        disabled={disabled}
-      />
-    </div>
-  )
-
-  // Filter pills component (shared)
-  const FilterPills = () => (
-    <div className="flex flex-wrap gap-2">
-      {getDateDisplayValue() && (
-        <FilterPill
-          label="Date"
-          value={getDateDisplayValue()!}
-          onRemove={() => onDatePresetChange('all')}
-        />
-      )}
-      {getAccountsDisplayValue() && (
-        <FilterPill
-          label="Accounts"
-          value={getAccountsDisplayValue()!}
-          onRemove={() => onClearFilter('account_ids')}
-        />
-      )}
-      {getCategoriesDisplayValue() && (
-        <FilterPill
-          label="Categories"
-          value={getCategoriesDisplayValue()!}
-          onRemove={() => onClearFilter('categories')}
-        />
-      )}
-      {getTypeDisplayValue() && (
-        <FilterPill
-          label="Type"
-          value={getTypeDisplayValue()!}
-          onRemove={() => onClearFilter('amount_type')}
-        />
-      )}
-      {getAmountDisplayValue() && (
-        <FilterPill
-          label="Amount"
-          value={getAmountDisplayValue()!}
-          onRemove={() => {
-            onClearFilter('min_amount')
-            onClearFilter('max_amount')
-          }}
-        />
-      )}
-      {getStatusDisplayValue() && (
-        <FilterPill
-          label="Status"
-          value={getStatusDisplayValue()!}
-          onRemove={() => onStatusFilterChange('all')}
-        />
-      )}
-    </div>
-  )
+  // Prepare filter pills props
+  const filterPillsProps: FilterPillsSectionProps = {
+    dateDisplayValue: getDateDisplayValue(),
+    accountsDisplayValue: getAccountsDisplayValue(),
+    categoriesDisplayValue: getCategoriesDisplayValue(),
+    typeDisplayValue: getTypeDisplayValue(),
+    amountDisplayValue: getAmountDisplayValue(),
+    statusDisplayValue: getStatusDisplayValue(),
+    onDatePresetChange,
+    onClearFilter,
+    onStatusFilterChange,
+  }
 
   // Mobile: Bottom sheet
   if (isMobile) {
@@ -352,7 +310,48 @@ export function TransactionFilterPanel({
             </SheetHeader>
 
             <div className="py-4 overflow-auto">
-              <FilterControlsGrid />
+              {/* Inline filter controls grid for mobile */}
+              <div className="grid grid-cols-1 gap-4">
+                <TransactionDateFilter
+                  preset={datePreset}
+                  startDate={filters.start_date}
+                  endDate={filters.end_date}
+                  onPresetChange={onDatePresetChange}
+                  onCustomRangeChange={onCustomDateChange}
+                  disabled={disabled}
+                />
+                <TransactionAccountFilter
+                  accounts={accountsForFilter}
+                  selectedIds={filters.account_ids || []}
+                  onChange={handleAccountsChange}
+                  loading={loadingAccounts}
+                  disabled={disabled}
+                />
+                <TransactionCategoryFilter
+                  categories={categories}
+                  selectedCategories={filters.categories || []}
+                  onChange={handleCategoriesChange}
+                  loading={loadingCategories}
+                  disabled={disabled}
+                />
+                <TransactionTypeFilter
+                  value={filters.amount_type || 'all'}
+                  onChange={handleTypeChange}
+                  disabled={disabled}
+                />
+                <TransactionAmountFilter
+                  minAmount={filters.min_amount}
+                  maxAmount={filters.max_amount}
+                  onChange={handleAmountChange}
+                  disabled={disabled}
+                />
+                <TransactionStatusFilter
+                  value={statusFilter}
+                  onChange={onStatusFilterChange}
+                  pendingCount={pendingCount}
+                  disabled={disabled}
+                />
+              </div>
             </div>
 
             <SheetFooter className="flex-row gap-2">
@@ -381,7 +380,7 @@ export function TransactionFilterPanel({
         {/* Active filter pills (always visible when filters are active) */}
         {hasActiveFilters && (
           <div className="mt-2 px-1">
-            <FilterPills />
+            <FilterPillsSection {...filterPillsProps} />
           </div>
         )}
       </div>
@@ -414,7 +413,7 @@ export function TransactionFilterPanel({
       {/* Active filter pills (always visible when filters are active) */}
       {hasActiveFilters && !isExpanded && (
         <div className="px-4 pb-3 flex flex-wrap gap-2">
-          <FilterPills />
+          <FilterPillsSection {...filterPillsProps} />
           <button
             type="button"
             onClick={onClearAllFilters}
@@ -441,13 +440,7 @@ export function TransactionFilterPanel({
 
             {/* Account Filter */}
             <TransactionAccountFilter
-              accounts={accounts.map((a) => ({
-                id: a.id,
-                name: a.name,
-                official_name: a.official_name,
-                institution_name: a.institution_name,
-                type: a.type,
-              }))}
+              accounts={accountsForFilter}
               selectedIds={filters.account_ids || []}
               onChange={handleAccountsChange}
               loading={loadingAccounts}

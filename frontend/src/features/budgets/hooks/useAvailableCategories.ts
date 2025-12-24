@@ -1,13 +1,18 @@
 /**
  * useAvailableCategories Hook
  * Issue #497: Budget Category Manager + Match Config UI
+ * Issue #564: Migrated to generated React Query hooks
  *
  * React hook for fetching available Plaid categories and transforming
  * them from flat strings to nested string arrays.
  */
 
-import { useState, useEffect, useCallback } from 'react';
-import { fetchAvailableCategories } from '../api/budgetsApi';
+import { useMemo, useCallback } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import {
+  useGetAvailableCategories,
+  getGetAvailableCategoriesQueryKey,
+} from '@/api/generated/endpoints/budgets/budgets';
 
 export interface UseAvailableCategoriesResult {
   /** List of available categories as string[][] */
@@ -61,42 +66,46 @@ function transformCategory(flatCategory: string): string[] {
  * ```
  */
 export function useAvailableCategories(): UseAvailableCategoriesResult {
-  const [categories, setCategories] = useState<string[][]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<Error | null>(null);
+  const queryClient = useQueryClient();
 
-  // Load categories function
-  const loadCategories = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const flatCategories = await fetchAvailableCategories();
-      // Transform flat strings to nested arrays, filtering out empty strings
-      const transformedCategories = flatCategories
-        .filter((cat) => cat.length > 0)
-        .map(transformCategory);
-      setCategories(transformedCategories);
-    } catch (err) {
-      setError(err instanceof Error ? err : new Error('Failed to fetch categories'));
-      setCategories([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const {
+    data,
+    isLoading,
+    error: queryError,
+    refetch: queryRefetch,
+  } = useGetAvailableCategories({
+    query: {
+      staleTime: 5 * 60 * 1000, // 5 minutes - categories don't change often
+    },
+  });
 
-  // Initial load
-  useEffect(() => {
-    loadCategories();
-  }, [loadCategories]);
+  // Convert error to Error instance
+  const error = queryError
+    ? queryError instanceof Error
+      ? queryError
+      : new Error('Failed to fetch categories')
+    : null;
 
-  // Refetch function
+  // Transform flat strings to nested arrays
+  // Generated type is string[] | null (not { categories: string[] })
+  const categories = useMemo(() => {
+    if (!data) return [];
+    return data
+      .filter((cat) => cat.length > 0)
+      .map(transformCategory);
+  }, [data]);
+
+  // Refetch function that invalidates the cache
   const refetch = useCallback(async () => {
-    await loadCategories();
-  }, [loadCategories]);
+    await queryClient.invalidateQueries({
+      queryKey: getGetAvailableCategoriesQueryKey(),
+    });
+    await queryRefetch();
+  }, [queryClient, queryRefetch]);
 
   return {
     categories,
-    loading,
+    loading: isLoading,
     error,
     refetch,
   };
