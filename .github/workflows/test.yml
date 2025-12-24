@@ -311,18 +311,19 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
-  # Frontend Tests (Single job - no sharding)
+  # Frontend TypeScript Check (runs once before shards)
+  # Issue #566: Separated to avoid running tsc 3 times in shards
   # =============================================================================
-  frontend-test:
-    name: Frontend Tests
+  frontend-typecheck:
+    name: Frontend TypeScript Check
     needs: detect-changes
     if: needs.detect-changes.outputs.frontend == 'true' || needs.detect-changes.outputs.api == 'true' || needs.detect-changes.outputs.workflow == 'true'
     runs-on: [self-hosted, macOS, mac-mini]
     env:
-      UNIQUE_WORKSPACE: workspace-frontend-test-${{ github.run_id }}
+      UNIQUE_WORKSPACE: workspace-frontend-typecheck-${{ github.run_id }}
 
     steps:
-      - name: Clean workspace (fix permission issues)
+      - name: Clean workspace
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
@@ -348,12 +349,73 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
           for i in 1 2 3; do
-            echo "📦 pnpm install attempt $i/3..."
+            echo "pnpm install attempt $i/3..."
             pnpm install --frozen-lockfile && {
-              echo "✅ Dependencies installed"
+              echo "Dependencies installed"
               break
             } || {
-              echo "⚠️ Install failed, cleaning pnpm store..."
+              echo "Install failed, cleaning pnpm store..."
+              pnpm store prune
+              [ $i -lt 3 ] && sleep 5
+            }
+          done
+
+      - name: Run TypeScript check
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        run: |
+          echo "::group::Running TypeScript Check"
+          pnpm run test:ci:typecheck
+          echo "::endgroup::"
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+  # =============================================================================
+  # Frontend Lint (runs in parallel with typecheck)
+  # Issue #566: Separated for faster feedback on lint errors
+  # =============================================================================
+  frontend-lint:
+    name: Frontend Lint
+    needs: detect-changes
+    if: needs.detect-changes.outputs.frontend == 'true' || needs.detect-changes.outputs.api == 'true' || needs.detect-changes.outputs.workflow == 'true'
+    runs-on: [self-hosted, macOS, mac-mini]
+    env:
+      UNIQUE_WORKSPACE: workspace-frontend-lint-${{ github.run_id }}
+
+    steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          clean: false
+          fetch-depth: 1
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          cache-dependency-path: ${{ env.UNIQUE_WORKSPACE }}/frontend/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        run: |
+          for i in 1 2 3; do
+            echo "pnpm install attempt $i/3..."
+            pnpm install --frozen-lockfile && {
+              echo "Dependencies installed"
+              break
+            } || {
+              echo "Install failed, cleaning pnpm store..."
               pnpm store prune
               [ $i -lt 3 ] && sleep 5
             }
@@ -366,19 +428,189 @@ jobs:
           pnpm run lint
           echo "::endgroup::"
 
-      - name: Run frontend unit tests
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+  # =============================================================================
+  # Frontend Tests (Sharded - 3 parallel jobs)
+  # Issue #566: Split tests across 3 shards for parallelization
+  # CRITICAL: Each shard uses 2GB heap (not 6GB) to stay within memory limits
+  # =============================================================================
+  frontend-test:
+    name: Frontend Tests (Shard ${{ matrix.shard }}/3)
+    needs: [detect-changes, frontend-typecheck, frontend-lint]
+    if: |
+      always() &&
+      needs.frontend-typecheck.result == 'success' &&
+      needs.frontend-lint.result == 'success' &&
+      (needs.detect-changes.outputs.frontend == 'true' ||
+       needs.detect-changes.outputs.api == 'true' ||
+       needs.detect-changes.outputs.workflow == 'true')
+    runs-on: [self-hosted, macOS, mac-mini]
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    env:
+      UNIQUE_WORKSPACE: workspace-frontend-shard-${{ matrix.shard }}-${{ github.run_id }}
+
+    steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          clean: false
+          fetch-depth: 1
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          cache-dependency-path: ${{ env.UNIQUE_WORKSPACE }}/frontend/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
-          echo "::group::Running Unit Tests"
-          pnpm run test:ci
+          for i in 1 2 3; do
+            echo "pnpm install attempt $i/3..."
+            pnpm install --frozen-lockfile && {
+              echo "Dependencies installed"
+              break
+            } || {
+              echo "Install failed, cleaning pnpm store..."
+              pnpm store prune
+              [ $i -lt 3 ] && sleep 5
+            }
+          done
+
+      - name: Run frontend unit tests (shard ${{ matrix.shard }}/3)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        run: |
+          echo "::group::Running Unit Tests (Shard ${{ matrix.shard }}/3)"
+          # CRITICAL: Using 2GB heap per shard (not 6GB) to allow parallel execution
+          # 3 shards x 2GB = 6GB total, same as before but parallelized
+          NODE_OPTIONS='--max-old-space-size=2048' pnpm exec vitest run \
+            --shard=${{ matrix.shard }}/3 \
+            --no-cache \
+            --coverage \
+            --coverage.reportsDirectory=coverage-shard-${{ matrix.shard }} \
+            --bail=5 \
+            --reporter=blob \
+            --reporter=verbose
           echo "::endgroup::"
 
-      - name: Upload coverage report
+      - name: Upload coverage shard
+        uses: actions/upload-artifact@v6
+        with:
+          name: coverage-shard-${{ matrix.shard }}
+          path: ${{ env.UNIQUE_WORKSPACE }}/frontend/coverage-shard-${{ matrix.shard }}/
+          retention-days: 1
+
+      - name: Upload blob reports
+        uses: actions/upload-artifact@v6
+        with:
+          name: blob-shard-${{ matrix.shard }}
+          path: ${{ env.UNIQUE_WORKSPACE }}/frontend/.vitest-reports/
+          retention-days: 1
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+  # =============================================================================
+  # Frontend Coverage Merge (combines all shards)
+  # Issue #566: Merges coverage from 3 shards into single report
+  # =============================================================================
+  frontend-merge-coverage:
+    name: Merge Frontend Coverage
+    needs: [detect-changes, frontend-test]
+    if: |
+      always() &&
+      !cancelled() &&
+      needs.frontend-test.result == 'success'
+    runs-on: [self-hosted, macOS, mac-mini]
+    env:
+      UNIQUE_WORKSPACE: workspace-frontend-merge-${{ github.run_id }}
+
+    steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          clean: false
+          fetch-depth: 1
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          cache-dependency-path: ${{ env.UNIQUE_WORKSPACE }}/frontend/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Download all coverage shards
+        uses: actions/download-artifact@v7
+        with:
+          pattern: coverage-shard-*
+          path: ${{ env.UNIQUE_WORKSPACE }}/frontend/
+          merge-multiple: false
+
+      - name: Merge LCOV coverage reports
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        run: |
+          echo "::group::Merging Coverage Reports"
+          mkdir -p coverage
+
+          # List coverage files found
+          echo "Coverage files found:"
+          find . -name "lcov.info" -path "*/coverage-shard-*/*" | head -20
+
+          # Merge all LCOV files
+          pnpm run test:ci:merge-coverage
+
+          echo "Merged LCOV file:"
+          if [ -f coverage/lcov.info ]; then
+            echo "Lines: $(wc -l < coverage/lcov.info)"
+          else
+            echo "Warning: No merged lcov.info found"
+          fi
+          echo "::endgroup::"
+
+      - name: Upload merged coverage report
         uses: actions/upload-artifact@v6
         with:
           name: frontend-coverage
           path: ${{ env.UNIQUE_WORKSPACE }}/frontend/coverage/
           retention-days: 30
+
+      - name: Cleanup shard artifacts
+        if: always()
+        uses: geekyeggo/delete-artifact@v5
+        with:
+          name: |
+            coverage-shard-*
+            blob-shard-*
 
       - name: Final workspace cleanup
         if: always()
