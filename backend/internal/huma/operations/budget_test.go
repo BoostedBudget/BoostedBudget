@@ -11,6 +11,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -112,6 +113,10 @@ func (m *mockBudgetSyncService) RecalculateBudgetAmounts(ctx context.Context, us
 
 func (m *mockBudgetSyncService) RecalculateBudget(ctx context.Context, budget *domain.Budget) error {
 	return m.recalculateErr
+}
+
+func (m *mockBudgetSyncService) SetEventProcessor(processor services.EventTriggerProcessor) {
+	// No-op for mock
 }
 
 // mockTransactionRepoForBudget is a mock implementation of repository.TransactionRepository for budget tests
