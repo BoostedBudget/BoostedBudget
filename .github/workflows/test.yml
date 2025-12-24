@@ -151,7 +151,18 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
-        run: pnpm install --frozen-lockfile
+        run: |
+          for i in 1 2 3; do
+            echo "📦 pnpm install attempt $i/3..."
+            pnpm install --frozen-lockfile && {
+              echo "✅ Dependencies installed"
+              break
+            } || {
+              echo "⚠️ Install failed, cleaning pnpm store..."
+              pnpm store prune
+              [ $i -lt 3 ] && sleep 5
+            }
+          done
 
       - name: Generate TypeScript client
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
@@ -335,7 +346,18 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
-        run: pnpm install --frozen-lockfile
+        run: |
+          for i in 1 2 3; do
+            echo "📦 pnpm install attempt $i/3..."
+            pnpm install --frozen-lockfile && {
+              echo "✅ Dependencies installed"
+              break
+            } || {
+              echo "⚠️ Install failed, cleaning pnpm store..."
+              pnpm store prune
+              [ $i -lt 3 ] && sleep 5
+            }
+          done
 
       - name: Run ESLint
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
@@ -398,7 +420,18 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
-        run: pnpm install --frozen-lockfile
+        run: |
+          for i in 1 2 3; do
+            echo "📦 pnpm install attempt $i/3..."
+            pnpm install --frozen-lockfile && {
+              echo "✅ Dependencies installed"
+              break
+            } || {
+              echo "⚠️ Install failed, cleaning pnpm store..."
+              pnpm store prune
+              [ $i -lt 3 ] && sleep 5
+            }
+          done
 
       - name: Install Playwright browsers
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
