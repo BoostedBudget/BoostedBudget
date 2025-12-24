@@ -117,8 +117,8 @@ infrastructure/     # Configs
 7. **TDD REFACTOR**: Clean → **Server Memory: Note refactoring patterns applied**
 8. **RUN ALL TESTS** (MANDATORY - NO PR without):
    - `cd backend && go test ./... -v` (MUST pass)
-   - `npm test -- --run && npm run lint` (MUST pass)
-   - `npm run test:e2e -- --reporter=line 2>&1` (MUST pass)
+   - `pnpm test -- --run && pnpm run lint` (MUST pass)
+   - `pnpm run test:e2e -- --reporter=line 2>&1` (MUST pass)
 9. **Server Memory: Final update** (learnings, gotchas, future considerations)
 10. PR ONLY after all tests pass
 
@@ -208,8 +208,8 @@ BAD ✗
 10. `*InRegion` abstractions, `primary_region`='us-east-1' → **Server Memory: Track region-related decisions**
 11. **RUN ALL TESTS** (MANDATORY before PR):
     - Backend: `cd backend && go test ./... -v`
-    - Frontend: `npm test -- --run && npm run lint`
-    - E2E: `npm run test:e2e -- --reporter=line 2>&1`
+    - Frontend: `pnpm test -- --run && pnpm run lint`
+    - E2E: `pnpm run test:e2e -- --reporter=line 2>&1`
     - **NO PR until ALL pass**
 12. PR with "Closes #N"
 13. **Server Memory: FINAL update** - consolidate all decisions, learnings, patterns, gotchas for future reference
@@ -424,7 +424,7 @@ source config/staging.env
 ```bash
 git clone <repo> && cd boostedbudget
 cd backend && go mod download
-cd ../frontend && npm install
+cd ../frontend && pnpm install
 cp .env.example .env  # Edit with Auth0/Plaid/Stripe creds
 docker-compose up
 ```
@@ -453,13 +453,13 @@ go test -tags=integration ./...
 go test -coverprofile=coverage.out ./...
 
 # Frontend
-npm test
-npm run test:e2e
-npm run test:components
+pnpm test
+pnpm run test:e2e
+pnpm run test:components
 
 # API
-npx prism mock api/openapi.yaml
-npm run test:api
+pnpm exec prism mock api/openapi.yaml
+pnpm run test:api
 ```
 
 ## Common Tasks

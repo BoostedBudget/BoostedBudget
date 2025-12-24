@@ -208,8 +208,8 @@ go test ./internal/config/... -v
 **Frontend API integration**:
 ```bash
 cd frontend
-npm test -- src/features/subscription/api/subscriptionApi.test.ts --run
-npm test -- src/features/subscription/hooks/useSubscriptionTiers.test.tsx --run
+pnpm test -- src/features/subscription/api/subscriptionApi.test.ts --run
+pnpm test -- src/features/subscription/hooks/useSubscriptionTiers.test.tsx --run
 ```
 
 **Integration** (ensure API returns valid data):

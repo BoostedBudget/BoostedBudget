@@ -78,8 +78,8 @@ WORKDIR /build
 
 # Copy package files
 COPY package*.json ./
-RUN npm ci --only=production && \
-    npm cache clean --force
+RUN npm install -g pnpm@10 && \
+    pnpm install --frozen-lockfile
 
 # Copy all source files
 COPY . .
@@ -93,7 +93,7 @@ ARG VITE_GOOGLE_ADSENSE_CLIENT
 ARG VITE_PLAID_PUBLIC_KEY
 
 # Build the application
-RUN npm run build
+RUN pnpm run build
 
 # Verify build output
 RUN ls -la dist/
@@ -193,16 +193,21 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: '18'
-        cache: 'npm'
-        cache-dependency-path: frontend/package-lock.json
+        cache: 'pnpm'
+        cache-dependency-path: frontend/pnpm-lock.yaml
+
+    - name: Install pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: 10
 
     - name: Run frontend tests
       working-directory: ./frontend
       run: |
-        npm ci
-        npm run lint
-        npm run test:ci
-        npm run test:e2e
+        pnpm install --frozen-lockfile
+        pnpm run lint
+        pnpm run test:ci
+        pnpm run test:e2e
 
     - name: SonarCloud Scan
       uses: SonarSource/sonarcloud-github-action@master
@@ -337,7 +342,7 @@ jobs:
 
     - name: Run smoke tests
       run: |
-        npm run test:smoke -- --env=staging
+        pnpm run test:smoke -- --env=staging
 
   # Step 5: Deploy to production (manual approval required)
   deploy-production:
@@ -587,7 +592,7 @@ services:
       VITE_AUTH0_CLIENT_ID: ${AUTH0_CLIENT_ID}
     volumes:
       - ./frontend:/build
-    command: npm run dev
+    command: pnpm run dev
 
   postgres:
     image: postgres:15-alpine
