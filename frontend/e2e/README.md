@@ -84,17 +84,17 @@ pnpm run test:e2e
 
 ### Run Tests with UI Mode (Interactive)
 ```bash
-ppnpm run test:e2e:ui
+pnpm run test:e2e:ui
 ```
 
 ### Run Tests in Headed Mode (See Browser)
 ```bash
-ppnpm run test:e2e:headed
+pnpm run test:e2e:headed
 ```
 
 ### Run Tests in Debug Mode
 ```bash
-ppnpm run test:e2e:debug
+pnpm run test:e2e:debug
 ```
 
 ### Run Specific Test File
@@ -104,7 +104,7 @@ npx playwright test health.spec.ts
 
 ### View Test Report
 ```bash
-ppnpm run test:e2e:report
+pnpm run test:e2e:report
 ```
 
 ## Test Structure
@@ -196,7 +196,7 @@ npx playwright show-trace trace.zip
 
 ### 4. Run in Debug Mode
 ```bash
-ppnpm run test:e2e:debug
+pnpm run test:e2e:debug
 ```
 
 ## Best Practices
@@ -247,7 +247,7 @@ ppnpm run test:e2e:debug
 - Cookie banner might be blocking element
 
 ### Slow Test Execution
-- Use headed mode only for debugging: `ppnpm run test:e2e:headed`
+- Use headed mode only for debugging: `pnpm run test:e2e:headed`
 - Run specific test files instead of entire suite
 - Increase workers in `playwright.config.ts` (parallel execution)
 
