@@ -1,8 +1,14 @@
+import { useState } from 'react'
 import { useAuth0 } from '@auth0/auth0-react'
 import { Star, Award, Gem, Check, X } from 'lucide-react'
 import { useSubscriptionTiers } from '../subscription/hooks/useSubscriptionTiers'
 import type { TierName, SubscriptionTier } from '../subscription/types'
 import './PricingPage.css'
+
+/**
+ * Billing period type for the toggle
+ */
+type BillingPeriod = 'monthly' | 'yearly'
 
 
 /**
@@ -13,6 +19,24 @@ function formatPrice(price: number | undefined): string {
     return 'Free'
   }
   return `$${price.toFixed(2)}`
+}
+
+/**
+ * Calculate savings percentage for yearly billing
+ */
+function calculateSavingsPercent(tierData: SubscriptionTier): number {
+  const monthlyTotal = tierData.pricing.price_monthly * 12
+  const yearlyTotal = tierData.pricing.price_yearly
+  if (monthlyTotal === 0) return 0
+  return Math.round(((monthlyTotal - yearlyTotal) / monthlyTotal) * 100)
+}
+
+/**
+ * Get equivalent monthly price for yearly billing
+ */
+function getEquivalentMonthly(yearlyPrice: number): string {
+  if (yearlyPrice === 0) return 'Free'
+  return `$${(yearlyPrice / 12).toFixed(2)}`
 }
 
 /**
@@ -84,12 +108,19 @@ interface TierCardProps {
   tierKey: TierName
   tierData: SubscriptionTier
   isCurrentTier: boolean
+  billingPeriod: BillingPeriod
 }
 
-function TierCard({ tierKey, tierData, isCurrentTier }: TierCardProps) {
+function TierCard({ tierKey, tierData, isCurrentTier, billingPeriod }: TierCardProps) {
   const features = buildFeatureList(tierData)
   const isFreeTier = tierKey === 'free'
   const isPremiumPlus = tierKey === 'premium_plus'
+
+  // Get the appropriate price based on billing period
+  const currentPrice = billingPeriod === 'monthly'
+    ? tierData.pricing.price_monthly
+    : tierData.pricing.price_yearly
+  const isPaidTier = tierData.pricing.price_monthly > 0
 
   // Get the icon component based on tier
   const renderTierIcon = () => {
@@ -120,9 +151,17 @@ function TierCard({ tierKey, tierData, isCurrentTier }: TierCardProps) {
       </div>
 
       <div className="pricing-card-price">
-        <span className="price-amount">{formatPrice(tierData.pricing.price_monthly)}</span>
-        {tierData.pricing.price_monthly > 0 && (
-          <span className="price-period">/month</span>
+        {billingPeriod === 'yearly' && isPaidTier && (
+          <span className="savings-badge">Save {calculateSavingsPercent(tierData)}%</span>
+        )}
+        <span className="price-amount">{formatPrice(currentPrice)}</span>
+        {currentPrice > 0 && (
+          <span className="price-period">/{billingPeriod === 'monthly' ? 'month' : 'year'}</span>
+        )}
+        {billingPeriod === 'yearly' && isPaidTier && (
+          <span className="price-equivalent">
+            {getEquivalentMonthly(tierData.pricing.price_yearly)}/mo, billed annually
+          </span>
         )}
       </div>
 
@@ -159,6 +198,7 @@ function TierCard({ tierKey, tierData, isCurrentTier }: TierCardProps) {
 export function PricingPage() {
   const { user } = useAuth0()
   const { tiers, loading, error, refetch } = useSubscriptionTiers()
+  const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>('monthly')
 
   // Get current user's tier from user metadata or default to 'free'
   // Note: In production, this would come from your user state/context
@@ -196,6 +236,26 @@ export function PricingPage() {
         <p>Select the plan that best fits your financial goals</p>
       </div>
 
+      <div className="billing-toggle" role="radiogroup" aria-label="Billing period">
+        <button
+          className={`billing-toggle__option ${billingPeriod === 'monthly' ? 'active' : ''}`}
+          onClick={() => setBillingPeriod('monthly')}
+          aria-checked={billingPeriod === 'monthly'}
+          role="radio"
+        >
+          Monthly
+        </button>
+        <button
+          className={`billing-toggle__option ${billingPeriod === 'yearly' ? 'active' : ''}`}
+          onClick={() => setBillingPeriod('yearly')}
+          aria-checked={billingPeriod === 'yearly'}
+          role="radio"
+        >
+          Yearly
+        </button>
+        <div className={`billing-toggle__slider ${billingPeriod}`} aria-hidden="true" />
+      </div>
+
       <div className="pricing-grid">
         {tierOrder.map((tierKey) => {
           const tierData = tiers.tiers[tierKey]
@@ -206,6 +266,7 @@ export function PricingPage() {
               tierKey={tierKey}
               tierData={tierData}
               isCurrentTier={tierKey === currentTier}
+              billingPeriod={billingPeriod}
             />
           )
         })}
