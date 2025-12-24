@@ -896,7 +896,7 @@ for i in $(seq 1 $MAX_RETRIES); do
 done
 
 # Run smoke tests
-npm run test:smoke -- --env=$ENVIRONMENT
+pnpm run test:smoke -- --env=$ENVIRONMENT
 
 echo "Deployment verification complete!"
 ```

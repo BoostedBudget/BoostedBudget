@@ -122,7 +122,7 @@ test-fast:
 	@echo "✅ Backend coverage: backend/coverage.html"
 	@echo ""
 	@echo "3️⃣  Frontend Tests..."
-	@cd frontend && npm run test:ci
+	@cd frontend && pnpm run test:ci
 	@echo "✅ Frontend coverage: frontend/coverage/index.html"
 	@echo ""
 	@echo "4️⃣  Linting..."
@@ -182,7 +182,7 @@ test-all:
 	@echo "✅ Backend coverage: backend/coverage.html"
 	@echo ""
 	@echo "3️⃣  Frontend Tests..."
-	@cd frontend && npm run test:ci
+	@cd frontend && pnpm run test:ci
 	@echo "✅ Frontend coverage: frontend/coverage/index.html"
 	@echo ""
 	@echo "4️⃣  Building Backend Binary for E2E Tests..."
