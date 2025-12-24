@@ -310,4 +310,99 @@ describe('PricingPage', () => {
       expect(screen.getAllByText('AI-powered insights').length).toBeGreaterThan(0)
     })
   })
+
+  describe('Billing period toggle', () => {
+    it('should render Monthly and Yearly options', () => {
+      render(<PricingPage />)
+
+      expect(screen.getByRole('radio', { name: /monthly/i })).toBeInTheDocument()
+      expect(screen.getByRole('radio', { name: /yearly/i })).toBeInTheDocument()
+    })
+
+    it('should default to Monthly view', () => {
+      render(<PricingPage />)
+
+      const monthlyButton = screen.getByRole('radio', { name: /monthly/i })
+      expect(monthlyButton).toHaveAttribute('aria-checked', 'true')
+    })
+
+    it('should show monthly prices by default', () => {
+      render(<PricingPage />)
+
+      // Premium Lite monthly price
+      expect(screen.getByText('$4.99')).toBeInTheDocument()
+      // Check for /month period label
+      const monthLabels = screen.getAllByText('/month')
+      expect(monthLabels.length).toBeGreaterThan(0)
+    })
+
+    it('should switch to yearly prices when Yearly clicked', async () => {
+      const user = userEvent.setup()
+      render(<PricingPage />)
+
+      await user.click(screen.getByRole('radio', { name: /yearly/i }))
+
+      // Premium Lite yearly price
+      expect(screen.getByText('$49.99')).toBeInTheDocument()
+      // Check for /year period label
+      const yearLabels = screen.getAllByText('/year')
+      expect(yearLabels.length).toBeGreaterThan(0)
+    })
+
+    it('should show savings badge in yearly view for paid tiers', async () => {
+      const user = userEvent.setup()
+      render(<PricingPage />)
+
+      await user.click(screen.getByRole('radio', { name: /yearly/i }))
+
+      // All paid tiers save ~17%
+      const savingsBadges = screen.getAllByText(/save 17%/i)
+      expect(savingsBadges.length).toBeGreaterThan(0)
+    })
+
+    it('should not show savings badge for free tier in yearly view', async () => {
+      const user = userEvent.setup()
+      render(<PricingPage />)
+
+      await user.click(screen.getByRole('radio', { name: /yearly/i }))
+
+      // Free tier should show "Free" not a savings badge
+      const freeElements = screen.getAllByText('Free')
+      expect(freeElements.length).toBeGreaterThan(0)
+    })
+
+    it('should show equivalent monthly price in yearly view', async () => {
+      const user = userEvent.setup()
+      render(<PricingPage />)
+
+      await user.click(screen.getByRole('radio', { name: /yearly/i }))
+
+      // $49.99/12 = $4.17/mo
+      expect(screen.getByText(/\$4\.17\/mo, billed annually/i)).toBeInTheDocument()
+    })
+
+    it('should toggle back to monthly view when Monthly clicked', async () => {
+      const user = userEvent.setup()
+      render(<PricingPage />)
+
+      // Switch to yearly
+      await user.click(screen.getByRole('radio', { name: /yearly/i }))
+      expect(screen.getByText('$49.99')).toBeInTheDocument()
+
+      // Switch back to monthly
+      await user.click(screen.getByRole('radio', { name: /monthly/i }))
+      expect(screen.getByText('$4.99')).toBeInTheDocument()
+    })
+
+    it('should be keyboard accessible', async () => {
+      render(<PricingPage />)
+
+      const monthlyButton = screen.getByRole('radio', { name: /monthly/i })
+      const yearlyButton = screen.getByRole('radio', { name: /yearly/i })
+
+      // Both buttons should be focusable
+      expect(monthlyButton).not.toHaveAttribute('tabindex', '-1')
+      expect(yearlyButton).not.toHaveAttribute('tabindex', '-1')
+    })
+  })
 })
