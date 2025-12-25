@@ -121,6 +121,12 @@ func (m *MockBudgetRepository) RemoveIncomeSource(ctx context.Context, budgetID 
 	return args.Error(0)
 }
 
+// Envelope budgeting rollover method (Issue #36: Rule Executors)
+func (m *MockBudgetRepository) AdjustCategoryAllocatedAmount(ctx context.Context, categoryID string, delta float64) error {
+	args := m.Called(ctx, categoryID, delta)
+	return args.Error(0)
+}
+
 // MockTransactionRepositoryForBudget is a minimal mock for transaction repository
 // Only mocking methods needed by BudgetService
 type MockTransactionRepositoryForBudget struct {

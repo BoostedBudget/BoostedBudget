@@ -247,6 +247,8 @@ func TestWebhookProcessor_Integration(t *testing.T) {
 		mockEncryptionService,
 		nil, // syncLimitService
 		nil, // ruleApplicationService
+		nil, // budgetSyncService
+		nil, // transactionMonitorService
 	)
 
 	itemErrorService := services.NewItemErrorService(

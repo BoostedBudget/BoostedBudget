@@ -89,6 +89,8 @@ func TestSyncLimits_E2E_FreeTierFirstSyncFlow(t *testing.T) {
 		mockEncryptionService,
 		syncLimitService,
 		nil, // ruleApplicationService
+		nil, // budgetSyncService - not needed for this test
+		nil, // transactionMonitorService - not needed for this test
 	)
 
 	// Initialize handlers
