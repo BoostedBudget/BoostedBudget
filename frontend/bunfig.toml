@@ -1,0 +1,25 @@
+# Bun configuration for BoostedBudget frontend
+# Migrated from pnpm/Vite in Issue #575
+
+[install]
+# Use exact versions from lockfile
+frozen = true
+
+[run]
+# Bun will use tsconfig.json for path aliases (@/* -> ./src/*)
+
+[test]
+# Test configuration (replaces vitest.config.ts)
+preload = ["./src/test/setup.ts"]
+root = "./"
+timeout = 30000
+
+# Coverage configuration
+coverage = true
+coverageDir = "coverage"
+coverageReporter = ["text", "json", "json-summary", "html", "lcov"]
+coverageSkipTestFiles = true
+
+# Coverage thresholds - CI will fail if below these values
+# Issue #564: Thresholds based on realistic coverage achievable with current test suite
+coverageThreshold = { lines = 0.25, functions = 0.67, branches = 0.68, statements = 0.25 }
