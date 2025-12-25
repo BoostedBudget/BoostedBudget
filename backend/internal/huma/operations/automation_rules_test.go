@@ -619,11 +619,10 @@ func TestAutomationRuleHandler_GetRuleExecutions_WithStatusFilter(t *testing.T) 
 	handler := NewAutomationRuleHandler(mockRuleService, nil)
 	handler.SetExecutionService(mockExecService)
 
-	statusStr := "completed"
 	input := &GetRuleExecutionsInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
 		ID:                 "rule-1",
-		Status:             &statusStr,
+		Status:             "completed",
 		Limit:              20,
 		Offset:             0,
 	}
