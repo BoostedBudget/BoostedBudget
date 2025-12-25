@@ -43,6 +43,9 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	deletionHandler := &DeletionHandler{}
 	plaidWebhookHandler := &PlaidWebhookHandler{}
 
+	// Automation Rules (Issues #34-38)
+	automationRuleHandler := &AutomationRuleHandler{}
+
 	// Register all routes
 	RegisterHealthRoutes(api, healthHandler)
 	RegisterMetricsRoutes(api, metricsHandler)
@@ -65,4 +68,7 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	RegisterCategoryPreviewRoutes(api, categoryPreviewHandler)
 	RegisterDeletionRoutes(api, deletionHandler)
 	RegisterPlaidWebhookRoutes(api, plaidWebhookHandler)
+
+	// Automation Rules (Issues #34-38)
+	RegisterAutomationRuleRoutes(api, automationRuleHandler)
 }

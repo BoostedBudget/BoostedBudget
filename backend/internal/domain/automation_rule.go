@@ -633,6 +633,45 @@ type ToggleAutomationRuleRequest struct {
 }
 
 // =============================================================================
+// Rule Test Result (Issue #38: Test Rule Execution)
+// =============================================================================
+
+// RuleTestResult represents the result of a dry-run rule execution.
+// Used by the POST /api/v1/rules/:id/test endpoint to preview what would happen
+// without persisting any changes.
+type RuleTestResult struct {
+	RuleID           string                 `json:"rule_id"`
+	RuleName         string                 `json:"rule_name"`
+	RuleType         RuleType               `json:"rule_type"`
+	ConditionsMet    bool                   `json:"conditions_met"`
+	ConditionResults []ConditionEvalResult  `json:"condition_results"`
+	SimulatedAction  map[string]interface{} `json:"simulated_action,omitempty"`
+	TriggerDataUsed  map[string]interface{} `json:"trigger_data_used"`
+	Error            string                 `json:"error,omitempty"`
+}
+
+// ConditionEvalResult represents the evaluation result of a single condition.
+type ConditionEvalResult struct {
+	Field    string      `json:"field"`
+	Operator string      `json:"operator"`
+	Value    interface{} `json:"value"`
+	Actual   interface{} `json:"actual"`
+	Met      bool        `json:"met"`
+}
+
+// =============================================================================
+// Rule Executions Response (Issue #38: Execution History)
+// =============================================================================
+
+// RuleExecutionsResponse represents a paginated list of rule executions.
+type RuleExecutionsResponse struct {
+	Executions []*RuleExecution `json:"executions"`
+	Total      int              `json:"total"`
+	Limit      int              `json:"limit"`
+	Offset     int              `json:"offset"`
+}
+
+// =============================================================================
 // Error Constants
 // =============================================================================
 
@@ -645,4 +684,5 @@ var (
 	ErrExecutionIntervalNotMet     = errors.New("minimum execution interval not met for subscription tier")
 	ErrEventTriggersNotAllowed     = errors.New("event-based triggers not allowed for subscription tier (upgrade to premium)")
 	ErrTransferSuggestionNotFound  = errors.New("transfer suggestion not found")
+	ErrRuleExecutionNotFound       = errors.New("rule execution not found")
 )

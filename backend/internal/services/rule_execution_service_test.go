@@ -102,6 +102,32 @@ func (m *mockRuleExecutionRepository) GetFailedExecutions(ctx context.Context, r
 	return result, nil
 }
 
+// GetByRuleIDWithFilter implements RuleExecutionRepository with optional status filter.
+// Issue #38: Rules API Endpoints - Execution history with filtering.
+func (m *mockRuleExecutionRepository) GetByRuleIDWithFilter(ctx context.Context, ruleID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.RuleExecution, int, error) {
+	var result []*domain.RuleExecution
+	for _, e := range m.executions {
+		if e.RuleID == ruleID {
+			if status == nil || e.Status == *status {
+				result = append(result, e)
+			}
+		}
+	}
+
+	total := len(result)
+
+	// Apply pagination
+	if offset >= len(result) {
+		return []*domain.RuleExecution{}, total, nil
+	}
+	result = result[offset:]
+	if limit > 0 && limit < len(result) {
+		result = result[:limit]
+	}
+
+	return result, total, nil
+}
+
 type mockTransferSuggestionRepository struct {
 	suggestions []*domain.TransferSuggestion
 	createError error
@@ -1332,5 +1358,322 @@ func TestSavingsGoalExecutor(t *testing.T) {
 		assert.Equal(t, domain.ExecutionStatusCompleted, execution.Status)
 		// No suggestion created when amount <= 0
 		assert.Empty(t, suggestionRepo.suggestions)
+	})
+}
+
+// ============================================================================
+// Issue #38: Test Rule Execution (TDD - Dry-Run)
+// ============================================================================
+
+// TestTestRule tests the dry-run rule execution for the test endpoint.
+func TestTestRule(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-id"
+
+	createTestTransferRule := func() *domain.AutomationRule {
+		actions := RuleActions{
+			Transfer: &domain.TransferAction{
+				FromAccountID: "account-1",
+				ToAccountID:   "account-2",
+				AmountType:    "fixed",
+				Amount:        100.0,
+			},
+		}
+		actionsJSON, _ := json.Marshal(actions)
+
+		return &domain.AutomationRule{
+			ID:       "rule-1",
+			UserID:   userID,
+			Name:     "Test Transfer Rule",
+			Enabled:  true,
+			Priority: 1,
+			RuleType: domain.RuleTypeTransferSuggestion,
+			TriggerConfig: domain.TriggerConfig{
+				Type:  domain.TriggerTypeEvent,
+				Event: "transaction_created",
+			},
+			Conditions: []domain.AutomationRuleCondition{
+				{Field: "amount", Operator: domain.ConditionOperatorGt, Value: "50"},
+			},
+			ConditionLogic: "AND",
+			Actions:        actionsJSON,
+		}
+	}
+
+	createTestAlertRule := func() *domain.AutomationRule {
+		actions := RuleActions{
+			Alert: &domain.AlertAction{
+				NotificationChannels: []string{"email", "in_app"},
+				ThresholdType:        "percentage",
+				ThresholdValue:       75.0,
+			},
+		}
+		actionsJSON, _ := json.Marshal(actions)
+
+		return &domain.AutomationRule{
+			ID:       "rule-2",
+			UserID:   userID,
+			Name:     "Budget Alert Rule",
+			Enabled:  true,
+			Priority: 1,
+			RuleType: domain.RuleTypeBudgetAlert,
+			TriggerConfig: domain.TriggerConfig{
+				Type:  domain.TriggerTypeEvent,
+				Event: "budget_updated",
+			},
+			Conditions: []domain.AutomationRuleCondition{
+				{Field: "percent_used", Operator: domain.ConditionOperatorGte, Value: "75"},
+			},
+			ConditionLogic: "AND",
+			Actions:        actionsJSON,
+		}
+	}
+
+	t.Run("returns test result with condition evaluations when conditions met", func(t *testing.T) {
+		execRepo := &mockRuleExecutionRepository{}
+		suggestionRepo := &mockTransferSuggestionRepository{}
+		ruleRepo := &mockAutomationRulesRepository{}
+
+		service := NewRuleExecutionService(
+			execRepo,
+			suggestionRepo,
+			ruleRepo,
+			nil,
+		)
+
+		rule := createTestTransferRule()
+		triggerData := map[string]interface{}{
+			"amount": 100.0, // Greater than 50
+		}
+
+		result, err := service.TestRule(ctx, rule, triggerData)
+
+		require.NoError(t, err)
+		assert.Equal(t, rule.ID, result.RuleID)
+		assert.Equal(t, rule.Name, result.RuleName)
+		assert.Equal(t, rule.RuleType, result.RuleType)
+		assert.True(t, result.ConditionsMet)
+		assert.Len(t, result.ConditionResults, 1)
+		assert.True(t, result.ConditionResults[0].Met)
+		assert.Equal(t, "amount", result.ConditionResults[0].Field)
+		assert.NotEmpty(t, result.SimulatedAction)
+		assert.NotEmpty(t, result.TriggerDataUsed)
+	})
+
+	t.Run("returns test result with conditions not met", func(t *testing.T) {
+		execRepo := &mockRuleExecutionRepository{}
+		suggestionRepo := &mockTransferSuggestionRepository{}
+		ruleRepo := &mockAutomationRulesRepository{}
+
+		service := NewRuleExecutionService(
+			execRepo,
+			suggestionRepo,
+			ruleRepo,
+			nil,
+		)
+
+		rule := createTestTransferRule()
+		triggerData := map[string]interface{}{
+			"amount": 25.0, // Less than 50, condition not met
+		}
+
+		result, err := service.TestRule(ctx, rule, triggerData)
+
+		require.NoError(t, err)
+		assert.False(t, result.ConditionsMet)
+		assert.Len(t, result.ConditionResults, 1)
+		assert.False(t, result.ConditionResults[0].Met)
+		assert.Empty(t, result.SimulatedAction) // No action simulated when conditions not met
+	})
+
+	t.Run("does not persist execution record", func(t *testing.T) {
+		execRepo := &mockRuleExecutionRepository{}
+		suggestionRepo := &mockTransferSuggestionRepository{}
+		ruleRepo := &mockAutomationRulesRepository{}
+
+		service := NewRuleExecutionService(
+			execRepo,
+			suggestionRepo,
+			ruleRepo,
+			nil,
+		)
+
+		rule := createTestTransferRule()
+		triggerData := map[string]interface{}{
+			"amount": 100.0,
+		}
+
+		_, err := service.TestRule(ctx, rule, triggerData)
+
+		require.NoError(t, err)
+		// Verify no execution record was created
+		assert.Empty(t, execRepo.executions)
+	})
+
+	t.Run("does not create transfer suggestions", func(t *testing.T) {
+		execRepo := &mockRuleExecutionRepository{}
+		suggestionRepo := &mockTransferSuggestionRepository{}
+		ruleRepo := &mockAutomationRulesRepository{}
+
+		service := NewRuleExecutionService(
+			execRepo,
+			suggestionRepo,
+			ruleRepo,
+			nil,
+		)
+
+		rule := createTestTransferRule()
+		triggerData := map[string]interface{}{
+			"amount": 100.0,
+		}
+
+		_, err := service.TestRule(ctx, rule, triggerData)
+
+		require.NoError(t, err)
+		// Verify no suggestions were created
+		assert.Empty(t, suggestionRepo.suggestions)
+	})
+
+	t.Run("works on disabled rules for preview", func(t *testing.T) {
+		execRepo := &mockRuleExecutionRepository{}
+		suggestionRepo := &mockTransferSuggestionRepository{}
+		ruleRepo := &mockAutomationRulesRepository{}
+
+		service := NewRuleExecutionService(
+			execRepo,
+			suggestionRepo,
+			ruleRepo,
+			nil,
+		)
+
+		rule := createTestTransferRule()
+		rule.Enabled = false // Disabled rule
+
+		triggerData := map[string]interface{}{
+			"amount": 100.0,
+		}
+
+		result, err := service.TestRule(ctx, rule, triggerData)
+
+		require.NoError(t, err)
+		// Test should still work on disabled rules
+		assert.Equal(t, rule.ID, result.RuleID)
+		assert.True(t, result.ConditionsMet)
+	})
+
+	t.Run("simulates budget alert action", func(t *testing.T) {
+		execRepo := &mockRuleExecutionRepository{}
+		suggestionRepo := &mockTransferSuggestionRepository{}
+		ruleRepo := &mockAutomationRulesRepository{}
+
+		service := NewRuleExecutionService(
+			execRepo,
+			suggestionRepo,
+			ruleRepo,
+			nil,
+		)
+
+		rule := createTestAlertRule()
+		triggerData := map[string]interface{}{
+			"percent_used": 82.5,
+		}
+
+		result, err := service.TestRule(ctx, rule, triggerData)
+
+		require.NoError(t, err)
+		assert.True(t, result.ConditionsMet)
+		assert.NotEmpty(t, result.SimulatedAction)
+		// Check simulated action contains notification channels
+		action, ok := result.SimulatedAction["notification_channels"]
+		assert.True(t, ok)
+		assert.NotNil(t, action)
+	})
+
+	t.Run("uses provided trigger data", func(t *testing.T) {
+		execRepo := &mockRuleExecutionRepository{}
+		suggestionRepo := &mockTransferSuggestionRepository{}
+		ruleRepo := &mockAutomationRulesRepository{}
+
+		service := NewRuleExecutionService(
+			execRepo,
+			suggestionRepo,
+			ruleRepo,
+			nil,
+		)
+
+		rule := createTestTransferRule()
+		triggerData := map[string]interface{}{
+			"amount":      100.0,
+			"custom_field": "custom_value",
+		}
+
+		result, err := service.TestRule(ctx, rule, triggerData)
+
+		require.NoError(t, err)
+		assert.Equal(t, triggerData, result.TriggerDataUsed)
+	})
+
+	t.Run("evaluates multiple conditions with AND logic", func(t *testing.T) {
+		execRepo := &mockRuleExecutionRepository{}
+		suggestionRepo := &mockTransferSuggestionRepository{}
+		ruleRepo := &mockAutomationRulesRepository{}
+
+		service := NewRuleExecutionService(
+			execRepo,
+			suggestionRepo,
+			ruleRepo,
+			nil,
+		)
+
+		rule := createTestTransferRule()
+		rule.Conditions = []domain.AutomationRuleCondition{
+			{Field: "amount", Operator: domain.ConditionOperatorGt, Value: "50"},
+			{Field: "merchant", Operator: domain.ConditionOperatorEq, Value: "Amazon"},
+		}
+		rule.ConditionLogic = "AND"
+
+		triggerData := map[string]interface{}{
+			"amount":   100.0,
+			"merchant": "Amazon",
+		}
+
+		result, err := service.TestRule(ctx, rule, triggerData)
+
+		require.NoError(t, err)
+		assert.True(t, result.ConditionsMet)
+		assert.Len(t, result.ConditionResults, 2)
+		assert.True(t, result.ConditionResults[0].Met)
+		assert.True(t, result.ConditionResults[1].Met)
+	})
+
+	t.Run("evaluates multiple conditions with OR logic", func(t *testing.T) {
+		execRepo := &mockRuleExecutionRepository{}
+		suggestionRepo := &mockTransferSuggestionRepository{}
+		ruleRepo := &mockAutomationRulesRepository{}
+
+		service := NewRuleExecutionService(
+			execRepo,
+			suggestionRepo,
+			ruleRepo,
+			nil,
+		)
+
+		rule := createTestTransferRule()
+		rule.Conditions = []domain.AutomationRuleCondition{
+			{Field: "amount", Operator: domain.ConditionOperatorGt, Value: "500"}, // Will not match
+			{Field: "merchant", Operator: domain.ConditionOperatorEq, Value: "Amazon"}, // Will match
+		}
+		rule.ConditionLogic = "OR"
+
+		triggerData := map[string]interface{}{
+			"amount":   100.0,  // Less than 500
+			"merchant": "Amazon",
+		}
+
+		result, err := service.TestRule(ctx, rule, triggerData)
+
+		require.NoError(t, err)
+		assert.True(t, result.ConditionsMet) // OR logic - at least one matches
+		assert.Len(t, result.ConditionResults, 2)
 	})
 }
