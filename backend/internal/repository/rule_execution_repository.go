@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,6 +26,10 @@ type RuleExecutionRepository interface {
 
 	// GetByRuleID retrieves executions for a specific rule with pagination.
 	GetByRuleID(ctx context.Context, ruleID string, limit, offset int) ([]*domain.RuleExecution, error)
+
+	// GetByRuleIDWithFilter retrieves executions for a rule with optional status filter and total count.
+	// Issue #38: Rules API Endpoints - Execution history with filtering.
+	GetByRuleIDWithFilter(ctx context.Context, ruleID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.RuleExecution, int, error)
 
 	// GetTodayExecutionCount counts executions for a user today (since midnight UTC).
 	GetTodayExecutionCount(ctx context.Context, userID string) (int, error)
@@ -161,6 +166,51 @@ func (r *ruleExecutionRepository) GetByRuleID(ctx context.Context, ruleID string
 	`
 
 	return r.queryExecutions(ctx, query, ruleID, limit, offset)
+}
+
+// GetByRuleIDWithFilter retrieves executions for a rule with optional status filter and total count.
+// Issue #38: Rules API Endpoints - Execution history with filtering.
+func (r *ruleExecutionRepository) GetByRuleIDWithFilter(ctx context.Context, ruleID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.RuleExecution, int, error) {
+	// Build count query
+	countQuery := `SELECT COUNT(*) FROM rule_executions WHERE rule_id = $1`
+	countArgs := []interface{}{ruleID}
+
+	// Build data query
+	dataQuery := `
+		SELECT id, rule_id, status, started_at, completed_at,
+			execution_duration_ms, trigger_context, input_data, output_data,
+			error_code, error_message, retry_count, max_retries
+		FROM rule_executions
+		WHERE rule_id = $1`
+	dataArgs := []interface{}{ruleID}
+
+	// Add status filter if provided
+	if status != nil {
+		countQuery += ` AND status = $2`
+		countArgs = append(countArgs, *status)
+		dataQuery += ` AND status = $2`
+		dataArgs = append(dataArgs, *status)
+	}
+
+	// Get total count
+	var total int
+	err := r.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// Add ordering and pagination
+	nextArg := len(dataArgs) + 1
+	dataQuery += fmt.Sprintf(` ORDER BY started_at DESC LIMIT $%d OFFSET $%d`, nextArg, nextArg+1)
+	dataArgs = append(dataArgs, limit, offset)
+
+	// Get executions
+	executions, err := r.queryExecutions(ctx, dataQuery, dataArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return executions, total, nil
 }
 
 // GetTodayExecutionCount counts executions for a user today (since midnight UTC).

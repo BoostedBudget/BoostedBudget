@@ -39,6 +39,14 @@ type RuleExecutionService interface {
 	// GetExecutionHistory retrieves execution history for a rule.
 	GetExecutionHistory(ctx context.Context, ruleID string, limit, offset int) ([]*domain.RuleExecution, error)
 
+	// GetExecutionHistoryWithFilter retrieves execution history with optional status filter and total count.
+	// Issue #38: Rules API Endpoints - Execution history with filtering.
+	GetExecutionHistoryWithFilter(ctx context.Context, ruleID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.RuleExecution, int, error)
+
+	// TestRule performs a dry-run execution of a rule without persisting any changes.
+	// Issue #38: Rules API Endpoints - Test endpoint.
+	TestRule(ctx context.Context, rule *domain.AutomationRule, triggerData map[string]interface{}) (*domain.RuleTestResult, error)
+
 	// SetUserGetter sets the user getter for tier checking.
 	SetUserGetter(getter UserGetter)
 
@@ -232,6 +240,129 @@ func (s *ruleExecutionService) ProcessEventTrigger(ctx context.Context, userID, 
 // GetExecutionHistory retrieves execution history for a rule.
 func (s *ruleExecutionService) GetExecutionHistory(ctx context.Context, ruleID string, limit, offset int) ([]*domain.RuleExecution, error) {
 	return s.executionRepo.GetByRuleID(ctx, ruleID, limit, offset)
+}
+
+// GetExecutionHistoryWithFilter retrieves execution history with optional status filter and total count.
+// Issue #38: Rules API Endpoints - Execution history with filtering.
+func (s *ruleExecutionService) GetExecutionHistoryWithFilter(ctx context.Context, ruleID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.RuleExecution, int, error) {
+	return s.executionRepo.GetByRuleIDWithFilter(ctx, ruleID, status, limit, offset)
+}
+
+// TestRule performs a dry-run execution of a rule without persisting any changes.
+// Issue #38: Rules API Endpoints - Test endpoint.
+// This method:
+// - Evaluates each condition and returns individual results
+// - Simulates what action would occur (without persisting)
+// - Works on disabled rules for preview purposes
+// - Does NOT count toward daily execution limits
+// - Does NOT persist execution records
+// - Does NOT create transfer suggestions or send notifications
+func (s *ruleExecutionService) TestRule(ctx context.Context, rule *domain.AutomationRule, triggerData map[string]interface{}) (*domain.RuleTestResult, error) {
+	result := &domain.RuleTestResult{
+		RuleID:          rule.ID,
+		RuleName:        rule.Name,
+		RuleType:        rule.RuleType,
+		TriggerDataUsed: triggerData,
+	}
+
+	// Evaluate each condition individually
+	conditionResults := make([]domain.ConditionEvalResult, len(rule.Conditions))
+	for i, condition := range rule.Conditions {
+		actual, exists := triggerData[condition.Field]
+		met := evaluateCondition(condition, triggerData)
+
+		conditionResults[i] = domain.ConditionEvalResult{
+			Field:    condition.Field,
+			Operator: string(condition.Operator),
+			Value:    condition.Value,
+			Actual:   actual,
+			Met:      met,
+		}
+
+		if !exists {
+			conditionResults[i].Actual = nil
+		}
+	}
+	result.ConditionResults = conditionResults
+
+	// Determine overall condition result based on logic
+	result.ConditionsMet = evaluateConditions(rule.Conditions, rule.ConditionLogic, triggerData)
+
+	// If conditions are met, simulate the action without persisting
+	if result.ConditionsMet {
+		simulatedAction, err := s.simulateAction(rule, triggerData)
+		if err != nil {
+			result.Error = err.Error()
+		} else {
+			result.SimulatedAction = simulatedAction
+		}
+	}
+
+	return result, nil
+}
+
+// simulateAction returns a description of what action would occur without actually executing it.
+func (s *ruleExecutionService) simulateAction(rule *domain.AutomationRule, triggerData map[string]interface{}) (map[string]interface{}, error) {
+	var actions RuleActions
+	if err := json.Unmarshal(rule.Actions, &actions); err != nil {
+		return nil, fmt.Errorf("failed to parse actions: %w", err)
+	}
+
+	simulatedAction := make(map[string]interface{})
+
+	switch rule.RuleType {
+	case domain.RuleTypeTransferSuggestion:
+		if actions.Transfer == nil {
+			return nil, fmt.Errorf("transfer action not defined")
+		}
+		amount := s.calculateTransferAmount(actions.Transfer, triggerData)
+		simulatedAction["action_type"] = "transfer_suggestion"
+		simulatedAction["from_account_id"] = actions.Transfer.FromAccountID
+		simulatedAction["to_account_id"] = actions.Transfer.ToAccountID
+		simulatedAction["amount"] = amount
+		simulatedAction["amount_type"] = actions.Transfer.AmountType
+
+	case domain.RuleTypeBudgetAlert:
+		if actions.Alert == nil {
+			return nil, fmt.Errorf("alert action not defined")
+		}
+		simulatedAction["action_type"] = "budget_alert"
+		simulatedAction["notification_channels"] = actions.Alert.NotificationChannels
+		simulatedAction["threshold_type"] = actions.Alert.ThresholdType
+		simulatedAction["threshold_value"] = actions.Alert.ThresholdValue
+
+	case domain.RuleTypeCategoryRollover:
+		if actions.Rollover == nil {
+			return nil, fmt.Errorf("rollover action not defined")
+		}
+		remaining := 0.0
+		if r, ok := triggerData["remaining"].(float64); ok {
+			remaining = r
+		}
+		amount := s.calculateRolloverAmount(actions.Rollover, remaining)
+		simulatedAction["action_type"] = "category_rollover"
+		simulatedAction["rollover_type"] = actions.Rollover.RolloverType
+		simulatedAction["rollover_amount"] = amount
+		if actions.Rollover.SourceBudgetCategoryID != "" {
+			simulatedAction["source_category_id"] = actions.Rollover.SourceBudgetCategoryID
+		}
+
+	case domain.RuleTypeSavingsGoal:
+		if actions.SavingsGoal == nil {
+			return nil, fmt.Errorf("savings goal action not defined")
+		}
+		amount := s.calculateSavingsGoalAmount(actions.SavingsGoal, triggerData)
+		simulatedAction["action_type"] = "savings_goal"
+		simulatedAction["savings_goal_id"] = actions.SavingsGoal.SavingsGoalID
+		simulatedAction["from_account_id"] = actions.SavingsGoal.FromAccountID
+		simulatedAction["amount"] = amount
+		simulatedAction["amount_type"] = actions.SavingsGoal.AmountType
+
+	default:
+		return nil, fmt.Errorf("unknown rule type: %s", rule.RuleType)
+	}
+
+	return simulatedAction, nil
 }
 
 // executeTransferSuggestion creates a transfer suggestion from the rule action.
