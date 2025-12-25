@@ -148,10 +148,10 @@ type DisableAutomationRuleInput struct {
 // GetRuleExecutionsInput represents the input for getting rule execution history.
 type GetRuleExecutionsInput struct {
 	inputs.AuthenticatedInput
-	ID     string  `path:"id" doc:"Automation Rule UUID"`
-	Status *string `query:"status" doc:"Filter by status: pending, running, completed, failed"`
-	Limit  int     `query:"limit" default:"20" minimum:"1" maximum:"100" doc:"Maximum number of results"`
-	Offset int     `query:"offset" default:"0" minimum:"0" doc:"Number of results to skip"`
+	ID     string `path:"id" doc:"Automation Rule UUID"`
+	Status string `query:"status" doc:"Filter by status: pending, running, completed, failed"`
+	Limit  int    `query:"limit" default:"20" minimum:"1" maximum:"100" doc:"Maximum number of results"`
+	Offset int    `query:"offset" default:"0" minimum:"0" doc:"Number of results to skip"`
 }
 
 // GetRuleExecutionsOutput represents the response for getting rule execution history.
@@ -338,8 +338,8 @@ func (h *AutomationRuleHandler) GetRuleExecutions(ctx context.Context, input *Ge
 
 	// Parse status filter if provided
 	var statusFilter *domain.ExecutionStatus
-	if input.Status != nil && *input.Status != "" {
-		status := domain.ExecutionStatus(*input.Status)
+	if input.Status != "" {
+		status := domain.ExecutionStatus(input.Status)
 		statusFilter = &status
 	}
 
