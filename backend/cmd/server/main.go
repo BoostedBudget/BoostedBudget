@@ -126,6 +126,7 @@ func main() {
 		budgetRepo := repository.NewBudgetRepository(db) // Issue #28: Budget management
 		savingsGoalRepo := repository.NewSavingsGoalRepository(db) // Issue #28: Savings goals
 		dashboardPrefsRepo := repository.NewDashboardPreferencesRepository(db) // Issue #354: Dashboard preferences
+		transferSuggestionRepo := repository.NewTransferSuggestionRepository(db) // Issue #36: Transfer suggestions
 
 		// Create mock audit logger (will be replaced with real implementation later)
 		auditLogger := &mockAuditLogger{}
@@ -263,11 +264,15 @@ func main() {
 				log.Println("✅ Plaid service initialized")
 				log.Println("✅ Account linking service initialized")
 
+				// Issue #36: Transaction Monitor Service for auto-detecting completed transfers
+				transactionMonitorService := services.NewTransactionMonitorService(transferSuggestionRepo)
+
 				// Initialize Transaction Sync Service for webhook processing
 				// Issue #256: Transaction Sync Service
 				// Issue #242: Monthly sync limits integration
 				// Issue #346: Categorization rules integration
 				// Issue #494: Budget sync integration
+				// Issue #36: Transaction monitor integration
 				transactionSyncService := services.NewTransactionSyncService(
 					webhookRepo,
 					linkedItemRepo,
@@ -280,6 +285,7 @@ func main() {
 					syncLimitService,
 					ruleApplicationService,
 					budgetSyncService,
+					transactionMonitorService,
 				)
 
 				// Initialize Item Error Service for ITEM webhook processing

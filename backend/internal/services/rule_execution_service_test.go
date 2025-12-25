@@ -924,3 +924,403 @@ func (m *mockSubscriptionCheckerSimple) GetEffectiveSubscription(ctx context.Con
 		Limits: m.limits,
 	}, nil
 }
+
+// ============================================================================
+// Issue #36: Savings Goal Executor Tests (TDD)
+// ============================================================================
+
+// mockSavingsGoalRepository for testing savings goal executor.
+type mockSavingsGoalRepository struct {
+	goals     []*domain.SavingsGoal
+	findError error
+}
+
+func (m *mockSavingsGoalRepository) Create(ctx context.Context, goal *domain.SavingsGoal) error {
+	m.goals = append(m.goals, goal)
+	return nil
+}
+
+func (m *mockSavingsGoalRepository) GetByID(ctx context.Context, id string) (*domain.SavingsGoal, error) {
+	if m.findError != nil {
+		return nil, m.findError
+	}
+	for _, g := range m.goals {
+		if g.ID == id {
+			return g, nil
+		}
+	}
+	return nil, domain.ErrSavingsGoalNotFound
+}
+
+func (m *mockSavingsGoalRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error) {
+	var result []*domain.SavingsGoal
+	for _, g := range m.goals {
+		if g.UserID == userID {
+			result = append(result, g)
+		}
+	}
+	return result, nil
+}
+
+func (m *mockSavingsGoalRepository) GetActiveByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error) {
+	var result []*domain.SavingsGoal
+	for _, g := range m.goals {
+		if g.UserID == userID && !g.IsCompleted {
+			result = append(result, g)
+		}
+	}
+	return result, nil
+}
+
+func (m *mockSavingsGoalRepository) GetByName(ctx context.Context, userID, name string) (*domain.SavingsGoal, error) {
+	for _, g := range m.goals {
+		if g.UserID == userID && g.Name == name {
+			return g, nil
+		}
+	}
+	return nil, domain.ErrSavingsGoalNotFound
+}
+
+func (m *mockSavingsGoalRepository) Update(ctx context.Context, goal *domain.SavingsGoal) error {
+	for i, g := range m.goals {
+		if g.ID == goal.ID {
+			m.goals[i] = goal
+			return nil
+		}
+	}
+	return domain.ErrSavingsGoalNotFound
+}
+
+func (m *mockSavingsGoalRepository) Delete(ctx context.Context, id, userID string) error {
+	for i, g := range m.goals {
+		if g.ID == id {
+			m.goals = append(m.goals[:i], m.goals[i+1:]...)
+			return nil
+		}
+	}
+	return domain.ErrSavingsGoalNotFound
+}
+
+func (m *mockSavingsGoalRepository) CountByUserID(ctx context.Context, userID string) (int, error) {
+	count := 0
+	for _, g := range m.goals {
+		if g.UserID == userID {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (m *mockSavingsGoalRepository) GetByAccountID(ctx context.Context, accountID string) ([]*domain.SavingsGoal, error) {
+	var result []*domain.SavingsGoal
+	for _, g := range m.goals {
+		if g.AccountID == accountID {
+			result = append(result, g)
+		}
+	}
+	return result, nil
+}
+
+func (m *mockSavingsGoalRepository) UpdateCurrentAmount(ctx context.Context, goalID string, currentAmount float64) error {
+	for _, g := range m.goals {
+		if g.ID == goalID {
+			g.CurrentAmount = currentAmount
+			return nil
+		}
+	}
+	return domain.ErrSavingsGoalNotFound
+}
+
+func (m *mockSavingsGoalRepository) MarkCompleted(ctx context.Context, goalID string) error {
+	for _, g := range m.goals {
+		if g.ID == goalID {
+			g.IsCompleted = true
+			return nil
+		}
+	}
+	return domain.ErrSavingsGoalNotFound
+}
+
+// TestSavingsGoalExecutor tests the savings goal rule executor.
+func TestSavingsGoalExecutor(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-id"
+	goalID := "savings-goal-123"
+	accountID := "savings-account-456"
+	fromAccountID := "checking-account-789"
+
+	createSavingsGoalRule := func(action domain.SavingsGoalAction) *domain.AutomationRule {
+		actions := RuleActions{
+			SavingsGoal: &action,
+		}
+		actionsJSON, _ := json.Marshal(actions)
+
+		return &domain.AutomationRule{
+			ID:       "rule-savings-1",
+			UserID:   userID,
+			Name:     "Savings Goal Contribution",
+			Enabled:  true,
+			Priority: 1,
+			RuleType: domain.RuleTypeSavingsGoal,
+			TriggerConfig: domain.TriggerConfig{
+				Type:  domain.TriggerTypeEvent,
+				Event: "transaction_created",
+			},
+			Conditions:     []domain.AutomationRuleCondition{},
+			ConditionLogic: "AND",
+			Actions:        actionsJSON,
+		}
+	}
+
+	t.Run("executes savings goal rule with fixed amount", func(t *testing.T) {
+		execRepo := &mockRuleExecutionRepository{}
+		suggestionRepo := &mockTransferSuggestionRepository{}
+		ruleRepo := &mockAutomationRulesRepository{}
+		goalRepo := &mockSavingsGoalRepository{
+			goals: []*domain.SavingsGoal{
+				{
+					ID:            goalID,
+					UserID:        userID,
+					Name:          "Emergency Fund",
+					AccountID:     accountID,
+					TargetAmount:  10000.0,
+					CurrentAmount: 2500.0,
+				},
+			},
+		}
+
+		service := NewRuleExecutionService(
+			execRepo,
+			suggestionRepo,
+			ruleRepo,
+			nil,
+		)
+		service.SetSavingsGoalRepo(goalRepo)
+
+		action := domain.SavingsGoalAction{
+			SavingsGoalID: goalID,
+			FromAccountID: fromAccountID,
+			AmountType:    "fixed",
+			Amount:        200.0,
+		}
+		rule := createSavingsGoalRule(action)
+
+		triggerData := map[string]interface{}{
+			"amount": 1000.0, // Paycheck
+		}
+
+		execution, err := service.ExecuteRule(ctx, rule, triggerData)
+
+		require.NoError(t, err)
+		assert.Equal(t, domain.ExecutionStatusCompleted, execution.Status)
+
+		// Verify suggestion was created
+		require.Len(t, suggestionRepo.suggestions, 1)
+		suggestion := suggestionRepo.suggestions[0]
+		assert.Equal(t, userID, suggestion.UserID)
+		assert.Equal(t, fromAccountID, *suggestion.FromAccountID)
+		assert.Equal(t, accountID, *suggestion.ToAccountID) // Savings goal's linked account
+		assert.Equal(t, 200.0, suggestion.Amount)           // Fixed amount
+		assert.Contains(t, *suggestion.Reason, "Emergency Fund")
+	})
+
+	t.Run("executes savings goal rule with percentage amount", func(t *testing.T) {
+		execRepo := &mockRuleExecutionRepository{}
+		suggestionRepo := &mockTransferSuggestionRepository{}
+		ruleRepo := &mockAutomationRulesRepository{}
+		goalRepo := &mockSavingsGoalRepository{
+			goals: []*domain.SavingsGoal{
+				{
+					ID:            goalID,
+					UserID:        userID,
+					Name:          "Vacation Fund",
+					AccountID:     accountID,
+					TargetAmount:  5000.0,
+					CurrentAmount: 1000.0,
+				},
+			},
+		}
+
+		service := NewRuleExecutionService(
+			execRepo,
+			suggestionRepo,
+			ruleRepo,
+			nil,
+		)
+		service.SetSavingsGoalRepo(goalRepo)
+
+		percentage := 10.0
+		action := domain.SavingsGoalAction{
+			SavingsGoalID: goalID,
+			FromAccountID: fromAccountID,
+			AmountType:    "percentage",
+			Percentage:    &percentage,
+		}
+		rule := createSavingsGoalRule(action)
+
+		triggerData := map[string]interface{}{
+			"amount": 500.0, // 10% of 500 = 50
+		}
+
+		execution, err := service.ExecuteRule(ctx, rule, triggerData)
+
+		require.NoError(t, err)
+		assert.Equal(t, domain.ExecutionStatusCompleted, execution.Status)
+
+		require.Len(t, suggestionRepo.suggestions, 1)
+		assert.Equal(t, 50.0, suggestionRepo.suggestions[0].Amount) // 10% of 500
+	})
+
+	t.Run("executes savings goal rule with remaining amount", func(t *testing.T) {
+		execRepo := &mockRuleExecutionRepository{}
+		suggestionRepo := &mockTransferSuggestionRepository{}
+		ruleRepo := &mockAutomationRulesRepository{}
+		goalRepo := &mockSavingsGoalRepository{
+			goals: []*domain.SavingsGoal{
+				{
+					ID:            goalID,
+					UserID:        userID,
+					Name:          "New Car Fund",
+					AccountID:     accountID,
+					TargetAmount:  20000.0,
+					CurrentAmount: 5000.0,
+				},
+			},
+		}
+
+		service := NewRuleExecutionService(
+			execRepo,
+			suggestionRepo,
+			ruleRepo,
+			nil,
+		)
+		service.SetSavingsGoalRepo(goalRepo)
+
+		action := domain.SavingsGoalAction{
+			SavingsGoalID: goalID,
+			FromAccountID: fromAccountID,
+			AmountType:    "remaining",
+			Threshold:     1000.0, // Keep at least $1000, transfer rest
+		}
+		rule := createSavingsGoalRule(action)
+
+		triggerData := map[string]interface{}{
+			"balance": 1500.0, // Balance after paycheck
+		}
+
+		execution, err := service.ExecuteRule(ctx, rule, triggerData)
+
+		require.NoError(t, err)
+		assert.Equal(t, domain.ExecutionStatusCompleted, execution.Status)
+
+		require.Len(t, suggestionRepo.suggestions, 1)
+		assert.Equal(t, 500.0, suggestionRepo.suggestions[0].Amount) // 1500 - 1000 = 500
+	})
+
+	t.Run("fails when savings goal action is missing", func(t *testing.T) {
+		execRepo := &mockRuleExecutionRepository{}
+		suggestionRepo := &mockTransferSuggestionRepository{}
+		ruleRepo := &mockAutomationRulesRepository{}
+
+		service := NewRuleExecutionService(
+			execRepo,
+			suggestionRepo,
+			ruleRepo,
+			nil,
+		)
+
+		// Create rule without savings goal action
+		actions := RuleActions{}
+		actionsJSON, _ := json.Marshal(actions)
+		rule := &domain.AutomationRule{
+			ID:             "rule-savings-bad",
+			UserID:         userID,
+			Name:           "Bad Savings Rule",
+			Enabled:        true,
+			RuleType:       domain.RuleTypeSavingsGoal,
+			TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "test"},
+			ConditionLogic: "AND",
+			Actions:        actionsJSON,
+		}
+
+		execution, err := service.ExecuteRule(ctx, rule, map[string]interface{}{})
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "savings goal action not defined")
+		assert.Equal(t, domain.ExecutionStatusFailed, execution.Status)
+	})
+
+	t.Run("fails when savings goal not found", func(t *testing.T) {
+		execRepo := &mockRuleExecutionRepository{}
+		suggestionRepo := &mockTransferSuggestionRepository{}
+		ruleRepo := &mockAutomationRulesRepository{}
+		goalRepo := &mockSavingsGoalRepository{
+			goals: []*domain.SavingsGoal{}, // Empty - goal not found
+		}
+
+		service := NewRuleExecutionService(
+			execRepo,
+			suggestionRepo,
+			ruleRepo,
+			nil,
+		)
+		service.SetSavingsGoalRepo(goalRepo)
+
+		action := domain.SavingsGoalAction{
+			SavingsGoalID: "non-existent-goal",
+			FromAccountID: fromAccountID,
+			AmountType:    "fixed",
+			Amount:        100.0,
+		}
+		rule := createSavingsGoalRule(action)
+
+		execution, err := service.ExecuteRule(ctx, rule, map[string]interface{}{})
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "savings goal not found")
+		assert.Equal(t, domain.ExecutionStatusFailed, execution.Status)
+	})
+
+	t.Run("skips when calculated amount is zero or negative", func(t *testing.T) {
+		execRepo := &mockRuleExecutionRepository{}
+		suggestionRepo := &mockTransferSuggestionRepository{}
+		ruleRepo := &mockAutomationRulesRepository{}
+		goalRepo := &mockSavingsGoalRepository{
+			goals: []*domain.SavingsGoal{
+				{
+					ID:        goalID,
+					UserID:    userID,
+					Name:      "Test Fund",
+					AccountID: accountID,
+				},
+			},
+		}
+
+		service := NewRuleExecutionService(
+			execRepo,
+			suggestionRepo,
+			ruleRepo,
+			nil,
+		)
+		service.SetSavingsGoalRepo(goalRepo)
+
+		action := domain.SavingsGoalAction{
+			SavingsGoalID: goalID,
+			FromAccountID: fromAccountID,
+			AmountType:    "remaining",
+			Threshold:     1000.0,
+		}
+		rule := createSavingsGoalRule(action)
+
+		triggerData := map[string]interface{}{
+			"balance": 500.0, // Less than threshold
+		}
+
+		execution, err := service.ExecuteRule(ctx, rule, triggerData)
+
+		require.NoError(t, err)
+		assert.Equal(t, domain.ExecutionStatusCompleted, execution.Status)
+		// No suggestion created when amount <= 0
+		assert.Empty(t, suggestionRepo.suggestions)
+	})
+}

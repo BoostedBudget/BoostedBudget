@@ -37,6 +37,10 @@ type BudgetRepository interface {
 	UpdateBudgetIncome(ctx context.Context, budgetID string, incomeAmount float64) error
 	AddIncomeSource(ctx context.Context, budgetID string, source domain.IncomeSource) error
 	RemoveIncomeSource(ctx context.Context, budgetID string, sourceIndex int) error
+
+	// Envelope budgeting rollover operations (Issue #36: Rule Executors)
+	// AdjustCategoryAllocatedAmount adjusts the allocated amount by delta (can be positive or negative)
+	AdjustCategoryAllocatedAmount(ctx context.Context, categoryID string, delta float64) error
 }
 
 // budgetRepository implements BudgetRepository using PostgreSQL.
@@ -775,6 +779,33 @@ func (r *budgetRepository) RemoveIncomeSource(ctx context.Context, budgetID stri
 
 	if rowsAffected == 0 {
 		return domain.ErrBudgetNotFound
+	}
+
+	return nil
+}
+
+// AdjustCategoryAllocatedAmount adjusts the allocated_amount by a delta value.
+// This is used for envelope budgeting rollovers (Issue #36: Rule Executors).
+// Delta can be positive (increase allocation) or negative (decrease allocation).
+func (r *budgetRepository) AdjustCategoryAllocatedAmount(ctx context.Context, categoryID string, delta float64) error {
+	query := `
+		UPDATE budget_categories
+		SET allocated_amount = allocated_amount + $1, updated_at = $2
+		WHERE id = $3
+	`
+
+	result, err := r.db.ExecContext(ctx, query, delta, time.Now(), categoryID)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return domain.ErrBudgetCategoryNotFound
 	}
 
 	return nil
