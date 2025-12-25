@@ -107,6 +107,9 @@ func main() {
 	// Declare webhook processor at package scope for graceful shutdown
 	var webhookProcessor *workers.WebhookProcessor
 
+	// Issue #37: Declare rule scheduler manager at package scope for graceful shutdown
+	var ruleSchedulerManager *workers.RuleSchedulerManager
+
 	if db != nil && cfg.Auth0Domain != "" && cfg.Auth0Audience != "" {
 		// Create repositories
 		profileRepo := repository.NewProfileRepository(db)
@@ -127,6 +130,7 @@ func main() {
 		savingsGoalRepo := repository.NewSavingsGoalRepository(db) // Issue #28: Savings goals
 		dashboardPrefsRepo := repository.NewDashboardPreferencesRepository(db) // Issue #354: Dashboard preferences
 		transferSuggestionRepo := repository.NewTransferSuggestionRepository(db) // Issue #36: Transfer suggestions
+		automationRuleRepo := repository.NewAutomationRulesRepository(db) // Issue #37: Automation rules
 
 		// Create mock audit logger (will be replaced with real implementation later)
 		auditLogger := &mockAuditLogger{}
@@ -172,6 +176,37 @@ func main() {
 			budgetCategoryMatchingService,
 			budgetLogger,
 		)
+
+		// Issue #37: Automation Rule Service and Rule Scheduler
+		automationRuleService := services.NewAutomationRuleService(automationRuleRepo, subscriptionService, profileRepo)
+		log.Println("✅ Automation rule service initialized")
+
+		// Issue #37: Rule Execution Service
+		ruleExecutionRepo := repository.NewRuleExecutionRepository(db)
+		ruleExecutionService := services.NewRuleExecutionService(ruleExecutionRepo, transferSuggestionRepo, automationRuleRepo, nil)
+		log.Println("✅ Rule execution service initialized")
+
+		// Issue #37: Rule Scheduler Manager with providers
+		ruleSchedulerManager = workers.NewRuleSchedulerManager()
+		subscriptionLimitAdapter := workers.NewSubscriptionLimitAdapter()
+
+		// Create and register CronTriggerProvider
+		cronProvider := workers.NewCronTriggerProvider(
+			automationRuleRepo,
+			ruleExecutionService,
+			subscriptionLimitAdapter,
+			15*time.Minute, // Refresh interval for picking up new/updated rules
+		)
+		ruleSchedulerManager.RegisterProvider(cronProvider)
+
+		// Create and register ManualTriggerProvider
+		manualProvider := workers.NewManualTriggerProvider(
+			automationRuleRepo,
+			ruleExecutionService,
+			subscriptionLimitAdapter,
+		)
+		ruleSchedulerManager.RegisterProvider(manualProvider)
+		log.Println("✅ Rule scheduler manager initialized with cron and manual providers")
 
 		// Initialize Email service (needed by deletion service and item error service)
 		// Optional - uses no-op mock if not configured
@@ -414,6 +449,11 @@ func main() {
 		operations.RegisterSavingsGoalRoutes(humaAPI, humaSavingsGoalHandler)
 		log.Println("✅ Huma savings goal routes registered")
 
+		// Register Huma automation rule routes (Issue #37: Rule Scheduler)
+		humaAutomationRuleHandler := operations.NewAutomationRuleHandler(automationRuleService, ruleSchedulerManager)
+		operations.RegisterAutomationRuleRoutes(humaAPI, humaAutomationRuleHandler)
+		log.Println("✅ Huma automation rule routes registered")
+
 		// Register Huma plaid routes (Issue #559: Huma migration)
 		if plaidService != nil && accountService != nil {
 			humaPlaidHandler := operations.NewPlaidHandler(plaidService, accountService)
@@ -555,6 +595,19 @@ func main() {
 		log.Println("✅ Webhook processor started")
 	}
 
+	// Issue #37: Start rule scheduler manager
+	if ruleSchedulerManager != nil {
+		if workerCtx == nil {
+			workerCtx, workerCancel = context.WithCancel(context.Background())
+		}
+		go func() {
+			if err := ruleSchedulerManager.Start(workerCtx); err != nil {
+				log.Printf("⚠️  Failed to start rule scheduler: %v", err)
+			}
+		}()
+		log.Println("✅ Rule scheduler manager started")
+	}
+
 	// Start server
 	// Bind to 0.0.0.0 to be accessible from outside the container (required for Fly.io)
 	address := fmt.Sprintf("0.0.0.0:%s", cfg.Port)
@@ -574,7 +627,18 @@ func main() {
 
 	log.Println("Shutting down server...")
 
-	// Stop background workers first (if running)
+	// Issue #37: Stop rule scheduler manager first (graceful shutdown)
+	if ruleSchedulerManager != nil {
+		log.Println("Stopping rule scheduler manager...")
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := ruleSchedulerManager.Stop(stopCtx); err != nil {
+			log.Printf("⚠️  Error stopping rule scheduler: %v", err)
+		}
+		stopCancel()
+		log.Println("Rule scheduler manager stopped")
+	}
+
+	// Stop background workers (if running)
 	if workerCancel != nil {
 		log.Println("Stopping background workers...")
 		workerCancel()
