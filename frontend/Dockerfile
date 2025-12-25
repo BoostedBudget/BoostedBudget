@@ -1,23 +1,19 @@
 # Multi-stage production Dockerfile for Frontend
 # Stage 1: Builder
-FROM node:25-alpine AS builder
-
-# Install pnpm globally
-RUN npm install -g pnpm@10
+FROM oven/bun:latest AS builder
 
 WORKDIR /build
 
 # Copy package files
-COPY frontend/package.json frontend/pnpm-lock.yaml ./
+COPY frontend/package.json frontend/bun.lock ./
 
 # Install ALL dependencies (including devDependencies for build)
-RUN echo "Installing production dependencies..." && \
+RUN echo "Installing dependencies with Bun..." && \
     for i in 1 2 3 4; do \
-      echo "pnpm install attempt $i/4..." && \
-      pnpm install --frozen-lockfile && \
+      echo "bun install attempt $i/4..." && \
+      bun install --frozen-lockfile && \
       echo "Dependencies installed" && break || \
-      { echo "pnpm install attempt $i/4 failed"; \
-        pnpm store prune; \
+      { echo "bun install attempt $i/4 failed"; \
         [ $i -lt 4 ] && sleep 10; }; \
     done
 
@@ -28,7 +24,7 @@ COPY config/ /config/
 COPY frontend/ .
 
 # Build the application
-RUN pnpm run build
+RUN bun run build
 
 # Stage 2: Runtime with Nginx (Debian-based)
 FROM nginx:stable
