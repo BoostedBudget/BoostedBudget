@@ -50,6 +50,11 @@ type AutomationRulesRepository interface {
 
 	// GetRulesByType retrieves enabled rules of a specific type.
 	GetRulesByType(ctx context.Context, userID string, ruleType domain.RuleType) ([]*domain.AutomationRule, error)
+
+	// GetRulesByScheduleTrigger retrieves all enabled rules with schedule triggers.
+	// Used by CronTriggerProvider to load all scheduled rules on startup and refresh.
+	// Issue #37: Rule Scheduler
+	GetRulesByScheduleTrigger(ctx context.Context) ([]*domain.AutomationRule, error)
 }
 
 // automationRulesRepository implements AutomationRulesRepository using PostgreSQL.
@@ -360,6 +365,24 @@ func (r *automationRulesRepository) GetRulesByType(ctx context.Context, userID s
 	`
 
 	return r.queryRules(ctx, query, userID, ruleType)
+}
+
+// GetRulesByScheduleTrigger retrieves all enabled rules with schedule triggers.
+// Issue #37: Rule Scheduler - used by CronTriggerProvider.
+func (r *automationRulesRepository) GetRulesByScheduleTrigger(ctx context.Context) ([]*domain.AutomationRule, error) {
+	query := `
+		SELECT id, user_id, name, description, enabled, priority,
+			rule_type, trigger_config, conditions, condition_logic,
+			actions, execution_count, last_executed_at, last_successful_at,
+			created_at, updated_at
+		FROM rules
+		WHERE enabled = true
+			AND trigger_config->>'type' = 'schedule'
+			AND trigger_config->>'cron' IS NOT NULL
+		ORDER BY priority DESC, created_at ASC
+	`
+
+	return r.queryRules(ctx, query)
 }
 
 // scanRule scans a single rule from a row.

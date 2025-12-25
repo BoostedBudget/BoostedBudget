@@ -7,7 +7,10 @@ package domain
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
+
+	"github.com/robfig/cron/v3"
 )
 
 // =============================================================================
@@ -204,8 +207,30 @@ func (tc *TriggerConfig) Validate() error {
 		if tc.Cron == "" {
 			return errors.New("cron expression is required for schedule trigger type")
 		}
+		// Validate cron expression (Issue #37)
+		if err := ValidateCronExpression(tc.Cron); err != nil {
+			return err
+		}
+		// Validate timezone if provided
+		if tc.Timezone != "" {
+			if _, err := time.LoadLocation(tc.Timezone); err != nil {
+				return fmt.Errorf("invalid timezone '%s': %w", tc.Timezone, err)
+			}
+		}
 	}
 
+	return nil
+}
+
+// ValidateCronExpression validates a cron expression string.
+// Issue #37: Rule Scheduler - used to validate cron expressions before scheduling.
+// Supports standard 5-field cron syntax: minute, hour, day-of-month, month, day-of-week.
+func ValidateCronExpression(expr string) error {
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+	_, err := parser.Parse(expr)
+	if err != nil {
+		return fmt.Errorf("invalid cron expression '%s': %w", expr, err)
+	}
 	return nil
 }
 

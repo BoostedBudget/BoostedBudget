@@ -904,6 +904,16 @@ func (m *mockAutomationRulesRepository) GetRulesByType(ctx context.Context, user
 	return result, nil
 }
 
+func (m *mockAutomationRulesRepository) GetRulesByScheduleTrigger(ctx context.Context) ([]*domain.AutomationRule, error) {
+	var result []*domain.AutomationRule
+	for _, r := range m.rules {
+		if r.Enabled && r.TriggerConfig.Type == domain.TriggerTypeSchedule && r.TriggerConfig.Cron != "" {
+			result = append(result, r)
+		}
+	}
+	return result, nil
+}
+
 // Simple mock implementations for UserGetter and SubscriptionChecker interfaces.
 
 type mockUserGetterSimple struct {
