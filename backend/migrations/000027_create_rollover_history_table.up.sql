@@ -21,7 +21,7 @@ CREATE TABLE rollover_history (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     budget_id UUID NOT NULL REFERENCES budgets(id) ON DELETE CASCADE,
-    rule_id UUID REFERENCES automation_rules(id) ON DELETE SET NULL,
+    rule_id UUID REFERENCES rules(id) ON DELETE SET NULL,
     rule_execution_id UUID REFERENCES rule_executions(id) ON DELETE SET NULL,
     source_budget_category_id UUID NOT NULL REFERENCES budget_categories(id) ON DELETE CASCADE,
     target_budget_category_id UUID REFERENCES budget_categories(id) ON DELETE SET NULL, -- NULL = to unallocated
@@ -54,7 +54,7 @@ CREATE INDEX idx_rollover_history_source_category ON rollover_history(source_bud
 COMMENT ON TABLE rollover_history IS 'Tracks envelope budgeting category rollovers for audit trail';
 COMMENT ON COLUMN rollover_history.user_id IS 'User who owns this rollover';
 COMMENT ON COLUMN rollover_history.budget_id IS 'Budget containing the categories';
-COMMENT ON COLUMN rollover_history.rule_id IS 'Automation rule that created this rollover (nullable for manual rollovers)';
+COMMENT ON COLUMN rollover_history.rule_id IS 'Rule that created this rollover (nullable for manual rollovers)';
 COMMENT ON COLUMN rollover_history.rule_execution_id IS 'Rule execution that created this rollover';
 COMMENT ON COLUMN rollover_history.source_budget_category_id IS 'Category from which funds are rolled over';
 COMMENT ON COLUMN rollover_history.target_budget_category_id IS 'Category to receive funds (NULL = unallocated)';
