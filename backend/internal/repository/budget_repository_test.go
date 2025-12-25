@@ -706,3 +706,65 @@ func TestBudgetRepository_GetCategoriesMatchingTransaction_NoMatches(t *testing.
 	assert.Empty(t, categories)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// =============================================================================
+// AdjustCategoryAllocatedAmount Tests (Issue #36: Rule Executors - Envelope Rollover)
+// =============================================================================
+
+// TestBudgetRepository_AdjustCategoryAllocatedAmount_Increase tests increasing allocation
+func TestBudgetRepository_AdjustCategoryAllocatedAmount_Increase(t *testing.T) {
+	db, mock, repo := setupBudgetMockDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	categoryID := uuid.New().String()
+	delta := 100.00 // Increase by $100
+
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE budget_categories`)).
+		WithArgs(delta, sqlmock.AnyArg(), categoryID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err := repo.AdjustCategoryAllocatedAmount(ctx, categoryID, delta)
+
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestBudgetRepository_AdjustCategoryAllocatedAmount_Decrease tests decreasing allocation
+func TestBudgetRepository_AdjustCategoryAllocatedAmount_Decrease(t *testing.T) {
+	db, mock, repo := setupBudgetMockDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	categoryID := uuid.New().String()
+	delta := -50.00 // Decrease by $50
+
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE budget_categories`)).
+		WithArgs(delta, sqlmock.AnyArg(), categoryID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err := repo.AdjustCategoryAllocatedAmount(ctx, categoryID, delta)
+
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestBudgetRepository_AdjustCategoryAllocatedAmount_NotFound tests adjusting non-existent category
+func TestBudgetRepository_AdjustCategoryAllocatedAmount_NotFound(t *testing.T) {
+	db, mock, repo := setupBudgetMockDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	categoryID := uuid.New().String()
+	delta := 100.00
+
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE budget_categories`)).
+		WithArgs(delta, sqlmock.AnyArg(), categoryID).
+		WillReturnResult(sqlmock.NewResult(0, 0)) // No rows affected
+
+	err := repo.AdjustCategoryAllocatedAmount(ctx, categoryID, delta)
+
+	assert.Error(t, err)
+	assert.Equal(t, domain.ErrBudgetCategoryNotFound, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

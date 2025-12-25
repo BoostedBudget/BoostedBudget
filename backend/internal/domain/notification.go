@@ -11,7 +11,7 @@ import (
 type Notification struct {
 	ID          string     `json:"id" db:"id"`
 	UserID      string     `json:"user_id" db:"user_id"`
-	Type        string     `json:"type" db:"type"` // item_error, login_required, pending_expiration, permission_revoked, transaction_sync
+	Type        string     `json:"type" db:"type"` // item_error, login_required, pending_expiration, permission_revoked, transaction_sync, budget_alert
 	Title       string     `json:"title" db:"title"`
 	Message     string     `json:"message" db:"message"`
 	ActionURL   *string    `json:"action_url,omitempty" db:"action_url"` // URL for user to take action (e.g., re-authenticate)
@@ -45,9 +45,10 @@ func (n *Notification) Validate() error {
 		"pending_expiration":   true,
 		"permission_revoked":   true,
 		"transaction_sync":     true,
+		"budget_alert":         true, // Issue #36: Rule Executors - budget alerts
 	}
 	if !validTypes[n.Type] {
-		return errors.New("type must be one of: item_error, login_required, pending_expiration, permission_revoked, transaction_sync")
+		return errors.New("type must be one of: item_error, login_required, pending_expiration, permission_revoked, transaction_sync, budget_alert")
 	}
 
 	return nil
