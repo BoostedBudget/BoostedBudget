@@ -9,6 +9,7 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/maxnussbaum/BoostedBudget/internal/workers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -88,6 +89,57 @@ func (m *MockAutomationRuleService) GetRulesByType(ctx context.Context, userID s
 func (m *MockAutomationRuleService) TierAllowsEventTriggers(ctx context.Context, userID string) (bool, error) {
 	args := m.Called(ctx, userID)
 	return args.Bool(0), args.Error(1)
+}
+
+// MockRuleExecutionService implements services.RuleExecutionService for testing.
+// Issue #38: Rules API Endpoints.
+type MockRuleExecutionService struct {
+	mock.Mock
+}
+
+func (m *MockRuleExecutionService) ExecuteRule(ctx context.Context, rule *domain.AutomationRule, triggerData map[string]interface{}) (*domain.RuleExecution, error) {
+	args := m.Called(ctx, rule, triggerData)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.RuleExecution), args.Error(1)
+}
+
+func (m *MockRuleExecutionService) ProcessEventTrigger(ctx context.Context, userID, eventType string, eventData map[string]interface{}) error {
+	args := m.Called(ctx, userID, eventType, eventData)
+	return args.Error(0)
+}
+
+func (m *MockRuleExecutionService) GetExecutionHistory(ctx context.Context, ruleID string, limit, offset int) ([]*domain.RuleExecution, error) {
+	args := m.Called(ctx, ruleID, limit, offset)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.RuleExecution), args.Error(1)
+}
+
+func (m *MockRuleExecutionService) GetExecutionHistoryWithFilter(ctx context.Context, ruleID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.RuleExecution, int, error) {
+	args := m.Called(ctx, ruleID, status, limit, offset)
+	if args.Get(0) == nil {
+		return nil, args.Int(1), args.Error(2)
+	}
+	return args.Get(0).([]*domain.RuleExecution), args.Int(1), args.Error(2)
+}
+
+func (m *MockRuleExecutionService) TestRule(ctx context.Context, rule *domain.AutomationRule, triggerData map[string]interface{}) (*domain.RuleTestResult, error) {
+	args := m.Called(ctx, rule, triggerData)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.RuleTestResult), args.Error(1)
+}
+
+func (m *MockRuleExecutionService) SetUserGetter(getter services.UserGetter) {
+	m.Called(getter)
+}
+
+func (m *MockRuleExecutionService) SetSubscriptionChecker(checker services.SubscriptionChecker) {
+	m.Called(checker)
 }
 
 // ============================================================================
@@ -388,4 +440,218 @@ func (m *mockManualProvider) Stop(ctx context.Context) error {
 func (m *mockManualProvider) TriggerRule(ctx context.Context, ruleID string, triggerData map[string]interface{}) (*domain.RuleExecution, error) {
 	m.lastTriggerData = triggerData
 	return m.execution, nil
+}
+
+// ============================================================================
+// Issue #38: Test, Enable, Disable, Executions Handler Tests
+// ============================================================================
+
+func TestAutomationRuleHandler_TestAutomationRule_Success(t *testing.T) {
+	mockRuleService := new(MockAutomationRuleService)
+	mockExecService := new(MockRuleExecutionService)
+
+	rule := createMockRule("rule-1", "user-1")
+	mockRuleService.On("GetRuleByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
+
+	testResult := &domain.RuleTestResult{
+		RuleID:        "rule-1",
+		RuleName:      rule.Name,
+		RuleType:      rule.RuleType,
+		ConditionsMet: true,
+		ConditionResults: []domain.ConditionEvalResult{
+			{Field: "amount", Operator: "gt", Value: "50", Actual: float64(100), Met: true},
+		},
+		SimulatedAction: map[string]interface{}{"action_type": "budget_alert"},
+		TriggerDataUsed: map[string]interface{}{"amount": float64(100)},
+	}
+	mockExecService.On("TestRule", mock.Anything, rule, mock.Anything).Return(testResult, nil)
+
+	handler := NewAutomationRuleHandler(mockRuleService, nil)
+	handler.SetExecutionService(mockExecService)
+
+	input := &TestAutomationRuleInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
+		ID:                 "rule-1",
+	}
+	input.Body.TriggerData = map[string]interface{}{"amount": float64(100)}
+
+	result, err := handler.TestAutomationRule(context.Background(), input)
+
+	require.NoError(t, err)
+	assert.Equal(t, "rule-1", result.Body.RuleID)
+	assert.True(t, result.Body.ConditionsMet)
+	assert.Len(t, result.Body.ConditionResults, 1)
+	mockRuleService.AssertExpectations(t)
+	mockExecService.AssertExpectations(t)
+}
+
+func TestAutomationRuleHandler_TestAutomationRule_RuleNotFound(t *testing.T) {
+	mockRuleService := new(MockAutomationRuleService)
+	mockExecService := new(MockRuleExecutionService)
+
+	mockRuleService.On("GetRuleByID", mock.Anything, "user-1", "rule-unknown").Return(nil, domain.ErrAutomationRuleNotFound)
+
+	handler := NewAutomationRuleHandler(mockRuleService, nil)
+	handler.SetExecutionService(mockExecService)
+
+	input := &TestAutomationRuleInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
+		ID:                 "rule-unknown",
+	}
+
+	_, err := handler.TestAutomationRule(context.Background(), input)
+
+	assert.Error(t, err)
+}
+
+func TestAutomationRuleHandler_TestAutomationRule_NoExecutionService(t *testing.T) {
+	mockRuleService := new(MockAutomationRuleService)
+
+	rule := createMockRule("rule-1", "user-1")
+	mockRuleService.On("GetRuleByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
+
+	handler := NewAutomationRuleHandler(mockRuleService, nil)
+	// No execution service set
+
+	input := &TestAutomationRuleInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
+		ID:                 "rule-1",
+	}
+
+	_, err := handler.TestAutomationRule(context.Background(), input)
+
+	assert.Error(t, err)
+}
+
+func TestAutomationRuleHandler_EnableAutomationRule(t *testing.T) {
+	mockService := new(MockAutomationRuleService)
+
+	rule := createMockRule("rule-1", "user-1")
+	rule.Enabled = true
+
+	mockService.On("ToggleRule", mock.Anything, "user-1", "rule-1", true).Return(rule, nil)
+
+	handler := NewAutomationRuleHandler(mockService, nil)
+
+	input := &EnableAutomationRuleInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
+		ID:                 "rule-1",
+	}
+
+	result, err := handler.EnableAutomationRule(context.Background(), input)
+
+	require.NoError(t, err)
+	assert.Equal(t, "rule-1", result.Body.ID)
+	assert.True(t, result.Body.Enabled)
+	mockService.AssertExpectations(t)
+}
+
+func TestAutomationRuleHandler_DisableAutomationRule(t *testing.T) {
+	mockService := new(MockAutomationRuleService)
+
+	rule := createMockRule("rule-1", "user-1")
+	rule.Enabled = false
+
+	mockService.On("ToggleRule", mock.Anything, "user-1", "rule-1", false).Return(rule, nil)
+
+	handler := NewAutomationRuleHandler(mockService, nil)
+
+	input := &DisableAutomationRuleInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
+		ID:                 "rule-1",
+	}
+
+	result, err := handler.DisableAutomationRule(context.Background(), input)
+
+	require.NoError(t, err)
+	assert.Equal(t, "rule-1", result.Body.ID)
+	assert.False(t, result.Body.Enabled)
+	mockService.AssertExpectations(t)
+}
+
+func TestAutomationRuleHandler_GetRuleExecutions_Success(t *testing.T) {
+	mockRuleService := new(MockAutomationRuleService)
+	mockExecService := new(MockRuleExecutionService)
+
+	rule := createMockRule("rule-1", "user-1")
+	mockRuleService.On("GetRuleByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
+
+	executions := []*domain.RuleExecution{
+		{ID: "exec-1", RuleID: "rule-1", Status: domain.ExecutionStatusCompleted},
+		{ID: "exec-2", RuleID: "rule-1", Status: domain.ExecutionStatusCompleted},
+	}
+	mockExecService.On("GetExecutionHistoryWithFilter", mock.Anything, "rule-1", (*domain.ExecutionStatus)(nil), 20, 0).Return(executions, 2, nil)
+
+	handler := NewAutomationRuleHandler(mockRuleService, nil)
+	handler.SetExecutionService(mockExecService)
+
+	input := &GetRuleExecutionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
+		ID:                 "rule-1",
+		Limit:              20,
+		Offset:             0,
+	}
+
+	result, err := handler.GetRuleExecutions(context.Background(), input)
+
+	require.NoError(t, err)
+	assert.Len(t, result.Body.Executions, 2)
+	assert.Equal(t, 2, result.Body.Total)
+	assert.Equal(t, 20, result.Body.Limit)
+	assert.Equal(t, 0, result.Body.Offset)
+	mockRuleService.AssertExpectations(t)
+	mockExecService.AssertExpectations(t)
+}
+
+func TestAutomationRuleHandler_GetRuleExecutions_WithStatusFilter(t *testing.T) {
+	mockRuleService := new(MockAutomationRuleService)
+	mockExecService := new(MockRuleExecutionService)
+
+	rule := createMockRule("rule-1", "user-1")
+	mockRuleService.On("GetRuleByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
+
+	completedStatus := domain.ExecutionStatusCompleted
+	executions := []*domain.RuleExecution{
+		{ID: "exec-1", RuleID: "rule-1", Status: domain.ExecutionStatusCompleted},
+	}
+	mockExecService.On("GetExecutionHistoryWithFilter", mock.Anything, "rule-1", &completedStatus, 20, 0).Return(executions, 1, nil)
+
+	handler := NewAutomationRuleHandler(mockRuleService, nil)
+	handler.SetExecutionService(mockExecService)
+
+	statusStr := "completed"
+	input := &GetRuleExecutionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
+		ID:                 "rule-1",
+		Status:             &statusStr,
+		Limit:              20,
+		Offset:             0,
+	}
+
+	result, err := handler.GetRuleExecutions(context.Background(), input)
+
+	require.NoError(t, err)
+	assert.Len(t, result.Body.Executions, 1)
+	assert.Equal(t, 1, result.Body.Total)
+}
+
+func TestAutomationRuleHandler_GetRuleExecutions_RuleNotFound(t *testing.T) {
+	mockRuleService := new(MockAutomationRuleService)
+	mockExecService := new(MockRuleExecutionService)
+
+	mockRuleService.On("GetRuleByID", mock.Anything, "user-1", "rule-unknown").Return(nil, domain.ErrAutomationRuleNotFound)
+
+	handler := NewAutomationRuleHandler(mockRuleService, nil)
+	handler.SetExecutionService(mockExecService)
+
+	input := &GetRuleExecutionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
+		ID:                 "rule-unknown",
+		Limit:              20,
+		Offset:             0,
+	}
+
+	_, err := handler.GetRuleExecutions(context.Background(), input)
+
+	assert.Error(t, err)
 }
