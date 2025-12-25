@@ -19,7 +19,7 @@ import (
 // TestMapPlaidTransaction_AllFields tests complete field mapping
 func TestMapPlaidTransaction_AllFields(t *testing.T) {
 	// Setup
-	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
+	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
 	ctx := context.Background()
 
 	linkedItemID := "linked-item-123"
@@ -87,7 +87,7 @@ func TestMapPlaidTransaction_AllFields(t *testing.T) {
 
 // TestMapPlaidTransaction_MissingAccount tests error when account not in map
 func TestMapPlaidTransaction_MissingAccount(t *testing.T) {
-	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
+	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
 	ctx := context.Background()
 
 	// Empty account map
@@ -113,7 +113,7 @@ func TestMapPlaidTransaction_MissingAccount(t *testing.T) {
 
 // TestMapPlaidTransaction_MinimalFields tests with only required fields
 func TestMapPlaidTransaction_MinimalFields(t *testing.T) {
-	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
+	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
 	ctx := context.Background()
 
 	accountMap := map[string]string{
@@ -146,7 +146,7 @@ func TestMapPlaidTransaction_MinimalFields(t *testing.T) {
 
 // TestMapPlaidTransaction_InvalidDate tests date parsing error
 func TestMapPlaidTransaction_InvalidDate(t *testing.T) {
-	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
+	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
 	ctx := context.Background()
 
 	accountMap := map[string]string{

@@ -1,4 +1,4 @@
-h1:3rAsQYUtgauapKfxN6+ZAICHePt3w0G8QYlNGdnMRO4=
+h1:hME+ZSs05BXaGrPS8oAPSXQr0EL2TrHufDftqh/TWns=
 000001_create_users_table.up.sql h1:yLRXvyF/CMBakERSQ+AtUhi7PwM2FE7Accl3PYwNohc=
 000002_create_privacy_settings_table.up.sql h1:PCNdCyla6SD17iu74ZQfRGqu45htbLl2DQ8MtjRpw1s=
 000003_create_audit_logs_table.up.sql h1:9VxaVOzvjrH8wJq5rKcJ8hL9FzoVV81mGhxOULA5iSM=
@@ -24,3 +24,5 @@ h1:3rAsQYUtgauapKfxN6+ZAICHePt3w0G8QYlNGdnMRO4=
 000023_enhance_budgets_for_envelope.up.sql h1:TsQddE5XeM3Or6kDVsZokDswr5LC4n/XKh11avo0BiM=
 000024_add_account_customization.up.sql h1:vn8hjBvx5ensOkEDCml1P57PgxavkHyaH9I4KWMJSWw=
 000025_create_rules_schema.up.sql h1:ud6xB04WAz8TE0NaVp3NSz7Q+D6bohOpSAQl+lPpD7s=
+000026_add_budget_alert_notification_type.up.sql h1:fV7PuX4b4QG9sFKCs1VVIpzKt9CK8txDGk5QhNizNDI=
+000027_create_rollover_history_table.up.sql h1:w+f5Ui1P9LUqXgWDcEukosVy3p+dyKozQRJ+Vt+P/Vw=

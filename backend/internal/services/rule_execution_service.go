@@ -17,9 +17,10 @@ import (
 
 // RuleActions is a wrapper for parsing action configurations from JSONB.
 type RuleActions struct {
-	Transfer *domain.TransferAction `json:"transfer,omitempty"`
-	Alert    *domain.AlertAction    `json:"alert,omitempty"`
-	Rollover *domain.RolloverAction `json:"rollover,omitempty"`
+	Transfer    *domain.TransferAction    `json:"transfer,omitempty"`
+	Alert       *domain.AlertAction       `json:"alert,omitempty"`
+	Rollover    *domain.RolloverAction    `json:"rollover,omitempty"`
+	SavingsGoal *domain.SavingsGoalAction `json:"savings_goal,omitempty"`
 }
 
 // ExecutionStatusSkipped is a synthetic status for skipped executions.
@@ -50,6 +51,7 @@ type ruleExecutionService struct {
 	executionRepo       repository.RuleExecutionRepository
 	suggestionRepo      repository.TransferSuggestionRepository
 	ruleRepo            repository.AutomationRulesRepository
+	savingsGoalRepo     repository.SavingsGoalRepository
 	notificationService NotificationService
 	userGetter          UserGetter
 	subscriptionChecker SubscriptionChecker
@@ -83,6 +85,11 @@ func (s *ruleExecutionService) SetUserGetter(getter UserGetter) {
 // SetSubscriptionChecker sets the subscription checker for limit enforcement.
 func (s *ruleExecutionService) SetSubscriptionChecker(checker SubscriptionChecker) {
 	s.subscriptionChecker = checker
+}
+
+// SetSavingsGoalRepo sets the savings goal repository for savings goal executor.
+func (s *ruleExecutionService) SetSavingsGoalRepo(repo repository.SavingsGoalRepository) {
+	s.savingsGoalRepo = repo
 }
 
 // ExecuteRule executes a single rule with the given trigger data.
@@ -139,6 +146,8 @@ func (s *ruleExecutionService) ExecuteRule(ctx context.Context, rule *domain.Aut
 		actionErr = s.executeBudgetAlert(ctx, rule, triggerData)
 	case domain.RuleTypeCategoryRollover:
 		actionErr = s.executeCategoryRollover(ctx, rule, execution.ID, triggerData)
+	case domain.RuleTypeSavingsGoal:
+		actionErr = s.executeSavingsGoal(ctx, rule, execution.ID, triggerData)
 	default:
 		actionErr = fmt.Errorf("unknown rule type: %s", rule.RuleType)
 	}
@@ -378,6 +387,84 @@ func (s *ruleExecutionService) calculateRolloverAmount(action *domain.RolloverAc
 		return remaining
 	}
 	return remaining
+}
+
+// executeSavingsGoal creates a transfer suggestion to contribute to a savings goal.
+// Issue #36: Rule Executors - Savings Goal Executor.
+func (s *ruleExecutionService) executeSavingsGoal(ctx context.Context, rule *domain.AutomationRule, executionID string, triggerData map[string]interface{}) error {
+	// Parse actions
+	var actions RuleActions
+	if err := json.Unmarshal(rule.Actions, &actions); err != nil {
+		return fmt.Errorf("failed to parse actions: %w", err)
+	}
+
+	if actions.SavingsGoal == nil {
+		return fmt.Errorf("savings goal action not defined")
+	}
+
+	savingsGoalAction := actions.SavingsGoal
+
+	// Get the savings goal to find the linked account
+	if s.savingsGoalRepo == nil {
+		return fmt.Errorf("savings goal repository not configured")
+	}
+
+	goal, err := s.savingsGoalRepo.GetByID(ctx, savingsGoalAction.SavingsGoalID)
+	if err != nil {
+		return fmt.Errorf("savings goal not found: %w", err)
+	}
+
+	// Calculate the contribution amount
+	amount := s.calculateSavingsGoalAmount(savingsGoalAction, triggerData)
+	if amount <= 0 {
+		// Nothing to transfer
+		return nil
+	}
+
+	// Create reason string
+	reason := fmt.Sprintf("Savings contribution to '%s' from rule '%s'", goal.Name, rule.Name)
+
+	// Create transfer suggestion from source account to savings goal's linked account
+	suggestion := &domain.TransferSuggestion{
+		ID:              uuid.New().String(),
+		UserID:          rule.UserID,
+		RuleID:          ptrString(rule.ID),
+		RuleExecutionID: ptrString(executionID),
+		FromAccountID:   ptrString(savingsGoalAction.FromAccountID),
+		ToAccountID:     ptrString(goal.AccountID), // Savings goal's linked account
+		Amount:          amount,
+		CurrencyCode:    "USD",
+		Reason:          &reason,
+		Source:          domain.SuggestionSourceRule,
+		Status:          domain.SuggestionStatusPending,
+	}
+
+	return s.suggestionRepo.Create(ctx, suggestion)
+}
+
+// calculateSavingsGoalAmount calculates the contribution amount based on action type.
+func (s *ruleExecutionService) calculateSavingsGoalAmount(action *domain.SavingsGoalAction, triggerData map[string]interface{}) float64 {
+	switch action.AmountType {
+	case "fixed":
+		return action.Amount
+	case "percentage":
+		if action.Percentage != nil {
+			if amt, ok := triggerData["amount"].(float64); ok {
+				return amt * (*action.Percentage / 100)
+			}
+		}
+		return 0
+	case "remaining":
+		// Calculate remaining amount above threshold
+		if balance, ok := triggerData["balance"].(float64); ok {
+			remaining := balance - action.Threshold
+			if remaining > 0 {
+				return remaining
+			}
+		}
+		return 0
+	}
+	return action.Amount
 }
 
 // evaluateConditions evaluates all conditions with the given logic.

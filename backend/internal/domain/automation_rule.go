@@ -22,6 +22,7 @@ const (
 	RuleTypeTransferSuggestion RuleType = "transfer_suggestion"
 	RuleTypeBudgetAlert        RuleType = "budget_alert"
 	RuleTypeCategoryRollover   RuleType = "category_rollover"
+	RuleTypeSavingsGoal        RuleType = "savings_goal" // Issue #36: Savings goal contributions
 )
 
 // validRuleTypes is a set of all valid rule types.
@@ -29,6 +30,7 @@ var validRuleTypes = map[RuleType]bool{
 	RuleTypeTransferSuggestion: true,
 	RuleTypeBudgetAlert:        true,
 	RuleTypeCategoryRollover:   true,
+	RuleTypeSavingsGoal:        true,
 }
 
 // IsValid checks if the rule type is valid.
@@ -243,11 +245,24 @@ type AlertAction struct {
 }
 
 // RolloverAction defines the action for category_rollover rules.
+// Issue #36: Rule Executors - Enhanced for envelope budgeting with optional target category.
 type RolloverAction struct {
 	SourceBudgetCategoryID string   `json:"source_budget_category_id"`
-	RolloverType           string   `json:"rollover_type"` // full, capped, percentage
+	TargetBudgetCategoryID *string  `json:"target_budget_category_id,omitempty"` // nil = to unallocated funds
+	RolloverType           string   `json:"rollover_type"`                       // full, capped, percentage
 	CapAmount              *float64 `json:"cap_amount,omitempty"`
 	Percentage             *float64 `json:"percentage,omitempty"`
+}
+
+// SavingsGoalAction defines the action for savings_goal rules.
+// Issue #36: Rule Executors - Creates transfer suggestions to contribute to savings goals.
+type SavingsGoalAction struct {
+	SavingsGoalID string   `json:"savings_goal_id"`         // Target savings goal
+	FromAccountID string   `json:"from_account_id"`         // Source account for transfer
+	AmountType    string   `json:"amount_type"`             // fixed, percentage, remaining
+	Amount        float64  `json:"amount,omitempty"`        // For fixed amount type
+	Percentage    *float64 `json:"percentage,omitempty"`    // For percentage amount type
+	Threshold     float64  `json:"threshold,omitempty"`     // Minimum balance threshold for remaining type
 }
 
 // =============================================================================
@@ -320,6 +335,8 @@ func (r *AutomationRule) validateActions() error {
 		return r.validateAlertAction()
 	case RuleTypeCategoryRollover:
 		return r.validateRolloverAction()
+	case RuleTypeSavingsGoal:
+		return r.validateSavingsGoalAction()
 	}
 
 	return nil
@@ -388,6 +405,36 @@ func (r *AutomationRule) validateRolloverAction() error {
 	return nil
 }
 
+func (r *AutomationRule) validateSavingsGoalAction() error {
+	action, err := r.ParseSavingsGoalAction()
+	if err != nil {
+		return errors.New("invalid savings goal action: " + err.Error())
+	}
+
+	if action.SavingsGoalID == "" {
+		return errors.New("savings_goal_id is required for savings_goal")
+	}
+
+	if action.FromAccountID == "" {
+		return errors.New("from_account_id is required for savings_goal")
+	}
+
+	validAmountTypes := map[string]bool{"fixed": true, "percentage": true, "remaining": true}
+	if !validAmountTypes[action.AmountType] {
+		return errors.New("amount_type must be 'fixed', 'percentage', or 'remaining' for savings_goal")
+	}
+
+	if action.AmountType == "fixed" && action.Amount <= 0 {
+		return errors.New("amount must be positive when amount_type is 'fixed'")
+	}
+
+	if action.AmountType == "percentage" && (action.Percentage == nil || *action.Percentage <= 0 || *action.Percentage > 100) {
+		return errors.New("percentage must be between 0 and 100 when amount_type is 'percentage'")
+	}
+
+	return nil
+}
+
 // ParseTransferAction parses the Actions JSON as a TransferAction.
 func (r *AutomationRule) ParseTransferAction() (*TransferAction, error) {
 	var action TransferAction
@@ -409,6 +456,15 @@ func (r *AutomationRule) ParseAlertAction() (*AlertAction, error) {
 // ParseRolloverAction parses the Actions JSON as a RolloverAction.
 func (r *AutomationRule) ParseRolloverAction() (*RolloverAction, error) {
 	var action RolloverAction
+	if err := json.Unmarshal(r.Actions, &action); err != nil {
+		return nil, err
+	}
+	return &action, nil
+}
+
+// ParseSavingsGoalAction parses the Actions JSON as a SavingsGoalAction.
+func (r *AutomationRule) ParseSavingsGoalAction() (*SavingsGoalAction, error) {
+	var action SavingsGoalAction
 	if err := json.Unmarshal(r.Actions, &action); err != nil {
 		return nil, err
 	}

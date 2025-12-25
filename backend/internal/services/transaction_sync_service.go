@@ -57,17 +57,18 @@ type TransactionSyncService interface {
 
 // transactionSyncService implements TransactionSyncService
 type transactionSyncService struct {
-	webhookRepo            repository.WebhookRepository
-	linkedItemRepo         repository.LinkedItemRepository
-	transactionRepo        repository.TransactionRepository
-	accountRepo            repository.AccountRepository          // Issue #261: For account mapping (Plaid account_id -> internal UUID)
-	profileRepo            repository.ProfileRepository          // Issue #242: For fetching user tier during sync audit
-	balanceSnapshotRepo    repository.BalanceSnapshotRepository  // Issue #353: For storing balance snapshots
-	plaidService           PlaidService
-	encryptionService      EncryptionService
-	syncLimitService       SyncLimitService       // Issue #242: Monthly sync limits and tier-based historical depth
-	ruleApplicationService RuleApplicationService // Issue #346: Apply categorization rules to new transactions
-	budgetSyncService      BudgetSyncService      // Issue #494: Sync budget amounts after transaction sync
+	webhookRepo               repository.WebhookRepository
+	linkedItemRepo            repository.LinkedItemRepository
+	transactionRepo           repository.TransactionRepository
+	accountRepo               repository.AccountRepository          // Issue #261: For account mapping (Plaid account_id -> internal UUID)
+	profileRepo               repository.ProfileRepository          // Issue #242: For fetching user tier during sync audit
+	balanceSnapshotRepo       repository.BalanceSnapshotRepository  // Issue #353: For storing balance snapshots
+	plaidService              PlaidService
+	encryptionService         EncryptionService
+	syncLimitService          SyncLimitService              // Issue #242: Monthly sync limits and tier-based historical depth
+	ruleApplicationService    RuleApplicationService        // Issue #346: Apply categorization rules to new transactions
+	budgetSyncService         BudgetSyncService             // Issue #494: Sync budget amounts after transaction sync
+	transactionMonitorService TransactionMonitorService     // Issue #36: Auto-detect completed transfer suggestions
 }
 
 // NewTransactionSyncService creates a new TransactionSyncService instance
@@ -82,20 +83,22 @@ func NewTransactionSyncService(
 	encryptionService EncryptionService,
 	syncLimitService SyncLimitService,
 	ruleApplicationService RuleApplicationService,
-	budgetSyncService BudgetSyncService, // Issue #494: Sync budget amounts
+	budgetSyncService BudgetSyncService,               // Issue #494: Sync budget amounts
+	transactionMonitorService TransactionMonitorService, // Issue #36: Auto-detect completed transfers
 ) TransactionSyncService {
 	return &transactionSyncService{
-		webhookRepo:            webhookRepo,
-		linkedItemRepo:         linkedItemRepo,
-		transactionRepo:        transactionRepo,
-		accountRepo:            accountRepo,
-		profileRepo:            profileRepo,
-		balanceSnapshotRepo:    balanceSnapshotRepo,
-		plaidService:           plaidService,
-		encryptionService:      encryptionService,
-		syncLimitService:       syncLimitService,
-		ruleApplicationService: ruleApplicationService,
-		budgetSyncService:      budgetSyncService,
+		webhookRepo:               webhookRepo,
+		linkedItemRepo:            linkedItemRepo,
+		transactionRepo:           transactionRepo,
+		accountRepo:               accountRepo,
+		profileRepo:               profileRepo,
+		balanceSnapshotRepo:       balanceSnapshotRepo,
+		plaidService:              plaidService,
+		encryptionService:         encryptionService,
+		syncLimitService:          syncLimitService,
+		ruleApplicationService:    ruleApplicationService,
+		budgetSyncService:         budgetSyncService,
+		transactionMonitorService: transactionMonitorService,
 	}
 }
 
@@ -585,6 +588,21 @@ func (s *transactionSyncService) processAddedTransactions(
 	}
 
 	log.Printf("Successfully stored %d added transactions (skipped %d)", len(transactions), len(added)-len(transactions))
+
+	// Issue #36: Monitor for transfer suggestion matches (non-blocking)
+	// Auto-accept pending suggestions that match newly synced transactions.
+	if s.transactionMonitorService != nil {
+		// Convert to pointer slice for monitor service
+		txnPtrs := make([]*domain.Transaction, len(transactions))
+		for i := range transactions {
+			txnPtrs[i] = &transactions[i]
+		}
+		if err := s.transactionMonitorService.MonitorForMatches(ctx, linkedItem.UserID, txnPtrs); err != nil {
+			// Log but don't fail - transaction monitoring is non-critical
+			log.Printf("Warning: Failed to monitor for transfer suggestion matches: %v", err)
+		}
+	}
+
 	return nil
 }
 
