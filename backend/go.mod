@@ -35,6 +35,7 @@ require (
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.67.3 // indirect
 	github.com/prometheus/procfs v0.19.2 // indirect
+	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/sendgrid/rest v2.6.9+incompatible // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
