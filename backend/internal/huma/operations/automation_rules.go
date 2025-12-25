@@ -17,6 +17,7 @@ import (
 // AutomationRuleHandler handles automation rule-related HTTP requests.
 type AutomationRuleHandler struct {
 	service          services.AutomationRuleService
+	executionService services.RuleExecutionService
 	schedulerManager *workers.RuleSchedulerManager
 }
 
@@ -29,6 +30,12 @@ func NewAutomationRuleHandler(
 		service:          service,
 		schedulerManager: schedulerManager,
 	}
+}
+
+// SetExecutionService sets the rule execution service for test and execution history endpoints.
+// Issue #38: Rules API Endpoints - Test and execution history.
+func (h *AutomationRuleHandler) SetExecutionService(executionService services.RuleExecutionService) {
+	h.executionService = executionService
 }
 
 // --- Input/Output Types ---
@@ -109,6 +116,47 @@ type TriggerAutomationRuleInput struct {
 // TriggerAutomationRuleOutput represents the response for triggering an automation rule.
 type TriggerAutomationRuleOutput struct {
 	Body *domain.RuleExecution
+}
+
+// TestAutomationRuleInput represents the input for testing a rule execution (dry-run).
+// Issue #38: Rules API Endpoints.
+type TestAutomationRuleInput struct {
+	inputs.AuthenticatedInput
+	ID   string `path:"id" doc:"Automation Rule UUID"`
+	Body struct {
+		TriggerData map[string]interface{} `json:"trigger_data,omitempty" doc:"Optional test data to evaluate conditions against"`
+	}
+}
+
+// TestAutomationRuleOutput represents the response for testing a rule execution.
+type TestAutomationRuleOutput struct {
+	Body *domain.RuleTestResult
+}
+
+// EnableAutomationRuleInput represents the input for enabling an automation rule.
+type EnableAutomationRuleInput struct {
+	inputs.AuthenticatedInput
+	ID string `path:"id" doc:"Automation Rule UUID"`
+}
+
+// DisableAutomationRuleInput represents the input for disabling an automation rule.
+type DisableAutomationRuleInput struct {
+	inputs.AuthenticatedInput
+	ID string `path:"id" doc:"Automation Rule UUID"`
+}
+
+// GetRuleExecutionsInput represents the input for getting rule execution history.
+type GetRuleExecutionsInput struct {
+	inputs.AuthenticatedInput
+	ID     string  `path:"id" doc:"Automation Rule UUID"`
+	Status *string `query:"status" doc:"Filter by status: pending, running, completed, failed"`
+	Limit  int     `query:"limit" default:"20" minimum:"1" maximum:"100" doc:"Maximum number of results"`
+	Offset int     `query:"offset" default:"0" minimum:"0" doc:"Number of results to skip"`
+}
+
+// GetRuleExecutionsOutput represents the response for getting rule execution history.
+type GetRuleExecutionsOutput struct {
+	Body *domain.RuleExecutionsResponse
 }
 
 // --- Handler Methods ---
@@ -225,6 +273,92 @@ func (h *AutomationRuleHandler) TriggerAutomationRule(ctx context.Context, input
 	return &TriggerAutomationRuleOutput{Body: execution}, nil
 }
 
+// TestAutomationRule handles POST /api/v1/rules/:id/test requests.
+// Performs a dry-run of the rule to preview results without persisting changes.
+// Issue #38: Rules API Endpoints.
+func (h *AutomationRuleHandler) TestAutomationRule(ctx context.Context, input *TestAutomationRuleInput) (*TestAutomationRuleOutput, error) {
+	// Verify user owns the rule
+	rule, err := h.service.GetRuleByID(ctx, input.UserID, input.ID)
+	if err != nil {
+		return nil, humaerrors.MapError(err)
+	}
+
+	// Check if execution service is available
+	if h.executionService == nil {
+		return nil, huma.Error500InternalServerError("Rule execution service not available")
+	}
+
+	// Perform dry-run test
+	result, err := h.executionService.TestRule(ctx, rule, input.Body.TriggerData)
+	if err != nil {
+		return nil, humaerrors.MapError(err)
+	}
+
+	return &TestAutomationRuleOutput{Body: result}, nil
+}
+
+// EnableAutomationRule handles POST /api/v1/rules/:id/enable requests.
+// Convenience wrapper for enabling a rule.
+// Issue #38: Rules API Endpoints.
+func (h *AutomationRuleHandler) EnableAutomationRule(ctx context.Context, input *EnableAutomationRuleInput) (*ToggleAutomationRuleOutput, error) {
+	rule, err := h.service.ToggleRule(ctx, input.UserID, input.ID, true)
+	if err != nil {
+		return nil, humaerrors.MapError(err)
+	}
+
+	return &ToggleAutomationRuleOutput{Body: rule}, nil
+}
+
+// DisableAutomationRule handles POST /api/v1/rules/:id/disable requests.
+// Convenience wrapper for disabling a rule.
+// Issue #38: Rules API Endpoints.
+func (h *AutomationRuleHandler) DisableAutomationRule(ctx context.Context, input *DisableAutomationRuleInput) (*ToggleAutomationRuleOutput, error) {
+	rule, err := h.service.ToggleRule(ctx, input.UserID, input.ID, false)
+	if err != nil {
+		return nil, humaerrors.MapError(err)
+	}
+
+	return &ToggleAutomationRuleOutput{Body: rule}, nil
+}
+
+// GetRuleExecutions handles GET /api/v1/rules/:id/executions requests.
+// Retrieves execution history for a specific rule with pagination.
+// Issue #38: Rules API Endpoints.
+func (h *AutomationRuleHandler) GetRuleExecutions(ctx context.Context, input *GetRuleExecutionsInput) (*GetRuleExecutionsOutput, error) {
+	// Verify user owns the rule
+	_, err := h.service.GetRuleByID(ctx, input.UserID, input.ID)
+	if err != nil {
+		return nil, humaerrors.MapError(err)
+	}
+
+	// Check if execution service is available
+	if h.executionService == nil {
+		return nil, huma.Error500InternalServerError("Rule execution service not available")
+	}
+
+	// Parse status filter if provided
+	var statusFilter *domain.ExecutionStatus
+	if input.Status != nil && *input.Status != "" {
+		status := domain.ExecutionStatus(*input.Status)
+		statusFilter = &status
+	}
+
+	// Get execution history with filter
+	executions, total, err := h.executionService.GetExecutionHistoryWithFilter(ctx, input.ID, statusFilter, input.Limit, input.Offset)
+	if err != nil {
+		return nil, humaerrors.MapError(err)
+	}
+
+	return &GetRuleExecutionsOutput{
+		Body: &domain.RuleExecutionsResponse{
+			Executions: executions,
+			Total:      total,
+			Limit:      input.Limit,
+			Offset:     input.Offset,
+		},
+	}, nil
+}
+
 // RegisterAutomationRuleRoutes registers automation rule routes with the Huma API.
 // Note: These routes require the Auth0 middleware to be applied.
 func RegisterAutomationRuleRoutes(api huma.API, handler *AutomationRuleHandler) {
@@ -306,4 +440,50 @@ func RegisterAutomationRuleRoutes(api huma.API, handler *AutomationRuleHandler) 
 		Tags:        []string{"Automation Rules"},
 		Security:    []map[string][]string{{"auth0": {}}},
 	}, handler.TriggerAutomationRule)
+
+	// Issue #38: Rules API Endpoints - New routes
+
+	// POST /api/v1/rules/{id}/test - Test automation rule (dry-run)
+	huma.Register(api, huma.Operation{
+		OperationID: "testAutomationRule",
+		Method:      http.MethodPost,
+		Path:        "/api/v1/rules/{id}/test",
+		Summary:     "Test automation rule",
+		Description: "Executes a dry-run of the rule to preview results without persisting changes.",
+		Tags:        []string{"Automation Rules"},
+		Security:    []map[string][]string{{"auth0": {}}},
+	}, handler.TestAutomationRule)
+
+	// POST /api/v1/rules/{id}/enable - Enable an automation rule
+	huma.Register(api, huma.Operation{
+		OperationID: "enableAutomationRule",
+		Method:      http.MethodPost,
+		Path:        "/api/v1/rules/{id}/enable",
+		Summary:     "Enable automation rule",
+		Description: "Enables an automation rule for execution.",
+		Tags:        []string{"Automation Rules"},
+		Security:    []map[string][]string{{"auth0": {}}},
+	}, handler.EnableAutomationRule)
+
+	// POST /api/v1/rules/{id}/disable - Disable an automation rule
+	huma.Register(api, huma.Operation{
+		OperationID: "disableAutomationRule",
+		Method:      http.MethodPost,
+		Path:        "/api/v1/rules/{id}/disable",
+		Summary:     "Disable automation rule",
+		Description: "Disables an automation rule from execution.",
+		Tags:        []string{"Automation Rules"},
+		Security:    []map[string][]string{{"auth0": {}}},
+	}, handler.DisableAutomationRule)
+
+	// GET /api/v1/rules/{id}/executions - Get rule execution history
+	huma.Register(api, huma.Operation{
+		OperationID: "getRuleExecutions",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/rules/{id}/executions",
+		Summary:     "Get rule execution history",
+		Description: "Retrieves execution history for a specific automation rule with optional status filter.",
+		Tags:        []string{"Automation Rules"},
+		Security:    []map[string][]string{{"auth0": {}}},
+	}, handler.GetRuleExecutions)
 }
