@@ -7,7 +7,7 @@ import tsparser from '@typescript-eslint/parser'
 
 export default [
   {
-    ignores: ['dist', 'node_modules', 'coverage', 'playwright-report', 'test-results', '*.config.*', 'src/types/generated/**', 'src/api/generated/**']
+    ignores: ['dist', 'node_modules', 'coverage', 'playwright-report', 'test-results', '*.config.*', 'server.ts', 'build.ts', 'src/types/generated/**', 'src/api/generated/**']
   },
   // Build scripts configuration
   {

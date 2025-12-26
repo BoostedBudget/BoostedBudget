@@ -6,7 +6,7 @@ set -e
 
 # Find available ports
 echo "Finding available ports for E2E tests..."
-PORTS_OUTPUT=$(node scripts/find-available-ports.js)
+PORTS_OUTPUT=$(bun scripts/find-available-ports.js)
 
 # Export the environment variables
 export $(echo "$PORTS_OUTPUT" | grep -E "^E2E_")
@@ -17,4 +17,4 @@ echo "  Backend: $E2E_BACKEND_PORT"
 
 # Run Playwright tests directly (not via npm to avoid circular dependency)
 # Scenario tests are excluded via testIgnore in playwright.config.ts (not E2E_SCENARIOS_MODE)
-npx playwright test "$@"
+bunx playwright test "$@"

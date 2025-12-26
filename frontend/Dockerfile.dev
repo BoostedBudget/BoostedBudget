@@ -1,25 +1,23 @@
 # Development Dockerfile for Frontend
-FROM node:25-alpine
-
-# Install pnpm globally
-RUN npm install -g pnpm@10
+# Issue #575: Migrated from Node/pnpm to Bun
+FROM oven/bun:latest
 
 # Install curl for health checks
-RUN apk add --no-cache curl
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Copy package files
-COPY package.json pnpm-lock.yaml ./
+COPY package.json bun.lock ./
 
 # Install dependencies
 RUN echo "Installing development dependencies..." && \
     for i in 1 2 3 4; do \
-      echo "pnpm install attempt $i/4..." && \
-      pnpm install && \
+      echo "bun install attempt $i/4..." && \
+      bun install --frozen-lockfile && \
       echo "Dependencies installed" && break || \
-      { echo "pnpm install attempt $i/4 failed"; \
-        pnpm store prune; \
+      { echo "bun install attempt $i/4 failed"; \
+        rm -rf ~/.bun/install/cache; \
         [ $i -lt 4 ] && sleep 10; }; \
     done
 
@@ -33,5 +31,5 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:3000/ || exit 1
 
-# Run Vite dev server with hot reload
-CMD ["pnpm", "run", "dev", "--", "--host", "0.0.0.0"]
+# Run Bun dev server with hot reload
+CMD ["bun", "run", "dev"]

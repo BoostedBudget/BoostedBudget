@@ -7,36 +7,3 @@ frozen = true
 
 [run]
 # Bun will use tsconfig.json for path aliases (@/* -> ./src/*)
-
-[test]
-# Test configuration (replaces vitest.config.ts)
-preload = ["./src/test/setup.ts"]
-root = "./"
-timeout = 30000
-
-# Coverage configuration
-# Note: Bun only supports "text" and "lcov" reporters
-coverage = false
-coverageDir = "coverage"
-coverageReporter = ["text", "lcov"]
-coverageSkipTestFiles = true
-
-# Coverage thresholds - CI will fail if below these values
-# Issue #564: Thresholds based on realistic coverage achievable with current test suite
-# Note: Bun uses lines, functions, statements (not branches)
-coverageThreshold = { lines = 0.25, functions = 0.67, statements = 0.25 }
-
-# Exclude patterns from coverage
-coveragePathIgnorePatterns = [
-  "node_modules/",
-  "src/test/",
-  "**/*.d.ts",
-  "**/*.config.*",
-  "**/dist/",
-  "**/e2e/**",
-  "**/*.spec.ts",
-  "src/main.tsx",
-  "src/privacy/CookieConsent.tsx",
-  "src/privacy/adsense.ts",
-  "src/store/store.ts"
-]

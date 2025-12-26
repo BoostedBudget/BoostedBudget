@@ -40,8 +40,8 @@ jobs:
               - 'go.sum'
             frontend:
               - 'frontend/**'
-              - 'package.json'
-              - 'pnpm-lock.yaml'
+              - 'frontend/package.json'
+              - 'frontend/bun.lock'
             api:
               - 'api/**'
               - 'api/openapi.yaml'
@@ -137,36 +137,38 @@ jobs:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          version: 10
+          bun-version: latest
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
+      - name: Restore Bun cache
+        id: cache-bun
+        uses: actions/cache/restore@v5
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'pnpm'
-          cache-dependency-path: ${{ env.UNIQUE_WORKSPACE }}/frontend/pnpm-lock.yaml
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
 
       - name: Install frontend dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
           for i in 1 2 3; do
-            echo "📦 pnpm install attempt $i/3..."
-            pnpm install --frozen-lockfile && {
+            echo "📦 bun install attempt $i/3..."
+            bun install --frozen-lockfile && {
               echo "✅ Dependencies installed"
               break
             } || {
-              echo "⚠️ Install failed, cleaning pnpm store..."
-              pnpm store prune
+              echo "⚠️ Install failed, cleaning bun cache..."
+              rm -rf ~/.bun/install/cache
               [ $i -lt 3 ] && sleep 5
             }
           done
 
       - name: Generate TypeScript client
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
-        run: pnpm run generate:api
+        run: bun run generate:api
 
       - name: Check if generated client is up to date
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
@@ -176,7 +178,7 @@ jobs:
           else
             echo "::error::Generated TypeScript client is outdated!"
             echo "The generated client differs from the committed version."
-            echo "Run 'cd frontend && pnpm run generate:api' locally and commit the changes."
+            echo "Run 'cd frontend && bun run generate:api' locally and commit the changes."
             echo ""
             echo "Diff (first 100 lines):"
             git diff frontend/src/api/generated | head -100
@@ -332,29 +334,31 @@ jobs:
           clean: false
           fetch-depth: 1
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          version: 10
+          bun-version: latest
 
-      - name: Set up Node
-        uses: actions/setup-node@v6
+      - name: Restore Bun cache
+        id: cache-bun
+        uses: actions/cache/restore@v5
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'pnpm'
-          cache-dependency-path: ${{ env.UNIQUE_WORKSPACE }}/frontend/pnpm-lock.yaml
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
 
       - name: Install frontend dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
           for i in 1 2 3; do
-            echo "📦 pnpm install attempt $i/3..."
-            pnpm install --frozen-lockfile && {
+            echo "📦 bun install attempt $i/3..."
+            bun install --frozen-lockfile && {
               echo "✅ Dependencies installed"
               break
             } || {
-              echo "⚠️ Install failed, cleaning pnpm store..."
-              pnpm store prune
+              echo "⚠️ Install failed, cleaning bun cache..."
+              rm -rf ~/.bun/install/cache
               [ $i -lt 3 ] && sleep 5
             }
           done
@@ -363,15 +367,22 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
           echo "::group::Running ESLint"
-          pnpm run lint
+          bun run lint
           echo "::endgroup::"
 
       - name: Run frontend unit tests
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
           echo "::group::Running Unit Tests"
-          pnpm run test:ci
+          bun run test:ci
           echo "::endgroup::"
+
+      - name: Save Bun cache
+        if: always() && steps.cache-bun.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v6
@@ -406,29 +417,31 @@ jobs:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          version: 10
+          bun-version: latest
 
-      - name: Set up Node
-        uses: actions/setup-node@v6
+      - name: Restore Bun cache
+        id: cache-bun
+        uses: actions/cache/restore@v5
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'pnpm'
-          cache-dependency-path: ${{ env.UNIQUE_WORKSPACE }}/frontend/pnpm-lock.yaml
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
 
       - name: Install frontend dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
           for i in 1 2 3; do
-            echo "📦 pnpm install attempt $i/3..."
-            pnpm install --frozen-lockfile && {
+            echo "📦 bun install attempt $i/3..."
+            bun install --frozen-lockfile && {
               echo "✅ Dependencies installed"
               break
             } || {
-              echo "⚠️ Install failed, cleaning pnpm store..."
-              pnpm store prune
+              echo "⚠️ Install failed, cleaning bun cache..."
+              rm -rf ~/.bun/install/cache
               [ $i -lt 3 ] && sleep 5
             }
           done
@@ -438,7 +451,7 @@ jobs:
         run: |
           echo "Installing Playwright browsers..."
           for i in 1 2 3; do
-            pnpm exec playwright install --with-deps chromium && {
+            bunx playwright install --with-deps chromium && {
               echo "Browsers installed"
               break
             } || {
@@ -495,7 +508,7 @@ jobs:
           CI: true
         run: |
           echo "::group::Running Playwright E2E tests"
-          pnpm run test:e2e
+          bun run test:e2e
           echo "::endgroup::"
 
       - name: Upload E2E test results

@@ -77,7 +77,7 @@ export default defineConfig({
     {
       // Pass PORT and E2E_BACKEND_PORT env vars to Vite for dynamic port allocation
       // E2E_BACKEND_PORT is needed for the Vite proxy configuration
-      command: `PORT=${frontendPort} E2E_BACKEND_PORT=${backendPort} pnpm run dev`,
+      command: `PORT=${frontendPort} E2E_BACKEND_PORT=${backendPort} bun run dev`,
       url: `http://localhost:${frontendPort}`,
       reuseExistingServer: !process.env.CI,
       timeout: 120 * 1000,
