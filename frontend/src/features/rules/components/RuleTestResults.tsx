@@ -7,7 +7,7 @@
  */
 
 import { CheckCircle, XCircle, AlertTriangle, X, Loader2 } from 'lucide-react'
-import type { RuleTestResult } from '@/api/generated/models'
+import type { RuleTestResult, ConditionEvalResult } from '@/api/generated/models'
 import { RULE_TYPE_LABELS } from '../constants'
 import type { RuleType } from '../types'
 import './RuleTestResults.css'
@@ -23,13 +23,6 @@ export interface RuleTestResultsProps {
   className?: string
 }
 
-interface ConditionResult {
-  field: string
-  operator: string
-  expected_value: string
-  actual_value: string
-  passed: boolean
-}
 
 /**
  * RuleTestResults displays the results of a rule test execution.
@@ -69,7 +62,7 @@ export function RuleTestResults({
   const typeLabel = RULE_TYPE_LABELS[ruleType] || result.rule_type
   const hasError = !!result.error
   const conditionsPassed = result.conditions_met
-  const conditions = (result.condition_results || []) as ConditionResult[]
+  const conditions: ConditionEvalResult[] = result.condition_results || []
   const simulatedAction = result.simulated_action as Record<string, unknown> | undefined
 
   return (
@@ -133,10 +126,10 @@ export function RuleTestResults({
               {conditions.map((condition, index) => (
                 <div
                   key={index}
-                  className={`rule-test-results__condition ${condition.passed ? 'rule-test-results__condition--passed' : 'rule-test-results__condition--failed'}`}
+                  className={`rule-test-results__condition ${condition.met ? 'rule-test-results__condition--passed' : 'rule-test-results__condition--failed'}`}
                 >
                   <div className="rule-test-results__condition-status">
-                    {condition.passed ? (
+                    {condition.met ? (
                       <CheckCircle
                         className="rule-test-results__condition-icon"
                         data-testid="condition-passed"
@@ -153,10 +146,10 @@ export function RuleTestResults({
                       {condition.field}
                     </code>
                     <span className="rule-test-results__condition-comparison">
-                      {condition.operator} {condition.expected_value}
+                      {condition.operator} {String(condition.value)}
                     </span>
                     <span className="rule-test-results__condition-actual">
-                      Actual: {condition.actual_value}
+                      Actual: {String(condition.actual)}
                     </span>
                   </div>
                 </div>
@@ -170,7 +163,7 @@ export function RuleTestResults({
           <div className="rule-test-results__section">
             <h3 className="rule-test-results__section-title">Simulated Action</h3>
             <div className="rule-test-results__action">
-              {simulatedAction.type && (
+              {!!simulatedAction.type && (
                 <div className="rule-test-results__action-row">
                   <span className="rule-test-results__action-label">Type:</span>
                   <span className="rule-test-results__action-value">
@@ -190,7 +183,7 @@ export function RuleTestResults({
                   </span>
                 </div>
               )}
-              {simulatedAction.message && (
+              {!!simulatedAction.message && (
                 <div className="rule-test-results__action-row">
                   <span className="rule-test-results__action-label">Message:</span>
                   <span className="rule-test-results__action-value">
