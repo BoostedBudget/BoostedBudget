@@ -20,9 +20,9 @@ const mockTestResult: RuleTestResult = {
     {
       field: 'budget.percent_used',
       operator: 'gte',
-      expected_value: '80',
-      actual_value: '85',
-      passed: true,
+      value: '80',
+      actual: '85',
+      met: true,
     },
   ],
   simulated_action: {
@@ -45,9 +45,9 @@ const mockFailedResult: RuleTestResult = {
     {
       field: 'account.balance',
       operator: 'gte',
-      expected_value: '1000',
-      actual_value: '500',
-      passed: false,
+      value: '1000',
+      actual: '500',
+      met: false,
     },
   ],
   simulated_action: undefined,

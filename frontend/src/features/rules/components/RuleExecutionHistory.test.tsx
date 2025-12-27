@@ -82,7 +82,7 @@ describe('RuleExecutionHistory', () => {
         isLoading: true,
         error: null,
         refetch: vi.fn(),
-      } as ReturnType<typeof useGetRuleExecutions>)
+      } as unknown as ReturnType<typeof useGetRuleExecutions>)
 
       render(<RuleExecutionHistory ruleId="rule-1" />, {
         wrapper: createTestWrapper(),
