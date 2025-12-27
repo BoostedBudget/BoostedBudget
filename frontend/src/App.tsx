@@ -26,6 +26,7 @@ import { PrivacyPolicy } from './legal/PrivacyPolicy'
 import { CancelDeletionPage } from './features/deletion/components/CancelDeletionPage'
 import { AutoCategorizationPageWrapper } from './features/auto-categorization/components/AutoCategorizationPageWrapper'
 import { BudgetsPage, BudgetDetailPage } from './features/budgets'
+import { RulesPage, RuleBuilder } from './features/rules'
 import { Toaster } from 'sonner'
 import './App.css'
 
@@ -229,6 +230,31 @@ function App() {
               element={
                 <ProtectedRoute>
                   <AutoCategorizationPageWrapper />
+                </ProtectedRoute>
+              }
+            />
+            {/* Issue #39: Automation Rules */}
+            <Route
+              path="/rules"
+              element={
+                <ProtectedRoute>
+                  <RulesPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/rules/new"
+              element={
+                <ProtectedRoute>
+                  <RuleBuilder />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/rules/:id/edit"
+              element={
+                <ProtectedRoute>
+                  <RuleBuilder />
                 </ProtectedRoute>
               }
             />
