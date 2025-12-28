@@ -1,0 +1,156 @@
+/**
+ * SavingsGoalActionForm Component Styles
+ * Issue #39: Rule Builder UI
+ *
+ * Styles for the savings goal action configuration form.
+ * Follows BEM naming convention.
+ */
+
+.savings-goal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+/* Field container */
+.savings-goal-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+/* Labels */
+.savings-goal-form__label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-gray-700);
+}
+
+.dark .savings-goal-form__label {
+  color: var(--color-gray-300);
+}
+
+/* Select */
+.savings-goal-form__select {
+  padding: 0.625rem 0.875rem;
+  border: 1px solid var(--color-gray-300);
+  border-radius: 0.5rem;
+  background-color: white;
+  font-size: 0.875rem;
+  color: var(--color-gray-900);
+  cursor: pointer;
+}
+
+.dark .savings-goal-form__select {
+  border-color: var(--color-gray-600);
+  background-color: var(--color-gray-900);
+  color: var(--color-gray-100);
+}
+
+.savings-goal-form__select:focus {
+  outline: none;
+  border-color: var(--color-blue-500);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.savings-goal-form__select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Description text */
+.savings-goal-form__description {
+  margin: 0.25rem 0 0 0;
+  font-size: 0.75rem;
+  color: var(--color-gray-500);
+}
+
+.dark .savings-goal-form__description {
+  color: var(--color-gray-400);
+}
+
+/* Progress text */
+.savings-goal-form__progress {
+  margin: 0.25rem 0 0 0;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--color-green-600);
+}
+
+.dark .savings-goal-form__progress {
+  color: var(--color-green-400);
+}
+
+/* Input group with prefix/suffix */
+.savings-goal-form__input-group {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--color-gray-300);
+  border-radius: 0.5rem;
+  background-color: white;
+  overflow: hidden;
+}
+
+.dark .savings-goal-form__input-group {
+  border-color: var(--color-gray-600);
+  background-color: var(--color-gray-900);
+}
+
+.savings-goal-form__input-group:focus-within {
+  border-color: var(--color-blue-500);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.savings-goal-form__prefix,
+.savings-goal-form__suffix {
+  padding: 0.625rem 0.75rem;
+  background-color: var(--color-gray-100);
+  color: var(--color-gray-600);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.dark .savings-goal-form__prefix,
+.dark .savings-goal-form__suffix {
+  background-color: var(--color-gray-800);
+  color: var(--color-gray-400);
+}
+
+.savings-goal-form__input-group .savings-goal-form__input {
+  flex: 1;
+  border: none;
+  border-radius: 0;
+  padding: 0.625rem 0.875rem;
+}
+
+.savings-goal-form__input-group .savings-goal-form__input:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+/* Input */
+.savings-goal-form__input {
+  padding: 0.625rem 0.875rem;
+  border: 1px solid var(--color-gray-300);
+  border-radius: 0.5rem;
+  background-color: white;
+  font-size: 0.875rem;
+  color: var(--color-gray-900);
+}
+
+.dark .savings-goal-form__input {
+  border-color: var(--color-gray-600);
+  background-color: var(--color-gray-900);
+  color: var(--color-gray-100);
+}
+
+.savings-goal-form__input:focus {
+  outline: none;
+  border-color: var(--color-blue-500);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.savings-goal-form__input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

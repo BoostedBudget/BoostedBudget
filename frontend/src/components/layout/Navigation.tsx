@@ -12,6 +12,7 @@ const navItems = [
   { to: '/accounts', label: 'Accounts' },
   { to: '/transactions', label: 'Transactions' },
   { to: '/budgets', label: 'Budgets' },
+  { to: '/rules', label: 'Rules' },
   { to: '/auto-categorization', label: 'Auto-Cat' },
 ]
 
