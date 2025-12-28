@@ -1,0 +1,87 @@
+/**
+ * ListViewToggle Component Styles
+ * Issue #39: Rule Builder UI
+ *
+ * Styles for the reusable list view toggle component.
+ * Follows BEM naming convention.
+ */
+
+.list-view-toggle {
+  display: inline-flex;
+  gap: 0;
+  border-radius: 0.5rem;
+  background-color: var(--color-gray-100);
+  padding: 0.25rem;
+}
+
+.dark .list-view-toggle {
+  background-color: var(--color-gray-800);
+}
+
+.list-view-toggle__button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.5rem 0.75rem;
+  border: none;
+  border-radius: 0.375rem;
+  background-color: transparent;
+  color: var(--color-gray-600);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.dark .list-view-toggle__button {
+  color: var(--color-gray-400);
+}
+
+.list-view-toggle__button:hover:not(:disabled) {
+  color: var(--color-gray-900);
+}
+
+.dark .list-view-toggle__button:hover:not(:disabled) {
+  color: var(--color-gray-200);
+}
+
+.list-view-toggle__button:focus-visible {
+  outline: 2px solid var(--color-blue-500);
+  outline-offset: 2px;
+}
+
+.list-view-toggle__button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.list-view-toggle__button--active {
+  background-color: white;
+  color: var(--color-gray-900);
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+}
+
+.dark .list-view-toggle__button--active {
+  background-color: var(--color-gray-700);
+  color: var(--color-gray-100);
+}
+
+.list-view-toggle__icon {
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+}
+
+.list-view-toggle__label {
+  /* Hide label on small screens, show icon only */
+}
+
+@media (max-width: 640px) {
+  .list-view-toggle__label {
+    display: none;
+  }
+
+  .list-view-toggle__button {
+    padding: 0.5rem;
+  }
+}

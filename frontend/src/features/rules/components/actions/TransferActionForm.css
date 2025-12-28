@@ -1,0 +1,157 @@
+/**
+ * TransferActionForm Component Styles
+ * Issue #39: Rule Builder UI
+ *
+ * Styles for the account transfer action configuration form.
+ * Follows BEM naming convention.
+ */
+
+.transfer-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+/* Row for side-by-side fields */
+.transfer-form__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+@media (max-width: 640px) {
+  .transfer-form__row {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Field container */
+.transfer-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+/* Labels */
+.transfer-form__label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-gray-700);
+}
+
+.dark .transfer-form__label {
+  color: var(--color-gray-300);
+}
+
+/* Select */
+.transfer-form__select {
+  padding: 0.625rem 0.875rem;
+  border: 1px solid var(--color-gray-300);
+  border-radius: 0.5rem;
+  background-color: white;
+  font-size: 0.875rem;
+  color: var(--color-gray-900);
+  cursor: pointer;
+}
+
+.dark .transfer-form__select {
+  border-color: var(--color-gray-600);
+  background-color: var(--color-gray-900);
+  color: var(--color-gray-100);
+}
+
+.transfer-form__select:focus {
+  outline: none;
+  border-color: var(--color-blue-500);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.transfer-form__select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Description text */
+.transfer-form__description {
+  margin: 0.25rem 0 0 0;
+  font-size: 0.75rem;
+  color: var(--color-gray-500);
+}
+
+.dark .transfer-form__description {
+  color: var(--color-gray-400);
+}
+
+/* Input group with prefix/suffix */
+.transfer-form__input-group {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--color-gray-300);
+  border-radius: 0.5rem;
+  background-color: white;
+  overflow: hidden;
+}
+
+.dark .transfer-form__input-group {
+  border-color: var(--color-gray-600);
+  background-color: var(--color-gray-900);
+}
+
+.transfer-form__input-group:focus-within {
+  border-color: var(--color-blue-500);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.transfer-form__prefix,
+.transfer-form__suffix {
+  padding: 0.625rem 0.75rem;
+  background-color: var(--color-gray-100);
+  color: var(--color-gray-600);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.dark .transfer-form__prefix,
+.dark .transfer-form__suffix {
+  background-color: var(--color-gray-800);
+  color: var(--color-gray-400);
+}
+
+.transfer-form__input-group .transfer-form__input {
+  flex: 1;
+  border: none;
+  border-radius: 0;
+  padding: 0.625rem 0.875rem;
+}
+
+.transfer-form__input-group .transfer-form__input:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+/* Input */
+.transfer-form__input {
+  padding: 0.625rem 0.875rem;
+  border: 1px solid var(--color-gray-300);
+  border-radius: 0.5rem;
+  background-color: white;
+  font-size: 0.875rem;
+  color: var(--color-gray-900);
+}
+
+.dark .transfer-form__input {
+  border-color: var(--color-gray-600);
+  background-color: var(--color-gray-900);
+  color: var(--color-gray-100);
+}
+
+.transfer-form__input:focus {
+  outline: none;
+  border-color: var(--color-blue-500);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.transfer-form__input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

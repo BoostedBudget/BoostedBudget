@@ -8,7 +8,7 @@
 
 import { useCallback, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { ArrowLeftIcon } from '@heroicons/react/24/outline';
+import { ArrowLeftIcon, BellAlertIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
 import { useBudgetDetail } from '../hooks/useBudgetDetail';
 import { useAvailableCategories } from '../hooks/useAvailableCategories';
 import { useTags } from '../../tags/hooks/useTags';
@@ -228,6 +228,26 @@ export function BudgetDetailPage() {
               </span>
             </div>
           )}
+        </div>
+
+        {/* Issue #39: Quick-create automation rules */}
+        <div className="budget-detail-page__actions">
+          <Link
+            to={`/rules/new?type=budget_alert&budget_id=${budgetId}`}
+            className="budget-detail-page__action-btn"
+            aria-label="Create budget alert rule"
+          >
+            <BellAlertIcon className="h-4 w-4" aria-hidden="true" />
+            Create Alert Rule
+          </Link>
+          <Link
+            to={`/rules/new?type=category_rollover&budget_id=${budgetId}`}
+            className="budget-detail-page__action-btn"
+            aria-label="Create category rollover rule"
+          >
+            <ArrowPathIcon className="h-4 w-4" aria-hidden="true" />
+            Create Rollover Rule
+          </Link>
         </div>
       </header>
 

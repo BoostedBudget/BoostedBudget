@@ -160,8 +160,11 @@ export function CreateBudgetDialog({
           name: formData.name.trim(),
           description: formData.description.trim() || undefined,
           period: formData.period,
-          start_date: formData.start_date,
-          end_date: formData.period === 'custom' ? formData.end_date : undefined,
+          // Convert date string (YYYY-MM-DD) to ISO 8601 datetime for Go time.Time parsing
+          start_date: new Date(formData.start_date).toISOString(),
+          end_date: formData.period === 'custom'
+            ? new Date(formData.end_date).toISOString()
+            : undefined,
           amount: parseFloat(formData.amount),
           // Issue #496: Include income sources
           income_sources: formData.income_sources.length > 0 ? formData.income_sources : undefined,

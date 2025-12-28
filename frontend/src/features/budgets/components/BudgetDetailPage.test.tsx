@@ -509,6 +509,62 @@ describe('BudgetDetailPage', () => {
     })
   })
 
+  describe('Issue #39: Quick-Create Automation Rules', () => {
+    it('should render create alert rule button', () => {
+      mockUseBudgetDetail.mockReturnValue({
+        budget: createMockBudget(),
+        loading: false,
+        error: null,
+        refetch: mockRefetch,
+      })
+
+      renderWithRouter()
+
+      expect(screen.getByRole('link', { name: /create.*alert.*rule/i })).toBeInTheDocument()
+    })
+
+    it('should render create rollover rule button', () => {
+      mockUseBudgetDetail.mockReturnValue({
+        budget: createMockBudget(),
+        loading: false,
+        error: null,
+        refetch: mockRefetch,
+      })
+
+      renderWithRouter()
+
+      expect(screen.getByRole('link', { name: /create.*rollover.*rule/i })).toBeInTheDocument()
+    })
+
+    it('should have correct href for alert rule button with budget_id', () => {
+      mockUseBudgetDetail.mockReturnValue({
+        budget: createMockBudget(),
+        loading: false,
+        error: null,
+        refetch: mockRefetch,
+      })
+
+      renderWithRouter('test-budget-123')
+
+      const alertLink = screen.getByRole('link', { name: /create.*alert.*rule/i })
+      expect(alertLink).toHaveAttribute('href', '/rules/new?type=budget_alert&budget_id=test-budget-123')
+    })
+
+    it('should have correct href for rollover rule button with budget_id', () => {
+      mockUseBudgetDetail.mockReturnValue({
+        budget: createMockBudget(),
+        loading: false,
+        error: null,
+        refetch: mockRefetch,
+      })
+
+      renderWithRouter('test-budget-456')
+
+      const rolloverLink = screen.getByRole('link', { name: /create.*rollover.*rule/i })
+      expect(rolloverLink).toHaveAttribute('href', '/rules/new?type=category_rollover&budget_id=test-budget-456')
+    })
+  })
+
   describe('Edge Cases', () => {
     it('should handle null income_sources', () => {
       mockUseBudgetDetail.mockReturnValue({
