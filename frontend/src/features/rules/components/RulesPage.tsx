@@ -8,12 +8,14 @@
 
 import { useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { Plus, AlertCircle, Loader2 } from 'lucide-react'
 import {
   useGetAutomationRules,
   useToggleAutomationRule,
   useDeleteAutomationRule,
   useTestAutomationRule,
+  getGetAutomationRulesQueryKey,
 } from '@/api/generated/endpoints/automation-rules/automation-rules'
 import type { AutomationRule } from '@/api/generated/models'
 import { ListViewToggle } from '@/shared/components/ListViewToggle'
@@ -36,6 +38,7 @@ interface DeleteConfirmState {
  */
 export function RulesPage() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
 
   // Get initial view from localStorage
   const getInitialView = (): ListView => {
@@ -67,7 +70,40 @@ export function RulesPage() {
   const rules = data ?? []
 
   // Mutations
-  const toggleMutation = useToggleAutomationRule()
+  // Issue #579: Optimistic updates for toggle - UI updates immediately, rollback on error
+  const toggleMutation = useToggleAutomationRule({
+    mutation: {
+      onMutate: async ({ id, data }) => {
+        // Cancel any outgoing refetches to avoid overwriting optimistic update
+        await queryClient.cancelQueries({ queryKey: getGetAutomationRulesQueryKey() })
+        // Snapshot the previous value for rollback
+        const previousRules = queryClient.getQueryData(getGetAutomationRulesQueryKey())
+        // Optimistically update the cache
+        queryClient.setQueryData(
+          getGetAutomationRulesQueryKey(),
+          (old: AutomationRule[] | undefined) =>
+            old?.map((rule) =>
+              rule.id === id ? { ...rule, enabled: data.enabled } : rule
+            )
+        )
+        // Return context with snapshot for rollback
+        return { previousRules }
+      },
+      onError: (_err, _variables, context) => {
+        // Rollback to previous value on error
+        if (context?.previousRules) {
+          queryClient.setQueryData(
+            getGetAutomationRulesQueryKey(),
+            context.previousRules
+          )
+        }
+      },
+      onSettled: () => {
+        // Always refetch after error or success to ensure cache is in sync
+        queryClient.invalidateQueries({ queryKey: getGetAutomationRulesQueryKey() })
+      },
+    },
+  })
   const deleteMutation = useDeleteAutomationRule()
   const testMutation = useTestAutomationRule()
 
