@@ -8,6 +8,11 @@
 import { useCallback } from 'react'
 import { Edit, Trash2, ChevronUp, ChevronDown } from 'lucide-react'
 import type { CategorizationRule } from '../types'
+import {
+  ColumnFilterDropdown,
+  type FilterOption,
+  type RangeValue,
+} from '@/shared/components/ColumnFilterDropdown'
 import './AutoCategorizationRuleTable.css'
 
 export type SortColumn = 'name' | 'status' | 'priority' | 'matches' | 'category'
@@ -36,6 +41,26 @@ export interface AutoCategorizationRuleTableProps {
   onSort?: (column: SortColumn, direction: SortDirection) => void
   /** Additional CSS class */
   className?: string
+
+  // Issue #590: Inline filter props
+  /** Available status options for filtering */
+  statusOptions?: FilterOption[]
+  /** Current status filter value */
+  statusFilter?: string[]
+  /** Called when status filter changes */
+  onStatusFilterChange?: (value: string[]) => void
+
+  /** Available category options for filtering */
+  categoryOptions?: FilterOption[]
+  /** Current category filter value */
+  categoryFilter?: string[]
+  /** Called when category filter changes */
+  onCategoryFilterChange?: (value: string[]) => void
+
+  /** Current priority range filter value */
+  priorityRange?: RangeValue | null
+  /** Called when priority range filter changes */
+  onPriorityRangeChange?: (value: RangeValue | null) => void
 }
 
 /**
@@ -83,6 +108,15 @@ export function AutoCategorizationRuleTable({
   sortDirection = 'asc',
   onSort,
   className = '',
+  // Issue #590: Inline filter props
+  statusOptions,
+  statusFilter,
+  onStatusFilterChange,
+  categoryOptions,
+  categoryFilter,
+  onCategoryFilterChange,
+  priorityRange,
+  onPriorityRangeChange,
 }: AutoCategorizationRuleTableProps) {
   const hasActions = !!(onEdit || onDelete || onToggle)
 
@@ -155,14 +189,49 @@ export function AutoCategorizationRuleTable({
             {renderSortableHeader('Name', 'name')}
           </th>
           <th className="autocat-table__th">
-            {renderSortableHeader('Status', 'status')}
+            <div className="autocat-table__header-content">
+              {renderSortableHeader('Status', 'status')}
+              {statusOptions && onStatusFilterChange && (
+                <ColumnFilterDropdown
+                  type="select"
+                  options={statusOptions}
+                  value={statusFilter}
+                  onChange={(val) => onStatusFilterChange(val as string[])}
+                  multiSelect
+                  ariaLabel="Filter by status"
+                />
+              )}
+            </div>
           </th>
           <th className="autocat-table__th">
-            {renderSortableHeader('Priority', 'priority')}
+            <div className="autocat-table__header-content">
+              {renderSortableHeader('Priority', 'priority')}
+              {onPriorityRangeChange && (
+                <ColumnFilterDropdown
+                  type="range"
+                  rangeValue={priorityRange}
+                  onChange={(val) => onPriorityRangeChange(val as RangeValue | null)}
+                  ariaLabel="Filter by priority"
+                />
+              )}
+            </div>
           </th>
           <th className="autocat-table__th">Conditions</th>
           <th className="autocat-table__th">
-            {renderSortableHeader('Category', 'category')}
+            <div className="autocat-table__header-content">
+              {renderSortableHeader('Category', 'category')}
+              {categoryOptions && onCategoryFilterChange && (
+                <ColumnFilterDropdown
+                  type="select"
+                  options={categoryOptions}
+                  value={categoryFilter}
+                  onChange={(val) => onCategoryFilterChange(val as string[])}
+                  multiSelect
+                  searchable
+                  ariaLabel="Filter by category"
+                />
+              )}
+            </div>
           </th>
           <th className="autocat-table__th autocat-table__th--matches">
             {renderSortableHeader('Matches', 'matches')}

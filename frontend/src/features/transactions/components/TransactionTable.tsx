@@ -1,6 +1,7 @@
 /**
  * TransactionTable Component
  * Issue #584: Unified Card/Table View System
+ * Issue #590: Enhanced Table Sorting and Inline Column Filtering
  *
  * Displays transactions in a table format for the Transactions page.
  * This is the table-only view (no card/table toggle for transactions).
@@ -11,6 +12,11 @@ import { Edit, Tag, ChevronUp, ChevronDown, Clock } from 'lucide-react'
 import type { Transaction } from '../types'
 import type { Account } from '../../accounts/types'
 import { getCategoryColor } from '@/lib/category-colors'
+import {
+  ColumnFilterDropdown,
+  type FilterOption,
+  type RangeValue,
+} from '@/shared/components/ColumnFilterDropdown'
 import './TransactionTable.css'
 
 export type TransactionSortColumn = 'date' | 'merchant' | 'amount' | 'category'
@@ -39,6 +45,26 @@ export interface TransactionTableProps {
   onSort?: (column: TransactionSortColumn, direction: SortDirection) => void
   /** Additional CSS class */
   className?: string
+
+  // Issue #590: Inline filter props
+  /** Available account options for filtering */
+  accountOptions?: FilterOption[]
+  /** Current account filter value */
+  accountFilter?: string[]
+  /** Called when account filter changes */
+  onAccountFilterChange?: (value: string[]) => void
+
+  /** Available category options for filtering */
+  categoryOptions?: FilterOption[]
+  /** Current category filter value */
+  categoryFilter?: string[]
+  /** Called when category filter changes */
+  onCategoryFilterChange?: (value: string[]) => void
+
+  /** Current amount range filter value */
+  amountRange?: RangeValue | null
+  /** Called when amount range filter changes */
+  onAmountRangeChange?: (value: RangeValue | null) => void
 }
 
 /**
@@ -125,6 +151,15 @@ export function TransactionTable({
   sortDirection = 'asc',
   onSort,
   className = '',
+  // Issue #590: Inline filter props
+  accountOptions,
+  accountFilter,
+  onAccountFilterChange,
+  categoryOptions,
+  categoryFilter,
+  onCategoryFilterChange,
+  amountRange,
+  onAmountRangeChange,
 }: TransactionTableProps) {
   const hasActions = !!(onEdit || onCategorize)
 
@@ -193,12 +228,50 @@ export function TransactionTable({
           <th className="transaction-table__th">
             {renderSortableHeader('Description', 'merchant')}
           </th>
-          <th className="transaction-table__th">Account</th>
           <th className="transaction-table__th">
-            {renderSortableHeader('Category', 'category')}
+            <div className="transaction-table__header-content">
+              <span>Account</span>
+              {accountOptions && onAccountFilterChange && (
+                <ColumnFilterDropdown
+                  type="select"
+                  options={accountOptions}
+                  value={accountFilter}
+                  onChange={(val) => onAccountFilterChange(val as string[])}
+                  multiSelect
+                  searchable
+                  ariaLabel="Filter by account"
+                />
+              )}
+            </div>
+          </th>
+          <th className="transaction-table__th">
+            <div className="transaction-table__header-content">
+              {renderSortableHeader('Category', 'category')}
+              {categoryOptions && onCategoryFilterChange && (
+                <ColumnFilterDropdown
+                  type="select"
+                  options={categoryOptions}
+                  value={categoryFilter}
+                  onChange={(val) => onCategoryFilterChange(val as string[])}
+                  multiSelect
+                  searchable
+                  ariaLabel="Filter by category"
+                />
+              )}
+            </div>
           </th>
           <th className="transaction-table__th transaction-table__th--amount">
-            {renderSortableHeader('Amount', 'amount')}
+            <div className="transaction-table__header-content">
+              {renderSortableHeader('Amount', 'amount')}
+              {onAmountRangeChange && (
+                <ColumnFilterDropdown
+                  type="range"
+                  rangeValue={amountRange}
+                  onChange={(val) => onAmountRangeChange(val as RangeValue | null)}
+                  ariaLabel="Filter by amount"
+                />
+              )}
+            </div>
           </th>
           {hasActions && (
             <th className="transaction-table__th transaction-table__th--actions">

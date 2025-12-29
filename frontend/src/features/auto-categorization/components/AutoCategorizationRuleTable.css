@@ -108,6 +108,13 @@
   height: 0.875rem;
 }
 
+/* Header content (combines sort + filter) */
+.autocat-table__header-content {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
 /* Rows */
 .autocat-table__row {
   transition: background-color 0.15s ease;

@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useTransactions } from './hooks/useTransactions'
 import { useTransactionFilters } from './hooks/useTransactionFilters'
 import { TransactionTable, type TransactionSortColumn, type SortDirection } from './components/TransactionTable'
+import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
 import { TransactionEditor } from './components/TransactionEditor'
 import { TransactionFilterPanel } from './components/TransactionFilterPanel'
 import { useGetUserTags, getGetUserTagsQueryKey } from '@/api/generated/endpoints/tags/tags'
@@ -73,6 +74,60 @@ export function TransactionsPage() {
     return map
   }, [accountsData?.accounts])
 
+  // Issue #590: Create account filter options for inline column filter
+  const accountOptions = useMemo<FilterOption[]>(() => {
+    const accs = accountsData?.accounts ?? []
+    return accs.map((acc) => ({
+      value: acc.id,
+      label: acc.nickname || acc.name,
+    }))
+  }, [accountsData?.accounts])
+
+  // Issue #590: Inline filter callbacks
+  const handleAccountFilterChange = useCallback(
+    (value: string[]) => {
+      setFilter('account_ids', value.length > 0 ? value : undefined)
+    },
+    [setFilter]
+  )
+
+  const handleCategoryFilterChange = useCallback(
+    (value: string[]) => {
+      setFilter('categories', value.length > 0 ? value : undefined)
+    },
+    [setFilter]
+  )
+
+  const handleAmountRangeChange = useCallback(
+    (value: RangeValue | null) => {
+      if (value && (value.min !== undefined || value.max !== undefined)) {
+        setFilters({
+          ...filters,
+          min_amount: value.min,
+          max_amount: value.max,
+        })
+      } else {
+        setFilters({
+          ...filters,
+          min_amount: undefined,
+          max_amount: undefined,
+        })
+      }
+    },
+    [filters, setFilters]
+  )
+
+  // Issue #590: Get current amount range from filters
+  const currentAmountRange = useMemo<RangeValue | null>(() => {
+    if (filters.min_amount !== undefined || filters.max_amount !== undefined) {
+      return {
+        min: filters.min_amount,
+        max: filters.max_amount,
+      }
+    }
+    return null
+  }, [filters.min_amount, filters.max_amount])
+
   const {
     data,
     loading,
@@ -85,6 +140,34 @@ export function TransactionsPage() {
     totalCount,
     currentPage,
   } = useTransactions({ filters, limit: 50 })
+
+  // Issue #590: Create category filter options from transaction data
+  const categoryOptions = useMemo<FilterOption[]>(() => {
+    const transactions = data?.transactions ?? []
+    const categorySet = new Set<string>()
+
+    transactions.forEach((t) => {
+      const category = t.category_override || t.category
+      if (category) {
+        try {
+          const parsed = JSON.parse(category)
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            categorySet.add(parsed[0])
+          }
+        } catch {
+          // If not JSON, use as-is
+          categorySet.add(category)
+        }
+      }
+    })
+
+    return Array.from(categorySet)
+      .sort()
+      .map((cat) => ({
+        value: cat,
+        label: cat,
+      }))
+  }, [data?.transactions])
 
   // Handle opening the transaction editor
   const handleEditTransaction = (transaction: Transaction) => {
@@ -281,6 +364,15 @@ export function TransactionsPage() {
               sortColumn={sortColumn}
               sortDirection={sortDirection}
               onSort={handleSort}
+              // Issue #590: Inline column filters
+              accountOptions={accountOptions}
+              accountFilter={filters.account_ids}
+              onAccountFilterChange={handleAccountFilterChange}
+              categoryOptions={categoryOptions}
+              categoryFilter={filters.categories}
+              onCategoryFilterChange={handleCategoryFilterChange}
+              amountRange={currentAmountRange}
+              onAmountRangeChange={handleAmountRangeChange}
             />
           </div>
 
