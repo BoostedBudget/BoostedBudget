@@ -6,6 +6,20 @@ import type { CategorizationRule, UseAutoCategorizationRulesResult } from '../ty
 
 // Mock the useAutoCategorizationRules hook
 vi.mock('../hooks/useAutoCategorizationRules')
+vi.mock('../hooks/useRuleFilters', () => ({
+  useRuleFilters: () => ({
+    filters: { status: [], category: [], priorityMin: undefined, priorityMax: undefined },
+    statusFilter: [],
+    categoryFilter: [],
+    priorityRange: null,
+    setStatusFilter: vi.fn(),
+    setCategoryFilter: vi.fn(),
+    setPriorityRange: vi.fn(),
+    clearAllFilters: vi.fn(),
+    activeFilterCount: 0,
+    hasActiveFilters: false,
+  }),
+}))
 
 describe('AutoCategorizationPage', () => {
   const mockRule1: CategorizationRule = {

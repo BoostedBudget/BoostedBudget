@@ -8,12 +8,13 @@
 
 import { useState, useCallback, useMemo } from 'react'
 import { useAutoCategorizationRules } from '../hooks/useAutoCategorizationRules'
+import { useRuleFilters } from '../hooks/useRuleFilters'
 import { AutoCategorizationRuleCard } from './AutoCategorizationRuleCard'
 import { AutoCategorizationRuleTable, type SortColumn as RuleSortColumn, type SortDirection } from './AutoCategorizationRuleTable'
 import { AutoCategorizationRuleEditor } from './AutoCategorizationRuleEditor'
 import { ListViewToggle } from '@/shared/components/ListViewToggle'
 import type { ListView } from '@/shared/components/ListViewToggle'
-import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
+import type { FilterOption } from '@/shared/components/ColumnFilterDropdown'
 import { STORAGE_KEY_LIST_VIEW } from '../constants'
 import type { CategorizationRule, CreateRuleRequest, UpdateRuleRequest } from '../types'
 import type { Account } from '../../accounts/types'
@@ -64,10 +65,15 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
   const [sortColumn, setSortColumn] = useState<RuleSortColumn | undefined>(undefined)
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
 
-  // Issue #590: Inline filter state
-  const [statusFilter, setStatusFilter] = useState<string[]>([])
-  const [categoryFilter, setCategoryFilter] = useState<string[]>([])
-  const [priorityRange, setPriorityRange] = useState<RangeValue | null>(null)
+  // Issue #590: Inline filter state (URL-synced)
+  const {
+    statusFilter,
+    categoryFilter,
+    priorityRange,
+    setStatusFilter,
+    setCategoryFilter,
+    setPriorityRange,
+  } = useRuleFilters()
 
   const isAtLimit = maxRules !== undefined && rules.length >= maxRules
   const showTierWarning = isAtLimit && currentTier === 'free'
@@ -154,18 +160,8 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
       }))
   }, [rules])
 
-  // Issue #590: Handle inline filter changes
-  const handleStatusFilterChange = useCallback((value: string[]) => {
-    setStatusFilter(value)
-  }, [])
-
-  const handleCategoryFilterChange = useCallback((value: string[]) => {
-    setCategoryFilter(value)
-  }, [])
-
-  const handlePriorityRangeChange = useCallback((value: RangeValue | null) => {
-    setPriorityRange(value)
-  }, [])
+  // Issue #590: Filter handlers from useRuleFilters hook (URL-synced)
+  // setStatusFilter, setCategoryFilter, setPriorityRange come from the hook
 
   // Issue #590: Filter and sort rules client-side
   const filteredAndSortedRules = useMemo(() => {
@@ -363,15 +359,15 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
             sortColumn={sortColumn}
             sortDirection={sortDirection}
             onSort={handleSort}
-            // Issue #590: Inline filter props
+            // Issue #590: Inline filter props (URL-synced via useRuleFilters)
             statusOptions={statusOptions}
             statusFilter={statusFilter}
-            onStatusFilterChange={handleStatusFilterChange}
+            onStatusFilterChange={setStatusFilter}
             categoryOptions={categoryOptions}
             categoryFilter={categoryFilter}
-            onCategoryFilterChange={handleCategoryFilterChange}
+            onCategoryFilterChange={setCategoryFilter}
             priorityRange={priorityRange}
-            onPriorityRangeChange={handlePriorityRangeChange}
+            onPriorityRangeChange={setPriorityRange}
           />
         )}
       </div>

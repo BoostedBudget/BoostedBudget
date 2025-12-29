@@ -4,7 +4,7 @@ import { Eye, EyeOff } from 'lucide-react'
 import { PlaidLinkButton } from './PlaidLinkButton'
 import { AccountCard } from './AccountCard'
 import { AccountTable, type SortColumn as AccountSortColumn, type SortDirection } from './components/AccountTable'
-import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
+import type { FilterOption } from '@/shared/components/ColumnFilterDropdown'
 import { UpgradeBanner } from './UpgradeBanner'
 import { SyncStatsCard } from './SyncStatsCard'
 import { AccountCustomizationModal } from './components/AccountCustomizationModal'
@@ -20,6 +20,7 @@ import { useProfile } from '../profile/hooks/useProfile'
 import { useSubscriptionTiers } from '../subscription/hooks/useSubscriptionTiers'
 import { useTierLimits } from '../subscription/hooks/useTierLimits'
 import { useAccountCustomization } from './hooks/useAccountCustomization'
+import { useAccountFilters } from './hooks/useAccountFilters'
 import type { Account, UpdateAccountRequest } from './types'
 import './AccountsPage.css'
 
@@ -52,10 +53,15 @@ export function AccountsPage() {
   const [sortColumn, setSortColumn] = useState<AccountSortColumn | undefined>(undefined)
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
 
-  // Issue #590: Inline filter state
-  const [institutionFilter, setInstitutionFilter] = useState<string[]>([])
-  const [typeFilter, setTypeFilter] = useState<string[]>([])
-  const [balanceRange, setBalanceRange] = useState<RangeValue | null>(null)
+  // Issue #590: Inline filter state (URL-synced)
+  const {
+    institutionFilter,
+    typeFilter,
+    balanceRange,
+    setInstitutionFilter,
+    setTypeFilter,
+    setBalanceRange,
+  } = useAccountFilters()
 
   // Use generated query hook for fetching accounts (always include hidden for toggle/counts)
   const {
@@ -157,18 +163,8 @@ export function AccountsPage() {
       }))
   }, [accountsData?.accounts])
 
-  // Issue #590: Handle inline filter changes
-  const handleInstitutionFilterChange = useCallback((value: string[]) => {
-    setInstitutionFilter(value)
-  }, [])
-
-  const handleTypeFilterChange = useCallback((value: string[]) => {
-    setTypeFilter(value)
-  }, [])
-
-  const handleBalanceRangeChange = useCallback((value: RangeValue | null) => {
-    setBalanceRange(value)
-  }, [])
+  // Issue #590: Filter handlers from useAccountFilters hook (URL-synced)
+  // setInstitutionFilter, setTypeFilter, setBalanceRange come from the hook
 
   // Issue #307: Handle save from modal
   const handleSaveAccount = useCallback(async (accountId: string, changes: Partial<UpdateAccountRequest>) => {
@@ -377,15 +373,15 @@ export function AccountsPage() {
               sortColumn={sortColumn}
               sortDirection={sortDirection}
               onSort={handleSort}
-              // Issue #590: Inline column filters
+              // Issue #590: Inline column filters (URL-synced via useAccountFilters)
               institutionOptions={institutionOptions}
               institutionFilter={institutionFilter}
-              onInstitutionFilterChange={handleInstitutionFilterChange}
+              onInstitutionFilterChange={setInstitutionFilter}
               typeOptions={typeOptions}
               typeFilter={typeFilter}
-              onTypeFilterChange={handleTypeFilterChange}
+              onTypeFilterChange={setTypeFilter}
               balanceRange={balanceRange}
-              onBalanceRangeChange={handleBalanceRangeChange}
+              onBalanceRangeChange={setBalanceRange}
             />
           ) : (
             <div className="accounts-grid">
