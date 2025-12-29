@@ -141,6 +141,8 @@ jobs:
         uses: pnpm/action-setup@v4
         with:
           version: 10
+          standalone: true
+          dest: ${{ github.workspace }}/${{ env.UNIQUE_WORKSPACE }}/.pnpm-home
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -336,6 +338,8 @@ jobs:
         uses: pnpm/action-setup@v4
         with:
           version: 10
+          standalone: true
+          dest: ${{ github.workspace }}/${{ env.UNIQUE_WORKSPACE }}/.pnpm-home
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -410,6 +414,8 @@ jobs:
         uses: pnpm/action-setup@v4
         with:
           version: 10
+          standalone: true
+          dest: ${{ github.workspace }}/${{ env.UNIQUE_WORKSPACE }}/.pnpm-home
 
       - name: Set up Node
         uses: actions/setup-node@v6
