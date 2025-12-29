@@ -451,6 +451,7 @@ func main() {
 
 		// Register Huma automation rule routes (Issue #37: Rule Scheduler)
 		humaAutomationRuleHandler := operations.NewAutomationRuleHandler(automationRuleService, ruleSchedulerManager)
+		humaAutomationRuleHandler.SetExecutionService(ruleExecutionService) // Issue #579: Wire execution service for test endpoint
 		operations.RegisterAutomationRuleRoutes(humaAPI, humaAutomationRuleHandler)
 		log.Println("✅ Huma automation rule routes registered")
 

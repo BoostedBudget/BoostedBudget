@@ -306,6 +306,7 @@ export function RuleTable({
                         aria-label={
                           rule.enabled ? 'Disable rule' : 'Enable rule'
                         }
+                        title={rule.enabled ? 'Disable rule' : 'Enable rule'}
                       >
                         <span className="rule-table__toggle-slider" />
                       </button>
@@ -317,6 +318,7 @@ export function RuleTable({
                         disabled={loading}
                         className="rule-table__action-btn"
                         aria-label="Test rule"
+                        title="Test rule"
                       >
                         <Play aria-hidden="true" />
                       </button>
@@ -328,6 +330,7 @@ export function RuleTable({
                         disabled={loading}
                         className="rule-table__action-btn"
                         aria-label="Edit rule"
+                        title="Edit rule"
                       >
                         <Edit aria-hidden="true" />
                       </button>
@@ -339,6 +342,7 @@ export function RuleTable({
                         disabled={loading}
                         className="rule-table__action-btn rule-table__action-btn--danger"
                         aria-label="Delete rule"
+                        title="Delete rule"
                       >
                         <Trash2 aria-hidden="true" />
                       </button>
