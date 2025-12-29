@@ -8,6 +8,11 @@
 import { useCallback } from 'react'
 import { Settings, Trash2, ChevronUp, ChevronDown } from 'lucide-react'
 import type { BudgetWithMetrics } from '../types'
+import {
+  ColumnFilterDropdown,
+  type FilterOption,
+  type RangeValue,
+} from '@/shared/components/ColumnFilterDropdown'
 import './BudgetTable.css'
 
 export type SortColumn = 'name' | 'period' | 'amount' | 'progress' | 'remaining'
@@ -34,6 +39,19 @@ export interface BudgetTableProps {
   onSort?: (column: SortColumn, direction: SortDirection) => void
   /** Additional CSS class */
   className?: string
+
+  // Issue #590: Inline filter props
+  /** Available period options for filtering */
+  periodOptions?: FilterOption[]
+  /** Current period filter value */
+  periodFilter?: string[]
+  /** Called when period filter changes */
+  onPeriodFilterChange?: (value: string[]) => void
+
+  /** Current progress range filter value (percentage) */
+  progressRange?: RangeValue | null
+  /** Called when progress range filter changes */
+  onProgressRangeChange?: (value: RangeValue | null) => void
 }
 
 /**
@@ -86,6 +104,12 @@ export function BudgetTable({
   sortDirection = 'asc',
   onSort,
   className = '',
+  // Issue #590: Inline filter props
+  periodOptions,
+  periodFilter,
+  onPeriodFilterChange,
+  progressRange,
+  onProgressRangeChange,
 }: BudgetTableProps) {
   const hasActions = !!(onManage || onDelete)
 
@@ -149,13 +173,35 @@ export function BudgetTable({
             {renderSortableHeader('Name', 'name')}
           </th>
           <th className="budget-table__th">
-            {renderSortableHeader('Period', 'period')}
+            <div className="budget-table__header-content">
+              {renderSortableHeader('Period', 'period')}
+              {periodOptions && onPeriodFilterChange && (
+                <ColumnFilterDropdown
+                  type="select"
+                  options={periodOptions}
+                  value={periodFilter}
+                  onChange={(val) => onPeriodFilterChange(val as string[])}
+                  multiSelect
+                  ariaLabel="Filter by period"
+                />
+              )}
+            </div>
           </th>
           <th className="budget-table__th budget-table__th--amount">
             {renderSortableHeader('Amount', 'amount')}
           </th>
           <th className="budget-table__th budget-table__th--progress">
-            {renderSortableHeader('Progress', 'progress')}
+            <div className="budget-table__header-content">
+              {renderSortableHeader('Progress', 'progress')}
+              {onProgressRangeChange && (
+                <ColumnFilterDropdown
+                  type="range"
+                  rangeValue={progressRange}
+                  onChange={(val) => onProgressRangeChange(val as RangeValue | null)}
+                  ariaLabel="Filter by progress"
+                />
+              )}
+            </div>
           </th>
           <th className="budget-table__th budget-table__th--remaining">
             {renderSortableHeader('Remaining', 'remaining')}

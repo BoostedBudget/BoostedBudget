@@ -75,6 +75,13 @@
   text-align: right;
 }
 
+/* Header content (combines sort + filter) */
+.account-table__header-content {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
 /* Sort button */
 .account-table__sort-btn {
   display: inline-flex;

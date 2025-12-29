@@ -13,6 +13,7 @@ import { AutoCategorizationRuleTable, type SortColumn as RuleSortColumn, type So
 import { AutoCategorizationRuleEditor } from './AutoCategorizationRuleEditor'
 import { ListViewToggle } from '@/shared/components/ListViewToggle'
 import type { ListView } from '@/shared/components/ListViewToggle'
+import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
 import { STORAGE_KEY_LIST_VIEW } from '../constants'
 import type { CategorizationRule, CreateRuleRequest, UpdateRuleRequest } from '../types'
 import type { Account } from '../../accounts/types'
@@ -62,6 +63,11 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
   // Issue #590: Sorting state
   const [sortColumn, setSortColumn] = useState<RuleSortColumn | undefined>(undefined)
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
+
+  // Issue #590: Inline filter state
+  const [statusFilter, setStatusFilter] = useState<string[]>([])
+  const [categoryFilter, setCategoryFilter] = useState<string[]>([])
+  const [priorityRange, setPriorityRange] = useState<RangeValue | null>(null)
 
   const isAtLimit = maxRules !== undefined && rules.length >= maxRules
   const showTierWarning = isAtLimit && currentTier === 'free'
@@ -127,11 +133,73 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
     setSortDirection(direction)
   }, [])
 
-  // Issue #590: Sort rules client-side
-  const sortedRules = useMemo(() => {
-    if (!sortColumn) return rules
+  // Issue #590: Create filter options from rules data
+  const statusOptions = useMemo<FilterOption[]>(() => [
+    { value: 'enabled', label: 'Enabled' },
+    { value: 'disabled', label: 'Disabled' },
+  ], [])
 
-    return [...rules].sort((a, b) => {
+  const categoryOptions = useMemo<FilterOption[]>(() => {
+    const cats = new Set<string>()
+    rules.forEach((rule) => {
+      if (rule.target_category?.[0]) {
+        cats.add(rule.target_category[0])
+      }
+    })
+    return Array.from(cats)
+      .sort()
+      .map((cat) => ({
+        value: cat,
+        label: cat,
+      }))
+  }, [rules])
+
+  // Issue #590: Handle inline filter changes
+  const handleStatusFilterChange = useCallback((value: string[]) => {
+    setStatusFilter(value)
+  }, [])
+
+  const handleCategoryFilterChange = useCallback((value: string[]) => {
+    setCategoryFilter(value)
+  }, [])
+
+  const handlePriorityRangeChange = useCallback((value: RangeValue | null) => {
+    setPriorityRange(value)
+  }, [])
+
+  // Issue #590: Filter and sort rules client-side
+  const filteredAndSortedRules = useMemo(() => {
+    let filtered = [...rules]
+
+    // Apply status filter
+    if (statusFilter.length > 0) {
+      filtered = filtered.filter((rule) => {
+        const status = rule.enabled ? 'enabled' : 'disabled'
+        return statusFilter.includes(status)
+      })
+    }
+
+    // Apply category filter
+    if (categoryFilter.length > 0) {
+      filtered = filtered.filter((rule) =>
+        rule.target_category?.[0] && categoryFilter.includes(rule.target_category[0])
+      )
+    }
+
+    // Apply priority range filter
+    if (priorityRange) {
+      filtered = filtered.filter((rule) => {
+        const priority = rule.priority
+        if (priorityRange.min !== undefined && priority < priorityRange.min) return false
+        if (priorityRange.max !== undefined && priority > priorityRange.max) return false
+        return true
+      })
+    }
+
+    // Apply sorting if sortColumn is set
+    if (!sortColumn) return filtered
+
+    return filtered.sort((a, b) => {
       let comparison = 0
 
       switch (sortColumn) {
@@ -161,7 +229,7 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
 
       return sortDirection === 'asc' ? comparison : -comparison
     })
-  }, [rules, sortColumn, sortDirection])
+  }, [rules, sortColumn, sortDirection, statusFilter, categoryFilter, priorityRange])
 
   // Loading state
   if (loading) {
@@ -286,7 +354,7 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
           </div>
         ) : (
           <AutoCategorizationRuleTable
-            rules={sortedRules}
+            rules={filteredAndSortedRules}
             onToggle={handleTableToggle}
             onEdit={handleEditClick}
             onDelete={(rule) => handleDelete(rule.id)}
@@ -295,6 +363,15 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
             sortColumn={sortColumn}
             sortDirection={sortDirection}
             onSort={handleSort}
+            // Issue #590: Inline filter props
+            statusOptions={statusOptions}
+            statusFilter={statusFilter}
+            onStatusFilterChange={handleStatusFilterChange}
+            categoryOptions={categoryOptions}
+            categoryFilter={categoryFilter}
+            onCategoryFilterChange={handleCategoryFilterChange}
+            priorityRange={priorityRange}
+            onPriorityRangeChange={handlePriorityRangeChange}
           />
         )}
       </div>
