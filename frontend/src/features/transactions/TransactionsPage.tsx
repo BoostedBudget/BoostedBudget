@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useTransactions } from './hooks/useTransactions'
 import { useTransactionFilters } from './hooks/useTransactionFilters'
-import { TransactionTable } from './components/TransactionTable'
+import { TransactionTable, type TransactionSortColumn, type SortDirection } from './components/TransactionTable'
 import { TransactionEditor } from './components/TransactionEditor'
 import { TransactionFilterPanel } from './components/TransactionFilterPanel'
 import { useGetUserTags, getGetUserTagsQueryKey } from '@/api/generated/endpoints/tags/tags'
@@ -49,6 +49,10 @@ export function TransactionsPage() {
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null)
   const [isEditorOpen, setIsEditorOpen] = useState(false)
   const queryClient = useQueryClient()
+
+  // Issue #590: Sorting state
+  const [sortColumn, setSortColumn] = useState<TransactionSortColumn | undefined>(undefined)
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
 
   // Fetch available tags, categories, and accounts using generated hooks
   const { data: tagsData } = useGetUserTags()
@@ -131,6 +135,49 @@ export function TransactionsPage() {
   // Calculate pending count from transactions data
   const pendingCount = data?.transactions?.filter((t) => t.pending).length ?? 0
 
+  // Issue #590: Handle sort change
+  const handleSort = useCallback((column: TransactionSortColumn, direction: SortDirection) => {
+    setSortColumn(column)
+    setSortDirection(direction)
+  }, [])
+
+  // Issue #590: Sort transactions client-side
+  const sortedTransactions = useMemo(() => {
+    const transactions = data?.transactions ?? []
+    if (!sortColumn) return transactions
+
+    return [...transactions].sort((a, b) => {
+      let comparison = 0
+
+      switch (sortColumn) {
+        case 'date': {
+          const dateA = new Date(a.authorized_date || a.date).getTime()
+          const dateB = new Date(b.authorized_date || b.date).getTime()
+          comparison = dateA - dateB
+          break
+        }
+        case 'merchant': {
+          const nameA = (a.merchant_name || a.name || '').toLowerCase()
+          const nameB = (b.merchant_name || b.name || '').toLowerCase()
+          comparison = nameA.localeCompare(nameB)
+          break
+        }
+        case 'amount': {
+          comparison = a.amount - b.amount
+          break
+        }
+        case 'category': {
+          const catA = a.category_override || a.category || ''
+          const catB = b.category_override || b.category || ''
+          comparison = catA.localeCompare(catB)
+          break
+        }
+      }
+
+      return sortDirection === 'asc' ? comparison : -comparison
+    })
+  }, [data?.transactions, sortColumn, sortDirection])
+
   // Loading state
   if (loading && !data) {
     return (
@@ -154,7 +201,7 @@ export function TransactionsPage() {
     )
   }
 
-  const transactions = data?.transactions ?? []
+  const transactions = sortedTransactions
   const isEmpty = transactions.length === 0
 
   return (
@@ -230,6 +277,10 @@ export function TransactionsPage() {
               onEdit={handleEditTransaction}
               onCategorize={handleCategorizeTransaction}
               loading={loading}
+              sortable
+              sortColumn={sortColumn}
+              sortDirection={sortDirection}
+              onSort={handleSort}
             />
           </div>
 

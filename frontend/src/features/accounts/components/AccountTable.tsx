@@ -192,7 +192,7 @@ export function AccountTable({
           <th className="account-table__th">
             {renderSortableHeader('Type', 'type')}
           </th>
-          <th className="account-table__th">Mask</th>
+          <th className="account-table__th">Acct #</th>
           <th className="account-table__th account-table__th--balance">
             {renderSortableHeader('Balance', 'balance')}
           </th>

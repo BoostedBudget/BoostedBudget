@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Eye, EyeOff } from 'lucide-react'
 import { PlaidLinkButton } from './PlaidLinkButton'
 import { AccountCard } from './AccountCard'
-import { AccountTable } from './components/AccountTable'
+import { AccountTable, type SortColumn as AccountSortColumn, type SortDirection } from './components/AccountTable'
 import { UpgradeBanner } from './UpgradeBanner'
 import { SyncStatsCard } from './SyncStatsCard'
 import { AccountCustomizationModal } from './components/AccountCustomizationModal'
@@ -46,6 +46,10 @@ export function AccountsPage() {
   // Issue #307: Modal state
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
+
+  // Issue #590: Sorting state
+  const [sortColumn, setSortColumn] = useState<AccountSortColumn | undefined>(undefined)
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
 
   // Use generated query hook for fetching accounts (always include hidden for toggle/counts)
   const {
@@ -106,6 +110,12 @@ export function AccountsPage() {
     setIsModalOpen(true)
   }, [])
 
+  // Issue #590: Handle sort change
+  const handleSort = useCallback((column: AccountSortColumn, direction: SortDirection) => {
+    setSortColumn(column)
+    setSortDirection(direction)
+  }, [])
+
   // Issue #307: Handle save from modal
   const handleSaveAccount = useCallback(async (accountId: string, changes: Partial<UpdateAccountRequest>) => {
     const updatedAccount = await updateAccount(accountId, changes)
@@ -134,7 +144,43 @@ export function AccountsPage() {
       filtered = accs.filter(acc => !acc.is_hidden)
     }
 
-    // Sort by display_order (nulls last), then created_at
+    // Issue #590: If user has selected a sort column, use that
+    if (sortColumn) {
+      return [...filtered].sort((a, b) => {
+        let comparison = 0
+
+        switch (sortColumn) {
+          case 'institution': {
+            const instA = (a.institution_name || '').toLowerCase()
+            const instB = (b.institution_name || '').toLowerCase()
+            comparison = instA.localeCompare(instB)
+            break
+          }
+          case 'name': {
+            const nameA = (a.nickname || a.name || '').toLowerCase()
+            const nameB = (b.nickname || b.name || '').toLowerCase()
+            comparison = nameA.localeCompare(nameB)
+            break
+          }
+          case 'type': {
+            const typeA = (a.subtype || a.type || '').toLowerCase()
+            const typeB = (b.subtype || b.type || '').toLowerCase()
+            comparison = typeA.localeCompare(typeB)
+            break
+          }
+          case 'balance': {
+            const balA = a.current_balance ?? 0
+            const balB = b.current_balance ?? 0
+            comparison = balA - balB
+            break
+          }
+        }
+
+        return sortDirection === 'asc' ? comparison : -comparison
+      })
+    }
+
+    // Default sort: by display_order (nulls last), then created_at
     return [...filtered].sort((a, b) => {
       const orderA = a.display_order ?? Number.MAX_SAFE_INTEGER
       const orderB = b.display_order ?? Number.MAX_SAFE_INTEGER
@@ -146,7 +192,7 @@ export function AccountsPage() {
       // Fallback to created_at
       return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
     })
-  }, [accountsData?.accounts, showHidden])
+  }, [accountsData?.accounts, showHidden, sortColumn, sortDirection])
 
   // Count of hidden accounts
   const hiddenCount = useMemo(() => {
@@ -250,6 +296,10 @@ export function AccountsPage() {
               accounts={displayedAccounts}
               onEdit={handleEditAccount}
               onDelete={(account) => handleDeleteAccount(account.id)}
+              sortable
+              sortColumn={sortColumn}
+              sortDirection={sortDirection}
+              onSort={handleSort}
             />
           ) : (
             <div className="accounts-grid">

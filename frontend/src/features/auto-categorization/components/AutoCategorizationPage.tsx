@@ -6,10 +6,10 @@
  * Issue #584: Unified Card/Table View System
  */
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { useAutoCategorizationRules } from '../hooks/useAutoCategorizationRules'
 import { AutoCategorizationRuleCard } from './AutoCategorizationRuleCard'
-import { AutoCategorizationRuleTable } from './AutoCategorizationRuleTable'
+import { AutoCategorizationRuleTable, type SortColumn as RuleSortColumn, type SortDirection } from './AutoCategorizationRuleTable'
 import { AutoCategorizationRuleEditor } from './AutoCategorizationRuleEditor'
 import { ListViewToggle } from '@/shared/components/ListViewToggle'
 import type { ListView } from '@/shared/components/ListViewToggle'
@@ -58,6 +58,10 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
   const [editorMode, setEditorMode] = useState<EditorMode>(null)
   const [editingRule, setEditingRule] = useState<CategorizationRule | null>(null)
   const [view, setView] = useState<ListView>(getInitialView)
+
+  // Issue #590: Sorting state
+  const [sortColumn, setSortColumn] = useState<RuleSortColumn | undefined>(undefined)
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
 
   const isAtLimit = maxRules !== undefined && rules.length >= maxRules
   const showTierWarning = isAtLimit && currentTier === 'free'
@@ -116,6 +120,48 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
   const handleViewChange = useCallback((newView: ListView) => {
     setView(newView)
   }, [])
+
+  // Issue #590: Handle sort change
+  const handleSort = useCallback((column: RuleSortColumn, direction: SortDirection) => {
+    setSortColumn(column)
+    setSortDirection(direction)
+  }, [])
+
+  // Issue #590: Sort rules client-side
+  const sortedRules = useMemo(() => {
+    if (!sortColumn) return rules
+
+    return [...rules].sort((a, b) => {
+      let comparison = 0
+
+      switch (sortColumn) {
+        case 'name': {
+          comparison = a.name.localeCompare(b.name)
+          break
+        }
+        case 'status': {
+          comparison = (a.enabled ? 1 : 0) - (b.enabled ? 1 : 0)
+          break
+        }
+        case 'priority': {
+          comparison = a.priority - b.priority
+          break
+        }
+        case 'matches': {
+          comparison = a.match_count - b.match_count
+          break
+        }
+        case 'category': {
+          const catA = a.target_category?.[0] || ''
+          const catB = b.target_category?.[0] || ''
+          comparison = catA.localeCompare(catB)
+          break
+        }
+      }
+
+      return sortDirection === 'asc' ? comparison : -comparison
+    })
+  }, [rules, sortColumn, sortDirection])
 
   // Loading state
   if (loading) {
@@ -240,11 +286,15 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
           </div>
         ) : (
           <AutoCategorizationRuleTable
-            rules={rules}
+            rules={sortedRules}
             onToggle={handleTableToggle}
             onEdit={handleEditClick}
             onDelete={(rule) => handleDelete(rule.id)}
             loading={loading}
+            sortable
+            sortColumn={sortColumn}
+            sortDirection={sortDirection}
+            onSort={handleSort}
           />
         )}
       </div>

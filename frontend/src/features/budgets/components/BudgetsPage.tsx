@@ -14,7 +14,7 @@ import { PlusIcon } from '@heroicons/react/24/outline';
 import { useBudgets } from '../hooks/useBudgets';
 import { useSavingsGoals } from '../hooks/useSavingsGoals';
 import { BudgetCard } from './BudgetCard';
-import { BudgetTable } from './BudgetTable';
+import { BudgetTable, type SortColumn as BudgetSortColumn, type SortDirection } from './BudgetTable';
 import { SavingsGoalCard } from './SavingsGoalCard';
 import { CreateBudgetDialog } from './CreateBudgetDialog';
 import { CreateSavingsGoalDialog } from './CreateSavingsGoalDialog';
@@ -54,6 +54,10 @@ export function BudgetsPage() {
   const [deletingBudget, setDeletingBudget] = useState<Budget | null>(null);
   const [deletingGoal, setDeletingGoal] = useState<SavingsGoal | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Issue #590: Sorting state
+  const [sortColumn, setSortColumn] = useState<BudgetSortColumn | undefined>(undefined);
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
 
   // Dialog handlers
   const openBudgetDialog = useCallback(() => setActiveDialog('budget'), []);
@@ -138,6 +142,47 @@ export function BudgetsPage() {
     }
   }, [deletingGoal, deleteGoal, closeDialog, refetchGoals]);
 
+  // Issue #590: Handle sort change
+  const handleSort = useCallback((column: BudgetSortColumn, direction: SortDirection) => {
+    setSortColumn(column);
+    setSortDirection(direction);
+  }, []);
+
+  // Issue #590: Sort budgets client-side
+  const sortBudgets = useCallback((budgetsToSort: Budget[]) => {
+    if (!sortColumn) return budgetsToSort;
+
+    const withMetrics = budgetsToSort.map(computeBudgetMetrics);
+    return [...withMetrics].sort((a, b) => {
+      let comparison = 0;
+
+      switch (sortColumn) {
+        case 'name': {
+          comparison = a.name.localeCompare(b.name);
+          break;
+        }
+        case 'period': {
+          comparison = a.period.localeCompare(b.period);
+          break;
+        }
+        case 'amount': {
+          comparison = a.amount - b.amount;
+          break;
+        }
+        case 'progress': {
+          comparison = a.percent_used - b.percent_used;
+          break;
+        }
+        case 'remaining': {
+          comparison = a.remaining_amount - b.remaining_amount;
+          break;
+        }
+      }
+
+      return sortDirection === 'asc' ? comparison : -comparison;
+    });
+  }, [sortColumn, sortDirection]);
+
   const loading = budgetsLoading || goalsLoading;
   const error = budgetsError || goalsError;
 
@@ -214,8 +259,12 @@ export function BudgetsPage() {
           </div>
         ) : view === 'table' ? (
           <BudgetTable
-            budgets={activeBudgets.map(computeBudgetMetrics)}
+            budgets={sortColumn ? sortBudgets(activeBudgets) : activeBudgets.map(computeBudgetMetrics)}
             onDelete={handleDeleteBudgetClick}
+            sortable
+            sortColumn={sortColumn}
+            sortDirection={sortDirection}
+            onSort={handleSort}
           />
         ) : (
           <div className="budgets-page__grid">
@@ -231,8 +280,12 @@ export function BudgetsPage() {
           <h2>Past Budgets</h2>
           {view === 'table' ? (
             <BudgetTable
-              budgets={inactiveBudgets.map(computeBudgetMetrics)}
+              budgets={sortColumn ? sortBudgets(inactiveBudgets) : inactiveBudgets.map(computeBudgetMetrics)}
               onDelete={handleDeleteBudgetClick}
+              sortable
+              sortColumn={sortColumn}
+              sortDirection={sortDirection}
+              onSort={handleSort}
             />
           ) : (
             <div className="budgets-page__grid">
