@@ -1,0 +1,290 @@
+/**
+ * AutoCategorizationRuleTable Component
+ * Issue #584: Unified Card/Table View System
+ *
+ * Displays auto-categorization rules in a table format with sorting and actions.
+ */
+
+import { useCallback } from 'react'
+import { Edit, Trash2, ChevronUp, ChevronDown } from 'lucide-react'
+import type { CategorizationRule } from '../types'
+import './AutoCategorizationRuleTable.css'
+
+export type SortColumn = 'name' | 'status' | 'priority' | 'matches' | 'category'
+export type SortDirection = 'asc' | 'desc'
+
+export interface AutoCategorizationRuleTableProps {
+  /** Rules to display */
+  rules: CategorizationRule[]
+  /** Called when edit button is clicked */
+  onEdit?: (rule: CategorizationRule) => void
+  /** Called when delete button is clicked */
+  onDelete?: (rule: CategorizationRule) => void
+  /** Called when toggle switch is changed */
+  onToggle?: (rule: CategorizationRule, enabled: boolean) => void
+  /** Called when a row is clicked */
+  onRowClick?: (rule: CategorizationRule) => void
+  /** Show loading state */
+  loading?: boolean
+  /** Enable sorting */
+  sortable?: boolean
+  /** Currently sorted column */
+  sortColumn?: SortColumn
+  /** Current sort direction */
+  sortDirection?: SortDirection
+  /** Called when sort changes */
+  onSort?: (column: SortColumn, direction: SortDirection) => void
+  /** Additional CSS class */
+  className?: string
+}
+
+/**
+ * Format conditions display text
+ */
+function formatConditions(
+  conditions: CategorizationRule['conditions'],
+  conditionLogic: CategorizationRule['condition_logic']
+): string {
+  const count = conditions.length
+  if (count === 1) {
+    return '1 condition'
+  }
+  return `${count} conditions (${conditionLogic})`
+}
+
+/**
+ * Get source badge text
+ */
+function getSourceLabel(source: CategorizationRule['source']): string {
+  switch (source) {
+    case 'manual':
+      return 'Manual'
+    case 'ai':
+      return 'AI'
+    case 'template':
+      return 'Template'
+    default:
+      return source
+  }
+}
+
+/**
+ * AutoCategorizationRuleTable displays auto-categorization rules in a sortable table format.
+ */
+export function AutoCategorizationRuleTable({
+  rules,
+  onEdit,
+  onDelete,
+  onToggle,
+  onRowClick,
+  loading = false,
+  sortable = false,
+  sortColumn,
+  sortDirection = 'asc',
+  onSort,
+  className = '',
+}: AutoCategorizationRuleTableProps) {
+  const hasActions = !!(onEdit || onDelete || onToggle)
+
+  const handleSort = useCallback(
+    (column: SortColumn) => {
+      if (!sortable || !onSort) return
+      const newDirection =
+        sortColumn === column && sortDirection === 'asc' ? 'desc' : 'asc'
+      onSort(column, newDirection)
+    },
+    [sortable, onSort, sortColumn, sortDirection]
+  )
+
+  const handleToggle = useCallback(
+    (rule: CategorizationRule) => {
+      if (onToggle && !loading) {
+        onToggle(rule, !rule.enabled)
+      }
+    },
+    [onToggle, loading]
+  )
+
+  const renderSortableHeader = (label: string, column: SortColumn) => {
+    if (!sortable) {
+      return label
+    }
+
+    const isActive = sortColumn === column
+    const ariaSort = isActive
+      ? sortDirection === 'asc'
+        ? 'ascending'
+        : 'descending'
+      : undefined
+
+    return (
+      <button
+        type="button"
+        onClick={() => handleSort(column)}
+        aria-sort={ariaSort}
+        className="autocat-table__sort-btn"
+      >
+        {label}
+        <span className="autocat-table__sort-icon">
+          {isActive && sortDirection === 'asc' && (
+            <ChevronUp aria-hidden="true" />
+          )}
+          {isActive && sortDirection === 'desc' && (
+            <ChevronDown aria-hidden="true" />
+          )}
+        </span>
+      </button>
+    )
+  }
+
+  if (rules.length === 0) {
+    return (
+      <div className={`autocat-table__empty ${className}`.trim()}>
+        <p>No rules found. Create your first auto-categorization rule to get started.</p>
+      </div>
+    )
+  }
+
+  return (
+    <table
+      className={`autocat-table ${loading ? 'autocat-table--loading' : ''} ${className}`.trim()}
+    >
+      <thead>
+        <tr className="autocat-table__header-row">
+          <th className="autocat-table__th">
+            {renderSortableHeader('Name', 'name')}
+          </th>
+          <th className="autocat-table__th">
+            {renderSortableHeader('Status', 'status')}
+          </th>
+          <th className="autocat-table__th">
+            {renderSortableHeader('Priority', 'priority')}
+          </th>
+          <th className="autocat-table__th">Conditions</th>
+          <th className="autocat-table__th">
+            {renderSortableHeader('Category', 'category')}
+          </th>
+          <th className="autocat-table__th autocat-table__th--matches">
+            {renderSortableHeader('Matches', 'matches')}
+          </th>
+          {hasActions && (
+            <th className="autocat-table__th autocat-table__th--actions">
+              Actions
+            </th>
+          )}
+        </tr>
+      </thead>
+      <tbody>
+        {rules.map((rule) => {
+          const conditionsText = formatConditions(
+            rule.conditions,
+            rule.condition_logic
+          )
+          const categoryLabel = rule.target_category?.[0] || 'No category'
+          const sourceLabel = getSourceLabel(rule.source)
+
+          return (
+            <tr
+              key={rule.id}
+              className={`autocat-table__row ${onRowClick ? 'autocat-table__row--clickable' : ''}`}
+              onClick={onRowClick ? () => onRowClick(rule) : undefined}
+            >
+              <td className="autocat-table__td autocat-table__td--name">
+                <div className="autocat-table__name-cell">
+                  <span className="autocat-table__name">{rule.name}</span>
+                  {rule.description && (
+                    <span className="autocat-table__description">
+                      {rule.description}
+                    </span>
+                  )}
+                  <span
+                    className={`autocat-table__source autocat-table__source--${rule.source}`}
+                  >
+                    {sourceLabel}
+                  </span>
+                </div>
+              </td>
+              <td className="autocat-table__td">
+                <span
+                  className={`autocat-table__status ${rule.enabled ? 'autocat-table__status--enabled' : 'autocat-table__status--disabled'}`}
+                >
+                  {rule.enabled ? 'Enabled' : 'Disabled'}
+                </span>
+              </td>
+              <td className="autocat-table__td autocat-table__td--priority">
+                {rule.priority}
+              </td>
+              <td className="autocat-table__td">{conditionsText}</td>
+              <td className="autocat-table__td autocat-table__td--category">
+                <div className="autocat-table__category-cell">
+                  <span className="autocat-table__category">{categoryLabel}</span>
+                  {rule.target_tags && rule.target_tags.length > 0 && (
+                    <div className="autocat-table__tags">
+                      {rule.target_tags.map((tag) => (
+                        <span key={tag} className="autocat-table__tag">
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </td>
+              <td className="autocat-table__td autocat-table__td--matches">
+                {rule.match_count}
+              </td>
+              {hasActions && (
+                <td
+                  className="autocat-table__td autocat-table__td--actions"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="autocat-table__actions">
+                    {onToggle && (
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={rule.enabled}
+                        onClick={() => handleToggle(rule)}
+                        disabled={loading}
+                        className={`autocat-table__toggle ${rule.enabled ? 'autocat-table__toggle--on' : ''}`}
+                        aria-label={
+                          rule.enabled ? 'Disable rule' : 'Enable rule'
+                        }
+                        title={rule.enabled ? 'Disable rule' : 'Enable rule'}
+                      >
+                        <span className="autocat-table__toggle-slider" />
+                      </button>
+                    )}
+                    {onEdit && (
+                      <button
+                        type="button"
+                        onClick={() => onEdit(rule)}
+                        disabled={loading}
+                        className="autocat-table__action-btn"
+                        aria-label="Edit rule"
+                        title="Edit rule"
+                      >
+                        <Edit aria-hidden="true" />
+                      </button>
+                    )}
+                    {onDelete && (
+                      <button
+                        type="button"
+                        onClick={() => onDelete(rule)}
+                        disabled={loading}
+                        className="autocat-table__action-btn autocat-table__action-btn--danger"
+                        aria-label="Delete rule"
+                        title="Delete rule"
+                      >
+                        <Trash2 aria-hidden="true" />
+                      </button>
+                    )}
+                  </div>
+                </td>
+              )}
+            </tr>
+          )
+        })}
+      </tbody>
+    </table>
+  )
+}

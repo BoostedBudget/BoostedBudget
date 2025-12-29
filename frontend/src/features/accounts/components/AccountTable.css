@@ -1,0 +1,320 @@
+/**
+ * AccountTable Component Styles
+ * Issue #584: Unified Card/Table View System
+ *
+ * Styles for the account table display component.
+ * Follows BEM naming convention.
+ */
+
+.account-table {
+  width: 100%;
+  border-collapse: collapse;
+  background-color: white;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  border: 1px solid var(--color-gray-200);
+}
+
+.dark .account-table {
+  background-color: var(--color-gray-800);
+  border-color: var(--color-gray-700);
+}
+
+.account-table--loading {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* Empty state */
+.account-table__empty {
+  text-align: center;
+  padding: 3rem 1.5rem;
+  color: var(--color-gray-500);
+  background-color: white;
+  border: 1px dashed var(--color-gray-300);
+  border-radius: 0.5rem;
+}
+
+.dark .account-table__empty {
+  background-color: var(--color-gray-800);
+  border-color: var(--color-gray-600);
+  color: var(--color-gray-400);
+}
+
+/* Header */
+.account-table__header-row {
+  background-color: var(--color-gray-50);
+}
+
+.dark .account-table__header-row {
+  background-color: var(--color-gray-900);
+}
+
+.account-table__th {
+  padding: 0.75rem 1rem;
+  text-align: left;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-gray-600);
+  border-bottom: 1px solid var(--color-gray-200);
+}
+
+.dark .account-table__th {
+  color: var(--color-gray-400);
+  border-bottom-color: var(--color-gray-700);
+}
+
+.account-table__th--balance {
+  text-align: right;
+}
+
+.account-table__th--actions {
+  width: 6rem;
+  text-align: right;
+}
+
+/* Sort button */
+.account-table__sort-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.account-table__sort-btn:hover {
+  color: var(--color-gray-900);
+}
+
+.dark .account-table__sort-btn:hover {
+  color: var(--color-gray-200);
+}
+
+.account-table__sort-icon {
+  width: 1rem;
+  height: 1rem;
+  display: inline-flex;
+  align-items: center;
+}
+
+.account-table__sort-icon svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+/* Rows */
+.account-table__row {
+  transition: background-color 0.15s ease;
+}
+
+.account-table__row:hover {
+  background-color: var(--color-gray-50);
+}
+
+.dark .account-table__row:hover {
+  background-color: var(--color-gray-750);
+}
+
+.account-table__row--clickable {
+  cursor: pointer;
+}
+
+.account-table__row--hidden {
+  opacity: 0.6;
+}
+
+/* Cells */
+.account-table__td {
+  padding: 0.875rem 1rem;
+  font-size: 0.875rem;
+  color: var(--color-gray-700);
+  border-bottom: 1px solid var(--color-gray-200);
+  vertical-align: middle;
+}
+
+.dark .account-table__td {
+  color: var(--color-gray-300);
+  border-bottom-color: var(--color-gray-700);
+}
+
+/* Institution column */
+.account-table__td--institution {
+  min-width: 120px;
+}
+
+.account-table__institution {
+  font-weight: 500;
+  color: var(--color-gray-900);
+}
+
+.dark .account-table__institution {
+  color: var(--color-gray-100);
+}
+
+/* Name column */
+.account-table__td--name {
+  min-width: 180px;
+}
+
+.account-table__name-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.account-table__emoji {
+  font-size: 1.125rem;
+}
+
+.account-table__name {
+  font-weight: 500;
+  color: var(--color-gray-900);
+}
+
+.dark .account-table__name {
+  color: var(--color-gray-100);
+}
+
+/* Hidden badge */
+.account-table__hidden-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.125rem 0.375rem;
+  font-size: 0.625rem;
+  font-weight: 500;
+  background-color: var(--color-gray-100);
+  color: var(--color-gray-600);
+  border-radius: 0.25rem;
+  margin-left: 0.5rem;
+}
+
+.dark .account-table__hidden-badge {
+  background-color: var(--color-gray-700);
+  color: var(--color-gray-400);
+}
+
+.account-table__hidden-icon {
+  width: 0.625rem;
+  height: 0.625rem;
+}
+
+/* Mask column */
+.account-table__td--mask {
+  font-variant-numeric: tabular-nums;
+  color: var(--color-gray-500);
+}
+
+.dark .account-table__td--mask {
+  color: var(--color-gray-400);
+}
+
+/* Balance column */
+.account-table__td--balance {
+  text-align: right;
+}
+
+.account-table__balance {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.account-table__balance--positive {
+  color: var(--color-gray-900);
+}
+
+.dark .account-table__balance--positive {
+  color: var(--color-gray-100);
+}
+
+.account-table__balance--negative {
+  color: var(--color-red-600);
+}
+
+.dark .account-table__balance--negative {
+  color: var(--color-red-400);
+}
+
+/* Actions cell */
+.account-table__td--actions {
+  text-align: right;
+}
+
+.account-table__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+/* Action buttons */
+.account-table__action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  background-color: transparent;
+  border: none;
+  border-radius: 0.375rem;
+  color: var(--color-gray-500);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.account-table__action-btn svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.account-table__action-btn:hover:not(:disabled) {
+  background-color: var(--color-gray-100);
+  color: var(--color-gray-700);
+}
+
+.dark .account-table__action-btn:hover:not(:disabled) {
+  background-color: var(--color-gray-700);
+  color: var(--color-gray-300);
+}
+
+.account-table__action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.account-table__action-btn--danger:hover:not(:disabled) {
+  background-color: var(--color-red-100);
+  color: var(--color-red-600);
+}
+
+.dark .account-table__action-btn--danger:hover:not(:disabled) {
+  background-color: var(--color-red-900);
+  color: var(--color-red-400);
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .account-table__td,
+  .account-table__th {
+    padding: 0.625rem 0.75rem;
+  }
+
+  .account-table__td--institution {
+    min-width: 100px;
+  }
+
+  .account-table__td--name {
+    min-width: 150px;
+  }
+
+  .account-table__th--actions {
+    width: 4rem;
+  }
+}
