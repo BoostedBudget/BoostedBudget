@@ -6,13 +6,15 @@
  * Issue #584: Unified Card/Table View System
  */
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { useAutoCategorizationRules } from '../hooks/useAutoCategorizationRules'
+import { useRuleFilters } from '../hooks/useRuleFilters'
 import { AutoCategorizationRuleCard } from './AutoCategorizationRuleCard'
-import { AutoCategorizationRuleTable } from './AutoCategorizationRuleTable'
+import { AutoCategorizationRuleTable, type SortColumn as RuleSortColumn, type SortDirection } from './AutoCategorizationRuleTable'
 import { AutoCategorizationRuleEditor } from './AutoCategorizationRuleEditor'
 import { ListViewToggle } from '@/shared/components/ListViewToggle'
 import type { ListView } from '@/shared/components/ListViewToggle'
+import type { FilterOption } from '@/shared/components/ColumnFilterDropdown'
 import { STORAGE_KEY_LIST_VIEW } from '../constants'
 import type { CategorizationRule, CreateRuleRequest, UpdateRuleRequest } from '../types'
 import type { Account } from '../../accounts/types'
@@ -58,6 +60,20 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
   const [editorMode, setEditorMode] = useState<EditorMode>(null)
   const [editingRule, setEditingRule] = useState<CategorizationRule | null>(null)
   const [view, setView] = useState<ListView>(getInitialView)
+
+  // Issue #590: Sorting state
+  const [sortColumn, setSortColumn] = useState<RuleSortColumn | undefined>(undefined)
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
+
+  // Issue #590: Inline filter state (URL-synced)
+  const {
+    statusFilter,
+    categoryFilter,
+    priorityRange,
+    setStatusFilter,
+    setCategoryFilter,
+    setPriorityRange,
+  } = useRuleFilters()
 
   const isAtLimit = maxRules !== undefined && rules.length >= maxRules
   const showTierWarning = isAtLimit && currentTier === 'free'
@@ -116,6 +132,100 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
   const handleViewChange = useCallback((newView: ListView) => {
     setView(newView)
   }, [])
+
+  // Issue #590: Handle sort change
+  const handleSort = useCallback((column: RuleSortColumn, direction: SortDirection) => {
+    setSortColumn(column)
+    setSortDirection(direction)
+  }, [])
+
+  // Issue #590: Create filter options from rules data
+  const statusOptions = useMemo<FilterOption[]>(() => [
+    { value: 'enabled', label: 'Enabled' },
+    { value: 'disabled', label: 'Disabled' },
+  ], [])
+
+  const categoryOptions = useMemo<FilterOption[]>(() => {
+    const cats = new Set<string>()
+    rules.forEach((rule) => {
+      if (rule.target_category?.[0]) {
+        cats.add(rule.target_category[0])
+      }
+    })
+    return Array.from(cats)
+      .sort()
+      .map((cat) => ({
+        value: cat,
+        label: cat,
+      }))
+  }, [rules])
+
+  // Issue #590: Filter handlers from useRuleFilters hook (URL-synced)
+  // setStatusFilter, setCategoryFilter, setPriorityRange come from the hook
+
+  // Issue #590: Filter and sort rules client-side
+  const filteredAndSortedRules = useMemo(() => {
+    let filtered = [...rules]
+
+    // Apply status filter
+    if (statusFilter.length > 0) {
+      filtered = filtered.filter((rule) => {
+        const status = rule.enabled ? 'enabled' : 'disabled'
+        return statusFilter.includes(status)
+      })
+    }
+
+    // Apply category filter
+    if (categoryFilter.length > 0) {
+      filtered = filtered.filter((rule) =>
+        rule.target_category?.[0] && categoryFilter.includes(rule.target_category[0])
+      )
+    }
+
+    // Apply priority range filter
+    if (priorityRange) {
+      filtered = filtered.filter((rule) => {
+        const priority = rule.priority
+        if (priorityRange.min !== undefined && priority < priorityRange.min) return false
+        if (priorityRange.max !== undefined && priority > priorityRange.max) return false
+        return true
+      })
+    }
+
+    // Apply sorting if sortColumn is set
+    if (!sortColumn) return filtered
+
+    return filtered.sort((a, b) => {
+      let comparison = 0
+
+      switch (sortColumn) {
+        case 'name': {
+          comparison = a.name.localeCompare(b.name)
+          break
+        }
+        case 'status': {
+          comparison = (a.enabled ? 1 : 0) - (b.enabled ? 1 : 0)
+          break
+        }
+        case 'priority': {
+          comparison = a.priority - b.priority
+          break
+        }
+        case 'matches': {
+          comparison = a.match_count - b.match_count
+          break
+        }
+        case 'category': {
+          const catA = a.target_category?.[0] || ''
+          const catB = b.target_category?.[0] || ''
+          comparison = catA.localeCompare(catB)
+          break
+        }
+      }
+
+      return sortDirection === 'asc' ? comparison : -comparison
+    })
+  }, [rules, sortColumn, sortDirection, statusFilter, categoryFilter, priorityRange])
 
   // Loading state
   if (loading) {
@@ -240,11 +350,24 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
           </div>
         ) : (
           <AutoCategorizationRuleTable
-            rules={rules}
+            rules={filteredAndSortedRules}
             onToggle={handleTableToggle}
             onEdit={handleEditClick}
             onDelete={(rule) => handleDelete(rule.id)}
             loading={loading}
+            sortable
+            sortColumn={sortColumn}
+            sortDirection={sortDirection}
+            onSort={handleSort}
+            // Issue #590: Inline filter props (URL-synced via useRuleFilters)
+            statusOptions={statusOptions}
+            statusFilter={statusFilter}
+            onStatusFilterChange={setStatusFilter}
+            categoryOptions={categoryOptions}
+            categoryFilter={categoryFilter}
+            onCategoryFilterChange={setCategoryFilter}
+            priorityRange={priorityRange}
+            onPriorityRangeChange={setPriorityRange}
           />
         )}
       </div>

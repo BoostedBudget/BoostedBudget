@@ -8,6 +8,11 @@
 import { useCallback } from 'react'
 import { Edit, Trash2, ChevronUp, ChevronDown, EyeOff } from 'lucide-react'
 import type { Account } from '@/api/generated/models'
+import {
+  ColumnFilterDropdown,
+  type FilterOption,
+  type RangeValue,
+} from '@/shared/components/ColumnFilterDropdown'
 import './AccountTable.css'
 
 export type SortColumn = 'institution' | 'name' | 'type' | 'balance'
@@ -34,6 +39,26 @@ export interface AccountTableProps {
   onSort?: (column: SortColumn, direction: SortDirection) => void
   /** Additional CSS class */
   className?: string
+
+  // Issue #590: Inline filter props
+  /** Available institution options for filtering */
+  institutionOptions?: FilterOption[]
+  /** Current institution filter value */
+  institutionFilter?: string[]
+  /** Called when institution filter changes */
+  onInstitutionFilterChange?: (value: string[]) => void
+
+  /** Available type options for filtering */
+  typeOptions?: FilterOption[]
+  /** Current type filter value */
+  typeFilter?: string[]
+  /** Called when type filter changes */
+  onTypeFilterChange?: (value: string[]) => void
+
+  /** Current balance range filter value */
+  balanceRange?: RangeValue | null
+  /** Called when balance range filter changes */
+  onBalanceRangeChange?: (value: RangeValue | null) => void
 }
 
 /**
@@ -124,6 +149,15 @@ export function AccountTable({
   sortDirection = 'asc',
   onSort,
   className = '',
+  // Issue #590: Inline filter props
+  institutionOptions,
+  institutionFilter,
+  onInstitutionFilterChange,
+  typeOptions,
+  typeFilter,
+  onTypeFilterChange,
+  balanceRange,
+  onBalanceRangeChange,
 }: AccountTableProps) {
   const hasActions = !!(onEdit || onDelete)
 
@@ -169,7 +203,15 @@ export function AccountTable({
     )
   }
 
-  if (accounts.length === 0) {
+  // Issue #590: Compute if any filters are active
+  // Note: Use != null to check for both null and undefined
+  const hasActiveFilters =
+    (institutionFilter?.length ?? 0) > 0 ||
+    (typeFilter?.length ?? 0) > 0 ||
+    balanceRange != null
+
+  // Only show empty state if no data AND no active filters
+  if (accounts.length === 0 && !hasActiveFilters) {
     return (
       <div className={`account-table__empty ${className}`.trim()}>
         <p>No accounts found. Connect a bank account to get started.</p>
@@ -184,17 +226,52 @@ export function AccountTable({
       <thead>
         <tr className="account-table__header-row">
           <th className="account-table__th">
-            {renderSortableHeader('Institution', 'institution')}
+            <div className="account-table__header-content">
+              {renderSortableHeader('Institution', 'institution')}
+              {institutionOptions && onInstitutionFilterChange && (
+                <ColumnFilterDropdown
+                  type="select"
+                  options={institutionOptions}
+                  value={institutionFilter}
+                  onChange={(val) => onInstitutionFilterChange(val as string[])}
+                  multiSelect
+                  searchable
+                  ariaLabel="Filter by institution"
+                />
+              )}
+            </div>
           </th>
           <th className="account-table__th">
             {renderSortableHeader('Account', 'name')}
           </th>
           <th className="account-table__th">
-            {renderSortableHeader('Type', 'type')}
+            <div className="account-table__header-content">
+              {renderSortableHeader('Type', 'type')}
+              {typeOptions && onTypeFilterChange && (
+                <ColumnFilterDropdown
+                  type="select"
+                  options={typeOptions}
+                  value={typeFilter}
+                  onChange={(val) => onTypeFilterChange(val as string[])}
+                  multiSelect
+                  ariaLabel="Filter by type"
+                />
+              )}
+            </div>
           </th>
-          <th className="account-table__th">Mask</th>
+          <th className="account-table__th">Acct #</th>
           <th className="account-table__th account-table__th--balance">
-            {renderSortableHeader('Balance', 'balance')}
+            <div className="account-table__header-content">
+              {renderSortableHeader('Balance', 'balance')}
+              {onBalanceRangeChange && (
+                <ColumnFilterDropdown
+                  type="range"
+                  rangeValue={balanceRange}
+                  onChange={(val) => onBalanceRangeChange(val as RangeValue | null)}
+                  ariaLabel="Filter by balance"
+                />
+              )}
+            </div>
           </th>
           {hasActions && (
             <th className="account-table__th account-table__th--actions">
@@ -204,7 +281,13 @@ export function AccountTable({
         </tr>
       </thead>
       <tbody>
-        {accounts.map((account) => {
+        {accounts.length === 0 ? (
+          <tr className="account-table__empty-row">
+            <td colSpan={hasActions ? 6 : 5}>
+              No accounts match your filters. Try adjusting your criteria.
+            </td>
+          </tr>
+        ) : accounts.map((account) => {
           const displayName = account.nickname || account.name
           const typeLabel = getAccountTypeLabel(account.type, account.subtype)
           const balanceFormatted = formatBalance(account.current_balance)

@@ -7,6 +7,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { CreateSavingsGoalDialog } from './CreateSavingsGoalDialog'
 
@@ -387,6 +388,7 @@ describe('CreateSavingsGoalDialog', () => {
     })
 
     it('should show API error on submission failure', async () => {
+      const user = userEvent.setup()
       mockMutateAsync.mockRejectedValueOnce(new Error('Network error'))
 
       renderWithQueryClient(
@@ -397,15 +399,16 @@ describe('CreateSavingsGoalDialog', () => {
         />
       )
 
-      fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Test Goal' } })
-      fireEvent.change(screen.getByLabelText('Target Amount'), { target: { value: '1000' } })
-      fireEvent.change(screen.getByLabelText('Account'), { target: { value: 'acc-1' } })
+      // Use userEvent for proper async handling
+      await user.clear(screen.getByLabelText('Name'))
+      await user.type(screen.getByLabelText('Name'), 'Test Goal')
+      await user.clear(screen.getByLabelText('Target Amount'))
+      await user.type(screen.getByLabelText('Target Amount'), '1000')
+      await user.selectOptions(screen.getByLabelText('Account'), 'acc-1')
 
-      fireEvent.click(screen.getByText('Create Goal'))
+      await user.click(screen.getByText('Create Goal'))
 
-      await waitFor(() => {
-        expect(screen.getByText('Network error')).toBeInTheDocument()
-      })
+      expect(await screen.findByText('Network error')).toBeInTheDocument()
     })
 
     it('should show Creating... when submitting', () => {

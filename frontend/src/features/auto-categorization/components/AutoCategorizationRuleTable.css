@@ -11,7 +11,7 @@
   border-collapse: collapse;
   background-color: white;
   border-radius: 0.5rem;
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid var(--color-gray-200);
 }
 
@@ -106,6 +106,13 @@
 .autocat-table__sort-icon svg {
   width: 0.875rem;
   height: 0.875rem;
+}
+
+/* Header content (combines sort + filter) */
+.autocat-table__header-content {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
 }
 
 /* Rows */
@@ -390,6 +397,18 @@
 .dark .autocat-table__action-btn--danger:hover:not(:disabled) {
   background-color: var(--color-red-900);
   color: var(--color-red-400);
+}
+
+/* Issue #590: Empty filter results row */
+.autocat-table__empty-row td {
+  padding: 3rem 1rem;
+  text-align: center;
+  color: var(--color-gray-500);
+  font-style: italic;
+}
+
+.dark .autocat-table__empty-row td {
+  color: var(--color-gray-400);
 }
 
 /* Responsive adjustments */

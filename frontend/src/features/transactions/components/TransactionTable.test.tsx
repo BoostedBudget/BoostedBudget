@@ -546,4 +546,151 @@ describe('TransactionTable', () => {
       })
     })
   })
+
+  // Issue #590: Inline Column Filtering Tests
+  describe('Inline Filtering', () => {
+    const accountOptions = [
+      { value: 'acc-1', label: 'My Checking' },
+      { value: 'acc-2', label: 'Savings' },
+    ]
+
+    const categoryOptions = [
+      { value: 'Shopping', label: 'Shopping' },
+      { value: 'Income', label: 'Income' },
+      { value: 'Food and Drink', label: 'Food and Drink' },
+    ]
+
+    it('should render account filter when accountOptions provided', () => {
+      render(
+        <TransactionTable
+          transactions={mockTransactions}
+          accountsMap={mockAccounts}
+          accountOptions={accountOptions}
+          onAccountFilterChange={() => {}}
+        />
+      )
+
+      // Should have a filter button in the Account column header
+      const filterButtons = screen.getAllByRole('button', { name: /filter by account/i })
+      expect(filterButtons.length).toBeGreaterThan(0)
+    })
+
+    it('should render category filter when categoryOptions provided', () => {
+      render(
+        <TransactionTable
+          transactions={mockTransactions}
+          accountsMap={mockAccounts}
+          categoryOptions={categoryOptions}
+          onCategoryFilterChange={() => {}}
+        />
+      )
+
+      const filterButtons = screen.getAllByRole('button', { name: /filter by category/i })
+      expect(filterButtons.length).toBeGreaterThan(0)
+    })
+
+    it('should render amount range filter when onAmountRangeChange provided', () => {
+      render(
+        <TransactionTable
+          transactions={mockTransactions}
+          accountsMap={mockAccounts}
+          onAmountRangeChange={() => {}}
+        />
+      )
+
+      const filterButtons = screen.getAllByRole('button', { name: /filter by amount/i })
+      expect(filterButtons.length).toBeGreaterThan(0)
+    })
+
+    it('should call onAccountFilterChange when account filter changed', async () => {
+      const onAccountFilterChange = vi.fn()
+      const userEvent = await import('@testing-library/user-event')
+      const user = userEvent.default.setup()
+
+      render(
+        <TransactionTable
+          transactions={mockTransactions}
+          accountsMap={mockAccounts}
+          accountOptions={accountOptions}
+          onAccountFilterChange={onAccountFilterChange}
+        />
+      )
+
+      const filterButton = screen.getByRole('button', { name: /filter by account/i })
+      await user.click(filterButton)
+
+      // For multi-select dropdowns, use checkboxes
+      const checkbox = screen.getByRole('checkbox', { name: /my checking/i })
+      await user.click(checkbox)
+
+      expect(onAccountFilterChange).toHaveBeenCalledWith(['acc-1'])
+    })
+
+    it('should call onCategoryFilterChange when category filter changed', async () => {
+      const onCategoryFilterChange = vi.fn()
+      const userEvent = await import('@testing-library/user-event')
+      const user = userEvent.default.setup()
+
+      render(
+        <TransactionTable
+          transactions={mockTransactions}
+          accountsMap={mockAccounts}
+          categoryOptions={categoryOptions}
+          onCategoryFilterChange={onCategoryFilterChange}
+        />
+      )
+
+      const filterButton = screen.getByRole('button', { name: /filter by category/i })
+      await user.click(filterButton)
+
+      // For multi-select dropdowns, use checkboxes
+      const checkbox = screen.getByRole('checkbox', { name: /shopping/i })
+      await user.click(checkbox)
+
+      expect(onCategoryFilterChange).toHaveBeenCalledWith(['Shopping'])
+    })
+
+    it('should show active filter indicator when account filter has value', () => {
+      render(
+        <TransactionTable
+          transactions={mockTransactions}
+          accountsMap={mockAccounts}
+          accountOptions={accountOptions}
+          accountFilter={['acc-1']}
+          onAccountFilterChange={() => {}}
+        />
+      )
+
+      const filterButton = screen.getByRole('button', { name: /filter by account/i })
+      expect(filterButton).toHaveClass('column-filter__trigger--active')
+    })
+
+    it('should show active filter indicator when category filter has value', () => {
+      render(
+        <TransactionTable
+          transactions={mockTransactions}
+          accountsMap={mockAccounts}
+          categoryOptions={categoryOptions}
+          categoryFilter={['Shopping']}
+          onCategoryFilterChange={() => {}}
+        />
+      )
+
+      const filterButton = screen.getByRole('button', { name: /filter by category/i })
+      expect(filterButton).toHaveClass('column-filter__trigger--active')
+    })
+
+    it('should not show filter icons when filter props not provided', () => {
+      render(
+        <TransactionTable
+          transactions={mockTransactions}
+          accountsMap={mockAccounts}
+        />
+      )
+
+      expect(screen.queryByRole('button', { name: /filter by account/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /filter by category/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /filter by amount/i })).not.toBeInTheDocument()
+    })
+  })
 })
