@@ -1,28 +1,15 @@
 import { useState, useCallback, useMemo } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import {
-  DndContext,
-  closestCenter,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from '@dnd-kit/core'
-import {
-  arrayMove,
-  SortableContext,
-  sortableKeyboardCoordinates,
-  useSortable,
-  verticalListSortingStrategy,
-} from '@dnd-kit/sortable'
-import { CSS } from '@dnd-kit/utilities'
 import { Eye, EyeOff } from 'lucide-react'
 import { PlaidLinkButton } from './PlaidLinkButton'
 import { AccountCard } from './AccountCard'
+import { AccountTable } from './components/AccountTable'
 import { UpgradeBanner } from './UpgradeBanner'
 import { SyncStatsCard } from './SyncStatsCard'
 import { AccountCustomizationModal } from './components/AccountCustomizationModal'
+import { ListViewToggle } from '@/shared/components/ListViewToggle'
+import type { ListView } from '@/shared/components/ListViewToggle'
+import { STORAGE_KEY_LIST_VIEW } from './constants'
 import {
   useGetAccounts,
   useDeleteAccount,
@@ -35,39 +22,15 @@ import { useAccountCustomization } from './hooks/useAccountCustomization'
 import type { Account, UpdateAccountRequest } from './types'
 import './AccountsPage.css'
 
-// Sortable wrapper for AccountCard
-interface SortableAccountCardProps {
-  account: Account
-  onDelete: (accountId: string) => void
-  onEdit: (account: Account) => void
-}
-
-function SortableAccountCard({ account, onDelete, onEdit }: SortableAccountCardProps) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: account.id })
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
+// Get initial view from localStorage
+function getInitialView(): ListView {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY_LIST_VIEW)
+    if (stored === 'cards' || stored === 'table') return stored
+  } catch {
+    /* ignore localStorage errors */
   }
-
-  return (
-    <div ref={setNodeRef} style={style} {...attributes}>
-      <AccountCard
-        account={account}
-        onDelete={onDelete}
-        onEdit={onEdit}
-        isDragging={isDragging}
-        dragHandleProps={listeners}
-      />
-    </div>
-  )
+  return 'cards' // Default to cards
 }
 
 export function AccountsPage() {
@@ -76,6 +39,9 @@ export function AccountsPage() {
 
   // Issue #307: Show/hide hidden accounts toggle
   const [showHidden, setShowHidden] = useState(false)
+
+  // Issue #584: View toggle state (cards/table)
+  const [view, setView] = useState<ListView>(getInitialView)
 
   // Issue #307: Modal state
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null)
@@ -114,21 +80,7 @@ export function AccountsPage() {
   const {
     updateAccount,
     isUpdating,
-    reorderAccounts,
-    isReordering,
   } = useAccountCustomization()
-
-  // DnD sensors
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 8, // 8px of movement to start drag
-      },
-    }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    })
-  )
 
   // Handle successful account linking - reload accounts and profile
   function handleAccountsLinked() {
@@ -202,44 +154,6 @@ export function AccountsPage() {
     return accs.filter(acc => acc.is_hidden).length
   }, [accountsData?.accounts])
 
-  // Issue #307: Handle drag end for reordering
-  const handleDragEnd = useCallback(async (event: DragEndEvent) => {
-    const { active, over } = event
-
-    if (over && active.id !== over.id) {
-      // Get current order
-      const oldIndex = displayedAccounts.findIndex(acc => acc.id === active.id)
-      const newIndex = displayedAccounts.findIndex(acc => acc.id === over.id)
-
-      if (oldIndex !== -1 && newIndex !== -1) {
-        // Optimistically update UI
-        const newOrder = arrayMove(displayedAccounts, oldIndex, newIndex)
-
-        // Build account orders for API
-        const accountOrders = newOrder.map((acc, index) => ({
-          account_id: acc.id,
-          display_order: index,
-        }))
-
-        // Optimistically update query cache
-        queryClient.setQueryData(accountsQueryKey, (oldData: { accounts: Account[] } | undefined) => {
-          if (!oldData) return oldData
-          const updated = oldData.accounts.map(acc => {
-            const order = accountOrders.find(o => o.account_id === acc.id)
-            if (order) {
-              return { ...acc, display_order: order.display_order }
-            }
-            return acc
-          })
-          return { ...oldData, accounts: updated }
-        })
-
-        // Call API
-        await reorderAccounts(accountOrders)
-      }
-    }
-  }, [displayedAccounts, reorderAccounts, queryClient, accountsQueryKey])
-
   // Calculate tier limits using hook
   const { isAtLimit, shouldShowUpgradeBanner, accountCountDisplay } = useTierLimits({
     user,
@@ -293,6 +207,12 @@ export function AccountsPage() {
               )}
             </button>
           )}
+          {/* Issue #584: View toggle */}
+          <ListViewToggle
+            view={view}
+            onChange={setView}
+            storageKey={STORAGE_KEY_LIST_VIEW}
+          />
           <PlaidLinkButton
             onSuccess={handleAccountsLinked}
             disabled={isAtLimit}
@@ -324,28 +244,25 @@ export function AccountsPage() {
             )}
           </p>
 
-          {/* Issue #307: Drag and drop context */}
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={handleDragEnd}
-          >
-            <SortableContext
-              items={displayedAccounts.map(acc => acc.id)}
-              strategy={verticalListSortingStrategy}
-            >
-              <div className={`accounts-grid ${isReordering ? 'accounts-grid--reordering' : ''}`}>
-                {displayedAccounts.map((account) => (
-                  <SortableAccountCard
-                    key={account.id}
-                    account={account}
-                    onDelete={handleDeleteAccount}
-                    onEdit={handleEditAccount}
-                  />
-                ))}
-              </div>
-            </SortableContext>
-          </DndContext>
+          {/* Issue #584: Conditional rendering based on view */}
+          {view === 'table' ? (
+            <AccountTable
+              accounts={displayedAccounts}
+              onEdit={handleEditAccount}
+              onDelete={(account) => handleDeleteAccount(account.id)}
+            />
+          ) : (
+            <div className="accounts-grid">
+              {displayedAccounts.map((account) => (
+                <AccountCard
+                  key={account.id}
+                  account={account}
+                  onDelete={handleDeleteAccount}
+                  onEdit={handleEditAccount}
+                />
+              ))}
+            </div>
+          )}
         </div>
       )}
 

@@ -1,0 +1,352 @@
+/**
+ * TransactionTable Component Styles
+ * Issue #584: Unified Card/Table View System
+ *
+ * Styles for the transaction table display component.
+ * Follows BEM naming convention.
+ */
+
+.transaction-table {
+  width: 100%;
+  border-collapse: collapse;
+  background-color: white;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  border: 1px solid var(--color-gray-200);
+}
+
+.dark .transaction-table {
+  background-color: var(--color-gray-800);
+  border-color: var(--color-gray-700);
+}
+
+.transaction-table--loading {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* Empty state */
+.transaction-table__empty {
+  text-align: center;
+  padding: 3rem 1.5rem;
+  color: var(--color-gray-500);
+  background-color: white;
+  border: 1px dashed var(--color-gray-300);
+  border-radius: 0.5rem;
+}
+
+.dark .transaction-table__empty {
+  background-color: var(--color-gray-800);
+  border-color: var(--color-gray-600);
+  color: var(--color-gray-400);
+}
+
+/* Header */
+.transaction-table__header-row {
+  background-color: var(--color-gray-50);
+}
+
+.dark .transaction-table__header-row {
+  background-color: var(--color-gray-900);
+}
+
+.transaction-table__th {
+  padding: 0.75rem 1rem;
+  text-align: left;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-gray-600);
+  border-bottom: 1px solid var(--color-gray-200);
+}
+
+.dark .transaction-table__th {
+  color: var(--color-gray-400);
+  border-bottom-color: var(--color-gray-700);
+}
+
+.transaction-table__th--amount {
+  text-align: right;
+}
+
+.transaction-table__th--actions {
+  width: 6rem;
+  text-align: right;
+}
+
+/* Sort button */
+.transaction-table__sort-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.transaction-table__sort-btn:hover {
+  color: var(--color-gray-900);
+}
+
+.dark .transaction-table__sort-btn:hover {
+  color: var(--color-gray-200);
+}
+
+.transaction-table__sort-icon {
+  width: 1rem;
+  height: 1rem;
+  display: inline-flex;
+  align-items: center;
+}
+
+.transaction-table__sort-icon svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+/* Rows */
+.transaction-table__row {
+  transition: background-color 0.15s ease;
+}
+
+.transaction-table__row:hover {
+  background-color: var(--color-gray-50);
+}
+
+.dark .transaction-table__row:hover {
+  background-color: var(--color-gray-750);
+}
+
+.transaction-table__row--clickable {
+  cursor: pointer;
+}
+
+.transaction-table__row--pending {
+  background-color: var(--color-yellow-50);
+}
+
+.dark .transaction-table__row--pending {
+  background-color: var(--color-yellow-900);
+}
+
+.transaction-table__row--pending:hover {
+  background-color: var(--color-yellow-100);
+}
+
+.dark .transaction-table__row--pending:hover {
+  background-color: var(--color-yellow-800);
+}
+
+/* Cells */
+.transaction-table__td {
+  padding: 0.875rem 1rem;
+  font-size: 0.875rem;
+  color: var(--color-gray-700);
+  border-bottom: 1px solid var(--color-gray-200);
+  vertical-align: middle;
+}
+
+.dark .transaction-table__td {
+  color: var(--color-gray-300);
+  border-bottom-color: var(--color-gray-700);
+}
+
+.transaction-table__td--date {
+  white-space: nowrap;
+  color: var(--color-gray-600);
+}
+
+.dark .transaction-table__td--date {
+  color: var(--color-gray-400);
+}
+
+.transaction-table__td--description {
+  min-width: 200px;
+}
+
+.transaction-table__name {
+  font-weight: 500;
+  color: var(--color-gray-900);
+}
+
+.dark .transaction-table__name {
+  color: var(--color-gray-100);
+}
+
+/* Tags */
+.transaction-table__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.25rem;
+}
+
+.transaction-table__tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.125rem 0.375rem;
+  font-size: 0.625rem;
+  font-weight: 500;
+  background-color: var(--color-blue-50);
+  color: var(--color-blue-700);
+  border-radius: 0.25rem;
+}
+
+.dark .transaction-table__tag {
+  background-color: var(--color-blue-900);
+  color: var(--color-blue-300);
+}
+
+/* Account badge */
+.transaction-table__account-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border-radius: 0.375rem;
+  color: var(--color-gray-800);
+}
+
+.dark .transaction-table__account-badge {
+  color: var(--color-gray-900);
+}
+
+/* Category */
+.transaction-table__category {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.transaction-table__category-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* Amount column */
+.transaction-table__td--amount {
+  text-align: right;
+}
+
+.transaction-table__amount-container {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.25rem;
+}
+
+.transaction-table__amount {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.transaction-table__amount--credit {
+  color: var(--color-green-600);
+}
+
+.dark .transaction-table__amount--credit {
+  color: var(--color-green-400);
+}
+
+.transaction-table__amount--debit {
+  color: var(--color-red-600);
+}
+
+.dark .transaction-table__amount--debit {
+  color: var(--color-red-400);
+}
+
+/* Pending badge */
+.transaction-table__pending-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.125rem 0.375rem;
+  font-size: 0.625rem;
+  font-weight: 500;
+  background-color: var(--color-yellow-100);
+  color: var(--color-yellow-800);
+  border-radius: 0.25rem;
+}
+
+.dark .transaction-table__pending-badge {
+  background-color: var(--color-yellow-800);
+  color: var(--color-yellow-200);
+}
+
+.transaction-table__pending-icon {
+  width: 0.625rem;
+  height: 0.625rem;
+}
+
+/* Actions cell */
+.transaction-table__td--actions {
+  text-align: right;
+}
+
+.transaction-table__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+/* Action buttons */
+.transaction-table__action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  background-color: transparent;
+  border: none;
+  border-radius: 0.375rem;
+  color: var(--color-gray-500);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.transaction-table__action-btn svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.transaction-table__action-btn:hover:not(:disabled) {
+  background-color: var(--color-gray-100);
+  color: var(--color-gray-700);
+}
+
+.dark .transaction-table__action-btn:hover:not(:disabled) {
+  background-color: var(--color-gray-700);
+  color: var(--color-gray-300);
+}
+
+.transaction-table__action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .transaction-table__td,
+  .transaction-table__th {
+    padding: 0.625rem 0.75rem;
+  }
+
+  .transaction-table__td--description {
+    min-width: 150px;
+  }
+
+  .transaction-table__th--actions {
+    width: 4rem;
+  }
+}

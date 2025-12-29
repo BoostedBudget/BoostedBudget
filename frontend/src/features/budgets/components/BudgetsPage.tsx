@@ -14,16 +14,31 @@ import { PlusIcon } from '@heroicons/react/24/outline';
 import { useBudgets } from '../hooks/useBudgets';
 import { useSavingsGoals } from '../hooks/useSavingsGoals';
 import { BudgetCard } from './BudgetCard';
+import { BudgetTable } from './BudgetTable';
 import { SavingsGoalCard } from './SavingsGoalCard';
 import { CreateBudgetDialog } from './CreateBudgetDialog';
 import { CreateSavingsGoalDialog } from './CreateSavingsGoalDialog';
 import { DeleteBudgetDialog } from './DeleteBudgetDialog';
 import { DeleteSavingsGoalDialog } from './DeleteSavingsGoalDialog';
-import type { Budget, SavingsGoal } from '../types';
+import { ListViewToggle } from '@/shared/components/ListViewToggle';
+import type { ListView } from '@/shared/components/ListViewToggle';
+import { STORAGE_KEY_LIST_VIEW } from '../constants';
+import { computeBudgetMetrics, type Budget, type SavingsGoal } from '../types';
 import './BudgetsPage.css';
 
 // Issue #462, #521: Use single state for mutual exclusion - only one dialog can be open at a time
 type ActiveDialog = 'budget' | 'goal' | 'delete-budget' | 'delete-goal' | null;
+
+// Issue #584: Get initial view from localStorage
+function getInitialView(): ListView {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY_LIST_VIEW);
+    if (stored === 'cards' || stored === 'table') return stored;
+  } catch {
+    /* ignore localStorage errors */
+  }
+  return 'cards'; // Default to cards
+}
 
 export function BudgetsPage() {
   const { budgets, loading: budgetsLoading, error: budgetsError, refetch: refetchBudgets, deleteBudget } = useBudgets();
@@ -31,6 +46,9 @@ export function BudgetsPage() {
 
   // Dialog state - single state ensures only one dialog open at a time
   const [activeDialog, setActiveDialog] = useState<ActiveDialog>(null);
+
+  // Issue #584: View toggle state (cards/table)
+  const [view, setView] = useState<ListView>(getInitialView);
 
   // Issue #521: Delete state
   const [deletingBudget, setDeletingBudget] = useState<Budget | null>(null);
@@ -159,6 +177,12 @@ export function BudgetsPage() {
             Track your spending and savings goals
           </p>
         </div>
+        {/* Issue #584: View toggle */}
+        <ListViewToggle
+          view={view}
+          onChange={setView}
+          storageKey={STORAGE_KEY_LIST_VIEW}
+        />
       </header>
 
       <section className="budgets-page__section">
@@ -188,6 +212,11 @@ export function BudgetsPage() {
               Create your first budget
             </button>
           </div>
+        ) : view === 'table' ? (
+          <BudgetTable
+            budgets={activeBudgets.map(computeBudgetMetrics)}
+            onDelete={handleDeleteBudgetClick}
+          />
         ) : (
           <div className="budgets-page__grid">
             {activeBudgets.map((budget) => (
@@ -200,11 +229,18 @@ export function BudgetsPage() {
       {inactiveBudgets.length > 0 && (
         <section className="budgets-page__section">
           <h2>Past Budgets</h2>
-          <div className="budgets-page__grid">
-            {inactiveBudgets.map((budget) => (
-              <BudgetCard key={budget.id} budget={budget} onDelete={handleDeleteBudgetClick} />
-            ))}
-          </div>
+          {view === 'table' ? (
+            <BudgetTable
+              budgets={inactiveBudgets.map(computeBudgetMetrics)}
+              onDelete={handleDeleteBudgetClick}
+            />
+          ) : (
+            <div className="budgets-page__grid">
+              {inactiveBudgets.map((budget) => (
+                <BudgetCard key={budget.id} budget={budget} onDelete={handleDeleteBudgetClick} />
+              ))}
+            </div>
+          )}
         </section>
       )}
 

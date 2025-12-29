@@ -432,7 +432,7 @@ describe('TransactionsPage', () => {
       })
     })
 
-    it('should open editor when clicking a transaction', async () => {
+    it('should open editor when clicking edit button', async () => {
       const user = userEvent.setup()
       const Wrapper = createWrapper()
       render(<TransactionsPage />, { wrapper: Wrapper })
@@ -441,10 +441,10 @@ describe('TransactionsPage', () => {
         expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
       })
 
-      // Click on the transaction card
-      const transactionCard = screen.getByText('Starbucks Coffee').closest('article')
-      expect(transactionCard).toBeInTheDocument()
-      await user.click(transactionCard!)
+      // Issue #584: Click the edit button (table row has edit action button)
+      const editButtons = screen.getAllByRole('button', { name: /edit transaction/i })
+      expect(editButtons.length).toBeGreaterThan(0)
+      await user.click(editButtons[0])
 
       // Editor should open
       await waitFor(() => {
@@ -461,8 +461,9 @@ describe('TransactionsPage', () => {
         expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
       })
 
-      const transactionCard = screen.getByText('Starbucks Coffee').closest('article')
-      await user.click(transactionCard!)
+      // Issue #584: Click edit button to open editor
+      const editButtons = screen.getAllByRole('button', { name: /edit transaction/i })
+      await user.click(editButtons[0])
 
       await waitFor(() => {
         expect(screen.getByText('Edit Transaction')).toBeInTheDocument()
@@ -480,8 +481,9 @@ describe('TransactionsPage', () => {
         expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
       })
 
-      const transactionCard = screen.getByText('Starbucks Coffee').closest('article')
-      await user.click(transactionCard!)
+      // Issue #584: Click edit button to open editor
+      const editButtons = screen.getAllByRole('button', { name: /edit transaction/i })
+      await user.click(editButtons[0])
 
       await waitFor(() => {
         expect(screen.getByText('Edit Transaction')).toBeInTheDocument()
@@ -519,7 +521,7 @@ describe('TransactionsPage', () => {
       })
     })
 
-    it('should make transaction cards clickable', async () => {
+    it('should render table with edit buttons for each transaction', async () => {
       const Wrapper = createWrapper()
       render(<TransactionsPage />, { wrapper: Wrapper })
 
@@ -527,9 +529,11 @@ describe('TransactionsPage', () => {
         expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
       })
 
-      const transactionCard = screen.getByText('Starbucks Coffee').closest('article')
-      expect(transactionCard).toHaveAttribute('role', 'button')
-      expect(transactionCard).toHaveAttribute('tabIndex', '0')
+      // Issue #584: Transactions are now in a table with edit buttons
+      expect(screen.getByRole('table')).toBeInTheDocument()
+      const editButtons = screen.getAllByRole('button', { name: /edit transaction/i })
+      // Should have edit buttons for each transaction
+      expect(editButtons.length).toBeGreaterThan(0)
     })
   })
 })
