@@ -88,7 +88,7 @@ describe('AccountTable', () => {
       expect(screen.getByText('Institution')).toBeInTheDocument()
       expect(screen.getByText('Account')).toBeInTheDocument()
       expect(screen.getByText('Type')).toBeInTheDocument()
-      expect(screen.getByText('Mask')).toBeInTheDocument()
+      expect(screen.getByText('Acct #')).toBeInTheDocument()  // Issue #590: Renamed from "Mask"
       expect(screen.getByText('Balance')).toBeInTheDocument()
     })
 

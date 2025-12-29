@@ -8,13 +8,14 @@
  * Main page for viewing and managing budgets and savings goals.
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { toast } from 'sonner';
 import { PlusIcon } from '@heroicons/react/24/outline';
 import { useBudgets } from '../hooks/useBudgets';
 import { useSavingsGoals } from '../hooks/useSavingsGoals';
+import { useBudgetFilters } from '../hooks/useBudgetFilters';
 import { BudgetCard } from './BudgetCard';
-import { BudgetTable } from './BudgetTable';
+import { BudgetTable, type SortColumn as BudgetSortColumn, type SortDirection } from './BudgetTable';
 import { SavingsGoalCard } from './SavingsGoalCard';
 import { CreateBudgetDialog } from './CreateBudgetDialog';
 import { CreateSavingsGoalDialog } from './CreateSavingsGoalDialog';
@@ -22,8 +23,9 @@ import { DeleteBudgetDialog } from './DeleteBudgetDialog';
 import { DeleteSavingsGoalDialog } from './DeleteSavingsGoalDialog';
 import { ListViewToggle } from '@/shared/components/ListViewToggle';
 import type { ListView } from '@/shared/components/ListViewToggle';
+import type { FilterOption } from '@/shared/components/ColumnFilterDropdown';
 import { STORAGE_KEY_LIST_VIEW } from '../constants';
-import { computeBudgetMetrics, type Budget, type SavingsGoal } from '../types';
+import { computeBudgetMetrics, type Budget, type BudgetWithMetrics, type SavingsGoal } from '../types';
 import './BudgetsPage.css';
 
 // Issue #462, #521: Use single state for mutual exclusion - only one dialog can be open at a time
@@ -54,6 +56,18 @@ export function BudgetsPage() {
   const [deletingBudget, setDeletingBudget] = useState<Budget | null>(null);
   const [deletingGoal, setDeletingGoal] = useState<SavingsGoal | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Issue #590: Sorting state
+  const [sortColumn, setSortColumn] = useState<BudgetSortColumn | undefined>(undefined);
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+
+  // Issue #590: Inline filter state (URL-synced)
+  const {
+    periodFilter,
+    progressRange,
+    setPeriodFilter,
+    setProgressRange,
+  } = useBudgetFilters();
 
   // Dialog handlers
   const openBudgetDialog = useCallback(() => setActiveDialog('budget'), []);
@@ -138,6 +152,91 @@ export function BudgetsPage() {
     }
   }, [deletingGoal, deleteGoal, closeDialog, refetchGoals]);
 
+  // Issue #590: Handle sort change
+  const handleSort = useCallback((column: BudgetSortColumn, direction: SortDirection) => {
+    setSortColumn(column);
+    setSortDirection(direction);
+  }, []);
+
+  // Issue #590: Create period options from budgets data
+  const periodOptions = useMemo<FilterOption[]>(() => {
+    const periods = new Set<string>();
+    budgets.forEach((budget) => {
+      if (budget.period) {
+        periods.add(budget.period);
+      }
+    });
+    // Standard period order
+    const periodOrder = ['weekly', 'monthly', 'quarterly', 'yearly', 'custom'];
+    return Array.from(periods)
+      .sort((a, b) => {
+        const indexA = periodOrder.indexOf(a.toLowerCase());
+        const indexB = periodOrder.indexOf(b.toLowerCase());
+        return (indexA === -1 ? 999 : indexA) - (indexB === -1 ? 999 : indexB);
+      })
+      .map((period) => ({
+        value: period,
+        label: period.charAt(0).toUpperCase() + period.slice(1),
+      }));
+  }, [budgets]);
+
+  // Issue #590: Filter handlers from useBudgetFilters hook (URL-synced)
+  // setPeriodFilter, setProgressRange come from the hook
+
+  // Issue #590: Filter and sort budgets client-side
+  const filterAndSortBudgets = useCallback((budgetsToProcess: Budget[]): BudgetWithMetrics[] => {
+    let withMetrics = budgetsToProcess.map(computeBudgetMetrics);
+
+    // Apply period filter
+    if (periodFilter.length > 0) {
+      withMetrics = withMetrics.filter((budget) =>
+        periodFilter.includes(budget.period)
+      );
+    }
+
+    // Apply progress range filter
+    if (progressRange) {
+      withMetrics = withMetrics.filter((budget) => {
+        const progress = budget.percent_used;
+        if (progressRange.min !== undefined && progress < progressRange.min) return false;
+        if (progressRange.max !== undefined && progress > progressRange.max) return false;
+        return true;
+      });
+    }
+
+    // Apply sorting if sortColumn is set
+    if (!sortColumn) return withMetrics;
+
+    return [...withMetrics].sort((a, b) => {
+      let comparison = 0;
+
+      switch (sortColumn) {
+        case 'name': {
+          comparison = a.name.localeCompare(b.name);
+          break;
+        }
+        case 'period': {
+          comparison = a.period.localeCompare(b.period);
+          break;
+        }
+        case 'amount': {
+          comparison = a.amount - b.amount;
+          break;
+        }
+        case 'progress': {
+          comparison = a.percent_used - b.percent_used;
+          break;
+        }
+        case 'remaining': {
+          comparison = a.remaining_amount - b.remaining_amount;
+          break;
+        }
+      }
+
+      return sortDirection === 'asc' ? comparison : -comparison;
+    });
+  }, [sortColumn, sortDirection, periodFilter, progressRange]);
+
   const loading = budgetsLoading || goalsLoading;
   const error = budgetsError || goalsError;
 
@@ -214,8 +313,18 @@ export function BudgetsPage() {
           </div>
         ) : view === 'table' ? (
           <BudgetTable
-            budgets={activeBudgets.map(computeBudgetMetrics)}
+            budgets={filterAndSortBudgets(activeBudgets)}
             onDelete={handleDeleteBudgetClick}
+            sortable
+            sortColumn={sortColumn}
+            sortDirection={sortDirection}
+            onSort={handleSort}
+            // Issue #590: Inline filter props (URL-synced via useBudgetFilters)
+            periodOptions={periodOptions}
+            periodFilter={periodFilter}
+            onPeriodFilterChange={setPeriodFilter}
+            progressRange={progressRange}
+            onProgressRangeChange={setProgressRange}
           />
         ) : (
           <div className="budgets-page__grid">
@@ -231,8 +340,18 @@ export function BudgetsPage() {
           <h2>Past Budgets</h2>
           {view === 'table' ? (
             <BudgetTable
-              budgets={inactiveBudgets.map(computeBudgetMetrics)}
+              budgets={filterAndSortBudgets(inactiveBudgets)}
               onDelete={handleDeleteBudgetClick}
+              sortable
+              sortColumn={sortColumn}
+              sortDirection={sortDirection}
+              onSort={handleSort}
+              // Issue #590: Inline filter props (URL-synced via useBudgetFilters)
+              periodOptions={periodOptions}
+              periodFilter={periodFilter}
+              onPeriodFilterChange={setPeriodFilter}
+              progressRange={progressRange}
+              onProgressRangeChange={setProgressRange}
             />
           ) : (
             <div className="budgets-page__grid">

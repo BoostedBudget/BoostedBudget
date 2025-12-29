@@ -3,7 +3,8 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Eye, EyeOff } from 'lucide-react'
 import { PlaidLinkButton } from './PlaidLinkButton'
 import { AccountCard } from './AccountCard'
-import { AccountTable } from './components/AccountTable'
+import { AccountTable, type SortColumn as AccountSortColumn, type SortDirection } from './components/AccountTable'
+import type { FilterOption } from '@/shared/components/ColumnFilterDropdown'
 import { UpgradeBanner } from './UpgradeBanner'
 import { SyncStatsCard } from './SyncStatsCard'
 import { AccountCustomizationModal } from './components/AccountCustomizationModal'
@@ -19,6 +20,7 @@ import { useProfile } from '../profile/hooks/useProfile'
 import { useSubscriptionTiers } from '../subscription/hooks/useSubscriptionTiers'
 import { useTierLimits } from '../subscription/hooks/useTierLimits'
 import { useAccountCustomization } from './hooks/useAccountCustomization'
+import { useAccountFilters } from './hooks/useAccountFilters'
 import type { Account, UpdateAccountRequest } from './types'
 import './AccountsPage.css'
 
@@ -46,6 +48,20 @@ export function AccountsPage() {
   // Issue #307: Modal state
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
+
+  // Issue #590: Sorting state
+  const [sortColumn, setSortColumn] = useState<AccountSortColumn | undefined>(undefined)
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
+
+  // Issue #590: Inline filter state (URL-synced)
+  const {
+    institutionFilter,
+    typeFilter,
+    balanceRange,
+    setInstitutionFilter,
+    setTypeFilter,
+    setBalanceRange,
+  } = useAccountFilters()
 
   // Use generated query hook for fetching accounts (always include hidden for toggle/counts)
   const {
@@ -106,6 +122,50 @@ export function AccountsPage() {
     setIsModalOpen(true)
   }, [])
 
+  // Issue #590: Handle sort change
+  const handleSort = useCallback((column: AccountSortColumn, direction: SortDirection) => {
+    setSortColumn(column)
+    setSortDirection(direction)
+  }, [])
+
+  // Issue #590: Create filter options from accounts data
+  const institutionOptions = useMemo<FilterOption[]>(() => {
+    const accs = accountsData?.accounts ?? []
+    const institutions = new Set<string>()
+    accs.forEach((acc) => {
+      if (acc.institution_name) {
+        institutions.add(acc.institution_name)
+      }
+    })
+    return Array.from(institutions)
+      .sort()
+      .map((inst) => ({
+        value: inst,
+        label: inst,
+      }))
+  }, [accountsData?.accounts])
+
+  const typeOptions = useMemo<FilterOption[]>(() => {
+    const accs = accountsData?.accounts ?? []
+    const types = new Set<string>()
+    accs.forEach((acc) => {
+      // Use subtype if available, otherwise type
+      const typeValue = acc.subtype || acc.type
+      if (typeValue) {
+        types.add(typeValue)
+      }
+    })
+    return Array.from(types)
+      .sort()
+      .map((type) => ({
+        value: type,
+        label: type.charAt(0).toUpperCase() + type.slice(1),
+      }))
+  }, [accountsData?.accounts])
+
+  // Issue #590: Filter handlers from useAccountFilters hook (URL-synced)
+  // setInstitutionFilter, setTypeFilter, setBalanceRange come from the hook
+
   // Issue #307: Handle save from modal
   const handleSaveAccount = useCallback(async (accountId: string, changes: Partial<UpdateAccountRequest>) => {
     const updatedAccount = await updateAccount(accountId, changes)
@@ -131,10 +191,69 @@ export function AccountsPage() {
 
     // Filter hidden accounts unless showHidden is true
     if (!showHidden) {
-      filtered = accs.filter(acc => !acc.is_hidden)
+      filtered = filtered.filter(acc => !acc.is_hidden)
     }
 
-    // Sort by display_order (nulls last), then created_at
+    // Issue #590: Apply inline filters
+    if (institutionFilter.length > 0) {
+      filtered = filtered.filter(acc =>
+        acc.institution_name && institutionFilter.includes(acc.institution_name)
+      )
+    }
+
+    if (typeFilter.length > 0) {
+      filtered = filtered.filter(acc => {
+        const typeValue = acc.subtype || acc.type
+        return typeValue && typeFilter.includes(typeValue)
+      })
+    }
+
+    if (balanceRange) {
+      filtered = filtered.filter(acc => {
+        const balance = acc.current_balance ?? 0
+        if (balanceRange.min !== undefined && balance < balanceRange.min) return false
+        if (balanceRange.max !== undefined && balance > balanceRange.max) return false
+        return true
+      })
+    }
+
+    // Issue #590: If user has selected a sort column, use that
+    if (sortColumn) {
+      return [...filtered].sort((a, b) => {
+        let comparison = 0
+
+        switch (sortColumn) {
+          case 'institution': {
+            const instA = (a.institution_name || '').toLowerCase()
+            const instB = (b.institution_name || '').toLowerCase()
+            comparison = instA.localeCompare(instB)
+            break
+          }
+          case 'name': {
+            const nameA = (a.nickname || a.name || '').toLowerCase()
+            const nameB = (b.nickname || b.name || '').toLowerCase()
+            comparison = nameA.localeCompare(nameB)
+            break
+          }
+          case 'type': {
+            const typeA = (a.subtype || a.type || '').toLowerCase()
+            const typeB = (b.subtype || b.type || '').toLowerCase()
+            comparison = typeA.localeCompare(typeB)
+            break
+          }
+          case 'balance': {
+            const balA = a.current_balance ?? 0
+            const balB = b.current_balance ?? 0
+            comparison = balA - balB
+            break
+          }
+        }
+
+        return sortDirection === 'asc' ? comparison : -comparison
+      })
+    }
+
+    // Default sort: by display_order (nulls last), then created_at
     return [...filtered].sort((a, b) => {
       const orderA = a.display_order ?? Number.MAX_SAFE_INTEGER
       const orderB = b.display_order ?? Number.MAX_SAFE_INTEGER
@@ -146,7 +265,7 @@ export function AccountsPage() {
       // Fallback to created_at
       return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
     })
-  }, [accountsData?.accounts, showHidden])
+  }, [accountsData?.accounts, showHidden, sortColumn, sortDirection, institutionFilter, typeFilter, balanceRange])
 
   // Count of hidden accounts
   const hiddenCount = useMemo(() => {
@@ -227,12 +346,10 @@ export function AccountsPage() {
         <SyncStatsCard />
       </div>
 
-      {displayedAccounts.length === 0 ? (
+      {accounts.length === 0 ? (
         <div className="empty-state">
           <p className="empty-state__message">
-            {accounts.length === 0
-              ? 'No accounts connected yet. Click "Connect Bank Account" above to get started.'
-              : 'All accounts are hidden. Click "Show Hidden" to view them.'}
+            No accounts connected yet. Click "Connect Bank Account" above to get started.
           </p>
         </div>
       ) : (
@@ -250,6 +367,19 @@ export function AccountsPage() {
               accounts={displayedAccounts}
               onEdit={handleEditAccount}
               onDelete={(account) => handleDeleteAccount(account.id)}
+              sortable
+              sortColumn={sortColumn}
+              sortDirection={sortDirection}
+              onSort={handleSort}
+              // Issue #590: Inline column filters (URL-synced via useAccountFilters)
+              institutionOptions={institutionOptions}
+              institutionFilter={institutionFilter}
+              onInstitutionFilterChange={setInstitutionFilter}
+              typeOptions={typeOptions}
+              typeFilter={typeFilter}
+              onTypeFilterChange={setTypeFilter}
+              balanceRange={balanceRange}
+              onBalanceRangeChange={setBalanceRange}
             />
           ) : (
             <div className="accounts-grid">

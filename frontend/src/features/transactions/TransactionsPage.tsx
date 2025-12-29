@@ -2,7 +2,8 @@ import { useState, useMemo, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useTransactions } from './hooks/useTransactions'
 import { useTransactionFilters } from './hooks/useTransactionFilters'
-import { TransactionTable } from './components/TransactionTable'
+import { TransactionTable, type TransactionSortColumn, type SortDirection } from './components/TransactionTable'
+import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
 import { TransactionEditor } from './components/TransactionEditor'
 import { TransactionFilterPanel } from './components/TransactionFilterPanel'
 import { useGetUserTags, getGetUserTagsQueryKey } from '@/api/generated/endpoints/tags/tags'
@@ -50,6 +51,10 @@ export function TransactionsPage() {
   const [isEditorOpen, setIsEditorOpen] = useState(false)
   const queryClient = useQueryClient()
 
+  // Issue #590: Sorting state
+  const [sortColumn, setSortColumn] = useState<TransactionSortColumn | undefined>(undefined)
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
+
   // Fetch available tags, categories, and accounts using generated hooks
   const { data: tagsData } = useGetUserTags()
   const { data: categoriesData } = useGetUserCategories()
@@ -69,6 +74,60 @@ export function TransactionsPage() {
     return map
   }, [accountsData?.accounts])
 
+  // Issue #590: Create account filter options for inline column filter
+  const accountOptions = useMemo<FilterOption[]>(() => {
+    const accs = accountsData?.accounts ?? []
+    return accs.map((acc) => ({
+      value: acc.id,
+      label: acc.nickname || acc.name,
+    }))
+  }, [accountsData?.accounts])
+
+  // Issue #590: Inline filter callbacks
+  const handleAccountFilterChange = useCallback(
+    (value: string[]) => {
+      setFilter('account_ids', value.length > 0 ? value : undefined)
+    },
+    [setFilter]
+  )
+
+  const handleCategoryFilterChange = useCallback(
+    (value: string[]) => {
+      setFilter('categories', value.length > 0 ? value : undefined)
+    },
+    [setFilter]
+  )
+
+  const handleAmountRangeChange = useCallback(
+    (value: RangeValue | null) => {
+      if (value && (value.min !== undefined || value.max !== undefined)) {
+        setFilters({
+          ...filters,
+          min_amount: value.min,
+          max_amount: value.max,
+        })
+      } else {
+        setFilters({
+          ...filters,
+          min_amount: undefined,
+          max_amount: undefined,
+        })
+      }
+    },
+    [filters, setFilters]
+  )
+
+  // Issue #590: Get current amount range from filters
+  const currentAmountRange = useMemo<RangeValue | null>(() => {
+    if (filters.min_amount !== undefined || filters.max_amount !== undefined) {
+      return {
+        min: filters.min_amount,
+        max: filters.max_amount,
+      }
+    }
+    return null
+  }, [filters.min_amount, filters.max_amount])
+
   const {
     data,
     loading,
@@ -81,6 +140,34 @@ export function TransactionsPage() {
     totalCount,
     currentPage,
   } = useTransactions({ filters, limit: 50 })
+
+  // Issue #590: Create category filter options from transaction data
+  const categoryOptions = useMemo<FilterOption[]>(() => {
+    const transactions = data?.transactions ?? []
+    const categorySet = new Set<string>()
+
+    transactions.forEach((t) => {
+      const category = t.category_override || t.category
+      if (category) {
+        try {
+          const parsed = JSON.parse(category)
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            categorySet.add(parsed[0])
+          }
+        } catch {
+          // If not JSON, use as-is
+          categorySet.add(category)
+        }
+      }
+    })
+
+    return Array.from(categorySet)
+      .sort()
+      .map((cat) => ({
+        value: cat,
+        label: cat,
+      }))
+  }, [data?.transactions])
 
   // Handle opening the transaction editor
   const handleEditTransaction = (transaction: Transaction) => {
@@ -131,6 +218,49 @@ export function TransactionsPage() {
   // Calculate pending count from transactions data
   const pendingCount = data?.transactions?.filter((t) => t.pending).length ?? 0
 
+  // Issue #590: Handle sort change
+  const handleSort = useCallback((column: TransactionSortColumn, direction: SortDirection) => {
+    setSortColumn(column)
+    setSortDirection(direction)
+  }, [])
+
+  // Issue #590: Sort transactions client-side
+  const sortedTransactions = useMemo(() => {
+    const transactions = data?.transactions ?? []
+    if (!sortColumn) return transactions
+
+    return [...transactions].sort((a, b) => {
+      let comparison = 0
+
+      switch (sortColumn) {
+        case 'date': {
+          const dateA = new Date(a.authorized_date || a.date).getTime()
+          const dateB = new Date(b.authorized_date || b.date).getTime()
+          comparison = dateA - dateB
+          break
+        }
+        case 'merchant': {
+          const nameA = (a.merchant_name || a.name || '').toLowerCase()
+          const nameB = (b.merchant_name || b.name || '').toLowerCase()
+          comparison = nameA.localeCompare(nameB)
+          break
+        }
+        case 'amount': {
+          comparison = a.amount - b.amount
+          break
+        }
+        case 'category': {
+          const catA = a.category_override || a.category || ''
+          const catB = b.category_override || b.category || ''
+          comparison = catA.localeCompare(catB)
+          break
+        }
+      }
+
+      return sortDirection === 'asc' ? comparison : -comparison
+    })
+  }, [data?.transactions, sortColumn, sortDirection])
+
   // Loading state
   if (loading && !data) {
     return (
@@ -154,7 +284,7 @@ export function TransactionsPage() {
     )
   }
 
-  const transactions = data?.transactions ?? []
+  const transactions = sortedTransactions
   const isEmpty = transactions.length === 0
 
   return (
@@ -230,6 +360,19 @@ export function TransactionsPage() {
               onEdit={handleEditTransaction}
               onCategorize={handleCategorizeTransaction}
               loading={loading}
+              sortable
+              sortColumn={sortColumn}
+              sortDirection={sortDirection}
+              onSort={handleSort}
+              // Issue #590: Inline column filters
+              accountOptions={accountOptions}
+              accountFilter={filters.account_ids}
+              onAccountFilterChange={handleAccountFilterChange}
+              categoryOptions={categoryOptions}
+              categoryFilter={filters.categories}
+              onCategoryFilterChange={handleCategoryFilterChange}
+              amountRange={currentAmountRange}
+              onAmountRangeChange={handleAmountRangeChange}
             />
           </div>
 

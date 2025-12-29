@@ -11,7 +11,7 @@
   border-collapse: collapse;
   background-color: white;
   border-radius: 0.5rem;
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid var(--color-gray-200);
 }
 
@@ -73,6 +73,13 @@
 .account-table__th--actions {
   width: 6rem;
   text-align: right;
+}
+
+/* Header content (combines sort + filter) */
+.account-table__header-content {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
 }
 
 /* Sort button */
@@ -297,6 +304,18 @@
 .dark .account-table__action-btn--danger:hover:not(:disabled) {
   background-color: var(--color-red-900);
   color: var(--color-red-400);
+}
+
+/* Issue #590: Empty filter results row */
+.account-table__empty-row td {
+  padding: 3rem 1rem;
+  text-align: center;
+  color: var(--color-gray-500);
+  font-style: italic;
+}
+
+.dark .account-table__empty-row td {
+  color: var(--color-gray-400);
 }
 
 /* Responsive adjustments */

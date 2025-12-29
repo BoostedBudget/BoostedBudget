@@ -1,15 +1,12 @@
 /**
  * Transaction Filter Panel Component
- * Container for all transaction filter controls with collapsible design
- * Mobile: Bottom sheet slide-up panel
- * Desktop: Collapsible panel above transaction list
+ * Container for date and status filter controls
  * Issue #529: Transaction page filtering
+ * Issue #590: Simplified - Account/Category/Amount filters moved inline to table headers
  */
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { ChevronDownIcon, XMarkIcon, FunnelIcon } from '@heroicons/react/24/outline'
-import { useGetAccounts } from '@/api/generated/endpoints/accounts/accounts'
-import { useGetPlaidCategories } from '@/api/generated/endpoints/categories/categories'
 import {
   Sheet,
   SheetContent,
@@ -20,12 +17,8 @@ import {
 } from '@/components/ui/sheet'
 import type { TransactionFilters, DatePreset, StatusFilter } from '../types'
 import {
-  TransactionAccountFilter,
-  TransactionAmountFilter,
-  TransactionCategoryFilter,
   TransactionDateFilter,
   TransactionStatusFilter,
-  TransactionTypeFilter,
   FilterPill,
 } from './filters'
 
@@ -49,26 +42,16 @@ interface TransactionFilterPanelProps {
 // Props interface for FilterPillsSection component
 interface FilterPillsSectionProps {
   dateDisplayValue: string | null
-  accountsDisplayValue: string | null
-  categoriesDisplayValue: string | null
-  typeDisplayValue: string | null
-  amountDisplayValue: string | null
   statusDisplayValue: string | null
   onDatePresetChange: (preset: DatePreset) => void
-  onClearFilter: (key: keyof TransactionFilters) => void
   onStatusFilterChange: (status: StatusFilter) => void
 }
 
 // Extracted module-level component for filter pills
 function FilterPillsSection({
   dateDisplayValue,
-  accountsDisplayValue,
-  categoriesDisplayValue,
-  typeDisplayValue,
-  amountDisplayValue,
   statusDisplayValue,
   onDatePresetChange,
-  onClearFilter,
   onStatusFilterChange,
 }: FilterPillsSectionProps) {
   return (
@@ -78,37 +61,6 @@ function FilterPillsSection({
           label="Date"
           value={dateDisplayValue}
           onRemove={() => onDatePresetChange('all')}
-        />
-      )}
-      {accountsDisplayValue && (
-        <FilterPill
-          label="Accounts"
-          value={accountsDisplayValue}
-          onRemove={() => onClearFilter('account_ids')}
-        />
-      )}
-      {categoriesDisplayValue && (
-        <FilterPill
-          label="Categories"
-          value={categoriesDisplayValue}
-          onRemove={() => onClearFilter('categories')}
-        />
-      )}
-      {typeDisplayValue && (
-        <FilterPill
-          label="Type"
-          value={typeDisplayValue}
-          onRemove={() => onClearFilter('amount_type')}
-        />
-      )}
-      {amountDisplayValue && (
-        <FilterPill
-          label="Amount"
-          value={amountDisplayValue}
-          onRemove={() => {
-            onClearFilter('min_amount')
-            onClearFilter('max_amount')
-          }}
         />
       )}
       {statusDisplayValue && (
@@ -146,81 +98,22 @@ export function TransactionFilterPanel({
   filters,
   datePreset,
   statusFilter,
-  activeFilterCount,
-  hasActiveFilters,
+  // These props are kept for API compatibility but no longer used
+  // since Account/Category/Amount filters moved inline to table headers
+  activeFilterCount: _activeFilterCount,
+  hasActiveFilters: _hasActiveFilters,
   pendingCount,
-  onFilterChange,
-  onFiltersChange,
   onDatePresetChange,
   onCustomDateChange,
   onStatusFilterChange,
-  onClearFilter,
-  onClearAllFilters,
+  onClearAllFilters: _onClearAllFilters,
   disabled,
 }: TransactionFilterPanelProps) {
   const [isExpanded, setIsExpanded] = useState(false)
   const [isSheetOpen, setIsSheetOpen] = useState(false)
   const isMobile = useIsMobile()
 
-  // Fetch accounts for the filter dropdown using generated hook
-  const { data: accountsData, isLoading: loadingAccounts } = useGetAccounts()
-  const accounts = accountsData?.accounts ?? []
-
-  // Fetch categories for the filter dropdown using generated hook
-  const { data: categoriesData, isLoading: loadingCategories } = useGetPlaidCategories()
-  const categories = (categoriesData as unknown as string[]) ?? []
-
-  // Handle account filter changes
-  const handleAccountsChange = useCallback(
-    (accountIds: string[]) => {
-      onFilterChange('account_ids', accountIds.length > 0 ? accountIds : undefined)
-    },
-    [onFilterChange]
-  )
-
-  // Handle category filter changes
-  const handleCategoriesChange = useCallback(
-    (selectedCategories: string[]) => {
-      onFilterChange('categories', selectedCategories.length > 0 ? selectedCategories : undefined)
-    },
-    [onFilterChange]
-  )
-
-  // Handle type filter changes
-  const handleTypeChange = useCallback(
-    (type: 'all' | 'income' | 'expense') => {
-      onFilterChange('amount_type', type === 'all' ? undefined : type)
-    },
-    [onFilterChange]
-  )
-
-  // Handle amount filter changes - uses batch update to avoid race condition
-  const handleAmountChange = useCallback(
-    (min?: number, max?: number) => {
-      onFiltersChange({
-        min_amount: min,
-        max_amount: max,
-      })
-    },
-    [onFiltersChange]
-  )
-
   // Get display values for filter pills
-  const getAccountsDisplayValue = () => {
-    if (!filters.account_ids || filters.account_ids.length === 0) return null
-    if (filters.account_ids.length === 1) {
-      const account = accounts.find((a) => a.id === filters.account_ids![0])
-      return account?.name || 'Selected account'
-    }
-    return `${filters.account_ids.length} accounts`
-  }
-
-  const getCategoriesDisplayValue = () => {
-    if (!filters.categories || filters.categories.length === 0) return null
-    if (filters.categories.length === 1) return filters.categories[0]
-    return `${filters.categories.length} categories`
-  }
-
   const getDateDisplayValue = () => {
     if (datePreset === 'all') return null
     if (datePreset === 'custom' && filters.start_date && filters.end_date) {
@@ -237,48 +130,22 @@ export function TransactionFilterPanel({
     return presetLabels[datePreset]
   }
 
-  const getAmountDisplayValue = () => {
-    if (filters.min_amount === undefined && filters.max_amount === undefined) return null
-    if (filters.min_amount !== undefined && filters.max_amount !== undefined) {
-      return `$${filters.min_amount.toFixed(2)} - $${filters.max_amount.toFixed(2)}`
-    }
-    if (filters.min_amount !== undefined) {
-      return `>= $${filters.min_amount.toFixed(2)}`
-    }
-    return `<= $${filters.max_amount!.toFixed(2)}`
-  }
-
-  const getTypeDisplayValue = () => {
-    if (!filters.amount_type) return null
-    return filters.amount_type === 'income' ? 'Income' : 'Expenses'
-  }
-
   const getStatusDisplayValue = () => {
     if (statusFilter === 'all') return null
     return statusFilter === 'posted' ? 'Posted' : 'Pending'
   }
 
-  // Prepare account data for filters
-  const accountsForFilter = accounts.map((a) => ({
-    id: a.id,
-    name: a.name,
-    official_name: a.official_name,
-    institution_name: a.institution_name,
-    type: a.type,
-  }))
-
   // Prepare filter pills props
   const filterPillsProps: FilterPillsSectionProps = {
     dateDisplayValue: getDateDisplayValue(),
-    accountsDisplayValue: getAccountsDisplayValue(),
-    categoriesDisplayValue: getCategoriesDisplayValue(),
-    typeDisplayValue: getTypeDisplayValue(),
-    amountDisplayValue: getAmountDisplayValue(),
     statusDisplayValue: getStatusDisplayValue(),
     onDatePresetChange,
-    onClearFilter,
     onStatusFilterChange,
   }
+
+  // Calculate active count for date/status only
+  const dateStatusActiveCount = (datePreset !== 'all' ? 1 : 0) + (statusFilter !== 'all' ? 1 : 0)
+  const hasDateStatusFilters = dateStatusActiveCount > 0
 
   // Mobile: Bottom sheet
   if (isMobile) {
@@ -293,10 +160,10 @@ export function TransactionFilterPanel({
             >
               <div className="flex items-center gap-2">
                 <FunnelIcon className="w-5 h-5 text-gray-500" />
-                <span className="font-medium text-gray-900">Filters</span>
-                {activeFilterCount > 0 && (
+                <span className="font-medium text-gray-900">Date & Status</span>
+                {dateStatusActiveCount > 0 && (
                   <span className="inline-flex items-center justify-center px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 rounded-full">
-                    {activeFilterCount}
+                    {dateStatusActiveCount}
                   </span>
                 )}
               </div>
@@ -306,7 +173,7 @@ export function TransactionFilterPanel({
 
           <SheetContent side="bottom" className="max-h-[85vh] overflow-auto">
             <SheetHeader>
-              <SheetTitle>Filters</SheetTitle>
+              <SheetTitle>Date & Status Filters</SheetTitle>
             </SheetHeader>
 
             <div className="py-4 overflow-auto">
@@ -320,31 +187,6 @@ export function TransactionFilterPanel({
                   onCustomRangeChange={onCustomDateChange}
                   disabled={disabled}
                 />
-                <TransactionAccountFilter
-                  accounts={accountsForFilter}
-                  selectedIds={filters.account_ids || []}
-                  onChange={handleAccountsChange}
-                  loading={loadingAccounts}
-                  disabled={disabled}
-                />
-                <TransactionCategoryFilter
-                  categories={categories}
-                  selectedCategories={filters.categories || []}
-                  onChange={handleCategoriesChange}
-                  loading={loadingCategories}
-                  disabled={disabled}
-                />
-                <TransactionTypeFilter
-                  value={filters.amount_type || 'all'}
-                  onChange={handleTypeChange}
-                  disabled={disabled}
-                />
-                <TransactionAmountFilter
-                  minAmount={filters.min_amount}
-                  maxAmount={filters.max_amount}
-                  onChange={handleAmountChange}
-                  disabled={disabled}
-                />
                 <TransactionStatusFilter
                   value={statusFilter}
                   onChange={onStatusFilterChange}
@@ -355,15 +197,16 @@ export function TransactionFilterPanel({
             </div>
 
             <SheetFooter className="flex-row gap-2">
-              {hasActiveFilters && (
+              {hasDateStatusFilters && (
                 <button
                   type="button"
                   onClick={() => {
-                    onClearAllFilters()
+                    onDatePresetChange('all')
+                    onStatusFilterChange('all')
                   }}
                   className="flex-1 px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
                 >
-                  Clear All ({activeFilterCount})
+                  Clear All
                 </button>
               )}
               <button
@@ -371,14 +214,14 @@ export function TransactionFilterPanel({
                 onClick={() => setIsSheetOpen(false)}
                 className="flex-1 px-4 py-2 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
               >
-                Apply Filters
+                Apply
               </button>
             </SheetFooter>
           </SheetContent>
         </Sheet>
 
         {/* Active filter pills (always visible when filters are active) */}
-        {hasActiveFilters && (
+        {hasDateStatusFilters && (
           <div className="mt-2 px-1">
             <FilterPillsSection {...filterPillsProps} />
           </div>
@@ -398,10 +241,10 @@ export function TransactionFilterPanel({
       >
         <div className="flex items-center gap-2">
           <FunnelIcon className="w-5 h-5 text-gray-500" />
-          <span className="font-medium text-gray-900">Filters</span>
-          {activeFilterCount > 0 && (
+          <span className="font-medium text-gray-900">Date & Status</span>
+          {dateStatusActiveCount > 0 && (
             <span className="inline-flex items-center justify-center px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 rounded-full">
-              {activeFilterCount}
+              {dateStatusActiveCount}
             </span>
           )}
         </div>
@@ -411,12 +254,15 @@ export function TransactionFilterPanel({
       </button>
 
       {/* Active filter pills (always visible when filters are active) */}
-      {hasActiveFilters && !isExpanded && (
+      {hasDateStatusFilters && !isExpanded && (
         <div className="px-4 pb-3 flex flex-wrap gap-2">
           <FilterPillsSection {...filterPillsProps} />
           <button
             type="button"
-            onClick={onClearAllFilters}
+            onClick={() => {
+              onDatePresetChange('all')
+              onStatusFilterChange('all')
+            }}
             className="text-xs text-gray-500 hover:text-gray-700 underline"
           >
             Clear all
@@ -427,7 +273,7 @@ export function TransactionFilterPanel({
       {/* Expanded filter controls */}
       {isExpanded && (
         <div className="px-4 pb-4 border-t border-gray-100">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pt-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4">
             {/* Date Filter */}
             <TransactionDateFilter
               preset={datePreset}
@@ -435,39 +281,6 @@ export function TransactionFilterPanel({
               endDate={filters.end_date}
               onPresetChange={onDatePresetChange}
               onCustomRangeChange={onCustomDateChange}
-              disabled={disabled}
-            />
-
-            {/* Account Filter */}
-            <TransactionAccountFilter
-              accounts={accountsForFilter}
-              selectedIds={filters.account_ids || []}
-              onChange={handleAccountsChange}
-              loading={loadingAccounts}
-              disabled={disabled}
-            />
-
-            {/* Category Filter */}
-            <TransactionCategoryFilter
-              categories={categories}
-              selectedCategories={filters.categories || []}
-              onChange={handleCategoriesChange}
-              loading={loadingCategories}
-              disabled={disabled}
-            />
-
-            {/* Type Filter */}
-            <TransactionTypeFilter
-              value={filters.amount_type || 'all'}
-              onChange={handleTypeChange}
-              disabled={disabled}
-            />
-
-            {/* Amount Filter */}
-            <TransactionAmountFilter
-              minAmount={filters.min_amount}
-              maxAmount={filters.max_amount}
-              onChange={handleAmountChange}
               disabled={disabled}
             />
 
@@ -481,15 +294,18 @@ export function TransactionFilterPanel({
           </div>
 
           {/* Clear all button */}
-          {hasActiveFilters && (
+          {hasDateStatusFilters && (
             <div className="mt-4 pt-4 border-t border-gray-100 flex justify-end">
               <button
                 type="button"
-                onClick={onClearAllFilters}
+                onClick={() => {
+                  onDatePresetChange('all')
+                  onStatusFilterChange('all')
+                }}
                 className="inline-flex items-center gap-1 px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
               >
                 <XMarkIcon className="w-4 h-4" />
-                Clear {activeFilterCount} filter{activeFilterCount !== 1 ? 's' : ''}
+                Clear filters
               </button>
             </div>
           )}
