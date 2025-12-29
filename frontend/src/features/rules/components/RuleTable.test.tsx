@@ -392,4 +392,47 @@ describe('RuleTable', () => {
       })
     })
   })
+
+  /**
+   * Issue #579: Action button tooltips
+   * Tooltips should appear on hover for all action buttons
+   */
+  describe('Action Button Tooltips', () => {
+    it('should have tooltip on toggle button', () => {
+      render(<RuleTable rules={mockRules} onToggle={vi.fn()} />)
+
+      const toggles = screen.getAllByRole('switch')
+      // First rule is enabled, so tooltip should say "Disable rule"
+      expect(toggles[0]).toHaveAttribute('title', 'Disable rule')
+      // Second rule is disabled, so tooltip should say "Enable rule"
+      expect(toggles[1]).toHaveAttribute('title', 'Enable rule')
+    })
+
+    it('should have tooltip on test button', () => {
+      render(<RuleTable rules={mockRules} onTest={vi.fn()} />)
+
+      const testButtons = screen.getAllByRole('button', { name: /test rule/i })
+      testButtons.forEach((btn) => {
+        expect(btn).toHaveAttribute('title', 'Test rule')
+      })
+    })
+
+    it('should have tooltip on edit button', () => {
+      render(<RuleTable rules={mockRules} onEdit={vi.fn()} />)
+
+      const editButtons = screen.getAllByRole('button', { name: /edit rule/i })
+      editButtons.forEach((btn) => {
+        expect(btn).toHaveAttribute('title', 'Edit rule')
+      })
+    })
+
+    it('should have tooltip on delete button', () => {
+      render(<RuleTable rules={mockRules} onDelete={vi.fn()} />)
+
+      const deleteButtons = screen.getAllByRole('button', { name: /delete rule/i })
+      deleteButtons.forEach((btn) => {
+        expect(btn).toHaveAttribute('title', 'Delete rule')
+      })
+    })
+  })
 })
