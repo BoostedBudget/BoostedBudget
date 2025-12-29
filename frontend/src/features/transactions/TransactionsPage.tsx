@@ -1,10 +1,8 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
-import type { CSSProperties, ReactElement } from 'react'
-import { List } from 'react-window'
+import { useState, useMemo, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useTransactions } from './hooks/useTransactions'
 import { useTransactionFilters } from './hooks/useTransactionFilters'
-import { TransactionCard } from './components/TransactionCard'
+import { TransactionTable } from './components/TransactionTable'
 import { TransactionEditor } from './components/TransactionEditor'
 import { TransactionFilterPanel } from './components/TransactionFilterPanel'
 import { useGetUserTags, getGetUserTagsQueryKey } from '@/api/generated/endpoints/tags/tags'
@@ -15,53 +13,6 @@ import type { Account } from '../accounts/types'
 import type { UserTag } from '../tags/types'
 import type { CustomCategory } from '../categories/types'
 import './TransactionsPage.css'
-
-/** Height of each transaction item in the virtualized list (in pixels) */
-const ITEM_HEIGHT = 96
-
-/** Height of the virtualized list container */
-const LIST_HEIGHT = 600
-
-/** Props for the virtualized list row component */
-interface TransactionRowProps {
-  transactions: Transaction[]
-  accountsMap: Record<string, Account>
-  onEdit: (transaction: Transaction) => void
-  onCategorize: (transaction: Transaction) => void
-}
-
-/**
- * Row component for the virtualized transaction list
- * react-window v2 uses a component-based API for rows
- */
-function TransactionRow({
-  index,
-  style,
-  transactions,
-  accountsMap,
-  onEdit,
-  onCategorize,
-}: {
-  ariaAttributes: {
-    'aria-posinset': number
-    'aria-setsize': number
-    role: 'listitem'
-  }
-  index: number
-  style: CSSProperties
-} & TransactionRowProps): ReactElement {
-  const transaction = transactions[index]
-  return (
-    <div style={style} className="virtualized-list-item">
-      <TransactionCard
-        transaction={transaction}
-        account={accountsMap[transaction.account_id]}
-        onEdit={onEdit}
-        onCategorize={onCategorize}
-      />
-    </div>
-  )
-}
 
 /**
  * Transactions Page
@@ -97,8 +48,6 @@ export function TransactionsPage() {
 
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null)
   const [isEditorOpen, setIsEditorOpen] = useState(false)
-  const [listWidth, setListWidth] = useState(0)
-  const listContainerRef = useRef<HTMLDivElement>(null)
   const queryClient = useQueryClient()
 
   // Fetch available tags, categories, and accounts using generated hooks
@@ -132,19 +81,6 @@ export function TransactionsPage() {
     totalCount,
     currentPage,
   } = useTransactions({ filters, limit: 50 })
-
-  // Measure list container width for virtualized list
-  useEffect(() => {
-    const updateWidth = () => {
-      if (listContainerRef.current) {
-        setListWidth(listContainerRef.current.offsetWidth)
-      }
-    }
-
-    updateWidth()
-    window.addEventListener('resize', updateWidth)
-    return () => window.removeEventListener('resize', updateWidth)
-  }, [])
 
   // Handle opening the transaction editor
   const handleEditTransaction = (transaction: Transaction) => {
@@ -286,42 +222,15 @@ export function TransactionsPage() {
             </p>
           </div>
 
-          <div className="transactions-list" ref={listContainerRef}>
-            {/*
-              For smaller lists (< 20 items) or when width isn't measured yet (tests),
-              use simple rendering for better test compatibility.
-              For larger lists, use virtualization for performance.
-            */}
-            {transactions.length < 20 || listWidth === 0 ? (
-              // Simple list for small datasets or test environments
-              transactions.map((transaction) => (
-                <TransactionCard
-                  key={transaction.id}
-                  transaction={transaction}
-                  account={accountsMap[transaction.account_id]}
-                  onEdit={handleEditTransaction}
-                  onCategorize={handleCategorizeTransaction}
-                />
-              ))
-            ) : (
-              // Virtualized list for large datasets
-              <List<TransactionRowProps>
-                style={{
-                  height: Math.min(LIST_HEIGHT, transactions.length * ITEM_HEIGHT),
-                  width: listWidth,
-                }}
-                className="virtualized-list"
-                rowComponent={TransactionRow}
-                rowCount={transactions.length}
-                rowHeight={ITEM_HEIGHT}
-                rowProps={{
-                  transactions,
-                  accountsMap,
-                  onEdit: handleEditTransaction,
-                  onCategorize: handleCategorizeTransaction,
-                }}
-              />
-            )}
+          {/* Issue #584: Transaction table view */}
+          <div className="transactions-table-container">
+            <TransactionTable
+              transactions={transactions}
+              accountsMap={accountsMap}
+              onEdit={handleEditTransaction}
+              onCategorize={handleCategorizeTransaction}
+              loading={loading}
+            />
           </div>
 
           {(hasMore || currentPage > 0) && (

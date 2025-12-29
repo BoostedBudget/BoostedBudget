@@ -3,12 +3,17 @@
  *
  * Main page for managing auto-categorization rules.
  * Issue #346: Custom Transaction Categorization Rules
+ * Issue #584: Unified Card/Table View System
  */
 
 import { useState, useCallback } from 'react'
 import { useAutoCategorizationRules } from '../hooks/useAutoCategorizationRules'
 import { AutoCategorizationRuleCard } from './AutoCategorizationRuleCard'
+import { AutoCategorizationRuleTable } from './AutoCategorizationRuleTable'
 import { AutoCategorizationRuleEditor } from './AutoCategorizationRuleEditor'
+import { ListViewToggle } from '@/shared/components/ListViewToggle'
+import type { ListView } from '@/shared/components/ListViewToggle'
+import { STORAGE_KEY_LIST_VIEW } from '../constants'
 import type { CategorizationRule, CreateRuleRequest, UpdateRuleRequest } from '../types'
 import type { Account } from '../../accounts/types'
 import type { UserTag } from '../../tags/types'
@@ -25,6 +30,19 @@ export interface AutoCategorizationPageProps {
 
 type EditorMode = 'create' | 'edit' | null
 
+// Issue #584: Get initial view from localStorage
+const getInitialView = (): ListView => {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY_LIST_VIEW)
+    if (stored === 'cards' || stored === 'table') {
+      return stored
+    }
+  } catch {
+    // Ignore localStorage errors
+  }
+  return 'cards'
+}
+
 export function AutoCategorizationPage({ categories, plaidCategories = [], accounts = [], tags = [], maxRules, currentTier }: AutoCategorizationPageProps) {
   const {
     rules,
@@ -39,6 +57,7 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
 
   const [editorMode, setEditorMode] = useState<EditorMode>(null)
   const [editingRule, setEditingRule] = useState<CategorizationRule | null>(null)
+  const [view, setView] = useState<ListView>(getInitialView)
 
   const isAtLimit = maxRules !== undefined && rules.length >= maxRules
   const showTierWarning = isAtLimit && currentTier === 'free'
@@ -84,6 +103,19 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
     },
     [toggleRule]
   )
+
+  // Issue #584: Handle toggle from table component (takes rule object instead of ruleId)
+  const handleTableToggle = useCallback(
+    async (rule: CategorizationRule, enabled: boolean) => {
+      await toggleRule(rule.id, enabled)
+    },
+    [toggleRule]
+  )
+
+  // Issue #584: Handle view change
+  const handleViewChange = useCallback((newView: ListView) => {
+    setView(newView)
+  }, [])
 
   // Loading state
   if (loading) {
@@ -162,14 +194,22 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
           <h1 className="auto-categorization-page__title">Auto-Categorization Rules</h1>
           <span className="auto-categorization-page__count">{rules.length} rules</span>
         </div>
-        <button
-          type="button"
-          className="auto-categorization-page__btn auto-categorization-page__btn--primary"
-          onClick={handleCreateClick}
-          disabled={isAtLimit}
-        >
-          Create Rule
-        </button>
+        {/* Issue #584: View toggle and actions */}
+        <div className="auto-categorization-page__actions">
+          <ListViewToggle
+            view={view}
+            onChange={handleViewChange}
+            storageKey={STORAGE_KEY_LIST_VIEW}
+          />
+          <button
+            type="button"
+            className="auto-categorization-page__btn auto-categorization-page__btn--primary"
+            onClick={handleCreateClick}
+            disabled={isAtLimit}
+          >
+            Create Rule
+          </button>
+        </div>
       </div>
 
       {showTierWarning && (
@@ -184,16 +224,29 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
         </div>
       )}
 
-      <div className="auto-categorization-page__list">
-        {rules.map((rule) => (
-          <AutoCategorizationRuleCard
-            key={rule.id}
-            rule={rule}
-            onToggle={(enabled) => handleToggle(rule.id, enabled)}
-            onEdit={() => handleEditClick(rule)}
-            onDelete={() => handleDelete(rule.id)}
+      {/* Issue #584: Conditional cards/table rendering */}
+      <div className="auto-categorization-page__content">
+        {view === 'cards' ? (
+          <div className="auto-categorization-page__list">
+            {rules.map((rule) => (
+              <AutoCategorizationRuleCard
+                key={rule.id}
+                rule={rule}
+                onToggle={(enabled) => handleToggle(rule.id, enabled)}
+                onEdit={() => handleEditClick(rule)}
+                onDelete={() => handleDelete(rule.id)}
+              />
+            ))}
+          </div>
+        ) : (
+          <AutoCategorizationRuleTable
+            rules={rules}
+            onToggle={handleTableToggle}
+            onEdit={handleEditClick}
+            onDelete={(rule) => handleDelete(rule.id)}
+            loading={loading}
           />
-        ))}
+        )}
       </div>
     </div>
   )

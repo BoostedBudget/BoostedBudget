@@ -37,6 +37,13 @@
   color: var(--color-text-secondary, #666666);
 }
 
+/* Issue #584: Actions container for view toggle and create button */
+.auto-categorization-page__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
 /* Buttons */
 .auto-categorization-page__btn {
   padding: 0.5rem 1rem;
@@ -168,6 +175,11 @@
 
 .auto-categorization-page__upgrade-link:hover {
   text-decoration: underline;
+}
+
+/* Issue #584: Content container for cards/table view */
+.auto-categorization-page__content {
+  margin-top: 1rem;
 }
 
 /* Rules list */
