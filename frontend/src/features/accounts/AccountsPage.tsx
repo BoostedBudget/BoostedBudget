@@ -346,12 +346,10 @@ export function AccountsPage() {
         <SyncStatsCard />
       </div>
 
-      {displayedAccounts.length === 0 ? (
+      {accounts.length === 0 ? (
         <div className="empty-state">
           <p className="empty-state__message">
-            {accounts.length === 0
-              ? 'No accounts connected yet. Click "Connect Bank Account" above to get started.'
-              : 'All accounts are hidden. Click "Show Hidden" to view them.'}
+            No accounts connected yet. Click "Connect Bank Account" above to get started.
           </p>
         </div>
       ) : (
