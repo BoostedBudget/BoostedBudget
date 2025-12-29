@@ -16,6 +16,18 @@ import type { Budget, SavingsGoal } from '../types';
 // Mock the hooks
 vi.mock('../hooks/useBudgets');
 vi.mock('../hooks/useSavingsGoals');
+vi.mock('../hooks/useBudgetFilters', () => ({
+  useBudgetFilters: () => ({
+    filters: { period: [], progressMin: undefined, progressMax: undefined },
+    periodFilter: [],
+    progressRange: null,
+    setPeriodFilter: vi.fn(),
+    setProgressRange: vi.fn(),
+    clearAllFilters: vi.fn(),
+    activeFilterCount: 0,
+    hasActiveFilters: false,
+  }),
+}));
 
 // Mock child components to simplify testing
 vi.mock('./BudgetCard', () => ({

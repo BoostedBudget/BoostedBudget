@@ -155,7 +155,14 @@ export function BudgetTable({
     )
   }
 
-  if (budgets.length === 0) {
+  // Issue #590: Compute if any filters are active
+  // Note: Use != null to check for both null and undefined
+  const hasActiveFilters =
+    (periodFilter?.length ?? 0) > 0 ||
+    progressRange != null
+
+  // Only show empty state if no data AND no active filters
+  if (budgets.length === 0 && !hasActiveFilters) {
     return (
       <div className={`budget-table__empty ${className}`.trim()}>
         <p>No budgets found. Create a budget to get started.</p>
@@ -215,7 +222,13 @@ export function BudgetTable({
         </tr>
       </thead>
       <tbody>
-        {budgets.map((budget) => {
+        {budgets.length === 0 ? (
+          <tr className="budget-table__empty-row">
+            <td colSpan={hasActions ? 7 : 6}>
+              No budgets match your filters. Try adjusting your criteria.
+            </td>
+          </tr>
+        ) : budgets.map((budget) => {
           const categoryCount = budget.categories?.length ?? 0
           const percentUsed = Math.round(budget.percent_used)
           const isOverBudget = budget.is_over_budget

@@ -203,7 +203,15 @@ export function AccountTable({
     )
   }
 
-  if (accounts.length === 0) {
+  // Issue #590: Compute if any filters are active
+  // Note: Use != null to check for both null and undefined
+  const hasActiveFilters =
+    (institutionFilter?.length ?? 0) > 0 ||
+    (typeFilter?.length ?? 0) > 0 ||
+    balanceRange != null
+
+  // Only show empty state if no data AND no active filters
+  if (accounts.length === 0 && !hasActiveFilters) {
     return (
       <div className={`account-table__empty ${className}`.trim()}>
         <p>No accounts found. Connect a bank account to get started.</p>
@@ -273,7 +281,13 @@ export function AccountTable({
         </tr>
       </thead>
       <tbody>
-        {accounts.map((account) => {
+        {accounts.length === 0 ? (
+          <tr className="account-table__empty-row">
+            <td colSpan={hasActions ? 6 : 5}>
+              No accounts match your filters. Try adjusting your criteria.
+            </td>
+          </tr>
+        ) : accounts.map((account) => {
           const displayName = account.nickname || account.name
           const typeLabel = getAccountTypeLabel(account.type, account.subtype)
           const balanceFormatted = formatBalance(account.current_balance)

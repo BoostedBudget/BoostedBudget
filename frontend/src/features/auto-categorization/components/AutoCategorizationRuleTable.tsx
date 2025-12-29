@@ -171,7 +171,15 @@ export function AutoCategorizationRuleTable({
     )
   }
 
-  if (rules.length === 0) {
+  // Issue #590: Compute if any filters are active
+  // Note: Use != null to check for both null and undefined
+  const hasActiveFilters =
+    (statusFilter?.length ?? 0) > 0 ||
+    (categoryFilter?.length ?? 0) > 0 ||
+    priorityRange != null
+
+  // Only show empty state if no data AND no active filters
+  if (rules.length === 0 && !hasActiveFilters) {
     return (
       <div className={`autocat-table__empty ${className}`.trim()}>
         <p>No rules found. Create your first auto-categorization rule to get started.</p>
@@ -244,7 +252,13 @@ export function AutoCategorizationRuleTable({
         </tr>
       </thead>
       <tbody>
-        {rules.map((rule) => {
+        {rules.length === 0 ? (
+          <tr className="autocat-table__empty-row">
+            <td colSpan={hasActions ? 7 : 6}>
+              No rules match your filters. Try adjusting your criteria.
+            </td>
+          </tr>
+        ) : rules.map((rule) => {
           const conditionsText = formatConditions(
             rule.conditions,
             rule.condition_logic

@@ -11,7 +11,7 @@
   border-collapse: collapse;
   background-color: white;
   border-radius: 0.5rem;
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid var(--color-gray-200);
 }
 
@@ -397,6 +397,18 @@
 .dark .autocat-table__action-btn--danger:hover:not(:disabled) {
   background-color: var(--color-red-900);
   color: var(--color-red-400);
+}
+
+/* Issue #590: Empty filter results row */
+.autocat-table__empty-row td {
+  padding: 3rem 1rem;
+  text-align: center;
+  color: var(--color-gray-500);
+  font-style: italic;
+}
+
+.dark .autocat-table__empty-row td {
+  color: var(--color-gray-400);
 }
 
 /* Responsive adjustments */

@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 import { PlusIcon } from '@heroicons/react/24/outline';
 import { useBudgets } from '../hooks/useBudgets';
 import { useSavingsGoals } from '../hooks/useSavingsGoals';
+import { useBudgetFilters } from '../hooks/useBudgetFilters';
 import { BudgetCard } from './BudgetCard';
 import { BudgetTable, type SortColumn as BudgetSortColumn, type SortDirection } from './BudgetTable';
 import { SavingsGoalCard } from './SavingsGoalCard';
@@ -22,7 +23,7 @@ import { DeleteBudgetDialog } from './DeleteBudgetDialog';
 import { DeleteSavingsGoalDialog } from './DeleteSavingsGoalDialog';
 import { ListViewToggle } from '@/shared/components/ListViewToggle';
 import type { ListView } from '@/shared/components/ListViewToggle';
-import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown';
+import type { FilterOption } from '@/shared/components/ColumnFilterDropdown';
 import { STORAGE_KEY_LIST_VIEW } from '../constants';
 import { computeBudgetMetrics, type Budget, type BudgetWithMetrics, type SavingsGoal } from '../types';
 import './BudgetsPage.css';
@@ -60,9 +61,13 @@ export function BudgetsPage() {
   const [sortColumn, setSortColumn] = useState<BudgetSortColumn | undefined>(undefined);
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
 
-  // Issue #590: Inline filter state
-  const [periodFilter, setPeriodFilter] = useState<string[]>([]);
-  const [progressRange, setProgressRange] = useState<RangeValue | null>(null);
+  // Issue #590: Inline filter state (URL-synced)
+  const {
+    periodFilter,
+    progressRange,
+    setPeriodFilter,
+    setProgressRange,
+  } = useBudgetFilters();
 
   // Dialog handlers
   const openBudgetDialog = useCallback(() => setActiveDialog('budget'), []);
@@ -175,14 +180,8 @@ export function BudgetsPage() {
       }));
   }, [budgets]);
 
-  // Issue #590: Handle inline filter changes
-  const handlePeriodFilterChange = useCallback((value: string[]) => {
-    setPeriodFilter(value);
-  }, []);
-
-  const handleProgressRangeChange = useCallback((value: RangeValue | null) => {
-    setProgressRange(value);
-  }, []);
+  // Issue #590: Filter handlers from useBudgetFilters hook (URL-synced)
+  // setPeriodFilter, setProgressRange come from the hook
 
   // Issue #590: Filter and sort budgets client-side
   const filterAndSortBudgets = useCallback((budgetsToProcess: Budget[]): BudgetWithMetrics[] => {
@@ -320,12 +319,12 @@ export function BudgetsPage() {
             sortColumn={sortColumn}
             sortDirection={sortDirection}
             onSort={handleSort}
-            // Issue #590: Inline filter props
+            // Issue #590: Inline filter props (URL-synced via useBudgetFilters)
             periodOptions={periodOptions}
             periodFilter={periodFilter}
-            onPeriodFilterChange={handlePeriodFilterChange}
+            onPeriodFilterChange={setPeriodFilter}
             progressRange={progressRange}
-            onProgressRangeChange={handleProgressRangeChange}
+            onProgressRangeChange={setProgressRange}
           />
         ) : (
           <div className="budgets-page__grid">
@@ -347,12 +346,12 @@ export function BudgetsPage() {
               sortColumn={sortColumn}
               sortDirection={sortDirection}
               onSort={handleSort}
-              // Issue #590: Inline filter props
+              // Issue #590: Inline filter props (URL-synced via useBudgetFilters)
               periodOptions={periodOptions}
               periodFilter={periodFilter}
-              onPeriodFilterChange={handlePeriodFilterChange}
+              onPeriodFilterChange={setPeriodFilter}
               progressRange={progressRange}
-              onProgressRangeChange={handleProgressRangeChange}
+              onProgressRangeChange={setProgressRange}
             />
           ) : (
             <div className="budgets-page__grid">
