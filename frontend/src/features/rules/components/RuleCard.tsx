@@ -177,10 +177,11 @@ export function RuleCard({
               onClick={() => onTest(rule)}
               disabled={loading}
               className="rule-card__action-btn rule-card__action-btn--test"
-              aria-label="Test rule"
+              aria-label="Backtest rule"
+              title="See what this rule would have done with your recent data"
             >
               <Play className="rule-card__action-icon" aria-hidden="true" />
-              Test
+              Backtest
             </button>
           )}
           {onEdit && (

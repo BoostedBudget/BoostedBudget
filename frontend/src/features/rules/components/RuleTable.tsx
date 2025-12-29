@@ -317,8 +317,8 @@ export function RuleTable({
                         onClick={() => onTest(rule)}
                         disabled={loading}
                         className="rule-table__action-btn"
-                        aria-label="Test rule"
-                        title="Test rule"
+                        aria-label="Backtest rule"
+                        title="Backtest - See what this rule would have done with your recent data"
                       >
                         <Play aria-hidden="true" />
                       </button>

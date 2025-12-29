@@ -45,8 +45,8 @@ export function RuleTestResults({
         <div className="rule-test-results__content">
           <div className="rule-test-results__loading">
             <Loader2 className="rule-test-results__spinner" />
-            <h2 id="test-results-title">Testing Rule...</h2>
-            <p>Running test execution, please wait.</p>
+            <h2 id="test-results-title">Running Backtest...</h2>
+            <p>Analyzing your recent data to show what this rule would have done.</p>
           </div>
         </div>
       </div>

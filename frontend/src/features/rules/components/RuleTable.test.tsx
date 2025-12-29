@@ -408,12 +408,12 @@ describe('RuleTable', () => {
       expect(toggles[1]).toHaveAttribute('title', 'Enable rule')
     })
 
-    it('should have tooltip on test button', () => {
+    it('should have tooltip on backtest button', () => {
       render(<RuleTable rules={mockRules} onTest={vi.fn()} />)
 
-      const testButtons = screen.getAllByRole('button', { name: /test rule/i })
-      testButtons.forEach((btn) => {
-        expect(btn).toHaveAttribute('title', 'Test rule')
+      const backtestButtons = screen.getAllByRole('button', { name: /backtest rule/i })
+      backtestButtons.forEach((btn) => {
+        expect(btn).toHaveAttribute('title', 'Backtest - See what this rule would have done with your recent data')
       })
     })
 
