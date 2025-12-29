@@ -28,7 +28,7 @@ export class ErrorBoundary extends Component<Props, State> {
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     this.setState({ errorInfo })
 
-    // Log to console in development/staging
+    // Log to console in development/qa
     const isDev = window.ENV?.ENVIRONMENT !== 'production'
     if (isDev) {
       console.error('ErrorBoundary caught error:', error)
@@ -116,7 +116,7 @@ export class ErrorBoundary extends Component<Props, State> {
                 color: '#dc2626',
                 marginBottom: '12px'
               }}>
-                Error Details (Development/Staging Only)
+                Error Details (Development/QA Only)
               </summary>
               <pre style={{
                 padding: '12px',

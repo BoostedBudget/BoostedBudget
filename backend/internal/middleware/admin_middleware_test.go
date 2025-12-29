@@ -10,12 +10,12 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestAdminMiddleware_StagingEnvironment_AllowsAccess verifies that admin middleware
-// allows requests to proceed when running in staging environment.
-func TestAdminMiddleware_StagingEnvironment_AllowsAccess(t *testing.T) {
+// TestAdminMiddleware_QAEnvironment_AllowsAccess verifies that admin middleware
+// allows requests to proceed when running in QA environment.
+func TestAdminMiddleware_QAEnvironment_AllowsAccess(t *testing.T) {
 	// Arrange
 	cfg := &config.Config{
-		Environment: "staging",
+		Environment: "qa",
 	}
 
 	e := echo.New()
@@ -39,7 +39,7 @@ func TestAdminMiddleware_StagingEnvironment_AllowsAccess(t *testing.T) {
 
 	// Assert
 	assert.NoError(t, err)
-	assert.True(t, handlerCalled, "Handler should be called when environment is staging")
+	assert.True(t, handlerCalled, "Handler should be called when environment is qa")
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
@@ -82,7 +82,7 @@ func TestAdminMiddleware_ProductionEnvironment_Returns404(t *testing.T) {
 }
 
 // TestAdminMiddleware_DevelopmentEnvironment_Returns404 verifies that admin middleware
-// returns 404 Not Found when running in development environment (staging-only endpoint).
+// returns 404 Not Found when running in development environment (qa-only endpoint).
 func TestAdminMiddleware_DevelopmentEnvironment_Returns404(t *testing.T) {
 	// Arrange
 	cfg := &config.Config{

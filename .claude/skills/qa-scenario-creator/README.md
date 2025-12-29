@@ -1,6 +1,6 @@
-# Staging Scenario Creator - Claude Code Skill
+# QA Scenario Creator - Claude Code Skill
 
-A custom Claude Code skill for creating YAML scenario files for the BoostedBudget staging data populator framework through an interactive, question-driven workflow.
+A custom Claude Code skill for creating YAML scenario files for the BoostedBudget qa data populator framework through an interactive, question-driven workflow.
 
 ## What This Skill Does
 
@@ -21,13 +21,13 @@ This skill helps you create new test data scenarios by:
    mkdir -p ~/.config/claude-code/skills
 
    # Copy this skill
-   cp -r .claude-skills/staging-scenario-creator ~/.config/claude-code/skills/
+   cp -r .claude-skills/qa-scenario-creator ~/.config/claude-code/skills/
    ```
 
 2. **Enable the skill** in Claude Code:
    - Open Claude Code settings
    - Navigate to **Settings > Capabilities > Skills**
-   - Enable "Staging Scenario Creator"
+   - Enable "QA Scenario Creator"
 
 3. **Restart Claude Code** (if necessary)
 
@@ -96,7 +96,7 @@ Claude: I'll help you create a staging scenario. Let me ask you a few questions:
 ✅ Scenario created successfully!
 
 To run this scenario:
-cd backend/scripts/staging-data-populator
+cd backend/scripts/qa-data-populator
 OVERRIDE_USER_EMAIL="your-email@example.com" OVERRIDE_USER_MODE="existing" \
   ./populate.sh scenarios/06-ui-testing-transaction-pagination.yaml
 ```
@@ -173,7 +173,7 @@ OVERRIDE_USER_EMAIL="your-email@example.com" OVERRIDE_USER_MODE="existing" \
 
 **Solutions**:
 - Skill auto-numbers to avoid conflicts
-- If manual numbering needed, check `backend/scripts/staging-data-populator/scenarios/` first
+- If manual numbering needed, check `backend/scripts/qa-data-populator/scenarios/` first
 - Use next available number (currently 01-05 exist, so start at 06)
 
 ## Examples
@@ -206,8 +206,8 @@ File: 08-edge-case-pending-refunds.yaml
 
 - **Skill.md**: Detailed workflow and instructions
 - **REFERENCE.md**: Complete schema reference with examples
-- **Staging Data Populator README**: `backend/scripts/staging-data-populator/README.md`
-- **Scenario Examples**: `backend/scripts/staging-data-populator/scenarios/`
+- **QA Data Populator README**: `backend/scripts/qa-data-populator/README.md`
+- **Scenario Examples**: `backend/scripts/qa-data-populator/scenarios/`
 
 ## Development
 
@@ -225,14 +225,14 @@ Add new examples to `REFERENCE.md` under "Complete Examples" section.
 ## Support
 
 - **GitHub Issues**: Report bugs or request features at [Issue #344](https://github.com/BoostedBudget/BoostedBudget/issues/344)
-- **Documentation**: See `backend/scripts/staging-data-populator/README.md`
-- **Example Scenarios**: `backend/scripts/staging-data-populator/scenarios/`
+- **Documentation**: See `backend/scripts/qa-data-populator/README.md`
+- **Example Scenarios**: `backend/scripts/qa-data-populator/scenarios/`
 
 ## Version
 
 - **Version**: 1.0.0
 - **Created**: 2025-11-13
-- **Related PR**: #343 (Staging Data Populator Framework)
+- **Related PR**: #343 (QA Data Populator Framework)
 - **Related Issue**: #342
 
 ---

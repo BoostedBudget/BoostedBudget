@@ -1,6 +1,6 @@
 # Staging Scenario Schema Reference
 
-Complete schema documentation and examples for BoostedBudget staging data populator scenarios.
+Complete schema documentation and examples for BoostedBudget qa data populator scenarios.
 
 ## Table of Contents
 

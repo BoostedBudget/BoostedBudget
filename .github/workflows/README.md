@@ -170,8 +170,8 @@ cd frontend && pnpm run test:e2e
 # Against production
 ./scripts/smoke-test.sh production
 
-# Against staging (when available)
-./scripts/smoke-test.sh staging
+# Against QA (Mac Mini)
+./scripts/smoke-test.sh qa
 ```
 
 ## Coverage Reports
