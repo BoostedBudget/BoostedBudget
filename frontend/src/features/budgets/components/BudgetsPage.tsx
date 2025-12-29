@@ -23,7 +23,7 @@ import { DeleteSavingsGoalDialog } from './DeleteSavingsGoalDialog';
 import { ListViewToggle } from '@/shared/components/ListViewToggle';
 import type { ListView } from '@/shared/components/ListViewToggle';
 import { STORAGE_KEY_LIST_VIEW } from '../constants';
-import { computeBudgetMetrics, type Budget, type SavingsGoal } from '../types';
+import { computeBudgetMetrics, type Budget, type BudgetWithMetrics, type SavingsGoal } from '../types';
 import './BudgetsPage.css';
 
 // Issue #462, #521: Use single state for mutual exclusion - only one dialog can be open at a time
@@ -149,10 +149,11 @@ export function BudgetsPage() {
   }, []);
 
   // Issue #590: Sort budgets client-side
-  const sortBudgets = useCallback((budgetsToSort: Budget[]) => {
-    if (!sortColumn) return budgetsToSort;
-
+  const sortBudgets = useCallback((budgetsToSort: Budget[]): BudgetWithMetrics[] => {
     const withMetrics = budgetsToSort.map(computeBudgetMetrics);
+
+    if (!sortColumn) return withMetrics;
+
     return [...withMetrics].sort((a, b) => {
       let comparison = 0;
 
