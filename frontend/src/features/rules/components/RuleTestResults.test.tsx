@@ -201,7 +201,7 @@ describe('RuleTestResults', () => {
         <RuleTestResults result={null} isLoading onClose={() => {}} />
       )
 
-      expect(screen.getByText(/testing rule/i)).toBeInTheDocument()
+      expect(screen.getByText(/running backtest/i)).toBeInTheDocument()
     })
   })
 
