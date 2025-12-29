@@ -2767,7 +2767,7 @@ paths:
         - Accounts
   /api/v1/admin/plaid/fire-webhook:
     post:
-      description: Fires a Plaid webhook for testing in staging environment. Requires Auth0 authentication.
+      description: Fires a Plaid webhook for testing in QA environment. Requires Auth0 authentication.
       operationId: fireWebhook
       requestBody:
         content:
@@ -2790,7 +2790,7 @@ paths:
           description: Error
       security:
         - auth0: []
-      summary: Fire a Plaid webhook (staging only)
+      summary: Fire a Plaid webhook (QA only)
       tags:
         - Admin
   /api/v1/analytics/cash-flow-history:
@@ -5224,7 +5224,5 @@ paths:
 servers:
   - description: Production (iad/us-east-1)
     url: https://api.boostedbudget.com
-  - description: Staging (iad/us-east-1)
-    url: https://api-staging.boostedbudget.com
-  - description: Local development
+  - description: QA / Local development
     url: http://localhost:8080

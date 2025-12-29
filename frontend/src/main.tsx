@@ -43,7 +43,7 @@ if (isTestEnv) {
 
   if (!domain || !clientId) {
     // In development (E2E tests, local dev without .env), use placeholders
-    // In production/staging, fail fast
+    // In production/qa, fail fast
     if (isDevelopment) {
       console.warn('[Auth0] No credentials found - using placeholders (development mode)')
       auth0Domain = 'dev-placeholder.auth0.com'

@@ -1,15 +1,14 @@
-name: Deploy to Staging
+name: Deploy to QA
 
-# Trigger on pushes to staging branch (after PR merge or direct push)
-# Also allow manual triggering to deploy a specific PR branch
+# Manual-only workflow for deploying PRs to QA environment (Mac Mini)
+# NOTE: This workflow requires manual triggering - there is no automatic deployment
+# A future "Deploy to Staging" workflow will be created for the Fly.io staging environment
 on:
-  push:
-    branches: [staging]
   workflow_dispatch:
     inputs:
       pr_number:
-        description: 'PR number to deploy (leave empty to deploy staging branch)'
-        required: false
+        description: 'PR number to deploy to QA'
+        required: true
         type: string
       skip_security_scan:
         description: 'Skip security scan (not recommended)'
@@ -20,9 +19,9 @@ on:
           - 'false'
           - 'true'
 
-# Only allow one staging deployment at a time
+# Only allow one QA deployment at a time
 concurrency:
-  group: deploy-staging
+  group: deploy-qa
   cancel-in-progress: false
 
 env:
@@ -34,11 +33,10 @@ env:
 
 jobs:
   # =============================================================================
-  # Fetch PR Metadata (only for manual PR deployments)
+  # Fetch PR Metadata
   # =============================================================================
   pr-metadata:
     name: Fetch PR Metadata
-    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number != '' }}
     runs-on: [self-hosted, macOS, mac-mini]
     outputs:
       head_sha: ${{ steps.pr-info.outputs.head_sha }}
@@ -109,8 +107,7 @@ jobs:
   build-images:
     name: Build ${{ matrix.component }} Image
     needs: [pr-metadata]
-    # Run if pr-metadata succeeded (PR deploy) or was skipped (staging branch deploy)
-    if: ${{ always() && (needs.pr-metadata.result == 'success' || needs.pr-metadata.result == 'skipped') }}
+    if: ${{ needs.pr-metadata.result == 'success' }}
     runs-on: [self-hosted, macOS, mac-mini]
     strategy:
       matrix:
@@ -136,17 +133,10 @@ jobs:
       - name: Determine build target
         id: build-target
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.pr_number }}" ]; then
-            echo "ref=${{ needs.pr-metadata.outputs.head_ref }}" >> $GITHUB_OUTPUT
-            echo "sha=${{ needs.pr-metadata.outputs.head_sha }}" >> $GITHUB_OUTPUT
-            echo "tag_prefix=${{ needs.pr-metadata.outputs.tag_prefix }}" >> $GITHUB_OUTPUT
-            echo "::notice::Building PR #${{ github.event.inputs.pr_number }} branch: ${{ needs.pr-metadata.outputs.head_ref }}"
-          else
-            echo "ref=staging" >> $GITHUB_OUTPUT
-            echo "sha=${{ github.sha }}" >> $GITHUB_OUTPUT
-            echo "tag_prefix=staging" >> $GITHUB_OUTPUT
-            echo "::notice::Building staging branch"
-          fi
+          echo "ref=${{ needs.pr-metadata.outputs.head_ref }}" >> $GITHUB_OUTPUT
+          echo "sha=${{ needs.pr-metadata.outputs.head_sha }}" >> $GITHUB_OUTPUT
+          echo "tag_prefix=${{ needs.pr-metadata.outputs.tag_prefix }}" >> $GITHUB_OUTPUT
+          echo "::notice::Building PR #${{ github.event.inputs.pr_number }} branch: ${{ needs.pr-metadata.outputs.head_ref }}"
 
       - name: Checkout code
         uses: actions/checkout@v6
@@ -267,8 +257,7 @@ jobs:
     name: Security Scan (${{ matrix.component }} Image)
     needs: [pr-metadata, build-images]
     # Run if build succeeded and security scan not disabled
-    # Use always() because pr-metadata is skipped for regular staging deploys
-    if: ${{ always() && needs.build-images.result == 'success' && github.event.inputs.skip_security_scan != 'true' }}
+    if: ${{ needs.build-images.result == 'success' && github.event.inputs.skip_security_scan != 'true' }}
     runs-on: [self-hosted, macOS, mac-mini]
     strategy:
       matrix:
@@ -348,7 +337,7 @@ jobs:
         with:
           image-ref: ${{ steps.image-ref.outputs.image-ref }}
           format: 'sarif'
-          output: 'trivy-${{ matrix.component }}-staging.sarif'
+          output: 'trivy-${{ matrix.component }}-qa.sarif'
           severity: 'CRITICAL,HIGH'
           exit-code: '0'
           ignore-unfixed: true
@@ -371,7 +360,7 @@ jobs:
         with:
           image-ref: ${{ steps.image-ref.outputs.image-ref }}
           format: 'sarif'
-          output: 'trivy-${{ matrix.component }}-staging.sarif'
+          output: 'trivy-${{ matrix.component }}-qa.sarif'
           severity: 'CRITICAL,HIGH'
           exit-code: '0'
           ignore-unfixed: true
@@ -393,7 +382,7 @@ jobs:
         with:
           image-ref: ${{ steps.image-ref.outputs.image-ref }}
           format: 'sarif'
-          output: 'trivy-${{ matrix.component }}-staging.sarif'
+          output: 'trivy-${{ matrix.component }}-qa.sarif'
           severity: 'CRITICAL,HIGH'
           exit-code: '0'
           ignore-unfixed: true
@@ -426,8 +415,8 @@ jobs:
         if: success() || failure()
         continue-on-error: true
         with:
-          sarif_file: 'trivy-${{ matrix.component }}-staging.sarif'
-          category: 'trivy-staging-${{ matrix.component }}'
+          sarif_file: 'trivy-${{ matrix.component }}-qa.sarif'
+          category: 'trivy-qa-${{ matrix.component }}'
 
       - name: Cleanup Trivy temporary files
         if: always()
@@ -444,16 +433,16 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
-  # Deploy to Mac Mini Staging
+  # Deploy to Mac Mini QA
   # =============================================================================
   deploy-to-mac-mini:
-    name: Deploy to Mac Mini
+    name: Deploy to Mac Mini QA
     needs: [pr-metadata, build-images, image-security-scan]
     # Run if build succeeded and either security scan passed OR was skipped
     if: ${{ always() && needs.build-images.result == 'success' && (needs.image-security-scan.result == 'success' || needs.image-security-scan.result == 'skipped') }}
     runs-on: [self-hosted, macOS, mac-mini]
     environment:
-      name: staging
+      name: qa
       url: https://localhost:3000
     env:
       UNIQUE_WORKSPACE: workspace-deploy-mac-mini-${{ github.run_id }}
@@ -472,28 +461,28 @@ jobs:
       - name: Restore SSL certificates from secrets
         run: |
           mkdir -p ${{ env.UNIQUE_WORKSPACE }}/frontend
-          echo "${{ secrets.STAGING_SSL_CERT }}" | base64 -d > ${{ env.UNIQUE_WORKSPACE }}/frontend/cert.pem
-          echo "${{ secrets.STAGING_SSL_KEY }}" | base64 -d > ${{ env.UNIQUE_WORKSPACE }}/frontend/key.pem
+          echo "${{ secrets.QA_SSL_CERT }}" | base64 -d > ${{ env.UNIQUE_WORKSPACE }}/frontend/cert.pem
+          echo "${{ secrets.QA_SSL_KEY }}" | base64 -d > ${{ env.UNIQUE_WORKSPACE }}/frontend/key.pem
           chmod 600 ${{ env.UNIQUE_WORKSPACE }}/frontend/*.pem
-          echo "✓ SSL certificates restored for HTTPS staging access"
+          echo "✓ SSL certificates restored for HTTPS QA access"
 
-      - name: Create .env.staging from secrets
+      - name: Create .env.qa from secrets
         run: |
           # Use outputs from build-images job for image tags
           TAG_PREFIX="${{ needs.build-images.outputs.tag_prefix }}"
           SHA="${{ needs.build-images.outputs.sha }}"
 
-          cat > ${{ env.UNIQUE_WORKSPACE }}/.env.staging << EOF
+          cat > ${{ env.UNIQUE_WORKSPACE }}/.env.qa << EOF
           # Application Settings
-          COMPOSE_PROJECT_NAME=boostedbudget-staging
-          NODE_ENV=staging
-          GO_ENV=staging
-          ENVIRONMENT=staging
+          COMPOSE_PROJECT_NAME=boostedbudget-qa
+          NODE_ENV=qa
+          GO_ENV=qa
+          ENVIRONMENT=qa
           VERSION=${TAG_PREFIX}-${SHA}
           PRIMARY_REGION=iad
 
           # CORS Configuration
-          CORS_ALLOWED_ORIGINS=${{ secrets.CORS_ALLOWED_ORIGINS_STAGING || 'https://yingyues-mac-mini.tailce219d.ts.net:3443,https://localhost:3443' }}
+          CORS_ALLOWED_ORIGINS=${{ secrets.CORS_ALLOWED_ORIGINS_QA || 'https://yingyues-mac-mini.tailce219d.ts.net:3443,https://localhost:3443' }}
 
           # Docker Image Configuration (pull from GHCR)
           PULL_FROM_GHCR=true
@@ -504,40 +493,40 @@ jobs:
           BACKEND_URL=http://localhost:8080
           FRONTEND_URL=http://localhost:3000
 
-          # Database (Staging)
-          POSTGRES_USER=staginguser
-          POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD_STAGING || 'stagingpass' }}
-          DATABASE_URL=postgresql://staginguser:${{ secrets.POSTGRES_PASSWORD_STAGING || 'stagingpass' }}@localhost:5433/boostedbudget_staging?sslmode=disable
+          # Database (QA)
+          POSTGRES_USER=qauser
+          POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD_QA || 'qapass' }}
+          DATABASE_URL=postgresql://qauser:${{ secrets.POSTGRES_PASSWORD_QA || 'qapass' }}@localhost:5433/boostedbudget_qa?sslmode=disable
 
-          # Redis (Staging)
+          # Redis (QA)
           REDIS_URL=redis://localhost:6380/0
 
-          # RabbitMQ (Staging)
+          # RabbitMQ (QA)
           RABBITMQ_URL=amqp://guest:guest@localhost:5673/
 
           # Auth0 (Dev Tenant)
-          AUTH0_DOMAIN=${{ secrets.AUTH0_DOMAIN_STAGING || 'dev-changeme.us.auth0.com' }}
-          AUTH0_AUDIENCE=${{ secrets.AUTH0_AUDIENCE_STAGING || 'https://api-staging.boostedbudget.com' }}
-          AUTH0_CLIENT_ID=${{ secrets.AUTH0_CLIENT_ID_STAGING || 'changeme' }}
-          AUTH0_CLIENT_SECRET=${{ secrets.AUTH0_CLIENT_SECRET_STAGING || 'changeme' }}
-          VITE_AUTH0_DOMAIN=${{ secrets.AUTH0_DOMAIN_STAGING || 'dev-changeme.us.auth0.com' }}
-          VITE_AUTH0_CLIENT_ID=${{ secrets.VITE_AUTH0_CLIENT_ID_STAGING || 'changeme' }}
-          VITE_AUTH0_AUDIENCE=${{ secrets.AUTH0_AUDIENCE_STAGING || 'https://api-staging.boostedbudget.com' }}
+          AUTH0_DOMAIN=${{ secrets.AUTH0_DOMAIN_QA || 'dev-changeme.us.auth0.com' }}
+          AUTH0_AUDIENCE=${{ secrets.AUTH0_AUDIENCE_QA || 'https://api-qa.boostedbudget.com' }}
+          AUTH0_CLIENT_ID=${{ secrets.AUTH0_CLIENT_ID_QA || 'changeme' }}
+          AUTH0_CLIENT_SECRET=${{ secrets.AUTH0_CLIENT_SECRET_QA || 'changeme' }}
+          VITE_AUTH0_DOMAIN=${{ secrets.AUTH0_DOMAIN_QA || 'dev-changeme.us.auth0.com' }}
+          VITE_AUTH0_CLIENT_ID=${{ secrets.VITE_AUTH0_CLIENT_ID_QA || 'changeme' }}
+          VITE_AUTH0_AUDIENCE=${{ secrets.AUTH0_AUDIENCE_QA || 'https://api-qa.boostedbudget.com' }}
 
           # Plaid (Sandbox)
           PLAID_ENV=sandbox
-          PLAID_CLIENT_ID=${{ secrets.PLAID_CLIENT_ID_STAGING || 'changeme' }}
-          PLAID_SECRET=${{ secrets.PLAID_SECRET_STAGING || 'changeme' }}
+          PLAID_CLIENT_ID=${{ secrets.PLAID_CLIENT_ID_QA || 'changeme' }}
+          PLAID_SECRET=${{ secrets.PLAID_SECRET_QA || 'changeme' }}
           PLAID_PRODUCTS=auth,transactions,balance
           PLAID_COUNTRY_CODES=US,CA,GB
-          PLAID_REDIRECT_URI=${{ secrets.PLAID_REDIRECT_URI_STAGING || 'https://localhost:3443/oauth-callback' }}
-          PLAID_WEBHOOK_URL=${{ secrets.PLAID_WEBHOOK_URL_STAGING || 'http://localhost:8080/webhooks/plaid' }}
+          PLAID_REDIRECT_URI=${{ secrets.PLAID_REDIRECT_URI_QA || 'https://localhost:3443/oauth-callback' }}
+          PLAID_WEBHOOK_URL=${{ secrets.PLAID_WEBHOOK_URL_QA || 'http://localhost:8080/webhooks/plaid' }}
 
           # Stripe (Test Mode)
           STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY_TEST || 'sk_test_changeme' }}
 
           # Security
-          ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY_STAGING || '12345678901234567890123456789012' }}
+          ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY_QA || '12345678901234567890123456789012' }}
 
           # Logging
           LOG_LEVEL=debug
@@ -553,26 +542,26 @@ jobs:
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
 
-      - name: Deploy to staging (pull from GHCR)
+      - name: Deploy to QA (pull from GHCR)
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: |
-          chmod +x ./scripts/deploy-staging.sh
-          # Environment variables are set in .env.staging
+          chmod +x ./scripts/deploy-qa.sh
+          # Environment variables are set in .env.qa
           # Script will read PULL_FROM_GHCR, BACKEND_IMAGE, FRONTEND_IMAGE from there
-          ./scripts/deploy-staging.sh
+          ./scripts/deploy-qa.sh
 
       - name: Show container status
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         if: always()
         run: |
-          docker-compose -f docker-compose.staging.yml --env-file .env.staging ps
+          docker-compose -f docker-compose.qa.yml --env-file .env.qa ps
 
       - name: Show logs on failure
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         if: failure()
         run: |
           echo "::group::Backend Logs"
-          docker-compose -f docker-compose.staging.yml --env-file .env.staging logs --tail=50 backend
+          docker-compose -f docker-compose.qa.yml --env-file .env.qa logs --tail=50 backend
           echo "::endgroup::"
 
       - name: Final workspace cleanup
@@ -583,10 +572,9 @@ jobs:
   # Smoke Tests
   # =============================================================================
   smoke-tests:
-    name: Staging Smoke Tests
+    name: QA Smoke Tests
     needs: [pr-metadata, build-images, deploy-to-mac-mini]
-    # Use always() because pr-metadata is skipped for regular staging deploys
-    if: ${{ always() && needs.deploy-to-mac-mini.result == 'success' }}
+    if: ${{ needs.deploy-to-mac-mini.result == 'success' }}
     runs-on: [self-hosted, macOS, mac-mini]
     env:
       UNIQUE_WORKSPACE: workspace-smoke-tests-${{ github.run_id }}
@@ -604,7 +592,7 @@ jobs:
       - name: Run smoke tests
         timeout-minutes: 5
         run: |
-          echo "Running smoke tests against staging..."
+          echo "Running smoke tests against QA..."
 
           # Backend health check
           if curl -f http://localhost:8080/health; then
@@ -630,7 +618,7 @@ jobs:
       - name: Smoke tests summary
         if: success()
         run: |
-          echo "### ✅ Staging Smoke Tests Passed" >> $GITHUB_STEP_SUMMARY
+          echo "### ✅ QA Smoke Tests Passed" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- Backend health check" >> $GITHUB_STEP_SUMMARY
           echo "- Frontend accessibility" >> $GITHUB_STEP_SUMMARY
@@ -647,7 +635,6 @@ jobs:
     name: Deployment Summary
     needs: [pr-metadata, build-images, deploy-to-mac-mini, smoke-tests]
     runs-on: [self-hosted, macOS, mac-mini]
-    # Use always() because pr-metadata is skipped for regular staging deploys
     if: ${{ always() && needs.smoke-tests.result == 'success' }}
 
     steps:
@@ -656,20 +643,15 @@ jobs:
           TAG_PREFIX="${{ needs.build-images.outputs.tag_prefix }}"
           SHA="${{ needs.build-images.outputs.sha }}"
 
-          # Different summary for PR deployments vs staging deployments
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.pr_number }}" ]; then
-            echo "### 🚀 PR #${{ github.event.inputs.pr_number }} Deployed to Staging" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**PR:** #${{ github.event.inputs.pr_number }} - ${{ needs.pr-metadata.outputs.pr_title }}" >> $GITHUB_STEP_SUMMARY
-            echo "**Author:** @${{ needs.pr-metadata.outputs.pr_author }}" >> $GITHUB_STEP_SUMMARY
-            echo "**Branch:** \`${{ needs.pr-metadata.outputs.head_ref }}\`" >> $GITHUB_STEP_SUMMARY
-            echo "**Triggered by:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "### 🚀 Staging Deployment Complete" >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "### 🚀 PR #${{ github.event.inputs.pr_number }} Deployed to QA" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**PR:** #${{ github.event.inputs.pr_number }} - ${{ needs.pr-metadata.outputs.pr_title }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Author:** @${{ needs.pr-metadata.outputs.pr_author }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** \`${{ needs.pr-metadata.outputs.head_ref }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered by:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
 
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Environment:** Staging (Mac Mini)" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** QA (Mac Mini)" >> $GITHUB_STEP_SUMMARY
           echo "**Version:** \`${TAG_PREFIX}-${SHA}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Commit:** \`${SHA}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -692,13 +674,13 @@ jobs:
           echo "**Deployed at:** $(date -u)" >> $GITHUB_STEP_SUMMARY
 
   # =============================================================================
-  # Notify PR (only for PR deployments)
+  # Notify PR
   # =============================================================================
   notify-pr:
     name: Comment on PR
     needs: [pr-metadata, build-images, smoke-tests]
-    # Only run for PR deployments and when smoke tests pass
-    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number != '' && needs.smoke-tests.result == 'success' }}
+    # Only run when smoke tests pass
+    if: ${{ needs.smoke-tests.result == 'success' }}
     runs-on: [self-hosted, macOS, mac-mini]
 
     steps:
@@ -710,9 +692,9 @@ jobs:
           # Use curl + GitHub API instead of gh CLI (gh not available on self-hosted runners)
           # GitHub API uses /issues/{number}/comments endpoint for PR comments (PRs are a type of issue)
           COMMENT_BODY=$(cat << 'EOF'
-          ## 🚀 Staging Deployment Successful
+          ## 🚀 QA Deployment Successful
 
-          This PR has been deployed to the staging environment for testing.
+          This PR has been deployed to the QA environment for testing.
 
           | Field | Value |
           |-------|-------|
@@ -729,7 +711,7 @@ jobs:
           [View deployment logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
           ---
-          *This is an automated comment from the staging deployment workflow.*
+          *This is an automated comment from the QA deployment workflow.*
           EOF
           )
 

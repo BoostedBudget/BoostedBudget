@@ -5,7 +5,7 @@
 #
 # Examples:
 #   ./scripts/smoke-test.sh production
-#   ./scripts/smoke-test.sh staging
+#   ./scripts/smoke-test.sh qa
 
 set -euo pipefail
 
@@ -25,12 +25,13 @@ RETRY_INTERVAL=10
 if [ "$ENVIRONMENT" == "production" ]; then
   API_URL="https://api.boostedbudget.com"
   WEB_URL="https://boostedbudget.com"
-elif [ "$ENVIRONMENT" == "staging" ]; then
-  API_URL="https://staging-api.boostedbudget.com"
-  WEB_URL="https://staging.boostedbudget.com"
+elif [ "$ENVIRONMENT" == "qa" ]; then
+  # QA runs on Mac Mini - use localhost or Tailscale URL
+  API_URL="${QA_API_URL:-http://localhost:8080}"
+  WEB_URL="${QA_WEB_URL:-http://localhost:3000}"
 else
   echo -e "${RED}❌ Unknown environment: $ENVIRONMENT${NC}"
-  echo "Usage: $0 [production|staging]"
+  echo "Usage: $0 [production|qa]"
   exit 1
 fi
 
