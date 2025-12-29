@@ -43,43 +43,28 @@
   margin: 0;
 }
 
-.transactions-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
+/* Issue #584: Transaction table container */
+.transactions-table-container {
   min-height: 200px;
+  overflow-x: auto;
 }
 
-/* Virtualized list styles - Issue #529 */
-.virtualized-list {
-  scrollbar-width: thin;
-  scrollbar-color: #d1d5db transparent;
+/* Custom scrollbar for table container */
+.transactions-table-container::-webkit-scrollbar {
+  height: 8px;
 }
 
-.virtualized-list::-webkit-scrollbar {
-  width: 8px;
-}
-
-.virtualized-list::-webkit-scrollbar-track {
+.transactions-table-container::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.virtualized-list::-webkit-scrollbar-thumb {
+.transactions-table-container::-webkit-scrollbar-thumb {
   background-color: #d1d5db;
   border-radius: 4px;
 }
 
-.virtualized-list::-webkit-scrollbar-thumb:hover {
+.transactions-table-container::-webkit-scrollbar-thumb:hover {
   background-color: #9ca3af;
-}
-
-.virtualized-list-item {
-  padding-right: 8px; /* Space for scrollbar */
-}
-
-.virtualized-list-item .transaction-card {
-  margin-bottom: 0;
-  height: calc(100% - 8px); /* Account for gap */
 }
 
 .empty-state {
