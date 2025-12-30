@@ -477,12 +477,12 @@ func main() {
 		operations.RegisterCategoryPreviewRoutes(humaAPI, humaCategoryPreviewHandler)
 		log.Println("✅ Huma category preview routes registered")
 
-		// Register Huma admin routes (Issue #559: Huma migration) - staging only
-		// Security: Only registered in staging environment
-		if plaidService != nil && encryptionService != nil && cfg.Environment == "staging" {
+		// Register Huma admin routes (Issue #559: Huma migration) - qa only
+		// Security: Only registered in qa environment
+		if plaidService != nil && encryptionService != nil && cfg.Environment == "qa" {
 			humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, encryptionService)
 			operations.RegisterAdminRoutes(humaAPI, humaAdminHandler)
-			log.Println("✅ Huma admin routes registered (staging only)")
+			log.Println("✅ Huma admin routes registered (qa only)")
 		}
 
 		// API v1 routes (Echo - to be migrated to Huma incrementally)
@@ -528,11 +528,11 @@ func main() {
 		// }
 
 		// Admin routes migrated to Huma (see humaAdminHandler above) - Issue #559
-		// Note: Security maintained - routes only registered in staging environment
-		// if adminHandler != nil && cfg.Environment == "staging" {
+		// Note: Security maintained - routes only registered in qa environment
+		// if adminHandler != nil && cfg.Environment == "qa" {
 		// 	admin := api.Group("/admin", middleware.AdminMiddleware(cfg))
 		// 	admin.POST("/plaid/fire-webhook", adminHandler.FireWebhook)
-		// 	log.Println("✅ Admin endpoints enabled (staging only)")
+		// 	log.Println("✅ Admin endpoints enabled (qa only)")
 		// }
 
 		// Deletion routes migrated to Huma (see humaDeletionHandler below) - Issue #559

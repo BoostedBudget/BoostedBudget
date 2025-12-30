@@ -13,7 +13,7 @@ import (
 // AdminHandler handles admin-only endpoints for testing and troubleshooting.
 //
 // Security: These endpoints are protected by:
-//  1. Route registration only in staging environment (main.go)
+//  1. Route registration only in qa environment (main.go)
 //  2. AdminMiddleware returns 404 in production (security through obscurity)
 //  3. Service-level validations (e.g., PlaidService checks sandbox environment)
 //
@@ -66,12 +66,12 @@ type FireWebhookResponseBody struct {
 
 // --- Handler Methods ---
 
-// FireWebhook fires a Plaid webhook for testing in staging environment.
+// FireWebhook fires a Plaid webhook for testing in QA environment.
 //
 // POST /api/v1/admin/plaid/fire-webhook
 //
 // Security:
-//   - Staging-only (AdminMiddleware returns 404 in production)
+//   - QA-only (AdminMiddleware returns 404 in production)
 //   - Requires Auth0 JWT authentication
 //   - Future (Issue #309): Will require "admin" role in JWT
 //
@@ -80,7 +80,7 @@ type FireWebhookResponseBody struct {
 //   - 404: Linked item not found
 //   - 500: Decryption failure or Plaid API error
 //
-// Issue #308: Admin API for Manual Webhook Firing in Staging
+// Issue #308: Admin API for Manual Webhook Firing in QA
 func (h *AdminHandler) FireWebhook(ctx context.Context, input *FireWebhookInput) (*FireWebhookOutput, error) {
 	// 1. Fetch linked item by Plaid item ID (not database primary key)
 	// Issue #331: item_id is the Plaid identifier, not the database primary key
@@ -116,15 +116,15 @@ func (h *AdminHandler) FireWebhook(ctx context.Context, input *FireWebhookInput)
 }
 
 // RegisterAdminRoutes registers admin routes with the Huma API.
-// Note: These routes should ONLY be registered in staging environment.
+// Note: These routes should ONLY be registered in QA environment.
 func RegisterAdminRoutes(api huma.API, handler *AdminHandler) {
-	// POST /api/v1/admin/plaid/fire-webhook - Fire a Plaid webhook (staging only)
+	// POST /api/v1/admin/plaid/fire-webhook - Fire a Plaid webhook (QA only)
 	huma.Register(api, huma.Operation{
 		OperationID: "fireWebhook",
 		Method:      http.MethodPost,
 		Path:        "/api/v1/admin/plaid/fire-webhook",
-		Summary:     "Fire a Plaid webhook (staging only)",
-		Description: "Fires a Plaid webhook for testing in staging environment. Requires Auth0 authentication.",
+		Summary:     "Fire a Plaid webhook (QA only)",
+		Description: "Fires a Plaid webhook for testing in QA environment. Requires Auth0 authentication.",
 		Tags:        []string{"Admin"},
 		Security:    []map[string][]string{{"auth0": {}}},
 	}, handler.FireWebhook)

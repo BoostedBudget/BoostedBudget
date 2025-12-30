@@ -1,26 +1,26 @@
 version: '3.9'
 
 services:
-  # PostgreSQL Database (Staging)
+  # PostgreSQL Database (QA)
   postgres:
     image: postgres:15-alpine
     pull_policy: always  # Always pull latest patches
     restart: unless-stopped  # Auto-restart on Mac Mini boot
     environment:
-      POSTGRES_DB: boostedbudget_staging
-      POSTGRES_USER: ${POSTGRES_USER:-staginguser}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stagingpass}
+      POSTGRES_DB: boostedbudget_qa
+      POSTGRES_USER: ${POSTGRES_USER:-qauser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-qapass}
     ports:
       - "5433:5432"  # Different port to avoid conflict with dev
     volumes:
-      - postgres_staging_data:/var/lib/postgresql/data
+      - postgres_qa_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-staginguser} -d boostedbudget_staging"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-qauser} -d boostedbudget_qa"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # Redis Cache (Staging)
+  # Redis Cache (QA)
   redis:
     image: redis:7-alpine
     pull_policy: always  # Always pull latest patches
@@ -28,14 +28,14 @@ services:
     ports:
       - "6380:6379"  # Different port to avoid conflict with dev
     volumes:
-      - redis_staging_data:/data
+      - redis_qa_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # RabbitMQ Message Queue (Staging)
+  # RabbitMQ Message Queue (QA)
   rabbitmq:
     image: rabbitmq:3-management-alpine
     pull_policy: always  # Always pull latest patches
@@ -44,28 +44,28 @@ services:
       - "5673:5672"   # AMQP - different port
       - "15673:15672" # Management UI - different port
     volumes:
-      - rabbitmq_staging_data:/var/lib/rabbitmq
+      - rabbitmq_qa_data:/var/lib/rabbitmq
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # Backend API (Staging)
+  # Backend API (QA)
   # Uses pre-built image from GHCR (GitHub Container Registry)
   # Image is built in CI/CD and pulled by deploy script
   backend:
-    image: ${BACKEND_IMAGE:-ghcr.io/boostedbudget/boostedbudget-backend:staging-latest}
+    image: ${BACKEND_IMAGE:-ghcr.io/boostedbudget/boostedbudget-backend:qa-latest}
     pull_policy: always  # Always pull latest image to ensure we have newest version
     restart: unless-stopped  # Auto-restart on Mac Mini boot
     ports:
-      - "8080:8080"  # Staging backend port
+      - "8080:8080"  # QA backend port
     environment:
       PORT: "8080"
-      ENVIRONMENT: "staging"
-      VERSION: "${VERSION:-staging-dev}"
+      ENVIRONMENT: "qa"
+      VERSION: "${VERSION:-qa-dev}"
       PRIMARY_REGION: "${PRIMARY_REGION:-iad}"
-      DATABASE_URL: "postgres://${POSTGRES_USER:-staginguser}:${POSTGRES_PASSWORD:-stagingpass}@postgres:5432/boostedbudget_staging?sslmode=disable"
+      DATABASE_URL: "postgres://${POSTGRES_USER:-qauser}:${POSTGRES_PASSWORD:-qapass}@postgres:5432/boostedbudget_qa?sslmode=disable"
       REDIS_URL: "redis://redis:6379"
       RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
       AUTH0_DOMAIN: "${AUTH0_DOMAIN}"
@@ -94,11 +94,11 @@ services:
       retries: 5
       start_period: 30s  # Grace period for migrations and service initialization
 
-  # Frontend (Staging)
+  # Frontend (QA)
   # Uses pre-built image from GHCR (GitHub Container Registry)
   # Image is built in CI/CD and pulled by deploy script
   frontend:
-    image: ${FRONTEND_IMAGE:-ghcr.io/boostedbudget/boostedbudget-frontend:staging-latest}
+    image: ${FRONTEND_IMAGE:-ghcr.io/boostedbudget/boostedbudget-frontend:qa-latest}
     pull_policy: always  # Always pull latest image to ensure we have newest version
     restart: unless-stopped  # Auto-restart on Mac Mini boot
     ports:
@@ -106,8 +106,8 @@ services:
       - "3443:443"  # HTTPS
     environment:
       DOCKER_ENV: "true"  # Tells Vite to use Docker service names for proxy
-      ENVIRONMENT: "${ENVIRONMENT:-staging}"  # Critical: Enables non-fatal Auth0 errors in staging
-      HTTPS_PORT: "3443"  # HTTPS redirect port for staging (production uses default 443)
+      ENVIRONMENT: "${ENVIRONMENT:-qa}"  # Critical: Enables non-fatal Auth0 errors in QA
+      HTTPS_PORT: "3443"  # HTTPS redirect port for QA (production uses default 443)
       API_URL: ""  # Empty = use nginx proxy with relative /api/* URLs (fixes CORS for Tailscale access)
       VITE_API_URL: ""  # Empty = use nginx proxy with relative /api/* URLs
       VITE_AUTH0_DOMAIN: "${AUTH0_DOMAIN}"
@@ -128,6 +128,6 @@ services:
       start_period: 10s  # Grace period for Nginx startup
 
 volumes:
-  postgres_staging_data:
-  redis_staging_data:
-  rabbitmq_staging_data:
+  postgres_qa_data:
+  redis_qa_data:
+  rabbitmq_qa_data:

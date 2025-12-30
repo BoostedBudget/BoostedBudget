@@ -161,17 +161,21 @@ BAD ✗
 ## Branching Strategy
 
 **Branches:**
-- `staging` - Integration branch, all feature PRs merge here first → deploys to Mac Mini staging
+- `staging` - Integration branch, all feature PRs merge here first → can be deployed to Mac Mini QA environment (adhoc)
 - `main` - Production branch, only updated via staging→main PRs → deploys to Fly.io production
 - `feature/<issue#>-<desc>` - Feature branches, created from staging, merge to staging
+
+**Environments:**
+- **QA** (Mac Mini) - Adhoc testing environment, deployed manually via `deploy-qa.yml` workflow_dispatch
+- **Production** (Fly.io) - Automatic deployment when code merges to main
 
 **Workflow:**
 1. Create feature branch from `staging`: `git checkout staging && git pull && git checkout -b feature/123-description`
 2. Develop and commit changes with issue ID: `git commit -m "#123: Your commit message"`
 3. Push and create PR to `staging`: All feature PRs target staging by default
-4. After merge to staging, staging auto-deploys to Mac Mini for QA/testing
-5. Once validated in staging, create PR from `staging` → `main`
-6. After merge to main, main deploys to Fly.io production
+4. Optionally deploy PR to QA environment for testing (manual trigger via deploy-qa.yml)
+5. Once validated, merge PR to staging, then create PR from `staging` → `main`
+6. After merge to main, main deploys to Fly.io production automatically
 7. **Auto-sync:** After production deployment completes, GitHub Action automatically syncs staging with main
 
 **Auto-Sync Behavior:**
@@ -214,21 +218,21 @@ BAD ✗
 12. PR with "Closes #N"
 13. **Server Memory: FINAL update** - consolidate all decisions, learnings, patterns, gotchas for future reference
 
-## Test Scenarios Framework (Staging Data Population)
+## Test Scenarios Framework (QA Data Population)
 
-**Location**: `backend/scripts/test-scenarios/`
-**Purpose**: Configuration-driven E2E/integration test scripts for populating staging with comprehensive transaction data
+**Location**: `backend/scripts/qa-data-populator/`
+**Purpose**: Configuration-driven E2E/integration test scripts for populating QA environment with comprehensive transaction data
 
 ### Quick Usage
 
 ```bash
 # Setup
-cd backend/scripts/test-scenarios
-cp config/staging.env.example config/staging.env
-vim config/staging.env  # Add AUTH_TOKEN and DATABASE_URL
+cd backend/scripts/qa-data-populator
+cp config/qa.env.example config/qa.env
+vim config/qa.env  # Add AUTH_TOKEN and DATABASE_URL
 
 # Run scenario
-source config/staging.env
+source config/qa.env
 ./run-scenario.sh scenarios/01-free-tier-first-sync.yaml
 
 # View results
@@ -334,11 +338,11 @@ setup:
 
 ### Admin Endpoint (Issue #308)
 
-**Endpoint**: `POST /api/v1/admin/plaid/fire-webhook` (staging-only)
+**Endpoint**: `POST /api/v1/admin/plaid/fire-webhook` (QA-only)
 
 **Usage**:
 ```bash
-curl -X POST https://staging.boostedbudget.com/api/v1/admin/plaid/fire-webhook \
+curl -X POST http://localhost:8080/api/v1/admin/plaid/fire-webhook \
   -H "Authorization: Bearer $AUTH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"item_id":"uuid","webhook_code":"DEFAULT_UPDATE"}'
@@ -372,15 +376,15 @@ source config/local.env
 ./run-scenario.sh scenarios/01-free-tier-first-sync.yaml --env local
 ```
 
-**Staging Testing**:
+**QA Testing**:
 ```bash
-source config/staging.env
+source config/qa.env
 ./run-all-scenarios.sh  # Run all scenarios
 ```
 
 ### When to Use This Framework
 
-✅ **Manual testing** - Populate staging with realistic data
+✅ **Manual testing** - Populate QA environment with realistic data
 ✅ **Regression testing** - Verify transaction pipeline after changes
 ✅ **Edge case validation** - Test scenarios hard to reproduce manually
 ✅ **Tier limit testing** - Validate subscription enforcement
@@ -632,7 +636,7 @@ if !result.Allowed {
 
 **Plaid**: Sandbox mode, Link token, webhooks, encrypted access tokens
 **Stripe**: Test mode, webhook handler, 14-day trial, graceful downgrades
-**Auth0**: Separate tenants (dev/staging/prod), custom claims, GDPR consent rules, M2M backend
+**Auth0**: Separate tenants (dev/qa/prod), custom claims, GDPR consent rules, M2M backend
 
 ## Multi-Region (Phase 7+)
 

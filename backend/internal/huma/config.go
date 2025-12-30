@@ -13,8 +13,7 @@ func NewAPIConfig(version, environment string) huma.Config {
 	// Configure servers based on environment
 	config.Servers = []*huma.Server{
 		{URL: "https://api.boostedbudget.com", Description: "Production (iad/us-east-1)"},
-		{URL: "https://api-staging.boostedbudget.com", Description: "Staging (iad/us-east-1)"},
-		{URL: "http://localhost:8080", Description: "Local development"},
+		{URL: "http://localhost:8080", Description: "QA / Local development"},
 	}
 
 	// API description with subscription tier info
