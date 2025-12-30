@@ -2,7 +2,7 @@
 <!--
 IMPORTANT: When working with this project plan, Claude Code should automatically generate detailed, step-by-step instructions for ANY task that requires manual developer action. This includes but is not limited to:
 
-1. External service setup (domains, DNS, Auth0, Stripe, Plaid, etc.)
+1. External service setup (domains, DNS, Clerk, Stripe, Plaid, etc.)
 2. Account creation and configuration
 3. CLI tool installation and authentication
 4. Environment variable configuration
@@ -81,20 +81,20 @@ GENERATE THESE INSTRUCTIONS IMMEDIATELY when encountering any setup task in the 
 ### Core Technology Stack
 ```yaml
 Authentication:
-  Provider: Auth0
+  Provider: Clerk
   Implementation: Universal Login / Custom Forms
-  Token: JWT with Auth0 validation
+  Token: JWT with Clerk validation
   
 Backend:
   Language: Go 1.21+
-  Framework: Echo/Gin with Auth0 middleware
+  Framework: Echo/Gin with Clerk middleware
   API Spec: OpenAPI 3.1
   Database: PostgreSQL 15 + Redis 7
   Message Queue: RabbitMQ (rule processing)
   
 Frontend:
   Framework: React 18 + TypeScript 5
-  Auth: Auth0 React SDK
+  Auth: Clerk React SDK
   Build Tool: Vite
   State: Redux Toolkit + RTK Query
   UI: Tailwind CSS + Radix UI
@@ -129,7 +129,7 @@ Development:
 - **Frontend:** Feature-based organization with barrel exports
 - **API:** RESTful with consistent resource naming
 - **Database:** Repository pattern with migrations
-- **Authentication:** Auth0 token validation on every request
+- **Authentication:** Clerk token validation on every request
 - **Data Privacy:** GDPR-compliant with encryption at rest
 
 ---
@@ -164,9 +164,9 @@ Note: GDPR compliance maintained regardless of data location.
 EU users can access service with full rights, data stored in USA.
 ```
 
-### Auth0 Configuration
+### Clerk Configuration
 ```javascript
-// Auth0 Tenant Configuration
+// Clerk Tenant Configuration
 {
   "tenant": "boostedbudget",
   "region": "US", // Single tenant for global users
@@ -192,8 +192,8 @@ EU users can access service with full rights, data stored in USA.
 
 ---
 
-## Phase 0: Project Bootstrap & Auth0 Setup (Week 1)
-*Deliverable: Fully configured global development environment with Auth0*
+## Phase 0: Project Bootstrap & Clerk Setup (Week 1)
+*Deliverable: Fully configured global development environment with Clerk*
 
 ### 0.1 Repository & Initial Setup
 - [ ] Register boostedbudget.com domain
@@ -217,7 +217,7 @@ boostedbudget/
 │   ├── cmd/
 │   │   └── server/
 │   ├── internal/
-│   │   ├── auth/           # Auth0 integration
+│   │   ├── auth/           # Clerk integration
 │   │   ├── generated/      # OpenAPI generated
 │   │   ├── handlers/
 │   │   ├── services/
@@ -232,7 +232,7 @@ boostedbudget/
 ├── frontend/
 │   ├── src/
 │   │   ├── api/
-│   │   ├── auth/           # Auth0 React SDK
+│   │   ├── auth/           # Clerk React SDK
 │   │   ├── features/
 │   │   ├── shared/
 │   │   ├── privacy/        # Cookie consent, GDPR
@@ -247,7 +247,7 @@ boostedbudget/
 │   │   ├── us-east-1/
 │   │   └── eu-west-1/
 │   ├── terraform/
-│   └── auth0/
+│   └── clerk/
 ├── scripts/
 ├── legal/
 │   ├── privacy-policy.md
@@ -256,9 +256,9 @@ boostedbudget/
 └── Makefile
 ```
 
-### 0.2 Auth0 Setup
-- [ ] Create Auth0 account and tenant
-- [ ] Configure Auth0 applications:
+### 0.2 Clerk Setup
+- [ ] Create Clerk account and tenant
+- [ ] Configure Clerk applications:
 ```javascript
 // Backend API Application (Machine-to-Machine)
 {
@@ -294,7 +294,7 @@ boostedbudget/
 }
 ```
 
-- [ ] Set up Auth0 Rules:
+- [ ] Set up Clerk Rules:
 ```javascript
 // rules/add-user-metadata.js
 function addUserMetadata(user, context, callback) {
@@ -311,7 +311,7 @@ function addUserMetadata(user, context, callback) {
     user.user_metadata.gdpr_consent = true;
     user.user_metadata.gdpr_consent_date = new Date().toISOString();
     
-    auth0.users.updateUserMetadata(user.user_id, user.user_metadata)
+    clerk.users.updateUserMetadata(user.user_id, user.user_metadata)
       .then(() => callback(null, user, context))
       .catch((err) => callback(err));
   } else {
@@ -324,7 +324,7 @@ function addUserMetadata(user, context, callback) {
 // This rule will be re-added in Phase 7+ for multi-region support
 ```
 
-### 0.3 OpenAPI Foundation with Auth0
+### 0.3 OpenAPI Foundation with Clerk
 - [ ] Create initial OpenAPI specification:
 ```yaml
 # api/openapi.yaml
@@ -345,7 +345,7 @@ servers:
     description: Production (USA - us-east-1)
     
 security:
-  - auth0: []
+  - clerk: []
 
 paths:
   /health:
@@ -419,11 +419,11 @@ paths:
 
 components:
   securitySchemes:
-    auth0:
+    clerk:
       type: oauth2
       flows:
         implicit:
-          authorizationUrl: https://boostedbudget.auth0.com/authorize
+          authorizationUrl: https://boostedbudget.clerk.com/authorize
           scopes:
             openid: OpenID
             profile: User profile
@@ -471,10 +471,10 @@ components:
           type: boolean
 ```
 
-### 0.4 Backend Auth0 Integration
-- [ ] Implement Auth0 middleware:
+### 0.4 Backend Clerk Integration
+- [ ] Implement Clerk middleware:
 ```go
-// backend/internal/middleware/auth0.go
+// backend/internal/middleware/clerk.go
 package middleware
 
 import (
@@ -483,18 +483,18 @@ import (
     "errors"
     "net/http"
     
-    "github.com/auth0/go-jwt-middleware/v2"
-    "github.com/auth0/go-jwt-middleware/v2/validator"
+    "github.com/clerk/go-jwt-middleware/v2"
+    "github.com/clerk/go-jwt-middleware/v2/validator"
     "github.com/labstack/echo/v4"
 )
 
-type Auth0Config struct {
+type ClerkConfig struct {
     Domain   string
     Audience string
     Issuer   string
 }
 
-func NewAuth0Middleware(config Auth0Config) echo.MiddlewareFunc {
+func NewClerkMiddleware(config ClerkConfig) echo.MiddlewareFunc {
     issuerURL := "https://" + config.Domain + "/"
     
     jwtValidator, err := validator.New(
@@ -544,31 +544,31 @@ func (c CustomClaims) Validate(ctx context.Context) error {
 }
 ```
 
-- [ ] Create user service with Auth0:
+- [ ] Create user service with Clerk:
 ```go
 // backend/internal/services/user_service.go
 package services
 
 import (
     "context"
-    "github.com/auth0/go-auth0/management"
+    "github.com/clerk/go-clerk/management"
 )
 
 type UserService struct {
-    auth0Client *management.Management
+    clerkClient *management.Management
     userRepo    UserRepository
     privacyRepo PrivacyRepository
 }
 
-func (s *UserService) GetOrCreateUser(ctx context.Context, auth0ID string) (*User, error) {
+func (s *UserService) GetOrCreateUser(ctx context.Context, clerkID string) (*User, error) {
     // Check if user exists in our database
-    user, err := s.userRepo.GetByAuth0ID(ctx, auth0ID)
+    user, err := s.userRepo.GetByClerkID(ctx, clerkID)
     if err == nil {
         return user, nil
     }
 
-    // Get user from Auth0
-    auth0User, err := s.auth0Client.User.Read(auth0ID)
+    // Get user from Clerk
+    clerkUser, err := s.clerkClient.User.Read(clerkID)
     if err != nil {
         return nil, err
     }
@@ -579,8 +579,8 @@ func (s *UserService) GetOrCreateUser(ctx context.Context, auth0ID string) (*Use
     // Create user in database
     user = &User{
         ID:            generateUUID(),
-        Auth0ID:       auth0ID,
-        Email:         auth0User.Email,
+        ClerkID:       clerkID,
+        Email:         clerkUser.Email,
         PrimaryRegion: primaryRegion,
         CreatedAt:     time.Now(),
     }
@@ -619,8 +619,8 @@ func (s *UserService) DeleteUser(ctx context.Context, userID string) error {
         return err
     }
     
-    // Mark Auth0 user for deletion
-    s.auth0Client.User.Update(user.Auth0ID, &management.User{
+    // Mark Clerk user for deletion
+    s.clerkClient.User.Update(user.ClerkID, &management.User{
         AppMetadata: map[string]interface{}{
             "scheduled_deletion": deletionDate.Format(time.RFC3339),
         },
@@ -657,22 +657,22 @@ func (s *UserService) ExportUserData(ctx context.Context, userID string) (*UserD
 }
 ```
 
-### 0.5 Frontend Auth0 Integration
-- [ ] Configure Auth0 React SDK:
+### 0.5 Frontend Clerk Integration
+- [ ] Configure Clerk React SDK:
 ```typescript
 // frontend/src/index.tsx
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { Auth0Provider } from '@auth0/auth0-react';
+import { ClerkProvider } from '@clerk/clerk-react';
 import { BrowserRouter } from 'react-router-dom';
 import App from './App';
 
-const auth0Config = {
-  domain: import.meta.env.VITE_AUTH0_DOMAIN,
-  clientId: import.meta.env.VITE_AUTH0_CLIENT_ID,
+const clerkConfig = {
+  domain: import.meta.env.VITE_CLERK_DOMAIN,
+  clientId: import.meta.env.VITE_CLERK_CLIENT_ID,
   authorizationParams: {
     redirect_uri: window.location.origin + '/callback',
-    audience: import.meta.env.VITE_AUTH0_AUDIENCE,
+    audience: import.meta.env.VITE_CLERK_AUDIENCE,
     scope: 'openid profile email'
   },
   cacheLocation: 'localstorage' as const,
@@ -682,9 +682,9 @@ const auth0Config = {
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <BrowserRouter>
-      <Auth0Provider {...auth0Config}>
+      <ClerkProvider {...clerkConfig}>
         <App />
-      </Auth0Provider>
+      </ClerkProvider>
     </BrowserRouter>
   </React.StrictMode>
 );
@@ -693,14 +693,14 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 - [ ] Create authentication wrapper:
 ```typescript
 // frontend/src/auth/AuthWrapper.tsx
-import { useAuth0 } from '@auth0/auth0-react';
+import { useClerk } from '@clerk/clerk-react';
 import { useEffect } from 'react';
 import { useAppDispatch } from '@/app/hooks';
 import { setUser, clearUser } from '@/features/auth/authSlice';
 import { LoadingSpinner } from '@/shared/components/LoadingSpinner';
 
 export const AuthWrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { isLoading, isAuthenticated, user, getAccessTokenSilently } = useAuth0();
+  const { isLoading, isAuthenticated, user, getAccessTokenSilently } = useClerk();
   const dispatch = useAppDispatch();
   
   useEffect(() => {
@@ -715,7 +715,7 @@ export const AuthWrapper: React.FC<{ children: React.ReactNode }> = ({ children 
       
       // Configure API client with token
       getAccessTokenSilently().then(token => {
-        window.localStorage.setItem('auth0_token', token);
+        window.localStorage.setItem('clerk_token', token);
         // Configure axios defaults
         axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
       });
@@ -735,7 +735,7 @@ export const AuthWrapper: React.FC<{ children: React.ReactNode }> = ({ children 
 - [ ] Create protected routes:
 ```typescript
 // frontend/src/auth/ProtectedRoute.tsx
-import { withAuthenticationRequired } from '@auth0/auth0-react';
+import { withAuthenticationRequired } from '@clerk/clerk-react';
 import { LoadingSpinner } from '@/shared/components/LoadingSpinner';
 
 export const ProtectedRoute: React.FC<{ component: React.ComponentType }> = ({ 
@@ -842,7 +842,7 @@ export const CookieConsent: React.FC = () => {
 };
 ```
 
-### 0.7 Docker Development Environment with Auth0
+### 0.7 Docker Development Environment with Clerk
 - [ ] Create development Docker setup:
 ```yaml
 # infrastructure/docker/docker-compose.yml
@@ -886,10 +886,10 @@ services:
       DATABASE_URL: postgres://devuser:devpass@postgres:5432/boostedbudget?sslmode=disable
       REDIS_URL: redis://redis:6379
       RABBITMQ_URL: amqp://devuser:devpass@rabbitmq:5672/
-      AUTH0_DOMAIN: ${AUTH0_DOMAIN}
-      AUTH0_AUDIENCE: ${AUTH0_AUDIENCE}
-      AUTH0_CLIENT_ID: ${AUTH0_CLIENT_ID}
-      AUTH0_CLIENT_SECRET: ${AUTH0_CLIENT_SECRET}
+      CLERK_DOMAIN: ${CLERK_DOMAIN}
+      CLERK_AUDIENCE: ${CLERK_AUDIENCE}
+      CLERK_CLIENT_ID: ${CLERK_CLIENT_ID}
+      CLERK_CLIENT_SECRET: ${CLERK_CLIENT_SECRET}
       PLAID_CLIENT_ID: ${PLAID_CLIENT_ID}
       PLAID_SECRET: ${PLAID_SECRET}
       PLAID_ENV: sandbox
@@ -911,9 +911,9 @@ services:
       - "3000:3000"
     environment:
       VITE_API_URL: http://localhost:8080/api/v1
-      VITE_AUTH0_DOMAIN: ${AUTH0_DOMAIN}
-      VITE_AUTH0_CLIENT_ID: ${AUTH0_CLIENT_ID}
-      VITE_AUTH0_AUDIENCE: ${AUTH0_AUDIENCE}
+      VITE_CLERK_DOMAIN: ${CLERK_DOMAIN}
+      VITE_CLERK_CLIENT_ID: ${CLERK_CLIENT_ID}
+      VITE_CLERK_AUDIENCE: ${CLERK_AUDIENCE}
       VITE_GOOGLE_ADSENSE_CLIENT: ${GOOGLE_ADSENSE_CLIENT}
       VITE_PLAID_PUBLIC_KEY: ${PLAID_PUBLIC_KEY}
     volumes:
@@ -934,7 +934,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    auth0_id VARCHAR(255) UNIQUE NOT NULL,
+    clerk_id VARCHAR(255) UNIQUE NOT NULL,
     email VARCHAR(255) NOT NULL,
     primary_region VARCHAR(20) NOT NULL DEFAULT 'us-east-1',
     -- Future: Will support 'eu-west-1', 'ap-southeast-1' in Phase 7+
@@ -952,7 +952,7 @@ CREATE TABLE users (
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_users_auth0_id ON users(auth0_id);
+CREATE INDEX idx_users_clerk_id ON users(clerk_id);
 CREATE INDEX idx_users_email ON users(email);
 CREATE INDEX idx_users_deletion_scheduled ON users(deletion_scheduled_for);
 
@@ -986,7 +986,7 @@ CREATE INDEX idx_audit_logs_created_at ON audit_logs(created_at);
 ### Phase 0 Deliverables
 ✅ **Deployable Application:**
 - Health check endpoint (no auth required)
-- Auth0 authentication configured
+- Clerk authentication configured
 - GDPR cookie consent banner
 - Multi-region database setup
 - Global CDN via CloudFlare
@@ -1000,14 +1000,14 @@ CREATE INDEX idx_audit_logs_created_at ON audit_logs(created_at);
 
 ✅ **Development Environment:**
 - Fully Dockerized
-- Auth0 integrated
+- Clerk integrated
 - Multi-region database simulation
-- OpenAPI specification with Auth0 security
+- OpenAPI specification with Clerk security
 
 ### Phase 0 Deployment Checklist
-- [ ] Auth0 tenant configured
+- [ ] Clerk tenant configured
 - [ ] Health endpoint responds with 200 OK
-- [ ] Auth0 login flow works
+- [ ] Clerk login flow works
 - [ ] GDPR consent banner appears
 - [ ] Docker images build successfully
 - [ ] Multi-region database connections work
@@ -1143,11 +1143,11 @@ func (s *SubscriptionService) CheckLimit(ctx context.Context, userID string, lim
 - [ ] Create profile management UI:
 ```typescript
 // frontend/src/features/profile/ProfilePage.tsx
-import { useAuth0 } from '@auth0/auth0-react';
+import { useClerk } from '@clerk/clerk-react';
 import { useQuery } from '@tanstack/react-query';
 
 export const ProfilePage: React.FC = () => {
-  const { user } = useAuth0();
+  const { user } = useClerk();
   const { data: profile } = useQuery({
     queryKey: ['profile'],
     queryFn: () => api.getProfile()
@@ -1736,10 +1736,10 @@ export const ruleTemplates = [
 ```typescript
 // frontend/src/features/rules/RuleBuilder.tsx
 import { useState } from 'react';
-import { useAuth0 } from '@auth0/auth0-react';
+import { useClerk } from '@clerk/clerk-react';
 
 export const RuleBuilder: React.FC = () => {
-  const { user } = useAuth0();
+  const { user } = useClerk();
   const [selectedTemplate, setSelectedTemplate] = useState(null);
   const { data: subscription } = useQuery(['subscription'], api.getSubscription);
   
@@ -1871,8 +1871,8 @@ func (s *PaymentService) HandleWebhook(ctx context.Context, payload []byte, sign
         tier := s.mapStripePriceToTier(subscription.Items.Data[0].Price.ID)
         s.userRepo.UpdateSubscription(ctx, subscription.Customer.ID, tier, subscription.CurrentPeriodEnd)
         
-        // Update Auth0 metadata
-        s.auth0Service.UpdateUserMetadata(subscription.Customer.ID, map[string]interface{}{
+        // Update Clerk metadata
+        s.clerkService.UpdateUserMetadata(subscription.Customer.ID, map[string]interface{}{
             "subscription_tier": tier,
             "subscription_active": subscription.Status == "active",
         })
@@ -1896,7 +1896,7 @@ func (s *PaymentService) HandleWebhook(ctx context.Context, payload []byte, sign
 ```typescript
 // frontend/src/features/ads/AdBanner.tsx
 import { useEffect } from 'react';
-import { useAuth0 } from '@auth0/auth0-react';
+import { useClerk } from '@clerk/clerk-react';
 import { useCookies } from 'react-cookie';
 
 interface AdBannerProps {
@@ -1910,7 +1910,7 @@ export const AdBanner: React.FC<AdBannerProps> = ({
   format = 'auto',
   style 
 }) => {
-  const { user } = useAuth0();
+  const { user } = useClerk();
   const [cookies] = useCookies(['gdpr-consent']);
   const { data: subscription } = useQuery(['subscription'], api.getSubscription);
   
@@ -2149,23 +2149,23 @@ func (s *CacheService) GetOrSet(ctx context.Context, key string,
 // mobile/src/App.tsx
 import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
-import { Auth0Provider } from 'react-native-auth0';
+import { ClerkProvider } from 'react-native-clerk';
 import { Provider } from 'react-redux';
 import { store } from './store';
 import { AppNavigator } from './navigation';
 
 export default function App() {
   return (
-    <Auth0Provider
-      domain={Config.AUTH0_DOMAIN}
-      clientId={Config.AUTH0_CLIENT_ID}
+    <ClerkProvider
+      domain={Config.CLERK_DOMAIN}
+      clientId={Config.CLERK_CLIENT_ID}
     >
       <Provider store={store}>
         <NavigationContainer>
           <AppNavigator />
         </NavigationContainer>
       </Provider>
-    </Auth0Provider>
+    </ClerkProvider>
   );
 }
 ```
@@ -2255,8 +2255,8 @@ func (r *RegionRouter) GetDBForUser(ctx context.Context, userID string) (*sql.DB
 // Activate the existing *InRegion methods
 func (r *UserRepository) CreateInRegion(ctx context.Context, user *User, region string) error {
     db := r.regionRouter.GetDB(region)
-    query := `INSERT INTO users (id, auth0_id, email, primary_region, ...) VALUES ($1, $2, $3, $4, ...)`
-    _, err := db.ExecContext(ctx, query, user.ID, user.Auth0ID, user.Email, user.PrimaryRegion, ...)
+    query := `INSERT INTO users (id, clerk_id, email, primary_region, ...) VALUES ($1, $2, $3, $4, ...)`
+    _, err := db.ExecContext(ctx, query, user.ID, user.ClerkID, user.Email, user.PrimaryRegion, ...)
     return err
 }
 ```
@@ -2285,7 +2285,7 @@ export const RegionSelector: React.FC = () => {
 };
 ```
 
-#### 3. Auth0 Rules Update (Week 3-4)
+#### 3. Clerk Rules Update (Week 3-4)
 
 Re-add geo-location rule:
 ```javascript
@@ -2308,7 +2308,7 @@ function geoLocation(user, context, callback) {
       user.app_metadata.suggested_region = 'us-east-1';
     }
 
-    auth0.users.updateAppMetadata(user.user_id, user.app_metadata)
+    clerk.users.updateAppMetadata(user.user_id, user.app_metadata)
       .then(() => callback(null, user, context))
       .catch((err) => callback(err));
   } else {
@@ -2627,10 +2627,10 @@ spec:
       - name: backend
         image: gcr.io/boostedbudget/backend:latest
         env:
-        - name: AUTH0_DOMAIN
+        - name: CLERK_DOMAIN
           valueFrom:
             secretKeyRef:
-              name: auth0-secrets
+              name: clerk-secrets
               key: domain
         - name: DATABASE_URL
           valueFrom:
@@ -2701,7 +2701,7 @@ jobs:
 ### Technical Metrics
 - **Global Uptime:** >99.9%
 - **API Response Time:** p50 < 100ms globally
-- **Auth0 Login Success:** >99%
+- **Clerk Login Success:** >99%
 - **Plaid Sync Success:** >95%
 - **Rule Execution Success:** >99%
 
@@ -2723,8 +2723,8 @@ jobs:
 ## Risk Mitigation
 
 ### Technical Risks
-1. **Auth0 Outage**
-   - Implement Auth0 tenant failover
+1. **Clerk Outage**
+   - Implement Clerk tenant failover
    - Cache JWT validation
    - Graceful degradation
 
@@ -2806,7 +2806,7 @@ jobs:
 
 This plan provides a complete roadmap for building BoostedBudget as a global, GDPR-compliant budgeting platform with intelligent automation. Key advantages of this approach:
 
-1. **Auth0 Integration** significantly reduces authentication complexity and provides enterprise-grade security
+1. **Clerk Integration** significantly reduces authentication complexity and provides enterprise-grade security
 2. **Global deployment from day one** with proper data residency
 3. **GDPR compliance built-in** rather than bolted on
 4. **Phased approach to financial features** - start with suggestions, add transfers later
@@ -2818,7 +2818,7 @@ Each phase produces a deployable, valuable product increment. The architecture s
 - Always deploy after each phase
 - Maintain GDPR compliance
 - Start with transfer suggestions, not actual money movement
-- Use Auth0's features to simplify authentication
+- Use Clerk's features to simplify authentication
 - Monitor metrics from day one
 
 ---

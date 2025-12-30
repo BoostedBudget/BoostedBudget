@@ -43,7 +43,7 @@
 
 **Backend Patterns** (from AccountsPage/PlaidHandler):
 - Handler → Service → Repository layers
-- Auth0 middleware for user authentication
+- Clerk middleware for user authentication
 - `middleware.GetUserID(c)` for extracting user from context
 - Error handling: Specific error types, appropriate HTTP status codes
 - Pagination: `limit` and `offset` query parameters
@@ -615,7 +615,7 @@ frontend/src/features/transactions/
 ✅ **Handler Layer** (11 tests passing):
   - Created TransactionHandler with GetTransactions method
   - Query parameter parsing: limit, offset, dates (YYYY-MM-DD), all filters
-  - Auth0 authentication via middleware.GetUserID()
+  - Clerk authentication via middleware.GetUserID()
   - Error mapping: ErrInvalidLimit/Offset/DateRange → 400, service errors → 500
   - JSON response with pagination metadata
   - Commits: 18cefea (RED), 1f968aa (GREEN)
@@ -623,7 +623,7 @@ frontend/src/features/transactions/
 ✅ **Route Wiring**:
   - Registered GET /api/v1/transactions endpoint in main.go
   - Created TransactionRepository, TransactionService, TransactionHandler instances
-  - Route protected by Auth0 middleware
+  - Route protected by Clerk middleware
   - Server compiles successfully
 
 **Test Results**: All 37 backend tests passing (100% pass rate)
@@ -882,7 +882,7 @@ frontend/src/features/transactions/
 - ✅ **Handler Layer**: 11 tests passing
   - GET /api/v1/transactions endpoint
   - Query param parsing (limit, offset, all filters)
-  - Auth0 middleware integration
+  - Clerk middleware integration
   - OpenAPI spec updated
 
 ### Frontend Implementation (100% Complete)
