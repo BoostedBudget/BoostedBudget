@@ -77,7 +77,7 @@ BoostedBudget/
 ### Need to Install 🔧
 
 - [ ] Tailscale (full app, not just CLI)
-- [ ] Auth0 dev tenant credentials
+- [ ] Clerk dev instance credentials
 - [ ] Stripe test mode API keys
 - [ ] GitHub Secrets configured
 
@@ -142,45 +142,25 @@ To prevent IP changes after reboot:
 
 ## Phase 2: Credentials & Secrets
 
-### 2.1 Auth0 Dev Tenant Setup
+### 2.1 Clerk Dev Instance Setup
 
-Create a **separate** Auth0 dev tenant for staging (never use production credentials).
+Create a **separate** Clerk dev instance for QA (never use production credentials).
 
-1. Go to https://manage.auth0.com/
-2. Create new tenant: **dev-boostedbudget** (or similar)
-3. Note your domain: `dev-boostedbudget.us.auth0.com`
-
-#### Create Backend API Application (M2M)
-
-1. **Applications** → **Create Application**
-2. Name: `BoostedBudget Backend API (QA)`
-3. Type: **Machine to Machine**
-4. API: Create new API
-   - Name: `BoostedBudget API (QA)`
-   - Identifier: `https://api-qa.boostedbudget.com`
+1. Go to https://dashboard.clerk.com/
+2. Create new application: **BoostedBudget QA** (or similar)
+3. Select authentication methods (Google, Email, etc.)
+4. Navigate to **Configure** → **API Keys**
 5. Note credentials:
-   - `AUTH0_DOMAIN`: `dev-boostedbudget.us.auth0.com`
-   - `AUTH0_CLIENT_ID`: (M2M client ID)
-   - `AUTH0_CLIENT_SECRET`: (M2M client secret)
-   - `AUTH0_AUDIENCE`: `https://api-qa.boostedbudget.com`
+   - `CLERK_SECRET_KEY`: Backend secret key (starts with `sk_test_...`)
+   - `VITE_CLERK_PUBLISHABLE_KEY`: Frontend publishable key (starts with `pk_test_...`)
 
-#### Create Frontend SPA Application
+#### Configure Allowed Origins
 
-1. **Applications** → **Create Application**
-2. Name: `BoostedBudget Frontend (QA)`
-3. Type: **Single Page Application**
-4. Settings:
-   - **Allowed Callback URLs**:
-     - `http://localhost:3000/callback`
-     - `http://mac-mini.tailnet-name.ts.net:3000/callback` (update after Tailscale setup)
-   - **Allowed Logout URLs**:
-     - `http://localhost:3000`
-     - `http://mac-mini.tailnet-name.ts.net:3000`
-   - **Allowed Web Origins**:
-     - `http://localhost:3000`
-     - `http://mac-mini.tailnet-name.ts.net:3000`
-5. Note credentials:
-   - `VITE_AUTH0_CLIENT_ID`: (SPA client ID)
+1. Navigate to **Configure** → **Paths**
+2. Add allowed origins:
+   - `http://localhost:3000`
+   - `http://mac-mini.tailnet-name.ts.net:3000` (update after Tailscale setup)
+3. Configure redirect URLs as needed
 
 ### 2.2 Get Plaid Sandbox Credentials
 
@@ -222,11 +202,8 @@ Add these secrets to your repository:
 
 | Secret Name | Value | Source |
 |-------------|-------|--------|
-| `AUTH0_DOMAIN_QA` | `dev-boostedbudget.us.auth0.com` | Auth0 dev tenant |
-| `AUTH0_AUDIENCE_QA` | `https://api-qa.boostedbudget.com` | Auth0 API identifier |
-| `AUTH0_CLIENT_ID_QA` | `your_m2m_client_id` | Auth0 Backend M2M app |
-| `AUTH0_CLIENT_SECRET_QA` | `your_m2m_client_secret` | Auth0 Backend M2M app |
-| `VITE_AUTH0_CLIENT_ID_QA` | `your_spa_client_id` | Auth0 Frontend SPA app |
+| `CLERK_SECRET_KEY_QA` | `sk_test_...` | Clerk dev instance |
+| `VITE_CLERK_PUBLISHABLE_KEY_QA` | `pk_test_...` | Clerk dev instance |
 | `PLAID_CLIENT_ID_QA` | `your_plaid_client_id` | Plaid dashboard |
 | `PLAID_SECRET_QA` | `your_plaid_sandbox_secret` | Plaid dashboard |
 | `STRIPE_PUBLISHABLE_KEY_TEST` | `pk_test_...` | Stripe test mode |
@@ -234,8 +211,6 @@ Add these secrets to your repository:
 | `STRIPE_WEBHOOK_SECRET_TEST` | `whsec_test_...` | Stripe webhook (optional) |
 | `ENCRYPTION_KEY_QA` | `32_character_key` | Generated above |
 | `POSTGRES_PASSWORD_QA` | `your_secure_password` | Choose a strong password |
-| `SESSION_SECRET_QA` | `$(openssl rand -base64 32)` | Generate random |
-| `JWT_SECRET_QA` | `$(openssl rand -base64 32)` | Generate random |
 
 ---
 
@@ -257,7 +232,7 @@ nano .env.qa
 
 Fill in all values from Phase 2. **Important sections**:
 
-- Auth0 credentials (from Auth0 dev tenant)
+- Clerk credentials (from Clerk dev instance)
 - Plaid sandbox credentials
 - Stripe test mode keys
 - Encryption key (32 characters)
@@ -567,7 +542,7 @@ docker-compose -f docker-compose.qa.yml ps backend
 docker-compose -f docker-compose.qa.yml restart backend
 
 # Check .env.qa has correct values
-cat .env.qa | grep AUTH0_DOMAIN
+cat .env.qa | grep CLERK_SECRET_KEY
 ```
 
 ### Issue: Database connection errors
@@ -658,9 +633,9 @@ docker exec -i boostedbudget-db-qa psql -U qauser boostedbudget_qa < backup.sql
 
 - [ ] Tailscale full app installed and running
 - [ ] Tailscale hostname obtained
-- [ ] Auth0 dev tenant created
-- [ ] Auth0 Backend M2M app configured
-- [ ] Auth0 Frontend SPA app configured
+- [ ] Clerk dev instance created
+- [ ] Clerk API keys obtained (secret + publishable)
+- [ ] Clerk allowed origins configured
 - [ ] Plaid sandbox credentials verified
 - [ ] Stripe test mode keys obtained
 - [ ] Encryption key generated
@@ -680,7 +655,7 @@ docker exec -i boostedbudget-db-qa psql -U qauser boostedbudget_qa < backup.sql
 - **Hosting**: $0/month (self-hosted Mac Mini)
 - **Tailscale**: $0/month (free tier)
 - **Docker**: $0/month (Docker Desktop free for personal use)
-- **Auth0**: $0/month (free dev tenant)
+- **Clerk**: $0/month (free tier for development)
 - **Plaid**: $0/month (sandbox mode)
 - **Stripe**: $0/month (test mode)
 
