@@ -163,7 +163,7 @@ func (h *SavingsGoalHandler) DeleteGoal(ctx context.Context, input *DeleteSaving
 }
 
 // RegisterSavingsGoalRoutes registers savings goal routes with the Huma API.
-// Note: These routes require the Auth0 middleware to be applied.
+// Note: These routes require the Clerk middleware to be applied.
 func RegisterSavingsGoalRoutes(api huma.API, handler *SavingsGoalHandler) {
 	// POST /api/v1/savings-goals - Create savings goal
 	huma.Register(api, huma.Operation{
@@ -173,7 +173,7 @@ func RegisterSavingsGoalRoutes(api huma.API, handler *SavingsGoalHandler) {
 		Summary:       "Create savings goal",
 		Description:   "Creates a new savings goal for the authenticated user.",
 		Tags:          []string{"Savings Goals"},
-		Security:      []map[string][]string{{"auth0": {}}},
+		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusCreated,
 	}, handler.CreateGoal)
 
@@ -185,7 +185,7 @@ func RegisterSavingsGoalRoutes(api huma.API, handler *SavingsGoalHandler) {
 		Summary:     "Get savings goals",
 		Description: "Retrieves all savings goals for the authenticated user.",
 		Tags:        []string{"Savings Goals"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetGoals)
 
 	// GET /api/v1/savings-goals/active - Get active savings goals (must be before :id route)
@@ -196,7 +196,7 @@ func RegisterSavingsGoalRoutes(api huma.API, handler *SavingsGoalHandler) {
 		Summary:     "Get active savings goals",
 		Description: "Retrieves all active (not completed) savings goals for the authenticated user.",
 		Tags:        []string{"Savings Goals"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetActiveGoals)
 
 	// GET /api/v1/savings-goals/:id - Get specific savings goal
@@ -207,7 +207,7 @@ func RegisterSavingsGoalRoutes(api huma.API, handler *SavingsGoalHandler) {
 		Summary:     "Get savings goal",
 		Description: "Retrieves a specific savings goal by ID.",
 		Tags:        []string{"Savings Goals"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetGoal)
 
 	// PUT /api/v1/savings-goals/:id - Update savings goal
@@ -218,7 +218,7 @@ func RegisterSavingsGoalRoutes(api huma.API, handler *SavingsGoalHandler) {
 		Summary:     "Update savings goal",
 		Description: "Updates a savings goal's properties.",
 		Tags:        []string{"Savings Goals"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.UpdateGoal)
 
 	// DELETE /api/v1/savings-goals/:id - Delete savings goal
@@ -229,7 +229,7 @@ func RegisterSavingsGoalRoutes(api huma.API, handler *SavingsGoalHandler) {
 		Summary:       "Delete savings goal",
 		Description:   "Removes a savings goal from the user's collection.",
 		Tags:          []string{"Savings Goals"},
-		Security:      []map[string][]string{{"auth0": {}}},
+		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusNoContent,
 	}, handler.DeleteGoal)
 }

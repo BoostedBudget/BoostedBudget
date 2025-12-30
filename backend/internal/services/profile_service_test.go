@@ -19,8 +19,8 @@ type MockProfileRepository struct {
 	mock.Mock
 }
 
-func (m *MockProfileRepository) GetUserByAuth0ID(ctx context.Context, auth0UserID string) (*domain.User, error) {
-	args := m.Called(ctx, auth0UserID)
+func (m *MockProfileRepository) GetUserByClerkID(ctx context.Context, clerkUserID string) (*domain.User, error) {
+	args := m.Called(ctx, clerkUserID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -50,8 +50,8 @@ func (m *MockProfileRepository) UpdateUser(ctx context.Context, user *domain.Use
 	return args.Error(0)
 }
 
-func (m *MockProfileRepository) UpdateLastLogin(ctx context.Context, auth0UserID string) error {
-	args := m.Called(ctx, auth0UserID)
+func (m *MockProfileRepository) UpdateLastLogin(ctx context.Context, clerkUserID string) error {
+	args := m.Called(ctx, clerkUserID)
 	return args.Error(0)
 }
 
@@ -79,7 +79,7 @@ func (m *MockProfileRepository) DeleteUserCascade(ctx context.Context, userID st
 }
 
 // TestGetProfile_ExistingUser tests retrieving an existing user
-// NOTE: After PR #197, GetProfile now receives internal user UUID, not Auth0 ID
+// NOTE: After PR #197, GetProfile now receives internal user UUID, not Clerk ID
 func TestGetProfile_ExistingUser(t *testing.T) {
 	// Setup
 	mockRepo := new(MockProfileRepository)
@@ -87,11 +87,11 @@ func TestGetProfile_ExistingUser(t *testing.T) {
 	ctx := context.Background()
 
 	userID := uuid.New().String()
-	auth0UserID := "auth0|507f1f77bcf86cd799439011"
+	clerkUserID := "user_507f1f77bcf86cd799439011"
 	email := "test@example.com"
 	existingUser := &domain.User{
 		ID:                 userID,
-		Auth0UserID:        auth0UserID,
+		ClerkUserID:        clerkUserID,
 		Email:              email,
 		SubscriptionTier:   "free",
 		SubscriptionStatus: "active",
@@ -102,15 +102,15 @@ func TestGetProfile_ExistingUser(t *testing.T) {
 
 	// Mock expectations - now using GetUserByID with internal UUID
 	mockRepo.On("GetUserByID", ctx, userID).Return(existingUser, nil)
-	mockRepo.On("UpdateLastLogin", ctx, auth0UserID).Return(nil)
+	mockRepo.On("UpdateLastLogin", ctx, clerkUserID).Return(nil)
 
-	// Execute - pass internal UUID, not Auth0 ID
+	// Execute - pass internal UUID, not Clerk ID
 	user, err := service.GetProfile(ctx, userID, email)
 
 	// Assert
 	assert.NoError(t, err)
 	assert.NotNil(t, user)
-	assert.Equal(t, auth0UserID, user.Auth0UserID)
+	assert.Equal(t, clerkUserID, user.ClerkUserID)
 	assert.Equal(t, email, user.Email)
 	mockRepo.AssertExpectations(t)
 }
@@ -170,11 +170,11 @@ func TestGetProfile_UpdateLastLoginError(t *testing.T) {
 	ctx := context.Background()
 
 	userID := uuid.New().String()
-	auth0UserID := "auth0|507f1f77bcf86cd799439011"
+	clerkUserID := "user_507f1f77bcf86cd799439011"
 	email := "test@example.com"
 	existingUser := &domain.User{
 		ID:                 userID,
-		Auth0UserID:        auth0UserID,
+		ClerkUserID:        clerkUserID,
 		Email:              email,
 		SubscriptionTier:   "free",
 		SubscriptionStatus: "active",
@@ -183,7 +183,7 @@ func TestGetProfile_UpdateLastLoginError(t *testing.T) {
 
 	// Mock expectations - UpdateLastLogin fails but shouldn't affect response
 	mockRepo.On("GetUserByID", ctx, userID).Return(existingUser, nil)
-	mockRepo.On("UpdateLastLogin", ctx, auth0UserID).Return(errors.New("update failed"))
+	mockRepo.On("UpdateLastLogin", ctx, clerkUserID).Return(errors.New("update failed"))
 
 	// Execute
 	user, err := service.GetProfile(ctx, userID, email)
@@ -195,7 +195,7 @@ func TestGetProfile_UpdateLastLoginError(t *testing.T) {
 }
 
 // TestUpdateProfile_Success tests successful profile update
-// NOTE: After PR #197, UpdateProfile now receives internal user UUID, not Auth0 ID
+// NOTE: After PR #197, UpdateProfile now receives internal user UUID, not Clerk ID
 func TestUpdateProfile_Success(t *testing.T) {
 	// Setup
 	mockRepo := new(MockProfileRepository)
@@ -203,10 +203,10 @@ func TestUpdateProfile_Success(t *testing.T) {
 	ctx := context.Background()
 
 	userID := uuid.New().String()
-	auth0UserID := "auth0|507f1f77bcf86cd799439011"
+	clerkUserID := "user_507f1f77bcf86cd799439011"
 	existingUser := &domain.User{
 		ID:                 userID,
-		Auth0UserID:        auth0UserID,
+		ClerkUserID:        clerkUserID,
 		Email:              "old@example.com",
 		SubscriptionTier:   "free",
 		SubscriptionStatus: "active",
@@ -224,7 +224,7 @@ func TestUpdateProfile_Success(t *testing.T) {
 		return u.Email == newEmail && u.PrimaryRegion == "iad"
 	})).Return(nil)
 
-	// Execute - pass internal UUID, not Auth0 ID
+	// Execute - pass internal UUID, not Clerk ID
 	user, err := service.UpdateProfile(ctx, userID, req)
 
 	// Assert
@@ -235,7 +235,7 @@ func TestUpdateProfile_Success(t *testing.T) {
 }
 
 // TestUpdateProfile_InvalidEmail tests email validation
-// NOTE: After PR #197, UpdateProfile now receives internal user UUID, not Auth0 ID
+// NOTE: After PR #197, UpdateProfile now receives internal user UUID, not Clerk ID
 func TestUpdateProfile_InvalidEmail(t *testing.T) {
 	// Setup
 	mockRepo := new(MockProfileRepository)
@@ -243,10 +243,10 @@ func TestUpdateProfile_InvalidEmail(t *testing.T) {
 	ctx := context.Background()
 
 	userID := uuid.New().String()
-	auth0UserID := "auth0|507f1f77bcf86cd799439011"
+	clerkUserID := "user_507f1f77bcf86cd799439011"
 	existingUser := &domain.User{
 		ID:            userID,
-		Auth0UserID:   auth0UserID,
+		ClerkUserID:   clerkUserID,
 		Email:         "valid@example.com",
 		PrimaryRegion: "iad",
 	}
@@ -259,7 +259,7 @@ func TestUpdateProfile_InvalidEmail(t *testing.T) {
 	// Mock expectations - now using GetUserByID with internal UUID
 	mockRepo.On("GetUserByID", ctx, userID).Return(existingUser, nil)
 
-	// Execute - pass internal UUID, not Auth0 ID
+	// Execute - pass internal UUID, not Clerk ID
 	user, err := service.UpdateProfile(ctx, userID, req)
 
 	// Assert
@@ -270,7 +270,7 @@ func TestUpdateProfile_InvalidEmail(t *testing.T) {
 }
 
 // TestUpdateProfile_InvalidRegion tests region validation
-// NOTE: After PR #197, UpdateProfile now receives internal user UUID, not Auth0 ID
+// NOTE: After PR #197, UpdateProfile now receives internal user UUID, not Clerk ID
 func TestUpdateProfile_InvalidRegion(t *testing.T) {
 	// Setup
 	mockRepo := new(MockProfileRepository)
@@ -278,10 +278,10 @@ func TestUpdateProfile_InvalidRegion(t *testing.T) {
 	ctx := context.Background()
 
 	userID := uuid.New().String()
-	auth0UserID := "auth0|507f1f77bcf86cd799439011"
+	clerkUserID := "user_507f1f77bcf86cd799439011"
 	existingUser := &domain.User{
 		ID:            userID,
-		Auth0UserID:   auth0UserID,
+		ClerkUserID:   clerkUserID,
 		Email:         "test@example.com",
 		PrimaryRegion: "iad",
 	}
@@ -294,7 +294,7 @@ func TestUpdateProfile_InvalidRegion(t *testing.T) {
 	// Mock expectations - now using GetUserByID with internal UUID
 	mockRepo.On("GetUserByID", ctx, userID).Return(existingUser, nil)
 
-	// Execute - pass internal UUID, not Auth0 ID
+	// Execute - pass internal UUID, not Clerk ID
 	user, err := service.UpdateProfile(ctx, userID, req)
 
 	// Assert
@@ -305,7 +305,7 @@ func TestUpdateProfile_InvalidRegion(t *testing.T) {
 }
 
 // TestUpdateProfile_ValidRegion tests updating to a valid region
-// NOTE: After PR #197, UpdateProfile now receives internal user UUID, not Auth0 ID
+// NOTE: After PR #197, UpdateProfile now receives internal user UUID, not Clerk ID
 func TestUpdateProfile_ValidRegion(t *testing.T) {
 	// Setup
 	mockRepo := new(MockProfileRepository)
@@ -313,10 +313,10 @@ func TestUpdateProfile_ValidRegion(t *testing.T) {
 	ctx := context.Background()
 
 	userID := uuid.New().String()
-	auth0UserID := "auth0|507f1f77bcf86cd799439011"
+	clerkUserID := "user_507f1f77bcf86cd799439011"
 	existingUser := &domain.User{
 		ID:            userID,
-		Auth0UserID:   auth0UserID,
+		ClerkUserID:   clerkUserID,
 		Email:         "test@example.com",
 		PrimaryRegion: "iad",
 	}
@@ -332,7 +332,7 @@ func TestUpdateProfile_ValidRegion(t *testing.T) {
 		return u.PrimaryRegion == newRegion
 	})).Return(nil)
 
-	// Execute - pass internal UUID, not Auth0 ID
+	// Execute - pass internal UUID, not Clerk ID
 	user, err := service.UpdateProfile(ctx, userID, req)
 
 	// Assert
@@ -343,7 +343,7 @@ func TestUpdateProfile_ValidRegion(t *testing.T) {
 }
 
 // TestUpdateProfile_UserNotFound tests updating non-existent user
-// NOTE: After PR #197, UpdateProfile now receives internal user UUID, not Auth0 ID
+// NOTE: After PR #197, UpdateProfile now receives internal user UUID, not Clerk ID
 func TestUpdateProfile_UserNotFound(t *testing.T) {
 	// Setup
 	mockRepo := new(MockProfileRepository)
@@ -359,7 +359,7 @@ func TestUpdateProfile_UserNotFound(t *testing.T) {
 	// Mock expectations - now using GetUserByID with internal UUID
 	mockRepo.On("GetUserByID", ctx, userID).Return(nil, repository.ErrUserNotFound)
 
-	// Execute - pass internal UUID, not Auth0 ID
+	// Execute - pass internal UUID, not Clerk ID
 	user, err := service.UpdateProfile(ctx, userID, req)
 
 	// Assert
@@ -370,7 +370,7 @@ func TestUpdateProfile_UserNotFound(t *testing.T) {
 }
 
 // TestUpdateProfile_UpdateError tests handling of update errors
-// NOTE: After PR #197, UpdateProfile now receives internal user UUID, not Auth0 ID
+// NOTE: After PR #197, UpdateProfile now receives internal user UUID, not Clerk ID
 func TestUpdateProfile_UpdateError(t *testing.T) {
 	// Setup
 	mockRepo := new(MockProfileRepository)
@@ -378,10 +378,10 @@ func TestUpdateProfile_UpdateError(t *testing.T) {
 	ctx := context.Background()
 
 	userID := uuid.New().String()
-	auth0UserID := "auth0|507f1f77bcf86cd799439011"
+	clerkUserID := "user_507f1f77bcf86cd799439011"
 	existingUser := &domain.User{
 		ID:            userID,
-		Auth0UserID:   auth0UserID,
+		ClerkUserID:   clerkUserID,
 		Email:         "test@example.com",
 		PrimaryRegion: "iad",
 	}
@@ -395,7 +395,7 @@ func TestUpdateProfile_UpdateError(t *testing.T) {
 	mockRepo.On("GetUserByID", ctx, userID).Return(existingUser, nil)
 	mockRepo.On("UpdateUser", ctx, mock.Anything).Return(errors.New("update failed"))
 
-	// Execute - pass internal UUID, not Auth0 ID
+	// Execute - pass internal UUID, not Clerk ID
 	user, err := service.UpdateProfile(ctx, userID, req)
 
 	// Assert

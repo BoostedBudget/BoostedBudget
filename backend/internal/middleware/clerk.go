@@ -69,8 +69,8 @@ func ClerkMiddleware(secretKey string, identityRepo repository.UserIdentityRepos
 			}
 
 			// Look up user identity to get internal user UUID
-			// Note: We use GetByAuth0ID which works for any provider ID format
-			identity, err := identityRepo.GetByAuth0ID(c.Request().Context(), clerkUserID)
+			// Note: We use GetByClerkID which works for any provider ID format
+			identity, err := identityRepo.GetByClerkID(c.Request().Context(), clerkUserID)
 			if err != nil {
 				if err == repository.ErrIdentityNotFound {
 					// New user - auto-register them
@@ -95,7 +95,7 @@ func ClerkMiddleware(secretKey string, identityRepo repository.UserIdentityRepos
 					}
 
 					// Lookup the identity again after registration
-					identity, err = identityRepo.GetByAuth0ID(c.Request().Context(), clerkUserID)
+					identity, err = identityRepo.GetByClerkID(c.Request().Context(), clerkUserID)
 					if err != nil {
 						c.Logger().Errorf("Failed to lookup newly registered identity for %s: %v", clerkUserID, err)
 						return echo.NewHTTPError(http.StatusInternalServerError, "Failed to complete registration")

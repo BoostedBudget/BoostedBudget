@@ -360,7 +360,7 @@ func (h *AutomationRuleHandler) GetRuleExecutions(ctx context.Context, input *Ge
 }
 
 // RegisterAutomationRuleRoutes registers automation rule routes with the Huma API.
-// Note: These routes require the Auth0 middleware to be applied.
+// Note: These routes require the Clerk middleware to be applied.
 func RegisterAutomationRuleRoutes(api huma.API, handler *AutomationRuleHandler) {
 	// GET /api/v1/rules - Get all user automation rules
 	huma.Register(api, huma.Operation{
@@ -370,7 +370,7 @@ func RegisterAutomationRuleRoutes(api huma.API, handler *AutomationRuleHandler) 
 		Summary:     "Get user automation rules",
 		Description: "Retrieves all automation rules for the authenticated user, ordered by priority.",
 		Tags:        []string{"Automation Rules"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetAutomationRules)
 
 	// GET /api/v1/rules/{id} - Get automation rule by ID
@@ -381,7 +381,7 @@ func RegisterAutomationRuleRoutes(api huma.API, handler *AutomationRuleHandler) 
 		Summary:     "Get automation rule by ID",
 		Description: "Retrieves a specific automation rule by its UUID.",
 		Tags:        []string{"Automation Rules"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetAutomationRuleByID)
 
 	// POST /api/v1/rules - Create a new automation rule
@@ -392,7 +392,7 @@ func RegisterAutomationRuleRoutes(api huma.API, handler *AutomationRuleHandler) 
 		Summary:       "Create a new automation rule",
 		Description:   "Creates a new automation rule for the authenticated user.",
 		Tags:          []string{"Automation Rules"},
-		Security:      []map[string][]string{{"auth0": {}}},
+		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusCreated,
 	}, handler.CreateAutomationRule)
 
@@ -404,7 +404,7 @@ func RegisterAutomationRuleRoutes(api huma.API, handler *AutomationRuleHandler) 
 		Summary:     "Update an automation rule",
 		Description: "Updates an automation rule's configuration.",
 		Tags:        []string{"Automation Rules"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.UpdateAutomationRule)
 
 	// DELETE /api/v1/rules/{id} - Delete an automation rule
@@ -415,7 +415,7 @@ func RegisterAutomationRuleRoutes(api huma.API, handler *AutomationRuleHandler) 
 		Summary:       "Delete an automation rule",
 		Description:   "Removes an automation rule.",
 		Tags:          []string{"Automation Rules"},
-		Security:      []map[string][]string{{"auth0": {}}},
+		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusNoContent,
 	}, handler.DeleteAutomationRule)
 
@@ -427,7 +427,7 @@ func RegisterAutomationRuleRoutes(api huma.API, handler *AutomationRuleHandler) 
 		Summary:     "Toggle an automation rule",
 		Description: "Enables or disables an automation rule.",
 		Tags:        []string{"Automation Rules"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.ToggleAutomationRule)
 
 	// POST /api/v1/rules/{id}/trigger - Manually trigger an automation rule
@@ -438,7 +438,7 @@ func RegisterAutomationRuleRoutes(api huma.API, handler *AutomationRuleHandler) 
 		Summary:     "Manually trigger an automation rule",
 		Description: "Triggers an automation rule for immediate execution with optional custom data.",
 		Tags:        []string{"Automation Rules"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.TriggerAutomationRule)
 
 	// Issue #38: Rules API Endpoints - New routes
@@ -451,7 +451,7 @@ func RegisterAutomationRuleRoutes(api huma.API, handler *AutomationRuleHandler) 
 		Summary:     "Test automation rule",
 		Description: "Executes a dry-run of the rule to preview results without persisting changes.",
 		Tags:        []string{"Automation Rules"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.TestAutomationRule)
 
 	// POST /api/v1/rules/{id}/enable - Enable an automation rule
@@ -462,7 +462,7 @@ func RegisterAutomationRuleRoutes(api huma.API, handler *AutomationRuleHandler) 
 		Summary:     "Enable automation rule",
 		Description: "Enables an automation rule for execution.",
 		Tags:        []string{"Automation Rules"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.EnableAutomationRule)
 
 	// POST /api/v1/rules/{id}/disable - Disable an automation rule
@@ -473,7 +473,7 @@ func RegisterAutomationRuleRoutes(api huma.API, handler *AutomationRuleHandler) 
 		Summary:     "Disable automation rule",
 		Description: "Disables an automation rule from execution.",
 		Tags:        []string{"Automation Rules"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.DisableAutomationRule)
 
 	// GET /api/v1/rules/{id}/executions - Get rule execution history
@@ -484,6 +484,6 @@ func RegisterAutomationRuleRoutes(api huma.API, handler *AutomationRuleHandler) 
 		Summary:     "Get rule execution history",
 		Description: "Retrieves execution history for a specific automation rule with optional status filter.",
 		Tags:        []string{"Automation Rules"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetRuleExecutions)
 }

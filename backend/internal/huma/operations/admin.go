@@ -72,7 +72,7 @@ type FireWebhookResponseBody struct {
 //
 // Security:
 //   - QA-only (AdminMiddleware returns 404 in production)
-//   - Requires Auth0 JWT authentication
+//   - Requires Clerk JWT authentication
 //   - Future (Issue #309): Will require "admin" role in JWT
 //
 // Error Responses:
@@ -124,8 +124,8 @@ func RegisterAdminRoutes(api huma.API, handler *AdminHandler) {
 		Method:      http.MethodPost,
 		Path:        "/api/v1/admin/plaid/fire-webhook",
 		Summary:     "Fire a Plaid webhook (QA only)",
-		Description: "Fires a Plaid webhook for testing in QA environment. Requires Auth0 authentication.",
+		Description: "Fires a Plaid webhook for testing in QA environment. Requires Clerk authentication.",
 		Tags:        []string{"Admin"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.FireWebhook)
 }

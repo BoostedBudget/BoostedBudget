@@ -30,12 +30,12 @@ var validRegions = map[string]bool{
 type ProfileService interface {
 	// GetProfile retrieves a user's profile by their internal user UUID
 	// If the user doesn't exist, creates a new user (first login scenario)
-	// NOTE: After PR #197, this accepts internal UUID, not Auth0 ID
+	// NOTE: After PR #197, this accepts internal UUID, not Clerk ID
 	GetProfile(ctx context.Context, userID string, email string) (*domain.User, error)
 
 	// UpdateProfile updates a user's profile with validated data
 	// Only allows updating email and primary_region fields
-	// NOTE: After PR #197, this accepts internal UUID, not Auth0 ID
+	// NOTE: After PR #197, this accepts internal UUID, not Clerk ID
 	UpdateProfile(ctx context.Context, userID string, req *domain.UpdateProfileRequest) (*domain.User, error)
 }
 
@@ -50,15 +50,15 @@ func NewProfileService(repo repository.ProfileRepository) ProfileService {
 }
 
 // GetProfile retrieves a user's profile or creates one if it doesn't exist
-// NOTE: After PR #197, this method receives internal user UUID, not Auth0 ID
+// NOTE: After PR #197, this method receives internal user UUID, not Clerk ID
 func (s *profileService) GetProfile(ctx context.Context, userID string, email string) (*domain.User, error) {
 	// Try to get existing user by internal UUID
 	user, err := s.repo.GetUserByID(ctx, userID)
 
 	if err == repository.ErrUserNotFound {
-		// User doesn't exist - this shouldn't happen since Auth0 middleware
+		// User doesn't exist - this shouldn't happen since Clerk middleware
 		// already validated the user exists in user_identities table
-		// Return error instead of creating (creation handled during first Auth0 login)
+		// Return error instead of creating (creation handled during first Clerk login)
 		return nil, repository.ErrUserNotFound
 	}
 
@@ -66,8 +66,8 @@ func (s *profileService) GetProfile(ctx context.Context, userID string, email st
 		return nil, err
 	}
 
-	// Update last login timestamp (use Auth0 ID from user record)
-	if err := s.repo.UpdateLastLogin(ctx, user.Auth0UserID); err != nil {
+	// Update last login timestamp (use Clerk ID from user record)
+	if err := s.repo.UpdateLastLogin(ctx, user.ClerkUserID); err != nil {
 		// Log error but don't fail the request
 		// In production, you'd use a proper logger here
 	}
@@ -76,7 +76,7 @@ func (s *profileService) GetProfile(ctx context.Context, userID string, email st
 }
 
 // UpdateProfile updates a user's profile with validation
-// NOTE: After PR #197, this method receives internal user UUID, not Auth0 ID
+// NOTE: After PR #197, this method receives internal user UUID, not Clerk ID
 func (s *profileService) UpdateProfile(ctx context.Context, userID string, req *domain.UpdateProfileRequest) (*domain.User, error) {
 	// Get existing user by internal UUID
 	user, err := s.repo.GetUserByID(ctx, userID)

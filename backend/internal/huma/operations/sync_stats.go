@@ -48,7 +48,7 @@ func (h *SyncStatsHandler) GetSyncStats(ctx context.Context, input *GetSyncStats
 }
 
 // RegisterSyncStatsRoutes registers sync stats routes with the Huma API.
-// Note: These routes require the Auth0 middleware to be applied.
+// Note: These routes require the Clerk middleware to be applied.
 func RegisterSyncStatsRoutes(api huma.API, handler *SyncStatsHandler) {
 	// GET /api/v1/sync-stats - Get sync statistics
 	huma.Register(api, huma.Operation{
@@ -58,6 +58,6 @@ func RegisterSyncStatsRoutes(api huma.API, handler *SyncStatsHandler) {
 		Summary:     "Get sync statistics",
 		Description: "Returns monthly sync usage statistics for the authenticated user.",
 		Tags:        []string{"Sync"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetSyncStats)
 }
