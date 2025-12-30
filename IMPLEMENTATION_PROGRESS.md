@@ -166,7 +166,7 @@
   - TestGetAccountTypes_Unauthorized
 - **Test Results:** All 8 tests passing ✅
 - **Handler Features:**
-  - User authentication via context (Auth0 middleware)
+  - User authentication via context (Clerk middleware)
   - Query parameter parsing (account_types, as_of_date, start_date, end_date, granularity)
   - Error handling (400 Bad Request, 401 Unauthorized, 500 Internal Server Error)
   - JSON response formatting
@@ -188,7 +188,7 @@
 - ✅ Dashboard domain types (requests & responses)
 - ✅ DashboardService with comprehensive tests (8/8 passing)
 - ✅ DashboardHandler with comprehensive tests (8/8 passing)
-- ✅ Routes registered and protected with Auth0 middleware
+- ✅ Routes registered and protected with Clerk middleware
 - ✅ Backend compiles successfully
 
 **Files Created:**
@@ -443,7 +443,7 @@ if err := s.createBalanceSnapshots(ctx, linkedItem, accessToken); err != nil {
 - **Repository Tests:** Use in-memory SQLite or test database (follow existing pattern)
 - **Service Tests:** Mock repository dependencies
 - **Handler Tests:** Use Echo test context (`setupTestContext` helper)
-- **E2E Tests:** Playwright with Auth0 authentication flow
+- **E2E Tests:** Playwright with Clerk authentication flow
 
 ---
 
