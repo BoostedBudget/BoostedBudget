@@ -17,17 +17,12 @@ kill_timeout = 30
   LOG_LEVEL = "info"
   ENABLE_METRICS = "true"
 
-  # Auth0 configuration (non-sensitive)
-  # Using dev tenant for MVP - will migrate to production tenant later
-  AUTH0_DOMAIN = "dev-evuy37ow1xcidsmw.us.auth0.com"
-  AUTH0_AUDIENCE = "https://api.boostedbudget.com"
-
   # Plaid configuration
   PLAID_ENV = "production"
 
   # NOTE: Sensitive values set via `fly secrets set`:
   # - DATABASE_URL (PostgreSQL connection string)
-  # - AUTH0_CLIENT_SECRET
+  # - CLERK_SECRET_KEY (Clerk authentication)
   # - PLAID_CLIENT_ID
   # - PLAID_SECRET
   # - STRIPE_SECRET_KEY

@@ -1,7 +1,7 @@
 # CLAUDE.md - BoostedBudget Guide
 
 ## Primary Docs
-- `boosted-budget-complete-plan.md`: Architecture, phases 0-6, APIs, schemas, Auth0/Plaid/Stripe/AdSense, GDPR, business logic
+- `boosted-budget-complete-plan.md`: Architecture, phases 0-6, APIs, schemas, Clerk/Plaid/Stripe/AdSense, GDPR, business logic
 - `boosted-budget-fly-deployment.md`: Docker, CI/CD, Fly.io, multi-region, secrets, deployment scripts
 
 ## Project Context
@@ -9,7 +9,7 @@
 
 **Tiers**: Free (1 rule, 3 accounts, 1x/day, ads) | Premium Lite $4.99 (5 rules, 15 accounts, 2x/day) | Premium $9.99 (15 rules, 30 accounts, 6x/day) | Premium+ $19.99 (unlimited, every 10min, AI + API)
 
-**Stack**: React 19 + TS5 + Vite 7 | Go 1.25+ Echo/Gin | PostgreSQL 15 + Redis 7 | Atlas (migrations) | Auth0 + Plaid + Stripe + AdSense | Docker → GHCR → Fly.io
+**Stack**: React 19 + TS5 + Vite 7 | Go 1.25+ Echo/Gin | PostgreSQL 15 + Redis 7 | Atlas (migrations) | Clerk + Plaid + Stripe + AdSense | Docker → GHCR → Fly.io
 
 **Database Migrations**: Atlas (versioned migrations) with schema linting, drift detection, and validation in CI/CD. See `backend/docs/atlas-migration-guide.md`
 
@@ -59,7 +59,7 @@ infrastructure/     # Configs
 - **ALL PR titles** MUST start with Issue ID: `#N: Your PR title`
 - **ALL PRs** MUST include `Closes #N` in description (auto-close on merge)
 - Examples:
-  - `#3: Implement Auth0 JWT validation middleware`
+  - `#3: Implement Clerk JWT validation middleware`
   - `#7: Add database migration for users table`
 - This ensures proper tracking and linking in GitHub
 
@@ -141,7 +141,7 @@ infrastructure/     # Configs
 GOOD ✓
 "Chose JWT middleware over session-based auth because:
  1. Stateless design aligns with multi-region Phase 7+ goals
- 2. Auth0 provides built-in JWT support
+ 2. Clerk provides built-in JWT support
  3. Avoids Redis dependency for auth state
  Trade-off: Slightly larger request size, but acceptable for our use case"
 
@@ -208,7 +208,7 @@ BAD ✗
    - Write idempotent migrations (IF NOT EXISTS, DO $$ blocks)
    - Run `./scripts/test-migrations.sh` BEFORE committing
    - Verify all 4 test suites pass (idempotency, performance, data integrity, schema validation)
-9. Auth0 integration verification → **Server Memory: Note auth flow decisions**
+9. Clerk integration verification → **Server Memory: Note auth flow decisions**
 10. `*InRegion` abstractions, `primary_region`='us-east-1' → **Server Memory: Track region-related decisions**
 11. **RUN ALL TESTS** (MANDATORY before PR):
     - Backend: `cd backend && go test ./... -v`
@@ -413,7 +413,7 @@ source config/qa.env
 - GDPR compliance (all users get rights)
 - Tier limits in `config/subscription_tiers.yaml` (free: 1 rule, 3 accounts, 1x/day, ads)
 - Single region us-east-1 (multi-region Phase 7+)
-- Auth0 for all auth (never custom auth)
+- Clerk for all auth (never custom auth)
 - Build Docker images (don't build on Fly)
 - OpenAPI as source of truth
 - >80% test coverage via TDD
@@ -429,7 +429,7 @@ source config/qa.env
 git clone <repo> && cd boostedbudget
 cd backend && go mod download
 cd ../frontend && pnpm install
-cp .env.example .env  # Edit with Auth0/Plaid/Stripe creds
+cp .env.example .env  # Edit with Clerk/Plaid/Stripe creds
 docker-compose up
 ```
 
@@ -565,7 +565,7 @@ atlas migrate lint --dir file://migrations --dev-url "docker://postgres/15/test"
 
 ## Security Patterns
 
-**Auth0**: JWT validation middleware, Auth0Provider wraps app, metadata includes tier, GDPR consent tracking, no geo-routing (Phase 7+)
+**Clerk**: JWT validation middleware, ClerkProvider wraps app, metadata includes tier, GDPR consent tracking, no geo-routing (Phase 7+)
 
 **Sensitive data**:
 ```go
@@ -636,7 +636,7 @@ if !result.Allowed {
 
 **Plaid**: Sandbox mode, Link token, webhooks, encrypted access tokens
 **Stripe**: Test mode, webhook handler, 14-day trial, graceful downgrades
-**Auth0**: Separate tenants (dev/qa/prod), custom claims, GDPR consent rules, M2M backend
+**Clerk**: Separate instances (dev/qa/prod), custom claims, GDPR consent rules
 
 ## Multi-Region (Phase 7+)
 
@@ -653,7 +653,7 @@ if !result.Allowed {
 
 ## Troubleshooting
 
-**Auth0**: `jwt decode $TOKEN`, `fly logs | grep auth0`
+**Clerk**: `jwt decode $TOKEN`, `fly logs | grep clerk`
 **DB**: `fly ssh console`, `echo $DATABASE_URL`, `fly postgres connect`
 **Deploy**: `fly logs`, `fly releases`, `fly deploy --image <prev>`
 

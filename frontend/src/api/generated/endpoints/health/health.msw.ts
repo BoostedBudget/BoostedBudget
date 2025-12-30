@@ -6,7 +6,7 @@
 
 ## Authentication
 
-All protected endpoints require Auth0 JWT Bearer token in the Authorization header:
+All protected endpoints require Clerk JWT Bearer token in the Authorization header:
 ```
 Authorization: Bearer <your-jwt-token>
 ```
@@ -38,7 +38,7 @@ export const getGetHealthResponseMock = (
 ): HealthResponse => ({
   $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
   checks: {
-    auth0: {
+    clerk: {
       message: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,

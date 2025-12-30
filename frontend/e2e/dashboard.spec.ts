@@ -9,7 +9,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test'
-import { loginWithAuth0, acceptCookieConsent } from './helpers/auth'
+import { loginWithClerk, acceptCookieConsent } from './helpers/auth'
 
 // Mock data for dashboard APIs
 const mockBalanceSummary = {
@@ -236,10 +236,9 @@ test.describe('Dashboard - Protected Route', () => {
 // Authenticated Tests (Conditional Skip Pattern)
 // ============================================================================
 
-// Skip authenticated tests if Auth0 not configured
-const skipAuth0Tests =
-  !process.env.VITE_AUTH0_DOMAIN || !process.env.VITE_AUTH0_CLIENT_ID
-const describeDashboard = skipAuth0Tests
+// Skip authenticated tests if Clerk not configured
+const skipClerkTests = !process.env.VITE_CLERK_PUBLISHABLE_KEY
+const describeDashboard = skipClerkTests
   ? test.describe.skip
   : test.describe
 
@@ -248,13 +247,13 @@ describeDashboard('Dashboard - Authenticated User', () => {
     // Clear cookies for test isolation
     await context.clearCookies()
 
-    // Login with Auth0
+    // Login with Clerk
     const credentials = {
-      email: process.env.TEST_AUTH0_EMAIL || '',
-      password: process.env.TEST_AUTH0_PASSWORD || '',
+      email: process.env.TEST_CLERK_EMAIL || '',
+      password: process.env.TEST_CLERK_PASSWORD || '',
     }
 
-    await loginWithAuth0(page, credentials)
+    await loginWithClerk(page, credentials)
     await acceptCookieConsent(page)
   })
 

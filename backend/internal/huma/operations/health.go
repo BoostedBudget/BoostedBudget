@@ -30,7 +30,7 @@ type HealthResponse struct {
 type HealthChecks struct {
 	Database *ServiceCheck `json:"database" doc:"Database connection status"`
 	Redis    *ServiceCheck `json:"redis" doc:"Redis cache status"`
-	Auth0    *ServiceCheck `json:"auth0" doc:"Auth0 authentication service status"`
+	Clerk    *ServiceCheck `json:"clerk" doc:"Clerk authentication service status"`
 }
 
 // ServiceCheck represents the health status of a single service.
@@ -60,16 +60,16 @@ func (e *HealthError) GetStatus() int {
 type HealthHandler struct {
 	DBCheck    func() error
 	RedisCheck func() error
-	Auth0Check func() error
+	ClerkCheck func() error
 	Version    string
 }
 
 // NewHealthHandler creates a new health handler with the given dependencies.
-func NewHealthHandler(dbCheck, redisCheck, auth0Check func() error, version string) *HealthHandler {
+func NewHealthHandler(dbCheck, redisCheck, clerkCheck func() error, version string) *HealthHandler {
 	return &HealthHandler{
 		DBCheck:    dbCheck,
 		RedisCheck: redisCheck,
-		Auth0Check: auth0Check,
+		ClerkCheck: clerkCheck,
 		Version:    version,
 	}
 }
@@ -82,8 +82,8 @@ func (h *HealthHandler) GetHealth(ctx context.Context, input *HealthInput) (*Hea
 	// Check Redis
 	redisCheck := h.performCheck(h.RedisCheck)
 
-	// Check Auth0
-	auth0Check := h.performCheck(h.Auth0Check)
+	// Check Clerk
+	clerkCheck := h.performCheck(h.ClerkCheck)
 
 	response := HealthResponse{
 		Version:   h.Version,
@@ -91,7 +91,7 @@ func (h *HealthHandler) GetHealth(ctx context.Context, input *HealthInput) (*Hea
 		Checks: HealthChecks{
 			Database: dbCheck,
 			Redis:    redisCheck,
-			Auth0:    auth0Check,
+			Clerk:    clerkCheck,
 		},
 	}
 
@@ -102,8 +102,8 @@ func (h *HealthHandler) GetHealth(ctx context.Context, input *HealthInput) (*Hea
 		return nil, huma.Error503ServiceUnavailable("System unhealthy: database connection failed")
 	}
 
-	// Redis and Auth0 are non-critical - if down, system is degraded
-	if redisCheck.Status == "down" || auth0Check.Status == "down" {
+	// Redis and Clerk are non-critical - if down, system is degraded
+	if redisCheck.Status == "down" || clerkCheck.Status == "down" {
 		response.Status = "degraded"
 	} else {
 		response.Status = "healthy"
@@ -139,7 +139,7 @@ func RegisterHealthRoutes(api huma.API, handler *HealthHandler) {
 		Method:      http.MethodGet,
 		Path:        "/health",
 		Summary:     "Health check",
-		Description: "Returns the health status of the API and its dependencies (database, Redis, Auth0).",
+		Description: "Returns the health status of the API and its dependencies (database, Redis, Clerk).",
 		Tags:        []string{"Health"},
 	}, handler.GetHealth)
 }
