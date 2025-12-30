@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 
-# deploy-staging.sh - Deploy BoostedBudget to Mac Mini Staging Environment
-# Usage: ./scripts/deploy-staging.sh
+# deploy-qa.sh - Deploy BoostedBudget to Mac Mini QA Environment
+# Usage: ./scripts/deploy-qa.sh
 #
 # This script:
-# 1. Stops existing staging containers gracefully
+# 1. Stops existing QA containers gracefully
 # 2. Pulls latest code from staging branch
 # 3. Builds/pulls Docker images
 # 4. Starts containers with docker-compose (detached mode)
@@ -22,9 +22,9 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-COMPOSE_PROJECT_NAME="boostedbudget-staging"
-COMPOSE_FILE="docker-compose.staging.yml"
-ENV_FILE=".env.staging"
+COMPOSE_PROJECT_NAME="boostedbudget-qa"
+COMPOSE_FILE="docker-compose.qa.yml"
+ENV_FILE=".env.qa"
 BACKEND_HEALTH_URL="http://localhost:8080/health"
 FRONTEND_URL="http://localhost:3000"  # Frontend serves HTTP only
 MAX_HEALTH_RETRIES=30
@@ -137,10 +137,10 @@ check_prerequisites() {
   fi
   print_success "Docker Compose found"
 
-  # Check if .env.staging exists
+  # Check if .env.qa exists
   if [ ! -f "$ENV_FILE" ]; then
     print_error "$ENV_FILE not found"
-    echo -e "${YELLOW}Create it from template: cp .env.staging.example .env.staging${NC}"
+    echo -e "${YELLOW}Create it from template: cp .env.qa.example .env.qa${NC}"
     exit 1
   fi
   print_success "Environment file found: $ENV_FILE"
@@ -158,20 +158,20 @@ save_current_state() {
   print_section "Saving Current State for Rollback"
 
   # Save list of running containers
-  docker ps --filter "name=boostedbudget-.*-staging" --format "{{.Names}}" > /tmp/staging-containers-backup.txt 2>/dev/null || true
+  docker ps --filter "name=boostedbudget-.*-qa" --format "{{.Names}}" > /tmp/qa-containers-backup.txt 2>/dev/null || true
 
-  if [ -s /tmp/staging-containers-backup.txt ]; then
-    print_success "Current state saved ($(wc -l < /tmp/staging-containers-backup.txt | tr -d ' ') containers)"
+  if [ -s /tmp/qa-containers-backup.txt ]; then
+    print_success "Current state saved ($(wc -l < /tmp/qa-containers-backup.txt | tr -d ' ') containers)"
   else
-    print_warning "No existing staging containers to backup"
+    print_warning "No existing QA containers to backup"
   fi
 }
 
 # Function to aggressively cleanup existing containers
 cleanup_containers() {
-  print_section "Cleaning Up Existing Staging Containers"
+  print_section "Cleaning Up Existing QA Containers"
 
-  echo "Stopping and removing all staging containers, networks, and orphans..."
+  echo "Stopping and removing all QA containers, networks, and orphans..."
 
   # Stop and remove containers, networks, and orphans
   # Use RESET_VOLUMES=true to also remove volumes (wipes database)
@@ -186,20 +186,20 @@ cleanup_containers() {
     }
   fi
 
-  # Extra safety: manually remove any lingering staging containers (including workspace-prefixed containers)
-  local lingering=$(docker ps -a --filter "name=boostedbudget-.*-staging" --format "{{.Names}}" 2>/dev/null || true)
-  local workspace_lingering=$(docker ps -a --filter "name=workspace-.*-staging" --format "{{.Names}}" 2>/dev/null || true)
+  # Extra safety: manually remove any lingering QA containers (including workspace-prefixed containers)
+  local lingering=$(docker ps -a --filter "name=boostedbudget-.*-qa" --format "{{.Names}}" 2>/dev/null || true)
+  local workspace_lingering=$(docker ps -a --filter "name=workspace-.*-qa" --format "{{.Names}}" 2>/dev/null || true)
   lingering="${lingering}${lingering:+$'\n'}${workspace_lingering}"
   if [ -n "$lingering" ]; then
-    echo "Found lingering staging containers, removing forcefully..."
+    echo "Found lingering QA containers, removing forcefully..."
     echo "$lingering" | xargs -r docker rm -f 2>/dev/null || true
     print_success "Lingering containers removed"
   fi
 
-  # Remove any dangling volumes with staging prefix
-  local staging_volumes=$(docker volume ls --filter "name=.*staging.*" -q 2>/dev/null || true)
-  if [ -n "$staging_volumes" ]; then
-    print_warning "Found $(echo "$staging_volumes" | wc -l) staging volumes (keeping for data persistence)"
+  # Remove any dangling volumes with qa prefix
+  local qa_volumes=$(docker volume ls --filter "name=.*qa.*" -q 2>/dev/null || true)
+  if [ -n "$qa_volumes" ]; then
+    print_warning "Found $(echo "$qa_volumes" | wc -l) QA volumes (keeping for data persistence)"
     # Don't delete volumes by default to preserve database data
   fi
 
@@ -217,13 +217,13 @@ pull_latest_code() {
 
   if [ -d ".git" ]; then
     CURRENT_BRANCH=$(git branch --show-current)
-    if [ "$CURRENT_BRANCH" = "staging" ] || [[ "$CURRENT_BRANCH" =~ ^feature/.*-staging.* ]]; then
+    if [ "$CURRENT_BRANCH" = "staging" ] || [[ "$CURRENT_BRANCH" =~ ^feature/.*$ ]]; then
       echo "Current branch: $CURRENT_BRANCH"
 
       # Pull latest code with retry
-      echo "📥 Pulling latest staging code..."
+      echo "📥 Pulling latest code..."
       for i in 1 2 3; do
-        git pull origin staging && {
+        git pull origin "$CURRENT_BRANCH" && {
           print_success "Code updated"
           break
         } || {
@@ -236,7 +236,7 @@ pull_latest_code() {
         }
       done
     else
-      print_warning "Not on staging branch (current: $CURRENT_BRANCH), skipping git pull"
+      print_warning "Not on staging or feature branch (current: $CURRENT_BRANCH), skipping git pull"
     fi
   else
     print_warning "Not a git repository, skipping code update"
@@ -319,7 +319,7 @@ build_or_pull_images() {
 
 # Function to start containers
 start_containers() {
-  print_section "Starting Staging Containers"
+  print_section "Starting QA Containers"
 
   echo "Starting containers in detached mode..."
   echo "Using environment file: $ENV_FILE"
@@ -360,7 +360,7 @@ start_containers() {
 
   # Show running containers
   echo ""
-  echo "Running staging containers:"
+  echo "Running QA containers:"
   docker-compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" ps
 
   # Give containers a moment to stabilize
@@ -417,19 +417,19 @@ run_migrations() {
         return 1
       }
 
-      # Get database credentials from .env.staging
-      if [ -f "../.env.staging" ]; then
-        source ../.env.staging
-        STAGING_DB_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5433/${POSTGRES_DB:-boostedbudget_staging}?sslmode=disable"
+      # Get database credentials from .env.qa
+      if [ -f "../.env.qa" ]; then
+        source ../.env.qa
+        QA_DB_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5433/${POSTGRES_DB:-boostedbudget_qa}?sslmode=disable"
       else
-        STAGING_DB_URL="postgresql://staginguser:VIcsIdkHNkjmVGVd8XC8adddZsvwm7zu@localhost:5433/boostedbudget_staging?sslmode=disable"
+        QA_DB_URL="postgresql://qauser:qapass@localhost:5433/boostedbudget_qa?sslmode=disable"
       fi
 
       # Check if baseline is needed (database exists but no Atlas tracking)
       echo "Checking migration status..."
-      if atlas migrate status --dir "file://migrations?format=golang-migrate" --url "$STAGING_DB_URL" 2>&1 | grep -q "No migration applied yet"; then
+      if atlas migrate status --dir "file://migrations?format=golang-migrate" --url "$QA_DB_URL" 2>&1 | grep -q "No migration applied yet"; then
         echo "Fresh database detected, establishing baseline at version 000012..."
-        atlas migrate set 000012 --dir "file://migrations?format=golang-migrate" --url "$STAGING_DB_URL" || {
+        atlas migrate set 000012 --dir "file://migrations?format=golang-migrate" --url "$QA_DB_URL" || {
           cd ..
           print_error "Failed to set baseline version"
           return 1
@@ -438,7 +438,7 @@ run_migrations() {
       fi
 
       # Apply any new migrations
-      atlas migrate apply --dir "file://migrations?format=golang-migrate" --url "$STAGING_DB_URL" || {
+      atlas migrate apply --dir "file://migrations?format=golang-migrate" --url "$QA_DB_URL" || {
         cd ..
         print_error "Failed to apply migrations"
         return 1
@@ -532,12 +532,12 @@ rollback() {
   docker-compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" down --remove-orphans 2>/dev/null || true
 
   # If there were previous containers, try to restart them
-  if [ -f /tmp/staging-containers-backup.txt ] && [ -s /tmp/staging-containers-backup.txt ]; then
+  if [ -f /tmp/qa-containers-backup.txt ] && [ -s /tmp/qa-containers-backup.txt ]; then
     print_warning "Previous containers found, but cannot auto-restart"
     print_warning "Please manually review and restart if needed"
   fi
 
-  print_error "Rollback completed - staging environment may be down"
+  print_error "Rollback completed - QA environment may be down"
   print_warning "Check logs: docker-compose -p $COMPOSE_PROJECT_NAME -f $COMPOSE_FILE logs"
   print_warning "Verify environment variables: cat $ENV_FILE"
 }
@@ -546,7 +546,7 @@ rollback() {
 display_info() {
   print_section "Deployment Complete"
 
-  print_success "Staging environment deployed successfully!"
+  print_success "QA environment deployed successfully!"
   echo ""
   echo -e "${BLUE}Access via:${NC}"
   echo -e "  ${GREEN}Frontend:${NC}  http://localhost:3000"
@@ -565,7 +565,7 @@ display_info() {
   echo ""
   echo -e "${BLUE}Data persistence:${NC}"
   echo -e "  Database data persists across deployments by default."
-  echo -e "  To wipe database: ${YELLOW}RESET_VOLUMES=true ./scripts/deploy-staging.sh${NC}"
+  echo -e "  To wipe database: ${YELLOW}RESET_VOLUMES=true ./scripts/deploy-qa.sh${NC}"
   echo ""
   echo -e "${BLUE}Restart policies:${NC} All containers will auto-restart on Mac Mini boot"
 }
@@ -573,7 +573,7 @@ display_info() {
 # Main execution
 main() {
   echo -e "${GREEN}╔═══════════════════════════════════════════════════════════════╗${NC}"
-  echo -e "${GREEN}║     BoostedBudget Mac Mini Staging Deployment Script         ║${NC}"
+  echo -e "${GREEN}║        BoostedBudget Mac Mini QA Deployment Script            ║${NC}"
   echo -e "${GREEN}╚═══════════════════════════════════════════════════════════════╝${NC}"
   echo ""
 
@@ -592,7 +592,7 @@ main() {
   verify_deployment || { rollback; exit 1; }
 
   # Cleanup backup file
-  rm -f /tmp/staging-containers-backup.txt
+  rm -f /tmp/qa-containers-backup.txt
 
   # Display final info
   display_info

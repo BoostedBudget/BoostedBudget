@@ -1,6 +1,6 @@
-# Mac Mini Staging Environment Setup Guide
+# Mac Mini QA Environment Setup Guide
 
-Complete guide for setting up the Mac Mini as a $0/month staging environment with auto-start on boot, Tailscale VPN access, and automated CI/CD deployment.
+Complete guide for setting up the Mac Mini as a $0/month QA environment with auto-start on boot, Tailscale VPN access, and automated CI/CD deployment.
 
 ## 📋 Table of Contents
 
@@ -20,7 +20,7 @@ Complete guide for setting up the Mac Mini as a $0/month staging environment wit
 
 ### Architecture
 
-- **Environment**: Staging (pre-production testing)
+- **Environment**: QA (pre-production testing)
 - **Platform**: Mac Mini (self-hosted)
 - **Cost**: $0/month
 - **Access**: Tailscale VPN + local network
@@ -50,16 +50,16 @@ Deployment complete ✅
 
 ```
 BoostedBudget/
-├── docker-compose.staging.yml     # Staging compose config
-├── .env.staging                    # Secrets (gitignored)
-├── .env.staging.example            # Template (committed)
-├── scripts/deploy-staging.sh       # Deployment script
+├── docker-compose.qa.yml     # QA compose config
+├── .env.qa                    # Secrets (gitignored)
+├── .env.qa.example            # Template (committed)
+├── scripts/deploy-qa.sh       # Deployment script
 ├── .github/workflows/
 │   ├── test.yml                   # PR tests
-│   ├── deploy-staging.yml         # Staging deployment
+│   ├── deploy-qa.yml         # QA deployment
 │   └── deploy-production.yml      # Production deployment
 └── docs/
-    └── MAC_MINI_STAGING_SETUP.md  # This file
+    └── MAC_MINI_QA_SETUP.md  # This file
 ```
 
 ---
@@ -153,21 +153,21 @@ Create a **separate** Auth0 dev tenant for staging (never use production credent
 #### Create Backend API Application (M2M)
 
 1. **Applications** → **Create Application**
-2. Name: `BoostedBudget Backend API (Staging)`
+2. Name: `BoostedBudget Backend API (QA)`
 3. Type: **Machine to Machine**
 4. API: Create new API
-   - Name: `BoostedBudget API (Staging)`
-   - Identifier: `https://api-staging.boostedbudget.com`
+   - Name: `BoostedBudget API (QA)`
+   - Identifier: `https://api-qa.boostedbudget.com`
 5. Note credentials:
    - `AUTH0_DOMAIN`: `dev-boostedbudget.us.auth0.com`
    - `AUTH0_CLIENT_ID`: (M2M client ID)
    - `AUTH0_CLIENT_SECRET`: (M2M client secret)
-   - `AUTH0_AUDIENCE`: `https://api-staging.boostedbudget.com`
+   - `AUTH0_AUDIENCE`: `https://api-qa.boostedbudget.com`
 
 #### Create Frontend SPA Application
 
 1. **Applications** → **Create Application**
-2. Name: `BoostedBudget Frontend (Staging)`
+2. Name: `BoostedBudget Frontend (QA)`
 3. Type: **Single Page Application**
 4. Settings:
    - **Allowed Callback URLs**:
@@ -206,11 +206,11 @@ Verify you have:
 ### 2.4 Generate Encryption Key
 
 ```bash
-# Generate 32-byte encryption key for staging
+# Generate 32-byte encryption key for QA
 openssl rand -base64 24 | tr -d '=' | head -c 32
 ```
 
-Save this key - you'll use it for `ENCRYPTION_KEY_STAGING`.
+Save this key - you'll use it for `ENCRYPTION_KEY_QA`.
 
 ### 2.5 Configure GitHub Secrets
 
@@ -222,26 +222,26 @@ Add these secrets to your repository:
 
 | Secret Name | Value | Source |
 |-------------|-------|--------|
-| `AUTH0_DOMAIN_STAGING` | `dev-boostedbudget.us.auth0.com` | Auth0 dev tenant |
-| `AUTH0_AUDIENCE_STAGING` | `https://api-staging.boostedbudget.com` | Auth0 API identifier |
-| `AUTH0_CLIENT_ID_STAGING` | `your_m2m_client_id` | Auth0 Backend M2M app |
-| `AUTH0_CLIENT_SECRET_STAGING` | `your_m2m_client_secret` | Auth0 Backend M2M app |
-| `VITE_AUTH0_CLIENT_ID_STAGING` | `your_spa_client_id` | Auth0 Frontend SPA app |
-| `PLAID_CLIENT_ID_STAGING` | `your_plaid_client_id` | Plaid dashboard |
-| `PLAID_SECRET_STAGING` | `your_plaid_sandbox_secret` | Plaid dashboard |
+| `AUTH0_DOMAIN_QA` | `dev-boostedbudget.us.auth0.com` | Auth0 dev tenant |
+| `AUTH0_AUDIENCE_QA` | `https://api-qa.boostedbudget.com` | Auth0 API identifier |
+| `AUTH0_CLIENT_ID_QA` | `your_m2m_client_id` | Auth0 Backend M2M app |
+| `AUTH0_CLIENT_SECRET_QA` | `your_m2m_client_secret` | Auth0 Backend M2M app |
+| `VITE_AUTH0_CLIENT_ID_QA` | `your_spa_client_id` | Auth0 Frontend SPA app |
+| `PLAID_CLIENT_ID_QA` | `your_plaid_client_id` | Plaid dashboard |
+| `PLAID_SECRET_QA` | `your_plaid_sandbox_secret` | Plaid dashboard |
 | `STRIPE_PUBLISHABLE_KEY_TEST` | `pk_test_...` | Stripe test mode |
 | `STRIPE_SECRET_KEY_TEST` | `sk_test_...` | Stripe test mode |
 | `STRIPE_WEBHOOK_SECRET_TEST` | `whsec_test_...` | Stripe webhook (optional) |
-| `ENCRYPTION_KEY_STAGING` | `32_character_key` | Generated above |
-| `POSTGRES_PASSWORD_STAGING` | `your_secure_password` | Choose a strong password |
-| `SESSION_SECRET_STAGING` | `$(openssl rand -base64 32)` | Generate random |
-| `JWT_SECRET_STAGING` | `$(openssl rand -base64 32)` | Generate random |
+| `ENCRYPTION_KEY_QA` | `32_character_key` | Generated above |
+| `POSTGRES_PASSWORD_QA` | `your_secure_password` | Choose a strong password |
+| `SESSION_SECRET_QA` | `$(openssl rand -base64 32)` | Generate random |
+| `JWT_SECRET_QA` | `$(openssl rand -base64 32)` | Generate random |
 
 ---
 
 ## Phase 3: Initial Deployment
 
-### 3.1 Create Local .env.staging File
+### 3.1 Create Local .env.qa File
 
 On your Mac Mini:
 
@@ -249,10 +249,10 @@ On your Mac Mini:
 cd /Users/yingyueliu/coding/BoostedBudget
 
 # Copy template
-cp .env.staging.example .env.staging
+cp .env.qa.example .env.qa
 
 # Edit with your actual credentials
-nano .env.staging
+nano .env.qa
 ```
 
 Fill in all values from Phase 2. **Important sections**:
@@ -265,15 +265,15 @@ Fill in all values from Phase 2. **Important sections**:
 
 ### 3.2 Update Tailscale URLs
 
-After Tailscale is set up, update URLs in `.env.staging`:
+After Tailscale is set up, update URLs in `.env.qa`:
 
 ```bash
 # Get your Tailscale hostname
 TAILSCALE_HOSTNAME=$(tailscale status | grep "$(hostname)" | awk '{print $1}')
 echo "Your Tailscale hostname: $TAILSCALE_HOSTNAME"
 
-# Update URLs in .env.staging
-sed -i '' "s|mac-mini.tailnet-name.ts.net|$TAILSCALE_HOSTNAME|g" .env.staging
+# Update URLs in .env.qa
+sed -i '' "s|mac-mini.tailnet-name.ts.net|$TAILSCALE_HOSTNAME|g" .env.qa
 ```
 
 ### 3.3 First Manual Deployment
@@ -288,22 +288,22 @@ git checkout staging
 git pull origin staging
 
 # Run deployment script
-chmod +x ./scripts/deploy-staging.sh
-./scripts/deploy-staging.sh
+chmod +x ./scripts/deploy-qa.sh
+./scripts/deploy-qa.sh
 ```
 
 **Expected output**:
 ```
 ╔═══════════════════════════════════════════════════════════════╗
-║     BoostedBudget Mac Mini Staging Deployment Script         ║
+║     BoostedBudget Mac Mini QA Deployment Script         ║
 ╚═══════════════════════════════════════════════════════════════╝
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Checking Prerequisites
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ✓ Docker Compose found
-✓ Environment file found: .env.staging
-✓ Compose file found: docker-compose.staging.yml
+✓ Environment file found: .env.qa
+✓ Compose file found: docker-compose.qa.yml
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Building Docker Images Locally
@@ -312,15 +312,15 @@ chmod +x ./scripts/deploy-staging.sh
 ✓ Images built successfully
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Starting Staging Containers
+  Starting QA Containers
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ✓ Containers started
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Verifying Restart Policies
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✓ boostedbudget-db-staging: unless-stopped
-✓ boostedbudget-redis-staging: unless-stopped
+✓ boostedbudget-db-qa: unless-stopped
+✓ boostedbudget-redis-qa: unless-stopped
 ...
 ✓ All containers have correct restart policies
 
@@ -334,8 +334,8 @@ chmod +x ./scripts/deploy-staging.sh
 ### 4.1 Verify Containers Are Running
 
 ```bash
-# Check all staging containers
-docker-compose -f docker-compose.staging.yml ps
+# Check all qa containers
+docker-compose -f docker-compose.qa.yml ps
 
 # Should show all services as "Up" with health status
 ```
@@ -343,18 +343,18 @@ docker-compose -f docker-compose.staging.yml ps
 Expected output:
 ```
 NAME                           STATUS                   PORTS
-boostedbudget-api-staging      Up (healthy)             0.0.0.0:8080->8080/tcp
-boostedbudget-db-staging       Up (healthy)             0.0.0.0:5433->5432/tcp
-boostedbudget-redis-staging    Up (healthy)             0.0.0.0:6380->6379/tcp
-boostedbudget-rabbitmq-staging Up (healthy)             0.0.0.0:5673->5672/tcp, 0.0.0.0:15673->15672/tcp
-boostedbudget-web-staging      Up                       0.0.0.0:3000->3000/tcp
+boostedbudget-api-qa      Up (healthy)             0.0.0.0:8080->8080/tcp
+boostedbudget-db-qa       Up (healthy)             0.0.0.0:5433->5432/tcp
+boostedbudget-redis-qa    Up (healthy)             0.0.0.0:6380->6379/tcp
+boostedbudget-rabbitmq-qa Up (healthy)             0.0.0.0:5673->5672/tcp, 0.0.0.0:15673->15672/tcp
+boostedbudget-web-qa      Up                       0.0.0.0:3000->3000/tcp
 ```
 
 ### 4.2 Verify Restart Policies
 
 ```bash
 # Check restart policies for all containers
-docker inspect boostedbudget-db-staging boostedbudget-redis-staging boostedbudget-rabbitmq-staging boostedbudget-api-staging boostedbudget-web-staging \
+docker inspect boostedbudget-db-qa boostedbudget-redis-qa boostedbudget-rabbitmq-qa boostedbudget-api-qa boostedbudget-web-qa \
   | grep -A 5 "RestartPolicy"
 ```
 
@@ -409,9 +409,9 @@ sudo reboot
 
 ```bash
 # Check containers auto-started
-docker ps | grep staging
+docker ps | grep qa
 
-# All staging containers should be running again
+# All qa containers should be running again
 
 # Test health endpoints
 curl http://localhost:8080/health
@@ -426,15 +426,15 @@ Push to staging branch to trigger automated deployment:
 
 ```bash
 # Make a trivial change
-echo "# Staging test" >> README.md
+echo "# QA test" >> README.md
 git add README.md
-git commit -m "#162: Test staging deployment"
+git commit -m "#162: Test qa deployment"
 git push origin staging
 ```
 
 Watch GitHub Actions:
 1. Go to **GitHub repo** → **Actions**
-2. Watch "Deploy to Staging" workflow
+2. Watch "Deploy to QA" workflow
 3. Should complete successfully with green checkmarks
 
 ---
@@ -446,7 +446,7 @@ Watch GitHub Actions:
 - **Frontend**: http://localhost:3000
 - **Backend API**: http://localhost:8080
 - **RabbitMQ UI**: http://localhost:15673 (guest/guest)
-- **Database**: `postgresql://staginguser:password@localhost:5433/boostedbudget_staging`
+- **Database**: `postgresql://qauser:password@localhost:5433/boostedbudget_qa`
 
 ### Remote Access (Tailscale VPN)
 
@@ -456,7 +456,7 @@ From any device connected to your Tailscale network:
 # Get Mac Mini's Tailscale hostname
 HOSTNAME=mac-mini.tailnet-name.ts.net  # Replace with your actual hostname
 
-# Access staging environment
+# Access qa environment
 Frontend:    http://$HOSTNAME:3000
 Backend API: http://$HOSTNAME:8080
 RabbitMQ UI: http://$HOSTNAME:15673
@@ -466,30 +466,30 @@ RabbitMQ UI: http://$HOSTNAME:15673
 
 ```bash
 # All services
-docker-compose -f docker-compose.staging.yml logs -f
+docker-compose -f docker-compose.qa.yml logs -f
 
 # Specific service
-docker-compose -f docker-compose.staging.yml logs -f backend
-docker-compose -f docker-compose.staging.yml logs -f frontend
+docker-compose -f docker-compose.qa.yml logs -f backend
+docker-compose -f docker-compose.qa.yml logs -f frontend
 
 # Last 100 lines
-docker-compose -f docker-compose.staging.yml logs --tail=100 backend
+docker-compose -f docker-compose.qa.yml logs --tail=100 backend
 ```
 
 ### Managing Containers
 
 ```bash
-# Stop staging environment
-docker-compose -f docker-compose.staging.yml down
+# Stop qa environment
+docker-compose -f docker-compose.qa.yml down
 
-# Start staging environment
-docker-compose -f docker-compose.staging.yml up -d
+# Start qa environment
+docker-compose -f docker-compose.qa.yml up -d
 
 # Restart a service
-docker-compose -f docker-compose.staging.yml restart backend
+docker-compose -f docker-compose.qa.yml restart backend
 
 # View service status
-docker-compose -f docker-compose.staging.yml ps
+docker-compose -f docker-compose.qa.yml ps
 ```
 
 ---
@@ -518,7 +518,7 @@ open -a Tailscale
 **Diagnosis**:
 ```bash
 # Check restart policies
-docker inspect boostedbudget-db-staging | grep -A 5 "RestartPolicy"
+docker inspect boostedbudget-db-qa | grep -A 5 "RestartPolicy"
 ```
 
 **Solution**:
@@ -527,7 +527,7 @@ docker inspect boostedbudget-db-staging | grep -A 5 "RestartPolicy"
 # Docker Desktop → Settings → General → "Start Docker Desktop when you log in"
 
 # Re-deploy to set correct restart policies
-./scripts/deploy-staging.sh
+./scripts/deploy-qa.sh
 ```
 
 ### Issue: Port conflicts
@@ -545,7 +545,7 @@ lsof -i :8080
 # Stop conflicting dev containers
 docker-compose down
 
-# Or change staging ports in docker-compose.staging.yml
+# Or change qa ports in docker-compose.qa.yml
 ```
 
 ### Issue: Health checks failing
@@ -555,19 +555,19 @@ docker-compose down
 **Diagnosis**:
 ```bash
 # Check backend logs
-docker-compose -f docker-compose.staging.yml logs backend
+docker-compose -f docker-compose.qa.yml logs backend
 
 # Check if backend is running
-docker-compose -f docker-compose.staging.yml ps backend
+docker-compose -f docker-compose.qa.yml ps backend
 ```
 
 **Solution**:
 ```bash
 # Restart backend
-docker-compose -f docker-compose.staging.yml restart backend
+docker-compose -f docker-compose.qa.yml restart backend
 
-# Check .env.staging has correct values
-cat .env.staging | grep AUTH0_DOMAIN
+# Check .env.qa has correct values
+cat .env.qa | grep AUTH0_DOMAIN
 ```
 
 ### Issue: Database connection errors
@@ -580,17 +580,17 @@ connection refused: localhost:5433
 **Solution**:
 ```bash
 # Check postgres is running
-docker-compose -f docker-compose.staging.yml ps postgres
+docker-compose -f docker-compose.qa.yml ps postgres
 
 # Check postgres logs
-docker-compose -f docker-compose.staging.yml logs postgres
+docker-compose -f docker-compose.qa.yml logs postgres
 
-# Verify credentials in .env.staging match docker-compose.staging.yml
+# Verify credentials in .env.qa match docker-compose.qa.yml
 ```
 
 ### Issue: CI/CD deployment fails
 
-**Symptoms**: GitHub Actions workflow fails on "Deploy to staging"
+**Symptoms**: GitHub Actions workflow fails on "Deploy to QA"
 
 **Diagnosis**:
 1. Check GitHub Actions logs
@@ -633,23 +633,23 @@ docker system prune -a --filter "until=24h"
 docker stats
 
 # Update images and restart
-docker-compose -f docker-compose.staging.yml pull
-docker-compose -f docker-compose.staging.yml up -d
+docker-compose -f docker-compose.qa.yml pull
+docker-compose -f docker-compose.qa.yml up -d
 ```
 
 ### Backup & Recovery
 
 **What to backup**:
-- `.env.staging` file (contains secrets)
+- `.env.qa` file (contains secrets)
 - Database data (if needed):
   ```bash
-  docker exec boostedbudget-db-staging pg_dump -U staginguser boostedbudget_staging > backup.sql
+  docker exec boostedbudget-db-qa pg_dump -U qauser boostedbudget_qa > backup.sql
   ```
 
 **Recovery**:
 ```bash
 # Restore database
-docker exec -i boostedbudget-db-staging psql -U staginguser boostedbudget_staging < backup.sql
+docker exec -i boostedbudget-db-qa psql -U qauser boostedbudget_qa < backup.sql
 ```
 
 ---
@@ -665,7 +665,7 @@ docker exec -i boostedbudget-db-staging psql -U staginguser boostedbudget_stagin
 - [ ] Stripe test mode keys obtained
 - [ ] Encryption key generated
 - [ ] GitHub Secrets configured
-- [ ] `.env.staging` created with all credentials
+- [ ] `.env.qa` created with all credentials
 - [ ] First manual deployment successful
 - [ ] All containers running with `unless-stopped` restart policy
 - [ ] Health checks passing

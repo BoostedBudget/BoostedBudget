@@ -1,26 +1,26 @@
 ---
-name: "Staging Scenario Creator"
-description: "Create new YAML scenario files for BoostedBudget staging data populator with guided questions"
+name: "QA Scenario Creator"
+description: "Create new YAML scenario files for BoostedBudget qa data populator with guided questions"
 version: "1.0.0"
 ---
 
-# Staging Scenario Creator
+# QA Scenario Creator
 
 ## Purpose
 
-This skill helps you create new YAML scenario files for the BoostedBudget staging data populator framework. It guides you through an interactive workflow to define test data scenarios with accounts, transactions, and assertions.
+This skill helps you create new YAML scenario files for the BoostedBudget qa data populator framework. It guides you through an interactive workflow to define test data scenarios with accounts, transactions, and assertions.
 
 ## When to Use This Skill
 
 Invoke this skill when you need to:
-- Create a new staging test scenario
+- Create a new QA test scenario
 - Generate YAML configuration for database test data
 - Add scenarios for UI testing, edge cases, or tier limit validation
-- Populate staging environment with specific test data patterns
+- Populate QA environment with specific test data patterns
 
 ## Interactive Workflow
 
-When the user requests to create a staging scenario, follow these steps systematically:
+When the user requests to create a QA scenario, follow these steps systematically:
 
 ### Step 1: Gather Scenario Metadata
 
@@ -105,10 +105,10 @@ Suggest reasonable assertions based on the configuration.
 1. **Auto-number the file**: Find next available number (01-05 exist, so start at 06)
 2. **Generate filename**: `{number}-{category}-{slug}.yaml` (e.g., `06-ui-testing-pagination.yaml`)
 3. **Create complete YAML** with proper structure and comments
-4. **Save to**: `backend/scripts/staging-data-populator/scenarios/`
+4. **Save to**: `backend/scripts/qa-data-populator/scenarios/`
 5. **Provide usage command**:
    ```bash
-   cd backend/scripts/staging-data-populator
+   cd backend/scripts/qa-data-populator
    OVERRIDE_USER_EMAIL="user@example.com" OVERRIDE_USER_MODE="existing" \
      ./populate.sh scenarios/{filename}
    ```

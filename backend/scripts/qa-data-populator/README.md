@@ -1,12 +1,12 @@
-# Staging Data Populator
+# QA Data Populator
 
-YAML-based script suite for populating staging environment with fake test data. Generates realistic users, accounts, and transactions for UI testing, QA validation, and demo purposes.
+YAML-based script suite for populating qa environment with fake test data. Generates realistic users, accounts, and transactions for UI testing, QA validation, and demo purposes.
 
 ## Quick Start
 
 ### Basic Usage (No Webhooks)
 ```bash
-cd backend/scripts/staging-data-populator
+cd backend/scripts/qa-data-populator
 
 # Run a demo scenario
 ./populate.sh scenarios/01-demo-data-free-user.yaml
@@ -14,7 +14,7 @@ cd backend/scripts/staging-data-populator
 
 ### With Webhook Integration (Balance Snapshots)
 ```bash
-cd backend/scripts/staging-data-populator
+cd backend/scripts/qa-data-populator
 
 # Export Auth0 token
 export AUTH_TOKEN="your-jwt-token"
@@ -25,7 +25,7 @@ export AUTH_TOKEN="your-jwt-token"
 
 **Output (Basic Scenario):**
 ```
-🚀 Staging Data Populator
+🚀 QA Data Populator
 
 Scenario: Demo Data - Free Tier User
 Tags: demo, free-tier, ui-testing
@@ -66,7 +66,7 @@ Results:
 
 ✅ **Realistic Fake Data** - 50+ merchants, proper categories, randomized amounts
 ✅ **Tier-Aware** - Free (30 days), Premium (365 days), Premium+ (730 days)
-✅ **Fast** - Populate staging in <10 seconds
+✅ **Fast** - Populate QA in <10 seconds
 ✅ **Idempotent** - Safe to run multiple times (auto-cleanup)
 ✅ **Extensible** - YAML-based, easy to add new scenarios
 ✅ **AI-Friendly** - Optimized for Claude Code to generate YAMLs
@@ -75,7 +75,7 @@ Results:
 ## Use Cases
 
 ### 1. **QA Manual Testing**
-Populate staging with test data for UI validation.
+Populate QA with test data for UI validation.
 ```bash
 ./populate.sh scenarios/01-demo-data-free-user.yaml
 ./populate.sh scenarios/02-demo-data-premium-user.yaml
@@ -114,7 +114,7 @@ open https://staging.boostedbudget.com
 
 **Step 2: Find your email**
 ```bash
-cd backend/scripts/staging-data-populator
+cd backend/scripts/qa-data-populator
 ./helpers/list-users.sh
 ```
 
@@ -533,7 +533,7 @@ webhooks:
 
 ### File Structure
 ```
-staging-data-populator/
+qa-data-populator/
 ├── populate.sh              # Main orchestrator
 ├── lib/
 │   ├── config.sh            # Load backend/.env
