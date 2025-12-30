@@ -74,12 +74,12 @@ get_user_id_by_email() {
   echo "$user_id"
 }
 
-# Get user ID by Auth0 user ID
-get_user_id_by_auth0_id() {
-  local auth0_user_id=$1
+# Get user ID by Clerk user ID
+get_user_id_by_clerk_id() {
+  local clerk_user_id=$1
 
   local user_id
-  user_id=$(query_db "SELECT user_id FROM user_identities WHERE auth0_user_id = '$auth0_user_id';")
+  user_id=$(query_db "SELECT user_id FROM user_identities WHERE clerk_user_id = '$clerk_user_id';")
 
   if [ -z "$user_id" ]; then
     return 1

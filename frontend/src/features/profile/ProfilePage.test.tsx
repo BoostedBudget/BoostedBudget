@@ -103,7 +103,7 @@ function renderWithRouter(ui: React.ReactElement, { initialUrl = '/profile' } = 
 describe('ProfilePage', () => {
   const mockUser: User = {
     id: '123e4567-e89b-12d3-a456-426614174000',
-    clerk_user_id: 'auth0|507f1f77bcf86cd799439011',
+    clerk_user_id: 'user_507f1f77bcf86cd799439011',
     email: 'test@example.com',
     email_verified: true,
     subscription_tier: 'premium',

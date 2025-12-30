@@ -140,7 +140,7 @@ test.describe('Account Deletion Flow', () => {
 
     // Should either be at profile or redirected to login
     const isAtProfile = url.includes('/profile')
-    const isAtLogin = url.includes('/') || url.includes('auth0.com')
+    const isAtLogin = url.includes('/') || url.includes('clerk.')
     expect(isAtProfile || isAtLogin).toBe(true)
   })
 
@@ -169,7 +169,7 @@ test.describe('Account Deletion Flow', () => {
 
     // Should be at root or Clerk login page
     const isAtRoot = url.includes('localhost') && url.endsWith('/')
-    const isAtClerk = url.includes('auth0.com')
+    const isAtClerk = url.includes('clerk.')
     expect(isAtRoot || isAtClerk).toBe(true)
   })
 

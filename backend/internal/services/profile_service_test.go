@@ -116,7 +116,7 @@ func TestGetProfile_ExistingUser(t *testing.T) {
 }
 
 // TestGetProfile_UserNotFound tests handling when user doesn't exist
-// NOTE: After PR #197, GetProfile no longer creates users (handled by Auth0 middleware)
+// NOTE: After PR #197, GetProfile no longer creates users (handled by Clerk middleware)
 // It now returns ErrUserNotFound if user doesn't exist
 func TestGetProfile_UserNotFound(t *testing.T) {
 	// Setup

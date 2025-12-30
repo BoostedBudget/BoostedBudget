@@ -39,7 +39,7 @@ let getAccessToken: GetTokenFunction | null = null
 
 /**
  * Configure the auth token provider.
- * Call this from AuthWrapper after Auth0 is initialized.
+ * Called from main.tsx after Clerk is initialized.
  */
 export const setAuthTokenProvider = (provider: GetTokenFunction) => {
   getAccessToken = provider

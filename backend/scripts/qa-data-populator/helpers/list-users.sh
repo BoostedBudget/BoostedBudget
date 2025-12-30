@@ -91,7 +91,7 @@ SQL="
 SELECT
   u.email,
   u.subscription_tier,
-  ui.auth0_user_id,
+  ui.clerk_user_id,
   u.created_at::date as joined_date,
   COUNT(DISTINCT li.id) as linked_items,
   COUNT(DISTINCT a.id) as accounts,
@@ -102,7 +102,7 @@ LEFT JOIN linked_items li ON li.user_id = u.id
 LEFT JOIN accounts a ON a.user_id = u.id
 LEFT JOIN transactions t ON t.user_id = u.id
 $WHERE_CLAUSE
-GROUP BY u.email, u.subscription_tier, ui.auth0_user_id, u.created_at
+GROUP BY u.email, u.subscription_tier, ui.clerk_user_id, u.created_at
 ORDER BY u.created_at DESC
 $LIMIT_CLAUSE;
 "
@@ -114,7 +114,7 @@ echo ""
 log_success "Query complete"
 echo ""
 log_info "Tip: Use these emails in your YAML scenarios (setup.user.email)"
-log_info "     For existing users, set mode: existing to preserve Auth0 login"
+log_info "     For existing users, set mode: existing to preserve Clerk login"
 echo ""
 
 exit 0

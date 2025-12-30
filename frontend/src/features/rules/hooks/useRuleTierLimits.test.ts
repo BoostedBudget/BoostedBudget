@@ -15,7 +15,7 @@ import type { SubscriptionTiersResponse } from '@/features/subscription/types'
 function createMockUser(tier: string = 'free'): User {
   return {
     id: 'user-1',
-    clerk_user_id: 'auth0|123',
+    clerk_user_id: 'user_123',
     email: 'test@example.com',
     email_verified: true,
     created_at: '2024-01-01T00:00:00Z',

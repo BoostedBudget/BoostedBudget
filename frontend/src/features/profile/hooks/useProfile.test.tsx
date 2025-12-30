@@ -17,7 +17,7 @@ import type { User } from '@/api/generated/models'
 // Mock user data matching generated User type
 const mockUser: User = {
   id: 'user-123',
-  clerk_user_id: 'auth0|123',
+  clerk_user_id: 'user_123',
   email: 'test@example.com',
   email_verified: true,
   primary_region: 'iad',

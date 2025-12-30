@@ -152,7 +152,7 @@ func (s *transactionSyncService) SyncTransactions(
 
 **GET /api/v1/sync-stats**
 
-**Authentication**: Required (Auth0 JWT)
+**Authentication**: Required (Clerk JWT)
 
 **Response** (200 OK):
 ```json
@@ -422,7 +422,7 @@ See `backend/internal/services/sync_limit_service_e2e_test.go` for:
 ### Authorization
 
 **Endpoint Security**:
-- All endpoints require Auth0 JWT
+- All endpoints require Clerk JWT
 - User ID extracted from JWT claims (not request params)
 - No user can access another user's sync stats
 
@@ -566,7 +566,7 @@ atlas migrate down --url "$DATABASE_URL" --target 000005
 
 **Resolution**:
 - If audit missing: Trigger manual sync via webhook replay
-- If API error: Check Auth0 authentication
+- If API error: Check Clerk authentication
 - If frontend error: Check network tab, verify API response
 
 **Issue**: User at limit can't sync new account
