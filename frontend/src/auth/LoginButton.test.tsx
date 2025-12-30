@@ -3,11 +3,11 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { LoginButton } from './LoginButton'
 
-// Mock Auth0
-const mockUseAuth0 = vi.hoisted(() => vi.fn())
+// Mock Clerk
+const mockUseClerk = vi.hoisted(() => vi.fn())
 
-vi.mock('@auth0/auth0-react', () => ({
-  useAuth0: mockUseAuth0,
+vi.mock('@clerk/clerk-react', () => ({
+  useClerk: mockUseClerk,
 }))
 
 describe('LoginButton', () => {
@@ -16,18 +16,18 @@ describe('LoginButton', () => {
   })
 
   it('should render login button', () => {
-    mockUseAuth0.mockReturnValue({
-      loginWithRedirect: vi.fn(),
+    mockUseClerk.mockReturnValue({
+      openSignIn: vi.fn(),
     })
 
     render(<LoginButton />)
     expect(screen.getByRole('button', { name: /log in/i })).toBeInTheDocument()
   })
 
-  it('should call loginWithRedirect when clicked', async () => {
-    const mockLoginWithRedirect = vi.fn()
-    mockUseAuth0.mockReturnValue({
-      loginWithRedirect: mockLoginWithRedirect,
+  it('should call openSignIn when clicked', async () => {
+    const mockOpenSignIn = vi.fn()
+    mockUseClerk.mockReturnValue({
+      openSignIn: mockOpenSignIn,
     })
 
     const user = userEvent.setup({ delay: null })
@@ -36,12 +36,12 @@ describe('LoginButton', () => {
     const button = screen.getByRole('button', { name: /log in/i })
     await user.click(button)
 
-    expect(mockLoginWithRedirect).toHaveBeenCalled()
+    expect(mockOpenSignIn).toHaveBeenCalled()
   })
 
   it('should pass custom className if provided', () => {
-    mockUseAuth0.mockReturnValue({
-      loginWithRedirect: vi.fn(),
+    mockUseClerk.mockReturnValue({
+      openSignIn: vi.fn(),
     })
 
     render(<LoginButton className="custom-class" />)
@@ -50,8 +50,8 @@ describe('LoginButton', () => {
   })
 
   it('should be disabled when disabled prop is true', () => {
-    mockUseAuth0.mockReturnValue({
-      loginWithRedirect: vi.fn(),
+    mockUseClerk.mockReturnValue({
+      openSignIn: vi.fn(),
     })
 
     render(<LoginButton disabled />)

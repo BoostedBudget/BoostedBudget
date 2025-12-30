@@ -6,11 +6,13 @@ import { AuthWrapper } from './AuthWrapper'
 import authReducer from './authSlice'
 import type { RootState } from '../store/store'
 
-// Mock Auth0
-const mockUseAuth0 = vi.hoisted(() => vi.fn())
+// Mock Clerk
+const mockUseAuth = vi.hoisted(() => vi.fn())
+const mockUseUser = vi.hoisted(() => vi.fn())
 
-vi.mock('@auth0/auth0-react', () => ({
-  useAuth0: mockUseAuth0,
+vi.mock('@clerk/clerk-react', () => ({
+  useAuth: mockUseAuth,
+  useUser: mockUseUser,
 }))
 
 describe('AuthWrapper', () => {
@@ -26,19 +28,29 @@ describe('AuthWrapper', () => {
   })
 
   it('should set user in Redux when authenticated', async () => {
-    const mockUser = {
-      sub: 'auth0|123',
-      email: 'test@example.com',
-      name: 'Test User',
+    const mockClerkUser = {
+      id: 'user_123',
+      primaryEmailAddress: {
+        emailAddress: 'test@example.com',
+        verification: { status: 'verified' },
+      },
+      fullName: 'Test User',
+      imageUrl: 'https://example.com/avatar.jpg',
+      publicMetadata: {
+        subscription_tier: 'free',
+        primary_region: 'iad',
+      },
     }
 
-    const mockGetAccessTokenSilently = vi.fn().mockResolvedValue('mock-token')
+    const mockGetToken = vi.fn().mockResolvedValue('mock-token')
 
-    mockUseAuth0.mockReturnValue({
-      isAuthenticated: true,
-      isLoading: false,
-      user: mockUser,
-      getAccessTokenSilently: mockGetAccessTokenSilently,
+    mockUseAuth.mockReturnValue({
+      isSignedIn: true,
+      getToken: mockGetToken,
+    })
+
+    mockUseUser.mockReturnValue({
+      user: mockClerkUser,
     })
 
     render(
@@ -51,16 +63,27 @@ describe('AuthWrapper', () => {
 
     await waitFor(() => {
       const state = store.getState() as RootState
-      expect(state.auth.user).toEqual(mockUser)
+      expect(state.auth.user).toEqual({
+        sub: 'user_123',
+        email: 'test@example.com',
+        email_verified: true,
+        name: 'Test User',
+        picture: 'https://example.com/avatar.jpg',
+        subscription_tier: 'free',
+        primary_region: 'iad',
+      })
       expect(state.auth.token).toBe('mock-token')
       expect(state.auth.isAuthenticated).toBe(true)
     })
   })
 
   it('should clear user in Redux when not authenticated', async () => {
-    mockUseAuth0.mockReturnValue({
-      isAuthenticated: false,
-      isLoading: false,
+    mockUseAuth.mockReturnValue({
+      isSignedIn: false,
+      getToken: vi.fn(),
+    })
+
+    mockUseUser.mockReturnValue({
       user: undefined,
     })
 
@@ -81,18 +104,26 @@ describe('AuthWrapper', () => {
   })
 
   it('should handle token refresh errors gracefully', async () => {
-    const mockUser = {
-      sub: 'auth0|123',
-      email: 'test@example.com',
+    const mockClerkUser = {
+      id: 'user_123',
+      primaryEmailAddress: {
+        emailAddress: 'test@example.com',
+        verification: { status: 'verified' },
+      },
+      fullName: null,
+      imageUrl: null,
+      publicMetadata: {},
     }
 
-    const mockGetAccessTokenSilently = vi.fn().mockRejectedValue(new Error('Token refresh failed'))
+    const mockGetToken = vi.fn().mockRejectedValue(new Error('Token refresh failed'))
 
-    mockUseAuth0.mockReturnValue({
-      isAuthenticated: true,
-      isLoading: false,
-      user: mockUser,
-      getAccessTokenSilently: mockGetAccessTokenSilently,
+    mockUseAuth.mockReturnValue({
+      isSignedIn: true,
+      getToken: mockGetToken,
+    })
+
+    mockUseUser.mockReturnValue({
+      user: mockClerkUser,
     })
 
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -116,9 +147,13 @@ describe('AuthWrapper', () => {
   })
 
   it('should render children', () => {
-    mockUseAuth0.mockReturnValue({
-      isAuthenticated: false,
-      isLoading: false,
+    mockUseAuth.mockReturnValue({
+      isSignedIn: false,
+      getToken: vi.fn(),
+    })
+
+    mockUseUser.mockReturnValue({
+      user: undefined,
     })
 
     const { getByText } = render(

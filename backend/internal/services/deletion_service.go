@@ -25,7 +25,7 @@ type DeletionService interface {
 type deletionService struct {
 	profileRepo      repository.ProfileRepository
 	emailService     EmailService
-	auth0Service     Auth0Service
+	clerkService     ClerkService
 	auditLogger      AuditLogger
 	gracePeriodDays  int
 	tokenSecret      string
@@ -40,7 +40,7 @@ type AuditLogger interface {
 func NewDeletionService(
 	profileRepo repository.ProfileRepository,
 	emailService EmailService,
-	auth0Service Auth0Service,
+	clerkService ClerkService,
 	auditLogger AuditLogger,
 	gracePeriodDays int,
 	tokenSecret string,
@@ -48,7 +48,7 @@ func NewDeletionService(
 	return &deletionService{
 		profileRepo:     profileRepo,
 		emailService:    emailService,
-		auth0Service:    auth0Service,
+		clerkService:    clerkService,
 		auditLogger:     auditLogger,
 		gracePeriodDays: gracePeriodDays,
 		tokenSecret:     tokenSecret,
@@ -152,9 +152,11 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string) er
 		return fmt.Errorf("failed to cascade delete user data: %w", err)
 	}
 
-	// Delete user from Auth0 (non-critical - log but don't fail)
-	if err := s.auth0Service.DeleteUser(ctx, user.Auth0UserID); err != nil {
-		// Auth0 deletion failure is logged but not critical
+	// Delete user from Clerk (non-critical - log but don't fail)
+	// Note: user.Auth0UserID stores the Clerk user ID (user_xxx format)
+	// The database column name is legacy and will be renamed in a future migration
+	if err := s.clerkService.DeleteUser(ctx, user.Auth0UserID); err != nil {
+		// Clerk deletion failure is logged but not critical
 		// User data is already deleted from our system
 		// Manual cleanup can be done later if needed
 		// In production, this would be logged to monitoring system

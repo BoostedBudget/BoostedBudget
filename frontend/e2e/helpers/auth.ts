@@ -1,38 +1,45 @@
 import { Page, expect } from '@playwright/test';
 
 /**
- * Auth0 Helper Functions for E2E Tests
- * These helpers handle Auth0 Universal Login flows
+ * Clerk Helper Functions for E2E Tests
+ * These helpers handle Clerk authentication flows
  */
 
-export interface Auth0Credentials {
+export interface ClerkCredentials {
   email: string;
   password: string;
 }
 
 /**
- * Perform login via Auth0 Universal Login
+ * Perform login via Clerk
  * @param page - Playwright page object
- * @param credentials - Auth0 test user credentials
+ * @param credentials - Clerk test user credentials
  */
-export async function loginWithAuth0(
+export async function loginWithClerk(
   page: Page,
-  credentials: Auth0Credentials
+  credentials: ClerkCredentials
 ): Promise<void> {
-  // Click login button to redirect to Auth0
+  // Click login button to open Clerk sign-in modal or redirect
   await page.click('button:has-text("Log In")');
 
-  // Wait for Auth0 Universal Login page
-  await page.waitForURL(/auth0\.com/, { timeout: 10000 });
+  // Wait for Clerk sign-in UI (could be modal or redirect)
+  // Clerk hosted pages are at accounts.*.clerk.accounts.dev or clerk.* domains
+  await page.waitForSelector('input[name="identifier"], input[type="email"]', { timeout: 10000 });
 
   // Fill in email
-  await page.fill('input[name="username"], input[type="email"]', credentials.email);
+  await page.fill('input[name="identifier"], input[type="email"]', credentials.email);
+
+  // Click continue button
+  await page.click('button:has-text("Continue")');
+
+  // Wait for password field
+  await page.waitForSelector('input[type="password"]', { timeout: 10000 });
 
   // Fill in password
-  await page.fill('input[name="password"], input[type="password"]', credentials.password);
+  await page.fill('input[type="password"]', credentials.password);
 
-  // Click submit/continue button
-  await page.click('button[type="submit"], button:has-text("Continue")');
+  // Click submit button
+  await page.click('button:has-text("Continue"), button[type="submit"]');
 
   // Wait for redirect back to app
   await page.waitForURL(/localhost:3000/, { timeout: 15000 });
@@ -42,35 +49,34 @@ export async function loginWithAuth0(
 }
 
 /**
- * Perform signup via Auth0 Universal Login
+ * Perform signup via Clerk
  * @param page - Playwright page object
  * @param credentials - New user credentials
  */
-export async function signupWithAuth0(
+export async function signupWithClerk(
   page: Page,
-  credentials: Auth0Credentials
+  credentials: ClerkCredentials
 ): Promise<void> {
-  // Click signup/register button if different from login
-  // For Auth0, often you click login then switch to signup
+  // Click login button to open Clerk UI
   await page.click('button:has-text("Log In")');
 
-  // Wait for Auth0 Universal Login page
-  await page.waitForURL(/auth0\.com/, { timeout: 10000 });
+  // Wait for Clerk sign-in UI
+  await page.waitForSelector('input[name="identifier"], input[type="email"]', { timeout: 10000 });
 
-  // Click "Sign up" tab/link if present
-  const signupLink = page.locator('a:has-text("Sign up"), button:has-text("Sign up")');
+  // Look for "Sign up" or "Don't have an account" link
+  const signupLink = page.locator('a:has-text("Sign up"), button:has-text("Sign up"), a:has-text("Don\'t have an account")');
   if (await signupLink.isVisible({ timeout: 2000 })) {
     await signupLink.click();
   }
 
   // Fill in email
-  await page.fill('input[name="email"], input[type="email"]', credentials.email);
+  await page.fill('input[name="emailAddress"], input[type="email"]', credentials.email);
 
   // Fill in password
   await page.fill('input[name="password"], input[type="password"]', credentials.password);
 
-  // Click submit/continue button
-  await page.click('button[type="submit"], button:has-text("Continue"), button:has-text("Sign Up")');
+  // Click submit button
+  await page.click('button[type="submit"], button:has-text("Continue"), button:has-text("Sign up")');
 
   // Wait for redirect back to app
   await page.waitForURL(/localhost:3000/, { timeout: 15000 });
@@ -122,3 +128,8 @@ export async function acceptCookieConsent(page: Page): Promise<void> {
     // Cookie banner not present or already accepted
   }
 }
+
+// Re-export with both names for backward compatibility during transition
+export { loginWithClerk as loginWithAuth0 };
+export { signupWithClerk as signupWithAuth0 };
+export type { ClerkCredentials as Auth0Credentials };

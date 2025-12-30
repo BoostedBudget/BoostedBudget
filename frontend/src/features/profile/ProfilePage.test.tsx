@@ -80,10 +80,10 @@ vi.mock('sonner', () => ({
   toast: mockToast,
 }))
 
-// Mock Auth0
-const mockUseAuth0 = vi.hoisted(() => vi.fn())
-vi.mock('@auth0/auth0-react', () => ({
-  useAuth0: mockUseAuth0,
+// Mock Clerk
+const mockUseAuth = vi.hoisted(() => vi.fn())
+vi.mock('@clerk/clerk-react', () => ({
+  useAuth: mockUseAuth,
 }))
 
 /**
@@ -119,9 +119,8 @@ describe('ProfilePage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockIsPending = false
-    mockUseAuth0.mockReturnValue({
-      isAuthenticated: true,
-      user: { email: 'test@example.com' },
+    mockUseAuth.mockReturnValue({
+      isSignedIn: true,
     })
 
     // Mock subscription tiers hook to return tier data

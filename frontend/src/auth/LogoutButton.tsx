@@ -1,4 +1,4 @@
-import { useAuth0 } from '@auth0/auth0-react'
+import { useClerk } from '@clerk/clerk-react'
 
 interface LogoutButtonProps {
   className?: string
@@ -6,14 +6,10 @@ interface LogoutButtonProps {
 }
 
 export const LogoutButton: React.FC<LogoutButtonProps> = ({ className, disabled }) => {
-  const { logout } = useAuth0()
+  const { signOut } = useClerk()
 
   const handleLogout = () => {
-    logout({
-      logoutParams: {
-        returnTo: window.location.origin,
-      },
-    })
+    signOut({ redirectUrl: window.location.origin })
   }
 
   return (

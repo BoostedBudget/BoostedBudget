@@ -17,12 +17,8 @@ kill_timeout = 10
   # API endpoint (no /v1 suffix - endpoints include full path like /api/v1/user/profile)
   API_URL = "https://api.boostedbudget.com"
 
-  # Auth0 configuration (runtime injection via docker-entrypoint.sh)
-  AUTH0_DOMAIN = "dev-evuy37ow1xcidsmw.us.auth0.com"
-  AUTH0_AUDIENCE = "https://api.boostedbudget.com"
-
   # NOTE: Sensitive environment variables set via `fly secrets set`:
-  # - AUTH0_CLIENT_ID (Auth0 SPA client ID)
+  # - CLERK_PUBLISHABLE_KEY (Clerk frontend publishable key)
   # - PLAID_PUBLIC_KEY
   # - GOOGLE_ADSENSE_CLIENT (for free tier ads)
 
