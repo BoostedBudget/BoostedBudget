@@ -56,14 +56,14 @@ func NewUserIdentity(userID, clerkUserID, email string, emailVerified, isPrimary
 }
 
 // ParseExternalUserID extracts the provider and provider_user_id from an external user ID
-// Legacy Auth0 IDs follow the format: "provider|user_id"
+// Legacy IDs (pre-migration) follow the format: "provider|user_id"
 // Clerk IDs follow the format: "user_xxx" (no pipe separator)
 // Examples:
 //   - "google-oauth2|123456" -> ("google-oauth2", "123456")
 //   - "microsoft|789" -> ("microsoft", "789")
 //   - "user_abc123" -> ("clerk", "abc123")
 func ParseExternalUserID(externalUserID string) (provider string, providerUserID string) {
-	// Find the pipe character separator (legacy Auth0 format)
+	// Find the pipe character separator (legacy format, pre-Clerk migration)
 	for i, ch := range externalUserID {
 		if ch == '|' {
 			provider = externalUserID[:i]

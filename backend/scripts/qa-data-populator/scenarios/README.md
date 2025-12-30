@@ -62,16 +62,16 @@ setup:
     mode: "new"  # OPTIONAL - "existing" or "new" (default: "new")
     email: "unique-email@example.com"  # REQUIRED - must be unique
     tier: "free"  # REQUIRED for new users, OPTIONAL for existing users
-    auth0_user_id: "google-oauth2|123..."  # OPTIONAL - for validation only
+    clerk_user_id: "user_2abc123..."  # OPTIONAL - for validation only
 ```
 
 **User Modes:**
-- `new` - Create a new fake user with fake Auth0 ID (default)
-  - **Frontend will NOT work** - cannot log in with fake Auth0 users
+- `new` - Create a new fake user with fake Clerk ID (default)
+  - **Frontend will NOT work** - cannot log in with fake Clerk users
   - Use for backend testing, API testing, SQL queries
-  - Script generates fake auth0_user_id automatically
+  - Script generates fake clerk_user_id automatically
 
-- `existing` - Use a real Auth0 user who has logged into staging
+- `existing` - Use a real Clerk user who has logged into staging
   - **Frontend WILL work** - user can log in and see populated data!
   - User must exist in database (must have logged into staging.boostedbudget.com first)
   - Script preserves user account during cleanup (only deletes data)
@@ -102,10 +102,10 @@ setup:
 ```yaml
 setup:
   user:
-    mode: "existing"  # REQUIRED for real Auth0 users
-    email: "your-email@example.com"  # Must match Auth0 login
+    mode: "existing"  # REQUIRED for real Clerk users
+    email: "your-email@example.com"  # Must match Clerk login
     tier: "premium"  # Optional - upgrades user's tier
-    # auth0_user_id: "google-oauth2|123..."  # Optional validation
+    # clerk_user_id: "user_2abc123..."  # Optional validation
 ```
 
 ### Linked Items
@@ -202,7 +202,7 @@ webhooks:
 - `TRANSACTIONS_REMOVED` - Retroactive deletions
 
 **Requirements:**
-- `AUTH_TOKEN` environment variable must be set with valid Auth0 JWT
+- `AUTH_TOKEN` environment variable must be set with valid Clerk JWT
 - Admin webhook endpoint must be deployed to staging
 - Webhook processing creates balance snapshots for all accounts
 
@@ -211,7 +211,7 @@ webhooks:
 - ✅ Tests the full webhook processing pipeline
 - ✅ Matches production behavior exactly
 - ❌ Slower (adds 5-30 seconds per scenario)
-- ❌ Requires Auth0 authentication
+- ❌ Requires Clerk authentication
 
 **Example:**
 ```yaml
@@ -397,4 +397,4 @@ See the example scenarios in this directory:
 - `05-edge-cases-pending-refunds.yaml` - Manual transactions, edge cases
 
 **For Frontend Testing (mode: existing):**
-- `99-existing-user-example.yaml` - Template for real Auth0 users (frontend testing)
+- `99-existing-user-example.yaml` - Template for real Clerk users (frontend testing)

@@ -82,7 +82,7 @@ describe('AutoCategorizationPageWrapper', () => {
 
   const mockUser = {
     id: 'user-1',
-    clerk_user_id: 'auth0|test123',
+    clerk_user_id: 'user_test123',
     email: 'test@example.com',
     email_verified: true,
     subscription_tier: 'premium' as const,
