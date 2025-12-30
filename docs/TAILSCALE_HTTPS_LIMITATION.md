@@ -2,14 +2,11 @@
 
 ## Issue
 
-Auth0 SDK requires HTTPS for all non-localhost origins for security reasons. This means:
+Authentication SDKs (including Clerk) require HTTPS for all non-localhost origins for security reasons. This means:
 - ✅ **http://localhost:3000** - Works perfectly (localhost is exempt)
-- ❌ **http://qa.example.ts.net:3000** - Blocked by Auth0
+- ❌ **http://qa.example.ts.net:3000** - Blocked by security requirements
 
-Error message:
-```
-auth0-spa-js must run on a secure origin. See https://github.com/auth0/auth0-spa-js/blob/main/FAQ.md#why-do-i-get-auth0-spa-js-must-run-on-a-secure-origin
-```
+Error: Authentication must run on a secure origin (HTTPS) for non-localhost domains.
 
 ## Root Cause
 
@@ -26,7 +23,7 @@ $ tailscale cert qa.example.ts.net
 This works for:
 - Local testing on the Mac Mini
 - SSH tunnel access: `ssh -L 3000:localhost:3000 user@mac-mini`
-- All Auth0 authentication flows
+- All Clerk authentication flows
 - Profile, accounts, transactions pages
 - Auto-registration on first login
 
@@ -65,7 +62,7 @@ ngrok http 3000
 
 ngrok provides: **https://random-name.ngrok.io** → **http://localhost:3000**
 
-Update Auth0 callback URLs to include the ngrok URL.
+Update Clerk allowed origins to include the ngrok URL.
 
 **Pros**: Free tier available, automatic HTTPS
 **Cons**: URL changes on restart (unless using paid plan), external dependency
@@ -112,7 +109,7 @@ ssh -L 3000:localhost:3000 runner@mac-mini-ip
 # Then access http://localhost:3000 in browser
 ```
 
-**Pros**: Secure, no additional setup, works with Auth0
+**Pros**: Secure, no additional setup, works with Clerk
 **Cons**: Requires SSH access, terminal must stay open
 
 ## Recommendation
