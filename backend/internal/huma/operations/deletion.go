@@ -102,7 +102,7 @@ func RegisterDeletionRoutes(api huma.API, handler *DeletionHandler) {
 		Summary:     "Request account deletion",
 		Description: "Initiates account deletion with 30-day grace period. User will receive email with cancellation link.",
 		Tags:        []string{"User"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.RequestDeletion)
 
 	// GET /api/v1/user/delete/cancel/{token} - Cancel deletion (public, token-based)

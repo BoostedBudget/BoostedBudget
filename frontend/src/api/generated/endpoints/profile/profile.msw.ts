@@ -37,7 +37,7 @@ export const getGetUserProfileResponseMock = (
   overrideResponse: Partial<User> = {},
 ): User => ({
   $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
-  auth0_user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  clerk_user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   created_at: `${faker.date.past().toISOString().split(".")[0]}Z`,
   deletion_requested_at: faker.helpers.arrayElement([
     `${faker.date.past().toISOString().split(".")[0]}Z`,
@@ -79,7 +79,7 @@ export const getUpdateUserProfileResponseMock = (
   overrideResponse: Partial<User> = {},
 ): User => ({
   $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
-  auth0_user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  clerk_user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   created_at: `${faker.date.past().toISOString().split(".")[0]}Z`,
   deletion_requested_at: faker.helpers.arrayElement([
     `${faker.date.past().toISOString().split(".")[0]}Z`,

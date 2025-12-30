@@ -2478,7 +2478,7 @@ components:
           format: uri
           readOnly: true
           type: string
-        auth0_user_id:
+        clerk_user_id:
           type: string
         created_at:
           format: date-time
@@ -2521,7 +2521,7 @@ components:
           type: string
       required:
         - id
-        - auth0_user_id
+        - clerk_user_id
         - email
         - email_verified
         - subscription_tier
@@ -2767,7 +2767,7 @@ paths:
         - Accounts
   /api/v1/admin/plaid/fire-webhook:
     post:
-      description: Fires a Plaid webhook for testing in QA environment. Requires Auth0 authentication.
+      description: Fires a Plaid webhook for testing in QA environment. Requires Clerk authentication.
       operationId: fireWebhook
       requestBody:
         content:
@@ -5143,7 +5143,7 @@ paths:
         - Profile
   /health:
     get:
-      description: Returns the health status of the API and its dependencies (database, Redis, Auth0).
+      description: Returns the health status of the API and its dependencies (database, Redis, Clerk).
       operationId: getHealth
       responses:
         "200":

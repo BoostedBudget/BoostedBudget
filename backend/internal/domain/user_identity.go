@@ -4,7 +4,7 @@ import (
 	"time"
 )
 
-// UserIdentity represents an Auth0 identity linked to a user account
+// UserIdentity represents an external identity linked to a user account
 // Supports multiple authentication providers per user (Google, Microsoft, Apple, etc.)
 // Implements Issue #148 Phase 2 - Multi-Provider Authentication
 type UserIdentity struct {
@@ -14,12 +14,12 @@ type UserIdentity struct {
 	// Foreign key to users table
 	UserID string `json:"user_id" db:"user_id"`
 
-	// Auth0 identity (e.g., "google-oauth2|123456", "microsoft|789")
-	Auth0UserID string `json:"auth0_user_id" db:"auth0_user_id"`
+	// Clerk identity (e.g., "user_xxx" for Clerk, "google-oauth2|123456" for legacy)
+	ClerkUserID string `json:"clerk_user_id" db:"clerk_user_id"`
 
 	// Provider information
-	Provider       string `json:"provider" db:"provider"`              // google-oauth2, microsoft, apple, github, auth0
-	ProviderUserID string `json:"provider_user_id" db:"provider_user_id"` // Extracted from Auth0UserID (e.g., "123456")
+	Provider       string `json:"provider" db:"provider"`              // clerk, google-oauth2, microsoft, apple, github
+	ProviderUserID string `json:"provider_user_id" db:"provider_user_id"` // Extracted from ClerkUserID (e.g., "xxx")
 
 	// Email from this specific provider (may differ across providers)
 	Email         string `json:"email,omitempty" db:"email"`
@@ -34,17 +34,17 @@ type UserIdentity struct {
 	LastUsedAt *time.Time `json:"last_used_at,omitempty" db:"last_used_at"` // Last login with this identity
 }
 
-// NewUserIdentity creates a new user identity for a given Auth0 user ID
-// Extracts provider and provider_user_id from the auth0_user_id format
-func NewUserIdentity(userID, auth0UserID, email string, emailVerified, isPrimary bool) *UserIdentity {
+// NewUserIdentity creates a new user identity for a given Clerk user ID
+// Extracts provider and provider_user_id from the clerk_user_id format
+func NewUserIdentity(userID, clerkUserID, email string, emailVerified, isPrimary bool) *UserIdentity {
 	now := time.Now()
 
-	// Extract provider and provider_user_id from auth0_user_id
-	provider, providerUserID := ParseAuth0UserID(auth0UserID)
+	// Extract provider and provider_user_id from clerk_user_id
+	provider, providerUserID := ParseExternalUserID(clerkUserID)
 
 	return &UserIdentity{
 		UserID:         userID,
-		Auth0UserID:    auth0UserID,
+		ClerkUserID:    clerkUserID,
 		Provider:       provider,
 		ProviderUserID: providerUserID,
 		Email:          email,
@@ -55,23 +55,29 @@ func NewUserIdentity(userID, auth0UserID, email string, emailVerified, isPrimary
 	}
 }
 
-// ParseAuth0UserID extracts the provider and provider_user_id from an Auth0 user ID
-// Auth0 user IDs follow the format: "provider|user_id"
+// ParseExternalUserID extracts the provider and provider_user_id from an external user ID
+// Legacy Auth0 IDs follow the format: "provider|user_id"
+// Clerk IDs follow the format: "user_xxx" (no pipe separator)
 // Examples:
 //   - "google-oauth2|123456" -> ("google-oauth2", "123456")
 //   - "microsoft|789" -> ("microsoft", "789")
-//   - "auth0|abc123" -> ("auth0", "abc123")
-func ParseAuth0UserID(auth0UserID string) (provider string, providerUserID string) {
-	// Find the pipe character separator
-	for i, ch := range auth0UserID {
+//   - "user_abc123" -> ("clerk", "abc123")
+func ParseExternalUserID(externalUserID string) (provider string, providerUserID string) {
+	// Find the pipe character separator (legacy Auth0 format)
+	for i, ch := range externalUserID {
 		if ch == '|' {
-			provider = auth0UserID[:i]
-			providerUserID = auth0UserID[i+1:]
+			provider = externalUserID[:i]
+			providerUserID = externalUserID[i+1:]
 			return
 		}
 	}
 
-	// Fallback: if no pipe found, treat entire string as auth0 provider
-	// This handles legacy or malformed IDs gracefully
-	return "auth0", auth0UserID
+	// No pipe found - check for Clerk format (user_xxx)
+	if len(externalUserID) > 5 && externalUserID[:5] == "user_" {
+		return "clerk", externalUserID[5:]
+	}
+
+	// Fallback: treat entire string as clerk provider
+	// This handles new Clerk IDs or other formats gracefully
+	return "clerk", externalUserID
 }

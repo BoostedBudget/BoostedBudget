@@ -196,7 +196,7 @@ func TestCreateLinkToken_Success(t *testing.T) {
 
 	// When: Creating link token for a user
 	ctx := context.Background()
-	userID := "auth0|test-user-123"
+	userID := "user_test-user-123"
 
 	response, err := service.CreateLinkToken(ctx, userID)
 
@@ -229,7 +229,7 @@ func TestCreateLinkToken_IncludesCorrectUserID(t *testing.T) {
 
 	// When: Creating link token with specific user ID
 	ctx := context.Background()
-	userID := "auth0|specific-user-456"
+	userID := "user_specific-user-456"
 
 	response, err := service.CreateLinkToken(ctx, userID)
 
@@ -261,7 +261,7 @@ func TestCreateLinkToken_IncludesRequiredProducts(t *testing.T) {
 
 	// When: Creating link token
 	ctx := context.Background()
-	response, err := service.CreateLinkToken(ctx, "auth0|test-user-123")
+	response, err := service.CreateLinkToken(ctx, "user_test-user-123")
 
 	// Then: Link token is created successfully
 	// (Products are configured internally: TRANSACTIONS, AUTH, BALANCE)
@@ -292,7 +292,7 @@ func TestCreateLinkToken_IncludesWebhookURL(t *testing.T) {
 
 	// When: Creating link token
 	ctx := context.Background()
-	response, err := service.CreateLinkToken(ctx, "auth0|test-user-123")
+	response, err := service.CreateLinkToken(ctx, "user_test-user-123")
 
 	// Then: Link token is created successfully with webhook configured
 	require.NoError(t, err, "Expected no error - webhook URL should be accepted")
@@ -323,7 +323,7 @@ func TestCreateLinkToken_ReturnsExpirationTime(t *testing.T) {
 	// When: Creating link token
 	ctx := context.Background()
 	before := time.Now()
-	response, err := service.CreateLinkToken(ctx, "auth0|test-user-123")
+	response, err := service.CreateLinkToken(ctx, "user_test-user-123")
 	after := time.Now().Add(31 * time.Minute) // Plaid tokens typically expire in 30 minutes
 
 	// Then: Response includes expiration time
@@ -350,7 +350,7 @@ func TestCreateLinkToken_PlaidAPIError(t *testing.T) {
 
 	// When: Attempting to create link token (will fail at API call)
 	ctx := context.Background()
-	response, err := service.CreateLinkToken(ctx, "auth0|test-user-123")
+	response, err := service.CreateLinkToken(ctx, "user_test-user-123")
 
 	// Then: Returns error from Plaid API
 	assert.Error(t, err, "Expected error with invalid credentials")
@@ -380,7 +380,7 @@ func TestCreateLinkToken_MissingWebhookURL(t *testing.T) {
 
 	// When: Attempting to create link token
 	ctx := context.Background()
-	response, err := service.CreateLinkToken(ctx, "auth0|test-user-123")
+	response, err := service.CreateLinkToken(ctx, "user_test-user-123")
 
 	// Then: Returns error about missing webhook URL
 	assert.Error(t, err, "Expected error when webhook URL is missing")
@@ -408,7 +408,7 @@ func TestCreateLinkToken_MissingRedirectURI(t *testing.T) {
 
 	// When: Attempting to create link token
 	ctx := context.Background()
-	response, err := service.CreateLinkToken(ctx, "auth0|test-user-123")
+	response, err := service.CreateLinkToken(ctx, "user_test-user-123")
 
 	// Then: Returns error about missing redirect URI
 	assert.Error(t, err, "Expected error when redirect URI is missing")
@@ -713,7 +713,7 @@ func TestCreateUpdateModeLinkToken_Success(t *testing.T) {
 	// When: Creating update mode link token with valid access token
 	// NOTE: In real test, this would be a valid sandbox access token from a previously created item
 	ctx := context.Background()
-	userID := "auth0|test-user-123"
+	userID := "user_test-user-123"
 	accessToken := "access-sandbox-test-token" // Sandbox test token (would be real in integration)
 
 	response, err := service.CreateUpdateModeLinkToken(ctx, userID, accessToken)
@@ -751,7 +751,7 @@ func TestCreateUpdateModeLinkToken_EmptyAccessToken(t *testing.T) {
 
 	// When: Creating update mode link token with empty access token
 	ctx := context.Background()
-	userID := "auth0|test-user-123"
+	userID := "user_test-user-123"
 	response, err := service.CreateUpdateModeLinkToken(ctx, userID, "")
 
 	// Then: Should return validation error
@@ -801,7 +801,7 @@ func TestCreateUpdateModeLinkToken_PlaidAPIError(t *testing.T) {
 
 	// When: Attempting to create update mode link token (will fail at API call)
 	ctx := context.Background()
-	userID := "auth0|test-user-123"
+	userID := "user_test-user-123"
 	accessToken := "access-sandbox-test-token"
 	response, err := service.CreateUpdateModeLinkToken(ctx, userID, accessToken)
 

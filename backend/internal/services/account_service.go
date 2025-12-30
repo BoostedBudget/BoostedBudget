@@ -24,11 +24,11 @@ var (
 // AccountService handles account linking and management
 type AccountService interface {
 	// LinkAccounts exchanges a Plaid public token for an access token and links bank accounts
-	// NOTE: After PR #197, this accepts internal user UUID, not Auth0 ID
+	// NOTE: After PR #197, this accepts internal user UUID, not Clerk ID
 	LinkAccounts(ctx context.Context, userID, publicToken, institutionID, institutionName string) (*LinkAccountsResult, error)
 
 	// GetAccounts retrieves all linked bank accounts for a user with institution information
-	// NOTE: After PR #197, this accepts internal user UUID, not Auth0 ID
+	// NOTE: After PR #197, this accepts internal user UUID, not Clerk ID
 	GetAccounts(ctx context.Context, userID string) ([]domain.Account, error)
 
 	// GetAccountsFiltered retrieves accounts with optional hidden filter (Issue #307)
@@ -97,7 +97,7 @@ func NewAccountService(
 }
 
 // LinkAccounts exchanges a Plaid public token for an access token and links bank accounts
-// NOTE: After PR #197, this method receives internal user UUID, not Auth0 ID
+// NOTE: After PR #197, this method receives internal user UUID, not Clerk ID
 //
 // Flow:
 // 1. Fetch user by internal UUID to get subscription tier
@@ -268,13 +268,13 @@ func convertPlaidAccount(plaidAccount plaid.AccountBase, linkedItemID, userID st
 }
 
 // GetAccounts retrieves all linked bank accounts for a user with institution information
-// NOTE: After PR #197, this method receives internal user UUID, not Auth0 ID
+// NOTE: After PR #197, this method receives internal user UUID, not Clerk ID
 func (s *accountService) GetAccounts(ctx context.Context, userID string) ([]domain.Account, error) {
 	// Fetch user by internal UUID to verify user exists
 	user, err := s.userRepo.GetUserByID(ctx, userID)
 	if err != nil {
 		if err == repository.ErrUserNotFound {
-			// User authenticated via Auth0 but not yet in our database
+			// User authenticated via Clerk but not yet in our database
 			// Return empty list instead of error (user hasn't linked any accounts yet)
 			return []domain.Account{}, nil
 		}
@@ -354,7 +354,7 @@ func (s *accountService) GetAccountsFiltered(ctx context.Context, userID string,
 	_, err := s.userRepo.GetUserByID(ctx, userID)
 	if err != nil {
 		if err == repository.ErrUserNotFound {
-			// User authenticated via Auth0 but not yet in our database
+			// User authenticated via Clerk but not yet in our database
 			// Return empty list instead of error (user hasn't linked any accounts yet)
 			return []domain.Account{}, nil
 		}

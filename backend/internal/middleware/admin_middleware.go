@@ -25,7 +25,7 @@ import (
 //   - development: Returns 404 Not Found (qa-only endpoint)
 //
 // Future Enhancement (Issue #309): Add role-based access control to check for "admin" role
-// in Auth0 JWT custom claims. Current implementation only validates environment.
+// in Clerk JWT custom claims. Current implementation only validates environment.
 func AdminMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {

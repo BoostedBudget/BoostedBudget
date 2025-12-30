@@ -87,7 +87,7 @@ func NewClerkMiddleware(
 		}
 
 		// Look up or register user identity
-		identity, err := identityRepo.GetByAuth0ID(ctx.Context(), clerkUserID)
+		identity, err := identityRepo.GetByClerkID(ctx.Context(), clerkUserID)
 		if err != nil {
 			if err == repository.ErrIdentityNotFound {
 				// Auto-register new user
@@ -100,7 +100,7 @@ func NewClerkMiddleware(
 					return
 				}
 
-				identity, err = identityRepo.GetByAuth0ID(ctx.Context(), clerkUserID)
+				identity, err = identityRepo.GetByClerkID(ctx.Context(), clerkUserID)
 				if err != nil {
 					writeClerkJSONError(ctx, http.StatusInternalServerError, "Failed to complete registration")
 					return

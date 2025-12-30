@@ -47,7 +47,7 @@ import type { ErrorType } from "../../../client";
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 /**
- * Returns the health status of the API and its dependencies (database, Redis, Auth0).
+ * Returns the health status of the API and its dependencies (database, Redis, Clerk).
  * @summary Health check
  */
 export const getHealth = (

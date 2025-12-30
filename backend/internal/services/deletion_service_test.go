@@ -26,8 +26,8 @@ func (m *MockProfileRepositoryForDeletion) GetUserByID(ctx context.Context, user
 	return args.Get(0).(*domain.User), args.Error(1)
 }
 
-func (m *MockProfileRepositoryForDeletion) GetUserByAuth0ID(ctx context.Context, auth0UserID string) (*domain.User, error) {
-	args := m.Called(ctx, auth0UserID)
+func (m *MockProfileRepositoryForDeletion) GetUserByClerkID(ctx context.Context, clerkUserID string) (*domain.User, error) {
+	args := m.Called(ctx, clerkUserID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -49,8 +49,8 @@ func (m *MockProfileRepositoryForDeletion) UpdateUser(ctx context.Context, user 
 	return args.Error(0)
 }
 
-func (m *MockProfileRepositoryForDeletion) UpdateLastLogin(ctx context.Context, auth0UserID string) error {
-	args := m.Called(ctx, auth0UserID)
+func (m *MockProfileRepositoryForDeletion) UpdateLastLogin(ctx context.Context, clerkUserID string) error {
+	args := m.Called(ctx, clerkUserID)
 	return args.Error(0)
 }
 
@@ -332,21 +332,21 @@ func TestExecuteDeletion_CascadesAllData(t *testing.T) {
 
 	user := &domain.User{
 		ID:          "user-123",
-		Auth0UserID: "auth0|123",
+		ClerkUserID: "user_123",
 		Email:       "test@example.com",
 		IsDeleted:   false,
 	}
 
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
-	mockClerk.On("DeleteUser", ctx, user.Auth0UserID).Return(nil)
+	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
 	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
 
 	err := service.ExecuteDeletion(ctx, user.ID)
 
 	assert.NoError(t, err)
 	mockRepo.AssertCalled(t, "DeleteUserCascade", ctx, user.ID)
-	mockClerk.AssertCalled(t, "DeleteUser", ctx, user.Auth0UserID)
+	mockClerk.AssertCalled(t, "DeleteUser", ctx, user.ClerkUserID)
 	mockAudit.AssertCalled(t, "Log", ctx, "user.deleted", "user", user.ID)
 }
 
@@ -362,21 +362,21 @@ func TestExecuteDeletion_DeletesClerkUser(t *testing.T) {
 
 	user := &domain.User{
 		ID:          "user-123",
-		Auth0UserID: "auth0|123",
+		ClerkUserID: "user_123",
 		Email:       "test@example.com",
 		IsDeleted:   false,
 	}
 
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
-	mockClerk.On("DeleteUser", ctx, user.Auth0UserID).Return(nil)
+	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
 	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
 
 	err := service.ExecuteDeletion(ctx, user.ID)
 
 	assert.NoError(t, err)
 	mockClerk.AssertExpectations(t)
-	mockClerk.AssertCalled(t, "DeleteUser", ctx, user.Auth0UserID)
+	mockClerk.AssertCalled(t, "DeleteUser", ctx, user.ClerkUserID)
 }
 
 // TestExecuteDeletion_HandlesAlreadyDeleted tests idempotency
@@ -391,7 +391,7 @@ func TestExecuteDeletion_HandlesAlreadyDeleted(t *testing.T) {
 
 	user := &domain.User{
 		ID:          "user-123",
-		Auth0UserID: "auth0|123",
+		ClerkUserID: "user_123",
 		Email:       "test@example.com",
 		IsDeleted:   true, // Already deleted
 	}
@@ -417,14 +417,14 @@ func TestExecuteDeletion_HandlesClerkError(t *testing.T) {
 
 	user := &domain.User{
 		ID:          "user-123",
-		Auth0UserID: "auth0|123",
+		ClerkUserID: "user_123",
 		Email:       "test@example.com",
 		IsDeleted:   false,
 	}
 
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
-	mockClerk.On("DeleteUser", ctx, user.Auth0UserID).Return(errors.New("Clerk API error"))
+	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(errors.New("Clerk API error"))
 	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
 
 	err := service.ExecuteDeletion(ctx, user.ID)

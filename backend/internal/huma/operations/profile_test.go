@@ -41,7 +41,7 @@ func createTestUser() *domain.User {
 	now := time.Now()
 	return &domain.User{
 		ID:                 "user-123",
-		Auth0UserID:        "auth0|123",
+		ClerkUserID:        "clerk_user_123",
 		Email:              "test@example.com",
 		EmailVerified:      true,
 		SubscriptionTier:   "free",

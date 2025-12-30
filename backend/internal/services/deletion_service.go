@@ -153,9 +153,9 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string) er
 	}
 
 	// Delete user from Clerk (non-critical - log but don't fail)
-	// Note: user.Auth0UserID stores the Clerk user ID (user_xxx format)
+	// Note: user.ClerkUserID stores the Clerk user ID (user_xxx format)
 	// The database column name is legacy and will be renamed in a future migration
-	if err := s.clerkService.DeleteUser(ctx, user.Auth0UserID); err != nil {
+	if err := s.clerkService.DeleteUser(ctx, user.ClerkUserID); err != nil {
 		// Clerk deletion failure is logged but not critical
 		// User data is already deleted from our system
 		// Manual cleanup can be done later if needed

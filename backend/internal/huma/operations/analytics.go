@@ -155,7 +155,7 @@ func (h *AnalyticsHandler) GetCashFlowHistory(ctx context.Context, input *GetCas
 }
 
 // RegisterAnalyticsRoutes registers analytics routes with the Huma API.
-// Note: These routes require the Auth0 middleware to be applied.
+// Note: These routes require the Clerk middleware to be applied.
 func RegisterAnalyticsRoutes(api huma.API, handler *AnalyticsHandler) {
 	// GET /api/v1/analytics/cash-flow-summary - Get cash flow summary
 	huma.Register(api, huma.Operation{
@@ -165,7 +165,7 @@ func RegisterAnalyticsRoutes(api huma.API, handler *AnalyticsHandler) {
 		Summary:     "Get cash flow summary",
 		Description: "Returns aggregated cash flow data (income, expenses, net) for a date range.",
 		Tags:        []string{"Analytics"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetCashFlowSummary)
 
 	// GET /api/v1/analytics/cash-flow-history - Get cash flow history
@@ -176,6 +176,6 @@ func RegisterAnalyticsRoutes(api huma.API, handler *AnalyticsHandler) {
 		Summary:     "Get cash flow history",
 		Description: "Returns time series cash flow data grouped by period for charts.",
 		Tags:        []string{"Analytics"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetCashFlowHistory)
 }

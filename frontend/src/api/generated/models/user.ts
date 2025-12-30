@@ -30,7 +30,7 @@ All data is stored in the us-east-1 (iad) region. Multi-region support planned f
 export interface User {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
-  auth0_user_id: string;
+  clerk_user_id: string;
   created_at: string;
   deletion_requested_at?: string;
   deletion_scheduled_at?: string;
