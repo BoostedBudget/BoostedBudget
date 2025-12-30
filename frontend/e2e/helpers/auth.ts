@@ -129,7 +129,3 @@ export async function acceptCookieConsent(page: Page): Promise<void> {
   }
 }
 
-// Re-export with both names for backward compatibility during transition
-export { loginWithClerk as loginWithAuth0 };
-export { signupWithClerk as signupWithAuth0 };
-export type { ClerkCredentials as Auth0Credentials };

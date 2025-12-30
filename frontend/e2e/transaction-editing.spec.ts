@@ -9,7 +9,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test'
-import { loginWithAuth0, acceptCookieConsent } from './helpers/auth'
+import { loginWithClerk, acceptCookieConsent } from './helpers/auth'
 
 // Mock data for transactions
 const mockTransactions = {
@@ -275,9 +275,8 @@ test.describe('Transaction Editing - Protected Route', () => {
 // Authenticated Tests
 // ============================================================================
 
-const skipAuth0Tests =
-  !process.env.VITE_AUTH0_DOMAIN || !process.env.VITE_AUTH0_CLIENT_ID
-const describeTransactionEditing = skipAuth0Tests
+const skipClerkTests = !process.env.VITE_CLERK_PUBLISHABLE_KEY
+const describeTransactionEditing = skipClerkTests
   ? test.describe.skip
   : test.describe
 
@@ -286,11 +285,11 @@ describeTransactionEditing('Transaction Editing - Authenticated User', () => {
     await context.clearCookies()
 
     const credentials = {
-      email: process.env.TEST_AUTH0_EMAIL || '',
-      password: process.env.TEST_AUTH0_PASSWORD || '',
+      email: process.env.TEST_CLERK_EMAIL || '',
+      password: process.env.TEST_CLERK_PASSWORD || '',
     }
 
-    await loginWithAuth0(page, credentials)
+    await loginWithClerk(page, credentials)
     await acceptCookieConsent(page)
   })
 

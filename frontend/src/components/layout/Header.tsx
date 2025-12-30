@@ -68,7 +68,7 @@ export function Header({ className }: HeaderProps) {
 
         {/* Mobile Navigation */}
         <MobileNav
-          isAuthenticated={isAuthenticated}
+          isAuthenticated={isAuthenticated ?? false}
           user={user || null}
           onLogout={handleLogout}
           onLogin={handleLogin}
