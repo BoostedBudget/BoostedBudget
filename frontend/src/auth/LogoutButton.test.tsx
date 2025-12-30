@@ -3,11 +3,11 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { LogoutButton } from './LogoutButton'
 
-// Mock Auth0
-const mockUseAuth0 = vi.hoisted(() => vi.fn())
+// Mock Clerk
+const mockUseClerk = vi.hoisted(() => vi.fn())
 
-vi.mock('@auth0/auth0-react', () => ({
-  useAuth0: mockUseAuth0,
+vi.mock('@clerk/clerk-react', () => ({
+  useClerk: mockUseClerk,
 }))
 
 describe('LogoutButton', () => {
@@ -16,18 +16,18 @@ describe('LogoutButton', () => {
   })
 
   it('should render logout button', () => {
-    mockUseAuth0.mockReturnValue({
-      logout: vi.fn(),
+    mockUseClerk.mockReturnValue({
+      signOut: vi.fn(),
     })
 
     render(<LogoutButton />)
     expect(screen.getByRole('button', { name: /log out/i })).toBeInTheDocument()
   })
 
-  it('should call logout with returnTo when clicked', async () => {
-    const mockLogout = vi.fn()
-    mockUseAuth0.mockReturnValue({
-      logout: mockLogout,
+  it('should call signOut with redirectUrl when clicked', async () => {
+    const mockSignOut = vi.fn()
+    mockUseClerk.mockReturnValue({
+      signOut: mockSignOut,
     })
 
     const user = userEvent.setup({ delay: null })
@@ -36,16 +36,14 @@ describe('LogoutButton', () => {
     const button = screen.getByRole('button', { name: /log out/i })
     await user.click(button)
 
-    expect(mockLogout).toHaveBeenCalledWith({
-      logoutParams: {
-        returnTo: window.location.origin,
-      },
+    expect(mockSignOut).toHaveBeenCalledWith({
+      redirectUrl: window.location.origin,
     })
   })
 
   it('should pass custom className if provided', () => {
-    mockUseAuth0.mockReturnValue({
-      logout: vi.fn(),
+    mockUseClerk.mockReturnValue({
+      signOut: vi.fn(),
     })
 
     render(<LogoutButton className="custom-class" />)
@@ -54,8 +52,8 @@ describe('LogoutButton', () => {
   })
 
   it('should be disabled when disabled prop is true', () => {
-    mockUseAuth0.mockReturnValue({
-      logout: vi.fn(),
+    mockUseClerk.mockReturnValue({
+      signOut: vi.fn(),
     })
 
     render(<LogoutButton disabled />)

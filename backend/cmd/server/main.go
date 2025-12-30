@@ -71,7 +71,7 @@ func main() {
 	healthHandler := operations.NewHealthHandler(
 		createDBCheck(),
 		createRedisCheck(),
-		createAuth0Check(),
+		createClerkCheck(),
 		cfg.Version,
 	)
 	operations.RegisterHealthRoutes(humaAPI, healthHandler)
@@ -100,7 +100,7 @@ func main() {
 	// Declare accountService at package scope for Huma handler registration
 	var accountService services.AccountService
 
-	// Authenticated routes (requires database and Auth0)
+	// Authenticated routes (requires database and Clerk)
 	// Declare deletion worker at package scope for graceful shutdown
 	var deletionWorker *workers.DeletionWorker
 
@@ -110,7 +110,7 @@ func main() {
 	// Issue #37: Declare rule scheduler manager at package scope for graceful shutdown
 	var ruleSchedulerManager *workers.RuleSchedulerManager
 
-	if db != nil && cfg.Auth0Domain != "" && cfg.Auth0Audience != "" {
+	if db != nil && cfg.ClerkSecretKey != "" {
 		// Create repositories
 		profileRepo := repository.NewProfileRepository(db)
 		privacyRepo := repository.NewPrivacyRepository(db)
@@ -118,7 +118,7 @@ func main() {
 		accountRepo := repository.NewAccountRepository(db)
 		transactionRepo := repository.NewTransactionRepository(db)
 		webhookRepo := repository.NewWebhookRepository(db)
-		identityRepo := repository.NewUserIdentityRepository(db) // Maps Auth0 IDs to user UUIDs
+		identityRepo := repository.NewUserIdentityRepository(db) // Maps Clerk IDs to user UUIDs
 		notificationRepo := repository.NewNotificationRepository(db) // Issue #257: Notification storage
 		syncAuditRepo := repository.NewSyncAuditRepository(db) // Issue #242: Monthly sync limits
 		balanceSnapshotRepo := repository.NewBalanceSnapshotRepository(db) // Issue #353: Balance tracking
@@ -219,21 +219,17 @@ func main() {
 			log.Println("⚠️  Email service disabled - cancellation links shown in UI instead (see GitHub issue for SendGrid integration)")
 		}
 
-		// Create deletion services (if Auth0 Management API configured)
-		if cfg.Auth0ManagementClientID != "" && cfg.Auth0ManagementClientSecret != "" && cfg.DeletionTokenSecret != "" {
-			// Initialize Auth0 Management API service
-			auth0Service := services.NewAuth0Service(
-				cfg.Auth0Domain,
-				cfg.Auth0ManagementClientID,
-				cfg.Auth0ManagementClientSecret,
-			)
-			log.Println("✅ Auth0 Management API service initialized")
+		// Create deletion services (if token secret configured)
+		if cfg.DeletionTokenSecret != "" {
+			// Initialize Clerk Backend API service
+			clerkService := services.NewClerkService(cfg.ClerkSecretKey)
+			log.Println("✅ Clerk Backend API service initialized")
 
 			// Initialize Deletion service (reuses auditLogger and emailService created earlier)
 			deletionService := services.NewDeletionService(
 				profileRepo,
 				emailService,
-				auth0Service,
+				clerkService,
 				auditLogger,
 				cfg.DeletionGracePeriodDays,
 				cfg.DeletionTokenSecret,
@@ -257,7 +253,7 @@ func main() {
 			deletionWorker = workers.NewDeletionWorker(deletionService, profileRepo, workerInterval)
 			log.Printf("✅ Deletion worker initialized (interval: %s)", workerInterval)
 		} else {
-			log.Println("⚠️  Deletion services disabled (requires AUTH0_MANAGEMENT_CLIENT_ID, AUTH0_MANAGEMENT_CLIENT_SECRET, DELETION_TOKEN_SECRET)")
+			log.Println("⚠️  Deletion services disabled (requires DELETION_TOKEN_SECRET)")
 		}
 
 		// Create encryption service (if configured)
@@ -376,23 +372,21 @@ func main() {
 		// Admin handler dependencies used by Huma admin routes - Issue #559
 		// plaidService, linkedItemRepo, and encryptionService are used in the Huma admin handler registration below
 
-		// Create Auth0 middleware with identity resolution and auto-registration
-		auth0Middleware := middleware.Auth0Middleware(
-			"https://"+cfg.Auth0Domain+"/",
-			cfg.Auth0Audience,
-			identityRepo,         // Resolves Auth0 IDs to internal user UUIDs
+		// Create Clerk middleware with identity resolution and auto-registration
+		clerkMiddleware := middleware.ClerkMiddleware(
+			cfg.ClerkSecretKey,
+			identityRepo,         // Resolves Clerk IDs to internal user UUIDs
 			registrationService,  // Auto-registers new users on first login
 		)
 
-		// Apply Huma Auth0 middleware for authenticated Huma routes
-		humaAuth0Middleware := humamiddleware.NewAuth0Middleware(
-			"https://"+cfg.Auth0Domain+"/",
-			cfg.Auth0Audience,
+		// Apply Huma Clerk middleware for authenticated Huma routes
+		humaClerkMiddleware := humamiddleware.NewClerkMiddleware(
+			cfg.ClerkSecretKey,
 			identityRepo,
 			registrationService,
 		)
-		humaAPI.UseMiddleware(humaAuth0Middleware)
-		log.Println("✅ Huma Auth0 middleware applied")
+		humaAPI.UseMiddleware(humaClerkMiddleware)
+		log.Println("✅ Huma Clerk middleware applied")
 
 		// Register Huma tag routes (Issue #345: User tag management)
 		humaTagHandler := operations.NewTagHandler(userTagService)
@@ -487,7 +481,7 @@ func main() {
 
 		// API v1 routes (Echo - to be migrated to Huma incrementally)
 		api := e.Group("/api/v1")
-		api.Use(auth0Middleware)
+		api.Use(clerkMiddleware)
 		// Profile and privacy routes migrated to Huma (see humaProfileHandler and humaPrivacyHandler above)
 		// api.GET("/user/profile", profileHandler.GetProfile)
 		// api.PUT("/user/profile", profileHandler.UpdateProfile)
@@ -542,7 +536,7 @@ func main() {
 		// 	api.GET("/user/delete/cancel/:token", deletionHandler.CancelDeletion)
 		// }
 
-		log.Println("✅ Authenticated routes enabled (Auth0 + Database)")
+		log.Println("✅ Authenticated routes enabled (Clerk + Database)")
 	}
 
 	// Plaid webhook endpoint (public - no auth required) - Migrated to Huma (Issue #559)
@@ -685,12 +679,12 @@ func createRedisCheck() func() error {
 	}
 }
 
-// createAuth0Check creates an Auth0 health check function
-// TODO: Replace with real Auth0 connection check
-func createAuth0Check() func() error {
+// createClerkCheck creates a Clerk health check function
+// TODO: Replace with real Clerk connection check
+func createClerkCheck() func() error {
 	return func() error {
 		// For now, always return healthy
-		// Will be replaced with actual Auth0 JWKS endpoint check when we add Auth0
+		// Will be replaced with actual Clerk endpoint check when we add Clerk
 		return nil
 	}
 }

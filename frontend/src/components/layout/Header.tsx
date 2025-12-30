@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { useAuth0 } from '@auth0/auth0-react'
+import { useAuth, useUser, useClerk } from '@clerk/clerk-react'
 import { Navigation } from './Navigation'
 import { UserDropdown } from './UserDropdown'
 import { MobileNav } from './MobileNav'
@@ -11,18 +11,23 @@ interface HeaderProps {
 }
 
 export function Header({ className }: HeaderProps) {
-  const { isAuthenticated, user, loginWithRedirect, logout } = useAuth0()
+  const { isSignedIn: isAuthenticated } = useAuth()
+  const { user: clerkUser } = useUser()
+  const { openSignIn, signOut } = useClerk()
+
+  // Map Clerk user to a format compatible with existing components
+  const user = clerkUser ? {
+    name: clerkUser.fullName || undefined,
+    email: clerkUser.primaryEmailAddress?.emailAddress,
+    picture: clerkUser.imageUrl,
+  } : {}
 
   const handleLogout = () => {
-    logout({
-      logoutParams: {
-        returnTo: window.location.origin,
-      },
-    })
+    signOut({ redirectUrl: window.location.origin })
   }
 
   const handleLogin = () => {
-    loginWithRedirect()
+    openSignIn()
   }
 
   return (

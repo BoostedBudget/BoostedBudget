@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { useAuth0 } from '@auth0/auth0-react'
+import { useAuth, useUser } from '@clerk/clerk-react'
 import { useAppDispatch } from '../store/hooks'
 import { setUser, clearUser } from './authSlice'
 
@@ -8,15 +8,27 @@ interface AuthWrapperProps {
 }
 
 export const AuthWrapper: React.FC<AuthWrapperProps> = ({ children }) => {
-  const { isAuthenticated, user, getAccessTokenSilently } = useAuth0()
+  const { isSignedIn, getToken } = useAuth()
+  const { user } = useUser()
   const dispatch = useAppDispatch()
 
   useEffect(() => {
     const syncAuthState = async () => {
-      if (isAuthenticated && user) {
+      if (isSignedIn && user) {
         try {
-          const token = await getAccessTokenSilently()
-          dispatch(setUser({ user, token }))
+          const token = await getToken()
+          // Map Clerk user to our auth state format
+          const mappedUser = {
+            sub: user.id,
+            email: user.primaryEmailAddress?.emailAddress,
+            email_verified: user.primaryEmailAddress?.verification?.status === 'verified',
+            name: user.fullName || undefined,
+            picture: user.imageUrl,
+            // Custom claims from publicMetadata
+            subscription_tier: (user.publicMetadata?.subscription_tier as string) || 'free',
+            primary_region: (user.publicMetadata?.primary_region as string) || 'iad',
+          }
+          dispatch(setUser({ user: mappedUser, token: token || undefined }))
         } catch (error) {
           console.error('Failed to get access token:', error)
         }
@@ -26,7 +38,7 @@ export const AuthWrapper: React.FC<AuthWrapperProps> = ({ children }) => {
     }
 
     syncAuthState()
-  }, [isAuthenticated, user, getAccessTokenSilently, dispatch])
+  }, [isSignedIn, user, getToken, dispatch])
 
   return <>{children}</>
 }

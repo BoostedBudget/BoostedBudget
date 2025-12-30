@@ -1,5 +1,18 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit'
-import type { User } from '@auth0/auth0-react'
+
+// Define our own User interface (not dependent on Auth0/Clerk types)
+export interface User {
+  sub: string
+  email?: string
+  email_verified?: boolean
+  name?: string
+  picture?: string
+  nickname?: string
+  // Custom claims from Clerk publicMetadata
+  subscription_tier?: string
+  primary_region?: string
+  [key: string]: unknown
+}
 
 interface AuthState {
   user: User | null
@@ -17,9 +30,9 @@ const authSlice = createSlice({
   name: 'auth',
   initialState,
   reducers: {
-    setUser: (state, action: PayloadAction<{ user: User; token: string }>) => {
+    setUser: (state, action: PayloadAction<{ user: User; token?: string | null }>) => {
       state.user = action.payload.user
-      state.token = action.payload.token
+      state.token = action.payload.token || null
       state.isAuthenticated = true
     },
     clearUser: (state) => {

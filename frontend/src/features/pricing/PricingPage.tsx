@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useAuth0 } from '@auth0/auth0-react'
+import { useUser } from '@clerk/clerk-react'
 import { Star, Award, Gem, Check, X } from 'lucide-react'
 import { useSubscriptionTiers } from '../subscription/hooks/useSubscriptionTiers'
 import type { TierName, SubscriptionTier } from '../subscription/types'
@@ -196,14 +196,14 @@ function TierCard({ tierKey, tierData, isCurrentTier, billingPeriod }: TierCardP
 }
 
 export function PricingPage() {
-  const { user } = useAuth0()
+  const { user } = useUser()
   const { tiers, loading, error, refetch } = useSubscriptionTiers()
   const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>('monthly')
 
-  // Get current user's tier from user metadata or default to 'free'
+  // Get current user's tier from Clerk publicMetadata or default to 'free'
   // Note: In production, this would come from your user state/context
   const currentTier: TierName =
-    (user?.['https://boostedbudget.com/subscription_tier'] as TierName) || 'free'
+    (user?.publicMetadata?.subscription_tier as TierName) || 'free'
 
   if (loading) {
     return (

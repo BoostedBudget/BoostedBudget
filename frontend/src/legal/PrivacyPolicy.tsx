@@ -25,7 +25,7 @@ export function PrivacyPolicy() {
           <h3>2.1 Personal Information</h3>
           <p>We collect the following types of personal information:</p>
           <ul>
-            <li><strong>Account Information:</strong> Email address, name, Auth0 user ID</li>
+            <li><strong>Account Information:</strong> Email address, name, Clerk user ID</li>
             <li><strong>Profile Data:</strong> User preferences, subscription tier, primary data region selection</li>
             <li><strong>Financial Data:</strong> Bank account information, transaction data, balances (via Plaid integration)</li>
             <li><strong>Authentication Tokens:</strong> Encrypted access tokens for third-party financial institutions</li>
@@ -71,7 +71,7 @@ export function PrivacyPolicy() {
           <ul>
             <li><strong>Encryption:</strong> Data encrypted in transit (TLS 1.3) and at rest (AES-256)</li>
             <li><strong>Access Controls:</strong> Role-based access, principle of least privilege</li>
-            <li><strong>Authentication:</strong> Auth0-powered authentication with industry-standard security</li>
+            <li><strong>Authentication:</strong> Clerk-powered authentication with industry-standard security</li>
             <li><strong>Token Protection:</strong> Financial institution tokens encrypted with dedicated encryption keys</li>
             <li><strong>Audit Logging:</strong> All data access and modifications are logged for security monitoring</li>
             <li><strong>Regular Security Audits:</strong> Periodic security assessments and vulnerability scanning</li>
@@ -82,7 +82,7 @@ export function PrivacyPolicy() {
           <h2>5. Third-Party Services</h2>
           <p>We work with the following trusted third-party service providers:</p>
           <ul>
-            <li><strong>Auth0:</strong> Authentication and user management</li>
+            <li><strong>Clerk:</strong> Authentication and user management</li>
             <li><strong>Plaid:</strong> Secure bank account connectivity and transaction data</li>
             <li><strong>Stripe:</strong> Payment processing for subscriptions</li>
             <li><strong>Google AdSense:</strong> Advertising for free-tier users (with consent)</li>
@@ -169,7 +169,7 @@ export function PrivacyPolicy() {
           <p>We do not sell your personal information. We may share your data in the following circumstances:</p>
           <ul>
             <li><strong>With Your Consent:</strong> When you explicitly authorize data sharing</li>
-            <li><strong>Service Providers:</strong> Third-party partners performing services on our behalf (Auth0, Plaid, Stripe)</li>
+            <li><strong>Service Providers:</strong> Third-party partners performing services on our behalf (Clerk, Plaid, Stripe)</li>
             <li><strong>Legal Compliance:</strong> When required by law, court order, or government request</li>
             <li><strong>Business Transfers:</strong> In the event of a merger, acquisition, or sale of assets</li>
             <li><strong>Fraud Prevention:</strong> To protect against fraud, security threats, or illegal activity</li>

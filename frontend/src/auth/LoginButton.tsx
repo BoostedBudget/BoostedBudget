@@ -1,4 +1,4 @@
-import { useAuth0 } from '@auth0/auth0-react'
+import { useClerk } from '@clerk/clerk-react'
 
 interface LoginButtonProps {
   className?: string
@@ -6,11 +6,11 @@ interface LoginButtonProps {
 }
 
 export const LoginButton: React.FC<LoginButtonProps> = ({ className, disabled }) => {
-  const { loginWithRedirect } = useAuth0()
+  const { openSignIn } = useClerk()
 
   return (
     <button
-      onClick={() => loginWithRedirect()}
+      onClick={() => openSignIn()}
       className={className}
       disabled={disabled}
     >

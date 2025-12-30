@@ -11,11 +11,11 @@ import { PricingPage } from './PricingPage'
 import * as useSubscriptionTiersHook from '../subscription/hooks/useSubscriptionTiers'
 import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
 
-// Mock useAuth0 using vi.hoisted pattern (avoids strict type checking)
-const mockUseAuth0 = vi.hoisted(() => vi.fn())
+// Mock useUser using vi.hoisted pattern (avoids strict type checking)
+const mockUseUser = vi.hoisted(() => vi.fn())
 
-vi.mock('@auth0/auth0-react', () => ({
-  useAuth0: mockUseAuth0,
+vi.mock('@clerk/clerk-react', () => ({
+  useUser: mockUseUser,
 }))
 
 // Mock useSubscriptionTiers
@@ -31,10 +31,10 @@ describe('PricingPage', () => {
       error: null,
       refetch: vi.fn(),
     })
-    mockUseAuth0.mockReturnValue({
+    mockUseUser.mockReturnValue({
       user: undefined,
-      isAuthenticated: false,
-      isLoading: false,
+      isSignedIn: false,
+      isLoaded: true,
     })
   })
 
@@ -162,13 +162,16 @@ describe('PricingPage', () => {
 
   describe('Current plan highlighting', () => {
     it('should show "Current Plan" badge for user\'s tier', () => {
-      // Mock authenticated user with premium tier
-      mockUseAuth0.mockReturnValue({
+      // Mock authenticated user with premium tier (using Clerk publicMetadata)
+      mockUseUser.mockReturnValue({
         user: {
-          'https://boostedbudget.com/subscription_tier': 'premium',
+          id: 'user_123',
+          publicMetadata: {
+            subscription_tier: 'premium',
+          },
         },
-        isAuthenticated: true,
-        isLoading: false,
+        isSignedIn: true,
+        isLoaded: true,
       })
 
       render(<PricingPage />)
@@ -179,13 +182,16 @@ describe('PricingPage', () => {
     })
 
     it('should show "Select Plan" for non-current tiers', () => {
-      // Mock authenticated user with free tier
-      mockUseAuth0.mockReturnValue({
+      // Mock authenticated user with free tier (using Clerk publicMetadata)
+      mockUseUser.mockReturnValue({
         user: {
-          'https://boostedbudget.com/subscription_tier': 'free',
+          id: 'user_123',
+          publicMetadata: {
+            subscription_tier: 'free',
+          },
         },
-        isAuthenticated: true,
-        isLoading: false,
+        isSignedIn: true,
+        isLoaded: true,
       })
 
       render(<PricingPage />)
@@ -197,13 +203,16 @@ describe('PricingPage', () => {
     })
 
     it('should disable button for current tier', () => {
-      // Mock authenticated user with premium tier
-      mockUseAuth0.mockReturnValue({
+      // Mock authenticated user with premium tier (using Clerk publicMetadata)
+      mockUseUser.mockReturnValue({
         user: {
-          'https://boostedbudget.com/subscription_tier': 'premium',
+          id: 'user_123',
+          publicMetadata: {
+            subscription_tier: 'premium',
+          },
         },
-        isAuthenticated: true,
-        isLoading: false,
+        isSignedIn: true,
+        isLoaded: true,
       })
 
       render(<PricingPage />)

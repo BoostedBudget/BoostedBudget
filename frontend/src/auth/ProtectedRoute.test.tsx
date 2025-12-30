@@ -3,13 +3,13 @@ import { render, screen } from '@testing-library/react'
 import { BrowserRouter } from 'react-router-dom'
 import { ProtectedRoute } from './ProtectedRoute'
 
-// Mock Auth0
-vi.mock('@auth0/auth0-react')
+// Mock Clerk
+const mockUseAuth = vi.hoisted(() => vi.fn())
+const mockRedirectToSignIn = vi.hoisted(() => vi.fn(() => null))
 
-const mockUseAuth0 = vi.hoisted(() => vi.fn())
-
-vi.mock('@auth0/auth0-react', () => ({
-  useAuth0: mockUseAuth0,
+vi.mock('@clerk/clerk-react', () => ({
+  useAuth: mockUseAuth,
+  RedirectToSignIn: mockRedirectToSignIn,
 }))
 
 describe('ProtectedRoute', () => {
@@ -20,9 +20,9 @@ describe('ProtectedRoute', () => {
   })
 
   it('should show loading state while authentication is loading', () => {
-    mockUseAuth0.mockReturnValue({
-      isLoading: true,
-      isAuthenticated: false,
+    mockUseAuth.mockReturnValue({
+      isLoaded: false,
+      isSignedIn: false,
     })
 
     render(
@@ -36,12 +36,10 @@ describe('ProtectedRoute', () => {
     expect(screen.getByText(/loading/i)).toBeInTheDocument()
   })
 
-  it('should redirect unauthenticated users to login', () => {
-    const mockLoginWithRedirect = vi.fn()
-    mockUseAuth0.mockReturnValue({
-      isLoading: false,
-      isAuthenticated: false,
-      loginWithRedirect: mockLoginWithRedirect,
+  it('should redirect unauthenticated users to sign in', () => {
+    mockUseAuth.mockReturnValue({
+      isLoaded: true,
+      isSignedIn: false,
     })
 
     render(
@@ -52,16 +50,16 @@ describe('ProtectedRoute', () => {
       </BrowserRouter>
     )
 
-    // Should call loginWithRedirect
-    expect(mockLoginWithRedirect).toHaveBeenCalled()
+    // Should render RedirectToSignIn component
+    expect(mockRedirectToSignIn).toHaveBeenCalled()
     // Should not show protected content
     expect(screen.queryByText('Protected Content')).not.toBeInTheDocument()
   })
 
   it('should render protected content for authenticated users', () => {
-    mockUseAuth0.mockReturnValue({
-      isLoading: false,
-      isAuthenticated: true,
+    mockUseAuth.mockReturnValue({
+      isLoaded: true,
+      isSignedIn: true,
     })
 
     render(
@@ -73,26 +71,5 @@ describe('ProtectedRoute', () => {
     )
 
     expect(screen.getByText('Protected Content')).toBeInTheDocument()
-  })
-
-  it('should pass return URL to loginWithRedirect', () => {
-    const mockLoginWithRedirect = vi.fn()
-    mockUseAuth0.mockReturnValue({
-      isLoading: false,
-      isAuthenticated: false,
-      loginWithRedirect: mockLoginWithRedirect,
-    })
-
-    render(
-      <BrowserRouter>
-        <ProtectedRoute>
-          <TestComponent />
-        </ProtectedRoute>
-      </BrowserRouter>
-    )
-
-    expect(mockLoginWithRedirect).toHaveBeenCalledWith({
-      appState: { returnTo: expect.any(String) },
-    })
   })
 })

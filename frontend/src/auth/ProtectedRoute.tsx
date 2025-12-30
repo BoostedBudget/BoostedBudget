@@ -1,24 +1,13 @@
-import { useEffect } from 'react'
-import { useAuth0 } from '@auth0/auth0-react'
-import { useLocation, Navigate } from 'react-router-dom'
+import { useAuth, RedirectToSignIn } from '@clerk/clerk-react'
 
 interface ProtectedRouteProps {
   children: React.ReactNode
 }
 
 export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
-  const { isAuthenticated, isLoading, loginWithRedirect } = useAuth0()
-  const location = useLocation()
+  const { isSignedIn, isLoaded } = useAuth()
 
-  useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
-      loginWithRedirect({
-        appState: { returnTo: location.pathname },
-      })
-    }
-  }, [isLoading, isAuthenticated, loginWithRedirect, location])
-
-  if (isLoading) {
+  if (!isLoaded) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh' }}>
         <p>Loading...</p>
@@ -26,8 +15,8 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
     )
   }
 
-  if (!isAuthenticated) {
-    return <Navigate to="/" replace />
+  if (!isSignedIn) {
+    return <RedirectToSignIn />
   }
 
   return <>{children}</>
