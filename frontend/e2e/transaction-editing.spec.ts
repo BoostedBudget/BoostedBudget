@@ -265,7 +265,7 @@ test.describe('Transaction Editing - Protected Route', () => {
   }) => {
     await page.goto('/transactions')
 
-    // Wait for redirect to complete (to home or Auth0)
+    // Wait for redirect to complete (to home page)
     // Using Playwright's auto-retry assertion to handle redirect timing
     await expect(page).not.toHaveURL(/\/transactions/, { timeout: 10000 })
   })

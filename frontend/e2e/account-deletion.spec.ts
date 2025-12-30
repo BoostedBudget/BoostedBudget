@@ -12,7 +12,7 @@ import { test, expect } from '@playwright/test'
  *
  * Issue #18: Account Deletion Flow (GDPR Article 17)
  *
- * NOTE: Tests requiring authentication are skipped pending Auth0 test credentials.
+ * NOTE: Tests requiring authentication are skipped pending Clerk test credentials.
  * See e2e/README.md for setup instructions.
  */
 
@@ -145,11 +145,11 @@ test.describe('Account Deletion Flow', () => {
   })
 
   // ============================================================================
-  // AUTHENTICATED TESTS - Require Auth0 Test Credentials (SKIPPED)
+  // AUTHENTICATED TESTS - Require Clerk Test Credentials (SKIPPED)
   // ============================================================================
   //
   // To enable these tests:
-  // 1. Set up Auth0 test tenant
+  // 1. Set up Clerk test tenant
   // 2. Create test user
   // 3. Add credentials to e2e/.env.test
   // 4. Update e2e/helpers/auth.ts with test login flow
@@ -167,15 +167,15 @@ test.describe('Account Deletion Flow', () => {
     const url = page.url()
     expect(url).not.toContain('/profile')
 
-    // Should be at root or Auth0 login page
+    // Should be at root or Clerk login page
     const isAtRoot = url.includes('localhost') && url.endsWith('/')
-    const isAtAuth0 = url.includes('auth0.com')
-    expect(isAtRoot || isAtAuth0).toBe(true)
+    const isAtClerk = url.includes('auth0.com')
+    expect(isAtRoot || isAtClerk).toBe(true)
   })
 
   test.skip('should display Delete Account section in Privacy Settings', async ({ page }) => {
-    // TODO: Requires Auth0 test credentials
-    // await loginWithAuth0(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
+    // TODO: Requires Clerk test credentials
+    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
     await page.goto('/profile')
     await page.waitForLoadState('networkidle')
@@ -206,8 +206,8 @@ test.describe('Account Deletion Flow', () => {
   })
 
   test.skip('should show confirmation dialog when delete button clicked', async ({ page }) => {
-    // TODO: Requires Auth0 test credentials
-    // await loginWithAuth0(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
+    // TODO: Requires Clerk test credentials
+    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
     await page.goto('/profile')
     await page.click('button:has-text("Privacy Settings")')
@@ -230,8 +230,8 @@ test.describe('Account Deletion Flow', () => {
   })
 
   test.skip('should require checkbox confirmation before allowing deletion', async ({ page }) => {
-    // TODO: Requires Auth0 test credentials
-    // await loginWithAuth0(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
+    // TODO: Requires Clerk test credentials
+    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
     await page.goto('/profile')
     await page.click('button:has-text("Privacy Settings")')
@@ -250,8 +250,8 @@ test.describe('Account Deletion Flow', () => {
   })
 
   test.skip('should cancel deletion request and close dialog', async ({ page }) => {
-    // TODO: Requires Auth0 test credentials
-    // await loginWithAuth0(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
+    // TODO: Requires Clerk test credentials
+    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
     await page.goto('/profile')
     await page.click('button:has-text("Privacy Settings")')
@@ -268,8 +268,8 @@ test.describe('Account Deletion Flow', () => {
   })
 
   test.skip('should successfully request account deletion', async ({ page }) => {
-    // TODO: Requires Auth0 test credentials
-    // await loginWithAuth0(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
+    // TODO: Requires Clerk test credentials
+    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
     // Mock successful deletion request
     await page.route('**/api/v1/user/delete', route => {
@@ -303,8 +303,8 @@ test.describe('Account Deletion Flow', () => {
   })
 
   test.skip('should display scheduled deletion date after request', async ({ page }) => {
-    // TODO: Requires Auth0 test credentials
-    // await loginWithAuth0(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
+    // TODO: Requires Clerk test credentials
+    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
     // Mock deletion request with scheduled date
     await page.route('**/api/v1/user/delete', route => {
@@ -334,8 +334,8 @@ test.describe('Account Deletion Flow', () => {
   })
 
   test.skip('should display cancellation URL after deletion request', async ({ page }) => {
-    // TODO: Requires Auth0 test credentials
-    // await loginWithAuth0(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
+    // TODO: Requires Clerk test credentials
+    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
     await page.route('**/api/v1/user/delete', route => {
       route.fulfill({
@@ -363,8 +363,8 @@ test.describe('Account Deletion Flow', () => {
   })
 
   test.skip('should handle deletion request errors gracefully', async ({ page }) => {
-    // TODO: Requires Auth0 test credentials
-    // await loginWithAuth0(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
+    // TODO: Requires Clerk test credentials
+    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
     // Mock error response
     await page.route('**/api/v1/user/delete', route => {
@@ -391,8 +391,8 @@ test.describe('Account Deletion Flow', () => {
   })
 
   test.skip('should prevent multiple simultaneous deletion requests', async ({ page }) => {
-    // TODO: Requires Auth0 test credentials
-    // await loginWithAuth0(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
+    // TODO: Requires Clerk test credentials
+    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
     // Mock slow deletion request
     await page.route('**/api/v1/user/delete', async route => {

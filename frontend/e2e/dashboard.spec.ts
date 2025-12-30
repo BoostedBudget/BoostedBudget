@@ -212,7 +212,7 @@ test.describe('Dashboard - Protected Route', () => {
     // Act - Navigate to dashboard without authentication
     await page.goto('/dashboard')
 
-    // Assert - Should redirect away from dashboard (to home or Auth0)
+    // Assert - Should redirect away from dashboard (to home or Clerk)
     // Using Playwright's auto-retry assertion to handle redirect timing
     await expect(page).not.toHaveURL(/\/dashboard/, { timeout: 10000 })
   })
@@ -228,7 +228,7 @@ test.describe('Dashboard - Protected Route', () => {
     const dashboardLinkBefore = page.getByRole('link', { name: /dashboard/i })
     await expect(dashboardLinkBefore).not.toBeVisible()
 
-    // Note: Testing authenticated state requires Auth0 credentials (see authenticated tests below)
+    // Note: Testing authenticated state requires Clerk credentials (see authenticated tests below)
   })
 })
 

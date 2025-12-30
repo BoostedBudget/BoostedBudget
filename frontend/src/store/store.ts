@@ -1,10 +1,9 @@
 import { configureStore } from '@reduxjs/toolkit'
-import authReducer from '../auth/authSlice'
 
+// Note: Auth state is now managed by Clerk hooks, not Redux
+// This store is kept for other app state (add reducers here as needed)
 export const store = configureStore({
-  reducer: {
-    auth: authReducer,
-  },
+  reducer: {},
 })
 
 export type RootState = ReturnType<typeof store.getState>

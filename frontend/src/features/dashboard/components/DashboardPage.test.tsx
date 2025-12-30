@@ -22,7 +22,7 @@ import type {
 // Mock Clerk
 const mockUseAuth = vi.hoisted(() => vi.fn())
 
-vi.mock('@clerk/clerk-react', () => ({
+vi.mock('@clerk/react-router', () => ({
   useAuth: mockUseAuth,
 }))
 

@@ -1,5 +1,5 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
-import { useAuth } from '@clerk/clerk-react'
+import { useAuth } from '@clerk/react-router'
 import { useCookieState } from './shared/hooks/useCookieState'
 import {
   CookieConsent,
