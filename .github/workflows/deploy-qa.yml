@@ -1,15 +1,29 @@
 name: Deploy to QA
 
-# Manual-only workflow for deploying PRs to QA environment (Mac Mini)
+# Manual-only workflow for deploying PRs or branches to QA environment (Mac Mini)
 # NOTE: This workflow requires manual triggering - there is no automatic deployment
-# A future "Deploy to Staging" workflow will be created for the Fly.io staging environment
+# Supports two deployment modes:
+#   - PR mode: Deploy from an open PR (for testing PRs before merge)
+#   - Branch mode: Deploy from a branch directly (e.g., staging after PR merge)
 on:
   workflow_dispatch:
     inputs:
-      pr_number:
-        description: 'PR number to deploy to QA'
+      deployment_mode:
+        description: 'Deployment mode'
         required: true
+        type: choice
+        options:
+          - 'pr'        # Deploy from a PR
+          - 'branch'    # Deploy from a branch directly
+      pr_number:
+        description: 'PR number to deploy (required if mode=pr)'
+        required: false
         type: string
+      branch_name:
+        description: 'Branch name to deploy (required if mode=branch)'
+        required: false
+        type: string
+        default: 'staging'
       skip_security_scan:
         description: 'Skip security scan (not recommended)'
         required: false
@@ -33,81 +47,149 @@ env:
 
 jobs:
   # =============================================================================
-  # Fetch PR Metadata
+  # Fetch Deployment Metadata (PR or Branch)
   # =============================================================================
-  pr-metadata:
-    name: Fetch PR Metadata
+  deployment-metadata:
+    name: Fetch Deployment Metadata
     runs-on: [self-hosted, macOS, mac-mini]
     outputs:
-      head_sha: ${{ steps.pr-info.outputs.head_sha }}
-      head_ref: ${{ steps.pr-info.outputs.head_ref }}
-      pr_title: ${{ steps.pr-info.outputs.pr_title }}
-      pr_author: ${{ steps.pr-info.outputs.pr_author }}
-      tag_prefix: ${{ steps.pr-info.outputs.tag_prefix }}
+      head_sha: ${{ steps.deploy-info.outputs.head_sha }}
+      head_ref: ${{ steps.deploy-info.outputs.head_ref }}
+      deploy_title: ${{ steps.deploy-info.outputs.deploy_title }}
+      deploy_author: ${{ steps.deploy-info.outputs.deploy_author }}
+      tag_prefix: ${{ steps.deploy-info.outputs.tag_prefix }}
+      deployment_mode: ${{ github.event.inputs.deployment_mode }}
 
     steps:
-      - name: Fetch PR information
-        id: pr-info
+      - name: Validate inputs
         run: |
-          echo "Fetching metadata for PR #${{ github.event.inputs.pr_number }}..."
+          MODE="${{ github.event.inputs.deployment_mode }}"
+          PR_NUMBER="${{ github.event.inputs.pr_number }}"
+          BRANCH_NAME="${{ github.event.inputs.branch_name }}"
 
-          # Use curl + GitHub API instead of gh CLI (gh not available on self-hosted runners)
-          PR_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.inputs.pr_number }}")
-
-          # Check for API errors
-          if echo "$PR_DATA" | jq -e '.message' > /dev/null 2>&1; then
-            echo "::error::Failed to fetch PR: $(echo "$PR_DATA" | jq -r '.message')"
+          if [ "$MODE" = "pr" ]; then
+            if [ -z "$PR_NUMBER" ]; then
+              echo "::error::PR number is required when deployment_mode=pr"
+              exit 1
+            fi
+            echo "::notice::Deployment mode: PR #${PR_NUMBER}"
+          elif [ "$MODE" = "branch" ]; then
+            if [ -z "$BRANCH_NAME" ]; then
+              echo "::error::Branch name is required when deployment_mode=branch"
+              exit 1
+            fi
+            echo "::notice::Deployment mode: Branch '${BRANCH_NAME}'"
+          else
+            echo "::error::Invalid deployment mode: $MODE"
             exit 1
           fi
 
-          # GitHub API returns state as lowercase: "open", "closed"
-          # and merged as boolean
-          PR_STATE=$(echo "$PR_DATA" | jq -r '.state')
-          PR_MERGED=$(echo "$PR_DATA" | jq -r '.merged')
-          if [ "$PR_MERGED" = "true" ]; then
-            echo "::error::PR #${{ github.event.inputs.pr_number }} is merged. Can only deploy open PRs."
-            exit 1
-          fi
-          if [ "$PR_STATE" = "closed" ]; then
-            echo "::error::PR #${{ github.event.inputs.pr_number }} is closed. Can only deploy open PRs."
-            exit 1
-          fi
+      - name: Fetch deployment information
+        id: deploy-info
+        run: |
+          MODE="${{ github.event.inputs.deployment_mode }}"
 
-          # GitHub API field names differ from gh CLI:
-          # .head.sha (not .headRefOid), .head.ref (not .headRefName), .user.login (not .author.login)
-          HEAD_SHA=$(echo "$PR_DATA" | jq -r '.head.sha')
-          HEAD_REF=$(echo "$PR_DATA" | jq -r '.head.ref')
-          PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
-          PR_AUTHOR=$(echo "$PR_DATA" | jq -r '.user.login')
+          if [ "$MODE" = "pr" ]; then
+            echo "Fetching metadata for PR #${{ github.event.inputs.pr_number }}..."
+
+            # Use curl + GitHub API instead of gh CLI (gh not available on self-hosted runners)
+            PR_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.inputs.pr_number }}")
+
+            # Check for API errors
+            if echo "$PR_DATA" | jq -e '.message' > /dev/null 2>&1; then
+              echo "::error::Failed to fetch PR: $(echo "$PR_DATA" | jq -r '.message')"
+              exit 1
+            fi
+
+            # GitHub API returns state as lowercase: "open", "closed"
+            # and merged as boolean
+            PR_STATE=$(echo "$PR_DATA" | jq -r '.state')
+            PR_MERGED=$(echo "$PR_DATA" | jq -r '.merged')
+            if [ "$PR_MERGED" = "true" ]; then
+              echo "::error::PR #${{ github.event.inputs.pr_number }} is merged. Can only deploy open PRs in PR mode."
+              echo "::notice::Tip: Use 'branch' deployment mode to deploy the merged branch instead."
+              exit 1
+            fi
+            if [ "$PR_STATE" = "closed" ]; then
+              echo "::error::PR #${{ github.event.inputs.pr_number }} is closed. Can only deploy open PRs in PR mode."
+              exit 1
+            fi
+
+            # GitHub API field names differ from gh CLI:
+            # .head.sha (not .headRefOid), .head.ref (not .headRefName), .user.login (not .author.login)
+            HEAD_SHA=$(echo "$PR_DATA" | jq -r '.head.sha')
+            HEAD_REF=$(echo "$PR_DATA" | jq -r '.head.ref')
+            DEPLOY_TITLE=$(echo "$PR_DATA" | jq -r '.title')
+            DEPLOY_AUTHOR=$(echo "$PR_DATA" | jq -r '.user.login')
+            TAG_PREFIX="pr-${{ github.event.inputs.pr_number }}"
+
+            echo "::notice::PR #${{ github.event.inputs.pr_number }}: ${DEPLOY_TITLE}"
+            echo "::notice::Branch: ${HEAD_REF} (${HEAD_SHA})"
+            echo "::notice::Author: @${DEPLOY_AUTHOR}"
+
+          else
+            # Branch mode
+            BRANCH_NAME="${{ github.event.inputs.branch_name }}"
+            echo "Fetching metadata for branch '${BRANCH_NAME}'..."
+
+            # Fetch branch info from GitHub API
+            BRANCH_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/${{ github.repository }}/branches/${BRANCH_NAME}")
+
+            # Check for API errors
+            if echo "$BRANCH_DATA" | jq -e '.message' > /dev/null 2>&1; then
+              echo "::error::Failed to fetch branch: $(echo "$BRANCH_DATA" | jq -r '.message')"
+              exit 1
+            fi
+
+            HEAD_SHA=$(echo "$BRANCH_DATA" | jq -r '.commit.sha')
+            HEAD_REF="${BRANCH_NAME}"
+            DEPLOY_TITLE="Branch deployment: ${BRANCH_NAME}"
+            DEPLOY_AUTHOR="${{ github.actor }}"
+            # Sanitize branch name for tag (replace / with -)
+            SANITIZED_BRANCH=$(echo "$BRANCH_NAME" | sed 's/\//-/g')
+            TAG_PREFIX="branch-${SANITIZED_BRANCH}"
+
+            echo "::notice::Branch: ${HEAD_REF} (${HEAD_SHA})"
+            echo "::notice::Triggered by: @${DEPLOY_AUTHOR}"
+          fi
 
           echo "head_sha=${HEAD_SHA}" >> $GITHUB_OUTPUT
           echo "head_ref=${HEAD_REF}" >> $GITHUB_OUTPUT
-          echo "pr_title=${PR_TITLE}" >> $GITHUB_OUTPUT
-          echo "pr_author=${PR_AUTHOR}" >> $GITHUB_OUTPUT
-          echo "tag_prefix=pr-${{ github.event.inputs.pr_number }}" >> $GITHUB_OUTPUT
+          echo "deploy_title=${DEPLOY_TITLE}" >> $GITHUB_OUTPUT
+          echo "deploy_author=${DEPLOY_AUTHOR}" >> $GITHUB_OUTPUT
+          echo "tag_prefix=${TAG_PREFIX}" >> $GITHUB_OUTPUT
 
-          echo "::notice::PR #${{ github.event.inputs.pr_number }}: ${PR_TITLE}"
-          echo "::notice::Branch: ${HEAD_REF} (${HEAD_SHA})"
-          echo "::notice::Author: @${PR_AUTHOR}"
-
-      - name: PR metadata summary
+      - name: Deployment metadata summary
         run: |
-          echo "### 📋 PR Metadata" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**PR:** #${{ github.event.inputs.pr_number }} - ${{ steps.pr-info.outputs.pr_title }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Author:** @${{ steps.pr-info.outputs.pr_author }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Branch:** \`${{ steps.pr-info.outputs.head_ref }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Commit:** \`${{ steps.pr-info.outputs.head_sha }}\`" >> $GITHUB_STEP_SUMMARY
+          MODE="${{ github.event.inputs.deployment_mode }}"
+
+          if [ "$MODE" = "pr" ]; then
+            echo "### 📋 PR Deployment Metadata" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Mode:** PR Deployment" >> $GITHUB_STEP_SUMMARY
+            echo "**PR:** #${{ github.event.inputs.pr_number }} - ${{ steps.deploy-info.outputs.deploy_title }}" >> $GITHUB_STEP_SUMMARY
+            echo "**Author:** @${{ steps.deploy-info.outputs.deploy_author }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### 📋 Branch Deployment Metadata" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Mode:** Branch Deployment" >> $GITHUB_STEP_SUMMARY
+            echo "**Branch:** \`${{ github.event.inputs.branch_name }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "**Triggered by:** @${{ steps.deploy-info.outputs.deploy_author }}" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "**Ref:** \`${{ steps.deploy-info.outputs.head_ref }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${{ steps.deploy-info.outputs.head_sha }}\`" >> $GITHUB_STEP_SUMMARY
 
   # =============================================================================
   # Build and Push Images to GHCR (Parallelized via Matrix)
   # =============================================================================
   build-images:
     name: Build ${{ matrix.component }} Image
-    needs: [pr-metadata]
-    if: ${{ needs.pr-metadata.result == 'success' }}
+    needs: [deployment-metadata]
+    if: ${{ needs.deployment-metadata.result == 'success' }}
     runs-on: [self-hosted, macOS, mac-mini]
     strategy:
       matrix:
@@ -133,10 +215,14 @@ jobs:
       - name: Determine build target
         id: build-target
         run: |
-          echo "ref=${{ needs.pr-metadata.outputs.head_ref }}" >> $GITHUB_OUTPUT
-          echo "sha=${{ needs.pr-metadata.outputs.head_sha }}" >> $GITHUB_OUTPUT
-          echo "tag_prefix=${{ needs.pr-metadata.outputs.tag_prefix }}" >> $GITHUB_OUTPUT
-          echo "::notice::Building PR #${{ github.event.inputs.pr_number }} branch: ${{ needs.pr-metadata.outputs.head_ref }}"
+          echo "ref=${{ needs.deployment-metadata.outputs.head_ref }}" >> $GITHUB_OUTPUT
+          echo "sha=${{ needs.deployment-metadata.outputs.head_sha }}" >> $GITHUB_OUTPUT
+          echo "tag_prefix=${{ needs.deployment-metadata.outputs.tag_prefix }}" >> $GITHUB_OUTPUT
+          if [ "${{ github.event.inputs.deployment_mode }}" = "pr" ]; then
+            echo "::notice::Building PR #${{ github.event.inputs.pr_number }} branch: ${{ needs.deployment-metadata.outputs.head_ref }}"
+          else
+            echo "::notice::Building branch: ${{ needs.deployment-metadata.outputs.head_ref }}"
+          fi
 
       - name: Checkout code
         uses: actions/checkout@v6
@@ -255,7 +341,7 @@ jobs:
   # =============================================================================
   image-security-scan:
     name: Security Scan (${{ matrix.component }} Image)
-    needs: [pr-metadata, build-images]
+    needs: [deployment-metadata, build-images]
     # Run if build succeeded and security scan not disabled
     if: ${{ needs.build-images.result == 'success' && github.event.inputs.skip_security_scan != 'true' }}
     runs-on: [self-hosted, macOS, mac-mini]
@@ -437,7 +523,7 @@ jobs:
   # =============================================================================
   deploy-to-mac-mini:
     name: Deploy to Mac Mini QA
-    needs: [pr-metadata, build-images, image-security-scan]
+    needs: [deployment-metadata, build-images, image-security-scan]
     # Run if build succeeded and either security scan passed OR was skipped
     if: ${{ always() && needs.build-images.result == 'success' && (needs.image-security-scan.result == 'success' || needs.image-security-scan.result == 'skipped') }}
     runs-on: [self-hosted, macOS, mac-mini]
@@ -573,7 +659,7 @@ jobs:
   # =============================================================================
   smoke-tests:
     name: QA Smoke Tests
-    needs: [pr-metadata, build-images, deploy-to-mac-mini]
+    needs: [deployment-metadata, build-images, deploy-to-mac-mini]
     if: ${{ needs.deploy-to-mac-mini.result == 'success' }}
     runs-on: [self-hosted, macOS, mac-mini]
     env:
@@ -633,7 +719,7 @@ jobs:
   # =============================================================================
   deployment-summary:
     name: Deployment Summary
-    needs: [pr-metadata, build-images, deploy-to-mac-mini, smoke-tests]
+    needs: [deployment-metadata, build-images, deploy-to-mac-mini, smoke-tests]
     runs-on: [self-hosted, macOS, mac-mini]
     if: ${{ always() && needs.smoke-tests.result == 'success' }}
 
@@ -642,12 +728,21 @@ jobs:
         run: |
           TAG_PREFIX="${{ needs.build-images.outputs.tag_prefix }}"
           SHA="${{ needs.build-images.outputs.sha }}"
+          MODE="${{ github.event.inputs.deployment_mode }}"
 
-          echo "### 🚀 PR #${{ github.event.inputs.pr_number }} Deployed to QA" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**PR:** #${{ github.event.inputs.pr_number }} - ${{ needs.pr-metadata.outputs.pr_title }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Author:** @${{ needs.pr-metadata.outputs.pr_author }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Branch:** \`${{ needs.pr-metadata.outputs.head_ref }}\`" >> $GITHUB_STEP_SUMMARY
+          if [ "$MODE" = "pr" ]; then
+            echo "### 🚀 PR #${{ github.event.inputs.pr_number }} Deployed to QA" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Mode:** PR Deployment" >> $GITHUB_STEP_SUMMARY
+            echo "**PR:** #${{ github.event.inputs.pr_number }} - ${{ needs.deployment-metadata.outputs.deploy_title }}" >> $GITHUB_STEP_SUMMARY
+            echo "**Author:** @${{ needs.deployment-metadata.outputs.deploy_author }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### 🚀 Branch '${{ github.event.inputs.branch_name }}' Deployed to QA" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Mode:** Branch Deployment" >> $GITHUB_STEP_SUMMARY
+            echo "**Branch:** \`${{ github.event.inputs.branch_name }}\`" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "**Ref:** \`${{ needs.deployment-metadata.outputs.head_ref }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Triggered by:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
 
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -678,9 +773,10 @@ jobs:
   # =============================================================================
   notify-pr:
     name: Comment on PR
-    needs: [pr-metadata, build-images, smoke-tests]
-    # Only run when smoke tests pass
-    if: ${{ needs.smoke-tests.result == 'success' }}
+    needs: [deployment-metadata, build-images, smoke-tests]
+    # Only run when deployment_mode=pr AND smoke tests pass
+    # Branch deployments don't need PR comments
+    if: ${{ needs.smoke-tests.result == 'success' && github.event.inputs.deployment_mode == 'pr' }}
     runs-on: [self-hosted, macOS, mac-mini]
 
     steps:
@@ -699,7 +795,7 @@ jobs:
           | Field | Value |
           |-------|-------|
           | **Version** | `TAG_PREFIX_PLACEHOLDER-SHA_PLACEHOLDER` |
-          | **Branch** | `${{ needs.pr-metadata.outputs.head_ref }}` |
+          | **Branch** | `${{ needs.deployment-metadata.outputs.head_ref }}` |
           | **Commit** | `SHA_PLACEHOLDER` |
           | **Triggered by** | @${{ github.actor }} |
 
