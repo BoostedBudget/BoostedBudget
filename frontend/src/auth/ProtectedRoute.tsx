@@ -1,22 +1,25 @@
-import { useAuth, RedirectToSignIn } from '@clerk/clerk-react'
+import { Navigate, useLocation } from 'react-router-dom'
+import { useAuth } from '@clerk/react-router'
 
 interface ProtectedRouteProps {
   children: React.ReactNode
 }
 
-export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
+export function ProtectedRoute({ children }: ProtectedRouteProps) {
   const { isSignedIn, isLoaded } = useAuth()
+  const location = useLocation()
 
   if (!isLoaded) {
     return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh' }}>
+      <div className="flex justify-center items-center min-h-screen">
         <p>Loading...</p>
       </div>
     )
   }
 
   if (!isSignedIn) {
-    return <RedirectToSignIn />
+    // Redirect to home, preserving intended destination
+    return <Navigate to="/" state={{ from: location }} replace />
   }
 
   return <>{children}</>

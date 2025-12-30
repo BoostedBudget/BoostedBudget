@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { useAuth, useUser, useClerk } from '@clerk/clerk-react'
+import { useAuth, useUser, useClerk } from '@clerk/react-router'
 import { Navigation } from './Navigation'
 import { UserDropdown } from './UserDropdown'
 import { MobileNav } from './MobileNav'

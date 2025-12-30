@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useUser } from '@clerk/clerk-react'
+import { useUser } from '@clerk/react-router'
 import { Star, Award, Gem, Check, X } from 'lucide-react'
 import { useSubscriptionTiers } from '../subscription/hooks/useSubscriptionTiers'
 import type { TierName, SubscriptionTier } from '../subscription/types'

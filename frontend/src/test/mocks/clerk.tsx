@@ -51,3 +51,16 @@ export const MockClerkProvider: React.FC<{
 }> = ({ children }) => {
   return <>{children}</>
 }
+
+// Default mock for @clerk/react-router
+// This can be imported in test files that need to mock Clerk
+export const defaultClerkMock = {
+  useAuth: vi.fn(() => createMockClerkAuth()),
+  useUser: vi.fn(() => createMockClerkUser()),
+  useClerk: vi.fn(() => createMockClerk()),
+  ClerkProvider: MockClerkProvider,
+  SignedIn: ({ children: _children }: { children: React.ReactNode }) => null,
+  SignedOut: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  SignInButton: ({ children }: { children?: React.ReactNode }) => <button>{children || 'Sign In'}</button>,
+  UserButton: () => <button>User</button>,
+}

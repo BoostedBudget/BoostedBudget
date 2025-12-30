@@ -9,7 +9,7 @@ import { test, expect } from '@playwright/test'
  * - Backend synchronization
  * - Cookie consent integration
  *
- * NOTE: Most tests require authentication with Auth0, which is currently
+ * NOTE: Most tests require authentication with Clerk, which is currently
  * skipped pending test credentials. See e2e/README.md for setup instructions.
  */
 
@@ -23,7 +23,7 @@ test.describe('Privacy Settings', () => {
     // Navigate to profile page (requires auth)
     await page.goto('/profile')
 
-    // Wait for redirect to complete (to home or Auth0)
+    // Wait for redirect to complete (to home or Clerk)
     // Using Playwright's auto-retry assertion to handle redirect timing
     await expect(page).not.toHaveURL(/\/profile/, { timeout: 10000 })
 

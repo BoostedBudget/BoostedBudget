@@ -8,7 +8,7 @@ const mockUseAuth = vi.hoisted(() => vi.fn())
 const mockUseUser = vi.hoisted(() => vi.fn())
 const mockUseClerk = vi.hoisted(() => vi.fn())
 
-vi.mock('@clerk/clerk-react', () => ({
+vi.mock('@clerk/react-router', () => ({
   useAuth: mockUseAuth,
   useUser: mockUseUser,
   useClerk: mockUseClerk,

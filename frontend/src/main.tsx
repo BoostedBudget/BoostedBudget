@@ -1,12 +1,11 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import { ClerkProvider, useAuth } from '@clerk/clerk-react'
+import { ClerkProvider, useAuth } from '@clerk/react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Provider } from 'react-redux'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App'
 import { store } from './store/store'
-import { AuthWrapper } from './auth'
 import { setAuthTokenProvider } from './api/client'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import './index.css'
@@ -34,7 +33,7 @@ if (isTestEnv) {
   // Unit tests (Vitest): always use placeholders
   clerkPublishableKey = 'pk_test_placeholder'
 } else {
-  const publishableKey = window.ENV?.CLERK_PUBLISHABLE_KEY || import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
+  const publishableKey = (window as { ENV?: { CLERK_PUBLISHABLE_KEY?: string } }).ENV?.CLERK_PUBLISHABLE_KEY || import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
 
   if (!publishableKey) {
     // In development (E2E tests, local dev without .env), use placeholders
@@ -77,10 +76,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         <ClerkProvider publishableKey={clerkPublishableKey}>
           <Provider store={store}>
             <BrowserRouter>
-              <AuthWrapper>
-                <InitializeAuth />
-                <App />
-              </AuthWrapper>
+              <InitializeAuth />
+              <App />
             </BrowserRouter>
           </Provider>
         </ClerkProvider>

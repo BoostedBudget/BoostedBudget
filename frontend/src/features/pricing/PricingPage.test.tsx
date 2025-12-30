@@ -14,7 +14,7 @@ import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtu
 // Mock useUser using vi.hoisted pattern (avoids strict type checking)
 const mockUseUser = vi.hoisted(() => vi.fn())
 
-vi.mock('@clerk/clerk-react', () => ({
+vi.mock('@clerk/react-router', () => ({
   useUser: mockUseUser,
 }))
 

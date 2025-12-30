@@ -131,7 +131,7 @@ test.describe('Navigation - Logo Links', () => {
 });
 
 // Tests that require authentication would go here
-// Skipped because they require Auth0 configuration
+// Skipped because they require Clerk configuration
 test.describe.skip('Navigation - Authenticated', () => {
   test('should show navigation links when authenticated', async ({ page: _page }) => {
     // This test requires authentication setup
