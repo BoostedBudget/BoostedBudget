@@ -74,8 +74,8 @@ type NonReadonly<T> = [T] extends [UnionToIntersection<T>]
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 /**
- * Fires a Plaid webhook for testing in staging environment. Requires Auth0 authentication.
- * @summary Fire a Plaid webhook (staging only)
+ * Fires a Plaid webhook for testing in QA environment. Requires Auth0 authentication.
+ * @summary Fire a Plaid webhook (QA only)
  */
 export const fireWebhook = (
   fireWebhookRequestBody: BodyType<NonReadonly<FireWebhookRequestBody>>,
@@ -141,7 +141,7 @@ export type FireWebhookMutationBody = BodyType<
 export type FireWebhookMutationError = ErrorType<ErrorModel>;
 
 /**
- * @summary Fire a Plaid webhook (staging only)
+ * @summary Fire a Plaid webhook (QA only)
  */
 export const useFireWebhook = <
   TError = ErrorType<ErrorModel>,
