@@ -397,6 +397,7 @@ jobs:
     # Run if backend-test succeeded OR was skipped (frontend-only changes)
     if: always() && !cancelled() && (needs.backend-test.result == 'success' || needs.backend-test.result == 'skipped')
     runs-on: [self-hosted, macOS, mac-mini]
+    environment: e2e  # Access Clerk secrets from e2e environment
     env:
       UNIQUE_WORKSPACE: workspace-e2e-test-${{ github.run_id }}
 
