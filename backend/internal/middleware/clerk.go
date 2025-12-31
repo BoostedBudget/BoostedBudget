@@ -10,6 +10,7 @@ import (
 	"github.com/clerk/clerk-sdk-go/v2"
 	"github.com/clerk/clerk-sdk-go/v2/jwt"
 	"github.com/labstack/echo/v4"
+	"github.com/maxnussbaum/BoostedBudget/internal/auth"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
@@ -77,7 +78,7 @@ func ClerkMiddleware(secretKey string, identityRepo repository.UserIdentityRepos
 					c.Logger().Infof("New user detected, auto-registering: %s", clerkUserID)
 
 					// Extract email from custom claims or fetch from Clerk API
-					email := extractEmailFromClaims(sessionClaims)
+					email := auth.ExtractEmailFromClaims(sessionClaims)
 					if email == "" {
 						c.Logger().Errorf("Missing email in token claims for %s", clerkUserID)
 						return echo.NewHTTPError(http.StatusUnauthorized, "Missing email in authentication token")
@@ -126,27 +127,6 @@ func ClerkMiddleware(secretKey string, identityRepo repository.UserIdentityRepos
 			return next(c)
 		}
 	}
-}
-
-// extractEmailFromClaims extracts email from Clerk session claims.
-// Clerk includes custom claims in the Custom field if configured via JWT templates.
-func extractEmailFromClaims(claims *clerk.SessionClaims) string {
-	if claims.Custom == nil {
-		return ""
-	}
-
-	// Custom claims are stored as a map
-	customClaims, ok := claims.Custom.(map[string]interface{})
-	if !ok {
-		return ""
-	}
-
-	// Try to get email from custom claims
-	if email, ok := customClaims["email"].(string); ok && email != "" {
-		return email
-	}
-
-	return ""
 }
 
 // GetUserID is a helper function to extract the user_id from the Echo context.
@@ -208,7 +188,7 @@ func GetEmail(c echo.Context) (string, error) {
 		return "", err
 	}
 
-	email := extractEmailFromClaims(claims)
+	email := auth.ExtractEmailFromClaims(claims)
 	if email == "" {
 		return "", errors.New("email not found in token claims")
 	}
@@ -222,24 +202,9 @@ func GetEmail(c echo.Context) (string, error) {
 func GetSubscriptionTier(c echo.Context) string {
 	claims, err := GetClerkClaims(c)
 	if err != nil {
-		return "free"
+		return auth.DefaultSubscriptionTier
 	}
-
-	if claims.Custom == nil {
-		return "free"
-	}
-
-	customClaims, ok := claims.Custom.(map[string]interface{})
-	if !ok {
-		return "free"
-	}
-
-	tier, ok := customClaims["subscription_tier"].(string)
-	if !ok {
-		return "free"
-	}
-
-	return tier
+	return auth.ExtractSubscriptionTier(claims)
 }
 
 // GetPrimaryRegion extracts the primary region from Clerk claims.
@@ -248,22 +213,7 @@ func GetSubscriptionTier(c echo.Context) string {
 func GetPrimaryRegion(c echo.Context) string {
 	claims, err := GetClerkClaims(c)
 	if err != nil {
-		return "iad"
+		return auth.DefaultPrimaryRegion
 	}
-
-	if claims.Custom == nil {
-		return "iad"
-	}
-
-	customClaims, ok := claims.Custom.(map[string]interface{})
-	if !ok {
-		return "iad"
-	}
-
-	region, ok := customClaims["primary_region"].(string)
-	if !ok {
-		return "iad"
-	}
-
-	return region
+	return auth.ExtractPrimaryRegion(claims)
 }

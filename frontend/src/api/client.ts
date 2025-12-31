@@ -54,13 +54,10 @@ export const customInstance = async <T>(
   config: AxiosRequestConfig,
   options?: AxiosRequestConfig
 ): Promise<T> => {
-  const source = Axios.CancelToken.source()
-
   // Merge configs
   const mergedConfig: AxiosRequestConfig = {
     ...config,
     ...options,
-    cancelToken: source.token,
   }
 
   // Inject auth token if provider is configured
