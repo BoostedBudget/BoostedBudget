@@ -12,9 +12,11 @@
  */
 
 import { test, expect } from '@playwright/test'
+import { setupClerkTestingToken } from '@clerk/testing/playwright'
 
 test.describe('Transaction Visual Enhancements', () => {
   test.beforeEach(async ({ page }) => {
+    await setupClerkTestingToken({ page })
     // Navigate to the transactions page
     // Note: This requires authentication - use a logged in session
     await page.goto('/transactions')

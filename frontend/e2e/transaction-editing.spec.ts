@@ -9,6 +9,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test'
+import { setupClerkTestingToken } from '@clerk/testing/playwright'
 import { loginWithClerk, acceptCookieConsent } from './helpers/auth'
 
 // Mock data for transactions
@@ -263,6 +264,7 @@ test.describe('Transaction Editing - Protected Route', () => {
   test('should redirect unauthenticated users away from transactions page', async ({
     page,
   }) => {
+    await setupClerkTestingToken({ page })
     await page.goto('/transactions')
 
     // Wait for redirect to complete (to home page)
@@ -283,6 +285,8 @@ const describeTransactionEditing = skipClerkTests
 describeTransactionEditing('Transaction Editing - Authenticated User', () => {
   test.beforeEach(async ({ page, context }) => {
     await context.clearCookies()
+
+    await setupClerkTestingToken({ page })
 
     const credentials = {
       email: process.env.TEST_CLERK_EMAIL || '',

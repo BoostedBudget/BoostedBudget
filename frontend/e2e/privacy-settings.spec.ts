@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { setupClerkTestingToken } from '@clerk/testing/playwright'
 
 /**
  * Privacy Settings E2E Tests
@@ -20,6 +21,7 @@ test.describe('Privacy Settings', () => {
   })
 
   test('should redirect unauthenticated users to login when accessing /profile', async ({ page }) => {
+    await setupClerkTestingToken({ page })
     // Navigate to profile page (requires auth)
     await page.goto('/profile')
 
@@ -35,6 +37,7 @@ test.describe('Privacy Settings', () => {
   })
 
   test('should show Privacy Policy page without authentication', async ({ page }) => {
+    await setupClerkTestingToken({ page })
     await page.goto('/legal/privacy-policy')
     await page.waitForLoadState('networkidle')
 

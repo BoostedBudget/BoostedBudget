@@ -9,6 +9,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test'
+import { setupClerkTestingToken } from '@clerk/testing/playwright'
 import { loginWithClerk, acceptCookieConsent } from './helpers/auth'
 
 // Mock data for dashboard APIs
@@ -209,6 +210,7 @@ test.describe('Dashboard - Protected Route', () => {
   test('should redirect unauthenticated users away from dashboard', async ({
     page,
   }) => {
+    await setupClerkTestingToken({ page })
     // Act - Navigate to dashboard without authentication
     await page.goto('/dashboard')
 
@@ -220,6 +222,7 @@ test.describe('Dashboard - Protected Route', () => {
   test('should show dashboard in navigation only when authenticated', async ({
     page,
   }) => {
+    await setupClerkTestingToken({ page })
     // Arrange - Start unauthenticated
     await page.goto('/')
     await page.waitForLoadState('networkidle')
@@ -246,6 +249,8 @@ describeDashboard('Dashboard - Authenticated User', () => {
   test.beforeEach(async ({ page, context }) => {
     // Clear cookies for test isolation
     await context.clearCookies()
+
+    await setupClerkTestingToken({ page })
 
     // Login with Clerk
     const credentials = {
