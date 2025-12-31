@@ -87,7 +87,7 @@ func TestStructuredLogging_WithUserID(t *testing.T) {
 	c := e.NewContext(req, rec)
 
 	// Set user ID in context (from auth middleware)
-	c.Set("user_id", "auth0|test-user")
+	c.Set("user_id", "user_test-user")
 
 	handler := func(c echo.Context) error {
 		return c.String(http.StatusOK, "test")
@@ -102,7 +102,7 @@ func TestStructuredLogging_WithUserID(t *testing.T) {
 	var logEntry map[string]interface{}
 	json.Unmarshal(logBuffer.Bytes(), &logEntry)
 
-	assert.Equal(t, "auth0|test-user", logEntry["user_id"])
+	assert.Equal(t, "user_test-user", logEntry["user_id"])
 }
 
 func TestStructuredLogging_WithError(t *testing.T) {

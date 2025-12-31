@@ -93,7 +93,7 @@ func (h *DashboardPreferencesHandler) ResetPreferences(ctx context.Context, inpu
 }
 
 // RegisterDashboardPreferencesRoutes registers dashboard preferences routes with the Huma API.
-// Note: These routes require the Auth0 middleware to be applied.
+// Note: These routes require the Clerk middleware to be applied.
 func RegisterDashboardPreferencesRoutes(api huma.API, handler *DashboardPreferencesHandler) {
 	// GET /api/v1/dashboard/preferences - Get dashboard preferences
 	huma.Register(api, huma.Operation{
@@ -103,7 +103,7 @@ func RegisterDashboardPreferencesRoutes(api huma.API, handler *DashboardPreferen
 		Summary:     "Get dashboard preferences",
 		Description: "Returns the user's dashboard layout preferences (or default if none exist).",
 		Tags:        []string{"Dashboard"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetPreferences)
 
 	// PUT /api/v1/dashboard/preferences - Save dashboard preferences
@@ -114,7 +114,7 @@ func RegisterDashboardPreferencesRoutes(api huma.API, handler *DashboardPreferen
 		Summary:     "Save dashboard preferences",
 		Description: "Saves the user's dashboard layout preferences.",
 		Tags:        []string{"Dashboard"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.SavePreferences)
 
 	// POST /api/v1/dashboard/preferences/reset - Reset dashboard preferences
@@ -125,6 +125,6 @@ func RegisterDashboardPreferencesRoutes(api huma.API, handler *DashboardPreferen
 		Summary:     "Reset dashboard preferences",
 		Description: "Resets the user's dashboard layout to the default configuration.",
 		Tags:        []string{"Dashboard"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.ResetPreferences)
 }

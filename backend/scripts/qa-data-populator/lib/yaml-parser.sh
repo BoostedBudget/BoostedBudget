@@ -75,12 +75,12 @@ get_user_mode() {
   fi
 }
 
-get_user_auth0_id() {
-  local auth0_id=$(yq e '.setup.user.auth0_user_id' "$SCENARIO_FILE")
-  if [ "$auth0_id" = "null" ]; then
+get_user_clerk_id() {
+  local clerk_id=$(yq e '.setup.user.clerk_user_id' "$SCENARIO_FILE")
+  if [ "$clerk_id" = "null" ]; then
     echo ""
   else
-    echo "$auth0_id"
+    echo "$clerk_id"
   fi
 }
 

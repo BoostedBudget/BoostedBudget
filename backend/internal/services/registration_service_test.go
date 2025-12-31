@@ -21,8 +21,8 @@ type MockUserIdentityRepository struct {
 	mock.Mock
 }
 
-func (m *MockUserIdentityRepository) GetByAuth0ID(ctx context.Context, auth0UserID string) (*domain.UserIdentity, error) {
-	args := m.Called(ctx, auth0UserID)
+func (m *MockUserIdentityRepository) GetByClerkID(ctx context.Context, clerkUserID string) (*domain.UserIdentity, error) {
+	args := m.Called(ctx, clerkUserID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -47,8 +47,8 @@ func (m *MockUserIdentityRepository) CreateTx(ctx context.Context, tx *sql.Tx, i
 	return args.Error(0)
 }
 
-func (m *MockUserIdentityRepository) UpdateLastUsed(ctx context.Context, auth0UserID string) error {
-	args := m.Called(ctx, auth0UserID)
+func (m *MockUserIdentityRepository) UpdateLastUsed(ctx context.Context, clerkUserID string) error {
+	args := m.Called(ctx, clerkUserID)
 	return args.Error(0)
 }
 
@@ -82,7 +82,7 @@ func (m *MockDB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, err
 func TestRegisterUser_Success(t *testing.T) {
 	// Arrange
 	ctx := context.Background()
-	auth0UserID := "google-oauth2|123456789"
+	clerkUserID := "google-oauth2|123456789"
 	email := "newuser@example.com"
 
 	mockProfileRepo := new(MockProfileRepository)
@@ -90,11 +90,11 @@ func TestRegisterUser_Success(t *testing.T) {
 	mockPrivacyRepo := new(MockPrivacyRepository)
 
 	// Identity doesn't exist (new user)
-	mockIdentityRepo.On("GetByAuth0ID", ctx, auth0UserID).Return(nil, repository.ErrIdentityNotFound)
+	mockIdentityRepo.On("GetByClerkID", ctx, clerkUserID).Return(nil, repository.ErrIdentityNotFound)
 
 	// Expect user creation
 	mockProfileRepo.On("CreateUser", ctx, mock.MatchedBy(func(u *domain.User) bool {
-		return u.Auth0UserID == auth0UserID &&
+		return u.ClerkUserID == clerkUserID &&
 			u.Email == email &&
 			u.SubscriptionTier == "free" &&
 			u.SubscriptionStatus == "active" &&
@@ -103,7 +103,7 @@ func TestRegisterUser_Success(t *testing.T) {
 
 	// Expect identity creation
 	mockIdentityRepo.On("Create", ctx, mock.MatchedBy(func(i *domain.UserIdentity) bool {
-		return i.Auth0UserID == auth0UserID &&
+		return i.ClerkUserID == clerkUserID &&
 			i.Provider == "google-oauth2" &&
 			i.ProviderUserID == "123456789" &&
 			i.Email == email &&
@@ -121,12 +121,12 @@ func TestRegisterUser_Success(t *testing.T) {
 	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, nil)
 
 	// Act
-	user, err := service.RegisterUser(ctx, auth0UserID, email, true)
+	user, err := service.RegisterUser(ctx, clerkUserID, email, true)
 
 	// Assert
 	assert.NoError(t, err)
 	assert.NotNil(t, user)
-	assert.Equal(t, auth0UserID, user.Auth0UserID)
+	assert.Equal(t, clerkUserID, user.ClerkUserID)
 	assert.Equal(t, email, user.Email)
 	assert.Equal(t, "free", user.SubscriptionTier)
 	assert.Equal(t, "active", user.SubscriptionStatus)
@@ -142,7 +142,7 @@ func TestRegisterUser_Success(t *testing.T) {
 func TestRegisterUser_AlreadyExists(t *testing.T) {
 	// Arrange
 	ctx := context.Background()
-	auth0UserID := "google-oauth2|123456789"
+	clerkUserID := "google-oauth2|123456789"
 	email := "existing@example.com"
 	userID := "existing-user-uuid"
 
@@ -154,18 +154,18 @@ func TestRegisterUser_AlreadyExists(t *testing.T) {
 	existingIdentity := &domain.UserIdentity{
 		ID:             "identity-uuid",
 		UserID:         userID,
-		Auth0UserID:    auth0UserID,
+		ClerkUserID:    clerkUserID,
 		Provider:       "google-oauth2",
 		ProviderUserID: "123456789",
 		Email:          email,
 		IsPrimary:      true,
 	}
-	mockIdentityRepo.On("GetByAuth0ID", ctx, auth0UserID).Return(existingIdentity, nil)
+	mockIdentityRepo.On("GetByClerkID", ctx, clerkUserID).Return(existingIdentity, nil)
 
 	// Expect user lookup (not creation)
 	existingUser := &domain.User{
 		ID:                 userID,
-		Auth0UserID:        auth0UserID,
+		ClerkUserID:        clerkUserID,
 		Email:              email,
 		SubscriptionTier:   "free",
 		SubscriptionStatus: "active",
@@ -177,13 +177,13 @@ func TestRegisterUser_AlreadyExists(t *testing.T) {
 	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, nil)
 
 	// Act
-	user, err := service.RegisterUser(ctx, auth0UserID, email, true)
+	user, err := service.RegisterUser(ctx, clerkUserID, email, true)
 
 	// Assert
 	assert.NoError(t, err)
 	assert.NotNil(t, user)
 	assert.Equal(t, userID, user.ID)
-	assert.Equal(t, auth0UserID, user.Auth0UserID)
+	assert.Equal(t, clerkUserID, user.ClerkUserID)
 	assert.Equal(t, email, user.Email)
 
 	// Should NOT create new user/identity/privacy (idempotent)
@@ -200,7 +200,7 @@ func TestRegisterUser_AlreadyExists(t *testing.T) {
 func TestRegisterUser_InvalidEmail(t *testing.T) {
 	// Arrange
 	ctx := context.Background()
-	auth0UserID := "google-oauth2|123456789"
+	clerkUserID := "google-oauth2|123456789"
 	invalidEmail := "not-an-email"
 
 	mockProfileRepo := new(MockProfileRepository)
@@ -211,7 +211,7 @@ func TestRegisterUser_InvalidEmail(t *testing.T) {
 	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, nil)
 
 	// Act
-	user, err := service.RegisterUser(ctx, auth0UserID, invalidEmail, true)
+	user, err := service.RegisterUser(ctx, clerkUserID, invalidEmail, true)
 
 	// Assert
 	assert.Error(t, err)
@@ -219,7 +219,7 @@ func TestRegisterUser_InvalidEmail(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid email")
 
 	// Should not call any repositories
-	mockIdentityRepo.AssertNotCalled(t, "GetByAuth0ID")
+	mockIdentityRepo.AssertNotCalled(t, "GetByClerkID")
 	mockProfileRepo.AssertNotCalled(t, "CreateUser")
 	mockIdentityRepo.AssertNotCalled(t, "Create")
 	mockPrivacyRepo.AssertNotCalled(t, "Create")
@@ -230,7 +230,7 @@ func TestRegisterUser_InvalidEmail(t *testing.T) {
 func TestRegisterUser_DatabaseError(t *testing.T) {
 	// Arrange
 	ctx := context.Background()
-	auth0UserID := "google-oauth2|123456789"
+	clerkUserID := "google-oauth2|123456789"
 	email := "newuser@example.com"
 
 	mockProfileRepo := new(MockProfileRepository)
@@ -238,7 +238,7 @@ func TestRegisterUser_DatabaseError(t *testing.T) {
 	mockPrivacyRepo := new(MockPrivacyRepository)
 
 	// Identity doesn't exist (new user)
-	mockIdentityRepo.On("GetByAuth0ID", ctx, auth0UserID).Return(nil, repository.ErrIdentityNotFound)
+	mockIdentityRepo.On("GetByClerkID", ctx, clerkUserID).Return(nil, repository.ErrIdentityNotFound)
 
 	// Simulate database error on user creation
 	dbError := errors.New("database connection failed")
@@ -248,7 +248,7 @@ func TestRegisterUser_DatabaseError(t *testing.T) {
 	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, nil)
 
 	// Act
-	user, err := service.RegisterUser(ctx, auth0UserID, email, true)
+	user, err := service.RegisterUser(ctx, clerkUserID, email, true)
 
 	// Assert
 	assert.Error(t, err)
@@ -259,12 +259,12 @@ func TestRegisterUser_DatabaseError(t *testing.T) {
 	mockProfileRepo.AssertExpectations(t)
 }
 
-// TestRegisterUser_EmptyAuth0UserID tests validation of required fields
+// TestRegisterUser_EmptyClerkUserID tests validation of required fields
 // RED Phase: This test will FAIL because RegistrationService doesn't exist yet
-func TestRegisterUser_EmptyAuth0UserID(t *testing.T) {
+func TestRegisterUser_EmptyClerkUserID(t *testing.T) {
 	// Arrange
 	ctx := context.Background()
-	auth0UserID := ""
+	clerkUserID := ""
 	email := "user@example.com"
 
 	mockProfileRepo := new(MockProfileRepository)
@@ -275,15 +275,15 @@ func TestRegisterUser_EmptyAuth0UserID(t *testing.T) {
 	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, nil)
 
 	// Act
-	user, err := service.RegisterUser(ctx, auth0UserID, email, true)
+	user, err := service.RegisterUser(ctx, clerkUserID, email, true)
 
 	// Assert
 	assert.Error(t, err)
 	assert.Nil(t, user)
-	assert.Contains(t, err.Error(), "auth0_user_id is required")
+	assert.Contains(t, err.Error(), "clerk_user_id is required")
 
 	// Should not call any repositories
-	mockIdentityRepo.AssertNotCalled(t, "GetByAuth0ID")
+	mockIdentityRepo.AssertNotCalled(t, "GetByClerkID")
 	mockProfileRepo.AssertNotCalled(t, "CreateUser")
 }
 
@@ -292,7 +292,7 @@ func TestRegisterUser_EmptyAuth0UserID(t *testing.T) {
 func TestRegisterUser_AuditLogging(t *testing.T) {
 	// Arrange
 	ctx := context.Background()
-	auth0UserID := "google-oauth2|123456789"
+	clerkUserID := "google-oauth2|123456789"
 	email := "newuser@example.com"
 
 	mockProfileRepo := new(MockProfileRepository)
@@ -301,11 +301,11 @@ func TestRegisterUser_AuditLogging(t *testing.T) {
 	mockAuditLogger := new(MockAuditLogger)
 
 	// Identity doesn't exist (new user)
-	mockIdentityRepo.On("GetByAuth0ID", ctx, auth0UserID).Return(nil, repository.ErrIdentityNotFound)
+	mockIdentityRepo.On("GetByClerkID", ctx, clerkUserID).Return(nil, repository.ErrIdentityNotFound)
 
 	// Expect user creation - mock sets user ID like real CreateUser does
 	mockProfileRepo.On("CreateUser", ctx, mock.MatchedBy(func(u *domain.User) bool {
-		return u.Auth0UserID == auth0UserID && u.Email == email
+		return u.ClerkUserID == clerkUserID && u.Email == email
 	})).Run(func(args mock.Arguments) {
 		// Simulate CreateUser setting the user ID
 		user := args.Get(1).(*domain.User)
@@ -328,7 +328,7 @@ func TestRegisterUser_AuditLogging(t *testing.T) {
 	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, mockAuditLogger, nil)
 
 	// Act
-	user, err := service.RegisterUser(ctx, auth0UserID, email, true)
+	user, err := service.RegisterUser(ctx, clerkUserID, email, true)
 
 	// Assert
 	assert.NoError(t, err)
@@ -352,7 +352,7 @@ func TestRegisterUser_AuditLogging(t *testing.T) {
 func TestRegisterUser_TransactionAtomicity(t *testing.T) {
 	// Arrange
 	ctx := context.Background()
-	auth0UserID := "google-oauth2|123456789"
+	clerkUserID := "google-oauth2|123456789"
 	email := "newuser@example.com"
 
 	mockProfileRepo := new(MockProfileRepository)
@@ -361,7 +361,7 @@ func TestRegisterUser_TransactionAtomicity(t *testing.T) {
 	mockDB := new(MockDB)
 
 	// Identity doesn't exist (new user)
-	mockIdentityRepo.On("GetByAuth0ID", ctx, auth0UserID).Return(nil, repository.ErrIdentityNotFound)
+	mockIdentityRepo.On("GetByClerkID", ctx, clerkUserID).Return(nil, repository.ErrIdentityNotFound)
 
 	// Mock transaction start
 	mockTx := &sql.Tx{} // This will be replaced by actual transaction in implementation
@@ -369,11 +369,11 @@ func TestRegisterUser_TransactionAtomicity(t *testing.T) {
 
 	// Expect CreateTx methods to be called (not Create)
 	mockProfileRepo.On("CreateUserTx", ctx, mockTx, mock.MatchedBy(func(u *domain.User) bool {
-		return u.Auth0UserID == auth0UserID && u.Email == email
+		return u.ClerkUserID == clerkUserID && u.Email == email
 	})).Return(nil)
 
 	mockIdentityRepo.On("CreateTx", ctx, mockTx, mock.MatchedBy(func(i *domain.UserIdentity) bool {
-		return i.Auth0UserID == auth0UserID && i.Email == email
+		return i.ClerkUserID == clerkUserID && i.Email == email
 	})).Return(nil)
 
 	mockPrivacyRepo.On("CreateTx", ctx, mockTx, mock.Anything).Return(nil)
@@ -388,7 +388,7 @@ func TestRegisterUser_TransactionAtomicity(t *testing.T) {
 	}
 
 	// Act
-	user, err := service.RegisterUser(ctx, auth0UserID, email)
+	user, err := service.RegisterUser(ctx, clerkUserID, email)
 
 	// Assert
 	assert.NoError(t, err)
@@ -407,7 +407,7 @@ func TestRegisterUser_TransactionAtomicity(t *testing.T) {
 func TestRegisterUser_TransactionRollbackOnUserError(t *testing.T) {
 	// Arrange
 	ctx := context.Background()
-	auth0UserID := "google-oauth2|123456789"
+	clerkUserID := "google-oauth2|123456789"
 	email := "newuser@example.com"
 
 	mockProfileRepo := new(MockProfileRepository)
@@ -415,7 +415,7 @@ func TestRegisterUser_TransactionRollbackOnUserError(t *testing.T) {
 	mockPrivacyRepo := new(MockPrivacyRepository)
 
 	// Identity doesn't exist (new user)
-	mockIdentityRepo.On("GetByAuth0ID", ctx, auth0UserID).Return(nil, repository.ErrIdentityNotFound)
+	mockIdentityRepo.On("GetByClerkID", ctx, clerkUserID).Return(nil, repository.ErrIdentityNotFound)
 
 	// User creation fails
 	userCreateError := errors.New("database error during user creation")
@@ -425,7 +425,7 @@ func TestRegisterUser_TransactionRollbackOnUserError(t *testing.T) {
 	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, nil)
 
 	// Act
-	user, err := service.RegisterUser(ctx, auth0UserID, email, true)
+	user, err := service.RegisterUser(ctx, clerkUserID, email, true)
 
 	// Assert
 	assert.Error(t, err)
@@ -444,7 +444,7 @@ func TestRegisterUser_TransactionRollbackOnUserError(t *testing.T) {
 func TestRegisterUser_TransactionRollbackOnIdentityError(t *testing.T) {
 	// Arrange
 	ctx := context.Background()
-	auth0UserID := "google-oauth2|123456789"
+	clerkUserID := "google-oauth2|123456789"
 	email := "newuser@example.com"
 
 	mockProfileRepo := new(MockProfileRepository)
@@ -452,7 +452,7 @@ func TestRegisterUser_TransactionRollbackOnIdentityError(t *testing.T) {
 	mockPrivacyRepo := new(MockPrivacyRepository)
 
 	// Identity doesn't exist (new user)
-	mockIdentityRepo.On("GetByAuth0ID", ctx, auth0UserID).Return(nil, repository.ErrIdentityNotFound)
+	mockIdentityRepo.On("GetByClerkID", ctx, clerkUserID).Return(nil, repository.ErrIdentityNotFound)
 
 	// User creation succeeds
 	mockProfileRepo.On("CreateUser", ctx, mock.Anything).Return(nil)
@@ -465,7 +465,7 @@ func TestRegisterUser_TransactionRollbackOnIdentityError(t *testing.T) {
 	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, nil)
 
 	// Act
-	user, err := service.RegisterUser(ctx, auth0UserID, email, true)
+	user, err := service.RegisterUser(ctx, clerkUserID, email, true)
 
 	// Assert
 	assert.Error(t, err)
@@ -484,7 +484,7 @@ func TestRegisterUser_TransactionRollbackOnIdentityError(t *testing.T) {
 func TestRegisterUser_TransactionRollbackOnPrivacyError(t *testing.T) {
 	// Arrange
 	ctx := context.Background()
-	auth0UserID := "google-oauth2|123456789"
+	clerkUserID := "google-oauth2|123456789"
 	email := "newuser@example.com"
 
 	mockProfileRepo := new(MockProfileRepository)
@@ -492,7 +492,7 @@ func TestRegisterUser_TransactionRollbackOnPrivacyError(t *testing.T) {
 	mockPrivacyRepo := new(MockPrivacyRepository)
 
 	// Identity doesn't exist (new user)
-	mockIdentityRepo.On("GetByAuth0ID", ctx, auth0UserID).Return(nil, repository.ErrIdentityNotFound)
+	mockIdentityRepo.On("GetByClerkID", ctx, clerkUserID).Return(nil, repository.ErrIdentityNotFound)
 
 	// User creation succeeds
 	mockProfileRepo.On("CreateUser", ctx, mock.Anything).Return(nil)
@@ -508,7 +508,7 @@ func TestRegisterUser_TransactionRollbackOnPrivacyError(t *testing.T) {
 	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, nil)
 
 	// Act
-	user, err := service.RegisterUser(ctx, auth0UserID, email, true)
+	user, err := service.RegisterUser(ctx, clerkUserID, email, true)
 
 	// Assert
 	assert.Error(t, err)
@@ -524,7 +524,7 @@ func TestRegisterUser_TransactionRollbackOnPrivacyError(t *testing.T) {
 func TestRegisterUser_EmailVerifiedTrue(t *testing.T) {
 	// Arrange
 	ctx := context.Background()
-	auth0UserID := "google-oauth2|123456789"
+	clerkUserID := "google-oauth2|123456789"
 	email := "verified@example.com"
 	emailVerified := true
 
@@ -533,19 +533,19 @@ func TestRegisterUser_EmailVerifiedTrue(t *testing.T) {
 	mockPrivacyRepo := new(MockPrivacyRepository)
 
 	// Identity doesn't exist (new user)
-	mockIdentityRepo.On("GetByAuth0ID", ctx, auth0UserID).Return(nil, repository.ErrIdentityNotFound)
+	mockIdentityRepo.On("GetByClerkID", ctx, clerkUserID).Return(nil, repository.ErrIdentityNotFound)
 
 	// Expect user creation with emailVerified=true
 	mockProfileRepo.On("CreateUser", ctx, mock.MatchedBy(func(u *domain.User) bool {
 		// Verify EmailVerified is set correctly
-		return u.Auth0UserID == auth0UserID &&
+		return u.ClerkUserID == clerkUserID &&
 			u.Email == email &&
 			u.EmailVerified == true
 	})).Return(nil)
 
 	// Expect identity creation with emailVerified=true
 	mockIdentityRepo.On("Create", ctx, mock.MatchedBy(func(i *domain.UserIdentity) bool {
-		return i.Auth0UserID == auth0UserID &&
+		return i.ClerkUserID == clerkUserID &&
 			i.Email == email &&
 			i.EmailVerified == true
 	})).Return(nil)
@@ -557,7 +557,7 @@ func TestRegisterUser_EmailVerifiedTrue(t *testing.T) {
 	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, nil)
 
 	// Act
-	user, err := service.RegisterUser(ctx, auth0UserID, email, emailVerified)
+	user, err := service.RegisterUser(ctx, clerkUserID, email, emailVerified)
 
 	// Assert
 	assert.NoError(t, err)
@@ -574,7 +574,7 @@ func TestRegisterUser_EmailVerifiedTrue(t *testing.T) {
 func TestRegisterUser_EmailVerifiedFalse(t *testing.T) {
 	// Arrange
 	ctx := context.Background()
-	auth0UserID := "google-oauth2|987654321"
+	clerkUserID := "google-oauth2|987654321"
 	email := "unverified@example.com"
 	emailVerified := false
 
@@ -583,19 +583,19 @@ func TestRegisterUser_EmailVerifiedFalse(t *testing.T) {
 	mockPrivacyRepo := new(MockPrivacyRepository)
 
 	// Identity doesn't exist (new user)
-	mockIdentityRepo.On("GetByAuth0ID", ctx, auth0UserID).Return(nil, repository.ErrIdentityNotFound)
+	mockIdentityRepo.On("GetByClerkID", ctx, clerkUserID).Return(nil, repository.ErrIdentityNotFound)
 
 	// Expect user creation with emailVerified=false
 	mockProfileRepo.On("CreateUser", ctx, mock.MatchedBy(func(u *domain.User) bool {
 		// Verify EmailVerified is set correctly
-		return u.Auth0UserID == auth0UserID &&
+		return u.ClerkUserID == clerkUserID &&
 			u.Email == email &&
 			u.EmailVerified == false
 	})).Return(nil)
 
 	// Expect identity creation with emailVerified=false
 	mockIdentityRepo.On("Create", ctx, mock.MatchedBy(func(i *domain.UserIdentity) bool {
-		return i.Auth0UserID == auth0UserID &&
+		return i.ClerkUserID == clerkUserID &&
 			i.Email == email &&
 			i.EmailVerified == false
 	})).Return(nil)
@@ -607,7 +607,7 @@ func TestRegisterUser_EmailVerifiedFalse(t *testing.T) {
 	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, nil)
 
 	// Act
-	user, err := service.RegisterUser(ctx, auth0UserID, email, emailVerified)
+	user, err := service.RegisterUser(ctx, clerkUserID, email, emailVerified)
 
 	// Assert
 	assert.NoError(t, err)
@@ -640,7 +640,7 @@ func TestRegisterUser_WithTransaction(t *testing.T) {
 func TestRegisterUser_TransactionBeginError(t *testing.T) {
 	// Arrange
 	ctx := context.Background()
-	auth0UserID := "google-oauth2|123456789"
+	clerkUserID := "google-oauth2|123456789"
 	email := "newuser@example.com"
 	emailVerified := true
 
@@ -654,7 +654,7 @@ func TestRegisterUser_TransactionBeginError(t *testing.T) {
 	mockPrivacyRepo := new(MockPrivacyRepository)
 
 	// Identity doesn't exist (new user)
-	mockIdentityRepo.On("GetByAuth0ID", ctx, auth0UserID).Return(nil, repository.ErrIdentityNotFound)
+	mockIdentityRepo.On("GetByClerkID", ctx, clerkUserID).Return(nil, repository.ErrIdentityNotFound)
 
 	// Expect transaction begin to fail
 	mockDB.ExpectBegin().WillReturnError(errors.New("database connection failed"))
@@ -663,7 +663,7 @@ func TestRegisterUser_TransactionBeginError(t *testing.T) {
 	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, db)
 
 	// Act
-	user, err := service.RegisterUser(ctx, auth0UserID, email, emailVerified)
+	user, err := service.RegisterUser(ctx, clerkUserID, email, emailVerified)
 
 	// Assert
 	assert.Error(t, err)
@@ -697,7 +697,7 @@ func TestRegisterUser_TransactionCommitError(t *testing.T) {
 func TestRegisterUser_TransactionUserCreationError(t *testing.T) {
 	// Arrange
 	ctx := context.Background()
-	auth0UserID := "google-oauth2|123456789"
+	clerkUserID := "google-oauth2|123456789"
 	email := "newuser@example.com"
 	emailVerified := true
 
@@ -711,7 +711,7 @@ func TestRegisterUser_TransactionUserCreationError(t *testing.T) {
 	mockPrivacyRepo := new(MockPrivacyRepository)
 
 	// Identity doesn't exist (new user)
-	mockIdentityRepo.On("GetByAuth0ID", ctx, auth0UserID).Return(nil, repository.ErrIdentityNotFound)
+	mockIdentityRepo.On("GetByClerkID", ctx, clerkUserID).Return(nil, repository.ErrIdentityNotFound)
 
 	// Expect transaction to begin
 	mockDB.ExpectBegin()
@@ -727,7 +727,7 @@ func TestRegisterUser_TransactionUserCreationError(t *testing.T) {
 	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, db)
 
 	// Act
-	user, err := service.RegisterUser(ctx, auth0UserID, email, emailVerified)
+	user, err := service.RegisterUser(ctx, clerkUserID, email, emailVerified)
 
 	// Assert
 	assert.Error(t, err)
@@ -746,7 +746,7 @@ func TestRegisterUser_TransactionUserCreationError(t *testing.T) {
 func TestRegisterUser_TransactionIdentityCreationError(t *testing.T) {
 	// Arrange
 	ctx := context.Background()
-	auth0UserID := "google-oauth2|123456789"
+	clerkUserID := "google-oauth2|123456789"
 	email := "newuser@example.com"
 	emailVerified := true
 
@@ -760,7 +760,7 @@ func TestRegisterUser_TransactionIdentityCreationError(t *testing.T) {
 	mockPrivacyRepo := new(MockPrivacyRepository)
 
 	// Identity doesn't exist (new user)
-	mockIdentityRepo.On("GetByAuth0ID", ctx, auth0UserID).Return(nil, repository.ErrIdentityNotFound)
+	mockIdentityRepo.On("GetByClerkID", ctx, clerkUserID).Return(nil, repository.ErrIdentityNotFound)
 
 	// Expect transaction to begin
 	mockDB.ExpectBegin()
@@ -779,7 +779,7 @@ func TestRegisterUser_TransactionIdentityCreationError(t *testing.T) {
 	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, db)
 
 	// Act
-	user, err := service.RegisterUser(ctx, auth0UserID, email, emailVerified)
+	user, err := service.RegisterUser(ctx, clerkUserID, email, emailVerified)
 
 	// Assert
 	assert.Error(t, err)
@@ -797,7 +797,7 @@ func TestRegisterUser_TransactionIdentityCreationError(t *testing.T) {
 func TestRegisterUser_TransactionPrivacyCreationError(t *testing.T) {
 	// Arrange
 	ctx := context.Background()
-	auth0UserID := "google-oauth2|123456789"
+	clerkUserID := "google-oauth2|123456789"
 	email := "newuser@example.com"
 	emailVerified := true
 
@@ -811,7 +811,7 @@ func TestRegisterUser_TransactionPrivacyCreationError(t *testing.T) {
 	mockPrivacyRepo := new(MockPrivacyRepository)
 
 	// Identity doesn't exist (new user)
-	mockIdentityRepo.On("GetByAuth0ID", ctx, auth0UserID).Return(nil, repository.ErrIdentityNotFound)
+	mockIdentityRepo.On("GetByClerkID", ctx, clerkUserID).Return(nil, repository.ErrIdentityNotFound)
 
 	// Expect transaction to begin
 	mockDB.ExpectBegin()
@@ -831,7 +831,7 @@ func TestRegisterUser_TransactionPrivacyCreationError(t *testing.T) {
 	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, db)
 
 	// Act
-	user, err := service.RegisterUser(ctx, auth0UserID, email, emailVerified)
+	user, err := service.RegisterUser(ctx, clerkUserID, email, emailVerified)
 
 	// Assert
 	assert.Error(t, err)

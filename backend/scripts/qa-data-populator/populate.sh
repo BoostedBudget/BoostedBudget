@@ -39,7 +39,7 @@ Examples:
   # Create fake user (mode: new)
   $(basename "$0") scenarios/01-demo-data-free-user.yaml
 
-  # Use existing Auth0 user (mode: existing)
+  # Use existing Clerk user (mode: existing)
   $(basename "$0") scenarios/01-demo-data-free-user.yaml --existing-user you@example.com
 
   # Use scenario with mode: existing already set
@@ -48,7 +48,7 @@ Examples:
 Environment:
   DATABASE_URL     Loaded from backend/.env
   DEBUG            Set to 'true' for debug logging
-  AUTH_TOKEN       Auth0 JWT token for admin webhook firing (optional)
+  AUTH_TOKEN       Clerk JWT token for admin webhook firing (optional)
                    Required only if scenario has webhooks.fire_after_setup: true
 
 For more information, see README.md

@@ -5,7 +5,7 @@ Quick reference guide for configuring GitHub repository secrets for CI/CD and de
 ## Prerequisites
 
 Before setting up GitHub secrets, you must have:
-- ✅ Completed [Auth0 Setup](./AUTH0_SETUP.md)
+- ✅ Completed [Clerk Setup](./CLERK_SETUP.md)
 - ✅ Created Plaid developer account
 - ✅ Created Stripe account
 - ✅ (Optional) Set up Google AdSense
@@ -15,7 +15,7 @@ Before setting up GitHub secrets, you must have:
 ## Adding Secrets to GitHub
 
 ### Navigate to Secrets Page
-1. Go to: `https://github.com/maxnussbaum/BoostedBudget`
+1. Go to: `https://github.com/BoostedBudget/BoostedBudget`
 2. Click **Settings** (repository settings)
 3. Click **Secrets and variables** → **Actions**
 4. Click **New repository secret**
@@ -24,16 +24,14 @@ Before setting up GitHub secrets, you must have:
 
 ## Required Secrets
 
-### Auth0 Secrets (Priority: HIGH)
+### Clerk Secrets (Priority: HIGH)
 
 | Secret Name | Where to Find | Example Value |
 |-------------|---------------|---------------|
-| `AUTH0_DOMAIN` | Auth0 Dashboard → Applications → BoostedBudget Web App → Settings → Domain | `boostedbudget.auth0.com` |
-| `AUTH0_AUDIENCE` | Auth0 Dashboard → APIs → BoostedBudget API → Settings → Identifier | `https://api.boostedbudget.com` |
-| `AUTH0_CLIENT_ID` | Auth0 Dashboard → Applications → BoostedBudget Web App → Settings → Client ID | `abc123def456...` |
-| `AUTH0_CLIENT_SECRET` | Auth0 Dashboard → Applications → BoostedBudget Web App → Settings → Client Secret | `xyz789...` (click to reveal) |
+| `CLERK_SECRET_KEY` | Clerk Dashboard → API Keys → Secret keys | `sk_test_...` or `sk_live_...` |
+| `CLERK_PUBLISHABLE_KEY` | Clerk Dashboard → API Keys → Publishable Key | `pk_test_...` or `pk_live_...` |
 
-**Setup Instructions**: See [AUTH0_SETUP.md](./AUTH0_SETUP.md) Section 7
+**Setup Instructions**: See [CLERK_SETUP.md](./CLERK_SETUP.md) Section 5
 
 ---
 
@@ -101,14 +99,14 @@ Before setting up GitHub secrets, you must have:
 For each secret in the tables above:
 
 1. Click **New repository secret**
-2. **Name**: Enter the exact secret name (e.g., `AUTH0_DOMAIN`)
+2. **Name**: Enter the exact secret name (e.g., `CLERK_SECRET_KEY`)
 3. **Secret**: Paste the value from your provider dashboard
 4. Click **Add secret**
 
 **Example**:
 ```
-Name: AUTH0_DOMAIN
-Secret: boostedbudget.auth0.com
+Name: CLERK_SECRET_KEY
+Secret: sk_test_abc123...
 ```
 
 ---
@@ -117,11 +115,9 @@ Secret: boostedbudget.auth0.com
 
 After adding all secrets, your GitHub Actions secrets page should show:
 
-### Phase 0 (Immediate - Required for Auth0):
-- ✅ `AUTH0_DOMAIN`
-- ✅ `AUTH0_AUDIENCE`
-- ✅ `AUTH0_CLIENT_ID`
-- ✅ `AUTH0_CLIENT_SECRET`
+### Phase 0 (Immediate - Required for Auth):
+- ✅ `CLERK_SECRET_KEY`
+- ✅ `CLERK_PUBLISHABLE_KEY`
 
 ### Phase 0 (Deployment):
 - ✅ `DATABASE_URL` (added during Fly.io setup)
@@ -153,10 +149,8 @@ jobs:
     steps:
       - name: Deploy to Fly.io
         env:
-          AUTH0_DOMAIN: ${{ secrets.AUTH0_DOMAIN }}
-          AUTH0_AUDIENCE: ${{ secrets.AUTH0_AUDIENCE }}
-          AUTH0_CLIENT_ID: ${{ secrets.AUTH0_CLIENT_ID }}
-          AUTH0_CLIENT_SECRET: ${{ secrets.AUTH0_CLIENT_SECRET }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           fly deploy
@@ -167,9 +161,9 @@ jobs:
 ## Security Best Practices
 
 ✅ **DO**:
-- Use separate credentials for dev/staging/production
+- Use separate Clerk applications for dev/staging/production
 - Rotate secrets regularly (every 90 days)
-- Use test/sandbox keys for development
+- Use test keys (`sk_test_`, `pk_test_`) for development
 - Limit secret access to necessary personnel
 - Enable secret scanning in repository settings
 
@@ -215,20 +209,21 @@ To delete a secret:
 - Check if running on fork (secrets not available in PRs from forks)
 
 ### Invalid Secret Value
-**Problem**: Auth0/Plaid/Stripe returns authentication error
+**Problem**: Clerk/Plaid/Stripe returns authentication error
 **Solution**:
 - Verify you copied the complete value (no trailing spaces)
-- Ensure using correct environment (sandbox vs production)
+- Ensure using correct environment (test vs production)
 - Check secret hasn't expired or been rotated
 
 ---
 
 ## Quick Reference Commands
 
-### Test Auth0 Configuration
+### Test Clerk Configuration
 ```bash
-# Verify Auth0 domain is accessible
-curl https://YOUR_AUTH0_DOMAIN/.well-known/openid-configuration
+# Verify Clerk secret key is valid
+curl -H "Authorization: Bearer $CLERK_SECRET_KEY" \
+  https://api.clerk.com/v1/users?limit=1
 ```
 
 ### Test Plaid Configuration
@@ -258,12 +253,12 @@ curl https://api.stripe.com/v1/customers \
 
 After configuring GitHub secrets:
 1. ✅ Secrets are ready for CI/CD workflows (Issue #9)
-2. ✅ Backend can use Auth0 for JWT validation (Issue #5)
-3. ✅ Frontend can integrate Auth0 login (Issue #6)
+2. ✅ Backend can use Clerk for JWT validation (Issue #593)
+3. ✅ Frontend can integrate Clerk login (Issue #593)
 4. ✅ Deployments will have access to credentials
 
 ---
 
-**Last Updated**: 2025-10-18
-**Issue**: #3
-**Related Docs**: [AUTH0_SETUP.md](./AUTH0_SETUP.md)
+**Last Updated**: 2025-12-29
+**Issue**: #593
+**Related Docs**: [CLERK_SETUP.md](./CLERK_SETUP.md)

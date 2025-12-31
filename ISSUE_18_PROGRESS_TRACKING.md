@@ -11,7 +11,7 @@
 ### Test Files Created
 - [x] `deletion_service_test.go` - 13 tests
 - [x] `email_service_test.go` - 4 tests
-- [x] `auth0_service_test.go` - 5 tests
+- [x] `clerk_service_test.go` - 5 tests
 - [x] `deletion_handler_test.go` - 5 tests
 - [x] `deletion_worker_test.go` - 5 tests
 - [x] Verified all tests FAIL (expected)
@@ -36,7 +36,7 @@
 - DeletionGracePeriodDays (int, default 30)
 - DeletionWorkerInterval (string, default "1h")
 - DeletionTokenSecret (string)
-- Auth0ManagementClientID, Auth0ManagementClientSecret
+- ClerkManagementClientID, ClerkManagementClientSecret
 - FrontendURL (string, default "http://localhost:5173")
 
 // Added helper:
@@ -55,9 +55,9 @@ DELETION_GRACE_PERIOD_DAYS=30
 DELETION_WORKER_INTERVAL=1h
 DELETION_TOKEN_SECRET=your-secret-here
 
-# Auth0 Management
-AUTH0_MANAGEMENT_CLIENT_ID=xxx
-AUTH0_MANAGEMENT_CLIENT_SECRET=xxx
+# Clerk Management
+CLERK_MANAGEMENT_CLIENT_ID=xxx
+CLERK_MANAGEMENT_CLIENT_SECRET=xxx
 
 # Frontend
 FRONTEND_URL=https://boostedbudget.com
@@ -67,31 +67,31 @@ FRONTEND_URL=https://boostedbudget.com
 
 ---
 
-#### 2. Auth0Service (auth0_service.go) ⏳ NEXT
+#### 2. ClerkService (clerk_service.go) ⏳ NEXT
 **Status**: Not started
-**File**: `backend/internal/services/auth0_service.go`
+**File**: `backend/internal/services/clerk_service.go`
 
 **Interface to Implement**:
 ```go
-type Auth0Service interface {
-    DeleteUser(ctx context.Context, auth0UserID string) error
+type ClerkService interface {
+    DeleteUser(ctx context.Context, clerkUserID string) error
     GetManagementToken(ctx context.Context) (string, error)
 }
 ```
 
 **Implementation Plan**:
-- Create auth0Service struct with domain, clientID, clientSecret, httpClient
+- Create clerkService struct with domain, clientID, clientSecret, httpClient
 - Implement M2M token fetching (client credentials flow)
 - Cache token with expiration (24 hours)
-- Implement DeleteUser method calling Auth0 Management API DELETE /api/v2/users/{id}
+- Implement DeleteUser method calling Clerk Management API DELETE /api/v2/users/{id}
 - Handle 404 as success (user already deleted)
-- Log errors but don't fail deletion if Auth0 fails
+- Log errors but don't fail deletion if Clerk fails
 
-**Auth0 Management API Endpoints**:
+**Clerk Management API Endpoints**:
 - POST `https://{domain}/oauth/token` - Get M2M token
 - DELETE `https://{domain}/api/v2/users/{id}` - Delete user
 
-**Tests to Pass**: 5 tests in auth0_service_test.go
+**Tests to Pass**: 5 tests in clerk_service_test.go
 
 ---
 
@@ -250,7 +250,7 @@ type DeletionService interface {
 1. Get user from profileRepo.GetUserByID(userID)
 2. If user.IsDeleted, return nil (idempotent)
 3. Call profileRepo.DeleteUserCascade(userID)
-4. Call auth0Service.DeleteUser(user.Auth0UserID) - log errors, don't fail
+4. Call clerkService.DeleteUser(user.ClerkUserID) - log errors, don't fail
 5. Call auditLog.Log("user.deleted", "user", userID)
 6. Return nil
 
@@ -284,7 +284,7 @@ func (h *DeletionHandler) CancelDeletion(c echo.Context) error
 ```
 
 **RequestDeletion (POST /api/v1/user/delete)**:
-1. Extract userID from context (requires Auth0 middleware)
+1. Extract userID from context (requires Clerk middleware)
 2. Extract email from context or claims
 3. Call deletionService.RequestDeletion(userID, email)
 4. Return 200 with JSON: {message, scheduled_at, cancellation_token}
@@ -374,10 +374,10 @@ func (w *DeletionWorker) ProcessScheduledDeletions(ctx context.Context) error {
 // After existing services...
 
 // Create deletion-related services
-auth0Service := services.NewAuth0Service(
-    cfg.Auth0Domain,
-    cfg.Auth0ManagementClientID,
-    cfg.Auth0ManagementClientSecret,
+clerkService := services.NewClerkService(
+    cfg.ClerkDomain,
+    cfg.ClerkManagementClientID,
+    cfg.ClerkManagementClientSecret,
 )
 
 emailService := services.NewEmailService(
@@ -389,7 +389,7 @@ emailService := services.NewEmailService(
 deletionService := services.NewDeletionService(
     profileRepo,
     emailService,
-    auth0Service,
+    clerkService,
     auditLogger,
     cfg.DeletionGracePeriodDays,
 )
@@ -422,7 +422,7 @@ go func() {
   post:
     summary: Request account deletion
     security:
-      - Auth0: []
+      - Clerk: []
     responses:
       200:
         content:
@@ -456,7 +456,7 @@ go func() {
 ## 📊 Test Progress
 
 ### Backend Tests
-- [ ] auth0_service_test.go (0/5 passing)
+- [ ] clerk_service_test.go (0/5 passing)
 - [ ] email_service_test.go (0/4 passing)
 - [ ] deletion_service_test.go (0/13 passing)
 - [ ] deletion_handler_test.go (0/5 passing)
@@ -471,7 +471,7 @@ go func() {
 ### Created (RED Phase):
 - ✅ `backend/internal/services/deletion_service_test.go`
 - ✅ `backend/internal/services/email_service_test.go`
-- ✅ `backend/internal/services/auth0_service_test.go`
+- ✅ `backend/internal/services/clerk_service_test.go`
 - ✅ `backend/internal/handlers/deletion_handler_test.go`
 - ✅ `backend/internal/workers/deletion_worker_test.go`
 - ✅ `ISSUE_18_IMPLEMENTATION_STATUS.md`
@@ -481,7 +481,7 @@ go func() {
 - ✅ `backend/internal/config/config.go` - Added deletion config fields
 
 ### To Create (GREEN Phase):
-- ⏳ `backend/internal/services/auth0_service.go`
+- ⏳ `backend/internal/services/clerk_service.go`
 - ⏳ `backend/internal/services/email_service.go`
 - ⏳ `backend/internal/services/deletion_service.go`
 - ⏳ `backend/internal/handlers/deletion_handler.go`
@@ -501,8 +501,8 @@ go func() {
 **Trade-off**: Can't revoke individually, but mitigated with Redis replay protection
 **Implementation**: HS256 JWT with user_id, purpose, exp claims
 
-### Decision 2: Graceful Auth0 Failure
-**Why**: User data is already deleted from our system, Auth0 can be cleaned up separately
+### Decision 2: Graceful Clerk Failure
+**Why**: User data is already deleted from our system, Clerk can be cleaned up separately
 **Implementation**: Log error but don't fail deletion, create orphan cleanup job later
 
 ### Decision 3: Application-Level Cascade Deletion
@@ -523,12 +523,12 @@ go func() {
 ## 🚀 Next Immediate Steps
 
 1. ✅ **Config Update** - COMPLETE
-2. ⏳ **Implement Auth0Service** - NEXT
-   - Create auth0_service.go
+2. ⏳ **Implement ClerkService** - NEXT
+   - Create clerk_service.go
    - Implement M2M token fetching
    - Implement DeleteUser method
-   - Run tests: `go test ./internal/services/auth0_service_test.go -v`
-3. ⏳ **Implement EmailService** - After Auth0Service
+   - Run tests: `go test ./internal/services/clerk_service_test.go -v`
+3. ⏳ **Implement EmailService** - After ClerkService
 4. ⏳ **Extend ProfileRepository** - After EmailService
 5. ⏳ **Implement DeletionService** - After Repository
 6. ⏳ **Implement Handler** - After DeletionService
@@ -552,4 +552,4 @@ go func() {
 ---
 
 **Last Commit**: `#18: RED Phase - Write all failing tests for account deletion flow`
-**Next Commit**: `#18: GREEN Phase - Implement Auth0Service with Management API`
+**Next Commit**: `#18: GREEN Phase - Implement ClerkService with Management API`

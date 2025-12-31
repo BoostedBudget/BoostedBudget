@@ -6,7 +6,7 @@
 
 ## Authentication
 
-All protected endpoints require Auth0 JWT Bearer token in the Authorization header:
+All protected endpoints require Clerk JWT Bearer token in the Authorization header:
 ```
 Authorization: Bearer <your-jwt-token>
 ```

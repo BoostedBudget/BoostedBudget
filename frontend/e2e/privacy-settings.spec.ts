@@ -9,7 +9,7 @@ import { test, expect } from '@playwright/test'
  * - Backend synchronization
  * - Cookie consent integration
  *
- * NOTE: Most tests require authentication with Auth0, which is currently
+ * NOTE: Most tests require authentication with Clerk, which is currently
  * skipped pending test credentials. See e2e/README.md for setup instructions.
  */
 
@@ -20,21 +20,23 @@ test.describe('Privacy Settings', () => {
   })
 
   test('should redirect unauthenticated users to login when accessing /profile', async ({ page }) => {
+    // No Clerk auth token - this test verifies unauthenticated redirect behavior
     // Navigate to profile page (requires auth)
     await page.goto('/profile')
 
-    // Wait for redirect to complete (to home or Auth0)
+    // Wait for redirect to complete (to home or Clerk)
     // Using Playwright's auto-retry assertion to handle redirect timing
     await expect(page).not.toHaveURL(/\/profile/, { timeout: 10000 })
 
-    // Verify landed somewhere valid (root or Auth0)
+    // Verify landed somewhere valid (root or Clerk)
     const url = page.url()
     const isAtRoot = url.includes('localhost') && url.endsWith('/')
-    const isAtAuth0 = url.includes('auth0.com')
-    expect(isAtRoot || isAtAuth0).toBe(true)
+    const isAtClerk = url.includes('clerk.')
+    expect(isAtRoot || isAtClerk).toBe(true)
   })
 
   test('should show Privacy Policy page without authentication', async ({ page }) => {
+    // No Clerk auth token - Privacy Policy is a public page
     await page.goto('/legal/privacy-policy')
     await page.waitForLoadState('networkidle')
 
@@ -51,15 +53,15 @@ test.describe('Privacy Settings', () => {
   })
 
   // ============================================================================
-  // SKIPPED TESTS - Require Auth0 Test Credentials
+  // SKIPPED TESTS - Require Clerk Test Credentials
   // ============================================================================
   //
   // To enable these tests:
-  // 1. Set up Auth0 test tenant
+  // 1. Set up Clerk test instance
   // 2. Create test user
   // 3. Add credentials to e2e/.env.test:
-  //    TEST_AUTH0_EMAIL=test-user@example.com
-  //    TEST_AUTH0_PASSWORD=TestPassword123!
+  //    TEST_CLERK_EMAIL=test-user@example.com
+  //    TEST_CLERK_PASSWORD=TestPassword123!
   // 4. Update e2e/helpers/auth.ts with test login flow
   // 5. Remove .skip from tests below
   //
@@ -67,8 +69,8 @@ test.describe('Privacy Settings', () => {
   // ============================================================================
 
   test.skip('should display Privacy Settings tab for authenticated users', async ({ page }) => {
-    // TODO: Requires Auth0 test credentials
-    // await loginWithAuth0(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
+    // TODO: Requires Clerk test credentials
+    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
     await page.goto('/profile')
     await page.waitForLoadState('networkidle')
@@ -86,8 +88,8 @@ test.describe('Privacy Settings', () => {
   })
 
   test.skip('should load and display current privacy settings', async ({ page }) => {
-    // TODO: Requires Auth0 test credentials
-    // await loginWithAuth0(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
+    // TODO: Requires Clerk test credentials
+    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
     await page.goto('/profile')
     await page.waitForLoadState('networkidle')
@@ -116,8 +118,8 @@ test.describe('Privacy Settings', () => {
   })
 
   test.skip('should toggle analytics cookie consent', async ({ page }) => {
-    // TODO: Requires Auth0 test credentials
-    // await loginWithAuth0(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
+    // TODO: Requires Clerk test credentials
+    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
     await page.goto('/profile')
     await page.click('button:has-text("Privacy Settings")')
@@ -135,8 +137,8 @@ test.describe('Privacy Settings', () => {
   })
 
   test.skip('should toggle advertising cookie consent', async ({ page }) => {
-    // TODO: Requires Auth0 test credentials
-    // await loginWithAuth0(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
+    // TODO: Requires Clerk test credentials
+    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
     await page.goto('/profile')
     await page.click('button:has-text("Privacy Settings")')
@@ -154,8 +156,8 @@ test.describe('Privacy Settings', () => {
   })
 
   test.skip('should toggle email preference settings', async ({ page }) => {
-    // TODO: Requires Auth0 test credentials
-    // await loginWithAuth0(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
+    // TODO: Requires Clerk test credentials
+    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
     await page.goto('/profile')
     await page.click('button:has-text("Privacy Settings")')
@@ -174,8 +176,8 @@ test.describe('Privacy Settings', () => {
   })
 
   test.skip('should toggle data sharing preference', async ({ page }) => {
-    // TODO: Requires Auth0 test credentials
-    // await loginWithAuth0(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
+    // TODO: Requires Clerk test credentials
+    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
     await page.goto('/profile')
     await page.click('button:has-text("Privacy Settings")')
@@ -188,8 +190,8 @@ test.describe('Privacy Settings', () => {
   })
 
   test.skip('should save privacy settings and show success message', async ({ page }) => {
-    // TODO: Requires Auth0 test credentials
-    // await loginWithAuth0(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
+    // TODO: Requires Clerk test credentials
+    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
     await page.goto('/profile')
     await page.click('button:has-text("Privacy Settings")')
@@ -206,8 +208,8 @@ test.describe('Privacy Settings', () => {
   })
 
   test.skip('should persist privacy settings after page reload', async ({ page }) => {
-    // TODO: Requires Auth0 test credentials
-    // await loginWithAuth0(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
+    // TODO: Requires Clerk test credentials
+    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
     await page.goto('/profile')
     await page.click('button:has-text("Privacy Settings")')
@@ -234,8 +236,8 @@ test.describe('Privacy Settings', () => {
   })
 
   test.skip('should update cookie consent when Privacy Settings saved', async ({ page }) => {
-    // TODO: Requires Auth0 test credentials
-    // await loginWithAuth0(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
+    // TODO: Requires Clerk test credentials
+    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
     await page.goto('/profile')
     await page.click('button:has-text("Privacy Settings")')
@@ -261,12 +263,12 @@ test.describe('Privacy Settings', () => {
   })
 
   test.skip('should sync Cookie Consent banner with Privacy Settings', async ({ page }) => {
-    // TODO: Requires Auth0 test credentials
+    // TODO: Requires Clerk test credentials
     // This test verifies bi-directional sync:
     // 1. Change cookie consent → Privacy Settings update
     // 2. Change Privacy Settings → cookie consent update
 
-    // await loginWithAuth0(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
+    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
     // First, accept all cookies via banner
     await page.goto('/')
@@ -295,10 +297,10 @@ test.describe('Privacy Settings', () => {
   })
 
   test.skip('should handle save errors gracefully', async ({ page }) => {
-    // TODO: Requires Auth0 test credentials + network interception
+    // TODO: Requires Clerk test credentials + network interception
     // This test would intercept the API call and force an error response
 
-    // await loginWithAuth0(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
+    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
     // Intercept API call to force error
     // await page.route('**/api/v1/user/privacy', route => route.abort())

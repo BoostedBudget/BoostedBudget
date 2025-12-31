@@ -1,5 +1,5 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
-import { useAuth0 } from '@auth0/auth0-react'
+import { useAuth } from '@clerk/react-router'
 import { useCookieState } from './shared/hooks/useCookieState'
 import {
   CookieConsent,
@@ -71,7 +71,7 @@ function HomePage({ health, loading }: { health: HealthCheck | null; loading: bo
         <p>✅ OpenAPI specification</p>
         <p>✅ Frontend skeleton (React + TypeScript + Vite)</p>
         <p>✅ GDPR Cookie Consent</p>
-        <p>✅ Auth0 integration</p>
+        <p>✅ Clerk integration</p>
         <p>✅ User Profile Management</p>
         <p>⏳ Database & migrations (coming next)</p>
         <p>⏳ Docker development environment (coming next)</p>
@@ -81,7 +81,7 @@ function HomePage({ health, loading }: { health: HealthCheck | null; loading: bo
 }
 
 function App() {
-  const { isAuthenticated } = useAuth0()
+  const { isSignedIn: isAuthenticated } = useAuth()
   const [, setConsentCookie] = useCookieState<CookieConsentData>(COOKIE_CONSENT_NAME)
 
   // Use generated mutation hook for privacy settings

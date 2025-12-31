@@ -86,9 +86,9 @@ COPY . .
 
 # Build arguments for compile-time environment variables
 ARG VITE_API_URL=https://api.boostedbudget.com/v1
-ARG VITE_AUTH0_DOMAIN
-ARG VITE_AUTH0_CLIENT_ID
-ARG VITE_AUTH0_AUDIENCE
+ARG VITE_CLERK_DOMAIN
+ARG VITE_CLERK_CLIENT_ID
+ARG VITE_CLERK_AUDIENCE
 ARG VITE_GOOGLE_ADSENSE_CLIENT
 ARG VITE_PLAID_PUBLIC_KEY
 
@@ -135,8 +135,8 @@ CMD ["nginx", "-g", "daemon off;"]
 cat > /usr/share/nginx/html/config.js << EOF
 window.__RUNTIME_CONFIG__ = {
   API_URL: "${API_URL:-https://api.boostedbudget.com/v1}",
-  AUTH0_DOMAIN: "${AUTH0_DOMAIN}",
-  AUTH0_CLIENT_ID: "${AUTH0_CLIENT_ID}",
+  CLERK_DOMAIN: "${CLERK_DOMAIN}",
+  CLERK_CLIENT_ID: "${CLERK_CLIENT_ID}",
   ENVIRONMENT: "${ENVIRONMENT:-production}"
 };
 EOF
@@ -278,9 +278,9 @@ jobs:
         cache-to: type=gha,mode=max
         platforms: linux/amd64,linux/arm64
         build-args: |
-          VITE_AUTH0_DOMAIN=${{ secrets.AUTH0_DOMAIN }}
-          VITE_AUTH0_CLIENT_ID=${{ secrets.AUTH0_CLIENT_ID }}
-          VITE_AUTH0_AUDIENCE=${{ secrets.AUTH0_AUDIENCE }}
+          VITE_CLERK_DOMAIN=${{ secrets.CLERK_DOMAIN }}
+          VITE_CLERK_CLIENT_ID=${{ secrets.CLERK_CLIENT_ID }}
+          VITE_CLERK_AUDIENCE=${{ secrets.CLERK_AUDIENCE }}
           VITE_GOOGLE_ADSENSE_CLIENT=${{ secrets.GOOGLE_ADSENSE_CLIENT }}
           VITE_PLAID_PUBLIC_KEY=${{ secrets.PLAID_PUBLIC_KEY }}
 
@@ -421,8 +421,8 @@ kill_timeout = 30
 [env]
   PORT = "8080"
   PRIMARY_REGION = "iad"
-  AUTH0_DOMAIN = "boostedbudget.auth0.com"
-  AUTH0_AUDIENCE = "https://api.boostedbudget.com"
+  CLERK_DOMAIN = "boostedbudget.clerk.com"
+  CLERK_AUDIENCE = "https://api.boostedbudget.com"
   PLAID_ENV = "production"
   ENVIRONMENT = "production"
   LOG_LEVEL = "info"
@@ -504,7 +504,7 @@ primary_region = "iad"
 [env]
   PORT = "80"
   API_URL = "https://api.boostedbudget.com/v1"
-  AUTH0_DOMAIN = "boostedbudget.auth0.com"
+  CLERK_DOMAIN = "boostedbudget.clerk.com"
   ENVIRONMENT = "production"
 
 [[services]]
@@ -566,10 +566,10 @@ services:
       DATABASE_URL: postgres://devuser:devpass@postgres:5432/boostedbudget?sslmode=disable
       REDIS_URL: redis://redis:6379
       PRIMARY_REGION: us-east-1
-      AUTH0_DOMAIN: ${AUTH0_DOMAIN}
-      AUTH0_AUDIENCE: ${AUTH0_AUDIENCE}
-      AUTH0_CLIENT_ID: ${AUTH0_CLIENT_ID}
-      AUTH0_CLIENT_SECRET: ${AUTH0_CLIENT_SECRET}
+      CLERK_DOMAIN: ${CLERK_DOMAIN}
+      CLERK_AUDIENCE: ${CLERK_AUDIENCE}
+      CLERK_CLIENT_ID: ${CLERK_CLIENT_ID}
+      CLERK_CLIENT_SECRET: ${CLERK_CLIENT_SECRET}
       ENVIRONMENT: development
       LOG_LEVEL: debug
     volumes:
@@ -588,8 +588,8 @@ services:
       - "3000:3000"
     environment:
       VITE_API_URL: http://localhost:8080/api/v1
-      VITE_AUTH0_DOMAIN: ${AUTH0_DOMAIN}
-      VITE_AUTH0_CLIENT_ID: ${AUTH0_CLIENT_ID}
+      VITE_CLERK_DOMAIN: ${CLERK_DOMAIN}
+      VITE_CLERK_CLIENT_ID: ${CLERK_CLIENT_ID}
     volumes:
       - ./frontend:/build
     command: pnpm run dev
@@ -657,8 +657,8 @@ echo -e "${GREEN}Building frontend image...${NC}"
 docker build \
   -t ${REGISTRY}/${NAMESPACE}/boostedbudget-frontend:${VERSION} \
   -t ${REGISTRY}/${NAMESPACE}/boostedbudget-frontend:latest \
-  --build-arg VITE_AUTH0_DOMAIN=${AUTH0_DOMAIN} \
-  --build-arg VITE_AUTH0_CLIENT_ID=${AUTH0_CLIENT_ID} \
+  --build-arg VITE_CLERK_DOMAIN=${CLERK_DOMAIN} \
+  --build-arg VITE_CLERK_CLIENT_ID=${CLERK_CLIENT_ID} \
   -f frontend/Dockerfile \
   frontend/
 
@@ -752,10 +752,10 @@ echo "Deployment complete!"
 FLY_API_TOKEN                # Fly.io API token for production
 FLY_API_TOKEN_STAGING        # Fly.io API token for staging
 GITHUB_TOKEN                 # Auto-generated for packages
-AUTH0_DOMAIN                 # Auth0 domain
-AUTH0_CLIENT_ID             # Auth0 client ID
-AUTH0_CLIENT_SECRET         # Auth0 client secret
-AUTH0_AUDIENCE              # Auth0 API audience
+CLERK_DOMAIN                 # Clerk domain
+CLERK_CLIENT_ID             # Clerk client ID
+CLERK_CLIENT_SECRET         # Clerk client secret
+CLERK_AUDIENCE              # Clerk API audience
 PLAID_CLIENT_ID             # Plaid client ID
 PLAID_SECRET                # Plaid secret (sandbox/production)
 PLAID_PUBLIC_KEY            # Plaid public key
@@ -778,9 +778,9 @@ CF_API_TOKEN               # CloudFlare API token
 fly secrets set \
   DATABASE_URL="postgres://..." \
   REDIS_URL="redis://..." \
-  AUTH0_DOMAIN="boostedbudget.auth0.com" \
-  AUTH0_CLIENT_ID="..." \
-  AUTH0_CLIENT_SECRET="..." \
+  CLERK_DOMAIN="boostedbudget.clerk.com" \
+  CLERK_CLIENT_ID="..." \
+  CLERK_CLIENT_SECRET="..." \
   PLAID_CLIENT_ID="..." \
   PLAID_SECRET="..." \
   STRIPE_SECRET_KEY="..." \
@@ -829,11 +829,11 @@ func (h *HealthHandler) GetHealth(c echo.Context) error {
         checks["redis"] = "healthy"
     }
     
-    // Check Auth0
-    if err := h.checkAuth0(); err != nil {
-        checks["auth0"] = "unhealthy"
+    // Check Clerk
+    if err := h.checkClerk(); err != nil {
+        checks["clerk"] = "unhealthy"
     } else {
-        checks["auth0"] = "healthy"
+        checks["clerk"] = "healthy"
     }
     
     status := "healthy"
@@ -1130,7 +1130,7 @@ This is the complete multi-region implementation as documented in `boosted-budge
    - Implement `RegionRouter` pattern
    - Activate existing `*InRegion` repository methods
    - Add region selection UI
-   - Update Auth0 rules for geo-suggestion
+   - Update Clerk rules for geo-suggestion
 
 3. **Data Migration** (Week 5-6)
    - User-initiated region migration tool
@@ -1265,7 +1265,7 @@ func (r *RegionRouter) Close() error {
 ```typescript
 // frontend/src/features/onboarding/RegionSelector.tsx
 import { useState } from 'react';
-import { useAuth0 } from '@auth0/auth0-react';
+import { useClerk } from '@clerk/clerk-react';
 
 interface Region {
   code: string;
@@ -1297,7 +1297,7 @@ const regions: Region[] = [
 
 export const RegionSelector: React.FC = () => {
   const [selectedRegion, setSelectedRegion] = useState<string>('');
-  const { user } = useAuth0();
+  const { user } = useClerk();
 
   const handleSelectRegion = async (regionCode: string) => {
     setSelectedRegion(regionCode);

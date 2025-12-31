@@ -18,7 +18,7 @@ ADMIN_WEBHOOK_URL="${ADMIN_WEBHOOK_URL:-https://staging.boostedbudget.com/api/v1
 # Args:
 #   $1 - item_id (Plaid item ID, not UUID)
 #   $2 - webhook_code (DEFAULT_UPDATE, INITIAL_UPDATE, HISTORICAL_UPDATE, TRANSACTIONS_REMOVED)
-#   $3 - auth_token (Auth0 JWT token)
+#   $3 - auth_token (Clerk JWT token)
 # Returns:
 #   0 on success, 1 on failure
 fire_admin_webhook() {
@@ -120,7 +120,7 @@ fire_webhooks_for_scenario() {
 
   if [ -z "$auth_token" ]; then
     log_error "AUTH_TOKEN not provided. Cannot fire admin webhooks."
-    log_error "Set AUTH_TOKEN environment variable with valid Auth0 JWT."
+    log_error "Set AUTH_TOKEN environment variable with valid Clerk JWT."
     return 1
   fi
 

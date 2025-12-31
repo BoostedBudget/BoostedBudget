@@ -24,63 +24,63 @@ func setupMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock, ProfileRepository) {
 	return db, mock, repo
 }
 
-// TestGetUserByAuth0ID_Success tests successful retrieval of user by Auth0 ID
-func TestGetUserByAuth0ID_Success(t *testing.T) {
+// TestGetUserByClerkID_Success tests successful retrieval of user by Clerk ID
+func TestGetUserByClerkID_Success(t *testing.T) {
 	db, mock, repo := setupMockDB(t)
 	defer db.Close()
 
 	ctx := context.Background()
-	auth0UserID := "auth0|507f1f77bcf86cd799439011"
+	clerkUserID := "user_507f1f77bcf86cd799439011"
 	userID := uuid.New().String()
 	now := time.Now()
 
 	// Expected user data
 	rows := sqlmock.NewRows([]string{
-		"id", "auth0_user_id", "email", "email_verified",
+		"id", "clerk_user_id", "email", "email_verified",
 		"subscription_tier", "subscription_status", "subscription_started_at", "subscription_ends_at",
 		"stripe_customer_id", "primary_region", "is_active", "is_deleted",
 		"deletion_requested_at", "deletion_scheduled_at",
 		"created_at", "updated_at", "last_login_at",
 	}).AddRow(
-		userID, auth0UserID, "test@example.com", true,
+		userID, clerkUserID, "test@example.com", true,
 		"free", "active", nil, nil,
 		nil, "iad", true, false,
 		nil, nil,
 		now, now, &now,
 	)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, auth0_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, stripe_customer_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at FROM users WHERE auth0_user_id = $1 AND is_deleted = FALSE`)).
-		WithArgs(auth0UserID).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, stripe_customer_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at FROM users WHERE clerk_user_id = $1 AND is_deleted = FALSE`)).
+		WithArgs(clerkUserID).
 		WillReturnRows(rows)
 
 	// Execute
-	user, err := repo.GetUserByAuth0ID(ctx, auth0UserID)
+	user, err := repo.GetUserByClerkID(ctx, clerkUserID)
 
 	// Assert
 	assert.NoError(t, err)
 	assert.NotNil(t, user)
 	assert.Equal(t, userID, user.ID)
-	assert.Equal(t, auth0UserID, user.Auth0UserID)
+	assert.Equal(t, clerkUserID, user.ClerkUserID)
 	assert.Equal(t, "test@example.com", user.Email)
 	assert.Equal(t, "free", user.SubscriptionTier)
 	assert.Equal(t, "iad", user.PrimaryRegion)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestGetUserByAuth0ID_NotFound tests when user is not found
-func TestGetUserByAuth0ID_NotFound(t *testing.T) {
+// TestGetUserByClerkID_NotFound tests when user is not found
+func TestGetUserByClerkID_NotFound(t *testing.T) {
 	db, mock, repo := setupMockDB(t)
 	defer db.Close()
 
 	ctx := context.Background()
-	auth0UserID := "auth0|nonexistent"
+	clerkUserID := "user_nonexistent"
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, auth0_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, stripe_customer_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at FROM users WHERE auth0_user_id = $1 AND is_deleted = FALSE`)).
-		WithArgs(auth0UserID).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, stripe_customer_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at FROM users WHERE clerk_user_id = $1 AND is_deleted = FALSE`)).
+		WithArgs(clerkUserID).
 		WillReturnError(sql.ErrNoRows)
 
 	// Execute
-	user, err := repo.GetUserByAuth0ID(ctx, auth0UserID)
+	user, err := repo.GetUserByClerkID(ctx, clerkUserID)
 
 	// Assert
 	assert.Error(t, err)
@@ -96,24 +96,24 @@ func TestGetUserByID_Success(t *testing.T) {
 
 	ctx := context.Background()
 	userID := uuid.New().String()
-	auth0UserID := "auth0|507f1f77bcf86cd799439011"
+	clerkUserID := "user_507f1f77bcf86cd799439011"
 	now := time.Now()
 
 	rows := sqlmock.NewRows([]string{
-		"id", "auth0_user_id", "email", "email_verified",
+		"id", "clerk_user_id", "email", "email_verified",
 		"subscription_tier", "subscription_status", "subscription_started_at", "subscription_ends_at",
 		"stripe_customer_id", "primary_region", "is_active", "is_deleted",
 		"deletion_requested_at", "deletion_scheduled_at",
 		"created_at", "updated_at", "last_login_at",
 	}).AddRow(
-		userID, auth0UserID, "test@example.com", true,
+		userID, clerkUserID, "test@example.com", true,
 		"premium", "active", &now, nil,
 		stringPtr("cus_ABC123"), "iad", true, false,
 		nil, nil,
 		now, now, &now,
 	)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, auth0_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, stripe_customer_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at FROM users WHERE id = $1 AND is_deleted = FALSE`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, stripe_customer_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at FROM users WHERE id = $1 AND is_deleted = FALSE`)).
 		WithArgs(userID).
 		WillReturnRows(rows)
 
@@ -138,7 +138,7 @@ func TestGetUserByID_NotFound(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New().String()
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, auth0_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, stripe_customer_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at FROM users WHERE id = $1 AND is_deleted = FALSE`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, stripe_customer_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at FROM users WHERE id = $1 AND is_deleted = FALSE`)).
 		WithArgs(userID).
 		WillReturnError(sql.ErrNoRows)
 
@@ -158,13 +158,13 @@ func TestCreateUser_Success(t *testing.T) {
 	defer db.Close()
 
 	ctx := context.Background()
-	user := domain.NewUser("auth0|newuser", "newuser@example.com", true)
+	user := domain.NewUser("user_newuser", "newuser@example.com", true)
 
 	// Expect INSERT query (match full query for consistency)
-	mock.ExpectExec(`INSERT INTO users \( id, auth0_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, stripe_customer_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at \) VALUES`).
+	mock.ExpectExec(`INSERT INTO users \( id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, stripe_customer_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at \) VALUES`).
 		WithArgs(
 			sqlmock.AnyArg(), // id (generated UUID)
-			user.Auth0UserID,
+			user.ClerkUserID,
 			user.Email,
 			user.EmailVerified,
 			user.SubscriptionTier,
@@ -198,13 +198,13 @@ func TestCreateUser_DuplicateEmail(t *testing.T) {
 	defer db.Close()
 
 	ctx := context.Background()
-	user := domain.NewUser("auth0|newuser", "existing@example.com", true)
+	user := domain.NewUser("user_newuser", "existing@example.com", true)
 
 	// Simulate unique constraint violation on email
 	mock.ExpectExec(`INSERT INTO users`).
 		WithArgs(
 			sqlmock.AnyArg(),
-			user.Auth0UserID,
+			user.ClerkUserID,
 			user.Email,
 			user.EmailVerified,
 			user.SubscriptionTier,
@@ -241,7 +241,7 @@ func TestUpdateUser_Success(t *testing.T) {
 	userID := uuid.New().String()
 	user := &domain.User{
 		ID:                 userID,
-		Auth0UserID:        "auth0|507f1f77bcf86cd799439011",
+		ClerkUserID:        "user_507f1f77bcf86cd799439011",
 		Email:              "updated@example.com",
 		EmailVerified:      true,
 		SubscriptionTier:   "free",
@@ -278,7 +278,7 @@ func TestUpdateUser_NotFound(t *testing.T) {
 	ctx := context.Background()
 	user := &domain.User{
 		ID:            uuid.New().String(),
-		Auth0UserID:   "auth0|nonexistent",
+		ClerkUserID:   "user_nonexistent",
 		Email:         "test@example.com",
 		PrimaryRegion: "iad",
 	}
@@ -309,19 +309,19 @@ func TestUpdateLastLogin_Success(t *testing.T) {
 	defer db.Close()
 
 	ctx := context.Background()
-	auth0UserID := "auth0|507f1f77bcf86cd799439011"
+	clerkUserID := "user_507f1f77bcf86cd799439011"
 
 	// Expect UPDATE query
-	mock.ExpectExec(`UPDATE users SET last_login_at = \$1, updated_at = \$2 WHERE auth0_user_id = \$3`).
+	mock.ExpectExec(`UPDATE users SET last_login_at = \$1, updated_at = \$2 WHERE clerk_user_id = \$3`).
 		WithArgs(
 			sqlmock.AnyArg(), // last_login_at (current time)
 			sqlmock.AnyArg(), // updated_at (current time)
-			auth0UserID,
+			clerkUserID,
 		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Execute
-	err := repo.UpdateLastLogin(ctx, auth0UserID)
+	err := repo.UpdateLastLogin(ctx, clerkUserID)
 
 	// Assert
 	assert.NoError(t, err)
@@ -334,19 +334,19 @@ func TestUpdateLastLogin_NotFound(t *testing.T) {
 	defer db.Close()
 
 	ctx := context.Background()
-	auth0UserID := "auth0|nonexistent"
+	clerkUserID := "user_nonexistent"
 
 	// Expect UPDATE query that affects 0 rows
-	mock.ExpectExec(`UPDATE users SET last_login_at = \$1, updated_at = \$2 WHERE auth0_user_id = \$3`).
+	mock.ExpectExec(`UPDATE users SET last_login_at = \$1, updated_at = \$2 WHERE clerk_user_id = \$3`).
 		WithArgs(
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
-			auth0UserID,
+			clerkUserID,
 		).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	// Execute
-	err := repo.UpdateLastLogin(ctx, auth0UserID)
+	err := repo.UpdateLastLogin(ctx, clerkUserID)
 
 	// Assert
 	assert.Error(t, err)

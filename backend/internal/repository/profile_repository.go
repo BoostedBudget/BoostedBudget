@@ -20,8 +20,8 @@ var (
 
 // ProfileRepository defines the interface for user profile data access
 type ProfileRepository interface {
-	// GetUserByAuth0ID retrieves a user by their Auth0 user ID
-	GetUserByAuth0ID(ctx context.Context, auth0UserID string) (*domain.User, error)
+	// GetUserByClerkID retrieves a user by their Clerk user ID
+	GetUserByClerkID(ctx context.Context, clerkUserID string) (*domain.User, error)
 
 	// GetUserByID retrieves a user by their internal UUID
 	GetUserByID(ctx context.Context, id string) (*domain.User, error)
@@ -36,7 +36,7 @@ type ProfileRepository interface {
 	UpdateUser(ctx context.Context, user *domain.User) error
 
 	// UpdateLastLogin updates the last_login_at timestamp for a user
-	UpdateLastLogin(ctx context.Context, auth0UserID string) error
+	UpdateLastLogin(ctx context.Context, clerkUserID string) error
 
 	// Deletion-related methods
 
@@ -63,22 +63,22 @@ func NewProfileRepository(db *sql.DB) ProfileRepository {
 	return &profileRepository{db: db}
 }
 
-// GetUserByAuth0ID retrieves a user by their Auth0 user ID
-func (r *profileRepository) GetUserByAuth0ID(ctx context.Context, auth0UserID string) (*domain.User, error) {
+// GetUserByClerkID retrieves a user by their Clerk user ID
+func (r *profileRepository) GetUserByClerkID(ctx context.Context, clerkUserID string) (*domain.User, error) {
 	query := `
-		SELECT id, auth0_user_id, email, email_verified,
+		SELECT id, clerk_user_id, email, email_verified,
 		       subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
 		       stripe_customer_id, primary_region, is_active, is_deleted,
 		       deletion_requested_at, deletion_scheduled_at,
 		       created_at, updated_at, last_login_at
 		FROM users
-		WHERE auth0_user_id = $1 AND is_deleted = FALSE
+		WHERE clerk_user_id = $1 AND is_deleted = FALSE
 	`
 
 	var user domain.User
-	err := r.db.QueryRowContext(ctx, query, auth0UserID).Scan(
+	err := r.db.QueryRowContext(ctx, query, clerkUserID).Scan(
 		&user.ID,
-		&user.Auth0UserID,
+		&user.ClerkUserID,
 		&user.Email,
 		&user.EmailVerified,
 		&user.SubscriptionTier,
@@ -109,7 +109,7 @@ func (r *profileRepository) GetUserByAuth0ID(ctx context.Context, auth0UserID st
 // GetUserByID retrieves a user by their internal UUID
 func (r *profileRepository) GetUserByID(ctx context.Context, id string) (*domain.User, error) {
 	query := `
-		SELECT id, auth0_user_id, email, email_verified,
+		SELECT id, clerk_user_id, email, email_verified,
 		       subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
 		       stripe_customer_id, primary_region, is_active, is_deleted,
 		       deletion_requested_at, deletion_scheduled_at,
@@ -121,7 +121,7 @@ func (r *profileRepository) GetUserByID(ctx context.Context, id string) (*domain
 	var user domain.User
 	err := r.db.QueryRowContext(ctx, query, id).Scan(
 		&user.ID,
-		&user.Auth0UserID,
+		&user.ClerkUserID,
 		&user.Email,
 		&user.EmailVerified,
 		&user.SubscriptionTier,
@@ -163,7 +163,7 @@ func (r *profileRepository) CreateUser(ctx context.Context, user *domain.User) e
 
 	query := `
 		INSERT INTO users (
-			id, auth0_user_id, email, email_verified,
+			id, clerk_user_id, email, email_verified,
 			subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
 			stripe_customer_id, primary_region, is_active, is_deleted,
 			deletion_requested_at, deletion_scheduled_at,
@@ -179,7 +179,7 @@ func (r *profileRepository) CreateUser(ctx context.Context, user *domain.User) e
 
 	_, err := r.db.ExecContext(ctx, query,
 		user.ID,
-		user.Auth0UserID,
+		user.ClerkUserID,
 		user.Email,
 		user.EmailVerified,
 		user.SubscriptionTier,
@@ -224,7 +224,7 @@ func (r *profileRepository) CreateUserTx(ctx context.Context, tx *sql.Tx, user *
 
 	query := `
 		INSERT INTO users (
-			id, auth0_user_id, email, email_verified,
+			id, clerk_user_id, email, email_verified,
 			subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
 			stripe_customer_id, primary_region, is_active, is_deleted,
 			deletion_requested_at, deletion_scheduled_at,
@@ -240,7 +240,7 @@ func (r *profileRepository) CreateUserTx(ctx context.Context, tx *sql.Tx, user *
 
 	_, err := tx.ExecContext(ctx, query,
 		user.ID,
-		user.Auth0UserID,
+		user.ClerkUserID,
 		user.Email,
 		user.EmailVerified,
 		user.SubscriptionTier,
@@ -319,17 +319,17 @@ func (r *profileRepository) UpdateUser(ctx context.Context, user *domain.User) e
 }
 
 // UpdateLastLogin updates the last_login_at timestamp for a user
-func (r *profileRepository) UpdateLastLogin(ctx context.Context, auth0UserID string) error {
+func (r *profileRepository) UpdateLastLogin(ctx context.Context, clerkUserID string) error {
 	now := time.Now()
 
 	query := `
 		UPDATE users
 		SET last_login_at = $1,
 		    updated_at = $2
-		WHERE auth0_user_id = $3
+		WHERE clerk_user_id = $3
 	`
 
-	result, err := r.db.ExecContext(ctx, query, now, now, auth0UserID)
+	result, err := r.db.ExecContext(ctx, query, now, now, clerkUserID)
 	if err != nil {
 		return err
 	}
@@ -410,7 +410,7 @@ func (r *profileRepository) GetUsersScheduledForDeletion(ctx context.Context) ([
 	now := time.Now()
 
 	query := `
-		SELECT id, auth0_user_id, email, email_verified,
+		SELECT id, clerk_user_id, email, email_verified,
 		       subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
 		       stripe_customer_id, primary_region, is_active, is_deleted,
 		       deletion_requested_at, deletion_scheduled_at,
@@ -433,7 +433,7 @@ func (r *profileRepository) GetUsersScheduledForDeletion(ctx context.Context) ([
 		var user domain.User
 		err := rows.Scan(
 			&user.ID,
-			&user.Auth0UserID,
+			&user.ClerkUserID,
 			&user.Email,
 			&user.EmailVerified,
 			&user.SubscriptionTier,
@@ -543,7 +543,7 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 		SET is_deleted = TRUE,
 		    is_active = FALSE,
 		    email = CONCAT('deleted_', id, '@deleted.local'),
-		    auth0_user_id = CONCAT('deleted_', id),
+		    clerk_user_id = CONCAT('deleted_', id),
 		    stripe_customer_id = NULL,
 		    deletion_requested_at = NULL,
 		    deletion_scheduled_at = NULL,

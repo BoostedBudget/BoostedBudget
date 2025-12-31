@@ -166,7 +166,7 @@ func (h *CategorizationRuleHandler) ToggleRule(ctx context.Context, input *Toggl
 }
 
 // RegisterCategorizationRuleRoutes registers categorization rule routes with the Huma API.
-// Note: These routes require the Auth0 middleware to be applied.
+// Note: These routes require the Clerk middleware to be applied.
 func RegisterCategorizationRuleRoutes(api huma.API, handler *CategorizationRuleHandler) {
 	// GET /api/v1/auto-categorization - Get all user rules
 	huma.Register(api, huma.Operation{
@@ -176,7 +176,7 @@ func RegisterCategorizationRuleRoutes(api huma.API, handler *CategorizationRuleH
 		Summary:     "Get user categorization rules",
 		Description: "Retrieves all categorization rules for the authenticated user, ordered by priority.",
 		Tags:        []string{"Auto-Categorization"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetUserRules)
 
 	// GET /api/v1/auto-categorization/{id} - Get rule by ID
@@ -187,7 +187,7 @@ func RegisterCategorizationRuleRoutes(api huma.API, handler *CategorizationRuleH
 		Summary:     "Get rule by ID",
 		Description: "Retrieves a specific categorization rule by its UUID.",
 		Tags:        []string{"Auto-Categorization"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetRuleByID)
 
 	// POST /api/v1/auto-categorization - Create a new rule
@@ -198,7 +198,7 @@ func RegisterCategorizationRuleRoutes(api huma.API, handler *CategorizationRuleH
 		Summary:       "Create a new categorization rule",
 		Description:   "Creates a new categorization rule for the authenticated user.",
 		Tags:          []string{"Auto-Categorization"},
-		Security:      []map[string][]string{{"auth0": {}}},
+		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusCreated,
 	}, handler.CreateRule)
 
@@ -210,7 +210,7 @@ func RegisterCategorizationRuleRoutes(api huma.API, handler *CategorizationRuleH
 		Summary:     "Update a rule",
 		Description: "Updates a categorization rule's configuration.",
 		Tags:        []string{"Auto-Categorization"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.UpdateRule)
 
 	// DELETE /api/v1/auto-categorization/{id} - Delete a rule
@@ -221,7 +221,7 @@ func RegisterCategorizationRuleRoutes(api huma.API, handler *CategorizationRuleH
 		Summary:       "Delete a rule",
 		Description:   "Removes a categorization rule.",
 		Tags:          []string{"Auto-Categorization"},
-		Security:      []map[string][]string{{"auth0": {}}},
+		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusNoContent,
 	}, handler.DeleteRule)
 
@@ -233,6 +233,6 @@ func RegisterCategorizationRuleRoutes(api huma.API, handler *CategorizationRuleH
 		Summary:     "Toggle a rule",
 		Description: "Enables or disables a categorization rule.",
 		Tags:        []string{"Auto-Categorization"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.ToggleRule)
 }

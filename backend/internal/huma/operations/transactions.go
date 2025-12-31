@@ -284,7 +284,7 @@ func parseFloat64(s string) (float64, error) {
 }
 
 // RegisterTransactionRoutes registers transaction routes with the Huma API.
-// Note: These routes require the Auth0 middleware to be applied.
+// Note: These routes require the Clerk middleware to be applied.
 func RegisterTransactionRoutes(api huma.API, handler *TransactionHandler) {
 	// GET /api/v1/transactions - List transactions with filters
 	huma.Register(api, huma.Operation{
@@ -294,7 +294,7 @@ func RegisterTransactionRoutes(api huma.API, handler *TransactionHandler) {
 		Summary:     "List transactions",
 		Description: "Retrieves transactions for the authenticated user with optional filters and pagination.",
 		Tags:        []string{"Transactions"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetTransactions)
 
 	// GET /api/v1/transactions/{id} - Get transaction by ID
@@ -305,7 +305,7 @@ func RegisterTransactionRoutes(api huma.API, handler *TransactionHandler) {
 		Summary:     "Get transaction by ID",
 		Description: "Retrieves a specific transaction by its UUID.",
 		Tags:        []string{"Transactions"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetTransactionByID)
 
 	// PUT /api/v1/transactions/{id}/tags - Update transaction tags
@@ -316,7 +316,7 @@ func RegisterTransactionRoutes(api huma.API, handler *TransactionHandler) {
 		Summary:     "Update transaction tags",
 		Description: "Updates the tags on a specific transaction.",
 		Tags:        []string{"Transactions"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.UpdateTransactionTags)
 
 	// PUT /api/v1/transactions/{id}/category - Update transaction category
@@ -327,7 +327,7 @@ func RegisterTransactionRoutes(api huma.API, handler *TransactionHandler) {
 		Summary:     "Update transaction category",
 		Description: "Updates the category override on a specific transaction.",
 		Tags:        []string{"Transactions"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.UpdateTransactionCategory)
 
 	// GET /api/v1/categories/plaid - Get distinct Plaid categories
@@ -338,6 +338,6 @@ func RegisterTransactionRoutes(api huma.API, handler *TransactionHandler) {
 		Summary:     "Get Plaid categories",
 		Description: "Returns distinct Plaid category names from the user's transactions.",
 		Tags:        []string{"Categories"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetPlaidCategories)
 }

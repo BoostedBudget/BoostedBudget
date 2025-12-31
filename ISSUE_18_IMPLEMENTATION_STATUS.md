@@ -22,9 +22,9 @@
    - TestCancelDeletion_InvalidToken
    - TestCancelDeletion_ExpiredToken
    - TestExecuteDeletion_CascadesAllData
-   - TestExecuteDeletion_DeletesAuth0User
+   - TestExecuteDeletion_DeletesClerkUser
    - TestExecuteDeletion_HandlesAlreadyDeleted
-   - TestExecuteDeletion_HandlesAuth0Error
+   - TestExecuteDeletion_HandlesClerkError
 
 2. **`backend/internal/services/email_service_test.go`** (4 tests)
    - TestSendDeletionConfirmation_Success
@@ -32,12 +32,12 @@
    - TestSendDeletionConfirmation_SMTPError
    - TestEmailTemplate_ContainsRequiredFields
 
-3. **`backend/internal/services/auth0_service_test.go`** (5 tests)
-   - TestAuth0DeleteUser_Success
-   - TestAuth0DeleteUser_NotFound
-   - TestAuth0DeleteUser_APIError
-   - TestAuth0GetManagementToken_Success
-   - TestAuth0GetManagementToken_CachesToken
+3. **`backend/internal/services/clerk_service_test.go`** (5 tests)
+   - TestClerkDeleteUser_Success
+   - TestClerkDeleteUser_NotFound
+   - TestClerkDeleteUser_APIError
+   - TestClerkGetManagementToken_Success
+   - TestClerkGetManagementToken_CachesToken
 
 **Total Tests Written**: 22/32 RED phase tests
 
@@ -74,12 +74,12 @@
 
 1. **Config Updates** (`backend/internal/config/config.go`)
    - Add SendGrid API key, from email
-   - Add Auth0 Management Client ID/Secret
+   - Add Clerk Management Client ID/Secret
    - Add deletion configuration (grace period, worker interval, token secret)
    - Add frontend URL for cancellation links
 
-2. **Auth0Service** (`backend/internal/services/auth0_service.go`)
-   - Implement Auth0 Management API client
+2. **ClerkService** (`backend/internal/services/clerk_service.go`)
+   - Implement Clerk Management API client
    - M2M token acquisition and caching
    - DeleteUser method with error handling
 
@@ -97,7 +97,7 @@
 5. **DeletionService** (`backend/internal/services/deletion_service.go`)
    - RequestDeletion (schedule, generate JWT token, send email)
    - CancelDeletion (validate JWT, clear deletion fields)
-   - ExecuteDeletion (cascade delete, call Auth0, audit log)
+   - ExecuteDeletion (cascade delete, call Clerk, audit log)
 
 6. **DeletionHandler** (`backend/internal/handlers/deletion_handler.go`)
    - POST /api/v1/user/delete endpoint
@@ -128,7 +128,7 @@
 cd backend
 go test ./internal/services/deletion_service_test.go -v
 go test ./internal/services/email_service_test.go -v
-go test ./internal/services/auth0_service_test.go -v
+go test ./internal/services/clerk_service_test.go -v
 go test ./internal/handlers/deletion_handler_test.go -v
 go test ./internal/workers/deletion_worker_test.go -v
 ```
@@ -165,9 +165,9 @@ go tool cover -func=coverage.out
 SENDGRID_API_KEY=SG.xxx
 SENDGRID_FROM_EMAIL=noreply@boostedbudget.com
 
-# Auth0 Management API (M2M)
-AUTH0_MANAGEMENT_CLIENT_ID=xxx
-AUTH0_MANAGEMENT_CLIENT_SECRET=xxx
+# Clerk Management API (M2M)
+CLERK_MANAGEMENT_CLIENT_ID=xxx
+CLERK_MANAGEMENT_CLIENT_SECRET=xxx
 
 # Deletion Configuration
 DELETION_GRACE_PERIOD_DAYS=30
@@ -191,7 +191,7 @@ FRONTEND_URL=https://boostedbudget.com
 7. Anonymize audit_logs (user_id → NULL)
 8. Delete user_identities
 9. Delete users
-10. Delete Auth0 user (via Management API)
+10. Delete Clerk user (via Management API)
 
 ---
 
@@ -229,7 +229,7 @@ FRONTEND_URL=https://boostedbudget.com
 2. **JWT tokens for cancellation**: Self-contained, no DB table needed
 3. **Application-level cascade deletion**: Better audit trail, more control
 4. **Anonymize audit logs**: GDPR Article 17 exception for legal compliance
-5. **Graceful Auth0 error handling**: Log but don't fail if Auth0 delete fails
+5. **Graceful Clerk error handling**: Log but don't fail if Clerk delete fails
 
 ---
 
@@ -237,5 +237,5 @@ FRONTEND_URL=https://boostedbudget.com
 
 1. Complete remaining test files (deletion_handler_test.go, deletion_worker_test.go)
 2. Verify all tests FAIL with clear error messages
-3. Begin GREEN phase: Implement Auth0Service first
+3. Begin GREEN phase: Implement ClerkService first
 4. Continue tracking progress in server-memory during implementation

@@ -363,7 +363,7 @@ func (h *BudgetHandler) GetCategoryTransactions(ctx context.Context, input *GetC
 }
 
 // RegisterBudgetRoutes registers budget routes with the Huma API.
-// Note: These routes require the Auth0 middleware to be applied.
+// Note: These routes require the Clerk middleware to be applied.
 func RegisterBudgetRoutes(api huma.API, handler *BudgetHandler) {
 	// POST /api/v1/budgets - Create budget
 	huma.Register(api, huma.Operation{
@@ -373,7 +373,7 @@ func RegisterBudgetRoutes(api huma.API, handler *BudgetHandler) {
 		Summary:       "Create budget",
 		Description:   "Creates a new budget for the authenticated user.",
 		Tags:          []string{"Budgets"},
-		Security:      []map[string][]string{{"auth0": {}}},
+		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusCreated,
 	}, handler.CreateBudget)
 
@@ -385,7 +385,7 @@ func RegisterBudgetRoutes(api huma.API, handler *BudgetHandler) {
 		Summary:     "Get budgets",
 		Description: "Retrieves all budgets for the authenticated user.",
 		Tags:        []string{"Budgets"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetBudgets)
 
 	// GET /api/v1/budgets/current - Get current budget (must be before :id route)
@@ -396,7 +396,7 @@ func RegisterBudgetRoutes(api huma.API, handler *BudgetHandler) {
 		Summary:     "Get current budget",
 		Description: "Retrieves the current active budget (where today is within the period).",
 		Tags:        []string{"Budgets"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetCurrentBudget)
 
 	// GET /api/v1/budgets/categories/available - Get available categories (must be before :id route)
@@ -407,7 +407,7 @@ func RegisterBudgetRoutes(api huma.API, handler *BudgetHandler) {
 		Summary:     "Get available categories",
 		Description: "Returns the merged list of available categories (custom + Plaid).",
 		Tags:        []string{"Budgets"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetAvailableCategories)
 
 	// GET /api/v1/budgets/:id - Get specific budget
@@ -418,7 +418,7 @@ func RegisterBudgetRoutes(api huma.API, handler *BudgetHandler) {
 		Summary:     "Get budget",
 		Description: "Retrieves a specific budget by ID.",
 		Tags:        []string{"Budgets"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetBudget)
 
 	// PUT /api/v1/budgets/:id - Update budget
@@ -429,7 +429,7 @@ func RegisterBudgetRoutes(api huma.API, handler *BudgetHandler) {
 		Summary:     "Update budget",
 		Description: "Updates a budget's properties.",
 		Tags:        []string{"Budgets"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.UpdateBudget)
 
 	// DELETE /api/v1/budgets/:id - Delete budget
@@ -440,7 +440,7 @@ func RegisterBudgetRoutes(api huma.API, handler *BudgetHandler) {
 		Summary:       "Delete budget",
 		Description:   "Removes a budget from the user's collection.",
 		Tags:          []string{"Budgets"},
-		Security:      []map[string][]string{{"auth0": {}}},
+		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusNoContent,
 	}, handler.DeleteBudget)
 
@@ -452,7 +452,7 @@ func RegisterBudgetRoutes(api huma.API, handler *BudgetHandler) {
 		Summary:       "Add budget category",
 		Description:   "Adds a category to a budget.",
 		Tags:          []string{"Budgets"},
-		Security:      []map[string][]string{{"auth0": {}}},
+		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusCreated,
 	}, handler.AddCategory)
 
@@ -464,7 +464,7 @@ func RegisterBudgetRoutes(api huma.API, handler *BudgetHandler) {
 		Summary:     "Update budget category",
 		Description: "Updates a budget category.",
 		Tags:        []string{"Budgets"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.UpdateCategory)
 
 	// DELETE /api/v1/budgets/:id/categories/:categoryId - Delete category
@@ -475,7 +475,7 @@ func RegisterBudgetRoutes(api huma.API, handler *BudgetHandler) {
 		Summary:       "Delete budget category",
 		Description:   "Removes a category from a budget.",
 		Tags:          []string{"Budgets"},
-		Security:      []map[string][]string{{"auth0": {}}},
+		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusNoContent,
 	}, handler.DeleteCategory)
 
@@ -487,7 +487,7 @@ func RegisterBudgetRoutes(api huma.API, handler *BudgetHandler) {
 		Summary:     "Sync budget",
 		Description: "Manually triggers recalculation of budget income and spent amounts.",
 		Tags:        []string{"Budgets"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.SyncBudget)
 
 	// GET /api/v1/budgets/:id/categories/:categoryId/transactions - Get category transactions
@@ -498,6 +498,6 @@ func RegisterBudgetRoutes(api huma.API, handler *BudgetHandler) {
 		Summary:     "Get category transactions",
 		Description: "Returns paginated transactions matching a budget category.",
 		Tags:        []string{"Budgets"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetCategoryTransactions)
 }

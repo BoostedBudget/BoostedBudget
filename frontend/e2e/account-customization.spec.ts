@@ -1,4 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
+import { setupClerkTestingToken } from '@clerk/testing/playwright';
 import { acceptCookieConsent } from './helpers/auth';
 
 /**
@@ -17,6 +18,7 @@ import { acceptCookieConsent } from './helpers/auth';
 
 // Helper to navigate to accounts page
 async function navigateToAccountsPage(page: Page) {
+  await setupClerkTestingToken({ page });
   await page.goto('/accounts');
   await acceptCookieConsent(page);
 }

@@ -9,8 +9,8 @@ type User struct {
 	// Primary identifier
 	ID string `json:"id" db:"id"`
 
-	// Auth0 user ID (from JWT sub claim)
-	Auth0UserID string `json:"auth0_user_id" db:"auth0_user_id"`
+	// Clerk user ID (from JWT sub claim)
+	ClerkUserID string `json:"clerk_user_id" db:"clerk_user_id"`
 
 	// Basic user information
 	Email         string `json:"email" db:"email"`
@@ -51,11 +51,11 @@ type UpdateProfileRequest struct {
 }
 
 // NewUser creates a new user with default values (free tier, iad region)
-// Used when a user logs in for the first time via Auth0
-func NewUser(auth0UserID, email string, emailVerified bool) *User {
+// Used when a user logs in for the first time via Clerk
+func NewUser(clerkUserID, email string, emailVerified bool) *User {
 	now := time.Now()
 	return &User{
-		Auth0UserID:        auth0UserID,
+		ClerkUserID:        clerkUserID,
 		Email:              email,
 		EmailVerified:      emailVerified,
 		SubscriptionTier:   "free",

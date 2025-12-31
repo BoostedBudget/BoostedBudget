@@ -110,7 +110,7 @@ func (h *NotificationHandler) GetUnreadCount(ctx context.Context, input *GetUnre
 }
 
 // RegisterNotificationRoutes registers notification routes with the Huma API.
-// Note: These routes require the Auth0 middleware to be applied.
+// Note: These routes require the Clerk middleware to be applied.
 func RegisterNotificationRoutes(api huma.API, handler *NotificationHandler) {
 	// GET /api/v1/notifications - Get user notifications
 	huma.Register(api, huma.Operation{
@@ -120,7 +120,7 @@ func RegisterNotificationRoutes(api huma.API, handler *NotificationHandler) {
 		Summary:     "Get user notifications",
 		Description: "Retrieves notifications for the authenticated user, ordered by created_at DESC.",
 		Tags:        []string{"Notifications"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetNotifications)
 
 	// GET /api/v1/notifications/unread/count - Get unread notification count
@@ -132,7 +132,7 @@ func RegisterNotificationRoutes(api huma.API, handler *NotificationHandler) {
 		Summary:     "Get unread notification count",
 		Description: "Returns the count of unread notifications for the authenticated user.",
 		Tags:        []string{"Notifications"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetUnreadCount)
 
 	// PATCH /api/v1/notifications/{id}/read - Mark notification as read
@@ -143,6 +143,6 @@ func RegisterNotificationRoutes(api huma.API, handler *NotificationHandler) {
 		Summary:     "Mark notification as read",
 		Description: "Marks a specific notification as read for the authenticated user.",
 		Tags:        []string{"Notifications"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.MarkNotificationRead)
 }

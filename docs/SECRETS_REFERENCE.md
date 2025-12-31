@@ -14,11 +14,11 @@ Set via: `flyctl secrets set KEY=value --app boostedbudget-api`
 
 **Note**: Automatically set when attaching Fly Postgres with `flyctl postgres attach`
 
-### Auth0
+### Clerk
 
 | Secret | Description | Where to Find | Required |
 |--------|-------------|---------------|----------|
-| `AUTH0_CLIENT_SECRET` | Auth0 M2M client secret | Auth0 Dashboard → Applications → BoostedBudget Backend API → Settings | ✅ Yes |
+| `CLERK_SECRET_KEY` | Clerk secret key | Clerk Dashboard → Configure → API Keys | ✅ Yes |
 
 ### Plaid
 
@@ -53,8 +53,6 @@ Set in `backend/fly.toml`:
   ENVIRONMENT = "production"
   LOG_LEVEL = "info"
   ENABLE_METRICS = "true"
-  AUTH0_DOMAIN = "boostedbudget.us.auth0.com"
-  AUTH0_AUDIENCE = "https://api.boostedbudget.com"
   PLAID_ENV = "production"
 ```
 
@@ -62,11 +60,11 @@ Set in `backend/fly.toml`:
 
 Set via: `flyctl secrets set KEY=value --app boostedbudget-web`
 
-### Auth0 (Public Client)
+### Clerk (Public Client)
 
 | Secret | Description | Where to Find | Required |
 |--------|-------------|---------------|----------|
-| `VITE_AUTH0_CLIENT_ID` | Auth0 SPA client ID | Auth0 Dashboard → Applications → BoostedBudget Frontend → Settings | ✅ Yes |
+| `VITE_CLERK_PUBLISHABLE_KEY` | Clerk publishable key | Clerk Dashboard → Configure → API Keys | ✅ Yes |
 
 **Note**: This is a public identifier (safe to expose in frontend JS), but we set it via secrets for deployment flexibility.
 
@@ -93,8 +91,6 @@ Set in `frontend/fly.toml`:
   PORT = "80"
   ENVIRONMENT = "production"
   VITE_API_URL = "https://api.boostedbudget.com/v1"
-  VITE_AUTH0_DOMAIN = "boostedbudget.us.auth0.com"
-  VITE_AUTH0_AUDIENCE = "https://api.boostedbudget.com"
 ```
 
 ## Local Development (.env)
@@ -107,10 +103,8 @@ For local development, create `.env` files:
 # Database
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/boostedbudget
 
-# Auth0
-AUTH0_DOMAIN=boostedbudget.us.auth0.com
-AUTH0_AUDIENCE=https://api.boostedbudget.com
-AUTH0_CLIENT_SECRET=your_dev_secret
+# Clerk
+CLERK_SECRET_KEY=sk_test_your_clerk_secret_key
 
 # Plaid (Sandbox)
 PLAID_CLIENT_ID=your_plaid_client_id
@@ -135,10 +129,8 @@ PRIMARY_REGION=us-east-1
 # API
 VITE_API_URL=http://localhost:8080/v1
 
-# Auth0
-VITE_AUTH0_DOMAIN=boostedbudget.us.auth0.com
-VITE_AUTH0_CLIENT_ID=your_dev_client_id
-VITE_AUTH0_AUDIENCE=https://api.boostedbudget.com
+# Clerk
+VITE_CLERK_PUBLISHABLE_KEY=pk_test_your_clerk_publishable_key
 
 # Plaid (Sandbox)
 VITE_PLAID_PUBLIC_KEY=your_plaid_public_key
@@ -149,14 +141,11 @@ VITE_GOOGLE_ADSENSE_CLIENT=ca-pub-XXXXXXXXXXXXXXXX
 
 ## How to Obtain Secrets
 
-### Auth0
+### Clerk
 
-1. Log into [Auth0 Dashboard](https://manage.auth0.com)
-2. Navigate to **Applications** → **Applications**
-3. Create two applications:
-   - **BoostedBudget Backend** (Machine to Machine)
-   - **BoostedBudget Frontend** (Single Page Application)
-4. Copy client IDs and secrets from Settings
+1. Log into [Clerk Dashboard](https://dashboard.clerk.com)
+2. Navigate to **Configure** → **API Keys**
+3. Copy your **Publishable Key** (for frontend) and **Secret Key** (for backend)
 
 ### Plaid
 
@@ -187,7 +176,7 @@ VITE_GOOGLE_ADSENSE_CLIENT=ca-pub-XXXXXXXXXXXXXXXX
 - Rotate secrets regularly
 - Use different secrets for dev/staging/production
 - Keep `.env` files in `.gitignore`
-- Use Auth0 for all authentication (never custom auth)
+- Use Clerk for all authentication (never custom auth)
 - Use Stripe test mode keys in development
 
 ❌ **DON'T:**
@@ -231,16 +220,16 @@ echo $DATABASE_URL
 When rotating secrets (recommended every 90 days):
 
 ```bash
-# Example: Rotate Auth0 client secret
-# 1. Generate new secret in Auth0 Dashboard
+# Example: Rotate Clerk secret key
+# 1. Generate new secret in Clerk Dashboard
 # 2. Update Fly.io secret
-flyctl secrets set AUTH0_CLIENT_SECRET=new_secret --app boostedbudget-api
+flyctl secrets set CLERK_SECRET_KEY=new_secret --app boostedbudget-api
 
 # 3. Fly will automatically redeploy with new secret
 # 4. Verify deployment works
 curl https://api.boostedbudget.com/health
 
-# 5. Delete old secret from Auth0
+# 5. Delete old secret from Clerk (if applicable)
 ```
 
 ## Emergency Secret Removal
@@ -263,14 +252,14 @@ flyctl secrets set SECRET_NAME=new_value --app app-name
 
 Before first deployment:
 
-- [ ] Auth0 applications created (Backend M2M + Frontend SPA)
+- [ ] Clerk application created and keys obtained
 - [ ] Plaid account created and keys obtained
 - [ ] Stripe account created and webhooks configured
 - [ ] Google AdSense account approved (for free tier)
 - [ ] PostgreSQL database created on Fly.io
 - [ ] All backend secrets set via `flyctl secrets set`
 - [ ] All frontend secrets set via `flyctl secrets set`
-- [ ] Auth0 callback URLs updated with production domains
+- [ ] Clerk allowed domains configured with production domains
 - [ ] Stripe webhooks pointed to production API
 - [ ] Secrets documented in team password manager
 - [ ] Local `.env` files created (not committed)
@@ -287,7 +276,7 @@ If you have issues with secrets:
 ## References
 
 - [Fly.io Secrets Documentation](https://fly.io/docs/reference/secrets/)
-- [Auth0 Applications](https://auth0.com/docs/get-started/auth0-overview/create-applications)
-- [Plaid Keys](https://plaid.com/docs/auth/partnerships/https://plaid.com/docs/api/tokens/#keys)
+- [Clerk Documentation](https://clerk.com/docs)
+- [Plaid Keys](https://plaid.com/docs/api/tokens/#keys)
 - [Stripe API Keys](https://stripe.com/docs/keys)
 - [Google AdSense Setup](https://support.google.com/adsense/answer/10162)

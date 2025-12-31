@@ -76,7 +76,7 @@ func (h *ProfileHandler) UpdateProfile(ctx context.Context, input *UpdateProfile
 }
 
 // RegisterProfileRoutes registers profile routes with the Huma API.
-// Note: These routes require the Auth0 middleware to be applied.
+// Note: These routes require the Clerk middleware to be applied.
 func RegisterProfileRoutes(api huma.API, handler *ProfileHandler) {
 	// GET /api/v1/user/profile - Get user profile
 	huma.Register(api, huma.Operation{
@@ -86,7 +86,7 @@ func RegisterProfileRoutes(api huma.API, handler *ProfileHandler) {
 		Summary:     "Get user profile",
 		Description: "Retrieves the authenticated user's profile, creating one if it's their first login.",
 		Tags:        []string{"Profile"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetProfile)
 
 	// PUT /api/v1/user/profile - Update user profile
@@ -97,6 +97,6 @@ func RegisterProfileRoutes(api huma.API, handler *ProfileHandler) {
 		Summary:     "Update user profile",
 		Description: "Updates the authenticated user's profile with validated data.",
 		Tags:        []string{"Profile"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.UpdateProfile)
 }

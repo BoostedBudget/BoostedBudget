@@ -22,15 +22,15 @@ var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-
 // - Transaction is only committed after all three entities are successfully created
 //
 // EMAIL VERIFICATION:
-// - emailVerified status is extracted from Auth0 JWT claims (email_verified field)
-// - This status reflects whether Auth0 verified the email during authentication
+// - emailVerified status is extracted from Clerk JWT claims (email_verified field)
+// - This status reflects whether Clerk verified the email during authentication
 // - The status is stored in both user.email_verified and user_identity.email_verified
 // - Default is false if not present in JWT claims (safe default)
 //
 // IDEMPOTENCY:
-// - Calling RegisterUser multiple times with the same auth0UserID is safe
+// - Calling RegisterUser multiple times with the same clerkUserID is safe
 // - If user already exists, returns existing user without creating duplicates
-// - Race conditions are handled via database constraints (unique auth0_user_id)
+// - Race conditions are handled via database constraints (unique clerk_user_id)
 type RegistrationService interface {
 	// RegisterUser creates a new user account or returns existing user (idempotent)
 	//
@@ -41,9 +41,9 @@ type RegistrationService interface {
 	//
 	// Parameters:
 	//   - ctx: Context for cancellation and timeout
-	//   - auth0UserID: Auth0 user ID from JWT sub claim (e.g., "google-oauth2|123456")
+	//   - clerkUserID: Clerk user ID from JWT sub claim (e.g., "google-oauth2|123456")
 	//   - email: User email address from JWT claims
-	//   - emailVerified: Whether Auth0 verified this email (from JWT email_verified claim)
+	//   - emailVerified: Whether Clerk verified this email (from JWT email_verified claim)
 	//
 	// Returns:
 	//   - User profile with generated UUID
@@ -51,9 +51,9 @@ type RegistrationService interface {
 	//
 	// Guarantees:
 	//   - Atomic: All three entities created together or none at all
-	//   - Idempotent: Safe to call multiple times with same auth0UserID
+	//   - Idempotent: Safe to call multiple times with same clerkUserID
 	//   - Validated: Email format checked, required fields enforced
-	RegisterUser(ctx context.Context, auth0UserID, email string, emailVerified bool) (*domain.User, error)
+	RegisterUser(ctx context.Context, clerkUserID, email string, emailVerified bool) (*domain.User, error)
 }
 
 type registrationService struct {
@@ -84,7 +84,7 @@ func NewRegistrationService(
 // RegisterUser implements idempotent user registration with atomic transaction safety
 //
 // FLOW:
-//   1. Validate inputs (auth0UserID, email format)
+//   1. Validate inputs (clerkUserID, email format)
 //   2. Check if user already exists (idempotent path)
 //   3. If new user:
 //      a. Begin database transaction
@@ -101,8 +101,8 @@ func NewRegistrationService(
 // - Only commits if all three entities created successfully
 //
 // EMAIL VERIFICATION:
-// - emailVerified param comes from Auth0 JWT claims (email_verified field)
-// - Auth0 sets this to true after user verifies their email
+// - emailVerified param comes from Clerk JWT claims (email_verified field)
+// - Clerk sets this to true after user verifies their email
 // - We store this status in both user and identity records
 // - This allows tracking which identities have verified emails
 //
@@ -110,10 +110,10 @@ func NewRegistrationService(
 // - When db is nil (unit tests), uses non-transactional Create methods
 // - Allows testing without mocking sql.DB transaction complexity
 // - Production always provides db, so transactions are always used
-func (s *registrationService) RegisterUser(ctx context.Context, auth0UserID, email string, emailVerified bool) (*domain.User, error) {
+func (s *registrationService) RegisterUser(ctx context.Context, clerkUserID, email string, emailVerified bool) (*domain.User, error) {
 	// Validate required fields
-	if auth0UserID == "" {
-		return nil, errors.New("auth0_user_id is required")
+	if clerkUserID == "" {
+		return nil, errors.New("clerk_user_id is required")
 	}
 
 	// Validate email format
@@ -122,7 +122,7 @@ func (s *registrationService) RegisterUser(ctx context.Context, auth0UserID, ema
 	}
 
 	// Check if user already exists (idempotent)
-	existingIdentity, err := s.identityRepo.GetByAuth0ID(ctx, auth0UserID)
+	existingIdentity, err := s.identityRepo.GetByClerkID(ctx, clerkUserID)
 	if err != nil && !errors.Is(err, repository.ErrIdentityNotFound) {
 		// Unexpected error (not "not found")
 		return nil, fmt.Errorf("failed to check existing identity: %w", err)
@@ -149,15 +149,15 @@ func (s *registrationService) RegisterUser(ctx context.Context, auth0UserID, ema
 		defer tx.Rollback() // Rollback if not committed
 
 		// Step 1: Create user profile within transaction
-		user = domain.NewUser(auth0UserID, email, emailVerified)
+		user = domain.NewUser(clerkUserID, email, emailVerified)
 		err = s.profileRepo.CreateUserTx(ctx, tx, user)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create user: %w", err)
 		}
 
 		// Step 2: Create user identity within transaction
-		// First identity is always primary; emailVerified from Auth0 JWT
-		identity := domain.NewUserIdentity(user.ID, auth0UserID, email, emailVerified, true)
+		// First identity is always primary; emailVerified from Clerk JWT
+		identity := domain.NewUserIdentity(user.ID, clerkUserID, email, emailVerified, true)
 		err = s.identityRepo.CreateTx(ctx, tx, identity)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create identity: %w", err)
@@ -177,15 +177,15 @@ func (s *registrationService) RegisterUser(ctx context.Context, auth0UserID, ema
 	} else {
 		// Unit test path: Use non-transactional methods
 		// Step 1: Create user profile
-		user = domain.NewUser(auth0UserID, email, emailVerified)
+		user = domain.NewUser(clerkUserID, email, emailVerified)
 		err = s.profileRepo.CreateUser(ctx, user)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create user: %w", err)
 		}
 
 		// Step 2: Create user identity
-		// First identity is always primary; emailVerified from Auth0 JWT
-		identity := domain.NewUserIdentity(user.ID, auth0UserID, email, emailVerified, true)
+		// First identity is always primary; emailVerified from Clerk JWT
+		identity := domain.NewUserIdentity(user.ID, clerkUserID, email, emailVerified, true)
 		err = s.identityRepo.Create(ctx, identity)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create identity: %w", err)

@@ -590,14 +590,9 @@ jobs:
           # RabbitMQ (QA)
           RABBITMQ_URL=amqp://guest:guest@localhost:5673/
 
-          # Auth0 (Dev Tenant)
-          AUTH0_DOMAIN=${{ secrets.AUTH0_DOMAIN_QA || 'dev-changeme.us.auth0.com' }}
-          AUTH0_AUDIENCE=${{ secrets.AUTH0_AUDIENCE_QA || 'https://api-qa.boostedbudget.com' }}
-          AUTH0_CLIENT_ID=${{ secrets.AUTH0_CLIENT_ID_QA || 'changeme' }}
-          AUTH0_CLIENT_SECRET=${{ secrets.AUTH0_CLIENT_SECRET_QA || 'changeme' }}
-          VITE_AUTH0_DOMAIN=${{ secrets.AUTH0_DOMAIN_QA || 'dev-changeme.us.auth0.com' }}
-          VITE_AUTH0_CLIENT_ID=${{ secrets.VITE_AUTH0_CLIENT_ID_QA || 'changeme' }}
-          VITE_AUTH0_AUDIENCE=${{ secrets.AUTH0_AUDIENCE_QA || 'https://api-qa.boostedbudget.com' }}
+          # Clerk Authentication
+          CLERK_SECRET_KEY=${{ secrets.CLERK_SECRET_KEY }}
+          CLERK_PUBLISHABLE_KEY=${{ secrets.CLERK_PUBLISHABLE_KEY }}
 
           # Plaid (Sandbox)
           PLAID_ENV=sandbox
