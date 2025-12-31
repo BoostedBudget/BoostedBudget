@@ -26,8 +26,8 @@ func (m *MockProfileRepositoryForDeletion) GetUserByID(ctx context.Context, user
 	return args.Get(0).(*domain.User), args.Error(1)
 }
 
-func (m *MockProfileRepositoryForDeletion) GetUserByAuth0ID(ctx context.Context, auth0UserID string) (*domain.User, error) {
-	args := m.Called(ctx, auth0UserID)
+func (m *MockProfileRepositoryForDeletion) GetUserByClerkID(ctx context.Context, clerkUserID string) (*domain.User, error) {
+	args := m.Called(ctx, clerkUserID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -49,8 +49,8 @@ func (m *MockProfileRepositoryForDeletion) UpdateUser(ctx context.Context, user 
 	return args.Error(0)
 }
 
-func (m *MockProfileRepositoryForDeletion) UpdateLastLogin(ctx context.Context, auth0UserID string) error {
-	args := m.Called(ctx, auth0UserID)
+func (m *MockProfileRepositoryForDeletion) UpdateLastLogin(ctx context.Context, clerkUserID string) error {
+	args := m.Called(ctx, clerkUserID)
 	return args.Error(0)
 }
 
@@ -92,19 +92,14 @@ func (m *MockEmailService) SendNotificationEmail(ctx context.Context, toEmail st
 	return args.Error(0)
 }
 
-// MockAuth0Service for testing
-type MockAuth0Service struct {
+// MockClerkService for testing
+type MockClerkService struct {
 	mock.Mock
 }
 
-func (m *MockAuth0Service) DeleteUser(ctx context.Context, auth0UserID string) error {
-	args := m.Called(ctx, auth0UserID)
+func (m *MockClerkService) DeleteUser(ctx context.Context, clerkUserID string) error {
+	args := m.Called(ctx, clerkUserID)
 	return args.Error(0)
-}
-
-func (m *MockAuth0Service) GetManagementToken(ctx context.Context) (string, error) {
-	args := m.Called(ctx)
-	return args.String(0), args.Error(1)
 }
 
 // MockAuditLogger for testing
@@ -122,10 +117,10 @@ func TestRequestDeletion_Success(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockProfileRepositoryForDeletion)
 	mockEmail := new(MockEmailService)
-	mockAuth0 := new(MockAuth0Service)
+	mockClerk := new(MockClerkService)
 	mockAudit := new(MockAuditLogger)
 
-	service := NewDeletionService(mockRepo, mockEmail, mockAuth0, mockAudit, 30, "test-secret-key")
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, 30, "test-secret-key")
 
 	userID := "user-123"
 	email := "test@example.com"
@@ -150,11 +145,11 @@ func TestRequestDeletion_SchedulesFor30Days(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockProfileRepositoryForDeletion)
 	mockEmail := new(MockEmailService)
-	mockAuth0 := new(MockAuth0Service)
+	mockClerk := new(MockClerkService)
 	mockAudit := new(MockAuditLogger)
 
 	gracePeriodDays := 30
-	service := NewDeletionService(mockRepo, mockEmail, mockAuth0, mockAudit, gracePeriodDays, "test-secret-key")
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, gracePeriodDays, "test-secret-key")
 
 	userID := "user-123"
 	email := "test@example.com"
@@ -176,10 +171,10 @@ func TestRequestDeletion_GeneratesToken(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockProfileRepositoryForDeletion)
 	mockEmail := new(MockEmailService)
-	mockAuth0 := new(MockAuth0Service)
+	mockClerk := new(MockClerkService)
 	mockAudit := new(MockAuditLogger)
 
-	service := NewDeletionService(mockRepo, mockEmail, mockAuth0, mockAudit, 30, "test-secret-key")
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, 30, "test-secret-key")
 
 	userID := "user-123"
 	email := "test@example.com"
@@ -200,10 +195,10 @@ func TestRequestDeletion_CreatesAuditLog(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockProfileRepositoryForDeletion)
 	mockEmail := new(MockEmailService)
-	mockAuth0 := new(MockAuth0Service)
+	mockClerk := new(MockClerkService)
 	mockAudit := new(MockAuditLogger)
 
-	service := NewDeletionService(mockRepo, mockEmail, mockAuth0, mockAudit, 30, "test-secret-key")
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, 30, "test-secret-key")
 
 	userID := "user-123"
 	email := "test@example.com"
@@ -224,10 +219,10 @@ func TestRequestDeletion_EmailServiceFailure(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockProfileRepositoryForDeletion)
 	mockEmail := new(MockEmailService)
-	mockAuth0 := new(MockAuth0Service)
+	mockClerk := new(MockClerkService)
 	mockAudit := new(MockAuditLogger)
 
-	service := NewDeletionService(mockRepo, mockEmail, mockAuth0, mockAudit, 30, "test-secret-key")
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, 30, "test-secret-key")
 
 	userID := "user-123"
 	email := "test@example.com"
@@ -247,10 +242,10 @@ func TestCancelDeletion_ValidToken(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockProfileRepositoryForDeletion)
 	mockEmail := new(MockEmailService)
-	mockAuth0 := new(MockAuth0Service)
+	mockClerk := new(MockClerkService)
 	mockAudit := new(MockAuditLogger)
 
-	service := NewDeletionService(mockRepo, mockEmail, mockAuth0, mockAudit, 30, "test-secret-key")
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, 30, "test-secret-key")
 
 	// First request deletion to get a token
 	userID := "user-123"
@@ -278,10 +273,10 @@ func TestCancelDeletion_InvalidToken(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockProfileRepositoryForDeletion)
 	mockEmail := new(MockEmailService)
-	mockAuth0 := new(MockAuth0Service)
+	mockClerk := new(MockClerkService)
 	mockAudit := new(MockAuditLogger)
 
-	service := NewDeletionService(mockRepo, mockEmail, mockAuth0, mockAudit, 30, "test-secret-key")
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, 30, "test-secret-key")
 
 	invalidToken := "invalid-token-string"
 
@@ -297,11 +292,11 @@ func TestCancelDeletion_ExpiredToken(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockProfileRepositoryForDeletion)
 	mockEmail := new(MockEmailService)
-	mockAuth0 := new(MockAuth0Service)
+	mockClerk := new(MockClerkService)
 	mockAudit := new(MockAuditLogger)
 
 	tokenSecret := "test-secret-key"
-	service := NewDeletionService(mockRepo, mockEmail, mockAuth0, mockAudit, 30, tokenSecret)
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, 30, tokenSecret)
 
 	// Create a real expired JWT token (expired 1 hour ago)
 	expiredTime := time.Now().Add(-1 * time.Hour)
@@ -330,58 +325,58 @@ func TestExecuteDeletion_CascadesAllData(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockProfileRepositoryForDeletion)
 	mockEmail := new(MockEmailService)
-	mockAuth0 := new(MockAuth0Service)
+	mockClerk := new(MockClerkService)
 	mockAudit := new(MockAuditLogger)
 
-	service := NewDeletionService(mockRepo, mockEmail, mockAuth0, mockAudit, 30, "test-secret-key")
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, 30, "test-secret-key")
 
 	user := &domain.User{
 		ID:          "user-123",
-		Auth0UserID: "auth0|123",
+		ClerkUserID: "user_123",
 		Email:       "test@example.com",
 		IsDeleted:   false,
 	}
 
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
-	mockAuth0.On("DeleteUser", ctx, user.Auth0UserID).Return(nil)
+	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
 	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
 
 	err := service.ExecuteDeletion(ctx, user.ID)
 
 	assert.NoError(t, err)
 	mockRepo.AssertCalled(t, "DeleteUserCascade", ctx, user.ID)
-	mockAuth0.AssertCalled(t, "DeleteUser", ctx, user.Auth0UserID)
+	mockClerk.AssertCalled(t, "DeleteUser", ctx, user.ClerkUserID)
 	mockAudit.AssertCalled(t, "Log", ctx, "user.deleted", "user", user.ID)
 }
 
-// TestExecuteDeletion_DeletesAuth0User verifies Auth0 deletion
-func TestExecuteDeletion_DeletesAuth0User(t *testing.T) {
+// TestExecuteDeletion_DeletesClerkUser verifies Clerk deletion
+func TestExecuteDeletion_DeletesClerkUser(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockProfileRepositoryForDeletion)
 	mockEmail := new(MockEmailService)
-	mockAuth0 := new(MockAuth0Service)
+	mockClerk := new(MockClerkService)
 	mockAudit := new(MockAuditLogger)
 
-	service := NewDeletionService(mockRepo, mockEmail, mockAuth0, mockAudit, 30, "test-secret-key")
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, 30, "test-secret-key")
 
 	user := &domain.User{
 		ID:          "user-123",
-		Auth0UserID: "auth0|123",
+		ClerkUserID: "user_123",
 		Email:       "test@example.com",
 		IsDeleted:   false,
 	}
 
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
-	mockAuth0.On("DeleteUser", ctx, user.Auth0UserID).Return(nil)
+	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
 	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
 
 	err := service.ExecuteDeletion(ctx, user.ID)
 
 	assert.NoError(t, err)
-	mockAuth0.AssertExpectations(t)
-	mockAuth0.AssertCalled(t, "DeleteUser", ctx, user.Auth0UserID)
+	mockClerk.AssertExpectations(t)
+	mockClerk.AssertCalled(t, "DeleteUser", ctx, user.ClerkUserID)
 }
 
 // TestExecuteDeletion_HandlesAlreadyDeleted tests idempotency
@@ -389,14 +384,14 @@ func TestExecuteDeletion_HandlesAlreadyDeleted(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockProfileRepositoryForDeletion)
 	mockEmail := new(MockEmailService)
-	mockAuth0 := new(MockAuth0Service)
+	mockClerk := new(MockClerkService)
 	mockAudit := new(MockAuditLogger)
 
-	service := NewDeletionService(mockRepo, mockEmail, mockAuth0, mockAudit, 30, "test-secret-key")
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, 30, "test-secret-key")
 
 	user := &domain.User{
 		ID:          "user-123",
-		Auth0UserID: "auth0|123",
+		ClerkUserID: "user_123",
 		Email:       "test@example.com",
 		IsDeleted:   true, // Already deleted
 	}
@@ -407,34 +402,34 @@ func TestExecuteDeletion_HandlesAlreadyDeleted(t *testing.T) {
 
 	assert.NoError(t, err, "Should not error on already deleted user")
 	mockRepo.AssertNotCalled(t, "DeleteUserCascade", mock.Anything, mock.Anything)
-	mockAuth0.AssertNotCalled(t, "DeleteUser", mock.Anything, mock.Anything)
+	mockClerk.AssertNotCalled(t, "DeleteUser", mock.Anything, mock.Anything)
 }
 
-// TestExecuteDeletion_HandlesAuth0Error tests graceful Auth0 error handling
-func TestExecuteDeletion_HandlesAuth0Error(t *testing.T) {
+// TestExecuteDeletion_HandlesClerkError tests graceful Clerk error handling
+func TestExecuteDeletion_HandlesClerkError(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockProfileRepositoryForDeletion)
 	mockEmail := new(MockEmailService)
-	mockAuth0 := new(MockAuth0Service)
+	mockClerk := new(MockClerkService)
 	mockAudit := new(MockAuditLogger)
 
-	service := NewDeletionService(mockRepo, mockEmail, mockAuth0, mockAudit, 30, "test-secret-key")
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, 30, "test-secret-key")
 
 	user := &domain.User{
 		ID:          "user-123",
-		Auth0UserID: "auth0|123",
+		ClerkUserID: "user_123",
 		Email:       "test@example.com",
 		IsDeleted:   false,
 	}
 
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
-	mockAuth0.On("DeleteUser", ctx, user.Auth0UserID).Return(errors.New("Auth0 API error"))
+	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(errors.New("Clerk API error"))
 	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
 
 	err := service.ExecuteDeletion(ctx, user.ID)
 
-	// Should still succeed even if Auth0 fails (our data is deleted)
+	// Should still succeed even if Clerk fails (our data is deleted)
 	assert.NoError(t, err)
 	mockRepo.AssertCalled(t, "DeleteUserCascade", ctx, user.ID)
 	mockAudit.AssertCalled(t, "Log", ctx, "user.deleted", "user", user.ID)

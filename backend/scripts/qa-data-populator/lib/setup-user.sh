@@ -17,7 +17,7 @@ setup_user() {
   USER_EMAIL=$(get_user_email)
   USER_TIER=$(get_user_tier)
   local user_mode=$(get_user_mode)
-  local auth0_user_id=$(get_user_auth0_id)
+  local clerk_user_id=$(get_user_clerk_id)
 
   if [ "$USER_EMAIL" = "null" ] || [ -z "$USER_EMAIL" ]; then
     log_error "User email is required (setup.user.email)"
@@ -39,7 +39,7 @@ setup_user() {
   # Handle based on mode
   if [ "$user_mode" = "existing" ]; then
     # ========== EXISTING USER MODE ==========
-    log_info "Mode: existing (using real Auth0 user)"
+    log_info "Mode: existing (using real Clerk user)"
 
     # Lookup user by email
     USER_ID=$(get_user_id_by_email "$USER_EMAIL")
@@ -48,7 +48,7 @@ setup_user() {
       log_error "User not found: $USER_EMAIL"
       log_error ""
       log_error "To use mode: existing, the user must exist in the database."
-      log_error "Please log into staging.boostedbudget.com via Auth0 first to create the account."
+      log_error "Please log into staging.boostedbudget.com via Clerk first to create the account."
       log_error ""
       log_error "Steps:"
       log_error "  1. Visit https://staging.boostedbudget.com"
@@ -57,22 +57,22 @@ setup_user() {
       return 1
     fi
 
-    # Optionally validate auth0_user_id if provided
-    if [ -n "$auth0_user_id" ]; then
-      local user_id_by_auth0=$(get_user_id_by_auth0_id "$auth0_user_id")
-      if [ -z "$user_id_by_auth0" ]; then
-        log_error "Auth0 user ID not found: $auth0_user_id"
+    # Optionally validate clerk_user_id if provided
+    if [ -n "$clerk_user_id" ]; then
+      local user_id_by_clerk=$(get_user_id_by_clerk_id "$clerk_user_id")
+      if [ -z "$user_id_by_clerk" ]; then
+        log_error "Clerk user ID not found: $clerk_user_id"
         return 1
       fi
 
-      if [ "$user_id_by_auth0" != "$USER_ID" ]; then
-        log_error "Auth0 user ID mismatch!"
+      if [ "$user_id_by_clerk" != "$USER_ID" ]; then
+        log_error "Clerk user ID mismatch!"
         log_error "  Email $USER_EMAIL belongs to user: $USER_ID"
-        log_error "  But Auth0 ID $auth0_user_id belongs to: $user_id_by_auth0"
+        log_error "  But Clerk ID $clerk_user_id belongs to: $user_id_by_clerk"
         return 1
       fi
 
-      log_debug "Auth0 user ID validated: $auth0_user_id"
+      log_debug "Clerk user ID validated: $clerk_user_id"
     fi
 
     # Get current tier if not specified
@@ -97,13 +97,13 @@ setup_user() {
     HISTORICAL_DAYS=$(get_historical_days "$USER_TIER")
 
     log_success "Using existing user: $USER_EMAIL (tier: $USER_TIER, ${HISTORICAL_DAYS}-day history)"
-    log_info "✅ Frontend will work - user can log in via Auth0 to view data"
+    log_info "✅ Frontend will work - user can log in via Clerk to view data"
 
   else
     # ========== NEW USER MODE (FAKE DATA) ==========
-    log_info "Mode: new (creating fake Auth0 user)"
-    log_warning "⚠️  Frontend will NOT work - fake Auth0 users cannot log in"
-    log_warning "    For frontend testing, use mode: existing with a real Auth0 user"
+    log_info "Mode: new (creating fake Clerk user)"
+    log_warning "⚠️  Frontend will NOT work - fake Clerk users cannot log in"
+    log_warning "    For frontend testing, use mode: existing with a real Clerk user"
 
     # Default tier if not specified
     if [ "$USER_TIER" = "null" ] || [ -z "$USER_TIER" ]; then
@@ -114,8 +114,8 @@ setup_user() {
     # Generate user ID
     USER_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
 
-    # Generate fake auth0 user ID
-    local fake_auth0_user_id="auth0|test-$(uuidgen | cut -d'-' -f1)"
+    # Generate fake clerk user ID
+    local fake_clerk_user_id="user_test$(uuidgen | cut -d'-' -f1)"
 
     # Get historical depth for tier
     HISTORICAL_DAYS=$(get_historical_days "$USER_TIER")
@@ -125,16 +125,16 @@ setup_user() {
     log_debug "  Email: $USER_EMAIL"
     log_debug "  Tier: $USER_TIER"
     log_debug "  Historical days: $HISTORICAL_DAYS"
-    log_debug "  Auth0 ID: $fake_auth0_user_id (fake)"
+    log_debug "  Clerk ID: $fake_clerk_user_id (fake)"
 
     # Insert user
     local sql="
       INSERT INTO users (
-        id, auth0_user_id, email, subscription_tier, primary_region, created_at, updated_at
+        id, clerk_user_id, email, subscription_tier, primary_region, created_at, updated_at
       )
       VALUES (
         '$USER_ID',
-        '$fake_auth0_user_id',
+        '$fake_clerk_user_id',
         '$USER_EMAIL',
         '$USER_TIER',
         'us-east-1',

@@ -19,7 +19,7 @@ export default defineConfig({
   testDir: './e2e',
 
   // Maximum time one test can run
-  timeout: 30 * 1000,
+  timeout: 15 * 1000,
 
   // Run tests in files in parallel
   fullyParallel: true,
@@ -65,9 +65,15 @@ export default defineConfig({
 
   // Configure projects for major browsers
   projects: [
+    // Clerk setup project - must run first to obtain testing token
+    {
+      name: 'setup',
+      testMatch: /global-setup\.ts/,
+    },
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
+      dependencies: ['setup'], // Ensure Clerk setup runs first
     },
   ],
 

@@ -4,8 +4,6 @@
 
 window.ENV = {
   API_URL: undefined, // Let axiosConfig.ts use Vite proxy via import.meta.env
-  AUTH0_DOMAIN: undefined, // Let main.tsx use import.meta.env.VITE_AUTH0_DOMAIN
-  AUTH0_CLIENT_ID: undefined, // Let main.tsx use import.meta.env.VITE_AUTH0_CLIENT_ID
-  AUTH0_AUDIENCE: undefined, // Let main.tsx use import.meta.env.VITE_AUTH0_AUDIENCE
+  CLERK_PUBLISHABLE_KEY: undefined, // Let main.tsx use import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
   ENVIRONMENT: 'development'
 };

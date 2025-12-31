@@ -187,7 +187,7 @@ func GetDefaultLayout(ctx context.Context, input *GetDefaultLayoutInput) (*GetDe
 }
 
 // RegisterDashboardRoutes registers dashboard routes with the Huma API.
-// Note: Most routes require the Auth0 middleware to be applied.
+// Note: Most routes require the Clerk middleware to be applied.
 func RegisterDashboardRoutes(api huma.API, handler *DashboardHandler) {
 	// GET /api/v1/dashboard/balance-summary - Get balance summary
 	huma.Register(api, huma.Operation{
@@ -197,7 +197,7 @@ func RegisterDashboardRoutes(api huma.API, handler *DashboardHandler) {
 		Summary:     "Get balance summary",
 		Description: "Returns current balance overview with breakdown by account type and period comparison.",
 		Tags:        []string{"Dashboard"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetBalanceSummary)
 
 	// GET /api/v1/dashboard/balance-history - Get balance history
@@ -208,7 +208,7 @@ func RegisterDashboardRoutes(api huma.API, handler *DashboardHandler) {
 		Summary:     "Get balance history",
 		Description: "Returns time series balance data for charts with optional account type breakdown.",
 		Tags:        []string{"Dashboard"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetBalanceHistory)
 
 	// GET /api/v1/dashboard/account-types - Get account types
@@ -219,7 +219,7 @@ func RegisterDashboardRoutes(api huma.API, handler *DashboardHandler) {
 		Summary:     "Get account types",
 		Description: "Returns available account types for the user with counts and totals.",
 		Tags:        []string{"Dashboard"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetAccountTypes)
 
 	// GET /api/v1/dashboard/default-layout - Get default layout (PUBLIC)

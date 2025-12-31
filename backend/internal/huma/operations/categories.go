@@ -141,7 +141,7 @@ func (h *CategoryHandler) DeleteCategory(ctx context.Context, input *DeleteCateg
 }
 
 // RegisterCategoryRoutes registers category routes with the Huma API.
-// Note: These routes require the Auth0 middleware to be applied.
+// Note: These routes require the Clerk middleware to be applied.
 func RegisterCategoryRoutes(api huma.API, handler *CategoryHandler) {
 	// GET /api/v1/categories - Get all user categories
 	huma.Register(api, huma.Operation{
@@ -151,7 +151,7 @@ func RegisterCategoryRoutes(api huma.API, handler *CategoryHandler) {
 		Summary:     "Get user categories",
 		Description: "Retrieves all custom categories for the authenticated user.",
 		Tags:        []string{"Categories"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetUserCategories)
 
 	// GET /api/v1/categories/{id} - Get category by ID
@@ -162,7 +162,7 @@ func RegisterCategoryRoutes(api huma.API, handler *CategoryHandler) {
 		Summary:     "Get category by ID",
 		Description: "Retrieves a specific category by its UUID.",
 		Tags:        []string{"Categories"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetCategoryByID)
 
 	// POST /api/v1/categories - Create a new category
@@ -173,7 +173,7 @@ func RegisterCategoryRoutes(api huma.API, handler *CategoryHandler) {
 		Summary:       "Create a new category",
 		Description:   "Creates a new custom category for the authenticated user.",
 		Tags:          []string{"Categories"},
-		Security:      []map[string][]string{{"auth0": {}}},
+		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusCreated,
 	}, handler.CreateCategory)
 
@@ -185,7 +185,7 @@ func RegisterCategoryRoutes(api huma.API, handler *CategoryHandler) {
 		Summary:     "Update a category",
 		Description: "Updates a category's name, icon, or color.",
 		Tags:        []string{"Categories"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.UpdateCategory)
 
 	// DELETE /api/v1/categories/{id} - Delete a category
@@ -196,7 +196,7 @@ func RegisterCategoryRoutes(api huma.API, handler *CategoryHandler) {
 		Summary:       "Delete a category",
 		Description:   "Removes a category from the user's collection.",
 		Tags:          []string{"Categories"},
-		Security:      []map[string][]string{{"auth0": {}}},
+		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusNoContent,
 	}, handler.DeleteCategory)
 }

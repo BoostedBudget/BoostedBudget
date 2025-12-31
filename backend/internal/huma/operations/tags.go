@@ -141,7 +141,7 @@ func (h *TagHandler) DeleteTag(ctx context.Context, input *DeleteTagInput) (*str
 }
 
 // RegisterTagRoutes registers tag routes with the Huma API.
-// Note: These routes require the Auth0 middleware to be applied.
+// Note: These routes require the Clerk middleware to be applied.
 func RegisterTagRoutes(api huma.API, handler *TagHandler) {
 	// GET /api/v1/tags - Get all user tags
 	huma.Register(api, huma.Operation{
@@ -151,7 +151,7 @@ func RegisterTagRoutes(api huma.API, handler *TagHandler) {
 		Summary:     "Get user tags",
 		Description: "Retrieves all tags for the authenticated user.",
 		Tags:        []string{"Tags"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetUserTags)
 
 	// GET /api/v1/tags/{id} - Get tag by ID
@@ -162,7 +162,7 @@ func RegisterTagRoutes(api huma.API, handler *TagHandler) {
 		Summary:     "Get tag by ID",
 		Description: "Retrieves a specific tag by its UUID.",
 		Tags:        []string{"Tags"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetTagByID)
 
 	// POST /api/v1/tags - Create a new tag
@@ -173,7 +173,7 @@ func RegisterTagRoutes(api huma.API, handler *TagHandler) {
 		Summary:       "Create a new tag",
 		Description:   "Creates a new tag for the authenticated user.",
 		Tags:          []string{"Tags"},
-		Security:      []map[string][]string{{"auth0": {}}},
+		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusCreated,
 	}, handler.CreateTag)
 
@@ -185,7 +185,7 @@ func RegisterTagRoutes(api huma.API, handler *TagHandler) {
 		Summary:     "Update a tag",
 		Description: "Updates a tag's name or color.",
 		Tags:        []string{"Tags"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.UpdateTag)
 
 	// DELETE /api/v1/tags/{id} - Delete a tag
@@ -196,7 +196,7 @@ func RegisterTagRoutes(api huma.API, handler *TagHandler) {
 		Summary:       "Delete a tag",
 		Description:   "Removes a tag from the user's collection.",
 		Tags:          []string{"Tags"},
-		Security:      []map[string][]string{{"auth0": {}}},
+		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusNoContent,
 	}, handler.DeleteTag)
 }

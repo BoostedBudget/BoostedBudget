@@ -6,7 +6,7 @@
 
 ## Authentication
 
-All protected endpoints require Auth0 JWT Bearer token in the Authorization header:
+All protected endpoints require Clerk JWT Bearer token in the Authorization header:
 ```
 Authorization: Bearer <your-jwt-token>
 ```
@@ -29,8 +29,8 @@ All data is stored in the us-east-1 (iad) region. Multi-region support planned f
 import type { ServiceCheck } from "./serviceCheck";
 
 export interface HealthChecks {
-  /** Auth0 authentication service status */
-  auth0: ServiceCheck;
+  /** Clerk authentication service status */
+  clerk: ServiceCheck;
   /** Database connection status */
   database: ServiceCheck;
   /** Redis cache status */

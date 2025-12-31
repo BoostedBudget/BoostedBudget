@@ -73,7 +73,7 @@ func (h *PrivacyHandler) UpdatePrivacySettings(ctx context.Context, input *Updat
 }
 
 // RegisterPrivacyRoutes registers privacy routes with the Huma API.
-// Note: These routes require the Auth0 middleware to be applied.
+// Note: These routes require the Clerk middleware to be applied.
 func RegisterPrivacyRoutes(api huma.API, handler *PrivacyHandler) {
 	// GET /api/v1/user/privacy - Get privacy settings
 	huma.Register(api, huma.Operation{
@@ -83,7 +83,7 @@ func RegisterPrivacyRoutes(api huma.API, handler *PrivacyHandler) {
 		Summary:     "Get privacy settings",
 		Description: "Retrieves the authenticated user's privacy settings, creating defaults if none exist.",
 		Tags:        []string{"Privacy"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetPrivacySettings)
 
 	// PUT /api/v1/user/privacy - Update privacy settings
@@ -94,6 +94,6 @@ func RegisterPrivacyRoutes(api huma.API, handler *PrivacyHandler) {
 		Summary:     "Update privacy settings",
 		Description: "Updates the authenticated user's privacy settings with GDPR validation.",
 		Tags:        []string{"Privacy"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.UpdatePrivacySettings)
 }

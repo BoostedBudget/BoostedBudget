@@ -1,14 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { BrowserRouter } from 'react-router-dom'
+import { BrowserRouter, MemoryRouter } from 'react-router-dom'
 import App from './App'
 
-// Mock Auth0
-const mockUseAuth0 = vi.hoisted(() => vi.fn())
+// Mock Clerk
+const mockUseAuth = vi.hoisted(() => vi.fn())
+const mockUseUser = vi.hoisted(() => vi.fn())
+const mockUseClerk = vi.hoisted(() => vi.fn())
 
-vi.mock('@auth0/auth0-react', () => ({
-  useAuth0: mockUseAuth0,
+vi.mock('@clerk/react-router', () => ({
+  useAuth: mockUseAuth,
+  useUser: mockUseUser,
+  useClerk: mockUseClerk,
 }))
 
 // Mock useDefaultDashboardLayout hook to avoid QueryClient requirement
@@ -108,11 +112,16 @@ describe('App', () => {
 
   describe('when user is not authenticated', () => {
     beforeEach(() => {
-      mockUseAuth0.mockReturnValue({
-        isAuthenticated: false,
-        isLoading: false,
+      mockUseAuth.mockReturnValue({
+        isSignedIn: false,
+        isLoaded: true,
+      })
+      mockUseUser.mockReturnValue({
         user: null,
-        loginWithRedirect: vi.fn(),
+      })
+      mockUseClerk.mockReturnValue({
+        openSignIn: vi.fn(),
+        signOut: vi.fn(),
       })
     })
 
@@ -154,19 +163,26 @@ describe('App', () => {
   })
 
   describe('when user is authenticated', () => {
-    const mockUser = {
-      name: 'Test User',
-      email: 'test@example.com',
-      picture: 'https://example.com/avatar.jpg',
+    const mockClerkUser = {
+      id: 'user_123',
+      fullName: 'Test User',
+      primaryEmailAddress: {
+        emailAddress: 'test@example.com',
+      },
+      imageUrl: 'https://example.com/avatar.jpg',
     }
 
     beforeEach(() => {
-      mockUseAuth0.mockReturnValue({
-        isAuthenticated: true,
-        isLoading: false,
-        user: mockUser,
-        logout: vi.fn(),
-        loginWithRedirect: vi.fn(),
+      mockUseAuth.mockReturnValue({
+        isSignedIn: true,
+        isLoaded: true,
+      })
+      mockUseUser.mockReturnValue({
+        user: mockClerkUser,
+      })
+      mockUseClerk.mockReturnValue({
+        openSignIn: vi.fn(),
+        signOut: vi.fn(),
       })
     })
 
@@ -209,7 +225,7 @@ describe('App', () => {
       await user.click(screen.getByRole('button', { name: /user menu/i }))
 
       await waitFor(() => {
-        expect(screen.getByText(mockUser.name)).toBeInTheDocument()
+        expect(screen.getByText('Test User')).toBeInTheDocument()
       }, { timeout: 10000 })
     }, 60000) // Extended timeout for CI
 
@@ -228,61 +244,71 @@ describe('App', () => {
       await user.click(screen.getByRole('button', { name: /user menu/i }))
 
       await waitFor(() => {
-        expect(screen.getByText(mockUser.email)).toBeInTheDocument()
+        expect(screen.getByText('test@example.com')).toBeInTheDocument()
       }, { timeout: 10000 })
     }, 60000) // Extended timeout for CI
   })
 
   describe('phase status', () => {
     beforeEach(() => {
-      mockUseAuth0.mockReturnValue({
-        isAuthenticated: false,
-        isLoading: false,
+      mockUseAuth.mockReturnValue({
+        isSignedIn: false,
+        isLoaded: true,
+      })
+      mockUseUser.mockReturnValue({
         user: null,
-        loginWithRedirect: vi.fn(),
+      })
+      mockUseClerk.mockReturnValue({
+        openSignIn: vi.fn(),
+        signOut: vi.fn(),
       })
     })
 
-    it('should show Auth0 integration as complete', async () => {
+    it('should show Clerk integration as complete', async () => {
       render(
-        <BrowserRouter>
+        <MemoryRouter initialEntries={['/']}>
           <App />
-        </BrowserRouter>
+        </MemoryRouter>
       )
 
       await waitFor(() => {
-        expect(screen.getByText(/✅ Auth0 integration/i)).toBeInTheDocument()
+        expect(screen.getByText(/✅ Clerk integration/i)).toBeInTheDocument()
       })
     })
 
-    it('should not show Auth0 as coming next', async () => {
+    it('should not show Clerk as coming next', async () => {
       render(
-        <BrowserRouter>
+        <MemoryRouter initialEntries={['/']}>
           <App />
-        </BrowserRouter>
+        </MemoryRouter>
       )
 
       await waitFor(() => {
-        expect(screen.queryByText(/⏳ Auth0 integration \(coming next\)/i)).not.toBeInTheDocument()
+        expect(screen.queryByText(/⏳ Clerk integration \(coming next\)/i)).not.toBeInTheDocument()
       })
     })
   })
 
   describe('health check section', () => {
     beforeEach(() => {
-      mockUseAuth0.mockReturnValue({
-        isAuthenticated: false,
-        isLoading: false,
+      mockUseAuth.mockReturnValue({
+        isSignedIn: false,
+        isLoaded: true,
+      })
+      mockUseUser.mockReturnValue({
         user: null,
-        loginWithRedirect: vi.fn(),
+      })
+      mockUseClerk.mockReturnValue({
+        openSignIn: vi.fn(),
+        signOut: vi.fn(),
       })
     })
 
     it('should still display system status section', async () => {
       render(
-        <BrowserRouter>
+        <MemoryRouter initialEntries={['/']}>
           <App />
-        </BrowserRouter>
+        </MemoryRouter>
       )
 
       await waitFor(() => {
@@ -292,9 +318,9 @@ describe('App', () => {
 
     it('should display health check error message', async () => {
       render(
-        <BrowserRouter>
+        <MemoryRouter initialEntries={['/']}>
           <App />
-        </BrowserRouter>
+        </MemoryRouter>
       )
 
       await waitFor(() => {
@@ -305,19 +331,26 @@ describe('App', () => {
 
   describe('transactions navigation', () => {
     describe('when user is authenticated', () => {
-      const mockUser = {
-        name: 'Test User',
-        email: 'test@example.com',
-        picture: 'https://example.com/avatar.jpg',
+      const mockClerkUser = {
+        id: 'user_123',
+        fullName: 'Test User',
+        primaryEmailAddress: {
+          emailAddress: 'test@example.com',
+        },
+        imageUrl: 'https://example.com/avatar.jpg',
       }
 
       beforeEach(() => {
-        mockUseAuth0.mockReturnValue({
-          isAuthenticated: true,
-          isLoading: false,
-          user: mockUser,
-          logout: vi.fn(),
-          loginWithRedirect: vi.fn(),
+        mockUseAuth.mockReturnValue({
+          isSignedIn: true,
+          isLoaded: true,
+        })
+        mockUseUser.mockReturnValue({
+          user: mockClerkUser,
+        })
+        mockUseClerk.mockReturnValue({
+          openSignIn: vi.fn(),
+          signOut: vi.fn(),
         })
       })
 
@@ -338,10 +371,16 @@ describe('App', () => {
 
     describe('when user is not authenticated', () => {
       beforeEach(() => {
-        mockUseAuth0.mockReturnValue({
-          isAuthenticated: false,
+        mockUseAuth.mockReturnValue({
+          isSignedIn: false,
+          isLoaded: true,
+        })
+        mockUseUser.mockReturnValue({
           user: null,
-          loginWithRedirect: vi.fn(),
+        })
+        mockUseClerk.mockReturnValue({
+          openSignIn: vi.fn(),
+          signOut: vi.fn(),
         })
       })
 

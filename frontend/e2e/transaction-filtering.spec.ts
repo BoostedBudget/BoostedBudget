@@ -12,7 +12,8 @@
  */
 
 import { test, expect, type Page } from '@playwright/test'
-import { loginWithAuth0, acceptCookieConsent } from './helpers/auth'
+import { setupClerkTestingToken } from '@clerk/testing/playwright'
+import { loginWithClerk, acceptCookieConsent } from './helpers/auth'
 
 // Mock data for transactions
 const mockTransactions = {
@@ -287,6 +288,7 @@ test.describe('Transaction Filtering - Protected Route', () => {
   test('should redirect unauthenticated users away from transactions page', async ({
     page,
   }) => {
+    // No Clerk auth token - this test verifies unauthenticated redirect behavior
     await page.goto('/transactions')
     await expect(page).not.toHaveURL(/\/transactions/, { timeout: 10000 })
   })
@@ -296,9 +298,8 @@ test.describe('Transaction Filtering - Protected Route', () => {
 // Authenticated Tests
 // ============================================================================
 
-const skipAuth0Tests =
-  !process.env.VITE_AUTH0_DOMAIN || !process.env.VITE_AUTH0_CLIENT_ID
-const describeTransactionFiltering = skipAuth0Tests
+const skipClerkTests = !process.env.VITE_CLERK_PUBLISHABLE_KEY
+const describeTransactionFiltering = skipClerkTests
   ? test.describe.skip
   : test.describe
 
@@ -306,12 +307,14 @@ describeTransactionFiltering('Transaction Filtering - Authenticated User', () =>
   test.beforeEach(async ({ page, context }) => {
     await context.clearCookies()
 
+    await setupClerkTestingToken({ page })
+
     const credentials = {
-      email: process.env.TEST_AUTH0_EMAIL || '',
-      password: process.env.TEST_AUTH0_PASSWORD || '',
+      email: process.env.TEST_CLERK_EMAIL || '',
+      password: process.env.TEST_CLERK_PASSWORD || '',
     }
 
-    await loginWithAuth0(page, credentials)
+    await loginWithClerk(page, credentials)
     await acceptCookieConsent(page)
   })
 

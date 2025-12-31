@@ -16,7 +16,7 @@ cd backend/scripts/qa-data-populator
 ```bash
 cd backend/scripts/qa-data-populator
 
-# Export Auth0 token
+# Export Clerk JWT token
 export AUTH_TOKEN="your-jwt-token"
 
 # Run scenario with webhook firing
@@ -101,13 +101,13 @@ Test specific scenarios (pending transactions, refunds, user notes).
 
 ### 5. **Frontend Testing with Real Users** ⭐
 
-**The scenarios above create FAKE Auth0 users that CANNOT be used in the frontend.**
+**The scenarios above create FAKE Clerk users that CANNOT be used in the frontend.**
 
-For frontend testing (viewing data in the UI), use `mode: existing` with a real Auth0 user:
+For frontend testing (viewing data in the UI), use `mode: existing` with a real Clerk user:
 
 **Step 1: Log into staging to create your user**
 ```bash
-# Visit staging and log in via Auth0
+# Visit staging and log in via Clerk
 open https://staging.boostedbudget.com
 # Use Google, Microsoft, or any auth provider
 ```
@@ -120,9 +120,9 @@ cd backend/scripts/qa-data-populator
 
 Output:
 ```
-      email                  | subscription_tier | auth0_user_id           | accounts | transactions
+      email                  | subscription_tier | clerk_user_id           | accounts | transactions
 -----------------------------|-------------------|-------------------------|----------|-------------
-your-email@example.com       | free              | google-oauth2|12345... | 0        | 0
+your-email@example.com       | free              | user_2abc123def456...   | 0        | 0
 ```
 
 **Step 3: Create or modify a scenario**
@@ -132,7 +132,7 @@ your-email@example.com       | free              | google-oauth2|12345... | 0   
 setup:
   user:
     mode: "existing"  # REQUIRED for real users!
-    email: "your-email@example.com"  # Your Auth0 email
+    email: "your-email@example.com"  # Your Clerk email
     tier: "premium"  # Optional tier upgrade
 ```
 
@@ -151,14 +151,14 @@ open https://staging.boostedbudget.com
 | Feature | `mode: new` (default) | `mode: existing` |
 |---------|----------------------|------------------|
 | **Frontend Access** | ❌ Cannot log in | ✅ Can log in and view data |
-| **User Creation** | Creates fake Auth0 user | Uses real Auth0 user |
+| **User Creation** | Creates fake Clerk user | Uses real Clerk user |
 | **Cleanup Behavior** | Deletes user completely | Preserves user, deletes only data |
 | **Use Case** | Backend/API testing | Frontend/UI testing |
 
 **Troubleshooting:**
 - **"User not found"** → Log into staging.boostedbudget.com first
 - **Frontend shows no data** → Verify `mode: existing` in YAML
-- **Cannot log in** → Use the same Auth0 provider (Google/Microsoft/etc.)
+- **Cannot log in** → Use the same Clerk auth provider (Google/Microsoft/etc.)
 
 **Helper Scripts:**
 ```bash
@@ -211,10 +211,10 @@ DATABASE_URL=postgresql://user:pass@localhost:5432/boostedbudget
 - `DATABASE_URL` - PostgreSQL connection string (read from backend/.env)
 
 **Optional (for webhook firing):**
-- `AUTH_TOKEN` - Auth0 JWT token for admin webhook endpoint
+- `AUTH_TOKEN` - Clerk JWT token for admin webhook endpoint
   - Required only when using `webhooks.fire_after_setup: true` in scenarios
   - Enables balance snapshot creation via webhook processing
-  - Obtain from staging Auth0 login (see "Webhook Integration" below)
+  - Obtain from staging Clerk login (see "Webhook Integration" below)
 
 ## Available Scenarios
 
@@ -268,8 +268,8 @@ DATABASE_URL=postgresql://user:pass@localhost:5432/boostedbudget
 
 ### Setup
 ```bash
-# Export your Auth0 JWT token (required for admin webhook endpoint)
-export AUTH_TOKEN="your-auth0-jwt-token"
+# Export your Clerk JWT token (required for admin webhook endpoint)
+export AUTH_TOKEN="your-clerk-jwt-token"
 
 # Run a scenario with webhook firing enabled
 ./populate.sh scenarios/06-balance-snapshot-creation.yaml
@@ -311,11 +311,11 @@ assertions:
 # 2. Open DevTools → Application → Local Storage
 # 3. Copy the auth token value
 
-# Option 2: Use Auth0 CLI (if configured)
-auth0 test login
+# Option 2: Use Clerk CLI (if configured)
+clerk session token
 ```
 
-**Security Note:** Webhook endpoint is staging-only and requires valid Auth0 JWT authentication.
+**Security Note:** Webhook endpoint is staging-only and requires valid Clerk JWT authentication.
 
 ## Creating New Scenarios
 
@@ -487,14 +487,14 @@ assertions:
 
 **"AUTH_TOKEN not set. Skipping webhook firing."**
 ```bash
-# Export your Auth0 JWT token before running
+# Export your Clerk JWT token before running
 export AUTH_TOKEN="eyJhbGc..."
 ./populate.sh scenarios/06-balance-snapshot-creation.yaml
 ```
 
 **"Webhook firing failed (401 Unauthorized)"**
-- Token expired: Auth0 JWT tokens expire after 24 hours
-- Invalid token: Ensure token is from staging Auth0 tenant
+- Token expired: Clerk JWT tokens expire after a period
+- Invalid token: Ensure token is from staging Clerk instance
 - Solution: Get a fresh token from staging.boostedbudget.com
 
 **"Webhook firing failed (500 Internal Server Error)"**
@@ -625,7 +625,7 @@ assertions:
 - **PostgreSQL Only** - Requires PostgreSQL database
 - **macOS/Linux** - Shell scripts designed for Unix-like systems
 - **Single Region** - Populates current environment only (no multi-region support)
-- **Auth0 Token Required** - Webhook firing requires valid Auth0 JWT token
+- **Clerk Token Required** - Webhook firing requires valid Clerk JWT token
 
 ## Comparison to Deleted Framework
 

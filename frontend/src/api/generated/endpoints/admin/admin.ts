@@ -6,7 +6,7 @@
 
 ## Authentication
 
-All protected endpoints require Auth0 JWT Bearer token in the Authorization header:
+All protected endpoints require Clerk JWT Bearer token in the Authorization header:
 ```
 Authorization: Bearer <your-jwt-token>
 ```
@@ -74,7 +74,7 @@ type NonReadonly<T> = [T] extends [UnionToIntersection<T>]
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 /**
- * Fires a Plaid webhook for testing in QA environment. Requires Auth0 authentication.
+ * Fires a Plaid webhook for testing in QA environment. Requires Clerk authentication.
  * @summary Fire a Plaid webhook (QA only)
  */
 export const fireWebhook = (

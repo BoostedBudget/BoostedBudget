@@ -13,6 +13,7 @@ import { acceptCookieConsent } from './helpers/auth';
 
 test.describe('Navigation - Unauthenticated', () => {
   test.beforeEach(async ({ page }) => {
+    // No Clerk auth token - these tests verify unauthenticated behavior
     await page.goto('/');
     await acceptCookieConsent(page);
   });
@@ -131,7 +132,7 @@ test.describe('Navigation - Logo Links', () => {
 });
 
 // Tests that require authentication would go here
-// Skipped because they require Auth0 configuration
+// Skipped because they require Clerk configuration
 test.describe.skip('Navigation - Authenticated', () => {
   test('should show navigation links when authenticated', async ({ page: _page }) => {
     // This test requires authentication setup

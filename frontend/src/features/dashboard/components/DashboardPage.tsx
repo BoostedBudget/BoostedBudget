@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo } from 'react'
-import { useAuth0 } from '@auth0/auth0-react'
+import { useAuth } from '@clerk/react-router'
 import { PlusIcon, PencilIcon, ArrowPathIcon, XMarkIcon } from '@heroicons/react/24/outline'
 import { DashboardProvider, useDashboardContext } from '../context/DashboardContext'
 import { useDashboardLayout } from '../hooks/useDashboardLayout'
@@ -29,14 +29,14 @@ import '../widgets'
  */
 
 function DashboardContent() {
-  const { getAccessTokenSilently } = useAuth0()
+  const { getToken } = useAuth()
   const { filters, setFilters, isEditing, setIsEditing } = useDashboardContext()
 
   // Issue #470: Pass getAccessToken for authenticated save on beforeunload
   const { layout, loading, error, saving, updateLayout, addWidget, removeWidget, resetToDefault, saveNow } = useDashboardLayout({
     getAccessToken: async () => {
       try {
-        return await getAccessTokenSilently()
+        return await getToken()
       } catch {
         return null
       }

@@ -1265,9 +1265,9 @@ components:
     HealthChecks:
       additionalProperties: false
       properties:
-        auth0:
+        clerk:
           $ref: "#/components/schemas/ServiceCheck"
-          description: Auth0 authentication service status
+          description: Clerk authentication service status
         database:
           $ref: "#/components/schemas/ServiceCheck"
           description: Database connection status
@@ -1277,7 +1277,7 @@ components:
       required:
         - database
         - redis
-        - auth0
+        - clerk
       type: object
     HealthResponse:
       additionalProperties: false
@@ -2478,7 +2478,7 @@ components:
           format: uri
           readOnly: true
           type: string
-        auth0_user_id:
+        clerk_user_id:
           type: string
         created_at:
           format: date-time
@@ -2521,7 +2521,7 @@ components:
           type: string
       required:
         - id
-        - auth0_user_id
+        - clerk_user_id
         - email
         - email_verified
         - subscription_tier
@@ -2607,9 +2607,9 @@ components:
         - h
       type: object
   securitySchemes:
-    auth0:
+    clerk:
       bearerFormat: JWT
-      description: Auth0 JWT Bearer token. Obtain from Auth0 after authentication.
+      description: Clerk JWT Bearer token. Obtain from Clerk after authentication.
       scheme: bearer
       type: http
 info:
@@ -2622,7 +2622,7 @@ info:
 
     ## Authentication
 
-    All protected endpoints require Auth0 JWT Bearer token in the Authorization header:
+    All protected endpoints require Clerk JWT Bearer token in the Authorization header:
     ```
     Authorization: Bearer <your-jwt-token>
     ```
@@ -2672,7 +2672,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get accounts
       tags:
         - Accounts
@@ -2700,7 +2700,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Reorder accounts
       tags:
         - Accounts
@@ -2726,7 +2726,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Delete account
       tags:
         - Accounts
@@ -2761,13 +2761,13 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Update account
       tags:
         - Accounts
   /api/v1/admin/plaid/fire-webhook:
     post:
-      description: Fires a Plaid webhook for testing in QA environment. Requires Auth0 authentication.
+      description: Fires a Plaid webhook for testing in QA environment. Requires Clerk authentication.
       operationId: fireWebhook
       requestBody:
         content:
@@ -2789,7 +2789,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Fire a Plaid webhook (QA only)
       tags:
         - Admin
@@ -2849,7 +2849,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get cash flow history
       tags:
         - Analytics
@@ -2902,7 +2902,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get cash flow summary
       tags:
         - Analytics
@@ -2928,7 +2928,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get user categorization rules
       tags:
         - Auto-Categorization
@@ -2955,7 +2955,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Create a new categorization rule
       tags:
         - Auto-Categorization
@@ -2981,7 +2981,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Delete a rule
       tags:
         - Auto-Categorization
@@ -3010,7 +3010,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get rule by ID
       tags:
         - Auto-Categorization
@@ -3045,7 +3045,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Update a rule
       tags:
         - Auto-Categorization
@@ -3081,7 +3081,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Toggle a rule
       tags:
         - Auto-Categorization
@@ -3107,7 +3107,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get budgets
       tags:
         - Budgets
@@ -3134,7 +3134,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Create budget
       tags:
         - Budgets
@@ -3160,7 +3160,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get available categories
       tags:
         - Budgets
@@ -3188,7 +3188,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Preview category matches
       tags:
         - Budget
@@ -3210,7 +3210,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get current budget
       tags:
         - Budgets
@@ -3236,7 +3236,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Delete budget
       tags:
         - Budgets
@@ -3265,7 +3265,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get budget
       tags:
         - Budgets
@@ -3300,7 +3300,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Update budget
       tags:
         - Budgets
@@ -3336,7 +3336,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Add budget category
       tags:
         - Budgets
@@ -3369,7 +3369,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Delete budget category
       tags:
         - Budgets
@@ -3411,7 +3411,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Update budget category
       tags:
         - Budgets
@@ -3469,7 +3469,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get category transactions
       tags:
         - Budgets
@@ -3499,7 +3499,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Sync budget
       tags:
         - Budgets
@@ -3525,7 +3525,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get user categories
       tags:
         - Categories
@@ -3552,7 +3552,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Create a new category
       tags:
         - Categories
@@ -3578,7 +3578,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get Plaid categories
       tags:
         - Categories
@@ -3604,7 +3604,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Delete a category
       tags:
         - Categories
@@ -3633,7 +3633,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get category by ID
       tags:
         - Categories
@@ -3668,7 +3668,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Update a category
       tags:
         - Categories
@@ -3690,7 +3690,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get account types
       tags:
         - Dashboard
@@ -3741,7 +3741,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get balance history
       tags:
         - Dashboard
@@ -3778,7 +3778,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get balance summary
       tags:
         - Dashboard
@@ -3820,7 +3820,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get dashboard preferences
       tags:
         - Dashboard
@@ -3847,7 +3847,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Save dashboard preferences
       tags:
         - Dashboard
@@ -3869,7 +3869,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Reset dashboard preferences
       tags:
         - Dashboard
@@ -3895,7 +3895,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Disconnect institution
       tags:
         - Accounts
@@ -3933,7 +3933,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get user notifications
       tags:
         - Notifications
@@ -3955,7 +3955,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get unread notification count
       tags:
         - Notifications
@@ -3985,7 +3985,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Mark notification as read
       tags:
         - Notifications
@@ -4013,7 +4013,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Exchange public token
       tags:
         - Plaid
@@ -4035,7 +4035,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Create Plaid link token
       tags:
         - Plaid
@@ -4061,7 +4061,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get user automation rules
       tags:
         - Automation Rules
@@ -4088,7 +4088,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Create a new automation rule
       tags:
         - Automation Rules
@@ -4114,7 +4114,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Delete an automation rule
       tags:
         - Automation Rules
@@ -4143,7 +4143,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get automation rule by ID
       tags:
         - Automation Rules
@@ -4178,7 +4178,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Update an automation rule
       tags:
         - Automation Rules
@@ -4208,7 +4208,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Disable automation rule
       tags:
         - Automation Rules
@@ -4238,7 +4238,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Enable automation rule
       tags:
         - Automation Rules
@@ -4296,7 +4296,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get rule execution history
       tags:
         - Automation Rules
@@ -4332,7 +4332,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Test automation rule
       tags:
         - Automation Rules
@@ -4368,7 +4368,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Toggle an automation rule
       tags:
         - Automation Rules
@@ -4404,7 +4404,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Manually trigger an automation rule
       tags:
         - Automation Rules
@@ -4430,7 +4430,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get savings goals
       tags:
         - Savings Goals
@@ -4457,7 +4457,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Create savings goal
       tags:
         - Savings Goals
@@ -4483,7 +4483,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get active savings goals
       tags:
         - Savings Goals
@@ -4509,7 +4509,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Delete savings goal
       tags:
         - Savings Goals
@@ -4538,7 +4538,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get savings goal
       tags:
         - Savings Goals
@@ -4573,7 +4573,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Update savings goal
       tags:
         - Savings Goals
@@ -4619,7 +4619,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get sync statistics
       tags:
         - Sync
@@ -4645,7 +4645,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get user tags
       tags:
         - Tags
@@ -4672,7 +4672,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Create a new tag
       tags:
         - Tags
@@ -4698,7 +4698,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Delete a tag
       tags:
         - Tags
@@ -4727,7 +4727,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get tag by ID
       tags:
         - Tags
@@ -4762,7 +4762,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Update a tag
       tags:
         - Tags
@@ -4887,7 +4887,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: List transactions
       tags:
         - Transactions
@@ -4917,7 +4917,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get transaction by ID
       tags:
         - Transactions
@@ -4953,7 +4953,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Update transaction category
       tags:
         - Transactions
@@ -4989,7 +4989,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Update transaction tags
       tags:
         - Transactions
@@ -5011,7 +5011,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Request account deletion
       tags:
         - User
@@ -5061,7 +5061,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get privacy settings
       tags:
         - Privacy
@@ -5088,7 +5088,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Update privacy settings
       tags:
         - Privacy
@@ -5110,7 +5110,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Get user profile
       tags:
         - Profile
@@ -5137,13 +5137,13 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       security:
-        - auth0: []
+        - clerk: []
       summary: Update user profile
       tags:
         - Profile
   /health:
     get:
-      description: Returns the health status of the API and its dependencies (database, Redis, Auth0).
+      description: Returns the health status of the API and its dependencies (database, Redis, Clerk).
       operationId: getHealth
       responses:
         "200":

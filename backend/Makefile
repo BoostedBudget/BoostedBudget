@@ -101,8 +101,7 @@ docker-build: ## Build Docker image
 docker-run: ## Run Docker container locally
 	docker run -p 8080:8080 \
 		-e DATABASE_URL \
-		-e AUTH0_DOMAIN \
-		-e AUTH0_AUDIENCE \
+		-e CLERK_SECRET_KEY \
 		boostedbudget-backend:latest
 
 .PHONY: clean

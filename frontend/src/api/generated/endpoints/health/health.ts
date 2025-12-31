@@ -6,7 +6,7 @@
 
 ## Authentication
 
-All protected endpoints require Auth0 JWT Bearer token in the Authorization header:
+All protected endpoints require Clerk JWT Bearer token in the Authorization header:
 ```
 Authorization: Bearer <your-jwt-token>
 ```
@@ -47,7 +47,7 @@ import type { ErrorType } from "../../../client";
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 /**
- * Returns the health status of the API and its dependencies (database, Redis, Auth0).
+ * Returns the health status of the API and its dependencies (database, Redis, Clerk).
  * @summary Health check
  */
 export const getHealth = (

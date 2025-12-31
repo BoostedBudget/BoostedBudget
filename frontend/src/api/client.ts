@@ -39,7 +39,7 @@ let getAccessToken: GetTokenFunction | null = null
 
 /**
  * Configure the auth token provider.
- * Call this from AuthWrapper after Auth0 is initialized.
+ * Called from main.tsx after Clerk is initialized.
  */
 export const setAuthTokenProvider = (provider: GetTokenFunction) => {
   getAccessToken = provider
@@ -54,13 +54,10 @@ export const customInstance = async <T>(
   config: AxiosRequestConfig,
   options?: AxiosRequestConfig
 ): Promise<T> => {
-  const source = Axios.CancelToken.source()
-
   // Merge configs
   const mergedConfig: AxiosRequestConfig = {
     ...config,
     ...options,
-    cancelToken: source.token,
   }
 
   // Inject auth token if provider is configured

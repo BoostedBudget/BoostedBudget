@@ -355,10 +355,10 @@ test_data_integrity() {
     # Insert test users
     psql "$DATABASE_URL" > /dev/null 2>&1 <<EOF
 -- Free tier user
-INSERT INTO users (id, auth0_user_id, email, primary_region, tier, created_at, updated_at)
+INSERT INTO users (id, clerk_user_id, email, primary_region, tier, created_at, updated_at)
 VALUES (
     '00000000-0000-0000-0000-000000000001'::uuid,
-    'auth0|test-free-user',
+    'user_test_free',
     'free@test.com',
     'us-east-1',
     'free',
@@ -367,10 +367,10 @@ VALUES (
 );
 
 -- Premium user
-INSERT INTO users (id, auth0_user_id, email, primary_region, tier, created_at, updated_at)
+INSERT INTO users (id, clerk_user_id, email, primary_region, tier, created_at, updated_at)
 VALUES (
     '00000000-0000-0000-0000-000000000002'::uuid,
-    'auth0|test-premium-user',
+    'user_test_premium',
     'premium@test.com',
     'us-east-1',
     'premium',
@@ -379,10 +379,10 @@ VALUES (
 );
 
 -- Premium Plus user
-INSERT INTO users (id, auth0_user_id, email, primary_region, tier, created_at, updated_at)
+INSERT INTO users (id, clerk_user_id, email, primary_region, tier, created_at, updated_at)
 VALUES (
     '00000000-0000-0000-0000-000000000003'::uuid,
-    'auth0|test-premium-plus-user',
+    'user_test_premium_plus',
     'premium-plus@test.com',
     'us-east-1',
     'premium_plus',

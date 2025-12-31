@@ -34,7 +34,7 @@ vi.mock('sonner', () => ({
 describe('ProfileForm', () => {
   const mockUser: User = {
     id: 'user-123',
-    auth0_user_id: 'auth0|123',
+    clerk_user_id: 'user_123',
     email: 'test@example.com',
     email_verified: true,
     primary_region: 'iad',

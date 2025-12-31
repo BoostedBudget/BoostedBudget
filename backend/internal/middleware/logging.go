@@ -80,7 +80,7 @@ func (l *StructuredLogger) log(level, message string, fields map[string]interfac
 // - status: HTTP status code
 // - duration_ms: Request duration in milliseconds
 // - request_id: Unique request identifier (if set by RequestID middleware)
-// - user_id: Authenticated user ID (if set by Auth0 middleware)
+// - user_id: Authenticated user ID (if set by Clerk middleware)
 // - remote_ip: Client IP address
 // - user_agent: Client user agent
 // - query: Query parameters (if present)

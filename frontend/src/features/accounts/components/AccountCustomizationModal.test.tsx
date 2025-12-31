@@ -78,7 +78,7 @@ describe('AccountCustomizationModal', () => {
   const mockAccount: Account = {
     id: '550e8400-e29b-41d4-a716-446655440000',
     linked_item_id: '770e9511-f3ac-52e5-b827-557766551112',
-    user_id: 'auth0|507f1f77bcf86cd799439011',
+    user_id: 'user_507f1f77bcf86cd799439011',
     plaid_account_id: 'plaid-acc-1',
     name: 'Chase Checking',
     official_name: 'Chase Total Checking',

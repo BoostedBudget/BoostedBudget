@@ -12,7 +12,7 @@ test.describe('Cookie Consent Banner', () => {
   });
 
   test('should display cookie consent banner on first visit', async ({ page }) => {
-    // Navigate to the homepage
+    // Navigate to the homepage (no auth needed - cookie banner is public)
     await page.goto('/');
 
     // Wait for the page to load

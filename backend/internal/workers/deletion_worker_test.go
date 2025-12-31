@@ -53,8 +53,8 @@ func (m *MockProfileRepoForWorker) GetUserByID(ctx context.Context, userID strin
 	return args.Get(0).(*domain.User), args.Error(1)
 }
 
-func (m *MockProfileRepoForWorker) GetUserByAuth0ID(ctx context.Context, auth0UserID string) (*domain.User, error) {
-	args := m.Called(ctx, auth0UserID)
+func (m *MockProfileRepoForWorker) GetUserByClerkID(ctx context.Context, clerkUserID string) (*domain.User, error) {
+	args := m.Called(ctx, clerkUserID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -76,8 +76,8 @@ func (m *MockProfileRepoForWorker) UpdateUser(ctx context.Context, user *domain.
 	return args.Error(0)
 }
 
-func (m *MockProfileRepoForWorker) UpdateLastLogin(ctx context.Context, auth0UserID string) error {
-	args := m.Called(ctx, auth0UserID)
+func (m *MockProfileRepoForWorker) UpdateLastLogin(ctx context.Context, clerkUserID string) error {
+	args := m.Called(ctx, clerkUserID)
 	return args.Error(0)
 }
 

@@ -53,7 +53,7 @@ type PlaidService interface {
 	//
 	// Parameters:
 	//   - ctx: Context for cancellation and timeout
-	//   - userID: The user's ID (Auth0 ID)
+	//   - userID: The user's ID (Clerk ID)
 	//   - accessToken: The Plaid access token for the Item to update (must be decrypted)
 	//
 	// Returns the link token response containing the link token for update mode.
@@ -182,7 +182,7 @@ func (s *plaidService) GetClient() *plaid.APIClient {
 //
 // The link token is a short-lived (30 minute) credential that enables the frontend
 // to initialize Plaid Link for connecting bank accounts. Configured with:
-//   - User identification (client_user_id from Auth0)
+//   - User identification (client_user_id from Clerk)
 //   - Products: TRANSACTIONS only (account data + transaction history)
 //   - OAuth redirect URI for institutions like Chase, Capital One, Wells Fargo
 //   - Country codes (US) and language (English)
@@ -280,7 +280,7 @@ func (s *plaidService) CreateLinkToken(ctx context.Context, userID string) (*dom
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout control
-//   - userID: The user's ID (Auth0 ID) for identifying the user in Plaid
+//   - userID: The user's ID (Clerk ID) for identifying the user in Plaid
 //   - accessToken: The Plaid access token for the Item (must be decrypted)
 //
 // Returns the link token response for update mode, or error if validation fails or Plaid API fails.
@@ -305,7 +305,7 @@ func (s *plaidService) CreateUpdateModeLinkToken(ctx context.Context, userID str
 		"BoostedBudget",       // client_name: Displayed in Plaid Link
 		"en",                  // language: English
 		[]plaid.CountryCode{plaid.COUNTRYCODE_US}, // country_codes: USA only (MVP)
-		*plaid.NewLinkTokenCreateRequestUser(userID), // user: Auth0 user ID
+		*plaid.NewLinkTokenCreateRequestUser(userID), // user: Clerk user ID
 	)
 
 	// CRITICAL: Set access token to enable update mode

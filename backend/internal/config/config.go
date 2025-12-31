@@ -23,11 +23,9 @@ type Config struct {
 	// RabbitMQ
 	RabbitMQURL string
 
-	// Auth0
-	Auth0Domain   string
-	Auth0Audience string
-	Auth0ClientID string
-	Auth0ClientSecret string
+	// Clerk
+	ClerkSecretKey      string
+	ClerkPublishableKey string
 
 	// Plaid
 	PlaidClientID    string
@@ -54,10 +52,6 @@ type Config struct {
 	DeletionWorkerInterval  string
 	DeletionTokenSecret     string
 
-	// Auth0 Management API (M2M)
-	Auth0ManagementClientID     string
-	Auth0ManagementClientSecret string
-
 	// Frontend URL (for cancellation links)
 	FrontendURL string
 }
@@ -81,11 +75,9 @@ func Load() (*Config, error) {
 		// RabbitMQ
 		RabbitMQURL: getEnv("RABBITMQ_URL", "amqp://localhost:5672/"),
 
-		// Auth0
-		Auth0Domain:   getEnv("AUTH0_DOMAIN", ""),
-		Auth0Audience: getEnv("AUTH0_AUDIENCE", ""),
-		Auth0ClientID: getEnv("AUTH0_CLIENT_ID", ""),
-		Auth0ClientSecret: getEnv("AUTH0_CLIENT_SECRET", ""),
+		// Clerk
+		ClerkSecretKey:      getEnv("CLERK_SECRET_KEY", ""),
+		ClerkPublishableKey: getEnv("CLERK_PUBLISHABLE_KEY", ""),
 
 		// Plaid
 		PlaidClientID:    getEnv("PLAID_CLIENT_ID", ""),
@@ -112,10 +104,6 @@ func Load() (*Config, error) {
 		DeletionWorkerInterval:  getEnv("DELETION_WORKER_INTERVAL", "1h"),
 		DeletionTokenSecret:     getEnv("DELETION_TOKEN_SECRET", ""),
 
-		// Auth0 Management API (M2M)
-		Auth0ManagementClientID:     getEnv("AUTH0_MANAGEMENT_CLIENT_ID", ""),
-		Auth0ManagementClientSecret: getEnv("AUTH0_MANAGEMENT_CLIENT_SECRET", ""),
-
 		// Frontend URL
 		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
 	}
@@ -135,11 +123,8 @@ func (c *Config) validate() error {
 	if c.DatabaseURL == "" {
 		return fmt.Errorf("DATABASE_URL is required")
 	}
-	if c.Auth0Domain == "" {
-		return fmt.Errorf("AUTH0_DOMAIN is required")
-	}
-	if c.Auth0Audience == "" {
-		return fmt.Errorf("AUTH0_AUDIENCE is required")
+	if c.ClerkSecretKey == "" {
+		return fmt.Errorf("CLERK_SECRET_KEY is required")
 	}
 	return nil
 }

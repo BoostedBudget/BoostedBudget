@@ -222,7 +222,7 @@ func (h *PlaidHandler) ReorderAccounts(ctx context.Context, input *ReorderAccoun
 }
 
 // RegisterPlaidRoutes registers Plaid routes with the Huma API.
-// Note: These routes require the Auth0 middleware to be applied.
+// Note: These routes require the Clerk middleware to be applied.
 func RegisterPlaidRoutes(api huma.API, handler *PlaidHandler) {
 	// POST /api/v1/plaid/link-token - Create link token
 	huma.Register(api, huma.Operation{
@@ -232,7 +232,7 @@ func RegisterPlaidRoutes(api huma.API, handler *PlaidHandler) {
 		Summary:     "Create Plaid link token",
 		Description: "Generates a Plaid Link token for initiating bank account connection flow.",
 		Tags:        []string{"Plaid"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.CreateLinkToken)
 
 	// POST /api/v1/plaid/exchange-token - Exchange public token
@@ -243,7 +243,7 @@ func RegisterPlaidRoutes(api huma.API, handler *PlaidHandler) {
 		Summary:     "Exchange public token",
 		Description: "Exchanges a Plaid public token for an access token and links bank accounts.",
 		Tags:        []string{"Plaid"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.ExchangePublicToken)
 
 	// GET /api/v1/accounts - Get accounts
@@ -254,7 +254,7 @@ func RegisterPlaidRoutes(api huma.API, handler *PlaidHandler) {
 		Summary:     "Get accounts",
 		Description: "Retrieves all linked bank accounts for the authenticated user.",
 		Tags:        []string{"Accounts"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetAccounts)
 
 	// PATCH /api/v1/accounts/reorder - Reorder accounts (must be before :id route)
@@ -265,7 +265,7 @@ func RegisterPlaidRoutes(api huma.API, handler *PlaidHandler) {
 		Summary:     "Reorder accounts",
 		Description: "Bulk updates display_order for multiple accounts.",
 		Tags:        []string{"Accounts"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.ReorderAccounts)
 
 	// PATCH /api/v1/accounts/:id - Update account
@@ -276,7 +276,7 @@ func RegisterPlaidRoutes(api huma.API, handler *PlaidHandler) {
 		Summary:     "Update account",
 		Description: "Updates account customization fields.",
 		Tags:        []string{"Accounts"},
-		Security:    []map[string][]string{{"auth0": {}}},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.UpdateAccount)
 
 	// DELETE /api/v1/accounts/:id - Delete account
@@ -287,7 +287,7 @@ func RegisterPlaidRoutes(api huma.API, handler *PlaidHandler) {
 		Summary:       "Delete account",
 		Description:   "Deletes a single account with ownership validation.",
 		Tags:          []string{"Accounts"},
-		Security:      []map[string][]string{{"auth0": {}}},
+		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusNoContent,
 	}, handler.DeleteAccount)
 
@@ -299,7 +299,7 @@ func RegisterPlaidRoutes(api huma.API, handler *PlaidHandler) {
 		Summary:       "Disconnect institution",
 		Description:   "Disconnects an institution and all associated accounts.",
 		Tags:          []string{"Accounts"},
-		Security:      []map[string][]string{{"auth0": {}}},
+		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusNoContent,
 	}, handler.DisconnectInstitution)
 }

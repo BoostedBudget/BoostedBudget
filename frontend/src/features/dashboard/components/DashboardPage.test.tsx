@@ -19,6 +19,13 @@ import type {
   WidgetType,
 } from '../types'
 
+// Mock Clerk
+const mockUseAuth = vi.hoisted(() => vi.fn())
+
+vi.mock('@clerk/react-router', () => ({
+  useAuth: mockUseAuth,
+}))
+
 // Mock the useDashboardData hook
 vi.mock('../hooks/useDashboardData')
 
@@ -182,6 +189,12 @@ describe('DashboardPage', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    // Default mock for Clerk
+    mockUseAuth.mockReturnValue({
+      isSignedIn: true,
+      isLoaded: true,
+      getToken: vi.fn().mockResolvedValue('mock-token'),
+    })
     // Default mock for useDashboardLayout
     vi.mocked(useDashboardLayout).mockReturnValue(defaultLayoutMock)
     // Default mock for useDashboardOnboarding - hide hint by default

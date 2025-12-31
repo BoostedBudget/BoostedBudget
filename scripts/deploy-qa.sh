@@ -74,10 +74,7 @@ validate_environment() {
   # Critical variables that MUST be set
   local critical_vars=(
     "ENCRYPTION_KEY"
-    "AUTH0_DOMAIN"
-    "AUTH0_AUDIENCE"
-    "AUTH0_CLIENT_ID"
-    "AUTH0_CLIENT_SECRET"
+    "CLERK_SECRET_KEY"
     "PLAID_CLIENT_ID"
     "PLAID_SECRET"
     "POSTGRES_USER"

@@ -214,8 +214,8 @@ type MockUserRepository struct {
 	mock.Mock
 }
 
-func (m *MockUserRepository) GetUserByAuth0ID(ctx context.Context, auth0UserID string) (*domain.User, error) {
-	args := m.Called(ctx, auth0UserID)
+func (m *MockUserRepository) GetUserByClerkID(ctx context.Context, clerkUserID string) (*domain.User, error) {
+	args := m.Called(ctx, clerkUserID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -245,8 +245,8 @@ func (m *MockUserRepository) UpdateUser(ctx context.Context, user *domain.User) 
 	return args.Error(0)
 }
 
-func (m *MockUserRepository) UpdateLastLogin(ctx context.Context, auth0UserID string) error {
-	args := m.Called(ctx, auth0UserID)
+func (m *MockUserRepository) UpdateLastLogin(ctx context.Context, clerkUserID string) error {
+	args := m.Called(ctx, clerkUserID)
 	return args.Error(0)
 }
 
@@ -498,13 +498,13 @@ func TestAccountService_GetAccounts(t *testing.T) {
 
 	ctx := context.Background()
 	userID := uuid.New().String()
-	auth0UserID := "auth0|123456"
+	clerkUserID := "user_123456"
 
 	// Mock user lookup - now using GetUserByID with internal UUID
-	// NOTE: After PR #197, GetAccounts receives internal UUID, not Auth0 ID
+	// NOTE: After PR #197, GetAccounts receives internal UUID, not Clerk ID
 	user := &domain.User{
 		ID:          userID,
-		Auth0UserID: auth0UserID,
+		ClerkUserID: clerkUserID,
 	}
 	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
 
@@ -532,7 +532,7 @@ func TestAccountService_GetAccounts(t *testing.T) {
 
 	mockAccountRepo.On("GetAccountsWithInstitution", ctx, userID).Return(expectedAccounts, nil)
 
-	// Execute - pass internal UUID, not Auth0 ID
+	// Execute - pass internal UUID, not Clerk ID
 	accounts, err := service.GetAccounts(ctx, userID)
 
 	// Assert
@@ -566,20 +566,20 @@ func TestAccountService_GetAccounts_Empty(t *testing.T) {
 
 	ctx := context.Background()
 	userID := uuid.New().String()
-	auth0UserID := "auth0|empty-user"
+	clerkUserID := "user_empty-user"
 
 	// Mock user lookup - now using GetUserByID with internal UUID
-	// NOTE: After PR #197, GetAccounts receives internal UUID, not Auth0 ID
+	// NOTE: After PR #197, GetAccounts receives internal UUID, not Clerk ID
 	user := &domain.User{
 		ID:          userID,
-		Auth0UserID: auth0UserID,
+		ClerkUserID: clerkUserID,
 	}
 	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
 
 	// Mock empty result
 	mockAccountRepo.On("GetAccountsWithInstitution", ctx, userID).Return([]domain.Account{}, nil)
 
-	// Execute - pass internal UUID, not Auth0 ID
+	// Execute - pass internal UUID, not Clerk ID
 	accounts, err := service.GetAccounts(ctx, userID)
 
 	// Assert
@@ -591,8 +591,8 @@ func TestAccountService_GetAccounts_Empty(t *testing.T) {
 }
 
 // TestAccountService_GetAccounts_WithInternalUUID tests the production scenario
-// NOTE: After PR #197, GetAccounts is called with internal UUID (not Auth0 ID)
-// Handler extracts UUID from middleware context after Auth0 ID → UUID resolution
+// NOTE: After PR #197, GetAccounts is called with internal UUID (not Clerk ID)
+// Handler extracts UUID from middleware context after Clerk ID → UUID resolution
 func TestAccountService_GetAccounts_WithInternalUUID(t *testing.T) {
 	// Setup mocks
 	mockAccountRepo := new(MockAccountRepository)
@@ -616,12 +616,12 @@ func TestAccountService_GetAccounts_WithInternalUUID(t *testing.T) {
 
 	// Production scenario: Handler passes internal UUID from middleware context
 	userID := uuid.New().String()
-	auth0UserID := "auth0|507f1f77bcf86cd799439011"
+	clerkUserID := "user_507f1f77bcf86cd799439011"
 
 	// Mock user lookup by internal UUID
 	user := &domain.User{
 		ID:            userID,
-		Auth0UserID:   auth0UserID,
+		ClerkUserID:   clerkUserID,
 		Email:         "user@example.com",
 		PrimaryRegion: "us-east-1",
 	}

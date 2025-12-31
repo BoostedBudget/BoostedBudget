@@ -3,11 +3,15 @@ import { render, screen } from '@testing-library/react'
 import { BrowserRouter } from 'react-router-dom'
 import { Header } from './Header'
 
-// Mock Auth0
-const mockUseAuth0 = vi.hoisted(() => vi.fn())
+// Mock Clerk
+const mockUseAuth = vi.hoisted(() => vi.fn())
+const mockUseUser = vi.hoisted(() => vi.fn())
+const mockUseClerk = vi.hoisted(() => vi.fn())
 
-vi.mock('@auth0/auth0-react', () => ({
-  useAuth0: mockUseAuth0,
+vi.mock('@clerk/react-router', () => ({
+  useAuth: mockUseAuth,
+  useUser: mockUseUser,
+  useClerk: mockUseClerk,
 }))
 
 describe('Header', () => {
@@ -25,11 +29,15 @@ describe('Header', () => {
 
   describe('when not authenticated', () => {
     beforeEach(() => {
-      mockUseAuth0.mockReturnValue({
-        isAuthenticated: false,
+      mockUseAuth.mockReturnValue({
+        isSignedIn: false,
+      })
+      mockUseUser.mockReturnValue({
         user: null,
-        loginWithRedirect: vi.fn(),
-        logout: vi.fn(),
+      })
+      mockUseClerk.mockReturnValue({
+        openSignIn: vi.fn(),
+        signOut: vi.fn(),
       })
     })
 
@@ -66,18 +74,25 @@ describe('Header', () => {
   })
 
   describe('when authenticated', () => {
-    const mockUser = {
-      name: 'Test User',
-      email: 'test@example.com',
-      picture: 'https://example.com/avatar.jpg',
+    const mockClerkUser = {
+      id: 'user_123',
+      fullName: 'Test User',
+      primaryEmailAddress: {
+        emailAddress: 'test@example.com',
+      },
+      imageUrl: 'https://example.com/avatar.jpg',
     }
 
     beforeEach(() => {
-      mockUseAuth0.mockReturnValue({
-        isAuthenticated: true,
-        user: mockUser,
-        loginWithRedirect: vi.fn(),
-        logout: vi.fn(),
+      mockUseAuth.mockReturnValue({
+        isSignedIn: true,
+      })
+      mockUseUser.mockReturnValue({
+        user: mockClerkUser,
+      })
+      mockUseClerk.mockReturnValue({
+        openSignIn: vi.fn(),
+        signOut: vi.fn(),
       })
     })
 
@@ -114,11 +129,15 @@ describe('Header', () => {
 
   describe('styling', () => {
     beforeEach(() => {
-      mockUseAuth0.mockReturnValue({
-        isAuthenticated: false,
+      mockUseAuth.mockReturnValue({
+        isSignedIn: false,
+      })
+      mockUseUser.mockReturnValue({
         user: null,
-        loginWithRedirect: vi.fn(),
-        logout: vi.fn(),
+      })
+      mockUseClerk.mockReturnValue({
+        openSignIn: vi.fn(),
+        signOut: vi.fn(),
       })
     })
 
@@ -154,11 +173,15 @@ describe('Header', () => {
 
   describe('logo link', () => {
     it('links to dashboard when authenticated', () => {
-      mockUseAuth0.mockReturnValue({
-        isAuthenticated: true,
-        user: { name: 'Test' },
-        loginWithRedirect: vi.fn(),
-        logout: vi.fn(),
+      mockUseAuth.mockReturnValue({
+        isSignedIn: true,
+      })
+      mockUseUser.mockReturnValue({
+        user: { id: 'user_123', fullName: 'Test' },
+      })
+      mockUseClerk.mockReturnValue({
+        openSignIn: vi.fn(),
+        signOut: vi.fn(),
       })
 
       renderHeader()
@@ -168,11 +191,15 @@ describe('Header', () => {
     })
 
     it('links to home when not authenticated', () => {
-      mockUseAuth0.mockReturnValue({
-        isAuthenticated: false,
+      mockUseAuth.mockReturnValue({
+        isSignedIn: false,
+      })
+      mockUseUser.mockReturnValue({
         user: null,
-        loginWithRedirect: vi.fn(),
-        logout: vi.fn(),
+      })
+      mockUseClerk.mockReturnValue({
+        openSignIn: vi.fn(),
+        signOut: vi.fn(),
       })
 
       renderHeader()
@@ -184,11 +211,15 @@ describe('Header', () => {
 
   describe('accepts custom className', () => {
     it('applies custom className to header', () => {
-      mockUseAuth0.mockReturnValue({
-        isAuthenticated: false,
+      mockUseAuth.mockReturnValue({
+        isSignedIn: false,
+      })
+      mockUseUser.mockReturnValue({
         user: null,
-        loginWithRedirect: vi.fn(),
-        logout: vi.fn(),
+      })
+      mockUseClerk.mockReturnValue({
+        openSignIn: vi.fn(),
+        signOut: vi.fn(),
       })
 
       render(
