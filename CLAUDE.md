@@ -466,6 +466,30 @@ pnpm exec prism mock api/openapi.yaml
 pnpm run test:api
 ```
 
+**E2E Tests Locally**:
+```bash
+# 1. Create frontend/.env (if not exists)
+echo "VITE_CLERK_PUBLISHABLE_KEY=pk_test_..." > frontend/.env
+
+# 2. Temporarily disable HTTPS (if cert.pem exists)
+cd frontend && mv cert.pem cert.pem.bak && mv key.pem key.pem.bak
+
+# 3. Export Clerk credentials and run tests
+export CLERK_PUBLISHABLE_KEY=pk_test_...
+export CLERK_SECRET_KEY=sk_test_...
+bash scripts/run-e2e-with-ports.sh
+
+# 4. Restore HTTPS certificates
+mv cert.pem.bak cert.pem && mv key.pem.bak key.pem
+```
+
+**E2E Test Notes**:
+- Backend runs without DATABASE_URL (logs warning, skips authenticated routes)
+- E2E tests mock API responses via `page.route()` for non-auth tests
+- Dynamic ports (30000-30099, 35000-35099) avoid Docker conflicts
+- Tests marked `.skip` require real Clerk test user login
+- Local SSL certificates cause Vite to serve HTTPS; Playwright expects HTTP
+
 ## Common Tasks
 
 **New API endpoint**:
