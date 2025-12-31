@@ -210,7 +210,7 @@ test.describe('Dashboard - Protected Route', () => {
   test('should redirect unauthenticated users away from dashboard', async ({
     page,
   }) => {
-    await setupClerkTestingToken({ page })
+    // No Clerk auth token - this test verifies unauthenticated redirect behavior
     // Act - Navigate to dashboard without authentication
     await page.goto('/dashboard')
 
@@ -222,7 +222,7 @@ test.describe('Dashboard - Protected Route', () => {
   test('should show dashboard in navigation only when authenticated', async ({
     page,
   }) => {
-    await setupClerkTestingToken({ page })
+    // No Clerk auth token - this test verifies unauthenticated state
     // Arrange - Start unauthenticated
     await page.goto('/')
     await page.waitForLoadState('networkidle')
