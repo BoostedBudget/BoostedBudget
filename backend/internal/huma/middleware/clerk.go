@@ -11,6 +11,7 @@ import (
 	"github.com/clerk/clerk-sdk-go/v2"
 	"github.com/clerk/clerk-sdk-go/v2/jwt"
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/maxnussbaum/BoostedBudget/internal/auth"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
@@ -91,7 +92,7 @@ func NewClerkMiddleware(
 		if err != nil {
 			if err == repository.ErrIdentityNotFound {
 				// Auto-register new user
-				email := extractEmailFromClerkClaims(sessionClaims)
+				email := auth.ExtractEmailFromClaims(sessionClaims)
 				emailVerified := true // Clerk verifies emails
 
 				_, err = registrationService.RegisterUser(ctx.Context(), clerkUserID, email, emailVerified)
@@ -126,22 +127,4 @@ func NewClerkMiddleware(
 		// Continue with updated context
 		next(huma.WithContext(ctx, newCtx))
 	}
-}
-
-// extractEmailFromClerkClaims extracts email from Clerk session claims.
-func extractEmailFromClerkClaims(claims *clerk.SessionClaims) string {
-	if claims.Custom == nil {
-		return ""
-	}
-
-	customClaims, ok := claims.Custom.(map[string]interface{})
-	if !ok {
-		return ""
-	}
-
-	if email, ok := customClaims["email"].(string); ok {
-		return email
-	}
-
-	return ""
 }

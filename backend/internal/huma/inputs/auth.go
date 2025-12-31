@@ -4,6 +4,7 @@ package inputs
 import (
 	"github.com/clerk/clerk-sdk-go/v2"
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/maxnussbaum/BoostedBudget/internal/auth"
 )
 
 // ContextKey is a custom type for context keys to avoid collisions.
@@ -74,30 +75,12 @@ func (a *AuthenticatedWithEmailInput) Resolve(ctx huma.Context) []error {
 	}
 
 	// Extract email from custom claims (set via JWT template in Clerk)
-	email := extractEmailFromClerkClaims(claims)
+	email := auth.ExtractEmailFromClaims(claims)
 	if email == "" {
 		return []error{huma.Error401Unauthorized("Email not found in token")}
 	}
 	a.Email = email
 	return nil
-}
-
-// extractEmailFromClerkClaims extracts email from Clerk session claims custom field.
-func extractEmailFromClerkClaims(claims *clerk.SessionClaims) string {
-	if claims.Custom == nil {
-		return ""
-	}
-
-	customClaims, ok := claims.Custom.(map[string]interface{})
-	if !ok {
-		return ""
-	}
-
-	if email, ok := customClaims["email"].(string); ok {
-		return email
-	}
-
-	return ""
 }
 
 // Ensure AuthenticatedWithEmailInput implements huma.Resolver at compile time.

@@ -71,17 +71,17 @@ const InitializeAuth = () => {
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <ErrorBoundary>
-      <QueryClientProvider client={queryClient}>
-        <ClerkProvider publishableKey={clerkPublishableKey}>
-          <Provider store={store}>
-            <BrowserRouter>
-              <InitializeAuth />
+    <ClerkProvider publishableKey={clerkPublishableKey}>
+      <ErrorBoundary>
+        <Provider store={store}>
+          <BrowserRouter>
+            <InitializeAuth />
+            <QueryClientProvider client={queryClient}>
               <App />
-            </BrowserRouter>
-          </Provider>
-        </ClerkProvider>
-      </QueryClientProvider>
-    </ErrorBoundary>
+            </QueryClientProvider>
+          </BrowserRouter>
+        </Provider>
+      </ErrorBoundary>
+    </ClerkProvider>
   </React.StrictMode>,
 )
