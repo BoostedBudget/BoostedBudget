@@ -16,6 +16,6 @@ setup.describe.configure({ mode: 'serial' })
  * - CLERK_PUBLISHABLE_KEY: Your Clerk publishable key
  * - CLERK_SECRET_KEY: Your Clerk secret key (for obtaining testing tokens)
  */
-setup('global clerk setup', async ({}) => {
+setup('global clerk setup', async () => {
   await clerkSetup()
 })
