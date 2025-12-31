@@ -1,5 +1,4 @@
 import { test, expect } from '@playwright/test'
-import { setupClerkTestingToken } from '@clerk/testing/playwright'
 
 /**
  * Account Deletion E2E Tests
@@ -28,8 +27,7 @@ test.describe('Account Deletion Flow', () => {
   // ============================================================================
 
   test('should show invalid link message when accessing cancellation page without token', async ({ page }) => {
-    await setupClerkTestingToken({ page });
-    // Navigate directly to cancel-deletion page without token
+    // No Clerk auth token - cancellation pages are public endpoints
     await page.goto('/cancel-deletion/')
     await page.waitForLoadState('networkidle')
 
@@ -42,7 +40,6 @@ test.describe('Account Deletion Flow', () => {
   })
 
   test('should display processing state on cancellation page load', async ({ page }) => {
-    await setupClerkTestingToken({ page });
     // Mock token for testing UI (backend will handle validation)
     const mockToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0In0.test'
 
@@ -57,7 +54,6 @@ test.describe('Account Deletion Flow', () => {
   })
 
   test('should show error state for invalid cancellation token', async ({ page }) => {
-    await setupClerkTestingToken({ page });
     const invalidToken = 'invalid-token-format'
 
     // Route API call to return 400 error
@@ -89,7 +85,6 @@ test.describe('Account Deletion Flow', () => {
   })
 
   test('should show success state for valid cancellation token', async ({ page }) => {
-    await setupClerkTestingToken({ page });
     const validToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0LXVzZXIifQ.valid-signature'
 
     // Mock successful cancellation
@@ -121,7 +116,6 @@ test.describe('Account Deletion Flow', () => {
   })
 
   test('should navigate to profile when "Go to Profile" clicked after successful cancellation', async ({ page }) => {
-    await setupClerkTestingToken({ page });
     const validToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0In0.sig'
 
     // Mock successful cancellation

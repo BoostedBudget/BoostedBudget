@@ -1,5 +1,4 @@
 import { test, expect } from '@playwright/test';
-import { setupClerkTestingToken } from '@clerk/testing/playwright';
 import { acceptCookieConsent } from './helpers/auth';
 
 /**
@@ -14,7 +13,7 @@ import { acceptCookieConsent } from './helpers/auth';
 
 test.describe('Navigation - Unauthenticated', () => {
   test.beforeEach(async ({ page }) => {
-    await setupClerkTestingToken({ page });
+    // No Clerk auth token - these tests verify unauthenticated behavior
     await page.goto('/');
     await acceptCookieConsent(page);
   });

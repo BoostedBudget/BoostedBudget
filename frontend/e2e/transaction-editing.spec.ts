@@ -264,7 +264,7 @@ test.describe('Transaction Editing - Protected Route', () => {
   test('should redirect unauthenticated users away from transactions page', async ({
     page,
   }) => {
-    await setupClerkTestingToken({ page })
+    // No Clerk auth token - this test verifies unauthenticated redirect behavior
     await page.goto('/transactions')
 
     // Wait for redirect to complete (to home page)
