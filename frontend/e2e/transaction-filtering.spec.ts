@@ -12,6 +12,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test'
+import { setupClerkTestingToken } from '@clerk/testing/playwright'
 import { loginWithClerk, acceptCookieConsent } from './helpers/auth'
 
 // Mock data for transactions
@@ -287,6 +288,7 @@ test.describe('Transaction Filtering - Protected Route', () => {
   test('should redirect unauthenticated users away from transactions page', async ({
     page,
   }) => {
+    await setupClerkTestingToken({ page })
     await page.goto('/transactions')
     await expect(page).not.toHaveURL(/\/transactions/, { timeout: 10000 })
   })
@@ -304,6 +306,8 @@ const describeTransactionFiltering = skipClerkTests
 describeTransactionFiltering('Transaction Filtering - Authenticated User', () => {
   test.beforeEach(async ({ page, context }) => {
     await context.clearCookies()
+
+    await setupClerkTestingToken({ page })
 
     const credentials = {
       email: process.env.TEST_CLERK_EMAIL || '',

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { setupClerkTestingToken } from '@clerk/testing/playwright';
 import { acceptCookieConsent } from './helpers/auth';
 
 /**
@@ -32,6 +33,7 @@ describeClerk('Clerk Authentication', () => {
 
   test.describe('Unauthenticated User', () => {
     test('should show Log In button when not authenticated', async ({ page }) => {
+      await setupClerkTestingToken({ page });
       await page.goto('/');
       await acceptCookieConsent(page);
 
@@ -41,6 +43,7 @@ describeClerk('Clerk Authentication', () => {
     });
 
     test('should not show Log Out button when not authenticated', async ({ page }) => {
+      await setupClerkTestingToken({ page });
       await page.goto('/');
       await acceptCookieConsent(page);
 
@@ -50,6 +53,7 @@ describeClerk('Clerk Authentication', () => {
     });
 
     test('should redirect to login when accessing protected route', async ({ page }) => {
+      await setupClerkTestingToken({ page });
       // Try to access a protected route (e.g., /dashboard, /profile)
       await page.goto('/dashboard');
 
@@ -69,6 +73,7 @@ describeClerk('Clerk Authentication', () => {
 
   test.describe('Login Flow', () => {
     test('should open Clerk sign-in when clicking Log In', async ({ page }) => {
+      await setupClerkTestingToken({ page });
       await page.goto('/');
       await acceptCookieConsent(page);
 
@@ -91,6 +96,7 @@ describeClerk('Clerk Authentication', () => {
        * 2. Set TEST_CLERK_EMAIL and TEST_CLERK_PASSWORD environment variables
        * 3. Remove test.skip
        */
+      await setupClerkTestingToken({ page });
       await page.goto('/');
       await acceptCookieConsent(page);
 
@@ -123,6 +129,7 @@ describeClerk('Clerk Authentication', () => {
        * NOTE: This test verifies Clerk shows an error for invalid credentials
        * It won't actually log in, just verify error handling
        */
+      await setupClerkTestingToken({ page });
       await page.goto('/');
       await acceptCookieConsent(page);
 
@@ -148,6 +155,7 @@ describeClerk('Clerk Authentication', () => {
 
   test.describe('Signup Flow', () => {
     test('should have signup option on Clerk login page', async ({ page }) => {
+      await setupClerkTestingToken({ page });
       await page.goto('/');
       await acceptCookieConsent(page);
 

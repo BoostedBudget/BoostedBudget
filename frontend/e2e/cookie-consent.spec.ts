@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { setupClerkTestingToken } from '@clerk/testing/playwright';
 
 /**
  * GDPR Cookie Consent Banner E2E Tests
@@ -12,6 +13,7 @@ test.describe('Cookie Consent Banner', () => {
   });
 
   test('should display cookie consent banner on first visit', async ({ page }) => {
+    await setupClerkTestingToken({ page });
     // Navigate to the homepage
     await page.goto('/');
 
@@ -30,6 +32,7 @@ test.describe('Cookie Consent Banner', () => {
   });
 
   test('should have Accept All, Necessary Only, and Customize buttons', async ({ page }) => {
+    await setupClerkTestingToken({ page });
     await page.goto('/');
     await page.waitForLoadState('networkidle');
 
@@ -40,6 +43,7 @@ test.describe('Cookie Consent Banner', () => {
   });
 
   test('should hide banner after clicking Accept All', async ({ page }) => {
+    await setupClerkTestingToken({ page });
     await page.goto('/');
     await page.waitForLoadState('networkidle');
 
@@ -55,6 +59,7 @@ test.describe('Cookie Consent Banner', () => {
   });
 
   test('should hide banner after clicking Necessary Only', async ({ page }) => {
+    await setupClerkTestingToken({ page });
     await page.goto('/');
     await page.waitForLoadState('networkidle');
 
@@ -70,6 +75,7 @@ test.describe('Cookie Consent Banner', () => {
   });
 
   test('should show detailed preferences when clicking Customize', async ({ page }) => {
+    await setupClerkTestingToken({ page });
     await page.goto('/');
     await page.waitForLoadState('networkidle');
 
@@ -89,6 +95,7 @@ test.describe('Cookie Consent Banner', () => {
   });
 
   test('should have necessary cookies checkbox checked and disabled', async ({ page }) => {
+    await setupClerkTestingToken({ page });
     await page.goto('/');
     await page.waitForLoadState('networkidle');
 
@@ -103,6 +110,7 @@ test.describe('Cookie Consent Banner', () => {
   });
 
   test('should allow toggling analytics and advertising cookies', async ({ page }) => {
+    await setupClerkTestingToken({ page });
     await page.goto('/');
     await page.waitForLoadState('networkidle');
 
@@ -136,6 +144,7 @@ test.describe('Cookie Consent Banner', () => {
   });
 
   test('should save custom preferences and hide banner', async ({ page }) => {
+    await setupClerkTestingToken({ page });
     await page.goto('/');
     await page.waitForLoadState('networkidle');
 
@@ -158,6 +167,7 @@ test.describe('Cookie Consent Banner', () => {
   });
 
   test('should not show banner on subsequent visit after accepting', async ({ page, context: _context }) => {
+    await setupClerkTestingToken({ page });
     // First visit - accept cookies
     await page.goto('/');
     await page.waitForLoadState('networkidle');
@@ -175,6 +185,7 @@ test.describe('Cookie Consent Banner', () => {
   });
 
   test('should have links to Privacy and Cookie policies', async ({ page }) => {
+    await setupClerkTestingToken({ page });
     await page.goto('/');
     await page.waitForLoadState('networkidle');
 
@@ -190,6 +201,7 @@ test.describe('Cookie Consent Banner', () => {
   });
 
   test('should have proper ARIA labels for accessibility', async ({ page }) => {
+    await setupClerkTestingToken({ page });
     await page.goto('/');
     await page.waitForLoadState('networkidle');
 
