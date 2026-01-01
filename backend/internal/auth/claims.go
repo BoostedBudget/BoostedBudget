@@ -4,7 +4,6 @@ package auth
 import (
 	"context"
 	"fmt"
-	"log"
 
 	"github.com/clerk/clerk-sdk-go/v2"
 	"github.com/clerk/clerk-sdk-go/v2/user"
@@ -50,34 +49,22 @@ func CustomClaimsConstructor(_ context.Context) any {
 //   - *CustomClaims (production with CustomClaimsConstructor)
 //   - map[string]interface{} (tests, legacy)
 func ExtractEmailFromClaims(claims *clerk.SessionClaims) string {
-	if claims == nil {
-		log.Printf("[ClerkAuth] ExtractEmailFromClaims: claims is nil")
+	if claims == nil || claims.Custom == nil {
 		return ""
 	}
-
-	if claims.Custom == nil {
-		log.Printf("[ClerkAuth] ExtractEmailFromClaims: claims.Custom is nil (Subject: %s)", claims.Subject)
-		return ""
-	}
-
-	// Log the actual type we received
-	log.Printf("[ClerkAuth] ExtractEmailFromClaims: claims.Custom type is %T", claims.Custom)
 
 	// Try typed CustomClaims first (production with CustomClaimsConstructor)
 	if customClaims, ok := claims.Custom.(*CustomClaims); ok {
-		log.Printf("[ClerkAuth] ExtractEmailFromClaims: Got *CustomClaims, email=%q", customClaims.Email)
 		return customClaims.Email
 	}
 
 	// Fallback: handle map[string]interface{} (tests, legacy)
 	if customClaims, ok := claims.Custom.(map[string]interface{}); ok {
-		log.Printf("[ClerkAuth] ExtractEmailFromClaims: Got map[string]interface{}, contents=%v", customClaims)
 		if email, ok := customClaims["email"].(string); ok && email != "" {
 			return email
 		}
 	}
 
-	log.Printf("[ClerkAuth] ExtractEmailFromClaims: No email found, claims.Custom=%+v", claims.Custom)
 	return ""
 }
 
@@ -159,7 +146,6 @@ func FetchEmailFromClerkAPI(ctx context.Context, clerkUserID string) (string, er
 	if clerkUser.PrimaryEmailAddressID != nil && len(clerkUser.EmailAddresses) > 0 {
 		for _, ea := range clerkUser.EmailAddresses {
 			if ea.ID == *clerkUser.PrimaryEmailAddressID {
-				log.Printf("[ClerkAuth] Found primary email for user %s: %s", clerkUserID, ea.EmailAddress)
 				return ea.EmailAddress, nil
 			}
 		}
@@ -167,9 +153,7 @@ func FetchEmailFromClerkAPI(ctx context.Context, clerkUserID string) (string, er
 
 	// Fallback: use first email if no primary set
 	if len(clerkUser.EmailAddresses) > 0 {
-		email := clerkUser.EmailAddresses[0].EmailAddress
-		log.Printf("[ClerkAuth] Using first email for user %s (no primary set): %s", clerkUserID, email)
-		return email, nil
+		return clerkUser.EmailAddresses[0].EmailAddress, nil
 	}
 
 	return "", fmt.Errorf("no email address found for user %s", clerkUserID)
