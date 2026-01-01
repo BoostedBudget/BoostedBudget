@@ -84,9 +84,10 @@ export default defineConfig({
   // Comment this out if you want to run tests against already running servers
   webServer: [
     {
-      // Pass PORT and E2E_BACKEND_PORT env vars to Vite for dynamic port allocation
+      // Pass PORT, E2E_BACKEND_PORT, and VITE_CLERK_PUBLISHABLE_KEY env vars to Vite
       // E2E_BACKEND_PORT is needed for the Vite proxy configuration
-      command: `PORT=${frontendPort} E2E_BACKEND_PORT=${backendPort} pnpm run dev`,
+      // VITE_CLERK_PUBLISHABLE_KEY enables Clerk authentication (Vite only exposes VITE_* vars)
+      command: `PORT=${frontendPort} E2E_BACKEND_PORT=${backendPort} VITE_CLERK_PUBLISHABLE_KEY=${process.env.CLERK_PUBLISHABLE_KEY || ''} pnpm run dev`,
       url: `http://localhost:${frontendPort}`,
       reuseExistingServer: !process.env.CI,
       timeout: 120 * 1000,
