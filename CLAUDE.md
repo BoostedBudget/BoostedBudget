@@ -481,12 +481,18 @@ bash scripts/run-e2e-with-ports.sh
 
 # 4. Restore HTTPS certificates
 mv cert.pem.bak cert.pem && mv key.pem.bak key.pem
+
+# Alternative: Run without database (if Docker not available)
+E2E_SKIP_POSTGRES=true bash scripts/run-e2e-with-ports.sh
 ```
 
 **E2E Test Notes**:
-- Backend runs without DATABASE_URL (logs warning, skips authenticated routes)
+- **With Docker**: Script auto-starts PostgreSQL container, runs migrations, passes DATABASE_URL to backend
+- **Without Docker**: Backend runs in degraded mode (use `E2E_SKIP_POSTGRES=true` to skip explicitly)
+- **Backend auto-build**: Script builds `backend/bin/server` if missing
+- **Requires Atlas CLI**: Install via `brew install ariga/tap/atlas` (macOS) or https://atlasgo.io
 - E2E tests mock API responses via `page.route()` for non-auth tests
-- Dynamic ports (30000-30099, 35000-35099) avoid Docker conflicts
+- Dynamic ports (30000-34900 frontend, 35000-39900 backend, 40000-44900 postgres) avoid conflicts
 - Tests marked `.skip` require real Clerk test user login
 - Local SSL certificates cause Vite to serve HTTPS; Playwright expects HTTP
 

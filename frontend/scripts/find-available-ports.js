@@ -7,8 +7,9 @@
  *   node scripts/find-available-ports.js
  *
  * Sets:
- *   E2E_FRONTEND_PORT - Dynamic port for Vite dev server
- *   E2E_BACKEND_PORT  - Dynamic port for backend server
+ *   E2E_FRONTEND_PORT  - Dynamic port for Vite dev server
+ *   E2E_BACKEND_PORT   - Dynamic port for backend server
+ *   E2E_POSTGRES_PORT  - Dynamic port for PostgreSQL container
  */
 
 import net from 'net';
@@ -69,25 +70,31 @@ async function main() {
     // Each job gets an isolated 100-port range:
     // - Frontend: 30000-34900 (50 ranges of 100 ports)
     // - Backend: 35000-39900 (50 ranges of 100 ports)
+    // - Postgres: 40000-44900 (50 ranges of 100 ports)
     // This supports up to 50 concurrent jobs with zero overlap
     const frontendStart = 30000 + portOffset;
     const frontendEnd = frontendStart + 99;
     const backendStart = 35000 + portOffset;
     const backendEnd = backendStart + 99;
+    const postgresStart = 40000 + portOffset;
+    const postgresEnd = postgresStart + 99;
 
     // Find available ports within this job's dedicated range
     const frontendPort = await findAvailablePort(frontendStart, frontendEnd, []);
     const backendPort = await findAvailablePort(backendStart, backendEnd, []);
+    const postgresPort = await findAvailablePort(postgresStart, postgresEnd, []);
 
     // Output as environment variables for CI
     console.log(`E2E_FRONTEND_PORT=${frontendPort}`);
     console.log(`E2E_BACKEND_PORT=${backendPort}`);
+    console.log(`E2E_POSTGRES_PORT=${postgresPort}`);
 
     // Also output JSON for programmatic use
     console.error(JSON.stringify({
       frontend: frontendPort,
       backend: backendPort,
-      range: `frontend=${frontendStart}-${frontendEnd}, backend=${backendStart}-${backendEnd}`
+      postgres: postgresPort,
+      range: `frontend=${frontendStart}-${frontendEnd}, backend=${backendStart}-${backendEnd}, postgres=${postgresStart}-${postgresEnd}`
     }));
   } catch (error) {
     console.error('Error finding available ports:', error.message);
