@@ -505,6 +505,9 @@ jobs:
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
           # Backend encryption key - required when running with DATABASE_URL
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+          # Pass to Playwright test process for conditional skip logic in test files
+          # (separate from CLERK_PUBLISHABLE_KEY which goes to Vite via playwright.config.ts)
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
         run: |
           echo "::group::Running Playwright E2E tests"
           pnpm run test:e2e
