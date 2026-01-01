@@ -72,8 +72,10 @@ func NewClerkMiddleware(
 		tokenString := parts[1]
 
 		// Verify the JWT token using Clerk SDK
+		// CustomClaimsConstructor is required to parse custom claims from JWT template
 		sessionClaims, err := jwt.Verify(ctx.Context(), &jwt.VerifyParams{
-			Token: tokenString,
+			Token:                   tokenString,
+			CustomClaimsConstructor: auth.CustomClaimsConstructor,
 		})
 		if err != nil {
 			writeClerkJSONError(ctx, http.StatusUnauthorized, "Invalid or expired token")
@@ -93,6 +95,18 @@ func NewClerkMiddleware(
 			if err == repository.ErrIdentityNotFound {
 				// Auto-register new user
 				email := auth.ExtractEmailFromClaims(sessionClaims)
+
+				// FALLBACK: If email not in JWT claims, fetch from Clerk API
+				// This handles cases where JWT template claims aren't populated correctly
+				if email == "" {
+					var fetchErr error
+					email, fetchErr = auth.FetchEmailFromClerkAPI(ctx.Context(), clerkUserID)
+					if fetchErr != nil {
+						writeClerkJSONError(ctx, http.StatusInternalServerError, "Failed to retrieve user email")
+						return
+					}
+				}
+
 				emailVerified := true // Clerk verifies emails
 
 				_, err = registrationService.RegisterUser(ctx.Context(), clerkUserID, email, emailVerified)
