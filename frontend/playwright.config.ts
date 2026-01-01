@@ -7,12 +7,15 @@ import { defineConfig, devices } from '@playwright/test';
  * Dynamic Port Allocation:
  * - E2E_FRONTEND_PORT: Override frontend port (default: 3000)
  * - E2E_BACKEND_PORT: Override backend port (default: 8080)
+ * - E2E_POSTGRES_PORT: Override PostgreSQL port (dynamic, set by run-e2e-with-ports.sh)
+ * - DATABASE_URL: PostgreSQL connection string (set by run-e2e-with-ports.sh)
  * - Use scripts/find-available-ports.js in CI to avoid port conflicts
  */
 
-// Get dynamic ports from environment, fallback to defaults
+// Get dynamic ports and database URL from environment, fallback to defaults
 const frontendPort = process.env.E2E_FRONTEND_PORT || '3000';
 const backendPort = process.env.E2E_BACKEND_PORT || '8080';
+const databaseUrl = process.env.DATABASE_URL || '';
 
 export default defineConfig({
   // Test directory
@@ -89,8 +92,9 @@ export default defineConfig({
       timeout: 120 * 1000,
     },
     {
-      // Pass PORT env var to backend for dynamic port allocation
-      command: `cd ../backend && PORT=${backendPort} ./bin/server`,
+      // Pass PORT and DATABASE_URL env vars to backend for dynamic port allocation
+      // DATABASE_URL is set by run-e2e-with-ports.sh when PostgreSQL container is available
+      command: `cd ../backend && PORT=${backendPort} DATABASE_URL="${databaseUrl}" ./bin/server`,
       url: `http://localhost:${backendPort}/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 120 * 1000,
