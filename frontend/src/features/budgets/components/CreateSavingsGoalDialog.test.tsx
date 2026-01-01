@@ -533,6 +533,7 @@ describe('CreateSavingsGoalDialog', () => {
 
   describe('Edge Cases', () => {
     it('should include description and deadline when provided', async () => {
+      const user = userEvent.setup()
       const newGoal = { id: 'goal-1', name: 'Test', target_amount: 500 }
       mockMutateAsync.mockResolvedValueOnce(newGoal)
 
@@ -544,11 +545,16 @@ describe('CreateSavingsGoalDialog', () => {
         />
       )
 
+      // Use fireEvent for text inputs (works fine)
       fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Vacation' } })
       fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Beach trip' } })
       fireEvent.change(screen.getByLabelText('Target Amount'), { target: { value: '2000' } })
-      fireEvent.change(screen.getByLabelText('Account'), { target: { value: 'acc-2' } })
-      fireEvent.change(screen.getByLabelText('Deadline (optional)'), { target: { value: '2025-12-31' } })
+
+      // Use userEvent.selectOptions for select (properly handles async state updates)
+      await user.selectOptions(screen.getByLabelText('Account'), 'acc-2')
+
+      // Use far-future date to avoid min date validation issues
+      fireEvent.change(screen.getByLabelText('Deadline (optional)'), { target: { value: '2030-12-31' } })
 
       fireEvent.click(screen.getByText('Create Goal'))
 
@@ -559,13 +565,14 @@ describe('CreateSavingsGoalDialog', () => {
             description: 'Beach trip',
             target_amount: 2000,
             account_id: 'acc-2',
-            deadline: '2025-12-31',
+            deadline: '2030-12-31',
           },
         })
       })
     })
 
     it('should handle non-Error rejection', async () => {
+      const user = userEvent.setup()
       mockMutateAsync.mockRejectedValueOnce('Unknown error')
 
       renderWithQueryClient(
@@ -576,9 +583,12 @@ describe('CreateSavingsGoalDialog', () => {
         />
       )
 
+      // Use fireEvent for text inputs
       fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Test' } })
       fireEvent.change(screen.getByLabelText('Target Amount'), { target: { value: '100' } })
-      fireEvent.change(screen.getByLabelText('Account'), { target: { value: 'acc-1' } })
+
+      // Use userEvent.selectOptions for select (properly handles async state updates)
+      await user.selectOptions(screen.getByLabelText('Account'), 'acc-1')
 
       fireEvent.click(screen.getByText('Create Goal'))
 
