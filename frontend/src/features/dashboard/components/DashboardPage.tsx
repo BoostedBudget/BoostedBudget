@@ -36,7 +36,7 @@ function DashboardContent() {
   const { layout, loading, error, saving, updateLayout, addWidget, removeWidget, resetToDefault, saveNow } = useDashboardLayout({
     getAccessToken: async () => {
       try {
-        return await getToken()
+        return await getToken({ template: 'BoostedBudget' })
       } catch {
         return null
       }
