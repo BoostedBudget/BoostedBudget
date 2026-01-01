@@ -1,4 +1,11 @@
 import { defineConfig, devices } from '@playwright/test';
+import { existsSync } from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
+
+// ES module equivalent of __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 /**
  * Playwright E2E Test Configuration
@@ -10,12 +17,21 @@ import { defineConfig, devices } from '@playwright/test';
  * - E2E_POSTGRES_PORT: Override PostgreSQL port (dynamic, set by run-e2e-with-ports.sh)
  * - DATABASE_URL: PostgreSQL connection string (set by run-e2e-with-ports.sh)
  * - Use scripts/find-available-ports.js in CI to avoid port conflicts
+ *
+ * Authentication:
+ * - TEST_CLERK_EMAIL: Email of Clerk test user (for authenticated tests)
+ * - TEST_CLERK_PASSWORD: Password for test user
+ * - Auth session saved to e2e/.auth/user.json, reused by chromium project
  */
 
 // Get dynamic ports and database URL from environment, fallback to defaults
 const frontendPort = process.env.E2E_FRONTEND_PORT || '3000';
 const backendPort = process.env.E2E_BACKEND_PORT || '8080';
 const databaseUrl = process.env.DATABASE_URL || '';
+
+// Auth session file path
+const authFile = join(__dirname, 'e2e/.auth/user.json');
+const hasAuthSession = existsSync(authFile);
 
 export default defineConfig({
   // Test directory
@@ -73,10 +89,34 @@ export default defineConfig({
       name: 'setup',
       testMatch: /global-setup\.ts/,
     },
+    // Authentication setup - logs in once and saves session state
+    // Requires TEST_CLERK_EMAIL and TEST_CLERK_PASSWORD env vars
+    // Session is saved to e2e/.auth/user.json and reused by chromium project
+    {
+      name: 'auth',
+      testMatch: /auth\.setup\.ts/,
+      dependencies: ['setup'],
+    },
+    // Main test project - uses saved authentication state if available
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
-      dependencies: ['setup'], // Ensure Clerk setup runs first
+      use: {
+        ...devices['Desktop Chrome'],
+        // Use saved auth state from auth.setup.ts if it exists
+        // When auth setup is skipped (no TEST_CLERK_* env vars), tests run unauthenticated
+        ...(hasAuthSession ? { storageState: authFile } : {}),
+      },
+      dependencies: ['auth'],
+    },
+    // Unauthenticated project for tests that don't require login
+    // Tests can use this by adding: test.use({ storageState: { cookies: [], origins: [] } });
+    {
+      name: 'chromium-no-auth',
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: { cookies: [], origins: [] },
+      },
+      dependencies: ['setup'],
     },
   ],
 
