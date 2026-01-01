@@ -3,8 +3,11 @@ package auth
 
 import (
 	"context"
+	"fmt"
+	"log"
 
 	"github.com/clerk/clerk-sdk-go/v2"
+	"github.com/clerk/clerk-sdk-go/v2/user"
 )
 
 // Default values for subscription and region
@@ -124,4 +127,38 @@ func ExtractPrimaryRegion(claims *clerk.SessionClaims) string {
 	}
 
 	return DefaultPrimaryRegion
+}
+
+// FetchEmailFromClerkAPI gets user email from Clerk Backend API.
+// This is a fallback when JWT custom claims don't contain email.
+//
+// The function queries Clerk's user API to get the user's primary email address.
+// This is more reliable than relying on JWT template claims because:
+// - Works even if JWT template is misconfigured
+// - Uses direct API call to Clerk's user database
+// - Gets verified, up-to-date email information
+func FetchEmailFromClerkAPI(ctx context.Context, clerkUserID string) (string, error) {
+	clerkUser, err := user.Get(ctx, clerkUserID)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch user from Clerk API: %w", err)
+	}
+
+	// Find primary email address
+	if clerkUser.PrimaryEmailAddressID != nil && len(clerkUser.EmailAddresses) > 0 {
+		for _, ea := range clerkUser.EmailAddresses {
+			if ea.ID == *clerkUser.PrimaryEmailAddressID {
+				log.Printf("[ClerkAuth] Found primary email for user %s: %s", clerkUserID, ea.EmailAddress)
+				return ea.EmailAddress, nil
+			}
+		}
+	}
+
+	// Fallback: use first email if no primary set
+	if len(clerkUser.EmailAddresses) > 0 {
+		email := clerkUser.EmailAddresses[0].EmailAddress
+		log.Printf("[ClerkAuth] Using first email for user %s (no primary set): %s", clerkUserID, email)
+		return email, nil
+	}
+
+	return "", fmt.Errorf("no email address found for user %s", clerkUserID)
 }

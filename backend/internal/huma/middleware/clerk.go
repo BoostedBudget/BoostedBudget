@@ -4,6 +4,7 @@ package middleware
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -95,13 +96,30 @@ func NewClerkMiddleware(
 			if err == repository.ErrIdentityNotFound {
 				// Auto-register new user
 				email := auth.ExtractEmailFromClaims(sessionClaims)
+
+				// FALLBACK: If email not in JWT claims, fetch from Clerk API
+				// This handles cases where JWT template claims aren't populated correctly
+				if email == "" {
+					log.Printf("[ClerkMiddleware] Email not in JWT claims for user %s, fetching from Clerk API", clerkUserID)
+					var fetchErr error
+					email, fetchErr = auth.FetchEmailFromClerkAPI(ctx.Context(), clerkUserID)
+					if fetchErr != nil {
+						log.Printf("[ClerkMiddleware] Failed to fetch email from Clerk API for user %s: %v", clerkUserID, fetchErr)
+						writeClerkJSONError(ctx, http.StatusInternalServerError, "Failed to retrieve user email")
+						return
+					}
+					log.Printf("[ClerkMiddleware] Successfully fetched email from Clerk API for user %s: %s", clerkUserID, email)
+				}
+
 				emailVerified := true // Clerk verifies emails
 
 				_, err = registrationService.RegisterUser(ctx.Context(), clerkUserID, email, emailVerified)
 				if err != nil {
+					log.Printf("[ClerkMiddleware] Failed to register user %s with email %s: %v", clerkUserID, email, err)
 					writeClerkJSONError(ctx, http.StatusInternalServerError, "Failed to create user account")
 					return
 				}
+				log.Printf("[ClerkMiddleware] Successfully registered new user %s with email %s", clerkUserID, email)
 
 				identity, err = identityRepo.GetByClerkID(ctx.Context(), clerkUserID)
 				if err != nil {
