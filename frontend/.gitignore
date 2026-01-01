@@ -2,3 +2,6 @@ test-results.json
 
 # Self-signed certificates (regenerate locally)
 *.pem
+
+# E2E test environment (contains secrets)
+.env.e2e
