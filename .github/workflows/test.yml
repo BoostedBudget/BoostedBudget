@@ -503,6 +503,8 @@ jobs:
           # Clerk Testing Token - required for @clerk/testing/playwright
           CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          # Backend encryption key - required when running with DATABASE_URL
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
         run: |
           echo "::group::Running Playwright E2E tests"
           pnpm run test:e2e
