@@ -56,7 +56,7 @@ const InitializeAuth = () => {
   React.useEffect(() => {
     const tokenProvider = async () => {
       try {
-        return await getToken()
+        return await getToken({ template: 'BoostedBudget' })
       } catch {
         return null
       }
