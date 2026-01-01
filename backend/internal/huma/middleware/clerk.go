@@ -72,8 +72,10 @@ func NewClerkMiddleware(
 		tokenString := parts[1]
 
 		// Verify the JWT token using Clerk SDK
+		// CustomClaimsConstructor is required to parse custom claims from JWT template
 		sessionClaims, err := jwt.Verify(ctx.Context(), &jwt.VerifyParams{
-			Token: tokenString,
+			Token:                   tokenString,
+			CustomClaimsConstructor: auth.CustomClaimsConstructor,
 		})
 		if err != nil {
 			writeClerkJSONError(ctx, http.StatusUnauthorized, "Invalid or expired token")
