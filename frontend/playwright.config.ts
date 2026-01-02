@@ -7,6 +7,13 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+// Ensure VITE_CLERK_PUBLISHABLE_KEY is available for test files
+// Test files check this env var at module load time for conditional skip logic
+// Without this, authenticated test suites skip even when credentials are available
+if (!process.env.VITE_CLERK_PUBLISHABLE_KEY && process.env.CLERK_PUBLISHABLE_KEY) {
+  process.env.VITE_CLERK_PUBLISHABLE_KEY = process.env.CLERK_PUBLISHABLE_KEY;
+}
+
 /**
  * Playwright E2E Test Configuration
  * See https://playwright.dev/docs/test-configuration
@@ -98,8 +105,10 @@ export default defineConfig({
       dependencies: ['setup'],
     },
     // Main test project - uses saved authentication state if available
+    // Only runs *.auth.spec.ts files (authenticated tests)
     {
       name: 'chromium',
+      testMatch: /\.auth\.spec\.ts$/,
       use: {
         ...devices['Desktop Chrome'],
         // Use saved auth state from auth.setup.ts if it exists
@@ -109,9 +118,10 @@ export default defineConfig({
       dependencies: ['auth'],
     },
     // Unauthenticated project for tests that don't require login
-    // Tests can use this by adding: test.use({ storageState: { cookies: [], origins: [] } });
+    // Only runs *.noauth.spec.ts files (public/unauthenticated tests)
     {
       name: 'chromium-no-auth',
+      testMatch: /\.noauth\.spec\.ts$/,
       use: {
         ...devices['Desktop Chrome'],
         storageState: { cookies: [], origins: [] },
