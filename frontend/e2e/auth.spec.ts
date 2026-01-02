@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { setupClerkTestingToken } from '@clerk/testing/playwright';
-import { acceptCookieConsent } from './helpers/auth';
+import { acceptCookieConsent, skipIfNoAuth } from './helpers/auth';
 
 /**
  * Clerk Authentication E2E Tests
@@ -88,14 +88,9 @@ describeClerk('Clerk Authentication', () => {
       await expect(emailInput).toBeVisible();
     });
 
-    test.skip('should successfully log in with valid credentials', async ({ page }) => {
-      /**
-       * SKIPPED: This test requires actual Clerk test credentials
-       * To enable:
-       * 1. Create test user in Clerk test instance
-       * 2. Set TEST_CLERK_EMAIL and TEST_CLERK_PASSWORD environment variables
-       * 3. Remove test.skip
-       */
+    test('should successfully log in with valid credentials', async ({ page }) => {
+      // Skip if no credentials available
+      test.skip(!process.env.TEST_CLERK_EMAIL || !process.env.TEST_CLERK_PASSWORD, 'Requires TEST_CLERK_EMAIL and TEST_CLERK_PASSWORD');
       await setupClerkTestingToken({ page });
       await page.goto('/');
       await acceptCookieConsent(page);
@@ -172,14 +167,9 @@ describeClerk('Clerk Authentication', () => {
       expect(signupExists).toBeGreaterThan(0);
     });
 
-    test.skip('should successfully create account with valid details', async ({ page: _page }) => {
-      /**
-       * SKIPPED: This test would create actual Clerk users
-       * To enable:
-       * 1. Set up test Clerk instance with user cleanup automation
-       * 2. Generate unique test email (e.g., test+timestamp@example.com)
-       * 3. Remove test.skip
-       */
+    test('should successfully create account with valid details', async ({ page: _page }) => {
+      // Skip: Creating users in Clerk requires special cleanup automation
+      test.skip(true, 'Requires automated Clerk user cleanup to avoid test pollution');
 
       // This is a placeholder for signup flow testing
       // Actual implementation would:
@@ -191,12 +181,11 @@ describeClerk('Clerk Authentication', () => {
   });
 
   test.describe('Authenticated User', () => {
-    test.skip('should access protected routes when authenticated', async ({ page: _page }) => {
-      /**
-       * SKIPPED: Requires actual authentication
-       * To enable: Implement auth helper to log in first, then remove test.skip
-       */
+    test.beforeEach(async ({}, testInfo) => {
+      skipIfNoAuth(testInfo);
+    });
 
+    test('should access protected routes when authenticated', async ({ page: _page }) => {
       // This test would:
       // 1. Log in using auth helper
       // 2. Navigate to protected route (e.g., /dashboard)
@@ -204,11 +193,7 @@ describeClerk('Clerk Authentication', () => {
       // 4. Verify content loads
     });
 
-    test.skip('should display user profile information', async ({ page: _page }) => {
-      /**
-       * SKIPPED: Requires actual authentication
-       */
-
+    test('should display user profile information', async ({ page: _page }) => {
       // This test would:
       // 1. Log in using auth helper
       // 2. Navigate to profile page
@@ -218,11 +203,11 @@ describeClerk('Clerk Authentication', () => {
   });
 
   test.describe('Logout Flow', () => {
-    test.skip('should successfully log out', async ({ page: _page }) => {
-      /**
-       * SKIPPED: Requires actual authentication first
-       */
+    test.beforeEach(async ({}, testInfo) => {
+      skipIfNoAuth(testInfo);
+    });
 
+    test('should successfully log out', async ({ page: _page }) => {
       // This test would:
       // 1. Log in using auth helper
       // 2. Click Log Out button
@@ -231,11 +216,7 @@ describeClerk('Clerk Authentication', () => {
       // 5. Verify session is cleared
     });
 
-    test.skip('should redirect to home page after logout', async ({ page: _page }) => {
-      /**
-       * SKIPPED: Requires actual authentication first
-       */
-
+    test('should redirect to home page after logout', async ({ page: _page }) => {
       // This test would:
       // 1. Log in using auth helper
       // 2. Navigate to protected route
@@ -243,11 +224,7 @@ describeClerk('Clerk Authentication', () => {
       // 4. Verify redirected to home page
     });
 
-    test.skip('should not access protected routes after logout', async ({ page: _page }) => {
-      /**
-       * SKIPPED: Requires actual authentication first
-       */
-
+    test('should not access protected routes after logout', async ({ page: _page }) => {
       // This test would:
       // 1. Log in using auth helper
       // 2. Log out
@@ -257,11 +234,11 @@ describeClerk('Clerk Authentication', () => {
   });
 
   test.describe('Session Persistence', () => {
-    test.skip('should maintain session across page reloads', async ({ page: _page }) => {
-      /**
-       * SKIPPED: Requires actual authentication first
-       */
+    test.beforeEach(async ({}, testInfo) => {
+      skipIfNoAuth(testInfo);
+    });
 
+    test('should maintain session across page reloads', async ({ page: _page }) => {
       // This test would:
       // 1. Log in using auth helper
       // 2. Reload the page
@@ -269,11 +246,7 @@ describeClerk('Clerk Authentication', () => {
       // 4. Verify Log Out button still visible
     });
 
-    test.skip('should maintain session across navigation', async ({ page: _page }) => {
-      /**
-       * SKIPPED: Requires actual authentication first
-       */
-
+    test('should maintain session across navigation', async ({ page: _page }) => {
       // This test would:
       // 1. Log in using auth helper
       // 2. Navigate to different pages

@@ -1,4 +1,4 @@
-import { Page, expect } from '@playwright/test';
+import { Page, expect, test, TestInfo } from '@playwright/test';
 
 /**
  * Clerk Helper Functions for E2E Tests
@@ -126,6 +126,24 @@ export async function acceptCookieConsent(page: Page): Promise<void> {
     }
   } catch {
     // Cookie banner not present or already accepted
+  }
+}
+
+/**
+ * Skip test if running in an unauthenticated project
+ * Use this in beforeEach for tests that require authentication
+ *
+ * @param testInfo - Test info object from Playwright
+ * @example
+ * test.beforeEach(async ({ page }, testInfo) => {
+ *   skipIfNoAuth(testInfo);
+ *   await setupPage(page);
+ * });
+ */
+export function skipIfNoAuth(testInfo: TestInfo): void {
+  // Skip if running in chromium-no-auth project (these tests require auth)
+  if (testInfo.project.name === 'chromium-no-auth') {
+    test.skip(true, 'Test requires authentication - skipping in chromium-no-auth project');
   }
 }
 
