@@ -86,6 +86,11 @@ else
           exit 1
         fi
 
+        # Seed test data (if seed file exists and Clerk user ID available)
+        if ! seed_e2e_data "$DATABASE_URL"; then
+          echo "   ⚠️  Test data seeding skipped or failed (tests may have limited data)"
+        fi
+
         echo ""
         echo "✅ Database ready for E2E tests!"
       else

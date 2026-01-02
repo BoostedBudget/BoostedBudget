@@ -68,10 +68,20 @@ bash scripts/run-e2e-with-ports.sh --project=chromium-no-auth
 1. Finds available ports (frontend 30000-34900, backend 35000-39900, postgres 40000-44900)
 2. Starts PostgreSQL container (if Docker available)
 3. Runs Atlas migrations
-4. Builds backend binary (if missing)
-5. Starts frontend (Vite) and backend servers
-6. Runs Playwright tests
-7. Cleans up PostgreSQL container on exit
+4. Seeds test data (accounts, transactions, tags) for E2E user
+5. Builds backend binary (if missing)
+6. Starts frontend (Vite) and backend servers
+7. Runs Playwright tests
+8. Cleans up PostgreSQL container on exit
+
+## Test Data Seeding
+
+When running with Docker, the script automatically seeds test data:
+- 3 test accounts (checking, savings, credit card)
+- 12+ transactions with various categories
+- User tags and custom categories
+
+The seeding uses the Clerk test user ID (obtained via API or `E2E_CLERK_USER_ID` env var).
 
 ## Test Projects
 
