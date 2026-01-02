@@ -63,7 +63,7 @@ test.describe('Account Customization - UI Elements (Requires Auth)', () => {
 
 // Tests that require authenticated state with accounts
 test.describe('Account Customization - Modal (Requires Auth)', () => {
-  test.beforeEach(async ({}, testInfo) => {
+  test.beforeEach(async (_fixtures, testInfo) => {
     skipIfNoAuth(testInfo);
   });
 
@@ -132,7 +132,7 @@ test.describe('Account Customization - Modal (Requires Auth)', () => {
 });
 
 test.describe('Account Customization - Nickname (Requires Auth)', () => {
-  test.beforeEach(async ({}, testInfo) => {
+  test.beforeEach(async (_fixtures, testInfo) => {
     skipIfNoAuth(testInfo);
   });
 
@@ -174,7 +174,7 @@ test.describe('Account Customization - Nickname (Requires Auth)', () => {
 });
 
 test.describe('Account Customization - Color (Requires Auth)', () => {
-  test.beforeEach(async ({}, testInfo) => {
+  test.beforeEach(async (_fixtures, testInfo) => {
     skipIfNoAuth(testInfo);
   });
 
@@ -238,7 +238,7 @@ test.describe('Account Customization - Color (Requires Auth)', () => {
 });
 
 test.describe('Account Customization - Icon (Requires Auth)', () => {
-  test.beforeEach(async ({}, testInfo) => {
+  test.beforeEach(async (_fixtures, testInfo) => {
     skipIfNoAuth(testInfo);
   });
 
@@ -290,7 +290,7 @@ test.describe('Account Customization - Icon (Requires Auth)', () => {
 });
 
 test.describe('Account Customization - Emoji (Requires Auth)', () => {
-  test.beforeEach(async ({}, testInfo) => {
+  test.beforeEach(async (_fixtures, testInfo) => {
     skipIfNoAuth(testInfo);
   });
 
@@ -351,7 +351,7 @@ test.describe('Account Customization - Emoji (Requires Auth)', () => {
 });
 
 test.describe('Account Customization - Hide/Show Toggle (Requires Auth)', () => {
-  test.beforeEach(async ({}, testInfo) => {
+  test.beforeEach(async (_fixtures, testInfo) => {
     skipIfNoAuth(testInfo);
   });
 
@@ -432,7 +432,7 @@ test.describe('Account Customization - Hide/Show Toggle (Requires Auth)', () => 
 });
 
 test.describe('Account Customization - Drag and Drop Reordering (Requires Auth)', () => {
-  test.beforeEach(async ({}, testInfo) => {
+  test.beforeEach(async (_fixtures, testInfo) => {
     skipIfNoAuth(testInfo);
   });
 
@@ -531,7 +531,7 @@ test.describe('Account Customization - Drag and Drop Reordering (Requires Auth)'
 });
 
 test.describe('Account Customization - Preview (Requires Auth)', () => {
-  test.beforeEach(async ({}, testInfo) => {
+  test.beforeEach(async (_fixtures, testInfo) => {
     skipIfNoAuth(testInfo);
   });
 
@@ -576,7 +576,7 @@ test.describe('Account Customization - Preview (Requires Auth)', () => {
 });
 
 test.describe('Account Customization - Accessibility (Requires Auth)', () => {
-  test.beforeEach(async ({}, testInfo) => {
+  test.beforeEach(async (_fixtures, testInfo) => {
     skipIfNoAuth(testInfo);
   });
 
@@ -666,7 +666,7 @@ test.describe('Account Customization - Accessibility (Requires Auth)', () => {
 });
 
 test.describe('Account Customization - Error Handling (Requires Auth)', () => {
-  test.beforeEach(async ({}, testInfo) => {
+  test.beforeEach(async (_fixtures, testInfo) => {
     skipIfNoAuth(testInfo);
   });
 

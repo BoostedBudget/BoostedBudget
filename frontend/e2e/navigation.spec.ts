@@ -133,7 +133,7 @@ test.describe('Navigation - Logo Links', () => {
 
 // Tests that require authentication
 test.describe('Navigation - Authenticated', () => {
-  test.beforeEach(async ({}, testInfo) => {
+  test.beforeEach(async (_fixtures, testInfo) => {
     skipIfNoAuth(testInfo);
   });
 
