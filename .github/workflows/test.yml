@@ -508,6 +508,10 @@ jobs:
           # Pass to Playwright test process for conditional skip logic in test files
           # (separate from CLERK_PUBLISHABLE_KEY which goes to Vite via playwright.config.ts)
           VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
+          # Test user credentials for authenticated E2E tests
+          # Create test user in Clerk Dashboard with username+password (not OAuth)
+          TEST_CLERK_EMAIL: ${{ secrets.TEST_CLERK_EMAIL }}
+          TEST_CLERK_PASSWORD: ${{ secrets.TEST_CLERK_PASSWORD }}
         run: |
           echo "::group::Running Playwright E2E tests"
           pnpm run test:e2e
