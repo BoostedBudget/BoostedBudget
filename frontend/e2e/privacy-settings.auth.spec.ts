@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, Page } from '@playwright/test'
 
 /**
  * Privacy Settings E2E Tests - Authenticated
@@ -12,7 +12,84 @@ import { test, expect } from '@playwright/test'
  * These tests run in chromium project with pre-authenticated session
  */
 
+// Mock profile data
+const mockProfile = {
+  id: 'user-123',
+  clerk_id: 'clerk_user_123',
+  email: 'test@example.com',
+  name: 'Test User',
+  tier: 'free',
+  created_at: '2025-01-01T00:00:00Z',
+  updated_at: '2025-01-01T00:00:00Z',
+}
+
+// Mock privacy settings
+const mockPrivacySettings = {
+  cookie_consent: {
+    necessary: true,
+    functional: true,
+    analytics: false,
+    advertising: false,
+    consented_at: '2025-01-01T00:00:00Z',
+  },
+  email_preferences: {
+    marketing: false,
+    product_updates: true,
+    security_alerts: true,
+  },
+  data_sharing: {
+    share_anonymized_data: false,
+    share_with_partners: false,
+  },
+  deletion_status: null,
+}
+
+/**
+ * Helper function to mock profile and privacy API endpoints
+ */
+async function mockProfileAPIs(page: Page) {
+  // Mock profile endpoint (wildcard to match query params)
+  await page.route('**/api/v1/user/profile*', (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(mockProfile),
+    })
+  })
+
+  // Mock privacy settings endpoint (wildcard to match query params)
+  await page.route('**/api/v1/user/privacy*', (route) => {
+    if (route.request().method() === 'GET') {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(mockPrivacySettings),
+      })
+    } else {
+      // Handle PUT for saving privacy settings
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ...mockPrivacySettings, ...route.request().postDataJSON() }),
+      })
+    }
+  })
+
+  // Mock subscription/tier endpoint
+  await page.route('**/api/v1/subscription/**', (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ tier: 'free', status: 'active' }),
+    })
+  })
+}
+
 test.describe('Privacy Settings - Authenticated', () => {
+  test.beforeEach(async ({ page }) => {
+    await mockProfileAPIs(page)
+  })
+
   test('should display Privacy Settings tab for authenticated users', async ({ page }) => {
     await page.goto('/profile')
     await page.waitForLoadState('networkidle')

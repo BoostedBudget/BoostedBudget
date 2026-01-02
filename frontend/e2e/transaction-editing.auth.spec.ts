@@ -9,8 +9,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test'
-import { setupClerkTestingToken } from '@clerk/testing/playwright'
-import { loginWithClerk, acceptCookieConsent } from './helpers/auth'
+import { acceptCookieConsent } from './helpers/auth'
 
 // Mock data for transactions
 const mockTransactions = {
@@ -152,8 +151,8 @@ async function mockTransactionAPIs(
     }
   })
 
-  // Mock tags endpoint (GET and POST)
-  await page.route('**/api/v1/tags', (route) => {
+  // Mock tags endpoint (GET and POST) - wildcard to match query params
+  await page.route('**/api/v1/tags*', (route) => {
     if (route.request().method() === 'GET') {
       route.fulfill({
         status: tagsStatus,
@@ -182,8 +181,8 @@ async function mockTransactionAPIs(
     }
   })
 
-  // Mock categories endpoint (GET and POST)
-  await page.route('**/api/v1/categories', (route) => {
+  // Mock categories endpoint (GET and POST) - wildcard to match query params
+  await page.route('**/api/v1/categories*', (route) => {
     if (route.request().method() === 'GET') {
       route.fulfill({
         status: categoriesStatus,
@@ -257,9 +256,8 @@ async function mockTransactionUpdateAPIs(
 // ============================================================================
 
 test.describe('Transaction Editing - Protected Route', () => {
-  test.beforeEach(async ({ context }) => {
-    await context.clearCookies()
-  })
+  // Override storageState to ensure no session is loaded for these tests
+  test.use({ storageState: { cookies: [], origins: [] } })
 
   test('should redirect unauthenticated users away from transactions page', async ({
     page,
@@ -278,17 +276,8 @@ test.describe('Transaction Editing - Protected Route', () => {
 // ============================================================================
 
 test.describe('Transaction Editing - Authenticated User', () => {
-  test.beforeEach(async ({ page, context }) => {
-    await context.clearCookies()
-
-    await setupClerkTestingToken({ page })
-
-    const credentials = {
-      email: process.env.TEST_CLERK_EMAIL || '',
-      password: process.env.TEST_CLERK_PASSWORD || '',
-    }
-
-    await loginWithClerk(page, credentials)
+  test.beforeEach(async ({ page }) => {
+    // Session is loaded via storageState from auth.setup.ts
     await acceptCookieConsent(page)
   })
 
@@ -846,7 +835,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
         }
       })
 
-      await page.route('**/api/v1/tags', (route) => {
+      await page.route('**/api/v1/tags*', (route) => {
         route.fulfill({
           status: 200,
           contentType: 'application/json',
@@ -854,7 +843,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
         })
       })
 
-      await page.route('**/api/v1/categories', (route) => {
+      await page.route('**/api/v1/categories*', (route) => {
         route.fulfill({
           status: 200,
           contentType: 'application/json',
@@ -927,7 +916,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
         }
       })
 
-      await page.route('**/api/v1/tags', (route) => {
+      await page.route('**/api/v1/tags*', (route) => {
         route.fulfill({
           status: 200,
           contentType: 'application/json',
@@ -935,7 +924,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
         })
       })
 
-      await page.route('**/api/v1/categories', (route) => {
+      await page.route('**/api/v1/categories*', (route) => {
         route.fulfill({
           status: 200,
           contentType: 'application/json',

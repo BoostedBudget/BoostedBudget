@@ -47,6 +47,34 @@ _generate_container_name() {
   fi
 }
 
+# Clean up any orphaned e2e-postgres containers from previous failed runs
+# This helps prevent port conflicts and resource leaks
+cleanup_orphan_containers() {
+  local containers
+  containers=$(docker ps -a --filter "name=e2e-postgres-" --format "{{.Names}}" 2>/dev/null)
+
+  if [ -n "$containers" ]; then
+    echo "🧹 Cleaning up orphaned e2e-postgres containers..."
+    for container in $containers; do
+      echo "   Removing: $container"
+      docker stop "$container" 2>/dev/null || true
+      docker rm -f "$container" 2>/dev/null || true
+    done
+    echo "   ✅ Orphan cleanup complete"
+  fi
+}
+
+# Check if a port is already in use
+_port_in_use() {
+  local port="${1:?Error: Port required}"
+
+  # Check if anything is listening on this port
+  if lsof -i ":${port}" -sTCP:LISTEN &>/dev/null; then
+    return 0  # Port is in use
+  fi
+  return 1  # Port is free
+}
+
 # =============================================================================
 # Public Functions
 # =============================================================================
@@ -75,6 +103,17 @@ check_docker() {
 # Returns 0 on success, 1 on failure
 start_postgres() {
   local port="${1:?Error: Port required for start_postgres}"
+
+  # Clean up any orphaned containers first (prevents port conflicts)
+  cleanup_orphan_containers
+
+  # Check if port is still in use after cleanup (external process may be using it)
+  if _port_in_use "$port"; then
+    echo "❌ Port $port is still in use after cleanup"
+    echo "   Check for other processes using this port:"
+    echo "   lsof -i :$port"
+    return 1
+  fi
 
   E2E_POSTGRES_CONTAINER=$(_generate_container_name)
 
@@ -210,13 +249,17 @@ run_migrations() {
 
 # Stop and remove PostgreSQL container
 # Safe to call multiple times (idempotent)
+# Also cleans up any orphaned containers to prevent resource leaks
 stop_postgres() {
   if [ -n "$E2E_POSTGRES_CONTAINER" ]; then
     echo "🛑 Stopping PostgreSQL container: $E2E_POSTGRES_CONTAINER"
     docker stop "$E2E_POSTGRES_CONTAINER" 2>/dev/null || true
-    docker rm "$E2E_POSTGRES_CONTAINER" 2>/dev/null || true
+    docker rm -f "$E2E_POSTGRES_CONTAINER" 2>/dev/null || true
     E2E_POSTGRES_CONTAINER=""
   fi
+
+  # Also clean up any orphaned containers (from crashed runs, parallel executions, etc.)
+  cleanup_orphan_containers
 }
 
 # Build DATABASE_URL from port

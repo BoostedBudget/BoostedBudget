@@ -97,7 +97,7 @@ test.describe('Clerk Authentication - Login Flow', () => {
 
       // Fill in password
       await page.fill('input[type="password"]', testPassword);
-      await page.click('button:has-text("Continue"), button[type="submit"]');
+      await page.locator('button:has-text("Continue"):visible, button[type="submit"]:visible').first().click();
 
       // Wait for redirect back to app
       await page.waitForURL(/localhost:3000/, { timeout: 15000 });
@@ -130,7 +130,10 @@ test.describe('Clerk Authentication - Login Flow', () => {
 
       // Clerk will either show error for non-existent email or ask for password
       // Either way, we're still in the auth flow
-      const stillInAuth = await page.locator('input[type="email"], input[type="password"], text=/error|invalid|not found/i').count();
+      const emailInputCount = await page.locator('input[type="email"]').count();
+      const passwordInputCount = await page.locator('input[type="password"]').count();
+      const errorTextCount = await page.getByText(/error|invalid|not found/i).count();
+      const stillInAuth = emailInputCount + passwordInputCount + errorTextCount;
       expect(stillInAuth).toBeGreaterThan(0);
     });
   });
@@ -149,7 +152,9 @@ test.describe('Clerk Authentication - Login Flow', () => {
 
       // Check for Sign Up link/button
       // Clerk typically has a "Sign up" link
-      const signupExists = await page.locator('a:has-text("Sign up"), button:has-text("Sign up"), a:has-text("Sign Up"), button:has-text("Sign Up"), text=/don\'t have an account/i').count();
+      const signUpLinks = await page.locator('a:has-text("Sign up"), button:has-text("Sign up"), a:has-text("Sign Up"), button:has-text("Sign Up")').count();
+      const dontHaveAccountText = await page.getByText(/don't have an account/i).count();
+      const signupExists = signUpLinks + dontHaveAccountText;
 
       expect(signupExists).toBeGreaterThan(0);
     });

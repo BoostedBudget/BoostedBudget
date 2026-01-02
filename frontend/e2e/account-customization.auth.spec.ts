@@ -16,8 +16,261 @@ import { acceptCookieConsent } from './helpers/auth';
  * - Drag-and-drop reordering
  */
 
+// Mock account data for tests
+const mockAccounts = {
+  accounts: [
+    {
+      id: 'acc-1',
+      linked_item_id: 'item-1',
+      user_id: 'user-123',
+      plaid_account_id: 'plaid-acc-1',
+      name: 'Primary Checking',
+      official_name: 'Premium Checking Account',
+      type: 'depository',
+      subtype: 'checking',
+      mask: '1234',
+      current_balance: 5000.0,
+      available_balance: 4500.0,
+      currency_code: 'USD',
+      institution_name: 'Chase',
+      nickname: null,
+      color: null,
+      icon: null,
+      emoji: null,
+      is_hidden: false,
+      display_order: 0,
+      created_at: '2025-01-01T00:00:00Z',
+      updated_at: '2025-01-01T00:00:00Z',
+    },
+    {
+      id: 'acc-2',
+      linked_item_id: 'item-1',
+      user_id: 'user-123',
+      plaid_account_id: 'plaid-acc-2',
+      name: 'Savings Account',
+      official_name: 'High Yield Savings',
+      type: 'depository',
+      subtype: 'savings',
+      mask: '5678',
+      current_balance: 10000.0,
+      available_balance: 10000.0,
+      currency_code: 'USD',
+      institution_name: 'Chase',
+      nickname: 'Emergency Fund',
+      color: '#4CAF50',
+      icon: 'piggy-bank',
+      emoji: null,
+      is_hidden: false,
+      display_order: 1,
+      created_at: '2025-01-01T00:00:00Z',
+      updated_at: '2025-01-01T00:00:00Z',
+    },
+    {
+      id: 'acc-3',
+      linked_item_id: 'item-1',
+      user_id: 'user-123',
+      plaid_account_id: 'plaid-acc-3',
+      name: 'Credit Card',
+      official_name: 'Rewards Credit Card',
+      type: 'credit',
+      subtype: 'credit card',
+      mask: '9999',
+      current_balance: -1500.0,
+      available_balance: 8500.0,
+      currency_code: 'USD',
+      institution_name: 'Chase',
+      nickname: null,
+      color: null,
+      icon: null,
+      emoji: null,
+      is_hidden: false,
+      display_order: 2,
+      created_at: '2025-01-01T00:00:00Z',
+      updated_at: '2025-01-01T00:00:00Z',
+    },
+  ],
+  total_count: 3,
+};
+
+// Store for tracking account updates during tests
+let accountUpdates: Record<string, object> = {};
+
+/**
+ * Helper function to mock all accounts API endpoints
+ */
+async function mockAccountsAPIs(page: Page) {
+  // Reset updates tracker
+  accountUpdates = {};
+
+  // Mock accounts list endpoint (with wildcard to match query params like ?include_hidden=true)
+  await page.route('**/api/v1/accounts*', (route) => {
+    if (route.request().method() === 'GET') {
+      // Return accounts with any pending updates applied
+      const updatedAccounts = mockAccounts.accounts.map((acc) => ({
+        ...acc,
+        ...(accountUpdates[acc.id] || {}),
+      }));
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ accounts: updatedAccounts, total_count: updatedAccounts.length }),
+      });
+    } else {
+      route.continue();
+    }
+  });
+
+  // Mock single account GET/PUT/PATCH
+  await page.route('**/api/v1/accounts/*', (route) => {
+    const url = route.request().url();
+    const method = route.request().method();
+
+    // Skip reorder endpoint (handled separately)
+    if (url.includes('/reorder')) {
+      route.continue();
+      return;
+    }
+
+    // Extract account ID from URL
+    const accountIdMatch = url.match(/\/accounts\/([^/?]+)/);
+    const accountId = accountIdMatch ? accountIdMatch[1] : null;
+
+    if (method === 'GET' && accountId) {
+      const account = mockAccounts.accounts.find((a) => a.id === accountId);
+      if (account) {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ ...account, ...(accountUpdates[accountId] || {}) }),
+        });
+      } else {
+        route.fulfill({ status: 404, body: JSON.stringify({ error: 'Account not found' }) });
+      }
+    } else if ((method === 'PUT' || method === 'PATCH') && accountId) {
+      const updates = route.request().postDataJSON();
+      accountUpdates[accountId] = { ...(accountUpdates[accountId] || {}), ...updates };
+      const account = mockAccounts.accounts.find((a) => a.id === accountId);
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ...account, ...accountUpdates[accountId] }),
+      });
+    } else {
+      route.continue();
+    }
+  });
+
+  // Mock account reorder endpoint
+  await page.route('**/api/v1/accounts/reorder', (route) => {
+    if (route.request().method() === 'POST' || route.request().method() === 'PUT') {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true }),
+      });
+    } else {
+      route.continue();
+    }
+  });
+
+  // Mock linked items endpoint (for PlaidLink button state)
+  await page.route('**/api/v1/linked-items*', (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        items: [
+          {
+            id: 'item-1',
+            institution_name: 'Chase',
+            status: 'active',
+            last_successful_sync: '2025-01-01T00:00:00Z',
+          },
+        ],
+        total_count: 1,
+      }),
+    });
+  });
+
+  // Mock user profile endpoint (Issue #582 - required by useProfile hook)
+  await page.route('**/api/v1/user/profile*', (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'user-123',
+        clerk_id: 'clerk_user_123',
+        email: 'test@example.com',
+        name: 'Test User',
+        tier: 'free',
+        created_at: '2025-01-01T00:00:00Z',
+        updated_at: '2025-01-01T00:00:00Z',
+      }),
+    });
+  });
+
+  // Mock subscription tiers endpoint (Issue #582 - required by useSubscriptionTiers hook)
+  await page.route('**/api/v1/subscription/tiers*', (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        tiers: {
+          free: {
+            name: 'Free',
+            account_limit: 3,
+            rule_limit: 1,
+            sync_frequency: '1x/day',
+            price_monthly: 0,
+            features: ['3 linked accounts', '1 automation rule'],
+          },
+          premium_lite: {
+            name: 'Premium Lite',
+            account_limit: 15,
+            rule_limit: 5,
+            sync_frequency: '2x/day',
+            price_monthly: 499,
+            features: ['15 linked accounts', '5 automation rules'],
+          },
+          premium: {
+            name: 'Premium',
+            account_limit: 30,
+            rule_limit: 15,
+            sync_frequency: '6x/day',
+            price_monthly: 999,
+            features: ['30 linked accounts', '15 automation rules'],
+          },
+          premium_plus: {
+            name: 'Premium+',
+            account_limit: -1,
+            rule_limit: -1,
+            sync_frequency: 'every 10min',
+            price_monthly: 1999,
+            features: ['Unlimited accounts', 'Unlimited rules', 'AI features'],
+          },
+        },
+      }),
+    });
+  });
+
+  // Mock sync stats endpoint (Issue #582 - required by SyncStatsCard)
+  await page.route('**/api/v1/sync/stats*', (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        syncs_this_month: 5,
+        syncs_limit: 30,
+        last_sync: '2025-01-01T00:00:00Z',
+        next_sync_available: '2025-01-02T00:00:00Z',
+      }),
+    });
+  });
+}
+
 // Helper to navigate to accounts page
 async function navigateToAccountsPage(page: Page) {
+  await mockAccountsAPIs(page);
   await setupClerkTestingToken({ page });
   await page.goto('/accounts');
   await acceptCookieConsent(page);
