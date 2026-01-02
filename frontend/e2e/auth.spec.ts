@@ -181,7 +181,7 @@ describeClerk('Clerk Authentication', () => {
   });
 
   test.describe('Authenticated User', () => {
-    test.beforeEach(async ({}, testInfo) => {
+    test.beforeEach(async (_fixtures, testInfo) => {
       skipIfNoAuth(testInfo);
     });
 
@@ -203,7 +203,7 @@ describeClerk('Clerk Authentication', () => {
   });
 
   test.describe('Logout Flow', () => {
-    test.beforeEach(async ({}, testInfo) => {
+    test.beforeEach(async (_fixtures, testInfo) => {
       skipIfNoAuth(testInfo);
     });
 
@@ -234,7 +234,7 @@ describeClerk('Clerk Authentication', () => {
   });
 
   test.describe('Session Persistence', () => {
-    test.beforeEach(async ({}, testInfo) => {
+    test.beforeEach(async (_fixtures, testInfo) => {
       skipIfNoAuth(testInfo);
     });
 

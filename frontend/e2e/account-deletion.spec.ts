@@ -149,7 +149,7 @@ test.describe('Account Deletion Flow', () => {
   // AUTHENTICATED TESTS - Require Clerk Test Credentials
   // ============================================================================
   test.describe('Authenticated Tests (Requires Auth)', () => {
-    test.beforeEach(async ({}, testInfo) => {
+    test.beforeEach(async (_fixtures, testInfo) => {
       skipIfNoAuth(testInfo);
     });
 
