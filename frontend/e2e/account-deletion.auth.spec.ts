@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, Page } from '@playwright/test'
 
 /**
  * Account Deletion E2E Tests - Authenticated
@@ -12,11 +12,82 @@ import { test, expect } from '@playwright/test'
  * These tests run in chromium project with pre-authenticated session
  */
 
-test.describe('Account Deletion - Authenticated', () => {
-  test('should redirect unauthenticated users to login when accessing profile', async ({ page }) => {
-    // Clear any existing auth state for this specific test
-    await page.context().clearCookies()
+// Mock profile data
+const mockProfile = {
+  id: 'user-123',
+  clerk_id: 'clerk_user_123',
+  email: 'test@example.com',
+  name: 'Test User',
+  tier: 'free',
+  created_at: '2025-01-01T00:00:00Z',
+  updated_at: '2025-01-01T00:00:00Z',
+}
 
+// Mock privacy settings
+const mockPrivacySettings = {
+  cookie_consent: {
+    necessary: true,
+    functional: true,
+    analytics: false,
+    advertising: false,
+    consented_at: '2025-01-01T00:00:00Z',
+  },
+  data_sharing: {
+    share_anonymized_data: false,
+    share_with_partners: false,
+  },
+  deletion_status: null,
+}
+
+/**
+ * Helper function to mock profile and privacy API endpoints
+ */
+async function mockProfileAPIs(page: Page) {
+  // Mock profile endpoint (wildcard to match query params)
+  await page.route('**/api/v1/user/profile*', (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(mockProfile),
+    })
+  })
+
+  // Mock privacy settings endpoint (wildcard to match query params)
+  await page.route('**/api/v1/user/privacy*', (route) => {
+    if (route.request().method() === 'GET') {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(mockPrivacySettings),
+      })
+    } else {
+      // Handle PUT for saving privacy settings
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ...mockPrivacySettings, ...route.request().postDataJSON() }),
+      })
+    }
+  })
+
+  // Mock subscription/tier endpoint
+  await page.route('**/api/v1/subscription/**', (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ tier: 'free', status: 'active' }),
+    })
+  })
+}
+
+// ==========================================================================
+// Protected Route Test (Unauthenticated)
+// ==========================================================================
+test.describe('Account Deletion - Protected Route', () => {
+  // Override storageState to test without authentication
+  test.use({ storageState: { cookies: [], origins: [] } })
+
+  test('should redirect unauthenticated users to login when accessing profile', async ({ page }) => {
     // Navigate to profile page (requires auth)
     await page.goto('/profile')
     await page.waitForLoadState('networkidle')
@@ -29,6 +100,15 @@ test.describe('Account Deletion - Authenticated', () => {
     const isAtRoot = url.includes('localhost') && url.endsWith('/')
     const isAtClerk = url.includes('clerk.')
     expect(isAtRoot || isAtClerk).toBe(true)
+  })
+})
+
+// ==========================================================================
+// Authenticated Tests
+// ==========================================================================
+test.describe('Account Deletion - Authenticated', () => {
+  test.beforeEach(async ({ page }) => {
+    await mockProfileAPIs(page)
   })
 
   test('should display Delete Account section in Privacy Settings', async ({ page }) => {

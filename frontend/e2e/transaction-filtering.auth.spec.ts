@@ -12,8 +12,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test'
-import { setupClerkTestingToken } from '@clerk/testing/playwright'
-import { loginWithClerk, acceptCookieConsent } from './helpers/auth'
+import { acceptCookieConsent } from './helpers/auth'
 
 // Mock data for transactions
 const mockTransactions = {
@@ -235,8 +234,8 @@ async function mockFilteringAPIs(
     }
   })
 
-  // Mock accounts endpoint
-  await page.route('**/api/v1/accounts', (route) => {
+  // Mock accounts endpoint (wildcard to match query params)
+  await page.route('**/api/v1/accounts*', (route) => {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -244,8 +243,8 @@ async function mockFilteringAPIs(
     })
   })
 
-  // Mock Plaid categories endpoint
-  await page.route('**/api/v1/categories/plaid', (route) => {
+  // Mock Plaid categories endpoint (wildcard to match query params)
+  await page.route('**/api/v1/categories/plaid*', (route) => {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -253,8 +252,8 @@ async function mockFilteringAPIs(
     })
   })
 
-  // Mock tags endpoint
-  await page.route('**/api/v1/tags', (route) => {
+  // Mock tags endpoint (wildcard to match query params)
+  await page.route('**/api/v1/tags*', (route) => {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -262,8 +261,8 @@ async function mockFilteringAPIs(
     })
   })
 
-  // Mock categories endpoint
-  await page.route('**/api/v1/categories', (route) => {
+  // Mock categories endpoint (wildcard to match query params)
+  await page.route('**/api/v1/categories*', (route) => {
     if (route.request().method() === 'GET') {
       route.fulfill({
         status: 200,
@@ -281,9 +280,8 @@ async function mockFilteringAPIs(
 // ============================================================================
 
 test.describe('Transaction Filtering - Protected Route', () => {
-  test.beforeEach(async ({ context }) => {
-    await context.clearCookies()
-  })
+  // Override storageState to ensure no session is loaded for these tests
+  test.use({ storageState: { cookies: [], origins: [] } })
 
   test('should redirect unauthenticated users away from transactions page', async ({
     page,
@@ -299,17 +297,8 @@ test.describe('Transaction Filtering - Protected Route', () => {
 // ============================================================================
 
 test.describe('Transaction Filtering - Authenticated User', () => {
-  test.beforeEach(async ({ page, context }) => {
-    await context.clearCookies()
-
-    await setupClerkTestingToken({ page })
-
-    const credentials = {
-      email: process.env.TEST_CLERK_EMAIL || '',
-      password: process.env.TEST_CLERK_PASSWORD || '',
-    }
-
-    await loginWithClerk(page, credentials)
+  test.beforeEach(async ({ page }) => {
+    // Session is loaded via storageState from auth.setup.ts
     await acceptCookieConsent(page)
   })
 
@@ -788,8 +777,8 @@ test.describe('Transaction Filtering - Authenticated User', () => {
         })
       })
 
-      // Mock other required APIs
-      await page.route('**/api/v1/accounts', async (route) => {
+      // Mock other required APIs (wildcard to match query params)
+      await page.route('**/api/v1/accounts*', async (route) => {
         await route.fulfill({
           status: 200,
           contentType: 'application/json',
@@ -797,7 +786,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
         })
       })
 
-      await page.route('**/api/v1/categories/plaid', async (route) => {
+      await page.route('**/api/v1/categories/plaid*', async (route) => {
         await route.fulfill({
           status: 200,
           contentType: 'application/json',
@@ -868,8 +857,8 @@ test.describe('Transaction Filtering - Authenticated User', () => {
         })
       })
 
-      // Mock other required APIs
-      await page.route('**/api/v1/accounts', async (route) => {
+      // Mock other required APIs (wildcard to match query params)
+      await page.route('**/api/v1/accounts*', async (route) => {
         await route.fulfill({
           status: 200,
           contentType: 'application/json',
@@ -877,7 +866,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
         })
       })
 
-      await page.route('**/api/v1/categories/plaid', async (route) => {
+      await page.route('**/api/v1/categories/plaid*', async (route) => {
         await route.fulfill({
           status: 200,
           contentType: 'application/json',

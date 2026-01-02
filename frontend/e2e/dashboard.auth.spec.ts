@@ -9,8 +9,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test'
-import { setupClerkTestingToken } from '@clerk/testing/playwright'
-import { loginWithClerk, acceptCookieConsent } from './helpers/auth'
+import { acceptCookieConsent } from './helpers/auth'
 
 // Mock data for dashboard APIs
 const mockBalanceSummary = {
@@ -124,22 +123,26 @@ const mockBalanceHistory = {
   ],
 }
 
+// Mock account types - Format must match AccountTypesResponse interface (Issue #582)
 const mockAccountTypes = {
   types: [
     {
-      type: 'depository',
-      balance: 5000.0,
-      account_count: 2,
+      key: 'depository',
+      label: 'Checking & Savings',
+      count: 2,
+      total_balance: 5000.0,
     },
     {
-      type: 'credit',
-      balance: -2000.0,
-      account_count: 1,
+      key: 'credit',
+      label: 'Credit Cards',
+      count: 1,
+      total_balance: -2000.0,
     },
     {
-      type: 'investment',
-      balance: 12000.5,
-      account_count: 1,
+      key: 'investment',
+      label: 'Investments',
+      count: 1,
+      total_balance: 12000.5,
     },
   ],
 }
@@ -196,6 +199,52 @@ async function mockDashboardAPIs(
       body: JSON.stringify(accountTypes),
     })
   })
+
+  // Mock dashboard preferences endpoint (CORRECT FORMAT - Issue #582)
+  // Format must match DashboardPreferencesResponse interface from types/index.ts
+  await page.route('**/api/v1/dashboard/preferences*', (route) => {
+    if (route.request().method() === 'GET') {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          layout: {
+            widgets: [
+              { i: 'balance-overview-1', type: 'balance-overview', x: 0, y: 0, w: 12, h: 2, minW: 4, minH: 2 },
+              { i: 'balance-history-1', type: 'balance-history', x: 0, y: 2, w: 12, h: 4, minW: 4, minH: 4 },
+              { i: 'account-cards-1', type: 'account-cards', x: 0, y: 6, w: 12, h: 3, minW: 4, minH: 3 },
+            ],
+            version: 4,
+          },
+          updated_at: '2025-01-01T00:00:00Z',
+        }),
+      })
+    } else {
+      // Handle PUT for saving preferences
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true }),
+      })
+    }
+  })
+
+  // Mock default layout endpoint (CORRECT FORMAT - Issue #582)
+  // Format must match DashboardLayout interface from types/index.ts
+  await page.route('**/api/v1/dashboard/default-layout*', (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        widgets: [
+          { i: 'balance-overview-1', type: 'balance-overview', x: 0, y: 0, w: 12, h: 2, minW: 4, minH: 2 },
+          { i: 'balance-history-1', type: 'balance-history', x: 0, y: 2, w: 12, h: 4, minW: 4, minH: 4 },
+          { i: 'account-cards-1', type: 'account-cards', x: 0, y: 6, w: 12, h: 3, minW: 4, minH: 3 },
+        ],
+        version: 4,
+      }),
+    })
+  })
 }
 
 // ============================================================================
@@ -203,9 +252,8 @@ async function mockDashboardAPIs(
 // ============================================================================
 
 test.describe('Dashboard - Protected Route', () => {
-  test.beforeEach(async ({ context }) => {
-    await context.clearCookies()
-  })
+  // Override storageState to ensure no session is loaded for these tests
+  test.use({ storageState: { cookies: [], origins: [] } })
 
   test('should redirect unauthenticated users away from dashboard', async ({
     page,
@@ -240,19 +288,8 @@ test.describe('Dashboard - Protected Route', () => {
 // ============================================================================
 
 test.describe('Dashboard - Authenticated User', () => {
-  test.beforeEach(async ({ page, context }) => {
-    // Clear cookies for test isolation
-    await context.clearCookies()
-
-    await setupClerkTestingToken({ page })
-
-    // Login with Clerk
-    const credentials = {
-      email: process.env.TEST_CLERK_EMAIL || '',
-      password: process.env.TEST_CLERK_PASSWORD || '',
-    }
-
-    await loginWithClerk(page, credentials)
+  test.beforeEach(async ({ page }) => {
+    // Session is loaded via storageState from auth.setup.ts
     await acceptCookieConsent(page)
   })
 
