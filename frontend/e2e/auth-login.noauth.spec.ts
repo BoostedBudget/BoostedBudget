@@ -1,28 +1,15 @@
 import { test, expect } from '@playwright/test';
 import { setupClerkTestingToken } from '@clerk/testing/playwright';
-import { acceptCookieConsent, skipIfNoAuth } from './helpers/auth';
+import { acceptCookieConsent } from './helpers/auth';
 
 /**
- * Clerk Authentication E2E Tests
- * Tests user authentication flows including login, signup, protected routes, and logout
+ * Clerk Authentication Login Flow E2E Tests
+ * Tests for unauthenticated users interacting with login/signup UI
  *
- * NOTE: These tests require Clerk credentials.
- * Set TEST_CLERK_EMAIL and TEST_CLERK_PASSWORD in .env.test file.
- *
- * For CI/CD, these tests can be run against a dedicated test Clerk instance
- * with automated test user creation/cleanup.
- *
- * SKIPPED IN CI: These tests are skipped when Clerk credentials are not configured.
- * Configure VITE_CLERK_PUBLISHABLE_KEY and test credentials to enable.
+ * These tests run in the chromium-no-auth project (user starts unauthenticated)
  */
 
-// Skip all Clerk tests if Clerk is not configured
-const skipClerkTests = !process.env.VITE_CLERK_PUBLISHABLE_KEY;
-
-// Use conditional describe - if skipClerkTests is true, use test.describe.skip, otherwise test.describe
-const describeClerk = skipClerkTests ? test.describe.skip : test.describe;
-
-describeClerk('Clerk Authentication', () => {
+test.describe('Clerk Authentication - Login Flow', () => {
   const testEmail = process.env.TEST_CLERK_EMAIL || 'test@example.com';
   const testPassword = process.env.TEST_CLERK_PASSWORD || 'TestPassword123!';
 
@@ -177,80 +164,6 @@ describeClerk('Clerk Authentication', () => {
       // 2. Click "Sign up"
       // 3. Fill in new user details
       // 4. Submit and verify account creation
-    });
-  });
-
-  test.describe('Authenticated User', () => {
-    test.beforeEach(async ({ page: _page }, testInfo) => {
-      skipIfNoAuth(testInfo);
-    });
-
-    test('should access protected routes when authenticated', async ({ page: _page }) => {
-      // This test would:
-      // 1. Log in using auth helper
-      // 2. Navigate to protected route (e.g., /dashboard)
-      // 3. Verify access granted
-      // 4. Verify content loads
-    });
-
-    test('should display user profile information', async ({ page: _page }) => {
-      // This test would:
-      // 1. Log in using auth helper
-      // 2. Navigate to profile page
-      // 3. Verify user email/name displayed
-      // 4. Verify profile data matches authenticated user
-    });
-  });
-
-  test.describe('Logout Flow', () => {
-    test.beforeEach(async ({ page: _page }, testInfo) => {
-      skipIfNoAuth(testInfo);
-    });
-
-    test('should successfully log out', async ({ page: _page }) => {
-      // This test would:
-      // 1. Log in using auth helper
-      // 2. Click Log Out button
-      // 3. Verify redirect to logged out state
-      // 4. Verify Log In button appears
-      // 5. Verify session is cleared
-    });
-
-    test('should redirect to home page after logout', async ({ page: _page }) => {
-      // This test would:
-      // 1. Log in using auth helper
-      // 2. Navigate to protected route
-      // 3. Click Log Out
-      // 4. Verify redirected to home page
-    });
-
-    test('should not access protected routes after logout', async ({ page: _page }) => {
-      // This test would:
-      // 1. Log in using auth helper
-      // 2. Log out
-      // 3. Try to access protected route
-      // 4. Verify redirected to login
-    });
-  });
-
-  test.describe('Session Persistence', () => {
-    test.beforeEach(async ({ page: _page }, testInfo) => {
-      skipIfNoAuth(testInfo);
-    });
-
-    test('should maintain session across page reloads', async ({ page: _page }) => {
-      // This test would:
-      // 1. Log in using auth helper
-      // 2. Reload the page
-      // 3. Verify still authenticated
-      // 4. Verify Log Out button still visible
-    });
-
-    test('should maintain session across navigation', async ({ page: _page }) => {
-      // This test would:
-      // 1. Log in using auth helper
-      // 2. Navigate to different pages
-      // 3. Verify still authenticated on each page
     });
   });
 

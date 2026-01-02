@@ -13,11 +13,9 @@
 
 import { test, expect } from '@playwright/test'
 import { setupClerkTestingToken } from '@clerk/testing/playwright'
-import { skipIfNoAuth } from './helpers/auth'
 
 test.describe('Transaction Visual Enhancements', () => {
-  test.beforeEach(async ({ page }, testInfo) => {
-    skipIfNoAuth(testInfo);
+  test.beforeEach(async ({ page }) => {
     await setupClerkTestingToken({ page })
     // Navigate to the transactions page
     // Note: This requires authentication - use a logged in session
