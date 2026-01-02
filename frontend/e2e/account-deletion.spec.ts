@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { skipIfNoAuth } from './helpers/auth'
 
 /**
  * Account Deletion E2E Tests
@@ -145,20 +146,14 @@ test.describe('Account Deletion Flow', () => {
   })
 
   // ============================================================================
-  // AUTHENTICATED TESTS - Require Clerk Test Credentials (SKIPPED)
+  // AUTHENTICATED TESTS - Require Clerk Test Credentials
   // ============================================================================
-  //
-  // To enable these tests:
-  // 1. Set up Clerk test tenant
-  // 2. Create test user
-  // 3. Add credentials to e2e/.env.test
-  // 4. Update e2e/helpers/auth.ts with test login flow
-  // 5. Remove .skip from tests below
-  //
-  // See e2e/README.md for detailed setup instructions
-  // ============================================================================
+  test.describe('Authenticated Tests (Requires Auth)', () => {
+    test.beforeEach(async ({}, testInfo) => {
+      skipIfNoAuth(testInfo);
+    });
 
-  test.skip('should redirect unauthenticated users to login when accessing profile', async ({ page }) => {
+    test('should redirect unauthenticated users to login when accessing profile', async ({ page }) => {
     // Navigate to profile page (requires auth)
     await page.goto('/profile')
     await page.waitForLoadState('networkidle')
@@ -173,7 +168,7 @@ test.describe('Account Deletion Flow', () => {
     expect(isAtRoot || isAtClerk).toBe(true)
   })
 
-  test.skip('should display Delete Account section in Privacy Settings', async ({ page }) => {
+    test('should display Delete Account section in Privacy Settings', async ({ page }) => {
     // TODO: Requires Clerk test credentials
     // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
@@ -205,7 +200,7 @@ test.describe('Account Deletion Flow', () => {
     await expect(deleteButton).toBeEnabled()
   })
 
-  test.skip('should show confirmation dialog when delete button clicked', async ({ page }) => {
+    test('should show confirmation dialog when delete button clicked', async ({ page }) => {
     // TODO: Requires Clerk test credentials
     // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
@@ -229,7 +224,7 @@ test.describe('Account Deletion Flow', () => {
     await expect(page.getByRole('button', { name: /^cancel$/i })).toBeVisible()
   })
 
-  test.skip('should require checkbox confirmation before allowing deletion', async ({ page }) => {
+    test('should require checkbox confirmation before allowing deletion', async ({ page }) => {
     // TODO: Requires Clerk test credentials
     // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
@@ -249,7 +244,7 @@ test.describe('Account Deletion Flow', () => {
     await expect(confirmButton).toBeEnabled()
   })
 
-  test.skip('should cancel deletion request and close dialog', async ({ page }) => {
+    test('should cancel deletion request and close dialog', async ({ page }) => {
     // TODO: Requires Clerk test credentials
     // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
@@ -267,7 +262,7 @@ test.describe('Account Deletion Flow', () => {
     await expect(page.getByText('Are you absolutely sure?')).not.toBeVisible()
   })
 
-  test.skip('should successfully request account deletion', async ({ page }) => {
+    test('should successfully request account deletion', async ({ page }) => {
     // TODO: Requires Clerk test credentials
     // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
@@ -302,7 +297,7 @@ test.describe('Account Deletion Flow', () => {
     // This verifies the flow completes without errors
   })
 
-  test.skip('should display scheduled deletion date after request', async ({ page }) => {
+    test('should display scheduled deletion date after request', async ({ page }) => {
     // TODO: Requires Clerk test credentials
     // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
@@ -333,7 +328,7 @@ test.describe('Account Deletion Flow', () => {
     await expect(page.getByText(datePattern)).toBeVisible()
   })
 
-  test.skip('should display cancellation URL after deletion request', async ({ page }) => {
+    test('should display cancellation URL after deletion request', async ({ page }) => {
     // TODO: Requires Clerk test credentials
     // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
@@ -362,7 +357,7 @@ test.describe('Account Deletion Flow', () => {
     await expect(page.getByText(/abc123token/i)).toBeVisible()
   })
 
-  test.skip('should handle deletion request errors gracefully', async ({ page }) => {
+    test('should handle deletion request errors gracefully', async ({ page }) => {
     // TODO: Requires Clerk test credentials
     // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
@@ -390,7 +385,7 @@ test.describe('Account Deletion Flow', () => {
     await expect(page.getByText('Are you absolutely sure?')).toBeVisible()
   })
 
-  test.skip('should prevent multiple simultaneous deletion requests', async ({ page }) => {
+    test('should prevent multiple simultaneous deletion requests', async ({ page }) => {
     // TODO: Requires Clerk test credentials
     // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
 
@@ -426,4 +421,5 @@ test.describe('Account Deletion Flow', () => {
     const cancelButton = page.getByRole('button', { name: /^cancel$/i })
     await expect(cancelButton).toBeDisabled()
   })
+  })  // Close 'Authenticated Tests (Requires Auth)' describe
 })

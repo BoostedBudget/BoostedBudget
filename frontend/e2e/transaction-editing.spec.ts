@@ -10,7 +10,7 @@
 
 import { test, expect, type Page } from '@playwright/test'
 import { setupClerkTestingToken } from '@clerk/testing/playwright'
-import { loginWithClerk, acceptCookieConsent } from './helpers/auth'
+import { loginWithClerk, acceptCookieConsent, skipIfNoAuth } from './helpers/auth'
 
 // Mock data for transactions
 const mockTransactions = {
@@ -283,7 +283,14 @@ const describeTransactionEditing = skipClerkTests
   : test.describe
 
 describeTransactionEditing('Transaction Editing - Authenticated User', () => {
-  test.beforeEach(async ({ page, context }) => {
+  test.beforeEach(async ({ page, context }, testInfo) => {
+    // Skip if running in chromium-no-auth project
+    skipIfNoAuth(testInfo);
+
+    // Skip if credentials are not available
+    test.skip(!process.env.TEST_CLERK_EMAIL || !process.env.TEST_CLERK_PASSWORD,
+      'Requires TEST_CLERK_EMAIL and TEST_CLERK_PASSWORD');
+
     await context.clearCookies()
 
     await setupClerkTestingToken({ page })

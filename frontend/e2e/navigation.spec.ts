@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { acceptCookieConsent } from './helpers/auth';
+import { acceptCookieConsent, skipIfNoAuth } from './helpers/auth';
 
 /**
  * Navigation E2E Tests
@@ -131,9 +131,12 @@ test.describe('Navigation - Logo Links', () => {
   });
 });
 
-// Tests that require authentication would go here
-// Skipped because they require Clerk configuration
-test.describe.skip('Navigation - Authenticated', () => {
+// Tests that require authentication
+test.describe('Navigation - Authenticated', () => {
+  test.beforeEach(async ({}, testInfo) => {
+    skipIfNoAuth(testInfo);
+  });
+
   test('should show navigation links when authenticated', async ({ page: _page }) => {
     // This test requires authentication setup
     // Would verify: Dashboard, Accounts, Transactions, Budgets, Auto-Cat links
