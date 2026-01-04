@@ -56,10 +56,11 @@ export default defineConfig({
   // Retry on CI only
   retries: process.env.CI ? 2 : 0,
 
-  // Opt out of parallel tests on CI
-  // Limit to 2 workers locally to prevent memory exhaustion (was 8 on 8-core system)
+  // Use 2 workers for parallel test execution (both local and CI)
+  // Limit to 2 workers to prevent memory exhaustion (was 8 on 8-core system)
   // See: Memory leak investigation Oct 2025 - saves 1.5GB vs unlimited workers
-  workers: process.env.CI ? 1 : 2,
+  // Issue #616: Increased CI from 1 to 2 workers for faster execution
+  workers: 2,
 
   // Reporter to use
   reporter: [
