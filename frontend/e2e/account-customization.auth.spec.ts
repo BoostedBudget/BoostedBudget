@@ -428,7 +428,7 @@ test.describe('Account Customization - Color (Requires Auth)', () => {
     const dialog = page.getByRole('dialog');
 
     // Should have preset color buttons
-    const colorButtons = dialog.locator('.color-preset');
+    const colorButtons = dialog.locator('button[aria-label^="Select color"]');
     await expect(colorButtons.first()).toBeVisible();
   });
 
@@ -439,10 +439,10 @@ test.describe('Account Customization - Color (Requires Auth)', () => {
     const dialog = page.getByRole('dialog');
 
     // Click a preset color
-    await dialog.locator('.color-preset').first().click();
+    await dialog.locator('button[aria-label^="Select color"]').first().click();
 
     // The color should be selected (check for ring or border)
-    await expect(dialog.locator('.color-preset').first()).toHaveAttribute('aria-pressed', 'true');
+    await expect(dialog.locator('button[aria-label^="Select color"]').first()).toHaveAttribute('aria-pressed', 'true');
   });
 
   test('should apply color to account card', async ({ page }) => {
@@ -453,7 +453,7 @@ test.describe('Account Customization - Color (Requires Auth)', () => {
     const dialog = page.getByRole('dialog');
 
     // Select a color (e.g., blue)
-    await dialog.locator('.color-preset[title*="Blue"]').click();
+    await dialog.locator('button[aria-label="Select color #3B82F6"]').click();
 
     // Save
     await dialog.getByRole('button', { name: /save/i }).click();
@@ -471,8 +471,8 @@ test.describe('Account Customization - Color (Requires Auth)', () => {
 
     const dialog = page.getByRole('dialog');
 
-    // Click "No Color" button
-    await dialog.getByRole('button', { name: /no color/i }).click();
+    // Click "Clear color" button
+    await dialog.locator('button[aria-label="Clear color"]').click();
 
     // Save and verify no color border
     await dialog.getByRole('button', { name: /save/i }).click();
@@ -493,7 +493,7 @@ test.describe('Account Customization - Icon (Requires Auth)', () => {
     await expect(iconButtons.first()).toBeVisible();
 
     // Should have "No Icon" option
-    await expect(dialog.getByRole('button', { name: /no icon/i })).toBeVisible();
+    await expect(dialog.locator('button:has-text("No Icon")')).toBeVisible();
   });
 
   test('should select an icon', async ({ page }) => {
@@ -503,10 +503,10 @@ test.describe('Account Customization - Icon (Requires Auth)', () => {
     const dialog = page.getByRole('dialog');
 
     // Click wallet icon
-    await dialog.getByRole('button', { name: /select wallet icon/i }).click();
+    await dialog.locator('button[aria-label="Select Wallet icon"]').click();
 
     // Should show as selected
-    await expect(dialog.getByRole('button', { name: /select wallet icon/i })).toHaveAttribute('aria-pressed', 'true');
+    await expect(dialog.locator('button[aria-label="Select Wallet icon"]')).toHaveAttribute('aria-pressed', 'true');
   });
 
   test('should display selected icon on card', async ({ page }) => {
@@ -516,8 +516,8 @@ test.describe('Account Customization - Icon (Requires Auth)', () => {
 
     const dialog = page.getByRole('dialog');
 
-    // Select piggy bank icon
-    await dialog.getByRole('button', { name: /select savings icon/i }).click();
+    // Select piggy bank icon (label is "Savings")
+    await dialog.locator('button[aria-label="Select Savings icon"]').click();
 
     // Save
     await dialog.getByRole('button', { name: /save/i }).click();
@@ -538,7 +538,7 @@ test.describe('Account Customization - Emoji (Requires Auth)', () => {
     const dialog = page.getByRole('dialog');
 
     // Should have emoji input
-    await expect(dialog.getByPlaceholder(/enter emoji/i)).toBeVisible();
+    await expect(dialog.locator('input[aria-label="Emoji input"]')).toBeVisible();
   });
 
   test('should show emoji suggestions', async ({ page }) => {
@@ -548,7 +548,7 @@ test.describe('Account Customization - Emoji (Requires Auth)', () => {
     const dialog = page.getByRole('dialog');
 
     // Should show quick emoji buttons
-    const emojiButtons = dialog.locator('.emoji-suggestion');
+    const emojiButtons = dialog.locator('button[aria-label^="Select emoji"]');
     await expect(emojiButtons.first()).toBeVisible();
   });
 
@@ -559,10 +559,10 @@ test.describe('Account Customization - Emoji (Requires Auth)', () => {
     const dialog = page.getByRole('dialog');
 
     // Click a suggested emoji
-    await dialog.locator('.emoji-suggestion').first().click();
+    await dialog.locator('button[aria-label^="Select emoji"]').first().click();
 
     // Emoji input should now have the value
-    const input = dialog.getByPlaceholder(/enter emoji/i);
+    const input = dialog.locator('input[aria-label="Emoji input"]');
     const value = await input.inputValue();
     expect(value.length).toBeGreaterThan(0);
   });
@@ -575,7 +575,7 @@ test.describe('Account Customization - Emoji (Requires Auth)', () => {
     const dialog = page.getByRole('dialog');
 
     // Enter an emoji
-    await dialog.getByPlaceholder(/enter emoji/i).fill('💰');
+    await dialog.locator('input[aria-label="Emoji input"]').fill('💰');
 
     // Save
     await dialog.getByRole('button', { name: /save/i }).click();
@@ -596,7 +596,7 @@ test.describe('Account Customization - Hide/Show Toggle (Requires Auth)', () => 
     const dialog = page.getByRole('dialog');
 
     // Should have hidden toggle
-    await expect(dialog.getByRole('switch', { name: /hide.*account/i })).toBeVisible();
+    await expect(dialog.locator('button[role="switch"]')).toBeVisible();
   });
 
   test('should hide account when toggle is enabled', async ({ page }) => {
@@ -610,7 +610,7 @@ test.describe('Account Customization - Hide/Show Toggle (Requires Auth)', () => 
     await openCustomizationModal(page, cardName);
     const dialog = page.getByRole('dialog');
 
-    await dialog.getByRole('switch', { name: /hide.*account/i }).click();
+    await dialog.locator('button[role="switch"]').click();
     await dialog.getByRole('button', { name: /save/i }).click();
     await expect(dialog).not.toBeVisible();
 
@@ -784,7 +784,7 @@ test.describe('Account Customization - Preview (Requires Auth)', () => {
     await nicknameInput.fill('Test Preview');
 
     // Preview should show the new name
-    const preview = dialog.locator('.account-card-preview, .modal-preview');
+    const preview = dialog.locator('.rounded-lg.border').first();
     await expect(preview).toContainText('Test Preview');
   });
 
@@ -795,10 +795,10 @@ test.describe('Account Customization - Preview (Requires Auth)', () => {
     const dialog = page.getByRole('dialog');
 
     // Select a color
-    await dialog.locator('.color-preset').first().click();
+    await dialog.locator('button[aria-label^="Select color"]').first().click();
 
     // Preview should show the color
-    const preview = dialog.locator('.account-card-preview, .modal-preview');
+    const preview = dialog.locator('.rounded-lg.border').first();
     await expect(preview).toHaveCSS('border-left-style', 'solid');
   });
 });
@@ -848,16 +848,16 @@ test.describe('Account Customization - Accessibility (Requires Auth)', () => {
 
     // Tab to color section and navigate with arrow keys
     // Focus first color preset
-    await dialog.locator('.color-preset').first().focus();
+    await dialog.locator('button[aria-label^="Select color"]').first().focus();
 
     // Should be focusable
-    await expect(dialog.locator('.color-preset').first()).toBeFocused();
+    await expect(dialog.locator('button[aria-label^="Select color"]').first()).toBeFocused();
 
     // Press Enter to select
     await page.keyboard.press('Enter');
 
     // Should be selected
-    await expect(dialog.locator('.color-preset').first()).toHaveAttribute('aria-pressed', 'true');
+    await expect(dialog.locator('button[aria-label^="Select color"]').first()).toHaveAttribute('aria-pressed', 'true');
   });
 
   test('icon selector should be keyboard navigable', async ({ page }) => {
