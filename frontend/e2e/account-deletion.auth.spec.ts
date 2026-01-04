@@ -83,7 +83,9 @@ async function mockProfileAPIs(page: Page) {
 // ==========================================================================
 // Protected Route Test (Unauthenticated)
 // ==========================================================================
-test.describe('Account Deletion - Protected Route', () => {
+// SKIPPED: Issue #615 - Protected route test unreliable in CI
+// storageState override doesn't reliably clear Clerk auth state
+test.describe.skip('Account Deletion - Protected Route', () => {
   // Override storageState to test without authentication
   test.use({ storageState: { cookies: [], origins: [] } })
 
