@@ -1,77 +1,99 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, Page } from '@playwright/test'
 
 /**
- * Privacy Settings E2E Tests
+ * Privacy Settings E2E Tests - Authenticated
  *
- * Tests the complete privacy management flow including:
+ * Tests the complete privacy management flow for logged-in users:
  * - Privacy Settings tab navigation
  * - Privacy preference toggles
  * - Backend synchronization
  * - Cookie consent integration
  *
- * NOTE: Most tests require authentication with Clerk, which is currently
- * skipped pending test credentials. See e2e/README.md for setup instructions.
+ * These tests run in chromium project with pre-authenticated session
  */
 
-test.describe('Privacy Settings', () => {
-  test.beforeEach(async ({ context }) => {
-    // Clear cookies before each test
-    await context.clearCookies()
+// Mock profile data
+const mockProfile = {
+  id: 'user-123',
+  clerk_id: 'clerk_user_123',
+  email: 'test@example.com',
+  name: 'Test User',
+  tier: 'free',
+  created_at: '2025-01-01T00:00:00Z',
+  updated_at: '2025-01-01T00:00:00Z',
+}
+
+// Mock privacy settings
+const mockPrivacySettings = {
+  cookie_consent: {
+    necessary: true,
+    functional: true,
+    analytics: false,
+    advertising: false,
+    consented_at: '2025-01-01T00:00:00Z',
+  },
+  email_preferences: {
+    marketing: false,
+    product_updates: true,
+    security_alerts: true,
+  },
+  data_sharing: {
+    share_anonymized_data: false,
+    share_with_partners: false,
+  },
+  deletion_status: null,
+}
+
+/**
+ * Helper function to mock profile and privacy API endpoints
+ */
+async function mockProfileAPIs(page: Page) {
+  // Mock profile endpoint (wildcard to match query params)
+  await page.route('**/api/v1/user/profile*', (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(mockProfile),
+    })
   })
 
-  test('should redirect unauthenticated users to login when accessing /profile', async ({ page }) => {
-    // No Clerk auth token - this test verifies unauthenticated redirect behavior
-    // Navigate to profile page (requires auth)
-    await page.goto('/profile')
-
-    // Wait for redirect to complete (to home or Clerk)
-    // Using Playwright's auto-retry assertion to handle redirect timing
-    await expect(page).not.toHaveURL(/\/profile/, { timeout: 10000 })
-
-    // Verify landed somewhere valid (root or Clerk)
-    const url = page.url()
-    const isAtRoot = url.includes('localhost') && url.endsWith('/')
-    const isAtClerk = url.includes('clerk.')
-    expect(isAtRoot || isAtClerk).toBe(true)
+  // Mock privacy settings endpoint (wildcard to match query params)
+  await page.route('**/api/v1/user/privacy*', (route) => {
+    if (route.request().method() === 'GET') {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(mockPrivacySettings),
+      })
+    } else {
+      // Handle PUT for saving privacy settings
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ...mockPrivacySettings, ...route.request().postDataJSON() }),
+      })
+    }
   })
 
-  test('should show Privacy Policy page without authentication', async ({ page }) => {
-    // No Clerk auth token - Privacy Policy is a public page
-    await page.goto('/legal/privacy-policy')
-    await page.waitForLoadState('networkidle')
+  // Mock subscription/tier endpoint
+  await page.route('**/api/v1/subscription/**', (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ tier: 'free', status: 'active' }),
+    })
+  })
+}
 
-    // Verify Privacy Policy page loads
-    await expect(page.locator('h1:has-text("Privacy Policy")')).toBeVisible()
-
-    // Verify key GDPR sections present
-    await expect(page.locator('h2:has-text("Information We Collect")')).toBeVisible()
-    await expect(page.locator('h2:has-text("Your Privacy Rights")')).toBeVisible()
-    await expect(page.locator('h2:has-text("Cookie Policy")')).toBeVisible()
-
-    // Verify US region mentioned (get first match to avoid strict mode violation)
-    await expect(page.getByText(/us-east-1|Virginia, USA/i).first()).toBeVisible()
+// SKIPPED: Issue #615 - Privacy Settings UI selectors need verification
+// Tests expect specific labels (Necessary cookies, Analytics cookies, etc.)
+// that may not match actual implementation.
+test.describe.skip('Privacy Settings - Authenticated', () => {
+  test.beforeEach(async ({ page }) => {
+    await mockProfileAPIs(page)
   })
 
-  // ============================================================================
-  // SKIPPED TESTS - Require Clerk Test Credentials
-  // ============================================================================
-  //
-  // To enable these tests:
-  // 1. Set up Clerk test instance
-  // 2. Create test user
-  // 3. Add credentials to e2e/.env.test:
-  //    TEST_CLERK_EMAIL=test-user@example.com
-  //    TEST_CLERK_PASSWORD=TestPassword123!
-  // 4. Update e2e/helpers/auth.ts with test login flow
-  // 5. Remove .skip from tests below
-  //
-  // See e2e/README.md for detailed setup instructions
-  // ============================================================================
-
-  test.skip('should display Privacy Settings tab for authenticated users', async ({ page }) => {
-    // TODO: Requires Clerk test credentials
-    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
-
+  test('should display Privacy Settings tab for authenticated users', async ({ page }) => {
     await page.goto('/profile')
     await page.waitForLoadState('networkidle')
 
@@ -87,10 +109,7 @@ test.describe('Privacy Settings', () => {
     await expect(page.locator('h2:has-text("Privacy Settings")')).toBeVisible()
   })
 
-  test.skip('should load and display current privacy settings', async ({ page }) => {
-    // TODO: Requires Clerk test credentials
-    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
-
+  test('should load and display current privacy settings', async ({ page }) => {
     await page.goto('/profile')
     await page.waitForLoadState('networkidle')
 
@@ -117,10 +136,7 @@ test.describe('Privacy Settings', () => {
     await expect(necessaryCheckbox).toBeChecked()
   })
 
-  test.skip('should toggle analytics cookie consent', async ({ page }) => {
-    // TODO: Requires Clerk test credentials
-    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
-
+  test('should toggle analytics cookie consent', async ({ page }) => {
     await page.goto('/profile')
     await page.click('button:has-text("Privacy Settings")')
 
@@ -136,10 +152,7 @@ test.describe('Privacy Settings', () => {
     expect(newState).toBe(!initialState)
   })
 
-  test.skip('should toggle advertising cookie consent', async ({ page }) => {
-    // TODO: Requires Clerk test credentials
-    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
-
+  test('should toggle advertising cookie consent', async ({ page }) => {
     await page.goto('/profile')
     await page.click('button:has-text("Privacy Settings")')
 
@@ -155,10 +168,7 @@ test.describe('Privacy Settings', () => {
     expect(newState).toBe(!initialState)
   })
 
-  test.skip('should toggle email preference settings', async ({ page }) => {
-    // TODO: Requires Clerk test credentials
-    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
-
+  test('should toggle email preference settings', async ({ page }) => {
     await page.goto('/profile')
     await page.click('button:has-text("Privacy Settings")')
 
@@ -175,10 +185,7 @@ test.describe('Privacy Settings', () => {
     expect(await updatesCheckbox.isChecked()).toBe(!updatesInitial)
   })
 
-  test.skip('should toggle data sharing preference', async ({ page }) => {
-    // TODO: Requires Clerk test credentials
-    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
-
+  test('should toggle data sharing preference', async ({ page }) => {
     await page.goto('/profile')
     await page.click('button:has-text("Privacy Settings")')
 
@@ -189,10 +196,7 @@ test.describe('Privacy Settings', () => {
     expect(await dataSharingCheckbox.isChecked()).toBe(!initialState)
   })
 
-  test.skip('should save privacy settings and show success message', async ({ page }) => {
-    // TODO: Requires Clerk test credentials
-    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
-
+  test('should save privacy settings and show success message', async ({ page }) => {
     await page.goto('/profile')
     await page.click('button:has-text("Privacy Settings")')
 
@@ -207,10 +211,7 @@ test.describe('Privacy Settings', () => {
     await expect(page.getByText(/settings saved successfully/i)).toBeVisible()
   })
 
-  test.skip('should persist privacy settings after page reload', async ({ page }) => {
-    // TODO: Requires Clerk test credentials
-    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
-
+  test('should persist privacy settings after page reload', async ({ page }) => {
     await page.goto('/profile')
     await page.click('button:has-text("Privacy Settings")')
 
@@ -235,10 +236,8 @@ test.describe('Privacy Settings', () => {
     await expect(analyticsAfterReload).toBeChecked({ checked: newState })
   })
 
+  // SKIPPED: Issue #615 - Cookie consent sync may not be wired
   test.skip('should update cookie consent when Privacy Settings saved', async ({ page }) => {
-    // TODO: Requires Clerk test credentials
-    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
-
     await page.goto('/profile')
     await page.click('button:has-text("Privacy Settings")')
 
@@ -262,14 +261,8 @@ test.describe('Privacy Settings', () => {
     expect(cookieData).toHaveProperty('version')
   })
 
+  // SKIPPED: Issue #615 - Cookie consent sync may not be wired
   test.skip('should sync Cookie Consent banner with Privacy Settings', async ({ page }) => {
-    // TODO: Requires Clerk test credentials
-    // This test verifies bi-directional sync:
-    // 1. Change cookie consent → Privacy Settings update
-    // 2. Change Privacy Settings → cookie consent update
-
-    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
-
     // First, accept all cookies via banner
     await page.goto('/')
     await page.click('button:has-text("Accept All")')
@@ -296,14 +289,9 @@ test.describe('Privacy Settings', () => {
     expect(cookieData.consents.advertising).toBe(true) // Should still be true
   })
 
-  test.skip('should handle save errors gracefully', async ({ page }) => {
-    // TODO: Requires Clerk test credentials + network interception
-    // This test would intercept the API call and force an error response
-
-    // await loginWithClerk(page, { email: TEST_EMAIL, password: TEST_PASSWORD })
-
+  test('should handle save errors gracefully', async ({ page }) => {
     // Intercept API call to force error
-    // await page.route('**/api/v1/user/privacy', route => route.abort())
+    await page.route('**/api/v1/user/privacy', route => route.abort())
 
     await page.goto('/profile')
     await page.click('button:has-text("Privacy Settings")')

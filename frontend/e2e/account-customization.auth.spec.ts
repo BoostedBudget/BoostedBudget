@@ -16,8 +16,261 @@ import { acceptCookieConsent } from './helpers/auth';
  * - Drag-and-drop reordering
  */
 
+// Mock account data for tests
+const mockAccounts = {
+  accounts: [
+    {
+      id: 'acc-1',
+      linked_item_id: 'item-1',
+      user_id: 'user-123',
+      plaid_account_id: 'plaid-acc-1',
+      name: 'Primary Checking',
+      official_name: 'Premium Checking Account',
+      type: 'depository',
+      subtype: 'checking',
+      mask: '1234',
+      current_balance: 5000.0,
+      available_balance: 4500.0,
+      currency_code: 'USD',
+      institution_name: 'Chase',
+      nickname: null,
+      color: null,
+      icon: null,
+      emoji: null,
+      is_hidden: false,
+      display_order: 0,
+      created_at: '2025-01-01T00:00:00Z',
+      updated_at: '2025-01-01T00:00:00Z',
+    },
+    {
+      id: 'acc-2',
+      linked_item_id: 'item-1',
+      user_id: 'user-123',
+      plaid_account_id: 'plaid-acc-2',
+      name: 'Savings Account',
+      official_name: 'High Yield Savings',
+      type: 'depository',
+      subtype: 'savings',
+      mask: '5678',
+      current_balance: 10000.0,
+      available_balance: 10000.0,
+      currency_code: 'USD',
+      institution_name: 'Chase',
+      nickname: 'Emergency Fund',
+      color: '#4CAF50',
+      icon: 'piggy-bank',
+      emoji: null,
+      is_hidden: false,
+      display_order: 1,
+      created_at: '2025-01-01T00:00:00Z',
+      updated_at: '2025-01-01T00:00:00Z',
+    },
+    {
+      id: 'acc-3',
+      linked_item_id: 'item-1',
+      user_id: 'user-123',
+      plaid_account_id: 'plaid-acc-3',
+      name: 'Credit Card',
+      official_name: 'Rewards Credit Card',
+      type: 'credit',
+      subtype: 'credit card',
+      mask: '9999',
+      current_balance: -1500.0,
+      available_balance: 8500.0,
+      currency_code: 'USD',
+      institution_name: 'Chase',
+      nickname: null,
+      color: null,
+      icon: null,
+      emoji: null,
+      is_hidden: false,
+      display_order: 2,
+      created_at: '2025-01-01T00:00:00Z',
+      updated_at: '2025-01-01T00:00:00Z',
+    },
+  ],
+  total_count: 3,
+};
+
+// Store for tracking account updates during tests
+let accountUpdates: Record<string, object> = {};
+
+/**
+ * Helper function to mock all accounts API endpoints
+ */
+async function mockAccountsAPIs(page: Page) {
+  // Reset updates tracker
+  accountUpdates = {};
+
+  // Mock accounts list endpoint (with wildcard to match query params like ?include_hidden=true)
+  await page.route('**/api/v1/accounts*', (route) => {
+    if (route.request().method() === 'GET') {
+      // Return accounts with any pending updates applied
+      const updatedAccounts = mockAccounts.accounts.map((acc) => ({
+        ...acc,
+        ...(accountUpdates[acc.id] || {}),
+      }));
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ accounts: updatedAccounts, total_count: updatedAccounts.length }),
+      });
+    } else {
+      route.continue();
+    }
+  });
+
+  // Mock single account GET/PUT/PATCH
+  await page.route('**/api/v1/accounts/*', (route) => {
+    const url = route.request().url();
+    const method = route.request().method();
+
+    // Skip reorder endpoint (handled separately)
+    if (url.includes('/reorder')) {
+      route.continue();
+      return;
+    }
+
+    // Extract account ID from URL
+    const accountIdMatch = url.match(/\/accounts\/([^/?]+)/);
+    const accountId = accountIdMatch ? accountIdMatch[1] : null;
+
+    if (method === 'GET' && accountId) {
+      const account = mockAccounts.accounts.find((a) => a.id === accountId);
+      if (account) {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ ...account, ...(accountUpdates[accountId] || {}) }),
+        });
+      } else {
+        route.fulfill({ status: 404, body: JSON.stringify({ error: 'Account not found' }) });
+      }
+    } else if ((method === 'PUT' || method === 'PATCH') && accountId) {
+      const updates = route.request().postDataJSON();
+      accountUpdates[accountId] = { ...(accountUpdates[accountId] || {}), ...updates };
+      const account = mockAccounts.accounts.find((a) => a.id === accountId);
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ...account, ...accountUpdates[accountId] }),
+      });
+    } else {
+      route.continue();
+    }
+  });
+
+  // Mock account reorder endpoint
+  await page.route('**/api/v1/accounts/reorder', (route) => {
+    if (route.request().method() === 'POST' || route.request().method() === 'PUT') {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true }),
+      });
+    } else {
+      route.continue();
+    }
+  });
+
+  // Mock linked items endpoint (for PlaidLink button state)
+  await page.route('**/api/v1/linked-items*', (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        items: [
+          {
+            id: 'item-1',
+            institution_name: 'Chase',
+            status: 'active',
+            last_successful_sync: '2025-01-01T00:00:00Z',
+          },
+        ],
+        total_count: 1,
+      }),
+    });
+  });
+
+  // Mock user profile endpoint (Issue #582 - required by useProfile hook)
+  await page.route('**/api/v1/user/profile*', (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'user-123',
+        clerk_id: 'clerk_user_123',
+        email: 'test@example.com',
+        name: 'Test User',
+        tier: 'free',
+        created_at: '2025-01-01T00:00:00Z',
+        updated_at: '2025-01-01T00:00:00Z',
+      }),
+    });
+  });
+
+  // Mock subscription tiers endpoint (Issue #582 - required by useSubscriptionTiers hook)
+  await page.route('**/api/v1/subscription/tiers*', (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        tiers: {
+          free: {
+            name: 'Free',
+            account_limit: 3,
+            rule_limit: 1,
+            sync_frequency: '1x/day',
+            price_monthly: 0,
+            features: ['3 linked accounts', '1 automation rule'],
+          },
+          premium_lite: {
+            name: 'Premium Lite',
+            account_limit: 15,
+            rule_limit: 5,
+            sync_frequency: '2x/day',
+            price_monthly: 499,
+            features: ['15 linked accounts', '5 automation rules'],
+          },
+          premium: {
+            name: 'Premium',
+            account_limit: 30,
+            rule_limit: 15,
+            sync_frequency: '6x/day',
+            price_monthly: 999,
+            features: ['30 linked accounts', '15 automation rules'],
+          },
+          premium_plus: {
+            name: 'Premium+',
+            account_limit: -1,
+            rule_limit: -1,
+            sync_frequency: 'every 10min',
+            price_monthly: 1999,
+            features: ['Unlimited accounts', 'Unlimited rules', 'AI features'],
+          },
+        },
+      }),
+    });
+  });
+
+  // Mock sync stats endpoint (Issue #582 - required by SyncStatsCard)
+  await page.route('**/api/v1/sync/stats*', (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        syncs_this_month: 5,
+        syncs_limit: 30,
+        last_sync: '2025-01-01T00:00:00Z',
+        next_sync_available: '2025-01-02T00:00:00Z',
+      }),
+    });
+  });
+}
+
 // Helper to navigate to accounts page
 async function navigateToAccountsPage(page: Page) {
+  await mockAccountsAPIs(page);
   await setupClerkTestingToken({ page });
   await page.goto('/accounts');
   await acceptCookieConsent(page);
@@ -35,6 +288,9 @@ async function openCustomizationModal(page: Page, accountName: string) {
   await expect(page.getByRole('dialog')).toBeVisible();
 }
 
+// SKIPPED: Issue #615 - Selectors need verification against actual component structure
+// Tests expect specific CSS classes (.account-card, .account-card__edit-btn, etc.)
+// and DnD library not yet integrated
 test.describe.skip('Account Customization - UI Elements (Requires Auth)', () => {
   test.beforeEach(async ({ page }) => {
     await navigateToAccountsPage(page);
@@ -61,7 +317,9 @@ test.describe.skip('Account Customization - UI Elements (Requires Auth)', () => 
 });
 
 // Tests that require authenticated state with accounts
+// SKIPPED: Issue #615 - Selectors need verification
 test.describe.skip('Account Customization - Modal (Requires Auth)', () => {
+
   test('should open customization modal on edit button click', async ({ page }) => {
     await navigateToAccountsPage(page);
 
@@ -126,7 +384,9 @@ test.describe.skip('Account Customization - Modal (Requires Auth)', () => {
   });
 });
 
+// SKIPPED: Issue #615 - Selectors need verification
 test.describe.skip('Account Customization - Nickname (Requires Auth)', () => {
+
   test('should update nickname and display it', async ({ page }) => {
     await navigateToAccountsPage(page);
     await openCustomizationModal(page, 'Primary Checking');
@@ -164,7 +424,9 @@ test.describe.skip('Account Customization - Nickname (Requires Auth)', () => {
   });
 });
 
+// SKIPPED: Issue #615 - Selectors need verification
 test.describe.skip('Account Customization - Color (Requires Auth)', () => {
+
   test('should display color picker with presets', async ({ page }) => {
     await navigateToAccountsPage(page);
     await page.locator('.account-card__edit-btn').first().click();
@@ -172,7 +434,7 @@ test.describe.skip('Account Customization - Color (Requires Auth)', () => {
     const dialog = page.getByRole('dialog');
 
     // Should have preset color buttons
-    const colorButtons = dialog.locator('.color-preset');
+    const colorButtons = dialog.locator('button[aria-label^="Select color"]');
     await expect(colorButtons.first()).toBeVisible();
   });
 
@@ -183,10 +445,10 @@ test.describe.skip('Account Customization - Color (Requires Auth)', () => {
     const dialog = page.getByRole('dialog');
 
     // Click a preset color
-    await dialog.locator('.color-preset').first().click();
+    await dialog.locator('button[aria-label^="Select color"]').first().click();
 
     // The color should be selected (check for ring or border)
-    await expect(dialog.locator('.color-preset').first()).toHaveAttribute('aria-pressed', 'true');
+    await expect(dialog.locator('button[aria-label^="Select color"]').first()).toHaveAttribute('aria-pressed', 'true');
   });
 
   test('should apply color to account card', async ({ page }) => {
@@ -197,7 +459,7 @@ test.describe.skip('Account Customization - Color (Requires Auth)', () => {
     const dialog = page.getByRole('dialog');
 
     // Select a color (e.g., blue)
-    await dialog.locator('.color-preset[title*="Blue"]').click();
+    await dialog.locator('button[aria-label="Select color #3B82F6"]').click();
 
     // Save
     await dialog.getByRole('button', { name: /save/i }).click();
@@ -215,8 +477,8 @@ test.describe.skip('Account Customization - Color (Requires Auth)', () => {
 
     const dialog = page.getByRole('dialog');
 
-    // Click "No Color" button
-    await dialog.getByRole('button', { name: /no color/i }).click();
+    // Click "Clear color" button
+    await dialog.locator('button[aria-label="Clear color"]').click();
 
     // Save and verify no color border
     await dialog.getByRole('button', { name: /save/i }).click();
@@ -224,7 +486,9 @@ test.describe.skip('Account Customization - Color (Requires Auth)', () => {
   });
 });
 
+// SKIPPED: Issue #615 - Selectors need verification
 test.describe.skip('Account Customization - Icon (Requires Auth)', () => {
+
   test('should display icon grid', async ({ page }) => {
     await navigateToAccountsPage(page);
     await page.locator('.account-card__edit-btn').first().click();
@@ -236,7 +500,7 @@ test.describe.skip('Account Customization - Icon (Requires Auth)', () => {
     await expect(iconButtons.first()).toBeVisible();
 
     // Should have "No Icon" option
-    await expect(dialog.getByRole('button', { name: /no icon/i })).toBeVisible();
+    await expect(dialog.locator('button:has-text("No Icon")')).toBeVisible();
   });
 
   test('should select an icon', async ({ page }) => {
@@ -246,10 +510,10 @@ test.describe.skip('Account Customization - Icon (Requires Auth)', () => {
     const dialog = page.getByRole('dialog');
 
     // Click wallet icon
-    await dialog.getByRole('button', { name: /select wallet icon/i }).click();
+    await dialog.locator('button[aria-label="Select Wallet icon"]').click();
 
     // Should show as selected
-    await expect(dialog.getByRole('button', { name: /select wallet icon/i })).toHaveAttribute('aria-pressed', 'true');
+    await expect(dialog.locator('button[aria-label="Select Wallet icon"]')).toHaveAttribute('aria-pressed', 'true');
   });
 
   test('should display selected icon on card', async ({ page }) => {
@@ -259,8 +523,8 @@ test.describe.skip('Account Customization - Icon (Requires Auth)', () => {
 
     const dialog = page.getByRole('dialog');
 
-    // Select piggy bank icon
-    await dialog.getByRole('button', { name: /select savings icon/i }).click();
+    // Select piggy bank icon (label is "Savings")
+    await dialog.locator('button[aria-label="Select Savings icon"]').click();
 
     // Save
     await dialog.getByRole('button', { name: /save/i }).click();
@@ -272,7 +536,9 @@ test.describe.skip('Account Customization - Icon (Requires Auth)', () => {
   });
 });
 
+// SKIPPED: Issue #615 - Selectors need verification
 test.describe.skip('Account Customization - Emoji (Requires Auth)', () => {
+
   test('should have emoji input field', async ({ page }) => {
     await navigateToAccountsPage(page);
     await page.locator('.account-card__edit-btn').first().click();
@@ -280,7 +546,7 @@ test.describe.skip('Account Customization - Emoji (Requires Auth)', () => {
     const dialog = page.getByRole('dialog');
 
     // Should have emoji input
-    await expect(dialog.getByPlaceholder(/enter emoji/i)).toBeVisible();
+    await expect(dialog.locator('input[aria-label="Emoji input"]')).toBeVisible();
   });
 
   test('should show emoji suggestions', async ({ page }) => {
@@ -290,7 +556,7 @@ test.describe.skip('Account Customization - Emoji (Requires Auth)', () => {
     const dialog = page.getByRole('dialog');
 
     // Should show quick emoji buttons
-    const emojiButtons = dialog.locator('.emoji-suggestion');
+    const emojiButtons = dialog.locator('button[aria-label^="Select emoji"]');
     await expect(emojiButtons.first()).toBeVisible();
   });
 
@@ -301,10 +567,10 @@ test.describe.skip('Account Customization - Emoji (Requires Auth)', () => {
     const dialog = page.getByRole('dialog');
 
     // Click a suggested emoji
-    await dialog.locator('.emoji-suggestion').first().click();
+    await dialog.locator('button[aria-label^="Select emoji"]').first().click();
 
     // Emoji input should now have the value
-    const input = dialog.getByPlaceholder(/enter emoji/i);
+    const input = dialog.locator('input[aria-label="Emoji input"]');
     const value = await input.inputValue();
     expect(value.length).toBeGreaterThan(0);
   });
@@ -317,7 +583,7 @@ test.describe.skip('Account Customization - Emoji (Requires Auth)', () => {
     const dialog = page.getByRole('dialog');
 
     // Enter an emoji
-    await dialog.getByPlaceholder(/enter emoji/i).fill('💰');
+    await dialog.locator('input[aria-label="Emoji input"]').fill('💰');
 
     // Save
     await dialog.getByRole('button', { name: /save/i }).click();
@@ -329,7 +595,9 @@ test.describe.skip('Account Customization - Emoji (Requires Auth)', () => {
   });
 });
 
+// SKIPPED: Issue #615 - Selectors need verification
 test.describe.skip('Account Customization - Hide/Show Toggle (Requires Auth)', () => {
+
   test('should have hide account toggle in modal', async ({ page }) => {
     await navigateToAccountsPage(page);
     await page.locator('.account-card__edit-btn').first().click();
@@ -337,7 +605,7 @@ test.describe.skip('Account Customization - Hide/Show Toggle (Requires Auth)', (
     const dialog = page.getByRole('dialog');
 
     // Should have hidden toggle
-    await expect(dialog.getByRole('switch', { name: /hide.*account/i })).toBeVisible();
+    await expect(dialog.locator('button[role="switch"]')).toBeVisible();
   });
 
   test('should hide account when toggle is enabled', async ({ page }) => {
@@ -351,7 +619,7 @@ test.describe.skip('Account Customization - Hide/Show Toggle (Requires Auth)', (
     await openCustomizationModal(page, cardName);
     const dialog = page.getByRole('dialog');
 
-    await dialog.getByRole('switch', { name: /hide.*account/i }).click();
+    await dialog.locator('button[role="switch"]').click();
     await dialog.getByRole('button', { name: /save/i }).click();
     await expect(dialog).not.toBeVisible();
 
@@ -406,7 +674,9 @@ test.describe.skip('Account Customization - Hide/Show Toggle (Requires Auth)', (
   });
 });
 
+// SKIPPED: Issue #615 - DnD library not yet integrated
 test.describe.skip('Account Customization - Drag and Drop Reordering (Requires Auth)', () => {
+
   test('should show drag handles on account cards', async ({ page }) => {
     await navigateToAccountsPage(page);
 
@@ -501,7 +771,9 @@ test.describe.skip('Account Customization - Drag and Drop Reordering (Requires A
   });
 });
 
+// SKIPPED: Issue #615 - Selectors need verification
 test.describe.skip('Account Customization - Preview (Requires Auth)', () => {
+
   test('should show live preview in modal', async ({ page }) => {
     await navigateToAccountsPage(page);
     await page.locator('.account-card__edit-btn').first().click();
@@ -523,7 +795,7 @@ test.describe.skip('Account Customization - Preview (Requires Auth)', () => {
     await nicknameInput.fill('Test Preview');
 
     // Preview should show the new name
-    const preview = dialog.locator('.account-card-preview, .modal-preview');
+    const preview = dialog.locator('.rounded-lg.border').first();
     await expect(preview).toContainText('Test Preview');
   });
 
@@ -534,15 +806,17 @@ test.describe.skip('Account Customization - Preview (Requires Auth)', () => {
     const dialog = page.getByRole('dialog');
 
     // Select a color
-    await dialog.locator('.color-preset').first().click();
+    await dialog.locator('button[aria-label^="Select color"]').first().click();
 
     // Preview should show the color
-    const preview = dialog.locator('.account-card-preview, .modal-preview');
+    const preview = dialog.locator('.rounded-lg.border').first();
     await expect(preview).toHaveCSS('border-left-style', 'solid');
   });
 });
 
+// SKIPPED: Issue #615 - Selectors need verification
 test.describe.skip('Account Customization - Accessibility (Requires Auth)', () => {
+
   test('modal should trap focus', async ({ page }) => {
     await navigateToAccountsPage(page);
     await page.locator('.account-card__edit-btn').first().click();
@@ -586,16 +860,16 @@ test.describe.skip('Account Customization - Accessibility (Requires Auth)', () =
 
     // Tab to color section and navigate with arrow keys
     // Focus first color preset
-    await dialog.locator('.color-preset').first().focus();
+    await dialog.locator('button[aria-label^="Select color"]').first().focus();
 
     // Should be focusable
-    await expect(dialog.locator('.color-preset').first()).toBeFocused();
+    await expect(dialog.locator('button[aria-label^="Select color"]').first()).toBeFocused();
 
     // Press Enter to select
     await page.keyboard.press('Enter');
 
     // Should be selected
-    await expect(dialog.locator('.color-preset').first()).toHaveAttribute('aria-pressed', 'true');
+    await expect(dialog.locator('button[aria-label^="Select color"]').first()).toHaveAttribute('aria-pressed', 'true');
   });
 
   test('icon selector should be keyboard navigable', async ({ page }) => {
@@ -628,7 +902,9 @@ test.describe.skip('Account Customization - Accessibility (Requires Auth)', () =
   });
 });
 
+// SKIPPED: Issue #615 - Selectors need verification
 test.describe.skip('Account Customization - Error Handling (Requires Auth)', () => {
+
   test('should show error message on save failure', async ({ page }) => {
     await navigateToAccountsPage(page);
     await page.locator('.account-card__edit-btn').first().click();

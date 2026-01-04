@@ -1,4 +1,18 @@
 import { defineConfig, devices } from '@playwright/test';
+import { existsSync } from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
+
+// ES module equivalent of __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Ensure VITE_CLERK_PUBLISHABLE_KEY is available for test files
+// Test files check this env var at module load time for conditional skip logic
+// Without this, authenticated test suites skip even when credentials are available
+if (!process.env.VITE_CLERK_PUBLISHABLE_KEY && process.env.CLERK_PUBLISHABLE_KEY) {
+  process.env.VITE_CLERK_PUBLISHABLE_KEY = process.env.CLERK_PUBLISHABLE_KEY;
+}
 
 /**
  * Playwright E2E Test Configuration
@@ -7,12 +21,24 @@ import { defineConfig, devices } from '@playwright/test';
  * Dynamic Port Allocation:
  * - E2E_FRONTEND_PORT: Override frontend port (default: 3000)
  * - E2E_BACKEND_PORT: Override backend port (default: 8080)
+ * - E2E_POSTGRES_PORT: Override PostgreSQL port (dynamic, set by run-e2e-with-ports.sh)
+ * - DATABASE_URL: PostgreSQL connection string (set by run-e2e-with-ports.sh)
  * - Use scripts/find-available-ports.js in CI to avoid port conflicts
+ *
+ * Authentication:
+ * - TEST_CLERK_EMAIL: Email of Clerk test user (for authenticated tests)
+ * - TEST_CLERK_PASSWORD: Password for test user
+ * - Auth session saved to e2e/.auth/user.json, reused by chromium project
  */
 
-// Get dynamic ports from environment, fallback to defaults
+// Get dynamic ports and database URL from environment, fallback to defaults
 const frontendPort = process.env.E2E_FRONTEND_PORT || '3000';
 const backendPort = process.env.E2E_BACKEND_PORT || '8080';
+const databaseUrl = process.env.DATABASE_URL || '';
+
+// Auth session file path
+const authFile = join(__dirname, 'e2e/.auth/user.json');
+const hasAuthSession = existsSync(authFile);
 
 export default defineConfig({
   // Test directory
@@ -70,10 +96,37 @@ export default defineConfig({
       name: 'setup',
       testMatch: /global-setup\.ts/,
     },
+    // Authentication setup - logs in once and saves session state
+    // Requires TEST_CLERK_EMAIL and TEST_CLERK_PASSWORD env vars
+    // Session is saved to e2e/.auth/user.json and reused by chromium project
+    {
+      name: 'auth',
+      testMatch: /auth\.setup\.ts/,
+      dependencies: ['setup'],
+    },
+    // Main test project - uses saved authentication state if available
+    // Only runs *.auth.spec.ts files (authenticated tests)
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
-      dependencies: ['setup'], // Ensure Clerk setup runs first
+      testMatch: /\.auth\.spec\.ts$/,
+      use: {
+        ...devices['Desktop Chrome'],
+        // Use saved auth state from auth.setup.ts if it exists
+        // When auth setup is skipped (no TEST_CLERK_* env vars), tests run unauthenticated
+        ...(hasAuthSession ? { storageState: authFile } : {}),
+      },
+      dependencies: ['auth'],
+    },
+    // Unauthenticated project for tests that don't require login
+    // Only runs *.noauth.spec.ts files (public/unauthenticated tests)
+    {
+      name: 'chromium-no-auth',
+      testMatch: /\.noauth\.spec\.ts$/,
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: { cookies: [], origins: [] },
+      },
+      dependencies: ['setup'],
     },
   ],
 
@@ -81,16 +134,18 @@ export default defineConfig({
   // Comment this out if you want to run tests against already running servers
   webServer: [
     {
-      // Pass PORT and E2E_BACKEND_PORT env vars to Vite for dynamic port allocation
+      // Pass PORT, E2E_BACKEND_PORT, and VITE_CLERK_PUBLISHABLE_KEY env vars to Vite
       // E2E_BACKEND_PORT is needed for the Vite proxy configuration
-      command: `PORT=${frontendPort} E2E_BACKEND_PORT=${backendPort} pnpm run dev`,
+      // VITE_CLERK_PUBLISHABLE_KEY enables Clerk authentication (Vite only exposes VITE_* vars)
+      command: `PORT=${frontendPort} E2E_BACKEND_PORT=${backendPort} VITE_CLERK_PUBLISHABLE_KEY=${process.env.CLERK_PUBLISHABLE_KEY || ''} pnpm run dev`,
       url: `http://localhost:${frontendPort}`,
       reuseExistingServer: !process.env.CI,
       timeout: 120 * 1000,
     },
     {
-      // Pass PORT env var to backend for dynamic port allocation
-      command: `cd ../backend && PORT=${backendPort} ./bin/server`,
+      // Pass PORT and DATABASE_URL env vars to backend for dynamic port allocation
+      // DATABASE_URL is set by run-e2e-with-ports.sh when PostgreSQL container is available
+      command: `cd ../backend && PORT=${backendPort} DATABASE_URL="${databaseUrl}" ./bin/server`,
       url: `http://localhost:${backendPort}/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 120 * 1000,

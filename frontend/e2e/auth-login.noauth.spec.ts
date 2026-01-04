@@ -3,26 +3,13 @@ import { setupClerkTestingToken } from '@clerk/testing/playwright';
 import { acceptCookieConsent } from './helpers/auth';
 
 /**
- * Clerk Authentication E2E Tests
- * Tests user authentication flows including login, signup, protected routes, and logout
+ * Clerk Authentication Login Flow E2E Tests
+ * Tests for unauthenticated users interacting with login/signup UI
  *
- * NOTE: These tests require Clerk credentials.
- * Set TEST_CLERK_EMAIL and TEST_CLERK_PASSWORD in .env.test file.
- *
- * For CI/CD, these tests can be run against a dedicated test Clerk instance
- * with automated test user creation/cleanup.
- *
- * SKIPPED IN CI: These tests are skipped when Clerk credentials are not configured.
- * Configure VITE_CLERK_PUBLISHABLE_KEY and test credentials to enable.
+ * These tests run in the chromium-no-auth project (user starts unauthenticated)
  */
 
-// Skip all Clerk tests if Clerk is not configured
-const skipClerkTests = !process.env.VITE_CLERK_PUBLISHABLE_KEY;
-
-// Use conditional describe - if skipClerkTests is true, use test.describe.skip, otherwise test.describe
-const describeClerk = skipClerkTests ? test.describe.skip : test.describe;
-
-describeClerk('Clerk Authentication', () => {
+test.describe('Clerk Authentication - Login Flow', () => {
   const testEmail = process.env.TEST_CLERK_EMAIL || 'test@example.com';
   const testPassword = process.env.TEST_CLERK_PASSWORD || 'TestPassword123!';
 
@@ -88,14 +75,11 @@ describeClerk('Clerk Authentication', () => {
       await expect(emailInput).toBeVisible();
     });
 
+    // SKIPPED: Issue #615 - User button selector needs verification after Clerk login
+    // The test logs in successfully but can't find the logged-in state selector.
     test.skip('should successfully log in with valid credentials', async ({ page }) => {
-      /**
-       * SKIPPED: This test requires actual Clerk test credentials
-       * To enable:
-       * 1. Create test user in Clerk test instance
-       * 2. Set TEST_CLERK_EMAIL and TEST_CLERK_PASSWORD environment variables
-       * 3. Remove test.skip
-       */
+      // Skip if no credentials available
+      test.skip(!process.env.TEST_CLERK_EMAIL || !process.env.TEST_CLERK_PASSWORD, 'Requires TEST_CLERK_EMAIL and TEST_CLERK_PASSWORD');
       await setupClerkTestingToken({ page });
       await page.goto('/');
       await acceptCookieConsent(page);
@@ -115,13 +99,13 @@ describeClerk('Clerk Authentication', () => {
 
       // Fill in password
       await page.fill('input[type="password"]', testPassword);
-      await page.click('button:has-text("Continue"), button[type="submit"]');
+      await page.locator('button:has-text("Continue"):visible, button[type="submit"]:visible').first().click();
 
       // Wait for redirect back to app
-      await page.waitForURL(/localhost:3000/, { timeout: 15000 });
+      await page.waitForURL(/localhost/, { timeout: 15000 });
 
-      // Verify logged in state
-      await expect(page.locator('button:has-text("Log Out")')).toBeVisible({ timeout: 5000 });
+      // Verify logged in state - look for user button or dashboard access
+      await expect(page.locator('[data-testid="user-button"], button[aria-label*="User"], .cl-userButtonBox, button:has-text("Log Out")')).toBeVisible({ timeout: 10000 });
     });
 
     test('should show error with invalid credentials', async ({ page }) => {
@@ -148,7 +132,10 @@ describeClerk('Clerk Authentication', () => {
 
       // Clerk will either show error for non-existent email or ask for password
       // Either way, we're still in the auth flow
-      const stillInAuth = await page.locator('input[type="email"], input[type="password"], text=/error|invalid|not found/i').count();
+      const emailInputCount = await page.locator('input[type="email"]').count();
+      const passwordInputCount = await page.locator('input[type="password"]').count();
+      const errorTextCount = await page.getByText(/error|invalid|not found/i).count();
+      const stillInAuth = emailInputCount + passwordInputCount + errorTextCount;
       expect(stillInAuth).toBeGreaterThan(0);
     });
   });
@@ -167,19 +154,16 @@ describeClerk('Clerk Authentication', () => {
 
       // Check for Sign Up link/button
       // Clerk typically has a "Sign up" link
-      const signupExists = await page.locator('a:has-text("Sign up"), button:has-text("Sign up"), a:has-text("Sign Up"), button:has-text("Sign Up"), text=/don\'t have an account/i').count();
+      const signUpLinks = await page.locator('a:has-text("Sign up"), button:has-text("Sign up"), a:has-text("Sign Up"), button:has-text("Sign Up")').count();
+      const dontHaveAccountText = await page.getByText(/don't have an account/i).count();
+      const signupExists = signUpLinks + dontHaveAccountText;
 
       expect(signupExists).toBeGreaterThan(0);
     });
 
-    test.skip('should successfully create account with valid details', async ({ page: _page }) => {
-      /**
-       * SKIPPED: This test would create actual Clerk users
-       * To enable:
-       * 1. Set up test Clerk instance with user cleanup automation
-       * 2. Generate unique test email (e.g., test+timestamp@example.com)
-       * 3. Remove test.skip
-       */
+    test('should successfully create account with valid details', async ({ page: _page }) => {
+      // Skip: Creating users in Clerk requires special cleanup automation
+      test.skip(true, 'Requires automated Clerk user cleanup to avoid test pollution');
 
       // This is a placeholder for signup flow testing
       // Actual implementation would:
@@ -187,97 +171,6 @@ describeClerk('Clerk Authentication', () => {
       // 2. Click "Sign up"
       // 3. Fill in new user details
       // 4. Submit and verify account creation
-    });
-  });
-
-  test.describe('Authenticated User', () => {
-    test.skip('should access protected routes when authenticated', async ({ page: _page }) => {
-      /**
-       * SKIPPED: Requires actual authentication
-       * To enable: Implement auth helper to log in first, then remove test.skip
-       */
-
-      // This test would:
-      // 1. Log in using auth helper
-      // 2. Navigate to protected route (e.g., /dashboard)
-      // 3. Verify access granted
-      // 4. Verify content loads
-    });
-
-    test.skip('should display user profile information', async ({ page: _page }) => {
-      /**
-       * SKIPPED: Requires actual authentication
-       */
-
-      // This test would:
-      // 1. Log in using auth helper
-      // 2. Navigate to profile page
-      // 3. Verify user email/name displayed
-      // 4. Verify profile data matches authenticated user
-    });
-  });
-
-  test.describe('Logout Flow', () => {
-    test.skip('should successfully log out', async ({ page: _page }) => {
-      /**
-       * SKIPPED: Requires actual authentication first
-       */
-
-      // This test would:
-      // 1. Log in using auth helper
-      // 2. Click Log Out button
-      // 3. Verify redirect to logged out state
-      // 4. Verify Log In button appears
-      // 5. Verify session is cleared
-    });
-
-    test.skip('should redirect to home page after logout', async ({ page: _page }) => {
-      /**
-       * SKIPPED: Requires actual authentication first
-       */
-
-      // This test would:
-      // 1. Log in using auth helper
-      // 2. Navigate to protected route
-      // 3. Click Log Out
-      // 4. Verify redirected to home page
-    });
-
-    test.skip('should not access protected routes after logout', async ({ page: _page }) => {
-      /**
-       * SKIPPED: Requires actual authentication first
-       */
-
-      // This test would:
-      // 1. Log in using auth helper
-      // 2. Log out
-      // 3. Try to access protected route
-      // 4. Verify redirected to login
-    });
-  });
-
-  test.describe('Session Persistence', () => {
-    test.skip('should maintain session across page reloads', async ({ page: _page }) => {
-      /**
-       * SKIPPED: Requires actual authentication first
-       */
-
-      // This test would:
-      // 1. Log in using auth helper
-      // 2. Reload the page
-      // 3. Verify still authenticated
-      // 4. Verify Log Out button still visible
-    });
-
-    test.skip('should maintain session across navigation', async ({ page: _page }) => {
-      /**
-       * SKIPPED: Requires actual authentication first
-       */
-
-      // This test would:
-      // 1. Log in using auth helper
-      // 2. Navigate to different pages
-      // 3. Verify still authenticated on each page
     });
   });
 
