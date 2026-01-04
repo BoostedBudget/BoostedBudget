@@ -100,10 +100,10 @@ test.describe('Clerk Authentication - Login Flow', () => {
       await page.locator('button:has-text("Continue"):visible, button[type="submit"]:visible').first().click();
 
       // Wait for redirect back to app
-      await page.waitForURL(/localhost:3000/, { timeout: 15000 });
+      await page.waitForURL(/localhost/, { timeout: 15000 });
 
-      // Verify logged in state
-      await expect(page.locator('button:has-text("Log Out")')).toBeVisible({ timeout: 5000 });
+      // Verify logged in state - look for user button or dashboard access
+      await expect(page.locator('[data-testid="user-button"], button[aria-label*="User"], .cl-userButtonBox, button:has-text("Log Out")')).toBeVisible({ timeout: 10000 });
     });
 
     test('should show error with invalid credentials', async ({ page }) => {

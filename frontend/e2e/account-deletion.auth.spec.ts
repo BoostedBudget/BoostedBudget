@@ -152,7 +152,7 @@ test.describe('Account Deletion - Authenticated', () => {
     await expect(page.getByText('Are you absolutely sure?')).toBeVisible()
 
     // Verify confirmation checkbox
-    const checkbox = page.getByRole('checkbox')
+    const checkbox = page.getByLabel(/I understand that all my data/i)
     await expect(checkbox).toBeVisible()
     await expect(page.getByText(/I understand that all my data will be permanently deleted/i)).toBeVisible()
 
@@ -171,7 +171,7 @@ test.describe('Account Deletion - Authenticated', () => {
     await expect(confirmButton).toBeDisabled()
 
     // Check the confirmation checkbox
-    const checkbox = page.getByRole('checkbox')
+    const checkbox = page.getByLabel(/I understand that all my data/i)
     await checkbox.click()
 
     // Verify confirm button is now enabled
@@ -187,7 +187,7 @@ test.describe('Account Deletion - Authenticated', () => {
     await expect(page.getByText('Are you absolutely sure?')).toBeVisible()
 
     // Click Cancel button
-    await page.click('button:has-text("^cancel$")')
+    await page.getByRole('button', { name: /^cancel$/i }).click()
 
     // Verify dialog is closed
     await expect(page.getByText('Are you absolutely sure?')).not.toBeVisible()
@@ -212,7 +212,7 @@ test.describe('Account Deletion - Authenticated', () => {
     await page.click('button:has-text("Delete My Account")')
 
     // Check confirmation checkbox
-    await page.getByRole('checkbox').click()
+    await page.getByLabel(/I understand that all my data/i).click()
 
     // Click confirm button
     await page.click('button:has-text("Yes, Delete My Account")')
@@ -242,7 +242,7 @@ test.describe('Account Deletion - Authenticated', () => {
     await page.goto('/profile')
     await page.click('button:has-text("Privacy Settings")')
     await page.click('button:has-text("Delete My Account")')
-    await page.getByRole('checkbox').click()
+    await page.getByLabel(/I understand that all my data/i).click()
     await page.click('button:has-text("Yes, Delete My Account")')
 
     await page.waitForTimeout(500)
@@ -269,7 +269,7 @@ test.describe('Account Deletion - Authenticated', () => {
     await page.goto('/profile')
     await page.click('button:has-text("Privacy Settings")')
     await page.click('button:has-text("Delete My Account")')
-    await page.getByRole('checkbox').click()
+    await page.getByLabel(/I understand that all my data/i).click()
     await page.click('button:has-text("Yes, Delete My Account")')
 
     await page.waitForTimeout(500)
@@ -292,7 +292,7 @@ test.describe('Account Deletion - Authenticated', () => {
     await page.goto('/profile')
     await page.click('button:has-text("Privacy Settings")')
     await page.click('button:has-text("Delete My Account")')
-    await page.getByRole('checkbox').click()
+    await page.getByLabel(/I understand that all my data/i).click()
     await page.click('button:has-text("Yes, Delete My Account")')
 
     await page.waitForTimeout(500)
@@ -322,7 +322,7 @@ test.describe('Account Deletion - Authenticated', () => {
     await page.goto('/profile')
     await page.click('button:has-text("Privacy Settings")')
     await page.click('button:has-text("Delete My Account")')
-    await page.getByRole('checkbox').click()
+    await page.getByLabel(/I understand that all my data/i).click()
 
     // Click confirm button
     await page.click('button:has-text("Yes, Delete My Account")')

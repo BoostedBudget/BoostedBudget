@@ -298,7 +298,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
       await expect(page.getByText('Starbucks')).toBeVisible()
 
       // Act - Click on the transaction
-      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      const transactionCard = page.locator('article.transaction-card').filter({ hasText: 'Starbucks' })
       await transactionCard.click()
 
       // Assert - Editor modal should open
@@ -312,7 +312,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
       await page.waitForLoadState('networkidle')
 
       // Act
-      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      const transactionCard = page.locator('article.transaction-card').filter({ hasText: 'Starbucks' })
       await transactionCard.click()
 
       // Assert
@@ -327,13 +327,13 @@ test.describe('Transaction Editing - Authenticated User', () => {
       await page.waitForLoadState('networkidle')
 
       // Act - Click transaction that has a tag
-      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      const transactionCard = page.locator('article.transaction-card').filter({ hasText: 'Starbucks' })
       await transactionCard.click()
 
       // Assert - Should show the Food tag
       await expect(page.getByText('Edit Transaction')).toBeVisible()
       // The tag should be visible in the editor
-      const tagSection = page.locator('.tag-editor, [data-testid="tag-editor"]')
+      const tagSection = page.locator('.tag-editor')
       await expect(tagSection.getByText('Food')).toBeVisible()
     })
 
@@ -344,7 +344,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
       await page.waitForLoadState('networkidle')
 
       // Act
-      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      const transactionCard = page.locator('article.transaction-card').filter({ hasText: 'Starbucks' })
       await transactionCard.click()
 
       // Assert - Should show category
@@ -366,7 +366,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
       await page.waitForLoadState('networkidle')
 
       // Open editor
-      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      const transactionCard = page.locator('article.transaction-card').filter({ hasText: 'Starbucks' })
       await transactionCard.click()
       await expect(page.getByText('Edit Transaction')).toBeVisible()
 
@@ -379,7 +379,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
       await page.getByRole('option', { name: 'Shopping' }).click()
 
       // Assert - Tag should appear in the list
-      const tagEditor = page.locator('.tag-editor, [data-testid="tag-editor"]')
+      const tagEditor = page.locator('.tag-editor')
       await expect(tagEditor.getByText('Shopping')).toBeVisible()
     })
 
@@ -391,7 +391,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
       await page.waitForLoadState('networkidle')
 
       // Open editor
-      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      const transactionCard = page.locator('article.transaction-card').filter({ hasText: 'Starbucks' })
       await transactionCard.click()
       await expect(page.getByText('Edit Transaction')).toBeVisible()
 
@@ -400,7 +400,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
       await removeButton.click()
 
       // Assert - Tag should be removed
-      const tagEditor = page.locator('.tag-editor, [data-testid="tag-editor"]')
+      const tagEditor = page.locator('.tag-editor')
       await expect(tagEditor.getByText('Food')).not.toBeVisible()
     })
 
@@ -412,7 +412,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
       await page.waitForLoadState('networkidle')
 
       // Open editor and remove a tag
-      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      const transactionCard = page.locator('article.transaction-card').filter({ hasText: 'Starbucks' })
       await transactionCard.click()
 
       const removeButton = page.getByRole('button', { name: /remove food/i })
@@ -440,7 +440,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
       await page.waitForLoadState('networkidle')
 
       // Open editor
-      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      const transactionCard = page.locator('article.transaction-card').filter({ hasText: 'Starbucks' })
       await transactionCard.click()
       await expect(page.getByText('Edit Transaction')).toBeVisible()
 
@@ -464,7 +464,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
       await page.waitForLoadState('networkidle')
 
       // Open editor
-      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      const transactionCard = page.locator('article.transaction-card').filter({ hasText: 'Starbucks' })
       await transactionCard.click()
       await expect(page.getByText('Edit Transaction')).toBeVisible()
 
@@ -484,7 +484,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
       await page.waitForLoadState('networkidle')
 
       // Open editor and change category
-      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      const transactionCard = page.locator('article.transaction-card').filter({ hasText: 'Starbucks' })
       await transactionCard.click()
 
       const changeCategoryButton = page.getByRole('button', { name: /change category/i })
@@ -512,7 +512,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
       await page.waitForLoadState('networkidle')
 
       // Open editor
-      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      const transactionCard = page.locator('article.transaction-card').filter({ hasText: 'Starbucks' })
       await transactionCard.click()
       await expect(page.getByText('Edit Transaction')).toBeVisible()
 
@@ -532,7 +532,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
       await page.waitForLoadState('networkidle')
 
       // Open editor and make a change
-      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      const transactionCard = page.locator('article.transaction-card').filter({ hasText: 'Starbucks' })
       await transactionCard.click()
 
       const removeButton = page.getByRole('button', { name: /remove food/i })
@@ -559,7 +559,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
       await page.waitForLoadState('networkidle')
 
       // Act - Click transaction without tags (Whole Foods)
-      const transactionCard = page.getByText('Whole Foods').locator('xpath=ancestor::article')
+      const transactionCard = page.locator('article.transaction-card').filter({ hasText: 'Whole Foods' })
       await transactionCard.click()
 
       // Assert - Should show empty tags state
@@ -577,7 +577,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
       await expect(page.getByText('Starbucks')).toBeVisible()
 
       // Act - Focus on transaction and press Enter
-      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      const transactionCard = page.locator('article.transaction-card').filter({ hasText: 'Starbucks' })
       await transactionCard.focus()
       await transactionCard.press('Enter')
 
@@ -598,7 +598,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
       await page.waitForLoadState('networkidle')
 
       // Open editor
-      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      const transactionCard = page.locator('article.transaction-card').filter({ hasText: 'Starbucks' })
       await transactionCard.click()
       await expect(page.getByText('Edit Transaction')).toBeVisible()
 
@@ -617,7 +617,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
       await page.waitForLoadState('networkidle')
 
       // Open editor
-      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      const transactionCard = page.locator('article.transaction-card').filter({ hasText: 'Starbucks' })
       await transactionCard.click()
       await expect(page.getByText('Edit Transaction')).toBeVisible()
 
@@ -639,7 +639,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
       await page.waitForLoadState('networkidle')
 
       // Open editor
-      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      const transactionCard = page.locator('article.transaction-card').filter({ hasText: 'Starbucks' })
       await transactionCard.click()
       await expect(page.getByText('Edit Transaction')).toBeVisible()
 
@@ -652,7 +652,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
       await page.getByRole('button', { name: /^create$/i }).click()
 
       // Assert - New tag should appear in the tag list
-      const tagEditor = page.locator('.tag-editor, [data-testid="tag-editor"]')
+      const tagEditor = page.locator('.tag-editor')
       await expect(tagEditor.getByText('My New Tag')).toBeVisible()
     })
 
@@ -663,7 +663,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
       await page.waitForLoadState('networkidle')
 
       // Open editor
-      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      const transactionCard = page.locator('article.transaction-card').filter({ hasText: 'Starbucks' })
       await transactionCard.click()
       await expect(page.getByText('Edit Transaction')).toBeVisible()
 
@@ -684,7 +684,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
       await page.waitForLoadState('networkidle')
 
       // Open editor
-      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      const transactionCard = page.locator('article.transaction-card').filter({ hasText: 'Starbucks' })
       await transactionCard.click()
       await expect(page.getByText('Edit Transaction')).toBeVisible()
 
@@ -709,7 +709,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
       await page.waitForLoadState('networkidle')
 
       // Open editor
-      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      const transactionCard = page.locator('article.transaction-card').filter({ hasText: 'Starbucks' })
       await transactionCard.click()
       await expect(page.getByText('Edit Transaction')).toBeVisible()
 
@@ -728,7 +728,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
       await page.waitForLoadState('networkidle')
 
       // Open editor
-      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      const transactionCard = page.locator('article.transaction-card').filter({ hasText: 'Starbucks' })
       await transactionCard.click()
       await expect(page.getByText('Edit Transaction')).toBeVisible()
 
@@ -750,7 +750,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
       await page.waitForLoadState('networkidle')
 
       // Open editor
-      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      const transactionCard = page.locator('article.transaction-card').filter({ hasText: 'Starbucks' })
       await transactionCard.click()
       await expect(page.getByText('Edit Transaction')).toBeVisible()
 
@@ -773,7 +773,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
       await page.waitForLoadState('networkidle')
 
       // Open editor
-      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      const transactionCard = page.locator('article.transaction-card').filter({ hasText: 'Starbucks' })
       await transactionCard.click()
       await expect(page.getByText('Edit Transaction')).toBeVisible()
 
@@ -794,7 +794,7 @@ test.describe('Transaction Editing - Authenticated User', () => {
       await page.waitForLoadState('networkidle')
 
       // Open editor
-      const transactionCard = page.getByText('Starbucks').locator('xpath=ancestor::article')
+      const transactionCard = page.locator('article.transaction-card').filter({ hasText: 'Starbucks' })
       await transactionCard.click()
       await expect(page.getByText('Edit Transaction')).toBeVisible()
 
