@@ -8,7 +8,22 @@ version: "1.0.0"
 
 ## Quick Start
 
-Run all E2E tests:
+Run all E2E tests (one-liner with output logging):
+```bash
+cd frontend
+set -a && source .env.e2e && set +a && mv cert.pem cert.pem.bak 2>/dev/null; mv key.pem key.pem.bak 2>/dev/null; bash scripts/run-e2e-with-ports.sh 2>&1 | tee e2e-output.log; mv cert.pem.bak cert.pem 2>/dev/null; mv key.pem.bak key.pem 2>/dev/null
+```
+
+This command:
+1. Sources environment variables from `.env.e2e`
+2. Temporarily moves SSL certificates (prevents HTTPS/HTTP mismatch)
+3. Runs the E2E test script
+4. Tees output to `e2e-output.log` for later analysis
+5. Restores SSL certificates
+
+**Note:** The `e2e-output.log` file is useful for parsing test results after a long run.
+
+### Step-by-step alternative:
 ```bash
 cd frontend
 set -a && source .env.e2e && set +a
