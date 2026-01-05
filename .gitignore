@@ -309,6 +309,8 @@ frontend/dist/
 in-memoria.db
 .claude/
 !.claude/commands/
+!.claude/agents/
+!.claude/skills/
 .serena
 
 # Test artifacts and coverage reports
