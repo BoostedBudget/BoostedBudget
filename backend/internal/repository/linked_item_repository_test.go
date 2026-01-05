@@ -3,11 +3,13 @@ package repository
 import (
 	"context"
 	"database/sql"
+	
 	"regexp"
 	"testing"
 	"time"
 
-	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/jackc/pgx/v5"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
@@ -15,18 +17,18 @@ import (
 )
 
 // setupLinkedItemMockDB creates a mock database and sqlmock instance for linked item repository testing
-func setupLinkedItemMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock, LinkedItemRepository) {
-	db, mock, err := sqlmock.New()
+func setupLinkedItemMockDB(t *testing.T) (pgxmock.PgxPoolIface, LinkedItemRepository) {
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 
-	repo := NewLinkedItemRepository(db)
-	return db, mock, repo
+	repo := NewLinkedItemRepository(mock)
+	return mock, repo
 }
 
 // TestLinkedItemRepository_Create tests successful creation of a linked item
 func TestLinkedItemRepository_Create(t *testing.T) {
-	db, mock, repo := setupLinkedItemMockDB(t)
-	defer db.Close()
+	mock, repo := setupLinkedItemMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	now := time.Now()
@@ -55,9 +57,9 @@ func TestLinkedItemRepository_Create(t *testing.T) {
 		linkedItem.InstitutionID,
 		linkedItem.InstitutionName,
 		linkedItem.Provider,
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-	).WillReturnResult(sqlmock.NewResult(1, 1))
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	// Execute
 	err := repo.Create(ctx, linkedItem)
@@ -69,14 +71,14 @@ func TestLinkedItemRepository_Create(t *testing.T) {
 
 // TestLinkedItemRepository_GetByUserID tests successful retrieval of all linked items for a user
 func TestLinkedItemRepository_GetByUserID(t *testing.T) {
-	db, mock, repo := setupLinkedItemMockDB(t)
-	defer db.Close()
+	mock, repo := setupLinkedItemMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
 	now := time.Now()
 
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "item_id", "access_token_encrypted",
 		"institution_id", "institution_name", "provider", "cursor", "last_synced_at",
 		"created_at", "updated_at",
@@ -117,8 +119,8 @@ func TestLinkedItemRepository_GetByUserID(t *testing.T) {
 
 // TestLinkedItemRepository_GetByItemID tests retrieval of a specific linked item by item ID
 func TestLinkedItemRepository_GetByItemID(t *testing.T) {
-	db, mock, repo := setupLinkedItemMockDB(t)
-	defer db.Close()
+	mock, repo := setupLinkedItemMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	itemID := "plaid-item-123"
@@ -126,7 +128,7 @@ func TestLinkedItemRepository_GetByItemID(t *testing.T) {
 	userID := uuid.New().String()
 	now := time.Now()
 
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "item_id", "access_token_encrypted",
 		"institution_id", "institution_name", "provider", "cursor", "last_synced_at",
 		"created_at", "updated_at",
@@ -159,8 +161,8 @@ func TestLinkedItemRepository_GetByItemID(t *testing.T) {
 
 // TestLinkedItemRepository_GetByItemID_NotFound tests when linked item is not found
 func TestLinkedItemRepository_GetByItemID_NotFound(t *testing.T) {
-	db, mock, repo := setupLinkedItemMockDB(t)
-	defer db.Close()
+	mock, repo := setupLinkedItemMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	itemID := "nonexistent-item"
@@ -172,7 +174,7 @@ func TestLinkedItemRepository_GetByItemID_NotFound(t *testing.T) {
 		       created_at, updated_at
 		FROM linked_items
 		WHERE item_id = $1
-	`)).WithArgs(itemID).WillReturnError(sql.ErrNoRows)
+	`)).WithArgs(itemID).WillReturnError(pgx.ErrNoRows)
 
 	// Execute
 	item, err := repo.GetByItemID(ctx, itemID)
@@ -186,8 +188,8 @@ func TestLinkedItemRepository_GetByItemID_NotFound(t *testing.T) {
 
 // TestLinkedItemRepository_UpdateCursor tests updating the transaction sync cursor
 func TestLinkedItemRepository_UpdateCursor(t *testing.T) {
-	db, mock, repo := setupLinkedItemMockDB(t)
-	defer db.Close()
+	mock, repo := setupLinkedItemMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	itemID := uuid.New().String()
@@ -199,10 +201,10 @@ func TestLinkedItemRepository_UpdateCursor(t *testing.T) {
 		WHERE id = $4
 	`)).WithArgs(
 		newCursor,
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
 		itemID,
-	).WillReturnResult(sqlmock.NewResult(0, 1))
+	).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	// Execute
 	err := repo.UpdateCursor(ctx, itemID, newCursor)
@@ -214,8 +216,8 @@ func TestLinkedItemRepository_UpdateCursor(t *testing.T) {
 
 // TestLinkedItemRepository_Delete tests deletion of a linked item (and cascade to accounts)
 func TestLinkedItemRepository_Delete(t *testing.T) {
-	db, mock, repo := setupLinkedItemMockDB(t)
-	defer db.Close()
+	mock, repo := setupLinkedItemMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	itemID := uuid.New().String()
@@ -223,7 +225,7 @@ func TestLinkedItemRepository_Delete(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(`
 		DELETE FROM linked_items
 		WHERE id = $1
-	`)).WithArgs(itemID).WillReturnResult(sqlmock.NewResult(0, 1))
+	`)).WithArgs(itemID).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	// Execute
 	err := repo.Delete(ctx, itemID)
@@ -235,8 +237,8 @@ func TestLinkedItemRepository_Delete(t *testing.T) {
 
 // TestLinkedItemRepository_GetByIDAndUser_Success tests successful retrieval with ownership validation
 func TestLinkedItemRepository_GetByIDAndUser_Success(t *testing.T) {
-	db, mock, repo := setupLinkedItemMockDB(t)
-	defer db.Close()
+	mock, repo := setupLinkedItemMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	itemID := uuid.New().String()
@@ -251,7 +253,7 @@ func TestLinkedItemRepository_GetByIDAndUser_Success(t *testing.T) {
 		WHERE id = $1 AND user_id = $2
 	`
 
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "item_id", "access_token_encrypted",
 		"institution_id", "institution_name", "provider",
 		"cursor", "last_synced_at", "created_at", "updated_at",
@@ -278,8 +280,8 @@ func TestLinkedItemRepository_GetByIDAndUser_Success(t *testing.T) {
 
 // TestLinkedItemRepository_GetByIDAndUser_NotFound tests when item doesn't exist
 func TestLinkedItemRepository_GetByIDAndUser_NotFound(t *testing.T) {
-	db, mock, repo := setupLinkedItemMockDB(t)
-	defer db.Close()
+	mock, repo := setupLinkedItemMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	itemID := uuid.New().String()
@@ -296,7 +298,7 @@ func TestLinkedItemRepository_GetByIDAndUser_NotFound(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
 		WithArgs(itemID, userID).
-		WillReturnError(sql.ErrNoRows)
+		WillReturnError(pgx.ErrNoRows)
 
 	// Execute
 	item, err := repo.GetByIDAndUser(ctx, itemID, userID)
@@ -310,8 +312,8 @@ func TestLinkedItemRepository_GetByIDAndUser_NotFound(t *testing.T) {
 
 // TestLinkedItemRepository_GetByIDAndUser_NotOwner tests when user doesn't own the item
 func TestLinkedItemRepository_GetByIDAndUser_NotOwner(t *testing.T) {
-	db, mock, repo := setupLinkedItemMockDB(t)
-	defer db.Close()
+	mock, repo := setupLinkedItemMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	itemID := uuid.New().String()
@@ -329,7 +331,7 @@ func TestLinkedItemRepository_GetByIDAndUser_NotOwner(t *testing.T) {
 	// No rows returned (ownership check fails)
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
 		WithArgs(itemID, wrongUserID).
-		WillReturnError(sql.ErrNoRows)
+		WillReturnError(pgx.ErrNoRows)
 
 	// Execute
 	item, err := repo.GetByIDAndUser(ctx, itemID, wrongUserID)
@@ -343,8 +345,8 @@ func TestLinkedItemRepository_GetByIDAndUser_NotOwner(t *testing.T) {
 
 // TestLinkedItemRepository_DeleteByUser_Success tests successful deletion with ownership validation
 func TestLinkedItemRepository_DeleteByUser_Success(t *testing.T) {
-	db, mock, repo := setupLinkedItemMockDB(t)
-	defer db.Close()
+	mock, repo := setupLinkedItemMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	itemID := uuid.New().String()
@@ -354,7 +356,7 @@ func TestLinkedItemRepository_DeleteByUser_Success(t *testing.T) {
 
 	mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
 		WithArgs(itemID, userID).
-		WillReturnResult(sqlmock.NewResult(0, 1)) // 1 row affected
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1)) // 1 row affected
 
 	// Execute
 	err := repo.DeleteByUser(ctx, itemID, userID)
@@ -366,8 +368,8 @@ func TestLinkedItemRepository_DeleteByUser_Success(t *testing.T) {
 
 // TestLinkedItemRepository_DeleteByUser_NotFound tests deletion when item doesn't exist
 func TestLinkedItemRepository_DeleteByUser_NotFound(t *testing.T) {
-	db, mock, repo := setupLinkedItemMockDB(t)
-	defer db.Close()
+	mock, repo := setupLinkedItemMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	itemID := uuid.New().String()
@@ -377,7 +379,7 @@ func TestLinkedItemRepository_DeleteByUser_NotFound(t *testing.T) {
 
 	mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
 		WithArgs(itemID, userID).
-		WillReturnResult(sqlmock.NewResult(0, 0)) // 0 rows affected
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0)) // 0 rows affected
 
 	// Execute
 	err := repo.DeleteByUser(ctx, itemID, userID)
@@ -390,8 +392,8 @@ func TestLinkedItemRepository_DeleteByUser_NotFound(t *testing.T) {
 
 // TestLinkedItemRepository_DeleteByUser_NotOwner tests deletion when user doesn't own the item
 func TestLinkedItemRepository_DeleteByUser_NotOwner(t *testing.T) {
-	db, mock, repo := setupLinkedItemMockDB(t)
-	defer db.Close()
+	mock, repo := setupLinkedItemMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	itemID := uuid.New().String()
@@ -401,7 +403,7 @@ func TestLinkedItemRepository_DeleteByUser_NotOwner(t *testing.T) {
 
 	mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
 		WithArgs(itemID, wrongUserID).
-		WillReturnResult(sqlmock.NewResult(0, 0)) // 0 rows affected (ownership check fails)
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0)) // 0 rows affected (ownership check fails)
 
 	// Execute
 	err := repo.DeleteByUser(ctx, itemID, wrongUserID)

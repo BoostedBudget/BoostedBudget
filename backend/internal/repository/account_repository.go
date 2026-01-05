@@ -2,12 +2,12 @@ package repository
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -69,11 +69,11 @@ type AccountRepository interface {
 
 // accountRepository implements AccountRepository using PostgreSQL
 type accountRepository struct {
-	db *sql.DB
+	db DB
 }
 
 // NewAccountRepository creates a new AccountRepository instance
-func NewAccountRepository(db *sql.DB) AccountRepository {
+func NewAccountRepository(db DB) AccountRepository {
 	return &accountRepository{db: db}
 }
 
@@ -97,7 +97,7 @@ func (r *accountRepository) Create(ctx context.Context, account *domain.Account)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	`
 
-	_, err := r.db.ExecContext(ctx, query,
+	_, err := r.db.Exec(ctx, query,
 		account.ID,
 		account.LinkedItemID,
 		account.UserID,
@@ -134,11 +134,11 @@ func (r *accountRepository) CreateBatch(ctx context.Context, accounts []domain.A
 	}
 
 	// Start transaction
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback() // Rollback if not committed
+	defer tx.Rollback(ctx) // Rollback if not committed
 
 	query := `
 		INSERT INTO accounts
@@ -162,7 +162,7 @@ func (r *accountRepository) CreateBatch(ctx context.Context, accounts []domain.A
 		account.CreatedAt = now
 		account.UpdatedAt = now
 
-		_, err := tx.ExecContext(ctx, query,
+		_, err := tx.Exec(ctx, query,
 			account.ID,
 			account.LinkedItemID,
 			account.UserID,
@@ -191,7 +191,7 @@ func (r *accountRepository) CreateBatch(ctx context.Context, accounts []domain.A
 	}
 
 	// Commit transaction
-	return tx.Commit()
+	return tx.Commit(ctx)
 }
 
 // GetByLinkedItemID retrieves all accounts for a specific linked item
@@ -206,7 +206,7 @@ func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID 
 		ORDER BY created_at ASC
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, linkedItemID)
+	rows, err := r.db.Query(ctx, query, linkedItemID)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +261,7 @@ func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]d
 		ORDER BY created_at ASC
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, userID)
+	rows, err := r.db.Query(ctx, query, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -317,7 +317,7 @@ func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, user
 		ORDER BY a.created_at ASC
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, userID)
+	rows, err := r.db.Query(ctx, query, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -370,7 +370,7 @@ func (r *accountRepository) CountByUserID(ctx context.Context, userID string) (i
 	`
 
 	var count int
-	err := r.db.QueryRowContext(ctx, query, userID).Scan(&count)
+	err := r.db.QueryRow(ctx, query, userID).Scan(&count)
 	if err != nil {
 		return 0, err
 	}
@@ -392,18 +392,13 @@ func (r *accountRepository) Delete(ctx context.Context, accountID, userID string
 		WHERE id = $1 AND user_id = $2
 	`
 
-	result, err := r.db.ExecContext(ctx, query, accountID, userID)
+	ct, err := r.db.Exec(ctx, query, accountID, userID)
 	if err != nil {
 		return err
 	}
 
 	// Check if any rows were affected (validates ownership and existence)
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		// Account not found OR user doesn't own it (both cases return same error for security)
 		return ErrAccountNotFound
 	}
@@ -425,7 +420,7 @@ func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userI
 	`
 
 	var account domain.Account
-	err := r.db.QueryRowContext(ctx, query, accountID, userID).Scan(
+	err := r.db.QueryRow(ctx, query, accountID, userID).Scan(
 		&account.ID, &account.LinkedItemID, &account.UserID, &account.PlaidAccountID,
 		&account.Name, &account.OfficialName, &account.Type, &account.Subtype, &account.Mask,
 		&account.CurrentBalance, &account.AvailableBalance, &account.CurrencyCode,
@@ -435,7 +430,7 @@ func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userI
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrAccountNotFound
 		}
 		return nil, err
@@ -455,7 +450,7 @@ func (r *accountRepository) Update(ctx context.Context, account *domain.Account,
 		WHERE id = $8 AND user_id = $9
 	`
 
-	result, err := r.db.ExecContext(ctx, query,
+	ct, err := r.db.Exec(ctx, query,
 		account.Nickname, account.CustomColor, account.CustomIcon,
 		account.CustomEmoji, account.DisplayOrder, account.IsHidden, account.UpdatedAt,
 		account.ID, userID,
@@ -464,12 +459,7 @@ func (r *accountRepository) Update(ctx context.Context, account *domain.Account,
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return ErrAccountNotFound
 	}
 
@@ -482,11 +472,11 @@ func (r *accountRepository) UpdateDisplayOrders(ctx context.Context, userID stri
 		return nil
 	}
 
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer tx.Rollback(ctx)
 
 	query := `
 		UPDATE accounts
@@ -497,22 +487,17 @@ func (r *accountRepository) UpdateDisplayOrders(ctx context.Context, userID stri
 	now := time.Now()
 
 	for _, order := range orders {
-		result, err := tx.ExecContext(ctx, query, order.DisplayOrder, now, order.AccountID, userID)
+		ct, err := tx.Exec(ctx, query, order.DisplayOrder, now, order.AccountID, userID)
 		if err != nil {
 			return err
 		}
 
-		rowsAffected, err := result.RowsAffected()
-		if err != nil {
-			return err
-		}
-
-		if rowsAffected == 0 {
+		if ct.RowsAffected() == 0 {
 			return ErrAccountNotFound
 		}
 	}
 
-	return tx.Commit()
+	return tx.Commit(ctx)
 }
 
 // GetAccountsWithInstitutionFiltered retrieves accounts with institution names and hidden filtering.
@@ -535,7 +520,7 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 
 	query += " ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC"
 
-	rows, err := r.db.QueryContext(ctx, query, userID)
+	rows, err := r.db.Query(ctx, query, userID)
 	if err != nil {
 		return nil, err
 	}

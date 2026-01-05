@@ -2,11 +2,11 @@ package services
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/plaid/plaid-go/v23/plaid"
@@ -66,13 +66,13 @@ type LinkAccountsResult struct {
 
 // accountService implements AccountService
 type accountService struct {
-	plaidService       PlaidService
-	subscriptionSvc    *SubscriptionService
-	encryptionSvc      EncryptionService
-	linkedItemRepo     repository.LinkedItemRepository
-	accountRepo        repository.AccountRepository
-	userRepo           repository.ProfileRepository
-	db                 *sql.DB
+	plaidService    PlaidService
+	subscriptionSvc *SubscriptionService
+	encryptionSvc   EncryptionService
+	linkedItemRepo  repository.LinkedItemRepository
+	accountRepo     repository.AccountRepository
+	userRepo        repository.ProfileRepository
+	db              *pgxpool.Pool
 }
 
 // NewAccountService creates a new AccountService instance
@@ -83,7 +83,7 @@ func NewAccountService(
 	linkedItemRepo repository.LinkedItemRepository,
 	accountRepo repository.AccountRepository,
 	userRepo repository.ProfileRepository,
-	db *sql.DB,
+	db *pgxpool.Pool,
 ) AccountService {
 	return &accountService{
 		plaidService:    plaidService,

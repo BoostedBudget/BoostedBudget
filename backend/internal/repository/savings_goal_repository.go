@@ -2,11 +2,12 @@ package repository
 
 import (
 	"context"
-	"database/sql"
+	"errors"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -30,11 +31,11 @@ type SavingsGoalRepository interface {
 
 // savingsGoalRepository implements SavingsGoalRepository using PostgreSQL.
 type savingsGoalRepository struct {
-	db *sql.DB
+	db DB
 }
 
 // NewSavingsGoalRepository creates a new SavingsGoalRepository instance.
-func NewSavingsGoalRepository(db *sql.DB) SavingsGoalRepository {
+func NewSavingsGoalRepository(db DB) SavingsGoalRepository {
 	return &savingsGoalRepository{db: db}
 }
 
@@ -60,7 +61,7 @@ func (r *savingsGoalRepository) Create(ctx context.Context, goal *domain.Savings
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	`
 
-	_, err := r.db.ExecContext(ctx, query,
+	_, err := r.db.Exec(ctx, query,
 		goal.ID,
 		goal.UserID,
 		goal.Name,
@@ -98,7 +99,7 @@ func (r *savingsGoalRepository) GetByID(ctx context.Context, id string) (*domain
 	`
 
 	goal := &domain.SavingsGoal{}
-	err := r.db.QueryRowContext(ctx, query, id).Scan(
+	err := r.db.QueryRow(ctx, query, id).Scan(
 		&goal.ID,
 		&goal.UserID,
 		&goal.Name,
@@ -114,7 +115,7 @@ func (r *savingsGoalRepository) GetByID(ctx context.Context, id string) (*domain
 		&goal.UpdatedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrSavingsGoalNotFound
 	}
 	if err != nil {
@@ -135,7 +136,7 @@ func (r *savingsGoalRepository) GetByUserID(ctx context.Context, userID string) 
 		ORDER BY created_at DESC
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, userID)
+	rows, err := r.db.Query(ctx, query, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +184,7 @@ func (r *savingsGoalRepository) GetActiveByUserID(ctx context.Context, userID st
 		ORDER BY created_at DESC
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, userID)
+	rows, err := r.db.Query(ctx, query, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +232,7 @@ func (r *savingsGoalRepository) GetByName(ctx context.Context, userID, name stri
 	`
 
 	goal := &domain.SavingsGoal{}
-	err := r.db.QueryRowContext(ctx, query, userID, name).Scan(
+	err := r.db.QueryRow(ctx, query, userID, name).Scan(
 		&goal.ID,
 		&goal.UserID,
 		&goal.Name,
@@ -247,7 +248,7 @@ func (r *savingsGoalRepository) GetByName(ctx context.Context, userID, name stri
 		&goal.UpdatedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrSavingsGoalNotFound
 	}
 	if err != nil {
@@ -269,7 +270,7 @@ func (r *savingsGoalRepository) Update(ctx context.Context, goal *domain.Savings
 		WHERE id = $11 AND user_id = $12
 	`
 
-	result, err := r.db.ExecContext(ctx, query,
+	ct, err := r.db.Exec(ctx, query,
 		goal.Name,
 		goal.Description,
 		goal.TargetAmount,
@@ -292,12 +293,7 @@ func (r *savingsGoalRepository) Update(ctx context.Context, goal *domain.Savings
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrSavingsGoalNotFound
 	}
 
@@ -308,17 +304,12 @@ func (r *savingsGoalRepository) Update(ctx context.Context, goal *domain.Savings
 func (r *savingsGoalRepository) Delete(ctx context.Context, id, userID string) error {
 	query := `DELETE FROM savings_goals WHERE id = $1 AND user_id = $2`
 
-	result, err := r.db.ExecContext(ctx, query, id, userID)
+	ct, err := r.db.Exec(ctx, query, id, userID)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrSavingsGoalNotFound
 	}
 
@@ -330,7 +321,7 @@ func (r *savingsGoalRepository) CountByUserID(ctx context.Context, userID string
 	query := `SELECT COUNT(*) FROM savings_goals WHERE user_id = $1`
 
 	var count int
-	err := r.db.QueryRowContext(ctx, query, userID).Scan(&count)
+	err := r.db.QueryRow(ctx, query, userID).Scan(&count)
 	if err != nil {
 		return 0, err
 	}
@@ -350,7 +341,7 @@ func (r *savingsGoalRepository) GetByAccountID(ctx context.Context, accountID st
 		ORDER BY created_at DESC
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, accountID)
+	rows, err := r.db.Query(ctx, query, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -396,17 +387,12 @@ func (r *savingsGoalRepository) UpdateCurrentAmount(ctx context.Context, goalID 
 		WHERE id = $2
 	`
 
-	result, err := r.db.ExecContext(ctx, query, currentAmount, goalID)
+	ct, err := r.db.Exec(ctx, query, currentAmount, goalID)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrSavingsGoalNotFound
 	}
 
@@ -424,17 +410,12 @@ func (r *savingsGoalRepository) MarkCompleted(ctx context.Context, goalID string
 		WHERE id = $2
 	`
 
-	result, err := r.db.ExecContext(ctx, query, now, goalID)
+	ct, err := r.db.Exec(ctx, query, now, goalID)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrSavingsGoalNotFound
 	}
 

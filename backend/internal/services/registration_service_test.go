@@ -2,13 +2,13 @@ package services
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"testing"
 
-	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -42,7 +42,7 @@ func (m *MockUserIdentityRepository) Create(ctx context.Context, identity *domai
 	return args.Error(0)
 }
 
-func (m *MockUserIdentityRepository) CreateTx(ctx context.Context, tx *sql.Tx, identity *domain.UserIdentity) error {
+func (m *MockUserIdentityRepository) CreateTx(ctx context.Context, tx pgx.Tx, identity *domain.UserIdentity) error {
 	args := m.Called(ctx, tx, identity)
 	return args.Error(0)
 }
@@ -67,12 +67,12 @@ type MockDB struct {
 	mock.Mock
 }
 
-func (m *MockDB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
+func (m *MockDB) BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error) {
 	args := m.Called(ctx, opts)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*sql.Tx), args.Error(1)
+	return args.Get(0).(pgx.Tx), args.Error(1)
 }
 
 // MockAuditLogger is defined in deletion_service_test.go and shared across test files
@@ -644,10 +644,10 @@ func TestRegisterUser_TransactionBeginError(t *testing.T) {
 	email := "newuser@example.com"
 	emailVerified := true
 
-	// Create sqlmock DB
-	db, mockDB, err := sqlmock.New()
+	// Create pgxmock pool
+	mockPool, err := pgxmock.NewPool()
 	assert.NoError(t, err)
-	defer db.Close()
+	defer mockPool.Close()
 
 	mockProfileRepo := new(MockProfileRepository)
 	mockIdentityRepo := new(MockUserIdentityRepository)
@@ -657,10 +657,10 @@ func TestRegisterUser_TransactionBeginError(t *testing.T) {
 	mockIdentityRepo.On("GetByClerkID", ctx, clerkUserID).Return(nil, repository.ErrIdentityNotFound)
 
 	// Expect transaction begin to fail
-	mockDB.ExpectBegin().WillReturnError(errors.New("database connection failed"))
+	mockPool.ExpectBegin().WillReturnError(errors.New("database connection failed"))
 
 	// Service with database
-	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, db)
+	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, mockPool)
 
 	// Act
 	user, err := service.RegisterUser(ctx, clerkUserID, email, emailVerified)
@@ -701,10 +701,10 @@ func TestRegisterUser_TransactionUserCreationError(t *testing.T) {
 	email := "newuser@example.com"
 	emailVerified := true
 
-	// Create sqlmock DB
-	db, mockDB, err := sqlmock.New()
+	// Create pgxmock pool
+	mockPool, err := pgxmock.NewPool()
 	assert.NoError(t, err)
-	defer db.Close()
+	defer mockPool.Close()
 
 	mockProfileRepo := new(MockProfileRepository)
 	mockIdentityRepo := new(MockUserIdentityRepository)
@@ -714,17 +714,17 @@ func TestRegisterUser_TransactionUserCreationError(t *testing.T) {
 	mockIdentityRepo.On("GetByClerkID", ctx, clerkUserID).Return(nil, repository.ErrIdentityNotFound)
 
 	// Expect transaction to begin
-	mockDB.ExpectBegin()
+	mockPool.ExpectBegin()
 
 	// User creation fails
-	mockProfileRepo.On("CreateUserTx", ctx, mock.AnythingOfType("*sql.Tx"), mock.Anything).
+	mockProfileRepo.On("CreateUserTx", ctx, mock.AnythingOfType("*pgxmock.Tx"), mock.Anything).
 		Return(errors.New("database error during user creation"))
 
 	// Expect rollback due to user creation error
-	mockDB.ExpectRollback()
+	mockPool.ExpectRollback()
 
 	// Service with database
-	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, db)
+	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, mockPool)
 
 	// Act
 	user, err := service.RegisterUser(ctx, clerkUserID, email, emailVerified)
@@ -739,7 +739,7 @@ func TestRegisterUser_TransactionUserCreationError(t *testing.T) {
 	mockPrivacyRepo.AssertNotCalled(t, "CreateTx")
 
 	// Verify rollback happened
-	assert.NoError(t, mockDB.ExpectationsWereMet())
+	assert.NoError(t, mockPool.ExpectationsWereMet())
 }
 
 // TestRegisterUser_TransactionIdentityCreationError tests identity creation failure in transaction
@@ -750,10 +750,10 @@ func TestRegisterUser_TransactionIdentityCreationError(t *testing.T) {
 	email := "newuser@example.com"
 	emailVerified := true
 
-	// Create sqlmock DB
-	db, mockDB, err := sqlmock.New()
+	// Create pgxmock pool
+	mockPool, err := pgxmock.NewPool()
 	assert.NoError(t, err)
-	defer db.Close()
+	defer mockPool.Close()
 
 	mockProfileRepo := new(MockProfileRepository)
 	mockIdentityRepo := new(MockUserIdentityRepository)
@@ -763,20 +763,20 @@ func TestRegisterUser_TransactionIdentityCreationError(t *testing.T) {
 	mockIdentityRepo.On("GetByClerkID", ctx, clerkUserID).Return(nil, repository.ErrIdentityNotFound)
 
 	// Expect transaction to begin
-	mockDB.ExpectBegin()
+	mockPool.ExpectBegin()
 
 	// User creation succeeds
-	mockProfileRepo.On("CreateUserTx", ctx, mock.AnythingOfType("*sql.Tx"), mock.Anything).Return(nil)
+	mockProfileRepo.On("CreateUserTx", ctx, mock.AnythingOfType("*pgxmock.Tx"), mock.Anything).Return(nil)
 
 	// Identity creation fails
-	mockIdentityRepo.On("CreateTx", ctx, mock.AnythingOfType("*sql.Tx"), mock.Anything).
+	mockIdentityRepo.On("CreateTx", ctx, mock.AnythingOfType("*pgxmock.Tx"), mock.Anything).
 		Return(repository.ErrDuplicateIdentity)
 
 	// Expect rollback due to identity creation error
-	mockDB.ExpectRollback()
+	mockPool.ExpectRollback()
 
 	// Service with database
-	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, db)
+	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, mockPool)
 
 	// Act
 	user, err := service.RegisterUser(ctx, clerkUserID, email, emailVerified)
@@ -790,7 +790,7 @@ func TestRegisterUser_TransactionIdentityCreationError(t *testing.T) {
 	mockPrivacyRepo.AssertNotCalled(t, "CreateTx")
 
 	// Verify rollback happened
-	assert.NoError(t, mockDB.ExpectationsWereMet())
+	assert.NoError(t, mockPool.ExpectationsWereMet())
 }
 
 // TestRegisterUser_TransactionPrivacyCreationError tests privacy creation failure in transaction
@@ -801,10 +801,10 @@ func TestRegisterUser_TransactionPrivacyCreationError(t *testing.T) {
 	email := "newuser@example.com"
 	emailVerified := true
 
-	// Create sqlmock DB
-	db, mockDB, err := sqlmock.New()
+	// Create pgxmock pool
+	mockPool, err := pgxmock.NewPool()
 	assert.NoError(t, err)
-	defer db.Close()
+	defer mockPool.Close()
 
 	mockProfileRepo := new(MockProfileRepository)
 	mockIdentityRepo := new(MockUserIdentityRepository)
@@ -814,21 +814,21 @@ func TestRegisterUser_TransactionPrivacyCreationError(t *testing.T) {
 	mockIdentityRepo.On("GetByClerkID", ctx, clerkUserID).Return(nil, repository.ErrIdentityNotFound)
 
 	// Expect transaction to begin
-	mockDB.ExpectBegin()
+	mockPool.ExpectBegin()
 
 	// User and identity creation succeed
-	mockProfileRepo.On("CreateUserTx", ctx, mock.AnythingOfType("*sql.Tx"), mock.Anything).Return(nil)
-	mockIdentityRepo.On("CreateTx", ctx, mock.AnythingOfType("*sql.Tx"), mock.Anything).Return(nil)
+	mockProfileRepo.On("CreateUserTx", ctx, mock.AnythingOfType("*pgxmock.Tx"), mock.Anything).Return(nil)
+	mockIdentityRepo.On("CreateTx", ctx, mock.AnythingOfType("*pgxmock.Tx"), mock.Anything).Return(nil)
 
 	// Privacy creation fails
-	mockPrivacyRepo.On("CreateTx", ctx, mock.AnythingOfType("*sql.Tx"), mock.Anything).
+	mockPrivacyRepo.On("CreateTx", ctx, mock.AnythingOfType("*pgxmock.Tx"), mock.Anything).
 		Return(errors.New("database error during privacy creation"))
 
 	// Expect rollback due to privacy creation error
-	mockDB.ExpectRollback()
+	mockPool.ExpectRollback()
 
 	// Service with database
-	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, db)
+	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, mockPool)
 
 	// Act
 	user, err := service.RegisterUser(ctx, clerkUserID, email, emailVerified)
@@ -839,5 +839,5 @@ func TestRegisterUser_TransactionPrivacyCreationError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to create privacy settings")
 
 	// Verify rollback happened
-	assert.NoError(t, mockDB.ExpectationsWereMet())
+	assert.NoError(t, mockPool.ExpectationsWereMet())
 }

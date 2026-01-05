@@ -2,11 +2,11 @@ package repository
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -25,7 +25,7 @@ type PrivacyRepository interface {
 
 	// CreateTx creates new privacy settings for a user within a transaction
 	// Generates UUID if not already set, and sets timestamps
-	CreateTx(ctx context.Context, tx *sql.Tx, settings *domain.PrivacySettings) error
+	CreateTx(ctx context.Context, tx pgx.Tx, settings *domain.PrivacySettings) error
 
 	// Update updates existing privacy settings for a user
 	Update(ctx context.Context, settings *domain.PrivacySettings) error
@@ -33,11 +33,11 @@ type PrivacyRepository interface {
 
 // privacyRepository implements PrivacyRepository using PostgreSQL
 type privacyRepository struct {
-	db *sql.DB
+	db DB
 }
 
 // NewPrivacyRepository creates a new PrivacyRepository instance
-func NewPrivacyRepository(db *sql.DB) PrivacyRepository {
+func NewPrivacyRepository(db DB) PrivacyRepository {
 	return &privacyRepository{db: db}
 }
 
@@ -54,7 +54,7 @@ func (r *privacyRepository) GetByUserID(ctx context.Context, userID string) (*do
 	`
 
 	var settings domain.PrivacySettings
-	err := r.db.QueryRowContext(ctx, query, userID).Scan(
+	err := r.db.QueryRow(ctx, query, userID).Scan(
 		&settings.ID,
 		&settings.UserID,
 		&settings.GDPRNecessaryConsent,
@@ -69,7 +69,7 @@ func (r *privacyRepository) GetByUserID(ctx context.Context, userID string) (*do
 		&settings.UpdatedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrPrivacySettingsNotFound
 	}
 	if err != nil {
@@ -108,7 +108,7 @@ func (r *privacyRepository) Create(ctx context.Context, settings *domain.Privacy
 		)
 	`
 
-	_, err := r.db.ExecContext(ctx, query,
+	_, err := r.db.Exec(ctx, query,
 		settings.ID,
 		settings.UserID,
 		settings.GDPRNecessaryConsent,
@@ -132,7 +132,7 @@ func (r *privacyRepository) Create(ctx context.Context, settings *domain.Privacy
 
 // CreateTx creates new privacy settings for a user within a transaction
 // Generates UUID if not already set, and sets timestamps
-func (r *privacyRepository) CreateTx(ctx context.Context, tx *sql.Tx, settings *domain.PrivacySettings) error {
+func (r *privacyRepository) CreateTx(ctx context.Context, tx pgx.Tx, settings *domain.PrivacySettings) error {
 	// Generate UUID if not already set
 	if settings.ID == "" {
 		settings.ID = uuid.New().String()
@@ -159,7 +159,7 @@ func (r *privacyRepository) CreateTx(ctx context.Context, tx *sql.Tx, settings *
 		)
 	`
 
-	_, err := tx.ExecContext(ctx, query,
+	_, err := tx.Exec(ctx, query,
 		settings.ID,
 		settings.UserID,
 		settings.GDPRNecessaryConsent,
@@ -201,7 +201,7 @@ func (r *privacyRepository) Update(ctx context.Context, settings *domain.Privacy
 		WHERE user_id = $10
 	`
 
-	result, err := r.db.ExecContext(ctx, query,
+	ct, err := r.db.Exec(ctx, query,
 		settings.GDPRNecessaryConsent,
 		settings.GDPRAnalyticsConsent,
 		settings.GDPRAdvertisingConsent,
@@ -219,12 +219,7 @@ func (r *privacyRepository) Update(ctx context.Context, settings *domain.Privacy
 	}
 
 	// Check if any rows were affected
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return ErrPrivacySettingsNotFound
 	}
 

@@ -2,12 +2,12 @@ package repository
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -38,7 +38,7 @@ type UserIdentityRepository interface {
 	// CreateTx creates a new identity in the database within a transaction
 	// Generates UUID if not set, sets timestamps
 	// Returns ErrDuplicateIdentity if clerk_user_id already exists
-	CreateTx(ctx context.Context, tx *sql.Tx, identity *domain.UserIdentity) error
+	CreateTx(ctx context.Context, tx pgx.Tx, identity *domain.UserIdentity) error
 
 	// UpdateLastUsed updates the last_used_at and updated_at timestamps for an identity
 	// Called during login to track when each identity was last used
@@ -48,11 +48,11 @@ type UserIdentityRepository interface {
 
 // userIdentityRepository implements UserIdentityRepository using PostgreSQL
 type userIdentityRepository struct {
-	db *sql.DB
+	db DB
 }
 
 // NewUserIdentityRepository creates a new UserIdentityRepository instance
-func NewUserIdentityRepository(db *sql.DB) UserIdentityRepository {
+func NewUserIdentityRepository(db DB) UserIdentityRepository {
 	return &userIdentityRepository{db: db}
 }
 
@@ -67,7 +67,7 @@ func (r *userIdentityRepository) GetByClerkID(ctx context.Context, clerkUserID s
 	`
 
 	var identity domain.UserIdentity
-	err := r.db.QueryRowContext(ctx, query, clerkUserID).Scan(
+	err := r.db.QueryRow(ctx, query, clerkUserID).Scan(
 		&identity.ID,
 		&identity.UserID,
 		&identity.ClerkUserID,
@@ -81,7 +81,7 @@ func (r *userIdentityRepository) GetByClerkID(ctx context.Context, clerkUserID s
 		&identity.LastUsedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrIdentityNotFound
 	}
 	if err != nil {
@@ -103,7 +103,7 @@ func (r *userIdentityRepository) GetByUserID(ctx context.Context, userID string)
 		ORDER BY is_primary DESC, created_at ASC
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, userID)
+	rows, err := r.db.Query(ctx, query, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +163,7 @@ func (r *userIdentityRepository) Create(ctx context.Context, identity *domain.Us
 		)
 	`
 
-	_, err := r.db.ExecContext(ctx, query,
+	_, err := r.db.Exec(ctx, query,
 		identity.ID,
 		identity.UserID,
 		identity.ClerkUserID,
@@ -191,7 +191,7 @@ func (r *userIdentityRepository) Create(ctx context.Context, identity *domain.Us
 }
 
 // CreateTx creates a new identity in the database within a transaction
-func (r *userIdentityRepository) CreateTx(ctx context.Context, tx *sql.Tx, identity *domain.UserIdentity) error {
+func (r *userIdentityRepository) CreateTx(ctx context.Context, tx pgx.Tx, identity *domain.UserIdentity) error {
 	// Generate UUID if not already set
 	if identity.ID == "" {
 		identity.ID = uuid.New().String()
@@ -214,7 +214,7 @@ func (r *userIdentityRepository) CreateTx(ctx context.Context, tx *sql.Tx, ident
 		)
 	`
 
-	_, err := tx.ExecContext(ctx, query,
+	_, err := tx.Exec(ctx, query,
 		identity.ID,
 		identity.UserID,
 		identity.ClerkUserID,
@@ -252,18 +252,13 @@ func (r *userIdentityRepository) UpdateLastUsed(ctx context.Context, clerkUserID
 		WHERE clerk_user_id = $3
 	`
 
-	result, err := r.db.ExecContext(ctx, query, now, now, clerkUserID)
+	ct, err := r.db.Exec(ctx, query, now, now, clerkUserID)
 	if err != nil {
 		return err
 	}
 
 	// Check if any rows were affected
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return ErrIdentityNotFound
 	}
 

@@ -2,12 +2,12 @@ package repository
 
 import (
 	"context"
-	"database/sql"
+	
 	"regexp"
 	"testing"
 	"time"
 
-	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
@@ -15,18 +15,18 @@ import (
 )
 
 // setupSnapshotMockDB creates a mock database and sqlmock instance for balance snapshot repository testing
-func setupSnapshotMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock, BalanceSnapshotRepository) {
-	db, mock, err := sqlmock.New()
+func setupSnapshotMockDB(t *testing.T) (pgxmock.PgxPoolIface, BalanceSnapshotRepository) {
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 
-	repo := NewBalanceSnapshotRepository(db)
-	return db, mock, repo
+	repo := NewBalanceSnapshotRepository(mock)
+	return mock, repo
 }
 
 // TestBalanceSnapshotRepository_Create_NewSnapshot tests inserting a new snapshot
 func TestBalanceSnapshotRepository_Create_NewSnapshot(t *testing.T) {
-	db, mock, repo := setupSnapshotMockDB(t)
-	defer db.Close()
+	mock, repo := setupSnapshotMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -60,8 +60,8 @@ func TestBalanceSnapshotRepository_Create_NewSnapshot(t *testing.T) {
 		snapshot.CurrencyCode,
 		snapshot.SnapshotAt,
 		snapshot.Source,
-		sqlmock.AnyArg(), // created_at
-	).WillReturnResult(sqlmock.NewResult(1, 1))
+		pgxmock.AnyArg(), // created_at
+	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	// Execute
 	err := repo.Create(ctx, snapshot)
@@ -73,8 +73,8 @@ func TestBalanceSnapshotRepository_Create_NewSnapshot(t *testing.T) {
 
 // TestBalanceSnapshotRepository_Create_MultiplePerDay tests creating multiple snapshots for same account same day
 func TestBalanceSnapshotRepository_Create_MultiplePerDay(t *testing.T) {
-	db, mock, repo := setupSnapshotMockDB(t)
-	defer db.Close()
+	mock, repo := setupSnapshotMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	accountID := uuid.New().String()
@@ -111,8 +111,8 @@ func TestBalanceSnapshotRepository_Create_MultiplePerDay(t *testing.T) {
 	`)).WithArgs(
 		snapshot1.ID, snapshot1.AccountID, snapshot1.UserID,
 		snapshot1.CurrentBalance, snapshot1.AvailableBalance, snapshot1.CurrencyCode,
-		snapshot1.SnapshotAt, snapshot1.Source, sqlmock.AnyArg(),
-	).WillReturnResult(sqlmock.NewResult(1, 1))
+		snapshot1.SnapshotAt, snapshot1.Source, pgxmock.AnyArg(),
+	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	mock.ExpectExec(regexp.QuoteMeta(`
 		INSERT INTO balance_snapshots
@@ -121,8 +121,8 @@ func TestBalanceSnapshotRepository_Create_MultiplePerDay(t *testing.T) {
 	`)).WithArgs(
 		snapshot2.ID, snapshot2.AccountID, snapshot2.UserID,
 		snapshot2.CurrentBalance, snapshot2.AvailableBalance, snapshot2.CurrencyCode,
-		snapshot2.SnapshotAt, snapshot2.Source, sqlmock.AnyArg(),
-	).WillReturnResult(sqlmock.NewResult(1, 1))
+		snapshot2.SnapshotAt, snapshot2.Source, pgxmock.AnyArg(),
+	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	// Execute both inserts
 	err := repo.Create(ctx, snapshot1)
@@ -136,8 +136,8 @@ func TestBalanceSnapshotRepository_Create_MultiplePerDay(t *testing.T) {
 
 // TestBalanceSnapshotRepository_GetByUserIDAndDateRange tests fetching snapshots for a user within date range
 func TestBalanceSnapshotRepository_GetByUserIDAndDateRange(t *testing.T) {
-	db, mock, repo := setupSnapshotMockDB(t)
-	defer db.Close()
+	mock, repo := setupSnapshotMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -148,7 +148,7 @@ func TestBalanceSnapshotRepository_GetByUserIDAndDateRange(t *testing.T) {
 	// Mock data
 	balance1 := 1000.00
 	balance2 := 1100.00
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "account_id", "user_id", "current_balance", "available_balance",
 		"currency_code", "snapshot_at", "source", "created_at",
 	}).
@@ -184,8 +184,8 @@ func TestBalanceSnapshotRepository_GetByUserIDAndDateRange(t *testing.T) {
 
 // TestBalanceSnapshotRepository_GetByUserIDAndDateRange_NoResults tests query with no matching snapshots
 func TestBalanceSnapshotRepository_GetByUserIDAndDateRange_NoResults(t *testing.T) {
-	db, mock, repo := setupSnapshotMockDB(t)
-	defer db.Close()
+	mock, repo := setupSnapshotMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -193,7 +193,7 @@ func TestBalanceSnapshotRepository_GetByUserIDAndDateRange_NoResults(t *testing.
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 
 	// Mock empty result
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "account_id", "user_id", "current_balance", "available_balance",
 		"currency_code", "snapshot_at", "source", "created_at",
 	})
@@ -219,8 +219,8 @@ func TestBalanceSnapshotRepository_GetByUserIDAndDateRange_NoResults(t *testing.
 
 // TestBalanceSnapshotRepository_GetAggregatedHistory tests aggregating balance history by date
 func TestBalanceSnapshotRepository_GetAggregatedHistory(t *testing.T) {
-	db, mock, repo := setupSnapshotMockDB(t)
-	defer db.Close()
+	mock, repo := setupSnapshotMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -229,7 +229,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory(t *testing.T) {
 	accountTypes := []string{"depository", "credit"}
 
 	// Mock aggregated data (grouped by DATE(snapshot_at))
-	rows := sqlmock.NewRows([]string{"snapshot_date", "total_balance"}).
+	rows := pgxmock.NewRows([]string{"snapshot_date", "total_balance"}).
 		AddRow(time.Date(2024, 11, 1, 0, 0, 0, 0, time.UTC), 5000.00).
 		AddRow(time.Date(2024, 11, 2, 0, 0, 0, 0, time.UTC), 5150.00).
 		AddRow(time.Date(2024, 11, 3, 0, 0, 0, 0, time.UTC), 5300.00)
@@ -244,7 +244,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory(t *testing.T) {
 		  AND a.type = ANY($4)
 		GROUP BY (bs.snapshot_at AT TIME ZONE 'UTC')::date
 		ORDER BY (bs.snapshot_at AT TIME ZONE 'UTC')::date ASC
-	`)).WithArgs(userID, startDate, endDate, sqlmock.AnyArg()).WillReturnRows(rows)
+	`)).WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).WillReturnRows(rows)
 
 	// Execute
 	history, err := repo.GetAggregatedHistory(ctx, userID, startDate, endDate, accountTypes)
@@ -260,8 +260,8 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory(t *testing.T) {
 
 // TestBalanceSnapshotRepository_GetAggregatedHistory_AllAccountTypes tests aggregation without type filter
 func TestBalanceSnapshotRepository_GetAggregatedHistory_AllAccountTypes(t *testing.T) {
-	db, mock, repo := setupSnapshotMockDB(t)
-	defer db.Close()
+	mock, repo := setupSnapshotMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -269,7 +269,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_AllAccountTypes(t *testi
 	endDate := time.Date(2024, 11, 3, 23, 59, 59, 0, time.UTC)
 
 	// Mock aggregated data (all account types, grouped by DATE(snapshot_at))
-	rows := sqlmock.NewRows([]string{"snapshot_date", "total_balance"}).
+	rows := pgxmock.NewRows([]string{"snapshot_date", "total_balance"}).
 		AddRow(time.Date(2024, 11, 1, 0, 0, 0, 0, time.UTC), 10000.00).
 		AddRow(time.Date(2024, 11, 2, 0, 0, 0, 0, time.UTC), 10200.00)
 
@@ -295,8 +295,8 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_AllAccountTypes(t *testi
 
 // TestBalanceSnapshotRepository_GetLatestByUserID tests fetching the most recent snapshot for each account
 func TestBalanceSnapshotRepository_GetLatestByUserID(t *testing.T) {
-	db, mock, repo := setupSnapshotMockDB(t)
-	defer db.Close()
+	mock, repo := setupSnapshotMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -304,7 +304,7 @@ func TestBalanceSnapshotRepository_GetLatestByUserID(t *testing.T) {
 	account2 := uuid.New().String()
 
 	// Mock latest snapshots (one per account)
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "account_id", "user_id", "current_balance", "available_balance",
 		"currency_code", "snapshot_at", "source", "created_at",
 	}).
@@ -339,8 +339,8 @@ func TestBalanceSnapshotRepository_GetLatestByUserID(t *testing.T) {
 
 // TestBalanceSnapshotRepository_GetLatestByAccountID tests fetching the most recent snapshot for a specific account
 func TestBalanceSnapshotRepository_GetLatestByAccountID(t *testing.T) {
-	db, mock, repo := setupSnapshotMockDB(t)
-	defer db.Close()
+	mock, repo := setupSnapshotMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	accountID := uuid.New().String()
@@ -348,7 +348,7 @@ func TestBalanceSnapshotRepository_GetLatestByAccountID(t *testing.T) {
 	snapshotAt := time.Date(2024, 11, 15, 14, 30, 45, 0, time.UTC)
 
 	// Mock latest snapshot for account
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "account_id", "user_id", "current_balance", "available_balance",
 		"currency_code", "snapshot_at", "source", "created_at",
 	}).AddRow(
@@ -378,14 +378,14 @@ func TestBalanceSnapshotRepository_GetLatestByAccountID(t *testing.T) {
 
 // TestBalanceSnapshotRepository_GetLatestByAccountID_NoSnapshot tests when no snapshot exists for account
 func TestBalanceSnapshotRepository_GetLatestByAccountID_NoSnapshot(t *testing.T) {
-	db, mock, repo := setupSnapshotMockDB(t)
-	defer db.Close()
+	mock, repo := setupSnapshotMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	accountID := uuid.New().String()
 
 	// Mock empty result
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "account_id", "user_id", "current_balance", "available_balance",
 		"currency_code", "snapshot_at", "source", "created_at",
 	})
@@ -410,15 +410,15 @@ func TestBalanceSnapshotRepository_GetLatestByAccountID_NoSnapshot(t *testing.T)
 
 // TestBalanceSnapshotRepository_DeleteByAccountID tests deleting snapshots for an account
 func TestBalanceSnapshotRepository_DeleteByAccountID(t *testing.T) {
-	db, mock, repo := setupSnapshotMockDB(t)
-	defer db.Close()
+	mock, repo := setupSnapshotMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	accountID := uuid.New().String()
 
 	mock.ExpectExec(regexp.QuoteMeta(`
 		DELETE FROM balance_snapshots WHERE account_id = $1
-	`)).WithArgs(accountID).WillReturnResult(sqlmock.NewResult(0, 5)) // 5 rows deleted
+	`)).WithArgs(accountID).WillReturnResult(pgxmock.NewResult("UPDATE", 5)) // 5 rows deleted
 
 	// Execute
 	err := repo.DeleteByAccountID(ctx, accountID)
@@ -430,8 +430,8 @@ func TestBalanceSnapshotRepository_DeleteByAccountID(t *testing.T) {
 
 // TestBalanceSnapshotRepository_Create_PreservesMicroseconds tests that microsecond precision is preserved
 func TestBalanceSnapshotRepository_Create_PreservesMicroseconds(t *testing.T) {
-	db, mock, repo := setupSnapshotMockDB(t)
-	defer db.Close()
+	mock, repo := setupSnapshotMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	// Create timestamp with microsecond precision
@@ -462,8 +462,8 @@ func TestBalanceSnapshotRepository_Create_PreservesMicroseconds(t *testing.T) {
 		snapshot.CurrencyCode,
 		snapshotAt, // Microseconds should be preserved
 		snapshot.Source,
-		sqlmock.AnyArg(),
-	).WillReturnResult(sqlmock.NewResult(1, 1))
+		pgxmock.AnyArg(),
+	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	// Execute
 	err := repo.Create(ctx, snapshot)
@@ -476,8 +476,8 @@ func TestBalanceSnapshotRepository_Create_PreservesMicroseconds(t *testing.T) {
 
 // TestBalanceSnapshotRepository_GetByUserIDAndDateRange_SubSecondOrdering tests ordering of snapshots less than 1 second apart
 func TestBalanceSnapshotRepository_GetByUserIDAndDateRange_SubSecondOrdering(t *testing.T) {
-	db, mock, repo := setupSnapshotMockDB(t)
-	defer db.Close()
+	mock, repo := setupSnapshotMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -489,7 +489,7 @@ func TestBalanceSnapshotRepository_GetByUserIDAndDateRange_SubSecondOrdering(t *
 	time1 := time.Date(2024, 11, 15, 10, 30, 45, 100000000, time.UTC) // .100 seconds
 	time2 := time.Date(2024, 11, 15, 10, 30, 45, 900000000, time.UTC) // .900 seconds
 
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "account_id", "user_id", "current_balance", "available_balance",
 		"currency_code", "snapshot_at", "source", "created_at",
 	}).
@@ -520,8 +520,8 @@ func TestBalanceSnapshotRepository_GetByUserIDAndDateRange_SubSecondOrdering(t *
 
 // TestBalanceSnapshotRepository_GetByUserIDAndDateRange_BoundaryConditions tests inclusive range boundaries
 func TestBalanceSnapshotRepository_GetByUserIDAndDateRange_BoundaryConditions(t *testing.T) {
-	db, mock, repo := setupSnapshotMockDB(t)
-	defer db.Close()
+	mock, repo := setupSnapshotMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -536,7 +536,7 @@ func TestBalanceSnapshotRepository_GetByUserIDAndDateRange_BoundaryConditions(t 
 	atEnd := time.Date(2024, 11, 15, 23, 59, 59, 999999000, time.UTC)
 	middle := time.Date(2024, 11, 15, 12, 0, 0, 0, time.UTC)
 
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "account_id", "user_id", "current_balance", "available_balance",
 		"currency_code", "snapshot_at", "source", "created_at",
 	}).
@@ -568,8 +568,8 @@ func TestBalanceSnapshotRepository_GetByUserIDAndDateRange_BoundaryConditions(t 
 
 // TestBalanceSnapshotRepository_GetAggregatedHistory_MultipleSnapshotsPerDay tests aggregation sums all snapshots per day
 func TestBalanceSnapshotRepository_GetAggregatedHistory_MultipleSnapshotsPerDay(t *testing.T) {
-	db, mock, repo := setupSnapshotMockDB(t)
-	defer db.Close()
+	mock, repo := setupSnapshotMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -581,7 +581,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_MultipleSnapshotsPerDay(
 	// the SUM would be 3300 (this is the current implementation behavior)
 	// NOTE: This tests the current behavior; if the intention was to use latest balance per day,
 	// the implementation would need to change
-	rows := sqlmock.NewRows([]string{"snapshot_date", "total_balance"}).
+	rows := pgxmock.NewRows([]string{"snapshot_date", "total_balance"}).
 		AddRow(time.Date(2024, 11, 15, 0, 0, 0, 0, time.UTC), 3300.00) // Sum of 1000+1100+1200
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
@@ -606,8 +606,8 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_MultipleSnapshotsPerDay(
 
 // TestBalanceSnapshotRepository_GetAggregatedHistory_TimezoneConsistency tests UTC conversion for aggregation
 func TestBalanceSnapshotRepository_GetAggregatedHistory_TimezoneConsistency(t *testing.T) {
-	db, mock, repo := setupSnapshotMockDB(t)
-	defer db.Close()
+	mock, repo := setupSnapshotMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -617,7 +617,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_TimezoneConsistency(t *t
 
 	// Mock aggregated data - the AT TIME ZONE 'UTC' casting ensures
 	// all timestamps are normalized to UTC before date extraction
-	rows := sqlmock.NewRows([]string{"snapshot_date", "total_balance"}).
+	rows := pgxmock.NewRows([]string{"snapshot_date", "total_balance"}).
 		AddRow(time.Date(2024, 11, 14, 0, 0, 0, 0, time.UTC), 1000.00).
 		AddRow(time.Date(2024, 11, 15, 0, 0, 0, 0, time.UTC), 2000.00).
 		AddRow(time.Date(2024, 11, 16, 0, 0, 0, 0, time.UTC), 3000.00)
@@ -648,8 +648,8 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_TimezoneConsistency(t *t
 
 // TestBalanceSnapshotRepository_GetLatestByAccountID_SubSecondPrecision tests that latest uses full timestamp precision
 func TestBalanceSnapshotRepository_GetLatestByAccountID_SubSecondPrecision(t *testing.T) {
-	db, mock, repo := setupSnapshotMockDB(t)
-	defer db.Close()
+	mock, repo := setupSnapshotMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	accountID := uuid.New().String()
@@ -658,7 +658,7 @@ func TestBalanceSnapshotRepository_GetLatestByAccountID_SubSecondPrecision(t *te
 	// Latest snapshot with microsecond precision
 	snapshotAt := time.Date(2024, 11, 15, 14, 30, 45, 999999000, time.UTC)
 
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "account_id", "user_id", "current_balance", "available_balance",
 		"currency_code", "snapshot_at", "source", "created_at",
 	}).AddRow(

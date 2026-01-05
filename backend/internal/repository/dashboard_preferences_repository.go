@@ -2,13 +2,13 @@ package repository
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -33,11 +33,11 @@ type DashboardPreferencesRepository interface {
 
 // dashboardPreferencesRepository implements DashboardPreferencesRepository using PostgreSQL
 type dashboardPreferencesRepository struct {
-	db *sql.DB
+	db DB
 }
 
 // NewDashboardPreferencesRepository creates a new DashboardPreferencesRepository instance
-func NewDashboardPreferencesRepository(db *sql.DB) DashboardPreferencesRepository {
+func NewDashboardPreferencesRepository(db DB) DashboardPreferencesRepository {
 	return &dashboardPreferencesRepository{db: db}
 }
 
@@ -50,7 +50,7 @@ func (r *dashboardPreferencesRepository) GetByUserID(ctx context.Context, userID
 	`
 
 	var prefs domain.DashboardPreferences
-	err := r.db.QueryRowContext(ctx, query, userID).Scan(
+	err := r.db.QueryRow(ctx, query, userID).Scan(
 		&prefs.ID,
 		&prefs.UserID,
 		&prefs.Layout,
@@ -59,7 +59,7 @@ func (r *dashboardPreferencesRepository) GetByUserID(ctx context.Context, userID
 		&prefs.UpdatedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrDashboardPreferencesNotFound
 	}
 	if err != nil {
@@ -101,7 +101,7 @@ func (r *dashboardPreferencesRepository) Upsert(ctx context.Context, prefs *doma
 		RETURNING id, created_at
 	`
 
-	err := r.db.QueryRowContext(ctx, query,
+	err := r.db.QueryRow(ctx, query,
 		prefs.ID,
 		prefs.UserID,
 		prefs.Layout,
@@ -121,17 +121,12 @@ func (r *dashboardPreferencesRepository) Upsert(ctx context.Context, prefs *doma
 func (r *dashboardPreferencesRepository) Delete(ctx context.Context, userID string) error {
 	query := `DELETE FROM user_dashboard_preferences WHERE user_id = $1`
 
-	result, err := r.db.ExecContext(ctx, query, userID)
+	ct, err := r.db.Exec(ctx, query, userID)
 	if err != nil {
 		return fmt.Errorf("failed to delete dashboard preferences: %w", err)
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to get rows affected: %w", err)
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return ErrDashboardPreferencesNotFound
 	}
 

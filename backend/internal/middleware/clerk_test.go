@@ -2,13 +2,13 @@ package middleware
 
 import (
 	"context"
-	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/clerk/clerk-sdk-go/v2"
+	"github.com/jackc/pgx/v5"
 	"github.com/labstack/echo/v4"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
@@ -480,7 +480,7 @@ type mockUserIdentityRepository struct {
 	getByClerkIDFunc  func(ctx context.Context, clerkUserID string) (*domain.UserIdentity, error)
 	getByUserIDFunc   func(ctx context.Context, userID string) ([]*domain.UserIdentity, error)
 	createFunc        func(ctx context.Context, identity *domain.UserIdentity) error
-	createTxFunc      func(ctx context.Context, tx *sql.Tx, identity *domain.UserIdentity) error
+	createTxFunc      func(ctx context.Context, tx pgx.Tx, identity *domain.UserIdentity) error
 	updateLastUsedErr error
 }
 
@@ -505,7 +505,7 @@ func (m *mockUserIdentityRepository) Create(ctx context.Context, identity *domai
 	return nil
 }
 
-func (m *mockUserIdentityRepository) CreateTx(ctx context.Context, tx *sql.Tx, identity *domain.UserIdentity) error {
+func (m *mockUserIdentityRepository) CreateTx(ctx context.Context, tx pgx.Tx, identity *domain.UserIdentity) error {
 	if m.createTxFunc != nil {
 		return m.createTxFunc(ctx, tx, identity)
 	}

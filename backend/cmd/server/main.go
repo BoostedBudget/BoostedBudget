@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"log/slog"
@@ -11,10 +10,11 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2/adapters/humaecho"
-	_ "github.com/lib/pq"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
 	echomiddleware "github.com/labstack/echo/v4/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
+	"github.com/maxnussbaum/BoostedBudget/internal/database"
 	humaconfig "github.com/maxnussbaum/BoostedBudget/internal/huma"
 	humamiddleware "github.com/maxnussbaum/BoostedBudget/internal/huma/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/operations"
@@ -31,20 +31,16 @@ func main() {
 		log.Fatal("Failed to load config:", err)
 	}
 
-	// Initialize database connection (optional for local dev)
-	var db *sql.DB
+	// Initialize database connection pool (optional for local dev)
+	var db *pgxpool.Pool
 	if cfg.DatabaseURL != "" {
-		db, err = sql.Open("postgres", cfg.DatabaseURL)
+		db, err = database.NewPoolFromURL(context.Background(), cfg.DatabaseURL)
 		if err != nil {
 			log.Fatal("Failed to connect to database:", err)
 		}
 		defer db.Close()
 
-		// Ping database to verify connection
-		if err := db.Ping(); err != nil {
-			log.Fatal("Failed to ping database:", err)
-		}
-		log.Println("✅ Database connection established")
+		log.Println("✅ Database connection pool established (pgx v5)")
 	} else {
 		log.Println("⚠️  Running without database (set DATABASE_URL to enable)")
 	}
