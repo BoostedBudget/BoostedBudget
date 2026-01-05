@@ -168,8 +168,10 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
-  # Security Scan - Docker Images (Parallelized)
+  # Security Scan - Docker Images (Grype by Anchore)
   # =============================================================================
+  # Grype: Fast, accurate vulnerability scanner with low false positives
+  # https://github.com/anchore/grype
   image-security-scan:
     name: Security Scan (${{ matrix.component }} Image)
     needs: build-images
@@ -183,12 +185,8 @@ jobs:
       actions: read
       contents: read
       packages: read
-      security-events: write
     env:
       UNIQUE_WORKSPACE: workspace-security-scan-${{ matrix.component }}-${{ github.run_id }}
-      # Isolated Trivy installation per component (fixes race condition)
-      TRIVY_TEMP_DIR: /tmp/trivy-${{ matrix.component }}-${{ github.run_id }}
-      TRIVY_CACHE_DIR: /tmp/trivy-cache-${{ matrix.component }}-${{ github.run_id }}
 
     steps:
       - name: Clean workspace
@@ -198,36 +196,22 @@ jobs:
         uses: actions/checkout@v6
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}
+          clean: false
 
-      - name: Configure Docker
+      - name: Ensure Grype is installed
         run: |
-          LOCKDIR=~/.docker/config.lock
-          TIMEOUT=30
-          ELAPSED=0
-
-          while ! mkdir "$LOCKDIR" 2>/dev/null; do
-            sleep 1
-            ELAPSED=$((ELAPSED + 1))
-            [ $ELAPSED -ge $TIMEOUT ] && exit 1
-          done
-
-          trap "rmdir '$LOCKDIR' 2>/dev/null || true" EXIT
-
-          mkdir -p ~/.docker
-          if [ -f ~/.docker/config.json ] && command -v jq &> /dev/null; then
-            TEMP_FILE=~/.docker/config.json.tmp.${{ matrix.component }}
-            if jq 'del(.credsStore)' ~/.docker/config.json > "$TEMP_FILE" 2>/dev/null; then
-              mv "$TEMP_FILE" ~/.docker/config.json
-            else
-              rm -f "$TEMP_FILE"
-            fi
-          else
-            echo "{}" > ~/.docker/config.json
+          if ! command -v grype &> /dev/null; then
+            echo "Installing Grype via Homebrew..."
+            brew install grype
           fi
+          echo "Grype version: $(grype version)"
 
-      - name: Log in to GHCR
-        run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Calculate image reference
         id: image-ref
@@ -241,107 +225,23 @@ jobs:
           echo "image-ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
           echo "Scanning production image: ${IMAGE_REF}"
 
-      - name: Run Trivy vulnerability scanner (with retry)
-        id: trivy-scan
-        continue-on-error: true
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ steps.image-ref.outputs.image-ref }}
-          format: 'sarif'
-          output: 'trivy-${{ matrix.component }}-production.sarif'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '0'
-          ignore-unfixed: true
-          cache: false
-        env:
-          TRIVY_TEMP_DIR: ${{ env.TRIVY_TEMP_DIR }}
-          TRIVY_CACHE_DIR: ${{ env.TRIVY_CACHE_DIR }}
+      - name: Pull Docker image
+        run: docker pull ${{ steps.image-ref.outputs.image-ref }}
 
-      - name: Wait before retry (exponential backoff)
-        if: steps.trivy-scan.outcome == 'failure'
+      - name: Scan Docker image for vulnerabilities
         run: |
-          echo "::warning::First scan attempt failed, waiting 10s before retry..."
-          sleep 10
-
-      - name: Retry Trivy scan (attempt 2)
-        if: steps.trivy-scan.outcome == 'failure'
-        id: trivy-scan-retry1
-        continue-on-error: true
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ steps.image-ref.outputs.image-ref }}
-          format: 'sarif'
-          output: 'trivy-${{ matrix.component }}-production.sarif'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '0'
-          ignore-unfixed: true
-          cache: false
-        env:
-          TRIVY_TEMP_DIR: ${{ env.TRIVY_TEMP_DIR }}
-          TRIVY_CACHE_DIR: ${{ env.TRIVY_CACHE_DIR }}
-
-      - name: Wait before final retry (exponential backoff)
-        if: steps.trivy-scan-retry1.outcome == 'failure'
-        run: |
-          echo "::warning::Second scan attempt failed, waiting 20s before final retry..."
-          sleep 20
-
-      - name: Retry Trivy scan (attempt 3)
-        if: steps.trivy-scan-retry1.outcome == 'failure'
-        id: trivy-scan-retry2
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ steps.image-ref.outputs.image-ref }}
-          format: 'sarif'
-          output: 'trivy-${{ matrix.component }}-production.sarif'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '0'
-          ignore-unfixed: true
-          cache: false
-        env:
-          TRIVY_TEMP_DIR: ${{ env.TRIVY_TEMP_DIR }}
-          TRIVY_CACHE_DIR: ${{ env.TRIVY_CACHE_DIR }}
-
-      - name: Scan error diagnostics
-        if: failure()
-        run: |
-          echo "::group::Production Scan Diagnostics"
-          echo "::error::All production image scan attempts failed for ${{ matrix.component }}"
-          echo "Image: ${{ steps.image-ref.outputs.image-ref }}"
-          echo ""
-          echo "Troubleshooting steps:"
-          echo "1. Verify image exists in registry: docker pull ${{ steps.image-ref.outputs.image-ref }}"
-          echo "2. Check Trivy cache: rm -rf ${{ env.TRIVY_CACHE_DIR }}"
-          echo "3. Verify network connectivity to vulnerability databases"
-          echo "4. Check Mac Mini disk space: df -h"
-          echo ""
-          echo "System diagnostics:"
-          echo "Disk space: $(df -h / | tail -1)"
-          echo "Temp dir: $(ls -la ${{ env.TRIVY_TEMP_DIR }} 2>&1 || echo 'not created')"
-          echo "Cache dir: $(ls -la ${{ env.TRIVY_CACHE_DIR }} 2>&1 || echo 'not created')"
-          echo "::endgroup::"
-
-      - name: Upload scan results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v4
-        if: success() || failure()
-        continue-on-error: true
-        with:
-          sarif_file: 'trivy-${{ matrix.component }}-production.sarif'
-          category: 'trivy-production-${{ matrix.component }}'
-
-      - name: Cleanup Trivy temporary files
-        if: always()
-        run: |
-          echo "::group::Cleanup Trivy Files"
-          echo "Removing temporary Trivy directories for ${{ matrix.component }}..."
-          rm -rf "${{ env.TRIVY_TEMP_DIR }}" 2>/dev/null || true
-          rm -rf "${{ env.TRIVY_CACHE_DIR }}" 2>/dev/null || true
-          echo "::notice::✅ Cleanup complete"
+          echo "::group::Docker Image Vulnerability Scan (Grype)"
+          grype ${{ steps.image-ref.outputs.image-ref }} \
+            --fail-on high \
+            --only-fixed \
+            --output table
           echo "::endgroup::"
 
       - name: Final workspace cleanup
         if: always()
-        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+        run: |
+          sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+          docker rmi ${{ steps.image-ref.outputs.image-ref }} 2>/dev/null || true
 
   # =============================================================================
   # Push Images to Fly.io Registry (Parallelized)
