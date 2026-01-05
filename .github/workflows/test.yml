@@ -801,20 +801,13 @@ jobs:
           echo "::endgroup::"
 
       # =========================================================================
-      # Dockerfile Linting: Hadolint CLI (container actions don't work on macOS!)
+      # Dockerfile Linting: Hadolint (pre-installed on Mac Mini runner)
       # =========================================================================
-      - name: Ensure Hadolint is installed
-        run: |
-          if ! command -v hadolint &> /dev/null; then
-            echo "Installing Hadolint via Homebrew..."
-            brew install hadolint
-          fi
-          echo "Hadolint version: $(hadolint --version)"
-
       - name: Lint Dockerfile (Hadolint)
         run: |
           echo "::group::Dockerfile Linting (Hadolint)"
-          hadolint "${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile" \
+          echo "Hadolint version: $(/opt/homebrew/bin/hadolint --version)"
+          /opt/homebrew/bin/hadolint "${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile" \
             --failure-threshold warning || echo "::warning::Dockerfile linting issues found"
           echo "::endgroup::"
 
