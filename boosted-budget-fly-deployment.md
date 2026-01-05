@@ -6,6 +6,118 @@ Build once, deploy anywhere. Both frontend and backend are compiled into Docker 
 **Initial Deployment**: USA-only (us-east-1/iad region) for MVP
 **Future Expansion**: Multi-region deployment path documented in "Future: Multi-Region Migration Plan" section
 
+---
+
+## Database Configuration
+
+BoostedBudget uses different database providers based on the environment:
+
+| Environment | Backend | Frontend | Database | Connection Pooling |
+|-------------|---------|----------|----------|-------------------|
+| **Local Dev** | Docker Compose | Docker Compose | Docker PostgreSQL | None (direct) |
+| **QA (Mac Mini)** | Docker Compose | Docker Compose | Docker PostgreSQL | None (direct) |
+| **Staging** | Fly.io | Cloudflare Pages (#610) | Neon | Neon built-in pooler |
+| **Production** | Fly.io | Cloudflare Pages (#611) | Neon | Neon built-in pooler |
+
+### Local Development (Docker PostgreSQL)
+
+Local development uses Docker Compose with a local PostgreSQL container:
+
+```bash
+# Start local environment
+docker-compose up -d
+
+# Database URL format (no SSL, direct connection)
+DATABASE_URL=postgresql://devuser:devpass@localhost:5432/boostedbudget?sslmode=disable
+```
+
+No connection pooling is needed locally - connect directly to PostgreSQL.
+
+### QA Environment (Mac Mini Docker PostgreSQL)
+
+The QA environment on Mac Mini uses Docker Compose with local PostgreSQL, similar to local development:
+
+```bash
+# Deploy to QA (via workflow_dispatch or manual)
+# See .github/workflows/deploy-qa.yml
+
+# Database URL format (same as local dev)
+DATABASE_URL=postgresql://qauser:qapass@postgres:5432/boostedbudget?sslmode=disable
+```
+
+QA uses direct connections without pooling, matching local development for test fidelity.
+
+### Staging/Production (Neon Serverless PostgreSQL)
+
+Staging and production use [Neon](https://neon.tech), a serverless PostgreSQL provider with built-in connection pooling.
+
+#### Neon Connection String Formats
+
+Neon provides two endpoints per database:
+
+| Type | URL Pattern | Use Case |
+|------|-------------|----------|
+| **Pooled** | `ep-xxx-pooler.region.aws.neon.tech` | Application connections (handles connection limits) |
+| **Direct** | `ep-xxx.region.aws.neon.tech` | Migrations (Atlas requires direct access) |
+
+```bash
+# Pooled connection (for application - use this as DATABASE_URL)
+postgresql://user:pass@ep-xxx-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require
+
+# Direct connection (for migrations - optional MIGRATION_DATABASE_URL)
+postgresql://user:pass@ep-xxx.us-east-1.aws.neon.tech/neondb?sslmode=require
+```
+
+**Important**: Atlas migrations are incompatible with connection poolers (they set session-level parameters). The `docker-entrypoint.sh` script automatically transforms pooler URLs to direct endpoints for migrations.
+
+#### Setting Up Fly.io Secrets for Neon
+
+```bash
+# Staging backend
+fly secrets set DATABASE_URL="postgresql://user:pass@ep-xxx-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require" -a boostedbudget-staging-api
+
+# Optional: Explicit direct URL (auto-transformed if not set)
+fly secrets set MIGRATION_DATABASE_URL="postgresql://user:pass@ep-xxx.us-east-1.aws.neon.tech/neondb?sslmode=require" -a boostedbudget-staging-api
+
+# Production backend
+fly secrets set DATABASE_URL="postgresql://user:pass@ep-xxx-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require" -a boostedbudget-api
+```
+
+#### Neon Serverless Considerations
+
+| Feature | Value | Notes |
+|---------|-------|-------|
+| **Autosuspend** | 5 min idle | Compute suspends after inactivity (configurable) |
+| **Cold Start** | 300ms-2s | Wake-up time when compute resumes |
+| **SSL Required** | Yes | All connections must use `sslmode=require` |
+| **Query Timeout** | 600s | Default for pooled connections |
+
+The `docker-entrypoint.sh` handles Neon cold starts with:
+- Warm-up step before migrations
+- `connect_timeout=15` for serverless endpoints
+- Enhanced retry logic (longer first retry)
+
+#### Neon Backup Strategy (PITR + Branching)
+
+Neon provides automatic Point-in-Time Recovery (PITR):
+
+| Feature | Free Tier | Paid Tiers |
+|---------|-----------|------------|
+| **PITR Retention** | 7 days | 7-30 days |
+| **Branches** | 10 | Unlimited |
+| **Storage** | 0.5 GiB | Variable |
+
+**Backup approach**:
+1. **Automatic**: Neon PITR provides continuous backup (no configuration needed)
+2. **Manual snapshots**: Create branches for point-in-time snapshots
+   ```bash
+   # In Neon Console: Create branch from specific point in time
+   # Branch naming: backup-YYYYMMDD-description
+   ```
+3. **Pre-deployment**: Create branch before major deployments for instant rollback
+
+---
+
 ## Docker Build Strategy
 
 ### Backend Multi-Stage Dockerfile
@@ -364,18 +476,13 @@ jobs:
         FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       run: |
         # Deploy with blue-green strategy
+        # Note: Migrations run automatically via docker-entrypoint.sh
+        # The entrypoint handles Neon pooler URL transformation for Atlas
         flyctl deploy \
           --app boostedbudget-api \
           --image ${{ needs.build-images.outputs.backend-image }} \
           --config ./fly.toml \
           --strategy bluegreen
-
-    - name: Run database migrations
-      env:
-        FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-      run: |
-        flyctl ssh console -a boostedbudget-api -C \
-          "migrate -path /app/migrations -database \$DATABASE_URL up"
 
     - name: Deploy frontend to production
       env:
@@ -477,8 +584,9 @@ kill_timeout = 30
     headers = {}
 
 [deploy]
-  # Run migrations before starting the app
-  release_command = "migrate -path /app/migrations -database $DATABASE_URL up"
+  # Migrations run automatically via docker-entrypoint.sh (not release_command)
+  # The entrypoint uses Atlas with Neon pooler URL transformation
+  strategy = "bluegreen"
 
 [[vm]]
   cpu_kind = "shared"
@@ -716,17 +824,14 @@ else
 fi
 
 # Deploy backend
+# Note: Migrations run automatically via docker-entrypoint.sh on container startup
+# The entrypoint handles Neon pooler URL transformation for Atlas migrations
 echo "Deploying backend..."
 flyctl deploy \
   --app ${BACKEND_APP} \
   --image ${REGISTRY}/${NAMESPACE}/boostedbudget-backend:${VERSION} \
   --config ${FLY_CONFIG} \
   --strategy bluegreen
-
-# Run migrations
-echo "Running database migrations..."
-flyctl ssh console -a ${BACKEND_APP} -C \
-  "migrate -path /app/migrations -database \$DATABASE_URL up"
 
 # Deploy frontend
 echo "Deploying frontend..."
@@ -752,21 +857,38 @@ echo "Deployment complete!"
 FLY_API_TOKEN                # Fly.io API token for production
 FLY_API_TOKEN_STAGING        # Fly.io API token for staging
 GITHUB_TOKEN                 # Auto-generated for packages
+
+# Authentication (Clerk)
 CLERK_DOMAIN                 # Clerk domain
 CLERK_CLIENT_ID             # Clerk client ID
-CLERK_CLIENT_SECRET         # Clerk client secret
+CLERK_CLIENT_SECRET         # Clerk client secret (backend validation)
 CLERK_AUDIENCE              # Clerk API audience
+
+# Bank Connections (Plaid)
 PLAID_CLIENT_ID             # Plaid client ID
 PLAID_SECRET                # Plaid secret (sandbox/production)
 PLAID_PUBLIC_KEY            # Plaid public key
-STRIPE_SECRET_KEY           # Stripe secret key
-STRIPE_WEBHOOK_SECRET       # Stripe webhook secret
-GOOGLE_ADSENSE_CLIENT       # AdSense client ID
+
+# Payments (Paddle)
+PADDLE_API_KEY              # Paddle API key
+PADDLE_WEBHOOK_SECRET       # Paddle webhook secret (pdl_ntfset_...)
+PADDLE_CLIENT_TOKEN         # Paddle client-side token (frontend)
+
+# Security
+ENCRYPTION_KEY              # 32-byte encryption key for sensitive data
+
+# Monetization
+GOOGLE_ADSENSE_CLIENT       # AdSense client ID (free tier ads)
+
+# Notifications & Monitoring
 SLACK_WEBHOOK              # Slack notifications
 SONAR_TOKEN                # SonarCloud token
+
+# CDN/DNS (Cloudflare)
 CF_ZONE_ID                 # CloudFlare zone ID
 CF_API_TOKEN               # CloudFlare API token
 
+# Note: DATABASE_URL set via Fly secrets (see "Database Configuration")
 # Note: No EU_DATABASE_URL needed for single-region MVP
 # Multi-region secrets documented in "Future: Multi-Region Migration Plan"
 ```
@@ -774,17 +896,26 @@ CF_API_TOKEN               # CloudFlare API token
 ### Fly.io Secrets Management
 
 ```bash
-# Set secrets in Fly.io (Single Region)
+# Set secrets in Fly.io (Staging - Neon database)
 fly secrets set \
-  DATABASE_URL="postgres://..." \
-  REDIS_URL="redis://..." \
-  CLERK_DOMAIN="boostedbudget.clerk.com" \
-  CLERK_CLIENT_ID="..." \
-  CLERK_CLIENT_SECRET="..." \
+  DATABASE_URL="postgresql://user:pass@ep-xxx-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require" \
+  CLERK_SECRET_KEY="sk_test_..." \
   PLAID_CLIENT_ID="..." \
   PLAID_SECRET="..." \
-  STRIPE_SECRET_KEY="..." \
-  STRIPE_WEBHOOK_SECRET="..." \
+  PADDLE_API_KEY="..." \
+  PADDLE_WEBHOOK_SECRET="pdl_ntfset_..." \
+  ENCRYPTION_KEY="your_32_byte_key_here" \
+  --app boostedbudget-staging-api
+
+# Set secrets in Fly.io (Production - Neon database)
+fly secrets set \
+  DATABASE_URL="postgresql://user:pass@ep-xxx-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require" \
+  CLERK_SECRET_KEY="sk_live_..." \
+  PLAID_CLIENT_ID="..." \
+  PLAID_SECRET="..." \
+  PADDLE_API_KEY="..." \
+  PADDLE_WEBHOOK_SECRET="pdl_ntfset_..." \
+  ENCRYPTION_KEY="your_32_byte_key_here" \
   --app boostedbudget-api
 
 # List secrets
@@ -793,8 +924,9 @@ fly secrets list --app boostedbudget-api
 # Remove a secret
 fly secrets unset KEY_NAME --app boostedbudget-api
 
-# Note: Only single DATABASE_URL needed for MVP
-# Multi-region database secrets added in Phase 7+
+# Note: DATABASE_URL uses Neon pooled endpoint
+# MIGRATION_DATABASE_URL optional (auto-transformed from pooler URL)
+# See "Database Configuration" section for Neon details
 ```
 
 ## Monitoring and Observability

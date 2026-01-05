@@ -19,29 +19,72 @@ fi
 
 echo "Running database migrations with Atlas..."
 
-# Construct direct PostgreSQL connection for Atlas (bypass PgBouncer)
-# Atlas is incompatible with PgBouncer transaction pooling mode because it tries
-# to set connection parameters (like search_path) that PgBouncer blocks.
+# Construct direct PostgreSQL connection for Atlas (bypass connection pooler)
+# Atlas is incompatible with connection poolers (PgBouncer/Neon pooler) because
+# it tries to set session-level parameters that poolers block.
 # Solution: Use direct PostgreSQL connection for migrations only.
 #
-# Preferred: Use MIGRATION_DATABASE_URL env var if set (cleaner, explicit)
-# Fallback: Transform DATABASE_URL from PgBouncer to direct connection
+# Priority:
+# 1. MIGRATION_DATABASE_URL if explicitly set (cleaner, most flexible)
+# 2. Transform Neon pooler URL to direct endpoint
+# 3. Use DATABASE_URL as-is (local/QA Docker PostgreSQL)
+
 if [ -n "${MIGRATION_DATABASE_URL:-}" ]; then
   MIGRATION_URL="$MIGRATION_DATABASE_URL"
   echo "Using MIGRATION_DATABASE_URL for direct PostgreSQL connection"
+elif [[ "$DATABASE_URL" == *"-pooler"* ]] && [[ "$DATABASE_URL" == *"neon.tech"* ]]; then
+  # Neon pooler pattern: ep-xxx-pooler.region.aws.neon.tech
+  # Transform to direct endpoint by removing "-pooler" from hostname
+  # Use precise sed to only match hostname portion (avoid password issues)
+  MIGRATION_URL=$(echo "$DATABASE_URL" | sed 's/\(@[^/]*\)-pooler\./\1./')
+  echo "Using Neon direct endpoint (bypassing connection pooler)"
 else
-  # Transform PgBouncer URL to direct connection
-  # PgBouncer pattern: postgresql://user:pass@pgbouncer.<cluster-id>.flympg.net/fly-db
-  # Direct pattern:    postgresql://user:pass@boostedbudget-db.internal:5432/fly-db
-  MIGRATION_URL=$(echo "$DATABASE_URL" | sed 's/pgbouncer\.[a-z0-9]*\.flympg\.net/boostedbudget-db.internal:5432/')
-  echo "Using transformed DATABASE_URL for direct PostgreSQL connection (bypassing PgBouncer)"
+  # Local/QA Docker PostgreSQL - use as-is
+  MIGRATION_URL="$DATABASE_URL"
+  echo "Using DATABASE_URL directly (no pooler transformation needed)"
+fi
+
+# Neon-specific connection enhancements
+if [[ "$MIGRATION_URL" == *"neon.tech"* ]]; then
+  # Ensure sslmode=require for Neon connections (defensive check)
+  if [[ "$MIGRATION_URL" != *"sslmode="* ]]; then
+    if [[ "$MIGRATION_URL" == *"?"* ]]; then
+      MIGRATION_URL="${MIGRATION_URL}&sslmode=require"
+    else
+      MIGRATION_URL="${MIGRATION_URL}?sslmode=require"
+    fi
+    echo "Added sslmode=require for Neon connection"
+  fi
+
+  # Add connect_timeout for serverless cold starts
+  if [[ "$MIGRATION_URL" != *"connect_timeout="* ]]; then
+    MIGRATION_URL="${MIGRATION_URL}&connect_timeout=15"
+    echo "Added connect_timeout=15 for Neon serverless"
+  fi
+
+  # Warm up Neon compute before running migrations (handle autosuspend)
+  echo "Warming up Neon database connection..."
+  WARM_UP_ATTEMPTS=3
+  for i in $(seq 1 $WARM_UP_ATTEMPTS); do
+    if atlas migrate status \
+        --config file:///app/atlas.hcl \
+        --env production \
+        --dir "file:///app/migrations?format=golang-migrate" \
+        --url "$MIGRATION_URL" > /dev/null 2>&1; then
+      echo "Database connection ready"
+      break
+    fi
+    if [ $i -lt $WARM_UP_ATTEMPTS ]; then
+      echo "Waiting for database to wake up... (attempt $i/$WARM_UP_ATTEMPTS)"
+      sleep 3
+    fi
+  done
 fi
 
 # Run migrations using Atlas with direct connection
 # Use --revisions-schema public to store revisions table in public schema
 # This prevents Atlas from creating a separate atlas_schema_revisions schema
-# and avoids conflicts with the pgbouncer schema
-echo "🗄️  Running database migrations..."
+echo "Applying database migrations..."
 MAX_ATTEMPTS=5
 for i in $(seq 1 $MAX_ATTEMPTS); do
   echo "Migration attempt $i/$MAX_ATTEMPTS..."
@@ -55,16 +98,22 @@ for i in $(seq 1 $MAX_ATTEMPTS); do
     --dir "file:///app/migrations?format=golang-migrate" \
     --url "$MIGRATION_URL" \
     --revisions-schema public && {
-    echo "✓ Migrations completed successfully"
+    echo "Migrations completed successfully"
     break
   } || {
     if [ $i -eq $MAX_ATTEMPTS ]; then
-      echo "✗ Migration failed after $MAX_ATTEMPTS attempts"
+      echo "Migration failed after $MAX_ATTEMPTS attempts"
       echo "Run 'atlas migrate status' for details"
       exit 1
     else
-      echo "⚠ Migration attempt $i failed, retrying in 10s..."
-      sleep 10
+      # Longer wait for first retry on Neon (cold start scenario)
+      if [ $i -eq 1 ] && [[ "$MIGRATION_URL" == *"neon.tech"* ]]; then
+        echo "First attempt failed (possible cold start), waiting 15s before retry..."
+        sleep 15
+      else
+        echo "Migration attempt $i failed, retrying in 10s..."
+        sleep 10
+      fi
     fi
   }
 done

@@ -737,23 +737,20 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
-  # Security Scan - Dependencies & Dockerfiles (Parallelized)
+  # Security Scan - Native Tools (govulncheck, pnpm audit, Hadolint)
   # =============================================================================
+  # Replaces Trivy with official/native tools to avoid SSL download issues
+  # - Backend: govulncheck (official Go vulnerability scanner with reachability analysis)
+  # - Frontend: pnpm audit (native npm/pnpm security audit)
+  # - Dockerfiles: Hadolint (Dockerfile best practices linter)
   security-scan:
     name: Security Scan (${{ matrix.component }})
     runs-on: [self-hosted, macOS, mac-mini]
     strategy:
       matrix:
         component: [backend, frontend]
-    permissions:
-      actions: read
-      contents: read
-      security-events: write
     env:
       UNIQUE_WORKSPACE: workspace-security-scan-${{ matrix.component }}-${{ github.run_id }}
-      # Isolated Trivy installation per component (fixes race condition)
-      TRIVY_TEMP_DIR: /tmp/trivy-${{ matrix.component }}-${{ github.run_id }}
-      TRIVY_CACHE_DIR: /tmp/trivy-cache-${{ matrix.component }}-${{ github.run_id }}
 
     steps:
       - name: Clean workspace (fix permission issues)
@@ -765,176 +762,53 @@ jobs:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
 
-      - name: Scan ${{ matrix.component }} dependencies (with retry)
-        id: scan-deps
-        continue-on-error: true
-        uses: aquasecurity/trivy-action@master
+      # =========================================================================
+      # Backend Security: govulncheck (Go official vulnerability scanner)
+      # =========================================================================
+      - name: Setup Go
+        if: matrix.component == 'backend'
+        uses: actions/setup-go@v5
         with:
-          scan-type: 'fs'
-          scan-ref: '${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}'
-          scanners: 'vuln'
-          format: 'sarif'
-          output: 'trivy-${{ matrix.component }}-deps.sarif'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '1'
-          ignore-unfixed: true
-          cache: false
-        env:
-          TRIVY_TEMP_DIR: ${{ env.TRIVY_TEMP_DIR }}
-          TRIVY_CACHE_DIR: ${{ env.TRIVY_CACHE_DIR }}
+          go-version-file: ${{ env.UNIQUE_WORKSPACE }}/backend/go.mod
+          cache-dependency-path: ${{ env.UNIQUE_WORKSPACE }}/backend/go.sum
 
-      - name: Wait before retry (exponential backoff)
-        if: steps.scan-deps.outcome == 'failure'
+      - name: Run govulncheck (Go vulnerabilities)
+        if: matrix.component == 'backend'
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
         run: |
-          echo "::warning::First scan attempt failed, waiting 10s before retry..."
-          sleep 10
-
-      - name: Retry dependency scan (attempt 2)
-        if: steps.scan-deps.outcome == 'failure'
-        id: scan-deps-retry1
-        continue-on-error: true
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'fs'
-          scan-ref: '${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}'
-          scanners: 'vuln'
-          format: 'sarif'
-          output: 'trivy-${{ matrix.component }}-deps.sarif'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '1'
-          ignore-unfixed: true
-          cache: false
-        env:
-          TRIVY_TEMP_DIR: ${{ env.TRIVY_TEMP_DIR }}
-          TRIVY_CACHE_DIR: ${{ env.TRIVY_CACHE_DIR }}
-
-      - name: Wait before final retry (exponential backoff)
-        if: steps.scan-deps-retry1.outcome == 'failure'
-        run: |
-          echo "::warning::Second scan attempt failed, waiting 20s before final retry..."
-          sleep 20
-
-      - name: Retry dependency scan (attempt 3)
-        if: steps.scan-deps-retry1.outcome == 'failure'
-        id: scan-deps-retry2
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'fs'
-          scan-ref: '${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}'
-          scanners: 'vuln'
-          format: 'sarif'
-          output: 'trivy-${{ matrix.component }}-deps.sarif'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '1'
-          ignore-unfixed: true
-          cache: false
-        env:
-          TRIVY_TEMP_DIR: ${{ env.TRIVY_TEMP_DIR }}
-          TRIVY_CACHE_DIR: ${{ env.TRIVY_CACHE_DIR }}
-
-      - name: Dependency scan error diagnostics
-        if: failure()
-        run: |
-          echo "::group::Scan Diagnostics"
-          echo "::error::All dependency scan attempts failed for ${{ matrix.component }}"
-          echo "Troubleshooting steps:"
-          echo "1. Check if Trivy cache is corrupted: rm -rf ${{ env.TRIVY_CACHE_DIR }}"
-          echo "2. Verify network connectivity to vulnerability databases"
-          echo "3. Check Mac Mini disk space: df -h"
-          echo "4. Review Trivy logs above for specific errors"
-
-          # Show system info
-          echo ""
-          echo "System diagnostics:"
-          echo "Disk space: $(df -h / | tail -1)"
-          echo "Temp dir: $(ls -la ${{ env.TRIVY_TEMP_DIR }} 2>&1 || echo 'not created')"
-          echo "Cache dir: $(ls -la ${{ env.TRIVY_CACHE_DIR }} 2>&1 || echo 'not created')"
+          echo "::group::Go Vulnerability Scan (govulncheck)"
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
           echo "::endgroup::"
 
-      - name: Upload ${{ matrix.component }} dependency scan results
-        uses: github/codeql-action/upload-sarif@v4
-        if: success() || failure()
-        continue-on-error: true
+      # =========================================================================
+      # Frontend Security: pnpm audit (native npm security audit)
+      # =========================================================================
+      - name: Setup Node.js
+        if: matrix.component == 'frontend'
+        uses: actions/setup-node@v4
         with:
-          sarif_file: 'trivy-${{ matrix.component }}-deps.sarif'
-          category: 'trivy-${{ matrix.component }}-dependencies'
+          node-version: '22'
 
-      - name: Scan ${{ matrix.component }} Dockerfile (with retry)
-        id: scan-dockerfile
-        continue-on-error: true
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'config'
-          scan-ref: '${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile'
-          format: 'sarif'
-          output: 'trivy-${{ matrix.component }}-dockerfile.sarif'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '0'
-          cache: false
-        env:
-          TRIVY_TEMP_DIR: ${{ env.TRIVY_TEMP_DIR }}
-          TRIVY_CACHE_DIR: ${{ env.TRIVY_CACHE_DIR }}
-
-      - name: Wait before Dockerfile retry (exponential backoff)
-        if: steps.scan-dockerfile.outcome == 'failure'
+      - name: Run pnpm audit (JS vulnerabilities)
+        if: matrix.component == 'frontend'
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
-          echo "::warning::First Dockerfile scan failed, waiting 10s before retry..."
-          sleep 10
+          echo "::group::JavaScript Vulnerability Scan (pnpm audit)"
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm audit --audit-level=high
+          echo "::endgroup::"
 
-      - name: Retry Dockerfile scan (attempt 2)
-        if: steps.scan-dockerfile.outcome == 'failure'
-        id: scan-dockerfile-retry1
-        continue-on-error: true
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'config'
-          scan-ref: '${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile'
-          format: 'sarif'
-          output: 'trivy-${{ matrix.component }}-dockerfile.sarif'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '0'
-          cache: false
-        env:
-          TRIVY_TEMP_DIR: ${{ env.TRIVY_TEMP_DIR }}
-          TRIVY_CACHE_DIR: ${{ env.TRIVY_CACHE_DIR }}
-
-      - name: Wait before final Dockerfile retry (exponential backoff)
-        if: steps.scan-dockerfile-retry1.outcome == 'failure'
+      # =========================================================================
+      # Dockerfile Linting: Hadolint (pre-installed on Mac Mini runner)
+      # =========================================================================
+      - name: Lint Dockerfile (Hadolint)
         run: |
-          echo "::warning::Second Dockerfile scan failed, waiting 20s before final retry..."
-          sleep 20
-
-      - name: Retry Dockerfile scan (attempt 3)
-        if: steps.scan-dockerfile-retry1.outcome == 'failure'
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'config'
-          scan-ref: '${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile'
-          format: 'sarif'
-          output: 'trivy-${{ matrix.component }}-dockerfile.sarif'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '0'
-          cache: false
-        env:
-          TRIVY_TEMP_DIR: ${{ env.TRIVY_TEMP_DIR }}
-          TRIVY_CACHE_DIR: ${{ env.TRIVY_CACHE_DIR }}
-
-      - name: Upload ${{ matrix.component }} Dockerfile scan results
-        uses: github/codeql-action/upload-sarif@v4
-        if: success() || failure()
-        continue-on-error: true
-        with:
-          sarif_file: 'trivy-${{ matrix.component }}-dockerfile.sarif'
-          category: 'trivy-${{ matrix.component }}-dockerfile'
-
-      - name: Cleanup Trivy temporary files
-        if: always()
-        run: |
-          echo "::group::Cleanup Trivy Files"
-          echo "Removing temporary Trivy directories for ${{ matrix.component }}..."
-          rm -rf "${{ env.TRIVY_TEMP_DIR }}" 2>/dev/null || true
-          rm -rf "${{ env.TRIVY_CACHE_DIR }}" 2>/dev/null || true
-          echo "::notice::✅ Cleanup complete"
+          echo "::group::Dockerfile Linting (Hadolint)"
+          echo "Hadolint version: $(/opt/homebrew/bin/hadolint --version)"
+          /opt/homebrew/bin/hadolint "${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile" \
+            --failure-threshold warning || echo "::warning::Dockerfile linting issues found"
           echo "::endgroup::"
 
       - name: Final workspace cleanup
