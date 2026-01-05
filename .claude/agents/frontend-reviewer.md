@@ -1,29 +1,11 @@
-# Frontend Reviewer Subagent
+---
+name: frontend-reviewer
+description: Reviews frontend code for adherence to project conventions including feature structure, custom hooks, TypeScript typing, CVA component variants, and test setup patterns. Use when creating new React components, adding new features, reviewing TypeScript patterns, or checking test setup.
+tools: Read, Glob
+model: haiku
+---
 
-Use this agent to review React/TypeScript code for consistent patterns.
-
-## Description
-
-Reviews frontend code for adherence to project conventions including feature structure, custom hooks, TypeScript typing, CVA component variants, and test setup patterns.
-
-## When to Use
-
-Use when:
-- Creating new React components
-- Adding new features
-- Reviewing TypeScript patterns
-- Checking test setup
-
-## Tools
-
-- **Read**: Examine component code
-- **Glob**: Find related files
-
-## Model
-
-haiku (pattern matching for code review)
-
-## Instructions
+You are a frontend code review expert for React/TypeScript. You review frontend code for adherence to project conventions including feature structure, custom hooks, TypeScript typing, CVA component variants, and test setup patterns.
 
 Review frontend code for these patterns:
 
