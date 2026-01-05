@@ -160,40 +160,14 @@ BAD ✗
 
 ## Branching Strategy
 
-**Branches:**
-- `staging` - Integration branch, all feature PRs merge here first → can be deployed to Mac Mini QA environment (adhoc)
-- `main` - Production branch, only updated via staging→main PRs → deploys to Fly.io production
-- `feature/<issue#>-<desc>` - Feature branches, created from staging, merge to staging
+> **Full details**: See `.claude/skills/git-workflow/SKILL.md` for complete branching conventions, commit formats, and PR workflows.
 
-**Environments:**
-- **QA** (Mac Mini) - Adhoc testing environment, deployed manually via `deploy-qa.yml` workflow_dispatch
-- **Production** (Fly.io) - Automatic deployment when code merges to main
+**Quick Reference:**
+- `staging` → Integration branch, all feature PRs merge here first
+- `main` → Production branch, only updated via staging→main PRs
+- `feature/<issue#>-<desc>` → Feature branches from staging
 
-**Workflow:**
-1. Create feature branch from `staging`: `git checkout staging && git pull && git checkout -b feature/123-description`
-2. Develop and commit changes with issue ID: `git commit -m "#123: Your commit message"`
-3. Push and create PR to `staging`: All feature PRs target staging by default
-4. Optionally deploy PR to QA environment for testing (manual trigger via deploy-qa.yml)
-5. Once validated, merge PR to staging, then create PR from `staging` → `main`
-6. After merge to main, main deploys to Fly.io production automatically
-7. **Auto-sync:** After production deployment completes, GitHub Action automatically syncs staging with main
-
-**Auto-Sync Behavior:**
-- After `staging→main` merge and successful production deployment, the "Sync Staging with Main" workflow runs automatically
-- Workflow merges `main→staging` to eliminate merge commit divergence
-- Both `staging` and `main` remain in sync, preventing perpetual "out of sync" status
-- If auto-sync fails, manual sync instructions provided in workflow summary
-- **Manual sync** (if needed):
-  ```bash
-  git checkout staging
-  git pull origin staging
-  git merge origin/main --no-edit
-  git push origin staging
-  ```
-
-**Branch Protection:**
-- For private repos: Manual reviews and approvals
-- For public repos: Configure protection rules for main and staging
+**Commands**: Use `/commit-push-pr` for streamlined commit, push, and PR creation.
 
 ## Dev Workflow Checklist
 
@@ -220,182 +194,50 @@ BAD ✗
 
 ## Test Scenarios Framework (QA Data Population)
 
+> **Full details**: See `.claude/skills/qa-scenario-creator/` for complete QA scenario creation, YAML templates, and usage patterns.
+
 **Location**: `backend/scripts/qa-data-populator/`
-**Purpose**: Configuration-driven E2E/integration test scripts for populating QA environment with comprehensive transaction data
+**Purpose**: Configuration-driven E2E/integration test scripts for QA environment
 
-### Quick Usage
+**Quick Start**: Use `/qa-scenario-creator` command to create new test scenarios.
 
-```bash
-# Setup
-cd backend/scripts/qa-data-populator
-cp config/qa.env.example config/qa.env
-vim config/qa.env  # Add AUTH_TOKEN and DATABASE_URL
+## Claude Code Workflows
 
-# Run scenario
-source config/qa.env
-./run-scenario.sh scenarios/01-free-tier-first-sync.yaml
+### Available Commands
+| Command | Purpose |
+|---------|---------|
+| `/commit-push-pr` | Stage, commit, push, create PR to staging |
+| `/new-endpoint` | Scaffold Go API endpoint with Huma patterns |
+| `/new-component` | Scaffold React component with feature structure |
+| `/db-migrate` | Create idempotent migration files |
+| `/check-integrations` | Health-check Clerk/Plaid/Paddle |
+| `/smart-plan` | Plan issue implementation with MCP tools |
+| `/plan-next-task` | Recommend next GitHub issue to work on |
+| `/qa-scenario-creator` | Create QA test scenarios |
+| `/run-e2e-tests` | Run E2E tests locally |
 
-# View results
-cat reports/latest.json
-```
+### Available Skills
+| Skill | Documentation |
+|-------|---------------|
+| `git-workflow` | Branch naming, commit format, PR conventions |
+| `go-patterns` | Huma operations, service/repo layers, testing |
+| `typescript-patterns` | Feature structure, React Query, CVA components |
+| `integration-guides` | Clerk JWT, Plaid webhooks, Paddle events |
+| `db-migration-guide` | Idempotency patterns, Atlas commands, testing |
+| `run-e2e-tests` | E2E testing setup, debugging, CI vs local |
+| `qa-scenario-creator` | QA data population framework |
 
-### Adding New Scenarios (5-Minute Guide)
+### Available Subagents
+| Subagent | Purpose |
+|----------|---------|
+| `code-simplifier` | Auto-cleanup after coding sessions |
+| `verify-app` | Run tests, check endpoints |
+| `api-designer` | Review Go API patterns |
+| `db-migrator` | Safe PostgreSQL schema changes |
+| `frontend-reviewer` | Review React/TypeScript patterns |
+| `integration-tester` | Test external integrations |
 
-**Step 1**: Create YAML file in `scenarios/`
-```yaml
-version: "1.0"
-scenario:
-  name: "my-new-test"
-  category: "normal"  # normal|edge_case|error|tier_limit|special
-
-  setup:
-    user: {id: "test-user-001", tier: "free", email: "test@example.com"}
-    linked_items: [{id: "item-001", item_id: "plaid-sandbox-item", ...}]
-    accounts: [{id: "acc-001", name: "Checking", type: "depository", ...}]
-
-  steps:
-    - action: "fire_webhook"
-      webhook_code: "DEFAULT_UPDATE"
-      item_id: "plaid-sandbox-item"
-    - action: "wait"
-      wait_seconds: 5
-
-  assertions:
-    database:
-      transactions_count: ">= 1"
-    webhook_status:
-      processed: true
-```
-
-**Step 2**: Run it
-```bash
-./run-scenario.sh scenarios/my-new-test.yaml
-```
-
-**Step 3**: Commit to Git (scenarios are version controlled)
-
-### Architecture
-
-**Configuration-Driven**: All test data in YAML files (no code changes for new scenarios)
-
-**Core Libraries** (`lib/`):
-- `api-client.sh` - Fire webhooks via admin endpoint: `fire_webhook()`, `wait_for_webhook_processed()`
-- `db-utils.sh` - Database operations: `insert_user()`, `insert_linked_item()`, `query_db()`
-- `assertions.sh` - Test validations: `assert_transaction_count()`, `assert_user_notes_preserved()`
-- `reporting.sh` - HTML/JSON report generation
-
-**Templates** (`templates/`):
-- `transactions.yaml` - Reusable transaction patterns (purchases, refunds, paychecks)
-- `users.yaml` - User tier templates (free, premium, premium_plus)
-- `accounts.yaml` - Account type templates (checking, savings, credit)
-
-**Scenarios** (`scenarios/`):
-- YAML files defining test cases
-- Categories: normal flow, edge cases, errors, tier limits, special cases
-- Each scenario: setup → steps → assertions
-
-### Key Scenarios
-
-**Normal Flow**:
-- `01-free-tier-first-sync.yaml` - First sync with 30-day history
-- `02-pagination-multi-page.yaml` - >500 transactions, multi-page
-- `07-removed-transactions.yaml` - TRANSACTIONS_REMOVED webhook
-
-**Edge Cases** (**CRITICAL**):
-- `03-preserve-user-notes.yaml` - **MUST PASS** - Prevents data loss bug
-- `06-pending-to-posted.yaml` - Transaction state transitions
-
-**Tier Limits**:
-- `04-tier-limit-enforcement.yaml` - Free tier 3-account monthly limit
-
-**Error Scenarios**:
-- `05-item-error-login-required.yaml` - Item LOGIN_REQUIRED error
-
-### Extensibility Pattern
-
-**To add more scenarios as features grow**:
-
-1. **Create new template** (if needed):
-```yaml
-# templates/transactions.yaml
-new_transaction_type:
-  amount: -X.XX
-  category: ["New", "Category"]
-  # ... fields
-```
-
-2. **Create scenario referencing template**:
-```yaml
-setup:
-  existing_transactions:
-    - <<: *new_transaction_type  # Reference template
-      external_transaction_id: "custom-id"
-```
-
-3. **Run and validate**
-
-4. **Commit** - Scenarios grow with the app
-
-### Admin Endpoint (Issue #308)
-
-**Endpoint**: `POST /api/v1/admin/plaid/fire-webhook` (QA-only)
-
-**Usage**:
-```bash
-curl -X POST http://localhost:8080/api/v1/admin/plaid/fire-webhook \
-  -H "Authorization: Bearer $AUTH_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"item_id":"uuid","webhook_code":"DEFAULT_UPDATE"}'
-```
-
-**Supported webhook codes**:
-- `INITIAL_UPDATE` - First sync (historical depth based on tier: 30/365/730 days)
-- `DEFAULT_UPDATE` - Incremental sync (cursor-based, no limit)
-- `HISTORICAL_UPDATE` - Backfill old transactions
-- `TRANSACTIONS_REMOVED` - Retroactive deletions
-
-**Security**: Triple-layer (route registration + middleware + service validation)
-
-### Progress Tracking
-
-**`PROGRESS.md`**: Tracks implementation progress and knowledge
-- Implementation status (phases, tasks)
-- Design decisions made
-- Blockers and resolutions
-- Knowledge base (pipeline flow, schemas, limits)
-- Lessons learned
-
-**Update PROGRESS.md** during implementation to preserve knowledge across context compactions
-
-### Testing Strategy
-
-**Local Testing** (Docker):
-```bash
-docker-compose up -d
-source config/local.env
-./run-scenario.sh scenarios/01-free-tier-first-sync.yaml --env local
-```
-
-**QA Testing**:
-```bash
-source config/qa.env
-./run-all-scenarios.sh  # Run all scenarios
-```
-
-### When to Use This Framework
-
-✅ **Manual testing** - Populate QA environment with realistic data
-✅ **Regression testing** - Verify transaction pipeline after changes
-✅ **Edge case validation** - Test scenarios hard to reproduce manually
-✅ **Tier limit testing** - Validate subscription enforcement
-✅ **Documentation** - Scenarios serve as living documentation
-
-### Related Issues
-
-- **Issue #308** - Admin API for Manual Webhook Firing (implemented)
-- **Issue #309** - Role-Based Admin Authentication (future)
-- **Issue #310** - Bulk Webhook Firing (future)
-- **Issue #311** - Webhook Replay (future)
+> **Note**: Consider triggering `code-simplifier` at the end of coding sessions to ensure consistent cleanup and simplification of newly written code.
 
 ## Critical Implementation Notes
 
@@ -471,56 +313,27 @@ pnpm run test:api
 ## Common Tasks
 
 **New API endpoint**:
-1. Update `api/openapi.yaml`
-2. `make generate-backend && make generate-frontend`
-3. Implement handler (`backend/internal/handlers/`)
-4. Service logic (`backend/internal/services/`)
-5. Tests (TDD!)
+> **Full details**: See `.claude/skills/go-patterns/SKILL.md` for Huma operation patterns, error handling, and testing.
+
+**Quick Start**: Use `/new-endpoint` command to scaffold with proper structure.
+
+**Manual steps**:
+1. Define Huma operation (Input/Output types, handler struct)
+2. Register in router with `huma.Register()`
+3. Implement service logic with repository layer
+4. Write tests (TDD!)
+5. Regenerate: `pnpm run generate:api` → orval TypeScript hooks
 
 **New migration**:
-```bash
-# Manual approach (create SQL files - Issue #348: .up/.down pairs for rollback support)
-cd backend/migrations
-touch 000006_<name>.up.sql    # Forward migration
-touch 000006_<name>.down.sql  # Rollback migration (REQUIRED)
+> **Full details**: See `.claude/skills/db-migration-guide/SKILL.md` for idempotency patterns, rollback support, and testing procedures.
 
-# Write .up.sql with idempotency guards (IF NOT EXISTS, DO $$ blocks)
-# Write .down.sql to reverse .up.sql (DROP TABLE CASCADE, etc.)
-# See migrations 000005, 000015 for rollback examples
+**Quick Start**: Use `/db-migrate` command to create migration files with proper structure.
 
-# Regenerate checksums (MUST use --dir-format golang-migrate):
-cd .. && atlas migrate hash --dir file://migrations --dir-format golang-migrate
-
-# ALWAYS lint before committing:
-atlas migrate lint --dir file://migrations --dev-url "docker://postgres/15/test" --latest 1
-
-# CRITICAL: Test migration comprehensively (Issues #326, #348):
-./scripts/test-migrations.sh
-# This runs 5 test suites:
-#   1. Idempotency (migrations can run 2x safely)
-#   2. Performance (duration tracking)
-#   3. Data integrity (preserves existing data)
-#   4. Schema validation (tables/constraints/indexes)
-#   5. Rollback testing (up→down→up cycle produces identical schema)
-
-# See backend/docs/migration-testing.md for details
-# See backend/docs/atlas-migration-guide.md for Atlas usage
-```
-
-**Migration Execution (CRITICAL)**:
-- **Backend container OWNS migration execution** (via `backend/scripts/docker-entrypoint.sh`)
-- Deploy scripts **MUST NOT** run migrations (causes duplicate execution)
-- Migrations run automatically when backend container starts
-- Built-in retry logic: 5 attempts with 5-second delays
-- All new migrations **MUST be idempotent** (safe to re-run)
-  - Use `DO $$ ... IF NOT EXISTS ... END $$;` for ALTER TABLE
-  - Use `CREATE INDEX IF NOT EXISTS` for indexes
-- **NEVER** skip this pattern - non-idempotent migrations cause deployment failures
-
-**Why this matters**:
-- Previous issue #279: Deploy script + container both ran migrations → constraint violations
-- Fix: Removed duplicate execution, made migrations idempotent
-- Pattern: Container startup = schema ready, no external migration orchestration needed
+**Critical Rules**:
+- All migrations **MUST be idempotent** (use `IF NOT EXISTS`, `DO $$` blocks)
+- Both `.up.sql` and `.down.sql` required for rollback support
+- Run `./scripts/test-migrations.sh` before committing (5 test suites)
+- Backend container owns migration execution (never run in deploy scripts)
 
 **New rule type**:
 1. Schema in `backend/internal/rules/types.go`
@@ -670,4 +483,4 @@ Keep synchronized:
 
 ---
 
-*Last updated: **MCPs MANDATORY** (Serena→in-memoria→Sequential FIRST always), **TRACK ALL DECISIONS CONTINUOUSLY** (in-memoria + server-memory AS YOU IMPLEMENT), Issue ID in ALL commits/PRs (#N:), TDD Red-Green-Refactor non-negotiable*
+*Last updated: Refactored with skill/command references. See `.claude/` for commands, skills, and subagents. MCPs MANDATORY (Serena→in-memoria→Sequential FIRST), Issue ID in ALL commits/PRs (#N:), TDD Red-Green-Refactor non-negotiable*

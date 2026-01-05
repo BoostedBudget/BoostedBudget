@@ -1,0 +1,366 @@
+---
+name: db-migration-guide
+description: "Database migration guide for BoostedBudget: Atlas migrations, idempotency patterns, rollback support, and testing."
+version: "1.0.0"
+---
+
+# Database Migration Guide
+
+## Overview
+
+BoostedBudget uses **Atlas** with **golang-migrate** format for database migrations. All migrations must be:
+
+1. **Idempotent** - Safe to run multiple times
+2. **Reversible** - Have both .up.sql and .down.sql
+3. **Tested** - Pass the 5-suite migration test
+
+## File Structure
+
+```
+backend/migrations/
+├── 000001_create_users_table.up.sql
+├── 000001_create_users_table.down.sql
+├── 000002_create_accounts_table.up.sql
+├── 000002_create_accounts_table.down.sql
+├── ...
+└── atlas.sum  # Checksum file (auto-generated)
+```
+
+## Creating a New Migration
+
+### Step 1: Determine Next Number
+
+```bash
+# Find the highest migration number
+ls backend/migrations/*.up.sql | sort -V | tail -1
+# Example: 000015_add_dashboard_layouts.up.sql → next is 000016
+```
+
+### Step 2: Create Files
+
+```bash
+# Create both up and down files
+touch backend/migrations/000016_description.up.sql
+touch backend/migrations/000016_description.down.sql
+```
+
+## Idempotency Patterns
+
+### Creating Tables
+
+```sql
+-- 000016_add_feature_flags.up.sql
+
+CREATE TABLE IF NOT EXISTS feature_flags (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    flag_name VARCHAR(100) NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_feature_flag UNIQUE (user_id, flag_name)
+);
+
+-- Create index
+CREATE INDEX IF NOT EXISTS idx_feature_flags_user_id ON feature_flags(user_id);
+CREATE INDEX IF NOT EXISTS idx_feature_flags_name ON feature_flags(flag_name);
+```
+
+### Adding Columns
+
+```sql
+-- Use DO block with IF NOT EXISTS check
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'users'
+        AND column_name = 'preferences'
+    ) THEN
+        ALTER TABLE users ADD COLUMN preferences JSONB DEFAULT '{}';
+    END IF;
+END $$;
+```
+
+### Adding Constraints
+
+```sql
+-- Check if constraint exists before adding
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chk_amount_positive'
+    ) THEN
+        ALTER TABLE transactions
+        ADD CONSTRAINT chk_amount_positive
+        CHECK (amount IS NOT NULL);
+    END IF;
+END $$;
+```
+
+### Adding Foreign Keys
+
+```sql
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'fk_transactions_account'
+    ) THEN
+        ALTER TABLE transactions
+        ADD CONSTRAINT fk_transactions_account
+        FOREIGN KEY (account_id)
+        REFERENCES accounts(id)
+        ON DELETE CASCADE;
+    END IF;
+END $$;
+```
+
+### Adding Indexes
+
+```sql
+-- Index creation is naturally idempotent with IF NOT EXISTS
+CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_external ON transactions(external_transaction_id);
+```
+
+### Adding Enum Values
+
+```sql
+-- Enums require special handling
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_enum
+        WHERE enumlabel = 'new_value'
+        AND enumtypid = 'status_enum'::regtype
+    ) THEN
+        ALTER TYPE status_enum ADD VALUE 'new_value';
+    END IF;
+END $$;
+```
+
+## Rollback Patterns (.down.sql)
+
+### Drop Table
+
+```sql
+-- 000016_add_feature_flags.down.sql
+
+DROP TABLE IF EXISTS feature_flags CASCADE;
+```
+
+### Drop Column
+
+```sql
+ALTER TABLE users DROP COLUMN IF EXISTS preferences;
+```
+
+### Drop Constraint
+
+```sql
+ALTER TABLE transactions DROP CONSTRAINT IF EXISTS chk_amount_positive;
+```
+
+### Drop Index
+
+```sql
+DROP INDEX IF EXISTS idx_transactions_date;
+```
+
+### Remove Enum Value
+
+```sql
+-- Note: PostgreSQL doesn't easily support removing enum values
+-- Document this limitation in the down migration
+-- Option 1: Recreate enum (requires table recreation)
+-- Option 2: Leave enum value (recommended for safety)
+```
+
+## Atlas Commands
+
+### Regenerate Checksums
+
+**Required after any migration file change:**
+
+```bash
+cd backend
+atlas migrate hash --dir file://migrations --dir-format golang-migrate
+```
+
+### Lint Migrations
+
+**Check for issues:**
+
+```bash
+cd backend
+atlas migrate lint \
+  --dir file://migrations \
+  --dev-url "docker://postgres/15/test" \
+  --latest 1
+```
+
+### Apply Migrations
+
+```bash
+# Local development
+cd backend
+atlas migrate apply \
+  --dir file://migrations \
+  --url "$DATABASE_URL"
+
+# With dry-run
+atlas migrate apply \
+  --dir file://migrations \
+  --url "$DATABASE_URL" \
+  --dry-run
+```
+
+### Check Migration Status
+
+```bash
+atlas migrate status \
+  --dir file://migrations \
+  --url "$DATABASE_URL"
+```
+
+## Migration Testing
+
+### Run Full Test Suite
+
+```bash
+cd backend
+./scripts/test-migrations.sh
+```
+
+### Test Suites
+
+The script runs 5 test suites:
+
+| Suite | Purpose |
+|-------|---------|
+| **Idempotency** | Run migrations twice, verify no errors |
+| **Performance** | Track migration duration |
+| **Data Integrity** | Verify existing data preserved |
+| **Schema Validation** | Check tables, constraints, indexes |
+| **Rollback** | Test up→down→up produces same schema |
+
+### Manual Testing
+
+```bash
+# 1. Start fresh database
+docker-compose down -v
+docker-compose up -d postgres
+
+# 2. Run migrations
+atlas migrate apply --dir file://migrations --url "$DATABASE_URL"
+
+# 3. Verify schema
+psql "$DATABASE_URL" -c "\d feature_flags"
+
+# 4. Test rollback
+atlas migrate down --dir file://migrations --url "$DATABASE_URL" --amount 1
+
+# 5. Re-apply
+atlas migrate apply --dir file://migrations --url "$DATABASE_URL"
+```
+
+## Common Issues
+
+### Issue: Non-Idempotent Migration
+
+**Symptom:** Migration fails on re-run with "already exists" error
+
+**Fix:** Add appropriate IF NOT EXISTS guards
+
+```sql
+-- Bad
+ALTER TABLE users ADD COLUMN theme VARCHAR(20);
+
+-- Good
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'theme') THEN
+        ALTER TABLE users ADD COLUMN theme VARCHAR(20);
+    END IF;
+END $$;
+```
+
+### Issue: Checksum Mismatch
+
+**Symptom:** "checksum mismatch" error
+
+**Fix:** Regenerate checksums
+
+```bash
+cd backend
+atlas migrate hash --dir file://migrations --dir-format golang-migrate
+```
+
+### Issue: Missing DOWN Migration
+
+**Symptom:** Rollback fails
+
+**Fix:** Create .down.sql that reverses .up.sql
+
+### Issue: Foreign Key Constraint
+
+**Symptom:** "cannot drop table" error during rollback
+
+**Fix:** Use CASCADE
+
+```sql
+DROP TABLE IF EXISTS feature_flags CASCADE;
+```
+
+### Issue: Data Loss on Rollback
+
+**Symptom:** Important data deleted by rollback
+
+**Fix:** Consider data migration approach
+
+```sql
+-- down.sql with data preservation
+-- Store data before dropping
+CREATE TABLE IF NOT EXISTS feature_flags_backup AS SELECT * FROM feature_flags;
+DROP TABLE IF EXISTS feature_flags CASCADE;
+```
+
+## Deployment Behavior
+
+### Container Startup
+
+Migrations run automatically when the backend container starts via `docker-entrypoint.sh`:
+
+1. Transform Neon pooler URL to direct connection
+2. Warm up cold connection (3 attempts)
+3. Run migrations with retry logic (5 attempts)
+4. Start application
+
+### Idempotency Requirement
+
+**Why migrations MUST be idempotent:**
+
+1. Container restarts re-run migrations
+2. Multiple containers may start simultaneously
+3. Failed deploys may leave partial state
+4. Rollbacks require re-application
+
+## Checklist
+
+Before committing a migration:
+
+- [ ] `.up.sql` uses idempotency patterns
+- [ ] `.down.sql` correctly reverses changes
+- [ ] `atlas migrate hash` completed
+- [ ] `atlas migrate lint` passes
+- [ ] `./scripts/test-migrations.sh` passes all 5 suites
+- [ ] No sensitive data in migrations
+- [ ] Rollback tested manually
+
+## Related
+
+- `.claude/commands/db-migrate.md` - Create migration command
+- `.claude/agents/db-migrator.md` - Migration subagent
+- `backend/docs/atlas-migration-guide.md` - Extended documentation
+- `backend/docs/migration-testing.md` - Testing documentation
