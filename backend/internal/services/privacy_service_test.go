@@ -2,12 +2,12 @@ package services
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
@@ -32,7 +32,7 @@ func (m *MockPrivacyRepository) Create(ctx context.Context, settings *domain.Pri
 	return args.Error(0)
 }
 
-func (m *MockPrivacyRepository) CreateTx(ctx context.Context, tx *sql.Tx, settings *domain.PrivacySettings) error {
+func (m *MockPrivacyRepository) CreateTx(ctx context.Context, tx pgx.Tx, settings *domain.PrivacySettings) error {
 	args := m.Called(ctx, tx, settings)
 	return args.Error(0)
 }

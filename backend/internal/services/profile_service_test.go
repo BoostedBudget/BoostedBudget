@@ -2,12 +2,12 @@ package services
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
@@ -40,7 +40,7 @@ func (m *MockProfileRepository) CreateUser(ctx context.Context, user *domain.Use
 	return args.Error(0)
 }
 
-func (m *MockProfileRepository) CreateUserTx(ctx context.Context, tx *sql.Tx, user *domain.User) error {
+func (m *MockProfileRepository) CreateUserTx(ctx context.Context, tx pgx.Tx, user *domain.User) error {
 	args := m.Called(ctx, tx, user)
 	return args.Error(0)
 }

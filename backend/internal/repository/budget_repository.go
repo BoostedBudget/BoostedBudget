@@ -2,12 +2,13 @@ package repository
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -45,11 +46,11 @@ type BudgetRepository interface {
 
 // budgetRepository implements BudgetRepository using PostgreSQL.
 type budgetRepository struct {
-	db *sql.DB
+	db DB
 }
 
 // NewBudgetRepository creates a new BudgetRepository instance.
-func NewBudgetRepository(db *sql.DB) BudgetRepository {
+func NewBudgetRepository(db DB) BudgetRepository {
 	return &budgetRepository{db: db}
 }
 
@@ -85,7 +86,7 @@ func (r *budgetRepository) Create(ctx context.Context, budget *domain.Budget) er
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	`
 
-	_, err = r.db.ExecContext(ctx, query,
+	_, err = r.db.Exec(ctx, query,
 		budget.ID,
 		budget.UserID,
 		budget.Name,
@@ -125,7 +126,7 @@ func (r *budgetRepository) GetByID(ctx context.Context, id string) (*domain.Budg
 
 	budget := &domain.Budget{}
 	var incomeSourcesJSON []byte
-	err := r.db.QueryRowContext(ctx, query, id).Scan(
+	err := r.db.QueryRow(ctx, query, id).Scan(
 		&budget.ID,
 		&budget.UserID,
 		&budget.Name,
@@ -142,7 +143,7 @@ func (r *budgetRepository) GetByID(ctx context.Context, id string) (*domain.Budg
 		&incomeSourcesJSON,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrBudgetNotFound
 	}
 	if err != nil {
@@ -175,7 +176,7 @@ func (r *budgetRepository) GetByUserID(ctx context.Context, userID string) ([]*d
 		ORDER BY created_at DESC
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, userID)
+	rows, err := r.db.Query(ctx, query, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +232,7 @@ func (r *budgetRepository) GetActiveByUserID(ctx context.Context, userID string)
 		ORDER BY created_at DESC
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, userID)
+	rows, err := r.db.Query(ctx, query, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -288,7 +289,7 @@ func (r *budgetRepository) GetByName(ctx context.Context, userID, name string) (
 
 	budget := &domain.Budget{}
 	var incomeSourcesJSON []byte
-	err := r.db.QueryRowContext(ctx, query, userID, name).Scan(
+	err := r.db.QueryRow(ctx, query, userID, name).Scan(
 		&budget.ID,
 		&budget.UserID,
 		&budget.Name,
@@ -305,7 +306,7 @@ func (r *budgetRepository) GetByName(ctx context.Context, userID, name string) (
 		&incomeSourcesJSON,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrBudgetNotFound
 	}
 	if err != nil {
@@ -342,7 +343,7 @@ func (r *budgetRepository) Update(ctx context.Context, budget *domain.Budget) er
 		WHERE id = $12 AND user_id = $13
 	`
 
-	result, err := r.db.ExecContext(ctx, query,
+	ct, err := r.db.Exec(ctx, query,
 		budget.Name,
 		budget.Description,
 		budget.Period,
@@ -366,12 +367,7 @@ func (r *budgetRepository) Update(ctx context.Context, budget *domain.Budget) er
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrBudgetNotFound
 	}
 
@@ -382,17 +378,12 @@ func (r *budgetRepository) Update(ctx context.Context, budget *domain.Budget) er
 func (r *budgetRepository) Delete(ctx context.Context, id, userID string) error {
 	query := `DELETE FROM budgets WHERE id = $1 AND user_id = $2`
 
-	result, err := r.db.ExecContext(ctx, query, id, userID)
+	ct, err := r.db.Exec(ctx, query, id, userID)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrBudgetNotFound
 	}
 
@@ -404,7 +395,7 @@ func (r *budgetRepository) CountByUserID(ctx context.Context, userID string) (in
 	query := `SELECT COUNT(*) FROM budgets WHERE user_id = $1`
 
 	var count int
-	err := r.db.QueryRowContext(ctx, query, userID).Scan(&count)
+	err := r.db.QueryRow(ctx, query, userID).Scan(&count)
 	if err != nil {
 		return 0, err
 	}
@@ -450,7 +441,7 @@ func (r *budgetRepository) CreateCategory(ctx context.Context, category *domain.
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`
 
-	_, err = r.db.ExecContext(ctx, query,
+	_, err = r.db.Exec(ctx, query,
 		category.ID,
 		category.BudgetID,
 		categoryJSON,
@@ -475,7 +466,7 @@ func (r *budgetRepository) GetCategoriesByBudgetID(ctx context.Context, budgetID
 		ORDER BY created_at ASC
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, budgetID)
+	rows, err := r.db.Query(ctx, query, budgetID)
 	if err != nil {
 		return nil, err
 	}
@@ -553,7 +544,7 @@ func (r *budgetRepository) UpdateCategory(ctx context.Context, category *domain.
 		WHERE id = $7 AND budget_id = $8
 	`
 
-	result, err := r.db.ExecContext(ctx, query,
+	ct, err := r.db.Exec(ctx, query,
 		categoryJSON,
 		category.AllocatedAmount,
 		category.SpentAmount,
@@ -568,12 +559,7 @@ func (r *budgetRepository) UpdateCategory(ctx context.Context, category *domain.
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrBudgetCategoryNotFound
 	}
 
@@ -589,17 +575,12 @@ func (r *budgetRepository) UpdateCategorySpentAmount(ctx context.Context, catego
 		WHERE id = $2
 	`
 
-	result, err := r.db.ExecContext(ctx, query, spentAmount, categoryID)
+	ct, err := r.db.Exec(ctx, query, spentAmount, categoryID)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrBudgetCategoryNotFound
 	}
 
@@ -610,17 +591,12 @@ func (r *budgetRepository) UpdateCategorySpentAmount(ctx context.Context, catego
 func (r *budgetRepository) DeleteCategory(ctx context.Context, id, budgetID string) error {
 	query := `DELETE FROM budget_categories WHERE id = $1 AND budget_id = $2`
 
-	result, err := r.db.ExecContext(ctx, query, id, budgetID)
+	ct, err := r.db.Exec(ctx, query, id, budgetID)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrBudgetCategoryNotFound
 	}
 
@@ -648,7 +624,7 @@ func (r *budgetRepository) GetCategoriesMatchingTransaction(ctx context.Context,
 		WHERE b.user_id = $1 AND b.is_active = true AND bc.category @> $2
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, userID, categoryJSON)
+	rows, err := r.db.Query(ctx, query, userID, categoryJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -703,17 +679,12 @@ func (r *budgetRepository) UpdateBudgetIncome(ctx context.Context, budgetID stri
 		WHERE id = $2
 	`
 
-	result, err := r.db.ExecContext(ctx, query, incomeAmount, budgetID)
+	ct, err := r.db.Exec(ctx, query, incomeAmount, budgetID)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrBudgetNotFound
 	}
 
@@ -735,17 +706,12 @@ func (r *budgetRepository) AddIncomeSource(ctx context.Context, budgetID string,
 		WHERE id = $2
 	`
 
-	result, err := r.db.ExecContext(ctx, query, sourceJSON, budgetID)
+	ct, err := r.db.Exec(ctx, query, sourceJSON, budgetID)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrBudgetNotFound
 	}
 
@@ -767,17 +733,12 @@ func (r *budgetRepository) RemoveIncomeSource(ctx context.Context, budgetID stri
 		WHERE id = $2
 	`
 
-	result, err := r.db.ExecContext(ctx, query, sourceIndex, budgetID)
+	ct, err := r.db.Exec(ctx, query, sourceIndex, budgetID)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrBudgetNotFound
 	}
 
@@ -794,17 +755,12 @@ func (r *budgetRepository) AdjustCategoryAllocatedAmount(ctx context.Context, ca
 		WHERE id = $3
 	`
 
-	result, err := r.db.ExecContext(ctx, query, delta, time.Now(), categoryID)
+	ct, err := r.db.Exec(ctx, query, delta, time.Now(), categoryID)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrBudgetCategoryNotFound
 	}
 

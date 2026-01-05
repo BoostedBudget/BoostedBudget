@@ -2,12 +2,12 @@ package repository
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -30,7 +30,7 @@ type ProfileRepository interface {
 	CreateUser(ctx context.Context, user *domain.User) error
 
 	// CreateUserTx creates a new user in the database within a transaction
-	CreateUserTx(ctx context.Context, tx *sql.Tx, user *domain.User) error
+	CreateUserTx(ctx context.Context, tx pgx.Tx, user *domain.User) error
 
 	// UpdateUser updates an existing user's information
 	UpdateUser(ctx context.Context, user *domain.User) error
@@ -55,11 +55,11 @@ type ProfileRepository interface {
 
 // profileRepository implements ProfileRepository using PostgreSQL
 type profileRepository struct {
-	db *sql.DB
+	db DB
 }
 
 // NewProfileRepository creates a new ProfileRepository instance
-func NewProfileRepository(db *sql.DB) ProfileRepository {
+func NewProfileRepository(db DB) ProfileRepository {
 	return &profileRepository{db: db}
 }
 
@@ -76,7 +76,7 @@ func (r *profileRepository) GetUserByClerkID(ctx context.Context, clerkUserID st
 	`
 
 	var user domain.User
-	err := r.db.QueryRowContext(ctx, query, clerkUserID).Scan(
+	err := r.db.QueryRow(ctx, query, clerkUserID).Scan(
 		&user.ID,
 		&user.ClerkUserID,
 		&user.Email,
@@ -96,7 +96,7 @@ func (r *profileRepository) GetUserByClerkID(ctx context.Context, clerkUserID st
 		&user.LastLoginAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrUserNotFound
 	}
 	if err != nil {
@@ -119,7 +119,7 @@ func (r *profileRepository) GetUserByID(ctx context.Context, id string) (*domain
 	`
 
 	var user domain.User
-	err := r.db.QueryRowContext(ctx, query, id).Scan(
+	err := r.db.QueryRow(ctx, query, id).Scan(
 		&user.ID,
 		&user.ClerkUserID,
 		&user.Email,
@@ -139,7 +139,7 @@ func (r *profileRepository) GetUserByID(ctx context.Context, id string) (*domain
 		&user.LastLoginAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrUserNotFound
 	}
 	if err != nil {
@@ -177,7 +177,7 @@ func (r *profileRepository) CreateUser(ctx context.Context, user *domain.User) e
 		)
 	`
 
-	_, err := r.db.ExecContext(ctx, query,
+	_, err := r.db.Exec(ctx, query,
 		user.ID,
 		user.ClerkUserID,
 		user.Email,
@@ -211,7 +211,7 @@ func (r *profileRepository) CreateUser(ctx context.Context, user *domain.User) e
 }
 
 // CreateUserTx creates a new user in the database within a transaction
-func (r *profileRepository) CreateUserTx(ctx context.Context, tx *sql.Tx, user *domain.User) error {
+func (r *profileRepository) CreateUserTx(ctx context.Context, tx pgx.Tx, user *domain.User) error {
 	// Generate UUID if not already set
 	if user.ID == "" {
 		user.ID = uuid.New().String()
@@ -238,7 +238,7 @@ func (r *profileRepository) CreateUserTx(ctx context.Context, tx *sql.Tx, user *
 		)
 	`
 
-	_, err := tx.ExecContext(ctx, query,
+	_, err := tx.Exec(ctx, query,
 		user.ID,
 		user.ClerkUserID,
 		user.Email,
@@ -287,7 +287,7 @@ func (r *profileRepository) UpdateUser(ctx context.Context, user *domain.User) e
 		WHERE id = $5
 	`
 
-	result, err := r.db.ExecContext(ctx, query,
+	ct, err := r.db.Exec(ctx, query,
 		user.Email,
 		user.EmailVerified,
 		user.PrimaryRegion,
@@ -306,12 +306,7 @@ func (r *profileRepository) UpdateUser(ctx context.Context, user *domain.User) e
 	}
 
 	// Check if any rows were affected
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return ErrUserNotFound
 	}
 
@@ -329,18 +324,13 @@ func (r *profileRepository) UpdateLastLogin(ctx context.Context, clerkUserID str
 		WHERE clerk_user_id = $3
 	`
 
-	result, err := r.db.ExecContext(ctx, query, now, now, clerkUserID)
+	ct, err := r.db.Exec(ctx, query, now, now, clerkUserID)
 	if err != nil {
 		return err
 	}
 
 	// Check if any rows were affected
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return ErrUserNotFound
 	}
 
@@ -359,17 +349,12 @@ func (r *profileRepository) MarkForDeletion(ctx context.Context, userID string, 
 		WHERE id = $4 AND is_deleted = FALSE
 	`
 
-	result, err := r.db.ExecContext(ctx, query, now, scheduledAt, now, userID)
+	ct, err := r.db.Exec(ctx, query, now, scheduledAt, now, userID)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return ErrUserNotFound
 	}
 
@@ -388,17 +373,12 @@ func (r *profileRepository) CancelDeletion(ctx context.Context, userID string) e
 		WHERE id = $2 AND is_deleted = FALSE
 	`
 
-	result, err := r.db.ExecContext(ctx, query, now, userID)
+	ct, err := r.db.Exec(ctx, query, now, userID)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return ErrUserNotFound
 	}
 
@@ -422,7 +402,7 @@ func (r *profileRepository) GetUsersScheduledForDeletion(ctx context.Context) ([
 		ORDER BY deletion_scheduled_at ASC
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, now)
+	rows, err := r.db.Query(ctx, query, now)
 	if err != nil {
 		return nil, err
 	}
@@ -467,58 +447,58 @@ func (r *profileRepository) GetUsersScheduledForDeletion(ctx context.Context) ([
 // This implements the 10-step deletion process to maintain audit trail
 func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string) error {
 	// Start a transaction for atomicity
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer tx.Rollback(ctx)
 
 	now := time.Now()
 
 	// Step 1: Delete all budget rules
-	_, err = tx.ExecContext(ctx, `DELETE FROM rules WHERE user_id = $1`, userID)
+	_, err = tx.Exec(ctx, `DELETE FROM rules WHERE user_id = $1`, userID)
 	if err != nil {
 		return err
 	}
 
 	// Step 2: Delete all transactions
-	_, err = tx.ExecContext(ctx, `DELETE FROM transactions WHERE user_id = $1`, userID)
+	_, err = tx.Exec(ctx, `DELETE FROM transactions WHERE user_id = $1`, userID)
 	if err != nil {
 		return err
 	}
 
 	// Step 3: Delete all Plaid items (bank connections)
-	_, err = tx.ExecContext(ctx, `DELETE FROM plaid_items WHERE user_id = $1`, userID)
+	_, err = tx.Exec(ctx, `DELETE FROM plaid_items WHERE user_id = $1`, userID)
 	if err != nil {
 		return err
 	}
 
 	// Step 4: Delete all accounts
-	_, err = tx.ExecContext(ctx, `DELETE FROM accounts WHERE user_id = $1`, userID)
+	_, err = tx.Exec(ctx, `DELETE FROM accounts WHERE user_id = $1`, userID)
 	if err != nil {
 		return err
 	}
 
 	// Step 5: Delete all recurring patterns
-	_, err = tx.ExecContext(ctx, `DELETE FROM recurring_patterns WHERE user_id = $1`, userID)
+	_, err = tx.Exec(ctx, `DELETE FROM recurring_patterns WHERE user_id = $1`, userID)
 	if err != nil {
 		return err
 	}
 
 	// Step 6: Delete all user preferences
-	_, err = tx.ExecContext(ctx, `DELETE FROM user_preferences WHERE user_id = $1`, userID)
+	_, err = tx.Exec(ctx, `DELETE FROM user_preferences WHERE user_id = $1`, userID)
 	if err != nil {
 		return err
 	}
 
 	// Step 7: Delete all notifications
-	_, err = tx.ExecContext(ctx, `DELETE FROM notifications WHERE user_id = $1`, userID)
+	_, err = tx.Exec(ctx, `DELETE FROM notifications WHERE user_id = $1`, userID)
 	if err != nil {
 		return err
 	}
 
 	// Step 8: Anonymize audit logs (keep for legal/compliance, but remove PII)
-	_, err = tx.ExecContext(ctx, `
+	_, err = tx.Exec(ctx, `
 		UPDATE audit_logs
 		SET metadata = jsonb_set(
 			COALESCE(metadata, '{}'::jsonb),
@@ -532,13 +512,13 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	}
 
 	// Step 9: Delete user sessions
-	_, err = tx.ExecContext(ctx, `DELETE FROM user_sessions WHERE user_id = $1`, userID)
+	_, err = tx.Exec(ctx, `DELETE FROM user_sessions WHERE user_id = $1`, userID)
 	if err != nil {
 		return err
 	}
 
 	// Step 10: Mark user as deleted
-	_, err = tx.ExecContext(ctx, `
+	_, err = tx.Exec(ctx, `
 		UPDATE users
 		SET is_deleted = TRUE,
 		    is_active = FALSE,
@@ -555,7 +535,7 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	}
 
 	// Commit the transaction
-	if err = tx.Commit(); err != nil {
+	if err = tx.Commit(ctx); err != nil {
 		return err
 	}
 

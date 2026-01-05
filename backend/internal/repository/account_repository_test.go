@@ -2,12 +2,14 @@ package repository
 
 import (
 	"context"
-	"database/sql"
+	"errors"
+	
 	"regexp"
 	"testing"
 	"time"
 
-	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/jackc/pgx/v5"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
@@ -15,18 +17,18 @@ import (
 )
 
 // setupAccountMockDB creates a mock database and sqlmock instance for account repository testing
-func setupAccountMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock, AccountRepository) {
-	db, mock, err := sqlmock.New()
+func setupAccountMockDB(t *testing.T) (pgxmock.PgxPoolIface, AccountRepository) {
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 
-	repo := NewAccountRepository(db)
-	return db, mock, repo
+	repo := NewAccountRepository(mock)
+	return mock, repo
 }
 
 // TestAccountRepository_Create tests successful creation of a single account
 func TestAccountRepository_Create(t *testing.T) {
-	db, mock, repo := setupAccountMockDB(t)
-	defer db.Close()
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	now := time.Now()
@@ -69,9 +71,9 @@ func TestAccountRepository_Create(t *testing.T) {
 		account.CurrentBalance,
 		account.AvailableBalance,
 		account.CurrencyCode,
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-	).WillReturnResult(sqlmock.NewResult(1, 1))
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	// Execute
 	err := repo.Create(ctx, account)
@@ -83,8 +85,8 @@ func TestAccountRepository_Create(t *testing.T) {
 
 // TestAccountRepository_CreateBatch tests batch creation of multiple accounts
 func TestAccountRepository_CreateBatch(t *testing.T) {
-	db, mock, repo := setupAccountMockDB(t)
-	defer db.Close()
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	linkedItemID := uuid.New().String()
@@ -135,9 +137,9 @@ func TestAccountRepository_CreateBatch(t *testing.T) {
 			acc.CurrentBalance,
 			acc.AvailableBalance,
 			acc.CurrencyCode,
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-		).WillReturnResult(sqlmock.NewResult(1, 1))
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+		).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	}
 
 	// Expect transaction commit
@@ -153,14 +155,14 @@ func TestAccountRepository_CreateBatch(t *testing.T) {
 
 // TestAccountRepository_GetByLinkedItemID tests retrieval of accounts by linked item
 func TestAccountRepository_GetByLinkedItemID(t *testing.T) {
-	db, mock, repo := setupAccountMockDB(t)
-	defer db.Close()
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	linkedItemID := uuid.New().String()
 	now := time.Now()
 
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
@@ -202,14 +204,14 @@ func TestAccountRepository_GetByLinkedItemID(t *testing.T) {
 
 // TestAccountRepository_GetByUserID tests retrieval of all accounts for a user
 func TestAccountRepository_GetByUserID(t *testing.T) {
-	db, mock, repo := setupAccountMockDB(t)
-	defer db.Close()
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
 	now := time.Now()
 
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
@@ -243,14 +245,14 @@ func TestAccountRepository_GetByUserID(t *testing.T) {
 
 // TestAccountRepository_CountByUserID tests counting accounts for subscription limit checks
 func TestAccountRepository_CountByUserID(t *testing.T) {
-	db, mock, repo := setupAccountMockDB(t)
-	defer db.Close()
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
 	expectedCount := 5
 
-	rows := sqlmock.NewRows([]string{"count"}).AddRow(expectedCount)
+	rows := pgxmock.NewRows([]string{"count"}).AddRow(expectedCount)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT COUNT(*)
@@ -269,8 +271,8 @@ func TestAccountRepository_CountByUserID(t *testing.T) {
 
 // TestAccountRepository_UniqueConstraint tests that duplicate accounts are rejected
 func TestAccountRepository_UniqueConstraint(t *testing.T) {
-	db, mock, repo := setupAccountMockDB(t)
-	defer db.Close()
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	account := &domain.Account{
@@ -286,7 +288,7 @@ func TestAccountRepository_UniqueConstraint(t *testing.T) {
 	// Simulate unique constraint violation
 	mock.ExpectExec(regexp.QuoteMeta(`
 		INSERT INTO accounts
-	`)).WillReturnError(sql.ErrConnDone) // Simulating constraint error
+	`)).WillReturnError(errors.New("connection done")) // Simulating constraint error
 
 	// Execute
 	err := repo.Create(ctx, account)
@@ -298,8 +300,8 @@ func TestAccountRepository_UniqueConstraint(t *testing.T) {
 
 // TestAccountRepository_GetAccountsWithInstitution tests retrieval of accounts with institution names
 func TestAccountRepository_GetAccountsWithInstitution(t *testing.T) {
-	db, mock, repo := setupAccountMockDB(t)
-	defer db.Close()
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -307,7 +309,7 @@ func TestAccountRepository_GetAccountsWithInstitution(t *testing.T) {
 	linkedItemID2 := uuid.New().String()
 
 	// Mock the LEFT JOIN query
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
@@ -374,14 +376,14 @@ func TestAccountRepository_GetAccountsWithInstitution(t *testing.T) {
 
 // TestAccountRepository_GetAccountsWithInstitution_Empty tests when user has no accounts
 func TestAccountRepository_GetAccountsWithInstitution_Empty(t *testing.T) {
-	db, mock, repo := setupAccountMockDB(t)
-	defer db.Close()
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
 
 	// Mock empty result
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
@@ -417,8 +419,8 @@ func TestAccountRepository_GetAccountsWithInstitution_Empty(t *testing.T) {
 // TestAccountRepository_Delete_Success tests successful account deletion with ownership validation
 func TestAccountRepository_Delete_Success(t *testing.T) {
 	// Given: Mock DB and account repository
-	db, mock, repo := setupAccountMockDB(t)
-	defer db.Close()
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	accountID := uuid.New().String()
@@ -428,7 +430,7 @@ func TestAccountRepository_Delete_Success(t *testing.T) {
 	expectedQuery := `DELETE FROM accounts WHERE id = $1 AND user_id = $2`
 	mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
 		WithArgs(accountID, userID).
-		WillReturnResult(sqlmock.NewResult(0, 1)) // 1 row affected
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1)) // 1 row affected
 
 	// When: Deleting account
 	err := repo.Delete(ctx, accountID, userID)
@@ -441,8 +443,8 @@ func TestAccountRepository_Delete_Success(t *testing.T) {
 // TestAccountRepository_Delete_NotFound tests deletion when account doesn't exist
 func TestAccountRepository_Delete_NotFound(t *testing.T) {
 	// Given: Mock DB and account repository
-	db, mock, repo := setupAccountMockDB(t)
-	defer db.Close()
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	accountID := uuid.New().String()
@@ -452,7 +454,7 @@ func TestAccountRepository_Delete_NotFound(t *testing.T) {
 	expectedQuery := `DELETE FROM accounts WHERE id = $1 AND user_id = $2`
 	mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
 		WithArgs(accountID, userID).
-		WillReturnResult(sqlmock.NewResult(0, 0)) // 0 rows affected
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0)) // 0 rows affected
 
 	// When: Attempting to delete non-existent account
 	err := repo.Delete(ctx, accountID, userID)
@@ -467,8 +469,8 @@ func TestAccountRepository_Delete_NotFound(t *testing.T) {
 // This validates ownership via the WHERE clause (id AND user_id must match)
 func TestAccountRepository_Delete_NotOwner(t *testing.T) {
 	// Given: Mock DB and account repository
-	db, mock, repo := setupAccountMockDB(t)
-	defer db.Close()
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	accountID := uuid.New().String()
@@ -478,7 +480,7 @@ func TestAccountRepository_Delete_NotOwner(t *testing.T) {
 	expectedQuery := `DELETE FROM accounts WHERE id = $1 AND user_id = $2`
 	mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
 		WithArgs(accountID, wrongUserID).
-		WillReturnResult(sqlmock.NewResult(0, 0)) // 0 rows affected (ownership check fails)
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0)) // 0 rows affected (ownership check fails)
 
 	// When: Attempting to delete account owned by different user
 	err := repo.Delete(ctx, accountID, wrongUserID)
@@ -492,8 +494,8 @@ func TestAccountRepository_Delete_NotOwner(t *testing.T) {
 // TestAccountRepository_Delete_DatabaseError tests handling of database errors during deletion
 func TestAccountRepository_Delete_DatabaseError(t *testing.T) {
 	// Given: Mock DB and account repository
-	db, mock, repo := setupAccountMockDB(t)
-	defer db.Close()
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	accountID := uuid.New().String()
@@ -503,14 +505,14 @@ func TestAccountRepository_Delete_DatabaseError(t *testing.T) {
 	expectedQuery := `DELETE FROM accounts WHERE id = $1 AND user_id = $2`
 	mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
 		WithArgs(accountID, userID).
-		WillReturnError(sql.ErrConnDone) // Database connection error
+		WillReturnError(errors.New("connection done")) // Database connection error
 
 	// When: Attempting to delete account with DB error
 	err := repo.Delete(ctx, accountID, userID)
 
 	// Then: Returns database error
 	assert.Error(t, err)
-	assert.ErrorIs(t, err, sql.ErrConnDone)
+	assert.ErrorIs(t, err, errors.New("connection done"))
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -526,15 +528,15 @@ func intPtr(i int) *int {
 
 // TestAccountRepository_GetByIDAndUser_Success tests successful retrieval of an account by ID and user
 func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
-	db, mock, repo := setupAccountMockDB(t)
-	defer db.Close()
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	accountID := uuid.New().String()
 	userID := uuid.New().String()
 	now := time.Now()
 
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
@@ -583,8 +585,8 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 
 // TestAccountRepository_GetByIDAndUser_NotFound tests when account doesn't exist
 func TestAccountRepository_GetByIDAndUser_NotFound(t *testing.T) {
-	db, mock, repo := setupAccountMockDB(t)
-	defer db.Close()
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	accountID := uuid.New().String()
@@ -603,7 +605,7 @@ func TestAccountRepository_GetByIDAndUser_NotFound(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
 		WithArgs(accountID, userID).
-		WillReturnError(sql.ErrNoRows)
+		WillReturnError(pgx.ErrNoRows)
 
 	// Execute
 	account, err := repo.GetByIDAndUser(ctx, accountID, userID)
@@ -616,8 +618,8 @@ func TestAccountRepository_GetByIDAndUser_NotFound(t *testing.T) {
 
 // TestAccountRepository_Update_Success tests successful account update
 func TestAccountRepository_Update_Success(t *testing.T) {
-	db, mock, repo := setupAccountMockDB(t)
-	defer db.Close()
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	accountID := uuid.New().String()
@@ -644,10 +646,10 @@ func TestAccountRepository_Update_Success(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
 		WithArgs(
 			account.Nickname, account.CustomColor, account.CustomIcon,
-			account.CustomEmoji, account.DisplayOrder, account.IsHidden, sqlmock.AnyArg(),
+			account.CustomEmoji, account.DisplayOrder, account.IsHidden, pgxmock.AnyArg(),
 			accountID, userID,
 		).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	// Execute
 	err := repo.Update(ctx, account, userID)
@@ -659,8 +661,8 @@ func TestAccountRepository_Update_Success(t *testing.T) {
 
 // TestAccountRepository_Update_NotFound tests update when account doesn't exist
 func TestAccountRepository_Update_NotFound(t *testing.T) {
-	db, mock, repo := setupAccountMockDB(t)
-	defer db.Close()
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	accountID := uuid.New().String()
@@ -682,10 +684,10 @@ func TestAccountRepository_Update_NotFound(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
 		WithArgs(
 			account.Nickname, account.CustomColor, account.CustomIcon,
-			account.CustomEmoji, account.DisplayOrder, account.IsHidden, sqlmock.AnyArg(),
+			account.CustomEmoji, account.DisplayOrder, account.IsHidden, pgxmock.AnyArg(),
 			accountID, userID,
 		).
-		WillReturnResult(sqlmock.NewResult(0, 0)) // 0 rows affected
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0)) // 0 rows affected
 
 	// Execute
 	err := repo.Update(ctx, account, userID)
@@ -697,8 +699,8 @@ func TestAccountRepository_Update_NotFound(t *testing.T) {
 
 // TestAccountRepository_UpdateDisplayOrders_Success tests bulk display order update
 func TestAccountRepository_UpdateDisplayOrders_Success(t *testing.T) {
-	db, mock, repo := setupAccountMockDB(t)
-	defer db.Close()
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -719,8 +721,8 @@ func TestAccountRepository_UpdateDisplayOrders_Success(t *testing.T) {
 	mock.ExpectBegin()
 	for _, order := range orders {
 		mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
-			WithArgs(order.DisplayOrder, sqlmock.AnyArg(), order.AccountID, userID).
-			WillReturnResult(sqlmock.NewResult(0, 1))
+			WithArgs(order.DisplayOrder, pgxmock.AnyArg(), order.AccountID, userID).
+			WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	}
 	mock.ExpectCommit()
 
@@ -734,8 +736,8 @@ func TestAccountRepository_UpdateDisplayOrders_Success(t *testing.T) {
 
 // TestAccountRepository_UpdateDisplayOrders_Empty tests with empty orders list
 func TestAccountRepository_UpdateDisplayOrders_Empty(t *testing.T) {
-	db, mock, repo := setupAccountMockDB(t)
-	defer db.Close()
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -750,8 +752,8 @@ func TestAccountRepository_UpdateDisplayOrders_Empty(t *testing.T) {
 
 // TestAccountRepository_UpdateDisplayOrders_AccountNotFound tests when one account doesn't exist
 func TestAccountRepository_UpdateDisplayOrders_AccountNotFound(t *testing.T) {
-	db, mock, repo := setupAccountMockDB(t)
-	defer db.Close()
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -772,12 +774,12 @@ func TestAccountRepository_UpdateDisplayOrders_AccountNotFound(t *testing.T) {
 	mock.ExpectBegin()
 	// First update succeeds
 	mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
-		WithArgs(orders[0].DisplayOrder, sqlmock.AnyArg(), orders[0].AccountID, userID).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WithArgs(orders[0].DisplayOrder, pgxmock.AnyArg(), orders[0].AccountID, userID).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	// Second update returns 0 rows (not found)
 	mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
-		WithArgs(orders[1].DisplayOrder, sqlmock.AnyArg(), orders[1].AccountID, userID).
-		WillReturnResult(sqlmock.NewResult(0, 0))
+		WithArgs(orders[1].DisplayOrder, pgxmock.AnyArg(), orders[1].AccountID, userID).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	mock.ExpectRollback()
 
 	// Execute
@@ -790,14 +792,14 @@ func TestAccountRepository_UpdateDisplayOrders_AccountNotFound(t *testing.T) {
 
 // TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden tests filtering hidden accounts
 func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *testing.T) {
-	db, mock, repo := setupAccountMockDB(t)
-	defer db.Close()
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
 	now := time.Now()
 
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
@@ -852,14 +854,14 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 
 // TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden tests including hidden accounts
 func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *testing.T) {
-	db, mock, repo := setupAccountMockDB(t)
-	defer db.Close()
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
 	now := time.Now()
 
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",

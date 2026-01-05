@@ -2,12 +2,13 @@ package repository
 
 import (
 	"context"
-	"database/sql"
+	
 	"regexp"
 	"testing"
 	"time"
 
-	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/jackc/pgx/v5"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
@@ -15,12 +16,12 @@ import (
 )
 
 // setupSavingsGoalMockDB creates a mock database for savings goal repository testing
-func setupSavingsGoalMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock, SavingsGoalRepository) {
-	db, mock, err := sqlmock.New()
+func setupSavingsGoalMockDB(t *testing.T) (pgxmock.PgxPoolIface, SavingsGoalRepository) {
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 
-	repo := NewSavingsGoalRepository(db)
-	return db, mock, repo
+	repo := NewSavingsGoalRepository(mock)
+	return mock, repo
 }
 
 // createTestSavingsGoal creates a test savings goal
@@ -43,27 +44,27 @@ func createTestSavingsGoal(userID, accountID string) *domain.SavingsGoal {
 
 // TestSavingsGoalRepository_Create tests successful savings goal creation
 func TestSavingsGoalRepository_Create(t *testing.T) {
-	db, mock, repo := setupSavingsGoalMockDB(t)
-	defer db.Close()
+	mock, repo := setupSavingsGoalMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	goal := createTestSavingsGoal(uuid.New().String(), uuid.New().String())
 
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO savings_goals`)).WithArgs(
-		sqlmock.AnyArg(), // id
+		pgxmock.AnyArg(), // id
 		goal.UserID,
 		goal.Name,
 		goal.Description,
 		goal.TargetAmount,
 		goal.CurrentAmount,
-		sqlmock.AnyArg(), // currency_code
+		pgxmock.AnyArg(), // currency_code
 		goal.AccountID,
-		sqlmock.AnyArg(), // deadline
+		pgxmock.AnyArg(), // deadline
 		goal.IsCompleted,
 		goal.CompletedAt,
-		sqlmock.AnyArg(), // created_at
-		sqlmock.AnyArg(), // updated_at
-	).WillReturnResult(sqlmock.NewResult(1, 1))
+		pgxmock.AnyArg(), // created_at
+		pgxmock.AnyArg(), // updated_at
+	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err := repo.Create(ctx, goal)
 
@@ -74,27 +75,27 @@ func TestSavingsGoalRepository_Create(t *testing.T) {
 
 // TestSavingsGoalRepository_Create_DuplicateName tests duplicate name error
 func TestSavingsGoalRepository_Create_DuplicateName(t *testing.T) {
-	db, mock, repo := setupSavingsGoalMockDB(t)
-	defer db.Close()
+	mock, repo := setupSavingsGoalMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	goal := createTestSavingsGoal(uuid.New().String(), uuid.New().String())
 
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO savings_goals`)).WithArgs(
-		sqlmock.AnyArg(),
+		pgxmock.AnyArg(),
 		goal.UserID,
 		goal.Name,
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-	).WillReturnError(sql.ErrNoRows) // Simulating constraint violation
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+	).WillReturnError(pgx.ErrNoRows) // Simulating constraint violation
 
 	err := repo.Create(ctx, goal)
 
@@ -104,8 +105,8 @@ func TestSavingsGoalRepository_Create_DuplicateName(t *testing.T) {
 
 // TestSavingsGoalRepository_GetByID tests retrieval by ID
 func TestSavingsGoalRepository_GetByID(t *testing.T) {
-	db, mock, repo := setupSavingsGoalMockDB(t)
-	defer db.Close()
+	mock, repo := setupSavingsGoalMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	goalID := uuid.New().String()
@@ -123,7 +124,7 @@ func TestSavingsGoalRepository_GetByID(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(goalID).
-		WillReturnRows(sqlmock.NewRows(columns).AddRow(
+		WillReturnRows(pgxmock.NewRows(columns).AddRow(
 			goalID,
 			userID,
 			"Vacation Fund",
@@ -152,15 +153,15 @@ func TestSavingsGoalRepository_GetByID(t *testing.T) {
 
 // TestSavingsGoalRepository_GetByID_NotFound tests retrieval of non-existent goal
 func TestSavingsGoalRepository_GetByID_NotFound(t *testing.T) {
-	db, mock, repo := setupSavingsGoalMockDB(t)
-	defer db.Close()
+	mock, repo := setupSavingsGoalMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	goalID := uuid.New().String()
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(goalID).
-		WillReturnError(sql.ErrNoRows)
+		WillReturnError(pgx.ErrNoRows)
 
 	goal, err := repo.GetByID(ctx, goalID)
 
@@ -172,8 +173,8 @@ func TestSavingsGoalRepository_GetByID_NotFound(t *testing.T) {
 
 // TestSavingsGoalRepository_GetByUserID tests retrieval by user ID
 func TestSavingsGoalRepository_GetByUserID(t *testing.T) {
-	db, mock, repo := setupSavingsGoalMockDB(t)
-	defer db.Close()
+	mock, repo := setupSavingsGoalMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -187,7 +188,7 @@ func TestSavingsGoalRepository_GetByUserID(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(userID).
-		WillReturnRows(sqlmock.NewRows(columns).
+		WillReturnRows(pgxmock.NewRows(columns).
 			AddRow(
 				uuid.New().String(),
 				userID,
@@ -228,8 +229,8 @@ func TestSavingsGoalRepository_GetByUserID(t *testing.T) {
 
 // TestSavingsGoalRepository_GetActiveByUserID tests retrieval of active goals
 func TestSavingsGoalRepository_GetActiveByUserID(t *testing.T) {
-	db, mock, repo := setupSavingsGoalMockDB(t)
-	defer db.Close()
+	mock, repo := setupSavingsGoalMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -243,7 +244,7 @@ func TestSavingsGoalRepository_GetActiveByUserID(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(userID).
-		WillReturnRows(sqlmock.NewRows(columns).AddRow(
+		WillReturnRows(pgxmock.NewRows(columns).AddRow(
 			uuid.New().String(),
 			userID,
 			"Active Goal",
@@ -269,8 +270,8 @@ func TestSavingsGoalRepository_GetActiveByUserID(t *testing.T) {
 
 // TestSavingsGoalRepository_GetByAccountID tests retrieval by account ID
 func TestSavingsGoalRepository_GetByAccountID(t *testing.T) {
-	db, mock, repo := setupSavingsGoalMockDB(t)
-	defer db.Close()
+	mock, repo := setupSavingsGoalMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	accountID := uuid.New().String()
@@ -285,7 +286,7 @@ func TestSavingsGoalRepository_GetByAccountID(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(accountID).
-		WillReturnRows(sqlmock.NewRows(columns).
+		WillReturnRows(pgxmock.NewRows(columns).
 			AddRow(
 				uuid.New().String(),
 				userID,
@@ -329,8 +330,8 @@ func TestSavingsGoalRepository_GetByAccountID(t *testing.T) {
 
 // TestSavingsGoalRepository_Update tests savings goal update
 func TestSavingsGoalRepository_Update(t *testing.T) {
-	db, mock, repo := setupSavingsGoalMockDB(t)
-	defer db.Close()
+	mock, repo := setupSavingsGoalMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	goal := createTestSavingsGoal(uuid.New().String(), uuid.New().String())
@@ -340,18 +341,18 @@ func TestSavingsGoalRepository_Update(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goals`)).
 		WithArgs(
 			goal.Name,
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
 			goal.ID,
 			goal.UserID,
-		).WillReturnResult(sqlmock.NewResult(0, 1))
+		).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	err := repo.Update(ctx, goal)
 
@@ -361,8 +362,8 @@ func TestSavingsGoalRepository_Update(t *testing.T) {
 
 // TestSavingsGoalRepository_Update_NotFound tests update of non-existent goal
 func TestSavingsGoalRepository_Update_NotFound(t *testing.T) {
-	db, mock, repo := setupSavingsGoalMockDB(t)
-	defer db.Close()
+	mock, repo := setupSavingsGoalMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	goal := createTestSavingsGoal(uuid.New().String(), uuid.New().String())
@@ -370,19 +371,19 @@ func TestSavingsGoalRepository_Update_NotFound(t *testing.T) {
 
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goals`)).
 		WithArgs(
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
 			goal.ID,
 			goal.UserID,
-		).WillReturnResult(sqlmock.NewResult(0, 0))
+		).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	err := repo.Update(ctx, goal)
 
@@ -393,8 +394,8 @@ func TestSavingsGoalRepository_Update_NotFound(t *testing.T) {
 
 // TestSavingsGoalRepository_Delete tests savings goal deletion
 func TestSavingsGoalRepository_Delete(t *testing.T) {
-	db, mock, repo := setupSavingsGoalMockDB(t)
-	defer db.Close()
+	mock, repo := setupSavingsGoalMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	goalID := uuid.New().String()
@@ -402,7 +403,7 @@ func TestSavingsGoalRepository_Delete(t *testing.T) {
 
 	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM savings_goals`)).
 		WithArgs(goalID, userID).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	err := repo.Delete(ctx, goalID, userID)
 
@@ -412,8 +413,8 @@ func TestSavingsGoalRepository_Delete(t *testing.T) {
 
 // TestSavingsGoalRepository_Delete_NotFound tests deletion of non-existent goal
 func TestSavingsGoalRepository_Delete_NotFound(t *testing.T) {
-	db, mock, repo := setupSavingsGoalMockDB(t)
-	defer db.Close()
+	mock, repo := setupSavingsGoalMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	goalID := uuid.New().String()
@@ -421,7 +422,7 @@ func TestSavingsGoalRepository_Delete_NotFound(t *testing.T) {
 
 	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM savings_goals`)).
 		WithArgs(goalID, userID).
-		WillReturnResult(sqlmock.NewResult(0, 0))
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	err := repo.Delete(ctx, goalID, userID)
 
@@ -432,15 +433,15 @@ func TestSavingsGoalRepository_Delete_NotFound(t *testing.T) {
 
 // TestSavingsGoalRepository_CountByUserID tests counting goals by user
 func TestSavingsGoalRepository_CountByUserID(t *testing.T) {
-	db, mock, repo := setupSavingsGoalMockDB(t)
-	defer db.Close()
+	mock, repo := setupSavingsGoalMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT`)).
 		WithArgs(userID).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(4))
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(4))
 
 	count, err := repo.CountByUserID(ctx, userID)
 
@@ -451,8 +452,8 @@ func TestSavingsGoalRepository_CountByUserID(t *testing.T) {
 
 // TestSavingsGoalRepository_UpdateCurrentAmount tests current amount update
 func TestSavingsGoalRepository_UpdateCurrentAmount(t *testing.T) {
-	db, mock, repo := setupSavingsGoalMockDB(t)
-	defer db.Close()
+	mock, repo := setupSavingsGoalMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	goalID := uuid.New().String()
@@ -460,7 +461,7 @@ func TestSavingsGoalRepository_UpdateCurrentAmount(t *testing.T) {
 
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goals`)).
 		WithArgs(newCurrentAmount, goalID).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	err := repo.UpdateCurrentAmount(ctx, goalID, newCurrentAmount)
 
@@ -470,15 +471,15 @@ func TestSavingsGoalRepository_UpdateCurrentAmount(t *testing.T) {
 
 // TestSavingsGoalRepository_UpdateCurrentAmount_NotFound tests update on non-existent goal
 func TestSavingsGoalRepository_UpdateCurrentAmount_NotFound(t *testing.T) {
-	db, mock, repo := setupSavingsGoalMockDB(t)
-	defer db.Close()
+	mock, repo := setupSavingsGoalMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	goalID := uuid.New().String()
 
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goals`)).
 		WithArgs(2500.00, goalID).
-		WillReturnResult(sqlmock.NewResult(0, 0))
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	err := repo.UpdateCurrentAmount(ctx, goalID, 2500.00)
 
@@ -489,15 +490,15 @@ func TestSavingsGoalRepository_UpdateCurrentAmount_NotFound(t *testing.T) {
 
 // TestSavingsGoalRepository_MarkCompleted tests marking goal as completed
 func TestSavingsGoalRepository_MarkCompleted(t *testing.T) {
-	db, mock, repo := setupSavingsGoalMockDB(t)
-	defer db.Close()
+	mock, repo := setupSavingsGoalMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	goalID := uuid.New().String()
 
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goals`)).
-		WithArgs(sqlmock.AnyArg(), goalID). // now timestamp and goalID
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WithArgs(pgxmock.AnyArg(), goalID). // now timestamp and goalID
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	err := repo.MarkCompleted(ctx, goalID)
 
@@ -507,15 +508,15 @@ func TestSavingsGoalRepository_MarkCompleted(t *testing.T) {
 
 // TestSavingsGoalRepository_MarkCompleted_NotFound tests marking non-existent goal as completed
 func TestSavingsGoalRepository_MarkCompleted_NotFound(t *testing.T) {
-	db, mock, repo := setupSavingsGoalMockDB(t)
-	defer db.Close()
+	mock, repo := setupSavingsGoalMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	goalID := uuid.New().String()
 
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goals`)).
-		WithArgs(sqlmock.AnyArg(), goalID).
-		WillReturnResult(sqlmock.NewResult(0, 0))
+		WithArgs(pgxmock.AnyArg(), goalID).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	err := repo.MarkCompleted(ctx, goalID)
 

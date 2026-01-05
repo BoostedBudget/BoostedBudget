@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -22,11 +21,11 @@ type AnalyticsRepository interface {
 
 // analyticsRepository implements AnalyticsRepository using PostgreSQL
 type analyticsRepository struct {
-	db *sql.DB
+	db DB
 }
 
 // NewAnalyticsRepository creates a new AnalyticsRepository instance
-func NewAnalyticsRepository(db *sql.DB) AnalyticsRepository {
+func NewAnalyticsRepository(db DB) AnalyticsRepository {
 	return &analyticsRepository{db: db}
 }
 
@@ -74,7 +73,7 @@ func (r *analyticsRepository) GetCashFlowAggregation(ctx context.Context, userID
 	}
 
 	var agg domain.CashFlowAggregation
-	err := r.db.QueryRowContext(ctx, query, args...).Scan(
+	err := r.db.QueryRow(ctx, query, args...).Scan(
 		&agg.Income,
 		&agg.IncomeCount,
 		&agg.Expenses,
@@ -146,7 +145,7 @@ func (r *analyticsRepository) GetCashFlowGrouped(ctx context.Context, userID str
 		ORDER BY period_start ASC
 	`, truncInterval)
 
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get grouped cash flow: %w", err)
 	}

@@ -2,12 +2,13 @@ package repository
 
 import (
 	"context"
-	"database/sql"
+	
 	"regexp"
 	"testing"
 	"time"
 
-	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/jackc/pgx/v5"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
@@ -15,18 +16,18 @@ import (
 )
 
 // setupCategoryMockDB creates a mock database for custom category repository testing
-func setupCategoryMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock, CustomCategoryRepository) {
-	db, mock, err := sqlmock.New()
+func setupCategoryMockDB(t *testing.T) (pgxmock.PgxPoolIface, CustomCategoryRepository) {
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 
-	repo := NewCustomCategoryRepository(db)
-	return db, mock, repo
+	repo := NewCustomCategoryRepository(mock)
+	return mock, repo
 }
 
 // TestCustomCategoryRepository_Create tests successful creation of a custom category
 func TestCustomCategoryRepository_Create(t *testing.T) {
-	db, mock, repo := setupCategoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupCategoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	color := "#FF5733"
@@ -54,9 +55,9 @@ func TestCustomCategoryRepository_Create(t *testing.T) {
 		category.Icon,
 		category.Color,
 		category.UsageCount,
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-	).WillReturnResult(sqlmock.NewResult(1, 1))
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err := repo.Create(ctx, category)
 
@@ -66,8 +67,8 @@ func TestCustomCategoryRepository_Create(t *testing.T) {
 
 // TestCustomCategoryRepository_Create_DuplicateName tests creation failure for duplicate name
 func TestCustomCategoryRepository_Create_DuplicateName(t *testing.T) {
-	db, mock, repo := setupCategoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupCategoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 
@@ -80,16 +81,16 @@ func TestCustomCategoryRepository_Create_DuplicateName(t *testing.T) {
 		INSERT INTO custom_categories (id, user_id, name, parent_category, icon, color, usage_count, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`)).WithArgs(
-		sqlmock.AnyArg(),
+		pgxmock.AnyArg(),
 		category.UserID,
 		category.Name,
 		category.ParentCategory,
 		category.Icon,
 		category.Color,
 		category.UsageCount,
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-	).WillReturnError(sql.ErrNoRows)
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+	).WillReturnError(pgx.ErrNoRows)
 
 	err := repo.Create(ctx, category)
 
@@ -99,8 +100,8 @@ func TestCustomCategoryRepository_Create_DuplicateName(t *testing.T) {
 
 // TestCustomCategoryRepository_GetByID tests successful retrieval by ID
 func TestCustomCategoryRepository_GetByID(t *testing.T) {
-	db, mock, repo := setupCategoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupCategoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	categoryID := uuid.New().String()
@@ -108,7 +109,7 @@ func TestCustomCategoryRepository_GetByID(t *testing.T) {
 	color := "#00FF00"
 	now := time.Now()
 
-	rows := sqlmock.NewRows([]string{"id", "user_id", "name", "parent_category", "icon", "color", "usage_count", "created_at", "updated_at"}).
+	rows := pgxmock.NewRows([]string{"id", "user_id", "name", "parent_category", "icon", "color", "usage_count", "created_at", "updated_at"}).
 		AddRow(categoryID, userID, "Electronics", nil, nil, &color, 5, now, now)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
@@ -129,8 +130,8 @@ func TestCustomCategoryRepository_GetByID(t *testing.T) {
 
 // TestCustomCategoryRepository_GetByID_NotFound tests retrieval when category doesn't exist
 func TestCustomCategoryRepository_GetByID_NotFound(t *testing.T) {
-	db, mock, repo := setupCategoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupCategoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	categoryID := uuid.New().String()
@@ -139,7 +140,7 @@ func TestCustomCategoryRepository_GetByID_NotFound(t *testing.T) {
 		SELECT id, user_id, name, parent_category, icon, color, usage_count, created_at, updated_at
 		FROM custom_categories
 		WHERE id = $1
-	`)).WithArgs(categoryID).WillReturnError(sql.ErrNoRows)
+	`)).WithArgs(categoryID).WillReturnError(pgx.ErrNoRows)
 
 	category, err := repo.GetByID(ctx, categoryID)
 
@@ -150,14 +151,14 @@ func TestCustomCategoryRepository_GetByID_NotFound(t *testing.T) {
 
 // TestCustomCategoryRepository_GetByUserID tests successful retrieval of all user categories
 func TestCustomCategoryRepository_GetByUserID(t *testing.T) {
-	db, mock, repo := setupCategoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupCategoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
 	now := time.Now()
 
-	rows := sqlmock.NewRows([]string{"id", "user_id", "name", "parent_category", "icon", "color", "usage_count", "created_at", "updated_at"}).
+	rows := pgxmock.NewRows([]string{"id", "user_id", "name", "parent_category", "icon", "color", "usage_count", "created_at", "updated_at"}).
 		AddRow(uuid.New().String(), userID, "Coffee", nil, nil, nil, 10, now, now).
 		AddRow(uuid.New().String(), userID, "Groceries", nil, nil, nil, 5, now, now).
 		AddRow(uuid.New().String(), userID, "Utilities", nil, nil, nil, 3, now, now)
@@ -181,15 +182,15 @@ func TestCustomCategoryRepository_GetByUserID(t *testing.T) {
 
 // TestCustomCategoryRepository_GetByName tests successful retrieval by user ID and name
 func TestCustomCategoryRepository_GetByName(t *testing.T) {
-	db, mock, repo := setupCategoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupCategoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
 	categoryID := uuid.New().String()
 	now := time.Now()
 
-	rows := sqlmock.NewRows([]string{"id", "user_id", "name", "parent_category", "icon", "color", "usage_count", "created_at", "updated_at"}).
+	rows := pgxmock.NewRows([]string{"id", "user_id", "name", "parent_category", "icon", "color", "usage_count", "created_at", "updated_at"}).
 		AddRow(categoryID, userID, "Subscriptions", nil, nil, nil, 2, now, now)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
@@ -208,8 +209,8 @@ func TestCustomCategoryRepository_GetByName(t *testing.T) {
 
 // TestCustomCategoryRepository_Update tests successful category update
 func TestCustomCategoryRepository_Update(t *testing.T) {
-	db, mock, repo := setupCategoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupCategoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	newColor := "#0000FF"
@@ -234,9 +235,9 @@ func TestCustomCategoryRepository_Update(t *testing.T) {
 		category.Icon,
 		category.Color,
 		category.UsageCount,
-		sqlmock.AnyArg(),
+		pgxmock.AnyArg(),
 		category.ID,
-	).WillReturnResult(sqlmock.NewResult(0, 1))
+	).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	err := repo.Update(ctx, category)
 
@@ -246,8 +247,8 @@ func TestCustomCategoryRepository_Update(t *testing.T) {
 
 // TestCustomCategoryRepository_Update_NotFound tests update when category doesn't exist
 func TestCustomCategoryRepository_Update_NotFound(t *testing.T) {
-	db, mock, repo := setupCategoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupCategoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 
@@ -266,9 +267,9 @@ func TestCustomCategoryRepository_Update_NotFound(t *testing.T) {
 		category.Icon,
 		category.Color,
 		category.UsageCount,
-		sqlmock.AnyArg(),
+		pgxmock.AnyArg(),
 		category.ID,
-	).WillReturnResult(sqlmock.NewResult(0, 0))
+	).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	err := repo.Update(ctx, category)
 
@@ -278,15 +279,15 @@ func TestCustomCategoryRepository_Update_NotFound(t *testing.T) {
 
 // TestCustomCategoryRepository_Delete tests successful category deletion
 func TestCustomCategoryRepository_Delete(t *testing.T) {
-	db, mock, repo := setupCategoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupCategoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	categoryID := uuid.New().String()
 
 	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM custom_categories WHERE id = $1`)).
 		WithArgs(categoryID).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	err := repo.Delete(ctx, categoryID)
 
@@ -296,15 +297,15 @@ func TestCustomCategoryRepository_Delete(t *testing.T) {
 
 // TestCustomCategoryRepository_Delete_NotFound tests deletion when category doesn't exist
 func TestCustomCategoryRepository_Delete_NotFound(t *testing.T) {
-	db, mock, repo := setupCategoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupCategoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	categoryID := uuid.New().String()
 
 	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM custom_categories WHERE id = $1`)).
 		WithArgs(categoryID).
-		WillReturnResult(sqlmock.NewResult(0, 0))
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	err := repo.Delete(ctx, categoryID)
 
@@ -314,13 +315,13 @@ func TestCustomCategoryRepository_Delete_NotFound(t *testing.T) {
 
 // TestCustomCategoryRepository_CountByUserID tests counting categories for a user
 func TestCustomCategoryRepository_CountByUserID(t *testing.T) {
-	db, mock, repo := setupCategoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupCategoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
 
-	rows := sqlmock.NewRows([]string{"count"}).AddRow(12)
+	rows := pgxmock.NewRows([]string{"count"}).AddRow(12)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM custom_categories WHERE user_id = $1`)).
 		WithArgs(userID).
@@ -335,8 +336,8 @@ func TestCustomCategoryRepository_CountByUserID(t *testing.T) {
 
 // TestCustomCategoryRepository_IncrementUsageCount tests incrementing usage count
 func TestCustomCategoryRepository_IncrementUsageCount(t *testing.T) {
-	db, mock, repo := setupCategoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupCategoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -347,10 +348,10 @@ func TestCustomCategoryRepository_IncrementUsageCount(t *testing.T) {
 		SET usage_count = usage_count + 1, updated_at = $1
 		WHERE user_id = $2 AND name = $3
 	`)).WithArgs(
-		sqlmock.AnyArg(),
+		pgxmock.AnyArg(),
 		userID,
 		categoryName,
-	).WillReturnResult(sqlmock.NewResult(0, 1))
+	).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	err := repo.IncrementUsageCount(ctx, userID, categoryName)
 
@@ -360,8 +361,8 @@ func TestCustomCategoryRepository_IncrementUsageCount(t *testing.T) {
 
 // TestCustomCategoryRepository_DecrementUsageCount tests decrementing usage count
 func TestCustomCategoryRepository_DecrementUsageCount(t *testing.T) {
-	db, mock, repo := setupCategoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupCategoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -372,10 +373,10 @@ func TestCustomCategoryRepository_DecrementUsageCount(t *testing.T) {
 		SET usage_count = GREATEST(usage_count - 1, 0), updated_at = $1
 		WHERE user_id = $2 AND name = $3
 	`)).WithArgs(
-		sqlmock.AnyArg(),
+		pgxmock.AnyArg(),
 		userID,
 		categoryName,
-	).WillReturnResult(sqlmock.NewResult(0, 1))
+	).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	err := repo.DecrementUsageCount(ctx, userID, categoryName)
 

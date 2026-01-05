@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"time"
 
@@ -50,11 +49,11 @@ type WebhookRepository interface {
 
 // webhookRepository implements WebhookRepository using PostgreSQL
 type webhookRepository struct {
-	db *sql.DB
+	db DB
 }
 
 // NewWebhookRepository creates a new WebhookRepository instance
-func NewWebhookRepository(db *sql.DB) WebhookRepository {
+func NewWebhookRepository(db DB) WebhookRepository {
 	return &webhookRepository{db: db}
 }
 
@@ -74,7 +73,7 @@ func (r *webhookRepository) Create(ctx context.Context, event *domain.WebhookEve
 		RETURNING id, created_at, updated_at
 	`
 
-	err := r.db.QueryRowContext(ctx, query,
+	err := r.db.QueryRow(ctx, query,
 		event.WebhookType,
 		event.WebhookCode,
 		event.ItemID,
@@ -103,7 +102,7 @@ func (r *webhookRepository) MarkProcessed(ctx context.Context, id string) error 
 	`
 
 	now := time.Now()
-	_, err := r.db.ExecContext(ctx, query, now, id)
+	_, err := r.db.Exec(ctx, query, now, id)
 	if err != nil {
 		return fmt.Errorf("failed to mark webhook as processed: %w", err)
 	}
@@ -123,7 +122,7 @@ func (r *webhookRepository) GetUnprocessed(ctx context.Context) ([]domain.Webhoo
 		ORDER BY created_at ASC
 	`
 
-	rows, err := r.db.QueryContext(ctx, query)
+	rows, err := r.db.Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get unprocessed webhooks: %w", err)
 	}
@@ -174,7 +173,7 @@ func (r *webhookRepository) GetByItemID(ctx context.Context, itemID string, limi
 		LIMIT $2
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, itemID, limit)
+	rows, err := r.db.Query(ctx, query, itemID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get webhooks by item_id: %w", err)
 	}
@@ -231,7 +230,7 @@ func (r *webhookRepository) Update(ctx context.Context, event *domain.WebhookEve
 		WHERE id = $7
 	`
 
-	_, err := r.db.ExecContext(ctx, query,
+	_, err := r.db.Exec(ctx, query,
 		event.Processed,
 		event.ProcessingStartedAt,
 		event.ProcessingCompletedAt,
@@ -272,7 +271,7 @@ func (r *webhookRepository) GetUnprocessedByType(ctx context.Context, webhookTyp
 		LIMIT $2
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, webhookType, limit)
+	rows, err := r.db.Query(ctx, query, webhookType, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get unprocessed webhooks by type: %w", err)
 	}

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,11 +17,11 @@ import (
 // Following RED-GREEN-REFACTOR: Write tests first, then implement
 
 func TestWebhookEventCreate_Success(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewWebhookRepository(db)
+	repo := NewWebhookRepository(mock)
 	ctx := context.Background()
 
 	// Test webhook event
@@ -48,15 +48,15 @@ func TestWebhookEventCreate_Success(t *testing.T) {
 			"TRANSACTIONS",
 			&webhookCode,
 			&itemID,
-			sqlmock.AnyArg(), // error_code
+			pgxmock.AnyArg(), // error_code
 			&newTxCount,
-			sqlmock.AnyArg(), // removed_transactions
+			pgxmock.AnyArg(), // removed_transactions
 			payload,
 			&signature,
 			true,
 			false,
 		).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "updated_at"}).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "created_at", "updated_at"}).
 			AddRow("test-id-123", time.Now(), time.Now()))
 
 	// Execute
@@ -71,11 +71,11 @@ func TestWebhookEventCreate_Success(t *testing.T) {
 }
 
 func TestWebhookEventCreate_DatabaseError(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewWebhookRepository(db)
+	repo := NewWebhookRepository(mock)
 	ctx := context.Background()
 
 	payload := json.RawMessage(`{"webhook_type":"TRANSACTIONS"}`)
@@ -97,18 +97,18 @@ func TestWebhookEventCreate_DatabaseError(t *testing.T) {
 }
 
 func TestWebhookEventMarkProcessed_Success(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewWebhookRepository(db)
+	repo := NewWebhookRepository(mock)
 	ctx := context.Background()
 	webhookID := "test-id-123"
 
 	// Mock the UPDATE query (expects timestamp + id)
 	mock.ExpectExec(`UPDATE webhook_events SET processed`).
-		WithArgs(sqlmock.AnyArg(), webhookID).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WithArgs(pgxmock.AnyArg(), webhookID).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	// Execute
 	err = repo.MarkProcessed(ctx, webhookID)
@@ -119,18 +119,18 @@ func TestWebhookEventMarkProcessed_Success(t *testing.T) {
 }
 
 func TestWebhookEventMarkProcessed_NotFound(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewWebhookRepository(db)
+	repo := NewWebhookRepository(mock)
 	ctx := context.Background()
 	webhookID := "nonexistent-id"
 
 	// Mock no rows affected (expects timestamp + id)
 	mock.ExpectExec(`UPDATE webhook_events SET processed`).
-		WithArgs(sqlmock.AnyArg(), webhookID).
-		WillReturnResult(sqlmock.NewResult(0, 0))
+		WithArgs(pgxmock.AnyArg(), webhookID).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	// Execute
 	err = repo.MarkProcessed(ctx, webhookID)
@@ -141,15 +141,15 @@ func TestWebhookEventMarkProcessed_NotFound(t *testing.T) {
 }
 
 func TestWebhookEventGetUnprocessed_Multiple(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewWebhookRepository(db)
+	repo := NewWebhookRepository(mock)
 	ctx := context.Background()
 
 	// Mock SELECT query
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "webhook_type", "webhook_code", "item_id", "error_code",
 		"new_transactions", "removed_transactions", "payload",
 		"signature", "signature_valid", "processed", "processed_at",
@@ -183,15 +183,15 @@ func TestWebhookEventGetUnprocessed_Multiple(t *testing.T) {
 }
 
 func TestWebhookEventGetUnprocessed_Empty(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewWebhookRepository(db)
+	repo := NewWebhookRepository(mock)
 	ctx := context.Background()
 
 	// Mock empty result
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "webhook_type", "webhook_code", "item_id", "error_code",
 		"new_transactions", "removed_transactions", "payload",
 		"signature", "signature_valid", "processed", "processed_at",
@@ -211,17 +211,17 @@ func TestWebhookEventGetUnprocessed_Empty(t *testing.T) {
 }
 
 func TestWebhookEventGetByItemID_Success(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewWebhookRepository(db)
+	repo := NewWebhookRepository(mock)
 	ctx := context.Background()
 	itemID := "test-item-123"
 	limit := 10
 
 	// Mock SELECT query with item_id filter
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "webhook_type", "webhook_code", "item_id", "error_code",
 		"new_transactions", "removed_transactions", "payload",
 		"signature", "signature_valid", "processed", "processed_at",
@@ -249,17 +249,17 @@ func TestWebhookEventGetByItemID_Success(t *testing.T) {
 }
 
 func TestWebhookEventGetByItemID_NotFound(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewWebhookRepository(db)
+	repo := NewWebhookRepository(mock)
 	ctx := context.Background()
 	itemID := "nonexistent-item"
 	limit := 10
 
 	// Mock empty result
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "webhook_type", "webhook_code", "item_id", "error_code",
 		"new_transactions", "removed_transactions", "payload",
 		"signature", "signature_valid", "processed", "processed_at",
@@ -291,11 +291,11 @@ func timePtr(t time.Time) *time.Time {
 // ============================================================================
 
 func TestWebhookRepository_Update_Success(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewWebhookRepository(db)
+	repo := NewWebhookRepository(mock)
 	ctx := context.Background()
 
 	// Create webhook event with processing metadata
@@ -325,7 +325,7 @@ func TestWebhookRepository_Update_Success(t *testing.T) {
 			event.NextRetryAt,
 			event.ID,
 		).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	// Execute
 	err = repo.Update(ctx, event)
@@ -336,11 +336,11 @@ func TestWebhookRepository_Update_Success(t *testing.T) {
 }
 
 func TestWebhookRepository_Update_NotFound(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewWebhookRepository(db)
+	repo := NewWebhookRepository(mock)
 	ctx := context.Background()
 
 	event := &domain.WebhookEvent{
@@ -352,14 +352,14 @@ func TestWebhookRepository_Update_NotFound(t *testing.T) {
 	mock.ExpectExec(`UPDATE webhook_events SET`).
 		WithArgs(
 			event.Processed,
-			sqlmock.AnyArg(), // processing_started_at
-			sqlmock.AnyArg(), // processing_completed_at
-			sqlmock.AnyArg(), // processing_error
+			pgxmock.AnyArg(), // processing_started_at
+			pgxmock.AnyArg(), // processing_completed_at
+			pgxmock.AnyArg(), // processing_error
 			event.RetryCount,
-			sqlmock.AnyArg(), // next_retry_at
+			pgxmock.AnyArg(), // next_retry_at
 			event.ID,
 		).
-		WillReturnResult(sqlmock.NewResult(0, 0))
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	// Execute
 	err = repo.Update(ctx, event)
@@ -370,15 +370,15 @@ func TestWebhookRepository_Update_NotFound(t *testing.T) {
 }
 
 func TestWebhookRepository_GetUnprocessedByType_Success(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewWebhookRepository(db)
+	repo := NewWebhookRepository(mock)
 	ctx := context.Background()
 
 	// Mock SELECT query filtered by webhook_type
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "webhook_type", "webhook_code", "item_id", "error_code",
 		"new_transactions", "removed_transactions", "payload",
 		"signature", "signature_valid", "processed", "processed_at",
@@ -419,15 +419,15 @@ func TestWebhookRepository_GetUnprocessedByType_Success(t *testing.T) {
 }
 
 func TestWebhookRepository_GetUnprocessedByType_OnlyTransactions(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewWebhookRepository(db)
+	repo := NewWebhookRepository(mock)
 	ctx := context.Background()
 
 	// Mock result with only TRANSACTIONS webhooks (filtering works)
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "webhook_type", "webhook_code", "item_id", "error_code",
 		"new_transactions", "removed_transactions", "payload",
 		"signature", "signature_valid", "processed", "processed_at",
@@ -460,15 +460,15 @@ func TestWebhookRepository_GetUnprocessedByType_OnlyTransactions(t *testing.T) {
 }
 
 func TestWebhookRepository_GetUnprocessedByType_RespectsRetryTime(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewWebhookRepository(db)
+	repo := NewWebhookRepository(mock)
 	ctx := context.Background()
 
 	// Mock empty result (webhooks exist but next_retry_at is in future)
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "webhook_type", "webhook_code", "item_id", "error_code",
 		"new_transactions", "removed_transactions", "payload",
 		"signature", "signature_valid", "processed", "processed_at",
@@ -493,18 +493,18 @@ func TestWebhookRepository_GetUnprocessedByType_RespectsRetryTime(t *testing.T) 
 }
 
 func TestWebhookRepository_GetUnprocessedByType_OrdersByCreatedAt(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewWebhookRepository(db)
+	repo := NewWebhookRepository(mock)
 	ctx := context.Background()
 
 	older := time.Now().Add(-2 * time.Hour)
 	newer := time.Now().Add(-1 * time.Hour)
 
 	// Mock result ordered by created_at ASC (oldest first)
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "webhook_type", "webhook_code", "item_id", "error_code",
 		"new_transactions", "removed_transactions", "payload",
 		"signature", "signature_valid", "processed", "processed_at",
