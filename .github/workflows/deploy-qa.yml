@@ -320,8 +320,8 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ steps.build-target.outputs.tag_prefix }}-${{ steps.build-target.outputs.sha }}
             ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ steps.build-target.outputs.tag_prefix }}-latest
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache,mode=max
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache-go${{ env.GO_VERSION }}
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache-go${{ env.GO_VERSION }},mode=max
           build-args: |
             VERSION=${{ steps.build-target.outputs.tag_prefix }}-${{ steps.build-target.outputs.sha }}
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
