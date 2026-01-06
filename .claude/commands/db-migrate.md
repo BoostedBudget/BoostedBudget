@@ -1,6 +1,6 @@
 # Database Migration
 
-Create a new migration file following Atlas/idempotency patterns.
+Create a new migration file following golang-migrate/idempotency patterns.
 
 ## Usage
 
@@ -85,21 +85,20 @@ DROP TABLE IF EXISTS user_preferences CASCADE;
 -- ALTER TABLE users DROP COLUMN IF EXISTS theme;
 ```
 
-### 5. Regenerate Atlas Checksums
+### 5. Lint Migration (Squawk)
 
 ```bash
 cd backend
-atlas migrate hash --dir file://migrations --dir-format golang-migrate
+squawk migrations/*.sql --pg-version=17
 ```
 
-### 6. Lint Migration
+**Squawk catches:**
+- Dangerous DROP TABLE/COLUMN operations
+- NOT NULL columns without defaults
+- Non-concurrent index creation
+- Type changes that require rewrites
 
-```bash
-cd backend
-atlas migrate lint --dir file://migrations --dev-url "docker://postgres/15/test" --latest 1
-```
-
-### 7. Run Migration Tests
+### 6. Run Migration Tests
 
 ```bash
 cd backend
@@ -113,7 +112,7 @@ cd backend
 4. Schema Validation - Tables/constraints correct
 5. Rollback Testing - up→down→up produces identical schema
 
-### 8. Verify Locally
+### 7. Verify Locally
 
 ```bash
 # Start local database
@@ -121,10 +120,15 @@ docker-compose up -d postgres
 
 # Run migrations
 cd backend
-atlas migrate apply --dir file://migrations --url "$DATABASE_URL"
+export DATABASE_URL="postgres://test:test@localhost:5432/test?sslmode=disable"
+migrate -database "$DATABASE_URL" -path migrations up
 
 # Verify schema
 psql "$DATABASE_URL" -c "\d user_preferences"
+
+# Test rollback
+migrate -database "$DATABASE_URL" -path migrations down 1
+migrate -database "$DATABASE_URL" -path migrations up
 ```
 
 ## Idempotency Patterns Reference
@@ -143,9 +147,9 @@ psql "$DATABASE_URL" -c "\d user_preferences"
 - Causes: Missing `IF NOT EXISTS`
 - Fix: Add idempotency guards
 
-**Checksum mismatch:**
-- Causes: Modified migration after hash
-- Fix: `atlas migrate hash --dir file://migrations --dir-format golang-migrate`
+**Dirty migration state:**
+- Causes: Failed migration left dirty flag
+- Fix: `migrate -database "$DATABASE_URL" -path migrations force <version>`
 
 **Foreign key errors:**
 - Causes: Missing `ON DELETE CASCADE`
@@ -155,8 +159,7 @@ psql "$DATABASE_URL" -c "\d user_preferences"
 
 - [ ] .up.sql with idempotency guards
 - [ ] .down.sql correctly reverses changes
-- [ ] `atlas migrate hash` completed
-- [ ] `atlas migrate lint` passes
+- [ ] `squawk migrations/*.sql --pg-version=17` passes
 - [ ] `./scripts/test-migrations.sh` passes
 - [ ] Local verification successful
 

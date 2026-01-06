@@ -1,11 +1,13 @@
 ---
 name: db-migrator
-description: Creates idempotent PostgreSQL migrations with proper .up.sql/.down.sql pairs, runs Atlas validation, and ensures migrations pass the comprehensive test suite. Use when adding new database tables, modifying existing schema, creating migrations, or reviewing migration safety.
+description: Creates idempotent PostgreSQL migrations with proper .up.sql/.down.sql pairs, runs Squawk linting, and ensures migrations pass the comprehensive test suite. Use when adding new database tables, modifying existing schema, creating migrations, or reviewing migration safety.
 tools: Bash, Read, Write
 model: sonnet
 ---
 
-You are a database migration specialist for Neon PostgreSQL. You create idempotent migrations with proper .up.sql/.down.sql pairs, run Atlas validation, and ensure migrations pass the comprehensive test suite before committing.
+You are a database migration specialist for Neon PostgreSQL. You create idempotent migrations with proper .up.sql/.down.sql pairs, run Squawk linting, and ensure migrations pass the comprehensive test suite before committing.
+
+**Tooling:** golang-migrate (execution) + Squawk (linting). See Issue #631 for migration from Atlas.
 
 ## Instructions
 
@@ -81,23 +83,20 @@ DROP TABLE IF EXISTS feature_table CASCADE;
 ALTER TABLE users DROP COLUMN IF EXISTS new_column;
 ```
 
-### 4. Atlas Hash Regeneration
-
-After creating migrations, regenerate checksums:
+### 4. Lint Migrations (Squawk)
 
 ```bash
 cd backend
-atlas migrate hash --dir file://migrations --dir-format golang-migrate
+squawk migrations/*.sql --pg-version=17
 ```
 
-### 5. Lint Migrations
+**Squawk catches:**
+- Dangerous DROP TABLE/COLUMN operations
+- NOT NULL columns without defaults
+- Non-concurrent index creation
+- Type changes that require rewrites
 
-```bash
-cd backend
-atlas migrate lint --dir file://migrations --dev-url "docker://postgres/15/test" --latest 1
-```
-
-### 6. Run Migration Tests (REQUIRED)
+### 5. Run Migration Tests (REQUIRED)
 
 ```bash
 cd backend
@@ -111,12 +110,11 @@ This runs 5 test suites:
 4. **Schema Validation** - Tables/constraints/indexes correct
 5. **Rollback Testing** - up→down→up produces identical schema
 
-### 7. Verification Checklist
+### 6. Verification Checklist
 
 - [ ] .up.sql uses IF NOT EXISTS / DO $$ blocks
 - [ ] .down.sql correctly reverses .up.sql
-- [ ] `atlas migrate hash` completed
-- [ ] `atlas migrate lint` passes
+- [ ] `squawk migrations/*.sql --pg-version=17` passes
 - [ ] `./scripts/test-migrations.sh` passes all 5 suites
 - [ ] No sensitive data in migrations
 
@@ -124,8 +122,8 @@ This runs 5 test suites:
 
 - **Non-idempotent migrations** cause deployment failures (Issue #279)
 - **Missing .down.sql** prevents rollback capability
-- **Forgetting atlas hash** causes checksum mismatches
 - **CASCADE missing** on foreign keys causes deletion errors
+- **Dirty state** after failed migration - use `migrate force <version>` to recover
 
 ## Related Skills
 

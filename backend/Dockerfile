@@ -15,11 +15,8 @@ WORKDIR /build
 COPY backend/go.mod backend/go.sum ./
 RUN echo "📦 Downloading Go modules..." && \
     for i in 1 2 3; do \
-      echo "Attempt $i/3..." && \
-      go mod download && \
-      echo "✓ Modules downloaded" && break || \
-      { echo "⚠ Download attempt $i/3 failed"; \
-        [ $i -lt 3 ] && sleep 10; }; \
+      go mod download && echo "✓ Modules downloaded" && break || \
+      { echo "⚠ Download attempt $i/3 failed"; [ $i -lt 3 ] && sleep 10; }; \
     done
 
 # Copy config directory (needed for runtime)
@@ -51,31 +48,29 @@ RUN echo "📦 Installing runtime dependencies..." && \
         [ $i -lt 3 ] && sleep 5; }; \
     done
 
-# Install Atlas for database migrations
-# Using -latest to get the most recent stable version
+# Install golang-migrate for database migrations
 # TARGETARCH is automatically set by Docker Buildx (amd64 or arm64)
 ARG TARGETARCH
-RUN echo "📦 Downloading Atlas CLI for ${TARGETARCH}..." && \
+RUN echo "📦 Downloading golang-migrate for ${TARGETARCH}..." && \
     for i in 1 2 3 4 5; do \
       echo "Attempt $i/5..." && \
       curl -sSfL --retry 3 --retry-delay 5 --connect-timeout 10 \
-        "https://release.ariga.io/atlas/atlas-linux-${TARGETARCH}-latest" \
-        -o /usr/local/bin/atlas && \
-      chmod +x /usr/local/bin/atlas && \
-      echo "✓ Atlas downloaded successfully" && break || \
+        "https://github.com/golang-migrate/migrate/releases/latest/download/migrate.linux-${TARGETARCH}.tar.gz" \
+        | tar -xz -C /usr/local/bin && \
+      chmod +x /usr/local/bin/migrate && \
+      echo "✓ golang-migrate downloaded successfully" && break || \
       { echo "⚠ Download attempt $i/5 failed"; \
         [ $i -lt 5 ] && sleep 10; }; \
     done && \
-    test -x /usr/local/bin/atlas || { echo "✗ Atlas installation failed"; exit 1; }
+    test -x /usr/local/bin/migrate || { echo "✗ golang-migrate installation failed"; exit 1; }
 
 WORKDIR /app
 
 # Copy binary from builder
 COPY --from=builder /build/server /app/server
 
-# Copy migrations directory and Atlas config (needed at runtime)
+# Copy migrations directory (needed at runtime for golang-migrate)
 COPY --from=builder /build/migrations /app/migrations
-COPY --from=builder /build/atlas.hcl /app/atlas.hcl
 
 # Copy config directory (subscription tiers, etc.)
 COPY --from=builder /build/config /app/config
