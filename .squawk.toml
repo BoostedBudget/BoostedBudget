@@ -1,0 +1,40 @@
+# Squawk Configuration for BoostedBudget
+# PostgreSQL migration linter for golang-migrate
+# Documentation: https://squawkhq.com/docs/rules
+# Issue #631: golang-migrate + Squawk for database migrations
+
+# Target PostgreSQL version (matches Neon production)
+pg_version = "17"
+
+# Assume migrations run in transactions (golang-migrate default behavior)
+assume_in_transaction = true
+
+# Exclude .down.sql files - rollback migrations NEED DROP TABLE statements
+# Only lint .up.sql files for safety checks
+excluded_paths = [
+  "*.down.sql",
+]
+
+# Rules to exclude from linting
+excluded_rules = [
+  "require-concurrent-index-creation",  # Small tables initially
+  "prefer-text-field",                  # We prefer VARCHAR for intent clarity
+  "require-timeout-settings",           # Connection-level timeouts in docker-entrypoint.sh
+  "prefer-robust-stmts",                # Legacy migrations lack IF NOT EXISTS
+  "prefer-identity",                    # Using gen_random_uuid() and legacy SERIAL/BIGSERIAL
+  "prefer-bigint-over-int",             # INT appropriate for non-overflowing fields
+  "prefer-bigint-over-smallint",        # SMALLINT appropriate for retry counts, priorities
+  "prefer-timestamp-tz",                # Legacy columns use TIMESTAMP
+  "constraint-missing-not-valid",       # Legacy migrations lack NOT VALID pattern
+  "require-concurrent-index-deletion",  # Acceptable for small tables
+  "renaming-column",                    # Intentional schema evolutions
+  "changing-column-type",               # Intentional schema evolutions
+]
+
+# Note: The following critical safety rules remain ENABLED:
+# - ban-drop-table: Prevents accidental DROP TABLE in .up.sql (rollbacks excluded via excluded_paths)
+# - ban-drop-column: Prevents accidental DROP COLUMN
+# - ban-drop-database: Prevents dropping the database
+# - adding-not-nullable-field: Warns on NOT NULL without DEFAULT
+# - adding-foreign-key-constraint: Warns on FK additions that may lock tables
+# - disallowed-unique-constraint: Warns about unique constraints that may lock

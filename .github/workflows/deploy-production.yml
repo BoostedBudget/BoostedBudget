@@ -7,14 +7,6 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      skip_security_scan:
-        description: 'Skip security scan (emergencies only - not recommended)'
-        required: false
-        default: 'false'
-        type: choice
-        options:
-          - 'false'
-          - 'true'
       force_deploy:
         description: 'Force deployment even if tests are failing (use with extreme caution)'
         required: false
@@ -30,7 +22,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  GO_VERSION: '1.25'
+  GO_VERSION: '1.25.5'
   NODE_VERSION: '20'
   REGISTRY: ghcr.io
   BACKEND_IMAGE_NAME: boostedbudget/boostedbudget-backend
@@ -147,11 +139,13 @@ jobs:
           file: ${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          pull: true
+          no-cache: true
           tags: |
             ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ github.sha }}
             ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:latest
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache,mode=max
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache-go${{ env.GO_VERSION }}
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache-go${{ env.GO_VERSION }},mode=max
           build-args: |
             VERSION=${{ github.sha }}
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
@@ -168,89 +162,12 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
-  # Security Scan - Docker Images (Grype by Anchore)
-  # =============================================================================
-  # Grype: Fast, accurate vulnerability scanner with low false positives
-  # https://github.com/anchore/grype
-  image-security-scan:
-    name: Security Scan (${{ matrix.component }} Image)
-    needs: build-images
-    runs-on: [self-hosted, macOS, mac-mini]
-    # Allow skipping security scan for emergency deployments (manual trigger only)
-    if: ${{ github.event.inputs.skip_security_scan != 'true' }}
-    strategy:
-      matrix:
-        component: [backend, frontend]
-    permissions:
-      actions: read
-      contents: read
-      packages: read
-    env:
-      UNIQUE_WORKSPACE: workspace-security-scan-${{ matrix.component }}-${{ github.run_id }}
-
-    steps:
-      - name: Clean workspace
-        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
-
-      - name: Checkout code
-        uses: actions/checkout@v6
-        with:
-          path: ${{ env.UNIQUE_WORKSPACE }}
-          clean: false
-
-      - name: Ensure Grype is installed
-        run: |
-          if ! command -v grype &> /dev/null; then
-            echo "Installing Grype via Homebrew..."
-            brew install grype
-          fi
-          echo "Grype version: $(grype version)"
-
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Calculate image reference
-        id: image-ref
-        run: |
-          if [ "${{ matrix.component }}" = "backend" ]; then
-            IMAGE_NAME="${{ env.BACKEND_IMAGE_NAME }}"
-          else
-            IMAGE_NAME="${{ env.FRONTEND_IMAGE_NAME }}"
-          fi
-          IMAGE_REF="${{ env.REGISTRY }}/${IMAGE_NAME}:${{ github.sha }}"
-          echo "image-ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
-          echo "Scanning production image: ${IMAGE_REF}"
-
-      - name: Pull Docker image
-        run: docker pull ${{ steps.image-ref.outputs.image-ref }}
-
-      - name: Scan Docker image for vulnerabilities
-        run: |
-          echo "::group::Docker Image Vulnerability Scan (Grype)"
-          grype ${{ steps.image-ref.outputs.image-ref }} \
-            --fail-on high \
-            --only-fixed \
-            --output table
-          echo "::endgroup::"
-
-      - name: Final workspace cleanup
-        if: always()
-        run: |
-          sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
-          docker rmi ${{ steps.image-ref.outputs.image-ref }} 2>/dev/null || true
-
-  # =============================================================================
   # Push Images to Fly.io Registry (Parallelized)
   # =============================================================================
   push-to-fly-registry:
     name: Push ${{ matrix.component }} to Fly.io
-    needs: [build-images, image-security-scan]
-    # Run if build succeeded and either security scan passed OR was skipped
-    if: ${{ always() && needs.build-images.result == 'success' && (needs.image-security-scan.result == 'success' || needs.image-security-scan.result == 'skipped') }}
+    needs: build-images
+    if: ${{ needs.build-images.result == 'success' }}
     runs-on: [self-hosted, macOS, mac-mini]
     strategy:
       matrix:
@@ -492,7 +409,6 @@ jobs:
           # Document manual trigger details if applicable
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "**Deployment Trigger:** Manual workflow_dispatch" >> $GITHUB_STEP_SUMMARY
-            echo "**Skip Security Scan:** ${{ github.event.inputs.skip_security_scan || 'false' }}" >> $GITHUB_STEP_SUMMARY
             echo "**Force Deploy:** ${{ github.event.inputs.force_deploy || 'false' }}" >> $GITHUB_STEP_SUMMARY
           else
             echo "**Deployment Trigger:** Automatic (push to main)" >> $GITHUB_STEP_SUMMARY

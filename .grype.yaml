@@ -1,0 +1,19 @@
+# Grype vulnerability scanner configuration
+# Ignore Go stdlib CVEs caused by Docker Hub golang:1.25.5-alpine containing Go 1.25.4
+# TODO: Remove these ignores once Docker Hub fixes their golang image
+# Tracking: https://github.com/docker-library/golang/issues
+
+ignore:
+  # CVE-2025-61729: crypto/x509 vulnerability (High)
+  # Reason: Docker Hub golang:1.25.5-alpine image contains Go 1.25.4 despite the tag
+  - vulnerability: CVE-2025-61729
+    package:
+      type: go-module
+      name: stdlib
+
+  # CVE-2025-61727: Related crypto/x509 vulnerability (Medium)
+  # Reason: Same Docker Hub image issue as above
+  - vulnerability: CVE-2025-61727
+    package:
+      type: go-module
+      name: stdlib

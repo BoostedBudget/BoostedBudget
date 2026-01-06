@@ -186,7 +186,7 @@ wait_for_postgres() {
   done
 }
 
-# Run database migrations using Atlas
+# Run database migrations using golang-migrate
 # Arguments:
 #   $1 - DATABASE_URL (required)
 # Returns 0 on success, 1 on failure
@@ -195,16 +195,15 @@ run_migrations() {
 
   echo "📦 Running database migrations..."
 
-  # Check if atlas is available
-  if ! command -v atlas &> /dev/null; then
-    echo "❌ Atlas CLI not found."
+  # Check if migrate is available
+  if ! command -v migrate &> /dev/null; then
+    echo "❌ golang-migrate CLI not found."
     echo ""
-    echo "   Install Atlas to run database migrations:"
-    echo "   macOS:   brew install ariga/tap/atlas"
-    echo "   Linux:   curl -sSf https://atlasgo.sh | sh"
-    echo "   Windows: https://atlasgo.io/getting-started#installation"
+    echo "   Install golang-migrate to run database migrations:"
+    echo "   macOS:   brew install golang-migrate"
+    echo "   Linux:   curl -L https://github.com/golang-migrate/migrate/releases/latest/download/migrate.linux-amd64.tar.gz | tar xvz"
     echo ""
-    echo "   See: https://atlasgo.io/getting-started"
+    echo "   See: https://github.com/golang-migrate/migrate"
     return 1
   fi
 
@@ -218,25 +217,14 @@ run_migrations() {
     return 1
   fi
 
-  # Verify atlas.hcl exists
-  if [ ! -f "${backend_dir}/atlas.hcl" ]; then
-    echo "❌ Atlas config not found: ${backend_dir}/atlas.hcl"
-    return 1
-  fi
-
   # Verify migrations directory exists
   if [ ! -d "${backend_dir}/migrations" ]; then
     echo "❌ Migrations directory not found: ${backend_dir}/migrations"
     return 1
   fi
 
-  # Run migrations
-  atlas migrate apply \
-    --config "file://${backend_dir}/atlas.hcl" \
-    --env local \
-    --url "$database_url" \
-    --dir "file://${backend_dir}/migrations?format=golang-migrate" \
-    --revisions-schema public
+  # Run migrations using golang-migrate
+  migrate -database "$database_url" -path "${backend_dir}/migrations" up
 
   if [ $? -ne 0 ]; then
     echo "❌ Database migrations failed"

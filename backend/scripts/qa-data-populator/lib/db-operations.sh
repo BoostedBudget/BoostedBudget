@@ -200,7 +200,7 @@ validate_database_schema() {
   for table in "${required_tables[@]}"; do
     if ! table_exists "$table"; then
       log_error "Required table '$table' not found in database"
-      log_error "Please run migrations: cd backend && atlas migrate apply"
+      log_error "Please run migrations: cd backend && migrate -database \$DATABASE_URL -path migrations up"
       return 1
     fi
   done

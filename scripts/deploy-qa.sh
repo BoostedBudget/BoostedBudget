@@ -403,12 +403,11 @@ run_migrations() {
 
   # Check if backend container is running
   if docker-compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" ps backend | grep -q "Up"; then
-    echo "Running Atlas migrations..."
+    echo "Running migrations..."
 
-    # Check if Atlas CLI is available
-    if command -v atlas &> /dev/null; then
-      # Run migrations from host using Atlas CLI
-      echo "Running migrations via host Atlas CLI..."
+    # Check if golang-migrate CLI is available
+    if command -v migrate &> /dev/null; then
+      echo "Running migrations via golang-migrate CLI..."
       cd backend || {
         print_error "Failed to change to backend directory"
         return 1
@@ -422,29 +421,17 @@ run_migrations() {
         QA_DB_URL="postgresql://qauser:qapass@localhost:5433/boostedbudget_qa?sslmode=disable"
       fi
 
-      # Check if baseline is needed (database exists but no Atlas tracking)
-      echo "Checking migration status..."
-      if atlas migrate status --dir "file://migrations?format=golang-migrate" --url "$QA_DB_URL" 2>&1 | grep -q "No migration applied yet"; then
-        echo "Fresh database detected, establishing baseline at version 000012..."
-        atlas migrate set 000012 --dir "file://migrations?format=golang-migrate" --url "$QA_DB_URL" || {
-          cd ..
-          print_error "Failed to set baseline version"
-          return 1
-        }
-        echo "✓ Baseline established successfully"
-      fi
-
-      # Apply any new migrations
-      atlas migrate apply --dir "file://migrations?format=golang-migrate" --url "$QA_DB_URL" || {
+      # Apply migrations
+      migrate -database "$QA_DB_URL" -path migrations up || {
         cd ..
         print_error "Failed to apply migrations"
         return 1
       }
       cd ..
-      print_success "Migrations applied via Atlas CLI"
+      print_success "Migrations applied via golang-migrate CLI"
     else
-      # Atlas not installed on host - migrations should run automatically via backend docker-entrypoint.sh
-      echo "Atlas CLI not found on host, relying on backend automatic migrations..."
+      # golang-migrate not installed on host - migrations should run automatically via backend docker-entrypoint.sh
+      echo "golang-migrate CLI not found on host, relying on backend automatic migrations..."
       echo "Migrations run automatically by backend container on startup"
       print_success "Migrations handled by backend container"
     fi
