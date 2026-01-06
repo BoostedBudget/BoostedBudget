@@ -317,6 +317,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           pull: true
+          no-cache: true
           tags: |
             ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ steps.build-target.outputs.tag_prefix }}-${{ steps.build-target.outputs.sha }}
             ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ steps.build-target.outputs.tag_prefix }}-latest
