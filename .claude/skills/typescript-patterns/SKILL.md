@@ -1,7 +1,6 @@
 ---
 name: typescript-patterns
 description: "TypeScript/React patterns for BoostedBudget: feature structure, hooks, components, testing, and state management."
-version: "1.0.0"
 ---
 
 # TypeScript/React Patterns Guide

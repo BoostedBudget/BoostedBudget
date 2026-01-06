@@ -1,7 +1,6 @@
 ---
 name: go-patterns
 description: "Go patterns for BoostedBudget: Huma operations, service layer, repository patterns, error handling, and testing."
-version: "1.0.0"
 ---
 
 # Go Patterns Guide
