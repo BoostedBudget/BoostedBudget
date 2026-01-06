@@ -130,8 +130,7 @@ COMMENT ON COLUMN accounts.last_synced_month IS 'Most recent sync month (YYYY-MM
 -- Migration Complete
 -- =============================================================================
 -- Next steps:
---   1. Run: atlas migrate lint --dir file://migrations --dev-url "docker://postgres/15/test" --latest 1
---   2. Run: atlas migrate hash --dir file://migrations
---   3. Implement SyncAuditRepository to make tests pass (TDD GREEN phase)
+--   1. Run: squawk backend/migrations/*.up.sql (lint migrations)
+--   2. Implement SyncAuditRepository to make tests pass (TDD GREEN phase)
 --   4. Test on staging environment
 --   5. Monitor accounts_synced_monthly{tier} metric after deployment

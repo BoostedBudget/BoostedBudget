@@ -485,6 +485,15 @@ jobs:
       - name: Make backend binary executable
         run: chmod +x $GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
 
+      - name: Install golang-migrate
+        run: |
+          # Install golang-migrate to user bin (no sudo needed on self-hosted runners)
+          mkdir -p $HOME/bin
+          curl -sSfL https://github.com/golang-migrate/migrate/releases/latest/download/migrate.darwin-arm64.tar.gz | tar -xz
+          mv migrate $HOME/bin/
+          echo "$HOME/bin" >> $GITHUB_PATH
+          $HOME/bin/migrate --version
+
       - name: Run E2E tests
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         env:

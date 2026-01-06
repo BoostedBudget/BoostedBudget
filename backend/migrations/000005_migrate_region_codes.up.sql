@@ -6,7 +6,7 @@
 -- eu-west-1        -> lhr (London)
 -- ap-southeast-1   -> syd (Sydney)
 --
--- Note: Atlas handles transaction management, no explicit BEGIN/COMMIT needed
+-- Note: golang-migrate handles transaction management, no explicit BEGIN/COMMIT needed
 
 -- Step 1: Update existing user data
 -- Convert AWS-style region codes to Fly.io IATA codes

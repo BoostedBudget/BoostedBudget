@@ -36,7 +36,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # Stage 2: Runtime (Debian Bookworm Slim - Minimal but stable)
 FROM debian:bookworm-slim
 
-# Install runtime dependencies including Atlas
+# Install runtime dependencies
 RUN echo "📦 Installing runtime dependencies..." && \
     for i in 1 2 3; do \
       echo "Attempt $i/3..." && \
