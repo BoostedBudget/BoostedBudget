@@ -717,7 +717,7 @@ func TestRegisterUser_TransactionUserCreationError(t *testing.T) {
 	mockPool.ExpectBegin()
 
 	// User creation fails
-	mockProfileRepo.On("CreateUserTx", ctx, mock.AnythingOfType("*pgxmock.Tx"), mock.Anything).
+	mockProfileRepo.On("CreateUserTx", ctx, mock.Anything, mock.Anything).
 		Return(errors.New("database error during user creation"))
 
 	// Expect rollback due to user creation error
@@ -766,10 +766,10 @@ func TestRegisterUser_TransactionIdentityCreationError(t *testing.T) {
 	mockPool.ExpectBegin()
 
 	// User creation succeeds
-	mockProfileRepo.On("CreateUserTx", ctx, mock.AnythingOfType("*pgxmock.Tx"), mock.Anything).Return(nil)
+	mockProfileRepo.On("CreateUserTx", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	// Identity creation fails
-	mockIdentityRepo.On("CreateTx", ctx, mock.AnythingOfType("*pgxmock.Tx"), mock.Anything).
+	mockIdentityRepo.On("CreateTx", ctx, mock.Anything, mock.Anything).
 		Return(repository.ErrDuplicateIdentity)
 
 	// Expect rollback due to identity creation error
@@ -817,11 +817,11 @@ func TestRegisterUser_TransactionPrivacyCreationError(t *testing.T) {
 	mockPool.ExpectBegin()
 
 	// User and identity creation succeed
-	mockProfileRepo.On("CreateUserTx", ctx, mock.AnythingOfType("*pgxmock.Tx"), mock.Anything).Return(nil)
-	mockIdentityRepo.On("CreateTx", ctx, mock.AnythingOfType("*pgxmock.Tx"), mock.Anything).Return(nil)
+	mockProfileRepo.On("CreateUserTx", ctx, mock.Anything, mock.Anything).Return(nil)
+	mockIdentityRepo.On("CreateTx", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	// Privacy creation fails
-	mockPrivacyRepo.On("CreateTx", ctx, mock.AnythingOfType("*pgxmock.Tx"), mock.Anything).
+	mockPrivacyRepo.On("CreateTx", ctx, mock.Anything, mock.Anything).
 		Return(errors.New("database error during privacy creation"))
 
 	// Expect rollback due to privacy creation error

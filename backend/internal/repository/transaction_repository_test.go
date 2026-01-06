@@ -105,8 +105,13 @@ func TestTransactionRepository_CreateBatch_Success(t *testing.T) {
 		},
 	}
 
-	// Expect batch INSERT with multiple value sets
+	// Expect batch INSERT with multiple value sets (19 fields per transaction * 2 transactions = 38 args)
+	args := make([]interface{}, 38)
+	for i := range args {
+		args[i] = pgxmock.AnyArg()
+	}
 	mock.ExpectExec("INSERT INTO transactions").
+		WithArgs(args...).
 		WillReturnResult(pgxmock.NewResult("INSERT", 2))
 
 	err = repo.CreateBatch(ctx, transactions)
@@ -177,9 +182,9 @@ func TestTransactionRepository_DeleteByExternalID_Success(t *testing.T) {
 	externalID := "plaid_tx_123"
 	userID := "user-123"
 
-	// Expect DELETE query
+	// Expect DELETE query (source is passed as string, not domain type)
 	mock.ExpectExec("DELETE FROM transactions").
-		WithArgs(domain.SourcePlaid, externalID, userID).
+		WithArgs(string(domain.SourcePlaid), externalID, userID).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err = repo.DeleteByExternalID(ctx, domain.SourcePlaid, externalID, userID)
@@ -202,6 +207,11 @@ func TestTransactionRepository_GetByUserID_Success(t *testing.T) {
 	limit := 10
 	offset := 0
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
+	extID1 := "plaid_tx_1"
+	extID2 := "plaid_tx_2"
+	now := time.Now()
+
 	// Mock result rows
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id",
@@ -214,19 +224,19 @@ func TestTransactionRepository_GetByUserID_Success(t *testing.T) {
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
-			"plaid", "plaid_tx_1", nil,
-			-50.00, time.Now(), nil, "Transaction 1", nil,
+			"plaid", &extID1, nil,
+			-50.00, now, nil, "Transaction 1", nil,
 			nil, nil, nil,
-			false, nil, time.Now(), time.Now(),
+			false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil,
 		).
 		AddRow(
 			"tx-2", userID, "account-2", "item-1",
-			"plaid", "plaid_tx_2", nil,
-			-25.00, time.Now(), nil, "Transaction 2", nil,
+			"plaid", &extID2, nil,
+			-25.00, now, nil, "Transaction 2", nil,
 			nil, nil, nil,
-			false, nil, time.Now(), time.Now(),
+			false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil,
 		)
@@ -257,6 +267,10 @@ func TestTransactionRepository_GetByAccountID_Success(t *testing.T) {
 
 	accountID := "account-123"
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
+	extID := "plaid_tx_1"
+	now := time.Now()
+
 	// Mock result rows
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id",
@@ -269,10 +283,10 @@ func TestTransactionRepository_GetByAccountID_Success(t *testing.T) {
 	}).
 		AddRow(
 			"tx-1", "user-1", accountID, "item-1",
-			"plaid", "plaid_tx_1", nil,
-			-50.00, time.Now(), nil, "Transaction 1", nil,
+			"plaid", &extID, nil,
+			-50.00, now, nil, "Transaction 1", nil,
 			nil, nil, nil,
-			false, nil, time.Now(), time.Now(),
+			false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil,
 		)
@@ -303,6 +317,10 @@ func TestTransactionRepository_GetBySource_Success(t *testing.T) {
 	userID := "user-123"
 	source := domain.SourcePlaid
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
+	extID := "plaid_tx_1"
+	now := time.Now()
+
 	// Mock result rows
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id",
@@ -315,17 +333,17 @@ func TestTransactionRepository_GetBySource_Success(t *testing.T) {
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
-			"plaid", "plaid_tx_1", nil,
-			-50.00, time.Now(), nil, "Transaction 1", nil,
+			"plaid", &extID, nil,
+			-50.00, now, nil, "Transaction 1", nil,
 			nil, nil, nil,
-			false, nil, time.Now(), time.Now(),
+			false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil,
 		)
 
-	// Expect SELECT query
+	// Expect SELECT query (source is passed as string, not domain type)
 	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE source").
-		WithArgs(source, userID).
+		WithArgs(string(source), userID).
 		WillReturnRows(rows)
 
 	transactions, err := repo.GetBySource(ctx, source, userID)
@@ -351,6 +369,10 @@ func TestTransactionRepository_GetByUserIDWithFilters_NoFilters(t *testing.T) {
 	offset := 0
 	filters := domain.TransactionFilters{} // No filters
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
+	extID := "plaid_tx_1"
+	now := time.Now()
+
 	// Mock result rows
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id",
@@ -363,10 +385,10 @@ func TestTransactionRepository_GetByUserIDWithFilters_NoFilters(t *testing.T) {
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
-			"plaid", "plaid_tx_1", nil,
-			-50.00, time.Now(), nil, "Transaction 1", nil,
+			"plaid", &extID, nil,
+			-50.00, now, nil, "Transaction 1", nil,
 			nil, nil, nil,
-			false, nil, time.Now(), time.Now(),
+			false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil,
 		)
@@ -403,6 +425,11 @@ func TestTransactionRepository_GetByUserIDWithFilters_DateRange(t *testing.T) {
 		EndDate:   &endDate,
 	}
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
+	extID := "plaid_tx_1"
+	txDate := time.Date(2025, 6, 15, 0, 0, 0, 0, time.UTC)
+	now := time.Now()
+
 	// Mock result rows
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id",
@@ -415,10 +442,10 @@ func TestTransactionRepository_GetByUserIDWithFilters_DateRange(t *testing.T) {
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
-			"plaid", "plaid_tx_1", nil,
-			-50.00, time.Date(2025, 6, 15, 0, 0, 0, 0, time.UTC), nil, "Transaction 1", nil,
+			"plaid", &extID, nil,
+			-50.00, txDate, nil, "Transaction 1", nil,
 			nil, nil, nil,
-			false, nil, time.Now(), time.Now(),
+			false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil,
 		)
@@ -453,6 +480,10 @@ func TestTransactionRepository_GetByUserIDWithFilters_AccountID(t *testing.T) {
 		AccountID: &accountID,
 	}
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
+	extID := "plaid_tx_1"
+	now := time.Now()
+
 	// Mock result rows
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id",
@@ -465,10 +496,10 @@ func TestTransactionRepository_GetByUserIDWithFilters_AccountID(t *testing.T) {
 	}).
 		AddRow(
 			"tx-1", userID, accountID, "item-1",
-			"plaid", "plaid_tx_1", nil,
-			-50.00, time.Now(), nil, "Transaction 1", nil,
+			"plaid", &extID, nil,
+			-50.00, now, nil, "Transaction 1", nil,
 			nil, nil, nil,
-			false, nil, time.Now(), time.Now(),
+			false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil,
 		)
@@ -504,7 +535,11 @@ func TestTransactionRepository_GetByUserIDWithFilters_Search(t *testing.T) {
 		Search: &searchQuery,
 	}
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
 	merchantName := "Starbucks Coffee"
+	extID := "plaid_tx_1"
+	now := time.Now()
+
 	// Mock result rows
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id",
@@ -517,10 +552,10 @@ func TestTransactionRepository_GetByUserIDWithFilters_Search(t *testing.T) {
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
-			"plaid", "plaid_tx_1", nil,
-			-5.49, time.Now(), nil, "Starbucks", &merchantName,
+			"plaid", &extID, nil,
+			-5.49, now, nil, "Starbucks", &merchantName,
 			nil, nil, nil,
-			false, nil, time.Now(), time.Now(),
+			false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil,
 		)
@@ -557,7 +592,11 @@ func TestTransactionRepository_GetByUserIDWithFilters_Category(t *testing.T) {
 		Category: &categoryFilter,
 	}
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
 	categoryJSON := `["Food and Drink", "Restaurants"]`
+	extID := "plaid_tx_1"
+	now := time.Now()
+
 	// Mock result rows
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id",
@@ -570,10 +609,10 @@ func TestTransactionRepository_GetByUserIDWithFilters_Category(t *testing.T) {
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
-			"plaid", "plaid_tx_1", nil,
-			-25.00, time.Now(), nil, "Restaurant", nil,
+			"plaid", &extID, nil,
+			-25.00, now, nil, "Restaurant", nil,
 			&categoryJSON, nil, nil,
-			false, nil, time.Now(), time.Now(),
+			false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil,
 		)
@@ -608,6 +647,10 @@ func TestTransactionRepository_GetByUserIDWithFilters_Pending(t *testing.T) {
 		Pending: &pendingOnly,
 	}
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
+	extID := "plaid_tx_1"
+	now := time.Now()
+
 	// Mock result rows
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id",
@@ -620,10 +663,10 @@ func TestTransactionRepository_GetByUserIDWithFilters_Pending(t *testing.T) {
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
-			"plaid", "plaid_tx_1", nil,
-			-100.00, time.Now(), nil, "Pending Transaction", nil,
+			"plaid", &extID, nil,
+			-100.00, now, nil, "Pending Transaction", nil,
 			nil, nil, nil,
-			true, nil, time.Now(), time.Now(),
+			true, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil,
 		)
@@ -663,6 +706,11 @@ func TestTransactionRepository_GetByUserIDWithFilters_MultipleFilters(t *testing
 		Pending:   &pendingOnly,
 	}
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
+	extID := "plaid_tx_1"
+	txDate := time.Date(2025, 6, 15, 0, 0, 0, 0, time.UTC)
+	now := time.Now()
+
 	// Mock result rows
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id",
@@ -675,10 +723,10 @@ func TestTransactionRepository_GetByUserIDWithFilters_MultipleFilters(t *testing
 	}).
 		AddRow(
 			"tx-1", userID, accountID, "item-1",
-			"plaid", "plaid_tx_1", nil,
-			-50.00, time.Date(2025, 6, 15, 0, 0, 0, 0, time.UTC), nil, "Transaction 1", nil,
+			"plaid", &extID, nil,
+			-50.00, txDate, nil, "Transaction 1", nil,
 			nil, nil, nil,
-			false, nil, time.Now(), time.Now(),
+			false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil,
 		)
@@ -772,8 +820,11 @@ func TestTransactionRepository_GetByExternalID_Success(t *testing.T) {
 	userID := "user-123"
 	source := domain.SourcePlaid
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
 	merchantName := "Starbucks Coffee"
 	categoryJSON := `["Food and Drink", "Coffee"]`
+	now := time.Now()
+
 	// Mock result row
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id",
@@ -786,10 +837,10 @@ func TestTransactionRepository_GetByExternalID_Success(t *testing.T) {
 	}).
 		AddRow(
 			"tx-uuid-123", userID, "account-456", "item-789",
-			"plaid", externalID, nil,
-			-25.50, time.Now(), nil, "Starbucks", &merchantName,
+			"plaid", &externalID, nil,
+			-25.50, now, nil, "Starbucks", &merchantName,
 			&categoryJSON, nil, nil,
-			false, nil, time.Now(), time.Now(),
+			false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil,
 		)
@@ -853,6 +904,10 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsTags(t *testing.T) 
 	offset := 0
 	filters := domain.TransactionFilters{}
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
+	extID := "plaid_tx_1"
+	now := time.Now()
+
 	// Mock result rows including tags and tags_source
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id",
@@ -865,10 +920,10 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsTags(t *testing.T) 
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
-			"plaid", "plaid_tx_1", nil,
-			-50.00, time.Now(), nil, "Transaction 1", nil,
+			"plaid", &extID, nil,
+			-50.00, now, nil, "Transaction 1", nil,
 			nil, nil, nil,
-			false, nil, time.Now(), time.Now(),
+			false, nil, now, now,
 			[]byte(`["Food", "Shopping"]`), []byte(`[{"tag":"Food","source":"user"},{"tag":"Shopping","source":"user"}]`),
 			nil, nil, nil, nil,
 		)
@@ -904,7 +959,13 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsCategoryOverride(t 
 	offset := 0
 	filters := domain.TransactionFilters{}
 
-	overrideDate := time.Now()
+	// Use pointers for nullable columns (pgxmock v4 requirement)
+	extID := "plaid_tx_1"
+	now := time.Now()
+	overrideDate := now
+	categoryJSON := `["Food and Drink"]`
+	categoryOverride := `["Custom Category"]`
+	originalCategory := `["Food and Drink"]`
 
 	// Mock result rows including category_override fields
 	rows := pgxmock.NewRows([]string{
@@ -918,12 +979,12 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsCategoryOverride(t 
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
-			"plaid", "plaid_tx_1", nil,
-			-50.00, time.Now(), nil, "Transaction 1", nil,
-			`["Food and Drink"]`, nil, nil,
-			false, nil, time.Now(), time.Now(),
+			"plaid", &extID, nil,
+			-50.00, now, nil, "Transaction 1", nil,
+			&categoryJSON, nil, nil,
+			false, nil, now, now,
 			nil, nil,
-			`["Custom Category"]`, "user", overrideDate, `["Food and Drink"]`,
+			&categoryOverride, "user", &overrideDate, &originalCategory,
 		)
 
 	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE user_id").
@@ -957,7 +1018,14 @@ func TestTransactionRepository_GetByID_ReturnsCategoryOverrideFields(t *testing.
 	ctx := context.Background()
 
 	txID := "tx-123"
-	overrideDate := time.Now()
+
+	// Use pointers for nullable columns (pgxmock v4 requirement)
+	extID := "plaid_tx_1"
+	now := time.Now()
+	overrideDate := now
+	categoryJSON := `["Food and Drink"]`
+	categoryOverride := `["Custom Category"]`
+	originalCategory := `["Food and Drink"]`
 
 	// Mock result row including all fields
 	rows := pgxmock.NewRows([]string{
@@ -968,11 +1036,11 @@ func TestTransactionRepository_GetByID_ReturnsCategoryOverrideFields(t *testing.
 		"category_override", "category_source", "category_override_date", "original_category",
 	}).
 		AddRow(
-			txID, "user-123", "account-1", "item-1", "plaid", "plaid_tx_1",
-			nil, -50.00, time.Now(), nil, "Transaction 1", nil,
-			`["Food and Drink"]`, nil, nil, false, nil,
-			time.Now(), time.Now(), []byte(`["Food"]`), []byte(`[{"tag":"Food","source":"user"}]`),
-			`["Custom Category"]`, "user", overrideDate, `["Food and Drink"]`,
+			txID, "user-123", "account-1", "item-1", "plaid", &extID,
+			nil, -50.00, now, nil, "Transaction 1", nil,
+			&categoryJSON, nil, nil, false, nil,
+			now, now, []byte(`["Food"]`), []byte(`[{"tag":"Food","source":"user"}]`),
+			&categoryOverride, "user", &overrideDate, &originalCategory,
 		)
 
 	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE id").

@@ -126,6 +126,9 @@ func TestCategorizationRuleRepository_GetByID(t *testing.T) {
 	userID := uuid.New().String()
 	now := time.Now()
 
+	// Helper for nullable string
+	desc := "Test description"
+
 	columns := []string{
 		"id", "user_id", "name", "description", "enabled", "priority",
 		"conditions", "condition_logic", "target_category", "target_tags",
@@ -139,7 +142,7 @@ func TestCategorizationRuleRepository_GetByID(t *testing.T) {
 			ruleID,
 			userID,
 			"Coffee Shops",
-			"Test description",
+			&desc, // Use pointer for nullable description
 			true,
 			10,
 			`[{"type":"merchant_contains","value":"starbucks"}]`,
@@ -150,7 +153,7 @@ func TestCategorizationRuleRepository_GetByID(t *testing.T) {
 			"manual",
 			5,
 			1,
-			now,
+			&now, // Use pointer for nullable last_matched_at
 			now,
 			now,
 		))
@@ -194,6 +197,9 @@ func TestCategorizationRuleRepository_GetByUserID(t *testing.T) {
 	userID := uuid.New().String()
 	now := time.Now()
 
+	// Helper for nullable strings
+	desc1, desc2 := "Desc 1", "Desc 2"
+
 	columns := []string{
 		"id", "user_id", "name", "description", "enabled", "priority",
 		"conditions", "condition_logic", "target_category", "target_tags",
@@ -208,7 +214,7 @@ func TestCategorizationRuleRepository_GetByUserID(t *testing.T) {
 				uuid.New().String(),
 				userID,
 				"Rule 1",
-				"Desc 1",
+				&desc1, // Use pointer for nullable description
 				true,
 				10,
 				`[]`,
@@ -227,7 +233,7 @@ func TestCategorizationRuleRepository_GetByUserID(t *testing.T) {
 				uuid.New().String(),
 				userID,
 				"Rule 2",
-				"Desc 2",
+				&desc2, // Use pointer for nullable description
 				true,
 				5,
 				`[]`,
@@ -259,6 +265,9 @@ func TestCategorizationRuleRepository_GetEnabledByUserID(t *testing.T) {
 	userID := uuid.New().String()
 	now := time.Now()
 
+	// Helper for nullable string
+	desc := "Desc"
+
 	columns := []string{
 		"id", "user_id", "name", "description", "enabled", "priority",
 		"conditions", "condition_logic", "target_category", "target_tags",
@@ -272,7 +281,7 @@ func TestCategorizationRuleRepository_GetEnabledByUserID(t *testing.T) {
 			uuid.New().String(),
 			userID,
 			"Enabled Rule",
-			"Desc",
+			&desc, // Use pointer for nullable description
 			true,
 			10,
 			`[]`,

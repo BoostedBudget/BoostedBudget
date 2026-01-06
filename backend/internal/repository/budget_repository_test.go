@@ -139,7 +139,7 @@ func TestBudgetRepository_GetByID(t *testing.T) {
 			budgetID,
 			userID,
 			"Groceries",
-			desc,
+			&desc, // Use pointer for nullable description
 			domain.BudgetPeriodMonthly,
 			now,
 			nil,
@@ -212,6 +212,9 @@ func TestBudgetRepository_GetByUserID(t *testing.T) {
 	userID := uuid.New().String()
 	now := time.Now()
 
+	// Helper for nullable strings
+	desc1, desc2 := "Desc 1", "Desc 2"
+
 	// Issue #491: added income_amount, income_sources
 	columns := []string{
 		"id", "user_id", "name", "description", "period", "start_date",
@@ -226,7 +229,7 @@ func TestBudgetRepository_GetByUserID(t *testing.T) {
 				uuid.New().String(),
 				userID,
 				"Budget 1",
-				"Desc 1",
+				&desc1, // Use pointer for nullable description
 				domain.BudgetPeriodMonthly,
 				now,
 				nil,
@@ -242,7 +245,7 @@ func TestBudgetRepository_GetByUserID(t *testing.T) {
 				uuid.New().String(),
 				userID,
 				"Budget 2",
-				"Desc 2",
+				&desc2, // Use pointer for nullable description
 				domain.BudgetPeriodWeekly,
 				now,
 				nil,
@@ -271,6 +274,9 @@ func TestBudgetRepository_GetActiveByUserID(t *testing.T) {
 	userID := uuid.New().String()
 	now := time.Now()
 
+	// Helper for nullable string
+	desc := "Desc"
+
 	// Issue #491: added income_amount, income_sources
 	columns := []string{
 		"id", "user_id", "name", "description", "period", "start_date",
@@ -284,7 +290,7 @@ func TestBudgetRepository_GetActiveByUserID(t *testing.T) {
 			uuid.New().String(),
 			userID,
 			"Active Budget",
-			"Desc",
+			&desc, // Use pointer for nullable description
 			domain.BudgetPeriodMonthly,
 			now,
 			nil,

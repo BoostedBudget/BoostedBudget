@@ -120,12 +120,20 @@ func TestRulesTable_UniqueNamePerUser(t *testing.T) {
 	userID := uuid.New().String()
 	ruleName := "My Transfer Rule"
 
-	// First insert should succeed
+	// First insert should succeed (8 arguments for rules table)
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO rules`)).
+		WithArgs(
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	// Second insert with same user_id + name should fail (constraint violation)
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO rules`)).
+		WithArgs(
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+		).
 		WillReturnError(pgx.ErrNoRows) // Simulating constraint violation
 
 	_, err1 := mock.Exec(ctx, `INSERT INTO rules (id, user_id, name, rule_type, trigger_config, conditions, condition_logic, actions) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
@@ -152,12 +160,17 @@ func TestRuleExecutionsTable_CascadeDeleteWithRule(t *testing.T) {
 	ruleID := uuid.New().String()
 	executionID := uuid.New().String()
 
-	// Insert a rule
+	// Insert a rule (8 arguments)
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO rules`)).
+		WithArgs(
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
-	// Insert an execution for that rule
+	// Insert an execution for that rule (4 arguments)
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO rule_executions`)).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	// Delete the rule (should cascade to executions)
@@ -199,6 +212,7 @@ func TestRuleExecutionsTable_StatusConstraint(t *testing.T) {
 			ctx := context.Background()
 
 			mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO rule_executions`)).
+				WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 				WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 			_, err := mock.Exec(ctx, `INSERT INTO rule_executions (id, rule_id, status, trigger_context) VALUES ($1, $2, $3, $4)`,
@@ -311,6 +325,10 @@ func TestTransferSuggestionsTable_PositiveAmountConstraint(t *testing.T) {
 
 	// Negative amount should fail
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO transfer_suggestions`)).
+		WithArgs(
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+		).
 		WillReturnError(pgx.ErrNoRows) // Simulating constraint violation
 
 	_, err := mock.Exec(ctx, `INSERT INTO transfer_suggestions (id, user_id, amount, currency_code, source, status) VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -332,6 +350,10 @@ func TestTransferSuggestionsTable_StatusConstraint(t *testing.T) {
 			ctx := context.Background()
 
 			mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO transfer_suggestions`)).
+				WithArgs(
+					pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+					pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+				).
 				WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 			_, err := mock.Exec(ctx, `INSERT INTO transfer_suggestions (id, user_id, amount, currency_code, source, status) VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -354,6 +376,10 @@ func TestTransferSuggestionsTable_SourceConstraint(t *testing.T) {
 			ctx := context.Background()
 
 			mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO transfer_suggestions`)).
+				WithArgs(
+					pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+					pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+				).
 				WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 			_, err := mock.Exec(ctx, `INSERT INTO transfer_suggestions (id, user_id, amount, currency_code, source, status) VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -373,12 +399,20 @@ func TestTransferSuggestionsTable_SetNullOnRuleDelete(t *testing.T) {
 	ruleID := uuid.New().String()
 	suggestionID := uuid.New().String()
 
-	// Insert a rule
+	// Insert a rule (8 arguments)
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO rules`)).
+		WithArgs(
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
-	// Insert a suggestion referencing that rule
+	// Insert a suggestion referencing that rule (7 arguments)
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO transfer_suggestions`)).
+		WithArgs(
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	// Delete the rule
@@ -417,12 +451,17 @@ func TestTransferSuggestionsTable_SetNullOnAccountDelete(t *testing.T) {
 	fromAccountID := uuid.New().String()
 	suggestionID := uuid.New().String()
 
-	// Insert an account (simulated)
+	// Insert an account (3 arguments)
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO accounts`)).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
-	// Insert a suggestion referencing that account
+	// Insert a suggestion referencing that account (7 arguments)
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO transfer_suggestions`)).
+		WithArgs(
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	// Delete the account
