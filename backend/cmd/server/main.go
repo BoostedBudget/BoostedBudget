@@ -101,16 +101,13 @@ func main() {
 	var accountService services.AccountService
 
 	// Authenticated routes (requires database and Clerk)
-	// Declare deletion worker at package scope for graceful shutdown
-	var deletionWorker *workers.DeletionWorker
 
-	// Declare webhook processor at package scope for graceful shutdown
-	// DEPRECATED: Issue #573 - Being replaced by River queue
-	var webhookProcessor *workers.WebhookProcessor
-
-	// Issue #573: River queue for async job processing
+	// Issue #573/629: River queue for async job processing
 	var jobQueue queue.JobQueue
 	var riverRunner queue.JobRunner
+
+	// Issue #629: Declare deletion worker for River registration
+	var accountDeletionWorker *jobs.AccountDeletionWorker
 
 	// Issue #37: Declare rule scheduler manager at package scope for graceful shutdown
 	var ruleSchedulerManager *workers.RuleSchedulerManager
@@ -249,14 +246,13 @@ func main() {
 			operations.RegisterDeletionRoutes(humaAPI, humaDeletionHandler)
 			log.Println("✅ Huma deletion routes registered")
 
-			// Create deletion worker with configured interval
-			workerInterval, err := time.ParseDuration(cfg.DeletionWorkerInterval)
-			if err != nil {
-				log.Printf("⚠️  Invalid deletion worker interval '%s', using default 1h", cfg.DeletionWorkerInterval)
-				workerInterval = 1 * time.Hour
-			}
-			deletionWorker = workers.NewDeletionWorker(deletionService, profileRepo, workerInterval)
-			log.Printf("✅ Deletion worker initialized (interval: %s)", workerInterval)
+			// Issue #629: Create River-based deletion workers
+			// These will be registered with River after jobQueue is created
+			accountDeletionWorker = jobs.NewAccountDeletionWorker(jobs.AccountDeletionWorkerDeps{
+				DeletionService: deletionService,
+				Logger:          slog.New(slog.NewJSONHandler(os.Stdout, nil)),
+			})
+			log.Println("✅ Account deletion worker created (River)")
 		} else {
 			log.Println("⚠️  Deletion services disabled (requires DELETION_TOKEN_SECRET)")
 		}
@@ -334,18 +330,7 @@ func main() {
 					emailService,
 				)
 
-				// DEPRECATED: Old polling-based webhook processor
-				// Issue #573: Replaced by River queue-based async processing
-				// webhookProcessor = workers.NewWebhookProcessor(
-				// 	transactionSyncService,
-				// 	itemErrorService,
-				// 	webhookRepo,
-				// 	30*time.Second, // Poll interval
-				// 	10,             // Batch size
-				// )
-				_ = webhookProcessor // Silence unused variable warning during transition
-
-				// Issue #573: Initialize River queue for async job processing
+				// Issue #573/629: Initialize River queue for async job processing
 				logger := slog.Default()
 				riverConfig := riverqueue.DefaultConfig()
 
@@ -357,9 +342,15 @@ func main() {
 					Logger:             logger,
 				})
 
-				// Create River workers and register our worker
+				// Create River workers and register all workers
 				riverWorkers := river.NewWorkers()
 				river.AddWorker(riverWorkers, webhookProcessingWorker)
+
+				// Issue #629: Register deletion workers if available
+				if accountDeletionWorker != nil {
+					river.AddWorker(riverWorkers, accountDeletionWorker)
+					log.Println("✅ Account deletion worker registered with River")
+				}
 
 				// Create River client
 				riverClient, err := riverqueue.NewClient(db, riverWorkers, riverConfig)
@@ -368,7 +359,8 @@ func main() {
 				} else {
 					jobQueue = riverClient
 					riverRunner = riverClient
-					log.Println("✅ River queue initialized with webhook processing worker")
+					log.Println("✅ River queue initialized")
+					// TODO Phase 5: Add periodic job scheduling for ScheduledDeletionCheckWorker
 				}
 
 				log.Println("✅ Transaction sync service initialized")
@@ -617,16 +609,7 @@ func main() {
 	var workerCtx context.Context
 	var workerCancel context.CancelFunc
 
-	// Start deletion worker
-	if deletionWorker != nil {
-		if workerCtx == nil {
-			workerCtx, workerCancel = context.WithCancel(context.Background())
-		}
-		go deletionWorker.Start(workerCtx)
-		log.Println("✅ Deletion worker started")
-	}
-
-	// Start River queue runner (Issue #573: Replaces webhook processor)
+	// Issue #573/629: Start River queue runner (handles webhook processing + account deletion)
 	if riverRunner != nil {
 		if workerCtx == nil {
 			workerCtx, workerCancel = context.WithCancel(context.Background())
@@ -636,17 +619,8 @@ func main() {
 				log.Printf("⚠️  River queue runner error: %v", err)
 			}
 		}()
-		log.Println("✅ River queue runner started (webhook processing enabled)")
+		log.Println("✅ River queue runner started")
 	}
-
-	// DEPRECATED: Old webhook processor (replaced by River queue)
-	// if webhookProcessor != nil {
-	// 	if workerCtx == nil {
-	// 		workerCtx, workerCancel = context.WithCancel(context.Background())
-	// 	}
-	// 	go webhookProcessor.Start(workerCtx)
-	// 	log.Println("✅ Webhook processor started")
-	// }
 
 	// Issue #37: Start rule scheduler manager
 	if ruleSchedulerManager != nil {
