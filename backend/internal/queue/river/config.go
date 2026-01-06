@@ -32,6 +32,9 @@ type Config struct {
 	// RetryPolicy configures the retry backoff strategy.
 	RetryPolicy *RetryPolicy
 
+	// PeriodicJobs configures recurring jobs that run on a schedule.
+	PeriodicJobs []*river.PeriodicJob
+
 	// Logger is an optional logger for River.
 	// If nil, River's default logger is used.
 	Logger any // *slog.Logger

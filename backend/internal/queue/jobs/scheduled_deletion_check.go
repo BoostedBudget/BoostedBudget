@@ -48,6 +48,8 @@ type ScheduledDeletionCheckWorkerDeps struct {
 }
 
 // NewScheduledDeletionCheckWorker creates a new scheduled deletion check worker.
+// Note: JobQueue can be nil initially and set later via SetJobQueue() to handle
+// circular dependency when configuring periodic jobs.
 func NewScheduledDeletionCheckWorker(deps ScheduledDeletionCheckWorkerDeps) *ScheduledDeletionCheckWorker {
 	logger := deps.Logger
 	if logger == nil {
@@ -58,6 +60,13 @@ func NewScheduledDeletionCheckWorker(deps ScheduledDeletionCheckWorkerDeps) *Sch
 		jobQueue:    deps.JobQueue,
 		logger:      logger,
 	}
+}
+
+// SetJobQueue sets the job queue after worker creation.
+// This is needed because of circular dependency: worker must be registered
+// before client creation, but needs client to enqueue jobs.
+func (w *ScheduledDeletionCheckWorker) SetJobQueue(jq queue.JobQueue) {
+	w.jobQueue = jq
 }
 
 // Work processes a scheduled deletion check job.

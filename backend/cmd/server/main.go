@@ -106,8 +106,9 @@ func main() {
 	var jobQueue queue.JobQueue
 	var riverRunner queue.JobRunner
 
-	// Issue #629: Declare deletion worker for River registration
+	// Issue #629: Declare deletion workers for River registration
 	var accountDeletionWorker *jobs.AccountDeletionWorker
+	var scheduledDeletionCheckWorker *jobs.ScheduledDeletionCheckWorker
 
 	// Issue #37: Declare rule scheduler manager at package scope for graceful shutdown
 	var ruleSchedulerManager *workers.RuleSchedulerManager
@@ -253,6 +254,15 @@ func main() {
 				Logger:          slog.New(slog.NewJSONHandler(os.Stdout, nil)),
 			})
 			log.Println("✅ Account deletion worker created (River)")
+
+			// Issue #629: Create scheduled deletion check worker
+			// Note: JobQueue is nil initially - set later via SetJobQueue() to handle circular dependency
+			scheduledDeletionCheckWorker = jobs.NewScheduledDeletionCheckWorker(jobs.ScheduledDeletionCheckWorkerDeps{
+				ProfileRepo: profileRepo,
+				JobQueue:    nil, // Set later after River client is created
+				Logger:      slog.New(slog.NewJSONHandler(os.Stdout, nil)),
+			})
+			log.Println("✅ Scheduled deletion check worker created (River)")
 		} else {
 			log.Println("⚠️  Deletion services disabled (requires DELETION_TOKEN_SECRET)")
 		}
@@ -334,6 +344,24 @@ func main() {
 				logger := slog.Default()
 				riverConfig := riverqueue.DefaultConfig()
 
+				// Issue #629: Configure periodic job for scheduled deletion check (hourly)
+				if scheduledDeletionCheckWorker != nil {
+					riverConfig.PeriodicJobs = []*river.PeriodicJob{
+						river.NewPeriodicJob(
+							river.PeriodicInterval(1*time.Hour),
+							func() (river.JobArgs, *river.InsertOpts) {
+								return jobs.ScheduledDeletionCheckArgs{
+									TriggerSource: "periodic",
+								}, &river.InsertOpts{
+									Queue: "low", // Deletions run on low priority queue
+								}
+							},
+							&river.PeriodicJobOpts{RunOnStart: true}, // Run immediately on startup to catch any pending deletions
+						),
+					}
+					log.Println("✅ Scheduled deletion check periodic job configured (hourly)")
+				}
+
 				// Create WebhookProcessingWorker with all dependencies
 				webhookProcessingWorker := jobs.NewWebhookProcessingWorker(jobs.WebhookProcessingWorkerDeps{
 					WebhookRepo:        webhookRepo,
@@ -351,6 +379,10 @@ func main() {
 					river.AddWorker(riverWorkers, accountDeletionWorker)
 					log.Println("✅ Account deletion worker registered with River")
 				}
+				if scheduledDeletionCheckWorker != nil {
+					river.AddWorker(riverWorkers, scheduledDeletionCheckWorker)
+					log.Println("✅ Scheduled deletion check worker registered with River")
+				}
 
 				// Create River client
 				riverClient, err := riverqueue.NewClient(db, riverWorkers, riverConfig)
@@ -360,7 +392,13 @@ func main() {
 					jobQueue = riverClient
 					riverRunner = riverClient
 					log.Println("✅ River queue initialized")
-					// TODO Phase 5: Add periodic job scheduling for ScheduledDeletionCheckWorker
+
+					// Issue #629: Wire up jobQueue to scheduledDeletionCheckWorker
+					// This resolves the circular dependency: worker needs queue but must be registered before client creation
+					if scheduledDeletionCheckWorker != nil {
+						scheduledDeletionCheckWorker.SetJobQueue(jobQueue)
+						log.Println("✅ Scheduled deletion check worker connected to job queue")
+					}
 				}
 
 				log.Println("✅ Transaction sync service initialized")
