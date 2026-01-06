@@ -1,7 +1,6 @@
 ---
 name: db-migration-guide
 description: "Database migration guide for BoostedBudget: Atlas migrations, idempotency patterns, rollback support, and testing."
-version: "1.0.0"
 ---
 
 # Database Migration Guide

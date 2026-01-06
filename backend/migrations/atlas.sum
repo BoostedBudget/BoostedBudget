@@ -1,4 +1,4 @@
-h1:Xts4ljlXdHNsYM64V4hJXbtqsE0er3Xp02rO/6SGdcg=
+h1:eP4dNYySMzJqBL0ftM3mVm4+5Hg2DZQH7UVALAciOxk=
 000001_create_users_table.up.sql h1:yLRXvyF/CMBakERSQ+AtUhi7PwM2FE7Accl3PYwNohc=
 000002_create_privacy_settings_table.up.sql h1:PCNdCyla6SD17iu74ZQfRGqu45htbLl2DQ8MtjRpw1s=
 000003_create_audit_logs_table.up.sql h1:9VxaVOzvjrH8wJq5rKcJ8hL9FzoVV81mGhxOULA5iSM=
@@ -28,3 +28,4 @@ h1:Xts4ljlXdHNsYM64V4hJXbtqsE0er3Xp02rO/6SGdcg=
 000027_create_rollover_history_table.up.sql h1:w+f5Ui1P9LUqXgWDcEukosVy3p+dyKozQRJ+Vt+P/Vw=
 000028_rename_auth0_to_clerk.up.sql h1:90pOmALXstU01Pjc/Tem69MqYG74LDZTAX8h1G6SaSE=
 000029_add_clerk_provider.up.sql h1:NKPy9kf4sWubWOJN8+RPO9GYXosinXDY14NJsxeORps=
+000030_add_river_queue.up.sql h1:hV+qORoYpVTXmYL3q+1o9CtVVovX2gkqg72PeSYCmxo=

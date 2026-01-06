@@ -4,10 +4,11 @@ package repository
 
 import (
 	"context"
-	"database/sql"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -43,11 +44,11 @@ type RolloverHistoryRepository interface {
 
 // rolloverHistoryRepository implements RolloverHistoryRepository using PostgreSQL.
 type rolloverHistoryRepository struct {
-	db *sql.DB
+	db DB
 }
 
 // NewRolloverHistoryRepository creates a new RolloverHistoryRepository instance.
-func NewRolloverHistoryRepository(db *sql.DB) RolloverHistoryRepository {
+func NewRolloverHistoryRepository(db DB) RolloverHistoryRepository {
 	return &rolloverHistoryRepository{db: db}
 }
 
@@ -75,7 +76,7 @@ func (r *rolloverHistoryRepository) Create(ctx context.Context, rollover *domain
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	`
 
-	_, err := r.db.ExecContext(ctx, query,
+	_, err := r.db.Exec(ctx, query,
 		rollover.ID,
 		rollover.UserID,
 		rollover.BudgetID,
@@ -106,7 +107,7 @@ func (r *rolloverHistoryRepository) GetByID(ctx context.Context, id string) (*do
 		WHERE id = $1
 	`
 
-	return r.scanRollover(r.db.QueryRowContext(ctx, query, id))
+	return r.scanRollover(r.db.QueryRow(ctx, query, id))
 }
 
 // GetByUserID retrieves rollover history for a user with pagination.
@@ -164,17 +165,12 @@ func (r *rolloverHistoryRepository) UpdateStatus(ctx context.Context, id string,
 		WHERE id = $3
 	`
 
-	result, err := r.db.ExecContext(ctx, query, status, appliedAt, id)
+	ct, err := r.db.Exec(ctx, query, status, appliedAt, id)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrRolloverHistoryNotFound
 	}
 
@@ -219,7 +215,7 @@ func (r *rolloverHistoryRepository) CountPendingByUserID(ctx context.Context, us
 	query := `SELECT COUNT(*) FROM rollover_history WHERE user_id = $1 AND status = 'pending'`
 
 	var count int
-	err := r.db.QueryRowContext(ctx, query, userID).Scan(&count)
+	err := r.db.QueryRow(ctx, query, userID).Scan(&count)
 	if err != nil {
 		return 0, err
 	}
@@ -228,7 +224,7 @@ func (r *rolloverHistoryRepository) CountPendingByUserID(ctx context.Context, us
 }
 
 // scanRollover scans a single rollover from a row.
-func (r *rolloverHistoryRepository) scanRollover(row *sql.Row) (*domain.RolloverHistory, error) {
+func (r *rolloverHistoryRepository) scanRollover(row pgx.Row) (*domain.RolloverHistory, error) {
 	rollover := &domain.RolloverHistory{}
 
 	err := row.Scan(
@@ -249,7 +245,7 @@ func (r *rolloverHistoryRepository) scanRollover(row *sql.Row) (*domain.Rollover
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domain.ErrRolloverHistoryNotFound
 		}
 		return nil, err
@@ -260,7 +256,7 @@ func (r *rolloverHistoryRepository) scanRollover(row *sql.Row) (*domain.Rollover
 
 // queryRollovers is a helper to query and scan multiple rollovers.
 func (r *rolloverHistoryRepository) queryRollovers(ctx context.Context, query string, args ...interface{}) ([]*domain.RolloverHistory, error) {
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

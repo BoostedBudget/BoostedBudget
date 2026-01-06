@@ -2,14 +2,20 @@ package services
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"regexp"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
+
+// TxBeginner is an interface for database connection pools that can begin transactions.
+// Both *pgxpool.Pool and pgxmock.PgxPoolIface satisfy this interface.
+type TxBeginner interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
 
 // Email validation regex (basic RFC 5322 compliant)
 var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
@@ -61,7 +67,7 @@ type registrationService struct {
 	identityRepo repository.UserIdentityRepository
 	privacyRepo  repository.PrivacyRepository
 	auditLogger  AuditLogger
-	db           *sql.DB // Database connection for transaction management
+	db           TxBeginner // Database connection pool for transaction management
 }
 
 // NewRegistrationService creates a new RegistrationService
@@ -70,7 +76,7 @@ func NewRegistrationService(
 	identityRepo repository.UserIdentityRepository,
 	privacyRepo repository.PrivacyRepository,
 	auditLogger AuditLogger,
-	db *sql.DB,
+	db TxBeginner,
 ) RegistrationService {
 	return &registrationService{
 		profileRepo:  profileRepo,
@@ -84,18 +90,18 @@ func NewRegistrationService(
 // RegisterUser implements idempotent user registration with atomic transaction safety
 //
 // FLOW:
-//   1. Validate inputs (clerkUserID, email format)
-//   2. Check if user already exists (idempotent path)
-//   3. If new user:
-//      a. Begin database transaction
-//      b. Create user profile (users table)
-//      c. Create user identity (user_identities table)
-//      d. Create privacy settings (user_privacy table)
-//      e. Commit transaction (all succeed or all fail)
-//   4. Log audit event (non-blocking failure)
+//  1. Validate inputs (clerkUserID, email format)
+//  2. Check if user already exists (idempotent path)
+//  3. If new user:
+//     a. Begin database transaction
+//     b. Create user profile (users table)
+//     c. Create user identity (user_identities table)
+//     d. Create privacy settings (user_privacy table)
+//     e. Commit transaction (all succeed or all fail)
+//  4. Log audit event (non-blocking failure)
 //
 // TRANSACTION SAFETY:
-// - Uses sql.DB.BeginTx for atomic multi-table inserts
+// - Uses pgxpool.Pool.Begin for atomic multi-table inserts
 // - Repositories provide *Tx methods for transaction-aware operations
 // - Deferred rollback ensures cleanup if any step fails
 // - Only commits if all three entities created successfully
@@ -108,7 +114,7 @@ func NewRegistrationService(
 //
 // UNIT TEST PATH:
 // - When db is nil (unit tests), uses non-transactional Create methods
-// - Allows testing without mocking sql.DB transaction complexity
+// - Allows testing without mocking pgxpool transaction complexity
 // - Production always provides db, so transactions are always used
 func (s *registrationService) RegisterUser(ctx context.Context, clerkUserID, email string, emailVerified bool) (*domain.User, error) {
 	// Validate required fields
@@ -142,11 +148,11 @@ func (s *registrationService) RegisterUser(ctx context.Context, clerkUserID, ema
 	var user *domain.User
 	if s.db != nil {
 		// Production path: Use atomic transaction
-		tx, err := s.db.BeginTx(ctx, nil)
+		tx, err := s.db.Begin(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to start transaction: %w", err)
 		}
-		defer tx.Rollback() // Rollback if not committed
+		defer tx.Rollback(ctx) // Rollback if not committed
 
 		// Step 1: Create user profile within transaction
 		user = domain.NewUser(clerkUserID, email, emailVerified)
@@ -171,7 +177,7 @@ func (s *registrationService) RegisterUser(ctx context.Context, clerkUserID, ema
 		}
 
 		// Commit transaction - all 3 creations succeed atomically
-		if err = tx.Commit(); err != nil {
+		if err = tx.Commit(ctx); err != nil {
 			return nil, fmt.Errorf("failed to commit transaction: %w", err)
 		}
 	} else {

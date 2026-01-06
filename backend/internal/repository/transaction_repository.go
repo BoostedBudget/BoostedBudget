@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/lib/pq"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
@@ -126,11 +127,11 @@ type TransactionRepository interface {
 
 // transactionRepository implements TransactionRepository using PostgreSQL
 type transactionRepository struct {
-	db *sql.DB
+	db DB
 }
 
 // NewTransactionRepository creates a new TransactionRepository instance
-func NewTransactionRepository(db *sql.DB) TransactionRepository {
+func NewTransactionRepository(db DB) TransactionRepository {
 	return &transactionRepository{db: db}
 }
 
@@ -155,7 +156,7 @@ func (r *transactionRepository) Create(ctx context.Context, transaction *domain.
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 	`
 
-	_, err := r.db.ExecContext(ctx, query,
+	_, err := r.db.Exec(ctx, query,
 		transaction.ID,
 		transaction.UserID,
 		transaction.AccountID,
@@ -253,7 +254,7 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 		ON CONFLICT (source, external_transaction_id, user_id) DO NOTHING
 	`, strings.Join(valueStrings, ", "))
 
-	_, err := r.db.ExecContext(ctx, query, valueArgs...)
+	_, err := r.db.Exec(ctx, query, valueArgs...)
 	if err != nil {
 		return fmt.Errorf("failed to batch create transactions: %w", err)
 	}
@@ -274,7 +275,7 @@ func (r *transactionRepository) Update(ctx context.Context, transaction *domain.
 		WHERE id = $13
 	`
 
-	result, err := r.db.ExecContext(ctx, query,
+	ct, err := r.db.Exec(ctx, query,
 		transaction.Amount,
 		transaction.Date,
 		transaction.AuthorizedDate,
@@ -294,12 +295,7 @@ func (r *transactionRepository) Update(ctx context.Context, transaction *domain.
 		return fmt.Errorf("failed to update transaction: %w", err)
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to get rows affected: %w", err)
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return ErrTransactionNotFound
 	}
 
@@ -313,17 +309,12 @@ func (r *transactionRepository) DeleteByExternalID(ctx context.Context, source d
 		WHERE source = $1 AND external_transaction_id = $2 AND user_id = $3
 	`
 
-	result, err := r.db.ExecContext(ctx, query, string(source), externalID, userID)
+	ct, err := r.db.Exec(ctx, query, string(source), externalID, userID)
 	if err != nil {
 		return fmt.Errorf("failed to delete transaction: %w", err)
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to get rows affected: %w", err)
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return ErrTransactionNotFound
 	}
 
@@ -343,7 +334,7 @@ func (r *transactionRepository) GetByUserID(ctx context.Context, userID string, 
 		LIMIT $2 OFFSET $3
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, userID, limit, offset)
+	rows, err := r.db.Query(ctx, query, userID, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query transactions: %w", err)
 	}
@@ -364,7 +355,7 @@ func (r *transactionRepository) GetByAccountID(ctx context.Context, accountID st
 		ORDER BY date DESC, created_at DESC
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, accountID)
+	rows, err := r.db.Query(ctx, query, accountID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query transactions: %w", err)
 	}
@@ -385,7 +376,7 @@ func (r *transactionRepository) GetBySource(ctx context.Context, source domain.T
 		ORDER BY date DESC, created_at DESC
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, string(source), userID)
+	rows, err := r.db.Query(ctx, query, string(source), userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query transactions: %w", err)
 	}
@@ -416,7 +407,7 @@ func (r *transactionRepository) GetByUserIDWithFilters(ctx context.Context, user
 		LIMIT $%d OFFSET $%d
 	`, whereClause, len(args)-1, len(args))
 
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query transactions: %w", err)
 	}
@@ -438,7 +429,7 @@ func (r *transactionRepository) CountByUserID(ctx context.Context, userID string
 	`, whereClause)
 
 	var count int
-	err := r.db.QueryRowContext(ctx, query, args...).Scan(&count)
+	err := r.db.QueryRow(ctx, query, args...).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("failed to count transactions: %w", err)
 	}
@@ -467,7 +458,7 @@ func (r *transactionRepository) GetByExternalID(ctx context.Context, source doma
 	var tagsSourceJSON []byte
 	var categorySource sql.NullString
 
-	err := r.db.QueryRowContext(ctx, query, string(source), externalID, userID).Scan(
+	err := r.db.QueryRow(ctx, query, string(source), externalID, userID).Scan(
 		&tx.ID,
 		&tx.UserID,
 		&tx.AccountID,
@@ -495,7 +486,7 @@ func (r *transactionRepository) GetByExternalID(ctx context.Context, source doma
 		&tx.OriginalCategory,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrTransactionNotFound
 	}
 	if err != nil {
@@ -647,7 +638,7 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 }
 
 // scanTransactions scans SQL rows into Transaction structs
-func (r *transactionRepository) scanTransactions(rows *sql.Rows) ([]domain.Transaction, error) {
+func (r *transactionRepository) scanTransactions(rows pgx.Rows) ([]domain.Transaction, error) {
 	var transactions []domain.Transaction
 
 	for rows.Next() {
@@ -738,7 +729,7 @@ func (r *transactionRepository) GetByID(ctx context.Context, id string) (*domain
 	var tagsSourceJSON []byte
 	var categorySource sql.NullString
 
-	err := r.db.QueryRowContext(ctx, query, id).Scan(
+	err := r.db.QueryRow(ctx, query, id).Scan(
 		&tx.ID,
 		&tx.UserID,
 		&tx.AccountID,
@@ -767,7 +758,7 @@ func (r *transactionRepository) GetByID(ctx context.Context, id string) (*domain
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrTransactionNotFound
 		}
 		return nil, fmt.Errorf("failed to get transaction by ID: %w", err)
@@ -817,17 +808,12 @@ func (r *transactionRepository) UpdateTags(ctx context.Context, id string, userI
 		WHERE id = $4 AND user_id = $5
 	`
 
-	result, err := r.db.ExecContext(ctx, query, tagsJSON, tagsSourceJSON, time.Now(), id, userID)
+	ct, err := r.db.Exec(ctx, query, tagsJSON, tagsSourceJSON, time.Now(), id, userID)
 	if err != nil {
 		return fmt.Errorf("failed to update transaction tags: %w", err)
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to get rows affected: %w", err)
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return ErrTransactionNotFound
 	}
 
@@ -851,17 +837,12 @@ func (r *transactionRepository) UpdateCategory(ctx context.Context, id string, u
 		WHERE id = $5 AND user_id = $6
 	`
 
-	result, err := r.db.ExecContext(ctx, query, categoryJSON, categorySource, now, now, id, userID)
+	ct, err := r.db.Exec(ctx, query, categoryJSON, categorySource, now, now, id, userID)
 	if err != nil {
 		return fmt.Errorf("failed to update transaction category: %w", err)
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to get rows affected: %w", err)
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return ErrTransactionNotFound
 	}
 
@@ -884,7 +865,7 @@ func (r *transactionRepository) GetDistinctPlaidCategories(ctx context.Context, 
 		ORDER BY cat
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, userID)
+	rows, err := r.db.Query(ctx, query, userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query distinct plaid categories: %w", err)
 	}
@@ -930,7 +911,7 @@ func (r *transactionRepository) GetIncomeSumByCategory(ctx context.Context, user
 	`
 
 	var sum float64
-	err := r.db.QueryRowContext(ctx, query, userID, startDate, endDate, categoryJSON).Scan(&sum)
+	err := r.db.QueryRow(ctx, query, userID, startDate, endDate, categoryJSON).Scan(&sum)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get income sum by category: %w", err)
 	}
@@ -952,7 +933,7 @@ func (r *transactionRepository) GetIncomeSumByTag(ctx context.Context, userID st
 	`
 
 	var sum float64
-	err := r.db.QueryRowContext(ctx, query, userID, startDate, endDate, tag).Scan(&sum)
+	err := r.db.QueryRow(ctx, query, userID, startDate, endDate, tag).Scan(&sum)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get income sum by tag: %w", err)
 	}
@@ -1037,7 +1018,7 @@ func (r *transactionRepository) GetSpentSumForBudgetCategory(ctx context.Context
 	}
 
 	var sum float64
-	err = r.db.QueryRowContext(ctx, query, args...).Scan(&sum)
+	err = r.db.QueryRow(ctx, query, args...).Scan(&sum)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get spent sum for budget category: %w", err)
 	}
@@ -1119,7 +1100,7 @@ func (r *transactionRepository) GetMatchingTransactionStats(ctx context.Context,
 
 	var count int
 	var sum float64
-	err := r.db.QueryRowContext(ctx, query, args...).Scan(&count, &sum)
+	err := r.db.QueryRow(ctx, query, args...).Scan(&count, &sum)
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to get matching transaction stats: %w", err)
 	}
@@ -1221,7 +1202,7 @@ func (r *transactionRepository) GetTransactionsForBudgetCategory(ctx context.Con
 
 	var totalCount int
 	var totalAmount float64
-	err = r.db.QueryRowContext(ctx, countQuery, baseArgs...).Scan(&totalCount, &totalAmount)
+	err = r.db.QueryRow(ctx, countQuery, baseArgs...).Scan(&totalCount, &totalAmount)
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("failed to get transaction count: %w", err)
 	}
@@ -1241,7 +1222,7 @@ func (r *transactionRepository) GetTransactionsForBudgetCategory(ctx context.Con
 	`, whereClause, nextArgNum, nextArgNum+1)
 
 	selectArgs := append(baseArgs, limit, offset)
-	rows, err := r.db.QueryContext(ctx, selectQuery, selectArgs...)
+	rows, err := r.db.Query(ctx, selectQuery, selectArgs...)
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("failed to query transactions: %w", err)
 	}

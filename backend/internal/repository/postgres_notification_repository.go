@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -21,11 +20,11 @@ var (
 
 // notificationRepository implements NotificationRepository using PostgreSQL
 type notificationRepository struct {
-	db *sql.DB
+	db DB
 }
 
 // NewNotificationRepository creates a new NotificationRepository instance
-func NewNotificationRepository(db *sql.DB) NotificationRepository {
+func NewNotificationRepository(db DB) NotificationRepository {
 	return &notificationRepository{db: db}
 }
 
@@ -53,7 +52,7 @@ func (r *notificationRepository) Create(ctx context.Context, notification *domai
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 	`
 
-	_, err := r.db.ExecContext(ctx, query,
+	_, err := r.db.Exec(ctx, query,
 		notification.ID,
 		notification.UserID,
 		notification.Type,
@@ -99,7 +98,7 @@ func (r *notificationRepository) Update(ctx context.Context, notification *domai
 		WHERE id = $1
 	`
 
-	result, err := r.db.ExecContext(ctx, query,
+	ct, err := r.db.Exec(ctx, query,
 		notification.ID,
 		notification.Type,
 		notification.Title,
@@ -116,12 +115,7 @@ func (r *notificationRepository) Update(ctx context.Context, notification *domai
 		return fmt.Errorf("failed to update notification: %w", err)
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to check rows affected: %w", err)
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return ErrNotificationNotFound
 	}
 
@@ -140,7 +134,7 @@ func (r *notificationRepository) GetByUserID(ctx context.Context, userID string,
 		LIMIT $2
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, userID, limit)
+	rows, err := r.db.Query(ctx, query, userID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query notifications: %w", err)
 	}
@@ -191,21 +185,16 @@ func (r *notificationRepository) MarkAsRead(ctx context.Context, notificationID 
 		WHERE id = $1 AND user_id = $2
 	`
 
-	result, err := r.db.ExecContext(ctx, query, notificationID, userID, time.Now())
+	ct, err := r.db.Exec(ctx, query, notificationID, userID, time.Now())
 	if err != nil {
 		return fmt.Errorf("failed to mark notification as read: %w", err)
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to check rows affected: %w", err)
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		// Check if notification exists at all
 		var exists bool
 		checkQuery := `SELECT EXISTS(SELECT 1 FROM notifications WHERE id = $1)`
-		err := r.db.QueryRowContext(ctx, checkQuery, notificationID).Scan(&exists)
+		err := r.db.QueryRow(ctx, checkQuery, notificationID).Scan(&exists)
 		if err != nil {
 			return fmt.Errorf("failed to check notification existence: %w", err)
 		}
@@ -230,7 +219,7 @@ func (r *notificationRepository) GetUnreadCount(ctx context.Context, userID stri
 	`
 
 	var count int
-	err := r.db.QueryRowContext(ctx, query, userID).Scan(&count)
+	err := r.db.QueryRow(ctx, query, userID).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("failed to count unread notifications: %w", err)
 	}
@@ -251,7 +240,7 @@ func (r *notificationRepository) GetUnsentEmails(ctx context.Context, limit int)
 		LIMIT $1
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, limit)
+	rows, err := r.db.Query(ctx, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query unsent email notifications: %w", err)
 	}
@@ -291,3 +280,6 @@ func (r *notificationRepository) GetUnsentEmails(ctx context.Context, limit int)
 
 	return notifications, nil
 }
+
+// Compile-time check to ensure notificationRepository implements NotificationRepository
+var _ NotificationRepository = (*notificationRepository)(nil)

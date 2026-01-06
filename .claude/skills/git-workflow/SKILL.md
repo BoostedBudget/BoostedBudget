@@ -1,7 +1,6 @@
 ---
 name: git-workflow
 description: "Git conventions for BoostedBudget: branch naming, commit format, PR workflow, and merge strategy."
-version: "1.0.0"
 ---
 
 # Git Workflow Guide

@@ -2,11 +2,13 @@ package repository
 
 import (
 	"context"
-	"database/sql"
+	"errors"
+	
 	"testing"
 	"time"
 
-	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/jackc/pgx/v5"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/lib/pq"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
@@ -15,11 +17,11 @@ import (
 
 // TestTransactionRepository_Create_Success tests successful transaction creation
 func TestTransactionRepository_Create_Success(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	externalID := "plaid_tx_123"
@@ -37,27 +39,27 @@ func TestTransactionRepository_Create_Success(t *testing.T) {
 	// Expect INSERT query
 	mock.ExpectExec("INSERT INTO transactions").
 		WithArgs(
-			sqlmock.AnyArg(), // id (UUID generated)
+			pgxmock.AnyArg(), // id (UUID generated)
 			transaction.UserID,
 			transaction.AccountID,
 			transaction.LinkedItemID,
 			string(transaction.Source),
 			transaction.ExternalTransactionID,
-			sqlmock.AnyArg(), // external_metadata
+			pgxmock.AnyArg(), // external_metadata
 			transaction.Amount,
-			sqlmock.AnyArg(), // date
-			sqlmock.AnyArg(), // authorized_date
+			pgxmock.AnyArg(), // date
+			pgxmock.AnyArg(), // authorized_date
 			transaction.Name,
-			sqlmock.AnyArg(), // merchant_name
-			sqlmock.AnyArg(), // category
-			sqlmock.AnyArg(), // personal_finance_category
-			sqlmock.AnyArg(), // payment_channel
+			pgxmock.AnyArg(), // merchant_name
+			pgxmock.AnyArg(), // category
+			pgxmock.AnyArg(), // personal_finance_category
+			pgxmock.AnyArg(), // payment_channel
 			transaction.Pending,
-			sqlmock.AnyArg(), // user_notes
-			sqlmock.AnyArg(), // created_at
-			sqlmock.AnyArg(), // updated_at
+			pgxmock.AnyArg(), // user_notes
+			pgxmock.AnyArg(), // created_at
+			pgxmock.AnyArg(), // updated_at
 		).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err = repo.Create(ctx, transaction)
 	assert.NoError(t, err)
@@ -71,11 +73,11 @@ func TestTransactionRepository_Create_Success(t *testing.T) {
 
 // TestTransactionRepository_CreateBatch_Success tests batch transaction creation
 func TestTransactionRepository_CreateBatch_Success(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	externalID1 := "plaid_tx_1"
@@ -103,9 +105,14 @@ func TestTransactionRepository_CreateBatch_Success(t *testing.T) {
 		},
 	}
 
-	// Expect batch INSERT with multiple value sets
+	// Expect batch INSERT with multiple value sets (19 fields per transaction * 2 transactions = 38 args)
+	args := make([]interface{}, 38)
+	for i := range args {
+		args[i] = pgxmock.AnyArg()
+	}
 	mock.ExpectExec("INSERT INTO transactions").
-		WillReturnResult(sqlmock.NewResult(1, 2))
+		WithArgs(args...).
+		WillReturnResult(pgxmock.NewResult("INSERT", 2))
 
 	err = repo.CreateBatch(ctx, transactions)
 	assert.NoError(t, err)
@@ -116,11 +123,11 @@ func TestTransactionRepository_CreateBatch_Success(t *testing.T) {
 
 // TestTransactionRepository_Update_Success tests transaction update
 func TestTransactionRepository_Update_Success(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	externalID := "plaid_tx_123"
@@ -141,20 +148,20 @@ func TestTransactionRepository_Update_Success(t *testing.T) {
 	mock.ExpectExec("UPDATE transactions SET").
 		WithArgs(
 			transaction.Amount,
-			sqlmock.AnyArg(), // date
-			sqlmock.AnyArg(), // authorized_date
+			pgxmock.AnyArg(), // date
+			pgxmock.AnyArg(), // authorized_date
 			transaction.Name,
-			sqlmock.AnyArg(), // merchant_name
-			sqlmock.AnyArg(), // category
-			sqlmock.AnyArg(), // personal_finance_category
-			sqlmock.AnyArg(), // payment_channel
+			pgxmock.AnyArg(), // merchant_name
+			pgxmock.AnyArg(), // category
+			pgxmock.AnyArg(), // personal_finance_category
+			pgxmock.AnyArg(), // payment_channel
 			transaction.Pending,
-			sqlmock.AnyArg(), // external_metadata
-			sqlmock.AnyArg(), // user_notes
-			sqlmock.AnyArg(), // updated_at
+			pgxmock.AnyArg(), // external_metadata
+			pgxmock.AnyArg(), // user_notes
+			pgxmock.AnyArg(), // updated_at
 			transaction.ID,
 		).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err = repo.Update(ctx, transaction)
 	assert.NoError(t, err)
@@ -165,20 +172,20 @@ func TestTransactionRepository_Update_Success(t *testing.T) {
 
 // TestTransactionRepository_DeleteByExternalID_Success tests transaction deletion
 func TestTransactionRepository_DeleteByExternalID_Success(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	externalID := "plaid_tx_123"
 	userID := "user-123"
 
-	// Expect DELETE query
+	// Expect DELETE query (source is passed as string, not domain type)
 	mock.ExpectExec("DELETE FROM transactions").
-		WithArgs(domain.SourcePlaid, externalID, userID).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WithArgs(string(domain.SourcePlaid), externalID, userID).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err = repo.DeleteByExternalID(ctx, domain.SourcePlaid, externalID, userID)
 	assert.NoError(t, err)
@@ -189,19 +196,24 @@ func TestTransactionRepository_DeleteByExternalID_Success(t *testing.T) {
 
 // TestTransactionRepository_GetByUserID_Success tests retrieving transactions by user
 func TestTransactionRepository_GetByUserID_Success(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
 	limit := 10
 	offset := 0
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
+	extID1 := "plaid_tx_1"
+	extID2 := "plaid_tx_2"
+	now := time.Now()
+
 	// Mock result rows
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
@@ -212,19 +224,19 @@ func TestTransactionRepository_GetByUserID_Success(t *testing.T) {
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
-			"plaid", "plaid_tx_1", nil,
-			-50.00, time.Now(), nil, "Transaction 1", nil,
+			"plaid", &extID1, nil,
+			-50.00, now, nil, "Transaction 1", nil,
 			nil, nil, nil,
-			false, nil, time.Now(), time.Now(),
+			false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil,
 		).
 		AddRow(
 			"tx-2", userID, "account-2", "item-1",
-			"plaid", "plaid_tx_2", nil,
-			-25.00, time.Now(), nil, "Transaction 2", nil,
+			"plaid", &extID2, nil,
+			-25.00, now, nil, "Transaction 2", nil,
 			nil, nil, nil,
-			false, nil, time.Now(), time.Now(),
+			false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil,
 		)
@@ -246,17 +258,21 @@ func TestTransactionRepository_GetByUserID_Success(t *testing.T) {
 
 // TestTransactionRepository_GetByAccountID_Success tests retrieving transactions by account
 func TestTransactionRepository_GetByAccountID_Success(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	accountID := "account-123"
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
+	extID := "plaid_tx_1"
+	now := time.Now()
+
 	// Mock result rows
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
@@ -267,10 +283,10 @@ func TestTransactionRepository_GetByAccountID_Success(t *testing.T) {
 	}).
 		AddRow(
 			"tx-1", "user-1", accountID, "item-1",
-			"plaid", "plaid_tx_1", nil,
-			-50.00, time.Now(), nil, "Transaction 1", nil,
+			"plaid", &extID, nil,
+			-50.00, now, nil, "Transaction 1", nil,
 			nil, nil, nil,
-			false, nil, time.Now(), time.Now(),
+			false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil,
 		)
@@ -291,18 +307,22 @@ func TestTransactionRepository_GetByAccountID_Success(t *testing.T) {
 
 // TestTransactionRepository_GetBySource_Success tests retrieving transactions by source
 func TestTransactionRepository_GetBySource_Success(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
 	source := domain.SourcePlaid
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
+	extID := "plaid_tx_1"
+	now := time.Now()
+
 	// Mock result rows
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
@@ -313,17 +333,17 @@ func TestTransactionRepository_GetBySource_Success(t *testing.T) {
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
-			"plaid", "plaid_tx_1", nil,
-			-50.00, time.Now(), nil, "Transaction 1", nil,
+			"plaid", &extID, nil,
+			-50.00, now, nil, "Transaction 1", nil,
 			nil, nil, nil,
-			false, nil, time.Now(), time.Now(),
+			false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil,
 		)
 
-	// Expect SELECT query
+	// Expect SELECT query (source is passed as string, not domain type)
 	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE source").
-		WithArgs(source, userID).
+		WithArgs(string(source), userID).
 		WillReturnRows(rows)
 
 	transactions, err := repo.GetBySource(ctx, source, userID)
@@ -337,11 +357,11 @@ func TestTransactionRepository_GetBySource_Success(t *testing.T) {
 
 // TestTransactionRepository_GetByUserIDWithFilters_NoFilters tests retrieving transactions without filters
 func TestTransactionRepository_GetByUserIDWithFilters_NoFilters(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -349,8 +369,12 @@ func TestTransactionRepository_GetByUserIDWithFilters_NoFilters(t *testing.T) {
 	offset := 0
 	filters := domain.TransactionFilters{} // No filters
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
+	extID := "plaid_tx_1"
+	now := time.Now()
+
 	// Mock result rows
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
@@ -361,10 +385,10 @@ func TestTransactionRepository_GetByUserIDWithFilters_NoFilters(t *testing.T) {
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
-			"plaid", "plaid_tx_1", nil,
-			-50.00, time.Now(), nil, "Transaction 1", nil,
+			"plaid", &extID, nil,
+			-50.00, now, nil, "Transaction 1", nil,
 			nil, nil, nil,
-			false, nil, time.Now(), time.Now(),
+			false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil,
 		)
@@ -384,11 +408,11 @@ func TestTransactionRepository_GetByUserIDWithFilters_NoFilters(t *testing.T) {
 
 // TestTransactionRepository_GetByUserIDWithFilters_DateRange tests filtering by date range
 func TestTransactionRepository_GetByUserIDWithFilters_DateRange(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -401,8 +425,13 @@ func TestTransactionRepository_GetByUserIDWithFilters_DateRange(t *testing.T) {
 		EndDate:   &endDate,
 	}
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
+	extID := "plaid_tx_1"
+	txDate := time.Date(2025, 6, 15, 0, 0, 0, 0, time.UTC)
+	now := time.Now()
+
 	// Mock result rows
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
@@ -413,10 +442,10 @@ func TestTransactionRepository_GetByUserIDWithFilters_DateRange(t *testing.T) {
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
-			"plaid", "plaid_tx_1", nil,
-			-50.00, time.Date(2025, 6, 15, 0, 0, 0, 0, time.UTC), nil, "Transaction 1", nil,
+			"plaid", &extID, nil,
+			-50.00, txDate, nil, "Transaction 1", nil,
 			nil, nil, nil,
-			false, nil, time.Now(), time.Now(),
+			false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil,
 		)
@@ -436,11 +465,11 @@ func TestTransactionRepository_GetByUserIDWithFilters_DateRange(t *testing.T) {
 
 // TestTransactionRepository_GetByUserIDWithFilters_AccountID tests filtering by account
 func TestTransactionRepository_GetByUserIDWithFilters_AccountID(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -451,8 +480,12 @@ func TestTransactionRepository_GetByUserIDWithFilters_AccountID(t *testing.T) {
 		AccountID: &accountID,
 	}
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
+	extID := "plaid_tx_1"
+	now := time.Now()
+
 	// Mock result rows
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
@@ -463,10 +496,10 @@ func TestTransactionRepository_GetByUserIDWithFilters_AccountID(t *testing.T) {
 	}).
 		AddRow(
 			"tx-1", userID, accountID, "item-1",
-			"plaid", "plaid_tx_1", nil,
-			-50.00, time.Now(), nil, "Transaction 1", nil,
+			"plaid", &extID, nil,
+			-50.00, now, nil, "Transaction 1", nil,
 			nil, nil, nil,
-			false, nil, time.Now(), time.Now(),
+			false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil,
 		)
@@ -487,11 +520,11 @@ func TestTransactionRepository_GetByUserIDWithFilters_AccountID(t *testing.T) {
 
 // TestTransactionRepository_GetByUserIDWithFilters_Search tests searching by merchant/name
 func TestTransactionRepository_GetByUserIDWithFilters_Search(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -502,9 +535,13 @@ func TestTransactionRepository_GetByUserIDWithFilters_Search(t *testing.T) {
 		Search: &searchQuery,
 	}
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
 	merchantName := "Starbucks Coffee"
+	extID := "plaid_tx_1"
+	now := time.Now()
+
 	// Mock result rows
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
@@ -515,10 +552,10 @@ func TestTransactionRepository_GetByUserIDWithFilters_Search(t *testing.T) {
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
-			"plaid", "plaid_tx_1", nil,
-			-5.49, time.Now(), nil, "Starbucks", &merchantName,
+			"plaid", &extID, nil,
+			-5.49, now, nil, "Starbucks", &merchantName,
 			nil, nil, nil,
-			false, nil, time.Now(), time.Now(),
+			false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil,
 		)
@@ -540,11 +577,11 @@ func TestTransactionRepository_GetByUserIDWithFilters_Search(t *testing.T) {
 
 // TestTransactionRepository_GetByUserIDWithFilters_Category tests filtering by category
 func TestTransactionRepository_GetByUserIDWithFilters_Category(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -555,9 +592,13 @@ func TestTransactionRepository_GetByUserIDWithFilters_Category(t *testing.T) {
 		Category: &categoryFilter,
 	}
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
 	categoryJSON := `["Food and Drink", "Restaurants"]`
+	extID := "plaid_tx_1"
+	now := time.Now()
+
 	// Mock result rows
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
@@ -568,10 +609,10 @@ func TestTransactionRepository_GetByUserIDWithFilters_Category(t *testing.T) {
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
-			"plaid", "plaid_tx_1", nil,
-			-25.00, time.Now(), nil, "Restaurant", nil,
+			"plaid", &extID, nil,
+			-25.00, now, nil, "Restaurant", nil,
 			&categoryJSON, nil, nil,
-			false, nil, time.Now(), time.Now(),
+			false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil,
 		)
@@ -591,11 +632,11 @@ func TestTransactionRepository_GetByUserIDWithFilters_Category(t *testing.T) {
 
 // TestTransactionRepository_GetByUserIDWithFilters_Pending tests filtering by pending status
 func TestTransactionRepository_GetByUserIDWithFilters_Pending(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -606,8 +647,12 @@ func TestTransactionRepository_GetByUserIDWithFilters_Pending(t *testing.T) {
 		Pending: &pendingOnly,
 	}
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
+	extID := "plaid_tx_1"
+	now := time.Now()
+
 	// Mock result rows
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
@@ -618,10 +663,10 @@ func TestTransactionRepository_GetByUserIDWithFilters_Pending(t *testing.T) {
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
-			"plaid", "plaid_tx_1", nil,
-			-100.00, time.Now(), nil, "Pending Transaction", nil,
+			"plaid", &extID, nil,
+			-100.00, now, nil, "Pending Transaction", nil,
 			nil, nil, nil,
-			true, nil, time.Now(), time.Now(),
+			true, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil,
 		)
@@ -642,11 +687,11 @@ func TestTransactionRepository_GetByUserIDWithFilters_Pending(t *testing.T) {
 
 // TestTransactionRepository_GetByUserIDWithFilters_MultipleFilters tests combining multiple filters
 func TestTransactionRepository_GetByUserIDWithFilters_MultipleFilters(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -661,8 +706,13 @@ func TestTransactionRepository_GetByUserIDWithFilters_MultipleFilters(t *testing
 		Pending:   &pendingOnly,
 	}
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
+	extID := "plaid_tx_1"
+	txDate := time.Date(2025, 6, 15, 0, 0, 0, 0, time.UTC)
+	now := time.Now()
+
 	// Mock result rows
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
@@ -673,10 +723,10 @@ func TestTransactionRepository_GetByUserIDWithFilters_MultipleFilters(t *testing
 	}).
 		AddRow(
 			"tx-1", userID, accountID, "item-1",
-			"plaid", "plaid_tx_1", nil,
-			-50.00, time.Date(2025, 6, 15, 0, 0, 0, 0, time.UTC), nil, "Transaction 1", nil,
+			"plaid", &extID, nil,
+			-50.00, txDate, nil, "Transaction 1", nil,
 			nil, nil, nil,
-			false, nil, time.Now(), time.Now(),
+			false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil,
 		)
@@ -698,18 +748,18 @@ func TestTransactionRepository_GetByUserIDWithFilters_MultipleFilters(t *testing
 
 // TestTransactionRepository_CountByUserID_NoFilters tests counting transactions without filters
 func TestTransactionRepository_CountByUserID_NoFilters(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
 	filters := domain.TransactionFilters{}
 
 	// Mock result rows
-	rows := sqlmock.NewRows([]string{"count"}).AddRow(42)
+	rows := pgxmock.NewRows([]string{"count"}).AddRow(42)
 
 	// Expect COUNT query
 	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM transactions WHERE user_id").
@@ -726,11 +776,11 @@ func TestTransactionRepository_CountByUserID_NoFilters(t *testing.T) {
 
 // TestTransactionRepository_CountByUserID_WithFilters tests counting transactions with filters
 func TestTransactionRepository_CountByUserID_WithFilters(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -742,7 +792,7 @@ func TestTransactionRepository_CountByUserID_WithFilters(t *testing.T) {
 	}
 
 	// Mock result rows
-	rows := sqlmock.NewRows([]string{"count"}).AddRow(5)
+	rows := pgxmock.NewRows([]string{"count"}).AddRow(5)
 
 	// Expect COUNT query with filters
 	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM transactions WHERE user_id(.+)AND account_id(.+)AND pending").
@@ -759,21 +809,24 @@ func TestTransactionRepository_CountByUserID_WithFilters(t *testing.T) {
 
 // TestTransactionRepository_GetByExternalID_Success tests retrieving a transaction by external ID
 func TestTransactionRepository_GetByExternalID_Success(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	externalID := "plaid_tx_123"
 	userID := "user-123"
 	source := domain.SourcePlaid
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
 	merchantName := "Starbucks Coffee"
 	categoryJSON := `["Food and Drink", "Coffee"]`
+	now := time.Now()
+
 	// Mock result row
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
@@ -784,10 +837,10 @@ func TestTransactionRepository_GetByExternalID_Success(t *testing.T) {
 	}).
 		AddRow(
 			"tx-uuid-123", userID, "account-456", "item-789",
-			"plaid", externalID, nil,
-			-25.50, time.Now(), nil, "Starbucks", &merchantName,
+			"plaid", &externalID, nil,
+			-25.50, now, nil, "Starbucks", &merchantName,
 			&categoryJSON, nil, nil,
-			false, nil, time.Now(), time.Now(),
+			false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil,
 		)
@@ -811,21 +864,21 @@ func TestTransactionRepository_GetByExternalID_Success(t *testing.T) {
 
 // TestTransactionRepository_GetByExternalID_NotFound tests when transaction doesn't exist
 func TestTransactionRepository_GetByExternalID_NotFound(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	externalID := "nonexistent_tx"
 	userID := "user-123"
 	source := domain.SourcePlaid
 
-	// Expect SELECT query to return sql.ErrNoRows (which gets converted to ErrTransactionNotFound)
+	// Expect SELECT query to return pgx.ErrNoRows (which gets converted to ErrTransactionNotFound)
 	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE source (.+) AND external_transaction_id (.+) AND user_id").
 		WithArgs(string(source), externalID, userID).
-		WillReturnError(sql.ErrNoRows)
+		WillReturnError(pgx.ErrNoRows)
 
 	transaction, err := repo.GetByExternalID(ctx, source, externalID, userID)
 	assert.Error(t, err)
@@ -839,11 +892,11 @@ func TestTransactionRepository_GetByExternalID_NotFound(t *testing.T) {
 // TestTransactionRepository_GetByUserIDWithFilters_ReturnsTags tests that tags are returned
 // TDD RED: This test will FAIL until GetByUserIDWithFilters includes tags in SELECT
 func TestTransactionRepository_GetByUserIDWithFilters_ReturnsTags(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -851,8 +904,12 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsTags(t *testing.T) 
 	offset := 0
 	filters := domain.TransactionFilters{}
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
+	extID := "plaid_tx_1"
+	now := time.Now()
+
 	// Mock result rows including tags and tags_source
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
@@ -863,10 +920,10 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsTags(t *testing.T) 
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
-			"plaid", "plaid_tx_1", nil,
-			-50.00, time.Now(), nil, "Transaction 1", nil,
+			"plaid", &extID, nil,
+			-50.00, now, nil, "Transaction 1", nil,
 			nil, nil, nil,
-			false, nil, time.Now(), time.Now(),
+			false, nil, now, now,
 			[]byte(`["Food", "Shopping"]`), []byte(`[{"tag":"Food","source":"user"},{"tag":"Shopping","source":"user"}]`),
 			nil, nil, nil, nil,
 		)
@@ -890,11 +947,11 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsTags(t *testing.T) 
 // TestTransactionRepository_GetByUserIDWithFilters_ReturnsCategoryOverride tests category_override fields
 // TDD RED: This test will FAIL until GetByUserIDWithFilters includes category_override in SELECT
 func TestTransactionRepository_GetByUserIDWithFilters_ReturnsCategoryOverride(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -902,10 +959,16 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsCategoryOverride(t 
 	offset := 0
 	filters := domain.TransactionFilters{}
 
-	overrideDate := time.Now()
+	// Use pointers for nullable columns (pgxmock v4 requirement)
+	extID := "plaid_tx_1"
+	now := time.Now()
+	overrideDate := now
+	categoryJSON := `["Food and Drink"]`
+	categoryOverride := `["Custom Category"]`
+	originalCategory := `["Food and Drink"]`
 
 	// Mock result rows including category_override fields
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
@@ -916,12 +979,12 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsCategoryOverride(t 
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
-			"plaid", "plaid_tx_1", nil,
-			-50.00, time.Now(), nil, "Transaction 1", nil,
-			`["Food and Drink"]`, nil, nil,
-			false, nil, time.Now(), time.Now(),
+			"plaid", &extID, nil,
+			-50.00, now, nil, "Transaction 1", nil,
+			&categoryJSON, nil, nil,
+			false, nil, now, now,
 			nil, nil,
-			`["Custom Category"]`, "user", overrideDate, `["Food and Drink"]`,
+			&categoryOverride, "user", &overrideDate, &originalCategory,
 		)
 
 	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE user_id").
@@ -947,18 +1010,25 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsCategoryOverride(t 
 // TestTransactionRepository_GetByID_ReturnsCategoryOverrideFields tests GetByID returns all category fields
 // TDD RED: This test will FAIL until GetByID includes category_override fields in SELECT
 func TestTransactionRepository_GetByID_ReturnsCategoryOverrideFields(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	txID := "tx-123"
-	overrideDate := time.Now()
+
+	// Use pointers for nullable columns (pgxmock v4 requirement)
+	extID := "plaid_tx_1"
+	now := time.Now()
+	overrideDate := now
+	categoryJSON := `["Food and Drink"]`
+	categoryOverride := `["Custom Category"]`
+	originalCategory := `["Food and Drink"]`
 
 	// Mock result row including all fields
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id", "source", "external_transaction_id",
 		"external_metadata", "amount", "date", "authorized_date", "name", "merchant_name",
 		"category", "personal_finance_category", "payment_channel", "pending", "user_notes",
@@ -966,11 +1036,11 @@ func TestTransactionRepository_GetByID_ReturnsCategoryOverrideFields(t *testing.
 		"category_override", "category_source", "category_override_date", "original_category",
 	}).
 		AddRow(
-			txID, "user-123", "account-1", "item-1", "plaid", "plaid_tx_1",
-			nil, -50.00, time.Now(), nil, "Transaction 1", nil,
-			`["Food and Drink"]`, nil, nil, false, nil,
-			time.Now(), time.Now(), []byte(`["Food"]`), []byte(`[{"tag":"Food","source":"user"}]`),
-			`["Custom Category"]`, "user", overrideDate, `["Food and Drink"]`,
+			txID, "user-123", "account-1", "item-1", "plaid", &extID,
+			nil, -50.00, now, nil, "Transaction 1", nil,
+			&categoryJSON, nil, nil, false, nil,
+			now, now, []byte(`["Food"]`), []byte(`[{"tag":"Food","source":"user"}]`),
+			&categoryOverride, "user", &overrideDate, &originalCategory,
 		)
 
 	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE id").
@@ -1000,11 +1070,11 @@ func TestTransactionRepository_GetByID_ReturnsCategoryOverrideFields(t *testing.
 // preserves original_category using COALESCE when it's NULL
 // TDD RED: This test will FAIL until UpdateCategory SQL includes COALESCE for original_category
 func TestTransactionRepository_UpdateCategory_PreservesOriginalCategory(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	txID := "tx-123"
@@ -1015,14 +1085,14 @@ func TestTransactionRepository_UpdateCategory_PreservesOriginalCategory(t *testi
 	// This ensures the first manual edit preserves the original Plaid category
 	mock.ExpectExec("UPDATE transactions SET category_override.*original_category = COALESCE\\(original_category, category\\)").
 		WithArgs(
-			sqlmock.AnyArg(), // category_override JSON
+			pgxmock.AnyArg(), // category_override JSON
 			domain.CategorySource("user"),
-			sqlmock.AnyArg(), // category_override_date
-			sqlmock.AnyArg(), // updated_at
+			pgxmock.AnyArg(), // category_override_date
+			pgxmock.AnyArg(), // updated_at
 			txID,
 			userID,
 		).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	err = repo.UpdateCategory(ctx, txID, userID, categoryOverride, domain.CategorySource("user"))
 	assert.NoError(t, err)
@@ -1034,17 +1104,17 @@ func TestTransactionRepository_UpdateCategory_PreservesOriginalCategory(t *testi
 // TestTransactionRepository_GetDistinctPlaidCategories_Success tests retrieving distinct Plaid categories
 // Returns primary category from personal_finance_category JSONB (Plaid v2 format)
 func TestTransactionRepository_GetDistinctPlaidCategories_Success(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
 
 	// Mock result rows - distinct primary categories from personal_finance_category JSONB
-	rows := sqlmock.NewRows([]string{"cat"}).
+	rows := pgxmock.NewRows([]string{"cat"}).
 		AddRow("FOOD_AND_DRINK").
 		AddRow("GENERAL_MERCHANDISE").
 		AddRow("TRAVEL")
@@ -1067,17 +1137,17 @@ func TestTransactionRepository_GetDistinctPlaidCategories_Success(t *testing.T) 
 
 // TestTransactionRepository_GetDistinctPlaidCategories_Empty tests when user has no categorized transactions
 func TestTransactionRepository_GetDistinctPlaidCategories_Empty(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-no-transactions"
 
 	// Mock empty result
-	rows := sqlmock.NewRows([]string{"cat"})
+	rows := pgxmock.NewRows([]string{"cat"})
 
 	mock.ExpectQuery("SELECT DISTINCT").
 		WithArgs(userID).
@@ -1097,11 +1167,11 @@ func TestTransactionRepository_GetDistinctPlaidCategories_Empty(t *testing.T) {
 
 // TestTransactionRepository_GetIncomeSumByCategory_Success tests successful sum calculation for matching category
 func TestTransactionRepository_GetIncomeSumByCategory_Success(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1111,7 +1181,7 @@ func TestTransactionRepository_GetIncomeSumByCategory_Success(t *testing.T) {
 	expectedSum := 5000.00
 
 	// Category is formatted as JSON array: ["Paycheck"]
-	rows := sqlmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
 	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount\), 0\)`).
 		WithArgs(userID, startDate, endDate, `["Paycheck"]`).
@@ -1127,11 +1197,11 @@ func TestTransactionRepository_GetIncomeSumByCategory_Success(t *testing.T) {
 
 // TestTransactionRepository_GetIncomeSumByCategory_NoMatches tests returning 0 when no transactions match
 func TestTransactionRepository_GetIncomeSumByCategory_NoMatches(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1140,7 +1210,7 @@ func TestTransactionRepository_GetIncomeSumByCategory_NoMatches(t *testing.T) {
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 
 	// COALESCE ensures 0 is returned for no matches
-	rows := sqlmock.NewRows([]string{"sum"}).AddRow(0.0)
+	rows := pgxmock.NewRows([]string{"sum"}).AddRow(0.0)
 
 	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount\), 0\)`).
 		WithArgs(userID, startDate, endDate, `["NonExistentCategory"]`).
@@ -1156,11 +1226,11 @@ func TestTransactionRepository_GetIncomeSumByCategory_NoMatches(t *testing.T) {
 
 // TestTransactionRepository_GetIncomeSumByCategory_DBError tests database error handling
 func TestTransactionRepository_GetIncomeSumByCategory_DBError(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1170,7 +1240,7 @@ func TestTransactionRepository_GetIncomeSumByCategory_DBError(t *testing.T) {
 
 	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount\), 0\)`).
 		WithArgs(userID, startDate, endDate, `["Paycheck"]`).
-		WillReturnError(sql.ErrConnDone)
+		WillReturnError(errors.New("connection done"))
 
 	sum, err := repo.GetIncomeSumByCategory(ctx, userID, category, startDate, endDate)
 	assert.Error(t, err)
@@ -1183,11 +1253,11 @@ func TestTransactionRepository_GetIncomeSumByCategory_DBError(t *testing.T) {
 
 // TestTransactionRepository_GetIncomeSumByTag_Success tests successful sum calculation for matching tag
 func TestTransactionRepository_GetIncomeSumByTag_Success(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1196,7 +1266,7 @@ func TestTransactionRepository_GetIncomeSumByTag_Success(t *testing.T) {
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 	expectedSum := 3000.00
 
-	rows := sqlmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
 	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount\), 0\)`).
 		WithArgs(userID, startDate, endDate, tag).
@@ -1212,11 +1282,11 @@ func TestTransactionRepository_GetIncomeSumByTag_Success(t *testing.T) {
 
 // TestTransactionRepository_GetIncomeSumByTag_NoMatches tests returning 0 when no transactions have the tag
 func TestTransactionRepository_GetIncomeSumByTag_NoMatches(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1224,7 +1294,7 @@ func TestTransactionRepository_GetIncomeSumByTag_NoMatches(t *testing.T) {
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 
-	rows := sqlmock.NewRows([]string{"sum"}).AddRow(0.0)
+	rows := pgxmock.NewRows([]string{"sum"}).AddRow(0.0)
 
 	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount\), 0\)`).
 		WithArgs(userID, startDate, endDate, tag).
@@ -1240,11 +1310,11 @@ func TestTransactionRepository_GetIncomeSumByTag_NoMatches(t *testing.T) {
 
 // TestTransactionRepository_GetIncomeSumByTag_DBError tests database error handling
 func TestTransactionRepository_GetIncomeSumByTag_DBError(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1254,7 +1324,7 @@ func TestTransactionRepository_GetIncomeSumByTag_DBError(t *testing.T) {
 
 	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount\), 0\)`).
 		WithArgs(userID, startDate, endDate, tag).
-		WillReturnError(sql.ErrConnDone)
+		WillReturnError(errors.New("connection done"))
 
 	sum, err := repo.GetIncomeSumByTag(ctx, userID, tag, startDate, endDate)
 	assert.Error(t, err)
@@ -1272,11 +1342,11 @@ func TestTransactionRepository_GetIncomeSumByTag_DBError(t *testing.T) {
 // TestTransactionRepository_GetSpentSumForBudgetCategory_CategoryOnly tests
 // category_only match logic - matches transactions by category containment
 func TestTransactionRepository_GetSpentSumForBudgetCategory_CategoryOnly(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1287,7 +1357,7 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_CategoryOnly(t *test
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 	expectedSum := 250.50
 
-	rows := sqlmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
 	// Match the category_only SQL query pattern
 	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
@@ -1305,11 +1375,11 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_CategoryOnly(t *test
 // TestTransactionRepository_GetSpentSumForBudgetCategory_TagOnly tests
 // tag_only match logic - matches transactions by tag existence
 func TestTransactionRepository_GetSpentSumForBudgetCategory_TagOnly(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1320,11 +1390,11 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_TagOnly(t *testing.T
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 	expectedSum := 175.25
 
-	rows := sqlmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
 	// Match the tag_only SQL query pattern with pq.Array
 	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, sqlmock.AnyArg()). // pq.Array produces custom type
+		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()). // pq.Array produces custom type
 		WillReturnRows(rows)
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, category, tags, matchLogic, startDate, endDate)
@@ -1338,11 +1408,11 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_TagOnly(t *testing.T
 // TestTransactionRepository_GetSpentSumForBudgetCategory_And tests
 // and match logic - requires BOTH category AND tag to match
 func TestTransactionRepository_GetSpentSumForBudgetCategory_And(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1353,11 +1423,11 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_And(t *testing.T) {
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 	expectedSum := 125.00
 
-	rows := sqlmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
 	// Match the and SQL query pattern with both category and tags
 	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, `["Food and Drink","Restaurants"]`, sqlmock.AnyArg()). // category JSON + pq.Array
+		WithArgs(userID, startDate, endDate, `["Food and Drink","Restaurants"]`, pgxmock.AnyArg()). // category JSON + pq.Array
 		WillReturnRows(rows)
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, category, tags, matchLogic, startDate, endDate)
@@ -1371,11 +1441,11 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_And(t *testing.T) {
 // TestTransactionRepository_GetSpentSumForBudgetCategory_Or tests
 // or match logic - matches if EITHER category OR tag matches
 func TestTransactionRepository_GetSpentSumForBudgetCategory_Or(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1386,11 +1456,11 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_Or(t *testing.T) {
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 	expectedSum := 89.97
 
-	rows := sqlmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
 	// Match the or SQL query pattern with both category and tags
 	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, `["Entertainment"]`, sqlmock.AnyArg()). // category JSON + pq.Array
+		WithArgs(userID, startDate, endDate, `["Entertainment"]`, pgxmock.AnyArg()). // category JSON + pq.Array
 		WillReturnRows(rows)
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, category, tags, matchLogic, startDate, endDate)
@@ -1404,11 +1474,11 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_Or(t *testing.T) {
 // TestTransactionRepository_GetSpentSumForBudgetCategory_EmptyMatchLogic tests
 // that empty match_logic defaults to category_only behavior
 func TestTransactionRepository_GetSpentSumForBudgetCategory_EmptyMatchLogic(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1419,7 +1489,7 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_EmptyMatchLogic(t *t
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 	expectedSum := 500.00
 
-	rows := sqlmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
 	// Should use category_only query pattern
 	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
@@ -1437,11 +1507,11 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_EmptyMatchLogic(t *t
 // TestTransactionRepository_GetSpentSumForBudgetCategory_NoMatches tests
 // that COALESCE returns 0 when no transactions match
 func TestTransactionRepository_GetSpentSumForBudgetCategory_NoMatches(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1452,7 +1522,7 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_NoMatches(t *testing
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 
 	// COALESCE ensures 0 is returned for no matches
-	rows := sqlmock.NewRows([]string{"sum"}).AddRow(0.0)
+	rows := pgxmock.NewRows([]string{"sum"}).AddRow(0.0)
 
 	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
 		WithArgs(userID, startDate, endDate, `["NonExistentCategory"]`).
@@ -1469,11 +1539,11 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_NoMatches(t *testing
 // TestTransactionRepository_GetSpentSumForBudgetCategory_DBError tests
 // database error handling
 func TestTransactionRepository_GetSpentSumForBudgetCategory_DBError(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1485,7 +1555,7 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_DBError(t *testing.T
 
 	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
 		WithArgs(userID, startDate, endDate, `["Food and Drink"]`).
-		WillReturnError(sql.ErrConnDone)
+		WillReturnError(errors.New("connection done"))
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, category, tags, matchLogic, startDate, endDate)
 	assert.Error(t, err)
@@ -1499,11 +1569,11 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_DBError(t *testing.T
 // TestTransactionRepository_GetSpentSumForBudgetCategory_HierarchicalCategory tests
 // that hierarchical categories (e.g., ["Food and Drink", "Restaurants"]) work correctly
 func TestTransactionRepository_GetSpentSumForBudgetCategory_HierarchicalCategory(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1515,7 +1585,7 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_HierarchicalCategory
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 	expectedSum := 350.00
 
-	rows := sqlmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
 	// Category should be marshaled as full JSON array
 	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
@@ -1537,11 +1607,11 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_HierarchicalCategory
 // TestTransactionRepository_GetMatchingTransactionStats_SingleCategory tests
 // preview with a single category using category_only match logic
 func TestTransactionRepository_GetMatchingTransactionStats_SingleCategory(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1553,7 +1623,7 @@ func TestTransactionRepository_GetMatchingTransactionStats_SingleCategory(t *tes
 	expectedCount := 5
 	expectedSum := 250.00
 
-	rows := sqlmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
+	rows := pgxmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
 
 	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
 		WithArgs(userID, startDate, endDate, `["Food and Drink","Restaurants"]`).
@@ -1571,11 +1641,11 @@ func TestTransactionRepository_GetMatchingTransactionStats_SingleCategory(t *tes
 // TestTransactionRepository_GetMatchingTransactionStats_MultipleCategories tests
 // preview with multiple categories (OR across categories)
 func TestTransactionRepository_GetMatchingTransactionStats_MultipleCategories(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1590,11 +1660,11 @@ func TestTransactionRepository_GetMatchingTransactionStats_MultipleCategories(t 
 	expectedCount := 12
 	expectedSum := 650.00
 
-	rows := sqlmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
+	rows := pgxmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
 
 	// Expect query with OR for multiple categories
 	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs(userID, startDate, endDate, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
 	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, categories, tags, matchLogic, startDate, endDate)
@@ -1609,11 +1679,11 @@ func TestTransactionRepository_GetMatchingTransactionStats_MultipleCategories(t 
 // TestTransactionRepository_GetMatchingTransactionStats_TagOnly tests
 // preview with tag_only match logic
 func TestTransactionRepository_GetMatchingTransactionStats_TagOnly(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1625,7 +1695,7 @@ func TestTransactionRepository_GetMatchingTransactionStats_TagOnly(t *testing.T)
 	expectedCount := 8
 	expectedSum := 400.00
 
-	rows := sqlmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
+	rows := pgxmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
 
 	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
 		WithArgs(userID, startDate, endDate, pq.Array(tags)).
@@ -1643,11 +1713,11 @@ func TestTransactionRepository_GetMatchingTransactionStats_TagOnly(t *testing.T)
 // TestTransactionRepository_GetMatchingTransactionStats_And tests
 // preview with AND match logic (both category and tags must match)
 func TestTransactionRepository_GetMatchingTransactionStats_And(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1659,7 +1729,7 @@ func TestTransactionRepository_GetMatchingTransactionStats_And(t *testing.T) {
 	expectedCount := 3
 	expectedSum := 150.00
 
-	rows := sqlmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
+	rows := pgxmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
 
 	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
 		WithArgs(userID, startDate, endDate, `["Food and Drink","Restaurants"]`, pq.Array(tags)).
@@ -1677,11 +1747,11 @@ func TestTransactionRepository_GetMatchingTransactionStats_And(t *testing.T) {
 // TestTransactionRepository_GetMatchingTransactionStats_Or tests
 // preview with OR match logic (either category or tags match)
 func TestTransactionRepository_GetMatchingTransactionStats_Or(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1693,7 +1763,7 @@ func TestTransactionRepository_GetMatchingTransactionStats_Or(t *testing.T) {
 	expectedCount := 10
 	expectedSum := 500.00
 
-	rows := sqlmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
+	rows := pgxmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
 
 	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
 		WithArgs(userID, startDate, endDate, `["Food and Drink","Restaurants"]`, pq.Array(tags)).
@@ -1711,11 +1781,11 @@ func TestTransactionRepository_GetMatchingTransactionStats_Or(t *testing.T) {
 // TestTransactionRepository_GetMatchingTransactionStats_NoMatches tests
 // that no matching transactions returns 0, 0
 func TestTransactionRepository_GetMatchingTransactionStats_NoMatches(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1725,7 +1795,7 @@ func TestTransactionRepository_GetMatchingTransactionStats_NoMatches(t *testing.
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 
-	rows := sqlmock.NewRows([]string{"count", "sum"}).AddRow(0, 0)
+	rows := pgxmock.NewRows([]string{"count", "sum"}).AddRow(0, 0)
 
 	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
 		WithArgs(userID, startDate, endDate, `["Nonexistent","Category"]`).
@@ -1743,11 +1813,11 @@ func TestTransactionRepository_GetMatchingTransactionStats_NoMatches(t *testing.
 // TestTransactionRepository_GetMatchingTransactionStats_DBError tests
 // database error handling
 func TestTransactionRepository_GetMatchingTransactionStats_DBError(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionRepository(mock)
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1759,7 +1829,7 @@ func TestTransactionRepository_GetMatchingTransactionStats_DBError(t *testing.T)
 
 	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
 		WithArgs(userID, startDate, endDate, `["Food and Drink"]`).
-		WillReturnError(sql.ErrConnDone)
+		WillReturnError(errors.New("connection done"))
 
 	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, categories, tags, matchLogic, startDate, endDate)
 	assert.Error(t, err)

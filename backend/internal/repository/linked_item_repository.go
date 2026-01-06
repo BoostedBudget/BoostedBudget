@@ -2,12 +2,12 @@ package repository
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -58,11 +58,11 @@ type LinkedItemRepository interface {
 
 // linkedItemRepository implements LinkedItemRepository using PostgreSQL
 type linkedItemRepository struct {
-	db *sql.DB
+	db DB
 }
 
 // NewLinkedItemRepository creates a new LinkedItemRepository instance
-func NewLinkedItemRepository(db *sql.DB) LinkedItemRepository {
+func NewLinkedItemRepository(db DB) LinkedItemRepository {
 	return &linkedItemRepository{db: db}
 }
 
@@ -84,7 +84,7 @@ func (r *linkedItemRepository) Create(ctx context.Context, item *domain.LinkedIt
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`
 
-	_, err := r.db.ExecContext(ctx, query,
+	_, err := r.db.Exec(ctx, query,
 		item.ID,
 		item.UserID,
 		item.ItemID,
@@ -121,7 +121,7 @@ func (r *linkedItemRepository) GetByID(ctx context.Context, id string) (*domain.
 	`
 
 	var item domain.LinkedItem
-	err := r.db.QueryRowContext(ctx, query, id).Scan(
+	err := r.db.QueryRow(ctx, query, id).Scan(
 		&item.ID,
 		&item.UserID,
 		&item.ItemID,
@@ -135,7 +135,7 @@ func (r *linkedItemRepository) GetByID(ctx context.Context, id string) (*domain.
 		&item.UpdatedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrLinkedItemNotFound
 	}
 	if err != nil {
@@ -157,7 +157,7 @@ func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) (
 		ORDER BY created_at DESC
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, userID)
+	rows, err := r.db.Query(ctx, query, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +209,7 @@ func (r *linkedItemRepository) GetByItemID(ctx context.Context, itemID string) (
 	`
 
 	var item domain.LinkedItem
-	err := r.db.QueryRowContext(ctx, query, itemID).Scan(
+	err := r.db.QueryRow(ctx, query, itemID).Scan(
 		&item.ID,
 		&item.UserID,
 		&item.ItemID,
@@ -223,7 +223,7 @@ func (r *linkedItemRepository) GetByItemID(ctx context.Context, itemID string) (
 		&item.UpdatedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrLinkedItemNotFound
 	}
 	if err != nil {
@@ -245,18 +245,13 @@ func (r *linkedItemRepository) UpdateCursor(ctx context.Context, id, cursor stri
 		WHERE id = $4
 	`
 
-	result, err := r.db.ExecContext(ctx, query, cursor, now, now, id)
+	ct, err := r.db.Exec(ctx, query, cursor, now, now, id)
 	if err != nil {
 		return err
 	}
 
 	// Check if any rows were affected
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return ErrLinkedItemNotFound
 	}
 
@@ -286,7 +281,7 @@ func (r *linkedItemRepository) Update(ctx context.Context, item *domain.LinkedIt
 		WHERE id = $1
 	`
 
-	result, err := r.db.ExecContext(ctx, query,
+	ct, err := r.db.Exec(ctx, query,
 		item.ID,
 		item.InstitutionID,
 		item.InstitutionName,
@@ -306,12 +301,7 @@ func (r *linkedItemRepository) Update(ctx context.Context, item *domain.LinkedIt
 	}
 
 	// Check if any rows were affected
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return ErrLinkedItemNotFound
 	}
 
@@ -325,18 +315,13 @@ func (r *linkedItemRepository) Delete(ctx context.Context, id string) error {
 		WHERE id = $1
 	`
 
-	result, err := r.db.ExecContext(ctx, query, id)
+	ct, err := r.db.Exec(ctx, query, id)
 	if err != nil {
 		return err
 	}
 
 	// Check if any rows were affected
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return ErrLinkedItemNotFound
 	}
 
@@ -361,7 +346,7 @@ func (r *linkedItemRepository) GetByIDAndUser(ctx context.Context, id, userID st
 	`
 
 	var item domain.LinkedItem
-	err := r.db.QueryRowContext(ctx, query, id, userID).Scan(
+	err := r.db.QueryRow(ctx, query, id, userID).Scan(
 		&item.ID,
 		&item.UserID,
 		&item.ItemID,
@@ -375,7 +360,7 @@ func (r *linkedItemRepository) GetByIDAndUser(ctx context.Context, id, userID st
 		&item.UpdatedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrLinkedItemNotFound
 	}
 	if err != nil {
@@ -399,18 +384,13 @@ func (r *linkedItemRepository) DeleteByUser(ctx context.Context, id, userID stri
 		WHERE id = $1 AND user_id = $2
 	`
 
-	result, err := r.db.ExecContext(ctx, query, id, userID)
+	ct, err := r.db.Exec(ctx, query, id, userID)
 	if err != nil {
 		return err
 	}
 
 	// Check if any rows were affected (validates ownership and existence)
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		// Item not found OR user doesn't own it (both cases return same error for security)
 		return ErrLinkedItemNotFound
 	}

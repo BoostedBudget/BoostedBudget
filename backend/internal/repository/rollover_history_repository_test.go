@@ -2,12 +2,13 @@ package repository
 
 import (
 	"context"
-	"database/sql"
+	
 	"regexp"
 	"testing"
 	"time"
 
-	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/jackc/pgx/v5"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
@@ -15,12 +16,12 @@ import (
 )
 
 // setupRolloverHistoryMockDB creates a mock database for rollover history repository testing.
-func setupRolloverHistoryMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock, RolloverHistoryRepository) {
-	db, mock, err := sqlmock.New()
+func setupRolloverHistoryMockDB(t *testing.T) (pgxmock.PgxPoolIface, RolloverHistoryRepository) {
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 
-	repo := NewRolloverHistoryRepository(db)
-	return db, mock, repo
+	repo := NewRolloverHistoryRepository(mock)
+	return mock, repo
 }
 
 // createTestRolloverHistory creates a test rollover history.
@@ -43,8 +44,8 @@ func createTestRolloverHistory(userID, budgetID, sourceCategoryID string) *domai
 // =============================================================================
 
 func TestRolloverHistoryRepository_Create(t *testing.T) {
-	db, mock, repo := setupRolloverHistoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupRolloverHistoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	rollover := createTestRolloverHistory(
@@ -54,7 +55,7 @@ func TestRolloverHistoryRepository_Create(t *testing.T) {
 	)
 
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO rollover_history`)).WithArgs(
-		sqlmock.AnyArg(), // id
+		pgxmock.AnyArg(), // id
 		rollover.UserID,
 		rollover.BudgetID,
 		rollover.RuleID,
@@ -63,12 +64,12 @@ func TestRolloverHistoryRepository_Create(t *testing.T) {
 		rollover.TargetBudgetCategoryID,
 		rollover.Amount,
 		rollover.RolloverType,
-		sqlmock.AnyArg(), // budget_period_start
-		sqlmock.AnyArg(), // budget_period_end
+		pgxmock.AnyArg(), // budget_period_start
+		pgxmock.AnyArg(), // budget_period_end
 		rollover.Status,
 		rollover.AppliedAt,
-		sqlmock.AnyArg(), // created_at
-	).WillReturnResult(sqlmock.NewResult(1, 1))
+		pgxmock.AnyArg(), // created_at
+	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err := repo.Create(ctx, rollover)
 
@@ -78,8 +79,8 @@ func TestRolloverHistoryRepository_Create(t *testing.T) {
 }
 
 func TestRolloverHistoryRepository_Create_WithTargetCategory(t *testing.T) {
-	db, mock, repo := setupRolloverHistoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupRolloverHistoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	rollover := createTestRolloverHistory(
@@ -91,7 +92,7 @@ func TestRolloverHistoryRepository_Create_WithTargetCategory(t *testing.T) {
 	rollover.TargetBudgetCategoryID = &targetCategoryID
 
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO rollover_history`)).WithArgs(
-		sqlmock.AnyArg(),
+		pgxmock.AnyArg(),
 		rollover.UserID,
 		rollover.BudgetID,
 		rollover.RuleID,
@@ -100,12 +101,12 @@ func TestRolloverHistoryRepository_Create_WithTargetCategory(t *testing.T) {
 		rollover.TargetBudgetCategoryID,
 		rollover.Amount,
 		rollover.RolloverType,
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
 		rollover.Status,
 		rollover.AppliedAt,
-		sqlmock.AnyArg(),
-	).WillReturnResult(sqlmock.NewResult(1, 1))
+		pgxmock.AnyArg(),
+	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err := repo.Create(ctx, rollover)
 
@@ -114,8 +115,8 @@ func TestRolloverHistoryRepository_Create_WithTargetCategory(t *testing.T) {
 }
 
 func TestRolloverHistoryRepository_Create_WithRuleInfo(t *testing.T) {
-	db, mock, repo := setupRolloverHistoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupRolloverHistoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	rollover := createTestRolloverHistory(
@@ -129,7 +130,7 @@ func TestRolloverHistoryRepository_Create_WithRuleInfo(t *testing.T) {
 	rollover.RuleExecutionID = &execID
 
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO rollover_history`)).WithArgs(
-		sqlmock.AnyArg(),
+		pgxmock.AnyArg(),
 		rollover.UserID,
 		rollover.BudgetID,
 		rollover.RuleID,
@@ -138,12 +139,12 @@ func TestRolloverHistoryRepository_Create_WithRuleInfo(t *testing.T) {
 		rollover.TargetBudgetCategoryID,
 		rollover.Amount,
 		rollover.RolloverType,
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
 		rollover.Status,
 		rollover.AppliedAt,
-		sqlmock.AnyArg(),
-	).WillReturnResult(sqlmock.NewResult(1, 1))
+		pgxmock.AnyArg(),
+	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err := repo.Create(ctx, rollover)
 
@@ -156,8 +157,8 @@ func TestRolloverHistoryRepository_Create_WithRuleInfo(t *testing.T) {
 // =============================================================================
 
 func TestRolloverHistoryRepository_GetByID(t *testing.T) {
-	db, mock, repo := setupRolloverHistoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupRolloverHistoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	rolloverID := uuid.New().String()
@@ -175,7 +176,7 @@ func TestRolloverHistoryRepository_GetByID(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(rolloverID).
-		WillReturnRows(sqlmock.NewRows(columns).AddRow(
+		WillReturnRows(pgxmock.NewRows(columns).AddRow(
 			rolloverID,
 			userID,
 			budgetID,
@@ -207,15 +208,15 @@ func TestRolloverHistoryRepository_GetByID(t *testing.T) {
 }
 
 func TestRolloverHistoryRepository_GetByID_NotFound(t *testing.T) {
-	db, mock, repo := setupRolloverHistoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupRolloverHistoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	rolloverID := uuid.New().String()
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(rolloverID).
-		WillReturnError(sql.ErrNoRows)
+		WillReturnError(pgx.ErrNoRows)
 
 	rollover, err := repo.GetByID(ctx, rolloverID)
 
@@ -230,12 +231,13 @@ func TestRolloverHistoryRepository_GetByID_NotFound(t *testing.T) {
 // =============================================================================
 
 func TestRolloverHistoryRepository_GetByUserID(t *testing.T) {
-	db, mock, repo := setupRolloverHistoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupRolloverHistoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
 	now := time.Now()
+	pastMonth := now.AddDate(0, -1, 0)
 
 	columns := []string{
 		"id", "user_id", "budget_id", "rule_id", "rule_execution_id",
@@ -246,7 +248,7 @@ func TestRolloverHistoryRepository_GetByUserID(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(userID, 10, 0).
-		WillReturnRows(sqlmock.NewRows(columns).
+		WillReturnRows(pgxmock.NewRows(columns).
 			AddRow(
 				uuid.New().String(),
 				userID,
@@ -257,10 +259,10 @@ func TestRolloverHistoryRepository_GetByUserID(t *testing.T) {
 				nil,
 				100.00,
 				domain.RolloverTypeFull,
-				now.AddDate(0, -1, 0),
+				pastMonth,
 				now,
 				domain.RolloverStatusApplied,
-				now,
+				&now, // Use pointer for nullable applied_at
 				now,
 			).
 			AddRow(
@@ -274,10 +276,10 @@ func TestRolloverHistoryRepository_GetByUserID(t *testing.T) {
 				50.00,
 				domain.RolloverTypeCapped,
 				now.AddDate(0, -2, 0),
-				now.AddDate(0, -1, 0),
+				pastMonth,
 				domain.RolloverStatusPending,
-				nil,
-				now.AddDate(0, -1, 0),
+				nil, // nil for pending status
+				pastMonth,
 			))
 
 	rollovers, err := repo.GetByUserID(ctx, userID, 10, 0)
@@ -288,8 +290,8 @@ func TestRolloverHistoryRepository_GetByUserID(t *testing.T) {
 }
 
 func TestRolloverHistoryRepository_GetByUserID_Empty(t *testing.T) {
-	db, mock, repo := setupRolloverHistoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupRolloverHistoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -303,7 +305,7 @@ func TestRolloverHistoryRepository_GetByUserID_Empty(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(userID, 10, 0).
-		WillReturnRows(sqlmock.NewRows(columns))
+		WillReturnRows(pgxmock.NewRows(columns))
 
 	rollovers, err := repo.GetByUserID(ctx, userID, 10, 0)
 
@@ -317,13 +319,14 @@ func TestRolloverHistoryRepository_GetByUserID_Empty(t *testing.T) {
 // =============================================================================
 
 func TestRolloverHistoryRepository_GetByBudgetID(t *testing.T) {
-	db, mock, repo := setupRolloverHistoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupRolloverHistoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	budgetID := uuid.New().String()
 	userID := uuid.New().String()
 	now := time.Now()
+	pastMonth := now.AddDate(0, -1, 0)
 
 	columns := []string{
 		"id", "user_id", "budget_id", "rule_id", "rule_execution_id",
@@ -334,7 +337,7 @@ func TestRolloverHistoryRepository_GetByBudgetID(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(budgetID, 10, 0).
-		WillReturnRows(sqlmock.NewRows(columns).
+		WillReturnRows(pgxmock.NewRows(columns).
 			AddRow(
 				uuid.New().String(),
 				userID,
@@ -345,10 +348,10 @@ func TestRolloverHistoryRepository_GetByBudgetID(t *testing.T) {
 				nil,
 				100.00,
 				domain.RolloverTypeFull,
-				now.AddDate(0, -1, 0),
+				pastMonth,
 				now,
 				domain.RolloverStatusApplied,
-				now,
+				&now, // Use pointer for nullable applied_at
 				now,
 			))
 
@@ -365,8 +368,8 @@ func TestRolloverHistoryRepository_GetByBudgetID(t *testing.T) {
 // =============================================================================
 
 func TestRolloverHistoryRepository_GetPendingByUserID(t *testing.T) {
-	db, mock, repo := setupRolloverHistoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupRolloverHistoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -381,7 +384,7 @@ func TestRolloverHistoryRepository_GetPendingByUserID(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(userID).
-		WillReturnRows(sqlmock.NewRows(columns).
+		WillReturnRows(pgxmock.NewRows(columns).
 			AddRow(
 				uuid.New().String(),
 				userID,
@@ -412,16 +415,16 @@ func TestRolloverHistoryRepository_GetPendingByUserID(t *testing.T) {
 // =============================================================================
 
 func TestRolloverHistoryRepository_UpdateStatus_Applied(t *testing.T) {
-	db, mock, repo := setupRolloverHistoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupRolloverHistoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	rolloverID := uuid.New().String()
 	now := time.Now()
 
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE rollover_history`)).
-		WithArgs(domain.RolloverStatusApplied, sqlmock.AnyArg(), rolloverID).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WithArgs(domain.RolloverStatusApplied, pgxmock.AnyArg(), rolloverID).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	err := repo.UpdateStatus(ctx, rolloverID, domain.RolloverStatusApplied, &now)
 
@@ -430,15 +433,16 @@ func TestRolloverHistoryRepository_UpdateStatus_Applied(t *testing.T) {
 }
 
 func TestRolloverHistoryRepository_UpdateStatus_Rejected(t *testing.T) {
-	db, mock, repo := setupRolloverHistoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupRolloverHistoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	rolloverID := uuid.New().String()
 
+	// Use AnyArg for the nullable applied_at since pgxmock v4 is stricter about nil types
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE rollover_history`)).
-		WithArgs(domain.RolloverStatusRejected, nil, rolloverID).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WithArgs(domain.RolloverStatusRejected, pgxmock.AnyArg(), rolloverID).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	err := repo.UpdateStatus(ctx, rolloverID, domain.RolloverStatusRejected, nil)
 
@@ -447,15 +451,16 @@ func TestRolloverHistoryRepository_UpdateStatus_Rejected(t *testing.T) {
 }
 
 func TestRolloverHistoryRepository_UpdateStatus_NotFound(t *testing.T) {
-	db, mock, repo := setupRolloverHistoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupRolloverHistoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	rolloverID := uuid.New().String()
 
+	// Use AnyArg for the nullable applied_at since pgxmock v4 is stricter about nil types
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE rollover_history`)).
-		WithArgs(domain.RolloverStatusApplied, nil, rolloverID).
-		WillReturnResult(sqlmock.NewResult(0, 0))
+		WithArgs(domain.RolloverStatusApplied, pgxmock.AnyArg(), rolloverID).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	err := repo.UpdateStatus(ctx, rolloverID, domain.RolloverStatusApplied, nil)
 
@@ -469,8 +474,8 @@ func TestRolloverHistoryRepository_UpdateStatus_NotFound(t *testing.T) {
 // =============================================================================
 
 func TestRolloverHistoryRepository_GetByBudgetAndPeriod(t *testing.T) {
-	db, mock, repo := setupRolloverHistoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupRolloverHistoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	budgetID := uuid.New().String()
@@ -487,8 +492,8 @@ func TestRolloverHistoryRepository_GetByBudgetAndPeriod(t *testing.T) {
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
-		WithArgs(budgetID, sqlmock.AnyArg(), sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows(columns).
+		WithArgs(budgetID, pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnRows(pgxmock.NewRows(columns).
 			AddRow(
 				uuid.New().String(),
 				userID,
@@ -502,7 +507,7 @@ func TestRolloverHistoryRepository_GetByBudgetAndPeriod(t *testing.T) {
 				periodStart,
 				periodEnd,
 				domain.RolloverStatusApplied,
-				now,
+				&now, // Use pointer for nullable applied_at
 				now,
 			))
 
@@ -519,14 +524,15 @@ func TestRolloverHistoryRepository_GetByBudgetAndPeriod(t *testing.T) {
 // =============================================================================
 
 func TestRolloverHistoryRepository_GetBySourceCategory(t *testing.T) {
-	db, mock, repo := setupRolloverHistoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupRolloverHistoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	sourceCategoryID := uuid.New().String()
 	userID := uuid.New().String()
 	budgetID := uuid.New().String()
 	now := time.Now()
+	pastMonth := now.AddDate(0, -1, 0)
 
 	columns := []string{
 		"id", "user_id", "budget_id", "rule_id", "rule_execution_id",
@@ -537,7 +543,7 @@ func TestRolloverHistoryRepository_GetBySourceCategory(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(sourceCategoryID, 10, 0).
-		WillReturnRows(sqlmock.NewRows(columns).
+		WillReturnRows(pgxmock.NewRows(columns).
 			AddRow(
 				uuid.New().String(),
 				userID,
@@ -548,10 +554,10 @@ func TestRolloverHistoryRepository_GetBySourceCategory(t *testing.T) {
 				nil,
 				100.00,
 				domain.RolloverTypeFull,
-				now.AddDate(0, -1, 0),
+				pastMonth,
 				now,
 				domain.RolloverStatusApplied,
-				now,
+				&now, // Use pointer for nullable applied_at
 				now,
 			))
 
@@ -568,15 +574,15 @@ func TestRolloverHistoryRepository_GetBySourceCategory(t *testing.T) {
 // =============================================================================
 
 func TestRolloverHistoryRepository_CountPendingByUserID(t *testing.T) {
-	db, mock, repo := setupRolloverHistoryMockDB(t)
-	defer db.Close()
+	mock, repo := setupRolloverHistoryMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT`)).
 		WithArgs(userID).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(3))
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(3))
 
 	count, err := repo.CountPendingByUserID(ctx, userID)
 

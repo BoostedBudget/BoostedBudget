@@ -2,12 +2,13 @@ package repository
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -46,11 +47,11 @@ type CategorizationRuleRepository interface {
 
 // categorizationRuleRepository implements CategorizationRuleRepository using PostgreSQL.
 type categorizationRuleRepository struct {
-	db *sql.DB
+	db DB
 }
 
 // NewCategorizationRuleRepository creates a new CategorizationRuleRepository instance.
-func NewCategorizationRuleRepository(db *sql.DB) CategorizationRuleRepository {
+func NewCategorizationRuleRepository(db DB) CategorizationRuleRepository {
 	return &categorizationRuleRepository{db: db}
 }
 
@@ -91,7 +92,7 @@ func (r *categorizationRuleRepository) Create(ctx context.Context, rule *domain.
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 	`
 
-	_, err = r.db.ExecContext(ctx, query,
+	_, err = r.db.Exec(ctx, query,
 		rule.ID,
 		rule.UserID,
 		rule.Name,
@@ -137,7 +138,7 @@ func (r *categorizationRuleRepository) GetByID(ctx context.Context, id string) (
 	rule := &domain.CategorizationRule{}
 	var conditionsJSON, categoryJSON, tagsJSON []byte
 
-	err := r.db.QueryRowContext(ctx, query, id).Scan(
+	err := r.db.QueryRow(ctx, query, id).Scan(
 		&rule.ID,
 		&rule.UserID,
 		&rule.Name,
@@ -158,7 +159,7 @@ func (r *categorizationRuleRepository) GetByID(ctx context.Context, id string) (
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domain.ErrRuleNotFound
 		}
 		return nil, err
@@ -222,7 +223,7 @@ func (r *categorizationRuleRepository) GetByName(ctx context.Context, userID, na
 	rule := &domain.CategorizationRule{}
 	var conditionsJSON, categoryJSON, tagsJSON []byte
 
-	err := r.db.QueryRowContext(ctx, query, userID, name).Scan(
+	err := r.db.QueryRow(ctx, query, userID, name).Scan(
 		&rule.ID,
 		&rule.UserID,
 		&rule.Name,
@@ -243,7 +244,7 @@ func (r *categorizationRuleRepository) GetByName(ctx context.Context, userID, na
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domain.ErrRuleNotFound
 		}
 		return nil, err
@@ -291,7 +292,7 @@ func (r *categorizationRuleRepository) Update(ctx context.Context, rule *domain.
 		WHERE id = $11
 	`
 
-	result, err := r.db.ExecContext(ctx, query,
+	ct, err := r.db.Exec(ctx, query,
 		rule.Name,
 		rule.Description,
 		rule.Enabled,
@@ -313,12 +314,7 @@ func (r *categorizationRuleRepository) Update(ctx context.Context, rule *domain.
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrRuleNotFound
 	}
 
@@ -329,17 +325,12 @@ func (r *categorizationRuleRepository) Update(ctx context.Context, rule *domain.
 func (r *categorizationRuleRepository) Delete(ctx context.Context, id string) error {
 	query := `DELETE FROM categorization_rules WHERE id = $1`
 
-	result, err := r.db.ExecContext(ctx, query, id)
+	ct, err := r.db.Exec(ctx, query, id)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrRuleNotFound
 	}
 
@@ -351,7 +342,7 @@ func (r *categorizationRuleRepository) CountByUserID(ctx context.Context, userID
 	query := `SELECT COUNT(*) FROM categorization_rules WHERE user_id = $1`
 
 	var count int
-	err := r.db.QueryRowContext(ctx, query, userID).Scan(&count)
+	err := r.db.QueryRow(ctx, query, userID).Scan(&count)
 	if err != nil {
 		return 0, err
 	}
@@ -367,17 +358,12 @@ func (r *categorizationRuleRepository) IncrementMatchCount(ctx context.Context, 
 		WHERE id = $2
 	`
 
-	result, err := r.db.ExecContext(ctx, query, time.Now(), ruleID)
+	ct, err := r.db.Exec(ctx, query, time.Now(), ruleID)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrRuleNotFound
 	}
 
@@ -392,17 +378,12 @@ func (r *categorizationRuleRepository) IncrementOverrideCount(ctx context.Contex
 		WHERE id = $1
 	`
 
-	result, err := r.db.ExecContext(ctx, query, ruleID)
+	ct, err := r.db.Exec(ctx, query, ruleID)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrRuleNotFound
 	}
 
@@ -411,7 +392,7 @@ func (r *categorizationRuleRepository) IncrementOverrideCount(ctx context.Contex
 
 // queryRules is a helper to query and scan multiple rules.
 func (r *categorizationRuleRepository) queryRules(ctx context.Context, query string, args ...interface{}) ([]*domain.CategorizationRule, error) {
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

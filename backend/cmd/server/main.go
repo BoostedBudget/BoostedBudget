@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"log/slog"
@@ -11,14 +10,19 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2/adapters/humaecho"
-	_ "github.com/lib/pq"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
 	echomiddleware "github.com/labstack/echo/v4/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
+	"github.com/maxnussbaum/BoostedBudget/internal/database"
 	humaconfig "github.com/maxnussbaum/BoostedBudget/internal/huma"
 	humamiddleware "github.com/maxnussbaum/BoostedBudget/internal/huma/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/operations"
 	"github.com/maxnussbaum/BoostedBudget/internal/middleware"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue/jobs"
+	riverqueue "github.com/maxnussbaum/BoostedBudget/internal/queue/river"
+	"github.com/riverqueue/river"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/maxnussbaum/BoostedBudget/internal/workers"
@@ -31,20 +35,16 @@ func main() {
 		log.Fatal("Failed to load config:", err)
 	}
 
-	// Initialize database connection (optional for local dev)
-	var db *sql.DB
+	// Initialize database connection pool (optional for local dev)
+	var db *pgxpool.Pool
 	if cfg.DatabaseURL != "" {
-		db, err = sql.Open("postgres", cfg.DatabaseURL)
+		db, err = database.NewPoolFromURL(context.Background(), cfg.DatabaseURL)
 		if err != nil {
 			log.Fatal("Failed to connect to database:", err)
 		}
 		defer db.Close()
 
-		// Ping database to verify connection
-		if err := db.Ping(); err != nil {
-			log.Fatal("Failed to ping database:", err)
-		}
-		log.Println("✅ Database connection established")
+		log.Println("✅ Database connection pool established (pgx v5)")
 	} else {
 		log.Println("⚠️  Running without database (set DATABASE_URL to enable)")
 	}
@@ -101,11 +101,14 @@ func main() {
 	var accountService services.AccountService
 
 	// Authenticated routes (requires database and Clerk)
-	// Declare deletion worker at package scope for graceful shutdown
-	var deletionWorker *workers.DeletionWorker
 
-	// Declare webhook processor at package scope for graceful shutdown
-	var webhookProcessor *workers.WebhookProcessor
+	// Issue #573/629: River queue for async job processing
+	var jobQueue queue.JobQueue
+	var riverRunner queue.JobRunner
+
+	// Issue #629: Declare deletion workers for River registration
+	var accountDeletionWorker *jobs.AccountDeletionWorker
+	var scheduledDeletionCheckWorker *jobs.ScheduledDeletionCheckWorker
 
 	// Issue #37: Declare rule scheduler manager at package scope for graceful shutdown
 	var ruleSchedulerManager *workers.RuleSchedulerManager
@@ -244,14 +247,22 @@ func main() {
 			operations.RegisterDeletionRoutes(humaAPI, humaDeletionHandler)
 			log.Println("✅ Huma deletion routes registered")
 
-			// Create deletion worker with configured interval
-			workerInterval, err := time.ParseDuration(cfg.DeletionWorkerInterval)
-			if err != nil {
-				log.Printf("⚠️  Invalid deletion worker interval '%s', using default 1h", cfg.DeletionWorkerInterval)
-				workerInterval = 1 * time.Hour
-			}
-			deletionWorker = workers.NewDeletionWorker(deletionService, profileRepo, workerInterval)
-			log.Printf("✅ Deletion worker initialized (interval: %s)", workerInterval)
+			// Issue #629: Create River-based deletion workers
+			// These will be registered with River after jobQueue is created
+			accountDeletionWorker = jobs.NewAccountDeletionWorker(jobs.AccountDeletionWorkerDeps{
+				DeletionService: deletionService,
+				Logger:          slog.New(slog.NewJSONHandler(os.Stdout, nil)),
+			})
+			log.Println("✅ Account deletion worker created (River)")
+
+			// Issue #629: Create scheduled deletion check worker
+			// Note: JobQueue is nil initially - set later via SetJobQueue() to handle circular dependency
+			scheduledDeletionCheckWorker = jobs.NewScheduledDeletionCheckWorker(jobs.ScheduledDeletionCheckWorkerDeps{
+				ProfileRepo: profileRepo,
+				JobQueue:    nil, // Set later after River client is created
+				Logger:      slog.New(slog.NewJSONHandler(os.Stdout, nil)),
+			})
+			log.Println("✅ Scheduled deletion check worker created (River)")
 		} else {
 			log.Println("⚠️  Deletion services disabled (requires DELETION_TOKEN_SECRET)")
 		}
@@ -329,19 +340,77 @@ func main() {
 					emailService,
 				)
 
-				// Initialize Webhook Processor background worker
-				// Polls for unprocessed TRANSACTIONS and ITEM webhooks every 30 seconds
-				// Processes up to 10 webhooks per batch (per type)
-				webhookProcessor = workers.NewWebhookProcessor(
-					transactionSyncService,
-					itemErrorService,
-					webhookRepo,
-					30*time.Second, // Poll interval
-					10,             // Batch size
-				)
+				// Issue #573/629: Initialize River queue for async job processing
+				logger := slog.Default()
+				riverConfig := riverqueue.DefaultConfig()
+
+				// Issue #629: Configure dead letter handler for failed jobs
+				deadLetterHandler := riverqueue.NewDeadLetterHandler(riverqueue.DeadLetterHandlerDeps{
+					DB:     db,
+					Logger: logger,
+				})
+				riverConfig.ErrorHandler = deadLetterHandler.ErrorHandlerFunc()
+				log.Println("✅ Dead letter handler configured for failed jobs")
+
+				// Issue #629: Configure periodic job for scheduled deletion check (hourly)
+				if scheduledDeletionCheckWorker != nil {
+					riverConfig.PeriodicJobs = []*river.PeriodicJob{
+						river.NewPeriodicJob(
+							river.PeriodicInterval(1*time.Hour),
+							func() (river.JobArgs, *river.InsertOpts) {
+								return jobs.ScheduledDeletionCheckArgs{
+									TriggerSource: "periodic",
+								}, &river.InsertOpts{
+									Queue: "low", // Deletions run on low priority queue
+								}
+							},
+							&river.PeriodicJobOpts{RunOnStart: true}, // Run immediately on startup to catch any pending deletions
+						),
+					}
+					log.Println("✅ Scheduled deletion check periodic job configured (hourly)")
+				}
+
+				// Create WebhookProcessingWorker with all dependencies
+				webhookProcessingWorker := jobs.NewWebhookProcessingWorker(jobs.WebhookProcessingWorkerDeps{
+					WebhookRepo:        webhookRepo,
+					TransactionSyncSvc: transactionSyncService,
+					ItemErrorSvc:       itemErrorService,
+					Logger:             logger,
+				})
+
+				// Create River workers and register all workers
+				riverWorkers := river.NewWorkers()
+				river.AddWorker(riverWorkers, webhookProcessingWorker)
+
+				// Issue #629: Register deletion workers if available
+				if accountDeletionWorker != nil {
+					river.AddWorker(riverWorkers, accountDeletionWorker)
+					log.Println("✅ Account deletion worker registered with River")
+				}
+				if scheduledDeletionCheckWorker != nil {
+					river.AddWorker(riverWorkers, scheduledDeletionCheckWorker)
+					log.Println("✅ Scheduled deletion check worker registered with River")
+				}
+
+				// Create River client
+				riverClient, err := riverqueue.NewClient(db, riverWorkers, riverConfig)
+				if err != nil {
+					log.Printf("⚠️  Failed to initialize River queue: %v", err)
+				} else {
+					jobQueue = riverClient
+					riverRunner = riverClient
+					log.Println("✅ River queue initialized")
+
+					// Issue #629: Wire up jobQueue to scheduledDeletionCheckWorker
+					// This resolves the circular dependency: worker needs queue but must be registered before client creation
+					if scheduledDeletionCheckWorker != nil {
+						scheduledDeletionCheckWorker.SetJobQueue(jobQueue)
+						log.Println("✅ Scheduled deletion check worker connected to job queue")
+					}
+				}
+
 				log.Println("✅ Transaction sync service initialized")
 				log.Println("✅ Item error service initialized")
-				log.Println("✅ Webhook processor initialized (interval: 30s, batch: 10, types: TRANSACTIONS+ITEM)")
 			}
 		}
 
@@ -543,6 +612,7 @@ func main() {
 	// Plaid servers need to POST to this endpoint without authentication
 	// Issue #202: Enhanced with JWT signature verification and database storage
 	// Issue #256: Webhook repository created in auth block above for webhook processor
+	// Issue #573: Now enqueues River jobs for async processing
 	if db != nil && plaidService != nil {
 		// Webhook repository for audit trail
 		webhookRepoForHandler := repository.NewWebhookRepository(db)
@@ -551,16 +621,29 @@ func main() {
 		webhookService := services.NewWebhookService(plaidService.GetClient())
 
 		// Register Huma plaid webhook route (Issue #559: Huma migration)
-		humaPlaidWebhookHandler := operations.NewPlaidWebhookHandler(webhookService, webhookRepoForHandler)
+		// Issue #573: Pass jobQueue for async webhook processing
+		humaPlaidWebhookHandler := operations.NewPlaidWebhookHandler(operations.PlaidWebhookHandlerDeps{
+			WebhookService: webhookService,
+			WebhookRepo:    webhookRepoForHandler,
+			JobQueue:       jobQueue,
+			Logger:         slog.Default(),
+		})
 		operations.RegisterPlaidWebhookRoutes(humaAPI, humaPlaidWebhookHandler)
 
 		log.Println("✅ Huma Plaid webhook route registered at POST /webhooks/plaid")
 		log.Println("✅ Webhook signature verification enabled (ES256 JWT)")
 		log.Println("✅ Webhook audit trail enabled (database storage)")
+		if jobQueue != nil {
+			log.Println("✅ Webhook async processing enabled (River queue)")
+		}
 	} else if db != nil {
 		// Fallback: Basic webhook handler without signature verification
 		// Used when Plaid credentials are not configured (e.g., local development)
-		humaPlaidWebhookHandler := operations.NewPlaidWebhookHandler(nil, repository.NewWebhookRepository(db))
+		humaPlaidWebhookHandler := operations.NewPlaidWebhookHandler(operations.PlaidWebhookHandlerDeps{
+			WebhookRepo: repository.NewWebhookRepository(db),
+			JobQueue:    jobQueue,
+			Logger:      slog.Default(),
+		})
 		operations.RegisterPlaidWebhookRoutes(humaAPI, humaPlaidWebhookHandler)
 		log.Println("✅ Huma Plaid webhook route registered at POST /webhooks/plaid (verification disabled)")
 		log.Println("⚠️  Webhook signature verification disabled (Plaid credentials not configured)")
@@ -572,22 +655,17 @@ func main() {
 	var workerCtx context.Context
 	var workerCancel context.CancelFunc
 
-	// Start deletion worker
-	if deletionWorker != nil {
+	// Issue #573/629: Start River queue runner (handles webhook processing + account deletion)
+	if riverRunner != nil {
 		if workerCtx == nil {
 			workerCtx, workerCancel = context.WithCancel(context.Background())
 		}
-		go deletionWorker.Start(workerCtx)
-		log.Println("✅ Deletion worker started")
-	}
-
-	// Start webhook processor
-	if webhookProcessor != nil {
-		if workerCtx == nil {
-			workerCtx, workerCancel = context.WithCancel(context.Background())
-		}
-		go webhookProcessor.Start(workerCtx)
-		log.Println("✅ Webhook processor started")
+		go func() {
+			if err := riverRunner.Start(workerCtx); err != nil {
+				log.Printf("⚠️  River queue runner error: %v", err)
+			}
+		}()
+		log.Println("✅ River queue runner started")
 	}
 
 	// Issue #37: Start rule scheduler manager
@@ -631,6 +709,21 @@ func main() {
 		}
 		stopCancel()
 		log.Println("Rule scheduler manager stopped")
+	}
+
+	// Issue #573: Stop River queue runner gracefully
+	if riverRunner != nil {
+		log.Println("Stopping River queue runner...")
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := riverRunner.Stop(stopCtx); err != nil {
+			log.Printf("⚠️  Error stopping River queue: %v", err)
+			// Try force stop if graceful stop fails
+			if err := riverRunner.StopAndCancel(stopCtx); err != nil {
+				log.Printf("⚠️  Error force stopping River queue: %v", err)
+			}
+		}
+		stopCancel()
+		log.Println("River queue runner stopped")
 	}
 
 	// Stop background workers (if running)

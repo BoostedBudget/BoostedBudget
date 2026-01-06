@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"time"
 
@@ -52,11 +51,11 @@ type SyncAuditRepository interface {
 
 // syncAuditRepository implements SyncAuditRepository using PostgreSQL
 type syncAuditRepository struct {
-	db *sql.DB
+	db DB
 }
 
 // NewSyncAuditRepository creates a new SyncAuditRepository instance
-func NewSyncAuditRepository(db *sql.DB) SyncAuditRepository {
+func NewSyncAuditRepository(db DB) SyncAuditRepository {
 	return &syncAuditRepository{db: db}
 }
 
@@ -69,7 +68,7 @@ func (r *syncAuditRepository) CountSyncsThisMonth(ctx context.Context, userID, m
 	`
 
 	var count int
-	err := r.db.QueryRowContext(ctx, query, userID, month).Scan(&count)
+	err := r.db.QueryRow(ctx, query, userID, month).Scan(&count)
 	if err != nil {
 		return 0, err
 	}
@@ -87,7 +86,7 @@ func (r *syncAuditRepository) HasSyncedThisMonth(ctx context.Context, userID, pl
 	`
 
 	var exists bool
-	err := r.db.QueryRowContext(ctx, query, userID, plaidAccountID, month).Scan(&exists)
+	err := r.db.QueryRow(ctx, query, userID, plaidAccountID, month).Scan(&exists)
 	if err != nil {
 		return false, err
 	}
@@ -122,7 +121,7 @@ func (r *syncAuditRepository) RecordSync(ctx context.Context, audit *domain.Sync
 			updated_at = EXCLUDED.updated_at
 	`
 
-	_, err := r.db.ExecContext(ctx, query,
+	_, err := r.db.Exec(ctx, query,
 		audit.ID,
 		audit.UserID,
 		audit.AccountID,
@@ -160,7 +159,7 @@ func (r *syncAuditRepository) GetSyncStats(ctx context.Context, userID, month st
 	}
 
 	var totalTransactions int64
-	err := r.db.QueryRowContext(ctx, query, userID, month).Scan(
+	err := r.db.QueryRow(ctx, query, userID, month).Scan(
 		&stats.AccountsSynced,
 		&totalTransactions,
 	)

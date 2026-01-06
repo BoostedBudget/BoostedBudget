@@ -2,11 +2,12 @@ package repository
 
 import (
 	"context"
-	"database/sql"
+	"errors"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -42,11 +43,11 @@ type CustomCategoryRepository interface {
 
 // customCategoryRepository implements CustomCategoryRepository using PostgreSQL
 type customCategoryRepository struct {
-	db *sql.DB
+	db DB
 }
 
 // NewCustomCategoryRepository creates a new CustomCategoryRepository instance
-func NewCustomCategoryRepository(db *sql.DB) CustomCategoryRepository {
+func NewCustomCategoryRepository(db DB) CustomCategoryRepository {
 	return &customCategoryRepository{db: db}
 }
 
@@ -67,7 +68,7 @@ func (r *customCategoryRepository) Create(ctx context.Context, category *domain.
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`
 
-	_, err := r.db.ExecContext(ctx, query,
+	_, err := r.db.Exec(ctx, query,
 		category.ID,
 		category.UserID,
 		category.Name,
@@ -100,7 +101,7 @@ func (r *customCategoryRepository) GetByID(ctx context.Context, id string) (*dom
 	`
 
 	category := &domain.CustomCategory{}
-	err := r.db.QueryRowContext(ctx, query, id).Scan(
+	err := r.db.QueryRow(ctx, query, id).Scan(
 		&category.ID,
 		&category.UserID,
 		&category.Name,
@@ -113,7 +114,7 @@ func (r *customCategoryRepository) GetByID(ctx context.Context, id string) (*dom
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domain.ErrCategoryNotFound
 		}
 		return nil, err
@@ -131,7 +132,7 @@ func (r *customCategoryRepository) GetByUserID(ctx context.Context, userID strin
 		ORDER BY name ASC
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, userID)
+	rows, err := r.db.Query(ctx, query, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +174,7 @@ func (r *customCategoryRepository) GetByName(ctx context.Context, userID, name s
 	`
 
 	category := &domain.CustomCategory{}
-	err := r.db.QueryRowContext(ctx, query, userID, name).Scan(
+	err := r.db.QueryRow(ctx, query, userID, name).Scan(
 		&category.ID,
 		&category.UserID,
 		&category.Name,
@@ -186,7 +187,7 @@ func (r *customCategoryRepository) GetByName(ctx context.Context, userID, name s
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domain.ErrCategoryNotFound
 		}
 		return nil, err
@@ -205,7 +206,7 @@ func (r *customCategoryRepository) Update(ctx context.Context, category *domain.
 		WHERE id = $7
 	`
 
-	result, err := r.db.ExecContext(ctx, query,
+	ct, err := r.db.Exec(ctx, query,
 		category.Name,
 		category.ParentCategory,
 		category.Icon,
@@ -223,12 +224,7 @@ func (r *customCategoryRepository) Update(ctx context.Context, category *domain.
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrCategoryNotFound
 	}
 
@@ -239,17 +235,12 @@ func (r *customCategoryRepository) Update(ctx context.Context, category *domain.
 func (r *customCategoryRepository) Delete(ctx context.Context, id string) error {
 	query := `DELETE FROM custom_categories WHERE id = $1`
 
-	result, err := r.db.ExecContext(ctx, query, id)
+	ct, err := r.db.Exec(ctx, query, id)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrCategoryNotFound
 	}
 
@@ -261,7 +252,7 @@ func (r *customCategoryRepository) CountByUserID(ctx context.Context, userID str
 	query := `SELECT COUNT(*) FROM custom_categories WHERE user_id = $1`
 
 	var count int
-	err := r.db.QueryRowContext(ctx, query, userID).Scan(&count)
+	err := r.db.QueryRow(ctx, query, userID).Scan(&count)
 	if err != nil {
 		return 0, err
 	}
@@ -277,17 +268,12 @@ func (r *customCategoryRepository) IncrementUsageCount(ctx context.Context, user
 		WHERE user_id = $2 AND name = $3
 	`
 
-	result, err := r.db.ExecContext(ctx, query, time.Now(), userID, categoryName)
+	ct, err := r.db.Exec(ctx, query, time.Now(), userID, categoryName)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrCategoryNotFound
 	}
 
@@ -302,17 +288,12 @@ func (r *customCategoryRepository) DecrementUsageCount(ctx context.Context, user
 		WHERE user_id = $2 AND name = $3
 	`
 
-	result, err := r.db.ExecContext(ctx, query, time.Now(), userID, categoryName)
+	ct, err := r.db.Exec(ctx, query, time.Now(), userID, categoryName)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrCategoryNotFound
 	}
 

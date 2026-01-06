@@ -2,12 +2,13 @@ package repository
 
 import (
 	"context"
-	"database/sql"
+	
 	"regexp"
 	"testing"
 	"time"
 
-	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/jackc/pgx/v5"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
@@ -15,18 +16,18 @@ import (
 )
 
 // setupUserTagMockDB creates a mock database and sqlmock instance for user tag repository testing
-func setupUserTagMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock, UserTagRepository) {
-	db, mock, err := sqlmock.New()
+func setupUserTagMockDB(t *testing.T) (pgxmock.PgxPoolIface, UserTagRepository) {
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 
-	repo := NewUserTagRepository(db)
-	return db, mock, repo
+	repo := NewUserTagRepository(mock)
+	return mock, repo
 }
 
 // TestUserTagRepository_Create tests successful creation of a user tag
 func TestUserTagRepository_Create(t *testing.T) {
-	db, mock, repo := setupUserTagMockDB(t)
-	defer db.Close()
+	mock, repo := setupUserTagMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	color := "#FF5733"
@@ -48,9 +49,9 @@ func TestUserTagRepository_Create(t *testing.T) {
 		tag.Name,
 		tag.Color,
 		tag.UsageCount,
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-	).WillReturnResult(sqlmock.NewResult(1, 1))
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err := repo.Create(ctx, tag)
 
@@ -60,8 +61,8 @@ func TestUserTagRepository_Create(t *testing.T) {
 
 // TestUserTagRepository_Create_DuplicateName tests creation failure for duplicate tag name
 func TestUserTagRepository_Create_DuplicateName(t *testing.T) {
-	db, mock, repo := setupUserTagMockDB(t)
-	defer db.Close()
+	mock, repo := setupUserTagMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 
@@ -74,16 +75,16 @@ func TestUserTagRepository_Create_DuplicateName(t *testing.T) {
 		INSERT INTO user_tags (id, user_id, name, color, usage_count, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`)).WithArgs(
-		sqlmock.AnyArg(),
+		pgxmock.AnyArg(),
 		tag.UserID,
 		tag.Name,
 		tag.Color,
 		tag.UsageCount,
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-	).WillReturnError(sql.ErrNoRows) // Simulating unique constraint error
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+	).WillReturnError(pgx.ErrNoRows) // Simulating unique constraint error
 
-	// Note: This won't trigger ErrTagAlreadyExists because sql.ErrNoRows doesn't contain "unique"
+	// Note: This won't trigger ErrTagAlreadyExists because pgx.ErrNoRows doesn't contain "unique"
 	// In real scenarios, the DB would return an error containing "unique_user_tag_name"
 	err := repo.Create(ctx, tag)
 
@@ -93,8 +94,8 @@ func TestUserTagRepository_Create_DuplicateName(t *testing.T) {
 
 // TestUserTagRepository_GetByID tests successful retrieval by ID
 func TestUserTagRepository_GetByID(t *testing.T) {
-	db, mock, repo := setupUserTagMockDB(t)
-	defer db.Close()
+	mock, repo := setupUserTagMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	tagID := uuid.New().String()
@@ -102,7 +103,7 @@ func TestUserTagRepository_GetByID(t *testing.T) {
 	color := "#00FF00"
 	now := time.Now()
 
-	rows := sqlmock.NewRows([]string{"id", "user_id", "name", "color", "usage_count", "created_at", "updated_at"}).
+	rows := pgxmock.NewRows([]string{"id", "user_id", "name", "color", "usage_count", "created_at", "updated_at"}).
 		AddRow(tagID, userID, "recurring", &color, 5, now, now)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
@@ -123,8 +124,8 @@ func TestUserTagRepository_GetByID(t *testing.T) {
 
 // TestUserTagRepository_GetByID_NotFound tests retrieval when tag doesn't exist
 func TestUserTagRepository_GetByID_NotFound(t *testing.T) {
-	db, mock, repo := setupUserTagMockDB(t)
-	defer db.Close()
+	mock, repo := setupUserTagMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	tagID := uuid.New().String()
@@ -133,7 +134,7 @@ func TestUserTagRepository_GetByID_NotFound(t *testing.T) {
 		SELECT id, user_id, name, color, usage_count, created_at, updated_at
 		FROM user_tags
 		WHERE id = $1
-	`)).WithArgs(tagID).WillReturnError(sql.ErrNoRows)
+	`)).WithArgs(tagID).WillReturnError(pgx.ErrNoRows)
 
 	tag, err := repo.GetByID(ctx, tagID)
 
@@ -144,14 +145,14 @@ func TestUserTagRepository_GetByID_NotFound(t *testing.T) {
 
 // TestUserTagRepository_GetByUserID tests successful retrieval of all user tags
 func TestUserTagRepository_GetByUserID(t *testing.T) {
-	db, mock, repo := setupUserTagMockDB(t)
-	defer db.Close()
+	mock, repo := setupUserTagMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
 	now := time.Now()
 
-	rows := sqlmock.NewRows([]string{"id", "user_id", "name", "color", "usage_count", "created_at", "updated_at"}).
+	rows := pgxmock.NewRows([]string{"id", "user_id", "name", "color", "usage_count", "created_at", "updated_at"}).
 		AddRow(uuid.New().String(), userID, "business", nil, 10, now, now).
 		AddRow(uuid.New().String(), userID, "personal", nil, 5, now, now).
 		AddRow(uuid.New().String(), userID, "reimbursable", nil, 3, now, now)
@@ -175,15 +176,15 @@ func TestUserTagRepository_GetByUserID(t *testing.T) {
 
 // TestUserTagRepository_GetByName tests successful retrieval by user ID and name
 func TestUserTagRepository_GetByName(t *testing.T) {
-	db, mock, repo := setupUserTagMockDB(t)
-	defer db.Close()
+	mock, repo := setupUserTagMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
 	tagID := uuid.New().String()
 	now := time.Now()
 
-	rows := sqlmock.NewRows([]string{"id", "user_id", "name", "color", "usage_count", "created_at", "updated_at"}).
+	rows := pgxmock.NewRows([]string{"id", "user_id", "name", "color", "usage_count", "created_at", "updated_at"}).
 		AddRow(tagID, userID, "needs-review", nil, 2, now, now)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
@@ -202,8 +203,8 @@ func TestUserTagRepository_GetByName(t *testing.T) {
 
 // TestUserTagRepository_Update tests successful tag update
 func TestUserTagRepository_Update(t *testing.T) {
-	db, mock, repo := setupUserTagMockDB(t)
-	defer db.Close()
+	mock, repo := setupUserTagMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	newColor := "#0000FF"
@@ -224,9 +225,9 @@ func TestUserTagRepository_Update(t *testing.T) {
 		tag.Name,
 		tag.Color,
 		tag.UsageCount,
-		sqlmock.AnyArg(),
+		pgxmock.AnyArg(),
 		tag.ID,
-	).WillReturnResult(sqlmock.NewResult(0, 1))
+	).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	err := repo.Update(ctx, tag)
 
@@ -236,8 +237,8 @@ func TestUserTagRepository_Update(t *testing.T) {
 
 // TestUserTagRepository_Update_NotFound tests update when tag doesn't exist
 func TestUserTagRepository_Update_NotFound(t *testing.T) {
-	db, mock, repo := setupUserTagMockDB(t)
-	defer db.Close()
+	mock, repo := setupUserTagMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 
@@ -254,9 +255,9 @@ func TestUserTagRepository_Update_NotFound(t *testing.T) {
 		tag.Name,
 		tag.Color,
 		tag.UsageCount,
-		sqlmock.AnyArg(),
+		pgxmock.AnyArg(),
 		tag.ID,
-	).WillReturnResult(sqlmock.NewResult(0, 0))
+	).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	err := repo.Update(ctx, tag)
 
@@ -266,15 +267,15 @@ func TestUserTagRepository_Update_NotFound(t *testing.T) {
 
 // TestUserTagRepository_Delete tests successful tag deletion
 func TestUserTagRepository_Delete(t *testing.T) {
-	db, mock, repo := setupUserTagMockDB(t)
-	defer db.Close()
+	mock, repo := setupUserTagMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	tagID := uuid.New().String()
 
 	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM user_tags WHERE id = $1`)).
 		WithArgs(tagID).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	err := repo.Delete(ctx, tagID)
 
@@ -284,15 +285,15 @@ func TestUserTagRepository_Delete(t *testing.T) {
 
 // TestUserTagRepository_Delete_NotFound tests deletion when tag doesn't exist
 func TestUserTagRepository_Delete_NotFound(t *testing.T) {
-	db, mock, repo := setupUserTagMockDB(t)
-	defer db.Close()
+	mock, repo := setupUserTagMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	tagID := uuid.New().String()
 
 	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM user_tags WHERE id = $1`)).
 		WithArgs(tagID).
-		WillReturnResult(sqlmock.NewResult(0, 0))
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	err := repo.Delete(ctx, tagID)
 
@@ -302,13 +303,13 @@ func TestUserTagRepository_Delete_NotFound(t *testing.T) {
 
 // TestUserTagRepository_CountByUserID tests counting tags for a user
 func TestUserTagRepository_CountByUserID(t *testing.T) {
-	db, mock, repo := setupUserTagMockDB(t)
-	defer db.Close()
+	mock, repo := setupUserTagMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
 
-	rows := sqlmock.NewRows([]string{"count"}).AddRow(7)
+	rows := pgxmock.NewRows([]string{"count"}).AddRow(7)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM user_tags WHERE user_id = $1`)).
 		WithArgs(userID).
@@ -323,8 +324,8 @@ func TestUserTagRepository_CountByUserID(t *testing.T) {
 
 // TestUserTagRepository_IncrementUsageCount tests incrementing usage count
 func TestUserTagRepository_IncrementUsageCount(t *testing.T) {
-	db, mock, repo := setupUserTagMockDB(t)
-	defer db.Close()
+	mock, repo := setupUserTagMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -335,10 +336,10 @@ func TestUserTagRepository_IncrementUsageCount(t *testing.T) {
 		SET usage_count = usage_count + 1, updated_at = $1
 		WHERE user_id = $2 AND name = $3
 	`)).WithArgs(
-		sqlmock.AnyArg(),
+		pgxmock.AnyArg(),
 		userID,
 		tagName,
-	).WillReturnResult(sqlmock.NewResult(0, 1))
+	).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	err := repo.IncrementUsageCount(ctx, userID, tagName)
 
@@ -348,8 +349,8 @@ func TestUserTagRepository_IncrementUsageCount(t *testing.T) {
 
 // TestUserTagRepository_DecrementUsageCount tests decrementing usage count
 func TestUserTagRepository_DecrementUsageCount(t *testing.T) {
-	db, mock, repo := setupUserTagMockDB(t)
-	defer db.Close()
+	mock, repo := setupUserTagMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -360,10 +361,10 @@ func TestUserTagRepository_DecrementUsageCount(t *testing.T) {
 		SET usage_count = GREATEST(usage_count - 1, 0), updated_at = $1
 		WHERE user_id = $2 AND name = $3
 	`)).WithArgs(
-		sqlmock.AnyArg(),
+		pgxmock.AnyArg(),
 		userID,
 		tagName,
-	).WillReturnResult(sqlmock.NewResult(0, 1))
+	).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	err := repo.DecrementUsageCount(ctx, userID, tagName)
 
@@ -373,8 +374,8 @@ func TestUserTagRepository_DecrementUsageCount(t *testing.T) {
 
 // TestUserTagRepository_IncrementUsageCount_NotFound tests increment when tag doesn't exist
 func TestUserTagRepository_IncrementUsageCount_NotFound(t *testing.T) {
-	db, mock, repo := setupUserTagMockDB(t)
-	defer db.Close()
+	mock, repo := setupUserTagMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -385,10 +386,10 @@ func TestUserTagRepository_IncrementUsageCount_NotFound(t *testing.T) {
 		SET usage_count = usage_count + 1, updated_at = $1
 		WHERE user_id = $2 AND name = $3
 	`)).WithArgs(
-		sqlmock.AnyArg(),
+		pgxmock.AnyArg(),
 		userID,
 		tagName,
-	).WillReturnResult(sqlmock.NewResult(0, 0))
+	).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	err := repo.IncrementUsageCount(ctx, userID, tagName)
 
