@@ -367,13 +367,19 @@ jobs:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
 
-      - name: Ensure Grype is installed
+      - name: Ensure Grype is installed and DB is fresh
         run: |
+          # Install grype if missing
           if ! command -v grype &> /dev/null; then
-            echo "Installing Grype via Homebrew..."
-            brew install grype
+            echo "Installing Grype..."
+            curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
           fi
           echo "Grype version: $(grype version)"
+
+          # Clear potentially corrupted cache and update DB
+          echo "Clearing grype cache and updating vulnerability database..."
+          rm -rf ~/.cache/grype 2>/dev/null || true
+          grype db update
 
       - name: Login to GHCR
         uses: docker/login-action@v3
