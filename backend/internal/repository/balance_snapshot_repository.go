@@ -2,12 +2,11 @@ package repository
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/lib/pq"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -47,11 +46,11 @@ type BalanceSnapshotRepository interface {
 
 // balanceSnapshotRepository implements BalanceSnapshotRepository using PostgreSQL
 type balanceSnapshotRepository struct {
-	db *sql.DB
+	db DB
 }
 
 // NewBalanceSnapshotRepository creates a new BalanceSnapshotRepository instance
-func NewBalanceSnapshotRepository(db *sql.DB) BalanceSnapshotRepository {
+func NewBalanceSnapshotRepository(db DB) BalanceSnapshotRepository {
 	return &balanceSnapshotRepository{db: db}
 }
 
@@ -72,7 +71,7 @@ func (r *balanceSnapshotRepository) Create(ctx context.Context, snapshot *domain
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`
 
-	_, err := r.db.ExecContext(ctx, query,
+	_, err := r.db.Exec(ctx, query,
 		snapshot.ID,
 		snapshot.AccountID,
 		snapshot.UserID,
@@ -99,7 +98,7 @@ func (r *balanceSnapshotRepository) GetByUserIDAndDateRange(ctx context.Context,
 		ORDER BY snapshot_at ASC
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, userID, startDate, endDate)
+	rows, err := r.db.Query(ctx, query, userID, startDate, endDate)
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +150,7 @@ func (r *balanceSnapshotRepository) GetAggregatedHistory(ctx context.Context, us
 			GROUP BY (bs.snapshot_at AT TIME ZONE 'UTC')::date
 			ORDER BY (bs.snapshot_at AT TIME ZONE 'UTC')::date ASC
 		`
-		args = []interface{}{userID, startDate, endDate, pq.Array(accountTypes)}
+		args = []interface{}{userID, startDate, endDate, accountTypes}
 	} else {
 		query = `
 			SELECT (bs.snapshot_at AT TIME ZONE 'UTC')::date as snapshot_date, SUM(bs.current_balance) as total_balance
@@ -165,7 +164,7 @@ func (r *balanceSnapshotRepository) GetAggregatedHistory(ctx context.Context, us
 		args = []interface{}{userID, startDate, endDate}
 	}
 
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -202,7 +201,7 @@ func (r *balanceSnapshotRepository) GetLatestByUserID(ctx context.Context, userI
 		ORDER BY account_id, snapshot_at DESC
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, userID)
+	rows, err := r.db.Query(ctx, query, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -247,7 +246,7 @@ func (r *balanceSnapshotRepository) GetLatestByAccountID(ctx context.Context, ac
 	`
 
 	var s domain.BalanceSnapshot
-	err := r.db.QueryRowContext(ctx, query, accountID).Scan(
+	err := r.db.QueryRow(ctx, query, accountID).Scan(
 		&s.ID,
 		&s.AccountID,
 		&s.UserID,
@@ -259,7 +258,7 @@ func (r *balanceSnapshotRepository) GetLatestByAccountID(ctx context.Context, ac
 		&s.CreatedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil // No snapshot found - return nil, nil (not an error)
 	}
 	if err != nil {
@@ -275,20 +274,11 @@ func (r *balanceSnapshotRepository) DeleteByAccountID(ctx context.Context, accou
 		DELETE FROM balance_snapshots WHERE account_id = $1
 	`
 
-	result, err := r.db.ExecContext(ctx, query, accountID)
-	if err != nil {
-		return err
-	}
-
-	rowsAffected, err := result.RowsAffected()
+	_, err := r.db.Exec(ctx, query, accountID)
 	if err != nil {
 		return err
 	}
 
 	// It's not an error if no rows were deleted (account might not have any snapshots)
-	if rowsAffected == 0 {
-		return nil
-	}
-
 	return nil
 }

@@ -1,7 +1,6 @@
 ---
 name: integration-guides
 description: "Integration guides for BoostedBudget: Clerk authentication, Plaid financial data, and Paddle payments."
-version: "1.0.0"
 ---
 
 # Integration Guides

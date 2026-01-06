@@ -74,7 +74,10 @@ func TestHandlePlaidWebhook_TransactionsUpdate(t *testing.T) {
 	mockService := &mockWebhookService{verifyResult: true}
 	mockRepo := &mockWebhookRepository{}
 
-	handler := NewPlaidWebhookHandler(mockService, mockRepo)
+	handler := NewPlaidWebhookHandler(PlaidWebhookHandlerDeps{
+		WebhookService: mockService,
+		WebhookRepo:    mockRepo,
+	})
 
 	payload := PlaidWebhookPayload{
 		WebhookType:     "TRANSACTIONS",
@@ -106,7 +109,10 @@ func TestHandlePlaidWebhook_ItemError(t *testing.T) {
 	mockService := &mockWebhookService{verifyResult: true}
 	mockRepo := &mockWebhookRepository{}
 
-	handler := NewPlaidWebhookHandler(mockService, mockRepo)
+	handler := NewPlaidWebhookHandler(PlaidWebhookHandlerDeps{
+		WebhookService: mockService,
+		WebhookRepo:    mockRepo,
+	})
 
 	payload := PlaidWebhookPayload{
 		WebhookType: "ITEM",
@@ -133,7 +139,10 @@ func TestHandlePlaidWebhook_InvalidJSON(t *testing.T) {
 	mockService := &mockWebhookService{}
 	mockRepo := &mockWebhookRepository{}
 
-	handler := NewPlaidWebhookHandler(mockService, mockRepo)
+	handler := NewPlaidWebhookHandler(PlaidWebhookHandlerDeps{
+		WebhookService: mockService,
+		WebhookRepo:    mockRepo,
+	})
 
 	input := &PlaidWebhookInput{
 		PlaidVerification: "",
@@ -153,7 +162,10 @@ func TestHandlePlaidWebhook_MissingFields(t *testing.T) {
 	mockService := &mockWebhookService{}
 	mockRepo := &mockWebhookRepository{}
 
-	handler := NewPlaidWebhookHandler(mockService, mockRepo)
+	handler := NewPlaidWebhookHandler(PlaidWebhookHandlerDeps{
+		WebhookService: mockService,
+		WebhookRepo:    mockRepo,
+	})
 
 	payload := PlaidWebhookPayload{
 		WebhookType: "", // Missing required field
@@ -178,7 +190,10 @@ func TestHandlePlaidWebhook_InvalidSignature(t *testing.T) {
 	mockService := &mockWebhookService{verifyResult: false}
 	mockRepo := &mockWebhookRepository{}
 
-	handler := NewPlaidWebhookHandler(mockService, mockRepo)
+	handler := NewPlaidWebhookHandler(PlaidWebhookHandlerDeps{
+		WebhookService: mockService,
+		WebhookRepo:    mockRepo,
+	})
 
 	payload := PlaidWebhookPayload{
 		WebhookType: "TRANSACTIONS",
@@ -207,7 +222,9 @@ func TestHandlePlaidWebhook_InvalidSignature(t *testing.T) {
 func TestHandlePlaidWebhook_NoService(t *testing.T) {
 	mockRepo := &mockWebhookRepository{}
 
-	handler := NewPlaidWebhookHandler(nil, mockRepo)
+	handler := NewPlaidWebhookHandler(PlaidWebhookHandlerDeps{
+		WebhookRepo: mockRepo,
+	})
 
 	payload := PlaidWebhookPayload{
 		WebhookType: "TRANSACTIONS",
@@ -234,7 +251,10 @@ func TestPlaidWebhookRouteRegistration(t *testing.T) {
 	mockRepo := &mockWebhookRepository{}
 
 	_, api := humatest.New(t)
-	handler := NewPlaidWebhookHandler(mockService, mockRepo)
+	handler := NewPlaidWebhookHandler(PlaidWebhookHandlerDeps{
+		WebhookService: mockService,
+		WebhookRepo:    mockRepo,
+	})
 	RegisterPlaidWebhookRoutes(api, handler)
 
 	// Test POST /webhooks/plaid with valid payload
@@ -258,7 +278,10 @@ func TestHandlePlaidWebhook_ValidSignatureStoresInDB(t *testing.T) {
 	mockService := &mockWebhookService{verifyResult: true}
 	mockRepo := &mockWebhookRepository{}
 
-	handler := NewPlaidWebhookHandler(mockService, mockRepo)
+	handler := NewPlaidWebhookHandler(PlaidWebhookHandlerDeps{
+		WebhookService: mockService,
+		WebhookRepo:    mockRepo,
+	})
 
 	payload := PlaidWebhookPayload{
 		WebhookType: "TRANSACTIONS",
@@ -286,7 +309,10 @@ func TestHandlePlaidWebhook_DatabaseErrorReturns200(t *testing.T) {
 	mockService := &mockWebhookService{verifyResult: true}
 	mockRepo := &mockWebhookRepository{createErr: errors.New("database connection failed")}
 
-	handler := NewPlaidWebhookHandler(mockService, mockRepo)
+	handler := NewPlaidWebhookHandler(PlaidWebhookHandlerDeps{
+		WebhookService: mockService,
+		WebhookRepo:    mockRepo,
+	})
 
 	payload := PlaidWebhookPayload{
 		WebhookType: "TRANSACTIONS",
@@ -313,7 +339,10 @@ func TestHandlePlaidWebhook_MissingSignatureStoresWithFalse(t *testing.T) {
 	mockService := &mockWebhookService{verifyResult: true}
 	mockRepo := &mockWebhookRepository{}
 
-	handler := NewPlaidWebhookHandler(mockService, mockRepo)
+	handler := NewPlaidWebhookHandler(PlaidWebhookHandlerDeps{
+		WebhookService: mockService,
+		WebhookRepo:    mockRepo,
+	})
 
 	payload := PlaidWebhookPayload{
 		WebhookType: "ITEM",

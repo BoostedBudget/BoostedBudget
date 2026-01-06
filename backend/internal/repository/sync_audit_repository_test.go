@@ -2,12 +2,13 @@ package repository
 
 import (
 	"context"
-	"database/sql"
+	"errors"
+	
 	"regexp"
 	"testing"
 	"time"
 
-	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
@@ -15,18 +16,18 @@ import (
 )
 
 // setupSyncAuditMockDB creates a mock database and sqlmock instance for sync audit repository testing
-func setupSyncAuditMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock, SyncAuditRepository) {
-	db, mock, err := sqlmock.New()
+func setupSyncAuditMockDB(t *testing.T) (pgxmock.PgxPoolIface, SyncAuditRepository) {
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 
-	repo := NewSyncAuditRepository(db)
-	return db, mock, repo
+	repo := NewSyncAuditRepository(mock)
+	return mock, repo
 }
 
 // TestSyncAuditRepository_CountSyncsThisMonth_Success tests counting unique accounts synced in a month
 func TestSyncAuditRepository_CountSyncsThisMonth_Success(t *testing.T) {
-	db, mock, repo := setupSyncAuditMockDB(t)
-	defer db.Close()
+	mock, repo := setupSyncAuditMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -40,7 +41,7 @@ func TestSyncAuditRepository_CountSyncsThisMonth_Success(t *testing.T) {
 	`
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
 		WithArgs(userID, syncMonth).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(3))
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(3))
 
 	// Execute
 	count, err := repo.CountSyncsThisMonth(ctx, userID, syncMonth)
@@ -53,8 +54,8 @@ func TestSyncAuditRepository_CountSyncsThisMonth_Success(t *testing.T) {
 
 // TestSyncAuditRepository_CountSyncsThisMonth_ReturnsZero tests zero count when no syncs
 func TestSyncAuditRepository_CountSyncsThisMonth_ReturnsZero(t *testing.T) {
-	db, mock, repo := setupSyncAuditMockDB(t)
-	defer db.Close()
+	mock, repo := setupSyncAuditMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -67,7 +68,7 @@ func TestSyncAuditRepository_CountSyncsThisMonth_ReturnsZero(t *testing.T) {
 	`
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
 		WithArgs(userID, syncMonth).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(0))
 
 	// Execute
 	count, err := repo.CountSyncsThisMonth(ctx, userID, syncMonth)
@@ -80,8 +81,8 @@ func TestSyncAuditRepository_CountSyncsThisMonth_ReturnsZero(t *testing.T) {
 
 // TestSyncAuditRepository_CountSyncsThisMonth_DatabaseError tests error handling
 func TestSyncAuditRepository_CountSyncsThisMonth_DatabaseError(t *testing.T) {
-	db, mock, repo := setupSyncAuditMockDB(t)
-	defer db.Close()
+	mock, repo := setupSyncAuditMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -94,7 +95,7 @@ func TestSyncAuditRepository_CountSyncsThisMonth_DatabaseError(t *testing.T) {
 	`
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
 		WithArgs(userID, syncMonth).
-		WillReturnError(sql.ErrConnDone)
+		WillReturnError(errors.New("connection done"))
 
 	// Execute
 	count, err := repo.CountSyncsThisMonth(ctx, userID, syncMonth)
@@ -107,8 +108,8 @@ func TestSyncAuditRepository_CountSyncsThisMonth_DatabaseError(t *testing.T) {
 
 // TestSyncAuditRepository_HasSyncedThisMonth_True tests when account has synced this month
 func TestSyncAuditRepository_HasSyncedThisMonth_True(t *testing.T) {
-	db, mock, repo := setupSyncAuditMockDB(t)
-	defer db.Close()
+	mock, repo := setupSyncAuditMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -123,7 +124,7 @@ func TestSyncAuditRepository_HasSyncedThisMonth_True(t *testing.T) {
 	`
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
 		WithArgs(userID, plaidAccountID, syncMonth).
-		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+		WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(true))
 
 	// Execute
 	exists, err := repo.HasSyncedThisMonth(ctx, userID, plaidAccountID, syncMonth)
@@ -136,8 +137,8 @@ func TestSyncAuditRepository_HasSyncedThisMonth_True(t *testing.T) {
 
 // TestSyncAuditRepository_HasSyncedThisMonth_False tests when account has NOT synced this month
 func TestSyncAuditRepository_HasSyncedThisMonth_False(t *testing.T) {
-	db, mock, repo := setupSyncAuditMockDB(t)
-	defer db.Close()
+	mock, repo := setupSyncAuditMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -152,7 +153,7 @@ func TestSyncAuditRepository_HasSyncedThisMonth_False(t *testing.T) {
 	`
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
 		WithArgs(userID, plaidAccountID, syncMonth).
-		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+		WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(false))
 
 	// Execute
 	exists, err := repo.HasSyncedThisMonth(ctx, userID, plaidAccountID, syncMonth)
@@ -165,8 +166,8 @@ func TestSyncAuditRepository_HasSyncedThisMonth_False(t *testing.T) {
 
 // TestSyncAuditRepository_RecordSync_FirstTime tests recording first sync of an account
 func TestSyncAuditRepository_RecordSync_FirstTime(t *testing.T) {
-	db, mock, repo := setupSyncAuditMockDB(t)
-	defer db.Close()
+	mock, repo := setupSyncAuditMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	now := time.Now()
@@ -207,14 +208,14 @@ func TestSyncAuditRepository_RecordSync_FirstTime(t *testing.T) {
 			audit.AccountID,
 			audit.PlaidAccountID,
 			audit.SyncMonth,
-			sqlmock.AnyArg(), // first_sync_at
-			sqlmock.AnyArg(), // last_sync_at
+			pgxmock.AnyArg(), // first_sync_at
+			pgxmock.AnyArg(), // last_sync_at
 			audit.TierAtSync,
 			audit.DaysHistorical,
 			audit.TransactionCount,
-			sqlmock.AnyArg(), // created_at
-			sqlmock.AnyArg(), // updated_at
-		).WillReturnResult(sqlmock.NewResult(1, 1))
+			pgxmock.AnyArg(), // created_at
+			pgxmock.AnyArg(), // updated_at
+		).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	// Execute
 	err := repo.RecordSync(ctx, audit)
@@ -226,8 +227,8 @@ func TestSyncAuditRepository_RecordSync_FirstTime(t *testing.T) {
 
 // TestSyncAuditRepository_RecordSync_ReSync tests re-syncing same account (upsert behavior)
 func TestSyncAuditRepository_RecordSync_ReSync(t *testing.T) {
-	db, mock, repo := setupSyncAuditMockDB(t)
-	defer db.Close()
+	mock, repo := setupSyncAuditMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	now := time.Now()
@@ -268,14 +269,14 @@ func TestSyncAuditRepository_RecordSync_ReSync(t *testing.T) {
 			audit.AccountID,
 			audit.PlaidAccountID,
 			audit.SyncMonth,
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
 			audit.TierAtSync,
 			audit.DaysHistorical,
 			audit.TransactionCount,
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-		).WillReturnResult(sqlmock.NewResult(1, 1)) // 1 row affected (updated)
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+		).WillReturnResult(pgxmock.NewResult("INSERT", 1)) // 1 row affected (updated)
 
 	// Execute
 	err := repo.RecordSync(ctx, audit)
@@ -287,8 +288,8 @@ func TestSyncAuditRepository_RecordSync_ReSync(t *testing.T) {
 
 // TestSyncAuditRepository_RecordSync_DifferentMonth tests syncing in different month creates new record
 func TestSyncAuditRepository_RecordSync_DifferentMonth(t *testing.T) {
-	db, mock, repo := setupSyncAuditMockDB(t)
-	defer db.Close()
+	mock, repo := setupSyncAuditMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	now := time.Now()
@@ -329,14 +330,14 @@ func TestSyncAuditRepository_RecordSync_DifferentMonth(t *testing.T) {
 			audit.AccountID,
 			audit.PlaidAccountID,
 			audit.SyncMonth,
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
 			audit.TierAtSync,
 			audit.DaysHistorical,
 			audit.TransactionCount,
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-		).WillReturnResult(sqlmock.NewResult(1, 1))
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+		).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	// Execute
 	err := repo.RecordSync(ctx, audit)
@@ -348,8 +349,8 @@ func TestSyncAuditRepository_RecordSync_DifferentMonth(t *testing.T) {
 
 // TestSyncAuditRepository_GetSyncStats_Success tests retrieving sync statistics
 func TestSyncAuditRepository_GetSyncStats_Success(t *testing.T) {
-	db, mock, repo := setupSyncAuditMockDB(t)
-	defer db.Close()
+	mock, repo := setupSyncAuditMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -364,7 +365,7 @@ func TestSyncAuditRepository_GetSyncStats_Success(t *testing.T) {
 	`
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
 		WithArgs(userID, syncMonth).
-		WillReturnRows(sqlmock.NewRows([]string{"accounts_synced", "total_transactions"}).
+		WillReturnRows(pgxmock.NewRows([]string{"accounts_synced", "total_transactions"}).
 			AddRow(3, 450))
 
 	// Execute
@@ -380,8 +381,8 @@ func TestSyncAuditRepository_GetSyncStats_Success(t *testing.T) {
 
 // TestSyncAuditRepository_GetSyncStats_NoSyncs tests stats when no syncs exist
 func TestSyncAuditRepository_GetSyncStats_NoSyncs(t *testing.T) {
-	db, mock, repo := setupSyncAuditMockDB(t)
-	defer db.Close()
+	mock, repo := setupSyncAuditMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -396,7 +397,7 @@ func TestSyncAuditRepository_GetSyncStats_NoSyncs(t *testing.T) {
 	`
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
 		WithArgs(userID, syncMonth).
-		WillReturnRows(sqlmock.NewRows([]string{"accounts_synced", "total_transactions"}).
+		WillReturnRows(pgxmock.NewRows([]string{"accounts_synced", "total_transactions"}).
 			AddRow(0, 0))
 
 	// Execute

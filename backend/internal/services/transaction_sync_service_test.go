@@ -64,6 +64,19 @@ func (m *MockWebhookRepository) GetUnprocessedByType(ctx context.Context, webhoo
 	return args.Get(0).([]domain.WebhookEvent), args.Error(1)
 }
 
+func (m *MockWebhookRepository) GetByID(ctx context.Context, id string) (*domain.WebhookEvent, error) {
+	args := m.Called(ctx, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.WebhookEvent), args.Error(1)
+}
+
+func (m *MockWebhookRepository) IncrementRetryCount(ctx context.Context, id string) error {
+	args := m.Called(ctx, id)
+	return args.Error(0)
+}
+
 // Note: MockEncryptionService is defined in account_service_test.go and reused here
 
 // ============================================================================

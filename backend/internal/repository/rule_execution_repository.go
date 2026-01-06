@@ -4,12 +4,13 @@ package repository
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -46,11 +47,11 @@ type RuleExecutionRepository interface {
 
 // ruleExecutionRepository implements RuleExecutionRepository using PostgreSQL.
 type ruleExecutionRepository struct {
-	db *sql.DB
+	db DB
 }
 
 // NewRuleExecutionRepository creates a new RuleExecutionRepository instance.
-func NewRuleExecutionRepository(db *sql.DB) RuleExecutionRepository {
+func NewRuleExecutionRepository(db DB) RuleExecutionRepository {
 	return &ruleExecutionRepository{db: db}
 }
 
@@ -86,7 +87,7 @@ func (r *ruleExecutionRepository) Create(ctx context.Context, execution *domain.
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	`
 
-	_, err := r.db.ExecContext(ctx, query,
+	_, err := r.db.Exec(ctx, query,
 		execution.ID,
 		execution.RuleID,
 		execution.Status,
@@ -114,7 +115,7 @@ func (r *ruleExecutionRepository) Update(ctx context.Context, execution *domain.
 		WHERE id = $8
 	`
 
-	result, err := r.db.ExecContext(ctx, query,
+	ct, err := r.db.Exec(ctx, query,
 		execution.Status,
 		execution.CompletedAt,
 		execution.ExecutionDurationMs,
@@ -128,13 +129,8 @@ func (r *ruleExecutionRepository) Update(ctx context.Context, execution *domain.
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
-		return sql.ErrNoRows
+	if ct.RowsAffected() == 0 {
+		return pgx.ErrNoRows
 	}
 
 	return nil
@@ -150,7 +146,7 @@ func (r *ruleExecutionRepository) GetByID(ctx context.Context, id string) (*doma
 		WHERE id = $1
 	`
 
-	return r.scanExecution(r.db.QueryRowContext(ctx, query, id))
+	return r.scanExecution(r.db.QueryRow(ctx, query, id))
 }
 
 // GetByRuleID retrieves executions for a specific rule with pagination.
@@ -194,7 +190,7 @@ func (r *ruleExecutionRepository) GetByRuleIDWithFilter(ctx context.Context, rul
 
 	// Get total count
 	var total int
-	err := r.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total)
+	err := r.db.QueryRow(ctx, countQuery, countArgs...).Scan(&total)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -230,7 +226,7 @@ func (r *ruleExecutionRepository) GetTodayExecutionCount(ctx context.Context, us
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 
 	var count int
-	err := r.db.QueryRowContext(ctx, query, userID, todayStart).Scan(&count)
+	err := r.db.QueryRow(ctx, query, userID, todayStart).Scan(&count)
 	if err != nil {
 		return 0, err
 	}
@@ -250,7 +246,7 @@ func (r *ruleExecutionRepository) GetLastExecutionForRule(ctx context.Context, r
 		LIMIT 1
 	`
 
-	return r.scanExecution(r.db.QueryRowContext(ctx, query, ruleID))
+	return r.scanExecution(r.db.QueryRow(ctx, query, ruleID))
 }
 
 // GetPendingExecutions retrieves pending executions for processing queue.
@@ -284,7 +280,7 @@ func (r *ruleExecutionRepository) GetFailedExecutions(ctx context.Context, ruleI
 }
 
 // scanExecution scans a single execution from a row.
-func (r *ruleExecutionRepository) scanExecution(row *sql.Row) (*domain.RuleExecution, error) {
+func (r *ruleExecutionRepository) scanExecution(row pgx.Row) (*domain.RuleExecution, error) {
 	execution := &domain.RuleExecution{}
 	var triggerContext, inputData, outputData []byte
 
@@ -305,7 +301,7 @@ func (r *ruleExecutionRepository) scanExecution(row *sql.Row) (*domain.RuleExecu
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, err
 		}
 		return nil, err
@@ -325,7 +321,7 @@ func (r *ruleExecutionRepository) scanExecution(row *sql.Row) (*domain.RuleExecu
 
 // queryExecutions is a helper to query and scan multiple executions.
 func (r *ruleExecutionRepository) queryExecutions(ctx context.Context, query string, args ...interface{}) ([]*domain.RuleExecution, error) {
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

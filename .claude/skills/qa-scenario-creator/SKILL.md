@@ -1,7 +1,6 @@
 ---
-name: "QA Scenario Creator"
+name: qa-scenario-creator
 description: "Create new YAML scenario files for BoostedBudget qa data populator with guided questions"
-version: "1.0.0"
 ---
 
 # QA Scenario Creator

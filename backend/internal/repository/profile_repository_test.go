@@ -2,13 +2,14 @@ package repository
 
 import (
 	"context"
-	"database/sql"
+	
 	"errors"
 	"regexp"
 	"testing"
 	"time"
 
-	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/jackc/pgx/v5"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
@@ -16,18 +17,18 @@ import (
 )
 
 // setupMockDB creates a mock database and sqlmock instance for testing
-func setupMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock, ProfileRepository) {
-	db, mock, err := sqlmock.New()
+func setupMockDB(t *testing.T) (pgxmock.PgxPoolIface, ProfileRepository) {
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 
-	repo := NewProfileRepository(db)
-	return db, mock, repo
+	repo := NewProfileRepository(mock)
+	return mock, repo
 }
 
 // TestGetUserByClerkID_Success tests successful retrieval of user by Clerk ID
 func TestGetUserByClerkID_Success(t *testing.T) {
-	db, mock, repo := setupMockDB(t)
-	defer db.Close()
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	clerkUserID := "user_507f1f77bcf86cd799439011"
@@ -35,7 +36,7 @@ func TestGetUserByClerkID_Success(t *testing.T) {
 	now := time.Now()
 
 	// Expected user data
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "clerk_user_id", "email", "email_verified",
 		"subscription_tier", "subscription_status", "subscription_started_at", "subscription_ends_at",
 		"stripe_customer_id", "primary_region", "is_active", "is_deleted",
@@ -69,15 +70,15 @@ func TestGetUserByClerkID_Success(t *testing.T) {
 
 // TestGetUserByClerkID_NotFound tests when user is not found
 func TestGetUserByClerkID_NotFound(t *testing.T) {
-	db, mock, repo := setupMockDB(t)
-	defer db.Close()
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	clerkUserID := "user_nonexistent"
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, stripe_customer_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at FROM users WHERE clerk_user_id = $1 AND is_deleted = FALSE`)).
 		WithArgs(clerkUserID).
-		WillReturnError(sql.ErrNoRows)
+		WillReturnError(pgx.ErrNoRows)
 
 	// Execute
 	user, err := repo.GetUserByClerkID(ctx, clerkUserID)
@@ -91,15 +92,15 @@ func TestGetUserByClerkID_NotFound(t *testing.T) {
 
 // TestGetUserByID_Success tests successful retrieval of user by ID
 func TestGetUserByID_Success(t *testing.T) {
-	db, mock, repo := setupMockDB(t)
-	defer db.Close()
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
 	clerkUserID := "user_507f1f77bcf86cd799439011"
 	now := time.Now()
 
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "clerk_user_id", "email", "email_verified",
 		"subscription_tier", "subscription_status", "subscription_started_at", "subscription_ends_at",
 		"stripe_customer_id", "primary_region", "is_active", "is_deleted",
@@ -132,15 +133,15 @@ func TestGetUserByID_Success(t *testing.T) {
 
 // TestGetUserByID_NotFound tests when user is not found by ID
 func TestGetUserByID_NotFound(t *testing.T) {
-	db, mock, repo := setupMockDB(t)
-	defer db.Close()
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, stripe_customer_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at FROM users WHERE id = $1 AND is_deleted = FALSE`)).
 		WithArgs(userID).
-		WillReturnError(sql.ErrNoRows)
+		WillReturnError(pgx.ErrNoRows)
 
 	// Execute
 	user, err := repo.GetUserByID(ctx, userID)
@@ -154,8 +155,8 @@ func TestGetUserByID_NotFound(t *testing.T) {
 
 // TestCreateUser_Success tests successful user creation
 func TestCreateUser_Success(t *testing.T) {
-	db, mock, repo := setupMockDB(t)
-	defer db.Close()
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	user := domain.NewUser("user_newuser", "newuser@example.com", true)
@@ -163,7 +164,7 @@ func TestCreateUser_Success(t *testing.T) {
 	// Expect INSERT query (match full query for consistency)
 	mock.ExpectExec(`INSERT INTO users \( id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, stripe_customer_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at \) VALUES`).
 		WithArgs(
-			sqlmock.AnyArg(), // id (generated UUID)
+			pgxmock.AnyArg(), // id (generated UUID)
 			user.ClerkUserID,
 			user.Email,
 			user.EmailVerified,
@@ -177,11 +178,11 @@ func TestCreateUser_Success(t *testing.T) {
 			user.IsDeleted,
 			user.DeletionRequestedAt,
 			user.DeletionScheduledAt,
-			sqlmock.AnyArg(), // created_at
-			sqlmock.AnyArg(), // updated_at
+			pgxmock.AnyArg(), // created_at
+			pgxmock.AnyArg(), // updated_at
 			user.LastLoginAt,
 		).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	// Execute
 	err := repo.CreateUser(ctx, user)
@@ -194,8 +195,8 @@ func TestCreateUser_Success(t *testing.T) {
 
 // TestCreateUser_DuplicateEmail tests handling of duplicate email constraint
 func TestCreateUser_DuplicateEmail(t *testing.T) {
-	db, mock, repo := setupMockDB(t)
-	defer db.Close()
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	user := domain.NewUser("user_newuser", "existing@example.com", true)
@@ -203,7 +204,7 @@ func TestCreateUser_DuplicateEmail(t *testing.T) {
 	// Simulate unique constraint violation on email
 	mock.ExpectExec(`INSERT INTO users`).
 		WithArgs(
-			sqlmock.AnyArg(),
+			pgxmock.AnyArg(),
 			user.ClerkUserID,
 			user.Email,
 			user.EmailVerified,
@@ -217,8 +218,8 @@ func TestCreateUser_DuplicateEmail(t *testing.T) {
 			user.IsDeleted,
 			user.DeletionRequestedAt,
 			user.DeletionScheduledAt,
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
 			user.LastLoginAt,
 		).
 		WillReturnError(errors.New("pq: duplicate key value violates unique constraint \"users_email_key\""))
@@ -234,8 +235,8 @@ func TestCreateUser_DuplicateEmail(t *testing.T) {
 
 // TestUpdateUser_Success tests successful user update
 func TestUpdateUser_Success(t *testing.T) {
-	db, mock, repo := setupMockDB(t)
-	defer db.Close()
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -257,10 +258,10 @@ func TestUpdateUser_Success(t *testing.T) {
 			user.Email,
 			user.EmailVerified,
 			user.PrimaryRegion,
-			sqlmock.AnyArg(), // updated_at
+			pgxmock.AnyArg(), // updated_at
 			user.ID,
 		).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	// Execute
 	err := repo.UpdateUser(ctx, user)
@@ -272,8 +273,8 @@ func TestUpdateUser_Success(t *testing.T) {
 
 // TestUpdateUser_NotFound tests updating non-existent user
 func TestUpdateUser_NotFound(t *testing.T) {
-	db, mock, repo := setupMockDB(t)
-	defer db.Close()
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	user := &domain.User{
@@ -289,10 +290,10 @@ func TestUpdateUser_NotFound(t *testing.T) {
 			user.Email,
 			user.EmailVerified,
 			user.PrimaryRegion,
-			sqlmock.AnyArg(),
+			pgxmock.AnyArg(),
 			user.ID,
 		).
-		WillReturnResult(sqlmock.NewResult(0, 0))
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	// Execute
 	err := repo.UpdateUser(ctx, user)
@@ -305,8 +306,8 @@ func TestUpdateUser_NotFound(t *testing.T) {
 
 // TestUpdateLastLogin_Success tests successful last login update
 func TestUpdateLastLogin_Success(t *testing.T) {
-	db, mock, repo := setupMockDB(t)
-	defer db.Close()
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	clerkUserID := "user_507f1f77bcf86cd799439011"
@@ -314,11 +315,11 @@ func TestUpdateLastLogin_Success(t *testing.T) {
 	// Expect UPDATE query
 	mock.ExpectExec(`UPDATE users SET last_login_at = \$1, updated_at = \$2 WHERE clerk_user_id = \$3`).
 		WithArgs(
-			sqlmock.AnyArg(), // last_login_at (current time)
-			sqlmock.AnyArg(), // updated_at (current time)
+			pgxmock.AnyArg(), // last_login_at (current time)
+			pgxmock.AnyArg(), // updated_at (current time)
 			clerkUserID,
 		).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	// Execute
 	err := repo.UpdateLastLogin(ctx, clerkUserID)
@@ -330,8 +331,8 @@ func TestUpdateLastLogin_Success(t *testing.T) {
 
 // TestUpdateLastLogin_NotFound tests updating last login for non-existent user
 func TestUpdateLastLogin_NotFound(t *testing.T) {
-	db, mock, repo := setupMockDB(t)
-	defer db.Close()
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	clerkUserID := "user_nonexistent"
@@ -339,11 +340,11 @@ func TestUpdateLastLogin_NotFound(t *testing.T) {
 	// Expect UPDATE query that affects 0 rows
 	mock.ExpectExec(`UPDATE users SET last_login_at = \$1, updated_at = \$2 WHERE clerk_user_id = \$3`).
 		WithArgs(
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
 			clerkUserID,
 		).
-		WillReturnResult(sqlmock.NewResult(0, 0))
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	// Execute
 	err := repo.UpdateLastLogin(ctx, clerkUserID)

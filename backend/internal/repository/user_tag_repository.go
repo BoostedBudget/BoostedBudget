@@ -2,11 +2,12 @@ package repository
 
 import (
 	"context"
-	"database/sql"
+	"errors"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -42,11 +43,11 @@ type UserTagRepository interface {
 
 // userTagRepository implements UserTagRepository using PostgreSQL
 type userTagRepository struct {
-	db *sql.DB
+	db DB
 }
 
 // NewUserTagRepository creates a new UserTagRepository instance
-func NewUserTagRepository(db *sql.DB) UserTagRepository {
+func NewUserTagRepository(db DB) UserTagRepository {
 	return &userTagRepository{db: db}
 }
 
@@ -67,7 +68,7 @@ func (r *userTagRepository) Create(ctx context.Context, tag *domain.UserTag) err
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`
 
-	_, err := r.db.ExecContext(ctx, query,
+	_, err := r.db.Exec(ctx, query,
 		tag.ID,
 		tag.UserID,
 		tag.Name,
@@ -98,7 +99,7 @@ func (r *userTagRepository) GetByID(ctx context.Context, id string) (*domain.Use
 	`
 
 	tag := &domain.UserTag{}
-	err := r.db.QueryRowContext(ctx, query, id).Scan(
+	err := r.db.QueryRow(ctx, query, id).Scan(
 		&tag.ID,
 		&tag.UserID,
 		&tag.Name,
@@ -109,7 +110,7 @@ func (r *userTagRepository) GetByID(ctx context.Context, id string) (*domain.Use
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domain.ErrTagNotFound
 		}
 		return nil, err
@@ -127,7 +128,7 @@ func (r *userTagRepository) GetByUserID(ctx context.Context, userID string) ([]*
 		ORDER BY name ASC
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, userID)
+	rows, err := r.db.Query(ctx, query, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +168,7 @@ func (r *userTagRepository) GetByName(ctx context.Context, userID, name string) 
 	`
 
 	tag := &domain.UserTag{}
-	err := r.db.QueryRowContext(ctx, query, userID, name).Scan(
+	err := r.db.QueryRow(ctx, query, userID, name).Scan(
 		&tag.ID,
 		&tag.UserID,
 		&tag.Name,
@@ -178,7 +179,7 @@ func (r *userTagRepository) GetByName(ctx context.Context, userID, name string) 
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domain.ErrTagNotFound
 		}
 		return nil, err
@@ -197,7 +198,7 @@ func (r *userTagRepository) Update(ctx context.Context, tag *domain.UserTag) err
 		WHERE id = $5
 	`
 
-	result, err := r.db.ExecContext(ctx, query,
+	ct, err := r.db.Exec(ctx, query,
 		tag.Name,
 		tag.Color,
 		tag.UsageCount,
@@ -213,12 +214,7 @@ func (r *userTagRepository) Update(ctx context.Context, tag *domain.UserTag) err
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrTagNotFound
 	}
 
@@ -229,17 +225,12 @@ func (r *userTagRepository) Update(ctx context.Context, tag *domain.UserTag) err
 func (r *userTagRepository) Delete(ctx context.Context, id string) error {
 	query := `DELETE FROM user_tags WHERE id = $1`
 
-	result, err := r.db.ExecContext(ctx, query, id)
+	ct, err := r.db.Exec(ctx, query, id)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrTagNotFound
 	}
 
@@ -251,7 +242,7 @@ func (r *userTagRepository) CountByUserID(ctx context.Context, userID string) (i
 	query := `SELECT COUNT(*) FROM user_tags WHERE user_id = $1`
 
 	var count int
-	err := r.db.QueryRowContext(ctx, query, userID).Scan(&count)
+	err := r.db.QueryRow(ctx, query, userID).Scan(&count)
 	if err != nil {
 		return 0, err
 	}
@@ -267,17 +258,12 @@ func (r *userTagRepository) IncrementUsageCount(ctx context.Context, userID, tag
 		WHERE user_id = $2 AND name = $3
 	`
 
-	result, err := r.db.ExecContext(ctx, query, time.Now(), userID, tagName)
+	ct, err := r.db.Exec(ctx, query, time.Now(), userID, tagName)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrTagNotFound
 	}
 
@@ -292,17 +278,12 @@ func (r *userTagRepository) DecrementUsageCount(ctx context.Context, userID, tag
 		WHERE user_id = $2 AND name = $3
 	`
 
-	result, err := r.db.ExecContext(ctx, query, time.Now(), userID, tagName)
+	ct, err := r.db.Exec(ctx, query, time.Now(), userID, tagName)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrTagNotFound
 	}
 

@@ -4,12 +4,13 @@ package repository
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -59,11 +60,11 @@ type AutomationRulesRepository interface {
 
 // automationRulesRepository implements AutomationRulesRepository using PostgreSQL.
 type automationRulesRepository struct {
-	db *sql.DB
+	db DB
 }
 
 // NewAutomationRulesRepository creates a new AutomationRulesRepository instance.
-func NewAutomationRulesRepository(db *sql.DB) AutomationRulesRepository {
+func NewAutomationRulesRepository(db DB) AutomationRulesRepository {
 	return &automationRulesRepository{db: db}
 }
 
@@ -104,7 +105,7 @@ func (r *automationRulesRepository) Create(ctx context.Context, rule *domain.Aut
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 	`
 
-	_, err = r.db.ExecContext(ctx, query,
+	_, err = r.db.Exec(ctx, query,
 		rule.ID,
 		rule.UserID,
 		rule.Name,
@@ -146,7 +147,7 @@ func (r *automationRulesRepository) GetByID(ctx context.Context, id string) (*do
 		WHERE id = $1
 	`
 
-	return r.scanRule(r.db.QueryRowContext(ctx, query, id))
+	return r.scanRule(r.db.QueryRow(ctx, query, id))
 }
 
 // GetByUserID retrieves all rules for a specific user, ordered by priority (desc).
@@ -190,7 +191,7 @@ func (r *automationRulesRepository) GetByName(ctx context.Context, userID, name 
 		WHERE user_id = $1 AND name = $2
 	`
 
-	return r.scanRule(r.db.QueryRowContext(ctx, query, userID, name))
+	return r.scanRule(r.db.QueryRow(ctx, query, userID, name))
 }
 
 // Update updates an existing rule.
@@ -216,7 +217,7 @@ func (r *automationRulesRepository) Update(ctx context.Context, rule *domain.Aut
 		WHERE id = $10
 	`
 
-	result, err := r.db.ExecContext(ctx, query,
+	ct, err := r.db.Exec(ctx, query,
 		rule.Name,
 		rule.Description,
 		rule.Enabled,
@@ -237,12 +238,7 @@ func (r *automationRulesRepository) Update(ctx context.Context, rule *domain.Aut
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrAutomationRuleNotFound
 	}
 
@@ -253,17 +249,12 @@ func (r *automationRulesRepository) Update(ctx context.Context, rule *domain.Aut
 func (r *automationRulesRepository) Delete(ctx context.Context, id string) error {
 	query := `DELETE FROM rules WHERE id = $1`
 
-	result, err := r.db.ExecContext(ctx, query, id)
+	ct, err := r.db.Exec(ctx, query, id)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrAutomationRuleNotFound
 	}
 
@@ -275,7 +266,7 @@ func (r *automationRulesRepository) CountByUserID(ctx context.Context, userID st
 	query := `SELECT COUNT(*) FROM rules WHERE user_id = $1`
 
 	var count int
-	err := r.db.QueryRowContext(ctx, query, userID).Scan(&count)
+	err := r.db.QueryRow(ctx, query, userID).Scan(&count)
 	if err != nil {
 		return 0, err
 	}
@@ -291,17 +282,12 @@ func (r *automationRulesRepository) IncrementExecutionCount(ctx context.Context,
 		WHERE id = $2
 	`
 
-	result, err := r.db.ExecContext(ctx, query, time.Now(), ruleID)
+	ct, err := r.db.Exec(ctx, query, time.Now(), ruleID)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrAutomationRuleNotFound
 	}
 
@@ -316,17 +302,12 @@ func (r *automationRulesRepository) UpdateLastSuccessful(ctx context.Context, ru
 		WHERE id = $2
 	`
 
-	result, err := r.db.ExecContext(ctx, query, time.Now(), ruleID)
+	ct, err := r.db.Exec(ctx, query, time.Now(), ruleID)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrAutomationRuleNotFound
 	}
 
@@ -386,7 +367,7 @@ func (r *automationRulesRepository) GetRulesByScheduleTrigger(ctx context.Contex
 }
 
 // scanRule scans a single rule from a row.
-func (r *automationRulesRepository) scanRule(row *sql.Row) (*domain.AutomationRule, error) {
+func (r *automationRulesRepository) scanRule(row pgx.Row) (*domain.AutomationRule, error) {
 	rule := &domain.AutomationRule{}
 	var triggerJSON, conditionsJSON []byte
 
@@ -410,7 +391,7 @@ func (r *automationRulesRepository) scanRule(row *sql.Row) (*domain.AutomationRu
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domain.ErrAutomationRuleNotFound
 		}
 		return nil, err
@@ -429,7 +410,7 @@ func (r *automationRulesRepository) scanRule(row *sql.Row) (*domain.AutomationRu
 
 // queryRules is a helper to query and scan multiple rules.
 func (r *automationRulesRepository) queryRules(ctx context.Context, query string, args ...interface{}) ([]*domain.AutomationRule, error) {
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

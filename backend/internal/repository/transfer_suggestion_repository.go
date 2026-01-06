@@ -4,10 +4,11 @@ package repository
 
 import (
 	"context"
-	"database/sql"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -44,11 +45,11 @@ type TransferSuggestionRepository interface {
 
 // transferSuggestionRepository implements TransferSuggestionRepository using PostgreSQL.
 type transferSuggestionRepository struct {
-	db *sql.DB
+	db DB
 }
 
 // NewTransferSuggestionRepository creates a new TransferSuggestionRepository instance.
-func NewTransferSuggestionRepository(db *sql.DB) TransferSuggestionRepository {
+func NewTransferSuggestionRepository(db DB) TransferSuggestionRepository {
 	return &transferSuggestionRepository{db: db}
 }
 
@@ -81,7 +82,7 @@ func (r *transferSuggestionRepository) Create(ctx context.Context, suggestion *d
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 	`
 
-	_, err := r.db.ExecContext(ctx, query,
+	_, err := r.db.Exec(ctx, query,
 		suggestion.ID,
 		suggestion.UserID,
 		suggestion.RuleID,
@@ -114,7 +115,7 @@ func (r *transferSuggestionRepository) GetByID(ctx context.Context, id string) (
 		WHERE id = $1
 	`
 
-	return r.scanSuggestion(r.db.QueryRowContext(ctx, query, id))
+	return r.scanSuggestion(r.db.QueryRow(ctx, query, id))
 }
 
 // GetByUserID retrieves suggestions for a user with optional status filter and pagination.
@@ -176,17 +177,12 @@ func (r *transferSuggestionRepository) UpdateStatus(ctx context.Context, id stri
 		WHERE id = $5
 	`
 
-	result, err := r.db.ExecContext(ctx, query, status, now, userNotes, now, id)
+	ct, err := r.db.Exec(ctx, query, status, now, userNotes, now, id)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrTransferSuggestionNotFound
 	}
 
@@ -203,7 +199,7 @@ func (r *transferSuggestionRepository) Update(ctx context.Context, suggestion *d
 		WHERE id = $5
 	`
 
-	result, err := r.db.ExecContext(ctx, query,
+	ct, err := r.db.Exec(ctx, query,
 		suggestion.Status,
 		suggestion.UserActionAt,
 		suggestion.UserNotes,
@@ -214,12 +210,7 @@ func (r *transferSuggestionRepository) Update(ctx context.Context, suggestion *d
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return domain.ErrTransferSuggestionNotFound
 	}
 
@@ -236,12 +227,12 @@ func (r *transferSuggestionRepository) ExpirePending(ctx context.Context) (int64
 		WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at < $1
 	`
 
-	result, err := r.db.ExecContext(ctx, query, now)
+	ct, err := r.db.Exec(ctx, query, now)
 	if err != nil {
 		return 0, err
 	}
 
-	return result.RowsAffected()
+	return ct.RowsAffected(), nil
 }
 
 // CountPendingByUserID counts pending suggestions for a user.
@@ -249,7 +240,7 @@ func (r *transferSuggestionRepository) CountPendingByUserID(ctx context.Context,
 	query := `SELECT COUNT(*) FROM transfer_suggestions WHERE user_id = $1 AND status = 'pending'`
 
 	var count int
-	err := r.db.QueryRowContext(ctx, query, userID).Scan(&count)
+	err := r.db.QueryRow(ctx, query, userID).Scan(&count)
 	if err != nil {
 		return 0, err
 	}
@@ -274,7 +265,7 @@ func (r *transferSuggestionRepository) GetByRuleID(ctx context.Context, ruleID s
 }
 
 // scanSuggestion scans a single suggestion from a row.
-func (r *transferSuggestionRepository) scanSuggestion(row *sql.Row) (*domain.TransferSuggestion, error) {
+func (r *transferSuggestionRepository) scanSuggestion(row pgx.Row) (*domain.TransferSuggestion, error) {
 	suggestion := &domain.TransferSuggestion{}
 
 	err := row.Scan(
@@ -297,7 +288,7 @@ func (r *transferSuggestionRepository) scanSuggestion(row *sql.Row) (*domain.Tra
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domain.ErrTransferSuggestionNotFound
 		}
 		return nil, err
@@ -308,7 +299,7 @@ func (r *transferSuggestionRepository) scanSuggestion(row *sql.Row) (*domain.Tra
 
 // querySuggestions is a helper to query and scan multiple suggestions.
 func (r *transferSuggestionRepository) querySuggestions(ctx context.Context, query string, args ...interface{}) ([]*domain.TransferSuggestion, error) {
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

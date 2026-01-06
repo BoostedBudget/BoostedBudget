@@ -2,23 +2,24 @@ package repository
 
 import (
 	"context"
-	"database/sql"
+	
 	"encoding/json"
 	"testing"
 	"time"
 
-	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/jackc/pgx/v5"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
 func TestDashboardPreferencesRepository_GetByUserID(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	if err != nil {
 		t.Fatalf("failed to create sqlmock: %v", err)
 	}
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewDashboardPreferencesRepository(db)
+	repo := NewDashboardPreferencesRepository(mock)
 	ctx := context.Background()
 
 	t.Run("success", func(t *testing.T) {
@@ -32,7 +33,7 @@ func TestDashboardPreferencesRepository_GetByUserID(t *testing.T) {
 		layoutJSON, _ := json.Marshal(layout)
 		testTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 
-		rows := sqlmock.NewRows([]string{"id", "user_id", "layout", "version", "created_at", "updated_at"}).
+		rows := pgxmock.NewRows([]string{"id", "user_id", "layout", "version", "created_at", "updated_at"}).
 			AddRow("pref-123", userID, layoutJSON, 1, testTime, testTime)
 
 		mock.ExpectQuery("SELECT id, user_id, layout, version, created_at, updated_at").
@@ -65,7 +66,7 @@ func TestDashboardPreferencesRepository_GetByUserID(t *testing.T) {
 
 		mock.ExpectQuery("SELECT id, user_id, layout, version, created_at, updated_at").
 			WithArgs(userID).
-			WillReturnError(sql.ErrNoRows)
+			WillReturnError(pgx.ErrNoRows)
 
 		prefs, err := repo.GetByUserID(ctx, userID)
 		if err != ErrDashboardPreferencesNotFound {
@@ -78,13 +79,13 @@ func TestDashboardPreferencesRepository_GetByUserID(t *testing.T) {
 }
 
 func TestDashboardPreferencesRepository_Upsert(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	if err != nil {
 		t.Fatalf("failed to create sqlmock: %v", err)
 	}
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewDashboardPreferencesRepository(db)
+	repo := NewDashboardPreferencesRepository(mock)
 	ctx := context.Background()
 
 	t.Run("insert new preferences", func(t *testing.T) {
@@ -99,8 +100,8 @@ func TestDashboardPreferencesRepository_Upsert(t *testing.T) {
 		}
 
 		mock.ExpectQuery("INSERT INTO user_dashboard_preferences").
-			WithArgs(sqlmock.AnyArg(), prefs.UserID, prefs.Layout, prefs.Version, sqlmock.AnyArg(), sqlmock.AnyArg()).
-			WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow("new-id", testTime))
+			WithArgs(pgxmock.AnyArg(), prefs.UserID, prefs.Layout, prefs.Version, pgxmock.AnyArg(), pgxmock.AnyArg()).
+			WillReturnRows(pgxmock.NewRows([]string{"id", "created_at"}).AddRow("new-id", testTime))
 
 		err := repo.Upsert(ctx, prefs)
 		if err != nil {
@@ -119,8 +120,8 @@ func TestDashboardPreferencesRepository_Upsert(t *testing.T) {
 		}
 
 		mock.ExpectQuery("INSERT INTO user_dashboard_preferences").
-			WithArgs(sqlmock.AnyArg(), prefs.UserID, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
-			WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow("new-id", testTime))
+			WithArgs(pgxmock.AnyArg(), prefs.UserID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+			WillReturnRows(pgxmock.NewRows([]string{"id", "created_at"}).AddRow("new-id", testTime))
 
 		err := repo.Upsert(ctx, prefs)
 		if err != nil {
@@ -133,13 +134,13 @@ func TestDashboardPreferencesRepository_Upsert(t *testing.T) {
 }
 
 func TestDashboardPreferencesRepository_Delete(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mock, err := pgxmock.NewPool()
 	if err != nil {
 		t.Fatalf("failed to create sqlmock: %v", err)
 	}
-	defer db.Close()
+	defer mock.Close()
 
-	repo := NewDashboardPreferencesRepository(db)
+	repo := NewDashboardPreferencesRepository(mock)
 	ctx := context.Background()
 
 	t.Run("success", func(t *testing.T) {
@@ -147,7 +148,7 @@ func TestDashboardPreferencesRepository_Delete(t *testing.T) {
 
 		mock.ExpectExec("DELETE FROM user_dashboard_preferences").
 			WithArgs(userID).
-			WillReturnResult(sqlmock.NewResult(0, 1))
+			WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 		err := repo.Delete(ctx, userID)
 		if err != nil {
@@ -160,7 +161,7 @@ func TestDashboardPreferencesRepository_Delete(t *testing.T) {
 
 		mock.ExpectExec("DELETE FROM user_dashboard_preferences").
 			WithArgs(userID).
-			WillReturnResult(sqlmock.NewResult(0, 0))
+			WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 		err := repo.Delete(ctx, userID)
 		if err != ErrDashboardPreferencesNotFound {

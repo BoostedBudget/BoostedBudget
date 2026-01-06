@@ -2,12 +2,12 @@ package services
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -39,7 +39,7 @@ func (m *MockProfileRepositoryForDeletion) CreateUser(ctx context.Context, user 
 	return args.Error(0)
 }
 
-func (m *MockProfileRepositoryForDeletion) CreateUserTx(ctx context.Context, tx *sql.Tx, user *domain.User) error {
+func (m *MockProfileRepositoryForDeletion) CreateUserTx(ctx context.Context, tx pgx.Tx, user *domain.User) error {
 	args := m.Called(ctx, tx, user)
 	return args.Error(0)
 }

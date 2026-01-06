@@ -2,11 +2,11 @@ package workers
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -66,7 +66,7 @@ func (m *MockProfileRepoForWorker) CreateUser(ctx context.Context, user *domain.
 	return args.Error(0)
 }
 
-func (m *MockProfileRepoForWorker) CreateUserTx(ctx context.Context, tx *sql.Tx, user *domain.User) error {
+func (m *MockProfileRepoForWorker) CreateUserTx(ctx context.Context, tx pgx.Tx, user *domain.User) error {
 	args := m.Called(ctx, tx, user)
 	return args.Error(0)
 }

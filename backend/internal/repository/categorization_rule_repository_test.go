@@ -2,12 +2,13 @@ package repository
 
 import (
 	"context"
-	"database/sql"
+	
 	"regexp"
 	"testing"
 	"time"
 
-	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/jackc/pgx/v5"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
@@ -15,12 +16,12 @@ import (
 )
 
 // setupRuleMockDB creates a mock database for categorization rule repository testing
-func setupRuleMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock, CategorizationRuleRepository) {
-	db, mock, err := sqlmock.New()
+func setupRuleMockDB(t *testing.T) (pgxmock.PgxPoolIface, CategorizationRuleRepository) {
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 
-	repo := NewCategorizationRuleRepository(db)
-	return db, mock, repo
+	repo := NewCategorizationRuleRepository(mock)
+	return mock, repo
 }
 
 // createTestRule creates a test categorization rule
@@ -46,32 +47,32 @@ func createTestRule(userID string) *domain.CategorizationRule {
 
 // TestCategorizationRuleRepository_Create tests successful rule creation
 func TestCategorizationRuleRepository_Create(t *testing.T) {
-	db, mock, repo := setupRuleMockDB(t)
-	defer db.Close()
+	mock, repo := setupRuleMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	rule := createTestRule(uuid.New().String())
 
 	mock.ExpectExec(regexp.QuoteMeta(`
 		INSERT INTO categorization_rules`)).WithArgs(
-		sqlmock.AnyArg(), // id
+		pgxmock.AnyArg(), // id
 		rule.UserID,
 		rule.Name,
 		rule.Description,
 		rule.Enabled,
 		rule.Priority,
-		sqlmock.AnyArg(), // conditions (JSON)
+		pgxmock.AnyArg(), // conditions (JSON)
 		rule.ConditionLogic,
-		sqlmock.AnyArg(), // target_category (JSON)
-		sqlmock.AnyArg(), // target_tags (JSON)
+		pgxmock.AnyArg(), // target_category (JSON)
+		pgxmock.AnyArg(), // target_tags (JSON)
 		rule.TagBehavior,
 		rule.Source,
 		rule.MatchCount,
 		rule.OverrideCount,
-		sqlmock.AnyArg(), // last_matched_at
-		sqlmock.AnyArg(), // created_at
-		sqlmock.AnyArg(), // updated_at
-	).WillReturnResult(sqlmock.NewResult(1, 1))
+		pgxmock.AnyArg(), // last_matched_at
+		pgxmock.AnyArg(), // created_at
+		pgxmock.AnyArg(), // updated_at
+	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err := repo.Create(ctx, rule)
 
@@ -82,32 +83,32 @@ func TestCategorizationRuleRepository_Create(t *testing.T) {
 
 // TestCategorizationRuleRepository_Create_DuplicateName tests duplicate name error
 func TestCategorizationRuleRepository_Create_DuplicateName(t *testing.T) {
-	db, mock, repo := setupRuleMockDB(t)
-	defer db.Close()
+	mock, repo := setupRuleMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	rule := createTestRule(uuid.New().String())
 
 	mock.ExpectExec(regexp.QuoteMeta(`
 		INSERT INTO categorization_rules`)).WithArgs(
-		sqlmock.AnyArg(),
+		pgxmock.AnyArg(),
 		rule.UserID,
 		rule.Name,
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-	).WillReturnError(sql.ErrNoRows) // Simulating constraint violation
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+	).WillReturnError(pgx.ErrNoRows) // Simulating constraint violation
 
 	err := repo.Create(ctx, rule)
 
@@ -117,13 +118,16 @@ func TestCategorizationRuleRepository_Create_DuplicateName(t *testing.T) {
 
 // TestCategorizationRuleRepository_GetByID tests retrieval by ID
 func TestCategorizationRuleRepository_GetByID(t *testing.T) {
-	db, mock, repo := setupRuleMockDB(t)
-	defer db.Close()
+	mock, repo := setupRuleMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	ruleID := uuid.New().String()
 	userID := uuid.New().String()
 	now := time.Now()
+
+	// Helper for nullable string
+	desc := "Test description"
 
 	columns := []string{
 		"id", "user_id", "name", "description", "enabled", "priority",
@@ -134,11 +138,11 @@ func TestCategorizationRuleRepository_GetByID(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(ruleID).
-		WillReturnRows(sqlmock.NewRows(columns).AddRow(
+		WillReturnRows(pgxmock.NewRows(columns).AddRow(
 			ruleID,
 			userID,
 			"Coffee Shops",
-			"Test description",
+			&desc, // Use pointer for nullable description
 			true,
 			10,
 			`[{"type":"merchant_contains","value":"starbucks"}]`,
@@ -149,7 +153,7 @@ func TestCategorizationRuleRepository_GetByID(t *testing.T) {
 			"manual",
 			5,
 			1,
-			now,
+			&now, // Use pointer for nullable last_matched_at
 			now,
 			now,
 		))
@@ -166,15 +170,15 @@ func TestCategorizationRuleRepository_GetByID(t *testing.T) {
 
 // TestCategorizationRuleRepository_GetByID_NotFound tests retrieval of non-existent rule
 func TestCategorizationRuleRepository_GetByID_NotFound(t *testing.T) {
-	db, mock, repo := setupRuleMockDB(t)
-	defer db.Close()
+	mock, repo := setupRuleMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	ruleID := uuid.New().String()
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(ruleID).
-		WillReturnError(sql.ErrNoRows)
+		WillReturnError(pgx.ErrNoRows)
 
 	rule, err := repo.GetByID(ctx, ruleID)
 
@@ -186,12 +190,15 @@ func TestCategorizationRuleRepository_GetByID_NotFound(t *testing.T) {
 
 // TestCategorizationRuleRepository_GetByUserID tests retrieval by user ID
 func TestCategorizationRuleRepository_GetByUserID(t *testing.T) {
-	db, mock, repo := setupRuleMockDB(t)
-	defer db.Close()
+	mock, repo := setupRuleMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
 	now := time.Now()
+
+	// Helper for nullable strings
+	desc1, desc2 := "Desc 1", "Desc 2"
 
 	columns := []string{
 		"id", "user_id", "name", "description", "enabled", "priority",
@@ -202,12 +209,12 @@ func TestCategorizationRuleRepository_GetByUserID(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(userID).
-		WillReturnRows(sqlmock.NewRows(columns).
+		WillReturnRows(pgxmock.NewRows(columns).
 			AddRow(
 				uuid.New().String(),
 				userID,
 				"Rule 1",
-				"Desc 1",
+				&desc1, // Use pointer for nullable description
 				true,
 				10,
 				`[]`,
@@ -226,7 +233,7 @@ func TestCategorizationRuleRepository_GetByUserID(t *testing.T) {
 				uuid.New().String(),
 				userID,
 				"Rule 2",
-				"Desc 2",
+				&desc2, // Use pointer for nullable description
 				true,
 				5,
 				`[]`,
@@ -251,12 +258,15 @@ func TestCategorizationRuleRepository_GetByUserID(t *testing.T) {
 
 // TestCategorizationRuleRepository_GetEnabledByUserID tests retrieval of enabled rules only
 func TestCategorizationRuleRepository_GetEnabledByUserID(t *testing.T) {
-	db, mock, repo := setupRuleMockDB(t)
-	defer db.Close()
+	mock, repo := setupRuleMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
 	now := time.Now()
+
+	// Helper for nullable string
+	desc := "Desc"
 
 	columns := []string{
 		"id", "user_id", "name", "description", "enabled", "priority",
@@ -267,11 +277,11 @@ func TestCategorizationRuleRepository_GetEnabledByUserID(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(userID).
-		WillReturnRows(sqlmock.NewRows(columns).AddRow(
+		WillReturnRows(pgxmock.NewRows(columns).AddRow(
 			uuid.New().String(),
 			userID,
 			"Enabled Rule",
-			"Desc",
+			&desc, // Use pointer for nullable description
 			true,
 			10,
 			`[]`,
@@ -297,8 +307,8 @@ func TestCategorizationRuleRepository_GetEnabledByUserID(t *testing.T) {
 
 // TestCategorizationRuleRepository_Update tests rule update
 func TestCategorizationRuleRepository_Update(t *testing.T) {
-	db, mock, repo := setupRuleMockDB(t)
-	defer db.Close()
+	mock, repo := setupRuleMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	rule := createTestRule(uuid.New().String())
@@ -308,17 +318,17 @@ func TestCategorizationRuleRepository_Update(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE categorization_rules`)).
 		WithArgs(
 			rule.Name,
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
 			rule.ID,
-		).WillReturnResult(sqlmock.NewResult(0, 1))
+		).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	err := repo.Update(ctx, rule)
 
@@ -328,8 +338,8 @@ func TestCategorizationRuleRepository_Update(t *testing.T) {
 
 // TestCategorizationRuleRepository_Update_NotFound tests update of non-existent rule
 func TestCategorizationRuleRepository_Update_NotFound(t *testing.T) {
-	db, mock, repo := setupRuleMockDB(t)
-	defer db.Close()
+	mock, repo := setupRuleMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	rule := createTestRule(uuid.New().String())
@@ -337,18 +347,18 @@ func TestCategorizationRuleRepository_Update_NotFound(t *testing.T) {
 
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE categorization_rules`)).
 		WithArgs(
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
 			rule.ID,
-		).WillReturnResult(sqlmock.NewResult(0, 0))
+		).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	err := repo.Update(ctx, rule)
 
@@ -359,15 +369,15 @@ func TestCategorizationRuleRepository_Update_NotFound(t *testing.T) {
 
 // TestCategorizationRuleRepository_Delete tests rule deletion
 func TestCategorizationRuleRepository_Delete(t *testing.T) {
-	db, mock, repo := setupRuleMockDB(t)
-	defer db.Close()
+	mock, repo := setupRuleMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	ruleID := uuid.New().String()
 
 	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM categorization_rules`)).
 		WithArgs(ruleID).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	err := repo.Delete(ctx, ruleID)
 
@@ -377,15 +387,15 @@ func TestCategorizationRuleRepository_Delete(t *testing.T) {
 
 // TestCategorizationRuleRepository_Delete_NotFound tests deletion of non-existent rule
 func TestCategorizationRuleRepository_Delete_NotFound(t *testing.T) {
-	db, mock, repo := setupRuleMockDB(t)
-	defer db.Close()
+	mock, repo := setupRuleMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	ruleID := uuid.New().String()
 
 	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM categorization_rules`)).
 		WithArgs(ruleID).
-		WillReturnResult(sqlmock.NewResult(0, 0))
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	err := repo.Delete(ctx, ruleID)
 
@@ -396,15 +406,15 @@ func TestCategorizationRuleRepository_Delete_NotFound(t *testing.T) {
 
 // TestCategorizationRuleRepository_CountByUserID tests counting rules by user
 func TestCategorizationRuleRepository_CountByUserID(t *testing.T) {
-	db, mock, repo := setupRuleMockDB(t)
-	defer db.Close()
+	mock, repo := setupRuleMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT`)).
 		WithArgs(userID).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(5))
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(5))
 
 	count, err := repo.CountByUserID(ctx, userID)
 
@@ -415,15 +425,15 @@ func TestCategorizationRuleRepository_CountByUserID(t *testing.T) {
 
 // TestCategorizationRuleRepository_IncrementMatchCount tests incrementing match count
 func TestCategorizationRuleRepository_IncrementMatchCount(t *testing.T) {
-	db, mock, repo := setupRuleMockDB(t)
-	defer db.Close()
+	mock, repo := setupRuleMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	ruleID := uuid.New().String()
 
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE categorization_rules`)).
-		WithArgs(sqlmock.AnyArg(), ruleID).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WithArgs(pgxmock.AnyArg(), ruleID).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	err := repo.IncrementMatchCount(ctx, ruleID)
 
@@ -433,15 +443,15 @@ func TestCategorizationRuleRepository_IncrementMatchCount(t *testing.T) {
 
 // TestCategorizationRuleRepository_IncrementOverrideCount tests incrementing override count
 func TestCategorizationRuleRepository_IncrementOverrideCount(t *testing.T) {
-	db, mock, repo := setupRuleMockDB(t)
-	defer db.Close()
+	mock, repo := setupRuleMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	ruleID := uuid.New().String()
 
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE categorization_rules`)).
 		WithArgs(ruleID).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	err := repo.IncrementOverrideCount(ctx, ruleID)
 
