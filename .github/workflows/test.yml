@@ -654,10 +654,17 @@ jobs:
 
       - name: Install migration tools
         run: |
+          # Install golang-migrate to user bin (no sudo needed on self-hosted runners)
+          mkdir -p $HOME/bin
           curl -sSfL https://github.com/golang-migrate/migrate/releases/latest/download/migrate.darwin-arm64.tar.gz | tar -xz
-          sudo mv migrate /usr/local/bin/
+          mv migrate $HOME/bin/
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+          # Install Squawk
           npm install -g squawk-cli
-          migrate --version && squawk --version
+
+          # Verify
+          $HOME/bin/migrate --version && squawk --version
 
       - name: Lint migrations with Squawk
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
