@@ -81,7 +81,7 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: ~/go/pkg/mod
-          key: go-modules-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+          key: go-modules-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             go-modules-${{ runner.os }}-
 
@@ -220,7 +220,7 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: ~/go/pkg/mod
-          key: go-modules-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+          key: go-modules-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             go-modules-${{ runner.os }}-
 
@@ -296,7 +296,7 @@ jobs:
         uses: actions/cache/save@v5
         with:
           path: ~/go/pkg/mod
-          key: go-modules-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+          key: go-modules-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
 
       - name: Save backend binary cache
         if: always() && steps.cache-backend-binary.outputs.cache-hit != 'true'
