@@ -147,6 +147,7 @@ jobs:
           file: ${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          pull: true
           tags: |
             ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ github.sha }}
             ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:latest
