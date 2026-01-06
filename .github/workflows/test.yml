@@ -797,3 +797,73 @@ jobs:
       - name: Final workspace cleanup
         if: always()
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+  # =============================================================================
+  # Docker Image Security Scan (Grype)
+  # =============================================================================
+  # Builds Docker images and scans for vulnerabilities in the compiled artifacts
+  # This catches issues that govulncheck misses (e.g., stdlib CVEs in binary)
+  docker-image-scan:
+    name: Docker Image Scan (${{ matrix.component }})
+    needs: detect-changes
+    if: |
+      needs.detect-changes.outputs.backend == 'true' ||
+      needs.detect-changes.outputs.frontend == 'true' ||
+      needs.detect-changes.outputs.workflow == 'true'
+    runs-on: [self-hosted, macOS, mac-mini]
+    strategy:
+      matrix:
+        component: [backend, frontend]
+    env:
+      UNIQUE_WORKSPACE: workspace-docker-scan-${{ matrix.component }}-${{ github.run_id }}
+
+    steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          clean: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image (local only)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.UNIQUE_WORKSPACE }}
+          file: ${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: test-${{ matrix.component }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Ensure Grype is installed
+        run: |
+          if ! command -v grype &> /dev/null; then
+            echo "Installing Grype via Homebrew..."
+            brew install grype
+          fi
+          grype version
+
+      - name: Scan Docker image with Grype
+        run: |
+          echo "::group::Docker Image Vulnerability Scan (Grype)"
+          grype test-${{ matrix.component }}:${{ github.sha }} \
+            --config ${{ env.UNIQUE_WORKSPACE }}/.grype.yaml \
+            --fail-on high \
+            --only-fixed \
+            --output table
+          echo "::endgroup::"
+
+      - name: Cleanup Docker image
+        if: always()
+        run: docker rmi test-${{ matrix.component }}:${{ github.sha }} 2>/dev/null || true
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
