@@ -2,11 +2,18 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+)
+
+var (
+	// ErrWebhookNotFound is returned when a webhook event is not found in the database
+	ErrWebhookNotFound = errors.New("webhook not found")
 )
 
 // WebhookRepository defines the interface for webhook event data access.
@@ -14,9 +21,15 @@ import (
 //
 // Issue #202: Plaid Webhook Integration
 // Issue #256: Transaction Sync Service - Added Update and GetUnprocessedByType
+// Issue #573: River Queue - Added GetByID for async job processing
 type WebhookRepository interface {
 	// Create stores a new webhook event in the database
 	Create(ctx context.Context, event *domain.WebhookEvent) error
+
+	// GetByID retrieves a webhook event by its ID (Issue #573)
+	// Used by River workers to fetch webhook details for async processing
+	// Returns domain.ErrNotFound if webhook doesn't exist
+	GetByID(ctx context.Context, id string) (*domain.WebhookEvent, error)
 
 	// MarkProcessed marks a webhook event as processed
 	// Used after successful processing to prevent double-processing
@@ -91,6 +104,53 @@ func (r *webhookRepository) Create(ctx context.Context, event *domain.WebhookEve
 	}
 
 	return nil
+}
+
+// GetByID retrieves a webhook event by its ID
+// Used by River workers to fetch webhook details for async processing
+func (r *webhookRepository) GetByID(ctx context.Context, id string) (*domain.WebhookEvent, error) {
+	query := `
+		SELECT id, webhook_type, webhook_code, item_id, error_code,
+		       new_transactions, removed_transactions, payload,
+		       signature, signature_valid, processed, processed_at,
+		       processing_started_at, processing_completed_at, processing_error,
+		       retry_count, next_retry_at,
+		       created_at, updated_at
+		FROM webhook_events
+		WHERE id = $1
+	`
+
+	var event domain.WebhookEvent
+	err := r.db.QueryRow(ctx, query, id).Scan(
+		&event.ID,
+		&event.WebhookType,
+		&event.WebhookCode,
+		&event.ItemID,
+		&event.ErrorCode,
+		&event.NewTransactions,
+		&event.RemovedTransactions,
+		&event.Payload,
+		&event.Signature,
+		&event.SignatureValid,
+		&event.Processed,
+		&event.ProcessedAt,
+		&event.ProcessingStartedAt,
+		&event.ProcessingCompletedAt,
+		&event.ProcessingError,
+		&event.RetryCount,
+		&event.NextRetryAt,
+		&event.CreatedAt,
+		&event.UpdatedAt,
+	)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrWebhookNotFound
+		}
+		return nil, fmt.Errorf("failed to get webhook event by id: %w", err)
+	}
+
+	return &event, nil
 }
 
 // MarkProcessed marks a webhook event as processed

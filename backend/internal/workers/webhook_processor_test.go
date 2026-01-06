@@ -108,6 +108,19 @@ func (m *MockWebhookRepoForWorker) GetUnprocessedByType(ctx context.Context, web
 	return args.Get(0).([]domain.WebhookEvent), args.Error(1)
 }
 
+func (m *MockWebhookRepoForWorker) GetByID(ctx context.Context, id string) (*domain.WebhookEvent, error) {
+	args := m.Called(ctx, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.WebhookEvent), args.Error(1)
+}
+
+func (m *MockWebhookRepoForWorker) IncrementRetryCount(ctx context.Context, id string) error {
+	args := m.Called(ctx, id)
+	return args.Error(0)
+}
+
 // ============================================================================
 // PHASE 5 RED: WebhookProcessor Tests
 // Issue #256: Transaction Sync Service
