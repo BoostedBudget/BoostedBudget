@@ -236,10 +236,7 @@ jobs:
 
       - name: Run Go tests with coverage
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
-        run: |
-          echo "::group::Running Go tests with race detection and coverage"
-          go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
-          echo "::endgroup::"
+        run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Check Go coverage threshold (≥60%)
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
@@ -363,19 +360,11 @@ jobs:
             }
           done
 
-      - name: Run ESLint
+      - name: Lint and test frontend
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
-          echo "::group::Running ESLint"
           pnpm run lint
-          echo "::endgroup::"
-
-      - name: Run frontend unit tests
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
-        run: |
-          echo "::group::Running Unit Tests"
           pnpm run test:ci
-          echo "::endgroup::"
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v6
@@ -571,10 +560,12 @@ jobs:
             exit 0
           fi
 
-          # Locate PostgreSQL@15 installation
+          # Locate PostgreSQL installation (try 17, fall back to 15)
           # Try standard Homebrew paths (Apple Silicon first, then Intel)
           POSTGRES_BIN=""
           SEARCH_PATHS=(
+            "/opt/homebrew/opt/postgresql@17/bin"
+            "/usr/local/opt/postgresql@17/bin"
             "/opt/homebrew/opt/postgresql@15/bin"
             "/usr/local/opt/postgresql@15/bin"
           )
@@ -582,15 +573,15 @@ jobs:
           for path in "${SEARCH_PATHS[@]}"; do
             if [ -d "$path" ] && [ -f "$path/psql" ]; then
               POSTGRES_BIN="$path"
-              echo "Found PostgreSQL@15 at: $path"
+              echo "Found PostgreSQL at: $path"
               break
             fi
           done
 
           if [ -z "$POSTGRES_BIN" ]; then
-            echo "::error::PostgreSQL@15 not found in Homebrew locations"
+            echo "::error::PostgreSQL client not found in Homebrew locations"
             echo "::error::Searched: ${SEARCH_PATHS[*]}"
-            echo "::error::Please ensure postgresql@15 is installed via Homebrew"
+            echo "::error::Please ensure postgresql@17 or postgresql@15 is installed via Homebrew"
             exit 1
           fi
 
@@ -621,7 +612,7 @@ jobs:
 
           echo "🐘 Pulling PostgreSQL image..."
           for i in 1 2 3; do
-            docker pull postgres:15 && break || {
+            docker pull postgres:17 && break || {
               echo "⚠️ Pull attempt $i/3 failed"
               [ $i -lt 3 ] && sleep 10
             }
@@ -637,7 +628,7 @@ jobs:
             --health-interval 10s \
             --health-timeout 5s \
             --health-retries 5 \
-            postgres:15
+            postgres:17
 
           # Get the dynamically assigned port
           sleep 2
@@ -661,40 +652,16 @@ jobs:
             sleep 1
           done
 
-      - name: Debug migration files
+      - name: Install migration tools
         run: |
-          echo "::group::Migration Files Debug"
-          cd ${{ env.UNIQUE_WORKSPACE }}/backend
-          echo "Working directory: $(pwd)"
-          echo ""
-          echo "Migration files count:"
-          ls -1 migrations/*.sql 2>/dev/null | wc -l || echo "No migration files found"
-          echo ""
-          echo ".down.sql files count:"
-          ls -1 migrations/*.down.sql 2>/dev/null | wc -l || echo "No .down.sql files found"
-          echo ""
-          echo "atlas.sum line count:"
-          wc -l migrations/atlas.sum || echo "atlas.sum not found"
-          echo "::endgroup::"
+          curl -sSfL https://github.com/golang-migrate/migrate/releases/latest/download/migrate.darwin-arm64.tar.gz | tar -xz
+          sudo mv migrate /usr/local/bin/
+          npm install -g squawk-cli
+          migrate --version && squawk --version
 
-      - name: Lint migrations (Atlas validation)
-        env:
-          DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: |
-          echo "::group::Linting migrations"
-          cd ${{ env.UNIQUE_WORKSPACE }}/backend
-
-          # NOTE: Must include format=golang-migrate in --dir URL for .up/.down file support
-          # Validates migration file integrity (checksums), SQL syntax, schema conflicts
-          # Using absolute path ($PWD) to ensure proper resolution in unique workspace
-          atlas migrate lint \
-            --config file://atlas.hcl \
-            --env local \
-            --dir "file://$PWD/migrations?format=golang-migrate" \
-            --latest 1
-
-          echo "::notice::✅ Migration lint passed - no schema errors detected"
-          echo "::endgroup::"
+      - name: Lint migrations with Squawk
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        run: squawk migrations/*.sql --pg-version=17
 
       - name: Run comprehensive migration tests
         env:

@@ -9,9 +9,9 @@
 
 **Tiers**: Free (1 rule, 3 accounts, 1x/day, ads) | Premium Lite $4.99 (5 rules, 15 accounts, 2x/day) | Premium $9.99 (15 rules, 30 accounts, 6x/day) | Premium+ $19.99 (unlimited, every 10min, AI + API)
 
-**Stack**: React 19 + TS5 + Vite 7 | Go 1.25+ Echo/Gin | PostgreSQL 15 + Redis 7 | Atlas (migrations) | Clerk + Plaid + Stripe + AdSense | Docker → GHCR → Fly.io
+**Stack**: React 19 + TS5 + Vite 7 | Go 1.25+ Echo/Gin | PostgreSQL 17 + Redis 7 | golang-migrate + Squawk (migrations) | Clerk + Plaid + Stripe + AdSense | Docker → GHCR → Fly.io
 
-**Database Migrations**: Atlas (versioned migrations) with schema linting, drift detection, and validation in CI/CD. See `backend/docs/atlas-migration-guide.md`
+**Database Migrations**: golang-migrate (versioned migrations) with Squawk linting for safety. See `backend/docs/golang-migrate-guide.md`
 
 **Architecture**: Single region (iad) MVP, multi-region Phase 7+, no money movement (suggestions only), future-ready `*InRegion` abstractions
 
@@ -181,7 +181,7 @@ BAD ✗
 8. Migrations for schema changes → **Server Memory: Document migration reasoning and rollback strategy**
    - Write idempotent migrations (IF NOT EXISTS, DO $$ blocks)
    - Run `./scripts/test-migrations.sh` BEFORE committing
-   - Verify all 4 test suites pass (idempotency, performance, data integrity, schema validation)
+   - Verify all 5 test suites pass (idempotency, performance, data integrity, schema validation, rollback)
 9. Clerk integration verification → **Server Memory: Note auth flow decisions**
 10. `*InRegion` abstractions, `primary_region`='us-east-1' → **Server Memory: Track region-related decisions**
 11. **RUN ALL TESTS** (MANDATORY before PR):
@@ -191,6 +191,7 @@ BAD ✗
     - **NO PR until ALL pass**
 12. PR with "Closes #N"
 13. **Server Memory: FINAL update** - consolidate all decisions, learnings, patterns, gotchas for future reference
+14. **Run code-simplifier** (MANDATORY for all code changes) - After completing implementation, run the `code-simplifier` subagent to review and simplify the code
 
 ## Test Scenarios Framework (QA Data Population)
 
@@ -263,6 +264,7 @@ BAD ✗
 - Graceful degradation for external services
 - `*InRegion` method signatures (future-ready)
 - `primary_region` = 'us-east-1' (prepared for Phase 7+)
+- **ALWAYS run code-simplifier** at the end of every implementation task that modifies code
 
 ## Setup & Commands
 

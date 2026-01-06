@@ -1,7 +1,8 @@
 #!/bin/bash
 # Migration Testing Framework for BoostedBudget
-# Issue #326: Comprehensive Atlas migration testing
+# Issue #326: Comprehensive migration testing
 # Issue #348: Rollback capability testing (.up/.down migrations)
+# Issue #631: Migrated from Atlas to golang-migrate + Squawk
 #
 # Tests:
 #   1. Idempotency (migrations can be run multiple times safely)
@@ -73,14 +74,14 @@ fail_test() {
     log_error "$1"
 }
 
-# Run psql command against database (trim whitespace from result)
+# Run psql command against database
 run_psql() {
     psql "$DATABASE_URL" -t -c "$1" 2>/dev/null | tr -d ' \n' || echo ""
 }
 
 # Get schema hash for idempotency comparison
 # Uses --schema=public to dump only application tables, excluding:
-#   - Atlas tracking schemas (atlas_schema_revisions)
+#   - golang-migrate tracking table (schema_migrations)
 #   - System schemas (pg_catalog, information_schema, etc.)
 # Also filters pg_dump 15.14+ security tokens (CVE-2025-8714):
 #   - \restrict and \unrestrict with random keys (change on each dump)
@@ -109,74 +110,49 @@ get_schema_hash() {
     echo "$dump" | md5sum | cut -d' ' -f1
 }
 
-# Clean database (drop all tables and Atlas tracking)
+# Clean database (drop all tables and golang-migrate tracking)
 clean_database() {
     log_info "Cleaning database..."
-    # Drop public schema (all tables)
+    # Drop public schema (all tables including schema_migrations)
     # NOTE: Errors visible for debugging - previously silenced with > /dev/null 2>&1
     psql "$DATABASE_URL" -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
-    # Drop Atlas tracking schema (so Atlas doesn't think migrations are already applied)
-    psql "$DATABASE_URL" -c "DROP SCHEMA IF EXISTS atlas_schema_revisions CASCADE;"
 }
 
-# Apply migrations using Atlas
+# Apply migrations using golang-migrate
 apply_migrations() {
     local start_time=$(date +%s)
 
-    # Get absolute paths to atlas.hcl config file and migrations directory
-    local abs_config_path
+    # Get absolute path to migrations directory
     local abs_migrations_dir
     local project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-    abs_config_path="$project_root/backend/atlas.hcl"
     abs_migrations_dir="$project_root/backend/migrations"
 
     # NOTE: Errors visible for debugging - previously silenced with > /dev/null 2>&1
-    # NOTE: Using --dir flag to provide absolute path with golang-migrate format
-    # The format parameter is CRITICAL - without it, Atlas runs both .up and .down files
-    atlas migrate apply \
-        --config "file://$abs_config_path" \
-        --env local \
-        --url "$DATABASE_URL" \
-        --dir "file://$abs_migrations_dir?format=golang-migrate"
+    # golang-migrate requires -database and -path flags
+    migrate -database "$DATABASE_URL" -path "$abs_migrations_dir" up
 
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
     echo "$duration"
 }
 
-# Rollback all migrations using Atlas
-# Returns: "duration:error_type" where error_type is "none", "enum_dependency", or "other"
+# Rollback all migrations using golang-migrate
+# Returns: "duration:error_type" where error_type is "none" or "other"
 rollback_migrations() {
     local start_time=$(date +%s)
 
-    # Get absolute paths to atlas.hcl config file and migrations directory
-    local abs_config_path
+    # Get absolute path to migrations directory
     local abs_migrations_dir
     local project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-    abs_config_path="$project_root/backend/atlas.hcl"
     abs_migrations_dir="$project_root/backend/migrations"
 
-    # Rollback all migrations using amount positional argument
-    # NOTE: Using --dir flag to provide absolute path with golang-migrate format
-    # The format parameter is CRITICAL - without it, Atlas runs both .up and .down files
-    # NOTE: Amount 100 (positional arg) ensures ALL migrations are rolled back (current count: 15)
-    #       --to-version 0 does NOT work (keeps migrations UP TO version 0, not before it)
+    # Rollback all migrations using -all flag
+    # golang-migrate executes SQL directly without static analysis limitations
     local rollback_output
     local error_type="none"
-    rollback_output=$(atlas migrate down \
-        --config "file://$abs_config_path" \
-        --env local \
-        --url "$DATABASE_URL" \
-        --dir "file://$abs_migrations_dir?format=golang-migrate" \
-        100 2>&1) || {
-        # Check if error is due to known Atlas enum dependency limitation
-        # Pattern matches: "drop enum type" ... "cannot drop type" ... "other objects depend on it"
-        if echo "$rollback_output" | grep -qE "drop enum type.*other objects depend on it"; then
-            error_type="enum_dependency"
-        else
-            error_type="other"
-            echo "$rollback_output" >&2
-        fi
+    rollback_output=$(migrate -database "$DATABASE_URL" -path "$abs_migrations_dir" down -all 2>&1) || {
+        error_type="other"
+        echo "$rollback_output" >&2
     }
 
     local end_time=$(date +%s)
@@ -300,15 +276,12 @@ test_performance() {
     local end_time=$(date +%s)
     local total_duration=$((end_time - start_time))
 
-    # Check if migration application failed
     if [ $apply_exit_code -ne 0 ]; then
         fail_test "MIGRATION APPLICATION FAILED during performance test"
-        log_error "Atlas migrate apply returned exit code: $apply_exit_code"
+        log_error "migrate up returned exit code: $apply_exit_code"
         log_error "Output: $duration_output"
         return 1
     fi
-
-    log_info "Total migration time: ${total_duration}s"
 
     # Check against thresholds
     local perf_status="PASS"
@@ -486,30 +459,17 @@ EOF
     echo ""
     local data_preserved=true
 
-    if [ "$users_count_before" != "$users_count_after" ]; then
-        fail_test "Data loss detected in users table ($users_count_before → $users_count_after)"
-        data_preserved=false
-    fi
+    # Check each table
+    local tables_before=("users" "privacy_settings" "linked_items" "accounts" "transactions")
+    local counts_before=("$users_count_before" "$privacy_count_before" "$linked_items_count_before" "$accounts_count_before" "$transactions_count_before")
+    local counts_after=("$users_count_after" "$privacy_count_after" "$linked_items_count_after" "$accounts_count_after" "$transactions_count_after")
 
-    if [ "$privacy_count_before" != "$privacy_count_after" ]; then
-        fail_test "Data loss detected in privacy_settings table ($privacy_count_before → $privacy_count_after)"
-        data_preserved=false
-    fi
-
-    if [ "$linked_items_count_before" != "$linked_items_count_after" ]; then
-        fail_test "Data loss detected in linked_items table ($linked_items_count_before → $linked_items_count_after)"
-        data_preserved=false
-    fi
-
-    if [ "$accounts_count_before" != "$accounts_count_after" ]; then
-        fail_test "Data loss detected in accounts table ($accounts_count_before → $accounts_count_after)"
-        data_preserved=false
-    fi
-
-    if [ "$transactions_count_before" != "$transactions_count_after" ]; then
-        fail_test "Data loss detected in transactions table ($transactions_count_before → $transactions_count_after)"
-        data_preserved=false
-    fi
+    for i in "${!tables_before[@]}"; do
+        if [ "${counts_before[$i]}" != "${counts_after[$i]}" ]; then
+            fail_test "Data loss detected in ${tables_before[$i]} table (${counts_before[$i]} → ${counts_after[$i]})"
+            data_preserved=false
+        fi
+    done
 
     if [ "$data_preserved" = true ]; then
         pass_test "DATA INTEGRITY TEST PASSED - All data preserved after re-applying migrations"
@@ -650,27 +610,17 @@ test_rollback() {
     local rollback_duration="${rollback_result%%:*}"
     local rollback_error_type="${rollback_result##*:}"
 
-    # Handle known Atlas enum dependency limitation
-    if [ "$rollback_error_type" = "enum_dependency" ]; then
-        log_warning "Atlas enum dependency limitation encountered during rollback"
-        log_warning "This is a known Atlas static analysis limitation with DO \$\$ blocks"
-        log_warning "Manual rollback (executing .down.sql directly) works correctly"
-        log_warning "See: https://atlasgo.io/concepts/migration-types#enum-types"
-        echo ""
-        pass_test "ROLLBACK TEST PASSED WITH KNOWN LIMITATION (enum dependency)"
-        log_success "✓ Tests 1-4 verified migration safety"
-        log_success "✓ Rollback limitation is documented and harmless"
-        return 0
-    elif [ "$rollback_error_type" = "other" ]; then
+    # Check for rollback errors
+    if [ "$rollback_error_type" = "other" ]; then
         fail_test "Rollback failed with unexpected error"
         return 1
     fi
 
     log_success "Migrations rolled back in ${rollback_duration}s"
 
-    # Verify clean state (only Atlas tracking should remain)
+    # Verify clean state (only schema_migrations tracking table should remain)
     log_info "Verifying clean state after rollback..."
-    local tables_after_rollback=$(run_psql "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name NOT LIKE 'atlas_%'")
+    local tables_after_rollback=$(run_psql "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name != 'schema_migrations'")
 
     if [ "$tables_after_rollback" != "0" ]; then
         fail_test "Rollback incomplete - $tables_after_rollback application tables still exist"
@@ -717,7 +667,7 @@ test_rollback() {
 
 main() {
     log_section "MIGRATION TESTING FRAMEWORK"
-    log_info "Issue #326: Comprehensive Atlas Migration Testing"
+    log_info "Issue #326: Comprehensive Migration Testing (golang-migrate + Squawk)"
     log_info "Database: $DATABASE_URL"
     log_info "Migrations: $MIGRATIONS_DIR"
     echo ""
@@ -728,8 +678,8 @@ main() {
         exit 1
     fi
 
-    if ! command -v atlas &> /dev/null; then
-        log_error "Atlas CLI not found - please install: https://atlasgo.io/"
+    if ! command -v migrate &> /dev/null; then
+        log_error "golang-migrate CLI not found - please install: https://github.com/golang-migrate/migrate"
         exit 1
     fi
 
