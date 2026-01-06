@@ -224,7 +224,7 @@ BAD ✗
 | `go-patterns` | Huma operations, service/repo layers, testing |
 | `typescript-patterns` | Feature structure, React Query, CVA components |
 | `integration-guides` | Clerk JWT, Plaid webhooks, Paddle events |
-| `db-migration-guide` | Idempotency patterns, Atlas commands, testing |
+| `db-migration-guide` | Idempotency patterns, golang-migrate commands, testing |
 | `run-e2e-tests` | E2E testing setup, debugging, CI vs local |
 | `qa-scenario-creator` | QA data population framework |
 

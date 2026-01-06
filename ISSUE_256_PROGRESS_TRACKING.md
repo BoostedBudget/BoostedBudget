@@ -95,8 +95,7 @@ for hasMore {
 ### PHASE 1: Database Migration ✅
 - [x] Create `000012_add_webhook_processing_metadata.up.sql`
 - [x] Create `000012_add_webhook_processing_metadata.down.sql`
-- [x] Run `atlas migrate hash`
-- [x] Run `atlas migrate lint` (no diagnostics)
+- [x] Migration linted and validated
 - [x] Index created: `idx_webhook_events_processing` (partial index on unprocessed webhooks)
 
 ### PHASE 2: Domain Models ✅
@@ -235,7 +234,7 @@ for hasMore {
 - ✅ Created migration 000012 with processing metadata fields
 - ✅ Added partial index `idx_webhook_events_processing` for efficient queries
 - ✅ Updated domain/webhook.go with all processing fields
-- ✅ Atlas validation passed (no diagnostics)
+- ✅ Migration validation passed (no diagnostics)
 
 ### 2025-10-27 - PHASE 3 Complete (Repository TDD)
 - ✅ **RED Phase:** Wrote 6 comprehensive repository tests (all failing as expected)

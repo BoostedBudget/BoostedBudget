@@ -542,7 +542,7 @@ See `backend/internal/services/sync_limit_service_e2e_test.go` for:
 
 **Database Rollback**:
 ```bash
-atlas migrate down --url "$DATABASE_URL" --target 000005
+migrate -database "$DATABASE_URL" -path migrations down
 ```
 
 ### Success Criteria

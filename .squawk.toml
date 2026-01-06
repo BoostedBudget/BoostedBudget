@@ -1,7 +1,7 @@
 # Squawk Configuration for BoostedBudget
-# PostgreSQL migration linter - replaces Atlas migrate lint
+# PostgreSQL migration linter for golang-migrate
 # Documentation: https://squawkhq.com/docs/rules
-# Issue #631: Migrated from Atlas to golang-migrate + Squawk
+# Issue #631: golang-migrate + Squawk for database migrations
 
 # Target PostgreSQL version (matches Neon production)
 pg_version = "17"
