@@ -321,18 +321,66 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
-  # Deploy Frontend to Cloudflare Pages (STUB)
+  # Deploy Frontend to Cloudflare Pages
   # =============================================================================
   deploy-frontend:
-    name: Deploy Frontend to Cloudflare Pages (STUB)
+    name: Deploy Frontend to Cloudflare Pages
     needs: build-images
     runs-on: [self-hosted, macOS, mac-mini]
+    environment:
+      name: staging
+      url: https://staging.boostedbudget.com
+    env:
+      UNIQUE_WORKSPACE: workspace-deploy-frontend-${{ github.run_id }}
 
     steps:
-      - name: Cloudflare Pages deployment (TODO)
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+      - name: Checkout staging branch
+        uses: actions/checkout@v6
+        with:
+          ref: staging
+          path: ${{ env.UNIQUE_WORKSPACE }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install pnpm
+        run: npm install -g pnpm@10
+
+      - name: Install dependencies
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        env:
+          VITE_API_URL: https://api.staging.boostedbudget.com
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
+          VITE_ENVIRONMENT: staging
+        run: pnpm run build
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: ${{ env.UNIQUE_WORKSPACE }}
+          command: pages deploy frontend/dist --project-name=boostedbudget-staging
+
+      - name: Deployment summary
         run: |
-          echo "::notice::Frontend Cloudflare Pages deployment not yet implemented"
-          echo "::notice::See issue #610 for Cloudflare Pages staging frontend setup"
+          echo "### Frontend Staging Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**URL:** https://staging.boostedbudget.com" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployed at:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
   # Staging Smoke Tests
@@ -402,11 +450,11 @@ jobs:
           echo "**Job Results:**" >> $GITHUB_STEP_SUMMARY
           echo "- Build Images: ${{ needs.build-images.result }}" >> $GITHUB_STEP_SUMMARY
           echo "- Deploy Backend: ${{ needs.deploy-backend.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Deploy Frontend: ${{ needs.deploy-frontend.result }} (stub)" >> $GITHUB_STEP_SUMMARY
+          echo "- Deploy Frontend: ${{ needs.deploy-frontend.result }}" >> $GITHUB_STEP_SUMMARY
           echo "- Smoke Tests: ${{ needs.smoke-tests.result }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**URLs:**" >> $GITHUB_STEP_SUMMARY
           echo "- Backend API: https://api.staging.boostedbudget.com" >> $GITHUB_STEP_SUMMARY
-          echo "- Frontend: (Cloudflare Pages - not yet configured)" >> $GITHUB_STEP_SUMMARY
+          echo "- Frontend: https://staging.boostedbudget.com" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Deployed at:** $(date -u)" >> $GITHUB_STEP_SUMMARY
