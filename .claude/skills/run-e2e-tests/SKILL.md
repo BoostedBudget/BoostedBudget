@@ -1,7 +1,6 @@
 ---
 name: run-e2e-tests
 description: "Run E2E tests locally for BoostedBudget. Use when testing frontend functionality, running playwright tests, or validating before PRs."
-version: "1.0.0"
 ---
 
 # BoostedBudget E2E Testing

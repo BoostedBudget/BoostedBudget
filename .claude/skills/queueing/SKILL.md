@@ -1,7 +1,6 @@
 ---
 name: queueing
 description: "River job queue patterns for BoostedBudget: job definitions, workers, periodic jobs, dead letter handling, and testing."
-version: "1.0.0"
 ---
 
 # River Job Queue Guide
