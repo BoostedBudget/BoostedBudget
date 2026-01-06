@@ -413,6 +413,7 @@ jobs:
         run: |
           echo "::group::Docker Image Vulnerability Scan (Grype)"
           grype ${{ steps.image-ref.outputs.image-ref }} \
+            --config ${{ env.UNIQUE_WORKSPACE }}/.grype.yaml \
             --fail-on high \
             --only-fixed \
             --output table
