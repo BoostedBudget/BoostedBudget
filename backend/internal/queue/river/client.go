@@ -74,6 +74,7 @@ func NewClient(pool *pgxpool.Pool, workers *river.Workers, cfg Config) (*Client,
 		FetchCooldown:        cfg.FetchCooldown,
 		FetchPollInterval:    cfg.FetchPollInterval,
 		PeriodicJobs:         cfg.PeriodicJobs,
+		ErrorHandler:         cfg.ErrorHandler,
 	}
 
 	riverClient, err := river.NewClient(riverpgxv5.New(pool), riverConfig)

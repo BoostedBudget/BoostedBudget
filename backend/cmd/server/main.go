@@ -344,6 +344,14 @@ func main() {
 				logger := slog.Default()
 				riverConfig := riverqueue.DefaultConfig()
 
+				// Issue #629: Configure dead letter handler for failed jobs
+				deadLetterHandler := riverqueue.NewDeadLetterHandler(riverqueue.DeadLetterHandlerDeps{
+					DB:     db,
+					Logger: logger,
+				})
+				riverConfig.ErrorHandler = deadLetterHandler.ErrorHandlerFunc()
+				log.Println("✅ Dead letter handler configured for failed jobs")
+
 				// Issue #629: Configure periodic job for scheduled deletion check (hourly)
 				if scheduledDeletionCheckWorker != nil {
 					riverConfig.PeriodicJobs = []*river.PeriodicJob{
