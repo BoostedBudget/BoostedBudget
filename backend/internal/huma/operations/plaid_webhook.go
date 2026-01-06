@@ -3,10 +3,13 @@ package operations
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue/jobs"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
@@ -15,13 +18,29 @@ import (
 type PlaidWebhookHandler struct {
 	webhookService services.WebhookService
 	webhookRepo    repository.WebhookRepository
+	jobQueue       queue.JobQueue
+	logger         *slog.Logger
+}
+
+// PlaidWebhookHandlerDeps contains dependencies for PlaidWebhookHandler.
+type PlaidWebhookHandlerDeps struct {
+	WebhookService services.WebhookService
+	WebhookRepo    repository.WebhookRepository
+	JobQueue       queue.JobQueue
+	Logger         *slog.Logger
 }
 
 // NewPlaidWebhookHandler creates a new PlaidWebhookHandler instance.
-func NewPlaidWebhookHandler(webhookService services.WebhookService, webhookRepo repository.WebhookRepository) *PlaidWebhookHandler {
+func NewPlaidWebhookHandler(deps PlaidWebhookHandlerDeps) *PlaidWebhookHandler {
+	logger := deps.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &PlaidWebhookHandler{
-		webhookService: webhookService,
-		webhookRepo:    webhookRepo,
+		webhookService: deps.WebhookService,
+		webhookRepo:    deps.WebhookRepo,
+		jobQueue:       deps.JobQueue,
+		logger:         logger,
 	}
 }
 
@@ -116,8 +135,37 @@ func (h *PlaidWebhookHandler) HandlePlaidWebhook(ctx context.Context, input *Pla
 			}
 		}
 
-		// Ignore database errors - don't fail webhook due to our issues
-		_ = h.webhookRepo.Create(ctx, webhookEvent)
+		// Store webhook and enqueue processing job
+		if err := h.webhookRepo.Create(ctx, webhookEvent); err != nil {
+			h.logger.Error("failed to store webhook",
+				"webhook_type", payload.WebhookType,
+				"error", err,
+			)
+			// Don't fail - return OK to prevent Plaid retry storms
+		} else if h.jobQueue != nil {
+			// Enqueue async processing job (Issue #573: River Queue)
+			jobArgs := jobs.WebhookProcessingArgs{
+				WebhookID:   webhookEvent.ID,
+				WebhookType: payload.WebhookType,
+				ItemID:      payload.ItemID,
+			}
+			uniqueOpts := jobs.WebhookProcessingUniqueOpts()
+			_, err := h.jobQueue.Enqueue(ctx, jobArgs, queue.WithUnique(*uniqueOpts))
+			if err != nil {
+				h.logger.Error("failed to enqueue webhook processing job",
+					"webhook_id", webhookEvent.ID,
+					"webhook_type", payload.WebhookType,
+					"error", err,
+				)
+				// Don't fail - webhook is stored, can be processed later
+			} else {
+				h.logger.Info("webhook processing job enqueued",
+					"webhook_id", webhookEvent.ID,
+					"webhook_type", payload.WebhookType,
+					"item_id", payload.ItemID,
+				)
+			}
+		}
 	}
 
 	// Handle different webhook types

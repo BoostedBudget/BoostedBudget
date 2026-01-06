@@ -19,6 +19,10 @@ import (
 	humamiddleware "github.com/maxnussbaum/BoostedBudget/internal/huma/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/operations"
 	"github.com/maxnussbaum/BoostedBudget/internal/middleware"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue/jobs"
+	riverqueue "github.com/maxnussbaum/BoostedBudget/internal/queue/river"
+	"github.com/riverqueue/river"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/maxnussbaum/BoostedBudget/internal/workers"
@@ -101,7 +105,12 @@ func main() {
 	var deletionWorker *workers.DeletionWorker
 
 	// Declare webhook processor at package scope for graceful shutdown
+	// DEPRECATED: Issue #573 - Being replaced by River queue
 	var webhookProcessor *workers.WebhookProcessor
+
+	// Issue #573: River queue for async job processing
+	var jobQueue queue.JobQueue
+	var riverRunner queue.JobRunner
 
 	// Issue #37: Declare rule scheduler manager at package scope for graceful shutdown
 	var ruleSchedulerManager *workers.RuleSchedulerManager
@@ -325,19 +334,45 @@ func main() {
 					emailService,
 				)
 
-				// Initialize Webhook Processor background worker
-				// Polls for unprocessed TRANSACTIONS and ITEM webhooks every 30 seconds
-				// Processes up to 10 webhooks per batch (per type)
-				webhookProcessor = workers.NewWebhookProcessor(
-					transactionSyncService,
-					itemErrorService,
-					webhookRepo,
-					30*time.Second, // Poll interval
-					10,             // Batch size
-				)
+				// DEPRECATED: Old polling-based webhook processor
+				// Issue #573: Replaced by River queue-based async processing
+				// webhookProcessor = workers.NewWebhookProcessor(
+				// 	transactionSyncService,
+				// 	itemErrorService,
+				// 	webhookRepo,
+				// 	30*time.Second, // Poll interval
+				// 	10,             // Batch size
+				// )
+				_ = webhookProcessor // Silence unused variable warning during transition
+
+				// Issue #573: Initialize River queue for async job processing
+				logger := slog.Default()
+				riverConfig := riverqueue.DefaultConfig()
+
+				// Create WebhookProcessingWorker with all dependencies
+				webhookProcessingWorker := jobs.NewWebhookProcessingWorker(jobs.WebhookProcessingWorkerDeps{
+					WebhookRepo:        webhookRepo,
+					TransactionSyncSvc: transactionSyncService,
+					ItemErrorSvc:       itemErrorService,
+					Logger:             logger,
+				})
+
+				// Create River workers and register our worker
+				riverWorkers := river.NewWorkers()
+				river.AddWorker(riverWorkers, webhookProcessingWorker)
+
+				// Create River client
+				riverClient, err := riverqueue.NewClient(db, riverWorkers, riverConfig)
+				if err != nil {
+					log.Printf("⚠️  Failed to initialize River queue: %v", err)
+				} else {
+					jobQueue = riverClient
+					riverRunner = riverClient
+					log.Println("✅ River queue initialized with webhook processing worker")
+				}
+
 				log.Println("✅ Transaction sync service initialized")
 				log.Println("✅ Item error service initialized")
-				log.Println("✅ Webhook processor initialized (interval: 30s, batch: 10, types: TRANSACTIONS+ITEM)")
 			}
 		}
 
@@ -539,6 +574,7 @@ func main() {
 	// Plaid servers need to POST to this endpoint without authentication
 	// Issue #202: Enhanced with JWT signature verification and database storage
 	// Issue #256: Webhook repository created in auth block above for webhook processor
+	// Issue #573: Now enqueues River jobs for async processing
 	if db != nil && plaidService != nil {
 		// Webhook repository for audit trail
 		webhookRepoForHandler := repository.NewWebhookRepository(db)
@@ -547,16 +583,29 @@ func main() {
 		webhookService := services.NewWebhookService(plaidService.GetClient())
 
 		// Register Huma plaid webhook route (Issue #559: Huma migration)
-		humaPlaidWebhookHandler := operations.NewPlaidWebhookHandler(webhookService, webhookRepoForHandler)
+		// Issue #573: Pass jobQueue for async webhook processing
+		humaPlaidWebhookHandler := operations.NewPlaidWebhookHandler(operations.PlaidWebhookHandlerDeps{
+			WebhookService: webhookService,
+			WebhookRepo:    webhookRepoForHandler,
+			JobQueue:       jobQueue,
+			Logger:         slog.Default(),
+		})
 		operations.RegisterPlaidWebhookRoutes(humaAPI, humaPlaidWebhookHandler)
 
 		log.Println("✅ Huma Plaid webhook route registered at POST /webhooks/plaid")
 		log.Println("✅ Webhook signature verification enabled (ES256 JWT)")
 		log.Println("✅ Webhook audit trail enabled (database storage)")
+		if jobQueue != nil {
+			log.Println("✅ Webhook async processing enabled (River queue)")
+		}
 	} else if db != nil {
 		// Fallback: Basic webhook handler without signature verification
 		// Used when Plaid credentials are not configured (e.g., local development)
-		humaPlaidWebhookHandler := operations.NewPlaidWebhookHandler(nil, repository.NewWebhookRepository(db))
+		humaPlaidWebhookHandler := operations.NewPlaidWebhookHandler(operations.PlaidWebhookHandlerDeps{
+			WebhookRepo: repository.NewWebhookRepository(db),
+			JobQueue:    jobQueue,
+			Logger:      slog.Default(),
+		})
 		operations.RegisterPlaidWebhookRoutes(humaAPI, humaPlaidWebhookHandler)
 		log.Println("✅ Huma Plaid webhook route registered at POST /webhooks/plaid (verification disabled)")
 		log.Println("⚠️  Webhook signature verification disabled (Plaid credentials not configured)")
@@ -577,14 +626,27 @@ func main() {
 		log.Println("✅ Deletion worker started")
 	}
 
-	// Start webhook processor
-	if webhookProcessor != nil {
+	// Start River queue runner (Issue #573: Replaces webhook processor)
+	if riverRunner != nil {
 		if workerCtx == nil {
 			workerCtx, workerCancel = context.WithCancel(context.Background())
 		}
-		go webhookProcessor.Start(workerCtx)
-		log.Println("✅ Webhook processor started")
+		go func() {
+			if err := riverRunner.Start(workerCtx); err != nil {
+				log.Printf("⚠️  River queue runner error: %v", err)
+			}
+		}()
+		log.Println("✅ River queue runner started (webhook processing enabled)")
 	}
+
+	// DEPRECATED: Old webhook processor (replaced by River queue)
+	// if webhookProcessor != nil {
+	// 	if workerCtx == nil {
+	// 		workerCtx, workerCancel = context.WithCancel(context.Background())
+	// 	}
+	// 	go webhookProcessor.Start(workerCtx)
+	// 	log.Println("✅ Webhook processor started")
+	// }
 
 	// Issue #37: Start rule scheduler manager
 	if ruleSchedulerManager != nil {
@@ -627,6 +689,21 @@ func main() {
 		}
 		stopCancel()
 		log.Println("Rule scheduler manager stopped")
+	}
+
+	// Issue #573: Stop River queue runner gracefully
+	if riverRunner != nil {
+		log.Println("Stopping River queue runner...")
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := riverRunner.Stop(stopCtx); err != nil {
+			log.Printf("⚠️  Error stopping River queue: %v", err)
+			// Try force stop if graceful stop fails
+			if err := riverRunner.StopAndCancel(stopCtx); err != nil {
+				log.Printf("⚠️  Error force stopping River queue: %v", err)
+			}
+		}
+		stopCancel()
+		log.Println("River queue runner stopped")
 	}
 
 	// Stop background workers (if running)
