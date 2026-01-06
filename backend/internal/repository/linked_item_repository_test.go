@@ -2,16 +2,14 @@ package repository
 
 import (
 	"context"
-	"database/sql"
-	
 	"regexp"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/pashagolub/pgxmock/v4"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -78,6 +76,9 @@ func TestLinkedItemRepository_GetByUserID(t *testing.T) {
 	userID := uuid.New().String()
 	now := time.Now()
 
+	// Helper for nullable string
+	cursor := "cursor-abc"
+
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "item_id", "access_token_encrypted",
 		"institution_id", "institution_name", "provider", "cursor", "last_synced_at",
@@ -90,7 +91,7 @@ func TestLinkedItemRepository_GetByUserID(t *testing.T) {
 		).
 		AddRow(
 			uuid.New().String(), userID, "item-2", "encrypted-token-2",
-			"ins_2", "Wells Fargo", "plaid", "cursor-abc", &now,
+			"ins_2", "Wells Fargo", "plaid", &cursor, &now,
 			now, now,
 		)
 
@@ -243,6 +244,7 @@ func TestLinkedItemRepository_GetByIDAndUser_Success(t *testing.T) {
 	ctx := context.Background()
 	itemID := uuid.New().String()
 	userID := uuid.New().String()
+	now := time.Now()
 
 	expectedQuery := `
 		SELECT id, user_id, item_id, access_token_encrypted,
@@ -260,7 +262,7 @@ func TestLinkedItemRepository_GetByIDAndUser_Success(t *testing.T) {
 	}).AddRow(
 		itemID, userID, "plaid-item-123", "encrypted-token",
 		"ins_chase", "Chase", "plaid",
-		sql.NullString{}, sql.NullTime{}, time.Now(), time.Now(),
+		nil, nil, now, now,
 	)
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).

@@ -145,19 +145,19 @@ func TestBalanceSnapshotRepository_GetByUserIDAndDateRange(t *testing.T) {
 	startDate := time.Date(2024, 11, 1, 0, 0, 0, 0, time.UTC)
 	endDate := time.Date(2024, 11, 15, 23, 59, 59, 0, time.UTC)
 
-	// Mock data
-	balance1 := 1000.00
-	balance2 := 1100.00
+	// Mock data - use pointers for nullable float64 columns
+	balance1, avail1 := 1000.00, 950.00
+	balance2, avail2 := 1100.00, 1050.00
 	rows := pgxmock.NewRows([]string{
 		"id", "account_id", "user_id", "current_balance", "available_balance",
 		"currency_code", "snapshot_at", "source", "created_at",
 	}).
 		AddRow(
-			uuid.New().String(), accountID, userID, 1000.00, 950.00,
+			uuid.New().String(), accountID, userID, &balance1, &avail1,
 			"USD", time.Date(2024, 11, 1, 10, 30, 0, 0, time.UTC), "plaid_webhook", time.Now(),
 		).
 		AddRow(
-			uuid.New().String(), accountID, userID, 1100.00, 1050.00,
+			uuid.New().String(), accountID, userID, &balance2, &avail2,
 			"USD", time.Date(2024, 11, 15, 14, 0, 0, 0, time.UTC), "plaid_webhook", time.Now(),
 		)
 
@@ -303,17 +303,21 @@ func TestBalanceSnapshotRepository_GetLatestByUserID(t *testing.T) {
 	account1 := uuid.New().String()
 	account2 := uuid.New().String()
 
+	// Helper for nullable float64 values
+	bal1, avail1 := 1500.00, 1400.00
+	bal2, avail2 := 2500.00, 2400.00
+
 	// Mock latest snapshots (one per account)
 	rows := pgxmock.NewRows([]string{
 		"id", "account_id", "user_id", "current_balance", "available_balance",
 		"currency_code", "snapshot_at", "source", "created_at",
 	}).
 		AddRow(
-			uuid.New().String(), account1, userID, 1500.00, 1400.00,
+			uuid.New().String(), account1, userID, &bal1, &avail1,
 			"USD", time.Date(2024, 11, 15, 14, 30, 0, 0, time.UTC), "plaid_webhook", time.Now(),
 		).
 		AddRow(
-			uuid.New().String(), account2, userID, 2500.00, 2400.00,
+			uuid.New().String(), account2, userID, &bal2, &avail2,
 			"USD", time.Date(2024, 11, 15, 14, 30, 0, 0, time.UTC), "plaid_webhook", time.Now(),
 		)
 
@@ -347,12 +351,15 @@ func TestBalanceSnapshotRepository_GetLatestByAccountID(t *testing.T) {
 	userID := uuid.New().String()
 	snapshotAt := time.Date(2024, 11, 15, 14, 30, 45, 0, time.UTC)
 
+	// Helper for nullable float64 values
+	balance, available := 1500.00, 1400.00
+
 	// Mock latest snapshot for account
 	rows := pgxmock.NewRows([]string{
 		"id", "account_id", "user_id", "current_balance", "available_balance",
 		"currency_code", "snapshot_at", "source", "created_at",
 	}).AddRow(
-		uuid.New().String(), accountID, userID, 1500.00, 1400.00,
+		uuid.New().String(), accountID, userID, &balance, &available,
 		"USD", snapshotAt, "plaid_webhook", time.Now(),
 	)
 
@@ -489,12 +496,15 @@ func TestBalanceSnapshotRepository_GetByUserIDAndDateRange_SubSecondOrdering(t *
 	time1 := time.Date(2024, 11, 15, 10, 30, 45, 100000000, time.UTC) // .100 seconds
 	time2 := time.Date(2024, 11, 15, 10, 30, 45, 900000000, time.UTC) // .900 seconds
 
+	// Helper for nullable float64 values
+	bal1, bal2 := 1000.00, 1001.00
+
 	rows := pgxmock.NewRows([]string{
 		"id", "account_id", "user_id", "current_balance", "available_balance",
 		"currency_code", "snapshot_at", "source", "created_at",
 	}).
-		AddRow(uuid.New().String(), accountID, userID, 1000.00, nil, "USD", time1, "plaid_webhook", time.Now()).
-		AddRow(uuid.New().String(), accountID, userID, 1001.00, nil, "USD", time2, "plaid_webhook", time.Now())
+		AddRow(uuid.New().String(), accountID, userID, &bal1, nil, "USD", time1, "plaid_webhook", time.Now()).
+		AddRow(uuid.New().String(), accountID, userID, &bal2, nil, "USD", time2, "plaid_webhook", time.Now())
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, account_id, user_id, current_balance, available_balance,
@@ -536,13 +546,16 @@ func TestBalanceSnapshotRepository_GetByUserIDAndDateRange_BoundaryConditions(t 
 	atEnd := time.Date(2024, 11, 15, 23, 59, 59, 999999000, time.UTC)
 	middle := time.Date(2024, 11, 15, 12, 0, 0, 0, time.UTC)
 
+	// Helper for nullable float64 values
+	bal1, bal2, bal3 := 1000.00, 1100.00, 1200.00
+
 	rows := pgxmock.NewRows([]string{
 		"id", "account_id", "user_id", "current_balance", "available_balance",
 		"currency_code", "snapshot_at", "source", "created_at",
 	}).
-		AddRow(uuid.New().String(), accountID, userID, 1000.00, nil, "USD", atStart, "plaid_webhook", time.Now()).
-		AddRow(uuid.New().String(), accountID, userID, 1100.00, nil, "USD", middle, "plaid_webhook", time.Now()).
-		AddRow(uuid.New().String(), accountID, userID, 1200.00, nil, "USD", atEnd, "plaid_webhook", time.Now())
+		AddRow(uuid.New().String(), accountID, userID, &bal1, nil, "USD", atStart, "plaid_webhook", time.Now()).
+		AddRow(uuid.New().String(), accountID, userID, &bal2, nil, "USD", middle, "plaid_webhook", time.Now()).
+		AddRow(uuid.New().String(), accountID, userID, &bal3, nil, "USD", atEnd, "plaid_webhook", time.Now())
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, account_id, user_id, current_balance, available_balance,
@@ -658,11 +671,14 @@ func TestBalanceSnapshotRepository_GetLatestByAccountID_SubSecondPrecision(t *te
 	// Latest snapshot with microsecond precision
 	snapshotAt := time.Date(2024, 11, 15, 14, 30, 45, 999999000, time.UTC)
 
+	// Helper for nullable float64 values
+	balance, available := 1500.00, 1400.00
+
 	rows := pgxmock.NewRows([]string{
 		"id", "account_id", "user_id", "current_balance", "available_balance",
 		"currency_code", "snapshot_at", "source", "created_at",
 	}).AddRow(
-		uuid.New().String(), accountID, userID, 1500.00, 1400.00,
+		uuid.New().String(), accountID, userID, &balance, &available,
 		"USD", snapshotAt, "plaid_webhook", time.Now(),
 	)
 

@@ -162,6 +162,12 @@ func TestAccountRepository_GetByLinkedItemID(t *testing.T) {
 	linkedItemID := uuid.New().String()
 	now := time.Now()
 
+	// Helper for nullable float64 values
+	balance1 := 1500.50
+	available1 := 1450.25
+	balance2 := 5000.00
+	available2 := 5000.00
+
 	rows := pgxmock.NewRows([]string{
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
@@ -170,14 +176,14 @@ func TestAccountRepository_GetByLinkedItemID(t *testing.T) {
 	}).
 		AddRow(
 			uuid.New().String(), linkedItemID, uuid.New().String(), "acc-1",
-			"Checking", "Chase Total Checking", "depository", "checking", "1234",
-			1500.50, 1450.25, "USD",
+			"Checking", strPtr("Chase Total Checking"), "depository", strPtr("checking"), strPtr("1234"),
+			&balance1, &available1, "USD",
 			now, now,
 		).
 		AddRow(
 			uuid.New().String(), linkedItemID, uuid.New().String(), "acc-2",
-			"Savings", nil, "depository", "savings", "5678",
-			5000.00, 5000.00, "USD",
+			"Savings", nil, "depository", strPtr("savings"), strPtr("5678"),
+			&balance2, &available2, "USD",
 			now, now,
 		)
 
@@ -211,6 +217,10 @@ func TestAccountRepository_GetByUserID(t *testing.T) {
 	userID := uuid.New().String()
 	now := time.Now()
 
+	// Helper for nullable float64 values
+	balance := 1000.00
+	available := 950.00
+
 	rows := pgxmock.NewRows([]string{
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
@@ -218,8 +228,8 @@ func TestAccountRepository_GetByUserID(t *testing.T) {
 		"created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), uuid.New().String(), userID, "acc-1",
-		"Checking", nil, "depository", "checking", "1234",
-		1000.00, 950.00, "USD",
+		"Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
+		&balance, &available, "USD",
 		now, now,
 	)
 
@@ -286,9 +296,29 @@ func TestAccountRepository_UniqueConstraint(t *testing.T) {
 	}
 
 	// Simulate unique constraint violation
+	// Need to match the full INSERT query with arguments for pgxmock v4
 	mock.ExpectExec(regexp.QuoteMeta(`
 		INSERT INTO accounts
-	`)).WillReturnError(errors.New("connection done")) // Simulating constraint error
+		(id, linked_item_id, user_id, plaid_account_id, name, official_name,
+		 type, subtype, mask, current_balance, available_balance, currency_code,
+		 created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+	`)).WithArgs(
+		pgxmock.AnyArg(), // id
+		pgxmock.AnyArg(), // linked_item_id
+		pgxmock.AnyArg(), // user_id
+		pgxmock.AnyArg(), // plaid_account_id
+		pgxmock.AnyArg(), // name
+		pgxmock.AnyArg(), // official_name
+		pgxmock.AnyArg(), // type
+		pgxmock.AnyArg(), // subtype
+		pgxmock.AnyArg(), // mask
+		pgxmock.AnyArg(), // current_balance
+		pgxmock.AnyArg(), // available_balance
+		pgxmock.AnyArg(), // currency_code
+		pgxmock.AnyArg(), // created_at
+		pgxmock.AnyArg(), // updated_at
+	).WillReturnError(errors.New("connection done")) // Simulating constraint error
 
 	// Execute
 	err := repo.Create(ctx, account)
@@ -308,6 +338,11 @@ func TestAccountRepository_GetAccountsWithInstitution(t *testing.T) {
 	linkedItemID1 := uuid.New().String()
 	linkedItemID2 := uuid.New().String()
 
+	// Helper for nullable float64 values
+	bal1, avail1 := 1500.50, 1450.25
+	bal2, avail2 := 5000.00, 5000.00
+	bal3, avail3 := 750.00, 700.00
+
 	// Mock the LEFT JOIN query
 	rows := pgxmock.NewRows([]string{
 		"id", "linked_item_id", "user_id", "plaid_account_id",
@@ -317,20 +352,20 @@ func TestAccountRepository_GetAccountsWithInstitution(t *testing.T) {
 	}).
 		AddRow(
 			uuid.New().String(), linkedItemID1, userID, "plaid-acc-1",
-			"Chase Checking", "Chase Total Checking®", "depository", "checking", "1234",
-			1500.50, 1450.25, "USD",
+			"Chase Checking", strPtr("Chase Total Checking®"), "depository", strPtr("checking"), strPtr("1234"),
+			&bal1, &avail1, "USD",
 			time.Now(), time.Now(), "Chase",
 		).
 		AddRow(
 			uuid.New().String(), linkedItemID1, userID, "plaid-acc-2",
-			"Chase Savings", "Chase Savings℠", "depository", "savings", "5678",
-			5000.00, 5000.00, "USD",
+			"Chase Savings", strPtr("Chase Savings℠"), "depository", strPtr("savings"), strPtr("5678"),
+			&bal2, &avail2, "USD",
 			time.Now(), time.Now(), "Chase",
 		).
 		AddRow(
 			uuid.New().String(), linkedItemID2, userID, "plaid-acc-3",
-			"Wells Fargo Checking", nil, "depository", "checking", "9012",
-			750.00, 700.00, "USD",
+			"Wells Fargo Checking", nil, "depository", strPtr("checking"), strPtr("9012"),
+			&bal3, &avail3, "USD",
 			time.Now(), time.Now(), "Wells Fargo",
 		)
 
@@ -512,7 +547,7 @@ func TestAccountRepository_Delete_DatabaseError(t *testing.T) {
 
 	// Then: Returns database error
 	assert.Error(t, err)
-	assert.ErrorIs(t, err, errors.New("connection done"))
+	assert.Contains(t, err.Error(), "connection done")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -536,6 +571,10 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 	userID := uuid.New().String()
 	now := time.Now()
 
+	// Helper for nullable float64 values
+	balance, available := 1500.50, 1450.25
+	displayOrder := 1
+
 	rows := pgxmock.NewRows([]string{
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
@@ -545,10 +584,10 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 		"created_at", "updated_at",
 	}).AddRow(
 		accountID, uuid.New().String(), userID, "plaid-acc-1",
-		"Checking", "Chase Total Checking", "depository", "checking", "1234",
-		1500.50, 1450.25, "USD",
-		"My Checking", "#3B82F6", "wallet", "💰",
-		1, false,
+		"Checking", strPtr("Chase Total Checking"), "depository", strPtr("checking"), strPtr("1234"),
+		&balance, &available, "USD",
+		strPtr("My Checking"), strPtr("#3B82F6"), strPtr("wallet"), strPtr("💰"),
+		&displayOrder, false,
 		now, now,
 	)
 
@@ -799,6 +838,11 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 	userID := uuid.New().String()
 	now := time.Now()
 
+	// Helper for nullable float64 values
+	bal1, avail1 := 1500.50, 1450.25
+	bal2, avail2 := 5000.00, 5000.00
+	order0, order1 := 0, 1
+
 	rows := pgxmock.NewRows([]string{
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
@@ -809,18 +853,18 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 	}).
 		AddRow(
 			uuid.New().String(), uuid.New().String(), userID, "acc-1",
-			"Checking", nil, "depository", "checking", "1234",
-			1500.50, 1450.25, "USD",
-			"My Checking", "#3B82F6", "wallet", nil,
-			0, false,
+			"Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
+			&bal1, &avail1, "USD",
+			strPtr("My Checking"), strPtr("#3B82F6"), strPtr("wallet"), nil,
+			&order0, false,
 			now, now, "Chase",
 		).
 		AddRow(
 			uuid.New().String(), uuid.New().String(), userID, "acc-2",
-			"Savings", nil, "depository", "savings", "5678",
-			5000.00, 5000.00, "USD",
+			"Savings", nil, "depository", strPtr("savings"), strPtr("5678"),
+			&bal2, &avail2, "USD",
 			nil, nil, nil, nil,
-			1, false,
+			&order1, false,
 			now, now, "Chase",
 		)
 
@@ -861,6 +905,11 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 	userID := uuid.New().String()
 	now := time.Now()
 
+	// Helper for nullable float64 values
+	bal1, avail1 := 1500.50, 1450.25
+	bal2, avail2 := 0.00, 0.00
+	order0 := 0
+
 	rows := pgxmock.NewRows([]string{
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
@@ -871,17 +920,17 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 	}).
 		AddRow(
 			uuid.New().String(), uuid.New().String(), userID, "acc-1",
-			"Checking", nil, "depository", "checking", "1234",
-			1500.50, 1450.25, "USD",
+			"Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
+			&bal1, &avail1, "USD",
 			nil, nil, nil, nil,
-			0, false,
+			&order0, false,
 			now, now, "Chase",
 		).
 		AddRow(
 			uuid.New().String(), uuid.New().String(), userID, "acc-2",
-			"Old Account", nil, "depository", "checking", "0000",
-			0.00, 0.00, "USD",
-			"Closed Account", nil, nil, nil,
+			"Old Account", nil, "depository", strPtr("checking"), strPtr("0000"),
+			&bal2, &avail2, "USD",
+			strPtr("Closed Account"), nil, nil, nil,
 			nil, true, // This one is hidden
 			now, now, "Bank of America",
 		)

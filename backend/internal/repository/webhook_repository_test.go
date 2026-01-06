@@ -84,8 +84,13 @@ func TestWebhookEventCreate_DatabaseError(t *testing.T) {
 		Payload:     payload,
 	}
 
-	// Mock database error
+	// Mock database error - need to match 10 arguments for pgxmock v4
+	args := make([]interface{}, 10)
+	for i := range args {
+		args[i] = pgxmock.AnyArg()
+	}
 	mock.ExpectQuery(`INSERT INTO webhook_events`).
+		WithArgs(args...).
 		WillReturnError(assert.AnError)
 
 	// Execute
@@ -148,6 +153,17 @@ func TestWebhookEventGetUnprocessed_Multiple(t *testing.T) {
 	repo := NewWebhookRepository(mock)
 	ctx := context.Background()
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
+	webhookCode1 := "DEFAULT_UPDATE"
+	webhookCode2 := "ERROR"
+	itemID1 := "item-1"
+	itemID2 := "item-2"
+	errorCode := "ITEM_LOGIN_REQUIRED"
+	newTransactions := 5
+	signature1 := "sig-1"
+	signature2 := "sig-2"
+	now := time.Now()
+
 	// Mock SELECT query
 	rows := pgxmock.NewRows([]string{
 		"id", "webhook_type", "webhook_code", "item_id", "error_code",
@@ -156,16 +172,16 @@ func TestWebhookEventGetUnprocessed_Multiple(t *testing.T) {
 		"created_at", "updated_at",
 	}).
 		AddRow(
-			"id-1", "TRANSACTIONS", "DEFAULT_UPDATE", "item-1", nil,
-			5, nil, json.RawMessage(`{}`),
-			"sig-1", true, false, nil,
-			time.Now(), time.Now(),
+			"id-1", "TRANSACTIONS", &webhookCode1, &itemID1, nil,
+			&newTransactions, nil, json.RawMessage(`{}`),
+			&signature1, true, false, nil,
+			now, now,
 		).
 		AddRow(
-			"id-2", "ITEM", "ERROR", "item-2", "ITEM_LOGIN_REQUIRED",
+			"id-2", "ITEM", &webhookCode2, &itemID2, &errorCode,
 			nil, nil, json.RawMessage(`{}`),
-			"sig-2", true, false, nil,
-			time.Now(), time.Now(),
+			&signature2, true, false, nil,
+			now, now,
 		)
 
 	mock.ExpectQuery(`SELECT .+ FROM webhook_events WHERE processed = false`).
@@ -220,6 +236,12 @@ func TestWebhookEventGetByItemID_Success(t *testing.T) {
 	itemID := "test-item-123"
 	limit := 10
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
+	webhookCode := "DEFAULT_UPDATE"
+	newTransactions := 3
+	signature := "sig-1"
+	now := time.Now()
+
 	// Mock SELECT query with item_id filter
 	rows := pgxmock.NewRows([]string{
 		"id", "webhook_type", "webhook_code", "item_id", "error_code",
@@ -228,10 +250,10 @@ func TestWebhookEventGetByItemID_Success(t *testing.T) {
 		"created_at", "updated_at",
 	}).
 		AddRow(
-			"id-1", "TRANSACTIONS", "DEFAULT_UPDATE", itemID, nil,
-			3, nil, json.RawMessage(`{}`),
-			"sig-1", true, true, timePtr(time.Now()),
-			time.Now(), time.Now(),
+			"id-1", "TRANSACTIONS", &webhookCode, &itemID, nil,
+			&newTransactions, nil, json.RawMessage(`{}`),
+			&signature, true, true, &now,
+			now, now,
 		)
 
 	mock.ExpectQuery(`SELECT .+ FROM webhook_events WHERE item_id`).
@@ -377,6 +399,17 @@ func TestWebhookRepository_GetUnprocessedByType_Success(t *testing.T) {
 	repo := NewWebhookRepository(mock)
 	ctx := context.Background()
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
+	webhookCode1 := "DEFAULT_UPDATE"
+	webhookCode2 := "INITIAL_UPDATE"
+	itemID1 := "item-1"
+	itemID2 := "item-2"
+	newTx1 := 5
+	newTx2 := 10
+	signature1 := "sig-1"
+	signature2 := "sig-2"
+	now := time.Now()
+
 	// Mock SELECT query filtered by webhook_type
 	rows := pgxmock.NewRows([]string{
 		"id", "webhook_type", "webhook_code", "item_id", "error_code",
@@ -387,18 +420,18 @@ func TestWebhookRepository_GetUnprocessedByType_Success(t *testing.T) {
 		"created_at", "updated_at",
 	}).
 		AddRow(
-			"id-1", "TRANSACTIONS", "DEFAULT_UPDATE", "item-1", nil,
-			5, nil, json.RawMessage(`{}`),
-			"sig-1", true, false, nil,
+			"id-1", "TRANSACTIONS", &webhookCode1, &itemID1, nil,
+			&newTx1, nil, json.RawMessage(`{}`),
+			&signature1, true, false, nil,
 			nil, nil, nil, 0, nil,
-			time.Now(), time.Now(),
+			now, now,
 		).
 		AddRow(
-			"id-2", "TRANSACTIONS", "INITIAL_UPDATE", "item-2", nil,
-			10, nil, json.RawMessage(`{}`),
-			"sig-2", true, false, nil,
+			"id-2", "TRANSACTIONS", &webhookCode2, &itemID2, nil,
+			&newTx2, nil, json.RawMessage(`{}`),
+			&signature2, true, false, nil,
 			nil, nil, nil, 0, nil,
-			time.Now(), time.Now(),
+			now, now,
 		)
 
 	// Expect query with webhook_type filter and retry filter
@@ -426,6 +459,13 @@ func TestWebhookRepository_GetUnprocessedByType_OnlyTransactions(t *testing.T) {
 	repo := NewWebhookRepository(mock)
 	ctx := context.Background()
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
+	webhookCode := "DEFAULT_UPDATE"
+	itemID := "item-1"
+	newTransactions := 5
+	signature := "sig-1"
+	now := time.Now()
+
 	// Mock result with only TRANSACTIONS webhooks (filtering works)
 	rows := pgxmock.NewRows([]string{
 		"id", "webhook_type", "webhook_code", "item_id", "error_code",
@@ -436,11 +476,11 @@ func TestWebhookRepository_GetUnprocessedByType_OnlyTransactions(t *testing.T) {
 		"created_at", "updated_at",
 	}).
 		AddRow(
-			"id-1", "TRANSACTIONS", "DEFAULT_UPDATE", "item-1", nil,
-			5, nil, json.RawMessage(`{}`),
-			"sig-1", true, false, nil,
+			"id-1", "TRANSACTIONS", &webhookCode, &itemID, nil,
+			&newTransactions, nil, json.RawMessage(`{}`),
+			&signature, true, false, nil,
 			nil, nil, nil, 0, nil,
-			time.Now(), time.Now(),
+			now, now,
 		)
 
 	mock.ExpectQuery(`SELECT .+ FROM webhook_events WHERE processed = false AND webhook_type`).
@@ -503,6 +543,15 @@ func TestWebhookRepository_GetUnprocessedByType_OrdersByCreatedAt(t *testing.T) 
 	older := time.Now().Add(-2 * time.Hour)
 	newer := time.Now().Add(-1 * time.Hour)
 
+	// Use pointers for nullable columns (pgxmock v4 requirement)
+	webhookCode := "DEFAULT_UPDATE"
+	itemID1 := "item-1"
+	itemID2 := "item-2"
+	newTx1 := 5
+	newTx2 := 3
+	signature1 := "sig-1"
+	signature2 := "sig-2"
+
 	// Mock result ordered by created_at ASC (oldest first)
 	rows := pgxmock.NewRows([]string{
 		"id", "webhook_type", "webhook_code", "item_id", "error_code",
@@ -513,16 +562,16 @@ func TestWebhookRepository_GetUnprocessedByType_OrdersByCreatedAt(t *testing.T) 
 		"created_at", "updated_at",
 	}).
 		AddRow(
-			"id-older", "TRANSACTIONS", "DEFAULT_UPDATE", "item-1", nil,
-			5, nil, json.RawMessage(`{}`),
-			"sig-1", true, false, nil,
+			"id-older", "TRANSACTIONS", &webhookCode, &itemID1, nil,
+			&newTx1, nil, json.RawMessage(`{}`),
+			&signature1, true, false, nil,
 			nil, nil, nil, 0, nil,
 			older, older,
 		).
 		AddRow(
-			"id-newer", "TRANSACTIONS", "DEFAULT_UPDATE", "item-2", nil,
-			3, nil, json.RawMessage(`{}`),
-			"sig-2", true, false, nil,
+			"id-newer", "TRANSACTIONS", &webhookCode, &itemID2, nil,
+			&newTx2, nil, json.RawMessage(`{}`),
+			&signature2, true, false, nil,
 			nil, nil, nil, 0, nil,
 			newer, newer,
 		)

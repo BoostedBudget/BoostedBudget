@@ -128,12 +128,12 @@ func TestSavingsGoalRepository_GetByID(t *testing.T) {
 			goalID,
 			userID,
 			"Vacation Fund",
-			desc,
+			&desc,     // Use pointer for nullable description
 			5000.00,
 			1000.00,
 			"USD",
 			accountID,
-			deadline,
+			&deadline, // Use pointer for nullable deadline
 			false,
 			nil,
 			now,
@@ -179,6 +179,8 @@ func TestSavingsGoalRepository_GetByUserID(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New().String()
 	now := time.Now()
+	deadline := now.AddDate(1, 0, 0)
+	desc1, desc2 := "Desc 1", "Desc 2"
 
 	columns := []string{
 		"id", "user_id", "name", "description", "target_amount", "current_amount",
@@ -193,12 +195,12 @@ func TestSavingsGoalRepository_GetByUserID(t *testing.T) {
 				uuid.New().String(),
 				userID,
 				"Goal 1",
-				"Desc 1",
+				&desc1, // Use pointer for nullable description
 				5000.00,
 				1000.00,
 				"USD",
 				uuid.New().String(),
-				now.AddDate(1, 0, 0),
+				&deadline, // Use pointer for nullable deadline
 				false,
 				nil,
 				now,
@@ -208,12 +210,12 @@ func TestSavingsGoalRepository_GetByUserID(t *testing.T) {
 				uuid.New().String(),
 				userID,
 				"Goal 2",
-				"Desc 2",
+				&desc2, // Use pointer for nullable description
 				10000.00,
 				5000.00,
 				"USD",
 				uuid.New().String(),
-				nil,
+				nil, // nil deadline is fine
 				false,
 				nil,
 				now,
@@ -235,6 +237,7 @@ func TestSavingsGoalRepository_GetActiveByUserID(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New().String()
 	now := time.Now()
+	desc := "Desc"
 
 	columns := []string{
 		"id", "user_id", "name", "description", "target_amount", "current_amount",
@@ -248,12 +251,12 @@ func TestSavingsGoalRepository_GetActiveByUserID(t *testing.T) {
 			uuid.New().String(),
 			userID,
 			"Active Goal",
-			"Desc",
+			&desc, // Use pointer for nullable description
 			5000.00,
 			1000.00,
 			"USD",
 			uuid.New().String(),
-			nil,
+			nil, // nil deadline is fine
 			false,
 			nil,
 			now,
@@ -277,6 +280,7 @@ func TestSavingsGoalRepository_GetByAccountID(t *testing.T) {
 	accountID := uuid.New().String()
 	userID := uuid.New().String()
 	now := time.Now()
+	desc1, desc2 := "Desc 1", "Desc 2"
 
 	columns := []string{
 		"id", "user_id", "name", "description", "target_amount", "current_amount",
@@ -291,7 +295,7 @@ func TestSavingsGoalRepository_GetByAccountID(t *testing.T) {
 				uuid.New().String(),
 				userID,
 				"Goal 1",
-				"Desc 1",
+				&desc1, // Use pointer for nullable description
 				5000.00,
 				1000.00,
 				"USD",
@@ -306,7 +310,7 @@ func TestSavingsGoalRepository_GetByAccountID(t *testing.T) {
 				uuid.New().String(),
 				userID,
 				"Goal 2",
-				"Desc 2",
+				&desc2, // Use pointer for nullable description
 				10000.00,
 				5000.00,
 				"USD",

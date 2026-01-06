@@ -237,6 +237,7 @@ func TestRolloverHistoryRepository_GetByUserID(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New().String()
 	now := time.Now()
+	pastMonth := now.AddDate(0, -1, 0)
 
 	columns := []string{
 		"id", "user_id", "budget_id", "rule_id", "rule_execution_id",
@@ -258,10 +259,10 @@ func TestRolloverHistoryRepository_GetByUserID(t *testing.T) {
 				nil,
 				100.00,
 				domain.RolloverTypeFull,
-				now.AddDate(0, -1, 0),
+				pastMonth,
 				now,
 				domain.RolloverStatusApplied,
-				now,
+				&now, // Use pointer for nullable applied_at
 				now,
 			).
 			AddRow(
@@ -275,10 +276,10 @@ func TestRolloverHistoryRepository_GetByUserID(t *testing.T) {
 				50.00,
 				domain.RolloverTypeCapped,
 				now.AddDate(0, -2, 0),
-				now.AddDate(0, -1, 0),
+				pastMonth,
 				domain.RolloverStatusPending,
-				nil,
-				now.AddDate(0, -1, 0),
+				nil, // nil for pending status
+				pastMonth,
 			))
 
 	rollovers, err := repo.GetByUserID(ctx, userID, 10, 0)
@@ -325,6 +326,7 @@ func TestRolloverHistoryRepository_GetByBudgetID(t *testing.T) {
 	budgetID := uuid.New().String()
 	userID := uuid.New().String()
 	now := time.Now()
+	pastMonth := now.AddDate(0, -1, 0)
 
 	columns := []string{
 		"id", "user_id", "budget_id", "rule_id", "rule_execution_id",
@@ -346,10 +348,10 @@ func TestRolloverHistoryRepository_GetByBudgetID(t *testing.T) {
 				nil,
 				100.00,
 				domain.RolloverTypeFull,
-				now.AddDate(0, -1, 0),
+				pastMonth,
 				now,
 				domain.RolloverStatusApplied,
-				now,
+				&now, // Use pointer for nullable applied_at
 				now,
 			))
 
@@ -437,8 +439,9 @@ func TestRolloverHistoryRepository_UpdateStatus_Rejected(t *testing.T) {
 	ctx := context.Background()
 	rolloverID := uuid.New().String()
 
+	// Use AnyArg for the nullable applied_at since pgxmock v4 is stricter about nil types
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE rollover_history`)).
-		WithArgs(domain.RolloverStatusRejected, nil, rolloverID).
+		WithArgs(domain.RolloverStatusRejected, pgxmock.AnyArg(), rolloverID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	err := repo.UpdateStatus(ctx, rolloverID, domain.RolloverStatusRejected, nil)
@@ -454,8 +457,9 @@ func TestRolloverHistoryRepository_UpdateStatus_NotFound(t *testing.T) {
 	ctx := context.Background()
 	rolloverID := uuid.New().String()
 
+	// Use AnyArg for the nullable applied_at since pgxmock v4 is stricter about nil types
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE rollover_history`)).
-		WithArgs(domain.RolloverStatusApplied, nil, rolloverID).
+		WithArgs(domain.RolloverStatusApplied, pgxmock.AnyArg(), rolloverID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	err := repo.UpdateStatus(ctx, rolloverID, domain.RolloverStatusApplied, nil)
@@ -503,7 +507,7 @@ func TestRolloverHistoryRepository_GetByBudgetAndPeriod(t *testing.T) {
 				periodStart,
 				periodEnd,
 				domain.RolloverStatusApplied,
-				now,
+				&now, // Use pointer for nullable applied_at
 				now,
 			))
 
@@ -528,6 +532,7 @@ func TestRolloverHistoryRepository_GetBySourceCategory(t *testing.T) {
 	userID := uuid.New().String()
 	budgetID := uuid.New().String()
 	now := time.Now()
+	pastMonth := now.AddDate(0, -1, 0)
 
 	columns := []string{
 		"id", "user_id", "budget_id", "rule_id", "rule_execution_id",
@@ -549,10 +554,10 @@ func TestRolloverHistoryRepository_GetBySourceCategory(t *testing.T) {
 				nil,
 				100.00,
 				domain.RolloverTypeFull,
-				now.AddDate(0, -1, 0),
+				pastMonth,
 				now,
 				domain.RolloverStatusApplied,
-				now,
+				&now, // Use pointer for nullable applied_at
 				now,
 			))
 
