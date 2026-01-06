@@ -35,6 +35,10 @@ type Config struct {
 	// PeriodicJobs configures recurring jobs that run on a schedule.
 	PeriodicJobs []*river.PeriodicJob
 
+	// ErrorHandler handles job errors and panics.
+	// Used for dead letter queue integration and custom error handling.
+	ErrorHandler river.ErrorHandler
+
 	// Logger is an optional logger for River.
 	// If nil, River's default logger is used.
 	Logger any // *slog.Logger
