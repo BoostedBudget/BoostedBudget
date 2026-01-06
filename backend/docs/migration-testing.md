@@ -20,7 +20,7 @@
 
 ## Overview
 
-The migration testing framework (`scripts/test-migrations.sh`) provides comprehensive validation of Atlas database migrations through five test suites:
+The migration testing framework (`scripts/test-migrations.sh`) provides comprehensive validation of golang-migrate database migrations through five test suites:
 
 1. **Idempotency Testing** - Ensures migrations can be run multiple times safely
 2. **Performance Benchmarking** - Tracks migration duration and flags slow migrations
@@ -87,7 +87,7 @@ docker run -d \
   -e POSTGRES_PASSWORD=test \
   -e POSTGRES_DB=test \
   -p 5433:5432 \
-  postgres:15
+  postgres:17
 
 # 2. Set DATABASE_URL
 export DATABASE_URL="postgres://test:test@localhost:5433/test?sslmode=disable"
@@ -106,7 +106,7 @@ docker rm -f test-pg-migrations
   MIGRATION TESTING FRAMEWORK
 ═══════════════════════════════════════════════════════════
 
-ℹ️  Issue #326: Comprehensive Atlas Migration Testing
+ℹ️  Issue #326: Comprehensive Migration Testing (golang-migrate + Squawk)
 ℹ️  Database: postgres://test:test@localhost:5433/test?sslmode=disable
 ℹ️  Migrations: ./backend/migrations
 
@@ -163,7 +163,7 @@ docker rm -f test-pg-migrations
 **Why It Matters:**
 - Container restarts might re-run migrations
 - Manual migration fixes may re-apply migrations
-- Atlas tracking can get out of sync
+- Migration tracking can get out of sync
 
 **Failure Example:**
 
@@ -274,7 +274,7 @@ Check for missing IF NOT EXISTS guards on:
 1. Apply all migrations (forward .up.sql files)
 2. Capture baseline schema hash
 3. Rollback all migrations (reverse .down.sql files to version 0)
-4. Verify clean state (only Atlas tracking schema remains)
+4. Verify clean state (only schema_migrations table remains)
 5. Re-apply all migrations (forward again)
 6. Capture reapplied schema hash
 7. Compare hashes → must be identical
@@ -566,7 +566,7 @@ Schema hash mismatch:
 **Cause:** Migration lacks IF NOT EXISTS guards
 
 **Fix:**
-1. Identify the problematic migration (check Atlas output for specific error)
+1. Identify the problematic migration (check golang-migrate output for specific error)
 2. Add IF NOT EXISTS pattern:
    - `CREATE TABLE IF NOT EXISTS ...`
    - `CREATE INDEX IF NOT EXISTS ...`
@@ -655,27 +655,29 @@ CREATE INDEX idx_users_email ON users(email);
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_users_email ON users(email);
 ```
 
-#### Issue: "atlas: command not found"
+#### Issue: "migrate: command not found"
 
 **Symptom:**
 
 ```
-❌ Atlas CLI not found - please install: https://atlasgo.io/
+❌ golang-migrate CLI not found - please install: https://github.com/golang-migrate/migrate
 ```
 
 **Fix:**
 
 ```bash
-# macOS/Linux
-curl -sSf https://atlasgo.sh | sh
+# macOS (Homebrew)
+brew install golang-migrate
 
-# Or specify version
-curl -sSfL https://release.ariga.io/atlas/atlas-linux-amd64-v0.37.1 -o atlas
-chmod +x atlas
-sudo mv atlas /usr/local/bin/
+# Linux
+curl -sSfL https://github.com/golang-migrate/migrate/releases/latest/download/migrate.linux-amd64.tar.gz | tar -xz
+sudo mv migrate /usr/local/bin/
+
+# Go install
+go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
 
 # Verify
-atlas version
+migrate --version
 ```
 
 #### Issue: "Cannot connect to database"
@@ -713,10 +715,10 @@ psql "$DATABASE_URL" -c "SELECT 1"
    ./scripts/test-migrations.sh
    ```
 
-2. ✅ **Run Atlas lint**
+2. ✅ **Run Squawk lint**
    ```bash
    cd backend
-   atlas migrate lint --dir file://migrations --dev-url "docker://postgres/15/test" --latest 1
+   squawk migrations/*.sql --pg-version=17
    ```
 
 3. ✅ **Review migration for idempotency patterns**
@@ -751,7 +753,7 @@ psql "$DATABASE_URL" -c "SELECT 1"
 
 ## Related Documentation
 
-- **Atlas Migration Guide:** `backend/docs/atlas-migration-guide.md`
+- **golang-migrate Guide:** `backend/docs/golang-migrate-guide.md`
 - **Migration Patterns:** See migrations 000013, 000015 for examples
 - **Rollback Examples:** See migrations 000005, 000015 for complex .down.sql patterns
 - **Issue #279:** Context on why idempotency matters

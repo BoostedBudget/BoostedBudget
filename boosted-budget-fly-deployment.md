@@ -58,7 +58,7 @@ Neon provides two endpoints per database:
 | Type | URL Pattern | Use Case |
 |------|-------------|----------|
 | **Pooled** | `ep-xxx-pooler.region.aws.neon.tech` | Application connections (handles connection limits) |
-| **Direct** | `ep-xxx.region.aws.neon.tech` | Migrations (Atlas requires direct access) |
+| **Direct** | `ep-xxx.region.aws.neon.tech` | Migrations (golang-migrate requires direct access) |
 
 ```bash
 # Pooled connection (for application - use this as DATABASE_URL)
@@ -68,7 +68,7 @@ postgresql://user:pass@ep-xxx-pooler.us-east-1.aws.neon.tech/neondb?sslmode=requ
 postgresql://user:pass@ep-xxx.us-east-1.aws.neon.tech/neondb?sslmode=require
 ```
 
-**Important**: Atlas migrations are incompatible with connection poolers (they set session-level parameters). The `docker-entrypoint.sh` script automatically transforms pooler URLs to direct endpoints for migrations.
+**Important**: Database migrations are incompatible with connection poolers (they set session-level parameters). The `docker-entrypoint.sh` script automatically transforms pooler URLs to direct endpoints for migrations.
 
 #### Setting Up Fly.io Secrets for Neon
 
@@ -477,7 +477,7 @@ jobs:
       run: |
         # Deploy with blue-green strategy
         # Note: Migrations run automatically via docker-entrypoint.sh
-        # The entrypoint handles Neon pooler URL transformation for Atlas
+        # The entrypoint handles Neon pooler URL transformation for migrations
         flyctl deploy \
           --app boostedbudget-api \
           --image ${{ needs.build-images.outputs.backend-image }} \
@@ -585,7 +585,7 @@ kill_timeout = 30
 
 [deploy]
   # Migrations run automatically via docker-entrypoint.sh (not release_command)
-  # The entrypoint uses Atlas with Neon pooler URL transformation
+  # The entrypoint uses golang-migrate with Neon pooler URL transformation
   strategy = "bluegreen"
 
 [[vm]]
@@ -825,7 +825,7 @@ fi
 
 # Deploy backend
 # Note: Migrations run automatically via docker-entrypoint.sh on container startup
-# The entrypoint handles Neon pooler URL transformation for Atlas migrations
+# The entrypoint handles Neon pooler URL transformation for database migrations
 echo "Deploying backend..."
 flyctl deploy \
   --app ${BACKEND_APP} \

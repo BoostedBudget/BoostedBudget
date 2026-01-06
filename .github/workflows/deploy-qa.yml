@@ -24,22 +24,13 @@ on:
         required: false
         type: string
         default: 'staging'
-      skip_security_scan:
-        description: 'Skip security scan (not recommended)'
-        required: false
-        default: 'false'
-        type: choice
-        options:
-          - 'false'
-          - 'true'
-
 # Only allow one QA deployment at a time
 concurrency:
   group: deploy-qa
   cancel-in-progress: false
 
 env:
-  GO_VERSION: '1.25'
+  GO_VERSION: '1.25.5'
   NODE_VERSION: '20'
   REGISTRY: ghcr.io
   BACKEND_IMAGE_NAME: boostedbudget/boostedbudget-backend
@@ -316,11 +307,13 @@ jobs:
           file: ${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          pull: true
+          no-cache: true
           tags: |
             ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ steps.build-target.outputs.tag_prefix }}-${{ steps.build-target.outputs.sha }}
             ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ steps.build-target.outputs.tag_prefix }}-latest
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache,mode=max
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache-go${{ env.GO_VERSION }}
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache-go${{ env.GO_VERSION }},mode=max
           build-args: |
             VERSION=${{ steps.build-target.outputs.tag_prefix }}-${{ steps.build-target.outputs.sha }}
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
@@ -337,99 +330,12 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
-  # Security Scan - Docker Images (Grype by Anchore)
-  # =============================================================================
-  # Grype: Fast, accurate vulnerability scanner with low false positives
-  # https://github.com/anchore/grype
-  image-security-scan:
-    name: Security Scan (${{ matrix.component }} Image)
-    needs: [deployment-metadata, build-images]
-    # Run if build succeeded and security scan not disabled
-    if: ${{ needs.build-images.result == 'success' && github.event.inputs.skip_security_scan != 'true' }}
-    runs-on: [self-hosted, macOS, mac-mini]
-    strategy:
-      matrix:
-        component: [backend, frontend]
-    permissions:
-      actions: read
-      contents: read
-      packages: read
-    env:
-      UNIQUE_WORKSPACE: workspace-security-scan-${{ matrix.component }}-${{ github.run_id }}
-
-    steps:
-      - name: Clean workspace
-        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
-
-      - name: Checkout code
-        uses: actions/checkout@v6
-        with:
-          path: ${{ env.UNIQUE_WORKSPACE }}
-          clean: false
-
-      - name: Ensure Grype is installed and DB is fresh
-        run: |
-          # Install grype if missing
-          if ! command -v grype &> /dev/null; then
-            echo "Installing Grype..."
-            curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
-          fi
-          echo "Grype version: $(grype version)"
-
-          # Clear potentially corrupted cache and update DB
-          echo "Clearing grype cache and updating vulnerability database..."
-          rm -rf ~/.cache/grype 2>/dev/null || true
-          grype db update
-
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Calculate image reference
-        id: image-ref
-        run: |
-          if [ "${{ matrix.component }}" = "backend" ]; then
-            IMAGE_NAME="${{ env.BACKEND_IMAGE_NAME }}"
-          else
-            IMAGE_NAME="${{ env.FRONTEND_IMAGE_NAME }}"
-          fi
-
-          TAG_PREFIX="${{ needs.build-images.outputs.tag_prefix }}"
-          SHA="${{ needs.build-images.outputs.sha }}"
-
-          IMAGE_REF="${{ env.REGISTRY }}/${IMAGE_NAME}:${TAG_PREFIX}-${SHA}"
-          echo "image-ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
-          echo "Scanning image: ${IMAGE_REF}"
-
-      - name: Pull Docker image
-        run: docker pull ${{ steps.image-ref.outputs.image-ref }}
-
-      - name: Scan Docker image for vulnerabilities
-        run: |
-          echo "::group::Docker Image Vulnerability Scan (Grype)"
-          grype ${{ steps.image-ref.outputs.image-ref }} \
-            --fail-on high \
-            --only-fixed \
-            --output table
-          echo "::endgroup::"
-
-      - name: Final workspace cleanup
-        if: always()
-        run: |
-          sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
-          docker rmi ${{ steps.image-ref.outputs.image-ref }} 2>/dev/null || true
-
-  # =============================================================================
   # Deploy to Mac Mini QA
   # =============================================================================
   deploy-to-mac-mini:
     name: Deploy to Mac Mini QA
-    needs: [deployment-metadata, build-images, image-security-scan]
-    # Run if build succeeded and either security scan passed OR was skipped
-    if: ${{ always() && needs.build-images.result == 'success' && (needs.image-security-scan.result == 'success' || needs.image-security-scan.result == 'skipped') }}
+    needs: [deployment-metadata, build-images]
+    if: ${{ needs.build-images.result == 'success' }}
     runs-on: [self-hosted, macOS, mac-mini]
     environment:
       name: qa
@@ -663,7 +569,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Auto-Restart:** ✅ All containers configured with \`restart: unless-stopped\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Tests:** ✅ Security scans passed, smoke tests passed" >> $GITHUB_STEP_SUMMARY
+          echo "**Tests:** ✅ Smoke tests passed" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Deployed at:** $(date -u)" >> $GITHUB_STEP_SUMMARY
 

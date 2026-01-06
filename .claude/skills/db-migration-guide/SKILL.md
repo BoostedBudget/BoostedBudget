@@ -1,17 +1,19 @@
 ---
 name: db-migration-guide
-description: "Database migration guide for BoostedBudget: Atlas migrations, idempotency patterns, rollback support, and testing."
+description: "Database migration guide for BoostedBudget: golang-migrate + Squawk migrations, idempotency patterns, rollback support, and testing."
 ---
 
 # Database Migration Guide
 
 ## Overview
 
-BoostedBudget uses **Atlas** with **golang-migrate** format for database migrations. All migrations must be:
+BoostedBudget uses **golang-migrate** for migration execution and **Squawk** for PostgreSQL linting. All migrations must be:
 
 1. **Idempotent** - Safe to run multiple times
 2. **Reversible** - Have both .up.sql and .down.sql
 3. **Tested** - Pass the 5-suite migration test
+
+**Issue #631:** Migrated from Atlas to golang-migrate + Squawk to avoid vendor lock-in.
 
 ## File Structure
 
@@ -21,8 +23,7 @@ backend/migrations/
 ├── 000001_create_users_table.down.sql
 ├── 000002_create_accounts_table.up.sql
 ├── 000002_create_accounts_table.down.sql
-├── ...
-└── atlas.sum  # Checksum file (auto-generated)
+└── ...
 ```
 
 ## Creating a New Migration
@@ -177,51 +178,54 @@ DROP INDEX IF EXISTS idx_transactions_date;
 -- Option 2: Leave enum value (recommended for safety)
 ```
 
-## Atlas Commands
+## golang-migrate + Squawk Commands
 
-### Regenerate Checksums
-
-**Required after any migration file change:**
+### Lint Migrations (ALWAYS before commit!)
 
 ```bash
 cd backend
-atlas migrate hash --dir file://migrations --dir-format golang-migrate
+squawk migrations/*.sql --pg-version=17
 ```
 
-### Lint Migrations
-
-**Check for issues:**
-
-```bash
-cd backend
-atlas migrate lint \
-  --dir file://migrations \
-  --dev-url "docker://postgres/15/test" \
-  --latest 1
-```
+**Squawk catches:**
+- Dangerous DROP TABLE/COLUMN operations
+- NOT NULL columns without defaults
+- Non-concurrent index creation
+- Type changes that require rewrites
 
 ### Apply Migrations
 
 ```bash
 # Local development
 cd backend
-atlas migrate apply \
-  --dir file://migrations \
-  --url "$DATABASE_URL"
+export DATABASE_URL="postgres://user:pass@localhost:5432/dbname?sslmode=disable"
+migrate -database "$DATABASE_URL" -path migrations up
 
-# With dry-run
-atlas migrate apply \
-  --dir file://migrations \
-  --url "$DATABASE_URL" \
-  --dry-run
+# Apply specific number
+migrate -database "$DATABASE_URL" -path migrations up 3
 ```
 
 ### Check Migration Status
 
 ```bash
-atlas migrate status \
-  --dir file://migrations \
-  --url "$DATABASE_URL"
+migrate -database "$DATABASE_URL" -path migrations version
+```
+
+### Rollback Migrations
+
+```bash
+# Rollback last migration
+migrate -database "$DATABASE_URL" -path migrations down 1
+
+# Rollback all migrations
+migrate -database "$DATABASE_URL" -path migrations down -all
+```
+
+### Force Version (Recovery)
+
+```bash
+# If a migration fails mid-execution and leaves dirty state
+migrate -database "$DATABASE_URL" -path migrations force <version>
 ```
 
 ## Migration Testing
@@ -253,16 +257,16 @@ docker-compose down -v
 docker-compose up -d postgres
 
 # 2. Run migrations
-atlas migrate apply --dir file://migrations --url "$DATABASE_URL"
+migrate -database "$DATABASE_URL" -path migrations up
 
 # 3. Verify schema
 psql "$DATABASE_URL" -c "\d feature_flags"
 
 # 4. Test rollback
-atlas migrate down --dir file://migrations --url "$DATABASE_URL" --amount 1
+migrate -database "$DATABASE_URL" -path migrations down 1
 
 # 5. Re-apply
-atlas migrate apply --dir file://migrations --url "$DATABASE_URL"
+migrate -database "$DATABASE_URL" -path migrations up
 ```
 
 ## Common Issues
@@ -285,15 +289,18 @@ DO $$ BEGIN
 END $$;
 ```
 
-### Issue: Checksum Mismatch
+### Issue: Dirty Migration State
 
-**Symptom:** "checksum mismatch" error
+**Symptom:** "Dirty database version N" error
 
-**Fix:** Regenerate checksums
+**Fix:** Check database state and force version if needed
 
 ```bash
-cd backend
-atlas migrate hash --dir file://migrations --dir-format golang-migrate
+# Check state
+psql "$DATABASE_URL" -c "SELECT version, dirty FROM schema_migrations"
+
+# If dirty=true, investigate and fix, then force version
+migrate -database "$DATABASE_URL" -path migrations force <version>
 ```
 
 ### Issue: Missing DOWN Migration
@@ -332,9 +339,8 @@ DROP TABLE IF EXISTS feature_flags CASCADE;
 Migrations run automatically when the backend container starts via `docker-entrypoint.sh`:
 
 1. Transform Neon pooler URL to direct connection
-2. Warm up cold connection (3 attempts)
-3. Run migrations with retry logic (5 attempts)
-4. Start application
+2. Run migrations with retry logic (5 attempts)
+3. Start application
 
 ### Idempotency Requirement
 
@@ -351,8 +357,7 @@ Before committing a migration:
 
 - [ ] `.up.sql` uses idempotency patterns
 - [ ] `.down.sql` correctly reverses changes
-- [ ] `atlas migrate hash` completed
-- [ ] `atlas migrate lint` passes
+- [ ] `squawk migrations/*.sql --pg-version=17` passes
 - [ ] `./scripts/test-migrations.sh` passes all 5 suites
 - [ ] No sensitive data in migrations
 - [ ] Rollback tested manually
@@ -361,5 +366,5 @@ Before committing a migration:
 
 - `.claude/commands/db-migrate.md` - Create migration command
 - `.claude/agents/db-migrator.md` - Migration subagent
-- `backend/docs/atlas-migration-guide.md` - Extended documentation
+- `backend/docs/golang-migrate-guide.md` - Extended documentation
 - `backend/docs/migration-testing.md` - Testing documentation

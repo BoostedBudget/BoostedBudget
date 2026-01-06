@@ -11,16 +11,16 @@ fi
 
 echo "Database URL configured"
 
-# Verify atlas tool is available
-if ! command -v atlas &> /dev/null; then
-  echo "ERROR: atlas tool not found in PATH"
+# Verify golang-migrate tool is available
+if ! command -v migrate &> /dev/null; then
+  echo "ERROR: golang-migrate tool not found in PATH"
   exit 1
 fi
 
-echo "Running database migrations with Atlas..."
+echo "Running database migrations with golang-migrate..."
 
-# Construct direct PostgreSQL connection for Atlas (bypass connection pooler)
-# Atlas is incompatible with connection poolers (PgBouncer/Neon pooler) because
+# Construct direct PostgreSQL connection for migrations (bypass connection pooler)
+# golang-migrate is incompatible with connection poolers (PgBouncer/Neon pooler) because
 # it tries to set session-level parameters that poolers block.
 # Solution: Use direct PostgreSQL connection for migrations only.
 #
@@ -46,13 +46,9 @@ fi
 
 # Neon-specific connection enhancements
 if [[ "$MIGRATION_URL" == *"neon.tech"* ]]; then
-  # Ensure sslmode=require for Neon connections (defensive check)
+  # Ensure sslmode=require for Neon connections
   if [[ "$MIGRATION_URL" != *"sslmode="* ]]; then
-    if [[ "$MIGRATION_URL" == *"?"* ]]; then
-      MIGRATION_URL="${MIGRATION_URL}&sslmode=require"
-    else
-      MIGRATION_URL="${MIGRATION_URL}?sslmode=require"
-    fi
+    MIGRATION_URL="${MIGRATION_URL}$(if [[ "$MIGRATION_URL" == *"?"* ]]; then echo "&"; else echo "?"; fi)sslmode=require"
     echo "Added sslmode=require for Neon connection"
   fi
 
@@ -61,49 +57,22 @@ if [[ "$MIGRATION_URL" == *"neon.tech"* ]]; then
     MIGRATION_URL="${MIGRATION_URL}&connect_timeout=15"
     echo "Added connect_timeout=15 for Neon serverless"
   fi
-
-  # Warm up Neon compute before running migrations (handle autosuspend)
-  echo "Warming up Neon database connection..."
-  WARM_UP_ATTEMPTS=3
-  for i in $(seq 1 $WARM_UP_ATTEMPTS); do
-    if atlas migrate status \
-        --config file:///app/atlas.hcl \
-        --env production \
-        --dir "file:///app/migrations?format=golang-migrate" \
-        --url "$MIGRATION_URL" > /dev/null 2>&1; then
-      echo "Database connection ready"
-      break
-    fi
-    if [ $i -lt $WARM_UP_ATTEMPTS ]; then
-      echo "Waiting for database to wake up... (attempt $i/$WARM_UP_ATTEMPTS)"
-      sleep 3
-    fi
-  done
 fi
 
-# Run migrations using Atlas with direct connection
-# Use --revisions-schema public to store revisions table in public schema
-# This prevents Atlas from creating a separate atlas_schema_revisions schema
+# Run migrations with retry logic
 echo "Applying database migrations..."
 MAX_ATTEMPTS=5
 for i in $(seq 1 $MAX_ATTEMPTS); do
   echo "Migration attempt $i/$MAX_ATTEMPTS..."
 
-  # Apply all pending migrations (Atlas handles fresh databases automatically)
-  # Use atlas.hcl config for golang-migrate format support (.up.sql/.down.sql)
-  # Explicit --dir with format parameter for consistency with CI/CD lint command
-  atlas migrate apply \
-    --config file:///app/atlas.hcl \
-    --env production \
-    --dir "file:///app/migrations?format=golang-migrate" \
-    --url "$MIGRATION_URL" \
-    --revisions-schema public && {
+  # Apply all pending migrations using golang-migrate
+  migrate -database "$MIGRATION_URL" -path /app/migrations up && {
     echo "Migrations completed successfully"
     break
   } || {
     if [ $i -eq $MAX_ATTEMPTS ]; then
       echo "Migration failed after $MAX_ATTEMPTS attempts"
-      echo "Run 'atlas migrate status' for details"
+      echo "Run 'migrate version' for details"
       exit 1
     else
       # Longer wait for first retry on Neon (cold start scenario)

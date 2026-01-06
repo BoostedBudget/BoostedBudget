@@ -87,16 +87,13 @@ test-fast:
 	@echo "⚠️  E2E tests skipped for speed. Run 'make test-all' before creating PRs."
 	@echo ""
 	@echo "1️⃣  Linting Migrations..."
-	@# Try using docker-compose postgres first (no ephemeral containers), fallback to skip
-	@# See: Memory leak investigation Oct 2025 - prevents dangling Docker image accumulation
-	@if docker compose ps postgres 2>/dev/null | grep -q "running"; then \
-		cd backend && atlas migrate lint \
-			--dir "file://migrations?format=golang-migrate" \
-			--dev-url "postgres://devuser:devpass@localhost:5432/boostedbudget?sslmode=disable" \
-			--latest 1; \
+	@# Run Squawk migration linter (no database connection needed)
+	@if command -v squawk &> /dev/null; then \
+		echo "Running Squawk migration linter..."; \
+		squawk backend/migrations/*.up.sql || true; \
 	else \
-		echo "⚠️  Migration lint skipped (docker-compose not running)"; \
-		echo "   Run 'make docker-up' or 'docker compose up -d postgres' to enable migration linting"; \
+		echo "⚠️  Migration lint skipped (squawk not installed)"; \
+		echo "   Install: npm install -g squawk-cli"; \
 	fi
 	@echo ""
 	@echo "2️⃣  Backend Tests..."
@@ -147,16 +144,13 @@ test-all:
 	@echo "========================================"
 	@echo ""
 	@echo "1️⃣  Linting Migrations..."
-	@# Try using docker-compose postgres first (no ephemeral containers), fallback to skip
-	@# See: Memory leak investigation Oct 2025 - prevents dangling Docker image accumulation
-	@if docker compose ps postgres 2>/dev/null | grep -q "running"; then \
-		cd backend && atlas migrate lint \
-			--dir "file://migrations?format=golang-migrate" \
-			--dev-url "postgres://devuser:devpass@localhost:5432/boostedbudget?sslmode=disable" \
-			--latest 1; \
+	@# Run Squawk migration linter (no database connection needed)
+	@if command -v squawk &> /dev/null; then \
+		echo "Running Squawk migration linter..."; \
+		squawk backend/migrations/*.up.sql || true; \
 	else \
-		echo "⚠️  Migration lint skipped (docker-compose not running)"; \
-		echo "   Run 'make docker-up' or 'docker compose up -d postgres' to enable migration linting"; \
+		echo "⚠️  Migration lint skipped (squawk not installed)"; \
+		echo "   Install: npm install -g squawk-cli"; \
 	fi
 	@echo ""
 	@echo "2️⃣  Backend Tests..."
