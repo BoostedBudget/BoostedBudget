@@ -51,6 +51,10 @@ import type {
   ErrorModel,
   GetBalanceHistoryParams,
   GetBalanceSummaryParams,
+  GetNetWorthHistoryParams,
+  GetNetWorthParams,
+  NetWorthHistoryResponse,
+  NetWorthResponse,
   SaveDashboardPreferencesInputBody,
 } from "../../models";
 
@@ -716,6 +720,323 @@ export function useGetDefaultLayout<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getGetDefaultLayoutQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  query.queryKey = queryOptions.queryKey;
+
+  return query;
+}
+
+/**
+ * Returns current net worth (assets - liabilities) with breakdown by category and period comparison.
+ * @summary Get current net worth
+ */
+export const getNetWorth = (
+  params?: GetNetWorthParams,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<NetWorthResponse>(
+    { url: `/api/v1/dashboard/net-worth`, method: "GET", params, signal },
+    options,
+  );
+};
+
+export const getGetNetWorthQueryKey = (params?: GetNetWorthParams) => {
+  return [`/api/v1/dashboard/net-worth`, ...(params ? [params] : [])] as const;
+};
+
+export const getGetNetWorthQueryOptions = <
+  TData = Awaited<ReturnType<typeof getNetWorth>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: GetNetWorthParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getNetWorth>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetNetWorthQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getNetWorth>>> = ({
+    signal,
+  }) => getNetWorth(params, requestOptions, signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getNetWorth>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetNetWorthQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getNetWorth>>
+>;
+export type GetNetWorthQueryError = ErrorType<ErrorModel>;
+
+export function useGetNetWorth<
+  TData = Awaited<ReturnType<typeof getNetWorth>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: undefined | GetNetWorthParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getNetWorth>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getNetWorth>>,
+          TError,
+          Awaited<ReturnType<typeof getNetWorth>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetNetWorth<
+  TData = Awaited<ReturnType<typeof getNetWorth>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: GetNetWorthParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getNetWorth>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getNetWorth>>,
+          TError,
+          Awaited<ReturnType<typeof getNetWorth>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetNetWorth<
+  TData = Awaited<ReturnType<typeof getNetWorth>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: GetNetWorthParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getNetWorth>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Get current net worth
+ */
+
+export function useGetNetWorth<
+  TData = Awaited<ReturnType<typeof getNetWorth>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: GetNetWorthParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getNetWorth>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetNetWorthQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  query.queryKey = queryOptions.queryKey;
+
+  return query;
+}
+
+/**
+ * Returns time series net worth data for charts with assets and liabilities breakdown.
+ * @summary Get net worth history
+ */
+export const getNetWorthHistory = (
+  params?: GetNetWorthHistoryParams,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<NetWorthHistoryResponse>(
+    {
+      url: `/api/v1/dashboard/net-worth-history`,
+      method: "GET",
+      params,
+      signal,
+    },
+    options,
+  );
+};
+
+export const getGetNetWorthHistoryQueryKey = (
+  params?: GetNetWorthHistoryParams,
+) => {
+  return [
+    `/api/v1/dashboard/net-worth-history`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetNetWorthHistoryQueryOptions = <
+  TData = Awaited<ReturnType<typeof getNetWorthHistory>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: GetNetWorthHistoryParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getNetWorthHistory>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetNetWorthHistoryQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getNetWorthHistory>>
+  > = ({ signal }) => getNetWorthHistory(params, requestOptions, signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getNetWorthHistory>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetNetWorthHistoryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getNetWorthHistory>>
+>;
+export type GetNetWorthHistoryQueryError = ErrorType<ErrorModel>;
+
+export function useGetNetWorthHistory<
+  TData = Awaited<ReturnType<typeof getNetWorthHistory>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: undefined | GetNetWorthHistoryParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getNetWorthHistory>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getNetWorthHistory>>,
+          TError,
+          Awaited<ReturnType<typeof getNetWorthHistory>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetNetWorthHistory<
+  TData = Awaited<ReturnType<typeof getNetWorthHistory>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: GetNetWorthHistoryParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getNetWorthHistory>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getNetWorthHistory>>,
+          TError,
+          Awaited<ReturnType<typeof getNetWorthHistory>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetNetWorthHistory<
+  TData = Awaited<ReturnType<typeof getNetWorthHistory>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: GetNetWorthHistoryParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getNetWorthHistory>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Get net worth history
+ */
+
+export function useGetNetWorthHistory<
+  TData = Awaited<ReturnType<typeof getNetWorthHistory>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: GetNetWorthHistoryParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getNetWorthHistory>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetNetWorthHistoryQueryOptions(params, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

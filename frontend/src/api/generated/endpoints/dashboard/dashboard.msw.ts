@@ -37,6 +37,8 @@ import type {
   BalanceSummaryResponse,
   DashboardLayout,
   DashboardPreferencesResponse,
+  NetWorthHistoryResponse,
+  NetWorthResponse,
 } from "../../models";
 
 export const getGetAccountTypesResponseMock = (
@@ -108,6 +110,92 @@ export const getGetDefaultLayoutResponseMock = (
   $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
   version: faker.number.int({ min: undefined, max: undefined }),
   widgets: faker.helpers.arrayElement([[], null]),
+  ...overrideResponse,
+});
+
+export const getGetNetWorthResponseMock = (
+  overrideResponse: Partial<NetWorthResponse> = {},
+): NetWorthResponse => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  as_of_date: `${faker.date.past().toISOString().split(".")[0]}Z`,
+  by_category: {
+    [faker.string.alphanumeric(5)]: {
+      account_count: faker.number.int({ min: undefined, max: undefined }),
+      by_type: {
+        [faker.string.alphanumeric(5)]: {
+          account_count: faker.number.int({ min: undefined, max: undefined }),
+          accounts: faker.helpers.arrayElement([[], null]),
+          balance: faker.number.float({
+            min: undefined,
+            max: undefined,
+            fractionDigits: 2,
+          }),
+        },
+      },
+      category: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      total: faker.number.float({
+        min: undefined,
+        max: undefined,
+        fractionDigits: 2,
+      }),
+    },
+  },
+  net_worth: faker.number.float({
+    min: undefined,
+    max: undefined,
+    fractionDigits: 2,
+  }),
+  period_comparison: faker.helpers.arrayElement([
+    {
+      net_worth_change: faker.number.float({
+        min: undefined,
+        max: undefined,
+        fractionDigits: 2,
+      }),
+      net_worth_change_percent: faker.number.float({
+        min: undefined,
+        max: undefined,
+        fractionDigits: 2,
+      }),
+      previous_assets: faker.number.float({
+        min: undefined,
+        max: undefined,
+        fractionDigits: 2,
+      }),
+      previous_liabilities: faker.number.float({
+        min: undefined,
+        max: undefined,
+        fractionDigits: 2,
+      }),
+      previous_net_worth: faker.number.float({
+        min: undefined,
+        max: undefined,
+        fractionDigits: 2,
+      }),
+    },
+    undefined,
+  ]),
+  total_assets: faker.number.float({
+    min: undefined,
+    max: undefined,
+    fractionDigits: 2,
+  }),
+  total_liabilities: faker.number.float({
+    min: undefined,
+    max: undefined,
+    fractionDigits: 2,
+  }),
+  ...overrideResponse,
+});
+
+export const getGetNetWorthHistoryResponseMock = (
+  overrideResponse: Partial<NetWorthHistoryResponse> = {},
+): NetWorthHistoryResponse => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  end_date: `${faker.date.past().toISOString().split(".")[0]}Z`,
+  granularity: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  snapshots: faker.helpers.arrayElement([[], null]),
+  start_date: `${faker.date.past().toISOString().split(".")[0]}Z`,
   ...overrideResponse,
 });
 
@@ -262,6 +350,62 @@ export const getGetDefaultLayoutMockHandler = (
   );
 };
 
+export const getGetNetWorthMockHandler = (
+  overrideResponse?:
+    | NetWorthResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<NetWorthResponse> | NetWorthResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/dashboard/net-worth",
+    async (info) => {
+      await delay(500);
+
+      return new HttpResponse(
+        JSON.stringify(
+          overrideResponse !== undefined
+            ? typeof overrideResponse === "function"
+              ? await overrideResponse(info)
+              : overrideResponse
+            : getGetNetWorthResponseMock(),
+        ),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetNetWorthHistoryMockHandler = (
+  overrideResponse?:
+    | NetWorthHistoryResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<NetWorthHistoryResponse> | NetWorthHistoryResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/dashboard/net-worth-history",
+    async (info) => {
+      await delay(500);
+
+      return new HttpResponse(
+        JSON.stringify(
+          overrideResponse !== undefined
+            ? typeof overrideResponse === "function"
+              ? await overrideResponse(info)
+              : overrideResponse
+            : getGetNetWorthHistoryResponseMock(),
+        ),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    },
+    options,
+  );
+};
+
 export const getGetDashboardPreferencesMockHandler = (
   overrideResponse?:
     | DashboardPreferencesResponse
@@ -356,6 +500,8 @@ export const getDashboardMock = () => [
   getGetBalanceHistoryMockHandler(),
   getGetBalanceSummaryMockHandler(),
   getGetDefaultLayoutMockHandler(),
+  getGetNetWorthMockHandler(),
+  getGetNetWorthHistoryMockHandler(),
   getGetDashboardPreferencesMockHandler(),
   getSaveDashboardPreferencesMockHandler(),
   getResetDashboardPreferencesMockHandler(),

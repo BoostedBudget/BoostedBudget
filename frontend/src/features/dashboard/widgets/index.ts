@@ -1,16 +1,13 @@
 /**
  * Widget Exports
- * Issue #354: Customizable Dashboard Widget System
- *
  * Import this file to register all widgets with the registry.
  */
-
-// Import widgets to trigger registration
 export { BalanceOverviewWidget } from './BalanceOverviewWidget';
 export { BalanceHistoryWidget } from './BalanceHistoryWidget';
 export { CashFlowSummaryWidget } from './CashFlowSummaryWidget';
 export { CashFlowChartWidget } from './CashFlowChartWidget';
 export { AccountCardsWidget } from './AccountCardsWidget';
+export { NetWorthWidget } from './NetWorthWidget';
 
 // Export registry functions
 export {

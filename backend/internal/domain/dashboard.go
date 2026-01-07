@@ -70,3 +70,62 @@ type DashboardFilters struct {
 	EndDate      *time.Time // End of date range (for balance history)
 	Granularity  string     // "daily", "weekly", "monthly" (for balance history)
 }
+
+// NetWorthResponse represents the response for GET /api/v1/dashboard/net-worth
+// Provides current net worth (assets - liabilities) with breakdown by category.
+type NetWorthResponse struct {
+	AsOfDate         time.Time                          `json:"as_of_date"`
+	NetWorth         float64                            `json:"net_worth"`
+	TotalAssets      float64                            `json:"total_assets"`
+	TotalLiabilities float64                            `json:"total_liabilities"`
+	ByCategory       map[string]*NetWorthCategoryBalance `json:"by_category"`
+	PeriodComparison *NetWorthPeriodComparison          `json:"period_comparison,omitempty"`
+}
+
+// NetWorthCategoryBalance represents balance information for assets or liabilities
+type NetWorthCategoryBalance struct {
+	Category     string                         `json:"category"` // "assets" or "liabilities"
+	Total        float64                        `json:"total"`
+	AccountCount int                            `json:"account_count"`
+	ByType       map[string]*AccountTypeBalance `json:"by_type"`
+}
+
+// NetWorthPeriodComparison represents net worth change compared to a previous period
+type NetWorthPeriodComparison struct {
+	PreviousNetWorth      float64 `json:"previous_net_worth"`
+	PreviousAssets        float64 `json:"previous_assets"`
+	PreviousLiabilities   float64 `json:"previous_liabilities"`
+	NetWorthChange        float64 `json:"net_worth_change"`
+	NetWorthChangePercent float64 `json:"net_worth_change_percent"`
+}
+
+// NetWorthHistoryResponse represents the response for GET /api/v1/dashboard/net-worth-history
+// Provides time series net worth data for charts.
+type NetWorthHistoryResponse struct {
+	StartDate   time.Time                 `json:"start_date"`
+	EndDate     time.Time                 `json:"end_date"`
+	Granularity string                    `json:"granularity"` // "daily", "weekly", "monthly"
+	Snapshots   []NetWorthHistorySnapshot `json:"snapshots"`
+}
+
+// NetWorthHistorySnapshot represents a single point in the net worth history timeline
+type NetWorthHistorySnapshot struct {
+	Date             time.Time `json:"date"`
+	NetWorth         float64   `json:"net_worth"`
+	TotalAssets      float64   `json:"total_assets"`
+	TotalLiabilities float64   `json:"total_liabilities"`
+}
+
+// AccountTypeCategory returns "assets" or "liabilities" for an account type.
+// Used to classify accounts for net worth calculation.
+// - Assets: depository (checking, savings), investment
+// - Liabilities: credit (credit cards), loan (mortgages, student loans)
+// - Other: defaults to assets (can be configured in future)
+func AccountTypeCategory(accountType string) string {
+	switch accountType {
+	case "credit", "loan":
+		return "liabilities"
+	default: // depository, investment, other
+		return "assets"
+	}
+}
