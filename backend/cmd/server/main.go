@@ -378,9 +378,22 @@ func main() {
 					Logger:             logger,
 				})
 
+				// Issue #666: Create PlaidSyncWorker for auto-sync after account linking
+				plaidSyncWorker := jobs.NewPlaidSyncWorker(jobs.PlaidSyncWorkerDeps{
+					SyncService:    transactionSyncService,
+					LinkedItemRepo: linkedItemRepo,
+					JobQueue:       nil, // Set after River client created (circular dependency)
+					Logger:         logger,
+				})
+				log.Println("✅ Plaid sync worker created")
+
 				// Create River workers and register all workers
 				riverWorkers := river.NewWorkers()
 				river.AddWorker(riverWorkers, webhookProcessingWorker)
+
+				// Issue #666: Register PlaidSyncWorker with River
+				river.AddWorker(riverWorkers, plaidSyncWorker)
+				log.Println("✅ Plaid sync worker registered with River")
 
 				// Issue #629: Register deletion workers if available
 				if accountDeletionWorker != nil {
@@ -401,18 +414,17 @@ func main() {
 					riverRunner = riverClient
 					log.Println("✅ River queue initialized")
 
-					// Issue #629: Wire up jobQueue to scheduledDeletionCheckWorker
-					// This resolves the circular dependency: worker needs queue but must be registered before client creation
+					// Wire up job queue to workers (resolves circular dependency)
 					if scheduledDeletionCheckWorker != nil {
 						scheduledDeletionCheckWorker.SetJobQueue(jobQueue)
 						log.Println("✅ Scheduled deletion check worker connected to job queue")
 					}
-
-					// Issue #658: Wire up jobQueue to accountService for auto-sync after linking
 					if accountService != nil {
 						accountService.SetJobQueue(jobQueue)
 						log.Println("✅ Account service connected to job queue for auto-sync")
 					}
+					plaidSyncWorker.SetJobQueue(jobQueue)
+					log.Println("✅ Plaid sync worker connected to job queue for follow-up jobs")
 				}
 
 				log.Println("✅ Transaction sync service initialized")

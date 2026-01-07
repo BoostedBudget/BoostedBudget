@@ -70,6 +70,12 @@ func NewPlaidSyncWorker(deps PlaidSyncWorkerDeps) *PlaidSyncWorker {
 	}
 }
 
+// SetJobQueue sets the job queue for enqueueing follow-up jobs.
+// This resolves the circular dependency: worker registration before client creation.
+func (w *PlaidSyncWorker) SetJobQueue(jq queue.JobQueue) {
+	w.jobQueue = jq
+}
+
 // Work processes a Plaid sync job.
 //
 // The worker:
