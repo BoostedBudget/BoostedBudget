@@ -106,11 +106,7 @@ type MockJobQueue struct {
 }
 
 func (m *MockJobQueue) Enqueue(ctx context.Context, job queue.Job, opts ...queue.EnqueueOption) (*queue.JobResult, error) {
-	callArgs := []interface{}{ctx, job}
-	for _, opt := range opts {
-		callArgs = append(callArgs, opt)
-	}
-	args := m.Called(callArgs...)
+	args := m.Called(ctx, job, opts)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -453,4 +449,28 @@ func TestNewPlaidSyncWorker_DefaultLogger(t *testing.T) {
 	})
 
 	assert.NotNil(t, worker.logger)
+}
+
+// TestPlaidSyncWorker_SetJobQueue tests the SetJobQueue method (Issue #666)
+func TestPlaidSyncWorker_SetJobQueue(t *testing.T) {
+	mockRepo := new(MockLinkedItemRepository)
+	mockSyncService := new(MockTransactionSyncService)
+	mockQueue := new(MockJobQueue)
+
+	// Create worker without job queue
+	worker := NewPlaidSyncWorker(PlaidSyncWorkerDeps{
+		SyncService:    mockSyncService,
+		LinkedItemRepo: mockRepo,
+		JobQueue:       nil, // Initially nil
+		Logger:         newTestLogger(),
+	})
+
+	// Job queue should be nil
+	assert.Nil(t, worker.jobQueue)
+
+	// Set job queue
+	worker.SetJobQueue(mockQueue)
+
+	// Job queue should now be set
+	assert.Equal(t, mockQueue, worker.jobQueue)
 }
