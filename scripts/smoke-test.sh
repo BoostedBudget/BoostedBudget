@@ -27,7 +27,8 @@ if [ "$ENVIRONMENT" == "production" ]; then
   WEB_URL="https://boostedbudget.com"
 elif [ "$ENVIRONMENT" == "staging" ]; then
   API_URL="https://staging-api.boostedbudget.com"
-  WEB_URL="https://staging.boostedbudget.com"
+  # Skip frontend checks - Cloudflare Zero Trust blocks automated requests
+  WEB_URL=""
 elif [ "$ENVIRONMENT" == "qa" ]; then
   # QA runs on Mac Mini - use localhost or Tailscale URL
   API_URL="${QA_API_URL:-http://localhost:8080}"
