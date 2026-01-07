@@ -1357,6 +1357,138 @@ components:
       required:
         - message
       type: object
+    NetWorthCategoryBalance:
+      additionalProperties: false
+      properties:
+        account_count:
+          format: int64
+          type: integer
+        by_type:
+          additionalProperties:
+            $ref: "#/components/schemas/AccountTypeBalance"
+          type: object
+        category:
+          type: string
+        total:
+          format: double
+          type: number
+      required:
+        - category
+        - total
+        - account_count
+        - by_type
+      type: object
+    NetWorthHistoryResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/NetWorthHistoryResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        end_date:
+          format: date-time
+          type: string
+        granularity:
+          type: string
+        snapshots:
+          items:
+            $ref: "#/components/schemas/NetWorthHistorySnapshot"
+          type:
+            - array
+            - "null"
+        start_date:
+          format: date-time
+          type: string
+      required:
+        - start_date
+        - end_date
+        - granularity
+        - snapshots
+      type: object
+    NetWorthHistorySnapshot:
+      additionalProperties: false
+      properties:
+        date:
+          format: date-time
+          type: string
+        net_worth:
+          format: double
+          type: number
+        total_assets:
+          format: double
+          type: number
+        total_liabilities:
+          format: double
+          type: number
+      required:
+        - date
+        - net_worth
+        - total_assets
+        - total_liabilities
+      type: object
+    NetWorthPeriodComparison:
+      additionalProperties: false
+      properties:
+        net_worth_change:
+          format: double
+          type: number
+        net_worth_change_percent:
+          format: double
+          type: number
+        previous_assets:
+          format: double
+          type: number
+        previous_liabilities:
+          format: double
+          type: number
+        previous_net_worth:
+          format: double
+          type: number
+      required:
+        - previous_net_worth
+        - previous_assets
+        - previous_liabilities
+        - net_worth_change
+        - net_worth_change_percent
+      type: object
+    NetWorthResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/NetWorthResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        as_of_date:
+          format: date-time
+          type: string
+        by_category:
+          additionalProperties:
+            $ref: "#/components/schemas/NetWorthCategoryBalance"
+          type: object
+        net_worth:
+          format: double
+          type: number
+        period_comparison:
+          $ref: "#/components/schemas/NetWorthPeriodComparison"
+        total_assets:
+          format: double
+          type: number
+        total_liabilities:
+          format: double
+          type: number
+      required:
+        - as_of_date
+        - net_worth
+        - total_assets
+        - total_liabilities
+        - by_category
+      type: object
     Notification:
       additionalProperties: false
       properties:
@@ -3800,6 +3932,94 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       summary: Get default dashboard layout
+      tags:
+        - Dashboard
+  /api/v1/dashboard/net-worth:
+    get:
+      description: Returns current net worth (assets - liabilities) with breakdown by category and period comparison.
+      operationId: getNetWorth
+      parameters:
+        - description: Comma-separated account types to filter (depository, investment, credit, loan)
+          explode: false
+          in: query
+          name: account_types
+          schema:
+            description: Comma-separated account types to filter (depository, investment, credit, loan)
+            type: string
+        - description: Get net worth as of specific date (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: as_of_date
+          schema:
+            description: Get net worth as of specific date (YYYY-MM-DD)
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NetWorthResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get current net worth
+      tags:
+        - Dashboard
+  /api/v1/dashboard/net-worth-history:
+    get:
+      description: Returns time series net worth data for charts with assets and liabilities breakdown.
+      operationId: getNetWorthHistory
+      parameters:
+        - description: Comma-separated account types to filter
+          explode: false
+          in: query
+          name: account_types
+          schema:
+            description: Comma-separated account types to filter
+            type: string
+        - description: Start of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: start_date
+          schema:
+            description: Start of date range (YYYY-MM-DD)
+            type: string
+        - description: End of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: end_date
+          schema:
+            description: End of date range (YYYY-MM-DD)
+            type: string
+        - description: "Time granularity: daily, weekly, or monthly"
+          explode: false
+          in: query
+          name: granularity
+          schema:
+            description: "Time granularity: daily, weekly, or monthly"
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NetWorthHistoryResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get net worth history
       tags:
         - Dashboard
   /api/v1/dashboard/preferences:
