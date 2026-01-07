@@ -227,6 +227,7 @@ BAD ✗
 | `db-migration-guide` | Idempotency patterns, golang-migrate commands, testing |
 | `run-e2e-tests` | E2E testing setup, debugging, CI vs local |
 | `qa-scenario-creator` | QA data population framework |
+| `plaid-sync` | Plaid transaction sync: webhooks, cursors, historical depth, auto-sync |
 
 ### Available Subagents
 | Subagent | Purpose |

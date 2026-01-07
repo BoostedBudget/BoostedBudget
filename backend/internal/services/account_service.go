@@ -4,13 +4,44 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/plaid/plaid-go/v23/plaid"
 )
+
+// plaidSyncJobArgs is a local struct for enqueueing Plaid sync jobs.
+// This mirrors jobs.PlaidSyncArgs to avoid import cycle (services → jobs → services).
+// The JSON structure must match jobs.PlaidSyncArgs exactly for River to deserialize correctly.
+type plaidSyncJobArgs struct {
+	UserID    string `json:"user_id"`
+	ItemID    string `json:"item_id"`
+	WebhookID string `json:"webhook_id,omitempty"`
+}
+
+// Kind returns the job type identifier. Must match jobs.PlaidSyncArgs.Kind()
+func (plaidSyncJobArgs) Kind() string { return "plaid_sync" }
+
+// plaidSyncUniqueOpts returns uniqueness options for Plaid sync jobs.
+// Mirrors jobs.PlaidSyncUniqueOpts() to prevent duplicate syncs within 5-minute window.
+func plaidSyncUniqueOpts() *queue.UniqueOpts {
+	return &queue.UniqueOpts{
+		ByArgs:   true,
+		ByPeriod: 5 * time.Minute,
+		ByState: []queue.JobState{
+			queue.JobStateAvailable,
+			queue.JobStateScheduled,
+			queue.JobStateRunning,
+			queue.JobStateRetryable,
+			queue.JobStatePending,
+		},
+	}
+}
 
 var (
 	// ErrAccountLimitExceeded is returned when user tries to link more accounts than their tier allows
@@ -56,6 +87,11 @@ type AccountService interface {
 	// Only the institution owner can disconnect it.
 	// Returns repository.ErrLinkedItemNotFound if item doesn't exist or user doesn't own it.
 	DisconnectInstitution(ctx context.Context, linkedItemID, userID string) error
+
+	// SetJobQueue sets the job queue for auto-sync after linking (Issue #658).
+	// This is needed because of circular dependency: service must be created before
+	// River client, but needs client to enqueue jobs.
+	SetJobQueue(jq queue.JobQueue)
 }
 
 // LinkAccountsResult contains the results of linking bank accounts
@@ -73,6 +109,25 @@ type accountService struct {
 	accountRepo     repository.AccountRepository
 	userRepo        repository.ProfileRepository
 	db              *pgxpool.Pool
+	jobQueue        queue.JobQueue // Issue #658: For auto-sync after linking (can be nil)
+	logger          *slog.Logger
+}
+
+// AccountServiceOption is a functional option for configuring AccountService
+type AccountServiceOption func(*accountService)
+
+// WithJobQueue sets the job queue for auto-sync after linking (Issue #658)
+func WithJobQueue(jq queue.JobQueue) AccountServiceOption {
+	return func(s *accountService) {
+		s.jobQueue = jq
+	}
+}
+
+// WithAccountServiceLogger sets the logger for AccountService
+func WithAccountServiceLogger(logger *slog.Logger) AccountServiceOption {
+	return func(s *accountService) {
+		s.logger = logger
+	}
 }
 
 // NewAccountService creates a new AccountService instance
@@ -84,8 +139,9 @@ func NewAccountService(
 	accountRepo repository.AccountRepository,
 	userRepo repository.ProfileRepository,
 	db *pgxpool.Pool,
+	opts ...AccountServiceOption,
 ) AccountService {
-	return &accountService{
+	svc := &accountService{
 		plaidService:    plaidService,
 		subscriptionSvc: subscriptionSvc,
 		encryptionSvc:   encryptionSvc,
@@ -93,7 +149,15 @@ func NewAccountService(
 		accountRepo:     accountRepo,
 		userRepo:        userRepo,
 		db:              db,
+		logger:          slog.Default(),
 	}
+
+	// Apply optional configuration
+	for _, opt := range opts {
+		opt(svc)
+	}
+
+	return svc
 }
 
 // LinkAccounts exchanges a Plaid public token for an access token and links bank accounts
@@ -215,6 +279,10 @@ func (s *accountService) LinkAccounts(
 		// For now, the linked_item → accounts CASCADE DELETE will clean up on item deletion
 		return nil, fmt.Errorf("failed to create accounts: %w", err)
 	}
+
+	// Issue #658: Enqueue initial sync job to fetch transactions
+	// This is non-blocking - if it fails, account linking still succeeds
+	s.enqueueInitialSync(ctx, linkedItem.ID, user.ID)
 
 	return &LinkAccountsResult{
 		LinkedItem: linkedItem,
@@ -468,4 +536,54 @@ func (s *accountService) ReorderAccounts(
 	}
 
 	return nil
+}
+
+// SetJobQueue sets the job queue for auto-sync after linking (Issue #658).
+// This is needed because of circular dependency: service must be created before
+// River client, but needs client to enqueue jobs.
+func (s *accountService) SetJobQueue(jq queue.JobQueue) {
+	s.jobQueue = jq
+}
+
+// enqueueInitialSync enqueues a PlaidSyncJob to sync transactions after account linking.
+// Issue #658: Auto-sync transactions after Plaid account linking
+//
+// This method is non-blocking: if the job queue fails, we log a warning but don't
+// fail the account linking operation. The user will still have their accounts linked,
+// and transactions will be synced when webhooks arrive.
+//
+// Parameters:
+//   - linkedItemID: The internal UUID of the LinkedItem to sync
+//   - userID: The internal UUID of the user who owns the linked item
+func (s *accountService) enqueueInitialSync(ctx context.Context, linkedItemID, userID string) {
+	// Guard against nil jobQueue (backward compatibility)
+	if s.jobQueue == nil {
+		return
+	}
+
+	syncJob := plaidSyncJobArgs{
+		UserID: userID,
+		ItemID: linkedItemID,
+	}
+
+	// Enqueue with 5-second delay to give Plaid time to prepare data
+	// Use uniqueness options to prevent duplicate syncs
+	_, err := s.jobQueue.Enqueue(ctx, syncJob,
+		queue.WithDelay(5*time.Second),
+		queue.WithUnique(*plaidSyncUniqueOpts()),
+		queue.WithTags("initial_sync"),
+	)
+	if err != nil {
+		// Log but don't fail - account linking should succeed even if queue fails
+		s.logger.Warn("failed to enqueue initial sync job",
+			"linked_item_id", linkedItemID,
+			"user_id", userID,
+			"error", err,
+		)
+	} else {
+		s.logger.Info("enqueued initial sync job",
+			"linked_item_id", linkedItemID,
+			"user_id", userID,
+		)
+	}
 }
