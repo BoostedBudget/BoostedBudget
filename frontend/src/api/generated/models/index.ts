@@ -196,3 +196,6 @@ export * from "./updateUserTagRequest";
 export * from "./user";
 export * from "./userTag";
 export * from "./widgetConfig";
+export * from "./widgetTypeInfo";
+export * from "./widgetTypesResponse";
+export * from "./widgetTypesResponseWidgetTypes";

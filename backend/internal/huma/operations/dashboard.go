@@ -72,6 +72,20 @@ type GetDefaultLayoutOutput struct {
 	Body *domain.DashboardLayout
 }
 
+// GetWidgetTypesInput represents the input for getting widget types.
+// Note: This is a PUBLIC endpoint, no authentication required.
+type GetWidgetTypesInput struct{}
+
+// WidgetTypesResponse wraps the list of widget types
+type WidgetTypesResponse struct {
+	WidgetTypes []domain.WidgetTypeInfo `json:"widgetTypes"`
+}
+
+// GetWidgetTypesOutput represents the response for getting widget types.
+type GetWidgetTypesOutput struct {
+	Body *WidgetTypesResponse
+}
+
 // Issue #127: Net Worth Tracking & Visualization
 
 // GetNetWorthInput represents the input for getting net worth.
@@ -213,6 +227,18 @@ func GetDefaultLayout(ctx context.Context, input *GetDefaultLayoutInput) (*GetDe
 	return &GetDefaultLayoutOutput{Body: layout}, nil
 }
 
+// GetWidgetTypes handles GET /api/v1/dashboard/widget-types requests.
+// Returns all available widget types with their metadata.
+// This endpoint is PUBLIC (no auth required) - used for widget catalog.
+func GetWidgetTypes(ctx context.Context, input *GetWidgetTypesInput) (*GetWidgetTypesOutput, error) {
+	widgetTypes := domain.AllWidgetTypes()
+	return &GetWidgetTypesOutput{
+		Body: &WidgetTypesResponse{
+			WidgetTypes: widgetTypes,
+		},
+	}, nil
+}
+
 // GetNetWorth handles GET /api/v1/dashboard/net-worth requests.
 // Returns current net worth (assets - liabilities) with category breakdown.
 func (h *DashboardHandler) GetNetWorth(ctx context.Context, input *GetNetWorthInput) (*GetNetWorthOutput, error) {
@@ -291,6 +317,17 @@ func RegisterDashboardRoutes(api huma.API, handler *DashboardHandler) {
 		Tags:        []string{"Dashboard"},
 		// Note: No Security field - this is a public endpoint
 	}, GetDefaultLayout)
+
+	// GET /api/v1/dashboard/widget-types - Get widget types (PUBLIC)
+	huma.Register(api, huma.Operation{
+		OperationID: "getWidgetTypes",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/dashboard/widget-types",
+		Summary:     "Get available widget types",
+		Description: "Returns all available widget types with their metadata for the widget catalog. Public endpoint.",
+		Tags:        []string{"Dashboard"},
+		// Note: No Security field - this is a public endpoint
+	}, GetWidgetTypes)
 
 	// GET /api/v1/dashboard/net-worth - Get net worth
 	huma.Register(api, huma.Operation{

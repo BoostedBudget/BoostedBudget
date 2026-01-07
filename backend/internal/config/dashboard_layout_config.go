@@ -172,16 +172,9 @@ func (c *DashboardLayoutConfig) validate() error {
 }
 
 // isValidWidgetType checks if the widget type is a known registered type
+// Uses domain.ValidWidgetTypes() as single source of truth
 func isValidWidgetType(widgetType string) bool {
-	// Valid widget types from domain.WidgetType constants
-	validTypes := map[string]bool{
-		"balance-overview":   true,
-		"balance-history":    true,
-		"cash-flow-chart":    true,
-		"cash-flow-summary":  true,
-		"account-cards":      true,
-	}
-	return validTypes[widgetType]
+	return domain.ValidWidgetTypes()[domain.WidgetType(widgetType)]
 }
 
 // GetDefaultLayout returns the default dashboard layout as a domain object

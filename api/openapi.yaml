@@ -2738,6 +2738,64 @@ components:
         - w
         - h
       type: object
+    WidgetTypeInfo:
+      additionalProperties: false
+      properties:
+        category:
+          type: string
+        defaultHeight:
+          format: int64
+          type: integer
+        defaultWidth:
+          format: int64
+          type: integer
+        description:
+          type: string
+        maxHeight:
+          format: int64
+          type: integer
+        maxWidth:
+          format: int64
+          type: integer
+        minHeight:
+          format: int64
+          type: integer
+        minWidth:
+          format: int64
+          type: integer
+        name:
+          type: string
+        type:
+          type: string
+      required:
+        - type
+        - name
+        - description
+        - category
+        - defaultWidth
+        - defaultHeight
+        - minWidth
+        - minHeight
+      type: object
+    WidgetTypesResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/WidgetTypesResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        widgetTypes:
+          items:
+            $ref: "#/components/schemas/WidgetTypeInfo"
+          type:
+            - array
+            - "null"
+      required:
+        - widgetTypes
+      type: object
   securitySchemes:
     clerk:
       bearerFormat: JWT
@@ -4091,6 +4149,26 @@ paths:
       security:
         - clerk: []
       summary: Reset dashboard preferences
+      tags:
+        - Dashboard
+  /api/v1/dashboard/widget-types:
+    get:
+      description: Returns all available widget types with their metadata for the widget catalog. Public endpoint.
+      operationId: getWidgetTypes
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WidgetTypesResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Get available widget types
       tags:
         - Dashboard
   /api/v1/linked-items/{id}:
