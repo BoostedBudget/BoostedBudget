@@ -333,7 +333,11 @@ jobs:
           node-version: '22'
 
       - name: Install pnpm
-        run: npm install -g pnpm@10
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          standalone: true
+          dest: ${{ github.workspace }}/${{ env.UNIQUE_WORKSPACE }}/.pnpm-home
 
       - name: Install dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
