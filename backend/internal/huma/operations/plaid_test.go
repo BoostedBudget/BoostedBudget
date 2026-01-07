@@ -10,6 +10,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/plaid/plaid-go/v23/plaid"
@@ -101,6 +102,10 @@ func (m *mockAccountServiceForPlaid) DeleteAccount(ctx context.Context, accountI
 
 func (m *mockAccountServiceForPlaid) DisconnectInstitution(ctx context.Context, linkedItemID, userID string) error {
 	return m.disconnectErr
+}
+
+func (m *mockAccountServiceForPlaid) SetJobQueue(jq queue.JobQueue) {
+	// no-op for tests
 }
 
 // Helper function to create test account
