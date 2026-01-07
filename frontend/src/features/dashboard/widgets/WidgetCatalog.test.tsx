@@ -1,10 +1,7 @@
 /**
  * Widget Catalog Tests
- *
- * Tests the WidgetCatalog modal component including widget display,
- * category grouping, add functionality, and "Added" states.
- *
  * Issue #354: Customizable Dashboard Widget System
+ * Issue #127: Added API mock for widget types validation
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -16,6 +13,24 @@ import type { WidgetDefinition } from '../types'
 // Mock the registry
 vi.mock('./registry', () => ({
   getAllWidgets: vi.fn(),
+}))
+
+// Mock the API hook - returns all widget types as valid
+vi.mock('@/api/generated/endpoints/dashboard/dashboard', () => ({
+  useGetWidgetTypes: vi.fn(() => ({
+    data: {
+      widgetTypes: [
+        { type: 'balance-overview', name: 'Balance Overview', category: 'overview' },
+        { type: 'balance-history', name: 'Balance History', category: 'charts' },
+        { type: 'cash-flow-summary', name: 'Cash Flow Summary', category: 'overview' },
+        { type: 'cash-flow-chart', name: 'Cash Flow Chart', category: 'charts' },
+        { type: 'account-cards', name: 'Account Cards', category: 'accounts' },
+        { type: 'net-worth', name: 'Net Worth', category: 'overview' },
+      ],
+    },
+    isLoading: false,
+    error: null,
+  })),
 }))
 
 describe('WidgetCatalog', () => {
@@ -104,12 +119,7 @@ describe('WidgetCatalog', () => {
         />
       )
 
-      // Find the close button in the dialog header
-      // It's a button with XMarkIcon, located near the title
-      const buttons = screen.getAllByRole('button')
-      // The close button should be in the header area - it's typically the first button
-      // or we can find it by looking for one that doesn't have text content
-      const closeButton = buttons.find(btn => btn.querySelector('svg'))
+      const closeButton = screen.getAllByRole('button').find(btn => btn.querySelector('svg'))
       if (closeButton) {
         fireEvent.click(closeButton)
       }
@@ -156,12 +166,8 @@ describe('WidgetCatalog', () => {
         />
       )
 
-      // Size is displayed as "w×h" - there can be multiple with same size
-      // Balance Overview: 4×3, Account Cards: 4×3
       expect(screen.getAllByText('4×3').length).toBeGreaterThanOrEqual(1)
-      // Cash Flow Summary: 8×3
       expect(screen.getByText('8×3')).toBeInTheDocument()
-      // Balance History: 6×4
       expect(screen.getByText('6×4')).toBeInTheDocument()
     })
   })
@@ -270,11 +276,7 @@ describe('WidgetCatalog', () => {
         />
       )
 
-      // Try to click on an already added widget
-      // The widget card should not trigger add for already-added widgets
       fireEvent.click(screen.getByText('Balance Overview'))
-
-      // Should not be called because widget is already added
       expect(mockOnAddWidget).not.toHaveBeenCalled()
     })
 
@@ -288,9 +290,7 @@ describe('WidgetCatalog', () => {
         />
       )
 
-      // Click on a widget that's not already added
       fireEvent.click(screen.getByText('Balance History'))
-
       expect(mockOnAddWidget).toHaveBeenCalledWith('balance-history')
     })
   })

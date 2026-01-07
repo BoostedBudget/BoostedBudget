@@ -56,6 +56,7 @@ import type {
   NetWorthHistoryResponse,
   NetWorthResponse,
   SaveDashboardPreferencesInputBody,
+  WidgetTypesResponse,
 } from "../../models";
 
 import { customInstance } from "../../../client";
@@ -1381,3 +1382,137 @@ export const useResetDashboardPreferences = <
 
   return useMutation(mutationOptions, queryClient);
 };
+/**
+ * Returns all available widget types with their metadata for the widget catalog. Public endpoint.
+ * @summary Get available widget types
+ */
+export const getWidgetTypes = (
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<WidgetTypesResponse>(
+    { url: `/api/v1/dashboard/widget-types`, method: "GET", signal },
+    options,
+  );
+};
+
+export const getGetWidgetTypesQueryKey = () => {
+  return [`/api/v1/dashboard/widget-types`] as const;
+};
+
+export const getGetWidgetTypesQueryOptions = <
+  TData = Awaited<ReturnType<typeof getWidgetTypes>>,
+  TError = ErrorType<ErrorModel>,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<Awaited<ReturnType<typeof getWidgetTypes>>, TError, TData>
+  >;
+  request?: SecondParameter<typeof customInstance>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetWidgetTypesQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getWidgetTypes>>> = ({
+    signal,
+  }) => getWidgetTypes(requestOptions, signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getWidgetTypes>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetWidgetTypesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getWidgetTypes>>
+>;
+export type GetWidgetTypesQueryError = ErrorType<ErrorModel>;
+
+export function useGetWidgetTypes<
+  TData = Awaited<ReturnType<typeof getWidgetTypes>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getWidgetTypes>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getWidgetTypes>>,
+          TError,
+          Awaited<ReturnType<typeof getWidgetTypes>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetWidgetTypes<
+  TData = Awaited<ReturnType<typeof getWidgetTypes>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getWidgetTypes>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getWidgetTypes>>,
+          TError,
+          Awaited<ReturnType<typeof getWidgetTypes>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetWidgetTypes<
+  TData = Awaited<ReturnType<typeof getWidgetTypes>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getWidgetTypes>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Get available widget types
+ */
+
+export function useGetWidgetTypes<
+  TData = Awaited<ReturnType<typeof getWidgetTypes>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getWidgetTypes>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetWidgetTypesQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  query.queryKey = queryOptions.queryKey;
+
+  return query;
+}

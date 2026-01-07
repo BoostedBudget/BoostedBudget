@@ -39,6 +39,7 @@ import type {
   DashboardPreferencesResponse,
   NetWorthHistoryResponse,
   NetWorthResponse,
+  WidgetTypesResponse,
 } from "../../models";
 
 export const getGetAccountTypesResponseMock = (
@@ -235,6 +236,14 @@ export const getResetDashboardPreferencesResponseMock = (
     widgets: faker.helpers.arrayElement([[], null]),
   },
   updated_at: `${faker.date.past().toISOString().split(".")[0]}Z`,
+  ...overrideResponse,
+});
+
+export const getGetWidgetTypesResponseMock = (
+  overrideResponse: Partial<WidgetTypesResponse> = {},
+): WidgetTypesResponse => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  widgetTypes: faker.helpers.arrayElement([[], null]),
   ...overrideResponse,
 });
 
@@ -495,6 +504,34 @@ export const getResetDashboardPreferencesMockHandler = (
     options,
   );
 };
+
+export const getGetWidgetTypesMockHandler = (
+  overrideResponse?:
+    | WidgetTypesResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<WidgetTypesResponse> | WidgetTypesResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/dashboard/widget-types",
+    async (info) => {
+      await delay(500);
+
+      return new HttpResponse(
+        JSON.stringify(
+          overrideResponse !== undefined
+            ? typeof overrideResponse === "function"
+              ? await overrideResponse(info)
+              : overrideResponse
+            : getGetWidgetTypesResponseMock(),
+        ),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    },
+    options,
+  );
+};
 export const getDashboardMock = () => [
   getGetAccountTypesMockHandler(),
   getGetBalanceHistoryMockHandler(),
@@ -505,4 +542,5 @@ export const getDashboardMock = () => [
   getGetDashboardPreferencesMockHandler(),
   getSaveDashboardPreferencesMockHandler(),
   getResetDashboardPreferencesMockHandler(),
+  getGetWidgetTypesMockHandler(),
 ];
