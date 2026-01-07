@@ -241,7 +241,7 @@ jobs:
     runs-on: [self-hosted, macOS, mac-mini]
     environment:
       name: staging
-      url: https://api.staging.boostedbudget.com
+      url: https://staging-api.boostedbudget.com
     env:
       UNIQUE_WORKSPACE: workspace-deploy-fly-staging-${{ github.run_id }}
 
@@ -298,7 +298,7 @@ jobs:
           echo "### Backend Staging Deployment" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Version:** \`staging-${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**URL:** https://api.staging.boostedbudget.com" >> $GITHUB_STEP_SUMMARY
+          echo "**URL:** https://staging-api.boostedbudget.com" >> $GITHUB_STEP_SUMMARY
           echo "**Deployed at:** $(date -u)" >> $GITHUB_STEP_SUMMARY
 
       - name: Final workspace cleanup
@@ -346,7 +346,7 @@ jobs:
       - name: Build frontend
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         env:
-          VITE_API_URL: https://api.staging.boostedbudget.com
+          VITE_API_URL: https://staging-api.boostedbudget.com
           VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
           VITE_ENVIRONMENT: staging
         run: pnpm run build
@@ -399,7 +399,7 @@ jobs:
             ./scripts/smoke-test.sh staging
           else
             echo "Running basic smoke tests..."
-            curl -f https://api.staging.boostedbudget.com/health || exit 1
+            curl -f https://staging-api.boostedbudget.com/health || exit 1
             echo "Backend health check passed"
           fi
 
@@ -408,7 +408,7 @@ jobs:
         run: |
           echo "### Staging Smoke Tests Passed" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- Backend health check: https://api.staging.boostedbudget.com/health" >> $GITHUB_STEP_SUMMARY
+          echo "- Backend health check: https://staging-api.boostedbudget.com/health" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Deployment Trigger:** Manual workflow_dispatch" >> $GITHUB_STEP_SUMMARY
           echo "**Triggered by:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
@@ -442,7 +442,7 @@ jobs:
           echo "- Smoke Tests: ${{ needs.smoke-tests.result }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**URLs:**" >> $GITHUB_STEP_SUMMARY
-          echo "- Backend API: https://api.staging.boostedbudget.com" >> $GITHUB_STEP_SUMMARY
+          echo "- Backend API: https://staging-api.boostedbudget.com" >> $GITHUB_STEP_SUMMARY
           echo "- Frontend: https://staging.boostedbudget.com" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Deployed at:** $(date -u)" >> $GITHUB_STEP_SUMMARY
