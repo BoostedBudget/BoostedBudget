@@ -26,7 +26,7 @@ if [ "$ENVIRONMENT" == "production" ]; then
   API_URL="https://api.boostedbudget.com"
   WEB_URL="https://boostedbudget.com"
 elif [ "$ENVIRONMENT" == "staging" ]; then
-  API_URL="https://api.staging.boostedbudget.com"
+  API_URL="https://staging-api.boostedbudget.com"
   WEB_URL="https://staging.boostedbudget.com"
 elif [ "$ENVIRONMENT" == "qa" ]; then
   # QA runs on Mac Mini - use localhost or Tailscale URL
