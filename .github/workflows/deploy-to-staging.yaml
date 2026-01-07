@@ -11,26 +11,22 @@ concurrency:
 
 env:
   GO_VERSION: '1.25.5'
-  NODE_VERSION: '20'
+  NODE_VERSION: '22'
   REGISTRY: ghcr.io
   BACKEND_IMAGE_NAME: boostedbudget/boostedbudget-backend
-  FRONTEND_IMAGE_NAME: boostedbudget/boostedbudget-frontend
 
 jobs:
   # =============================================================================
-  # Build and Push Images to GHCR (Parallelized via Matrix)
+  # Build and Push Backend Image to GHCR
   # =============================================================================
-  build-images:
-    name: Build ${{ matrix.component }} Image
+  build-backend:
+    name: Build Backend Image
     runs-on: [self-hosted, macOS, mac-mini]
-    strategy:
-      matrix:
-        component: [backend, frontend]
     permissions:
       contents: read
       packages: write
     env:
-      UNIQUE_WORKSPACE: workspace-build-images-${{ matrix.component }}-${{ github.run_id }}
+      UNIQUE_WORKSPACE: workspace-build-backend-${{ github.run_id }}
 
     steps:
       - name: Clean workspace
@@ -52,7 +48,7 @@ jobs:
           ELAPSED=0
 
           while ! mkdir "$LOCKDIR" 2>/dev/null; do
-            echo "[${{ matrix.component }}] Waiting for config.json lock..."
+            echo "[backend] Waiting for config.json lock..."
             sleep 1
             ELAPSED=$((ELAPSED + 1))
             if [ $ELAPSED -ge $TIMEOUT ]; then
@@ -66,7 +62,7 @@ jobs:
           mkdir -p ~/.docker
           if [ -f ~/.docker/config.json ]; then
             if command -v jq &> /dev/null; then
-              TEMP_FILE=~/.docker/config.json.tmp.${{ matrix.component }}
+              TEMP_FILE=~/.docker/config.json.tmp.backend
               if jq 'del(.credsStore)' ~/.docker/config.json > "$TEMP_FILE" 2>/dev/null; then
                 mv "$TEMP_FILE" ~/.docker/config.json
               else
@@ -84,7 +80,7 @@ jobs:
           ELAPSED=0
 
           while ! mkdir "$LOCKDIR" 2>/dev/null; do
-            echo "[${{ matrix.component }}] Waiting for docker login lock..."
+            echo "[backend] Waiting for docker login lock..."
             sleep 1
             ELAPSED=$((ELAPSED + 1))
             if [ $ELAPSED -ge $TIMEOUT ]; then
@@ -109,32 +105,21 @@ jobs:
             fi
           done
 
-      - name: Set image name for ${{ matrix.component }}
-        id: image-name
-        run: |
-          if [ "${{ matrix.component }}" = "backend" ]; then
-            IMAGE_NAME="${{ env.BACKEND_IMAGE_NAME }}"
-          else
-            IMAGE_NAME="${{ env.FRONTEND_IMAGE_NAME }}"
-          fi
-          echo "image-name=${IMAGE_NAME}" >> $GITHUB_OUTPUT
-          echo "Building: ${{ env.REGISTRY }}/${IMAGE_NAME}:staging-${{ github.sha }}"
-
-      - name: Build and push ${{ matrix.component }} image
+      - name: Build and push backend image
         id: build
         uses: docker/build-push-action@v6
         with:
           context: ${{ env.UNIQUE_WORKSPACE }}
-          file: ${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile
+          file: ${{ env.UNIQUE_WORKSPACE }}/backend/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           pull: true
           no-cache: true
           tags: |
-            ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:staging-${{ github.sha }}
-            ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:staging-latest
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache-go${{ env.GO_VERSION }}
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache-go${{ env.GO_VERSION }},mode=max
+            ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:staging-${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:staging-latest
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:buildcache-go${{ env.GO_VERSION }}
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:buildcache-go${{ env.GO_VERSION }},mode=max
           build-args: |
             VERSION=staging-${{ github.sha }}
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
@@ -142,9 +127,9 @@ jobs:
 
       - name: Image build summary
         run: |
-          echo "### ${{ matrix.component }} Image Built" >> $GITHUB_STEP_SUMMARY
+          echo "### Backend Image Built" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Image:** \`${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:staging-${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:staging-${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
 
       - name: Final workspace cleanup
         if: always()
@@ -155,8 +140,8 @@ jobs:
   # =============================================================================
   push-to-fly-registry:
     name: Push Backend to Fly.io
-    needs: build-images
-    if: ${{ needs.build-images.result == 'success' }}
+    needs: build-backend
+    if: ${{ needs.build-backend.result == 'success' }}
     runs-on: [self-hosted, macOS, mac-mini]
 
     steps:
@@ -252,7 +237,7 @@ jobs:
   # =============================================================================
   deploy-backend:
     name: Deploy Backend to Fly.io Staging
-    needs: [build-images, push-to-fly-registry]
+    needs: [build-backend, push-to-fly-registry]
     runs-on: [self-hosted, macOS, mac-mini]
     environment:
       name: staging
@@ -325,7 +310,6 @@ jobs:
   # =============================================================================
   deploy-frontend:
     name: Deploy Frontend to Cloudflare Pages
-    needs: build-images
     runs-on: [self-hosted, macOS, mac-mini]
     environment:
       name: staging
@@ -434,7 +418,7 @@ jobs:
   # =============================================================================
   deployment-summary:
     name: Deployment Summary
-    needs: [build-images, deploy-backend, deploy-frontend, smoke-tests]
+    needs: [build-backend, deploy-backend, deploy-frontend, smoke-tests]
     runs-on: [self-hosted, macOS, mac-mini]
     if: always()
 
@@ -448,7 +432,7 @@ jobs:
           echo "**Triggered by:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Job Results:**" >> $GITHUB_STEP_SUMMARY
-          echo "- Build Images: ${{ needs.build-images.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Build Backend: ${{ needs.build-backend.result }}" >> $GITHUB_STEP_SUMMARY
           echo "- Deploy Backend: ${{ needs.deploy-backend.result }}" >> $GITHUB_STEP_SUMMARY
           echo "- Deploy Frontend: ${{ needs.deploy-frontend.result }}" >> $GITHUB_STEP_SUMMARY
           echo "- Smoke Tests: ${{ needs.smoke-tests.result }}" >> $GITHUB_STEP_SUMMARY
