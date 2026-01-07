@@ -407,6 +407,12 @@ func main() {
 						scheduledDeletionCheckWorker.SetJobQueue(jobQueue)
 						log.Println("✅ Scheduled deletion check worker connected to job queue")
 					}
+
+					// Issue #658: Wire up jobQueue to accountService for auto-sync after linking
+					if accountService != nil {
+						accountService.SetJobQueue(jobQueue)
+						log.Println("✅ Account service connected to job queue for auto-sync")
+					}
 				}
 
 				log.Println("✅ Transaction sync service initialized")

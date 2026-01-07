@@ -307,10 +307,14 @@ backend/cmd/server/server
 backend/tmp/
 frontend/dist/
 in-memoria.db
-.claude/
+# Claude Code - ignore settings but track skills, commands, agents
+.claude/*
 !.claude/commands/
+!.claude/commands/**
 !.claude/agents/
+!.claude/agents/**
 !.claude/skills/
+!.claude/skills/**
 .serena
 
 # Test artifacts and coverage reports
