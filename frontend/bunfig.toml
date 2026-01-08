@@ -6,8 +6,10 @@
 frozen = false
 
 [test]
-# Preload test setup file
-preload = ["./src/test/setup.ts"]
+# Preload files for bun test (order matters!)
+# 1. happydom.ts - Register DOM globals first
+# 2. testing-library.ts - Setup testing library matchers
+preload = ["./src/test/happydom.ts", "./src/test/testing-library.ts"]
 
 # Note: Coverage thresholds will be enforced in CI scripts
 # Bun's built-in coverage is used via --coverage flag
