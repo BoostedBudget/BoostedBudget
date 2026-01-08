@@ -2250,3 +2250,132 @@ func TestSyncTransactions_FinalPageCursorUpdate(t *testing.T) {
 	// Assert: UpdateCursor was called with final cursor
 	mockLinkedItemRepo.AssertCalled(t, "UpdateCursor", ctx, "linked-item-123", finalCursor)
 }
+
+// TestSyncTransactions_InvalidCursorAutoReset verifies that when Plaid returns an
+// INVALID_CURSOR error, the cursor is automatically reset to empty string to trigger
+// a full re-sync on retry.
+// Issue #171: Auto-recovery from cursor corruption
+func TestSyncTransactions_InvalidCursorAutoReset(t *testing.T) {
+	ctx := context.Background()
+
+	// Setup mocks
+	mockPlaidService := new(MockPlaidService)
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockEncryptionService := new(MockEncryptionService)
+
+	service := NewTransactionSyncService(
+		nil, // webhookRepo
+		mockLinkedItemRepo,
+		nil, // transactionRepo
+		nil, // accountRepo
+		nil, // profileRepo
+		nil, // balanceSnapshotRepo
+		mockPlaidService,
+		mockEncryptionService,
+		nil, // syncLimitService
+		nil, // ruleApplicationService
+		nil, // budgetSyncService
+		nil, // transactionMonitorService
+	)
+
+	// LinkedItem with corrupted cursor
+	corruptedCursor := "corrupted-cursor-xyz"
+	linkedItem := &domain.LinkedItem{
+		ID:                   "linked-item-123",
+		UserID:               "user-123",
+		ItemID:               "plaid-item-123",
+		AccessTokenEncrypted: "encrypted-token",
+		Cursor:               &corruptedCursor,
+	}
+
+	// Mock: Decrypt access token
+	mockEncryptionService.On("Decrypt", "encrypted-token").Return("access-token", nil)
+
+	// Mock: Plaid API returns INVALID_CURSOR error
+	// This simulates a corrupted or expired cursor scenario
+	invalidCursorErr := createPlaidInvalidCursorError()
+	mockPlaidService.On("TransactionsSync", ctx, "access-token", corruptedCursor, 0).Return(nil, invalidCursorErr)
+
+	// CRITICAL: Cursor should be reset to empty string for full re-sync
+	mockLinkedItemRepo.On("UpdateCursor", ctx, "linked-item-123", "").Return(nil)
+
+	// Execute
+	result, err := service.SyncTransactions(ctx, linkedItem)
+
+	// Assert: Error is returned (to trigger retry with reset cursor)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "cursor reset")
+
+	// Assert: Cursor was reset to empty string
+	mockLinkedItemRepo.AssertCalled(t, "UpdateCursor", ctx, "linked-item-123", "")
+
+	// Assert: Partial results returned
+	assert.NotNil(t, result)
+	assert.Empty(t, result.Added) // No transactions fetched due to error
+}
+
+// TestSyncTransactions_InvalidCursorResetFailure verifies error handling when
+// cursor reset fails during INVALID_CURSOR recovery.
+func TestSyncTransactions_InvalidCursorResetFailure(t *testing.T) {
+	ctx := context.Background()
+
+	// Setup mocks
+	mockPlaidService := new(MockPlaidService)
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockEncryptionService := new(MockEncryptionService)
+
+	service := NewTransactionSyncService(
+		nil, mockLinkedItemRepo, nil, nil, nil, nil,
+		mockPlaidService, mockEncryptionService, nil, nil, nil, nil,
+	)
+
+	// LinkedItem with corrupted cursor
+	corruptedCursor := "corrupted-cursor"
+	linkedItem := &domain.LinkedItem{
+		ID:                   "linked-item-123",
+		UserID:               "user-123",
+		ItemID:               "plaid-item-123",
+		AccessTokenEncrypted: "encrypted-token",
+		Cursor:               &corruptedCursor,
+	}
+
+	// Mock: Decrypt access token
+	mockEncryptionService.On("Decrypt", "encrypted-token").Return("access-token", nil)
+
+	// Mock: Plaid API returns INVALID_CURSOR error
+	invalidCursorErr := createPlaidInvalidCursorError()
+	mockPlaidService.On("TransactionsSync", ctx, "access-token", corruptedCursor, 0).Return(nil, invalidCursorErr)
+
+	// Mock: Cursor reset FAILS (database error)
+	mockLinkedItemRepo.On("UpdateCursor", ctx, "linked-item-123", "").Return(errors.New("database connection lost"))
+
+	// Execute
+	result, err := service.SyncTransactions(ctx, linkedItem)
+
+	// Assert: Error indicates cursor reset failure
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to reset cursor")
+
+	// Assert: Partial results returned
+	assert.NotNil(t, result)
+}
+
+// createPlaidInvalidCursorError creates a mock Plaid error that classifies as INVALID_CURSOR.
+// In production, this would be a plaid.PlaidError with ErrorCode="INVALID_CURSOR".
+func createPlaidInvalidCursorError() error {
+	// Create a mock error that ClassifyPlaidError will recognize as INVALID_CURSOR.
+	// Since we can't easily create a real plaid.PlaidError, we use a workaround:
+	// We need to mock at the domain.ClassifyPlaidError level or use a real Plaid error structure.
+	//
+	// For this test, we'll create an error that will be classified as Temporary by default
+	// (since it's not a real Plaid error), and we need to ensure the test exercises the
+	// cursor reset code path.
+	//
+	// To properly test this, we need to create an actual Plaid-formatted error response.
+	// Let's use the plaid SDK's error handling.
+	return &domain.PlaidSyncError{
+		OriginalError: errors.New("cursor is invalid or expired"),
+		ErrorType:     domain.PlaidErrorInvalidCursor,
+		ErrorCode:     "INVALID_CURSOR",
+	}
+}

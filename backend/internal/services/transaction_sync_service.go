@@ -231,6 +231,23 @@ func (s *transactionSyncService) SyncTransactions(
 		// Call Plaid API for single page (with tier-based historical depth)
 		resp, err := s.plaidService.TransactionsSync(ctx, accessToken, cursor, daysRequested)
 		if err != nil {
+			// Issue #171: Check for invalid cursor error and auto-reset
+			// Check if error is already a PlaidSyncError, otherwise classify it
+			var plaidErr *domain.PlaidSyncError
+			if existingPlaidErr, ok := err.(*domain.PlaidSyncError); ok {
+				plaidErr = existingPlaidErr
+			} else {
+				plaidErr = domain.ClassifyPlaidError(err)
+			}
+			if plaidErr.ErrorType == domain.PlaidErrorInvalidCursor {
+				// Reset cursor to empty string for full re-sync
+				log.Printf("Invalid cursor detected for item %s, resetting for full re-sync", linkedItem.ID)
+				if resetErr := s.linkedItemRepo.UpdateCursor(ctx, linkedItem.ID, ""); resetErr != nil {
+					return result, fmt.Errorf("failed to reset cursor after INVALID_CURSOR: %w", resetErr)
+				}
+				// Return error to trigger retry with empty cursor
+				return result, fmt.Errorf("cursor reset, will retry full sync: %w", err)
+			}
 			// Return partial results with error
 			// Cursor already updated for pages that succeeded
 			return result, fmt.Errorf("sync failed on page %d: %w", pageCount, err)
