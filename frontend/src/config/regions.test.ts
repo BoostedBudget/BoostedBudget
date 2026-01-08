@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect } from 'bun:test'
 import { REGIONS, getRegionDisplay, getRegionInfo, isValidRegion, REGION_CODES, DEFAULT_REGION } from './regions'
 
 describe('Region Configuration', () => {

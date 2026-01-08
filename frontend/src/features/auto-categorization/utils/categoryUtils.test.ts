@@ -5,7 +5,7 @@
  * Issue #402: Fix Category Dropdowns in Auto-Categorization Rule Editor
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect } from 'bun:test'
 import { formatPlaidCategory, toPlaidCategoryEnum } from './categoryUtils'
 
 describe('formatPlaidCategory', () => {
