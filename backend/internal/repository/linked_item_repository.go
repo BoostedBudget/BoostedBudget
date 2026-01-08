@@ -54,6 +54,16 @@ type LinkedItemRepository interface {
 	//   - The item doesn't exist
 	//   - The item exists but belongs to a different user (ownership check fails)
 	DeleteByUser(ctx context.Context, id, userID string) error
+
+	// GetByIDForUpdate retrieves a linked item by ID with a row-level exclusive lock.
+	// Use this in sync workers to prevent concurrent syncs for the same item.
+	// The lock is held until the transaction commits or rolls back.
+	//
+	// IMPORTANT: This must be called within a transaction. The lock is released
+	// when the transaction ends (commit or rollback).
+	//
+	// Returns ErrLinkedItemNotFound if the item doesn't exist.
+	GetByIDForUpdate(ctx context.Context, tx pgx.Tx, id string) (*domain.LinkedItem, error)
 }
 
 // linkedItemRepository implements LinkedItemRepository using PostgreSQL
@@ -396,4 +406,65 @@ func (r *linkedItemRepository) DeleteByUser(ctx context.Context, id, userID stri
 	}
 
 	return nil
+}
+
+// GetByIDForUpdate retrieves a linked item by ID with a row-level exclusive lock.
+// This prevents concurrent sync operations on the same linked item.
+//
+// The FOR UPDATE clause acquires an exclusive row-level lock that:
+//   - Blocks other transactions attempting to SELECT FOR UPDATE on the same row
+//   - Blocks other transactions attempting to UPDATE or DELETE the row
+//   - Is held until the transaction commits or rolls back
+//
+// Usage pattern:
+//
+//	tx, _ := db.Begin(ctx)
+//	defer tx.Rollback(ctx)
+//	item, err := repo.GetByIDForUpdate(ctx, tx, linkedItemID)
+//	// ... perform sync operations ...
+//	tx.Commit(ctx)
+//
+// Returns ErrLinkedItemNotFound if the item doesn't exist.
+func (r *linkedItemRepository) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, id string) (*domain.LinkedItem, error) {
+	query := `
+		SELECT id, user_id, item_id, access_token_encrypted,
+		       institution_id, institution_name, provider,
+		       cursor, last_synced_at,
+		       status, error_code, error_message, last_error_at,
+		       retry_count, next_retry_at,
+		       created_at, updated_at
+		FROM linked_items
+		WHERE id = $1
+		FOR UPDATE
+	`
+
+	var item domain.LinkedItem
+	err := tx.QueryRow(ctx, query, id).Scan(
+		&item.ID,
+		&item.UserID,
+		&item.ItemID,
+		&item.AccessTokenEncrypted,
+		&item.InstitutionID,
+		&item.InstitutionName,
+		&item.Provider,
+		&item.Cursor,
+		&item.LastSyncedAt,
+		&item.Status,
+		&item.ErrorCode,
+		&item.ErrorMessage,
+		&item.LastErrorAt,
+		&item.RetryCount,
+		&item.NextRetryAt,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrLinkedItemNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return &item, nil
 }

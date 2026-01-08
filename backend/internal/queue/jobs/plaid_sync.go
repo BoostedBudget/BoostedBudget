@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -36,6 +37,12 @@ type PlaidSyncArgs struct {
 // Used by River to route jobs to the appropriate worker.
 func (PlaidSyncArgs) Kind() string { return "plaid_sync" }
 
+// TxBeginner is an interface for starting database transactions.
+// This allows the worker to acquire row-level locks for concurrent sync prevention.
+type TxBeginner interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
 // PlaidSyncWorker processes Plaid sync jobs by fetching transactions
 // from Plaid and storing them in the database.
 type PlaidSyncWorker struct {
@@ -45,6 +52,7 @@ type PlaidSyncWorker struct {
 	linkedItemRepo repository.LinkedItemRepository
 	jobQueue       queue.JobQueue
 	logger         *slog.Logger
+	db             TxBeginner
 }
 
 // PlaidSyncWorkerDeps contains the dependencies for PlaidSyncWorker.
@@ -54,6 +62,7 @@ type PlaidSyncWorkerDeps struct {
 	LinkedItemRepo repository.LinkedItemRepository
 	JobQueue       queue.JobQueue
 	Logger         *slog.Logger
+	DB             TxBeginner
 }
 
 // NewPlaidSyncWorker creates a new Plaid sync worker with the given dependencies.
@@ -67,6 +76,7 @@ func NewPlaidSyncWorker(deps PlaidSyncWorkerDeps) *PlaidSyncWorker {
 		linkedItemRepo: deps.LinkedItemRepo,
 		jobQueue:       deps.JobQueue,
 		logger:         logger,
+		db:             deps.DB,
 	}
 }
 
@@ -79,9 +89,13 @@ func (w *PlaidSyncWorker) SetJobQueue(jq queue.JobQueue) {
 // Work processes a Plaid sync job.
 //
 // The worker:
-//  1. Retrieves the LinkedItem to get the access token and cursor
-//  2. Calls SyncTransactions which handles all pagination and storage
-//  3. Enqueues follow-up jobs for budget evaluation if transactions changed
+//  1. Acquires an exclusive row-level lock on the LinkedItem to prevent concurrent syncs
+//  2. Retrieves the LinkedItem to get the access token and cursor
+//  3. Calls SyncTransactions which handles all pagination and storage
+//  4. Releases the lock and enqueues follow-up jobs if transactions changed
+//
+// The row-level lock (FOR UPDATE) ensures only one worker can sync a given item at a time.
+// If another job is already syncing, this job will block until the lock is released.
 //
 // Errors are returned to River for retry with exponential backoff.
 // Jobs are automatically retried up to MaxAttempts (default 5).
@@ -98,8 +112,9 @@ func (w *PlaidSyncWorker) Work(ctx context.Context, job *river.Job[PlaidSyncArgs
 
 	startTime := time.Now()
 
-	// Get the linked item with ownership validation
-	linkedItem, err := w.linkedItemRepo.GetByIDAndUser(ctx, args.ItemID, args.UserID)
+	// Acquire row-level lock via transaction
+	// This prevents concurrent sync operations on the same linked item
+	linkedItem, tx, err := w.acquireLockAndGetItem(ctx, args.ItemID, args.UserID)
 	if err != nil {
 		if errors.Is(err, repository.ErrLinkedItemNotFound) {
 			w.logger.Warn("linked item not found, skipping job",
@@ -109,8 +124,22 @@ func (w *PlaidSyncWorker) Work(ctx context.Context, job *river.Job[PlaidSyncArgs
 			// Don't retry if item doesn't exist - it was likely deleted
 			return nil
 		}
-		return fmt.Errorf("failed to get linked item: %w", err)
+		if errors.Is(err, errOwnershipMismatch) {
+			w.logger.Warn("linked item ownership mismatch, skipping job",
+				"item_id", args.ItemID,
+				"user_id", args.UserID,
+			)
+			// Don't retry if user doesn't own the item
+			return nil
+		}
+		return fmt.Errorf("failed to acquire lock on linked item: %w", err)
 	}
+	// Ensure transaction is always cleaned up (commit on success, rollback on error)
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback(ctx) // No-op if already committed
+		}
+	}()
 
 	// Perform the sync - this is fully self-contained and handles:
 	// - Cursor-based pagination until has_more=false
@@ -164,6 +193,14 @@ func (w *PlaidSyncWorker) Work(ctx context.Context, job *river.Job[PlaidSyncArgs
 		"duration_ms", time.Since(startTime).Milliseconds(),
 	)
 
+	// Commit the transaction to release the lock (if we're using locking)
+	// This must happen before enqueueing follow-up jobs to avoid holding the lock
+	if tx != nil {
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("failed to commit transaction: %w", err)
+		}
+	}
+
 	// Enqueue follow-up job if there were transaction changes
 	// This allows us to decouple sync from budget notifications
 	if totalChanges > 0 && w.jobQueue != nil {
@@ -204,4 +241,54 @@ func PlaidSyncUniqueOpts() *queue.UniqueOpts {
 			queue.JobStatePending,
 		},
 	}
+}
+
+// errOwnershipMismatch is returned when the linked item's user ID doesn't match the job's user ID.
+var errOwnershipMismatch = errors.New("linked item ownership mismatch")
+
+// acquireLockAndGetItem starts a transaction, acquires an exclusive row-level lock
+// on the linked item, and validates ownership.
+//
+// The returned transaction MUST be committed or rolled back by the caller.
+// The lock is held until the transaction ends.
+//
+// Returns:
+//   - The linked item if successful
+//   - The transaction (caller must commit/rollback)
+//   - repository.ErrLinkedItemNotFound if the item doesn't exist
+//   - errOwnershipMismatch if the item belongs to a different user
+//   - Other errors for database failures
+func (w *PlaidSyncWorker) acquireLockAndGetItem(ctx context.Context, itemID, userID string) (*domain.LinkedItem, pgx.Tx, error) {
+	// If DB is not configured, fall back to non-locking behavior
+	// This allows graceful degradation in tests or when locking is not needed
+	if w.db == nil {
+		item, err := w.linkedItemRepo.GetByIDAndUser(ctx, itemID, userID)
+		return item, nil, err
+	}
+
+	// Start transaction for row-level locking
+	tx, err := w.db.Begin(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+
+	// Acquire exclusive lock and get the item
+	item, err := w.linkedItemRepo.GetByIDForUpdate(ctx, tx, itemID)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		return nil, nil, err
+	}
+
+	// Validate ownership - the item must belong to the specified user
+	if item.UserID != userID {
+		_ = tx.Rollback(ctx)
+		return nil, nil, errOwnershipMismatch
+	}
+
+	w.logger.Debug("acquired lock on linked item",
+		"item_id", itemID,
+		"user_id", userID,
+	)
+
+	return item, tx, nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/events"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -76,6 +77,14 @@ func (m *MockLinkedItemRepository) GetByIDAndUser(ctx context.Context, id, userI
 func (m *MockLinkedItemRepository) DeleteByUser(ctx context.Context, id, userID string) error {
 	args := m.Called(ctx, id, userID)
 	return args.Error(0)
+}
+
+func (m *MockLinkedItemRepository) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, id string) (*domain.LinkedItem, error) {
+	args := m.Called(ctx, tx, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.LinkedItem), args.Error(1)
 }
 
 // MockTransactionRepository is a mock for TransactionRepository

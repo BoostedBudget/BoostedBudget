@@ -379,11 +379,13 @@ func main() {
 				})
 
 				// Issue #666: Create PlaidSyncWorker for auto-sync after account linking
+				// Issue #171: Add DB for row-level locking to prevent concurrent syncs
 				plaidSyncWorker := jobs.NewPlaidSyncWorker(jobs.PlaidSyncWorkerDeps{
 					SyncService:    transactionSyncService,
 					LinkedItemRepo: linkedItemRepo,
 					JobQueue:       nil, // Set after River client created (circular dependency)
 					Logger:         logger,
+					DB:             db, // For row-level locking via FOR UPDATE
 				})
 				log.Println("✅ Plaid sync worker created")
 
