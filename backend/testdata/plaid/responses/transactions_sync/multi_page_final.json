@@ -1,0 +1,27 @@
+{
+  "added": [
+    {
+      "transaction_id": "txn_final_001",
+      "account_id": "acc_test_001",
+      "amount": 5.00,
+      "iso_currency_code": "USD",
+      "date": "2024-01-17",
+      "authorized_date": "2024-01-17",
+      "name": "Venmo Payment",
+      "merchant_name": "Venmo",
+      "category": ["Transfer", "Peer-to-Peer"],
+      "personal_finance_category": {
+        "primary": "TRANSFER_OUT",
+        "detailed": "TRANSFER_OUT_ACCOUNT_TRANSFER"
+      },
+      "payment_channel": "online",
+      "pending": false,
+      "pending_transaction_id": null
+    }
+  ],
+  "modified": [],
+  "removed": [],
+  "next_cursor": "cursor_final",
+  "has_more": false,
+  "request_id": "req_test_multi_page_final"
+}

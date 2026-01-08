@@ -64,6 +64,14 @@ func (m *MockPlaidService) FireWebhook(ctx context.Context, accessToken string, 
 	return args.Get(0).(*plaid.SandboxItemFireWebhookResponse), args.Error(1)
 }
 
+func (m *MockPlaidService) AccountsGet(ctx context.Context, accessToken string) (*plaid.AccountsGetResponse, error) {
+	args := m.Called(ctx, accessToken)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*plaid.AccountsGetResponse), args.Error(1)
+}
+
 type MockEncryptionService struct {
 	mock.Mock
 }
@@ -1396,14 +1404,10 @@ func TestAccountService_LinkAccounts_EnqueuesSyncJob(t *testing.T) {
 	userID := uuid.New().String()
 	linkedItemID := uuid.New().String()
 
-	// Mock: Expect Enqueue to be called with PlaidSyncArgs
+	// Mock: Enqueue should be called with plaid_sync job
 	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
-		// Verify job kind is "plaid_sync"
 		return job.Kind() == "plaid_sync"
-	}), mock.Anything).Return(&queue.JobResult{
-		ID:   123,
-		Kind: "plaid_sync",
-	}, nil)
+	}), mock.Anything).Return(&queue.JobResult{ID: 123, Kind: "plaid_sync"}, nil)
 
 	// Call enqueueInitialSync directly
 	service.enqueueInitialSync(ctx, linkedItemID, userID)

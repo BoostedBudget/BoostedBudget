@@ -1,0 +1,45 @@
+{
+  "added": [
+    {
+      "transaction_id": "txn_test_001",
+      "account_id": "acc_test_001",
+      "amount": 25.50,
+      "iso_currency_code": "USD",
+      "date": "2024-01-15",
+      "authorized_date": "2024-01-14",
+      "name": "Starbucks Coffee",
+      "merchant_name": "Starbucks",
+      "category": ["Food and Drink", "Restaurants", "Coffee Shop"],
+      "personal_finance_category": {
+        "primary": "FOOD_AND_DRINK",
+        "detailed": "FOOD_AND_DRINK_COFFEE"
+      },
+      "payment_channel": "in_store",
+      "pending": false,
+      "pending_transaction_id": null
+    },
+    {
+      "transaction_id": "txn_test_002",
+      "account_id": "acc_test_001",
+      "amount": 150.00,
+      "iso_currency_code": "USD",
+      "date": "2024-01-14",
+      "authorized_date": "2024-01-14",
+      "name": "Amazon",
+      "merchant_name": "Amazon.com",
+      "category": ["Shops", "Digital Purchase"],
+      "personal_finance_category": {
+        "primary": "GENERAL_MERCHANDISE",
+        "detailed": "GENERAL_MERCHANDISE_ONLINE_MARKETPLACES"
+      },
+      "payment_channel": "online",
+      "pending": false,
+      "pending_transaction_id": null
+    }
+  ],
+  "modified": [],
+  "removed": [],
+  "next_cursor": "cursor_after_sync_001",
+  "has_more": false,
+  "request_id": "req_test_single_page"
+}

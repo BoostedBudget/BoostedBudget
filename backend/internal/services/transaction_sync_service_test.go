@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/plaid/plaid-go/v23/plaid"
 	"github.com/stretchr/testify/assert"
@@ -372,10 +373,7 @@ func TestSyncTransactions_SuccessSinglePage(t *testing.T) {
 
 	// Mock Plaid API response (single page, has_more=false)
 	plaidResp := &plaid.TransactionsSyncResponse{
-		Added: []plaid.Transaction{
-			{TransactionId: "txn-1", Amount: 10.0},
-			{TransactionId: "txn-2", Amount: 20.0},
-		},
+		Added:      []plaid.Transaction{{TransactionId: "txn-1", Amount: 10.0}, {TransactionId: "txn-2", Amount: 20.0}},
 		Modified:   []plaid.Transaction{},
 		Removed:    []plaid.RemovedTransaction{},
 		NextCursor: "cursor-after",
@@ -650,17 +648,17 @@ func TestSyncTransactions_CursorUpdateError(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	cursor := "existing-cursor" // Set cursor to avoid first-sync path
+	existingCursor := "existing-cursor"
 	linkedItem := &domain.LinkedItem{
 		ID:                   "linked-item-123",
 		AccessTokenEncrypted: "encrypted-token",
-		Cursor:               &cursor, // Re-sync scenario to avoid sync limit checks
+		Cursor:               &existingCursor,
 	}
 
 	// Mock decryption
 	mockEncryptionService.On("Decrypt", "encrypted-token").Return("decrypted-token", nil)
 
-	// Plaid API succeeds
+	// Mock Plaid API success
 	plaidResp := &plaid.TransactionsSyncResponse{
 		Added:      []plaid.Transaction{{TransactionId: "txn-1"}},
 		NextCursor: "cursor-new",
@@ -708,17 +706,16 @@ func TestSyncTransactions_EmptyCursor(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	cursor := "existing-cursor" // Set cursor to avoid first-sync path
+	existingCursor := "existing-cursor"
 	linkedItem := &domain.LinkedItem{
 		ID:                   "linked-item-123",
 		AccessTokenEncrypted: "encrypted-token",
-		Cursor:               &cursor, // Re-sync scenario to avoid sync limit checks
+		Cursor:               &existingCursor,
 	}
 
-	// Mock decryption
+	// Mock decryption and Plaid API (re-sync scenario)
 	mockEncryptionService.On("Decrypt", "encrypted-token").Return("decrypted-token", nil)
 
-	// Mock Plaid API with cursor (re-sync scenario)
 	plaidResp := &plaid.TransactionsSyncResponse{
 		Added:      []plaid.Transaction{{TransactionId: "txn-1"}},
 		NextCursor: "cursor-initial",
@@ -742,10 +739,6 @@ func TestSyncTransactions_EmptyCursor(t *testing.T) {
 	mockPlaidService.AssertExpectations(t)
 }
 
-// Helper function to create string pointers
-func stringPtr(s string) *string {
-	return &s
-}
 
 // ============================================================================
 // Issue #261: Transaction Storage Logic Tests
@@ -920,37 +913,13 @@ func TestProcessAddedTransactions_Success(t *testing.T) {
 	}
 
 	// Mock linked item
-	linkedItem := &domain.LinkedItem{
-		ID:     linkedItemID,
-		UserID: userID,
-	}
+	linkedItem := &domain.LinkedItem{ID: linkedItemID, UserID: userID}
 
 	// 3 Plaid transactions to add
 	added := []plaid.Transaction{
-		{
-			TransactionId: "plaid-txn-1",
-			AccountId:     "plaid-acc-1",
-			Amount:        100.00,
-			Date:          "2024-01-15",
-			Name:          "Transaction 1",
-			Pending:       false,
-		},
-		{
-			TransactionId: "plaid-txn-2",
-			AccountId:     "plaid-acc-2",
-			Amount:        50.00,
-			Date:          "2024-01-16",
-			Name:          "Transaction 2",
-			Pending:       false,
-		},
-		{
-			TransactionId: "plaid-txn-3",
-			AccountId:     "plaid-acc-3",
-			Amount:        25.00,
-			Date:          "2024-01-17",
-			Name:          "Transaction 3",
-			Pending:       true,
-		},
+		{TransactionId: "plaid-txn-1", AccountId: "plaid-acc-1", Amount: 100.00, Date: "2024-01-15", Name: "Transaction 1", Pending: false},
+		{TransactionId: "plaid-txn-2", AccountId: "plaid-acc-2", Amount: 50.00, Date: "2024-01-16", Name: "Transaction 2", Pending: false},
+		{TransactionId: "plaid-txn-3", AccountId: "plaid-acc-3", Amount: 25.00, Date: "2024-01-17", Name: "Transaction 3", Pending: true},
 	}
 
 	// Mock: CreateBatch should be called with 3 transactions
@@ -1209,22 +1178,8 @@ func TestProcessModifiedTransactions_Success(t *testing.T) {
 
 	// 2 modified transactions from Plaid
 	modified := []plaid.Transaction{
-		{
-			TransactionId: "plaid-txn-1",
-			AccountId:     "plaid-acc-1",
-			Amount:        150.00, // Amount changed from 100 to 150
-			Date:          "2024-01-15",
-			Name:          "Transaction 1 Updated",
-			Pending:       false,
-		},
-		{
-			TransactionId: "plaid-txn-2",
-			AccountId:     "plaid-acc-2",
-			Amount:        75.00, // Amount changed
-			Date:          "2024-01-16",
-			Name:          "Transaction 2 Updated",
-			Pending:       true, // Now pending
-		},
+		{TransactionId: "plaid-txn-1", AccountId: "plaid-acc-1", Amount: 150.00, Date: "2024-01-15", Name: "Transaction 1 Updated", Pending: false},
+		{TransactionId: "plaid-txn-2", AccountId: "plaid-acc-2", Amount: 75.00, Date: "2024-01-16", Name: "Transaction 2 Updated", Pending: true},
 	}
 
 	// Mock: GetByExternalID returns existing transactions WITH user_notes
@@ -1485,14 +1440,11 @@ func TestProcessRemovedTransactions_Success(t *testing.T) {
 	}
 
 	// 3 removed transactions from Plaid
-	txnID1 := "plaid-txn-removed-1"
-	txnID2 := "plaid-txn-removed-2"
-	txnID3 := "plaid-txn-removed-3"
-
+	id1, id2, id3 := "plaid-txn-removed-1", "plaid-txn-removed-2", "plaid-txn-removed-3"
 	removed := []plaid.RemovedTransaction{
-		{TransactionId: &txnID1},
-		{TransactionId: &txnID2},
-		{TransactionId: &txnID3},
+		{TransactionId: &id1},
+		{TransactionId: &id2},
+		{TransactionId: &id3},
 	}
 
 	// Mock: DeleteByExternalID called for each transaction
@@ -1619,9 +1571,7 @@ func TestProcessRemovedTransactions_NilTransactionID(t *testing.T) {
 	}
 
 	// Transaction with nil ID (should skip)
-	removed := []plaid.RemovedTransaction{
-		{TransactionId: nil}, // NIL ID
-	}
+	removed := []plaid.RemovedTransaction{{TransactionId: nil}}
 
 	// Execute
 	err := service.processRemovedTransactions(ctx, removed, linkedItem)
@@ -1682,40 +1632,22 @@ func TestProcessModifiedTransactions_PendingToPosted(t *testing.T) {
 		UserID: userID,
 	}
 
-	// Existing pending transactions in database (will be queried during processModified)
-	userNotesRestaurant := "Team lunch - add tip later"
-	userNotesHotel := "Business trip hotel"
+	// Existing pending transactions in database
+	notesRestaurant, notesHotel := "Team lunch - add tip later", "Business trip hotel"
 	existingPendingRestaurant := &domain.Transaction{
-		ID:                    "txn-pending-restaurant",
-		UserID:                userID,
-		AccountID:             "account-uuid-restaurant",
-		LinkedItemID:          linkedItemID,
-		ExternalTransactionID: strPtrHelper("plaid-txn-restaurant"),
-		Amount:                -45.00, // Authorization amount (before tip)
-		Pending:               true,   // Currently pending
-		UserNotes:             &userNotesRestaurant,
+		ID: "txn-pending-restaurant", UserID: userID, AccountID: "account-uuid-restaurant",
+		LinkedItemID: linkedItemID, ExternalTransactionID: strPtrHelper("plaid-txn-restaurant"),
+		Amount: -45.00, Pending: true, UserNotes: &notesRestaurant,
 	}
-
 	existingPendingHotel := &domain.Transaction{
-		ID:                    "txn-pending-hotel",
-		UserID:                userID,
-		AccountID:             "account-uuid-hotel",
-		LinkedItemID:          linkedItemID,
-		ExternalTransactionID: strPtrHelper("plaid-txn-hotel"),
-		Amount:                -200.00, // Hotel reservation hold
-		Pending:               true,
-		UserNotes:             &userNotesHotel,
+		ID: "txn-pending-hotel", UserID: userID, AccountID: "account-uuid-hotel",
+		LinkedItemID: linkedItemID, ExternalTransactionID: strPtrHelper("plaid-txn-hotel"),
+		Amount: -200.00, Pending: true, UserNotes: &notesHotel,
 	}
-
 	existingPendingGas := &domain.Transaction{
-		ID:                    "txn-pending-gas",
-		UserID:                userID,
-		AccountID:             "account-uuid-gas",
-		LinkedItemID:          linkedItemID,
-		ExternalTransactionID: strPtrHelper("plaid-txn-gas"),
-		Amount:                -55.00, // Gas station authorization
-		Pending:               true,
-		UserNotes:             nil, // No notes on this one
+		ID: "txn-pending-gas", UserID: userID, AccountID: "account-uuid-gas",
+		LinkedItemID: linkedItemID, ExternalTransactionID: strPtrHelper("plaid-txn-gas"),
+		Amount: -55.00, Pending: true, UserNotes: nil,
 	}
 
 	// Modified transactions from Plaid (posted versions)
@@ -1849,17 +1781,9 @@ func TestProcessAddedTransactions_SetsOriginalCategory(t *testing.T) {
 		UserID: userID,
 	}
 
-	// Create Plaid transaction with category
+	// Plaid transaction with category
 	added := []plaid.Transaction{
-		{
-			TransactionId: "plaid-txn-with-category",
-			AccountId:     "plaid-acc-1",
-			Amount:        100.00,
-			Date:          "2024-01-15",
-			Name:          "Grocery Store",
-			Category:      []string{"Food and Drink", "Groceries"},
-			Pending:       false,
-		},
+		{TransactionId: "plaid-txn-with-category", AccountId: "plaid-acc-1", Amount: 100.00, Date: "2024-01-15", Name: "Grocery Store", Category: []string{"Food and Drink", "Groceries"}, Pending: false},
 	}
 
 	// Mock: CreateBatch should be called with transactions that have OriginalCategory set
@@ -1894,7 +1818,435 @@ func TestProcessAddedTransactions_SetsOriginalCategory(t *testing.T) {
 	mockTransactionRepo.AssertExpectations(t)
 }
 
-// strPtrHelper is a helper to create string pointers for tests
+
+// strPtrHelper creates a pointer to a string value
 func strPtrHelper(s string) *string {
 	return &s
+}
+
+// stringPtr is an alias for strPtrHelper for backwards compatibility
+var stringPtr = strPtrHelper
+
+// mockSyncLimitServiceForCursorTests is a minimal mock for SyncLimitService used in cursor tests
+type mockSyncLimitServiceForCursorTests struct {
+	mock.Mock
+}
+
+func (m *mockSyncLimitServiceForCursorTests) CheckSyncLimit(ctx context.Context, userID, plaidAccountID string) (bool, string, error) {
+	args := m.Called(ctx, userID, plaidAccountID)
+	return args.Bool(0), args.String(1), args.Error(2)
+}
+
+func (m *mockSyncLimitServiceForCursorTests) RecordSync(ctx context.Context, userID, accountID, plaidAccountID string, tier domain.TierName, daysHistorical, transactionCount int) error {
+	args := m.Called(ctx, userID, accountID, plaidAccountID, tier, daysHistorical, transactionCount)
+	return args.Error(0)
+}
+
+func (m *mockSyncLimitServiceForCursorTests) GetSyncStats(ctx context.Context, userID string) (*domain.SyncStats, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.SyncStats), args.Error(1)
+}
+
+func (m *mockSyncLimitServiceForCursorTests) GetHistoricalDepthLimit(ctx context.Context, userID string) (int, error) {
+	args := m.Called(ctx, userID)
+	return args.Int(0), args.Error(1)
+}
+
+// mockProfileRepoForCursorTests is a minimal mock for ProfileRepository used in cursor tests
+type mockProfileRepoForCursorTests struct {
+	mock.Mock
+}
+
+func (m *mockProfileRepoForCursorTests) GetUserByClerkID(ctx context.Context, clerkUserID string) (*domain.User, error) {
+	args := m.Called(ctx, clerkUserID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.User), args.Error(1)
+}
+
+func (m *mockProfileRepoForCursorTests) GetUserByID(ctx context.Context, id string) (*domain.User, error) {
+	args := m.Called(ctx, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.User), args.Error(1)
+}
+
+func (m *mockProfileRepoForCursorTests) CreateUser(ctx context.Context, user *domain.User) error {
+	args := m.Called(ctx, user)
+	return args.Error(0)
+}
+
+func (m *mockProfileRepoForCursorTests) CreateUserTx(ctx context.Context, tx pgx.Tx, user *domain.User) error {
+	args := m.Called(ctx, tx, user)
+	return args.Error(0)
+}
+
+func (m *mockProfileRepoForCursorTests) UpdateUser(ctx context.Context, user *domain.User) error {
+	args := m.Called(ctx, user)
+	return args.Error(0)
+}
+
+func (m *mockProfileRepoForCursorTests) UpdateLastLogin(ctx context.Context, clerkUserID string) error {
+	args := m.Called(ctx, clerkUserID)
+	return args.Error(0)
+}
+
+func (m *mockProfileRepoForCursorTests) MarkForDeletion(ctx context.Context, userID string, scheduledAt time.Time) error {
+	args := m.Called(ctx, userID, scheduledAt)
+	return args.Error(0)
+}
+
+func (m *mockProfileRepoForCursorTests) CancelDeletion(ctx context.Context, userID string) error {
+	args := m.Called(ctx, userID)
+	return args.Error(0)
+}
+
+func (m *mockProfileRepoForCursorTests) GetUsersScheduledForDeletion(ctx context.Context) ([]*domain.User, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
+}
+
+func (m *mockProfileRepoForCursorTests) DeleteUserCascade(ctx context.Context, userID string) error {
+	args := m.Called(ctx, userID)
+	return args.Error(0)
+}
+
+// ============================================================================
+// CURSOR PERSISTENCE TESTS (Critical)
+// Plaid Staging Validation - Cursor handling edge cases
+// ============================================================================
+
+// TestSyncTransactions_CursorPersistsAfterTxnStorageFailure verifies that the cursor
+// is persisted even when transaction storage fails. This ensures resumability.
+func TestSyncTransactions_CursorPersistsAfterTxnStorageFailure(t *testing.T) {
+	ctx := context.Background()
+
+	// Setup mocks
+	mockPlaidService := new(MockPlaidService)
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockEncryptionService := new(MockEncryptionService)
+
+	service := NewTransactionSyncService(
+		nil, // webhookRepo
+		mockLinkedItemRepo,
+		mockTransactionRepo,
+		mockAccountRepo,
+		nil, // profileRepo - not needed for these tests
+		nil, // balanceSnapshotRepo - not needed for these tests
+		mockPlaidService,
+		mockEncryptionService,
+		nil, // syncLimitService - not needed for these tests
+		nil, // ruleApplicationService - not needed for these tests
+		nil, // budgetSyncService - not needed for these tests
+		nil, // transactionMonitorService - not needed for these tests
+	)
+
+	// LinkedItem with existing cursor (simulating mid-sync resume)
+	existingCursor := "cursor-page-1"
+	linkedItem := &domain.LinkedItem{
+		ID:                   "linked-item-123",
+		UserID:               "user-123",
+		ItemID:               "plaid-item-123",
+		AccessTokenEncrypted: "encrypted-token",
+		Cursor:               &existingCursor,
+	}
+
+	// Mock: Decrypt access token
+	mockEncryptionService.On("Decrypt", "encrypted-token").Return("access-token", nil)
+
+	// Mock: Get accounts for mapping
+	accounts := []domain.Account{
+		{ID: "acc-uuid-1", PlaidAccountID: "plaid-acc-1", UserID: "user-123"},
+	}
+	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-123").Return(accounts, nil)
+
+	// Mock: Plaid TransactionsSync returns transactions
+	newCursor := "cursor-page-2"
+	plaidResponse := &plaid.TransactionsSyncResponse{
+		Added: []plaid.Transaction{
+			{TransactionId: "txn-1", AccountId: "plaid-acc-1", Amount: 50.00, Date: "2024-01-15", Name: "Test", Pending: false},
+		},
+		Modified: []plaid.Transaction{},
+		Removed:  []plaid.RemovedTransaction{},
+	}
+	plaidResponse.SetNextCursor(newCursor)
+	plaidResponse.SetHasMore(false)
+	mockPlaidService.On("TransactionsSync", ctx, "access-token", existingCursor, 0).Return(plaidResponse, nil)
+
+	// Mock: Cursor update SUCCEEDS (this is the critical part)
+	mockLinkedItemRepo.On("UpdateCursor", ctx, "linked-item-123", newCursor).Return(nil)
+
+	// Mock: Transaction storage FAILS
+	mockTransactionRepo.On("CreateBatch", ctx, mock.Anything).Return(errors.New("database connection lost"))
+
+	// Execute
+	result, err := service.SyncTransactions(ctx, linkedItem)
+
+	// Assert: Error is returned due to transaction storage failure
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "database connection lost")
+
+	// Assert: But cursor was still updated (critical for resumability)
+	mockLinkedItemRepo.AssertCalled(t, "UpdateCursor", ctx, "linked-item-123", newCursor)
+
+	// Assert: Partial results were returned (transactions that failed to store)
+	assert.NotNil(t, result)
+	assert.Equal(t, newCursor, result.NewCursor)
+}
+
+// TestSyncTransactions_CursorResumeFromLastSuccessfulPage verifies that after a
+// partial sync failure, the next sync attempt resumes from the last successful cursor.
+func TestSyncTransactions_CursorResumeFromLastSuccessfulPage(t *testing.T) {
+	ctx := context.Background()
+
+	// Setup mocks
+	mockPlaidService := new(MockPlaidService)
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockEncryptionService := new(MockEncryptionService)
+
+	service := NewTransactionSyncService(
+		nil, // webhookRepo
+		mockLinkedItemRepo,
+		mockTransactionRepo,
+		mockAccountRepo,
+		nil, // profileRepo - not needed for these tests
+		nil, // balanceSnapshotRepo - not needed for these tests
+		mockPlaidService,
+		mockEncryptionService,
+		nil, // syncLimitService - not needed for these tests
+		nil, // ruleApplicationService - not needed for these tests
+		nil, // budgetSyncService - not needed for these tests
+		nil, // transactionMonitorService - not needed for these tests
+	)
+
+	// LinkedItem with cursor from previous partial sync
+	resumeCursor := "cursor-after-page-2"
+	linkedItem := &domain.LinkedItem{
+		ID:                   "linked-item-123",
+		UserID:               "user-123",
+		ItemID:               "plaid-item-123",
+		AccessTokenEncrypted: "encrypted-token",
+		Cursor:               &resumeCursor,
+	}
+
+	// Mock: Decrypt access token
+	mockEncryptionService.On("Decrypt", "encrypted-token").Return("access-token", nil)
+
+	// Mock: Get accounts for mapping
+	accounts := []domain.Account{
+		{ID: "acc-uuid-1", PlaidAccountID: "plaid-acc-1", UserID: "user-123"},
+	}
+	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-123").Return(accounts, nil)
+
+	// Mock: Plaid API is called with the RESUME cursor (not empty cursor)
+	finalCursor := "cursor-final"
+	plaidResponse := &plaid.TransactionsSyncResponse{
+		Added: []plaid.Transaction{
+			{TransactionId: "txn-resume-1", AccountId: "plaid-acc-1", Amount: 25.00, Date: "2024-01-16", Name: "Resume Txn", Pending: false},
+		},
+		Modified: []plaid.Transaction{},
+		Removed:  []plaid.RemovedTransaction{},
+	}
+	plaidResponse.SetNextCursor(finalCursor)
+	plaidResponse.SetHasMore(false)
+
+	// CRITICAL: The cursor passed to TransactionsSync should be the resume cursor
+	mockPlaidService.On("TransactionsSync", ctx, "access-token", resumeCursor, 0).Return(plaidResponse, nil)
+
+	// Mock: Cursor update succeeds
+	mockLinkedItemRepo.On("UpdateCursor", ctx, "linked-item-123", finalCursor).Return(nil)
+
+	// Mock: Transaction storage succeeds
+	mockTransactionRepo.On("CreateBatch", ctx, mock.Anything).Return(nil)
+
+	// Execute
+	result, err := service.SyncTransactions(ctx, linkedItem)
+
+	// Assert: Sync completes successfully
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, finalCursor, result.NewCursor)
+
+	// Assert: TransactionsSync was called with the resume cursor (not empty)
+	mockPlaidService.AssertCalled(t, "TransactionsSync", ctx, "access-token", resumeCursor, 0)
+}
+
+// TestSyncTransactions_NilVsEmptyCursor verifies that both nil cursor and empty string
+// cursor trigger a first-sync (no cursor parameter to Plaid API).
+func TestSyncTransactions_NilVsEmptyCursor(t *testing.T) {
+	testCases := []struct {
+		name   string
+		cursor *string
+	}{
+		{"nil cursor", nil},
+		{"empty string", strPtrHelper("")},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+
+			// Setup mocks
+			mockPlaidService := new(MockPlaidService)
+			mockLinkedItemRepo := new(MockLinkedItemRepository)
+			mockTransactionRepo := new(MockTransactionRepository)
+			mockAccountRepo := new(MockAccountRepository)
+			mockProfileRepo := new(mockProfileRepoForCursorTests)
+			mockEncryptionService := new(MockEncryptionService)
+			mockSyncLimitService := new(mockSyncLimitServiceForCursorTests)
+
+			service := NewTransactionSyncService(
+				nil, mockLinkedItemRepo, mockTransactionRepo, mockAccountRepo, mockProfileRepo,
+				nil, mockPlaidService, mockEncryptionService, mockSyncLimitService,
+				nil, nil, nil,
+			)
+
+			linkedItem := &domain.LinkedItem{
+				ID:                   "linked-item-first-sync",
+				UserID:               "user-123",
+				ItemID:               "plaid-item-123",
+				AccessTokenEncrypted: "encrypted-token",
+				Cursor:               tc.cursor,
+			}
+
+			// Mock: Decrypt access token
+			mockEncryptionService.On("Decrypt", "encrypted-token").Return("access-token", nil)
+
+			// Mock: Get historical depth limit (first sync uses this)
+			mockSyncLimitService.On("GetHistoricalDepthLimit", ctx, "user-123").Return(90, nil)
+
+			// Mock: Get user for audit recording (first sync)
+			testUser := &domain.User{
+				ID:               "user-123",
+				SubscriptionTier: "free",
+			}
+			mockProfileRepo.On("GetUserByID", ctx, "user-123").Return(testUser, nil)
+
+			// Mock: Record sync audit (first sync)
+			mockSyncLimitService.On("RecordSync", ctx, "user-123", "acc-uuid-1", "plaid-acc-1", domain.TierName("free"), 90, 0).Return(nil)
+
+			// Mock: Get accounts
+			accounts := []domain.Account{
+				{ID: "acc-uuid-1", PlaidAccountID: "plaid-acc-1", UserID: "user-123"},
+			}
+			mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-first-sync").Return(accounts, nil)
+
+			// Mock: Plaid API - expect empty string cursor for first sync
+			firstCursor := "cursor-first"
+			plaidResponse := &plaid.TransactionsSyncResponse{
+				Added:    []plaid.Transaction{},
+				Modified: []plaid.Transaction{},
+				Removed:  []plaid.RemovedTransaction{},
+			}
+			plaidResponse.SetNextCursor(firstCursor)
+			plaidResponse.SetHasMore(false)
+
+			// CRITICAL: Both nil and "" should result in empty string being passed
+			mockPlaidService.On("TransactionsSync", ctx, "access-token", "", 90).Return(plaidResponse, nil)
+
+			// Mock: Cursor update
+			mockLinkedItemRepo.On("UpdateCursor", ctx, "linked-item-first-sync", firstCursor).Return(nil)
+
+			// Execute
+			result, err := service.SyncTransactions(ctx, linkedItem)
+
+			// Assert
+			assert.NoError(t, err)
+			assert.NotNil(t, result)
+			assert.Equal(t, firstCursor, result.NewCursor)
+
+			// Assert: TransactionsSync was called with empty cursor
+			mockPlaidService.AssertCalled(t, "TransactionsSync", ctx, "access-token", "", 90)
+		})
+	}
+}
+
+// TestSyncTransactions_FinalPageCursorUpdate verifies that cursor is updated
+// even on the final page (has_more=false).
+func TestSyncTransactions_FinalPageCursorUpdate(t *testing.T) {
+	ctx := context.Background()
+
+	// Setup mocks
+	mockPlaidService := new(MockPlaidService)
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockEncryptionService := new(MockEncryptionService)
+
+	service := NewTransactionSyncService(
+		nil, // webhookRepo
+		mockLinkedItemRepo,
+		mockTransactionRepo,
+		mockAccountRepo,
+		nil, // profileRepo - not needed for these tests
+		nil, // balanceSnapshotRepo - not needed for these tests
+		mockPlaidService,
+		mockEncryptionService,
+		nil, // syncLimitService - not needed for these tests
+		nil, // ruleApplicationService - not needed for these tests
+		nil, // budgetSyncService - not needed for these tests
+		nil, // transactionMonitorService - not needed for these tests
+	)
+
+	// LinkedItem with existing cursor
+	existingCursor := "cursor-page-3"
+	linkedItem := &domain.LinkedItem{
+		ID:                   "linked-item-123",
+		UserID:               "user-123",
+		ItemID:               "plaid-item-123",
+		AccessTokenEncrypted: "encrypted-token",
+		Cursor:               &existingCursor,
+	}
+
+	// Mock: Decrypt access token
+	mockEncryptionService.On("Decrypt", "encrypted-token").Return("access-token", nil)
+
+	// Mock: Get accounts
+	accounts := []domain.Account{
+		{ID: "acc-uuid-1", PlaidAccountID: "plaid-acc-1", UserID: "user-123"},
+	}
+	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-123").Return(accounts, nil)
+
+	// Mock: Plaid API returns final page (has_more=false)
+	finalCursor := "cursor-final-page"
+	plaidResponse := &plaid.TransactionsSyncResponse{
+		Added: []plaid.Transaction{
+			{TransactionId: "txn-final", AccountId: "plaid-acc-1", Amount: 10.00, Date: "2024-01-17", Name: "Final", Pending: false},
+		},
+		Modified: []plaid.Transaction{},
+		Removed:  []plaid.RemovedTransaction{},
+	}
+	plaidResponse.SetNextCursor(finalCursor)
+	plaidResponse.SetHasMore(false) // Final page
+
+	mockPlaidService.On("TransactionsSync", ctx, "access-token", existingCursor, 0).Return(plaidResponse, nil)
+
+	// CRITICAL: Even on final page, cursor should be updated
+	mockLinkedItemRepo.On("UpdateCursor", ctx, "linked-item-123", finalCursor).Return(nil)
+
+	// Mock: Transaction storage succeeds
+	mockTransactionRepo.On("CreateBatch", ctx, mock.Anything).Return(nil)
+
+	// Execute
+	result, err := service.SyncTransactions(ctx, linkedItem)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, finalCursor, result.NewCursor)
+
+	// Assert: UpdateCursor was called with final cursor
+	mockLinkedItemRepo.AssertCalled(t, "UpdateCursor", ctx, "linked-item-123", finalCursor)
 }
