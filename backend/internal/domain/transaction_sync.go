@@ -46,6 +46,10 @@ const (
 	// PlaidErrorRateLimit indicates rate limiting by Plaid API.
 	// Should be retried with exponential backoff (longer delays).
 	PlaidErrorRateLimit
+
+	// PlaidErrorInvalidCursor indicates the sync cursor is corrupted or expired.
+	// Issue #171: Auto-recovery by resetting cursor and triggering full re-sync.
+	PlaidErrorInvalidCursor
 )
 
 // PlaidSyncError wraps Plaid API errors with classification metadata.
@@ -108,6 +112,14 @@ func ClassifyPlaidError(err error) *PlaidSyncError {
 		return &PlaidSyncError{
 			OriginalError: err,
 			ErrorType:     PlaidErrorRateLimit,
+			ErrorCode:     plaidErr.ErrorCode,
+		}
+
+	case "INVALID_CURSOR":
+		// Issue #171: Cursor is corrupted or expired - reset and full re-sync
+		return &PlaidSyncError{
+			OriginalError: err,
+			ErrorType:     PlaidErrorInvalidCursor,
 			ErrorCode:     plaidErr.ErrorCode,
 		}
 

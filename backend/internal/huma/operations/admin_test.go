@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2/humatest"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -60,6 +61,10 @@ func (m *mockPlaidServiceForAdmin) FireWebhook(ctx context.Context, accessToken 
 	return m.fireWebhookResp, nil
 }
 
+func (m *mockPlaidServiceForAdmin) AccountsGet(ctx context.Context, accessToken string) (*plaid.AccountsGetResponse, error) {
+	return nil, nil
+}
+
 // mockLinkedItemRepo is a mock implementation of repository.LinkedItemRepository
 type mockLinkedItemRepo struct {
 	item    *domain.LinkedItem
@@ -110,6 +115,10 @@ func (m *mockLinkedItemRepo) Delete(ctx context.Context, id string) error {
 
 func (m *mockLinkedItemRepo) DeleteByUser(ctx context.Context, id, userID string) error {
 	return nil
+}
+
+func (m *mockLinkedItemRepo) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, id string) (*domain.LinkedItem, error) {
+	return m.item, m.getErr
 }
 
 // mockEncryptionService is a mock implementation of services.EncryptionService
