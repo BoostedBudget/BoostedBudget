@@ -31,6 +31,16 @@ export default mergeConfig(
         // Issue #575: Exclude bun:test files during hybrid migration
         'src/features/subscription/hooks/useTierLimits.test.ts',
         'src/features/budgets/components/BudgetProgressBar.test.tsx',
+        // Batch 1 - Pure logic tests (2025-01-08)
+        'src/config/regions.test.ts',
+        'src/shared/utils/string.test.ts',
+        'src/lib/category-colors.test.ts',
+        'src/privacy/utils.test.ts',
+        'src/shared/charts/formatters.test.ts',
+        'src/shared/charts/layout.test.ts',
+        'src/features/auto-categorization/utils/categoryUtils.test.ts',
+        'src/features/dashboard/types/gridstack-utils.test.ts',
+        'src/features/budgets/utils/transactionBudgetMatcher.test.ts',
       ],
       coverage: {
         provider: 'v8',

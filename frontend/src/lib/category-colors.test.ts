@@ -5,7 +5,7 @@
  * Issue #531: Transaction List Visual Enhancements
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect } from 'bun:test'
 import {
   getCategoryColor,
   CATEGORY_COLORS,
