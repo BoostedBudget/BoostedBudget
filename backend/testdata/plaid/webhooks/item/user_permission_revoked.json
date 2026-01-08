@@ -1,0 +1,13 @@
+{
+  "webhook_type": "ITEM",
+  "webhook_code": "USER_PERMISSION_REVOKED",
+  "item_id": "item_test_001",
+  "error": {
+    "error_type": "ITEM_ERROR",
+    "error_code": "USER_PERMISSION_REVOKED",
+    "error_message": "the user revoked access to this item.",
+    "display_message": "You have disconnected this account.",
+    "status": 400
+  },
+  "environment": "sandbox"
+}

@@ -1,0 +1,19 @@
+{
+  "added": [
+    {"transaction_id": "txn_batch_001", "account_id": "acc_test_001", "amount": 10.00, "iso_currency_code": "USD", "date": "2024-01-15", "name": "Transaction 1", "payment_channel": "online", "pending": false},
+    {"transaction_id": "txn_batch_002", "account_id": "acc_test_001", "amount": 20.00, "iso_currency_code": "USD", "date": "2024-01-15", "name": "Transaction 2", "payment_channel": "online", "pending": false},
+    {"transaction_id": "txn_batch_003", "account_id": "acc_test_001", "amount": 30.00, "iso_currency_code": "USD", "date": "2024-01-15", "name": "Transaction 3", "payment_channel": "online", "pending": false},
+    {"transaction_id": "txn_batch_004", "account_id": "acc_test_001", "amount": 40.00, "iso_currency_code": "USD", "date": "2024-01-15", "name": "Transaction 4", "payment_channel": "online", "pending": false},
+    {"transaction_id": "txn_batch_005", "account_id": "acc_test_001", "amount": 50.00, "iso_currency_code": "USD", "date": "2024-01-15", "name": "Transaction 5", "payment_channel": "online", "pending": false},
+    {"transaction_id": "txn_batch_006", "account_id": "acc_test_001", "amount": 60.00, "iso_currency_code": "USD", "date": "2024-01-14", "name": "Transaction 6", "payment_channel": "online", "pending": false},
+    {"transaction_id": "txn_batch_007", "account_id": "acc_test_001", "amount": 70.00, "iso_currency_code": "USD", "date": "2024-01-14", "name": "Transaction 7", "payment_channel": "online", "pending": false},
+    {"transaction_id": "txn_batch_008", "account_id": "acc_test_001", "amount": 80.00, "iso_currency_code": "USD", "date": "2024-01-14", "name": "Transaction 8", "payment_channel": "online", "pending": false},
+    {"transaction_id": "txn_batch_009", "account_id": "acc_test_001", "amount": 90.00, "iso_currency_code": "USD", "date": "2024-01-14", "name": "Transaction 9", "payment_channel": "online", "pending": false},
+    {"transaction_id": "txn_batch_010", "account_id": "acc_test_001", "amount": 100.00, "iso_currency_code": "USD", "date": "2024-01-14", "name": "Transaction 10", "payment_channel": "online", "pending": false}
+  ],
+  "modified": [],
+  "removed": [],
+  "next_cursor": "cursor_large_batch",
+  "has_more": false,
+  "request_id": "req_test_large_batch"
+}

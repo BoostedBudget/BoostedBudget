@@ -125,6 +125,23 @@ type PlaidService interface {
 		accessToken string,
 		webhookCode string,
 	) (*plaid.SandboxItemFireWebhookResponse, error)
+
+	// AccountsGet fetches accounts and their balances for a linked item.
+	// Uses the Plaid /accounts/get endpoint to retrieve current account data.
+	//
+	// This method is used after transaction sync to capture balance snapshots
+	// and to verify account information. Balance data retrieval is FREE
+	// (included with TRANSACTIONS product).
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation and timeout
+	//   - accessToken: The Plaid access token (must be decrypted)
+	//
+	// Returns account information including current and available balances.
+	// Returns error if the Plaid API call fails or the access token is invalid.
+	//
+	// Plaid Staging Validation - AccountsGet abstraction for testability
+	AccountsGet(ctx context.Context, accessToken string) (*plaid.AccountsGetResponse, error)
 }
 
 // plaidService implements PlaidService with a configured Plaid API client
@@ -498,6 +515,33 @@ func (s *plaidService) FireWebhook(
 
 	if err != nil {
 		return nil, fmt.Errorf("plaid SandboxItemFireWebhook failed: %w", err)
+	}
+
+	return &resp, nil
+}
+
+// AccountsGet fetches accounts and their balances for a linked item.
+//
+// Uses the Plaid /accounts/get API endpoint to retrieve current account data
+// including current and available balances. This is included FREE with the
+// TRANSACTIONS product.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout
+//   - accessToken: The Plaid access token (must be decrypted)
+//
+// Returns account information with current balances, or error if API call fails.
+func (s *plaidService) AccountsGet(ctx context.Context, accessToken string) (*plaid.AccountsGetResponse, error) {
+	// Build request
+	request := plaid.NewAccountsGetRequest(accessToken)
+
+	// Call Plaid API
+	resp, _, err := s.client.PlaidApi.AccountsGet(ctx).
+		AccountsGetRequest(*request).
+		Execute()
+
+	if err != nil {
+		return nil, fmt.Errorf("plaid AccountsGet failed: %w", err)
 	}
 
 	return &resp, nil
