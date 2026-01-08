@@ -357,7 +357,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: ${{ env.UNIQUE_WORKSPACE }}
-          command: pages deploy frontend/dist --project-name=boostedbudget-staging
+          command: pages deploy frontend/dist --project-name=boostedbudget
 
       - name: Deployment summary
         run: |
