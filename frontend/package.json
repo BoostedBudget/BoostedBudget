@@ -2,7 +2,7 @@
   "name": "boostedbudget-frontend",
   "version": "0.1.0",
   "type": "module",
-  "packageManager": "pnpm@10.26.2",
+  "packageManager": "bun@1.1.29",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
