@@ -1,0 +1,10 @@
+# Bun configuration for BoostedBudget frontend
+# Issue #575: Migration from pnpm/Vitest/Vite to Bun
+
+[install]
+# Don't freeze lockfile during development
+frozen = false
+
+[test]
+# Preload test setup file
+preload = ["./src/test/setup.ts"]
