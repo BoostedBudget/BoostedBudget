@@ -3,6 +3,9 @@
  *
  * Tests the React hook with React Query caching strategy.
  * Uses MSW for API mocking.
+ *
+ * Note: Kept on Vitest during Phase 2B due to MSW+axios+Bun compatibility issues.
+ * Will migrate in Phase 2C once MSW workaround is established.
  */
 
 import { describe, it, expect, afterEach, afterAll, beforeAll } from 'vitest'
@@ -45,9 +48,13 @@ function createWrapper() {
   }
 }
 
+// Start server before tests (MSW + Bun compatibility)
+server.listen({ onUnhandledRequest: 'error' })
+console.log('[MSW] Server started')
+
 describe('useSubscriptionTiers', () => {
   beforeAll(() => {
-    server.listen({ onUnhandledRequest: 'error' })
+    console.log('[MSW] beforeAll - server should be listening')
   })
 
   afterEach(() => {
@@ -57,6 +64,7 @@ describe('useSubscriptionTiers', () => {
 
   afterAll(() => {
     server.close()
+    console.log('[MSW] Server closed')
   })
 
   it('should return loading state initially', async () => {
