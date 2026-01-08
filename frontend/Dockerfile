@@ -1,25 +1,14 @@
 # Multi-stage production Dockerfile for Frontend
 # Stage 1: Builder
-FROM node:25-alpine AS builder
-
-# Install pnpm globally
-RUN npm install -g pnpm@10
+FROM oven/bun:1 AS builder
 
 WORKDIR /build
 
 # Copy package files
-COPY frontend/package.json frontend/pnpm-lock.yaml ./
+COPY frontend/package.json frontend/bun.lockb ./
 
-# Install ALL dependencies (including devDependencies for build)
-RUN echo "Installing production dependencies..." && \
-    for i in 1 2 3 4; do \
-      echo "pnpm install attempt $i/4..." && \
-      pnpm install --frozen-lockfile && \
-      echo "Dependencies installed" && break || \
-      { echo "pnpm install attempt $i/4 failed"; \
-        pnpm store prune; \
-        [ $i -lt 4 ] && sleep 10; }; \
-    done
+# Install dependencies
+RUN bun install --frozen-lockfile
 
 # Copy config directory (needed for type generation)
 COPY config/ /config/
@@ -28,20 +17,16 @@ COPY config/ /config/
 COPY frontend/ .
 
 # Build the application
-RUN pnpm run build
+RUN bun run build
 
 # Stage 2: Runtime with Nginx (Debian-based)
 FROM nginx:stable
 
 # Install runtime dependencies
-RUN echo "📦 Installing runtime dependencies..." && \
-    for i in 1 2 3; do \
-      echo "Attempt $i/3..." && \
+RUN for i in 1 2 3; do \
       apt-get update && apt-get install -y --no-install-recommends curl && \
-      rm -rf /var/lib/apt/lists/* && \
-      echo "✓ Dependencies installed" && break || \
-      { echo "⚠ apt-get attempt $i/3 failed"; \
-        [ $i -lt 3 ] && sleep 5; }; \
+      rm -rf /var/lib/apt/lists/* && break || \
+      { [ $i -lt 3 ] && sleep 5; }; \
     done
 
 # Copy custom nginx configuration
