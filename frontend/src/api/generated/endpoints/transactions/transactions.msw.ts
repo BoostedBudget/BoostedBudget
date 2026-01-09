@@ -106,12 +106,25 @@ export const getGetTransactionByIDResponseMock = (
         undefined,
       ]),
       plaid_account_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      replaced_at: faker.helpers.arrayElement([
+        `${faker.date.past().toISOString().split(".")[0]}Z`,
+        undefined,
+      ]),
+      replaced_by_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      status: faker.string.alpha({ length: { min: 10, max: 20 } }),
       subtype: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
       type: faker.string.alpha({ length: { min: 10, max: 20 } }),
       updated_at: `${faker.date.past().toISOString().split(".")[0]}Z`,
+      user_account_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
     },
     undefined,
@@ -173,6 +186,10 @@ export const getGetTransactionByIDResponseMock = (
   tags: faker.helpers.arrayElement([[], null]),
   tags_source: faker.helpers.arrayElement([[], null]),
   updated_at: `${faker.date.past().toISOString().split(".")[0]}Z`,
+  user_account_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   user_notes: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -242,12 +259,25 @@ export const getUpdateTransactionCategoryResponseMock = (
         undefined,
       ]),
       plaid_account_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      replaced_at: faker.helpers.arrayElement([
+        `${faker.date.past().toISOString().split(".")[0]}Z`,
+        undefined,
+      ]),
+      replaced_by_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      status: faker.string.alpha({ length: { min: 10, max: 20 } }),
       subtype: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
       type: faker.string.alpha({ length: { min: 10, max: 20 } }),
       updated_at: `${faker.date.past().toISOString().split(".")[0]}Z`,
+      user_account_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
     },
     undefined,
@@ -309,6 +339,10 @@ export const getUpdateTransactionCategoryResponseMock = (
   tags: faker.helpers.arrayElement([[], null]),
   tags_source: faker.helpers.arrayElement([[], null]),
   updated_at: `${faker.date.past().toISOString().split(".")[0]}Z`,
+  user_account_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   user_notes: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -378,12 +412,25 @@ export const getUpdateTransactionTagsResponseMock = (
         undefined,
       ]),
       plaid_account_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      replaced_at: faker.helpers.arrayElement([
+        `${faker.date.past().toISOString().split(".")[0]}Z`,
+        undefined,
+      ]),
+      replaced_by_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      status: faker.string.alpha({ length: { min: 10, max: 20 } }),
       subtype: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
       type: faker.string.alpha({ length: { min: 10, max: 20 } }),
       updated_at: `${faker.date.past().toISOString().split(".")[0]}Z`,
+      user_account_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
     },
     undefined,
@@ -445,6 +492,10 @@ export const getUpdateTransactionTagsResponseMock = (
   tags: faker.helpers.arrayElement([[], null]),
   tags_source: faker.helpers.arrayElement([[], null]),
   updated_at: `${faker.date.past().toISOString().split(".")[0]}Z`,
+  user_account_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   user_notes: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
