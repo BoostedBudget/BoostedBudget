@@ -109,6 +109,11 @@ export default mergeConfig(
         'src/features/auto-categorization/hooks/useRuleFilters.test.ts',
         'src/features/accounts/hooks/useAccountFilters.test.ts',
         'src/features/transactions/hooks/useTransactionFilters.test.ts',
+        // Batch 17 - Action form tests (2026-01-09)
+        'src/features/rules/components/actions/RolloverActionForm.test.tsx',
+        'src/features/rules/components/actions/BudgetAlertActionForm.test.tsx',
+        'src/features/rules/components/actions/SavingsGoalActionForm.test.tsx',
+        'src/features/rules/components/actions/TransferActionForm.test.tsx',
       ],
       coverage: {
         provider: 'v8',
