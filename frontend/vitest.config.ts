@@ -41,6 +41,15 @@ export default mergeConfig(
         'src/features/auto-categorization/utils/categoryUtils.test.ts',
         'src/features/dashboard/types/gridstack-utils.test.ts',
         'src/features/budgets/utils/transactionBudgetMatcher.test.ts',
+        // Batch 2 - Component tests without vi.* patterns (2026-01-08)
+        'src/features/budgets/components/MilestoneIndicator.test.tsx',
+        'src/features/accounts/components/AccountIconDisplay.test.tsx',
+        'src/shared/hooks/useTabState.test.tsx',
+        'src/features/budgets/components/transaction-link/TransactionBudgetBadge.test.tsx',
+        'src/features/budgets/components/category-management/AllocationBreakdown.test.tsx',
+        'src/features/budgets/components/budget-detail/BudgetIncomeSection.test.tsx',
+        'src/features/rules/hooks/useRuleTierLimits.test.ts',
+        'src/features/rules/hooks/useRuleForm.test.ts',
       ],
       coverage: {
         provider: 'v8',

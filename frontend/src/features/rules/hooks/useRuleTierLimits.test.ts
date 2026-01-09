@@ -6,7 +6,7 @@
  * TDD RED: Writing tests before implementation.
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect } from 'bun:test'
 import { useRuleTierLimits } from './useRuleTierLimits'
 import type { User } from '@/features/profile/types'
 import type { SubscriptionTiersResponse } from '@/features/subscription/types'
@@ -28,7 +28,6 @@ function createMockUser(tier: string = 'free'): User {
   }
 }
 
-// Mock tiers factory - creates properly typed mock data
 function createMockTiers(): SubscriptionTiersResponse {
   const createFeatures = (overrides: Record<string, boolean> = {}) => ({
     ads_enabled: false,

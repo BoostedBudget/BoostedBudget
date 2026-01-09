@@ -5,15 +5,11 @@
  * TDD tests for milestone markers on progress bars.
  */
 
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import { MilestoneIndicator } from './MilestoneIndicator';
+import { describe, it, expect } from 'bun:test'
+import { render, screen } from '@testing-library/react'
+import { MilestoneIndicator } from './MilestoneIndicator'
 
 describe('MilestoneIndicator', () => {
-  // ==========================================================================
-  // Rendering Tests
-  // ==========================================================================
-
   describe('Rendering', () => {
     it('renders milestone markers at correct positions', () => {
       render(<MilestoneIndicator progress={50} milestones={[25, 50, 75, 100]} />);
@@ -67,10 +63,6 @@ describe('MilestoneIndicator', () => {
       expect(marker100).toHaveStyle({ left: '100%' });
     });
   });
-
-  // ==========================================================================
-  // Progress Display Tests
-  // ==========================================================================
 
   describe('Progress Display', () => {
     it('shows percentage labels when showLabels is true', () => {
@@ -127,10 +119,6 @@ describe('MilestoneIndicator', () => {
     });
   });
 
-  // ==========================================================================
-  // Custom Milestones Tests
-  // ==========================================================================
-
   describe('Custom Milestones', () => {
     it('renders custom milestone values', () => {
       render(<MilestoneIndicator progress={50} milestones={[10, 30, 60, 90]} />);
@@ -157,10 +145,6 @@ describe('MilestoneIndicator', () => {
       expect(markers).toHaveLength(0);
     });
   });
-
-  // ==========================================================================
-  // Accessibility Tests
-  // ==========================================================================
 
   describe('Accessibility', () => {
     it('has accessible role for markers', () => {
