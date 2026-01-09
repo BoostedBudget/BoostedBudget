@@ -7,7 +7,7 @@
  * Issue #353: Balance Tracking Dashboard
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import { BalanceOverview } from './BalanceOverview'
 import type { BalanceSummary } from '../types'

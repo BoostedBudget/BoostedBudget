@@ -50,6 +50,9 @@ export default mergeConfig(
         'src/features/budgets/components/budget-detail/BudgetIncomeSection.test.tsx',
         'src/features/rules/hooks/useRuleTierLimits.test.ts',
         'src/features/rules/hooks/useRuleForm.test.ts',
+        // Batch 3 - Dashboard component tests (2026-01-08)
+        'src/features/dashboard/components/AccountBalanceCards.test.tsx',
+        'src/features/dashboard/components/BalanceOverview.test.tsx',
       ],
       coverage: {
         provider: 'v8',
