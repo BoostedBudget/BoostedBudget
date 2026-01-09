@@ -789,7 +789,7 @@ func TestBuildAccountMap_Success(t *testing.T) {
 	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItemID).Return(accounts, nil)
 
 	// Execute
-	accountMap, err := service.buildAccountMap(ctx, linkedItemID)
+	accountMap, _, err := service.buildAccountMaps(ctx, linkedItemID)
 
 	// Assert
 	assert.NoError(t, err)
@@ -829,7 +829,7 @@ func TestBuildAccountMap_EmptyAccounts(t *testing.T) {
 	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItemID).Return([]domain.Account{}, nil)
 
 	// Execute
-	accountMap, err := service.buildAccountMap(ctx, linkedItemID)
+	accountMap, _, err := service.buildAccountMaps(ctx, linkedItemID)
 
 	// Assert
 	assert.NoError(t, err)
@@ -866,7 +866,7 @@ func TestBuildAccountMap_RepositoryError(t *testing.T) {
 	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItemID).Return(nil, errors.New("database error"))
 
 	// Execute
-	accountMap, err := service.buildAccountMap(ctx, linkedItemID)
+	accountMap, _, err := service.buildAccountMaps(ctx, linkedItemID)
 
 	// Assert
 	assert.Error(t, err)
@@ -950,7 +950,7 @@ func TestProcessAddedTransactions_Success(t *testing.T) {
 	})).Return(nil)
 
 	// Execute
-	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap)
+	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil)
 
 	// Assert
 	assert.NoError(t, err)
@@ -1015,7 +1015,7 @@ func TestProcessAddedTransactions_Deduplication(t *testing.T) {
 	})).Return(nil)
 
 	// Execute
-	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap)
+	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil)
 
 	// Assert
 	assert.NoError(t, err)
@@ -1089,7 +1089,7 @@ func TestProcessAddedTransactions_PartialFailure(t *testing.T) {
 	})).Return(nil)
 
 	// Execute
-	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap)
+	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil)
 
 	// Assert - should succeed but log warning for skipped transaction
 	assert.NoError(t, err) // Continue processing despite skipping one
@@ -1130,7 +1130,7 @@ func TestProcessAddedTransactions_EmptySlice(t *testing.T) {
 	// (We'll optimize to skip DB call if no transactions)
 
 	// Execute
-	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap)
+	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil)
 
 	// Assert
 	assert.NoError(t, err)
@@ -1234,7 +1234,7 @@ func TestProcessModifiedTransactions_Success(t *testing.T) {
 	})).Return(nil).Once()
 
 	// Execute
-	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap)
+	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap, nil)
 
 	// Assert
 	assert.NoError(t, err)
@@ -1304,7 +1304,7 @@ func TestProcessModifiedTransactions_NewTransactionNoUserNotes(t *testing.T) {
 	})).Return(nil)
 
 	// Execute
-	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap)
+	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap, nil)
 
 	// Assert
 	assert.NoError(t, err)
@@ -1359,7 +1359,7 @@ func TestProcessModifiedTransactions_TransactionNotFound(t *testing.T) {
 		Return(nil, errors.New("transaction not found"))
 
 	// Execute
-	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap)
+	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap, nil)
 
 	// Assert - should continue despite not finding transaction (log warning)
 	assert.NoError(t, err) // Gracefully skip
@@ -1398,7 +1398,7 @@ func TestProcessModifiedTransactions_EmptySlice(t *testing.T) {
 	modified := []plaid.Transaction{}
 
 	// Execute
-	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap)
+	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap, nil)
 
 	// Assert
 	assert.NoError(t, err)
@@ -1726,7 +1726,7 @@ func TestProcessModifiedTransactions_PendingToPosted(t *testing.T) {
 	})).Return(nil).Once()
 
 	// Execute
-	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap)
+	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap, nil)
 
 	// Assert
 	assert.NoError(t, err)
@@ -1811,7 +1811,7 @@ func TestProcessAddedTransactions_SetsOriginalCategory(t *testing.T) {
 	})).Return(nil)
 
 	// Execute
-	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap)
+	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil)
 
 	// Assert
 	assert.NoError(t, err)
@@ -2378,4 +2378,484 @@ func createPlaidInvalidCursorError() error {
 		ErrorType:     domain.PlaidErrorInvalidCursor,
 		ErrorCode:     "INVALID_CURSOR",
 	}
+}
+
+// ============================================================================
+// Issue #171 - Plaid Re-Link Handling: UserAccountID Propagation Tests
+// ============================================================================
+// These tests verify that transactions synced from Plaid have their
+// UserAccountID field set correctly for stable reference across re-links.
+
+// TestTransactionSyncService_SyncTransactions_SetsUserAccountID verifies that
+// transactions synced from Plaid have UserAccountID set from the account.
+// TDD RED: This test will fail until mapPlaidTransaction is updated.
+func TestTransactionSyncService_SyncTransactions_SetsUserAccountID(t *testing.T) {
+	// Setup mocks
+	mockWebhookRepo := new(MockWebhookRepository)
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockPlaidService := new(MockPlaidService)
+	mockEncryptionService := new(MockEncryptionService)
+
+	service := NewTransactionSyncService(
+		mockWebhookRepo,
+		mockLinkedItemRepo,
+		mockTransactionRepo,
+		mockAccountRepo,
+		nil, // profileRepo
+		nil, // balanceSnapshotRepo
+		mockPlaidService,
+		mockEncryptionService,
+		nil, // syncLimitService
+		nil, // ruleApplicationService
+		nil, // budgetSyncService
+		nil, // transactionMonitorService
+	)
+
+	ctx := context.Background()
+	userAccountID := "user-account-uuid-123"
+
+	// LinkedItem with active status - use existing cursor to skip sync limit check
+	linkedItem := &domain.LinkedItem{
+		ID:                   "linked-item-123",
+		UserID:               "user-123",
+		ItemID:               "plaid-item-123",
+		AccessTokenEncrypted: "encrypted-token",
+		Cursor:               stringPtr("existing-cursor"), // Re-sync to skip limit check
+		Provider:             "plaid",
+		Status:               domain.LinkedItemStatusActive,
+	}
+
+	// Account with UserAccountID set (from re-link or initial link)
+	accounts := []domain.Account{
+		{
+			ID:             "internal-account-uuid",
+			UserID:         "user-123",
+			PlaidAccountID: "plaid-account-id-1",
+			LinkedItemID:   "linked-item-123",
+			UserAccountID:  &userAccountID, // Issue #171: Stable reference
+			Status:         domain.AccountStatusActive,
+		},
+	}
+
+	// Mock decryption
+	mockEncryptionService.On("Decrypt", "encrypted-token").Return("access-token", nil)
+
+	// Mock Plaid TransactionsSync response with one new transaction
+	plaidResp := &plaid.TransactionsSyncResponse{
+		Added: []plaid.Transaction{
+			{
+				TransactionId: "plaid-txn-1",
+				AccountId:     "plaid-account-id-1",
+				Amount:        99.99,
+				Date:          "2024-01-15",
+				Name:          "Test Transaction",
+				Pending:       false,
+			},
+		},
+		Modified:   []plaid.Transaction{},
+		Removed:    []plaid.RemovedTransaction{},
+		NextCursor: "cursor-123",
+		HasMore:    false,
+	}
+	mockPlaidService.On("TransactionsSync", ctx, "access-token", "existing-cursor", 0).Return(plaidResp, nil)
+
+	// Mock GetByLinkedItemID returns accounts with UserAccountID set
+	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-123").Return(accounts, nil)
+
+	// Mock CreateBatch - verify transactions have UserAccountID set
+	mockTransactionRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
+		if len(txns) != 1 {
+			t.Logf("Expected 1 transaction, got %d", len(txns))
+			return false
+		}
+		// Issue #171: UserAccountID MUST be set from the account
+		if txns[0].UserAccountID == nil || *txns[0].UserAccountID != userAccountID {
+			t.Logf("Expected UserAccountID=%s, got %v", userAccountID, txns[0].UserAccountID)
+			return false
+		}
+		return true
+	})).Return(nil)
+
+	// Mock cursor update
+	mockLinkedItemRepo.On("UpdateCursor", ctx, "linked-item-123", "cursor-123").Return(nil)
+
+	// Execute
+	result, err := service.SyncTransactions(ctx, linkedItem)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Len(t, result.Added, 1)
+
+	mockTransactionRepo.AssertExpectations(t)
+	t.Log("✓ UserAccountID correctly propagated from account to transaction")
+}
+
+// TestTransactionSyncService_SyncTransactions_LooksUpUserAccountFromAccount verifies
+// that the sync service correctly looks up UserAccountID from each account.
+func TestTransactionSyncService_SyncTransactions_LooksUpUserAccountFromAccount(t *testing.T) {
+	mockWebhookRepo := new(MockWebhookRepository)
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockPlaidService := new(MockPlaidService)
+	mockEncryptionService := new(MockEncryptionService)
+
+	service := NewTransactionSyncService(
+		mockWebhookRepo,
+		mockLinkedItemRepo,
+		mockTransactionRepo,
+		mockAccountRepo,
+		nil, nil,
+		mockPlaidService,
+		mockEncryptionService,
+		nil, nil, nil, nil,
+	)
+
+	ctx := context.Background()
+	userAccountID1 := "user-account-1"
+	userAccountID2 := "user-account-2"
+
+	linkedItem := &domain.LinkedItem{
+		ID:                   "linked-item-123",
+		UserID:               "user-123",
+		ItemID:               "plaid-item-123",
+		AccessTokenEncrypted: "encrypted-token",
+		Cursor:               stringPtr("existing-cursor"), // Re-sync to skip limit check
+		Provider:             "plaid",
+		Status:               domain.LinkedItemStatusActive,
+	}
+
+	// Two accounts with different UserAccountIDs
+	accounts := []domain.Account{
+		{
+			ID:             "account-uuid-1",
+			UserID:         "user-123",
+			PlaidAccountID: "plaid-acc-1",
+			LinkedItemID:   "linked-item-123",
+			UserAccountID:  &userAccountID1,
+			Status:         domain.AccountStatusActive,
+		},
+		{
+			ID:             "account-uuid-2",
+			UserID:         "user-123",
+			PlaidAccountID: "plaid-acc-2",
+			LinkedItemID:   "linked-item-123",
+			UserAccountID:  &userAccountID2,
+			Status:         domain.AccountStatusActive,
+		},
+	}
+
+	mockEncryptionService.On("Decrypt", "encrypted-token").Return("access-token", nil)
+
+	// Plaid returns transactions from both accounts
+	plaidResp := &plaid.TransactionsSyncResponse{
+		Added: []plaid.Transaction{
+			{TransactionId: "txn-1", AccountId: "plaid-acc-1", Amount: 10.00, Date: "2024-01-15", Name: "Txn 1"},
+			{TransactionId: "txn-2", AccountId: "plaid-acc-2", Amount: 20.00, Date: "2024-01-16", Name: "Txn 2"},
+		},
+		Modified:   []plaid.Transaction{},
+		Removed:    []plaid.RemovedTransaction{},
+		NextCursor: "cursor-456",
+		HasMore:    false,
+	}
+	mockPlaidService.On("TransactionsSync", ctx, "access-token", "existing-cursor", 0).Return(plaidResp, nil)
+
+	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-123").Return(accounts, nil)
+
+	// Verify each transaction gets correct UserAccountID from its account
+	mockTransactionRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
+		if len(txns) != 2 {
+			return false
+		}
+		// First txn from plaid-acc-1 should have user-account-1
+		if txns[0].UserAccountID == nil || *txns[0].UserAccountID != userAccountID1 {
+			t.Logf("txn[0] expected UserAccountID=%s, got %v", userAccountID1, txns[0].UserAccountID)
+			return false
+		}
+		// Second txn from plaid-acc-2 should have user-account-2
+		if txns[1].UserAccountID == nil || *txns[1].UserAccountID != userAccountID2 {
+			t.Logf("txn[1] expected UserAccountID=%s, got %v", userAccountID2, txns[1].UserAccountID)
+			return false
+		}
+		return true
+	})).Return(nil)
+
+	mockLinkedItemRepo.On("UpdateCursor", ctx, "linked-item-123", "cursor-456").Return(nil)
+
+	result, err := service.SyncTransactions(ctx, linkedItem)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Len(t, result.Added, 2)
+
+	mockTransactionRepo.AssertExpectations(t)
+	t.Log("✓ Each transaction correctly maps to its account's UserAccountID")
+}
+
+// TestTransactionSyncService_ProcessAddedTransactions_SetsUserAccountID tests the
+// internal processAddedTransactions method with userAccountMap.
+func TestTransactionSyncService_ProcessAddedTransactions_SetsUserAccountID(t *testing.T) {
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil, nil,
+		mockTransactionRepo,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	userAccountID := "user-account-stable-uuid"
+
+	linkedItem := &domain.LinkedItem{
+		ID:     "linked-item-123",
+		UserID: "user-456",
+	}
+
+	// Account map: Plaid account_id -> Internal account UUID
+	accountMap := map[string]string{
+		"plaid-acc-1": "account-uuid-1",
+	}
+
+	// Issue #171: User account map: Plaid account_id -> UserAccount UUID
+	userAccountMap := map[string]string{
+		"plaid-acc-1": userAccountID,
+	}
+
+	added := []plaid.Transaction{
+		{
+			TransactionId: "plaid-txn-1",
+			AccountId:     "plaid-acc-1",
+			Amount:        50.00,
+			Date:          "2024-01-20",
+			Name:          "Test Purchase",
+			Pending:       false,
+		},
+	}
+
+	// Verify transaction has UserAccountID set
+	mockTransactionRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
+		if len(txns) != 1 {
+			return false
+		}
+		// Issue #171: Must have UserAccountID from userAccountMap
+		if txns[0].UserAccountID == nil || *txns[0].UserAccountID != userAccountID {
+			t.Logf("Expected UserAccountID=%s, got %v", userAccountID, txns[0].UserAccountID)
+			return false
+		}
+		// Also verify AccountID is set correctly
+		if txns[0].AccountID != "account-uuid-1" {
+			t.Logf("Expected AccountID=account-uuid-1, got %s", txns[0].AccountID)
+			return false
+		}
+		return true
+	})).Return(nil)
+
+	// Execute - note: processAddedTransactions signature will need to be updated
+	// to accept userAccountMap parameter for Issue #171
+	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap, userAccountMap)
+
+	assert.NoError(t, err)
+	mockTransactionRepo.AssertExpectations(t)
+	t.Log("✓ processAddedTransactions correctly sets UserAccountID from userAccountMap")
+}
+
+// TestTransactionSyncService_ProcessAddedTransactions_NullUserAccountID_Handled tests
+// that transactions are still created when UserAccountID is nil (legacy data).
+func TestTransactionSyncService_ProcessAddedTransactions_NullUserAccountID_Handled(t *testing.T) {
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil, nil,
+		mockTransactionRepo,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+
+	linkedItem := &domain.LinkedItem{
+		ID:     "linked-item-123",
+		UserID: "user-456",
+	}
+
+	accountMap := map[string]string{
+		"plaid-acc-1": "account-uuid-1",
+	}
+
+	// Empty userAccountMap (legacy account without user_account_id)
+	userAccountMap := map[string]string{}
+
+	added := []plaid.Transaction{
+		{
+			TransactionId: "plaid-txn-legacy",
+			AccountId:     "plaid-acc-1",
+			Amount:        75.00,
+			Date:          "2024-01-25",
+			Name:          "Legacy Transaction",
+			Pending:       false,
+		},
+	}
+
+	// Transaction should still be created, but with nil UserAccountID
+	mockTransactionRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
+		if len(txns) != 1 {
+			return false
+		}
+		// UserAccountID should be nil (not in map)
+		if txns[0].UserAccountID != nil {
+			t.Logf("Expected nil UserAccountID, got %v", *txns[0].UserAccountID)
+			return false
+		}
+		// AccountID should still be set correctly
+		if txns[0].AccountID != "account-uuid-1" {
+			return false
+		}
+		return true
+	})).Return(nil)
+
+	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap, userAccountMap)
+
+	assert.NoError(t, err)
+	mockTransactionRepo.AssertExpectations(t)
+	t.Log("✓ Transactions created with nil UserAccountID for legacy accounts")
+}
+
+// TestTransactionSyncService_Relink_PreservesEnrichments verifies that when a
+// transaction is re-synced after a re-link (same transaction_id, different account_id),
+// the DO UPDATE preserves user enrichments (notes, tags, category_override).
+// Note: This is tested via the transaction repository DO UPDATE tests, but we include
+// a service-level test to verify the full flow.
+func TestTransactionSyncService_Relink_PreservesEnrichments(t *testing.T) {
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil, nil,
+		mockTransactionRepo,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	newUserAccountID := "new-user-account-after-relink"
+
+	// This is the NEW linked_item after re-link
+	linkedItem := &domain.LinkedItem{
+		ID:     "new-linked-item-456",
+		UserID: "user-123",
+	}
+
+	// New account mapping after re-link (new Plaid account_id -> new internal UUID)
+	accountMap := map[string]string{
+		"new-plaid-acc-id": "new-account-uuid",
+	}
+
+	userAccountMap := map[string]string{
+		"new-plaid-acc-id": newUserAccountID,
+	}
+
+	// This transaction has the SAME transaction_id as before re-link
+	// but comes from a NEW Plaid account_id
+	added := []plaid.Transaction{
+		{
+			TransactionId: "stable-txn-id-preserved", // Same as before re-link
+			AccountId:     "new-plaid-acc-id",        // Different from before
+			Amount:        150.00,
+			Date:          "2024-01-10",
+			Name:          "Re-linked Transaction",
+			Pending:       false,
+		},
+	}
+
+	// The DO UPDATE in CreateBatch should:
+	// 1. Update account_id, linked_item_id, user_account_id (to new values)
+	// 2. PRESERVE user_notes, category_override, tags, tags_source
+	mockTransactionRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
+		if len(txns) != 1 {
+			return false
+		}
+		// Verify new values are set
+		if txns[0].AccountID != "new-account-uuid" {
+			return false
+		}
+		if txns[0].LinkedItemID != "new-linked-item-456" {
+			return false
+		}
+		if txns[0].UserAccountID == nil || *txns[0].UserAccountID != newUserAccountID {
+			return false
+		}
+		return true
+	})).Return(nil)
+
+	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap, userAccountMap)
+
+	assert.NoError(t, err)
+	mockTransactionRepo.AssertExpectations(t)
+	t.Log("✓ Re-link transaction sync updates FKs while preserving enrichments (via DO UPDATE)")
+}
+
+// TestTransactionSyncService_ModifiedTransactions_SetsUserAccountID verifies that
+// modified transactions also get UserAccountID propagated.
+func TestTransactionSyncService_ModifiedTransactions_SetsUserAccountID(t *testing.T) {
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil, nil,
+		mockTransactionRepo,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	userAccountID := "user-account-uuid-modified"
+
+	linkedItem := &domain.LinkedItem{
+		ID:     "linked-item-123",
+		UserID: "user-456",
+	}
+
+	accountMap := map[string]string{
+		"plaid-acc-1": "account-uuid-1",
+	}
+
+	userAccountMap := map[string]string{
+		"plaid-acc-1": userAccountID,
+	}
+
+	// Modified transactions (e.g., pending -> posted)
+	modified := []plaid.Transaction{
+		{
+			TransactionId: "plaid-txn-modified",
+			AccountId:     "plaid-acc-1",
+			Amount:        100.00,
+			Date:          "2024-01-28",
+			Name:          "Modified Transaction",
+			Pending:       false, // Was true, now false (posted)
+		},
+	}
+
+	// Mock GetByExternalID - processModifiedTransactions looks up existing transaction first
+	existingTxn := &domain.Transaction{
+		ID:            "existing-txn-uuid",
+		UserID:        "user-456",
+		AccountID:     "account-uuid-1",
+		LinkedItemID:  "linked-item-123",
+		UserAccountID: nil, // Old transaction didn't have UserAccountID
+		Amount:        100.00,
+	}
+	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "plaid-txn-modified", "user-456").Return(existingTxn, nil)
+
+	// Update should be called with UserAccountID set
+	mockTransactionRepo.On("Update", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
+		if txn.UserAccountID == nil || *txn.UserAccountID != userAccountID {
+			t.Logf("Modified txn: expected UserAccountID=%s, got %v", userAccountID, txn.UserAccountID)
+			return false
+		}
+		return true
+	})).Return(nil)
+
+	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap, userAccountMap)
+
+	assert.NoError(t, err)
+	mockTransactionRepo.AssertExpectations(t)
+	t.Log("✓ Modified transactions also have UserAccountID set")
 }

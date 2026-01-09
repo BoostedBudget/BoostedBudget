@@ -285,26 +285,29 @@ func (s *transactionSyncService) SyncTransactions(
 	// Store Added/Modified transactions, delete Removed transactions
 	// ========================================================================
 
-	// Step 5: Build account map for transaction mapping (O(1) lookups)
-	accountMap, err := s.buildAccountMap(ctx, linkedItem.ID)
+	// Step 5: Build account maps for transaction mapping (O(1) lookups)
+	// Issue #171: Also builds userAccountMap for stable UserAccountID reference
+	accountMap, userAccountMap, err := s.buildAccountMaps(ctx, linkedItem.ID)
 	if err != nil {
 		// Return successful sync result but log storage error
 		// Webhook can retry storage on next sync
-		log.Printf("ERROR: Failed to build account map for item %s: %v", linkedItem.ID, err)
-		return result, fmt.Errorf("failed to build account map: %w", err)
+		log.Printf("ERROR: Failed to build account maps for item %s: %v", linkedItem.ID, err)
+		return result, fmt.Errorf("failed to build account maps: %w", err)
 	}
 
 	// Step 6: Process Added transactions (create batch)
+	// Issue #171: Pass userAccountMap for stable UserAccountID propagation
 	if len(result.Added) > 0 {
-		if err := s.processAddedTransactions(ctx, result.Added, linkedItem, accountMap); err != nil {
+		if err := s.processAddedTransactions(ctx, result.Added, linkedItem, accountMap, userAccountMap); err != nil {
 			log.Printf("ERROR: Failed to process added transactions for item %s: %v", linkedItem.ID, err)
 			return result, fmt.Errorf("failed to process added transactions: %w", err)
 		}
 	}
 
 	// Step 7: Process Modified transactions (update with user_notes preservation)
+	// Issue #171: Pass userAccountMap for stable UserAccountID propagation
 	if len(result.Modified) > 0 {
-		if err := s.processModifiedTransactions(ctx, result.Modified, linkedItem, accountMap); err != nil {
+		if err := s.processModifiedTransactions(ctx, result.Modified, linkedItem, accountMap, userAccountMap); err != nil {
 			log.Printf("ERROR: Failed to process modified transactions for item %s: %v", linkedItem.ID, err)
 			return result, fmt.Errorf("failed to process modified transactions: %w", err)
 		}
@@ -399,49 +402,56 @@ func (s *transactionSyncService) SyncTransactions(
 // Issue #261: Transaction Storage Logic - Helper Methods
 // ============================================================================
 
-// buildAccountMap loads all accounts for a linked item and creates a map
-// from Plaid account_id to internal account UUID for efficient lookups.
-//
-// This allows O(1) account mapping when processing transactions, avoiding
-// N database queries for N transactions.
-//
+// buildAccountMaps builds both accountMap and userAccountMap for transaction mapping.
+// Issue #171: userAccountMap provides stable UserAccountID that survives re-links.
 // Returns:
-//   - map[plaidAccountID]internalAccountUUID
-//   - error if accounts cannot be loaded
-func (s *transactionSyncService) buildAccountMap(ctx context.Context, linkedItemID string) (map[string]string, error) {
+//   - accountMap: Plaid account_id -> Internal account UUID
+//   - userAccountMap: Plaid account_id -> UserAccount UUID (stable reference)
+func (s *transactionSyncService) buildAccountMaps(ctx context.Context, linkedItemID string) (map[string]string, map[string]string, error) {
 	// Load all accounts for this linked item
 	accounts, err := s.accountRepo.GetByLinkedItemID(ctx, linkedItemID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load accounts for linked item %s: %w", linkedItemID, err)
+		return nil, nil, fmt.Errorf("failed to load accounts for linked item %s: %w", linkedItemID, err)
 	}
 
-	// Build map: Plaid account_id -> Internal account UUID
+	// Build maps: Plaid account_id -> Internal IDs
 	accountMap := make(map[string]string, len(accounts))
+	userAccountMap := make(map[string]string, len(accounts))
+
 	for _, account := range accounts {
 		accountMap[account.PlaidAccountID] = account.ID
+		// Issue #171: Also map to UserAccountID for stable reference
+		if account.UserAccountID != nil {
+			userAccountMap[account.PlaidAccountID] = *account.UserAccountID
+		}
 	}
 
-	return accountMap, nil
+	return accountMap, userAccountMap, nil
 }
 
 // mapPlaidTransaction converts a Plaid transaction to domain.Transaction.
-// Performs account ID mapping using the provided accountMap.
-//
-// Returns error if:
-//   - Account not found in accountMap
-//   - Date parsing fails
-//   - JSON serialization fails
+// Maps account IDs using accountMap and userAccountMap for stable references.
+// Returns error if account is not found in map or date parsing fails.
 func (s *transactionSyncService) mapPlaidTransaction(
 	ctx context.Context,
 	plaidTxn plaid.Transaction,
 	linkedItemID string,
 	userID string,
 	accountMap map[string]string,
+	userAccountMap map[string]string,
 ) (*domain.Transaction, error) {
 	// Map Plaid account_id to internal account UUID
 	internalAccountID, found := accountMap[plaidTxn.AccountId]
 	if !found {
 		return nil, fmt.Errorf("account not found for plaid_account_id %s", plaidTxn.AccountId)
+	}
+
+	// Map to stable UserAccountID if available
+	var userAccountID *string
+	if len(userAccountMap) > 0 {
+		if uaID, found := userAccountMap[plaidTxn.AccountId]; found {
+			userAccountID = &uaID
+		}
 	}
 
 	// Parse transaction date (required)
@@ -496,8 +506,9 @@ func (s *transactionSyncService) mapPlaidTransaction(
 
 	return &domain.Transaction{
 		UserID:                  userID,
-		AccountID:               internalAccountID, // Correctly mapped!
+		AccountID:               internalAccountID,
 		LinkedItemID:            linkedItemID,
+		UserAccountID:           userAccountID,
 		Source:                  domain.SourcePlaid,
 		ExternalTransactionID:   &externalID,
 		ExternalMetadata:        externalMetadata,
@@ -507,11 +518,11 @@ func (s *transactionSyncService) mapPlaidTransaction(
 		Name:                    plaidTxn.Name,
 		MerchantName:            merchantName,
 		Category:                categoryJSON,
-		OriginalCategory:        categoryJSON, // Preserve original Plaid category for reset functionality
+		OriginalCategory:        categoryJSON,
 		PersonalFinanceCategory: pfCategoryJSON,
 		PaymentChannel:          paymentChannel,
 		Pending:                 plaidTxn.GetPending(),
-		UserNotes:               nil, // Always nil for new/modified transactions from Plaid
+		UserNotes:               nil,
 	}, nil
 }
 
@@ -553,20 +564,21 @@ func (s *transactionSyncService) buildExternalMetadata(plaidTxn plaid.Transactio
 
 // processAddedTransactions stores newly added transactions in the database.
 // Maps Plaid transactions to domain.Transaction and calls CreateBatch.
+// Issue #171: Also sets UserAccountID from userAccountMap for stable reference.
 //
 // Graceful error handling:
 //   - Skips transactions with unmapped accounts (logs warning)
 //   - Continues processing even if some transactions fail mapping
 //   - Returns error only if database CreateBatch fails
 //
-// Deduplication: CreateBatch uses ON CONFLICT DO NOTHING, so duplicates are ignored.
+// Deduplication: CreateBatch uses ON CONFLICT DO UPDATE, preserving user enrichments.
 func (s *transactionSyncService) processAddedTransactions(
 	ctx context.Context,
 	added []plaid.Transaction,
 	linkedItem *domain.LinkedItem,
 	accountMap map[string]string,
+	userAccountMap map[string]string,
 ) error {
-	// Optimization: Skip DB call if no transactions
 	if len(added) == 0 {
 		return nil
 	}
@@ -574,9 +586,8 @@ func (s *transactionSyncService) processAddedTransactions(
 	// Map Plaid transactions to domain.Transaction
 	transactions := make([]domain.Transaction, 0, len(added))
 	for _, plaidTxn := range added {
-		domainTxn, err := s.mapPlaidTransaction(ctx, plaidTxn, linkedItem.ID, linkedItem.UserID, accountMap)
+		domainTxn, err := s.mapPlaidTransaction(ctx, plaidTxn, linkedItem.ID, linkedItem.UserID, accountMap, userAccountMap)
 		if err != nil {
-			// Log warning but continue processing other transactions
 			log.Printf("Warning: Skipping transaction %s: %v", plaidTxn.TransactionId, err)
 			continue
 		}
@@ -642,8 +653,8 @@ func (s *transactionSyncService) processModifiedTransactions(
 	modified []plaid.Transaction,
 	linkedItem *domain.LinkedItem,
 	accountMap map[string]string,
+	userAccountMap map[string]string,
 ) error {
-	// Optimization: Skip processing if no transactions
 	if len(modified) == 0 {
 		return nil
 	}
@@ -653,7 +664,7 @@ func (s *transactionSyncService) processModifiedTransactions(
 
 	for _, plaidTxn := range modified {
 		// Map Plaid transaction to domain.Transaction (new data from Plaid)
-		newTxn, err := s.mapPlaidTransaction(ctx, plaidTxn, linkedItem.ID, linkedItem.UserID, accountMap)
+		newTxn, err := s.mapPlaidTransaction(ctx, plaidTxn, linkedItem.ID, linkedItem.UserID, accountMap, userAccountMap)
 		if err != nil {
 			log.Printf("Warning: Skipping modified transaction %s: %v", plaidTxn.TransactionId, err)
 			skippedCount++
@@ -866,3 +877,4 @@ func (s *transactionSyncService) createBalanceSnapshots(
 		successCount, linkedItem.ID, skippedCount, dedupedCount)
 	return nil
 }
+

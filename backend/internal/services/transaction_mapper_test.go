@@ -50,7 +50,7 @@ func TestMapPlaidTransaction_AllFields(t *testing.T) {
 	}
 
 	// Execute
-	result, err := service.mapPlaidTransaction(ctx, plaidTxn, linkedItemID, userID, accountMap)
+	result, err := service.mapPlaidTransaction(ctx, plaidTxn, linkedItemID, userID, accountMap, nil)
 
 	// Assert
 	require.NoError(t, err)
@@ -102,7 +102,7 @@ func TestMapPlaidTransaction_MissingAccount(t *testing.T) {
 	}
 
 	// Execute
-	result, err := service.mapPlaidTransaction(ctx, plaidTxn, "item-1", "user-1", accountMap)
+	result, err := service.mapPlaidTransaction(ctx, plaidTxn, "item-1", "user-1", accountMap, nil)
 
 	// Assert: Should return error
 	assert.Error(t, err)
@@ -131,7 +131,7 @@ func TestMapPlaidTransaction_MinimalFields(t *testing.T) {
 	}
 
 	// Execute
-	result, err := service.mapPlaidTransaction(ctx, plaidTxn, "item-1", "user-1", accountMap)
+	result, err := service.mapPlaidTransaction(ctx, plaidTxn, "item-1", "user-1", accountMap, nil)
 
 	// Assert
 	require.NoError(t, err)
@@ -162,7 +162,7 @@ func TestMapPlaidTransaction_InvalidDate(t *testing.T) {
 	}
 
 	// Execute
-	result, err := service.mapPlaidTransaction(ctx, plaidTxn, "item-1", "user-1", accountMap)
+	result, err := service.mapPlaidTransaction(ctx, plaidTxn, "item-1", "user-1", accountMap, nil)
 
 	// Assert: Should return error
 	assert.Error(t, err)

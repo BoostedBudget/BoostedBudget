@@ -154,6 +154,10 @@ func (m *mockTransactionRepoForBudget) GetIncomeSumByTag(ctx context.Context, us
 func (m *mockTransactionRepoForBudget) GetSpentSumForBudgetCategory(ctx context.Context, userID string, category []string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (float64, error) { return 0, nil }
 func (m *mockTransactionRepoForBudget) GetMatchingTransactionStats(ctx context.Context, userID string, categories [][]string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (int, float64, error) { return 0, 0, nil }
 
+// GetByUserAccountID retrieves all transactions for a user_account.
+// Issue #171 - Plaid Re-Link Handling
+func (m *mockTransactionRepoForBudget) GetByUserAccountID(ctx context.Context, userID string, userAccountID string) ([]domain.Transaction, error) { return nil, nil }
+
 // Helper function to create test budget
 func createTestBudget() *domain.Budget {
 	now := time.Now()
