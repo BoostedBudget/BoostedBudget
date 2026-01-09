@@ -93,6 +93,24 @@ vi.mock('@/api/generated/endpoints/privacy/privacy', () => ({
   })),
 }))
 
+// Mock the generated dashboard hooks used by WidgetCatalog
+vi.mock('@/api/generated/endpoints/dashboard/dashboard', () => ({
+  useGetWidgetTypes: vi.fn(() => ({
+    data: {
+      widgetTypes: [
+        { type: 'balance-overview', name: 'Balance Overview', category: 'overview' },
+        { type: 'balance-history', name: 'Balance History', category: 'charts' },
+        { type: 'cash-flow-summary', name: 'Cash Flow Summary', category: 'overview' },
+        { type: 'cash-flow-chart', name: 'Cash Flow Chart', category: 'charts' },
+        { type: 'account-cards', name: 'Account Cards', category: 'accounts' },
+        { type: 'net-worth', name: 'Net Worth', category: 'overview' },
+      ],
+    },
+    isLoading: false,
+    error: null,
+  })),
+}))
+
 describe('App', () => {
   beforeEach(() => {
     vi.clearAllMocks()

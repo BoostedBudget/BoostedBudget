@@ -344,22 +344,16 @@ func TestDefaultDashboardLayout(t *testing.T) {
 
 func TestValidWidgetTypes(t *testing.T) {
 	types := ValidWidgetTypes()
+	allWidgetTypes := AllWidgetTypes()
 
-	expectedTypes := []WidgetType{
-		WidgetTypeBalanceOverview,
-		WidgetTypeBalanceHistory,
-		WidgetTypeCashFlowSummary,
-		WidgetTypeCashFlowChart,
-		WidgetTypeAccountCards,
+	// ValidWidgetTypes should contain all types from AllWidgetTypes
+	if len(types) != len(allWidgetTypes) {
+		t.Errorf("ValidWidgetTypes() count = %v, expected %v", len(types), len(allWidgetTypes))
 	}
 
-	for _, wt := range expectedTypes {
-		if !types[wt] {
-			t.Errorf("ValidWidgetTypes() missing type: %v", wt)
+	for _, info := range allWidgetTypes {
+		if !types[info.Type] {
+			t.Errorf("ValidWidgetTypes() missing type: %v", info.Type)
 		}
-	}
-
-	if len(types) != len(expectedTypes) {
-		t.Errorf("ValidWidgetTypes() count = %v, expected %v", len(types), len(expectedTypes))
 	}
 }

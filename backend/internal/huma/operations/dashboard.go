@@ -72,6 +72,48 @@ type GetDefaultLayoutOutput struct {
 	Body *domain.DashboardLayout
 }
 
+// GetWidgetTypesInput represents the input for getting widget types.
+// Note: This is a PUBLIC endpoint, no authentication required.
+type GetWidgetTypesInput struct{}
+
+// WidgetTypesResponse wraps the list of widget types
+type WidgetTypesResponse struct {
+	WidgetTypes []domain.WidgetTypeInfo `json:"widgetTypes"`
+}
+
+// GetWidgetTypesOutput represents the response for getting widget types.
+type GetWidgetTypesOutput struct {
+	Body *WidgetTypesResponse
+}
+
+// Issue #127: Net Worth Tracking & Visualization
+
+// GetNetWorthInput represents the input for getting net worth.
+type GetNetWorthInput struct {
+	inputs.AuthenticatedInput
+	AccountTypes string `query:"account_types" doc:"Comma-separated account types to filter (depository, investment, credit, loan)"`
+	AsOfDate     string `query:"as_of_date" doc:"Get net worth as of specific date (YYYY-MM-DD)"`
+}
+
+// GetNetWorthOutput represents the response for getting net worth.
+type GetNetWorthOutput struct {
+	Body *domain.NetWorthResponse
+}
+
+// GetNetWorthHistoryInput represents the input for getting net worth history.
+type GetNetWorthHistoryInput struct {
+	inputs.AuthenticatedInput
+	AccountTypes string `query:"account_types" doc:"Comma-separated account types to filter"`
+	StartDate    string `query:"start_date" doc:"Start of date range (YYYY-MM-DD)"`
+	EndDate      string `query:"end_date" doc:"End of date range (YYYY-MM-DD)"`
+	Granularity  string `query:"granularity" doc:"Time granularity: daily, weekly, or monthly"`
+}
+
+// GetNetWorthHistoryOutput represents the response for getting net worth history.
+type GetNetWorthHistoryOutput struct {
+	Body *domain.NetWorthHistoryResponse
+}
+
 // --- Helper Functions ---
 
 // parseFilters parses query parameters into DashboardFilters.
@@ -172,7 +214,6 @@ func (h *DashboardHandler) GetAccountTypes(ctx context.Context, input *GetAccoun
 // GetDefaultLayout handles GET /api/v1/dashboard/default-layout requests.
 // Returns the default dashboard layout configuration from YAML config.
 // This endpoint is PUBLIC (no auth required) - used for initial dashboard setup.
-// Issue #449: Centralize default dashboard layout configuration
 func GetDefaultLayout(ctx context.Context, input *GetDefaultLayoutInput) (*GetDefaultLayoutOutput, error) {
 	// Load the dashboard layout configuration
 	layoutConfig, err := config.LoadDashboardLayoutConfig()
@@ -184,6 +225,50 @@ func GetDefaultLayout(ctx context.Context, input *GetDefaultLayoutInput) (*GetDe
 	layout := layoutConfig.GetDefaultLayout()
 
 	return &GetDefaultLayoutOutput{Body: layout}, nil
+}
+
+// GetWidgetTypes handles GET /api/v1/dashboard/widget-types requests.
+// Returns all available widget types with their metadata.
+// This endpoint is PUBLIC (no auth required) - used for widget catalog.
+func GetWidgetTypes(ctx context.Context, input *GetWidgetTypesInput) (*GetWidgetTypesOutput, error) {
+	widgetTypes := domain.AllWidgetTypes()
+	return &GetWidgetTypesOutput{
+		Body: &WidgetTypesResponse{
+			WidgetTypes: widgetTypes,
+		},
+	}, nil
+}
+
+// GetNetWorth handles GET /api/v1/dashboard/net-worth requests.
+// Returns current net worth (assets - liabilities) with category breakdown.
+func (h *DashboardHandler) GetNetWorth(ctx context.Context, input *GetNetWorthInput) (*GetNetWorthOutput, error) {
+	filters, err := parseFilters(input.AccountTypes, input.AsOfDate, "", "", "")
+	if err != nil {
+		return nil, err
+	}
+
+	response, err := h.service.GetNetWorth(ctx, input.UserID, filters)
+	if err != nil {
+		return nil, humaerrors.MapError(err)
+	}
+
+	return &GetNetWorthOutput{Body: response}, nil
+}
+
+// GetNetWorthHistory handles GET /api/v1/dashboard/net-worth-history requests.
+// Returns time series net worth data for charts.
+func (h *DashboardHandler) GetNetWorthHistory(ctx context.Context, input *GetNetWorthHistoryInput) (*GetNetWorthHistoryOutput, error) {
+	filters, err := parseFilters(input.AccountTypes, "", input.StartDate, input.EndDate, input.Granularity)
+	if err != nil {
+		return nil, err
+	}
+
+	response, err := h.service.GetNetWorthHistory(ctx, input.UserID, filters)
+	if err != nil {
+		return nil, humaerrors.MapError(err)
+	}
+
+	return &GetNetWorthHistoryOutput{Body: response}, nil
 }
 
 // RegisterDashboardRoutes registers dashboard routes with the Huma API.
@@ -232,4 +317,37 @@ func RegisterDashboardRoutes(api huma.API, handler *DashboardHandler) {
 		Tags:        []string{"Dashboard"},
 		// Note: No Security field - this is a public endpoint
 	}, GetDefaultLayout)
+
+	// GET /api/v1/dashboard/widget-types - Get widget types (PUBLIC)
+	huma.Register(api, huma.Operation{
+		OperationID: "getWidgetTypes",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/dashboard/widget-types",
+		Summary:     "Get available widget types",
+		Description: "Returns all available widget types with their metadata for the widget catalog. Public endpoint.",
+		Tags:        []string{"Dashboard"},
+		// Note: No Security field - this is a public endpoint
+	}, GetWidgetTypes)
+
+	// GET /api/v1/dashboard/net-worth - Get net worth
+	huma.Register(api, huma.Operation{
+		OperationID: "getNetWorth",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/dashboard/net-worth",
+		Summary:     "Get current net worth",
+		Description: "Returns current net worth (assets - liabilities) with breakdown by category and period comparison.",
+		Tags:        []string{"Dashboard"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.GetNetWorth)
+
+	// GET /api/v1/dashboard/net-worth-history - Get net worth history
+	huma.Register(api, huma.Operation{
+		OperationID: "getNetWorthHistory",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/dashboard/net-worth-history",
+		Summary:     "Get net worth history",
+		Description: "Returns time series net worth data for charts with assets and liabilities breakdown.",
+		Tags:        []string{"Dashboard"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.GetNetWorthHistory)
 }

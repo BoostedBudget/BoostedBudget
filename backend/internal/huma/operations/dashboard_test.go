@@ -17,12 +17,16 @@ import (
 
 // mockDashboardService is a mock implementation of services.DashboardService
 type mockDashboardService struct {
-	balanceSummary   *domain.BalanceSummaryResponse
-	balanceHistory   *domain.BalanceHistoryResponse
-	accountTypes     *domain.AccountTypesResponse
-	summaryErr       error
-	historyErr       error
-	typesErr         error
+	balanceSummary  *domain.BalanceSummaryResponse
+	balanceHistory  *domain.BalanceHistoryResponse
+	accountTypes    *domain.AccountTypesResponse
+	netWorth        *domain.NetWorthResponse
+	netWorthHistory *domain.NetWorthHistoryResponse
+	summaryErr      error
+	historyErr      error
+	typesErr        error
+	netWorthErr     error
+	netWorthHistErr error
 }
 
 func (m *mockDashboardService) GetBalanceSummary(ctx context.Context, userID string, filters *domain.DashboardFilters) (*domain.BalanceSummaryResponse, error) {
@@ -44,6 +48,20 @@ func (m *mockDashboardService) GetAccountTypes(ctx context.Context, userID strin
 		return nil, m.typesErr
 	}
 	return m.accountTypes, nil
+}
+
+func (m *mockDashboardService) GetNetWorth(ctx context.Context, userID string, filters *domain.DashboardFilters) (*domain.NetWorthResponse, error) {
+	if m.netWorthErr != nil {
+		return nil, m.netWorthErr
+	}
+	return m.netWorth, nil
+}
+
+func (m *mockDashboardService) GetNetWorthHistory(ctx context.Context, userID string, filters *domain.DashboardFilters) (*domain.NetWorthHistoryResponse, error) {
+	if m.netWorthHistErr != nil {
+		return nil, m.netWorthHistErr
+	}
+	return m.netWorthHistory, nil
 }
 
 // Helper functions to create test data
