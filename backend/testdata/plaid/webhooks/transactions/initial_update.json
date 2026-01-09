@@ -1,0 +1,7 @@
+{
+  "webhook_type": "TRANSACTIONS",
+  "webhook_code": "INITIAL_UPDATE",
+  "item_id": "item_test_001",
+  "new_transactions": 25,
+  "environment": "sandbox"
+}

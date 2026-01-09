@@ -100,6 +100,24 @@ func (m *MockLinkedItemRepository) DeleteByUser(ctx context.Context, id, userID 
 	return args.Error(0)
 }
 
+func (m *MockLinkedItemRepository) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, id string) (*domain.LinkedItem, error) {
+	args := m.Called(ctx, tx, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.LinkedItem), args.Error(1)
+}
+
+// GetByUserAndInstitution retrieves a linked item by user ID, institution ID, and status.
+// Issue #171 - Plaid Re-Link Handling
+func (m *MockLinkedItemRepository) GetByUserAndInstitution(ctx context.Context, userID, institutionID, status string) (*domain.LinkedItem, error) {
+	args := m.Called(ctx, userID, institutionID, status)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.LinkedItem), args.Error(1)
+}
+
 // MockJobQueue mocks the JobQueue interface
 type MockJobQueue struct {
 	mock.Mock
@@ -303,8 +321,10 @@ func TestPlaidSyncWorker_Work_RepositoryError(t *testing.T) {
 	err := worker.Work(ctx, job)
 
 	// Should return error for retry
+	// Note: With the new locking logic, this now returns "failed to acquire lock on linked item"
+	// when DB is nil (fallback to GetByIDAndUser)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to get linked item")
+	assert.Contains(t, err.Error(), "failed to acquire lock on linked item")
 	mockRepo.AssertExpectations(t)
 }
 

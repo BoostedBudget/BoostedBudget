@@ -1,0 +1,6 @@
+{
+  "webhook_type": "ITEM",
+  "webhook_code": "LOGIN_REPAIRED",
+  "item_id": "item_test_001",
+  "environment": "sandbox"
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/events"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -76,6 +77,24 @@ func (m *MockLinkedItemRepository) GetByIDAndUser(ctx context.Context, id, userI
 func (m *MockLinkedItemRepository) DeleteByUser(ctx context.Context, id, userID string) error {
 	args := m.Called(ctx, id, userID)
 	return args.Error(0)
+}
+
+func (m *MockLinkedItemRepository) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, id string) (*domain.LinkedItem, error) {
+	args := m.Called(ctx, tx, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.LinkedItem), args.Error(1)
+}
+
+// GetByUserAndInstitution retrieves a linked item by user ID, institution ID, and status.
+// Issue #171 - Plaid Re-Link Handling
+func (m *MockLinkedItemRepository) GetByUserAndInstitution(ctx context.Context, userID, institutionID, status string) (*domain.LinkedItem, error) {
+	args := m.Called(ctx, userID, institutionID, status)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.LinkedItem), args.Error(1)
 }
 
 // MockTransactionRepository is a mock for TransactionRepository
@@ -192,6 +211,16 @@ func (m *MockTransactionRepository) GetTransactionsForBudgetCategory(ctx context
 		return nil, args.Int(1), args.Get(2).(float64), args.Error(3)
 	}
 	return args.Get(0).([]domain.Transaction), args.Int(1), args.Get(2).(float64), args.Error(3)
+}
+
+// GetByUserAccountID retrieves all transactions for a user_account.
+// Issue #171 - Plaid Re-Link Handling
+func (m *MockTransactionRepository) GetByUserAccountID(ctx context.Context, userID string, userAccountID string) ([]domain.Transaction, error) {
+	args := m.Called(ctx, userID, userAccountID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.Transaction), args.Error(1)
 }
 
 // MockPlaidClient is a mock for Plaid API client

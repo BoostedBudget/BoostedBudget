@@ -1,0 +1,7 @@
+{
+  "webhook_type": "TRANSACTIONS",
+  "webhook_code": "TRANSACTIONS_REMOVED",
+  "item_id": "item_test_001",
+  "removed_transactions": ["txn_removed_001", "txn_removed_002"],
+  "environment": "sandbox"
+}

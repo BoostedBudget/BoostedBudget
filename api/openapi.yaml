@@ -41,12 +41,21 @@ components:
           type: string
         plaid_account_id:
           type: string
+        replaced_at:
+          format: date-time
+          type: string
+        replaced_by_id:
+          type: string
+        status:
+          type: string
         subtype:
           type: string
         type:
           type: string
         updated_at:
           format: date-time
+          type: string
+        user_account_id:
           type: string
         user_id:
           type: string
@@ -58,6 +67,7 @@ components:
         - name
         - type
         - currency_code
+        - status
         - is_hidden
         - created_at
         - updated_at
@@ -2196,6 +2206,8 @@ components:
         updated_at:
           format: date-time
           type: string
+        user_account_id:
+          type: string
         user_id:
           type: string
         user_notes:
@@ -2585,6 +2597,49 @@ components:
       required:
         - tags
       type: object
+    UpdateUserAccountRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/UpdateUserAccountRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        custom_color:
+          type:
+            - string
+            - "null"
+        custom_emoji:
+          type:
+            - string
+            - "null"
+        custom_icon:
+          type:
+            - string
+            - "null"
+        display_order:
+          format: int64
+          type:
+            - integer
+            - "null"
+        is_hidden:
+          type:
+            - boolean
+            - "null"
+        nickname:
+          type:
+            - string
+            - "null"
+      required:
+        - nickname
+        - custom_color
+        - custom_icon
+        - custom_emoji
+        - display_order
+        - is_hidden
+      type: object
     UpdateUserTagRequest:
       additionalProperties: false
       properties:
@@ -2661,6 +2716,57 @@ components:
         - primary_region
         - is_active
         - is_deleted
+        - created_at
+        - updated_at
+      type: object
+    UserAccount:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/UserAccount.json
+          format: uri
+          readOnly: true
+          type: string
+        account_name_hint:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        custom_color:
+          type: string
+        custom_emoji:
+          type: string
+        custom_icon:
+          type: string
+        display_order:
+          format: int64
+          type: integer
+        id:
+          type: string
+        institution_id:
+          type: string
+        is_hidden:
+          type: boolean
+        mask:
+          type: string
+        nickname:
+          type: string
+        primary_subtype:
+          type: string
+        primary_type:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+        user_id:
+          type: string
+      required:
+        - id
+        - user_id
+        - institution_id
+        - is_hidden
         - created_at
         - updated_at
       type: object
@@ -5291,6 +5397,105 @@ paths:
       summary: Update transaction tags
       tags:
         - Transactions
+  /api/v1/user-accounts:
+    get:
+      description: Returns all stable user accounts for the authenticated user. These survive Plaid re-links and provide consistent references for querying transactions.
+      operationId: getUserAccounts
+      parameters:
+        - description: Include hidden accounts (default false)
+          explode: false
+          in: query
+          name: include_hidden
+          schema:
+            description: Include hidden accounts (default false)
+            type: boolean
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/UserAccount"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - bearerAuth: []
+      summary: List user accounts
+      tags:
+        - User Accounts
+  /api/v1/user-accounts/{id}:
+    get:
+      description: Retrieves a specific user account by ID. Returns 404 if not found or not owned by the user.
+      operationId: getUserAccountById
+      parameters:
+        - description: User Account UUID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: User Account UUID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserAccount"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - bearerAuth: []
+      summary: Get user account by ID
+      tags:
+        - User Accounts
+    patch:
+      description: Updates customization fields (nickname, color, icon, emoji, display order, hidden status) for a user account. Only provided fields are updated.
+      operationId: updateUserAccount
+      parameters:
+        - description: User Account UUID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: User Account UUID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserAccountRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserAccount"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - bearerAuth: []
+      summary: Update user account
+      tags:
+        - User Accounts
   /api/v1/user/delete:
     post:
       description: Initiates account deletion with 30-day grace period. User will receive email with cancellation link.

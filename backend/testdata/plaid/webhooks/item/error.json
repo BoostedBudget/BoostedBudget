@@ -1,0 +1,13 @@
+{
+  "webhook_type": "ITEM",
+  "webhook_code": "ERROR",
+  "item_id": "item_test_001",
+  "error": {
+    "error_type": "ITEM_ERROR",
+    "error_code": "ITEM_LOGIN_REQUIRED",
+    "error_message": "the login details of this item have changed (credentials, MFA, or required user action) and a user login is required to update this information.",
+    "display_message": "Your bank requires you to log in again.",
+    "status": 400
+  },
+  "environment": "sandbox"
+}

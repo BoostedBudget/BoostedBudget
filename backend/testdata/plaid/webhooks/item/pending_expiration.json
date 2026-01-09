@@ -1,0 +1,7 @@
+{
+  "webhook_type": "ITEM",
+  "webhook_code": "PENDING_EXPIRATION",
+  "item_id": "item_test_001",
+  "consent_expiration_time": "2024-02-15T00:00:00Z",
+  "environment": "sandbox"
+}
