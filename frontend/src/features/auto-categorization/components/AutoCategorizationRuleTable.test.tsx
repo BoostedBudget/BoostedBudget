@@ -6,7 +6,7 @@
  * TDD RED: Writing tests before implementation.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { AutoCategorizationRuleTable } from './AutoCategorizationRuleTable'
 import type { CategorizationRule } from '../types'
@@ -72,9 +72,6 @@ const mockRules: CategorizationRule[] = [
 ]
 
 describe('AutoCategorizationRuleTable', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
 
   describe('Rendering', () => {
     it('should render a table', () => {
@@ -176,28 +173,25 @@ describe('AutoCategorizationRuleTable', () => {
     it('should display source badge for manual rules', () => {
       render(<AutoCategorizationRuleTable rules={mockRules} />)
 
-      const manualBadges = screen.getAllByText('Manual')
-      expect(manualBadges.length).toBeGreaterThan(0)
+      expect(screen.getByText('Manual')).toBeInTheDocument()
     })
 
     it('should display source badge for AI rules', () => {
       render(<AutoCategorizationRuleTable rules={mockRules} />)
 
-      const aiBadges = screen.getAllByText('AI')
-      expect(aiBadges.length).toBeGreaterThan(0)
+      expect(screen.getByText('AI')).toBeInTheDocument()
     })
 
     it('should display source badge for template rules', () => {
       render(<AutoCategorizationRuleTable rules={mockRules} />)
 
-      const templateBadges = screen.getAllByText('Template')
-      expect(templateBadges.length).toBeGreaterThan(0)
+      expect(screen.getByText('Template')).toBeInTheDocument()
     })
   })
 
   describe('Row Actions', () => {
     it('should call onEdit when edit button is clicked', () => {
-      const onEdit = vi.fn()
+      const onEdit = mock(() => {})
       render(<AutoCategorizationRuleTable rules={mockRules} onEdit={onEdit} />)
 
       const editButtons = screen.getAllByRole('button', { name: /edit/i })
@@ -207,7 +201,7 @@ describe('AutoCategorizationRuleTable', () => {
     })
 
     it('should call onDelete when delete button is clicked', () => {
-      const onDelete = vi.fn()
+      const onDelete = mock(() => {})
       render(<AutoCategorizationRuleTable rules={mockRules} onDelete={onDelete} />)
 
       const deleteButtons = screen.getAllByRole('button', { name: /delete/i })
@@ -217,7 +211,7 @@ describe('AutoCategorizationRuleTable', () => {
     })
 
     it('should call onToggle when toggle switch is clicked', () => {
-      const onToggle = vi.fn()
+      const onToggle = mock(() => {})
       render(<AutoCategorizationRuleTable rules={mockRules} onToggle={onToggle} />)
 
       const toggleButtons = screen.getAllByRole('switch')
@@ -260,7 +254,7 @@ describe('AutoCategorizationRuleTable', () => {
 
   describe('Row Click', () => {
     it('should call onRowClick when row is clicked', () => {
-      const onRowClick = vi.fn()
+      const onRowClick = mock(() => {})
       render(
         <AutoCategorizationRuleTable rules={mockRules} onRowClick={onRowClick} />
       )
@@ -291,7 +285,7 @@ describe('AutoCategorizationRuleTable', () => {
     })
 
     it('should call onSort when clicking sortable header', () => {
-      const onSort = vi.fn()
+      const onSort = mock(() => {})
       render(
         <AutoCategorizationRuleTable
           rules={mockRules}
@@ -307,7 +301,7 @@ describe('AutoCategorizationRuleTable', () => {
     })
 
     it('should toggle sort direction on second click', () => {
-      const onSort = vi.fn()
+      const onSort = mock(() => {})
       render(
         <AutoCategorizationRuleTable
           rules={mockRules}
@@ -391,7 +385,7 @@ describe('AutoCategorizationRuleTable', () => {
   describe('Action Button Tooltips', () => {
     it('should have tooltip on edit button', () => {
       render(
-        <AutoCategorizationRuleTable rules={mockRules} onEdit={vi.fn()} />
+        <AutoCategorizationRuleTable rules={mockRules} onEdit={mock(() => {})} />
       )
 
       const editButtons = screen.getAllByRole('button', { name: /edit rule/i })
@@ -402,7 +396,7 @@ describe('AutoCategorizationRuleTable', () => {
 
     it('should have tooltip on delete button', () => {
       render(
-        <AutoCategorizationRuleTable rules={mockRules} onDelete={vi.fn()} />
+        <AutoCategorizationRuleTable rules={mockRules} onDelete={mock(() => {})} />
       )
 
       const deleteButtons = screen.getAllByRole('button', { name: /delete rule/i })
@@ -413,7 +407,7 @@ describe('AutoCategorizationRuleTable', () => {
 
     it('should have tooltip on toggle switch', () => {
       render(
-        <AutoCategorizationRuleTable rules={mockRules} onToggle={vi.fn()} />
+        <AutoCategorizationRuleTable rules={mockRules} onToggle={mock(() => {})} />
       )
 
       const toggleButtons = screen.getAllByRole('switch')

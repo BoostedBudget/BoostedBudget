@@ -6,7 +6,7 @@
  * TDD RED: Writing tests before implementation.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { RuleCard } from './RuleCard'
 import type { AutomationRule } from '@/api/generated/models'
@@ -35,9 +35,6 @@ const mockRule: AutomationRule = {
 }
 
 describe('RuleCard', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
 
   describe('Rendering', () => {
     it('should render rule name', () => {
@@ -142,7 +139,7 @@ describe('RuleCard', () => {
 
   describe('Actions', () => {
     it('should call onEdit when edit button is clicked', () => {
-      const onEdit = vi.fn()
+      const onEdit = mock(() => {})
       render(<RuleCard rule={mockRule} onEdit={onEdit} />)
 
       fireEvent.click(screen.getByRole('button', { name: /edit/i }))
@@ -151,7 +148,7 @@ describe('RuleCard', () => {
     })
 
     it('should call onDelete when delete button is clicked', () => {
-      const onDelete = vi.fn()
+      const onDelete = mock(() => {})
       render(<RuleCard rule={mockRule} onDelete={onDelete} />)
 
       fireEvent.click(screen.getByRole('button', { name: /delete/i }))
@@ -160,7 +157,7 @@ describe('RuleCard', () => {
     })
 
     it('should call onToggle when toggle is clicked', () => {
-      const onToggle = vi.fn()
+      const onToggle = mock(() => {})
       render(<RuleCard rule={mockRule} onToggle={onToggle} />)
 
       fireEvent.click(screen.getByRole('switch'))
@@ -169,7 +166,7 @@ describe('RuleCard', () => {
     })
 
     it('should call onToggle with true when enabling disabled rule', () => {
-      const onToggle = vi.fn()
+      const onToggle = mock(() => {})
       const disabledRule = { ...mockRule, enabled: false }
       render(<RuleCard rule={disabledRule} onToggle={onToggle} />)
 
@@ -179,7 +176,7 @@ describe('RuleCard', () => {
     })
 
     it('should call onTest when test button is clicked', () => {
-      const onTest = vi.fn()
+      const onTest = mock(() => {})
       render(<RuleCard rule={mockRule} onTest={onTest} />)
 
       fireEvent.click(screen.getByRole('button', { name: /test/i }))
@@ -208,9 +205,9 @@ describe('RuleCard', () => {
 
   describe('Loading State', () => {
     it('should disable actions when loading', () => {
-      const onEdit = vi.fn()
-      const onDelete = vi.fn()
-      const onToggle = vi.fn()
+      const onEdit = mock(() => {})
+      const onDelete = mock(() => {})
+      const onToggle = mock(() => {})
 
       render(
         <RuleCard
@@ -250,7 +247,7 @@ describe('RuleCard', () => {
     })
 
     it('should have accessible toggle switch', () => {
-      const onToggle = vi.fn()
+      const onToggle = mock(() => {})
       render(<RuleCard rule={mockRule} onToggle={onToggle} />)
 
       const toggle = screen.getByRole('switch')
@@ -258,7 +255,7 @@ describe('RuleCard', () => {
     })
 
     it('should have accessible toggle for disabled rule', () => {
-      const onToggle = vi.fn()
+      const onToggle = mock(() => {})
       const disabledRule = { ...mockRule, enabled: false }
       render(<RuleCard rule={disabledRule} onToggle={onToggle} />)
 
