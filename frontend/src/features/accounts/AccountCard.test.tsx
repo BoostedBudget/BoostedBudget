@@ -1,4 +1,13 @@
-import { describe, it, expect } from 'vitest'
+/**
+ * AccountCard Component Tests
+ *
+ * Tests the account card component that displays individual account
+ * details including balance, institution, and account type information.
+ *
+ * Issue #575: Hybrid test framework migration (Vitest + bun:test)
+ */
+
+import { describe, it, expect } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import { AccountCard } from './AccountCard'
 import type { Account } from './types'

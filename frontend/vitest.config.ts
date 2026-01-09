@@ -53,6 +53,8 @@ export default mergeConfig(
         // Batch 3 - Dashboard component tests (2026-01-08)
         'src/features/dashboard/components/AccountBalanceCards.test.tsx',
         'src/features/dashboard/components/BalanceOverview.test.tsx',
+        // Batch 4 - Simple account component tests (2026-01-08)
+        'src/features/accounts/AccountCard.test.tsx',
       ],
       coverage: {
         provider: 'v8',
