@@ -963,3 +963,249 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 	assert.Equal(t, "Closed Account", *accounts[1].Nickname)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// ============================================================================
+// Issue #171: Re-link Handling Tests
+// ============================================================================
+
+// TestAccountRepository_GetByUserAccountAndStatus_Active tests finding active accounts by user_account_id
+func TestAccountRepository_GetByUserAccountAndStatus_Active(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userAccountID := uuid.New().String()
+	now := time.Now()
+
+	bal1 := 1500.50
+	avail1 := 1450.25
+
+	// Expected columns including Issue #171 fields
+	rows := pgxmock.NewRows([]string{
+		"id", "linked_item_id", "user_id", "plaid_account_id",
+		"name", "official_name", "type", "subtype", "mask",
+		"current_balance", "available_balance", "currency_code",
+		"user_account_id", "status", "replaced_at", "replaced_by_id",
+		"nickname", "custom_color", "custom_icon", "custom_emoji", "display_order", "is_hidden",
+		"created_at", "updated_at",
+	}).
+		AddRow(
+			uuid.New().String(), uuid.New().String(), uuid.New().String(), "acc-1",
+			"Checking", strPtr("Chase Total Checking"), "depository", strPtr("checking"), strPtr("1234"),
+			&bal1, &avail1, "USD",
+			&userAccountID, "active", nil, nil,
+			nil, nil, nil, nil, nil, false,
+			now, now,
+		)
+
+	mock.ExpectQuery("SELECT.*FROM accounts.*WHERE user_account_id.*AND status").
+		WithArgs(userAccountID, "active").
+		WillReturnRows(rows)
+
+	// Execute - this method should exist for stable queries across re-links
+	accounts, err := repo.GetByUserAccountAndStatus(ctx, userAccountID, "active")
+
+	// Assert
+	assert.NoError(t, err)
+	assert.Len(t, accounts, 1)
+	assert.Equal(t, userAccountID, *accounts[0].UserAccountID)
+	assert.Equal(t, domain.AccountStatusActive, accounts[0].Status)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_GetByUserAccountAndStatus_Replaced tests finding replaced accounts
+func TestAccountRepository_GetByUserAccountAndStatus_Replaced(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userAccountID := uuid.New().String()
+	replacedByID := uuid.New().String()
+	now := time.Now()
+	replacedAt := now.Add(-time.Hour)
+
+	bal1 := 1500.50
+	avail1 := 1450.25
+
+	rows := pgxmock.NewRows([]string{
+		"id", "linked_item_id", "user_id", "plaid_account_id",
+		"name", "official_name", "type", "subtype", "mask",
+		"current_balance", "available_balance", "currency_code",
+		"user_account_id", "status", "replaced_at", "replaced_by_id",
+		"nickname", "custom_color", "custom_icon", "custom_emoji", "display_order", "is_hidden",
+		"created_at", "updated_at",
+	}).
+		AddRow(
+			uuid.New().String(), uuid.New().String(), uuid.New().String(), "acc-old",
+			"Checking", strPtr("Chase Total Checking"), "depository", strPtr("checking"), strPtr("1234"),
+			&bal1, &avail1, "USD",
+			&userAccountID, "replaced", &replacedAt, &replacedByID,
+			nil, nil, nil, nil, nil, false,
+			now, now,
+		)
+
+	mock.ExpectQuery("SELECT.*FROM accounts.*WHERE user_account_id.*AND status").
+		WithArgs(userAccountID, "replaced").
+		WillReturnRows(rows)
+
+	// Execute
+	accounts, err := repo.GetByUserAccountAndStatus(ctx, userAccountID, "replaced")
+
+	// Assert
+	assert.NoError(t, err)
+	assert.Len(t, accounts, 1)
+	assert.Equal(t, domain.AccountStatusReplaced, accounts[0].Status)
+	assert.NotNil(t, accounts[0].ReplacedAt)
+	assert.NotNil(t, accounts[0].ReplacedByID)
+	assert.Equal(t, replacedByID, *accounts[0].ReplacedByID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_GetByUserAccountAndStatus_NotFound tests when no matching accounts exist
+func TestAccountRepository_GetByUserAccountAndStatus_NotFound(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userAccountID := uuid.New().String()
+
+	rows := pgxmock.NewRows([]string{
+		"id", "linked_item_id", "user_id", "plaid_account_id",
+		"name", "official_name", "type", "subtype", "mask",
+		"current_balance", "available_balance", "currency_code",
+		"user_account_id", "status", "replaced_at", "replaced_by_id",
+		"nickname", "custom_color", "custom_icon", "custom_emoji", "display_order", "is_hidden",
+		"created_at", "updated_at",
+	})
+
+	mock.ExpectQuery("SELECT.*FROM accounts.*WHERE user_account_id.*AND status").
+		WithArgs(userAccountID, "active").
+		WillReturnRows(rows)
+
+	// Execute
+	accounts, err := repo.GetByUserAccountAndStatus(ctx, userAccountID, "active")
+
+	// Assert - should return empty slice (not an error) when no match found
+	assert.NoError(t, err)
+	assert.Empty(t, accounts)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_GetByUserAccountAndStatus_MultipleAccounts tests accounts across re-links
+func TestAccountRepository_GetByUserAccountAndStatus_MultipleAccounts(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userAccountID := uuid.New().String()
+	now := time.Now()
+	replacedAt := now.Add(-time.Hour)
+
+	bal1 := 1500.50
+	avail1 := 1450.25
+	bal2 := 1600.00
+	avail2 := 1550.00
+
+	// Mock two accounts with same user_account_id - one replaced, one active
+	// This simulates a re-link scenario
+	rows := pgxmock.NewRows([]string{
+		"id", "linked_item_id", "user_id", "plaid_account_id",
+		"name", "official_name", "type", "subtype", "mask",
+		"current_balance", "available_balance", "currency_code",
+		"user_account_id", "status", "replaced_at", "replaced_by_id",
+		"nickname", "custom_color", "custom_icon", "custom_emoji", "display_order", "is_hidden",
+		"created_at", "updated_at",
+	}).
+		AddRow(
+			uuid.New().String(), uuid.New().String(), uuid.New().String(), "acc-old",
+			"Checking", strPtr("Chase Total Checking"), "depository", strPtr("checking"), strPtr("1234"),
+			&bal1, &avail1, "USD",
+			&userAccountID, "replaced", &replacedAt, nil,
+			nil, nil, nil, nil, nil, false,
+			now.Add(-2*time.Hour), now,
+		).
+		AddRow(
+			uuid.New().String(), uuid.New().String(), uuid.New().String(), "acc-new",
+			"Checking", strPtr("Chase Total Checking"), "depository", strPtr("checking"), strPtr("1234"),
+			&bal2, &avail2, "USD",
+			&userAccountID, "active", nil, nil,
+			nil, nil, nil, nil, nil, false,
+			now, now,
+		)
+
+	// When querying without status filter (nil), return all
+	mock.ExpectQuery("SELECT.*FROM accounts.*WHERE user_account_id").
+		WithArgs(userAccountID).
+		WillReturnRows(rows)
+
+	// Execute - get all accounts for a user_account (both active and replaced)
+	accounts, err := repo.GetByUserAccountID(ctx, userAccountID)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.Len(t, accounts, 2)
+	// First should be replaced (older)
+	assert.Equal(t, domain.AccountStatusReplaced, accounts[0].Status)
+	// Second should be active (newer)
+	assert.Equal(t, domain.AccountStatusActive, accounts[1].Status)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_UpdateStatus tests updating account status for soft-delete
+func TestAccountRepository_UpdateStatus(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+	replacedByID := uuid.New().String()
+
+	// Expect update to set status, replaced_at, and replaced_by_id
+	mock.ExpectExec("UPDATE accounts.*SET.*status.*replaced_at.*replaced_by_id").
+		WithArgs(
+			pgxmock.AnyArg(), // status
+			pgxmock.AnyArg(), // replaced_at
+			pgxmock.AnyArg(), // replaced_by_id
+			pgxmock.AnyArg(), // updated_at
+			pgxmock.AnyArg(), // id
+			pgxmock.AnyArg(), // user_id
+		).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	// Execute
+	err := repo.UpdateStatus(ctx, accountID, userID, domain.AccountStatusReplaced, &replacedByID)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_UpdateStatus_NotFound tests updating status for non-existent account
+func TestAccountRepository_UpdateStatus_NotFound(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+
+	mock.ExpectExec("UPDATE accounts.*SET.*status.*replaced_at.*replaced_by_id").
+		WithArgs(
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+		).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	// Execute
+	err := repo.UpdateStatus(ctx, accountID, userID, domain.AccountStatusReplaced, nil)
+
+	// Assert
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrAccountNotFound)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

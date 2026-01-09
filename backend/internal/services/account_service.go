@@ -108,6 +108,7 @@ type accountService struct {
 	linkedItemRepo  repository.LinkedItemRepository
 	accountRepo     repository.AccountRepository
 	userRepo        repository.ProfileRepository
+	userAccountSvc  UserAccountService // Issue #171: For re-link user_account matching
 	db              *pgxpool.Pool
 	jobQueue        queue.JobQueue // Issue #658: For auto-sync after linking (can be nil)
 	logger          *slog.Logger
@@ -127,6 +128,13 @@ func WithJobQueue(jq queue.JobQueue) AccountServiceOption {
 func WithAccountServiceLogger(logger *slog.Logger) AccountServiceOption {
 	return func(s *accountService) {
 		s.logger = logger
+	}
+}
+
+// WithUserAccountService sets the UserAccountService for re-link user_account matching (Issue #171)
+func WithUserAccountService(uaSvc UserAccountService) AccountServiceOption {
+	return func(s *accountService) {
+		s.userAccountSvc = uaSvc
 	}
 }
 
@@ -170,7 +178,9 @@ func NewAccountService(
 // 4. Fetch accounts from Plaid
 // 5. Verify combined count doesn't exceed limit
 // 6. Encrypt access token
-// 7. Store linked item and accounts atomically in database
+// 7. Issue #171: Check for re-link (existing item at same institution) and soft-delete old data
+// 8. Store linked item and accounts atomically in database
+// 9. Issue #171: For each account, match/create user_account for stable reference
 //
 // Returns ErrAccountLimitExceeded if user is at or over their account limit
 // Returns ErrInvalidPublicToken if Plaid rejects the token
@@ -251,14 +261,25 @@ func (s *accountService) LinkAccounts(
 		return nil, fmt.Errorf("failed to encrypt access token: %w", err)
 	}
 
-	// Step 7: Store linked item and accounts atomically in database
+	// Step 7: Issue #171 - Check for re-link (existing active item at same institution)
+	var existingLinkedItem *domain.LinkedItem
+	existingLinkedItem, err = s.linkedItemRepo.GetByUserAndInstitution(
+		ctx, user.ID, institutionID, string(domain.LinkedItemStatusActive),
+	)
+	if err != nil && !errors.Is(err, repository.ErrLinkedItemNotFound) {
+		// Unexpected error checking for existing item
+		return nil, fmt.Errorf("failed to check for existing linked item: %w", err)
+	}
+
+	// Step 8: Create new linked item
 	linkedItem := &domain.LinkedItem{
 		UserID:               user.ID,
 		ItemID:               itemID,
 		AccessTokenEncrypted: encryptedToken,
 		InstitutionID:        institutionID,
 		InstitutionName:      institutionName,
-		Provider:             "plaid", // Set provider to avoid database constraint violation (Issue #305)
+		Provider:             "plaid",                       // Set provider to avoid database constraint violation (Issue #305)
+		Status:               domain.LinkedItemStatusActive, // Issue #171: Explicitly set active status
 	}
 
 	// Create linked item
@@ -266,14 +287,83 @@ func (s *accountService) LinkAccounts(
 		return nil, fmt.Errorf("failed to create linked item: %w", err)
 	}
 
-	// Convert Plaid accounts to domain accounts
+	// Step 9: Issue #171 - If this is a re-link, soft-delete the old linked_item and accounts
+	if existingLinkedItem != nil {
+		s.logger.Info("re-link detected, soft-deleting old linked item",
+			"old_item_id", existingLinkedItem.ID,
+			"new_item_id", linkedItem.ID,
+			"institution_id", institutionID,
+		)
+
+		// Mark old linked_item as 'replaced' with replaced_by_id pointing to new item
+		now := time.Now()
+		existingLinkedItem.Status = domain.LinkedItemStatusReplaced
+		existingLinkedItem.ReplacedAt = &now
+		existingLinkedItem.ReplacedByID = &linkedItem.ID
+		if err := s.linkedItemRepo.Update(ctx, existingLinkedItem); err != nil {
+			s.logger.Error("failed to soft-delete old linked item",
+				"old_item_id", existingLinkedItem.ID,
+				"error", err,
+			)
+			// Continue - the new item was created successfully
+		}
+
+		// Mark old accounts as 'replaced'
+		oldAccounts, err := s.accountRepo.GetByLinkedItemID(ctx, existingLinkedItem.ID)
+		if err != nil {
+			s.logger.Error("failed to get old accounts for soft-delete",
+				"old_item_id", existingLinkedItem.ID,
+				"error", err,
+			)
+		} else {
+			for _, oldAcct := range oldAccounts {
+				if err := s.accountRepo.UpdateStatus(ctx, oldAcct.ID, user.ID, domain.AccountStatusReplaced, nil); err != nil {
+					s.logger.Error("failed to soft-delete old account",
+						"account_id", oldAcct.ID,
+						"error", err,
+					)
+				}
+			}
+		}
+	}
+
+	// Step 10: Convert Plaid accounts to domain accounts with user_account_id
 	accounts := make([]domain.Account, len(plaidAccounts))
 	for i, plaidAccount := range plaidAccounts {
 		account := convertPlaidAccount(plaidAccount, linkedItem.ID, user.ID)
+
+		// Issue #171: Match or create user_account for stable reference across re-links
+		if s.userAccountSvc != nil {
+			accountType := string(plaidAccount.GetType())
+			accountSubtype := ""
+			if subtype, ok := plaidAccount.GetSubtypeOk(); ok && subtype != nil {
+				accountSubtype = string(*subtype)
+			}
+
+			userAccount, err := s.userAccountSvc.MatchOrCreate(
+				ctx,
+				user.ID,
+				institutionID,
+				account.Mask,
+				plaidAccount.GetName(),
+				accountType,
+				accountSubtype,
+			)
+			if err != nil {
+				s.logger.Error("failed to match/create user_account",
+					"plaid_account_id", plaidAccount.GetAccountId(),
+					"error", err,
+				)
+				// Continue without user_account_id - transactions can still be synced
+			} else {
+				account.UserAccountID = &userAccount.ID
+			}
+		}
+
 		accounts[i] = account
 	}
 
-	// Create accounts in batch
+	// Step 11: Create accounts in batch
 	if err := s.accountRepo.CreateBatch(ctx, accounts); err != nil {
 		// TODO: Consider rollback mechanism if account creation fails
 		// For now, the linked_item → accounts CASCADE DELETE will clean up on item deletion

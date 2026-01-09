@@ -123,6 +123,14 @@ type TransactionRepository interface {
 	// Uses the same matching logic as GetSpentSumForBudgetCategory.
 	// Returns transactions ordered by date DESC.
 	GetTransactionsForBudgetCategory(ctx context.Context, userID string, category []string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time, limit, offset int) (transactions []domain.Transaction, totalCount int, totalAmount float64, err error)
+
+	// Issue #171: Re-Link Handling
+
+	// GetByUserAccountID retrieves all transactions for a specific user_account.
+	// This provides stable queries across re-links since user_account_id survives
+	// when a user re-links a bank (which assigns new item_id and account_id values).
+	// Returns transactions from all associated accounts (current and replaced) ordered by date DESC.
+	GetByUserAccountID(ctx context.Context, userID string, userAccountID string) ([]domain.Transaction, error)
 }
 
 // transactionRepository implements TransactionRepository using PostgreSQL
@@ -192,15 +200,22 @@ func (r *transactionRepository) Create(ctx context.Context, transaction *domain.
 }
 
 // CreateBatch creates multiple transactions in a single database operation
-// Uses a multi-row INSERT for performance
+// Uses a multi-row INSERT for performance.
+//
+// Issue #171: Changed from DO NOTHING to DO UPDATE for re-link handling.
+// When a duplicate transaction is encountered (same source, external_transaction_id, user_id),
+// we update the FKs (account_id, linked_item_id, user_account_id) and Plaid fields while
+// PRESERVING user enrichments (user_notes, category_override, tags, tags_source).
 func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []domain.Transaction) error {
 	if len(transactions) == 0 {
 		return nil
 	}
 
 	// Build multi-row INSERT query
+	// Issue #171: Added user_account_id field (20 fields now instead of 19)
+	const numFields = 20
 	valueStrings := make([]string, 0, len(transactions))
-	valueArgs := make([]interface{}, 0, len(transactions)*19)
+	valueArgs := make([]interface{}, 0, len(transactions)*numFields)
 
 	for i, tx := range transactions {
 		// Generate UUID if not set
@@ -214,18 +229,19 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 		transactions[i].UpdatedAt = now
 
 		// Create placeholders for this row
-		placeholders := make([]string, 19)
-		for j := 0; j < 19; j++ {
-			placeholders[j] = fmt.Sprintf("$%d", i*19+j+1)
+		placeholders := make([]string, numFields)
+		for j := 0; j < numFields; j++ {
+			placeholders[j] = fmt.Sprintf("$%d", i*numFields+j+1)
 		}
 		valueStrings = append(valueStrings, fmt.Sprintf("(%s)", strings.Join(placeholders, ", ")))
 
-		// Add values
+		// Add values (including user_account_id)
 		valueArgs = append(valueArgs,
 			transactions[i].ID,
 			transactions[i].UserID,
 			transactions[i].AccountID,
 			transactions[i].LinkedItemID,
+			transactions[i].UserAccountID, // Issue #171: Stable reference for re-links
 			string(transactions[i].Source),
 			transactions[i].ExternalTransactionID,
 			transactions[i].ExternalMetadata,
@@ -244,15 +260,37 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 		)
 	}
 
+	// Issue #171: Changed from DO NOTHING to DO UPDATE for re-link handling.
+	// On conflict (duplicate transaction), we:
+	// - UPDATE: FKs (account_id, linked_item_id, user_account_id) - changes on re-link
+	// - UPDATE: Plaid fields (amount, date, name, merchant_name, pending, etc.) - may change
+	// - PRESERVE: User enrichments (user_notes, category_override, tags, tags_source)
 	query := fmt.Sprintf(`
 		INSERT INTO transactions
-		(id, user_id, account_id, linked_item_id, source, external_transaction_id,
-		 external_metadata, amount, date, authorized_date, name, merchant_name,
+		(id, user_id, account_id, linked_item_id, user_account_id,
+		 source, external_transaction_id, external_metadata,
+		 amount, date, authorized_date, name, merchant_name,
 		 category, personal_finance_category, payment_channel, pending, user_notes,
 		 created_at, updated_at)
 		VALUES %s
-		ON CONFLICT (source, external_transaction_id, user_id) DO NOTHING
+		ON CONFLICT (source, external_transaction_id, user_id) DO UPDATE SET
+			account_id = EXCLUDED.account_id,
+			linked_item_id = EXCLUDED.linked_item_id,
+			user_account_id = EXCLUDED.user_account_id,
+			external_metadata = EXCLUDED.external_metadata,
+			amount = EXCLUDED.amount,
+			date = EXCLUDED.date,
+			authorized_date = EXCLUDED.authorized_date,
+			name = EXCLUDED.name,
+			merchant_name = EXCLUDED.merchant_name,
+			category = EXCLUDED.category,
+			personal_finance_category = EXCLUDED.personal_finance_category,
+			payment_channel = EXCLUDED.payment_channel,
+			pending = EXCLUDED.pending,
+			updated_at = NOW()
 	`, strings.Join(valueStrings, ", "))
+	// Note: user_notes, category_override, tags, tags_source are NOT in the SET clause
+	// so they will be PRESERVED on conflict
 
 	_, err := r.db.Exec(ctx, query, valueArgs...)
 	if err != nil {
@@ -1234,4 +1272,99 @@ func (r *transactionRepository) GetTransactionsForBudgetCategory(ctx context.Con
 	}
 
 	return transactions, totalCount, totalAmount, nil
+}
+
+// GetByUserAccountID retrieves all transactions for a specific user_account.
+// Issue #171: Provides stable queries across re-links since user_account_id survives
+// when a user re-links a bank (which assigns new item_id and account_id values).
+func (r *transactionRepository) GetByUserAccountID(ctx context.Context, userID string, userAccountID string) ([]domain.Transaction, error) {
+	query := `
+		SELECT id, user_id, account_id, linked_item_id, user_account_id,
+			   source, external_transaction_id, external_metadata,
+			   amount, date, authorized_date, name, merchant_name,
+			   category, personal_finance_category, payment_channel, pending, user_notes,
+			   created_at, updated_at, tags, tags_source,
+			   category_override, category_source, category_override_date, original_category
+		FROM transactions
+		WHERE user_id = $1 AND user_account_id = $2
+		ORDER BY date DESC, created_at DESC
+	`
+
+	rows, err := r.db.Query(ctx, query, userID, userAccountID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query transactions by user_account_id: %w", err)
+	}
+	defer rows.Close()
+
+	var transactions []domain.Transaction
+
+	for rows.Next() {
+		var tx domain.Transaction
+		var source string
+		var tagsJSON []byte
+		var tagsSourceJSON []byte
+		var categorySource sql.NullString
+
+		err := rows.Scan(
+			&tx.ID,
+			&tx.UserID,
+			&tx.AccountID,
+			&tx.LinkedItemID,
+			&tx.UserAccountID,
+			&source,
+			&tx.ExternalTransactionID,
+			&tx.ExternalMetadata,
+			&tx.Amount,
+			&tx.Date,
+			&tx.AuthorizedDate,
+			&tx.Name,
+			&tx.MerchantName,
+			&tx.Category,
+			&tx.PersonalFinanceCategory,
+			&tx.PaymentChannel,
+			&tx.Pending,
+			&tx.UserNotes,
+			&tx.CreatedAt,
+			&tx.UpdatedAt,
+			&tagsJSON,
+			&tagsSourceJSON,
+			&tx.CategoryOverride,
+			&categorySource,
+			&tx.CategoryOverrideDate,
+			&tx.OriginalCategory,
+		)
+
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan transaction: %w", err)
+		}
+
+		tx.Source = domain.TransactionSource(source)
+
+		// Parse tags from JSONB
+		if tagsJSON != nil {
+			if err := json.Unmarshal(tagsJSON, &tx.Tags); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal tags: %w", err)
+			}
+		}
+
+		// Parse tags_source from JSONB
+		if tagsSourceJSON != nil {
+			if err := json.Unmarshal(tagsSourceJSON, &tx.TagsSource); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal tags_source: %w", err)
+			}
+		}
+
+		// Set category source
+		if categorySource.Valid {
+			tx.CategorySourceField = domain.CategorySource(categorySource.String)
+		}
+
+		transactions = append(transactions, tx)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating transaction rows: %w", err)
+	}
+
+	return transactions, nil
 }

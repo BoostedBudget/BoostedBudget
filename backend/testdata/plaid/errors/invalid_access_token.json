@@ -1,0 +1,9 @@
+{
+  "error_type": "INVALID_INPUT",
+  "error_code": "INVALID_ACCESS_TOKEN",
+  "error_message": "The access_token provided is not valid or has expired.",
+  "display_message": "Your bank connection has expired. Please reconnect your account.",
+  "request_id": "req_test_invalid_token",
+  "causes": [],
+  "status": 400
+}
