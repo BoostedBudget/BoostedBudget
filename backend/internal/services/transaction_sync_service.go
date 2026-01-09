@@ -332,19 +332,12 @@ func (s *transactionSyncService) SyncTransactions(
 	if err := s.createBalanceSnapshots(ctx, linkedItem, accessToken); err != nil {
 		log.Printf("Warning: Failed to create balance snapshots for item %s: %v", linkedItem.ID, err)
 		// Don't fail the entire sync - snapshots are non-critical
-		// Will retry on next webhook
 	}
 
-	// ========================================================================
-	// Issue #494: Sync Budget Amounts
-	// Recalculate budget income and category spent amounts after transactions change
-	// ========================================================================
-
-	// Sync budget amounts for the user (non-blocking)
+	// Issue #494: Sync budget amounts (non-blocking)
 	if s.budgetSyncService != nil {
 		if err := s.budgetSyncService.RecalculateBudgetAmounts(ctx, linkedItem.UserID); err != nil {
 			log.Printf("Warning: Failed to sync budget amounts for user %s: %v", linkedItem.UserID, err)
-			// Don't fail the entire sync - budget sync is non-critical
 		}
 	}
 
@@ -795,9 +788,7 @@ func (s *transactionSyncService) createBalanceSnapshots(
 	// Step 3: Create balance snapshots for each account
 	now := time.Now().UTC()
 	deduplicationWindow := 5 * time.Minute
-	successCount := 0
-	skippedCount := 0
-	dedupedCount := 0
+	successCount, skippedCount, dedupedCount := 0, 0, 0
 
 	for _, plaidAccount := range plaidAccounts {
 		plaidAccountID := plaidAccount.GetAccountId()
@@ -814,7 +805,6 @@ func (s *transactionSyncService) createBalanceSnapshots(
 		latestSnapshot, err := s.balanceSnapshotRepo.GetLatestByAccountID(ctx, internalAccount.ID)
 		if err != nil {
 			log.Printf("Warning: Failed to check latest snapshot for account %s: %v", plaidAccountID, err)
-			// Continue anyway - create snapshot even if dedup check fails
 		} else if latestSnapshot != nil && now.Sub(latestSnapshot.SnapshotAt) < deduplicationWindow {
 			log.Printf("Skipping snapshot for account %s: recent snapshot exists (%v ago)",
 				plaidAccountID, now.Sub(latestSnapshot.SnapshotAt).Round(time.Second))
@@ -830,37 +820,9 @@ func (s *transactionSyncService) createBalanceSnapshots(
 			continue
 		}
 
-		// Create balance snapshot
-		// Issue #171: Include UserAccountID for stable reference across Plaid re-links
-		snapshot := &domain.BalanceSnapshot{
-			AccountID:     internalAccount.ID,
-			UserAccountID: internalAccount.UserAccountID,
-			UserID:        linkedItem.UserID,
-			SnapshotAt:    now,
-			Source:        domain.SnapshotSourcePlaidWebhook,
-			CurrencyCode:  "USD", // Default to USD
-		}
-
-		// Set current balance if available
-		if current, ok := balances.GetCurrentOk(); ok && current != nil {
-			currentFloat := float64(*current)
-			snapshot.CurrentBalance = &currentFloat
-		}
-
-		// Set available balance if available
-		if available, ok := balances.GetAvailableOk(); ok && available != nil {
-			availableFloat := float64(*available)
-			snapshot.AvailableBalance = &availableFloat
-		}
-
-		// Set currency code if available
-		if currencyCode, ok := balances.GetIsoCurrencyCodeOk(); ok && currencyCode != nil {
-			snapshot.CurrencyCode = *currencyCode
-		}
-
-		// Validate snapshot has at least one balance
-		if snapshot.CurrentBalance == nil && snapshot.AvailableBalance == nil {
-			log.Printf("Warning: Account %s has neither current nor available balance, skipping snapshot", plaidAccountID)
+		// Create and validate balance snapshot
+		snapshot := s.createBalanceSnapshot(internalAccount, linkedItem, balances, now, plaidAccountID)
+		if snapshot == nil {
 			skippedCount++
 			continue
 		}
@@ -878,5 +840,49 @@ func (s *transactionSyncService) createBalanceSnapshots(
 	log.Printf("Created %d balance snapshots for item %s (skipped %d, deduped %d)",
 		successCount, linkedItem.ID, skippedCount, dedupedCount)
 	return nil
+}
+
+// createBalanceSnapshot builds a BalanceSnapshot from Plaid balance data.
+// Returns nil if the snapshot is invalid (missing both current and available balance).
+func (s *transactionSyncService) createBalanceSnapshot(
+	account domain.Account,
+	linkedItem *domain.LinkedItem,
+	balances *plaid.AccountBalance,
+	timestamp time.Time,
+	plaidAccountID string,
+) *domain.BalanceSnapshot {
+	snapshot := &domain.BalanceSnapshot{
+		AccountID:     account.ID,
+		UserAccountID: account.UserAccountID,
+		UserID:        linkedItem.UserID,
+		SnapshotAt:    timestamp,
+		Source:        domain.SnapshotSourcePlaidWebhook,
+		CurrencyCode:  "USD",
+	}
+
+	// Set current balance if available
+	if current, ok := balances.GetCurrentOk(); ok && current != nil {
+		currentFloat := float64(*current)
+		snapshot.CurrentBalance = &currentFloat
+	}
+
+	// Set available balance if available
+	if available, ok := balances.GetAvailableOk(); ok && available != nil {
+		availableFloat := float64(*available)
+		snapshot.AvailableBalance = &availableFloat
+	}
+
+	// Set currency code if available
+	if currencyCode, ok := balances.GetIsoCurrencyCodeOk(); ok && currencyCode != nil {
+		snapshot.CurrencyCode = *currencyCode
+	}
+
+	// Validate snapshot has at least one balance
+	if snapshot.CurrentBalance == nil && snapshot.AvailableBalance == nil {
+		log.Printf("Warning: Account %s has neither current nor available balance, skipping snapshot", plaidAccountID)
+		return nil
+	}
+
+	return snapshot
 }
 
