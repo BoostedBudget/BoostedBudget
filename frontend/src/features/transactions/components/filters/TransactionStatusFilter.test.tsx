@@ -1,9 +1,4 @@
-/**
- * TransactionStatusFilter Component Tests
- * Issue #529: Transaction page filtering
- */
-
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, mock } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TransactionStatusFilter } from './TransactionStatusFilter'
@@ -29,7 +24,7 @@ describe('TransactionStatusFilter', () => {
 
   it('should call onChange when button is clicked', async () => {
     const user = userEvent.setup()
-    const onChange = vi.fn()
+    const onChange = mock(() => {})
 
     render(<TransactionStatusFilter value="all" onChange={onChange} />)
 
@@ -38,26 +33,21 @@ describe('TransactionStatusFilter', () => {
     expect(onChange).toHaveBeenCalledWith('posted')
   })
 
-  it('should show pending count badge', () => {
-    render(
+  it('should show pending count badge only when count is greater than 0', () => {
+    const { rerender } = render(
       <TransactionStatusFilter value="all" onChange={() => {}} pendingCount={5} />
     )
 
     expect(screen.getByText('5')).toBeInTheDocument()
-  })
 
-  it('should not show pending count badge when count is 0', () => {
-    render(
+    rerender(
       <TransactionStatusFilter value="all" onChange={() => {}} pendingCount={0} />
     )
 
     expect(screen.queryByText('0')).not.toBeInTheDocument()
-  })
 
-  it('should not show pending count badge when pendingCount is undefined', () => {
-    render(<TransactionStatusFilter value="all" onChange={() => {}} />)
+    rerender(<TransactionStatusFilter value="all" onChange={() => {}} />)
 
-    // Just the Pending label, no count badge
     const pendingButton = screen.getByRole('button', { name: 'Pending' })
     expect(pendingButton).toBeInTheDocument()
   })

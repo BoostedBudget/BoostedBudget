@@ -4,10 +4,10 @@
  * TDD RED: These tests are written first.
  */
 
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
-import { SavingsGoalCard } from './SavingsGoalCard';
-import type { SavingsGoal } from '../types';
+import { describe, it, expect, mock } from 'bun:test'
+import { render, screen, fireEvent } from '@testing-library/react'
+import { SavingsGoalCard } from './SavingsGoalCard'
+import type { SavingsGoal } from '../types'
 
 describe('SavingsGoalCard', () => {
   const mockGoal: SavingsGoal = {
@@ -114,7 +114,7 @@ describe('SavingsGoalCard', () => {
 
   describe('Interactions', () => {
     it('should call onEdit when edit button is clicked', () => {
-      const onEdit = vi.fn();
+      const onEdit = mock(() => {});
       render(<SavingsGoalCard goal={mockGoal} onEdit={onEdit} />);
 
       const editButton = screen.getByRole('button', { name: /edit/i });
@@ -124,7 +124,7 @@ describe('SavingsGoalCard', () => {
     });
 
     it('should call onDelete when delete button is clicked', () => {
-      const onDelete = vi.fn();
+      const onDelete = mock(() => {});
       render(<SavingsGoalCard goal={mockGoal} onDelete={onDelete} />);
 
       const deleteButton = screen.getByRole('button', { name: /delete/i });
@@ -141,7 +141,7 @@ describe('SavingsGoalCard', () => {
     });
 
     it('should call onAddFunds when add funds button is clicked', () => {
-      const onAddFunds = vi.fn();
+      const onAddFunds = mock(() => {});
       render(<SavingsGoalCard goal={mockGoal} onAddFunds={onAddFunds} />);
 
       const addButton = screen.getByRole('button', { name: /add funds/i });

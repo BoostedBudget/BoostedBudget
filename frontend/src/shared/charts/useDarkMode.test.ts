@@ -3,30 +3,31 @@
  * Issue #445: Recharts to Plotly Migration
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
-import { useDarkMode } from './useDarkMode';
+import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
+import { renderHook, act } from '@testing-library/react'
+import { useDarkMode } from './useDarkMode'
 
 describe('useDarkMode', () => {
   let matchMediaMock: {
-    matches: boolean;
-    addEventListener: ReturnType<typeof vi.fn>;
-    removeEventListener: ReturnType<typeof vi.fn>;
-  };
+    matches: boolean
+    addEventListener: ReturnType<typeof mock>
+    removeEventListener: ReturnType<typeof mock>
+  }
+  const originalMatchMedia = window.matchMedia
 
   beforeEach(() => {
     matchMediaMock = {
       matches: false,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    };
-
-    vi.stubGlobal('matchMedia', vi.fn(() => matchMediaMock));
-  });
+      addEventListener: mock(() => {}),
+      removeEventListener: mock(() => {}),
+    }
+    // @ts-expect-error - mocking matchMedia
+    window.matchMedia = mock(() => matchMediaMock)
+  })
 
   afterEach(() => {
-    vi.unstubAllGlobals();
-  });
+    window.matchMedia = originalMatchMedia
+  })
 
   it('returns false when system prefers light mode', () => {
     matchMediaMock.matches = false;

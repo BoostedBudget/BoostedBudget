@@ -1,25 +1,17 @@
-/**
- * Widget Wrapper Tests
- *
- * Tests the WidgetWrapper component including header rendering,
- * edit mode controls, and remove button functionality.
- *
- * Issue #354: Customizable Dashboard Widget System
- */
-
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
-import { WidgetWrapper } from './WidgetWrapper'
-import * as registry from './registry'
 import type { WidgetDefinition } from '../types'
 
-// Mock the registry
-vi.mock('./registry', () => ({
-  getWidget: vi.fn(),
+const mockGetWidget = mock(() => undefined as WidgetDefinition | undefined)
+
+mock.module('./registry', () => ({
+  getWidget: mockGetWidget,
 }))
 
+import { WidgetWrapper } from './WidgetWrapper'
+
 describe('WidgetWrapper', () => {
-  const mockOnRemove = vi.fn()
+  const mockOnRemove = mock(() => {})
 
   const mockDefinition: WidgetDefinition = {
     type: 'balance-overview',
@@ -33,8 +25,9 @@ describe('WidgetWrapper', () => {
   }
 
   beforeEach(() => {
-    vi.clearAllMocks()
-    vi.mocked(registry.getWidget).mockReturnValue(mockDefinition)
+    mockGetWidget.mockClear()
+    mockOnRemove.mockClear()
+    mockGetWidget.mockReturnValue(mockDefinition)
   })
 
   describe('Header', () => {
@@ -53,8 +46,8 @@ describe('WidgetWrapper', () => {
       expect(screen.getByText('Balance Overview')).toBeInTheDocument()
     })
 
-    it('should show widget type when definition not found', () => {
-      vi.mocked(registry.getWidget).mockReturnValue(undefined)
+    it('should show widget type as fallback when definition not found', () => {
+      mockGetWidget.mockReturnValue(undefined)
 
       render(
         <WidgetWrapper
@@ -67,12 +60,8 @@ describe('WidgetWrapper', () => {
         </WidgetWrapper>
       )
 
-      // When registry returns undefined, component shows type as fallback
       expect(screen.getByText('balance-overview')).toBeInTheDocument()
     })
-
-// Note: Drag handle SVG was removed in Issue #443 as it was redundant
-    // GridStack handles drag-and-drop via handleClass, no visual indicator needed
   })
 
   describe('Remove Button', () => {
@@ -106,8 +95,7 @@ describe('WidgetWrapper', () => {
       expect(screen.queryByLabelText('Remove widget')).not.toBeInTheDocument()
     })
 
-    it('should open confirmation dialog when remove button clicked', () => {
-      // Issue #412: Changed behavior - now shows confirmation dialog instead of direct removal
+    it('should open confirmation dialog without calling onRemove', () => {
       render(
         <WidgetWrapper
           widgetId="widget-1"
@@ -121,13 +109,12 @@ describe('WidgetWrapper', () => {
 
       fireEvent.click(screen.getByLabelText('Remove widget'))
 
-      // Dialog should open, onRemove not called yet
       expect(screen.getByRole('dialog')).toBeInTheDocument()
       expect(mockOnRemove).not.toHaveBeenCalled()
     })
 
     it('should stop event propagation on remove click', () => {
-      const parentClickHandler = vi.fn()
+      const parentClickHandler = mock(() => {})
 
       render(
         <div onClick={parentClickHandler}>
@@ -166,8 +153,7 @@ describe('WidgetWrapper', () => {
   })
 
   describe('Remove Confirmation Dialog', () => {
-    it('should show confirmation dialog when remove button clicked', async () => {
-      // Issue #412: Delete confirmation before removing widget
+    it('should show confirmation dialog with title and message', () => {
       render(
         <WidgetWrapper
           widgetId="widget-1"
@@ -181,28 +167,8 @@ describe('WidgetWrapper', () => {
 
       fireEvent.click(screen.getByLabelText('Remove widget'))
 
-      // Dialog should appear with title and confirmation message
       expect(screen.getByText('Remove Widget')).toBeInTheDocument()
       expect(screen.getByText(/Are you sure you want to remove/)).toBeInTheDocument()
-    })
-
-    it('should not call onRemove immediately when remove button clicked', () => {
-      render(
-        <WidgetWrapper
-          widgetId="widget-1"
-          widgetType="balance-overview"
-          isEditing={true}
-          onRemove={mockOnRemove}
-        >
-          <div>Content</div>
-        </WidgetWrapper>
-      )
-
-      // Click remove button
-      fireEvent.click(screen.getByLabelText('Remove widget'))
-
-      // onRemove should NOT be called yet - dialog should show first
-      expect(mockOnRemove).not.toHaveBeenCalled()
     })
 
     it('should call onRemove only after confirming in dialog', () => {
@@ -284,9 +250,7 @@ describe('WidgetWrapper', () => {
   })
 
   describe('Styling', () => {
-    it('should have correct container classes with h-full (GridStack provides positioning)', () => {
-      // Issue #441: Changed from absolute inset-0 back to h-full
-      // GridStack's .grid-stack-item-content provides the absolute positioning
+    it('should have correct container classes', () => {
       const { container } = render(
         <WidgetWrapper
           widgetId="widget-1"
@@ -299,18 +263,11 @@ describe('WidgetWrapper', () => {
       )
 
       const wrapper = container.firstChild as HTMLElement
-      // Issue #441: h-full works now because GridStack parent has explicit height
-      expect(wrapper).toHaveClass('h-full')
-      expect(wrapper).not.toHaveClass('absolute')
-      expect(wrapper).not.toHaveClass('inset-0')
-      expect(wrapper).toHaveClass('bg-white')
-      expect(wrapper).toHaveClass('rounded-lg')
-      expect(wrapper).toHaveClass('shadow')
+      expect(wrapper).toHaveClass('h-full', 'bg-white', 'rounded-lg', 'shadow')
+      expect(wrapper).not.toHaveClass('absolute', 'inset-0')
     })
 
-    it('should have min-h-0 on content container to enable flex shrinking', () => {
-      // Issue #410: Content container needs min-h-0 to allow flex item to shrink
-      // below its content size, enabling overflow-auto to work correctly
+    it('should have min-h-0 and overflow-auto on content container', () => {
       const { container } = render(
         <WidgetWrapper
           widgetId="widget-1"
@@ -322,30 +279,12 @@ describe('WidgetWrapper', () => {
         </WidgetWrapper>
       )
 
-      // Find the content container (the one with flex-1 and overflow-auto)
       const contentContainer = container.querySelector('.flex-1.overflow-auto')
       expect(contentContainer).toBeInTheDocument()
       expect(contentContainer).toHaveClass('min-h-0')
     })
 
-    it('should have overflow-auto on content container for scrollable content', () => {
-      const { container } = render(
-        <WidgetWrapper
-          widgetId="widget-1"
-          widgetType="balance-overview"
-          isEditing={false}
-          onRemove={mockOnRemove}
-        >
-          <div>Content</div>
-        </WidgetWrapper>
-      )
-
-      const contentContainer = container.querySelector('.flex-1')
-      expect(contentContainer).toBeInTheDocument()
-      expect(contentContainer).toHaveClass('overflow-auto')
-    })
-
-    it('should have dark mode classes', () => {
+    it('should have dark mode and border classes', () => {
       const { container } = render(
         <WidgetWrapper
           widgetId="widget-1"
@@ -358,26 +297,12 @@ describe('WidgetWrapper', () => {
       )
 
       const wrapper = container.firstChild as HTMLElement
-      expect(wrapper).toHaveClass('dark:bg-gray-800')
-    })
-
-    it('should have border classes for clear widget outline', () => {
-      // Issue #412: Widgets should have visible borders for clear visual boundaries
-      const { container } = render(
-        <WidgetWrapper
-          widgetId="widget-1"
-          widgetType="balance-overview"
-          isEditing={false}
-          onRemove={mockOnRemove}
-        >
-          <div>Content</div>
-        </WidgetWrapper>
+      expect(wrapper).toHaveClass(
+        'dark:bg-gray-800',
+        'border',
+        'border-gray-200',
+        'dark:border-gray-700'
       )
-
-      const wrapper = container.firstChild as HTMLElement
-      expect(wrapper).toHaveClass('border')
-      expect(wrapper).toHaveClass('border-gray-200')
-      expect(wrapper).toHaveClass('dark:border-gray-700')
     })
   })
 
@@ -394,21 +319,11 @@ describe('WidgetWrapper', () => {
         </WidgetWrapper>
       )
 
-      expect(registry.getWidget).toHaveBeenCalledWith('cash-flow-summary')
+      expect(mockGetWidget).toHaveBeenCalledWith('cash-flow-summary')
     })
   })
 
-  /**
-   * Edit Mode Visual Outline Tests - Issue #439, #443
-   *
-   * In edit mode, widgets should display a visible outline
-   * to clearly indicate draggable/droppable bounds.
-   *
-   * Issue #443: Changed from ring (box-shadow) to outline because
-   * ring was being clipped by parent overflow:hidden in grid libraries.
-   * Outline is not affected by overflow and renders correctly.
-   */
-  describe('Edit Mode Visual Outline - Issue #439, #443', () => {
+  describe('Edit Mode Visual Outline', () => {
     it('should show outline when in edit mode', () => {
       const { container } = render(
         <WidgetWrapper
@@ -422,13 +337,10 @@ describe('WidgetWrapper', () => {
       )
 
       const wrapper = container.firstChild as HTMLElement
-      expect(wrapper).toHaveClass('outline')
-      expect(wrapper).toHaveClass('outline-2')
-      expect(wrapper).toHaveClass('outline-blue-400')
-      expect(wrapper).toHaveClass('-outline-offset-2')
+      expect(wrapper).toHaveClass('outline', 'outline-2', 'outline-blue-400', '-outline-offset-2')
     })
 
-    it('should NOT show outline when not editing', () => {
+    it('should not show outline when not editing', () => {
       const { container } = render(
         <WidgetWrapper
           widgetId="widget-1"
@@ -441,12 +353,10 @@ describe('WidgetWrapper', () => {
       )
 
       const wrapper = container.firstChild as HTMLElement
-      expect(wrapper).not.toHaveClass('outline')
-      expect(wrapper).not.toHaveClass('outline-2')
-      expect(wrapper).not.toHaveClass('outline-blue-400')
+      expect(wrapper).not.toHaveClass('outline', 'outline-2', 'outline-blue-400')
     })
 
-    it('should maintain other styling classes in edit mode', () => {
+    it('should maintain other styling classes when editing', () => {
       const { container } = render(
         <WidgetWrapper
           widgetId="widget-1"
@@ -459,13 +369,13 @@ describe('WidgetWrapper', () => {
       )
 
       const wrapper = container.firstChild as HTMLElement
-      // Outline should be added without removing other classes
-      // Issue #441: Using h-full instead of absolute/inset-0 (GridStack provides positioning)
-      expect(wrapper).toHaveClass('h-full')
-      expect(wrapper).toHaveClass('bg-white')
-      expect(wrapper).toHaveClass('rounded-lg')
-      expect(wrapper).toHaveClass('outline')
-      expect(wrapper).toHaveClass('outline-blue-400')
+      expect(wrapper).toHaveClass(
+        'h-full',
+        'bg-white',
+        'rounded-lg',
+        'outline',
+        'outline-blue-400'
+      )
     })
   })
 })
