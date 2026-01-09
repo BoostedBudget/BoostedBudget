@@ -67,6 +67,12 @@ export default mergeConfig(
         // Batch 8 - Dashboard tests (2026-01-08)
         'src/features/dashboard/components/AccountTypeFilter.test.tsx',
         'src/features/dashboard/hooks/useDashboardOnboarding.test.ts',
+        // Batch 9 - Router tests (2026-01-08)
+        'src/components/layout/MobileNav.test.tsx',
+        'src/components/layout/Navigation.test.tsx',
+        'src/components/layout/UserDropdown.test.tsx',
+        'src/features/budgets/components/BudgetCard.test.tsx',
+        'src/features/profile/components/SubscriptionCard.test.tsx',
       ],
       coverage: {
         provider: 'v8',
