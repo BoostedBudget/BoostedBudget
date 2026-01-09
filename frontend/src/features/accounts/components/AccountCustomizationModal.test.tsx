@@ -308,8 +308,9 @@ describe('AccountCustomizationModal', () => {
       // Save
       await user.click(screen.getByRole('button', { name: 'Save Changes' }))
 
+      // Issue #171: onSave now receives full account object for user_account_id resolution
       await waitFor(() => {
-        expect(mockOnSave).toHaveBeenCalledWith(mockAccount.id, expect.objectContaining({
+        expect(mockOnSave).toHaveBeenCalledWith(mockAccount, expect.objectContaining({
           nickname: 'New Name',
         }))
       })

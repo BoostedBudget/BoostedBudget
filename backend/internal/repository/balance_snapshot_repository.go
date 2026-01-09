@@ -55,6 +55,7 @@ func NewBalanceSnapshotRepository(db DB) BalanceSnapshotRepository {
 }
 
 // Create inserts a new balance snapshot
+// Issue #171: Includes user_account_id for stable reference across Plaid re-links
 func (r *balanceSnapshotRepository) Create(ctx context.Context, snapshot *domain.BalanceSnapshot) error {
 	// Generate UUID if not already set
 	if snapshot.ID == "" {
@@ -67,13 +68,14 @@ func (r *balanceSnapshotRepository) Create(ctx context.Context, snapshot *domain
 
 	query := `
 		INSERT INTO balance_snapshots
-		(id, account_id, user_id, current_balance, available_balance, currency_code, snapshot_at, source, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		(id, account_id, user_account_id, user_id, current_balance, available_balance, currency_code, snapshot_at, source, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`
 
 	_, err := r.db.Exec(ctx, query,
 		snapshot.ID,
 		snapshot.AccountID,
+		snapshot.UserAccountID,
 		snapshot.UserID,
 		snapshot.CurrentBalance,
 		snapshot.AvailableBalance,
@@ -89,7 +91,7 @@ func (r *balanceSnapshotRepository) Create(ctx context.Context, snapshot *domain
 // GetByUserIDAndDateRange retrieves all balance snapshots for a user within a date range
 func (r *balanceSnapshotRepository) GetByUserIDAndDateRange(ctx context.Context, userID string, startDate, endDate time.Time) ([]domain.BalanceSnapshot, error) {
 	query := `
-		SELECT id, account_id, user_id, current_balance, available_balance,
+		SELECT id, account_id, user_account_id, user_id, current_balance, available_balance,
 		       currency_code, snapshot_at, source, created_at
 		FROM balance_snapshots
 		WHERE user_id = $1
@@ -110,6 +112,7 @@ func (r *balanceSnapshotRepository) GetByUserIDAndDateRange(ctx context.Context,
 		err := rows.Scan(
 			&s.ID,
 			&s.AccountID,
+			&s.UserAccountID,
 			&s.UserID,
 			&s.CurrentBalance,
 			&s.AvailableBalance,
@@ -194,7 +197,7 @@ func (r *balanceSnapshotRepository) GetAggregatedHistory(ctx context.Context, us
 func (r *balanceSnapshotRepository) GetLatestByUserID(ctx context.Context, userID string) ([]domain.BalanceSnapshot, error) {
 	query := `
 		SELECT DISTINCT ON (account_id)
-		       id, account_id, user_id, current_balance, available_balance,
+		       id, account_id, user_account_id, user_id, current_balance, available_balance,
 		       currency_code, snapshot_at, source, created_at
 		FROM balance_snapshots
 		WHERE user_id = $1
@@ -213,6 +216,7 @@ func (r *balanceSnapshotRepository) GetLatestByUserID(ctx context.Context, userI
 		err := rows.Scan(
 			&s.ID,
 			&s.AccountID,
+			&s.UserAccountID,
 			&s.UserID,
 			&s.CurrentBalance,
 			&s.AvailableBalance,
@@ -237,7 +241,7 @@ func (r *balanceSnapshotRepository) GetLatestByUserID(ctx context.Context, userI
 // GetLatestByAccountID retrieves the most recent balance snapshot for a specific account
 func (r *balanceSnapshotRepository) GetLatestByAccountID(ctx context.Context, accountID string) (*domain.BalanceSnapshot, error) {
 	query := `
-		SELECT id, account_id, user_id, current_balance, available_balance,
+		SELECT id, account_id, user_account_id, user_id, current_balance, available_balance,
 		       currency_code, snapshot_at, source, created_at
 		FROM balance_snapshots
 		WHERE account_id = $1
@@ -249,6 +253,7 @@ func (r *balanceSnapshotRepository) GetLatestByAccountID(ctx context.Context, ac
 	err := r.db.QueryRow(ctx, query, accountID).Scan(
 		&s.ID,
 		&s.AccountID,
+		&s.UserAccountID,
 		&s.UserID,
 		&s.CurrentBalance,
 		&s.AvailableBalance,
