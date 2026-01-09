@@ -271,17 +271,14 @@ export function AccountsPage() {
     })
   }, [accountsData?.accounts, showHidden, sortColumn, sortDirection, institutionFilter, typeFilter, balanceRange])
 
-  // Count of hidden accounts (excluding replaced accounts)
-  const hiddenCount = useMemo(() => {
+  // Account counts (excluding replaced accounts)
+  const { hiddenCount, activeAccountsCount } = useMemo(() => {
     const accs = accountsData?.accounts ?? []
-    // Issue #171: Exclude replaced accounts from hidden count
-    return accs.filter(acc => acc.is_hidden && acc.status !== 'replaced').length
-  }, [accountsData?.accounts])
-
-  // Issue #171: Active accounts count (excluding replaced)
-  const activeAccountsCount = useMemo(() => {
-    const accs = accountsData?.accounts ?? []
-    return accs.filter(acc => acc.status !== 'replaced').length
+    const activeAccounts = accs.filter(acc => acc.status !== 'replaced')
+    return {
+      hiddenCount: activeAccounts.filter(acc => acc.is_hidden).length,
+      activeAccountsCount: activeAccounts.length,
+    }
   }, [accountsData?.accounts])
 
   // Calculate tier limits using hook

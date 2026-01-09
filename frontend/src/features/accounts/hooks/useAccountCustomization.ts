@@ -15,7 +15,6 @@ import {
 import { useUpdateUserAccount as useUpdateUserAccountMutation } from '@/api/generated/endpoints/user-accounts/user-accounts'
 import type {
   Account,
-  UpdateAccountRequest as GeneratedUpdateAccountRequest,
   UpdateUserAccountRequest as GeneratedUpdateUserAccountRequest,
 } from '@/api/generated/models'
 
@@ -97,23 +96,24 @@ export function useAccountCustomization(): UseAccountCustomizationResult {
     changes: PartialUpdateAccountRequest
   ): Promise<Account | null> {
     try {
+      // Normalize request data (convert undefined to null)
+      const requestData: GeneratedUpdateUserAccountRequest = {
+        nickname: changes.nickname ?? null,
+        custom_color: changes.custom_color ?? null,
+        custom_icon: changes.custom_icon ?? null,
+        custom_emoji: changes.custom_emoji ?? null,
+        display_order: changes.display_order ?? null,
+        is_hidden: changes.is_hidden ?? null,
+      }
+
       // If account has a stable UserAccount reference, use that endpoint
       // This ensures customizations survive Plaid re-links (Issue #171)
       if (account.user_account_id) {
-        const userAccountRequestData: GeneratedUpdateUserAccountRequest = {
-          nickname: changes.nickname ?? null,
-          custom_color: changes.custom_color ?? null,
-          custom_icon: changes.custom_icon ?? null,
-          custom_emoji: changes.custom_emoji ?? null,
-          display_order: changes.display_order ?? null,
-          is_hidden: changes.is_hidden ?? null,
-        }
         await updateUserAccountMutation.mutateAsync({
           id: account.user_account_id,
-          data: userAccountRequestData,
+          data: requestData,
         })
-        // Return updated account with new values applied locally
-        // (The actual Account model will be refreshed via query invalidation)
+        // Return updated account with changed values (others preserved)
         return {
           ...account,
           nickname: changes.nickname !== undefined ? (changes.nickname ?? undefined) : account.nickname,
@@ -126,17 +126,9 @@ export function useAccountCustomization(): UseAccountCustomizationResult {
       }
 
       // Fallback: Use legacy Account endpoint (for accounts without user_account_id)
-      const accountRequestData: GeneratedUpdateAccountRequest = {
-        nickname: changes.nickname ?? null,
-        custom_color: changes.custom_color ?? null,
-        custom_icon: changes.custom_icon ?? null,
-        custom_emoji: changes.custom_emoji ?? null,
-        display_order: changes.display_order ?? null,
-        is_hidden: changes.is_hidden ?? null,
-      }
       const response = await updateAccountMutation.mutateAsync({
         id: account.id,
-        data: accountRequestData,
+        data: requestData,
       })
       return response.account
     } catch {
@@ -169,18 +161,14 @@ export function useAccountCustomization(): UseAccountCustomizationResult {
     reorderMutation.reset()
   }
 
-  // Convert errors to Error instances - check both mutations
-  const updateError = updateAccountMutation.error || updateUserAccountMutation.error
-    ? ((updateAccountMutation.error || updateUserAccountMutation.error) instanceof Error
-        ? (updateAccountMutation.error || updateUserAccountMutation.error) as Error
-        : new Error('Failed to update account'))
-    : null
+  // Helper to normalize error to Error instance
+  const normalizeError = (err: unknown): Error | null => {
+    if (!err) return null
+    return err instanceof Error ? err : new Error('Operation failed')
+  }
 
-  const reorderError = reorderMutation.error
-    ? (reorderMutation.error instanceof Error
-        ? reorderMutation.error
-        : new Error('Failed to reorder accounts'))
-    : null
+  const updateError = normalizeError(updateAccountMutation.error || updateUserAccountMutation.error)
+  const reorderError = normalizeError(reorderMutation.error)
 
   return {
     updateAccount,

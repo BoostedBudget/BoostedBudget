@@ -99,39 +99,7 @@ func (r *balanceSnapshotRepository) GetByUserIDAndDateRange(ctx context.Context,
 		  AND snapshot_at <= $3
 		ORDER BY snapshot_at ASC
 	`
-
-	rows, err := r.db.Query(ctx, query, userID, startDate, endDate)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var snapshots []domain.BalanceSnapshot
-	for rows.Next() {
-		var s domain.BalanceSnapshot
-		err := rows.Scan(
-			&s.ID,
-			&s.AccountID,
-			&s.UserAccountID,
-			&s.UserID,
-			&s.CurrentBalance,
-			&s.AvailableBalance,
-			&s.CurrencyCode,
-			&s.SnapshotAt,
-			&s.Source,
-			&s.CreatedAt,
-		)
-		if err != nil {
-			return nil, err
-		}
-		snapshots = append(snapshots, s)
-	}
-
-	if err = rows.Err(); err != nil {
-		return nil, err
-	}
-
-	return snapshots, nil
+	return r.scanSnapshots(ctx, query, userID, startDate, endDate)
 }
 
 // GetAggregatedHistory retrieves aggregated balance history for dashboard charts
@@ -203,39 +171,7 @@ func (r *balanceSnapshotRepository) GetLatestByUserID(ctx context.Context, userI
 		WHERE user_id = $1
 		ORDER BY account_id, snapshot_at DESC
 	`
-
-	rows, err := r.db.Query(ctx, query, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var snapshots []domain.BalanceSnapshot
-	for rows.Next() {
-		var s domain.BalanceSnapshot
-		err := rows.Scan(
-			&s.ID,
-			&s.AccountID,
-			&s.UserAccountID,
-			&s.UserID,
-			&s.CurrentBalance,
-			&s.AvailableBalance,
-			&s.CurrencyCode,
-			&s.SnapshotAt,
-			&s.Source,
-			&s.CreatedAt,
-		)
-		if err != nil {
-			return nil, err
-		}
-		snapshots = append(snapshots, s)
-	}
-
-	if err = rows.Err(); err != nil {
-		return nil, err
-	}
-
-	return snapshots, nil
+	return r.scanSnapshots(ctx, query, userID)
 }
 
 // GetLatestByAccountID retrieves the most recent balance snapshot for a specific account
@@ -275,15 +211,43 @@ func (r *balanceSnapshotRepository) GetLatestByAccountID(ctx context.Context, ac
 
 // DeleteByAccountID removes all balance snapshots for a specific account
 func (r *balanceSnapshotRepository) DeleteByAccountID(ctx context.Context, accountID string) error {
-	query := `
-		DELETE FROM balance_snapshots WHERE account_id = $1
-	`
+	_, err := r.db.Exec(ctx, `DELETE FROM balance_snapshots WHERE account_id = $1`, accountID)
+	// It's not an error if no rows were deleted (account might not have any snapshots)
+	return err
+}
 
-	_, err := r.db.Exec(ctx, query, accountID)
+// scanSnapshots is a helper to reduce duplication in snapshot scanning logic
+func (r *balanceSnapshotRepository) scanSnapshots(ctx context.Context, query string, args ...interface{}) ([]domain.BalanceSnapshot, error) {
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	defer rows.Close()
+
+	var snapshots []domain.BalanceSnapshot
+	for rows.Next() {
+		var s domain.BalanceSnapshot
+		err := rows.Scan(
+			&s.ID,
+			&s.AccountID,
+			&s.UserAccountID,
+			&s.UserID,
+			&s.CurrentBalance,
+			&s.AvailableBalance,
+			&s.CurrencyCode,
+			&s.SnapshotAt,
+			&s.Source,
+			&s.CreatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		snapshots = append(snapshots, s)
 	}
 
-	// It's not an error if no rows were deleted (account might not have any snapshots)
-	return nil
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return snapshots, nil
 }
