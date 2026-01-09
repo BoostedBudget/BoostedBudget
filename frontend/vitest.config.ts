@@ -89,6 +89,11 @@ export default mergeConfig(
         'src/shared/charts/useDarkMode.test.ts',
         'src/features/budgets/components/SavingsGoalCard.test.tsx',
         // Note: registry.test.ts stays on vitest - mock.module() conflicts with WidgetWrapper mocks
+        // Batch 13 - Auto-categorization and rule card tests (2026-01-08)
+        'src/features/auto-categorization/components/AutoCategorizationRuleCard.test.tsx',
+        'src/features/auto-categorization/components/AutoCategorizationRuleTable.test.tsx',
+        'src/features/rules/components/RuleCard.test.tsx',
+        'src/features/budgets/goalTemplates.test.ts',
       ],
       coverage: {
         provider: 'v8',

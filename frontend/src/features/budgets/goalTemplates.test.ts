@@ -5,7 +5,7 @@
  * TDD tests for goal template utilities.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, setSystemTime } from 'bun:test';
 import {
   GOAL_TEMPLATES,
   getGoalTemplate,
@@ -132,12 +132,11 @@ describe('goalTemplates', () => {
     const mockDate = new Date('2025-06-15T12:00:00Z');
 
     beforeEach(() => {
-      vi.useFakeTimers();
-      vi.setSystemTime(mockDate);
+      setSystemTime(mockDate);
     });
 
     afterEach(() => {
-      vi.useRealTimers();
+      setSystemTime();
     });
 
     it('returns date string for template with suggestedDeadlineMonths', () => {
@@ -209,7 +208,7 @@ describe('goalTemplates', () => {
 
     it('handles year boundary correctly (December + months)', () => {
       // Set date to December
-      vi.setSystemTime(new Date('2025-12-15T12:00:00Z'));
+      setSystemTime(new Date('2025-12-15T12:00:00Z'));
 
       const template: GoalTemplate = {
         id: 'test',
