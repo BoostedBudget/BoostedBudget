@@ -69,8 +69,34 @@ describe('AutoCategorizationPageWrapper', () => {
   ]
 
   const mockAccounts: Account[] = [
-    { id: 'acc-1', name: 'Checking', type: 'depository', mask: '1234', linked_item_id: 'item-1', user_id: 'user-1', plaid_account_id: 'plaid-1', currency_code: 'USD', is_hidden: false, created_at: '2025-01-01', updated_at: '2025-01-01' },
-    { id: 'acc-2', name: 'Savings', type: 'depository', mask: '5678', linked_item_id: 'item-1', user_id: 'user-1', plaid_account_id: 'plaid-2', currency_code: 'USD', is_hidden: false, created_at: '2025-01-01', updated_at: '2025-01-01' },
+    {
+      id: 'acc-1',
+      name: 'Checking',
+      type: 'depository',
+      mask: '1234',
+      linked_item_id: 'item-1',
+      user_id: 'user-1',
+      plaid_account_id: 'plaid-1',
+      currency_code: 'USD',
+      is_hidden: false,
+      status: 'active',
+      created_at: '2025-01-01',
+      updated_at: '2025-01-01',
+    },
+    {
+      id: 'acc-2',
+      name: 'Savings',
+      type: 'depository',
+      mask: '5678',
+      linked_item_id: 'item-1',
+      user_id: 'user-1',
+      plaid_account_id: 'plaid-2',
+      currency_code: 'USD',
+      is_hidden: false,
+      status: 'active',
+      created_at: '2025-01-01',
+      updated_at: '2025-01-01',
+    },
   ]
 
   const mockTags: UserTag[] = [
