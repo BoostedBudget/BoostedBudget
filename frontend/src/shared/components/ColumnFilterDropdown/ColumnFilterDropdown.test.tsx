@@ -5,14 +5,14 @@
  * TDD RED: Writing tests before implementation.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ColumnFilterDropdown } from './ColumnFilterDropdown'
 
 describe('ColumnFilterDropdown', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    // mocks cleared individually
   })
 
   describe('Rendering', () => {
@@ -91,7 +91,7 @@ describe('ColumnFilterDropdown', () => {
     })
 
     it('should call onChange when option selected', async () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
       render(
         <ColumnFilterDropdown
           options={options}
@@ -121,7 +121,7 @@ describe('ColumnFilterDropdown', () => {
     })
 
     it('should clear selection when "All" is clicked', async () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
       render(
         <ColumnFilterDropdown
           options={options}
@@ -163,7 +163,7 @@ describe('ColumnFilterDropdown', () => {
     ]
 
     it('should allow multiple selections', async () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
       render(
         <ColumnFilterDropdown
           options={options}
@@ -234,7 +234,7 @@ describe('ColumnFilterDropdown', () => {
     })
 
     it('should select all when clicking Select All', async () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
       render(
         <ColumnFilterDropdown
           options={options}
@@ -251,7 +251,7 @@ describe('ColumnFilterDropdown', () => {
     })
 
     it('should clear all when clicking Clear', async () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
       render(
         <ColumnFilterDropdown
           options={options}
@@ -286,7 +286,7 @@ describe('ColumnFilterDropdown', () => {
     })
 
     it('should call onChange with min/max values', async () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
       render(
         <ColumnFilterDropdown
           type="range"
@@ -325,7 +325,7 @@ describe('ColumnFilterDropdown', () => {
     })
 
     it('should clear range when clear clicked', async () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
       render(
         <ColumnFilterDropdown
           type="range"

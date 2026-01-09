@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SearchableSelect } from './SearchableSelect'
@@ -38,12 +38,12 @@ describe('SearchableSelect', () => {
   const defaultProps = {
     options: mockOptions,
     value: null,
-    onChange: vi.fn(),
+    onChange: mock(() => {}),
     placeholder: 'Search...',
   }
 
   beforeEach(() => {
-    vi.clearAllMocks()
+    // mocks cleared individually
   })
 
   describe('Rendering', () => {
@@ -176,7 +176,7 @@ describe('SearchableSelect', () => {
 
   describe('Selection', () => {
     it('should call onChange with selected value on click', async () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
       const user = userEvent.setup({ delay: null })
       render(<SearchableSelect {...defaultProps} onChange={onChange} />)
 
@@ -217,7 +217,7 @@ describe('SearchableSelect', () => {
     })
 
     it('should allow clearing selection with empty option', async () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
       const user = userEvent.setup({ delay: null })
       render(
         <SearchableSelect
@@ -261,7 +261,7 @@ describe('SearchableSelect', () => {
     })
 
     it('should select highlighted option on Enter', async () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
       const user = userEvent.setup({ delay: null })
       render(<SearchableSelect {...defaultProps} onChange={onChange} />)
 

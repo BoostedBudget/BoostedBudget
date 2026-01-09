@@ -99,6 +99,11 @@ export default mergeConfig(
         'src/features/rules/components/TriggerSelector.test.tsx',
         'src/features/rules/components/RuleTestResults.test.tsx',
         'src/features/dashboard/widgets/RemoveWidgetDialog.test.tsx',
+        // Batch 15 - Shared component tests (2026-01-08)
+        'src/shared/components/ListViewToggle/ListViewToggle.test.tsx',
+        'src/shared/components/TableHeaderCell/TableHeaderCell.test.tsx',
+        'src/shared/components/SearchableSelect/SearchableSelect.test.tsx',
+        'src/shared/components/ColumnFilterDropdown/ColumnFilterDropdown.test.tsx',
       ],
       coverage: {
         provider: 'v8',
