@@ -314,11 +314,23 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: bun install --frozen-lockfile
 
-      - name: Lint and test frontend
+      - name: Lint frontend
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        run: bun run lint
+
+      - name: Run Vitest tests (legacy - migrating to bun:test)
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
-          bun run lint
-          bun run test:ci
+          echo "::group::Running Vitest tests"
+          NODE_OPTIONS='--max-old-space-size=6144' bun run vitest run --no-cache --coverage --reporter=verbose
+          echo "::endgroup::"
+
+      - name: Run bun:test tests (migrated tests)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        run: |
+          echo "::group::Running bun:test tests"
+          bun run test:bun
+          echo "::endgroup::"
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v6
