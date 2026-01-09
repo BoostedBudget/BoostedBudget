@@ -5,7 +5,7 @@
  * Issue #529: Transaction page filtering
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { renderHook, act } from '@testing-library/react'
 import { BrowserRouter } from 'react-router-dom'
 import React from 'react'
@@ -25,7 +25,7 @@ describe('useTransactionFilters', () => {
   })
 
   afterEach(() => {
-    vi.restoreAllMocks()
+    // mocks restored in afterEach
   })
 
   describe('Initialization', () => {

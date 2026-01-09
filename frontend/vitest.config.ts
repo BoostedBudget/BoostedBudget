@@ -104,6 +104,11 @@ export default mergeConfig(
         'src/shared/components/TableHeaderCell/TableHeaderCell.test.tsx',
         'src/shared/components/SearchableSelect/SearchableSelect.test.tsx',
         'src/shared/components/ColumnFilterDropdown/ColumnFilterDropdown.test.tsx',
+        // Batch 16 - Filter hook tests (2026-01-08)
+        'src/features/budgets/hooks/useBudgetFilters.test.ts',
+        'src/features/auto-categorization/hooks/useRuleFilters.test.ts',
+        'src/features/accounts/hooks/useAccountFilters.test.ts',
+        'src/features/transactions/hooks/useTransactionFilters.test.ts',
       ],
       coverage: {
         provider: 'v8',
