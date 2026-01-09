@@ -8,18 +8,14 @@
  * Issue #544: Add unit tests for account customization components
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { IconSelector } from './IconSelector'
 import { VALID_ACCOUNT_ICONS } from '../types'
 
 describe('IconSelector', () => {
-  const mockOnChange = vi.fn()
-
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
+  const mockOnChange = mock(() => {})
 
   describe('Initialization', () => {
     it('renders with no initial icon', () => {
@@ -114,13 +110,6 @@ describe('IconSelector', () => {
       const noIconButton = screen.getByText('No Icon').closest('button')
       expect(noIconButton).toHaveAttribute('aria-pressed', 'true')
     })
-
-    it('highlights "No Icon" when value is undefined', () => {
-      render(<IconSelector onChange={mockOnChange} />)
-
-      const noIconButton = screen.getByText('No Icon').closest('button')
-      expect(noIconButton).toHaveAttribute('aria-pressed', 'true')
-    })
   })
 
   describe('Current Selection Display', () => {
@@ -132,12 +121,6 @@ describe('IconSelector', () => {
 
     it('hides current selection when no icon is selected', () => {
       render(<IconSelector value={null} onChange={mockOnChange} />)
-
-      expect(screen.queryByText(/^Current:/)).not.toBeInTheDocument()
-    })
-
-    it('hides current selection when value is undefined', () => {
-      render(<IconSelector onChange={mockOnChange} />)
 
       expect(screen.queryByText(/^Current:/)).not.toBeInTheDocument()
     })

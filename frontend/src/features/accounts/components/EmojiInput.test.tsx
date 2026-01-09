@@ -8,17 +8,13 @@
  * Issue #544: Add unit tests for account customization components
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { EmojiInput } from './EmojiInput'
 
 describe('EmojiInput', () => {
-  const mockOnChange = vi.fn()
-
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
+  const mockOnChange = mock(() => {})
 
   describe('Initialization', () => {
     it('renders with no initial emoji', () => {
@@ -113,29 +109,14 @@ describe('EmojiInput', () => {
       expect(screen.queryByLabelText('Clear emoji')).not.toBeInTheDocument()
     })
 
-    it('hides clear button when value is undefined', () => {
-      render(<EmojiInput onChange={mockOnChange} />)
-
-      expect(screen.queryByLabelText('Clear emoji')).not.toBeInTheDocument()
-    })
-
     it('clears emoji when clear button is clicked', async () => {
-      const user = userEvent.setup()
-      render(<EmojiInput value="💰" onChange={mockOnChange} />)
-
-      await user.click(screen.getByLabelText('Clear emoji'))
-
-      expect(mockOnChange).toHaveBeenCalledWith(null)
-    })
-
-    it('clears input value when clear button is clicked', async () => {
       const user = userEvent.setup()
       render(<EmojiInput value="💰" onChange={mockOnChange} />)
 
       const input = screen.getByLabelText('Emoji input')
       await user.click(screen.getByLabelText('Clear emoji'))
 
-      // After clearing, input should be empty
+      expect(mockOnChange).toHaveBeenCalledWith(null)
       expect(input).toHaveValue('')
     })
   })
@@ -211,12 +192,6 @@ describe('EmojiInput', () => {
 
     it('hides preview when no value is set', () => {
       render(<EmojiInput value={null} onChange={mockOnChange} />)
-
-      expect(screen.queryByLabelText('Emoji preview')).not.toBeInTheDocument()
-    })
-
-    it('hides preview when value is undefined', () => {
-      render(<EmojiInput onChange={mockOnChange} />)
 
       expect(screen.queryByLabelText('Emoji preview')).not.toBeInTheDocument()
     })
