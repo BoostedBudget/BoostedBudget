@@ -58,6 +58,9 @@ export default mergeConfig(
         // Batch 5 - Tests with simple vi.* patterns (2026-01-08)
         'src/features/accounts/components/EmojiInput.test.tsx',
         'src/features/accounts/components/IconSelector.test.tsx',
+        // Batch 6 - Tests with vi.mock patterns (2026-01-08)
+        'src/features/accounts/components/ColorPicker.test.tsx',
+        'src/features/accounts/SyncStatsCard.test.tsx',
       ],
       coverage: {
         provider: 'v8',
