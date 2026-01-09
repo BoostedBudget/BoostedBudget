@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BrowserRouter } from 'react-router-dom'
@@ -10,12 +10,13 @@ const mockUser = {
   picture: 'https://example.com/avatar.jpg',
 }
 
-describe('MobileNav', () => {
-  const mockOnLogout = vi.fn()
-  const mockOnLogin = vi.fn()
+const mockOnLogout = mock(() => {})
+const mockOnLogin = mock(() => {})
 
+describe('MobileNav', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    mockOnLogout.mockClear()
+    mockOnLogin.mockClear()
   })
 
   const renderMobileNav = (isAuthenticated = true, user: typeof mockUser | null = mockUser) => {
@@ -48,7 +49,7 @@ describe('MobileNav', () => {
     })
   })
 
-  it('shows logo in sheet', async () => {
+  it('shows content in sheet when authenticated', async () => {
     const user = userEvent.setup()
     renderMobileNav()
 
@@ -56,53 +57,13 @@ describe('MobileNav', () => {
 
     await waitFor(() => {
       expect(screen.getByText('BoostedBudget')).toBeInTheDocument()
-    })
-  })
-
-  it('shows navigation links when authenticated', async () => {
-    const user = userEvent.setup()
-    renderMobileNav()
-
-    await user.click(screen.getByRole('button', { name: /open menu/i }))
-
-    await waitFor(() => {
       expect(screen.getByRole('link', { name: /dashboard/i })).toBeInTheDocument()
       expect(screen.getByRole('link', { name: /accounts/i })).toBeInTheDocument()
       expect(screen.getByRole('link', { name: /transactions/i })).toBeInTheDocument()
       expect(screen.getByRole('link', { name: /budgets/i })).toBeInTheDocument()
-    })
-  })
-
-  it('shows user info when authenticated', async () => {
-    const user = userEvent.setup()
-    renderMobileNav()
-
-    await user.click(screen.getByRole('button', { name: /open menu/i }))
-
-    await waitFor(() => {
       expect(screen.getByText(mockUser.name)).toBeInTheDocument()
       expect(screen.getByText(mockUser.email)).toBeInTheDocument()
-    })
-  })
-
-  it('shows View Profile link when authenticated', async () => {
-    const user = userEvent.setup()
-    renderMobileNav()
-
-    await user.click(screen.getByRole('button', { name: /open menu/i }))
-
-    await waitFor(() => {
       expect(screen.getByRole('link', { name: /view profile/i })).toBeInTheDocument()
-    })
-  })
-
-  it('shows logout button when authenticated', async () => {
-    const user = userEvent.setup()
-    renderMobileNav()
-
-    await user.click(screen.getByRole('button', { name: /open menu/i }))
-
-    await waitFor(() => {
       expect(screen.getByRole('button', { name: /log out/i })).toBeInTheDocument()
     })
   })
@@ -141,8 +102,7 @@ describe('MobileNav', () => {
       expect(screen.getByRole('button', { name: /log out/i })).toBeInTheDocument()
     })
 
-    const logoutBtn = screen.getByRole('button', { name: /log out/i })
-    await user.click(logoutBtn)
+    await user.click(screen.getByRole('button', { name: /log out/i }))
 
     expect(mockOnLogout).toHaveBeenCalledTimes(1)
   })
@@ -157,8 +117,7 @@ describe('MobileNav', () => {
       expect(screen.getByRole('button', { name: /log in/i })).toBeInTheDocument()
     })
 
-    const loginBtn = screen.getByRole('button', { name: /log in/i })
-    await user.click(loginBtn)
+    await user.click(screen.getByRole('button', { name: /log in/i }))
 
     expect(mockOnLogin).toHaveBeenCalledTimes(1)
   })
@@ -173,10 +132,8 @@ describe('MobileNav', () => {
       expect(screen.getByRole('link', { name: /dashboard/i })).toBeInTheDocument()
     })
 
-    const dashboardLink = screen.getByRole('link', { name: /dashboard/i })
-    await user.click(dashboardLink)
+    await user.click(screen.getByRole('link', { name: /dashboard/i }))
 
-    // Sheet should close - dialog should not be visible
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     })

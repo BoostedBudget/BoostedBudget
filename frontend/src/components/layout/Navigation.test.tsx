@@ -1,8 +1,16 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, mock } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { Navigation } from './Navigation'
+
+const ROUTES = [
+  { name: /dashboard/i, href: '/dashboard' },
+  { name: /accounts/i, href: '/accounts' },
+  { name: /transactions/i, href: '/transactions' },
+  { name: /budgets/i, href: '/budgets' },
+  { name: /auto-cat/i, href: '/auto-categorization' },
+]
 
 describe('Navigation', () => {
   const renderWithRouter = (initialEntries = ['/dashboard']) => {
@@ -16,11 +24,9 @@ describe('Navigation', () => {
   it('renders all navigation links', () => {
     renderWithRouter()
 
-    expect(screen.getByRole('link', { name: /dashboard/i })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /accounts/i })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /transactions/i })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /budgets/i })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /auto-cat/i })).toBeInTheDocument()
+    ROUTES.forEach(({ name }) => {
+      expect(screen.getByRole('link', { name })).toBeInTheDocument()
+    })
   })
 
   it('does NOT render Profile link (moved to dropdown)', () => {
@@ -48,11 +54,9 @@ describe('Navigation', () => {
   it('has correct href attributes', () => {
     renderWithRouter()
 
-    expect(screen.getByRole('link', { name: /dashboard/i })).toHaveAttribute('href', '/dashboard')
-    expect(screen.getByRole('link', { name: /accounts/i })).toHaveAttribute('href', '/accounts')
-    expect(screen.getByRole('link', { name: /transactions/i })).toHaveAttribute('href', '/transactions')
-    expect(screen.getByRole('link', { name: /budgets/i })).toHaveAttribute('href', '/budgets')
-    expect(screen.getByRole('link', { name: /auto-cat/i })).toHaveAttribute('href', '/auto-categorization')
+    ROUTES.forEach(({ name, href }) => {
+      expect(screen.getByRole('link', { name })).toHaveAttribute('href', href)
+    })
   })
 
   it('renders with main navigation aria-label', () => {
@@ -85,7 +89,7 @@ describe('Navigation', () => {
 
   it('calls onLinkClick when a link is clicked', async () => {
     const user = userEvent.setup()
-    const onLinkClick = vi.fn()
+    const onLinkClick = mock(() => {})
 
     render(
       <MemoryRouter>
