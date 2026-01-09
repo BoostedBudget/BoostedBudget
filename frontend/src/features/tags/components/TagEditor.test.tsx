@@ -1,23 +1,23 @@
 /**
  * TagEditor Component Tests
  * Issue #564: Frontend Test Coverage Improvement
- *
- * Tests the tag editor component with multi-select and inline creation.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { TagEditor } from './TagEditor'
 import type { UserTag } from '../types'
 
 // Mock the generated mutation hook
-const mockMutateAsync = vi.fn()
-vi.mock('@/api/generated/endpoints/tags/tags', () => ({
+const mockMutateAsync = mock(() => Promise.resolve({}))
+
+mock.module('@/api/generated/endpoints/tags/tags', () => ({
   useCreateTag: () => ({
     mutateAsync: mockMutateAsync,
     isPending: false,
   }),
 }))
+
+import { TagEditor } from './TagEditor'
 
 // Mock tags data
 function createMockTags(): UserTag[] {
@@ -28,12 +28,14 @@ function createMockTags(): UserTag[] {
   ]
 }
 
-describe('TagEditor', () => {
-  const mockOnChange = vi.fn()
-  const mockOnTagCreated = vi.fn()
+const mockOnChange = mock(() => {})
+const mockOnTagCreated = mock(() => {})
 
+describe('TagEditor', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    mockMutateAsync.mockClear()
+    mockOnChange.mockClear()
+    mockOnTagCreated.mockClear()
   })
 
   describe('Rendering', () => {
@@ -84,7 +86,8 @@ describe('TagEditor', () => {
       )
 
       const tagChip = screen.getByText('Essential').closest('.tag-chip') as HTMLElement
-      expect(tagChip.style.backgroundColor).toBe('rgb(255, 87, 51)')
+      // Happy-dom returns hex, jsdom returns rgb
+      expect(['rgb(255, 87, 51)', '#FF5733']).toContain(tagChip.style.backgroundColor)
     })
 
     it('should render remove button for each selected tag', () => {
@@ -463,8 +466,8 @@ describe('TagEditor', () => {
       )
 
       const tagChip = screen.getByText('NoColor').closest('.tag-chip') as HTMLElement
-      // Should use default gray color
-      expect(tagChip.style.backgroundColor).toBe('rgb(107, 114, 128)')
+      // Should use default gray color (happy-dom returns hex, jsdom returns rgb)
+      expect(['rgb(107, 114, 128)', '#6B7280']).toContain(tagChip.style.backgroundColor)
     })
   })
 })
