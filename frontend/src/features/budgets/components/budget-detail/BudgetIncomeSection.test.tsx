@@ -6,10 +6,10 @@
  * Tests the income comparison section showing expected vs actual income.
  */
 
-import { describe, it, expect } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
-import { BudgetIncomeSection } from './BudgetIncomeSection';
-import type { IncomeSource } from '../../types';
+import { describe, it, expect } from 'bun:test'
+import { render, screen, fireEvent } from '@testing-library/react'
+import { BudgetIncomeSection } from './BudgetIncomeSection'
+import type { IncomeSource } from '../../types'
 
 describe('BudgetIncomeSection', () => {
   const mockIncomeSources: IncomeSource[] = [
@@ -264,7 +264,7 @@ describe('BudgetIncomeSection', () => {
     });
   });
 
-  describe('Collapsible/Expandable', () => {
+  describe('Expandable', () => {
     it('should be collapsible/expandable', () => {
       render(<BudgetIncomeSection {...defaultProps} />);
 

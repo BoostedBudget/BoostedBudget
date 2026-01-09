@@ -5,17 +5,13 @@
  * TDD RED Phase: Write comprehensive tests before implementation
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { TransactionBudgetBadge } from './TransactionBudgetBadge'
 import type { BudgetCategoryMatch } from '../../utils/transactionBudgetMatcher'
 import type { BudgetCategory } from '../../types'
-
-// =============================================================================
-// Test Helpers
-// =============================================================================
 
 function createBudgetCategory(
   overrides: Partial<BudgetCategory> = {}
@@ -54,10 +50,6 @@ function renderWithRouter(
     </MemoryRouter>
   )
 }
-
-// =============================================================================
-// Rendering Tests
-// =============================================================================
 
 describe('TransactionBudgetBadge - rendering', () => {
   it('should not render when match is null', () => {
@@ -122,10 +114,6 @@ describe('TransactionBudgetBadge - rendering', () => {
   })
 })
 
-// =============================================================================
-// Match Reason Icons Tests
-// =============================================================================
-
 describe('TransactionBudgetBadge - match reason icons', () => {
   it('should have title showing category match reason when matchReason is "category"', () => {
     const match = createMatch('category')
@@ -159,10 +147,6 @@ describe('TransactionBudgetBadge - match reason icons', () => {
     expect(icon).toBeInTheDocument()
   })
 })
-
-// =============================================================================
-// Interaction Tests
-// =============================================================================
 
 describe('TransactionBudgetBadge - interaction', () => {
   it('should be a link to budget detail page', () => {
@@ -202,10 +186,6 @@ describe('TransactionBudgetBadge - interaction', () => {
     expect(link).toHaveFocus()
   })
 })
-
-// =============================================================================
-// Edge Cases
-// =============================================================================
 
 describe('TransactionBudgetBadge - edge cases', () => {
   it('should handle very long category names with truncation', () => {
