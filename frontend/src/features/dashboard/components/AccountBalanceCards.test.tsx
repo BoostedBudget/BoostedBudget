@@ -8,7 +8,7 @@
  * Issue #422: Widget styling compliance and dark mode support
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import { AccountBalanceCards } from './AccountBalanceCards'
 import type { BalanceSummary } from '../types'
