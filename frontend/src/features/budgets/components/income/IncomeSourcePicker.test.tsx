@@ -1,30 +1,28 @@
 /**
  * IncomeSourcePicker Tests
  * Issue #496: Income Source Configuration UI for Envelope Budgeting
- *
- * TDD RED Phase: Tests for adding new income sources with type-specific pickers.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { IncomeSourcePicker } from './IncomeSourcePicker';
-import type { IncomeSource } from '../../types';
-import type { UserTag } from '@/features/tags/types';
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { IncomeSourcePicker } from './IncomeSourcePicker'
+import type { IncomeSource } from '../../types'
+import type { UserTag } from '@/features/tags/types'
 
 describe('IncomeSourcePicker', () => {
-  const mockOnAdd = vi.fn();
+  const mockOnAdd = mock(() => {})
 
-  const mockCategories = ['INCOME', 'TRANSFER_IN', 'LOAN_PAYMENTS'];
+  const mockCategories = ['INCOME', 'TRANSFER_IN', 'LOAN_PAYMENTS']
   const mockTags: UserTag[] = [
     { id: '1', user_id: 'user-1', name: 'Salary', color: '#22c55e', usage_count: 5, created_at: '', updated_at: '' },
     { id: '2', user_id: 'user-1', name: 'Freelance', color: '#3b82f6', usage_count: 3, created_at: '', updated_at: '' },
     { id: '3', user_id: 'user-1', name: 'Bonus', color: '#f59e0b', usage_count: 1, created_at: '', updated_at: '' },
-  ];
+  ]
 
   beforeEach(() => {
-    vi.clearAllMocks();
-  });
+    mockOnAdd.mockClear()
+  })
 
   // ==========================================================================
   // Type Selection Tests
