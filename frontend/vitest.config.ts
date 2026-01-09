@@ -55,6 +55,9 @@ export default mergeConfig(
         'src/features/dashboard/components/BalanceOverview.test.tsx',
         // Batch 4 - Simple account component tests (2026-01-08)
         'src/features/accounts/AccountCard.test.tsx',
+        // Batch 5 - Tests with simple vi.* patterns (2026-01-08)
+        'src/features/accounts/components/EmojiInput.test.tsx',
+        'src/features/accounts/components/IconSelector.test.tsx',
       ],
       coverage: {
         provider: 'v8',
