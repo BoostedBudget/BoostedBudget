@@ -57,8 +57,6 @@ export interface DashboardFilters {
   granularity?: 'daily' | 'weekly' | 'monthly';
 }
 
-// Issue #354: Cash Flow Analytics Types
-
 export interface CashFlowFilters {
   startDate: string;
   endDate: string;
@@ -106,7 +104,43 @@ export interface CashFlowHistory {
   periods: CashFlowPeriodData[];
 }
 
-// Issue #354: Widget System Types
+export interface NetWorthPeriodComparison {
+  previous_net_worth: number;
+  previous_assets: number;
+  previous_liabilities: number;
+  net_worth_change: number;
+  net_worth_change_percent: number;
+}
+
+export interface NetWorthCategoryBalance {
+  category: 'assets' | 'liabilities';
+  total: number;
+  account_count: number;
+  by_type: Record<string, AccountTypeBalance>;
+}
+
+export interface NetWorthSummary {
+  as_of_date: string;
+  net_worth: number;
+  total_assets: number;
+  total_liabilities: number;
+  by_category: Record<string, NetWorthCategoryBalance>;
+  period_comparison?: NetWorthPeriodComparison;
+}
+
+export interface NetWorthHistorySnapshot {
+  date: string;
+  net_worth: number;
+  total_assets: number;
+  total_liabilities: number;
+}
+
+export interface NetWorthHistory {
+  start_date: string;
+  end_date: string;
+  granularity: 'daily' | 'weekly' | 'monthly';
+  snapshots: NetWorthHistorySnapshot[];
+}
 
 export type WidgetType =
   | 'balance-overview'
@@ -114,7 +148,8 @@ export type WidgetType =
   | 'cash-flow-summary'
   | 'cash-flow-chart'
   | 'account-cards'
-  | 'budget-overview';
+  | 'budget-overview'
+  | 'net-worth';
 
 export interface WidgetConfig {
   i: string;          // Unique widget instance ID (react-grid-layout uses 'i')

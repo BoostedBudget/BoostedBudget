@@ -2,9 +2,11 @@
  * Widget Catalog Component
  * Issue #354: Customizable Dashboard Widget System
  * Issue #462: Migrated from HeadlessUI to shadcn/ui
+ * Issue #127: Centralized widget type validation via API
  *
- * Modal/drawer showing available widgets that can be added to the dashboard.
- * Uses shadcn/ui Dialog built on Radix UI.
+ * Modal showing available widgets. Validates widget types against:
+ * 1. Local registry (component implementation)
+ * 2. Backend API (valid type in backend)
  */
 
 import { useMemo, useCallback } from 'react';
@@ -21,6 +23,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { useGetWidgetTypes } from '@/api/generated/endpoints/dashboard/dashboard';
 import { getAllWidgets } from './registry';
 import type { WidgetDefinition, WidgetType } from '../types';
 
@@ -108,17 +111,34 @@ export function WidgetCatalog({
   onAddWidget,
   existingWidgetTypes = [],
 }: WidgetCatalogProps) {
+  const { data: widgetTypesData } = useGetWidgetTypes();
+
+  const validBackendTypes = useMemo(() => {
+    const types = new Set<string>();
+    if (widgetTypesData?.widgetTypes) {
+      widgetTypesData.widgetTypes.forEach((wt) => types.add(wt.type));
+    }
+    return types;
+  }, [widgetTypesData]);
+
   const categories = useMemo(() => {
     const allWidgets = getAllWidgets();
     const categoryMap = new Map<string, WidgetDefinition[]>();
 
-    allWidgets.forEach((widget) => {
+    // Filter: show widgets from registry that exist in backend API
+    // If API hasn't loaded yet, show all local widgets (graceful degradation)
+    const validWidgets = allWidgets.filter((widget) => {
+      if (validBackendTypes.size === 0) return true;
+      return validBackendTypes.has(widget.type);
+    });
+
+    validWidgets.forEach((widget) => {
       const existing = categoryMap.get(widget.category) || [];
       categoryMap.set(widget.category, [...existing, widget]);
     });
 
     return Array.from(categoryMap.entries());
-  }, []);
+  }, [validBackendTypes]);
 
   const handleAddWidget = useCallback(
     (type: WidgetType) => {
@@ -128,12 +148,9 @@ export function WidgetCatalog({
     [onAddWidget, onClose]
   );
 
-  // Handle dialog open state changes - click outside closes the dialog
   const handleOpenChange = useCallback(
     (open: boolean) => {
-      if (!open) {
-        onClose();
-      }
+      if (!open) onClose();
     },
     [onClose]
   );

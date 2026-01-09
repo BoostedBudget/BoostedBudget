@@ -15,17 +15,17 @@ const (
 	WidgetTypeCashFlowSummary WidgetType = "cash-flow-summary"
 	WidgetTypeCashFlowChart   WidgetType = "cash-flow-chart"
 	WidgetTypeAccountCards    WidgetType = "account-cards"
+	WidgetTypeNetWorth        WidgetType = "net-worth"
 )
 
-// ValidWidgetTypes returns a map of valid widget types
+// ValidWidgetTypes returns a set of valid widget types
+// This is the single source of truth for widget type validation
 func ValidWidgetTypes() map[WidgetType]bool {
-	return map[WidgetType]bool{
-		WidgetTypeBalanceOverview: true,
-		WidgetTypeBalanceHistory:  true,
-		WidgetTypeCashFlowSummary: true,
-		WidgetTypeCashFlowChart:   true,
-		WidgetTypeAccountCards:    true,
+	types := make(map[WidgetType]bool)
+	for _, info := range AllWidgetTypes() {
+		types[info.Type] = true
 	}
+	return types
 }
 
 // WidgetConfig represents a single widget's configuration in the layout
