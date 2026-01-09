@@ -78,6 +78,17 @@ export default mergeConfig(
         'src/features/budgets/components/budget-detail/UnallocatedFundsCard.test.tsx',
         'src/features/transactions/components/TransactionCard.test.tsx',
         'src/features/budgets/components/transaction-link/BudgetTransactionList.test.tsx',
+        // Batch 11 - Filter and widget tests (2026-01-08)
+        'src/features/transactions/components/filters/FilterPill.test.tsx',
+        'src/features/transactions/components/filters/TransactionTypeFilter.test.tsx',
+        'src/features/transactions/components/filters/TransactionStatusFilter.test.tsx',
+        'src/features/dashboard/widgets/WidgetWrapper.test.tsx',
+        // Batch 12 - Delete dialogs and utility tests (2026-01-08)
+        'src/features/budgets/components/DeleteBudgetDialog.test.tsx',
+        'src/features/budgets/components/DeleteSavingsGoalDialog.test.tsx',
+        'src/shared/charts/useDarkMode.test.ts',
+        'src/features/budgets/components/SavingsGoalCard.test.tsx',
+        // Note: registry.test.ts stays on vitest - mock.module() conflicts with WidgetWrapper mocks
       ],
       coverage: {
         provider: 'v8',

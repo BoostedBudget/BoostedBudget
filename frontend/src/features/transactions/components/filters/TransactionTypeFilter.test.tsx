@@ -1,9 +1,4 @@
-/**
- * TransactionTypeFilter Component Tests
- * Issue #529: Transaction page filtering
- */
-
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, mock } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TransactionTypeFilter } from './TransactionTypeFilter'
@@ -27,25 +22,19 @@ describe('TransactionTypeFilter', () => {
     expect(allButton).toHaveAttribute('aria-pressed', 'false')
   })
 
-  it('should call onChange when button is clicked', async () => {
+  it('should call onChange with correct value when button is clicked', async () => {
     const user = userEvent.setup()
-    const onChange = vi.fn()
+    const onChange = mock(() => {})
 
-    render(<TransactionTypeFilter value="all" onChange={onChange} />)
+    const { rerender } = render(<TransactionTypeFilter value="all" onChange={onChange} />)
 
     await user.click(screen.getByRole('button', { name: 'Expenses' }))
-
     expect(onChange).toHaveBeenCalledWith('expense')
-  })
 
-  it('should call onChange with income when Income clicked', async () => {
-    const user = userEvent.setup()
-    const onChange = vi.fn()
+    onChange.mockClear()
 
-    render(<TransactionTypeFilter value="all" onChange={onChange} />)
-
+    rerender(<TransactionTypeFilter value="expense" onChange={onChange} />)
     await user.click(screen.getByRole('button', { name: 'Income' }))
-
     expect(onChange).toHaveBeenCalledWith('income')
   })
 
