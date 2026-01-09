@@ -45,8 +45,12 @@ export interface Account {
   nickname?: string;
   official_name?: string;
   plaid_account_id: string;
+  replaced_at?: string;
+  replaced_by_id?: string;
+  status: string;
   subtype?: string;
   type: string;
   updated_at: string;
+  user_account_id?: string;
   user_id: string;
 }

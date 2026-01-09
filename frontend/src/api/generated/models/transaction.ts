@@ -57,6 +57,7 @@ export interface Transaction {
   tags: TransactionTags;
   tags_source: TransactionTagsSource;
   updated_at: string;
+  user_account_id?: string;
   user_id: string;
   user_notes?: string;
 }

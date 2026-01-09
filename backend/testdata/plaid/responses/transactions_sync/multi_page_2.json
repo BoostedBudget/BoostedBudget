@@ -1,0 +1,27 @@
+{
+  "added": [
+    {
+      "transaction_id": "txn_page2_001",
+      "account_id": "acc_test_001",
+      "amount": 89.99,
+      "iso_currency_code": "USD",
+      "date": "2024-01-18",
+      "authorized_date": "2024-01-17",
+      "name": "Best Buy",
+      "merchant_name": "Best Buy",
+      "category": ["Shops", "Electronics"],
+      "personal_finance_category": {
+        "primary": "GENERAL_MERCHANDISE",
+        "detailed": "GENERAL_MERCHANDISE_ELECTRONICS"
+      },
+      "payment_channel": "in_store",
+      "pending": false,
+      "pending_transaction_id": null
+    }
+  ],
+  "modified": [],
+  "removed": [],
+  "next_cursor": "cursor_page_2",
+  "has_more": true,
+  "request_id": "req_test_multi_page_2"
+}

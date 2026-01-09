@@ -90,6 +90,7 @@ describe('AccountCustomizationModal', () => {
     currency_code: 'USD',
     institution_name: 'Chase',
     is_hidden: false,
+    status: 'active',
     created_at: '2025-10-18T14:30:00Z',
     updated_at: '2025-10-20T10:15:00Z',
   }
@@ -308,8 +309,9 @@ describe('AccountCustomizationModal', () => {
       // Save
       await user.click(screen.getByRole('button', { name: 'Save Changes' }))
 
+      // Issue #171: onSave now receives full account object for user_account_id resolution
       await waitFor(() => {
-        expect(mockOnSave).toHaveBeenCalledWith(mockAccount.id, expect.objectContaining({
+        expect(mockOnSave).toHaveBeenCalledWith(mockAccount, expect.objectContaining({
           nickname: 'New Name',
         }))
       })

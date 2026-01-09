@@ -53,12 +53,20 @@ type TagSource struct {
 // Design: The struct uses generic field names (source, external_transaction_id) instead of
 // provider-specific names (plaid_transaction_id) to support multiple providers and manual
 // transactions without schema changes.
+//
+// Issue #171: Added UserAccountID for stable queries across re-links.
+// The UserAccountID links to a user_accounts record that survives when a user
+// re-links a bank (which assigns new item_id and account_id values).
 type Transaction struct {
 	// Core identifiers
 	ID           string `json:"id" db:"id"`
 	UserID       string `json:"user_id" db:"user_id"`
 	AccountID    string `json:"account_id" db:"account_id"`
 	LinkedItemID string `json:"linked_item_id" db:"linked_item_id"`
+
+	// Stable reference for re-link handling (Issue #171)
+	// Links to user_accounts table which survives Plaid Item re-links
+	UserAccountID *string `json:"user_account_id,omitempty" db:"user_account_id"`
 
 	// Provider abstraction
 	// Source identifies where this transaction came from (plaid, manual, teller, etc.)

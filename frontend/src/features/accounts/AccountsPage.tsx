@@ -167,8 +167,9 @@ export function AccountsPage() {
   // setInstitutionFilter, setTypeFilter, setBalanceRange come from the hook
 
   // Issue #307: Handle save from modal
-  const handleSaveAccount = useCallback(async (accountId: string, changes: Partial<UpdateAccountRequest>) => {
-    const updatedAccount = await updateAccount(accountId, changes)
+  // Issue #171: Now passes full account for user_account_id resolution
+  const handleSaveAccount = useCallback(async (account: Account, changes: Partial<UpdateAccountRequest>) => {
+    const updatedAccount = await updateAccount(account, changes)
     if (updatedAccount) {
       // Optimistically update the query cache
       queryClient.setQueryData(accountsQueryKey, (oldData: { accounts: Account[] } | undefined) => {
@@ -176,7 +177,7 @@ export function AccountsPage() {
         return {
           ...oldData,
           accounts: oldData.accounts.map(acc =>
-            acc.id === accountId ? updatedAccount : acc
+            acc.id === account.id ? updatedAccount : acc
           ),
         }
       })
@@ -188,6 +189,9 @@ export function AccountsPage() {
   const displayedAccounts = useMemo(() => {
     const accs = accountsData?.accounts ?? []
     let filtered = accs
+
+    // Issue #171: Always filter out replaced accounts (they're soft-deleted after Plaid re-link)
+    filtered = filtered.filter(acc => acc.status !== 'replaced')
 
     // Filter hidden accounts unless showHidden is true
     if (!showHidden) {
@@ -267,17 +271,22 @@ export function AccountsPage() {
     })
   }, [accountsData?.accounts, showHidden, sortColumn, sortDirection, institutionFilter, typeFilter, balanceRange])
 
-  // Count of hidden accounts
-  const hiddenCount = useMemo(() => {
+  // Account counts (excluding replaced accounts)
+  const { hiddenCount, activeAccountsCount } = useMemo(() => {
     const accs = accountsData?.accounts ?? []
-    return accs.filter(acc => acc.is_hidden).length
+    const activeAccounts = accs.filter(acc => acc.status !== 'replaced')
+    return {
+      hiddenCount: activeAccounts.filter(acc => acc.is_hidden).length,
+      activeAccountsCount: activeAccounts.length,
+    }
   }, [accountsData?.accounts])
 
   // Calculate tier limits using hook
+  // Issue #171: Use activeAccountsCount to exclude replaced accounts
   const { isAtLimit, shouldShowUpgradeBanner, accountCountDisplay } = useTierLimits({
     user,
     tiers,
-    currentAccountCount: accounts.length,
+    currentAccountCount: activeAccountsCount,
   })
 
   if (loading || tiersLoading) {
