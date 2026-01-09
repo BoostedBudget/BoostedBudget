@@ -1,11 +1,4 @@
-/**
- * TransactionCard Component Tests
- *
- * TDD RED: These tests are written first and will initially fail.
- * Tests the transaction card display component.
- */
-
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, mock, setSystemTime } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { TransactionCard } from './TransactionCard'
@@ -15,55 +8,47 @@ import type { BudgetCategoryMatch } from '../../budgets/utils/transactionBudgetM
 import type { BudgetCategory } from '../../budgets/types'
 import { CATEGORY_COLORS, DEFAULT_CATEGORY_COLOR } from '@/lib/category-colors'
 
-// Helper to create budget category match for tests
-function createBudgetCategoryMatch(
+const createBudgetCategoryMatch = (
   matchReason: 'category' | 'tag' | 'both' = 'category',
   categoryOverrides: Partial<BudgetCategory> = {}
-): BudgetCategoryMatch {
-  return {
-    category: {
-      id: 'cat-1',
-      budget_id: 'budget-1',
-      category: ['Food and Drink', 'Restaurants'],
-      allocated_amount: 500,
-      spent_amount: 250,
-      created_at: '2025-01-01T00:00:00Z',
-      updated_at: '2025-01-01T00:00:00Z',
-      tags: ['dining'],
-      match_logic: 'category_only',
-      ...categoryOverrides,
-    },
-    matchReason,
-  }
-}
-
-// Helper to render with router (needed for Link component in badge)
-function renderWithRouter(ui: React.ReactElement) {
-  return render(<MemoryRouter>{ui}</MemoryRouter>)
-}
-
-// Helper to create mock account for Issue #531 tests
-function createMockAccount(overrides: Partial<Account> = {}): Account {
-  return {
-    id: 'account-456',
-    linked_item_id: 'item-789',
-    user_id: 'user-123',
-    plaid_account_id: 'plaid-acc-123',
-    name: 'Chase Checking',
-    official_name: 'CHASE TOTAL CHECKING',
-    type: 'depository',
-    subtype: 'checking',
-    mask: '1234',
-    current_balance: 5000,
-    available_balance: 4500,
-    currency_code: 'USD',
-    institution_name: 'Chase',
-    is_hidden: false,
+): BudgetCategoryMatch => ({
+  category: {
+    id: 'cat-1',
+    budget_id: 'budget-1',
+    category: ['Food and Drink', 'Restaurants'],
+    allocated_amount: 500,
+    spent_amount: 250,
     created_at: '2025-01-01T00:00:00Z',
     updated_at: '2025-01-01T00:00:00Z',
-    ...overrides,
-  }
-}
+    tags: ['dining'],
+    match_logic: 'category_only',
+    ...categoryOverrides,
+  },
+  matchReason,
+})
+
+const renderWithRouter = (ui: React.ReactElement) =>
+  render(<MemoryRouter>{ui}</MemoryRouter>)
+
+const createMockAccount = (overrides: Partial<Account> = {}): Account => ({
+  id: 'account-456',
+  linked_item_id: 'item-789',
+  user_id: 'user-123',
+  plaid_account_id: 'plaid-acc-123',
+  name: 'Chase Checking',
+  official_name: 'CHASE TOTAL CHECKING',
+  type: 'depository',
+  subtype: 'checking',
+  mask: '1234',
+  current_balance: 5000,
+  available_balance: 4500,
+  currency_code: 'USD',
+  institution_name: 'Chase',
+  is_hidden: false,
+  created_at: '2025-01-01T00:00:00Z',
+  updated_at: '2025-01-01T00:00:00Z',
+  ...overrides,
+})
 
 describe('TransactionCard', () => {
   const mockTransaction: Transaction = {
@@ -107,14 +92,12 @@ describe('TransactionCard', () => {
     })
 
     it('should render transaction date in readable format', () => {
-      // Use a date in the past to get formatted output instead of "Today"
       const pastTransaction: Transaction = {
         ...mockTransaction,
         date: '2025-09-15',
         authorized_date: null,
       }
       render(<TransactionCard transaction={pastTransaction} />)
-      // Should show "Sep 15, 2025" or similar human-readable format
       expect(screen.getByText(/Sep.*15.*2025/i)).toBeInTheDocument()
     })
 
@@ -123,36 +106,32 @@ describe('TransactionCard', () => {
       expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
     })
 
-    it('should fallback to transaction name when merchant name is missing', () => {
+    it('should fallback to transaction name when merchant name missing', () => {
       const transactionWithoutMerchant: Transaction = {
         ...mockTransaction,
         merchant_name: null,
       }
-
       render(<TransactionCard transaction={transactionWithoutMerchant} />)
       expect(screen.getByText('Starbucks')).toBeInTheDocument()
     })
   })
 
   describe('Category Display', () => {
-    it('should display primary category from JSON string for consistency', () => {
-      // Use a transaction without "Food" in merchant name to avoid confusion
+    it('should display primary category from JSON string', () => {
       const transactionWithCategories: Transaction = {
         ...mockTransaction,
         merchant_name: 'Local Restaurant',
         category: '["Food and Drink", "Restaurants"]',
       }
       render(<TransactionCard transaction={transactionWithCategories} />)
-      // Should show primary category "Food and Drink" for consistency
       expect(screen.getByText(/Food and Drink/i)).toBeInTheDocument()
     })
 
-    it('should display primary category when only one category exists', () => {
+    it('should display primary category when only one exists', () => {
       const transactionWithPrimaryOnly: Transaction = {
         ...mockTransaction,
-        category: '["Travel"]', // Only primary category
+        category: '["Travel"]',
       }
-
       render(<TransactionCard transaction={transactionWithPrimaryOnly} />)
       expect(screen.getByText(/Travel/i)).toBeInTheDocument()
     })
@@ -160,9 +139,8 @@ describe('TransactionCard', () => {
     it('should display primary category even when secondary exists', () => {
       const transactionWithSecondary: Transaction = {
         ...mockTransaction,
-        category: '["Shops", "Clothing"]', // Has secondary but should show primary
+        category: '["Shops", "Clothing"]',
       }
-
       render(<TransactionCard transaction={transactionWithSecondary} />)
       expect(screen.getByText(/Shops/i)).toBeInTheDocument()
     })
@@ -197,109 +175,97 @@ describe('TransactionCard', () => {
       expect(screen.getByText('Uncategorized')).toBeInTheDocument()
     })
 
-    it('should display category_override when present (priority over category)', () => {
+    it('should display category_override when present', () => {
       const transactionWithOverride: Transaction = {
         ...mockTransaction,
         merchant_name: 'Local Store',
         category: '["Food and Drink", "Restaurants"]',
         category_override: '["Shopping", "Groceries"]',
       }
-
       render(<TransactionCard transaction={transactionWithOverride} />)
-      // Should show override primary category "Shopping", not original "Food and Drink"
       expect(screen.getByText(/Shopping/i)).toBeInTheDocument()
       expect(screen.queryByText(/Food and Drink/i)).not.toBeInTheDocument()
     })
 
-    it('should fall back to category when category_override is null', () => {
+    it('should fall back to category when override is null', () => {
       const transactionWithoutOverride: Transaction = {
         ...mockTransaction,
         merchant_name: 'Local Restaurant',
         category: '["Food and Drink", "Restaurants"]',
         category_override: null,
       }
-
       render(<TransactionCard transaction={transactionWithoutOverride} />)
-      // Should show primary category "Food and Drink"
       expect(screen.getByText(/Food and Drink/i)).toBeInTheDocument()
     })
 
-    it('should fall back to category when category_override is empty array and category_source is NOT manual', () => {
+    it('should fall back to category when override is empty and source not manual', () => {
       const transactionWithEmptyOverride: Transaction = {
         ...mockTransaction,
         merchant_name: 'Local Restaurant',
         category: '["Food and Drink", "Restaurants"]',
         category_override: '[]',
-        category_source: 'plaid', // Not manual, so fall back
+        category_source: 'plaid',
       }
-
       render(<TransactionCard transaction={transactionWithEmptyOverride} />)
-      // Should show primary category "Food and Drink"
       expect(screen.getByText(/Food and Drink/i)).toBeInTheDocument()
     })
   })
 
   describe('Explicit Uncategorized Display', () => {
-    it('should display Uncategorized when category_source is manual and category_override is empty', () => {
+    it('should display Uncategorized when manually cleared', () => {
       const explicitlyUncategorized: Transaction = {
         ...mockTransaction,
         category: '["Food and Drink", "Coffee"]',
         category_override: '[]',
-        category_source: 'manual', // User explicitly cleared the category
+        category_source: 'manual',
       }
-
       render(<TransactionCard transaction={explicitlyUncategorized} />)
       expect(screen.getByText('Uncategorized')).toBeInTheDocument()
-      // Should NOT fall back to Plaid category
       expect(screen.queryByText(/Food and Drink/i)).not.toBeInTheDocument()
     })
 
-    it('should display Uncategorized when category_source is manual and category_override is null', () => {
+    it('should display Uncategorized when manual override is null', () => {
       const explicitlyUncategorized: Transaction = {
         ...mockTransaction,
         category: '["Food and Drink", "Coffee"]',
         category_override: null,
         category_source: 'manual',
       }
-
       render(<TransactionCard transaction={explicitlyUncategorized} />)
       expect(screen.getByText('Uncategorized')).toBeInTheDocument()
       expect(screen.queryByText(/Food and Drink/i)).not.toBeInTheDocument()
     })
 
-    it('should show warning indicator for explicitly uncategorized transactions', () => {
+    it('should show warning indicator for explicitly uncategorized', () => {
       const explicitlyUncategorized: Transaction = {
         ...mockTransaction,
         category: '["Food and Drink", "Coffee"]',
         category_override: '[]',
         category_source: 'manual',
       }
-
       const { container } = render(<TransactionCard transaction={explicitlyUncategorized} />)
-      // Should have warning indicator element
       const warningIndicator = container.querySelector('.transaction-card__uncategorized-warning')
       expect(warningIndicator).toBeInTheDocument()
     })
 
-    it('should show warning indicator for any uncategorized transaction', () => {
+    it('should show warning indicator for any uncategorized', () => {
       const neverCategorized: Transaction = {
         ...mockTransaction,
         category: null,
         category_override: null,
       }
-
       const { container } = render(<TransactionCard transaction={neverCategorized} />)
       const warningIndicator = container.querySelector('.transaction-card__uncategorized-warning')
       expect(warningIndicator).toBeInTheDocument()
     })
 
-    it('should NOT show warning indicator for categorized transactions', () => {
+    it('should not show warning for categorized', () => {
       const { container } = render(<TransactionCard transaction={mockTransaction} />)
       const warningIndicator = container.querySelector('.transaction-card__uncategorized-warning')
       expect(warningIndicator).not.toBeInTheDocument()
     })
 
-    it('should display original_category when available for reset context', () => {
+    it('should display original_category when available', () => {
       const withOriginalCategory: Transaction = {
         ...mockTransaction,
         category: '["Food and Drink", "Coffee"]',
@@ -307,9 +273,7 @@ describe('TransactionCard', () => {
         category_source: 'manual',
         original_category: '["Food and Drink", "Coffee"]',
       }
-
       render(<TransactionCard transaction={withOriginalCategory} />)
-      // Original category should be accessible (e.g., in data attribute or tooltip)
       const card = screen.getByRole('article')
       expect(card).toHaveAttribute('data-original-category', '["Food and Drink", "Coffee"]')
     })
@@ -327,23 +291,20 @@ describe('TransactionCard', () => {
       expect(screen.getByText('Monthly')).toBeInTheDocument()
     })
 
-    it('should not display tags section when tags array is empty', () => {
+    it('should not display tags when empty', () => {
       const transactionWithEmptyTags: Transaction = {
         ...mockTransaction,
         tags: [],
       }
-
       render(<TransactionCard transaction={transactionWithEmptyTags} />)
-      // Should not have a tags container when no tags
       expect(screen.queryByTestId('transaction-tags')).not.toBeInTheDocument()
     })
 
-    it('should not display tags section when tags is undefined', () => {
+    it('should not display tags when undefined', () => {
       const transactionWithoutTags: Transaction = {
         ...mockTransaction,
         tags: undefined,
       }
-
       render(<TransactionCard transaction={transactionWithoutTags} />)
       expect(screen.queryByTestId('transaction-tags')).not.toBeInTheDocument()
     })
@@ -353,15 +314,12 @@ describe('TransactionCard', () => {
         ...mockTransaction,
         tags: ['Work', 'Expense', 'Reimbursable'],
       }
-
       const { container } = render(<TransactionCard transaction={transactionWithMultipleTags} />)
 
-      // Should have all three tags
       expect(screen.getByText('Work')).toBeInTheDocument()
       expect(screen.getByText('Expense')).toBeInTheDocument()
       expect(screen.getByText('Reimbursable')).toBeInTheDocument()
 
-      // Should have tags container with correct class
       const tagsContainer = container.querySelector('.transaction-card__tags')
       expect(tagsContainer).toBeInTheDocument()
     })
@@ -440,7 +398,7 @@ describe('TransactionCard', () => {
       expect(screen.getByText('$0.00')).toBeInTheDocument()
     })
 
-    it('should apply debit styling to negative amounts', () => {
+    it('should apply debit styling to negative', () => {
       render(<TransactionCard transaction={mockTransaction} />)
       const amountElement = screen.getByText('-$25.50')
       expect(
@@ -450,12 +408,11 @@ describe('TransactionCard', () => {
       ).toBe(true)
     })
 
-    it('should apply credit styling to positive amounts', () => {
+    it('should apply credit styling to positive', () => {
       const creditTransaction: Transaction = {
         ...mockTransaction,
         amount: 100.00,
       }
-
       render(<TransactionCard transaction={creditTransaction} />)
       const amountElement = screen.getByText('+$100.00')
       expect(
@@ -469,12 +426,11 @@ describe('TransactionCard', () => {
   describe('Date Formatting', () => {
     // Mock system time to Oct 29, 2025, 12:00 PM local time for consistent date testing
     beforeEach(() => {
-      vi.useFakeTimers()
-      vi.setSystemTime(new Date(2025, 9, 29, 12, 0, 0)) // Oct 29, 2025, 12:00 PM (month is 0-indexed)
+      setSystemTime(new Date(2025, 9, 29, 12, 0, 0)) // Oct 29, 2025, 12:00 PM (month is 0-indexed)
     })
 
     afterEach(() => {
-      vi.useRealTimers()
+      setSystemTime() // Reset to real time
     })
 
     it('should use authorized_date when available', () => {
@@ -483,9 +439,7 @@ describe('TransactionCard', () => {
         date: '2025-09-20',
         authorized_date: '2025-09-19',
       }
-
       render(<TransactionCard transaction={transactionWithAuthDate} />)
-      // Should show authorized date (Sep 19) instead of date (Sep 20)
       expect(screen.getByText(/Sep.*19.*2025/i)).toBeInTheDocument()
     })
 
@@ -500,62 +454,51 @@ describe('TransactionCard', () => {
       expect(screen.getByText(/Sep.*15.*2025/i)).toBeInTheDocument()
     })
 
-    it('should show today for current date transactions', () => {
-      // System time mocked to Oct 29, 2025
+    it('should show today for current date', () => {
       const todayTransaction: Transaction = {
         ...mockTransaction,
-        date: '2025-10-29', // Today in mocked system time
+        date: '2025-10-29',
       }
-
       render(<TransactionCard transaction={todayTransaction} />)
       expect(screen.getByText('Today')).toBeInTheDocument()
     })
 
-    it('should show yesterday for yesterday transactions', () => {
-      // System time mocked to Oct 29, 2025, so yesterday is Oct 28
+    it('should show yesterday for yesterday', () => {
       const yesterdayTransaction: Transaction = {
         ...mockTransaction,
-        date: '2025-10-28', // Yesterday in mocked system time
+        date: '2025-10-28',
       }
-
       render(<TransactionCard transaction={yesterdayTransaction} />)
       expect(screen.getByText('Yesterday')).toBeInTheDocument()
     })
 
-    // TDD RED: These tests will fail until formatDate() is fixed
     describe('Date Format Edge Cases', () => {
-      it('should handle RFC3339 date format from backend', () => {
-        // Backend returns dates as RFC3339: "2025-09-15T00:00:00Z"
+      it('should handle RFC3339 date format', () => {
         const transactionWithRFC3339Date: Transaction = {
           ...mockTransaction,
           date: '2025-09-15T00:00:00Z',
           authorized_date: null,
         }
-
         render(<TransactionCard transaction={transactionWithRFC3339Date} />)
         expect(screen.getByText(/Sep.*15.*2025/i)).toBeInTheDocument()
       })
 
-      it('should handle null/undefined date gracefully', () => {
-        // Edge case: both date fields are null (shouldn't happen but must not crash)
+      it('should handle null date gracefully', () => {
         const transactionWithNullDate: Transaction = {
           ...mockTransaction,
-          date: null as unknown as string, // Type assertion to test runtime behavior
+          date: null as unknown as string,
           authorized_date: null,
         }
-
         render(<TransactionCard transaction={transactionWithNullDate} />)
         expect(screen.getByText('Invalid Date')).toBeInTheDocument()
       })
 
-      it('should handle malformed date string gracefully', () => {
-        // Edge case: corrupted/invalid date string
+      it('should handle malformed date string', () => {
         const transactionWithBadDate: Transaction = {
           ...mockTransaction,
           date: 'not-a-valid-date',
           authorized_date: null,
         }
-
         render(<TransactionCard transaction={transactionWithBadDate} />)
         expect(screen.getByText('Invalid Date')).toBeInTheDocument()
       })
@@ -565,7 +508,6 @@ describe('TransactionCard', () => {
   describe('Accessibility', () => {
     it('should have proper semantic structure', () => {
       const { container } = render(<TransactionCard transaction={mockTransaction} />)
-      // Should use article or similar semantic element
       const article = container.querySelector('article')
       expect(article).toBeInTheDocument()
     })
@@ -618,7 +560,6 @@ describe('TransactionCard', () => {
     })
   })
 
-  // Issue #499: Budget Badge Integration Tests
   describe('Budget Badge Integration', () => {
     it('should render TransactionBudgetBadge when budgetMatch prop is provided', () => {
       const budgetMatch = createBudgetCategoryMatch('category')
@@ -656,9 +597,8 @@ describe('TransactionCard', () => {
       expect(screen.queryByRole('link', { name: /Budget:/i })).not.toBeInTheDocument()
     })
 
-    it('should position badge before category text in meta section', () => {
+    it('should position badge before category', () => {
       const budgetMatch = createBudgetCategoryMatch('category')
-
       const { container } = renderWithRouter(
         <TransactionCard transaction={mockTransaction} budgetMatch={budgetMatch} />
       )
@@ -666,14 +606,11 @@ describe('TransactionCard', () => {
       const meta = container.querySelector('.transaction-card__meta')
       expect(meta).toBeInTheDocument()
 
-      // Badge should be a direct child of meta and come before category
       const badge = meta?.querySelector('.transaction-budget-badge')
       const category = meta?.querySelector('.transaction-card__category')
-
       expect(badge).toBeInTheDocument()
       expect(category).toBeInTheDocument()
 
-      // Verify badge comes before category in DOM order
       if (badge && category) {
         const children = Array.from(meta!.children)
         const badgeIndex = children.indexOf(badge)
@@ -727,8 +664,7 @@ describe('TransactionCard', () => {
     })
   })
 
-  // Issue #531: Transaction List Visual Enhancements
-  describe('Account Badge Display (Issue #531)', () => {
+  describe('Account Badge Display', () => {
     it('should render account name when account prop is provided', () => {
       const account = createMockAccount()
 
@@ -741,19 +677,16 @@ describe('TransactionCard', () => {
 
     it('should render account nickname when available', () => {
       const account = createMockAccount({ nickname: 'Main Checking' })
-
       renderWithRouter(
         <TransactionCard transaction={mockTransaction} account={account} />
       )
 
       expect(screen.getByText('Main Checking')).toBeInTheDocument()
-      // Should not show the original name
       expect(screen.queryByText('Chase Checking')).not.toBeInTheDocument()
     })
 
     it('should apply account custom_color as background', () => {
       const account = createMockAccount({ custom_color: '#EF4444' })
-
       const { container } = renderWithRouter(
         <TransactionCard transaction={mockTransaction} account={account} />
       )
@@ -803,7 +736,7 @@ describe('TransactionCard', () => {
     })
   })
 
-  describe('Category Color Dot (Issue #531)', () => {
+  describe('Category Color Dot', () => {
     it('should render category color dot before category text', () => {
       const { container } = render(<TransactionCard transaction={mockTransaction} />)
 
@@ -851,21 +784,20 @@ describe('TransactionCard', () => {
     })
   })
 
-  describe('Income/Expense Arrows (Issue #531)', () => {
-    it('should display up arrow for income (positive amount)', () => {
+  describe('Income/Expense Arrows', () => {
+    it('should display up arrow for income', () => {
       const incomeTransaction: Transaction = {
         ...mockTransaction,
         amount: 1000.00,
       }
-
       render(<TransactionCard transaction={incomeTransaction} />)
 
       expect(screen.getByTestId('income-arrow')).toBeInTheDocument()
       expect(screen.queryByTestId('expense-arrow')).not.toBeInTheDocument()
     })
 
-    it('should display down arrow for expense (negative amount)', () => {
-      render(<TransactionCard transaction={mockTransaction} />) // amount is -25.50
+    it('should display down arrow for expense', () => {
+      render(<TransactionCard transaction={mockTransaction} />)
 
       expect(screen.getByTestId('expense-arrow')).toBeInTheDocument()
       expect(screen.queryByTestId('income-arrow')).not.toBeInTheDocument()
@@ -884,7 +816,7 @@ describe('TransactionCard', () => {
     })
   })
 
-  describe('Enhanced Pending Badge (Issue #531)', () => {
+  describe('Enhanced Pending Badge', () => {
     it('should display clock icon in pending badge', () => {
       const pendingTransaction: Transaction = {
         ...mockTransaction,
@@ -916,9 +848,9 @@ describe('TransactionCard', () => {
     })
   })
 
-  describe('Hover Quick Actions (Issue #531)', () => {
+  describe('Hover Quick Actions', () => {
     it('should render quick actions container', () => {
-      const onEdit = vi.fn()
+      const onEdit = mock(() => {})
 
       const { container } = render(
         <TransactionCard transaction={mockTransaction} onEdit={onEdit} />
@@ -929,7 +861,7 @@ describe('TransactionCard', () => {
     })
 
     it('should render edit button when onEdit is provided', () => {
-      const onEdit = vi.fn()
+      const onEdit = mock(() => {})
 
       render(
         <TransactionCard transaction={mockTransaction} onEdit={onEdit} />
@@ -940,7 +872,7 @@ describe('TransactionCard', () => {
     })
 
     it('should render categorize button when onCategorize is provided', () => {
-      const onCategorize = vi.fn()
+      const onCategorize = mock(() => {})
 
       render(
         <TransactionCard transaction={mockTransaction} onCategorize={onCategorize} />
@@ -951,7 +883,7 @@ describe('TransactionCard', () => {
     })
 
     it('should call onEdit when edit button is clicked', () => {
-      const onEdit = vi.fn()
+      const onEdit = mock(() => {})
 
       render(
         <TransactionCard transaction={mockTransaction} onEdit={onEdit} />
@@ -964,7 +896,7 @@ describe('TransactionCard', () => {
     })
 
     it('should call onCategorize when categorize button is clicked', () => {
-      const onCategorize = vi.fn()
+      const onCategorize = mock(() => {})
 
       render(
         <TransactionCard transaction={mockTransaction} onCategorize={onCategorize} />
@@ -976,10 +908,8 @@ describe('TransactionCard', () => {
       expect(onCategorize).toHaveBeenCalledWith(mockTransaction)
     })
 
-    it('should not call card onClick when quick action button is clicked', () => {
-      const onCardClick = vi.fn()
-
-      // Render card with onEdit handler
+    it('should call onEdit when quick action clicked', () => {
+      const onCardClick = mock(() => {})
       render(
         <TransactionCard
           transaction={mockTransaction}
@@ -990,7 +920,6 @@ describe('TransactionCard', () => {
       const editButton = screen.getByRole('button', { name: /edit transaction/i })
       fireEvent.click(editButton)
 
-      // onEdit callback should be called once
       expect(onCardClick).toHaveBeenCalledTimes(1)
     })
 
@@ -1007,8 +936,8 @@ describe('TransactionCard', () => {
     })
 
     it('should have accessible labels on quick action buttons', () => {
-      const onEdit = vi.fn()
-      const onCategorize = vi.fn()
+      const onEdit = mock(() => {})
+      const onCategorize = mock(() => {})
 
       render(
         <TransactionCard

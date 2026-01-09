@@ -73,6 +73,11 @@ export default mergeConfig(
         'src/components/layout/UserDropdown.test.tsx',
         'src/features/budgets/components/BudgetCard.test.tsx',
         'src/features/profile/components/SubscriptionCard.test.tsx',
+        // Batch 10 - More router/component tests (2026-01-08)
+        'src/features/budgets/components/category-management/BudgetCategoryCard.test.tsx',
+        'src/features/budgets/components/budget-detail/UnallocatedFundsCard.test.tsx',
+        'src/features/transactions/components/TransactionCard.test.tsx',
+        'src/features/budgets/components/transaction-link/BudgetTransactionList.test.tsx',
       ],
       coverage: {
         provider: 'v8',
