@@ -61,6 +61,12 @@ export default mergeConfig(
         // Batch 6 - Tests with vi.mock patterns (2026-01-08)
         'src/features/accounts/components/ColorPicker.test.tsx',
         'src/features/accounts/SyncStatsCard.test.tsx',
+        // Batch 7 - Hook tests with vi.mock patterns (2026-01-08)
+        'src/features/budgets/hooks/useCurrentBudget.test.tsx',
+        'src/features/budgets/hooks/useBudgetTransactions.test.tsx',
+        // Batch 8 - Dashboard tests (2026-01-08)
+        'src/features/dashboard/components/AccountTypeFilter.test.tsx',
+        'src/features/dashboard/hooks/useDashboardOnboarding.test.ts',
       ],
       coverage: {
         provider: 'v8',

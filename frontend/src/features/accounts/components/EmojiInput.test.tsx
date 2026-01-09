@@ -8,7 +8,7 @@
  * Issue #544: Add unit tests for account customization components
  */
 
-import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { describe, it, expect, mock } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { EmojiInput } from './EmojiInput'

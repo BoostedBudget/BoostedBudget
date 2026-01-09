@@ -1,16 +1,8 @@
-/**
- * AccountTypeFilter Component Tests
- * Issue #564: Frontend Test Coverage Improvement
- *
- * Tests the account type filter component for dashboard filtering.
- */
-
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { AccountTypeFilter } from './AccountTypeFilter'
 import type { AccountTypesResponse } from '../types'
 
-// Mock account types data
 function createMockAccountTypes(types: Array<{ key: string; label: string; count: number; total_balance: number }> = []): AccountTypesResponse {
   return {
     types: types.length > 0 ? types : [
@@ -21,89 +13,81 @@ function createMockAccountTypes(types: Array<{ key: string; label: string; count
   }
 }
 
-describe('AccountTypeFilter', () => {
-  const mockOnChange = vi.fn()
+const mockOnChange = mock(() => {})
 
+describe('AccountTypeFilter', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    mockOnChange.mockClear()
   })
 
-  describe('Rendering', () => {
-    it('should render the component with title', () => {
-      render(
-        <AccountTypeFilter
-          accountTypes={createMockAccountTypes()}
-          selectedTypes={[]}
-          onChange={mockOnChange}
-        />
-      )
+  it('should render the component with title', () => {
+    render(
+      <AccountTypeFilter
+        accountTypes={createMockAccountTypes()}
+        selectedTypes={[]}
+        onChange={mockOnChange}
+      />
+    )
+    expect(screen.getByText('Account Types')).toBeInTheDocument()
+  })
 
-      expect(screen.getByText('Account Types')).toBeInTheDocument()
-    })
+  it('should render All Types checkbox', () => {
+    render(
+      <AccountTypeFilter
+        accountTypes={createMockAccountTypes()}
+        selectedTypes={[]}
+        onChange={mockOnChange}
+      />
+    )
+    expect(screen.getByText('All Types')).toBeInTheDocument()
+  })
 
-    it('should render All Types checkbox', () => {
-      render(
-        <AccountTypeFilter
-          accountTypes={createMockAccountTypes()}
-          selectedTypes={[]}
-          onChange={mockOnChange}
-        />
-      )
+  it('should render all account type options', () => {
+    render(
+      <AccountTypeFilter
+        accountTypes={createMockAccountTypes()}
+        selectedTypes={[]}
+        onChange={mockOnChange}
+      />
+    )
+    expect(screen.getByText('Checking & Savings')).toBeInTheDocument()
+    expect(screen.getByText('Credit Cards')).toBeInTheDocument()
+    expect(screen.getByText('Investments')).toBeInTheDocument()
+  })
 
-      expect(screen.getByText('All Types')).toBeInTheDocument()
-    })
+  it('should render account counts with plural form', () => {
+    render(
+      <AccountTypeFilter
+        accountTypes={createMockAccountTypes()}
+        selectedTypes={[]}
+        onChange={mockOnChange}
+      />
+    )
+    expect(screen.getByText('2 accounts')).toBeInTheDocument()
+    expect(screen.getByText('3 accounts')).toBeInTheDocument()
+  })
 
-    it('should render all account type options', () => {
-      render(
-        <AccountTypeFilter
-          accountTypes={createMockAccountTypes()}
-          selectedTypes={[]}
-          onChange={mockOnChange}
-        />
-      )
+  it('should render account count with singular form', () => {
+    render(
+      <AccountTypeFilter
+        accountTypes={createMockAccountTypes()}
+        selectedTypes={[]}
+        onChange={mockOnChange}
+      />
+    )
+    expect(screen.getByText('1 account')).toBeInTheDocument()
+  })
 
-      expect(screen.getByText('Checking & Savings')).toBeInTheDocument()
-      expect(screen.getByText('Credit Cards')).toBeInTheDocument()
-      expect(screen.getByText('Investments')).toBeInTheDocument()
-    })
-
-    it('should render account counts with plural form', () => {
-      render(
-        <AccountTypeFilter
-          accountTypes={createMockAccountTypes()}
-          selectedTypes={[]}
-          onChange={mockOnChange}
-        />
-      )
-
-      expect(screen.getByText('2 accounts')).toBeInTheDocument()
-      expect(screen.getByText('3 accounts')).toBeInTheDocument()
-    })
-
-    it('should render account count with singular form', () => {
-      render(
-        <AccountTypeFilter
-          accountTypes={createMockAccountTypes()}
-          selectedTypes={[]}
-          onChange={mockOnChange}
-        />
-      )
-
-      expect(screen.getByText('1 account')).toBeInTheDocument()
-    })
-
-    it('should render empty state with no types', () => {
-      render(
-        <AccountTypeFilter
-          accountTypes={{ types: [] }}
-          selectedTypes={[]}
-          onChange={mockOnChange}
-        />
-      )
-
-      expect(screen.getByText('Account Types')).toBeInTheDocument()
-      expect(screen.getByText('All Types')).toBeInTheDocument()
-    })
+  it('should render empty state with no types', () => {
+    render(
+      <AccountTypeFilter
+        accountTypes={{ types: [] }}
+        selectedTypes={[]}
+        onChange={mockOnChange}
+      />
+    )
+    expect(screen.getByText('Account Types')).toBeInTheDocument()
+    expect(screen.getByText('All Types')).toBeInTheDocument()
   })
 
   describe('Currency Formatting', () => {
@@ -173,7 +157,6 @@ describe('AccountTypeFilter', () => {
           onChange={mockOnChange}
         />
       )
-
       const allTypesCheckbox = screen.getAllByRole('checkbox')[0]
       expect(allTypesCheckbox).toBeChecked()
     })
@@ -186,7 +169,6 @@ describe('AccountTypeFilter', () => {
           onChange={mockOnChange}
         />
       )
-
       const allTypesCheckbox = screen.getAllByRole('checkbox')[0]
       expect(allTypesCheckbox).toBeChecked()
     })
@@ -199,7 +181,6 @@ describe('AccountTypeFilter', () => {
           onChange={mockOnChange}
         />
       )
-
       const allTypesCheckbox = screen.getAllByRole('checkbox')[0]
       expect(allTypesCheckbox).not.toBeChecked()
     })
@@ -212,12 +193,10 @@ describe('AccountTypeFilter', () => {
           onChange={mockOnChange}
         />
       )
-
       const checkboxes = screen.getAllByRole('checkbox')
-      // First checkbox is "All Types", then individual types
-      expect(checkboxes[1]).toBeChecked() // depository
-      expect(checkboxes[2]).not.toBeChecked() // credit
-      expect(checkboxes[3]).not.toBeChecked() // investment
+      expect(checkboxes[1]).toBeChecked()
+      expect(checkboxes[2]).not.toBeChecked()
+      expect(checkboxes[3]).not.toBeChecked()
     })
 
     it('should check all individual types when selectedTypes is empty', () => {
@@ -228,9 +207,7 @@ describe('AccountTypeFilter', () => {
           onChange={mockOnChange}
         />
       )
-
       const checkboxes = screen.getAllByRole('checkbox')
-      // When selectedTypes is empty, all types are implicitly selected
       expect(checkboxes[1]).toBeChecked()
       expect(checkboxes[2]).toBeChecked()
       expect(checkboxes[3]).toBeChecked()
@@ -246,10 +223,8 @@ describe('AccountTypeFilter', () => {
           onChange={mockOnChange}
         />
       )
-
       const allTypesCheckbox = screen.getAllByRole('checkbox')[0]
       fireEvent.click(allTypesCheckbox)
-
       expect(mockOnChange).toHaveBeenCalledWith([])
     })
 
@@ -261,10 +236,8 @@ describe('AccountTypeFilter', () => {
           onChange={mockOnChange}
         />
       )
-
       const allTypesCheckbox = screen.getAllByRole('checkbox')[0]
       fireEvent.click(allTypesCheckbox)
-
       expect(mockOnChange).toHaveBeenCalledWith(['depository', 'credit', 'investment'])
     })
   })
@@ -278,10 +251,8 @@ describe('AccountTypeFilter', () => {
           onChange={mockOnChange}
         />
       )
-
       const creditCheckbox = screen.getAllByRole('checkbox')[2]
       fireEvent.click(creditCheckbox)
-
       expect(mockOnChange).toHaveBeenCalledWith(['depository', 'credit'])
     })
 
@@ -293,10 +264,8 @@ describe('AccountTypeFilter', () => {
           onChange={mockOnChange}
         />
       )
-
       const depositoryCheckbox = screen.getAllByRole('checkbox')[1]
       fireEvent.click(depositoryCheckbox)
-
       expect(mockOnChange).toHaveBeenCalledWith(['credit'])
     })
 
@@ -308,14 +277,8 @@ describe('AccountTypeFilter', () => {
           onChange={mockOnChange}
         />
       )
-
-      // Click on depository - when selectedTypes is empty, it doesn't include 'depository'
-      // so the toggle logic adds it to the array
       const depositoryCheckbox = screen.getAllByRole('checkbox')[1]
       fireEvent.click(depositoryCheckbox)
-
-      // Since selectedTypes is empty and depository is not in the array,
-      // clicking adds it to selection
       expect(mockOnChange).toHaveBeenCalledWith(['depository'])
     })
   })
@@ -329,7 +292,6 @@ describe('AccountTypeFilter', () => {
           onChange={mockOnChange}
         />
       )
-
       expect(screen.getAllByRole('checkbox').length).toBeGreaterThan(0)
     })
 
@@ -341,7 +303,6 @@ describe('AccountTypeFilter', () => {
           onChange={mockOnChange}
         />
       )
-
       expect(screen.getByText('Checking & Savings')).toBeInTheDocument()
       expect(screen.getByText('Credit Cards')).toBeInTheDocument()
       expect(screen.getByText('Investments')).toBeInTheDocument()
