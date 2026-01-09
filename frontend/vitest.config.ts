@@ -114,6 +114,14 @@ export default mergeConfig(
         'src/features/rules/components/actions/BudgetAlertActionForm.test.tsx',
         'src/features/rules/components/actions/SavingsGoalActionForm.test.tsx',
         'src/features/rules/components/actions/TransferActionForm.test.tsx',
+        // Batch 18 - Income source and category config tests (2026-01-09)
+        'src/features/budgets/components/income/IncomeSourceConfig.test.tsx',
+        'src/features/budgets/components/income/IncomeSourceItem.test.tsx',
+        'src/features/budgets/components/income/IncomeSourcePicker.test.tsx',
+        'src/features/budgets/components/category-management/CategoryMatchConfig.test.tsx',
+        // Batch 19 - Hook and filter tests (2026-01-09)
+        'src/features/budgets/hooks/useIncomeTracking.test.ts',
+        'src/features/transactions/components/filters/TransactionDateFilter.test.tsx',
       ],
       coverage: {
         provider: 'v8',

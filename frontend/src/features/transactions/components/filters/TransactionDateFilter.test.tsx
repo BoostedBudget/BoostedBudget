@@ -3,16 +3,24 @@
  * Issue #529: Transaction page filtering
  */
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TransactionDateFilter } from './TransactionDateFilter'
 
+const mockOnPresetChange = mock(() => {})
+const mockOnCustomRangeChange = mock(() => {})
+
 describe('TransactionDateFilter', () => {
+  beforeEach(() => {
+    mockOnPresetChange.mockClear()
+    mockOnCustomRangeChange.mockClear()
+  })
+
   const defaultProps = {
     preset: 'all' as const,
-    onPresetChange: vi.fn(),
-    onCustomRangeChange: vi.fn(),
+    onPresetChange: mockOnPresetChange,
+    onCustomRangeChange: mockOnCustomRangeChange,
   }
 
   it('should render all preset buttons', () => {
@@ -35,7 +43,7 @@ describe('TransactionDateFilter', () => {
 
   it('should call onPresetChange when preset clicked', async () => {
     const user = userEvent.setup()
-    const onPresetChange = vi.fn()
+    const onPresetChange = mock(() => {})
 
     render(<TransactionDateFilter {...defaultProps} onPresetChange={onPresetChange} />)
 
@@ -69,7 +77,7 @@ describe('TransactionDateFilter', () => {
 
   it('should call onCustomRangeChange when Apply button clicked', async () => {
     const user = userEvent.setup()
-    const onCustomRangeChange = vi.fn()
+    const onCustomRangeChange = mock(() => {})
 
     render(
       <TransactionDateFilter
