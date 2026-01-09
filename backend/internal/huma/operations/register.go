@@ -46,6 +46,9 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	// Automation Rules (Issues #34-38)
 	automationRuleHandler := &AutomationRuleHandler{}
 
+	// Issue #171: Stable user account references
+	userAccountHandler := &UserAccountHandler{}
+
 	// Register all routes
 	RegisterHealthRoutes(api, healthHandler)
 	RegisterMetricsRoutes(api, metricsHandler)
@@ -71,4 +74,7 @@ func RegisterAllRoutesForSpec(api huma.API) {
 
 	// Automation Rules (Issues #34-38)
 	RegisterAutomationRuleRoutes(api, automationRuleHandler)
+
+	// Issue #171: Stable user account references
+	RegisterUserAccountRoutes(api, userAccountHandler)
 }

@@ -108,6 +108,16 @@ func (m *MockLinkedItemRepository) GetByIDForUpdate(ctx context.Context, tx pgx.
 	return args.Get(0).(*domain.LinkedItem), args.Error(1)
 }
 
+// GetByUserAndInstitution retrieves a linked item by user ID, institution ID, and status.
+// Issue #171 - Plaid Re-Link Handling
+func (m *MockLinkedItemRepository) GetByUserAndInstitution(ctx context.Context, userID, institutionID, status string) (*domain.LinkedItem, error) {
+	args := m.Called(ctx, userID, institutionID, status)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.LinkedItem), args.Error(1)
+}
+
 // MockJobQueue mocks the JobQueue interface
 type MockJobQueue struct {
 	mock.Mock

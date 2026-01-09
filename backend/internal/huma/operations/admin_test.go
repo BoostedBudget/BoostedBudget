@@ -121,6 +121,12 @@ func (m *mockLinkedItemRepo) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, id
 	return m.item, m.getErr
 }
 
+// GetByUserAndInstitution retrieves a linked item by user ID, institution ID, and status.
+// Issue #171 - Plaid Re-Link Handling
+func (m *mockLinkedItemRepo) GetByUserAndInstitution(ctx context.Context, userID, institutionID, status string) (*domain.LinkedItem, error) {
+	return nil, repository.ErrLinkedItemNotFound
+}
+
 // mockEncryptionService is a mock implementation of services.EncryptionService
 type mockEncryptionService struct {
 	decryptedToken string
