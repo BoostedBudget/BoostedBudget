@@ -831,12 +831,14 @@ func (s *transactionSyncService) createBalanceSnapshots(
 		}
 
 		// Create balance snapshot
+		// Issue #171: Include UserAccountID for stable reference across Plaid re-links
 		snapshot := &domain.BalanceSnapshot{
-			AccountID:    internalAccount.ID,
-			UserID:       linkedItem.UserID,
-			SnapshotAt:   now,
-			Source:       domain.SnapshotSourcePlaidWebhook,
-			CurrencyCode: "USD", // Default to USD
+			AccountID:     internalAccount.ID,
+			UserAccountID: internalAccount.UserAccountID,
+			UserID:        linkedItem.UserID,
+			SnapshotAt:    now,
+			Source:        domain.SnapshotSourcePlaidWebhook,
+			CurrencyCode:  "USD", // Default to USD
 		}
 
 		// Set current balance if available

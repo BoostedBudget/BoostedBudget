@@ -8,9 +8,13 @@ import (
 // BalanceSnapshot represents a point-in-time snapshot of an account's balance.
 // Captured from Plaid webhooks (INITIAL_UPDATE, DEFAULT_UPDATE) to track historical balances.
 // Supports multiple snapshots per day for Premium+ tier high-frequency syncs (10-minute intervals).
+//
+// Issue #171: UserAccountID provides stable reference across Plaid re-links.
+// When querying balance history, use UserAccountID to get history across all account versions.
 type BalanceSnapshot struct {
 	ID               string    `json:"id" db:"id"`
 	AccountID        string    `json:"account_id" db:"account_id"`
+	UserAccountID    *string   `json:"user_account_id,omitempty" db:"user_account_id"` // Stable reference (Issue #171)
 	UserID           string    `json:"user_id" db:"user_id"`
 	CurrentBalance   *float64  `json:"current_balance,omitempty" db:"current_balance"`
 	AvailableBalance *float64  `json:"available_balance,omitempty" db:"available_balance"`

@@ -32,7 +32,7 @@ import type { Account, AccountIcon, UpdateAccountRequest } from '../types'
 // Internal component to handle modal content with its own state
 interface ModalContentProps {
   account: Account
-  onSave: (accountId: string, changes: Partial<UpdateAccountRequest>) => Promise<void>
+  onSave: (account: Account, changes: Partial<UpdateAccountRequest>) => Promise<void>
   onCancel: () => void
   isSaving: boolean
 }
@@ -83,7 +83,7 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
 
     // Only save if there are changes
     if (Object.keys(changes).length > 0) {
-      await onSave(account.id, changes)
+      await onSave(account, changes)
     } else {
       onCancel()
     }
@@ -253,8 +253,8 @@ export interface AccountCustomizationModalProps {
   open: boolean
   /** Callback when modal should close */
   onOpenChange: (open: boolean) => void
-  /** Callback when save is clicked */
-  onSave: (accountId: string, changes: Partial<UpdateAccountRequest>) => Promise<void>
+  /** Callback when save is clicked - passes full account for user_account_id resolution (Issue #171) */
+  onSave: (account: Account, changes: Partial<UpdateAccountRequest>) => Promise<void>
   /** Whether save is in progress */
   isSaving?: boolean
 }
@@ -284,8 +284,8 @@ export function AccountCustomizationModal({
     onOpenChange(false)
   }, [onOpenChange])
 
-  const handleSave = useCallback(async (accountId: string, changes: Partial<UpdateAccountRequest>) => {
-    await onSave(accountId, changes)
+  const handleSave = useCallback(async (account: Account, changes: Partial<UpdateAccountRequest>) => {
+    await onSave(account, changes)
     onOpenChange(false)
   }, [onSave, onOpenChange])
 
