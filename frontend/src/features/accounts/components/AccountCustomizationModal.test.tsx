@@ -90,6 +90,7 @@ describe('AccountCustomizationModal', () => {
     currency_code: 'USD',
     institution_name: 'Chase',
     is_hidden: false,
+    status: 'active',
     created_at: '2025-10-18T14:30:00Z',
     updated_at: '2025-10-20T10:15:00Z',
   }

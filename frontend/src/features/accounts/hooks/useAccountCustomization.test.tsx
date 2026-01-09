@@ -157,8 +157,8 @@ describe('useAccountCustomization', () => {
 
       // Should return account with updated values
       expect(returnedAccount).not.toBeNull()
-      expect(returnedAccount?.nickname).toBe('Updated Name')
-      expect(returnedAccount?.custom_color).toBe('#FF0000')
+      expect(returnedAccount!.nickname).toBe('Updated Name')
+      expect(returnedAccount!.custom_color).toBe('#FF0000')
       expect(result.current.updateError).toBeNull()
     })
 
