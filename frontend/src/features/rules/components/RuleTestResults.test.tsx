@@ -6,7 +6,7 @@
  * TDD RED: Writing tests before implementation.
  */
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { RuleTestResults } from './RuleTestResults'
 import type { RuleTestResult } from '@/api/generated/models'
@@ -181,7 +181,7 @@ describe('RuleTestResults', () => {
 
   describe('Close Button', () => {
     it('should call onClose when close button clicked', () => {
-      const onClose = vi.fn()
+      const onClose = mock(() => {})
 
       render(
         <RuleTestResults result={mockTestResult} onClose={onClose} />

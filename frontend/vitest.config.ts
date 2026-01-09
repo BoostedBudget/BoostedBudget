@@ -94,6 +94,11 @@ export default mergeConfig(
         'src/features/auto-categorization/components/AutoCategorizationRuleTable.test.tsx',
         'src/features/rules/components/RuleCard.test.tsx',
         'src/features/budgets/goalTemplates.test.ts',
+        // Batch 14 - Rule component tests (2026-01-08)
+        'src/features/rules/components/CronBuilder.test.tsx',
+        'src/features/rules/components/TriggerSelector.test.tsx',
+        'src/features/rules/components/RuleTestResults.test.tsx',
+        'src/features/dashboard/widgets/RemoveWidgetDialog.test.tsx',
       ],
       coverage: {
         provider: 'v8',

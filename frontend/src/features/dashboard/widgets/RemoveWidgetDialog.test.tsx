@@ -5,16 +5,17 @@
  * Issue #412: Dashboard widget UX improvements
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { RemoveWidgetDialog } from './RemoveWidgetDialog'
 
 describe('RemoveWidgetDialog', () => {
-  const mockOnConfirm = vi.fn()
-  const mockOnCancel = vi.fn()
+  const mockOnConfirm = mock(() => {})
+  const mockOnCancel = mock(() => {})
 
   beforeEach(() => {
-    vi.clearAllMocks()
+    mockOnConfirm.mockClear()
+    mockOnCancel.mockClear()
   })
 
   describe('Display', () => {
