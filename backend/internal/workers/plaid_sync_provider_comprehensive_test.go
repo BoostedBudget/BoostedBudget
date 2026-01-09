@@ -507,3 +507,121 @@ func TestPlaidSyncProvider_ConvertPlaidTransaction_InvalidDate(t *testing.T) {
 	assert.Nil(t, domainTxn)
 	assert.Contains(t, err.Error(), "failed to parse transaction date")
 }
+
+// TestPlaidSyncProvider_SyncForLinkedItem_TenPagePagination tests 10+ page sync
+// This is a stress test to verify cursor handling and pagination over many pages.
+func TestPlaidSyncProvider_SyncForLinkedItem_TenPagePagination(t *testing.T) {
+	linkedItemRepo := new(MockLinkedItemRepository)
+	txnRepo := new(MockTransactionRepository)
+	plaidClient := new(MockPlaidClient)
+	emitter := new(MockEventEmitter)
+
+	provider := NewPlaidSyncProvider(linkedItemRepo, txnRepo, plaidClient, emitter)
+	ctx := context.Background()
+
+	linkedItemID := "test-linked-item"
+	linkedItem := &domain.LinkedItem{
+		ID:                   linkedItemID,
+		UserID:               "user-123",
+		AccessTokenEncrypted: "encrypted-token",
+		Cursor:               nil, // Initial sync
+	}
+
+	// Generate 10 pages of transactions
+	const numPages = 10
+	const transactionsPerPage = 50 // Simulate realistic page sizes
+	accountID := "acc-123"
+	date := "2024-01-15"
+
+	// Build expected cursors and responses
+	cursors := make([]string, numPages)
+	for i := 0; i < numPages; i++ {
+		cursors[i] = "cursor-page-" + string(rune('A'+i))
+	}
+	finalCursor := "cursor-final"
+
+	// Setup expectations
+	linkedItemRepo.On("GetByID", ctx, linkedItemID).Return(linkedItem, nil)
+
+	// Build responses for each page
+	var previousCursor *string
+	for pageNum := 0; pageNum < numPages; pageNum++ {
+		// Generate transactions for this page
+		transactions := make([]plaid.Transaction, transactionsPerPage)
+		for i := 0; i < transactionsPerPage; i++ {
+			txnID := "txn-page-" + string(rune('A'+pageNum)) + "-" + string(rune('0'+i%10)) + string(rune('0'+(i/10)%10))
+			amount := float64(10 + pageNum*100 + i)
+			transactions[i] = plaid.Transaction{
+				Amount:        amount,
+				TransactionId: txnID,
+				AccountId:     accountID,
+				Date:          date,
+				Name:          "Store " + txnID,
+				Pending:       false,
+			}
+		}
+
+		isLastPage := pageNum == numPages-1
+		var nextCursor string
+		if isLastPage {
+			nextCursor = finalCursor
+		} else {
+			nextCursor = cursors[pageNum]
+		}
+
+		syncResp := &plaid.TransactionsSyncResponse{
+			Added:      transactions,
+			Modified:   []plaid.Transaction{},
+			Removed:    []plaid.RemovedTransaction{},
+			NextCursor: nextCursor,
+			HasMore:    !isLastPage,
+		}
+
+		// Mock the Plaid API call
+		if previousCursor == nil {
+			plaidClient.On("TransactionsSync", ctx, "encrypted-token", (*string)(nil)).Return(syncResp, nil).Once()
+		} else {
+			cursorCopy := *previousCursor
+			plaidClient.On("TransactionsSync", ctx, "encrypted-token", &cursorCopy).Return(syncResp, nil).Once()
+		}
+
+		// Mock CreateBatch for each page
+		txnRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
+			return len(txns) == transactionsPerPage
+		})).Return(nil).Once()
+
+		// Mock Emit for each transaction in this page (one event per transaction)
+		for i := 0; i < transactionsPerPage; i++ {
+			emitter.On("Emit", ctx, mock.MatchedBy(func(e events.TransactionEvent) bool {
+				return e.Type == events.EventTypeAdded && e.UserID == "user-123"
+			})).Return(nil).Once()
+		}
+
+		// Update previous cursor for next iteration
+		if !isLastPage {
+			previousCursor = &cursors[pageNum]
+		}
+	}
+
+	// Final cursor update
+	linkedItemRepo.On("UpdateCursor", ctx, linkedItemID, finalCursor).Return(nil)
+
+	// Execute
+	count, err := provider.SyncForLinkedItem(ctx, linkedItemID)
+
+	// Assert
+	assert.NoError(t, err)
+	expectedCount := numPages * transactionsPerPage
+	assert.Equal(t, expectedCount, count, "Should have synced %d transactions across %d pages", expectedCount, numPages)
+
+	// Verify all expectations were met
+	linkedItemRepo.AssertExpectations(t)
+	txnRepo.AssertExpectations(t)
+	plaidClient.AssertExpectations(t)
+	emitter.AssertExpectations(t)
+
+	// Verify specific call counts (AssertNumberOfCalls returns true if count matches)
+	assert.True(t, plaidClient.AssertNumberOfCalls(t, "TransactionsSync", numPages), "Should have made exactly %d Plaid API calls", numPages)
+	assert.True(t, txnRepo.AssertNumberOfCalls(t, "CreateBatch", numPages), "Should have created %d batches", numPages)
+	assert.True(t, emitter.AssertNumberOfCalls(t, "Emit", expectedCount), "Should have emitted %d events (one per transaction)", expectedCount)
+}

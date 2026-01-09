@@ -51,6 +51,10 @@ func (m *mockPlaidServiceForPlaid) FireWebhook(ctx context.Context, accessToken 
 	return nil, nil
 }
 
+func (m *mockPlaidServiceForPlaid) AccountsGet(ctx context.Context, accessToken string) (*plaid.AccountsGetResponse, error) {
+	return nil, nil
+}
+
 // mockAccountServiceForPlaid is a mock implementation of services.AccountService
 type mockAccountServiceForPlaid struct {
 	accounts      []domain.Account

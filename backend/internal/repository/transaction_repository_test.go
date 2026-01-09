@@ -105,8 +105,9 @@ func TestTransactionRepository_CreateBatch_Success(t *testing.T) {
 		},
 	}
 
-	// Expect batch INSERT with multiple value sets (19 fields per transaction * 2 transactions = 38 args)
-	args := make([]interface{}, 38)
+	// Expect batch INSERT with multiple value sets (20 fields per transaction * 2 transactions = 40 args)
+	// Issue #171: Added user_account_id as the 5th field
+	args := make([]interface{}, 40)
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
@@ -1839,5 +1840,166 @@ func TestTransactionRepository_GetMatchingTransactionStats_DBError(t *testing.T)
 
 	err = mock.ExpectationsWereMet()
 	assert.NoError(t, err)
+}
+
+// =============================================================================
+// Issue #171: Re-Link Handling Tests
+// =============================================================================
+
+// TestTransactionRepository_CreateBatch_WithUserAccountID tests batch creation with user_account_id
+// Issue #171: UserAccountID is added to transactions for stable queries across re-links
+func TestTransactionRepository_CreateBatch_WithUserAccountID(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock)
+	ctx := context.Background()
+
+	externalID := "plaid_tx_relink_1"
+	userAccountID := "user-account-uuid-123"
+	transactions := []domain.Transaction{
+		{
+			UserID:                "user-123",
+			AccountID:             "account-new-123",
+			LinkedItemID:          "item-new-123",
+			UserAccountID:         &userAccountID,
+			Source:                domain.SourcePlaid,
+			ExternalTransactionID: &externalID,
+			Amount:                -50.00,
+			Date:                  time.Now(),
+			Name:                  "Starbucks",
+		},
+	}
+
+	// Expect batch INSERT with user_account_id field (20 fields now)
+	// Build arguments for 20 fields per transaction
+	args := make([]interface{}, 20)
+	for i := range args {
+		args[i] = pgxmock.AnyArg()
+	}
+	mock.ExpectExec("INSERT INTO transactions").
+		WithArgs(args...).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+
+	err = repo.CreateBatch(ctx, transactions)
+	assert.NoError(t, err)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_CreateBatch_DOUpdateBehavior verifies that ON CONFLICT DO UPDATE is used
+// Issue #171: When a re-link occurs, duplicate transactions should UPDATE FKs, not be ignored
+func TestTransactionRepository_CreateBatch_DOUpdateBehavior(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock)
+	ctx := context.Background()
+
+	externalID := "plaid_tx_duplicate_1"
+	userAccountID := "user-account-uuid-123"
+
+	// Simulate a re-link scenario: same transaction, new account_id
+	transactions := []domain.Transaction{
+		{
+			UserID:                "user-123",
+			AccountID:             "account-NEW-after-relink", // NEW account after re-link
+			LinkedItemID:          "item-NEW-after-relink",    // NEW linked item after re-link
+			UserAccountID:         &userAccountID,             // Stable user_account_id
+			Source:                domain.SourcePlaid,
+			ExternalTransactionID: &externalID, // Same external ID (Plaid transaction_id is stable)
+			Amount:                -50.00,
+			Date:                  time.Now(),
+			Name:                  "Starbucks",
+		},
+	}
+
+	// Build arguments for 20 fields per transaction
+	args := make([]interface{}, 20)
+	for i := range args {
+		args[i] = pgxmock.AnyArg()
+	}
+
+	// The query should use ON CONFLICT DO UPDATE (not DO NOTHING)
+	// This test verifies the query structure includes DO UPDATE
+	mock.ExpectExec("ON CONFLICT.*DO UPDATE").
+		WithArgs(args...).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+
+	err = repo.CreateBatch(ctx, transactions)
+	assert.NoError(t, err)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetByUserAccountID tests retrieval by stable user_account_id
+// Issue #171: Allows querying transactions across re-links using stable reference
+func TestTransactionRepository_GetByUserAccountID(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock)
+	ctx := context.Background()
+
+	userID := "user-123"
+	userAccountID := "user-account-uuid-123"
+	now := time.Now()
+
+	externalID1 := "tx-1"
+	externalID2 := "tx-2"
+
+	// Build rows matching the SELECT query column order in GetByUserAccountID
+	// Note: category_source must be raw string (not *string) for sql.NullString scanning
+	rows := pgxmock.NewRows([]string{
+		"id", "user_id", "account_id", "linked_item_id", "user_account_id",
+		"source", "external_transaction_id", "external_metadata",
+		"amount", "date", "authorized_date", "name", "merchant_name",
+		"category", "personal_finance_category", "payment_channel", "pending", "user_notes",
+		"created_at", "updated_at", "tags", "tags_source",
+		"category_override", "category_source", "category_override_date", "original_category",
+	}).
+		AddRow(
+			"tx-uuid-1", userID, "account-old", "item-old", &userAccountID,
+			"plaid", &externalID1, nil,
+			-50.00, now, nil, "Starbucks", ptrStr("Starbucks Corp"),
+			nil, nil, nil, false, nil,
+			now, now, []byte(`[]`), []byte(`[]`),
+			nil, "plaid", nil, nil, // category_source as raw string for sql.NullString
+		).
+		AddRow(
+			"tx-uuid-2", userID, "account-new", "item-new", &userAccountID,
+			"plaid", &externalID2, nil,
+			-25.00, now, nil, "Coffee", nil,
+			nil, nil, nil, false, nil,
+			now, now, []byte(`[]`), []byte(`[]`),
+			nil, "plaid", nil, nil, // category_source as raw string for sql.NullString
+		)
+
+	mock.ExpectQuery("SELECT.*FROM transactions.*WHERE user_id.*AND user_account_id").
+		WithArgs(userID, userAccountID).
+		WillReturnRows(rows)
+
+	// This method should exist for stable queries
+	transactions, err := repo.GetByUserAccountID(ctx, userID, userAccountID)
+	require.NoError(t, err)
+	assert.Len(t, transactions, 2)
+	// Both transactions have the same user_account_id despite different account_ids
+	assert.Equal(t, "account-old", transactions[0].AccountID)
+	assert.Equal(t, "account-new", transactions[1].AccountID)
+	assert.Equal(t, userAccountID, *transactions[0].UserAccountID)
+	assert.Equal(t, userAccountID, *transactions[1].UserAccountID)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// Helper function to create string pointer
+func ptrStr(s string) *string {
+	return &s
 }
 

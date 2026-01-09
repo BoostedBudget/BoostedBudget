@@ -65,6 +65,25 @@ type AccountRepository interface {
 	// If includeHidden is false, only returns accounts where is_hidden = false.
 	// Results are sorted by display_order ASC (nulls last), then created_at ASC.
 	GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error)
+
+	// GetByUserAccountAndStatus retrieves accounts by user_account_id and status.
+	// This is used for querying accounts across re-links using stable user_account reference.
+	// Issue #171: Plaid Re-Link Handling
+	//
+	// Returns empty slice if no accounts found (not an error).
+	GetByUserAccountAndStatus(ctx context.Context, userAccountID, status string) ([]domain.Account, error)
+
+	// GetByUserAccountID retrieves all accounts for a user_account (any status).
+	// This returns both active and replaced accounts for historical view.
+	// Issue #171: Plaid Re-Link Handling
+	GetByUserAccountID(ctx context.Context, userAccountID string) ([]domain.Account, error)
+
+	// UpdateStatus updates an account's status and soft-delete fields with ownership validation.
+	// Used when marking accounts as replaced during re-link.
+	// Issue #171: Plaid Re-Link Handling
+	//
+	// Returns ErrAccountNotFound if account doesn't exist or user doesn't own it.
+	UpdateStatus(ctx context.Context, accountID, userID string, status domain.AccountStatus, replacedByID *string) error
 }
 
 // accountRepository implements AccountRepository using PostgreSQL
@@ -552,4 +571,133 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 	}
 
 	return accounts, nil
+}
+
+// GetByUserAccountAndStatus retrieves accounts by user_account_id and status.
+// Issue #171: Plaid Re-Link Handling
+func (r *accountRepository) GetByUserAccountAndStatus(ctx context.Context, userAccountID, status string) ([]domain.Account, error) {
+	query := `
+		SELECT id, linked_item_id, user_id, plaid_account_id,
+		       name, official_name, type, subtype, mask,
+		       current_balance, available_balance, currency_code,
+		       user_account_id, status, replaced_at, replaced_by_id,
+		       nickname, custom_color, custom_icon, custom_emoji, display_order, is_hidden,
+		       created_at, updated_at
+		FROM accounts
+		WHERE user_account_id = $1 AND status = $2
+		ORDER BY created_at ASC
+	`
+
+	rows, err := r.db.Query(ctx, query, userAccountID, status)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var accounts []domain.Account
+	for rows.Next() {
+		var account domain.Account
+		err := rows.Scan(
+			&account.ID, &account.LinkedItemID, &account.UserID, &account.PlaidAccountID,
+			&account.Name, &account.OfficialName, &account.Type, &account.Subtype, &account.Mask,
+			&account.CurrentBalance, &account.AvailableBalance, &account.CurrencyCode,
+			&account.UserAccountID, &account.Status, &account.ReplacedAt, &account.ReplacedByID,
+			&account.Nickname, &account.CustomColor, &account.CustomIcon, &account.CustomEmoji,
+			&account.DisplayOrder, &account.IsHidden,
+			&account.CreatedAt, &account.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		accounts = append(accounts, account)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if accounts == nil {
+		accounts = []domain.Account{}
+	}
+
+	return accounts, nil
+}
+
+// GetByUserAccountID retrieves all accounts for a user_account (any status).
+// Issue #171: Plaid Re-Link Handling
+func (r *accountRepository) GetByUserAccountID(ctx context.Context, userAccountID string) ([]domain.Account, error) {
+	query := `
+		SELECT id, linked_item_id, user_id, plaid_account_id,
+		       name, official_name, type, subtype, mask,
+		       current_balance, available_balance, currency_code,
+		       user_account_id, status, replaced_at, replaced_by_id,
+		       nickname, custom_color, custom_icon, custom_emoji, display_order, is_hidden,
+		       created_at, updated_at
+		FROM accounts
+		WHERE user_account_id = $1
+		ORDER BY created_at ASC
+	`
+
+	rows, err := r.db.Query(ctx, query, userAccountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var accounts []domain.Account
+	for rows.Next() {
+		var account domain.Account
+		err := rows.Scan(
+			&account.ID, &account.LinkedItemID, &account.UserID, &account.PlaidAccountID,
+			&account.Name, &account.OfficialName, &account.Type, &account.Subtype, &account.Mask,
+			&account.CurrentBalance, &account.AvailableBalance, &account.CurrencyCode,
+			&account.UserAccountID, &account.Status, &account.ReplacedAt, &account.ReplacedByID,
+			&account.Nickname, &account.CustomColor, &account.CustomIcon, &account.CustomEmoji,
+			&account.DisplayOrder, &account.IsHidden,
+			&account.CreatedAt, &account.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		accounts = append(accounts, account)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if accounts == nil {
+		accounts = []domain.Account{}
+	}
+
+	return accounts, nil
+}
+
+// UpdateStatus updates an account's status and soft-delete fields with ownership validation.
+// Issue #171: Plaid Re-Link Handling
+func (r *accountRepository) UpdateStatus(ctx context.Context, accountID, userID string, status domain.AccountStatus, replacedByID *string) error {
+	now := time.Now()
+
+	// Set replaced_at only when transitioning to replaced status
+	var replacedAt *time.Time
+	if status == domain.AccountStatusReplaced {
+		replacedAt = &now
+	}
+
+	query := `
+		UPDATE accounts
+		SET status = $1, replaced_at = $2, replaced_by_id = $3, updated_at = $4
+		WHERE id = $5 AND user_id = $6
+	`
+
+	result, err := r.db.Exec(ctx, query, status, replacedAt, replacedByID, now, accountID, userID)
+	if err != nil {
+		return err
+	}
+
+	if result.RowsAffected() == 0 {
+		return ErrAccountNotFound
+	}
+
+	return nil
 }

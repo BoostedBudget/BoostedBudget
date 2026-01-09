@@ -9,6 +9,9 @@ import (
 
 // Account represents a bank account linked through Plaid.
 // One LinkedItem can have multiple accounts (checking, savings, credit, etc.)
+//
+// Issue #171: Added UserAccountID and soft-delete fields for re-link handling.
+// The UserAccountID links to a stable user_accounts record that survives re-links.
 type Account struct {
 	ID               string     `json:"id" db:"id"`
 	LinkedItemID     string     `json:"linked_item_id" db:"linked_item_id"`
@@ -24,7 +27,17 @@ type Account struct {
 	CurrencyCode     string     `json:"currency_code" db:"currency_code"` // ISO 4217 currency code
 	InstitutionName  string     `json:"institution_name,omitempty" db:"institution_name"` // From linked_items JOIN (optional)
 
+	// Stable reference for re-link handling (Issue #171)
+	UserAccountID *string `json:"user_account_id,omitempty" db:"user_account_id"` // FK to user_accounts
+
+	// Soft-delete fields for re-link handling (Issue #171)
+	Status       AccountStatus `json:"status" db:"status"`                       // 'active' or 'replaced'
+	ReplacedAt   *time.Time    `json:"replaced_at,omitempty" db:"replaced_at"`   // When this account was replaced
+	ReplacedByID *string       `json:"replaced_by_id,omitempty" db:"replaced_by_id"` // UUID of replacement account
+
 	// Customization fields (Issue #307)
+	// Note: Customizations are moving to user_accounts table for stability across re-links
+	// These fields are kept for backward compatibility but user_accounts is the source of truth
 	Nickname     *string `json:"nickname,omitempty" db:"nickname"`           // User-defined display name
 	CustomColor  *string `json:"custom_color,omitempty" db:"custom_color"`   // Hex color #RRGGBB
 	CustomIcon   *string `json:"custom_icon,omitempty" db:"custom_icon"`     // Predefined icon identifier
@@ -35,6 +48,16 @@ type Account struct {
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }
+
+// AccountStatus represents the soft-delete status of an account
+type AccountStatus string
+
+const (
+	// AccountStatusActive indicates the account is currently active and syncing
+	AccountStatusActive AccountStatus = "active"
+	// AccountStatusReplaced indicates the account was replaced by a re-link
+	AccountStatusReplaced AccountStatus = "replaced"
+)
 
 // Validate checks that the Account has all required fields and valid types
 func (a *Account) Validate() error {

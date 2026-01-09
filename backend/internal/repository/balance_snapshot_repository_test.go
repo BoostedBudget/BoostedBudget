@@ -47,13 +47,15 @@ func TestBalanceSnapshotRepository_Create_NewSnapshot(t *testing.T) {
 	}
 
 	// Expect simple INSERT query (no ON CONFLICT - multiple snapshots per day allowed)
+	// Issue #171: Includes user_account_id for stable reference across Plaid re-links
 	mock.ExpectExec(regexp.QuoteMeta(`
 		INSERT INTO balance_snapshots
-		(id, account_id, user_id, current_balance, available_balance, currency_code, snapshot_at, source, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		(id, account_id, user_account_id, user_id, current_balance, available_balance, currency_code, snapshot_at, source, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`)).WithArgs(
 		snapshot.ID,
 		snapshot.AccountID,
+		snapshot.UserAccountID,
 		snapshot.UserID,
 		snapshot.CurrentBalance,
 		snapshot.AvailableBalance,
@@ -104,22 +106,23 @@ func TestBalanceSnapshotRepository_Create_MultiplePerDay(t *testing.T) {
 	}
 
 	// Expect two separate INSERT queries (no conflict handling)
+	// Issue #171: Includes user_account_id for stable reference across Plaid re-links
 	mock.ExpectExec(regexp.QuoteMeta(`
 		INSERT INTO balance_snapshots
-		(id, account_id, user_id, current_balance, available_balance, currency_code, snapshot_at, source, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		(id, account_id, user_account_id, user_id, current_balance, available_balance, currency_code, snapshot_at, source, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`)).WithArgs(
-		snapshot1.ID, snapshot1.AccountID, snapshot1.UserID,
+		snapshot1.ID, snapshot1.AccountID, snapshot1.UserAccountID, snapshot1.UserID,
 		snapshot1.CurrentBalance, snapshot1.AvailableBalance, snapshot1.CurrencyCode,
 		snapshot1.SnapshotAt, snapshot1.Source, pgxmock.AnyArg(),
 	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	mock.ExpectExec(regexp.QuoteMeta(`
 		INSERT INTO balance_snapshots
-		(id, account_id, user_id, current_balance, available_balance, currency_code, snapshot_at, source, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		(id, account_id, user_account_id, user_id, current_balance, available_balance, currency_code, snapshot_at, source, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`)).WithArgs(
-		snapshot2.ID, snapshot2.AccountID, snapshot2.UserID,
+		snapshot2.ID, snapshot2.AccountID, snapshot2.UserAccountID, snapshot2.UserID,
 		snapshot2.CurrentBalance, snapshot2.AvailableBalance, snapshot2.CurrencyCode,
 		snapshot2.SnapshotAt, snapshot2.Source, pgxmock.AnyArg(),
 	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
@@ -146,23 +149,25 @@ func TestBalanceSnapshotRepository_GetByUserIDAndDateRange(t *testing.T) {
 	endDate := time.Date(2024, 11, 15, 23, 59, 59, 0, time.UTC)
 
 	// Mock data - use pointers for nullable float64 columns
+	// Issue #171: Includes user_account_id for stable reference across Plaid re-links
 	balance1, avail1 := 1000.00, 950.00
 	balance2, avail2 := 1100.00, 1050.00
+	userAccountID := uuid.New().String()
 	rows := pgxmock.NewRows([]string{
-		"id", "account_id", "user_id", "current_balance", "available_balance",
+		"id", "account_id", "user_account_id", "user_id", "current_balance", "available_balance",
 		"currency_code", "snapshot_at", "source", "created_at",
 	}).
 		AddRow(
-			uuid.New().String(), accountID, userID, &balance1, &avail1,
+			uuid.New().String(), accountID, &userAccountID, userID, &balance1, &avail1,
 			"USD", time.Date(2024, 11, 1, 10, 30, 0, 0, time.UTC), "plaid_webhook", time.Now(),
 		).
 		AddRow(
-			uuid.New().String(), accountID, userID, &balance2, &avail2,
+			uuid.New().String(), accountID, &userAccountID, userID, &balance2, &avail2,
 			"USD", time.Date(2024, 11, 15, 14, 0, 0, 0, time.UTC), "plaid_webhook", time.Now(),
 		)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, account_id, user_id, current_balance, available_balance,
+		SELECT id, account_id, user_account_id, user_id, current_balance, available_balance,
 		       currency_code, snapshot_at, source, created_at
 		FROM balance_snapshots
 		WHERE user_id = $1
@@ -193,13 +198,14 @@ func TestBalanceSnapshotRepository_GetByUserIDAndDateRange_NoResults(t *testing.
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 
 	// Mock empty result
+	// Issue #171: Includes user_account_id for stable reference across Plaid re-links
 	rows := pgxmock.NewRows([]string{
-		"id", "account_id", "user_id", "current_balance", "available_balance",
+		"id", "account_id", "user_account_id", "user_id", "current_balance", "available_balance",
 		"currency_code", "snapshot_at", "source", "created_at",
 	})
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, account_id, user_id, current_balance, available_balance,
+		SELECT id, account_id, user_account_id, user_id, current_balance, available_balance,
 		       currency_code, snapshot_at, source, created_at
 		FROM balance_snapshots
 		WHERE user_id = $1
@@ -304,26 +310,29 @@ func TestBalanceSnapshotRepository_GetLatestByUserID(t *testing.T) {
 	account2 := uuid.New().String()
 
 	// Helper for nullable float64 values
+	// Issue #171: Includes user_account_id for stable reference across Plaid re-links
 	bal1, avail1 := 1500.00, 1400.00
 	bal2, avail2 := 2500.00, 2400.00
+	userAccountID1 := uuid.New().String()
+	userAccountID2 := uuid.New().String()
 
 	// Mock latest snapshots (one per account)
 	rows := pgxmock.NewRows([]string{
-		"id", "account_id", "user_id", "current_balance", "available_balance",
+		"id", "account_id", "user_account_id", "user_id", "current_balance", "available_balance",
 		"currency_code", "snapshot_at", "source", "created_at",
 	}).
 		AddRow(
-			uuid.New().String(), account1, userID, &bal1, &avail1,
+			uuid.New().String(), account1, &userAccountID1, userID, &bal1, &avail1,
 			"USD", time.Date(2024, 11, 15, 14, 30, 0, 0, time.UTC), "plaid_webhook", time.Now(),
 		).
 		AddRow(
-			uuid.New().String(), account2, userID, &bal2, &avail2,
+			uuid.New().String(), account2, &userAccountID2, userID, &bal2, &avail2,
 			"USD", time.Date(2024, 11, 15, 14, 30, 0, 0, time.UTC), "plaid_webhook", time.Now(),
 		)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT DISTINCT ON (account_id)
-		       id, account_id, user_id, current_balance, available_balance,
+		       id, account_id, user_account_id, user_id, current_balance, available_balance,
 		       currency_code, snapshot_at, source, created_at
 		FROM balance_snapshots
 		WHERE user_id = $1
@@ -352,19 +361,21 @@ func TestBalanceSnapshotRepository_GetLatestByAccountID(t *testing.T) {
 	snapshotAt := time.Date(2024, 11, 15, 14, 30, 45, 0, time.UTC)
 
 	// Helper for nullable float64 values
+	// Issue #171: Includes user_account_id for stable reference across Plaid re-links
 	balance, available := 1500.00, 1400.00
+	userAccountID := uuid.New().String()
 
 	// Mock latest snapshot for account
 	rows := pgxmock.NewRows([]string{
-		"id", "account_id", "user_id", "current_balance", "available_balance",
+		"id", "account_id", "user_account_id", "user_id", "current_balance", "available_balance",
 		"currency_code", "snapshot_at", "source", "created_at",
 	}).AddRow(
-		uuid.New().String(), accountID, userID, &balance, &available,
+		uuid.New().String(), accountID, &userAccountID, userID, &balance, &available,
 		"USD", snapshotAt, "plaid_webhook", time.Now(),
 	)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, account_id, user_id, current_balance, available_balance,
+		SELECT id, account_id, user_account_id, user_id, current_balance, available_balance,
 		       currency_code, snapshot_at, source, created_at
 		FROM balance_snapshots
 		WHERE account_id = $1
@@ -392,13 +403,14 @@ func TestBalanceSnapshotRepository_GetLatestByAccountID_NoSnapshot(t *testing.T)
 	accountID := uuid.New().String()
 
 	// Mock empty result
+	// Issue #171: Includes user_account_id for stable reference across Plaid re-links
 	rows := pgxmock.NewRows([]string{
-		"id", "account_id", "user_id", "current_balance", "available_balance",
+		"id", "account_id", "user_account_id", "user_id", "current_balance", "available_balance",
 		"currency_code", "snapshot_at", "source", "created_at",
 	})
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, account_id, user_id, current_balance, available_balance,
+		SELECT id, account_id, user_account_id, user_id, current_balance, available_balance,
 		       currency_code, snapshot_at, source, created_at
 		FROM balance_snapshots
 		WHERE account_id = $1
@@ -456,13 +468,15 @@ func TestBalanceSnapshotRepository_Create_PreservesMicroseconds(t *testing.T) {
 	}
 
 	// Expect INSERT with exact timestamp including microseconds
+	// Issue #171: Includes user_account_id for stable reference across Plaid re-links
 	mock.ExpectExec(regexp.QuoteMeta(`
 		INSERT INTO balance_snapshots
-		(id, account_id, user_id, current_balance, available_balance, currency_code, snapshot_at, source, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		(id, account_id, user_account_id, user_id, current_balance, available_balance, currency_code, snapshot_at, source, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`)).WithArgs(
 		snapshot.ID,
 		snapshot.AccountID,
+		snapshot.UserAccountID,
 		snapshot.UserID,
 		snapshot.CurrentBalance,
 		snapshot.AvailableBalance,
@@ -497,17 +511,19 @@ func TestBalanceSnapshotRepository_GetByUserIDAndDateRange_SubSecondOrdering(t *
 	time2 := time.Date(2024, 11, 15, 10, 30, 45, 900000000, time.UTC) // .900 seconds
 
 	// Helper for nullable float64 values
+	// Issue #171: Includes user_account_id for stable reference across Plaid re-links
 	bal1, bal2 := 1000.00, 1001.00
+	userAccountID := uuid.New().String()
 
 	rows := pgxmock.NewRows([]string{
-		"id", "account_id", "user_id", "current_balance", "available_balance",
+		"id", "account_id", "user_account_id", "user_id", "current_balance", "available_balance",
 		"currency_code", "snapshot_at", "source", "created_at",
 	}).
-		AddRow(uuid.New().String(), accountID, userID, &bal1, nil, "USD", time1, "plaid_webhook", time.Now()).
-		AddRow(uuid.New().String(), accountID, userID, &bal2, nil, "USD", time2, "plaid_webhook", time.Now())
+		AddRow(uuid.New().String(), accountID, &userAccountID, userID, &bal1, nil, "USD", time1, "plaid_webhook", time.Now()).
+		AddRow(uuid.New().String(), accountID, &userAccountID, userID, &bal2, nil, "USD", time2, "plaid_webhook", time.Now())
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, account_id, user_id, current_balance, available_balance,
+		SELECT id, account_id, user_account_id, user_id, current_balance, available_balance,
 		       currency_code, snapshot_at, source, created_at
 		FROM balance_snapshots
 		WHERE user_id = $1
@@ -547,18 +563,20 @@ func TestBalanceSnapshotRepository_GetByUserIDAndDateRange_BoundaryConditions(t 
 	middle := time.Date(2024, 11, 15, 12, 0, 0, 0, time.UTC)
 
 	// Helper for nullable float64 values
+	// Issue #171: Includes user_account_id for stable reference across Plaid re-links
 	bal1, bal2, bal3 := 1000.00, 1100.00, 1200.00
+	userAccountID := uuid.New().String()
 
 	rows := pgxmock.NewRows([]string{
-		"id", "account_id", "user_id", "current_balance", "available_balance",
+		"id", "account_id", "user_account_id", "user_id", "current_balance", "available_balance",
 		"currency_code", "snapshot_at", "source", "created_at",
 	}).
-		AddRow(uuid.New().String(), accountID, userID, &bal1, nil, "USD", atStart, "plaid_webhook", time.Now()).
-		AddRow(uuid.New().String(), accountID, userID, &bal2, nil, "USD", middle, "plaid_webhook", time.Now()).
-		AddRow(uuid.New().String(), accountID, userID, &bal3, nil, "USD", atEnd, "plaid_webhook", time.Now())
+		AddRow(uuid.New().String(), accountID, &userAccountID, userID, &bal1, nil, "USD", atStart, "plaid_webhook", time.Now()).
+		AddRow(uuid.New().String(), accountID, &userAccountID, userID, &bal2, nil, "USD", middle, "plaid_webhook", time.Now()).
+		AddRow(uuid.New().String(), accountID, &userAccountID, userID, &bal3, nil, "USD", atEnd, "plaid_webhook", time.Now())
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, account_id, user_id, current_balance, available_balance,
+		SELECT id, account_id, user_account_id, user_id, current_balance, available_balance,
 		       currency_code, snapshot_at, source, created_at
 		FROM balance_snapshots
 		WHERE user_id = $1
@@ -672,18 +690,20 @@ func TestBalanceSnapshotRepository_GetLatestByAccountID_SubSecondPrecision(t *te
 	snapshotAt := time.Date(2024, 11, 15, 14, 30, 45, 999999000, time.UTC)
 
 	// Helper for nullable float64 values
+	// Issue #171: Includes user_account_id for stable reference across Plaid re-links
 	balance, available := 1500.00, 1400.00
+	userAccountID := uuid.New().String()
 
 	rows := pgxmock.NewRows([]string{
-		"id", "account_id", "user_id", "current_balance", "available_balance",
+		"id", "account_id", "user_account_id", "user_id", "current_balance", "available_balance",
 		"currency_code", "snapshot_at", "source", "created_at",
 	}).AddRow(
-		uuid.New().String(), accountID, userID, &balance, &available,
+		uuid.New().String(), accountID, &userAccountID, userID, &balance, &available,
 		"USD", snapshotAt, "plaid_webhook", time.Now(),
 	)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, account_id, user_id, current_balance, available_balance,
+		SELECT id, account_id, user_account_id, user_id, current_balance, available_balance,
 		       currency_code, snapshot_at, source, created_at
 		FROM balance_snapshots
 		WHERE account_id = $1

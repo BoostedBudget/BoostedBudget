@@ -2,6 +2,7 @@
  * useAccountCustomization Hook Tests
  *
  * Tests for account customization operations (Issue #307)
+ * Issue #171: Updated to test UserAccount endpoint for stable customization storage
  * Uses MSW for API mocking with React Query.
  */
 
@@ -14,8 +15,8 @@ import React from 'react'
 import { useAccountCustomization } from './useAccountCustomization'
 import type { Account } from '@/api/generated/models'
 
-// Mock account data
-const mockAccount: Account = {
+// Mock account data without user_account_id (legacy flow)
+const mockAccountLegacy: Account = {
   id: 'acc-123',
   linked_item_id: 'item-456',
   user_id: 'user-789',
@@ -33,8 +34,16 @@ const mockAccount: Account = {
   custom_color: '#3B82F6',
   display_order: 0,
   is_hidden: false,
+  status: 'active',
   created_at: '2025-10-18T14:30:00Z',
   updated_at: '2025-10-20T10:15:00Z',
+}
+
+// Mock account data with user_account_id (Issue #171 flow)
+const mockAccountWithUserAccount: Account = {
+  ...mockAccountLegacy,
+  id: 'acc-456',
+  user_account_id: 'ua-789',
 }
 
 // MSW server setup
@@ -43,7 +52,15 @@ const server = setupServer(
     return HttpResponse.json({ success: true })
   }),
   http.patch('*/api/v1/accounts/:id', () => {
-    return HttpResponse.json({ account: mockAccount })
+    return HttpResponse.json({ account: mockAccountLegacy })
+  }),
+  // Issue #171: UserAccount endpoint for stable customization storage
+  http.patch('*/api/v1/user-accounts/:id', () => {
+    return HttpResponse.json({
+      id: 'ua-789',
+      nickname: 'Updated Name',
+      custom_color: '#FF0000',
+    })
   })
 )
 
@@ -101,8 +118,8 @@ describe('useAccountCustomization', () => {
   })
 
   describe('updateAccount', () => {
-    it('should update account successfully', async () => {
-      const updatedAccount = { ...mockAccount, nickname: 'Updated Name', custom_color: '#FF0000' }
+    it('should update account via legacy Account endpoint when no user_account_id', async () => {
+      const updatedAccount = { ...mockAccountLegacy, nickname: 'Updated Name', custom_color: '#FF0000' }
       server.use(
         http.patch('*/api/v1/accounts/:id', () => {
           return HttpResponse.json({ account: updatedAccount })
@@ -115,7 +132,7 @@ describe('useAccountCustomization', () => {
 
       let returnedAccount: Account | null = null
       await act(async () => {
-        returnedAccount = await result.current.updateAccount('acc-123', {
+        returnedAccount = await result.current.updateAccount(mockAccountLegacy, {
           nickname: 'Updated Name',
           custom_color: '#FF0000',
         })
@@ -125,11 +142,31 @@ describe('useAccountCustomization', () => {
       expect(result.current.updateError).toBeNull()
     })
 
+    it('should update account via UserAccount endpoint when user_account_id exists (Issue #171)', async () => {
+      const { result } = renderHook(() => useAccountCustomization(), {
+        wrapper: createWrapper(),
+      })
+
+      let returnedAccount: Account | null = null
+      await act(async () => {
+        returnedAccount = await result.current.updateAccount(mockAccountWithUserAccount, {
+          nickname: 'Updated Name',
+          custom_color: '#FF0000',
+        })
+      })
+
+      // Should return account with updated values
+      expect(returnedAccount).not.toBeNull()
+      expect(returnedAccount!.nickname).toBe('Updated Name')
+      expect(returnedAccount!.custom_color).toBe('#FF0000')
+      expect(result.current.updateError).toBeNull()
+    })
+
     it('should set isUpdating to true during update', async () => {
       server.use(
         http.patch('*/api/v1/accounts/:id', async () => {
           await new Promise((resolve) => setTimeout(resolve, 100))
-          return HttpResponse.json({ account: mockAccount })
+          return HttpResponse.json({ account: mockAccountLegacy })
         })
       )
 
@@ -139,7 +176,7 @@ describe('useAccountCustomization', () => {
 
       // Start the update
       act(() => {
-        result.current.updateAccount('acc-123', { nickname: 'Test' })
+        result.current.updateAccount(mockAccountLegacy, { nickname: 'Test' })
       })
 
       // Check loading state is true
@@ -169,7 +206,7 @@ describe('useAccountCustomization', () => {
 
       let returnedAccount: Account | null = null
       await act(async () => {
-        returnedAccount = await result.current.updateAccount('acc-123', { nickname: 'Test' })
+        returnedAccount = await result.current.updateAccount(mockAccountLegacy, { nickname: 'Test' })
       })
 
       expect(returnedAccount).toBeNull()
@@ -194,7 +231,7 @@ describe('useAccountCustomization', () => {
       })
 
       await act(async () => {
-        await result.current.updateAccount('acc-123', { nickname: 'Test' })
+        await result.current.updateAccount(mockAccountLegacy, { nickname: 'Test' })
       })
 
       // Wait for React to update state after mutation error
@@ -315,7 +352,7 @@ describe('useAccountCustomization', () => {
       })
 
       await act(async () => {
-        await result.current.updateAccount('acc-123', { nickname: 'Test' })
+        await result.current.updateAccount(mockAccountLegacy, { nickname: 'Test' })
       })
 
       // Wait for error state to be set
@@ -378,7 +415,7 @@ describe('useAccountCustomization', () => {
       })
 
       await act(async () => {
-        await result.current.updateAccount('acc-123', { nickname: 'Test' })
+        await result.current.updateAccount(mockAccountLegacy, { nickname: 'Test' })
         await result.current.reorderAccounts([{ account_id: 'acc-1', display_order: 0 }])
       })
 

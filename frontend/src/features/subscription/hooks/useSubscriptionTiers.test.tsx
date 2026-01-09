@@ -85,10 +85,10 @@ describe('useSubscriptionTiers', () => {
     expect(result.current.tiers).toBeNull()
     expect(result.current.error).toBeNull()
 
-    // Wait for completion
+    // Wait for completion (increased timeout for slow CI environments)
     await waitFor(() => {
       expect(result.current.loading).toBe(false)
-    })
+    }, { timeout: 5000 })
   })
 
   it('should fetch and return subscription tiers on mount', async () => {

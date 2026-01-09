@@ -139,6 +139,16 @@ func (m *MockTransactionRepository) GetTransactionsForBudgetCategory(ctx context
 	return args.Get(0).([]domain.Transaction), args.Int(1), args.Get(2).(float64), args.Error(3)
 }
 
+// GetByUserAccountID retrieves all transactions for a user_account.
+// Issue #171 - Plaid Re-Link Handling
+func (m *MockTransactionRepository) GetByUserAccountID(ctx context.Context, userID string, userAccountID string) ([]domain.Transaction, error) {
+	args := m.Called(ctx, userID, userAccountID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.Transaction), args.Error(1)
+}
+
 // TestTransactionService_ListTransactions_EnforcesMaxLimit tests that the service enforces a maximum limit of 100
 func TestTransactionService_ListTransactions_EnforcesMaxLimit(t *testing.T) {
 	mockRepo := new(MockTransactionRepository)
