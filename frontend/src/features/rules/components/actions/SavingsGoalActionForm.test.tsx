@@ -6,10 +6,9 @@
  * TDD RED: Writing tests before implementation.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { SavingsGoalActionForm } from './SavingsGoalActionForm'
 import type { SavingsGoalAction } from '../../types'
 
 // Mock savings goals
@@ -56,7 +55,7 @@ const mockAccounts = [
   },
 ]
 
-vi.mock('@/api/generated/endpoints/accounts/accounts', () => ({
+mock.module('@/api/generated/endpoints/accounts/accounts', () => ({
   useGetAccounts: () => ({
     data: { accounts: mockAccounts },
     isLoading: false,
@@ -64,13 +63,15 @@ vi.mock('@/api/generated/endpoints/accounts/accounts', () => ({
   }),
 }))
 
-vi.mock('@/api/generated/endpoints/savings-goals/savings-goals', () => ({
+mock.module('@/api/generated/endpoints/savings-goals/savings-goals', () => ({
   useGetSavingsGoals: () => ({
     data: mockSavingsGoals,
     isLoading: false,
     error: null,
   }),
 }))
+
+import { SavingsGoalActionForm } from './SavingsGoalActionForm'
 
 function createQueryClient() {
   return new QueryClient({
@@ -94,10 +95,6 @@ const defaultAction: SavingsGoalAction = {
 }
 
 describe('SavingsGoalActionForm', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
   describe('Rendering', () => {
     it('should render savings goal selector', () => {
       renderWithProviders(
@@ -157,7 +154,7 @@ describe('SavingsGoalActionForm', () => {
 
   describe('Goal Selection', () => {
     it('should call onChange when savings goal is changed', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
 
       renderWithProviders(
         <SavingsGoalActionForm action={defaultAction} onChange={onChange} />
@@ -194,7 +191,7 @@ describe('SavingsGoalActionForm', () => {
 
   describe('Account Selection', () => {
     it('should call onChange when from account is changed', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
 
       renderWithProviders(
         <SavingsGoalActionForm action={defaultAction} onChange={onChange} />
@@ -238,7 +235,7 @@ describe('SavingsGoalActionForm', () => {
     })
 
     it('should call onChange when amount is changed', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
 
       renderWithProviders(
         <SavingsGoalActionForm action={defaultAction} onChange={onChange} />
@@ -288,7 +285,7 @@ describe('SavingsGoalActionForm', () => {
     })
 
     it('should call onChange when percentage is changed', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
 
       renderWithProviders(
         <SavingsGoalActionForm action={percentageAction} onChange={onChange} />
@@ -348,7 +345,7 @@ describe('SavingsGoalActionForm', () => {
     })
 
     it('should call onChange when threshold is changed', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
 
       renderWithProviders(
         <SavingsGoalActionForm action={remainingAction} onChange={onChange} />
@@ -378,7 +375,7 @@ describe('SavingsGoalActionForm', () => {
 
   describe('Amount Type Switching', () => {
     it('should call onChange when amount type is changed', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
 
       renderWithProviders(
         <SavingsGoalActionForm action={defaultAction} onChange={onChange} />
