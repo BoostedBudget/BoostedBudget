@@ -1,26 +1,23 @@
 /**
  * TimeframeSelector Component Tests
  * Issue #564: Frontend Test Coverage Improvement
- *
- * Tests the timeframe/date range selector for dashboard filtering.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, mock, beforeEach, afterEach, setSystemTime } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { TimeframeSelector } from './TimeframeSelector'
 
 describe('TimeframeSelector', () => {
-  const mockOnRangeChange = vi.fn()
+  const mockOnRangeChange = mock(() => {})
   const mockDate = new Date('2025-01-15T12:00:00.000Z')
 
   beforeEach(() => {
-    vi.clearAllMocks()
-    vi.useFakeTimers()
-    vi.setSystemTime(mockDate)
+    mockOnRangeChange.mockClear()
+    setSystemTime(mockDate)
   })
 
   afterEach(() => {
-    vi.useRealTimers()
+    setSystemTime()
   })
 
   describe('Rendering', () => {

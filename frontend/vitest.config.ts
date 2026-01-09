@@ -122,6 +122,9 @@ export default mergeConfig(
         // Batch 19 - Hook and filter tests (2026-01-09)
         'src/features/budgets/hooks/useIncomeTracking.test.ts',
         'src/features/transactions/components/filters/TransactionDateFilter.test.tsx',
+        // Batch 20 - Dashboard and tags tests (2026-01-09)
+        'src/features/dashboard/components/TimeframeSelector.test.tsx',
+        'src/features/tags/components/TagEditor.test.tsx',
       ],
       coverage: {
         provider: 'v8',
