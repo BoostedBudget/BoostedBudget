@@ -1,25 +1,42 @@
-/**
- * Balance Overview Widget Tests
- *
- * Tests the BalanceOverviewWidget component including loading,
- * error, and success states.
- *
- * Issue #354: Customizable Dashboard Widget System
- */
-
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
+import type { BalanceSummary } from '../types'
 
-// Mock dependencies before importing the component
-vi.mock('../context/DashboardContext', () => ({
-  useDashboardContext: vi.fn(),
+const mockSetFilters = mock(() => {})
+const mockSetTimeframe = mock(() => {})
+const mockSetIsEditing = mock(() => {})
+const mockUseDashboardContext = mock(() => ({
+  filters: {
+    startDate: '2024-01-01',
+    endDate: '2024-01-31',
+    accountTypes: undefined,
+  },
+  setFilters: mockSetFilters,
+  timeframe: 'month',
+  setTimeframe: mockSetTimeframe,
+  isEditing: false,
+  setIsEditing: mockSetIsEditing,
 }))
 
-vi.mock('../hooks/useDashboardData', () => ({
-  useDashboardData: vi.fn(),
+const mockRefetch = mock(() => {})
+const mockUseDashboardData = mock(() => ({
+  summary: null,
+  history: null,
+  accountTypes: null,
+  loading: true,
+  error: null,
+  refetch: mockRefetch,
 }))
 
-vi.mock('../components/BalanceOverview', () => ({
+mock.module('../context/DashboardContext', () => ({
+  useDashboardContext: mockUseDashboardContext,
+}))
+
+mock.module('../hooks/useDashboardData', () => ({
+  useDashboardData: mockUseDashboardData,
+}))
+
+mock.module('../components/BalanceOverview', () => ({
   BalanceOverview: ({ summary }: { summary: unknown }) => (
     <div data-testid="balance-overview">
       Balance Overview: {JSON.stringify(summary)}
@@ -27,22 +44,13 @@ vi.mock('../components/BalanceOverview', () => ({
   ),
 }))
 
-vi.mock('./registry', () => ({
-  registerWidget: vi.fn(),
+mock.module('./registry', () => ({
+  registerWidget: mock(() => {}),
 }))
 
 import { BalanceOverviewWidget } from './BalanceOverviewWidget'
-import { useDashboardContext } from '../context/DashboardContext'
-import { useDashboardData } from '../hooks/useDashboardData'
-import type { BalanceSummary } from '../types'
 
 describe('BalanceOverviewWidget', () => {
-  const mockFilters = {
-    startDate: '2024-01-01',
-    endDate: '2024-01-31',
-    accountTypes: undefined,
-  }
-
   const mockSummary: BalanceSummary = {
     as_of_date: '2024-01-31',
     total_balance: 10000,
@@ -54,34 +62,35 @@ describe('BalanceOverviewWidget', () => {
     },
   }
 
-  beforeEach(() => {
-    vi.clearAllMocks()
+  const defaultProps = {
+    widgetId: 'test-1',
+    onRemove: mock(() => {}),
+  }
 
-    // Default mock for context
-    vi.mocked(useDashboardContext).mockReturnValue({
-      filters: mockFilters,
-      setFilters: vi.fn(),
-      timeframe: 'month',
-      setTimeframe: vi.fn(),
-      isEditing: false,
-      setIsEditing: vi.fn(),
+  const setMockDataState = (state: Partial<ReturnType<typeof mockUseDashboardData>>) => {
+    mockUseDashboardData.mockReturnValue({
+      summary: null,
+      history: null,
+      accountTypes: null,
+      loading: false,
+      error: null,
+      refetch: mockRefetch,
+      ...state,
     })
+  }
+
+  beforeEach(() => {
+    mockUseDashboardContext.mockClear()
+    mockUseDashboardData.mockClear()
+    mockRefetch.mockClear()
   })
 
   describe('Loading State', () => {
     it('should show loading spinner when loading', () => {
-      vi.mocked(useDashboardData).mockReturnValue({
-        summary: null,
-        history: null,
-        accountTypes: null,
-        loading: true,
-        error: null,
-        refetch: vi.fn(),
-      })
+      setMockDataState({ loading: true })
 
-      render(<BalanceOverviewWidget widgetId="test-1" onRemove={vi.fn()} />)
+      render(<BalanceOverviewWidget {...defaultProps} />)
 
-      // Check for spinner animation class
       const spinner = document.querySelector('.animate-spin')
       expect(spinner).toBeInTheDocument()
     })
@@ -89,31 +98,17 @@ describe('BalanceOverviewWidget', () => {
 
   describe('Error State', () => {
     it('should show error message when error occurs', () => {
-      vi.mocked(useDashboardData).mockReturnValue({
-        summary: null,
-        history: null,
-        accountTypes: null,
-        loading: false,
-        error: new Error('Network error'),
-        refetch: vi.fn(),
-      })
+      setMockDataState({ error: new Error('Network error') })
 
-      render(<BalanceOverviewWidget widgetId="test-1" onRemove={vi.fn()} />)
+      render(<BalanceOverviewWidget {...defaultProps} />)
 
       expect(screen.getByText('Network error')).toBeInTheDocument()
     })
 
     it('should show error text in red', () => {
-      vi.mocked(useDashboardData).mockReturnValue({
-        summary: null,
-        history: null,
-        accountTypes: null,
-        loading: false,
-        error: new Error('API Error'),
-        refetch: vi.fn(),
-      })
+      setMockDataState({ error: new Error('API Error') })
 
-      render(<BalanceOverviewWidget widgetId="test-1" onRemove={vi.fn()} />)
+      render(<BalanceOverviewWidget {...defaultProps} />)
 
       const errorText = screen.getByText('API Error')
       expect(errorText).toHaveClass('text-red-500')
@@ -122,67 +117,37 @@ describe('BalanceOverviewWidget', () => {
 
   describe('Empty State', () => {
     it('should show no data message when summary is null', () => {
-      vi.mocked(useDashboardData).mockReturnValue({
-        summary: null,
-        history: null,
-        accountTypes: null,
-        loading: false,
-        error: null,
-        refetch: vi.fn(),
-      })
+      setMockDataState({})
 
-      render(<BalanceOverviewWidget widgetId="test-1" onRemove={vi.fn()} />)
+      render(<BalanceOverviewWidget {...defaultProps} />)
 
       expect(screen.getByText('No data available')).toBeInTheDocument()
     })
   })
 
   describe('Success State', () => {
+    beforeEach(() => {
+      setMockDataState({ summary: mockSummary })
+    })
+
     it('should render BalanceOverview component with data', () => {
-      vi.mocked(useDashboardData).mockReturnValue({
-        summary: mockSummary,
-        history: null,
-        accountTypes: null,
-        loading: false,
-        error: null,
-        refetch: vi.fn(),
-      })
-
-      render(<BalanceOverviewWidget widgetId="test-1" onRemove={vi.fn()} />)
-
+      render(<BalanceOverviewWidget {...defaultProps} />)
       expect(screen.getByTestId('balance-overview')).toBeInTheDocument()
     })
 
     it('should pass summary to BalanceOverview component', () => {
-      vi.mocked(useDashboardData).mockReturnValue({
-        summary: mockSummary,
-        history: null,
-        accountTypes: null,
-        loading: false,
-        error: null,
-        refetch: vi.fn(),
-      })
-
-      render(<BalanceOverviewWidget widgetId="test-1" onRemove={vi.fn()} />)
-
+      render(<BalanceOverviewWidget {...defaultProps} />)
       expect(screen.getByTestId('balance-overview')).toHaveTextContent('10000')
     })
   })
 
   describe('Context Integration', () => {
     it('should use filters from dashboard context', () => {
-      vi.mocked(useDashboardData).mockReturnValue({
-        summary: mockSummary,
-        history: null,
-        accountTypes: null,
-        loading: false,
-        error: null,
-        refetch: vi.fn(),
-      })
+      setMockDataState({ summary: mockSummary })
 
-      render(<BalanceOverviewWidget widgetId="test-1" onRemove={vi.fn()} />)
+      render(<BalanceOverviewWidget {...defaultProps} />)
 
-      expect(useDashboardData).toHaveBeenCalledWith(
+      expect(mockUseDashboardData).toHaveBeenCalledWith(
         expect.objectContaining({
           startDate: '2024-01-01',
           endDate: '2024-01-31',
