@@ -166,6 +166,8 @@ export default mergeConfig(
         // Batch 32 - Rules and category management (2026-01-09)
         'src/features/rules/components/ConditionBuilder.test.tsx',
         'src/features/budgets/components/category-management/BudgetCategoryManager.test.tsx',
+        // Batch 33 - More rules (2026-01-09)
+        'src/features/rules/components/RulesPage.test.tsx',
       ],
       coverage: {
         provider: 'v8',
