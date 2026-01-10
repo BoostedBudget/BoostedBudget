@@ -1,8 +1,8 @@
-import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { BudgetCategory, CreateBudgetCategoryRequest, UpdateBudgetCategoryRequest } from '../../types'
 import type { UserTag } from '@/features/tags/types'
 
-mock.module('./BudgetCategoryCard', () => ({
+vi.mock('./BudgetCategoryCard', () => ({
   BudgetCategoryCard: ({
     category,
     onEdit,
@@ -27,7 +27,7 @@ mock.module('./BudgetCategoryCard', () => ({
   ),
 }))
 
-mock.module('./BudgetCategoryForm', () => ({
+vi.mock('./BudgetCategoryForm', () => ({
   BudgetCategoryForm: ({
     isOpen,
     onClose,
@@ -67,7 +67,7 @@ mock.module('./BudgetCategoryForm', () => ({
     ) : null,
 }))
 
-mock.module('./AllocationBreakdown', () => ({
+vi.mock('./AllocationBreakdown', () => ({
   AllocationBreakdown: ({
     categories,
     totalIncome,
@@ -131,12 +131,10 @@ const createMockCategory = (overrides?: Partial<BudgetCategory>): BudgetCategory
   ...overrides,
 })
 
-type MockFn = ReturnType<typeof mock>
-
 describe('BudgetCategoryManager', () => {
-  let mockOnAddCategory: MockFn
-  let mockOnUpdateCategory: MockFn
-  let mockOnDeleteCategory: MockFn
+  let mockOnAddCategory: ReturnType<typeof vi.fn>
+  let mockOnUpdateCategory: ReturnType<typeof vi.fn>
+  let mockOnDeleteCategory: ReturnType<typeof vi.fn>
 
   const renderManager = (props: Partial<Parameters<typeof BudgetCategoryManager>[0]> = {}) =>
     render(
@@ -154,9 +152,9 @@ describe('BudgetCategoryManager', () => {
     )
 
   beforeEach(() => {
-    mockOnAddCategory = mock(() => Promise.resolve({} as BudgetCategory))
-    mockOnUpdateCategory = mock(() => Promise.resolve({} as BudgetCategory))
-    mockOnDeleteCategory = mock(() => Promise.resolve(undefined))
+    mockOnAddCategory = vi.fn(() => Promise.resolve({} as BudgetCategory))
+    mockOnUpdateCategory = vi.fn(() => Promise.resolve({} as BudgetCategory))
+    mockOnDeleteCategory = vi.fn(() => Promise.resolve(undefined))
   })
 
   it('should render empty state when no categories', () => {

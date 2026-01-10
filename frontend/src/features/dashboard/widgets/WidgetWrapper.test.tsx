@@ -1,12 +1,8 @@
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import type { WidgetDefinition } from '../types'
-
-const mockGetWidget = mock(() => undefined as WidgetDefinition | undefined)
-
-mock.module('./registry', () => ({
-  getWidget: mockGetWidget,
-}))
+// Issue #575: Use centralized registry mock to prevent mock.module() pollution
+import { mockGetWidget } from '@/test/mocks/registry'
 
 import { WidgetWrapper } from './WidgetWrapper'
 

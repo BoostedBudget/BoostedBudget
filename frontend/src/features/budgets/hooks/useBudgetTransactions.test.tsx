@@ -1,27 +1,14 @@
-import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach } from 'bun:test'
 import { renderHook, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import type { Transaction } from '../../transactions/types'
-
-const mockRefetch = mock(() => Promise.resolve({ data: null }))
-const mockGetCategoryTransactions = mock(() => Promise.resolve({}))
-const mockUseGetCategoryTransactions = mock(() => ({
-  data: undefined,
-  isLoading: false,
-  error: null,
-  refetch: mockRefetch,
-}))
-const mockGetQueryKey = mock((budgetId: string, categoryId: string, params: unknown) =>
-  ['budgets', budgetId, 'categories', categoryId, 'transactions', params]
-)
-
-mock.module('@/api/generated/endpoints/budgets/budgets', () => ({
-  useGetCategoryTransactions: mockUseGetCategoryTransactions,
-  getGetCategoryTransactionsQueryKey: mockGetQueryKey,
-  getCategoryTransactions: (...args: unknown[]) => mockGetCategoryTransactions(...args),
-}))
-
+import {
+  mockUseGetCategoryTransactions,
+  mockRefetchCategoryTransactions,
+  mockGetCategoryTransactions,
+  mockGetCategoryTransactionsQueryKey,
+} from '@/test/mocks/budgets-api'
 import { useBudgetTransactions } from './useBudgetTransactions'
 
 function createWrapper() {
@@ -53,8 +40,8 @@ describe('useBudgetTransactions', () => {
   beforeEach(() => {
     mockUseGetCategoryTransactions.mockClear()
     mockGetCategoryTransactions.mockClear()
-    mockRefetch.mockClear()
-    mockGetQueryKey.mockClear()
+    mockRefetchCategoryTransactions.mockClear()
+    mockGetCategoryTransactionsQueryKey.mockClear()
   })
 
   function mockQueryState(data?: unknown, isLoading = false, error: Error | null = null) {
@@ -62,7 +49,7 @@ describe('useBudgetTransactions', () => {
       data,
       isLoading,
       error,
-      refetch: mockRefetch,
+      refetch: mockRefetchCategoryTransactions,
     })
   }
 
@@ -268,7 +255,7 @@ describe('useBudgetTransactions', () => {
         await result.current.refetch()
       })
 
-      expect(mockRefetch).toHaveBeenCalled()
+      expect(mockRefetchCategoryTransactions).toHaveBeenCalled()
     })
   })
 

@@ -7,8 +7,14 @@ expect.extend(matchers)
 
 // Ensure cleanup runs after each test (critical for memory management)
 // This unmounts React trees from render() and renderHook() calls
+// Also resets URL state to prevent pollution between tests
 afterEach(() => {
   cleanup()
+  // Reset URL state to prevent pollution between test files (Issue #575)
+  // Tests using useSearchParams or window.location need consistent initial state
+  if (typeof window !== 'undefined' && window.history) {
+    window.history.replaceState({}, '', 'http://localhost:3000/')
+  }
 })
 
 // Force cleanup of any pending handles after all tests complete

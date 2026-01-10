@@ -1,22 +1,23 @@
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
-import type { Budget, BudgetWithMetrics } from '../../budgets/types'
-
-const mockRefetch = mock(() => {})
-const mockUseCurrentBudget = mock(() => ({
-  budget: null,
-  metrics: null,
-  loading: true,
-  error: null,
-  hasNoBudget: false,
-  refetch: mockRefetch,
-}))
-
-mock.module('../../budgets/hooks/useCurrentBudget', () => ({
-  useCurrentBudget: mockUseCurrentBudget,
-}))
-
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
+import type { Budget } from '../../budgets/types'
+import {
+  mockUseGetCurrentBudget,
+  mockRefetchCurrentBudget,
+} from '@/test/mocks/budgets-api'
 import { BudgetOverviewWidget } from './BudgetOverviewWidget'
+
+// Create QueryClient wrapper for tests
+function createWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  return function Wrapper({ children }: { children: ReactNode }) {
+    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  }
+}
 
 describe('BudgetOverviewWidget', () => {
   const mockBudget: Budget = {
@@ -60,49 +61,36 @@ describe('BudgetOverviewWidget', () => {
     income_sources: [],
   }
 
-  const mockMetrics: BudgetWithMetrics = {
-    ...mockBudget,
-    total_allocated: 800,
-    total_spent: 350,
-    remaining_amount: 1650,
-    percent_used: 18,
-    is_over_budget: false,
-    unallocated_funds: 1200,
-    is_fully_allocated: false,
-    categories: mockBudget.categories!.map((cat) => ({
-      ...cat,
-      percent_used: cat.spent_amount / cat.allocated_amount * 100,
-      remaining_amount: cat.allocated_amount - cat.spent_amount,
-    })),
-  }
-
   const defaultProps = {
     widgetId: 'widget-1',
     onRemove: mock(() => {}),
   }
 
-  const setMockState = (state: Partial<ReturnType<typeof mockUseCurrentBudget>>) => {
-    mockUseCurrentBudget.mockReturnValue({
-      budget: null,
-      metrics: null,
-      loading: false,
-      error: null,
-      hasNoBudget: false,
-      refetch: mockRefetch,
-      ...state,
+  // Helper to configure API mock state
+  function setMockState(options: {
+    budget?: Budget | null
+    loading?: boolean
+    error?: Error | null
+  }) {
+    const { budget = null, loading = false, error = null } = options
+    mockUseGetCurrentBudget.mockReturnValue({
+      data: budget,
+      isLoading: loading,
+      error,
+      refetch: mockRefetchCurrentBudget,
     })
   }
 
   beforeEach(() => {
-    mockUseCurrentBudget.mockClear()
-    mockRefetch.mockClear()
+    mockUseGetCurrentBudget.mockClear()
+    mockRefetchCurrentBudget.mockClear()
   })
 
   describe('Loading State', () => {
     it('should show loading spinner initially', () => {
       setMockState({ loading: true })
 
-      render(<BudgetOverviewWidget {...defaultProps} />)
+      render(<BudgetOverviewWidget {...defaultProps} />, { wrapper: createWrapper() })
 
       const loading = document.querySelector('.animate-spin')
       expect(loading).toBeInTheDocument()
@@ -111,47 +99,50 @@ describe('BudgetOverviewWidget', () => {
 
   describe('Success State', () => {
     beforeEach(() => {
-      setMockState({ budget: mockBudget, metrics: mockMetrics })
+      setMockState({ budget: mockBudget })
     })
 
     it('should render budget name', () => {
-      render(<BudgetOverviewWidget {...defaultProps} />)
+      render(<BudgetOverviewWidget {...defaultProps} />, { wrapper: createWrapper() })
       expect(screen.getByText('Monthly Budget')).toBeInTheDocument()
     })
 
     it('should render budget amount', () => {
-      render(<BudgetOverviewWidget {...defaultProps} />)
+      render(<BudgetOverviewWidget {...defaultProps} />, { wrapper: createWrapper() })
       expect(screen.getByText('$2,000.00')).toBeInTheDocument()
     })
 
     it('should render spent amount', () => {
-      render(<BudgetOverviewWidget {...defaultProps} />)
+      render(<BudgetOverviewWidget {...defaultProps} />, { wrapper: createWrapper() })
+      // Spent is 250 + 100 = 350
       expect(screen.getByText('$350.00')).toBeInTheDocument()
     })
 
     it('should render progress bar', () => {
-      render(<BudgetOverviewWidget {...defaultProps} />)
+      render(<BudgetOverviewWidget {...defaultProps} />, { wrapper: createWrapper() })
       expect(screen.getByRole('progressbar')).toBeInTheDocument()
     })
 
     it('should show percentage used', () => {
-      render(<BudgetOverviewWidget {...defaultProps} />)
+      render(<BudgetOverviewWidget {...defaultProps} />, { wrapper: createWrapper() })
+      // 350/2000 = 17.5% rounded to 18%
       expect(screen.getByText('18%')).toBeInTheDocument()
     })
   })
 
   describe('No Budget State', () => {
     beforeEach(() => {
-      setMockState({ hasNoBudget: true })
+      // 404 error indicates no budget
+      setMockState({ error: { response: { status: 404 } } as unknown as Error })
     })
 
     it('should show "no budget" message', () => {
-      render(<BudgetOverviewWidget {...defaultProps} />)
+      render(<BudgetOverviewWidget {...defaultProps} />, { wrapper: createWrapper() })
       expect(screen.getByText(/no active budget/i)).toBeInTheDocument()
     })
 
     it('should show create budget prompt with correct link', () => {
-      render(<BudgetOverviewWidget {...defaultProps} />)
+      render(<BudgetOverviewWidget {...defaultProps} />, { wrapper: createWrapper() })
       const createBtn = screen.getByRole('link', { name: /create budget/i })
       expect(createBtn).toBeInTheDocument()
       expect(createBtn).toHaveAttribute('href', '/budgets')
@@ -162,7 +153,7 @@ describe('BudgetOverviewWidget', () => {
     it('should show error message on failure', () => {
       setMockState({ error: new Error('Network error') })
 
-      render(<BudgetOverviewWidget {...defaultProps} />)
+      render(<BudgetOverviewWidget {...defaultProps} />, { wrapper: createWrapper() })
 
       expect(screen.getByText(/error/i)).toBeInTheDocument()
     })

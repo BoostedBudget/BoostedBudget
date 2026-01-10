@@ -1,23 +1,12 @@
-import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach } from 'bun:test'
 import { renderHook, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import type { Budget } from '../types'
-
-const mockRefetch = mock(() => {})
-const mockUseGetCurrentBudget = mock(() => ({
-  data: undefined,
-  isLoading: true,
-  error: null,
-  refetch: mockRefetch,
-}))
-const mockGetQueryKey = mock(() => ['budgets', 'current'])
-
-mock.module('@/api/generated/endpoints/budgets/budgets', () => ({
-  useGetCurrentBudget: mockUseGetCurrentBudget,
-  getGetCurrentBudgetQueryKey: mockGetQueryKey,
-}))
-
+import {
+  mockUseGetCurrentBudget,
+  mockRefetchCurrentBudget,
+} from '@/test/mocks/budgets-api'
 import { useCurrentBudget } from './useCurrentBudget'
 
 function createWrapper() {
@@ -62,8 +51,7 @@ describe('useCurrentBudget', () => {
 
   beforeEach(() => {
     mockUseGetCurrentBudget.mockClear()
-    mockRefetch.mockClear()
-    mockGetQueryKey.mockClear()
+    mockRefetchCurrentBudget.mockClear()
   })
 
   function mockState(
@@ -75,7 +63,7 @@ describe('useCurrentBudget', () => {
       data,
       isLoading,
       error,
-      refetch: mockRefetch,
+      refetch: mockRefetchCurrentBudget,
     })
   }
 
@@ -227,7 +215,7 @@ describe('useCurrentBudget', () => {
       })
 
       await waitFor(() => {
-        expect(mockRefetch).toHaveBeenCalled()
+        expect(mockRefetchCurrentBudget).toHaveBeenCalled()
       })
     })
   })

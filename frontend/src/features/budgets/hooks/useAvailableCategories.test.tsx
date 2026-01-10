@@ -4,26 +4,14 @@
  * Issue #564: Migrated to generated React Query hooks
  */
 
-import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach } from 'bun:test'
 import { renderHook, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
-
-// Create mock functions
-const mockRefetch = mock(() => Promise.resolve())
-const mockUseGetAvailableCategories = mock(() => ({
-  data: undefined,
-  isLoading: true,
-  error: null,
-  refetch: mockRefetch,
-}))
-
-// Mock the generated hook
-mock.module('@/api/generated/endpoints/budgets/budgets', () => ({
-  useGetAvailableCategories: mockUseGetAvailableCategories,
-  getGetAvailableCategoriesQueryKey: mock(() => ['budgets', 'available-categories']),
-}))
-
+import {
+  mockUseGetAvailableCategories,
+  mockRefetchAvailableCategories,
+} from '@/test/mocks/budgets-api'
 import { useAvailableCategories } from './useAvailableCategories'
 
 // Helper to create wrapper with QueryClient
@@ -60,7 +48,7 @@ describe('useAvailableCategories', () => {
   ]
 
   beforeEach(() => {
-    mockRefetch.mockClear()
+    mockRefetchAvailableCategories.mockClear()
     mockUseGetAvailableCategories.mockClear()
   })
 
@@ -70,7 +58,7 @@ describe('useAvailableCategories', () => {
       data: undefined,
       isLoading: true,
       error: null,
-      refetch: mockRefetch,
+      refetch: mockRefetchAvailableCategories,
     })
   }
 
@@ -81,7 +69,7 @@ describe('useAvailableCategories', () => {
       data: categories,
       isLoading: false,
       error: null,
-      refetch: mockRefetch,
+      refetch: mockRefetchAvailableCategories,
     })
   }
 
@@ -91,7 +79,7 @@ describe('useAvailableCategories', () => {
       data: undefined,
       isLoading: false,
       error,
-      refetch: mockRefetch,
+      refetch: mockRefetchAvailableCategories,
     })
   }
 
@@ -177,7 +165,7 @@ describe('useAvailableCategories', () => {
         data: undefined,
         isLoading: false,
         error: 'String error' as unknown as Error,
-        refetch: mockRefetch,
+        refetch: mockRefetchAvailableCategories,
       })
 
       const { result } = renderHook(() => useAvailableCategories(), {
@@ -212,7 +200,7 @@ describe('useAvailableCategories', () => {
       });
 
       await waitFor(() => {
-        expect(mockRefetch).toHaveBeenCalled();
+        expect(mockRefetchAvailableCategories).toHaveBeenCalled();
       });
     });
   });
@@ -251,7 +239,7 @@ describe('useAvailableCategories', () => {
         data: undefined,
         isLoading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockRefetchAvailableCategories,
       })
 
       const { result } = renderHook(() => useAvailableCategories(), {

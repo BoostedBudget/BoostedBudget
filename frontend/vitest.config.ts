@@ -114,7 +114,7 @@ export default mergeConfig(
         'src/features/rules/components/actions/BudgetAlertActionForm.test.tsx',
         'src/features/rules/components/actions/SavingsGoalActionForm.test.tsx',
         'src/features/rules/components/actions/TransferActionForm.test.tsx',
-        // Batch 18 - Income source and category config tests (2026-01-09)
+        // Batch 18 - Income source tests (2026-01-09)
         'src/features/budgets/components/income/IncomeSourceConfig.test.tsx',
         'src/features/budgets/components/income/IncomeSourceItem.test.tsx',
         'src/features/budgets/components/income/IncomeSourcePicker.test.tsx',
@@ -165,12 +165,11 @@ export default mergeConfig(
         'src/features/budgets/components/BudgetTable.test.tsx',
         // Batch 32 - Rules and category management (2026-01-09)
         'src/features/rules/components/ConditionBuilder.test.tsx',
-        'src/features/budgets/components/category-management/BudgetCategoryManager.test.tsx',
-        // Batch 33 - More rules (2026-01-09)
-        'src/features/rules/components/RulesPage.test.tsx',
+        // NOTE: BudgetCategoryManager stays on vitest - mocks BudgetCategoryCard causing pollution
+        // NOTE: RulesPage stays on vitest - mocks useRuleTierLimits, useProfile, useSubscriptionTiers causing pollution
         // Batch 34 - Simple vi.mock() files (2026-01-09)
         'src/features/dashboard/widgets/CashFlowChartWidget.test.tsx',
-        'src/features/dashboard/widgets/DashboardGrid.test.tsx',
+        // NOTE: DashboardGrid stays on vitest - mocks WidgetWrapper causing pollution
         'src/features/budgets/components/category-management/BudgetCategoryForm.test.tsx',
         'src/features/budgets/components/CreateSavingsGoalDialog.test.tsx',
       ],

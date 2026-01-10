@@ -1,6 +1,8 @@
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import type { BalanceSummary } from '../types'
+// Issue #575: Use centralized registry mock to prevent mock.module() pollution
+import '@/test/mocks/registry'
 
 const mockSetFilters = mock(() => {})
 const mockSetTimeframe = mock(() => {})
@@ -42,10 +44,6 @@ mock.module('../components/BalanceOverview', () => ({
       Balance Overview: {JSON.stringify(summary)}
     </div>
   ),
-}))
-
-mock.module('./registry', () => ({
-  registerWidget: mock(() => {}),
 }))
 
 import { BalanceOverviewWidget } from './BalanceOverviewWidget'
