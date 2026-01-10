@@ -1,23 +1,17 @@
 /**
  * TagEditor Component Tests
  * Issue #564: Frontend Test Coverage Improvement
+ * Issue #575: Uses centralized tags-api mock
  */
 
-import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import type { UserTag } from '../types'
-
-// Mock the generated mutation hook
-const mockMutateAsync = mock(() => Promise.resolve({}))
-
-mock.module('@/api/generated/endpoints/tags/tags', () => ({
-  useCreateTag: () => ({
-    mutateAsync: mockMutateAsync,
-    isPending: false,
-  }),
-}))
-
 import { TagEditor } from './TagEditor'
+import {
+  mockUseCreateTag,
+  mockCreateTagMutateAsync,
+} from '@/test/mocks/tags-api'
 
 // Mock tags data
 function createMockTags(): UserTag[] {
@@ -33,9 +27,18 @@ const mockOnTagCreated = mock(() => {})
 
 describe('TagEditor', () => {
   beforeEach(() => {
-    mockMutateAsync.mockClear()
+    mockCreateTagMutateAsync.mockClear()
     mockOnChange.mockClear()
     mockOnTagCreated.mockClear()
+
+    // Default: successful tag creation
+    mockCreateTagMutateAsync.mockResolvedValue({})
+    mockUseCreateTag.mockReturnValue({
+      mutateAsync: mockCreateTagMutateAsync,
+      isPending: false,
+      isError: false,
+      error: null,
+    })
   })
 
   describe('Rendering', () => {
@@ -323,7 +326,7 @@ describe('TagEditor', () => {
 
     it('should call mutation when Create clicked', async () => {
       const newTag = { id: 'tag-4', user_id: 'user-1', name: 'New Tag', color: '#6B7280', usage_count: 0, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' }
-      mockMutateAsync.mockResolvedValueOnce(newTag)
+      mockCreateTagMutateAsync.mockResolvedValueOnce(newTag)
 
       render(
         <TagEditor
@@ -340,7 +343,7 @@ describe('TagEditor', () => {
       fireEvent.click(screen.getByText('Create'))
 
       await waitFor(() => {
-        expect(mockMutateAsync).toHaveBeenCalledWith({
+        expect(mockCreateTagMutateAsync).toHaveBeenCalledWith({
           data: { name: 'New Tag', color: '#6B7280' },
         })
       })
@@ -348,7 +351,7 @@ describe('TagEditor', () => {
 
     it('should add new tag to selection after creation', async () => {
       const newTag = { id: 'tag-4', user_id: 'user-1', name: 'New Tag', color: '#6B7280', usage_count: 0, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' }
-      mockMutateAsync.mockResolvedValueOnce(newTag)
+      mockCreateTagMutateAsync.mockResolvedValueOnce(newTag)
 
       render(
         <TagEditor
@@ -371,7 +374,7 @@ describe('TagEditor', () => {
 
     it('should call onTagCreated callback after creation', async () => {
       const newTag = { id: 'tag-4', user_id: 'user-1', name: 'New Tag', color: '#6B7280', usage_count: 0, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' }
-      mockMutateAsync.mockResolvedValueOnce(newTag)
+      mockCreateTagMutateAsync.mockResolvedValueOnce(newTag)
 
       render(
         <TagEditor

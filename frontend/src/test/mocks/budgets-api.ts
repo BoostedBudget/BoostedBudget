@@ -55,6 +55,60 @@ export const mockGetAvailableCategoriesQueryKey = mock(() => [
   'available-categories',
 ])
 
+// === useGetBudgets (used by useBudgets.test.tsx) ===
+export const mockRefetchBudgets = mock(() => Promise.resolve({}))
+export const mockUseGetBudgets = mock(() => ({
+  data: undefined,
+  isLoading: true,
+  error: null,
+  refetch: mockRefetchBudgets,
+}))
+export const mockGetBudgetsQueryKey = mock(() => ['budgets'])
+
+// === Mutation mocks for useBudgets.test.tsx ===
+export const mockCreateBudgetMutateAsync = mock(() => Promise.resolve())
+export const mockUseCreateBudget = mock(() => ({
+  mutateAsync: mockCreateBudgetMutateAsync,
+}))
+
+export const mockUpdateBudgetMutateAsync = mock(() => Promise.resolve())
+export const mockUseUpdateBudget = mock(() => ({
+  mutateAsync: mockUpdateBudgetMutateAsync,
+}))
+
+export const mockDeleteBudgetMutateAsync = mock(() => Promise.resolve())
+export const mockUseDeleteBudget = mock(() => ({
+  mutateAsync: mockDeleteBudgetMutateAsync,
+}))
+
+export const mockAddBudgetCategoryMutateAsync = mock(() => Promise.resolve())
+export const mockUseAddBudgetCategory = mock(() => ({
+  mutateAsync: mockAddBudgetCategoryMutateAsync,
+}))
+
+export const mockUpdateBudgetCategoryMutateAsync = mock(() => Promise.resolve())
+export const mockUseUpdateBudgetCategory = mock(() => ({
+  mutateAsync: mockUpdateBudgetCategoryMutateAsync,
+}))
+
+export const mockDeleteBudgetCategoryMutateAsync = mock(() => Promise.resolve())
+export const mockUseDeleteBudgetCategory = mock(() => ({
+  mutateAsync: mockDeleteBudgetCategoryMutateAsync,
+}))
+
+// Non-hook function mock for getting available categories
+export const mockGetAvailableCategoriesFn = mock(() => Promise.resolve([]))
+
+// === useGetBudget (used by useBudgetDetail.test.tsx) ===
+export const mockRefetchBudget = mock(() => Promise.resolve({}))
+export const mockUseGetBudget = mock(() => ({
+  data: undefined,
+  isLoading: true,
+  error: null,
+  refetch: mockRefetchBudget,
+}))
+export const mockGetBudgetQueryKey = mock((id: string) => ['budgets', id])
+
 // Single mock.module() call - called once at preload time
 // Re-export ALL real exports, only override the specific hooks we need to mock
 mock.module('@/api/generated/endpoints/budgets/budgets', () => ({
@@ -77,4 +131,19 @@ mock.module('@/api/generated/endpoints/budgets/budgets', () => ({
   useGetAvailableCategories: (...args: unknown[]) =>
     mockUseGetAvailableCategories(...args),
   getGetAvailableCategoriesQueryKey: () => mockGetAvailableCategoriesQueryKey(),
+
+  // useBudgets hook mocks
+  useGetBudgets: (...args: unknown[]) => mockUseGetBudgets(...args),
+  getGetBudgetsQueryKey: () => mockGetBudgetsQueryKey(),
+  useCreateBudget: (...args: unknown[]) => mockUseCreateBudget(...args),
+  useUpdateBudget: (...args: unknown[]) => mockUseUpdateBudget(...args),
+  useDeleteBudget: (...args: unknown[]) => mockUseDeleteBudget(...args),
+  useAddBudgetCategory: (...args: unknown[]) => mockUseAddBudgetCategory(...args),
+  useUpdateBudgetCategory: (...args: unknown[]) => mockUseUpdateBudgetCategory(...args),
+  useDeleteBudgetCategory: (...args: unknown[]) => mockUseDeleteBudgetCategory(...args),
+  getAvailableCategories: (...args: unknown[]) => mockGetAvailableCategoriesFn(...args),
+
+  // useBudgetDetail hook mocks
+  useGetBudget: (...args: unknown[]) => mockUseGetBudget(...args),
+  getGetBudgetQueryKey: (...args: unknown[]) => mockGetBudgetQueryKey(...(args as [string])),
 }))

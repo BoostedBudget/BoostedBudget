@@ -6,7 +6,12 @@ import type { Account } from '../../accounts/types'
 import type { UserTag } from '../../tags/types'
 import type { CustomCategory } from '../../categories/types'
 import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
+import { mockUseGetUserTags } from '@/test/mocks/tags-api'
+import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
+import { mockUseGetUserProfile, mockRefetchUserProfile } from '@/test/mocks/profile-api'
+import { mockUseGetSubscriptionTiers, mockRefetchSubscriptionTiers } from '@/test/mocks/subscription-api'
 
+// Categories API mock (no centralized mock yet)
 const mockUseGetUserCategories = mock(() => ({
   data: [],
   isLoading: false,
@@ -19,51 +24,9 @@ const mockUseGetPlaidCategories = mock(() => ({
   error: null,
 }))
 
-const mockUseGetAccounts = mock(() => ({
-  data: { accounts: [] },
-  isLoading: false,
-  error: null,
-}))
-
-const mockUseGetUserTags = mock(() => ({
-  data: [],
-  isLoading: false,
-  error: null,
-}))
-
-const mockUseProfile = mock(() => ({
-  user: null,
-  loading: false,
-  error: null,
-  refetch: mock(() => {}),
-}))
-
-const mockUseSubscriptionTiers = mock(() => ({
-  tiers: mockSubscriptionTiersResponse,
-  loading: false,
-  error: null,
-  refetch: mock(() => {}),
-}))
-
 mock.module('@/api/generated/endpoints/categories/categories', () => ({
   useGetUserCategories: mockUseGetUserCategories,
   useGetPlaidCategories: mockUseGetPlaidCategories,
-}))
-
-mock.module('@/api/generated/endpoints/accounts/accounts', () => ({
-  useGetAccounts: mockUseGetAccounts,
-}))
-
-mock.module('@/api/generated/endpoints/tags/tags', () => ({
-  useGetUserTags: mockUseGetUserTags,
-}))
-
-mock.module('../../profile/hooks/useProfile', () => ({
-  useProfile: mockUseProfile,
-}))
-
-mock.module('../../subscription/hooks/useSubscriptionTiers', () => ({
-  useSubscriptionTiers: mockUseSubscriptionTiers,
 }))
 
 mock.module('./AutoCategorizationPage', () => ({
@@ -181,18 +144,19 @@ describe('AutoCategorizationPageWrapper', () => {
       error: null,
     })
 
-    mockUseProfile.mockReturnValue({
-      user: overrides?.user === undefined ? mockUser : overrides?.user,
-      loading: false,
+    // Use centralized API mocks - the wrapper hooks will use these
+    mockUseGetUserProfile.mockReturnValue({
+      data: overrides?.user === undefined ? mockUser : overrides?.user,
+      isLoading: false,
       error: null,
-      refetch: mock(() => {}),
+      refetch: mockRefetchUserProfile,
     })
 
-    mockUseSubscriptionTiers.mockReturnValue({
-      tiers: overrides?.tiers === undefined ? mockSubscriptionTiersResponse : overrides?.tiers,
-      loading: false,
+    mockUseGetSubscriptionTiers.mockReturnValue({
+      data: overrides?.tiers === undefined ? mockSubscriptionTiersResponse : overrides?.tiers,
+      isLoading: false,
       error: null,
-      refetch: mock(() => {}),
+      refetch: mockRefetchSubscriptionTiers,
     })
   }
 
@@ -201,8 +165,8 @@ describe('AutoCategorizationPageWrapper', () => {
     mockUseGetPlaidCategories.mockClear()
     mockUseGetAccounts.mockClear()
     mockUseGetUserTags.mockClear()
-    mockUseProfile.mockClear()
-    mockUseSubscriptionTiers.mockClear()
+    mockUseGetUserProfile.mockClear()
+    mockUseGetSubscriptionTiers.mockClear()
     configureHooks()
   })
 
