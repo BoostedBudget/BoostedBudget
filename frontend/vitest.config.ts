@@ -190,6 +190,7 @@ export default mergeConfig(
         // Phase 4A: Page tests migrated (2026-01-10)
         'src/features/deletion/components/CancelDeletionPage.test.tsx',
         'src/components/layout/Header.test.tsx',
+        'src/features/categories/components/CategoryEditor.test.tsx',
       ],
       coverage: {
         provider: 'v8',
