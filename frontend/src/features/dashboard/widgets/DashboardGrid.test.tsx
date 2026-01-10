@@ -7,7 +7,7 @@
  * Issue #354: Customizable Dashboard Widget System
  */
 
-import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import React from 'react'
 import type {
   DashboardLayout,
@@ -16,18 +16,18 @@ import type {
   WidgetDefinition,
 } from '../types'
 
-const mockGridStackOn = mock(() => {})
-const mockGridStackOff = mock(() => {})
-const mockGridStackLoad = mock(() => {})
-const mockGridStackSave = mock(() => [])
-const mockGridStackEnableMove = mock(() => {})
-const mockGridStackEnableResize = mock(() => {})
-const mockGridStackRemoveWidget = mock(() => {})
-const mockGridStackDestroy = mock(() => {})
-const mockGridStackBatchUpdate = mock(() => {})
-const mockGridStackUpdate = mock(() => {})
-const mockGridStackGetGridItems = mock(() => [])
-const mockGridStackMakeWidget = mock(() => {})
+const mockGridStackOn = vi.fn()
+const mockGridStackOff = vi.fn()
+const mockGridStackLoad = vi.fn()
+const mockGridStackSave = vi.fn(() => [])
+const mockGridStackEnableMove = vi.fn()
+const mockGridStackEnableResize = vi.fn()
+const mockGridStackRemoveWidget = vi.fn()
+const mockGridStackDestroy = vi.fn()
+const mockGridStackBatchUpdate = vi.fn()
+const mockGridStackUpdate = vi.fn()
+const mockGridStackGetGridItems = vi.fn(() => [])
+const mockGridStackMakeWidget = vi.fn()
 
 const mockGridStackInstance = {
   on: mockGridStackOn,
@@ -48,18 +48,13 @@ const mockGridStackInstance = {
   _ignoreCB: false,
 }
 
-mock.module('gridstack', () => ({
+vi.mock('gridstack', () => ({
   GridStack: {
-    init: mock(() => mockGridStackInstance),
+    init: vi.fn(() => mockGridStackInstance),
   },
 }))
 
-const mockGetWidget = mock(() => undefined as WidgetDefinition | undefined)
-mock.module('./registry', () => ({
-  getWidget: mockGetWidget,
-}))
-
-mock.module('./WidgetWrapper', () => ({
+vi.mock('./WidgetWrapper', () => ({
   WidgetWrapper: ({
     children,
     onRemove,
@@ -76,6 +71,12 @@ mock.module('./WidgetWrapper', () => ({
       {children}
     </div>
   ),
+}))
+
+const mockGetWidget = vi.fn()
+
+vi.mock('./registry', () => ({
+  getWidget: (...args: unknown[]) => mockGetWidget(...args),
 }))
 
 import { render, screen, fireEvent } from '@testing-library/react'
@@ -108,9 +109,9 @@ describe('DashboardGrid', () => {
     version: 1,
   }
 
-  const mockOnLayoutChange = mock(() => {})
-  const mockOnRemoveWidget = mock(() => {})
-  const mockOnDropWidget = mock(() => {})
+  const mockOnLayoutChange = vi.fn()
+  const mockOnRemoveWidget = vi.fn()
+  const mockOnDropWidget = vi.fn()
 
   const MockWidgetComponent = ({ widgetId }: WidgetProps) => (
     <div data-testid={`widget-content-${widgetId}`}>Widget content</div>

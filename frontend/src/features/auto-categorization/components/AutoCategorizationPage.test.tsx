@@ -1,5 +1,6 @@
-import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { BrowserRouter } from 'react-router-dom'
 import type { CategorizationRule, UseAutoCategorizationRulesResult } from '../types'
 
 const mockUseAutoCategorizationRules = mock(() => ({
@@ -17,24 +18,22 @@ mock.module('../hooks/useAutoCategorizationRules', () => ({
   useAutoCategorizationRules: mockUseAutoCategorizationRules,
 }))
 
-mock.module('../hooks/useRuleFilters', () => ({
-  useRuleFilters: () => ({
-    filters: { status: [], category: [], priorityMin: undefined, priorityMax: undefined },
-    statusFilter: [],
-    categoryFilter: [],
-    priorityRange: null,
-    setStatusFilter: mock(() => {}),
-    setCategoryFilter: mock(() => {}),
-    setPriorityRange: mock(() => {}),
-    clearAllFilters: mock(() => {}),
-    activeFilterCount: 0,
-    hasActiveFilters: false,
-  }),
-}))
+// Note: We don't mock useRuleFilters - let it use the real implementation with BrowserRouter
+// This prevents mock pollution affecting useRuleFilters.test.ts
 
 import { AutoCategorizationPage } from './AutoCategorizationPage'
 
+// Helper to render with router context
+function renderWithRouter(ui: React.ReactElement) {
+  return render(<BrowserRouter>{ui}</BrowserRouter>)
+}
+
 describe('AutoCategorizationPage', () => {
+  afterEach(() => {
+    // Reset URL state to prevent pollution to other tests
+    window.history.replaceState({}, '', '/')
+  })
+
   const mockRule1: CategorizationRule = {
     id: 'rule-1',
     user_id: 'user-1',
@@ -87,7 +86,7 @@ describe('AutoCategorizationPage', () => {
   describe('Loading state', () => {
     it('should show loading spinner when loading', () => {
       mockUseAutoCategorizationRules.mockReturnValue(createMockResult({ loading: true }))
-      render(<AutoCategorizationPage categories={mockCategories} />)
+      renderWithRouter(<AutoCategorizationPage categories={mockCategories} />)
       expect(screen.getByText(/loading rules/i)).toBeInTheDocument()
     })
   })
@@ -97,7 +96,7 @@ describe('AutoCategorizationPage', () => {
       mockUseAutoCategorizationRules.mockReturnValue(
         createMockResult({ error: 'Failed to fetch rules' })
       )
-      render(<AutoCategorizationPage categories={mockCategories} />)
+      renderWithRouter(<AutoCategorizationPage categories={mockCategories} />)
       expect(screen.getByText(/failed to fetch rules/i)).toBeInTheDocument()
     })
 
@@ -106,7 +105,7 @@ describe('AutoCategorizationPage', () => {
       mockUseAutoCategorizationRules.mockReturnValue(
         createMockResult({ error: 'Network error', refresh: mockRefresh })
       )
-      render(<AutoCategorizationPage categories={mockCategories} />)
+      renderWithRouter(<AutoCategorizationPage categories={mockCategories} />)
       fireEvent.click(screen.getByRole('button', { name: /retry/i }))
       expect(mockRefresh).toHaveBeenCalled()
     })
@@ -118,12 +117,12 @@ describe('AutoCategorizationPage', () => {
     })
 
     it('should show empty state when no rules', () => {
-      render(<AutoCategorizationPage categories={mockCategories} />)
+      renderWithRouter(<AutoCategorizationPage categories={mockCategories} />)
       expect(screen.getByText(/no rules yet/i)).toBeInTheDocument()
     })
 
     it('should show create button in empty state', () => {
-      render(<AutoCategorizationPage categories={mockCategories} />)
+      renderWithRouter(<AutoCategorizationPage categories={mockCategories} />)
       expect(screen.getByRole('button', { name: /create.*rule/i })).toBeInTheDocument()
     })
   })
@@ -136,13 +135,13 @@ describe('AutoCategorizationPage', () => {
     })
 
     it('should render list of rules', () => {
-      render(<AutoCategorizationPage categories={mockCategories} />)
+      renderWithRouter(<AutoCategorizationPage categories={mockCategories} />)
       expect(screen.getByText('Coffee Shops')).toBeInTheDocument()
       expect(screen.getByText('Groceries')).toBeInTheDocument()
     })
 
     it('should show rule count', () => {
-      render(<AutoCategorizationPage categories={mockCategories} />)
+      renderWithRouter(<AutoCategorizationPage categories={mockCategories} />)
       expect(screen.getByText(/2 rules/i)).toBeInTheDocument()
     })
   })
@@ -150,14 +149,14 @@ describe('AutoCategorizationPage', () => {
   describe('Create rule', () => {
     it('should open editor when Create Rule is clicked', () => {
       mockUseAutoCategorizationRules.mockReturnValue(createMockResult({ rules: [mockRule1] }))
-      render(<AutoCategorizationPage categories={mockCategories} />)
+      renderWithRouter(<AutoCategorizationPage categories={mockCategories} />)
       fireEvent.click(screen.getByRole('button', { name: /create rule/i }))
       expect(screen.getByRole('heading', { name: /create rule/i })).toBeInTheDocument()
     })
 
     it('should close editor on cancel', () => {
       mockUseAutoCategorizationRules.mockReturnValue(createMockResult({ rules: [] }))
-      render(<AutoCategorizationPage categories={mockCategories} />)
+      renderWithRouter(<AutoCategorizationPage categories={mockCategories} />)
       fireEvent.click(screen.getByRole('button', { name: /create.*rule/i }))
       fireEvent.click(screen.getByRole('button', { name: /cancel/i }))
       expect(screen.queryByRole('heading', { name: /create rule/i })).not.toBeInTheDocument()
@@ -168,7 +167,7 @@ describe('AutoCategorizationPage', () => {
       mockUseAutoCategorizationRules.mockReturnValue(
         createMockResult({ rules: [], createRule: mockCreateRule })
       )
-      render(<AutoCategorizationPage categories={mockCategories} />)
+      renderWithRouter(<AutoCategorizationPage categories={mockCategories} />)
       fireEvent.click(screen.getByRole('button', { name: /create.*rule/i }))
       expect(screen.getByRole('heading', { name: /create rule/i })).toBeInTheDocument()
     })
@@ -177,7 +176,7 @@ describe('AutoCategorizationPage', () => {
   describe('Edit rule', () => {
     it('should open editor with rule data when Edit is clicked', () => {
       mockUseAutoCategorizationRules.mockReturnValue(createMockResult({ rules: [mockRule1] }))
-      render(<AutoCategorizationPage categories={mockCategories} />)
+      renderWithRouter(<AutoCategorizationPage categories={mockCategories} />)
       fireEvent.click(screen.getByRole('button', { name: /edit/i }))
       expect(screen.getByRole('heading', { name: /edit rule/i })).toBeInTheDocument()
       expect(screen.getByDisplayValue('Coffee Shops')).toBeInTheDocument()
@@ -190,7 +189,7 @@ describe('AutoCategorizationPage', () => {
       mockUseAutoCategorizationRules.mockReturnValue(
         createMockResult({ rules: [mockRule1], deleteRule: mockDeleteRule })
       )
-      render(<AutoCategorizationPage categories={mockCategories} />)
+      renderWithRouter(<AutoCategorizationPage categories={mockCategories} />)
       const deleteButton = screen.getByRole('button', { name: 'Delete' })
       fireEvent.click(deleteButton)
       const confirmButtons = screen.getAllByRole('button', { name: 'Delete' })
@@ -207,7 +206,7 @@ describe('AutoCategorizationPage', () => {
       mockUseAutoCategorizationRules.mockReturnValue(
         createMockResult({ rules: [mockRule1], toggleRule: mockToggleRule })
       )
-      render(<AutoCategorizationPage categories={mockCategories} />)
+      renderWithRouter(<AutoCategorizationPage categories={mockCategories} />)
       fireEvent.click(screen.getByRole('button', { name: /disable/i }))
       await waitFor(() => {
         expect(mockToggleRule).toHaveBeenCalledWith('rule-1', false)
@@ -221,17 +220,17 @@ describe('AutoCategorizationPage', () => {
     })
 
     it('should show tier limit warning when at limit', () => {
-      render(<AutoCategorizationPage categories={mockCategories} maxRules={1} currentTier="free" />)
+      renderWithRouter(<AutoCategorizationPage categories={mockCategories} maxRules={1} currentTier="free" />)
       expect(screen.getByText(/rule limit reached/i)).toBeInTheDocument()
     })
 
     it('should disable create button when at limit', () => {
-      render(<AutoCategorizationPage categories={mockCategories} maxRules={1} currentTier="free" />)
+      renderWithRouter(<AutoCategorizationPage categories={mockCategories} maxRules={1} currentTier="free" />)
       expect(screen.getByRole('button', { name: /create rule/i })).toBeDisabled()
     })
 
     it('should show upgrade prompt for free tier', () => {
-      render(<AutoCategorizationPage categories={mockCategories} maxRules={1} currentTier="free" />)
+      renderWithRouter(<AutoCategorizationPage categories={mockCategories} maxRules={1} currentTier="free" />)
       expect(screen.getByText(/upgrade/i)).toBeInTheDocument()
     })
   })

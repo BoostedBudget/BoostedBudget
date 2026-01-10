@@ -320,13 +320,11 @@ describe('DeleteAccountSection', () => {
 
   describe('Cancellation Link Display', () => {
     it('should generate correct cancellation URL format', () => {
-      Object.defineProperty(window, 'location', {
-        value: { origin: 'http://localhost:3000' },
-        writable: true,
-      })
-
+      // Don't override window.location - it pollutes other tests
+      // Just test the URL format directly
+      const origin = 'http://localhost:3000'
       const expectedToken = mockSuccessResponse.cancellation_token
-      const expectedUrl = `http://localhost:3000/cancel-deletion/${expectedToken}`
+      const expectedUrl = `${origin}/cancel-deletion/${expectedToken}`
 
       expect(expectedUrl).toContain('/cancel-deletion/')
       expect(expectedUrl).toContain(expectedToken)

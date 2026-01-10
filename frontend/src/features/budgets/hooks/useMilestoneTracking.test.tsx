@@ -11,9 +11,9 @@ import { useMilestoneTracking } from './useMilestoneTracking'
 
 describe('useMilestoneTracking', () => {
   const localStorageMock: Record<string, string> = {}
-  const originalGetItem = localStorage.getItem
-  const originalSetItem = localStorage.setItem
-  const originalRemoveItem = localStorage.removeItem
+
+  // Save the entire original localStorage object
+  const originalLocalStorage = window.localStorage
 
   const mockGetItem = mock((key: string) => localStorageMock[key] || null)
   const mockSetItem = mock((key: string, value: string) => {
@@ -39,17 +39,16 @@ describe('useMilestoneTracking', () => {
         length: 0,
       },
       writable: true,
+      configurable: true,
     })
   })
 
   afterEach(() => {
+    // Restore the original localStorage object completely
     Object.defineProperty(window, 'localStorage', {
-      value: {
-        getItem: originalGetItem,
-        setItem: originalSetItem,
-        removeItem: originalRemoveItem,
-      },
+      value: originalLocalStorage,
       writable: true,
+      configurable: true,
     })
   })
 

@@ -6,19 +6,19 @@
  * TDD RED: Writing tests before implementation.
  */
 
-import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { AutomationRule } from '@/api/generated/models'
 
-const mockUseGetAutomationRules = mock(() => ({
+const mockUseGetAutomationRules = vi.fn(() => ({
   data: [] as AutomationRule[],
   isLoading: false,
   error: null,
 }))
-const mockToggleRule = mock(() => {})
-const mockDeleteRule = mock(() => {})
-const mockTestRule = mock(() => {})
+const mockToggleRule = vi.fn()
+const mockDeleteRule = vi.fn()
+const mockTestRule = vi.fn()
 
-mock.module('@/api/generated/endpoints/automation-rules/automation-rules', () => ({
+vi.mock('@/api/generated/endpoints/automation-rules/automation-rules', () => ({
   useGetAutomationRules: () => mockUseGetAutomationRules(),
   useToggleAutomationRule: () => ({
     mutate: mockToggleRule,
@@ -33,11 +33,11 @@ mock.module('@/api/generated/endpoints/automation-rules/automation-rules', () =>
     mutateAsync: mockTestRule,
     isPending: false,
     data: null,
-    reset: mock(() => {}),
+    reset: vi.fn(),
   }),
 }))
 
-mock.module('../hooks/useRuleTierLimits', () => ({
+vi.mock('../hooks/useRuleTierLimits', () => ({
   useRuleTierLimits: () => ({
     ruleLimit: 5,
     isUnlimited: false,
@@ -49,7 +49,7 @@ mock.module('../hooks/useRuleTierLimits', () => ({
   }),
 }))
 
-mock.module('@/features/profile/hooks/useProfile', () => ({
+vi.mock('@/features/profile/hooks/useProfile', () => ({
   useProfile: () => ({
     user: { subscription_tier: 'premium' },
     loading: false,
@@ -57,7 +57,7 @@ mock.module('@/features/profile/hooks/useProfile', () => ({
   }),
 }))
 
-mock.module('@/features/subscription/hooks/useSubscriptionTiers', () => ({
+vi.mock('@/features/subscription/hooks/useSubscriptionTiers', () => ({
   useSubscriptionTiers: () => ({
     tiers: {
       tiers: {
@@ -203,7 +203,7 @@ describe('RulesPage', () => {
       data: null,
       isLoading: false,
       error: new Error('Failed to load'),
-      refetch: mock(() => {}),
+      refetch: vi.fn(),
     }))
     renderWithProviders(<RulesPage />)
     expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()

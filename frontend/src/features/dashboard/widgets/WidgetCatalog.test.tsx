@@ -7,16 +7,12 @@
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import type { WidgetDefinition } from '../types'
+// Issue #575: Use centralized registry mock to prevent mock.module() pollution
+import { mockGetAllWidgets } from '@/test/mocks/registry'
 
 // Create mock functions
-const mockGetAllWidgets = mock(() => [] as WidgetDefinition[])
 const mockOnClose = mock(() => {})
 const mockOnAddWidget = mock(() => {})
-
-// Mock the registry
-mock.module('./registry', () => ({
-  getAllWidgets: mockGetAllWidgets,
-}))
 
 // Mock the API hook - returns all widget types as valid
 mock.module('@/api/generated/endpoints/dashboard/dashboard', () => ({

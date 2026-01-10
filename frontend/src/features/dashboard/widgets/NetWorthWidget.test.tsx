@@ -1,12 +1,14 @@
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import type { NetWorthSummary, NetWorthHistory } from '../types'
+// Issue #575: Use centralized registry mock to prevent mock.module() pollution
+import '@/test/mocks/registry'
 
 const mockSetFilters = mock(() => {})
 const mockSetTimeframe = mock(() => {})
 const mockSetIsEditing = mock(() => {})
 
-const defaultContextState = {
+const mockUseDashboardContext = mock(() => ({
   filters: {
     startDate: '2024-01-01',
     endDate: '2024-01-31',
@@ -17,9 +19,7 @@ const defaultContextState = {
   setTimeframe: mockSetTimeframe,
   isEditing: false,
   setIsEditing: mockSetIsEditing,
-}
-
-const mockUseDashboardContext = mock(() => defaultContextState)
+}))
 
 const mockRefetch = mock(() => {})
 
@@ -39,10 +39,6 @@ mock.module('../context/DashboardContext', () => ({
 
 mock.module('../hooks/useNetWorthData', () => ({
   useNetWorthData: mockUseNetWorthData,
-}))
-
-mock.module('./registry', () => ({
-  registerWidget: mock(() => {}),
 }))
 
 import { NetWorthWidget } from './NetWorthWidget'

@@ -7,31 +7,8 @@ import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import type { BudgetCategory } from '../../types'
 import type { UserTag } from '@/features/tags/types'
 
-mock.module('./CategoryMatchConfig', () => ({
-  CategoryMatchConfig: ({
-    value,
-    onChange,
-    disabled,
-  }: {
-    value: string
-    onChange: (v: string) => void
-    disabled?: boolean
-  }) => (
-    <div data-testid="category-match-config">
-      <select
-        data-testid="match-logic-select"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        disabled={disabled}
-      >
-        <option value="category_only">Category Only</option>
-        <option value="tag_only">Tag Only</option>
-        <option value="and">Category AND Tag</option>
-        <option value="or">Category OR Tag</option>
-      </select>
-    </div>
-  ),
-}))
+// Note: We don't mock CategoryMatchConfig - use the real component with radio buttons
+// This prevents mock pollution affecting CategoryMatchConfig.test.tsx
 
 const mockUsePreviewCategories = mock(() => ({
   preview: null,
@@ -335,8 +312,9 @@ describe('BudgetCategoryForm', () => {
       const amountInput = screen.getByRole('spinbutton', { name: /amount/i })
       fireEvent.change(amountInput, { target: { value: '100' } })
 
-      const matchLogicSelect = screen.getByTestId('match-logic-select')
-      fireEvent.change(matchLogicSelect, { target: { value: 'tag_only' } })
+      // Select "Match by tags only" radio option - the real CategoryMatchConfig uses radio buttons
+      const tagOnlyRadio = screen.getByRole('radio', { name: /match by tags only/i })
+      fireEvent.click(tagOnlyRadio)
 
       const form = document.querySelector('form')
       fireEvent.submit(form!)
@@ -360,11 +338,13 @@ describe('BudgetCategoryForm', () => {
         />
       )
 
-      expect(screen.getByTestId('category-match-config')).toBeInTheDocument()
+      // CategoryMatchConfig renders as a fieldset with radio buttons
+      expect(screen.getByRole('group', { name: /match logic/i })).toBeInTheDocument()
       expect(screen.queryByText(/^tags$/i)).not.toBeInTheDocument()
 
-      const matchLogicSelect = screen.getByTestId('match-logic-select')
-      await user.selectOptions(matchLogicSelect, 'tag_only')
+      // Select "Match by tags only" radio option to show tags picker
+      const tagOnlyRadio = screen.getByRole('radio', { name: /match by tags only/i })
+      await user.click(tagOnlyRadio)
 
       await waitFor(() => {
         expect(screen.getByText(/^tags$/i)).toBeInTheDocument()
