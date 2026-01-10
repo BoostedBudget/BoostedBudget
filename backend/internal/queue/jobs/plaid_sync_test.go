@@ -118,6 +118,36 @@ func (m *MockLinkedItemRepository) GetByUserAndInstitution(ctx context.Context, 
 	return args.Get(0).(*domain.LinkedItem), args.Error(1)
 }
 
+// GetItemsForCleanup - Issue #668: Plaid Item Management for Cost Optimization
+func (m *MockLinkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays, staleDays int) ([]domain.LinkedItem, error) {
+	args := m.Called(ctx, errorDays, staleDays)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.LinkedItem), args.Error(1)
+}
+
+// GetItemsPendingCleanup - Issue #668
+func (m *MockLinkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]domain.LinkedItem, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.LinkedItem), args.Error(1)
+}
+
+// MarkForCleanup - Issue #668
+func (m *MockLinkedItemRepository) MarkForCleanup(ctx context.Context, itemID string, cleanupAt time.Time) error {
+	args := m.Called(ctx, itemID, cleanupAt)
+	return args.Error(0)
+}
+
+// ClearCleanupSchedule - Issue #668
+func (m *MockLinkedItemRepository) ClearCleanupSchedule(ctx context.Context, itemID string) error {
+	args := m.Called(ctx, itemID)
+	return args.Error(0)
+}
+
 // MockJobQueue mocks the JobQueue interface
 type MockJobQueue struct {
 	mock.Mock

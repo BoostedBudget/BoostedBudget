@@ -1209,3 +1209,109 @@ func TestAccountRepository_UpdateStatus_NotFound(t *testing.T) {
 	assert.ErrorIs(t, err, ErrAccountNotFound)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// ============================================================================
+// Issue #668: Plaid Item Management for Cost Optimization Tests
+// ============================================================================
+
+// TestAccountRepository_CountActiveByLinkedItemID tests counting active accounts for an item
+func TestAccountRepository_CountActiveByLinkedItemID(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	linkedItemID := uuid.New().String()
+	expectedCount := 3
+
+	rows := pgxmock.NewRows([]string{"count"}).AddRow(expectedCount)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT COUNT(*)
+		FROM accounts
+		WHERE linked_item_id = $1 AND status = 'active'
+	`)).WithArgs(linkedItemID).WillReturnRows(rows)
+
+	// Execute
+	count, err := repo.CountActiveByLinkedItemID(ctx, linkedItemID)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.Equal(t, expectedCount, count)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_CountActiveByLinkedItemID_ZeroAccounts tests count when item has no active accounts
+func TestAccountRepository_CountActiveByLinkedItemID_ZeroAccounts(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	linkedItemID := uuid.New().String()
+
+	rows := pgxmock.NewRows([]string{"count"}).AddRow(0)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT COUNT(*)
+		FROM accounts
+		WHERE linked_item_id = $1 AND status = 'active'
+	`)).WithArgs(linkedItemID).WillReturnRows(rows)
+
+	// Execute
+	count, err := repo.CountActiveByLinkedItemID(ctx, linkedItemID)
+
+	// Assert - count should be 0, no error
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_CountActiveByLinkedItemID_ExcludesReplaced tests that replaced accounts are not counted
+func TestAccountRepository_CountActiveByLinkedItemID_ExcludesReplaced(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	linkedItemID := uuid.New().String()
+
+	// Only 2 active accounts (3 total - 1 replaced = 2 active)
+	expectedCount := 2
+
+	rows := pgxmock.NewRows([]string{"count"}).AddRow(expectedCount)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT COUNT(*)
+		FROM accounts
+		WHERE linked_item_id = $1 AND status = 'active'
+	`)).WithArgs(linkedItemID).WillReturnRows(rows)
+
+	// Execute
+	count, err := repo.CountActiveByLinkedItemID(ctx, linkedItemID)
+
+	// Assert - should exclude replaced accounts
+	assert.NoError(t, err)
+	assert.Equal(t, expectedCount, count)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_CountActiveByLinkedItemID_DBError tests database error handling
+func TestAccountRepository_CountActiveByLinkedItemID_DBError(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	linkedItemID := uuid.New().String()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT COUNT(*)
+		FROM accounts
+		WHERE linked_item_id = $1 AND status = 'active'
+	`)).WithArgs(linkedItemID).WillReturnError(errors.New("database connection error"))
+
+	// Execute
+	count, err := repo.CountActiveByLinkedItemID(ctx, linkedItemID)
+
+	// Assert
+	assert.Error(t, err)
+	assert.Equal(t, 0, count)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
