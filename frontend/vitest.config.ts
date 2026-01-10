@@ -132,6 +132,9 @@ export default mergeConfig(
         // Batch 22 - Savings goals and rule execution tests (2026-01-09)
         'src/features/budgets/hooks/useSavingsGoals.test.tsx',
         'src/features/rules/components/RuleExecutionHistory.test.tsx',
+        // Batch 23 - Rule table and deletion tests (2026-01-09)
+        'src/features/rules/components/RuleTable.test.tsx',
+        'src/features/deletion/components/DeleteAccountSection.test.tsx',
       ],
       coverage: {
         provider: 'v8',
