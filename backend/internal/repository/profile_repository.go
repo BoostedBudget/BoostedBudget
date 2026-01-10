@@ -467,8 +467,10 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 		return err
 	}
 
-	// Step 3: Delete all Plaid items (bank connections)
-	_, err = tx.Exec(ctx, `DELETE FROM plaid_items WHERE user_id = $1`, userID)
+	// Step 3: Delete all linked items (bank connections)
+	// NOTE: This does NOT call Plaid /item/remove - that's handled by DeletionService
+	// before calling this method to stop Plaid billing
+	_, err = tx.Exec(ctx, `DELETE FROM linked_items WHERE user_id = $1`, userID)
 	if err != nil {
 		return err
 	}

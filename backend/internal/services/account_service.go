@@ -43,6 +43,35 @@ func plaidSyncUniqueOpts() *queue.UniqueOpts {
 	}
 }
 
+// itemCleanupJobArgs is a local struct for enqueueing item cleanup jobs.
+// This mirrors jobs.ItemCleanupArgs to avoid import cycle (services → jobs → services).
+// The JSON structure must match jobs.ItemCleanupArgs exactly for River to deserialize correctly.
+// Issue #668: Plaid Item Management for Cost Optimization
+type itemCleanupJobArgs struct {
+	LinkedItemID string `json:"linked_item_id"`
+	UserID       string `json:"user_id"`
+	Reason       string `json:"reason"`
+}
+
+// Kind returns the job type identifier. Must match jobs.ItemCleanupArgs.Kind()
+func (itemCleanupJobArgs) Kind() string { return "item_cleanup" }
+
+// itemCleanupUniqueOpts returns uniqueness options for item cleanup jobs.
+// Mirrors jobs.ItemCleanupUniqueOpts() to prevent duplicate cleanups.
+// Issue #668: Plaid Item Management for Cost Optimization
+func itemCleanupUniqueOpts() *queue.UniqueOpts {
+	return &queue.UniqueOpts{
+		ByArgs: true,
+		ByState: []queue.JobState{
+			queue.JobStateAvailable,
+			queue.JobStateScheduled,
+			queue.JobStateRunning,
+			queue.JobStateRetryable,
+			queue.JobStatePending,
+		},
+	}
+}
+
 var (
 	// ErrAccountLimitExceeded is returned when user tries to link more accounts than their tier allows
 	ErrAccountLimitExceeded = errors.New("account limit exceeded for current subscription tier")
@@ -50,6 +79,9 @@ var (
 	ErrInvalidPublicToken = errors.New("invalid or expired public token")
 	// ErrPlaidAPIFailure is returned when Plaid API calls fail
 	ErrPlaidAPIFailure = errors.New("plaid API request failed")
+	// ErrNoAccountsAvailable is returned when Plaid returns zero accounts during linking
+	// Issue #668: Zero-account item prevention - prevents creating billable items with no accounts
+	ErrNoAccountsAvailable = errors.New("no accounts available from institution")
 )
 
 // AccountService handles account linking and management
@@ -244,6 +276,12 @@ func (s *accountService) LinkAccounts(
 	}
 
 	plaidAccounts := accountsResp.GetAccounts()
+
+	// Step 4b: Validate that Plaid returned at least one account
+	// Issue #668: Prevent creating billable Plaid items with zero accounts
+	if len(plaidAccounts) == 0 {
+		return nil, fmt.Errorf("%w: the institution returned no accounts to link - please ensure you select accounts during the connection process", ErrNoAccountsAvailable)
+	}
 
 	// Step 5: Verify combined count doesn't exceed limit
 	newTotalCount := currentAccountCount + len(plaidAccounts)
@@ -450,16 +488,80 @@ func (s *accountService) GetAccounts(ctx context.Context, userID string) ([]doma
 
 // DeleteAccount deletes a single account with ownership validation.
 //
-// This method delegates to the repository layer which validates ownership via
-// WHERE id = $1 AND user_id = $2. Only the account owner can delete their account.
+// This method:
+// 1. Gets the account to retrieve its linked_item_id
+// 2. Delegates to the repository layer which validates ownership via WHERE id = $1 AND user_id = $2
+// 3. After deletion, checks if the linked item now has zero active accounts
+// 4. If zero accounts remain, enqueues a cleanup job to remove the Plaid item (stop billing)
 //
 // Use case: User wants to remove a single account (e.g., closed credit card) while
 // keeping other accounts from the same institution.
 //
+// Issue #668: Zero-account item detection and cleanup - proactively remove Plaid items
+// when all accounts are deleted to stop unnecessary billing.
+//
 // Returns repository.ErrAccountNotFound if account doesn't exist or user doesn't own it.
 func (s *accountService) DeleteAccount(ctx context.Context, accountID, userID string) error {
-	// Delegate to repository - it handles ownership validation
-	return s.accountRepo.Delete(ctx, accountID, userID)
+	// Step 1: Get the account to retrieve linked_item_id before deletion
+	account, err := s.accountRepo.GetByIDAndUser(ctx, accountID, userID)
+	if err != nil {
+		return err // Returns ErrAccountNotFound if not found or not owned
+	}
+	linkedItemID := account.LinkedItemID
+
+	// Step 2: Delete the account
+	if err := s.accountRepo.Delete(ctx, accountID, userID); err != nil {
+		return err
+	}
+
+	// Step 3: Check if zero-account cleanup should be triggered
+	// Only proceed if jobQueue is available (optional dependency)
+	if s.jobQueue == nil {
+		return nil
+	}
+
+	// Step 4: Count remaining active accounts for this linked item
+	remainingCount, err := s.accountRepo.CountActiveByLinkedItemID(ctx, linkedItemID)
+	if err != nil {
+		// Log error but don't fail the deletion
+		if s.logger != nil {
+			s.logger.Warn("failed to count remaining accounts after deletion",
+				"account_id", accountID,
+				"linked_item_id", linkedItemID,
+				"error", err,
+			)
+		}
+		return nil
+	}
+
+	// Step 5: If no accounts remain, enqueue cleanup job
+	if remainingCount == 0 {
+		cleanupJob := itemCleanupJobArgs{
+			LinkedItemID: linkedItemID,
+			UserID:       userID,
+			Reason:       "zero_accounts",
+		}
+		uniqueOpts := itemCleanupUniqueOpts()
+		_, err := s.jobQueue.Enqueue(ctx, cleanupJob, queue.WithUnique(*uniqueOpts))
+		if err != nil {
+			// Log error but don't fail the deletion
+			if s.logger != nil {
+				s.logger.Warn("failed to enqueue item cleanup job",
+					"linked_item_id", linkedItemID,
+					"user_id", userID,
+					"error", err,
+				)
+			}
+		} else if s.logger != nil {
+			s.logger.Info("enqueued item cleanup job for zero-account item",
+				"linked_item_id", linkedItemID,
+				"user_id", userID,
+				"reason", "zero_accounts",
+			)
+		}
+	}
+
+	return nil
 }
 
 // DisconnectInstitution disconnects an institution (linked item) and all associated accounts.
@@ -489,20 +591,19 @@ func (s *accountService) DisconnectInstitution(ctx context.Context, linkedItemID
 
 	// Step 3: Call Plaid to remove the item (stops monthly billing)
 	// This is critical for cost control per Issue #226
-	err = s.plaidService.RemoveItem(ctx, accessToken)
-	if err != nil {
-		// Log the error but continue - access token may already be invalid
-		// We still want to clean up our database even if Plaid call fails
-		fmt.Printf("Warning: Plaid RemoveItem failed for item %s: %v\n", linkedItemID, err)
+	// Log the error but continue - access token may already be invalid
+	// We still want to clean up our database even if Plaid call fails
+	if err := s.plaidService.RemoveItem(ctx, accessToken); err != nil {
+		if s.logger != nil {
+			s.logger.Warn("plaid RemoveItem failed for item",
+				"item_id", linkedItemID,
+				"error", err,
+			)
+		}
 	}
 
 	// Step 4: Delete from database (CASCADE deletes all accounts)
-	err = s.linkedItemRepo.DeleteByUser(ctx, linkedItemID, userID)
-	if err != nil {
-		return err // Returns ErrLinkedItemNotFound if deletion fails
-	}
-
-	return nil
+	return s.linkedItemRepo.DeleteByUser(ctx, linkedItemID, userID)
 }
 
 // GetAccountsFiltered retrieves accounts with optional hidden filter (Issue #307)
