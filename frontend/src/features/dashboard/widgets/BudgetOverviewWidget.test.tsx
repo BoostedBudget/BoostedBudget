@@ -1,20 +1,22 @@
-/**
- * BudgetOverviewWidget Tests
- *
- * TDD RED: Tests for the budget overview dashboard widget.
- * Issue #564: Migrated to mock useCurrentBudget hook instead of API
- */
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { render, screen, waitFor } from '@testing-library/react'
+import type { Budget, BudgetWithMetrics } from '../../budgets/types'
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import { BudgetOverviewWidget } from './BudgetOverviewWidget';
-import type { Budget, BudgetWithMetrics } from '../../budgets/types';
+const mockRefetch = mock(() => {})
+const mockUseCurrentBudget = mock(() => ({
+  budget: null,
+  metrics: null,
+  loading: true,
+  error: null,
+  hasNoBudget: false,
+  refetch: mockRefetch,
+}))
 
-// Mock the useCurrentBudget hook
-vi.mock('../../budgets/hooks/useCurrentBudget');
+mock.module('../../budgets/hooks/useCurrentBudget', () => ({
+  useCurrentBudget: mockUseCurrentBudget,
+}))
 
-// Import the mocked hook
-import { useCurrentBudget } from '../../budgets/hooks/useCurrentBudget';
+import { BudgetOverviewWidget } from './BudgetOverviewWidget'
 
 describe('BudgetOverviewWidget', () => {
   const mockBudget: Budget = {
@@ -37,7 +39,6 @@ describe('BudgetOverviewWidget', () => {
         spent_amount: 250,
         created_at: '2025-01-01T00:00:00Z',
         updated_at: '2025-01-01T00:00:00Z',
-        // Issue #495: Envelope budgeting fields
         tags: [],
         match_logic: 'category_only',
       },
@@ -49,211 +50,121 @@ describe('BudgetOverviewWidget', () => {
         spent_amount: 100,
         created_at: '2025-01-01T00:00:00Z',
         updated_at: '2025-01-01T00:00:00Z',
-        // Issue #495: Envelope budgeting fields
         tags: [],
         match_logic: 'category_only',
       },
     ],
     created_at: '2025-01-01T00:00:00Z',
     updated_at: '2025-01-01T00:00:00Z',
-    // Issue #495: Envelope budgeting fields
     income_amount: 0,
     income_sources: [],
-  };
+  }
 
-  // Computed metrics for the mock budget (extends Budget with metrics)
   const mockMetrics: BudgetWithMetrics = {
     ...mockBudget,
-    total_allocated: 800, // 500 + 300
-    total_spent: 350, // 250 + 100
-    remaining_amount: 1650, // 2000 - 350
-    percent_used: 18, // (350 / 2000) * 100 = 17.5% -> 18%
+    total_allocated: 800,
+    total_spent: 350,
+    remaining_amount: 1650,
+    percent_used: 18,
     is_over_budget: false,
-    unallocated_funds: 1200, // 2000 - 800
+    unallocated_funds: 1200,
     is_fully_allocated: false,
     categories: mockBudget.categories!.map((cat) => ({
       ...cat,
       percent_used: cat.spent_amount / cat.allocated_amount * 100,
       remaining_amount: cat.allocated_amount - cat.spent_amount,
     })),
-  };
+  }
 
   const defaultProps = {
     widgetId: 'widget-1',
-    onRemove: vi.fn(),
-  };
+    onRemove: mock(() => {}),
+  }
+
+  const setMockState = (state: Partial<ReturnType<typeof mockUseCurrentBudget>>) => {
+    mockUseCurrentBudget.mockReturnValue({
+      budget: null,
+      metrics: null,
+      loading: false,
+      error: null,
+      hasNoBudget: false,
+      refetch: mockRefetch,
+      ...state,
+    })
+  }
 
   beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+    mockUseCurrentBudget.mockClear()
+    mockRefetch.mockClear()
+  })
 
   describe('Loading State', () => {
     it('should show loading spinner initially', () => {
-      vi.mocked(useCurrentBudget).mockReturnValue({
-        budget: null,
-        metrics: null,
-        loading: true,
-        error: null,
-        hasNoBudget: false,
-        refetch: vi.fn(),
-      });
+      setMockState({ loading: true })
 
-      render(<BudgetOverviewWidget {...defaultProps} />);
+      render(<BudgetOverviewWidget {...defaultProps} />)
 
-      // Check for loading indicator
-      const loading = document.querySelector('.animate-spin');
-      expect(loading).toBeInTheDocument();
-    });
-  });
+      const loading = document.querySelector('.animate-spin')
+      expect(loading).toBeInTheDocument()
+    })
+  })
 
   describe('Success State', () => {
-    it('should render budget name', async () => {
-      vi.mocked(useCurrentBudget).mockReturnValue({
-        budget: mockBudget,
-        metrics: mockMetrics,
-        loading: false,
-        error: null,
-        hasNoBudget: false,
-        refetch: vi.fn(),
-      });
+    beforeEach(() => {
+      setMockState({ budget: mockBudget, metrics: mockMetrics })
+    })
 
-      render(<BudgetOverviewWidget {...defaultProps} />);
+    it('should render budget name', () => {
+      render(<BudgetOverviewWidget {...defaultProps} />)
+      expect(screen.getByText('Monthly Budget')).toBeInTheDocument()
+    })
 
-      await waitFor(() => {
-        expect(screen.getByText('Monthly Budget')).toBeInTheDocument();
-      });
-    });
+    it('should render budget amount', () => {
+      render(<BudgetOverviewWidget {...defaultProps} />)
+      expect(screen.getByText('$2,000.00')).toBeInTheDocument()
+    })
 
-    it('should render budget amount', async () => {
-      vi.mocked(useCurrentBudget).mockReturnValue({
-        budget: mockBudget,
-        metrics: mockMetrics,
-        loading: false,
-        error: null,
-        hasNoBudget: false,
-        refetch: vi.fn(),
-      });
+    it('should render spent amount', () => {
+      render(<BudgetOverviewWidget {...defaultProps} />)
+      expect(screen.getByText('$350.00')).toBeInTheDocument()
+    })
 
-      render(<BudgetOverviewWidget {...defaultProps} />);
+    it('should render progress bar', () => {
+      render(<BudgetOverviewWidget {...defaultProps} />)
+      expect(screen.getByRole('progressbar')).toBeInTheDocument()
+    })
 
-      await waitFor(() => {
-        expect(screen.getByText('$2,000.00')).toBeInTheDocument();
-      });
-    });
-
-    it('should render spent amount', async () => {
-      vi.mocked(useCurrentBudget).mockReturnValue({
-        budget: mockBudget,
-        metrics: mockMetrics,
-        loading: false,
-        error: null,
-        hasNoBudget: false,
-        refetch: vi.fn(),
-      });
-
-      render(<BudgetOverviewWidget {...defaultProps} />);
-
-      await waitFor(() => {
-        // Total spent: 250 + 100 = 350
-        expect(screen.getByText('$350.00')).toBeInTheDocument();
-      });
-    });
-
-    it('should render progress bar', async () => {
-      vi.mocked(useCurrentBudget).mockReturnValue({
-        budget: mockBudget,
-        metrics: mockMetrics,
-        loading: false,
-        error: null,
-        hasNoBudget: false,
-        refetch: vi.fn(),
-      });
-
-      render(<BudgetOverviewWidget {...defaultProps} />);
-
-      await waitFor(() => {
-        expect(screen.getByRole('progressbar')).toBeInTheDocument();
-      });
-    });
-
-    it('should show percentage used', async () => {
-      vi.mocked(useCurrentBudget).mockReturnValue({
-        budget: mockBudget,
-        metrics: mockMetrics,
-        loading: false,
-        error: null,
-        hasNoBudget: false,
-        refetch: vi.fn(),
-      });
-
-      render(<BudgetOverviewWidget {...defaultProps} />);
-
-      await waitFor(() => {
-        // 350 / 2000 * 100 = 17.5% -> 18%
-        expect(screen.getByText('18%')).toBeInTheDocument();
-      });
-    });
-  });
+    it('should show percentage used', () => {
+      render(<BudgetOverviewWidget {...defaultProps} />)
+      expect(screen.getByText('18%')).toBeInTheDocument()
+    })
+  })
 
   describe('No Budget State', () => {
-    it('should show "no budget" message when hasNoBudget is true', async () => {
-      vi.mocked(useCurrentBudget).mockReturnValue({
-        budget: null,
-        metrics: null,
-        loading: false,
-        error: null,
-        hasNoBudget: true,
-        refetch: vi.fn(),
-      });
+    beforeEach(() => {
+      setMockState({ hasNoBudget: true })
+    })
 
-      render(<BudgetOverviewWidget {...defaultProps} />);
+    it('should show "no budget" message', () => {
+      render(<BudgetOverviewWidget {...defaultProps} />)
+      expect(screen.getByText(/no active budget/i)).toBeInTheDocument()
+    })
 
-      await waitFor(() => {
-        expect(screen.getByText(/no active budget/i)).toBeInTheDocument();
-      });
-    });
-
-    it('should show create budget prompt when no budget', async () => {
-      vi.mocked(useCurrentBudget).mockReturnValue({
-        budget: null,
-        metrics: null,
-        loading: false,
-        error: null,
-        hasNoBudget: true,
-        refetch: vi.fn(),
-      });
-
-      render(<BudgetOverviewWidget {...defaultProps} />);
-
-      await waitFor(() => {
-        // Check for the Create Budget button specifically
-        const createBtn = screen.getByRole('link', { name: /create budget/i });
-        expect(createBtn).toBeInTheDocument();
-        expect(createBtn).toHaveAttribute('href', '/budgets');
-      });
-    });
-  });
+    it('should show create budget prompt with correct link', () => {
+      render(<BudgetOverviewWidget {...defaultProps} />)
+      const createBtn = screen.getByRole('link', { name: /create budget/i })
+      expect(createBtn).toBeInTheDocument()
+      expect(createBtn).toHaveAttribute('href', '/budgets')
+    })
+  })
 
   describe('Error State', () => {
-    it('should show error message on failure', async () => {
-      vi.mocked(useCurrentBudget).mockReturnValue({
-        budget: null,
-        metrics: null,
-        loading: false,
-        error: new Error('Network error'),
-        hasNoBudget: false,
-        refetch: vi.fn(),
-      });
+    it('should show error message on failure', () => {
+      setMockState({ error: new Error('Network error') })
 
-      render(<BudgetOverviewWidget {...defaultProps} />);
+      render(<BudgetOverviewWidget {...defaultProps} />)
 
-      await waitFor(() => {
-        expect(screen.getByText(/error/i)).toBeInTheDocument();
-      });
-    });
-  });
-});
+      expect(screen.getByText(/error/i)).toBeInTheDocument()
+    })
+  })
+})

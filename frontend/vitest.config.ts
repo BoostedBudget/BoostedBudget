@@ -144,6 +144,10 @@ export default mergeConfig(
         'src/features/transactions/components/filters/TransactionCategoryFilter.test.tsx',
         'src/features/transactions/components/filters/TransactionAmountFilter.test.tsx',
         'src/features/transactions/components/filters/TransactionAccountFilter.test.tsx',
+        // Batch 27 - Dashboard widget tests (2026-01-09)
+        'src/features/dashboard/widgets/BudgetOverviewWidget.test.tsx',
+        'src/features/dashboard/widgets/BalanceOverviewWidget.test.tsx',
+        'src/features/dashboard/widgets/CashFlowSummaryWidget.test.tsx',
       ],
       coverage: {
         provider: 'v8',
