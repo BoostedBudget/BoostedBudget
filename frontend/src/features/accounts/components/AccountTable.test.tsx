@@ -1,12 +1,4 @@
-/**
- * AccountTable Component Tests
- * Issue #584: Unified Card/Table View System
- *
- * Tests for the account table display component.
- * TDD RED: Writing tests before implementation.
- */
-
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { AccountTable } from './AccountTable'
 import type { Account } from '@/api/generated/models'
@@ -74,10 +66,6 @@ const mockAccounts: Account[] = [
 ]
 
 describe('AccountTable', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
   describe('Rendering', () => {
     it('should render a table', () => {
       render(<AccountTable accounts={mockAccounts} />)
@@ -91,14 +79,13 @@ describe('AccountTable', () => {
       expect(screen.getByText('Institution')).toBeInTheDocument()
       expect(screen.getByText('Account')).toBeInTheDocument()
       expect(screen.getByText('Type')).toBeInTheDocument()
-      expect(screen.getByText('Acct #')).toBeInTheDocument()  // Issue #590: Renamed from "Mask"
+      expect(screen.getByText('Acct #')).toBeInTheDocument()
       expect(screen.getByText('Balance')).toBeInTheDocument()
     })
 
     it('should render all accounts', () => {
       render(<AccountTable accounts={mockAccounts} />)
 
-      // Chase appears twice (for two accounts)
       const chaseLabels = screen.getAllByText('Chase')
       expect(chaseLabels.length).toBe(2)
       expect(screen.getByText('American Express')).toBeInTheDocument()
@@ -107,9 +94,7 @@ describe('AccountTable', () => {
     it('should display nickname when available, otherwise account name', () => {
       render(<AccountTable accounts={mockAccounts} />)
 
-      // acc-1 has nickname "My Checking"
       expect(screen.getByText('My Checking')).toBeInTheDocument()
-      // acc-2 has no nickname, should show account name
       expect(screen.getByText('Savings Account')).toBeInTheDocument()
     })
 
@@ -118,9 +103,7 @@ describe('AccountTable', () => {
 
       expect(screen.getByText('Checking')).toBeInTheDocument()
       expect(screen.getByText('Savings')).toBeInTheDocument()
-      // Note: "Credit Card" is the label for subtype "credit card"
-      const creditCardLabels = screen.getAllByText('Credit Card')
-      expect(creditCardLabels.length).toBeGreaterThan(0)
+      expect(screen.getAllByText('Credit Card').length).toBeGreaterThan(0)
     })
 
     it('should display masked account number', () => {
@@ -141,8 +124,7 @@ describe('AccountTable', () => {
     it('should show hidden badge for hidden accounts', () => {
       render(<AccountTable accounts={mockAccounts} />)
 
-      const hiddenBadges = screen.getAllByText('Hidden')
-      expect(hiddenBadges.length).toBe(1) // Only acc-3 is hidden
+      expect(screen.getAllByText('Hidden').length).toBe(1)
     })
 
     it('should display custom emoji when available', () => {
@@ -167,22 +149,18 @@ describe('AccountTable', () => {
   describe('Balance Styling', () => {
     it('should apply positive class to positive balances', () => {
       render(<AccountTable accounts={mockAccounts} />)
-
-      const positiveBalance = screen.getByText('$2,500.50')
-      expect(positiveBalance).toHaveClass('account-table__balance--positive')
+      expect(screen.getByText('$2,500.50')).toHaveClass('account-table__balance--positive')
     })
 
     it('should apply negative class to negative balances', () => {
       render(<AccountTable accounts={mockAccounts} />)
-
-      const negativeBalance = screen.getByText('-$1,250.75')
-      expect(negativeBalance).toHaveClass('account-table__balance--negative')
+      expect(screen.getByText('-$1,250.75')).toHaveClass('account-table__balance--negative')
     })
   })
 
   describe('Row Actions', () => {
     it('should call onEdit when edit button is clicked', () => {
-      const onEdit = vi.fn()
+      const onEdit = mock(() => {})
       render(<AccountTable accounts={mockAccounts} onEdit={onEdit} />)
 
       const editButtons = screen.getAllByRole('button', { name: /edit/i })
@@ -192,7 +170,7 @@ describe('AccountTable', () => {
     })
 
     it('should call onDelete when delete button is clicked', () => {
-      const onDelete = vi.fn()
+      const onDelete = mock(() => {})
       render(<AccountTable accounts={mockAccounts} onDelete={onDelete} />)
 
       const deleteButtons = screen.getAllByRole('button', { name: /delete/i })
@@ -233,11 +211,10 @@ describe('AccountTable', () => {
 
   describe('Row Click', () => {
     it('should call onRowClick when row is clicked', () => {
-      const onRowClick = vi.fn()
+      const onRowClick = mock(() => {})
       render(<AccountTable accounts={mockAccounts} onRowClick={onRowClick} />)
 
       const rows = screen.getAllByRole('row')
-      // Skip header row
       fireEvent.click(rows[1])
 
       expect(onRowClick).toHaveBeenCalledWith(mockAccounts[0])
@@ -260,7 +237,7 @@ describe('AccountTable', () => {
     })
 
     it('should call onSort when clicking sortable header', () => {
-      const onSort = vi.fn()
+      const onSort = mock(() => {})
       render(<AccountTable accounts={mockAccounts} sortable onSort={onSort} />)
 
       const nameHeader = screen.getByText('Account').closest('button')!
@@ -270,7 +247,7 @@ describe('AccountTable', () => {
     })
 
     it('should toggle sort direction on second click', () => {
-      const onSort = vi.fn()
+      const onSort = mock(() => {})
       render(
         <AccountTable
           accounts={mockAccounts}
@@ -307,9 +284,8 @@ describe('AccountTable', () => {
       render(<AccountTable accounts={mockAccounts} />)
 
       expect(screen.getByRole('table')).toBeInTheDocument()
-      const rowgroups = screen.getAllByRole('rowgroup')
-      expect(rowgroups.length).toBe(2) // thead and tbody
-      expect(screen.getAllByRole('row').length).toBe(4) // 1 header + 3 data rows
+      expect(screen.getAllByRole('rowgroup').length).toBe(2)
+      expect(screen.getAllByRole('row').length).toBe(4)
     })
 
     it('should have accessible column headers', () => {
@@ -338,19 +314,15 @@ describe('AccountTable', () => {
 
   describe('Action Button Tooltips', () => {
     it('should have tooltip on edit button', () => {
-      render(<AccountTable accounts={mockAccounts} onEdit={vi.fn()} />)
-
-      const editButtons = screen.getAllByRole('button', { name: /edit account/i })
-      editButtons.forEach((btn) => {
+      render(<AccountTable accounts={mockAccounts} onEdit={mock(() => {})} />)
+      screen.getAllByRole('button', { name: /edit account/i }).forEach((btn) => {
         expect(btn).toHaveAttribute('title', 'Edit account')
       })
     })
 
     it('should have tooltip on delete button', () => {
-      render(<AccountTable accounts={mockAccounts} onDelete={vi.fn()} />)
-
-      const deleteButtons = screen.getAllByRole('button', { name: /delete account/i })
-      deleteButtons.forEach((btn) => {
+      render(<AccountTable accounts={mockAccounts} onDelete={mock(() => {})} />)
+      screen.getAllByRole('button', { name: /delete account/i }).forEach((btn) => {
         expect(btn).toHaveAttribute('title', 'Delete account')
       })
     })
