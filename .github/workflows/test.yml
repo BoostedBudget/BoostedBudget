@@ -322,22 +322,15 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
           echo "::group::Running Vitest tests"
-          NODE_OPTIONS='--max-old-space-size=6144' bun run vitest run --no-cache --coverage --reporter=verbose
+          NODE_OPTIONS='--max-old-space-size=6144' bun run vitest run --no-cache --reporter=verbose
           echo "::endgroup::"
 
-      - name: Run bun:test tests (migrated tests)
+      - name: Run bun:test tests with coverage (migrated tests)
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
-          echo "::group::Running bun:test tests"
-          bun run test:bun
+          echo "::group::Running bun:test tests with coverage"
+          bun test --coverage $(cat package.json | grep '"test:bun"' | sed 's/.*"bun test //' | sed 's/",$//')
           echo "::endgroup::"
-
-      - name: Upload coverage report
-        uses: actions/upload-artifact@v6
-        with:
-          name: frontend-coverage
-          path: ${{ env.UNIQUE_WORKSPACE }}/frontend/coverage/
-          retention-days: 30
 
       - name: Final workspace cleanup
         if: always()
