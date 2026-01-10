@@ -129,6 +129,9 @@ export default mergeConfig(
         'src/shared/hooks/useCookieState.test.tsx',
         'src/features/dashboard/widgets/WidgetCatalog.test.tsx',
         'src/features/budgets/hooks/useAvailableCategories.test.tsx',
+        // Batch 22 - Savings goals and rule execution tests (2026-01-09)
+        'src/features/budgets/hooks/useSavingsGoals.test.tsx',
+        'src/features/rules/components/RuleExecutionHistory.test.tsx',
       ],
       coverage: {
         provider: 'v8',
