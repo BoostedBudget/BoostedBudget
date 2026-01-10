@@ -1,12 +1,4 @@
-/**
- * BudgetTable Component Tests
- * Issue #584: Unified Card/Table View System
- *
- * Tests for the budget table display component.
- * TDD RED: Writing tests before implementation.
- */
-
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { BudgetTable } from './BudgetTable'
 import type { BudgetWithMetrics } from '../types'
@@ -120,172 +112,104 @@ const mockBudgets: BudgetWithMetrics[] = [
 ]
 
 describe('BudgetTable', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
 
   describe('Rendering', () => {
-    it('should render a table', () => {
+    it('should render table with headers and all budget rows', () => {
       render(<BudgetTable budgets={mockBudgets} />)
 
       expect(screen.getByRole('table')).toBeInTheDocument()
-    })
-
-    it('should render table headers', () => {
-      render(<BudgetTable budgets={mockBudgets} />)
-
       expect(screen.getByText('Name')).toBeInTheDocument()
       expect(screen.getByText('Period')).toBeInTheDocument()
       expect(screen.getByText('Amount')).toBeInTheDocument()
       expect(screen.getByText('Progress')).toBeInTheDocument()
       expect(screen.getByText('Remaining')).toBeInTheDocument()
       expect(screen.getByText('Categories')).toBeInTheDocument()
-    })
-
-    it('should render all budgets', () => {
-      render(<BudgetTable budgets={mockBudgets} />)
 
       expect(screen.getByText('Monthly Groceries')).toBeInTheDocument()
       expect(screen.getByText('Entertainment')).toBeInTheDocument()
       expect(screen.getByText('Vacation Savings')).toBeInTheDocument()
     })
 
-    it('should display period with proper label', () => {
+    it('should display formatted periods and amounts', () => {
       render(<BudgetTable budgets={mockBudgets} />)
 
       expect(screen.getByText('Monthly')).toBeInTheDocument()
       expect(screen.getByText('Weekly')).toBeInTheDocument()
       expect(screen.getByText('Yearly')).toBeInTheDocument()
-    })
-
-    it('should display formatted amount', () => {
-      render(<BudgetTable budgets={mockBudgets} />)
 
       expect(screen.getByText('$500.00')).toBeInTheDocument()
-      // $100.00 appears twice (amount and remaining for Entertainment)
-      const hundredDollarCells = screen.getAllByText('$100.00')
-      expect(hundredDollarCells.length).toBeGreaterThan(0)
+      expect(screen.getAllByText('$100.00').length).toBeGreaterThan(0)
       expect(screen.getByText('$2,000.00')).toBeInTheDocument()
     })
 
-    it('should display category count', () => {
+    it('should display category counts and status badges', () => {
       render(<BudgetTable budgets={mockBudgets} />)
 
-      // budget-1 has 2 categories, budget-2 has 0, budget-3 has 1
       expect(screen.getByText('2')).toBeInTheDocument()
       expect(screen.getByText('0')).toBeInTheDocument()
       expect(screen.getByText('1')).toBeInTheDocument()
-    })
-
-    it('should show Active badge for active budgets', () => {
-      render(<BudgetTable budgets={mockBudgets} />)
 
       const activeBadges = screen.getAllByText('Active')
-      expect(activeBadges.length).toBe(2) // budget-1 and budget-2 are active
-    })
-
-    it('should show Inactive badge for inactive budgets', () => {
-      render(<BudgetTable budgets={mockBudgets} />)
-
+      expect(activeBadges.length).toBe(2)
       expect(screen.getByText('Inactive')).toBeInTheDocument()
     })
 
     it('should show empty state when no budgets', () => {
       render(<BudgetTable budgets={[]} />)
-
       expect(screen.getByText(/no budgets found/i)).toBeInTheDocument()
     })
 
     it('should apply loading class when loading', () => {
       render(<BudgetTable budgets={mockBudgets} loading />)
-
       expect(screen.getByRole('table')).toHaveClass('budget-table--loading')
     })
   })
 
-  describe('Progress Display', () => {
-    it('should display progress bar', () => {
+  describe('Progress & Remaining', () => {
+    it('should display progress bars with correct percentages', () => {
       render(<BudgetTable budgets={mockBudgets} />)
 
-      // Check for progress bar elements
       const progressBars = screen.getAllByRole('progressbar')
-      expect(progressBars.length).toBe(3)
-    })
+      expect(progressBars).toHaveLength(3)
 
-    it('should show correct progress percentage', () => {
-      render(<BudgetTable budgets={mockBudgets} />)
-
-      // Monthly Groceries is 65% used
       expect(screen.getByText('65%')).toBeInTheDocument()
-      // Entertainment is 0% used
       expect(screen.getByText('0%')).toBeInTheDocument()
-    })
-
-    it('should apply over-budget styling for budgets exceeding limit', () => {
-      render(<BudgetTable budgets={mockBudgets} />)
-
-      // Vacation Savings is over budget (125%)
       expect(screen.getByText('125%')).toBeInTheDocument()
     })
-  })
 
-  describe('Remaining Amount', () => {
-    it('should display formatted remaining amount', () => {
-      render(<BudgetTable budgets={mockBudgets} />)
-
-      expect(screen.getByText('$175.00')).toBeInTheDocument() // Monthly Groceries
-    })
-
-    it('should apply negative class to negative remaining', () => {
-      render(<BudgetTable budgets={mockBudgets} />)
-
-      // Vacation Savings has -$500 remaining
-      const negativeRemaining = screen.getByText('-$500.00')
-      expect(negativeRemaining).toHaveClass('budget-table__remaining--negative')
-    })
-
-    it('should apply positive class to positive remaining', () => {
+    it('should display and style remaining amounts correctly', () => {
       render(<BudgetTable budgets={mockBudgets} />)
 
       const positiveRemaining = screen.getByText('$175.00')
       expect(positiveRemaining).toHaveClass('budget-table__remaining--positive')
+
+      const negativeRemaining = screen.getByText('-$500.00')
+      expect(negativeRemaining).toHaveClass('budget-table__remaining--negative')
     })
   })
 
   describe('Row Actions', () => {
-    it('should call onManage when manage button is clicked', () => {
-      const onManage = vi.fn()
-      render(<BudgetTable budgets={mockBudgets} onManage={onManage} />)
-
-      const manageButtons = screen.getAllByRole('button', { name: /manage/i })
-      fireEvent.click(manageButtons[0])
-
-      expect(onManage).toHaveBeenCalledWith(mockBudgets[0])
-    })
-
-    it('should call onDelete when delete button is clicked', () => {
-      const onDelete = vi.fn()
-      render(<BudgetTable budgets={mockBudgets} onDelete={onDelete} />)
-
-      const deleteButtons = screen.getAllByRole('button', { name: /delete/i })
-      fireEvent.click(deleteButtons[0])
-
-      expect(onDelete).toHaveBeenCalledWith(mockBudgets[0].id)
-    })
-
-    it('should not show actions column when no handlers provided', () => {
-      render(<BudgetTable budgets={mockBudgets} />)
-
+    it('should toggle actions column visibility based on handlers', () => {
+      const { rerender } = render(<BudgetTable budgets={mockBudgets} />)
       expect(screen.queryByText('Actions')).not.toBeInTheDocument()
-    })
 
-    it('should show actions column when handlers provided', () => {
-      render(<BudgetTable budgets={mockBudgets} onManage={() => {}} />)
-
+      rerender(<BudgetTable budgets={mockBudgets} onManage={() => {}} />)
       expect(screen.getByText('Actions')).toBeInTheDocument()
     })
 
-    it('should disable actions when loading', () => {
+    it('should call action handlers when buttons are clicked', () => {
+      const onManage = mock(() => {})
+      const onDelete = mock(() => {})
+      render(<BudgetTable budgets={mockBudgets} onManage={onManage} onDelete={onDelete} />)
+
+      fireEvent.click(screen.getAllByRole('button', { name: /manage/i })[0])
+      expect(onManage).toHaveBeenCalledWith(mockBudgets[0])
+
+      fireEvent.click(screen.getAllByRole('button', { name: /delete/i })[0])
+      expect(onDelete).toHaveBeenCalledWith(mockBudgets[0].id)
+    })
+
+    it('should disable action buttons when loading', () => {
       render(
         <BudgetTable
           budgets={mockBudgets}
@@ -295,17 +219,15 @@ describe('BudgetTable', () => {
         />
       )
 
-      const manageButtons = screen.getAllByRole('button', { name: /manage/i })
-      const deleteButtons = screen.getAllByRole('button', { name: /delete/i })
-
-      manageButtons.forEach((btn) => expect(btn).toBeDisabled())
-      deleteButtons.forEach((btn) => expect(btn).toBeDisabled())
+      screen.getAllByRole('button', { name: /manage|delete/i }).forEach((btn) => {
+        expect(btn).toBeDisabled()
+      })
     })
   })
 
   describe('Row Click', () => {
     it('should call onRowClick when row is clicked', () => {
-      const onRowClick = vi.fn()
+      const onRowClick = mock(() => {})
       render(<BudgetTable budgets={mockBudgets} onRowClick={onRowClick} />)
 
       const rows = screen.getAllByRole('row')
@@ -324,25 +246,19 @@ describe('BudgetTable', () => {
   })
 
   describe('Sorting', () => {
-    it('should make name column sortable', () => {
-      render(<BudgetTable budgets={mockBudgets} sortable />)
-
-      const nameHeader = screen.getByText('Name')
-      expect(nameHeader.closest('button')).toBeInTheDocument()
-    })
-
-    it('should call onSort when clicking sortable header', () => {
-      const onSort = vi.fn()
+    it('should make headers clickable and handle sort callbacks', () => {
+      const onSort = mock(() => {})
       render(<BudgetTable budgets={mockBudgets} sortable onSort={onSort} />)
 
       const nameHeader = screen.getByText('Name').closest('button')!
-      fireEvent.click(nameHeader)
+      expect(nameHeader).toBeInTheDocument()
 
+      fireEvent.click(nameHeader)
       expect(onSort).toHaveBeenCalledWith('name', 'asc')
     })
 
-    it('should toggle sort direction on second click', () => {
-      const onSort = vi.fn()
+    it('should toggle sort direction and show aria-sort indicator', () => {
+      const onSort = mock(() => {})
       render(
         <BudgetTable
           budgets={mockBudgets}
@@ -354,44 +270,24 @@ describe('BudgetTable', () => {
       )
 
       const nameHeader = screen.getByText('Name').closest('button')!
-      fireEvent.click(nameHeader)
-
-      expect(onSort).toHaveBeenCalledWith('name', 'desc')
-    })
-
-    it('should show sort indicator on sorted column', () => {
-      render(
-        <BudgetTable
-          budgets={mockBudgets}
-          sortable
-          sortColumn="name"
-          sortDirection="asc"
-        />
-      )
-
-      const nameHeader = screen.getByText('Name').closest('button')!
       expect(nameHeader).toHaveAttribute('aria-sort', 'ascending')
+
+      fireEvent.click(nameHeader)
+      expect(onSort).toHaveBeenCalledWith('name', 'desc')
     })
   })
 
   describe('Accessibility', () => {
-    it('should have accessible table structure', () => {
+    it('should have proper table structure and headers', () => {
       render(<BudgetTable budgets={mockBudgets} />)
 
       expect(screen.getByRole('table')).toBeInTheDocument()
-      const rowgroups = screen.getAllByRole('rowgroup')
-      expect(rowgroups.length).toBe(2) // thead and tbody
-      expect(screen.getAllByRole('row').length).toBe(4) // 1 header + 3 data rows
+      expect(screen.getAllByRole('rowgroup')).toHaveLength(2)
+      expect(screen.getAllByRole('row')).toHaveLength(4)
+      expect(screen.getAllByRole('columnheader').length).toBeGreaterThan(0)
     })
 
-    it('should have accessible column headers', () => {
-      render(<BudgetTable budgets={mockBudgets} />)
-
-      const headers = screen.getAllByRole('columnheader')
-      expect(headers.length).toBeGreaterThan(0)
-    })
-
-    it('should have aria-label on action buttons', () => {
+    it('should have proper aria attributes on interactive elements', () => {
       render(
         <BudgetTable
           budgets={mockBudgets}
@@ -402,38 +298,20 @@ describe('BudgetTable', () => {
 
       const manageButtons = screen.getAllByRole('button', { name: /manage budget/i })
       const deleteButtons = screen.getAllByRole('button', { name: /delete budget/i })
-
       expect(manageButtons.length).toBe(3)
       expect(deleteButtons.length).toBe(3)
-    })
 
-    it('should have aria-valuenow on progress bars', () => {
-      render(<BudgetTable budgets={mockBudgets} />)
+      manageButtons.forEach((btn) => {
+        expect(btn).toHaveAttribute('title', 'Manage budget')
+      })
+      deleteButtons.forEach((btn) => {
+        expect(btn).toHaveAttribute('title', 'Delete budget')
+      })
 
       const progressBars = screen.getAllByRole('progressbar')
       expect(progressBars[0]).toHaveAttribute('aria-valuenow', '65')
       expect(progressBars[1]).toHaveAttribute('aria-valuenow', '0')
       expect(progressBars[2]).toHaveAttribute('aria-valuenow', '125')
-    })
-  })
-
-  describe('Action Button Tooltips', () => {
-    it('should have tooltip on manage button', () => {
-      render(<BudgetTable budgets={mockBudgets} onManage={vi.fn()} />)
-
-      const manageButtons = screen.getAllByRole('button', { name: /manage budget/i })
-      manageButtons.forEach((btn) => {
-        expect(btn).toHaveAttribute('title', 'Manage budget')
-      })
-    })
-
-    it('should have tooltip on delete button', () => {
-      render(<BudgetTable budgets={mockBudgets} onDelete={vi.fn()} />)
-
-      const deleteButtons = screen.getAllByRole('button', { name: /delete budget/i })
-      deleteButtons.forEach((btn) => {
-        expect(btn).toHaveAttribute('title', 'Delete budget')
-      })
     })
   })
 })
