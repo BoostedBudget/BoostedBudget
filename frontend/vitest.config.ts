@@ -161,6 +161,8 @@ export default mergeConfig(
         'src/features/dashboard/hooks/useDefaultDashboardLayout.test.tsx',
         'src/features/auto-categorization/components/AutoCategorizationPage.test.tsx',
         'src/features/auto-categorization/components/AutoCategorizationPageWrapper.test.tsx',
+        // Batch 31 - Budget components (2026-01-09)
+        'src/features/budgets/components/BudgetTable.test.tsx',
       ],
       coverage: {
         provider: 'v8',
