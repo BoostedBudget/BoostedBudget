@@ -1,12 +1,4 @@
-/**
- * TransactionTable Component Tests
- * Issue #584: Unified Card/Table View System
- *
- * Tests for the transaction table display component.
- * TDD RED: Writing tests before implementation.
- */
-
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { TransactionTable } from './TransactionTable'
 import type { Transaction } from '../types'
@@ -107,10 +99,6 @@ const mockTransactions: Transaction[] = [
 ]
 
 describe('TransactionTable', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
   describe('Rendering', () => {
     it('should render a table', () => {
       render(
@@ -159,9 +147,7 @@ describe('TransactionTable', () => {
         />
       )
 
-      // txn-1 has merchant_name "Amazon"
       expect(screen.getByText('Amazon')).toBeInTheDocument()
-      // txn-2 has no merchant_name, should show transaction name
       expect(screen.getByText('DIRECT DEPOSIT - PAYROLL')).toBeInTheDocument()
     })
 
@@ -173,10 +159,7 @@ describe('TransactionTable', () => {
         />
       )
 
-      // Should use nickname if available (appears twice for acc-1)
-      const checkingBadges = screen.getAllByText('My Checking')
-      expect(checkingBadges.length).toBeGreaterThan(0)
-      // Should use name if nickname not available
+      expect(screen.getAllByText('My Checking').length).toBeGreaterThan(0)
       expect(screen.getByText('Savings')).toBeInTheDocument()
     })
 
@@ -188,9 +171,7 @@ describe('TransactionTable', () => {
         />
       )
 
-      // Expense should have minus sign
       expect(screen.getByText('-$45.99')).toBeInTheDocument()
-      // Income should have plus sign
       expect(screen.getByText('+$2,500.00')).toBeInTheDocument()
     })
 
@@ -215,8 +196,7 @@ describe('TransactionTable', () => {
         />
       )
 
-      const pendingBadges = screen.getAllByText('Pending')
-      expect(pendingBadges.length).toBe(1)
+      expect(screen.getAllByText('Pending').length).toBe(1)
     })
 
     it('should display tags when present', () => {
@@ -259,7 +239,6 @@ describe('TransactionTable', () => {
         />
       )
 
-      // txn-1 has authorized_date '2025-01-14'
       expect(screen.getByText('Jan 14, 2025')).toBeInTheDocument()
     })
 
@@ -271,7 +250,6 @@ describe('TransactionTable', () => {
         />
       )
 
-      // txn-2 has no authorized_date, should use date '2025-01-10'
       expect(screen.getByText('Jan 10, 2025')).toBeInTheDocument()
     })
   })
@@ -285,8 +263,7 @@ describe('TransactionTable', () => {
         />
       )
 
-      const incomeAmount = screen.getByText('+$2,500.00')
-      expect(incomeAmount).toHaveClass('transaction-table__amount--credit')
+      expect(screen.getByText('+$2,500.00')).toHaveClass('transaction-table__amount--credit')
     })
 
     it('should apply debit class to negative amounts', () => {
@@ -297,14 +274,13 @@ describe('TransactionTable', () => {
         />
       )
 
-      const expenseAmount = screen.getByText('-$45.99')
-      expect(expenseAmount).toHaveClass('transaction-table__amount--debit')
+      expect(screen.getByText('-$45.99')).toHaveClass('transaction-table__amount--debit')
     })
   })
 
   describe('Row Actions', () => {
     it('should call onEdit when edit button is clicked', () => {
-      const onEdit = vi.fn()
+      const onEdit = mock(() => {})
       render(
         <TransactionTable
           transactions={mockTransactions}
@@ -320,7 +296,7 @@ describe('TransactionTable', () => {
     })
 
     it('should call onCategorize when categorize button is clicked', () => {
-      const onCategorize = vi.fn()
+      const onCategorize = mock(() => {})
       render(
         <TransactionTable
           transactions={mockTransactions}
@@ -375,7 +351,7 @@ describe('TransactionTable', () => {
 
   describe('Row Click', () => {
     it('should call onRowClick when row is clicked', () => {
-      const onRowClick = vi.fn()
+      const onRowClick = mock(() => {})
       render(
         <TransactionTable
           transactions={mockTransactions}
@@ -385,7 +361,6 @@ describe('TransactionTable', () => {
       )
 
       const rows = screen.getAllByRole('row')
-      // Skip header row
       fireEvent.click(rows[1])
 
       expect(onRowClick).toHaveBeenCalledWith(mockTransactions[0])
@@ -420,7 +395,7 @@ describe('TransactionTable', () => {
     })
 
     it('should call onSort when clicking sortable header', () => {
-      const onSort = vi.fn()
+      const onSort = mock(() => {})
       render(
         <TransactionTable
           transactions={mockTransactions}
@@ -437,7 +412,7 @@ describe('TransactionTable', () => {
     })
 
     it('should toggle sort direction on second click', () => {
-      const onSort = vi.fn()
+      const onSort = mock(() => {})
       render(
         <TransactionTable
           transactions={mockTransactions}
@@ -481,10 +456,8 @@ describe('TransactionTable', () => {
       )
 
       expect(screen.getByRole('table')).toBeInTheDocument()
-      // Table has two rowgroups: thead and tbody
-      const rowgroups = screen.getAllByRole('rowgroup')
-      expect(rowgroups.length).toBe(2)
-      expect(screen.getAllByRole('row').length).toBe(4) // 1 header + 3 data rows
+      expect(screen.getAllByRole('rowgroup').length).toBe(2)
+      expect(screen.getAllByRole('row').length).toBe(4)
     })
 
     it('should have accessible column headers', () => {
@@ -523,12 +496,11 @@ describe('TransactionTable', () => {
         <TransactionTable
           transactions={mockTransactions}
           accountsMap={mockAccounts}
-          onEdit={vi.fn()}
+          onEdit={mock(() => {})}
         />
       )
 
-      const editButtons = screen.getAllByRole('button', { name: /edit transaction/i })
-      editButtons.forEach((btn) => {
+      screen.getAllByRole('button', { name: /edit transaction/i }).forEach((btn) => {
         expect(btn).toHaveAttribute('title', 'Edit transaction')
       })
     })
@@ -538,18 +510,16 @@ describe('TransactionTable', () => {
         <TransactionTable
           transactions={mockTransactions}
           accountsMap={mockAccounts}
-          onCategorize={vi.fn()}
+          onCategorize={mock(() => {})}
         />
       )
 
-      const categorizeButtons = screen.getAllByRole('button', { name: /categorize transaction/i })
-      categorizeButtons.forEach((btn) => {
+      screen.getAllByRole('button', { name: /categorize transaction/i }).forEach((btn) => {
         expect(btn).toHaveAttribute('title', 'Categorize transaction')
       })
     })
   })
 
-  // Issue #590: Inline Column Filtering Tests
   describe('Inline Filtering', () => {
     const accountOptions = [
       { value: 'acc-1', label: 'My Checking' },
@@ -605,7 +575,7 @@ describe('TransactionTable', () => {
     })
 
     it('should call onAccountFilterChange when account filter changed', async () => {
-      const onAccountFilterChange = vi.fn()
+      const onAccountFilterChange = mock(() => {})
       const userEvent = await import('@testing-library/user-event')
       const user = userEvent.default.setup()
 
@@ -629,7 +599,7 @@ describe('TransactionTable', () => {
     })
 
     it('should call onCategoryFilterChange when category filter changed', async () => {
-      const onCategoryFilterChange = vi.fn()
+      const onCategoryFilterChange = mock(() => {})
       const userEvent = await import('@testing-library/user-event')
       const user = userEvent.default.setup()
 

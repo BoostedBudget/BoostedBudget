@@ -137,6 +137,9 @@ export default mergeConfig(
         'src/features/deletion/components/DeleteAccountSection.test.tsx',
         // Batch 24 - Chart tests (2026-01-09)
         'src/features/dashboard/components/BalanceHistoryChart.test.tsx',
+        // Batch 25 - Table component tests (2026-01-09)
+        'src/features/accounts/components/AccountTable.test.tsx',
+        'src/features/transactions/components/TransactionTable.test.tsx',
       ],
       coverage: {
         provider: 'v8',
