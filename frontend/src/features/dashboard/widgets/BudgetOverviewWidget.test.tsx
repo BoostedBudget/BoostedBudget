@@ -1,5 +1,5 @@
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import type { Budget, BudgetWithMetrics } from '../../budgets/types'
 
 const mockRefetch = mock(() => {})
