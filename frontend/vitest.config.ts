@@ -182,6 +182,11 @@ export default mergeConfig(
         // Phase 3: vi.hoisted hook tests migrated (2026-01-10)
         'src/features/budgets/hooks/useBudgets.test.tsx',
         'src/features/budgets/hooks/useBudgetDetail.test.tsx',
+        'src/features/dashboard/hooks/useCashFlowData.test.tsx',
+        'src/features/dashboard/hooks/useDashboardData.test.tsx',
+        'src/features/dashboard/hooks/useDashboardLayout.test.tsx',
+        'src/features/auto-categorization/hooks/useAutoCategorizationRules.test.tsx',
+        'src/features/transactions/hooks/useTransactions.test.tsx',
       ],
       coverage: {
         provider: 'v8',
