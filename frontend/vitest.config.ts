@@ -176,6 +176,12 @@ export default mergeConfig(
         // MSW tests migrated to centralized API mocks (2026-01-10)
         'src/features/deletion/hooks/useDeletion.test.tsx',
         'src/features/accounts/hooks/useAccountCustomization.test.tsx',
+        'src/features/tags/hooks/useTags.test.tsx',
+        'src/features/profile/hooks/useProfile.test.tsx',
+        'src/features/subscription/hooks/useSubscriptionTiers.test.tsx',
+        // Phase 3: vi.hoisted hook tests migrated (2026-01-10)
+        'src/features/budgets/hooks/useBudgets.test.tsx',
+        'src/features/budgets/hooks/useBudgetDetail.test.tsx',
       ],
       coverage: {
         provider: 'v8',

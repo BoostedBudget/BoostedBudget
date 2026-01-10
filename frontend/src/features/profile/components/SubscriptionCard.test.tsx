@@ -1,40 +1,50 @@
-import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { User } from '../types'
 import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
-
-const mockRefetch = mock(() => {})
-const mockUseSubscriptionTiers = mock(() => ({
-  tiers: mockSubscriptionTiersResponse,
-  loading: false,
-  error: null,
-  refetch: mockRefetch,
-}))
-
-mock.module('../../subscription/hooks/useSubscriptionTiers', () => ({
-  useSubscriptionTiers: mockUseSubscriptionTiers,
-}))
+import {
+  mockUseGetSubscriptionTiers,
+  mockRefetchSubscriptionTiers,
+} from '@/test/mocks/subscription-api'
 
 import { SubscriptionCard } from './SubscriptionCard'
 
+function createTestQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: 0 },
+    },
+  })
+}
+
 function renderWithRouter(ui: React.ReactElement) {
-  return render(<MemoryRouter>{ui}</MemoryRouter>)
+  const queryClient = createTestQueryClient()
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter>{ui}</MemoryRouter>
+    </QueryClientProvider>
+  )
 }
 
 describe('SubscriptionCard', () => {
   beforeEach(() => {
-    mockUseSubscriptionTiers.mockReturnValue({
-      tiers: mockSubscriptionTiersResponse,
-      loading: false,
+    mockUseGetSubscriptionTiers.mockClear()
+    mockRefetchSubscriptionTiers.mockClear()
+
+    // Default successful response - configure the API mock
+    mockUseGetSubscriptionTiers.mockReturnValue({
+      data: mockSubscriptionTiersResponse,
+      isLoading: false,
       error: null,
-      refetch: mockRefetch,
+      refetch: mockRefetchSubscriptionTiers,
     })
   })
 
   afterEach(() => {
-    mockUseSubscriptionTiers.mockClear()
-    mockRefetch.mockClear()
+    mockUseGetSubscriptionTiers.mockClear()
+    mockRefetchSubscriptionTiers.mockClear()
   })
 
   describe('Tier display', () => {
@@ -149,11 +159,11 @@ describe('SubscriptionCard', () => {
 
   describe('Hook states', () => {
     it('should show loading state when hook is loading', () => {
-      mockUseSubscriptionTiers.mockReturnValue({
-        tiers: null,
-        loading: true,
+      mockUseGetSubscriptionTiers.mockReturnValue({
+        data: undefined,
+        isLoading: true,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockRefetchSubscriptionTiers,
       })
 
       renderWithRouter(<SubscriptionCard tier="free" status="active" />)
@@ -163,11 +173,11 @@ describe('SubscriptionCard', () => {
 
     it('should show error state when hook has error', () => {
       const error = new Error('Failed to fetch tiers')
-      mockUseSubscriptionTiers.mockReturnValue({
-        tiers: null,
-        loading: false,
+      mockUseGetSubscriptionTiers.mockReturnValue({
+        data: undefined,
+        isLoading: false,
         error,
-        refetch: mockRefetch,
+        refetch: mockRefetchSubscriptionTiers,
       })
 
       renderWithRouter(<SubscriptionCard tier="free" status="active" />)
