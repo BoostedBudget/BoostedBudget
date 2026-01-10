@@ -187,6 +187,9 @@ export default mergeConfig(
         'src/features/dashboard/hooks/useDashboardLayout.test.tsx',
         'src/features/auto-categorization/hooks/useAutoCategorizationRules.test.tsx',
         'src/features/transactions/hooks/useTransactions.test.tsx',
+        // Phase 4A: Page tests migrated (2026-01-10)
+        'src/features/deletion/components/CancelDeletionPage.test.tsx',
+        'src/components/layout/Header.test.tsx',
       ],
       coverage: {
         provider: 'v8',
