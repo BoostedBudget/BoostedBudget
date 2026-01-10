@@ -1,46 +1,54 @@
 /**
  * useSavingsGoals Hook Tests
  * Issue #564: Migrated to mock generated React Query hooks
- *
- * Tests the React hook for savings goal CRUD operations.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, waitFor, act } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { ReactNode } from 'react';
-import { useSavingsGoals } from './useSavingsGoals';
-import type { SavingsGoal, CreateSavingsGoalRequest, UpdateSavingsGoalRequest } from '../types';
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { renderHook, waitFor, act } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
+import type { SavingsGoal, CreateSavingsGoalRequest, UpdateSavingsGoalRequest } from '../types'
 
 // Mock mutation functions
-const mockCreateMutateAsync = vi.fn();
-const mockUpdateMutateAsync = vi.fn();
-const mockDeleteMutateAsync = vi.fn();
-const mockAllRefetch = vi.fn().mockResolvedValue({});
-const mockActiveRefetch = vi.fn().mockResolvedValue({});
+const mockCreateMutateAsync = mock(() => Promise.resolve({}))
+const mockUpdateMutateAsync = mock(() => Promise.resolve({}))
+const mockDeleteMutateAsync = mock(() => Promise.resolve({}))
+const mockAllRefetch = mock(() => Promise.resolve({}))
+const mockActiveRefetch = mock(() => Promise.resolve({}))
+
+// Mock for query hooks
+const mockUseGetSavingsGoals = mock(() => ({
+  data: undefined,
+  isLoading: true,
+  error: null,
+  refetch: mockAllRefetch,
+}))
+
+const mockUseGetActiveSavingsGoals = mock(() => ({
+  data: undefined,
+  isLoading: false,
+  error: null,
+  refetch: mockActiveRefetch,
+}))
 
 // Mock the generated hooks
-vi.mock('@/api/generated/endpoints/savings-goals/savings-goals', () => ({
-  useGetSavingsGoals: vi.fn(),
-  useGetActiveSavingsGoals: vi.fn(),
-  useCreateSavingsGoal: vi.fn(() => ({
+mock.module('@/api/generated/endpoints/savings-goals/savings-goals', () => ({
+  useGetSavingsGoals: mockUseGetSavingsGoals,
+  useGetActiveSavingsGoals: mockUseGetActiveSavingsGoals,
+  useCreateSavingsGoal: mock(() => ({
     mutateAsync: mockCreateMutateAsync,
   })),
-  useUpdateSavingsGoal: vi.fn(() => ({
+  useUpdateSavingsGoal: mock(() => ({
     mutateAsync: mockUpdateMutateAsync,
   })),
-  useDeleteSavingsGoal: vi.fn(() => ({
+  useDeleteSavingsGoal: mock(() => ({
     mutateAsync: mockDeleteMutateAsync,
   })),
-  getGetSavingsGoalsQueryKey: vi.fn(() => ['savings-goals']),
-  getGetActiveSavingsGoalsQueryKey: vi.fn(() => ['savings-goals', 'active']),
-}));
+  getGetSavingsGoalsQueryKey: mock(() => ['savings-goals']),
+  getGetActiveSavingsGoalsQueryKey: mock(() => ['savings-goals', 'active']),
+}))
 
-// Import the mocked hooks
-import {
-  useGetSavingsGoals,
-  useGetActiveSavingsGoals,
-} from '@/api/generated/endpoints/savings-goals/savings-goals';
+import { useSavingsGoals } from './useSavingsGoals'
 
 // Helper to create wrapper with QueryClient
 function createWrapper() {
@@ -88,43 +96,40 @@ describe('useSavingsGoals', () => {
   ];
 
   beforeEach(() => {
-    vi.clearAllMocks();
-    mockCreateMutateAsync.mockReset();
-    mockUpdateMutateAsync.mockReset();
-    mockDeleteMutateAsync.mockReset();
-    mockAllRefetch.mockClear();
-    mockActiveRefetch.mockClear();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+    mockCreateMutateAsync.mockClear()
+    mockUpdateMutateAsync.mockClear()
+    mockDeleteMutateAsync.mockClear()
+    mockAllRefetch.mockClear()
+    mockActiveRefetch.mockClear()
+    mockUseGetSavingsGoals.mockClear()
+    mockUseGetActiveSavingsGoals.mockClear()
+  })
 
   // Helper to configure query states
   function configureAllGoalsQuery(config: {
-    data?: SavingsGoal[] | null;
-    isLoading?: boolean;
-    error?: Error | null;
+    data?: SavingsGoal[] | null
+    isLoading?: boolean
+    error?: Error | null
   }) {
-    vi.mocked(useGetSavingsGoals).mockReturnValue({
+    mockUseGetSavingsGoals.mockReturnValue({
       data: config.data ?? undefined,
       isLoading: config.isLoading ?? false,
       error: config.error ?? null,
       refetch: mockAllRefetch,
-    } as unknown as ReturnType<typeof useGetSavingsGoals>);
+    })
   }
 
   function configureActiveGoalsQuery(config: {
-    data?: SavingsGoal[] | null;
-    isLoading?: boolean;
-    error?: Error | null;
+    data?: SavingsGoal[] | null
+    isLoading?: boolean
+    error?: Error | null
   }) {
-    vi.mocked(useGetActiveSavingsGoals).mockReturnValue({
+    mockUseGetActiveSavingsGoals.mockReturnValue({
       data: config.data ?? undefined,
       isLoading: config.isLoading ?? false,
       error: config.error ?? null,
       refetch: mockActiveRefetch,
-    } as unknown as ReturnType<typeof useGetActiveSavingsGoals>);
+    })
   }
 
   describe('Initial State', () => {

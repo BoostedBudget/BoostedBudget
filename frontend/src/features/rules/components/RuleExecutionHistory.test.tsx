@@ -1,23 +1,29 @@
 /**
  * RuleExecutionHistory Component Tests
  * Issue #39: Rule Builder UI
- *
- * Tests for the rule execution history display component.
- * TDD RED: Writing tests before implementation.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { RuleExecutionHistory } from './RuleExecutionHistory'
 import type { RuleExecution } from '@/api/generated/models'
 
+// Mock refetch function
+const mockRefetch = mock(() => Promise.resolve())
+
 // Mock the API hook
-vi.mock('@/api/generated/endpoints/automation-rules/automation-rules', () => ({
-  useGetRuleExecutions: vi.fn(),
+const mockUseGetRuleExecutions = mock(() => ({
+  data: undefined,
+  isLoading: true,
+  error: null,
+  refetch: mockRefetch,
 }))
 
-import { useGetRuleExecutions } from '@/api/generated/endpoints/automation-rules/automation-rules'
+mock.module('@/api/generated/endpoints/automation-rules/automation-rules', () => ({
+  useGetRuleExecutions: mockUseGetRuleExecutions,
+}))
+
+import { RuleExecutionHistory } from './RuleExecutionHistory'
 
 const mockExecutions: RuleExecution[] = [
   {
@@ -72,17 +78,18 @@ function createTestWrapper() {
 
 describe('RuleExecutionHistory', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    mockUseGetRuleExecutions.mockClear()
+    mockRefetch.mockClear()
   })
 
   describe('Loading State', () => {
     it('should show loading state when fetching', () => {
-      vi.mocked(useGetRuleExecutions).mockReturnValue({
+      mockUseGetRuleExecutions.mockReturnValue({
         data: undefined,
         isLoading: true,
         error: null,
-        refetch: vi.fn(),
-      } as unknown as ReturnType<typeof useGetRuleExecutions>)
+        refetch: mockRefetch,
+      })
 
       render(<RuleExecutionHistory ruleId="rule-1" />, {
         wrapper: createTestWrapper(),
@@ -94,12 +101,12 @@ describe('RuleExecutionHistory', () => {
 
   describe('Empty State', () => {
     it('should show empty message when no executions', () => {
-      vi.mocked(useGetRuleExecutions).mockReturnValue({
+      mockUseGetRuleExecutions.mockReturnValue({
         data: { executions: [] },
         isLoading: false,
         error: null,
-        refetch: vi.fn(),
-      } as unknown as ReturnType<typeof useGetRuleExecutions>)
+        refetch: mockRefetch,
+      })
 
       render(<RuleExecutionHistory ruleId="rule-1" />, {
         wrapper: createTestWrapper(),
@@ -111,12 +118,12 @@ describe('RuleExecutionHistory', () => {
 
   describe('Error State', () => {
     it('should show error message on fetch failure', () => {
-      vi.mocked(useGetRuleExecutions).mockReturnValue({
+      mockUseGetRuleExecutions.mockReturnValue({
         data: undefined,
         isLoading: false,
         error: new Error('Failed to load'),
-        refetch: vi.fn(),
-      } as unknown as ReturnType<typeof useGetRuleExecutions>)
+        refetch: mockRefetch,
+      })
 
       render(<RuleExecutionHistory ruleId="rule-1" />, {
         wrapper: createTestWrapper(),
@@ -126,13 +133,12 @@ describe('RuleExecutionHistory', () => {
     })
 
     it('should have retry button on error', () => {
-      const refetch = vi.fn()
-      vi.mocked(useGetRuleExecutions).mockReturnValue({
+      mockUseGetRuleExecutions.mockReturnValue({
         data: undefined,
         isLoading: false,
         error: new Error('Failed to load'),
-        refetch,
-      } as unknown as ReturnType<typeof useGetRuleExecutions>)
+        refetch: mockRefetch,
+      })
 
       render(<RuleExecutionHistory ruleId="rule-1" />, {
         wrapper: createTestWrapper(),
@@ -141,18 +147,18 @@ describe('RuleExecutionHistory', () => {
       const retryButton = screen.getByRole('button', { name: /retry/i })
       fireEvent.click(retryButton)
 
-      expect(refetch).toHaveBeenCalled()
+      expect(mockRefetch).toHaveBeenCalled()
     })
   })
 
   describe('Execution List', () => {
     beforeEach(() => {
-      vi.mocked(useGetRuleExecutions).mockReturnValue({
+      mockUseGetRuleExecutions.mockReturnValue({
         data: { executions: mockExecutions },
         isLoading: false,
         error: null,
-        refetch: vi.fn(),
-      } as unknown as ReturnType<typeof useGetRuleExecutions>)
+        refetch: mockRefetch,
+      })
     })
 
     it('should render execution table', () => {
@@ -213,12 +219,12 @@ describe('RuleExecutionHistory', () => {
 
   describe('Status Badges', () => {
     beforeEach(() => {
-      vi.mocked(useGetRuleExecutions).mockReturnValue({
+      mockUseGetRuleExecutions.mockReturnValue({
         data: { executions: mockExecutions },
         isLoading: false,
         error: null,
-        refetch: vi.fn(),
-      } as unknown as ReturnType<typeof useGetRuleExecutions>)
+        refetch: mockRefetch,
+      })
     })
 
     it('should apply success styling to completed status', () => {
@@ -251,12 +257,12 @@ describe('RuleExecutionHistory', () => {
 
   describe('Pagination', () => {
     it('should show pagination controls when limit is provided', () => {
-      vi.mocked(useGetRuleExecutions).mockReturnValue({
+      mockUseGetRuleExecutions.mockReturnValue({
         data: { executions: mockExecutions, total: 25 },
         isLoading: false,
         error: null,
-        refetch: vi.fn(),
-      } as unknown as ReturnType<typeof useGetRuleExecutions>)
+        refetch: mockRefetch,
+      })
 
       render(<RuleExecutionHistory ruleId="rule-1" limit={10} />, {
         wrapper: createTestWrapper(),
@@ -266,14 +272,14 @@ describe('RuleExecutionHistory', () => {
     })
 
     it('should call onPageChange when pagination button clicked', () => {
-      vi.mocked(useGetRuleExecutions).mockReturnValue({
+      mockUseGetRuleExecutions.mockReturnValue({
         data: { executions: mockExecutions, total: 25 },
         isLoading: false,
         error: null,
-        refetch: vi.fn(),
-      } as unknown as ReturnType<typeof useGetRuleExecutions>)
+        refetch: mockRefetch,
+      })
 
-      const onPageChange = vi.fn()
+      const onPageChange = mock(() => {})
       render(
         <RuleExecutionHistory
           ruleId="rule-1"
@@ -292,12 +298,12 @@ describe('RuleExecutionHistory', () => {
 
   describe('Accessibility', () => {
     beforeEach(() => {
-      vi.mocked(useGetRuleExecutions).mockReturnValue({
+      mockUseGetRuleExecutions.mockReturnValue({
         data: { executions: mockExecutions },
         isLoading: false,
         error: null,
-        refetch: vi.fn(),
-      } as unknown as ReturnType<typeof useGetRuleExecutions>)
+        refetch: mockRefetch,
+      })
     })
 
     it('should have accessible table structure', () => {
@@ -323,19 +329,19 @@ describe('RuleExecutionHistory', () => {
 
   describe('Props', () => {
     it('should pass limit and offset to API hook', () => {
-      vi.mocked(useGetRuleExecutions).mockReturnValue({
+      mockUseGetRuleExecutions.mockReturnValue({
         data: { executions: [] },
         isLoading: false,
         error: null,
-        refetch: vi.fn(),
-      } as unknown as ReturnType<typeof useGetRuleExecutions>)
+        refetch: mockRefetch,
+      })
 
       render(
         <RuleExecutionHistory ruleId="rule-1" limit={20} offset={40} />,
         { wrapper: createTestWrapper() }
       )
 
-      expect(useGetRuleExecutions).toHaveBeenCalledWith(
+      expect(mockUseGetRuleExecutions).toHaveBeenCalledWith(
         'rule-1',
         expect.objectContaining({ limit: 20, offset: 40 }),
         undefined
@@ -343,12 +349,12 @@ describe('RuleExecutionHistory', () => {
     })
 
     it('should apply custom className', () => {
-      vi.mocked(useGetRuleExecutions).mockReturnValue({
+      mockUseGetRuleExecutions.mockReturnValue({
         data: { executions: [] },
         isLoading: false,
         error: null,
-        refetch: vi.fn(),
-      } as unknown as ReturnType<typeof useGetRuleExecutions>)
+        refetch: mockRefetch,
+      })
 
       const { container } = render(
         <RuleExecutionHistory ruleId="rule-1" className="custom-class" />,
