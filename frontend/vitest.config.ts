@@ -163,6 +163,9 @@ export default mergeConfig(
         'src/features/auto-categorization/components/AutoCategorizationPageWrapper.test.tsx',
         // Batch 31 - Budget components (2026-01-09)
         'src/features/budgets/components/BudgetTable.test.tsx',
+        // Batch 32 - Rules and category management (2026-01-09)
+        'src/features/rules/components/ConditionBuilder.test.tsx',
+        'src/features/budgets/components/category-management/BudgetCategoryManager.test.tsx',
       ],
       coverage: {
         provider: 'v8',
