@@ -135,6 +135,8 @@ export default mergeConfig(
         // Batch 23 - Rule table and deletion tests (2026-01-09)
         'src/features/rules/components/RuleTable.test.tsx',
         'src/features/deletion/components/DeleteAccountSection.test.tsx',
+        // Batch 24 - Chart tests (2026-01-09)
+        'src/features/dashboard/components/BalanceHistoryChart.test.tsx',
       ],
       coverage: {
         provider: 'v8',
