@@ -153,7 +153,7 @@ export default mergeConfig(
         'src/features/dashboard/widgets/AccountCardsWidget.test.tsx',
         // Batch 29 - Hook and context tests (2026-01-09)
         'src/shared/hooks/useCopyToClipboard.test.tsx',
-        'src/features/dashboard/context/DashboardContext.test.tsx',
+        // NOTE: DashboardContext.test.tsx stays on vitest - tests real implementation, centralized mock overrides it
         'src/features/budgets/hooks/useMilestoneTracking.test.tsx',
         'src/features/budgets/hooks/usePreviewCategories.test.tsx',
         // Batch 30 - Dashboard and auto-categorization tests (2026-01-09)
@@ -169,9 +169,13 @@ export default mergeConfig(
         // NOTE: RulesPage stays on vitest - mocks useRuleTierLimits, useProfile, useSubscriptionTiers causing pollution
         // Batch 34 - Simple vi.mock() files (2026-01-09)
         'src/features/dashboard/widgets/CashFlowChartWidget.test.tsx',
-        // NOTE: DashboardGrid stays on vitest - mocks WidgetWrapper causing pollution
+        // DashboardGrid uses centralized registry mock now
+        'src/features/dashboard/widgets/DashboardGrid.test.tsx',
         'src/features/budgets/components/category-management/BudgetCategoryForm.test.tsx',
         'src/features/budgets/components/CreateSavingsGoalDialog.test.tsx',
+        // MSW tests migrated to centralized API mocks (2026-01-10)
+        'src/features/deletion/hooks/useDeletion.test.tsx',
+        'src/features/accounts/hooks/useAccountCustomization.test.tsx',
       ],
       coverage: {
         provider: 'v8',

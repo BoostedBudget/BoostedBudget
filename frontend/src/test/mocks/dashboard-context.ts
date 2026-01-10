@@ -1,7 +1,9 @@
 // Issue #575: Centralized dashboard context mock to prevent mock.module() pollution
-// Simplified version that doesn't use React directly in preload
+// This file is preloaded via bunfig.toml before all tests
+// IMPORTANT: Re-exports all real exports, only overrides useDashboardContext
 
 import { mock } from 'bun:test'
+import * as RealDashboardContext from '@/features/dashboard/context/DashboardContext'
 
 // Configurable mock function - tests customize in beforeEach
 export const mockSetFilters = mock(() => {})
@@ -22,11 +24,14 @@ export const mockUseDashboardContext = mock(() => ({
 }))
 
 // Single mock.module() call - called once at preload time
+// Re-export ALL real exports, only override useDashboardContext
 mock.module('@/features/dashboard/context/DashboardContext', () => ({
+  ...RealDashboardContext,
   useDashboardContext: () => mockUseDashboardContext(),
 }))
 
 // Also mock relative path imports (widget tests use relative paths)
 mock.module('../context/DashboardContext', () => ({
+  ...RealDashboardContext,
   useDashboardContext: () => mockUseDashboardContext(),
 }))

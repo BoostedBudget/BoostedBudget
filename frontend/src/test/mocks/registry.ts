@@ -36,14 +36,6 @@ mock.module('@/features/dashboard/widgets/registry', () => ({
   DEFAULT_LAYOUT: MOCK_DEFAULT_LAYOUT,
 }))
 
-// Also mock the relative path import (some tests use './registry')
-mock.module('./registry', () => ({
-  getWidget: (...args: unknown[]) => mockGetWidget(...args),
-  getAllWidgets: () => mockGetAllWidgets(),
-  registerWidget: (...args: unknown[]) => mockRegisterWidget(...args),
-  getWidgetsByCategory: (...args: unknown[]) => mockGetWidgetsByCategory(...args),
-  isWidgetRegistered: (...args: unknown[]) => mockIsWidgetRegistered(...args),
-  generateWidgetId: (...args: unknown[]) => mockGenerateWidgetId(...(args as [WidgetType])),
-  createWidgetConfig: (...args: unknown[]) => mockCreateWidgetConfig(...args),
-  DEFAULT_LAYOUT: MOCK_DEFAULT_LAYOUT,
-}))
+// Note: We intentionally do NOT mock './registry' relative path
+// This allows registry.test.ts to test the REAL implementation
+// Only the alias path '@/features/dashboard/widgets/registry' is mocked

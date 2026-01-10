@@ -7,7 +7,7 @@
  * Issue #354: Customizable Dashboard Widget System
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
 import React from 'react'
 import type {
   DashboardLayout,
@@ -15,19 +15,21 @@ import type {
   WidgetProps,
   WidgetDefinition,
 } from '../types'
+import { mockGetWidget } from '@/test/mocks/registry'
 
-const mockGridStackOn = vi.fn()
-const mockGridStackOff = vi.fn()
-const mockGridStackLoad = vi.fn()
-const mockGridStackSave = vi.fn(() => [])
-const mockGridStackEnableMove = vi.fn()
-const mockGridStackEnableResize = vi.fn()
-const mockGridStackRemoveWidget = vi.fn()
-const mockGridStackDestroy = vi.fn()
-const mockGridStackBatchUpdate = vi.fn()
-const mockGridStackUpdate = vi.fn()
-const mockGridStackGetGridItems = vi.fn(() => [])
-const mockGridStackMakeWidget = vi.fn()
+// GridStack mocks
+const mockGridStackOn = mock(() => {})
+const mockGridStackOff = mock(() => {})
+const mockGridStackLoad = mock(() => {})
+const mockGridStackSave = mock(() => [])
+const mockGridStackEnableMove = mock(() => {})
+const mockGridStackEnableResize = mock(() => {})
+const mockGridStackRemoveWidget = mock(() => {})
+const mockGridStackDestroy = mock(() => {})
+const mockGridStackBatchUpdate = mock(() => {})
+const mockGridStackUpdate = mock(() => {})
+const mockGridStackGetGridItems = mock(() => [] as HTMLElement[])
+const mockGridStackMakeWidget = mock(() => {})
 
 const mockGridStackInstance = {
   on: mockGridStackOn,
@@ -48,38 +50,18 @@ const mockGridStackInstance = {
   _ignoreCB: false,
 }
 
-vi.mock('gridstack', () => ({
+const mockGridStackInit = mock(() => mockGridStackInstance)
+
+mock.module('gridstack', () => ({
   GridStack: {
-    init: vi.fn(() => mockGridStackInstance),
+    init: mockGridStackInit,
   },
 }))
 
-vi.mock('./WidgetWrapper', () => ({
-  WidgetWrapper: ({
-    children,
-    onRemove,
-    widgetType,
-  }: {
-    children: React.ReactNode
-    onRemove: () => void
-    widgetType: string
-  }) => (
-    <div data-testid={`widget-wrapper-${widgetType}`}>
-      <button data-testid={`remove-${widgetType}`} onClick={onRemove}>
-        Remove
-      </button>
-      {children}
-    </div>
-  ),
-}))
+// Issue #575: Using real WidgetWrapper to avoid mock.module() pollution
+// WidgetWrapper uses centralized registry mock which provides widget titles
 
-const mockGetWidget = vi.fn()
-
-vi.mock('./registry', () => ({
-  getWidget: (...args: unknown[]) => mockGetWidget(...args),
-}))
-
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { DashboardGrid } from './DashboardGrid'
 
 describe('DashboardGrid', () => {
@@ -109,9 +91,9 @@ describe('DashboardGrid', () => {
     version: 1,
   }
 
-  const mockOnLayoutChange = vi.fn()
-  const mockOnRemoveWidget = vi.fn()
-  const mockOnDropWidget = vi.fn()
+  const mockOnLayoutChange = mock(() => {})
+  const mockOnRemoveWidget = mock(() => {})
+  const mockOnDropWidget = mock(() => {})
 
   const MockWidgetComponent = ({ widgetId }: WidgetProps) => (
     <div data-testid={`widget-content-${widgetId}`}>Widget content</div>
@@ -130,6 +112,7 @@ describe('DashboardGrid', () => {
       mockGridStackUpdate,
       mockGridStackGetGridItems,
       mockGridStackMakeWidget,
+      mockGridStackInit,
       mockOnLayoutChange,
       mockOnRemoveWidget,
       mockOnDropWidget,
@@ -138,6 +121,8 @@ describe('DashboardGrid', () => {
     mockGridStackGetGridItems.mockReturnValue([])
     mockGridStackInstance._ignoreCB = false
 
+    // Configure centralized registry mock
+    mockGetWidget.mockClear()
     mockGetWidget.mockImplementation((type: WidgetType) => {
       const definitions: Record<string, WidgetDefinition> = {
         'balance-overview': {
@@ -193,12 +178,9 @@ describe('DashboardGrid', () => {
         />
       )
 
-      expect(
-        screen.getByTestId('widget-wrapper-balance-overview')
-      ).toBeInTheDocument()
-      expect(
-        screen.getByTestId('widget-wrapper-cash-flow-summary')
-      ).toBeInTheDocument()
+      // Check for widget titles from registry mock definitions
+      expect(screen.getByText('Balance Overview')).toBeInTheDocument()
+      expect(screen.getByText('Cash Flow Summary')).toBeInTheDocument()
     })
 
     it('should render widget content from registry component', () => {
@@ -245,9 +227,8 @@ describe('DashboardGrid', () => {
       )
 
       expect(container.querySelector('.grid-stack')).toBeInTheDocument()
-      expect(
-        screen.queryByTestId('widget-wrapper-balance-overview')
-      ).not.toBeInTheDocument()
+      // No widget titles should be present
+      expect(screen.queryByText('Balance Overview')).not.toBeInTheDocument()
     })
   })
 
@@ -286,8 +267,8 @@ describe('DashboardGrid', () => {
   })
 
   describe('Widget Removal', () => {
-    it('should call onRemoveWidget when remove button clicked', () => {
-      render(
+    it('should call onRemoveWidget when remove button clicked and confirmed', () => {
+      const { container } = render(
         <DashboardGrid
           layout={mockLayout}
           isEditing={true}
@@ -296,13 +277,19 @@ describe('DashboardGrid', () => {
         />
       )
 
-      fireEvent.click(screen.getByTestId('remove-balance-overview'))
+      // Find widget-1 container and its remove button
+      const widget1Container = container.querySelector('[gs-id="widget-1"]')!
+      const removeButton = within(widget1Container as HTMLElement).getByLabelText('Remove widget')
+      fireEvent.click(removeButton)
+
+      // Confirm in the dialog
+      fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
 
       expect(mockOnRemoveWidget).toHaveBeenCalledWith('widget-1')
     })
 
     it('should call onRemoveWidget with correct widget id for each widget', () => {
-      render(
+      const { container } = render(
         <DashboardGrid
           layout={mockLayout}
           isEditing={true}
@@ -311,7 +298,13 @@ describe('DashboardGrid', () => {
         />
       )
 
-      fireEvent.click(screen.getByTestId('remove-cash-flow-summary'))
+      // Find widget-2 container and its remove button
+      const widget2Container = container.querySelector('[gs-id="widget-2"]')!
+      const removeButton = within(widget2Container as HTMLElement).getByLabelText('Remove widget')
+      fireEvent.click(removeButton)
+
+      // Confirm in the dialog
+      fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
 
       expect(mockOnRemoveWidget).toHaveBeenCalledWith('widget-2')
     })
