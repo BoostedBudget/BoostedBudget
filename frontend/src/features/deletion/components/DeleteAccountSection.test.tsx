@@ -1,24 +1,26 @@
-/**
- * DeleteAccountSection Component Tests
- *
- * TDD RED: Tests for the account deletion UI component in Privacy Settings.
- * Covers confirmation flow, deletion request, success state, and error handling.
- *
- * Issue #18: Account Deletion Flow (GDPR Article 17)
- */
-
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { DeleteAccountSection } from './DeleteAccountSection'
-import * as useDeletionHook from '../hooks/useDeletion'
 import type { RequestDeletionResponse } from '../types'
 
-// Mock the hook
-vi.mock('../hooks/useDeletion')
+const mockRequestAccountDeletion = mock(() => Promise.resolve({}))
+const mockCancelAccountDeletion = mock(() => Promise.resolve({}))
+
+const mockUseDeletion = mock(() => ({
+  requestAccountDeletion: mockRequestAccountDeletion,
+  isRequesting: false,
+  requestError: null,
+  cancelAccountDeletion: mockCancelAccountDeletion,
+  isCanceling: false,
+  cancelError: null,
+}))
+
+mock.module('../hooks/useDeletion', () => ({
+  useDeletion: mockUseDeletion,
+}))
+
+import { DeleteAccountSection } from './DeleteAccountSection'
 
 describe('DeleteAccountSection', () => {
-  const mockRequestAccountDeletion = vi.fn()
-
   const mockSuccessResponse: RequestDeletionResponse = {
     message: 'Account deletion scheduled',
     scheduled_at: '2025-11-26T00:00:00Z',
@@ -26,21 +28,16 @@ describe('DeleteAccountSection', () => {
   }
 
   beforeEach(() => {
-    // Mock successful hook response by default
-    vi.mocked(useDeletionHook.useDeletion).mockReturnValue({
+    mockRequestAccountDeletion.mockClear()
+    mockCancelAccountDeletion.mockClear()
+    mockUseDeletion.mockReturnValue({
       requestAccountDeletion: mockRequestAccountDeletion,
       isRequesting: false,
       requestError: null,
-      cancelAccountDeletion: vi.fn(),
+      cancelAccountDeletion: mockCancelAccountDeletion,
       isCanceling: false,
       cancelError: null,
     })
-
-    mockRequestAccountDeletion.mockClear()
-  })
-
-  afterEach(() => {
-    vi.clearAllMocks()
   })
 
   describe('Initial Render', () => {
@@ -74,7 +71,7 @@ describe('DeleteAccountSection', () => {
       expect(deleteButton).toBeEnabled()
     })
 
-    it('should NOT display confirmation dialog initially', () => {
+    it('should not display confirmation dialog initially', () => {
       render(<DeleteAccountSection />)
 
       expect(screen.queryByText(/are you absolutely sure/i)).not.toBeInTheDocument()
@@ -178,23 +175,17 @@ describe('DeleteAccountSection', () => {
     })
 
     it('should disable buttons during deletion request', () => {
-      // First render with isRequesting: false to open dialog
       const { rerender } = render(<DeleteAccountSection />)
-
-      // Open confirmation dialog
       fireEvent.click(screen.getByRole('button', { name: /delete my account/i }))
 
-      // Now mock isRequesting: true to simulate the request in progress
-      vi.mocked(useDeletionHook.useDeletion).mockReturnValue({
+      mockUseDeletion.mockReturnValue({
         requestAccountDeletion: mockRequestAccountDeletion,
-        isRequesting: true, // Requesting in progress
+        isRequesting: true,
         requestError: null,
-        cancelAccountDeletion: vi.fn(),
+        cancelAccountDeletion: mockCancelAccountDeletion,
         isCanceling: false,
         cancelError: null,
       })
-
-      // Rerender to apply the new mock state
       rerender(<DeleteAccountSection />)
 
       const cancelButton = screen.getByRole('button', { name: /^cancel$/i })
@@ -205,99 +196,33 @@ describe('DeleteAccountSection', () => {
     })
 
     it('should show "Processing..." text during request', () => {
-      // First render with isRequesting: false to open dialog
       const { rerender } = render(<DeleteAccountSection />)
-
-      // Open confirmation dialog
       fireEvent.click(screen.getByRole('button', { name: /delete my account/i }))
 
-      // Now mock isRequesting: true to simulate the request in progress
-      vi.mocked(useDeletionHook.useDeletion).mockReturnValue({
+      mockUseDeletion.mockReturnValue({
         requestAccountDeletion: mockRequestAccountDeletion,
         isRequesting: true,
         requestError: null,
-        cancelAccountDeletion: vi.fn(),
+        cancelAccountDeletion: mockCancelAccountDeletion,
         isCanceling: false,
         cancelError: null,
       })
-
-      // Rerender to apply the new mock state
       rerender(<DeleteAccountSection />)
 
       expect(screen.getByText('Processing...')).toBeInTheDocument()
     })
 
-    it('should display success state with cancellation token after deletion', async () => {
+    it('should trigger deletion request with success response', async () => {
       mockRequestAccountDeletion.mockResolvedValue(mockSuccessResponse)
-
-      const { rerender } = render(<DeleteAccountSection />)
-
-      fireEvent.click(screen.getByRole('button', { name: /delete my account/i }))
-      fireEvent.click(screen.getByRole('checkbox'))
-      fireEvent.click(screen.getByRole('button', { name: /yes, delete my account/i }))
-
-      // Wait for async operation
-      await waitFor(() => {
-        expect(mockRequestAccountDeletion).toHaveBeenCalled()
-      })
-
-      // Rerender to show success state (simulating state update)
-      rerender(<DeleteAccountSection />)
-
-      // Note: In actual implementation, component manages this state internally
-      // This test verifies the component CAN display the success state
-    })
-
-    it('should display scheduled date in success state', async () => {
-      render(<DeleteAccountSection />)
-
-      // Trigger deletion
-      fireEvent.click(screen.getByRole('button', { name: /delete my account/i }))
-      fireEvent.click(screen.getByRole('checkbox'))
-
-      mockRequestAccountDeletion.mockResolvedValue(mockSuccessResponse)
-      fireEvent.click(screen.getByRole('button', { name: /yes, delete my account/i }))
-
-      await waitFor(() => {
-        expect(mockRequestAccountDeletion).toHaveBeenCalled()
-      })
-
-      // Success state should show scheduled date (component internal state)
-      // Actual rendering depends on component implementation
-    })
-
-    it('should show cancellation URL in success state', async () => {
       render(<DeleteAccountSection />)
 
       fireEvent.click(screen.getByRole('button', { name: /delete my account/i }))
       fireEvent.click(screen.getByRole('checkbox'))
-
-      mockRequestAccountDeletion.mockResolvedValue(mockSuccessResponse)
       fireEvent.click(screen.getByRole('button', { name: /yes, delete my account/i }))
 
       await waitFor(() => {
         expect(mockRequestAccountDeletion).toHaveBeenCalled()
       })
-
-      // URL format verified in component implementation
-    })
-
-    it('should hide confirmation dialog in success state', async () => {
-      render(<DeleteAccountSection />)
-
-      fireEvent.click(screen.getByRole('button', { name: /delete my account/i }))
-      expect(screen.getByText(/are you absolutely sure/i)).toBeInTheDocument()
-
-      fireEvent.click(screen.getByRole('checkbox'))
-
-      mockRequestAccountDeletion.mockResolvedValue(mockSuccessResponse)
-      fireEvent.click(screen.getByRole('button', { name: /yes, delete my account/i }))
-
-      await waitFor(() => {
-        expect(mockRequestAccountDeletion).toHaveBeenCalled()
-      })
-
-      // Dialog should close after successful deletion
     })
   })
 
@@ -305,11 +230,11 @@ describe('DeleteAccountSection', () => {
     it('should display error message when deletion fails', () => {
       const error = new Error('Failed to schedule deletion')
 
-      vi.mocked(useDeletionHook.useDeletion).mockReturnValue({
+      mockUseDeletion.mockReturnValue({
         requestAccountDeletion: mockRequestAccountDeletion,
         isRequesting: false,
         requestError: error,
-        cancelAccountDeletion: vi.fn(),
+        cancelAccountDeletion: mockCancelAccountDeletion,
         isCanceling: false,
         cancelError: null,
       })
@@ -324,11 +249,11 @@ describe('DeleteAccountSection', () => {
     it('should keep confirmation dialog open on error', () => {
       const error = new Error('Network error')
 
-      vi.mocked(useDeletionHook.useDeletion).mockReturnValue({
+      mockUseDeletion.mockReturnValue({
         requestAccountDeletion: mockRequestAccountDeletion,
         isRequesting: false,
         requestError: error,
-        cancelAccountDeletion: vi.fn(),
+        cancelAccountDeletion: mockCancelAccountDeletion,
         isCanceling: false,
         cancelError: null,
       })
@@ -344,11 +269,11 @@ describe('DeleteAccountSection', () => {
       const error = new Error('First attempt failed')
 
       // First render with error
-      vi.mocked(useDeletionHook.useDeletion).mockReturnValue({
+      mockUseDeletion.mockReturnValue({
         requestAccountDeletion: mockRequestAccountDeletion,
         isRequesting: false,
         requestError: error,
-        cancelAccountDeletion: vi.fn(),
+        cancelAccountDeletion: mockCancelAccountDeletion,
         isCanceling: false,
         cancelError: null,
       })
@@ -359,11 +284,11 @@ describe('DeleteAccountSection', () => {
       expect(screen.getByText(error.message)).toBeInTheDocument()
 
       // Rerender without error (simulating retry)
-      vi.mocked(useDeletionHook.useDeletion).mockReturnValue({
+      mockUseDeletion.mockReturnValue({
         requestAccountDeletion: mockRequestAccountDeletion,
         isRequesting: false,
         requestError: null, // Error cleared
-        cancelAccountDeletion: vi.fn(),
+        cancelAccountDeletion: mockCancelAccountDeletion,
         isCanceling: false,
         cancelError: null,
       })
@@ -376,11 +301,11 @@ describe('DeleteAccountSection', () => {
     it('should handle network errors gracefully', () => {
       const error = new Error('Network request failed')
 
-      vi.mocked(useDeletionHook.useDeletion).mockReturnValue({
+      mockUseDeletion.mockReturnValue({
         requestAccountDeletion: mockRequestAccountDeletion,
         isRequesting: false,
         requestError: error,
-        cancelAccountDeletion: vi.fn(),
+        cancelAccountDeletion: mockCancelAccountDeletion,
         isCanceling: false,
         cancelError: null,
       })
@@ -395,7 +320,6 @@ describe('DeleteAccountSection', () => {
 
   describe('Cancellation Link Display', () => {
     it('should generate correct cancellation URL format', () => {
-      // Mock window.location.origin
       Object.defineProperty(window, 'location', {
         value: { origin: 'http://localhost:3000' },
         writable: true,
@@ -404,16 +328,8 @@ describe('DeleteAccountSection', () => {
       const expectedToken = mockSuccessResponse.cancellation_token
       const expectedUrl = `http://localhost:3000/cancel-deletion/${expectedToken}`
 
-      // URL format: window.location.origin/cancel-deletion/{token}
       expect(expectedUrl).toContain('/cancel-deletion/')
       expect(expectedUrl).toContain(expectedToken)
-    })
-
-    it('should show important instructions about saving link', () => {
-      render(<DeleteAccountSection />)
-
-      // Instructions are part of the success state UI
-      // Verifies component has proper warning text about saving the link
     })
   })
 })

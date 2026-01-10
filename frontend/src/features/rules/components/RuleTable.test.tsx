@@ -1,12 +1,4 @@
-/**
- * RuleTable Component Tests
- * Issue #39: Rule Builder UI
- *
- * Tests for the rule table display component.
- * TDD RED: Writing tests before implementation.
- */
-
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { RuleTable } from './RuleTable'
 import type { AutomationRule } from '@/api/generated/models'
@@ -75,10 +67,6 @@ const mockRules: AutomationRule[] = [
 ]
 
 describe('RuleTable', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
   describe('Rendering', () => {
     it('should render a table', () => {
       render(<RuleTable rules={mockRules} />)
@@ -126,7 +114,6 @@ describe('RuleTable', () => {
       render(<RuleTable rules={mockRules} />)
 
       const scheduledBadges = screen.getAllByText(/^scheduled$/i)
-      // "Event" badge appears once in the third rule's trigger column
       const triggerCells = screen.getAllByText(/^event$/i)
 
       expect(scheduledBadges.length).toBe(2)
@@ -156,7 +143,7 @@ describe('RuleTable', () => {
 
   describe('Row Actions', () => {
     it('should call onEdit when edit button is clicked', () => {
-      const onEdit = vi.fn()
+      const onEdit = mock(() => {})
       render(<RuleTable rules={mockRules} onEdit={onEdit} />)
 
       const editButtons = screen.getAllByRole('button', { name: /edit/i })
@@ -166,7 +153,7 @@ describe('RuleTable', () => {
     })
 
     it('should call onDelete when delete button is clicked', () => {
-      const onDelete = vi.fn()
+      const onDelete = mock(() => {})
       render(<RuleTable rules={mockRules} onDelete={onDelete} />)
 
       const deleteButtons = screen.getAllByRole('button', { name: /delete/i })
@@ -176,7 +163,7 @@ describe('RuleTable', () => {
     })
 
     it('should call onToggle when toggle is clicked', () => {
-      const onToggle = vi.fn()
+      const onToggle = mock(() => {})
       render(<RuleTable rules={mockRules} onToggle={onToggle} />)
 
       const toggles = screen.getAllByRole('switch')
@@ -186,7 +173,7 @@ describe('RuleTable', () => {
     })
 
     it('should call onToggle with true when enabling disabled rule', () => {
-      const onToggle = vi.fn()
+      const onToggle = mock(() => {})
       render(<RuleTable rules={mockRules} onToggle={onToggle} />)
 
       const toggles = screen.getAllByRole('switch')
@@ -243,7 +230,7 @@ describe('RuleTable', () => {
     })
 
     it('should call onSort when clicking sortable header', () => {
-      const onSort = vi.fn()
+      const onSort = mock(() => {})
       render(<RuleTable rules={mockRules} sortable onSort={onSort} />)
 
       const nameHeader = screen.getByText('Name').closest('button')!
@@ -253,7 +240,7 @@ describe('RuleTable', () => {
     })
 
     it('should toggle sort direction on second click', () => {
-      const onSort = vi.fn()
+      const onSort = mock(() => {})
       render(
         <RuleTable
           rules={mockRules}
@@ -287,11 +274,10 @@ describe('RuleTable', () => {
 
   describe('Row Click', () => {
     it('should call onRowClick when row is clicked', () => {
-      const onRowClick = vi.fn()
+      const onRowClick = mock(() => {})
       render(<RuleTable rules={mockRules} onRowClick={onRowClick} />)
 
       const rows = screen.getAllByRole('row')
-      // Skip header row
       fireEvent.click(rows[1])
 
       expect(onRowClick).toHaveBeenCalledWith(mockRules[0])
@@ -310,12 +296,11 @@ describe('RuleTable', () => {
       render(<RuleTable rules={mockRules} selectable />)
 
       const checkboxes = screen.getAllByRole('checkbox')
-      // One for header, one for each rule
       expect(checkboxes.length).toBe(4)
     })
 
     it('should call onSelectionChange when checkbox clicked', () => {
-      const onSelectionChange = vi.fn()
+      const onSelectionChange = mock(() => {})
       render(
         <RuleTable
           rules={mockRules}
@@ -325,13 +310,13 @@ describe('RuleTable', () => {
       )
 
       const checkboxes = screen.getAllByRole('checkbox')
-      fireEvent.click(checkboxes[1]) // First row checkbox
+      fireEvent.click(checkboxes[1])
 
       expect(onSelectionChange).toHaveBeenCalledWith(['rule-1'])
     })
 
     it('should select all when header checkbox clicked', () => {
-      const onSelectionChange = vi.fn()
+      const onSelectionChange = mock(() => {})
       render(
         <RuleTable
           rules={mockRules}
@@ -341,7 +326,7 @@ describe('RuleTable', () => {
       )
 
       const checkboxes = screen.getAllByRole('checkbox')
-      fireEvent.click(checkboxes[0]) // Header checkbox
+      fireEvent.click(checkboxes[0])
 
       expect(onSelectionChange).toHaveBeenCalledWith(['rule-1', 'rule-2', 'rule-3'])
     })
@@ -367,10 +352,9 @@ describe('RuleTable', () => {
       render(<RuleTable rules={mockRules} />)
 
       expect(screen.getByRole('table')).toBeInTheDocument()
-      // Table has two rowgroups: thead and tbody
       const rowgroups = screen.getAllByRole('rowgroup')
       expect(rowgroups.length).toBe(2)
-      expect(screen.getAllByRole('row').length).toBe(4) // 1 header + 3 data rows
+      expect(screen.getAllByRole('row').length).toBe(4)
     })
 
     it('should have accessible column headers', () => {
@@ -393,23 +377,17 @@ describe('RuleTable', () => {
     })
   })
 
-  /**
-   * Issue #579: Action button tooltips
-   * Tooltips should appear on hover for all action buttons
-   */
   describe('Action Button Tooltips', () => {
     it('should have tooltip on toggle button', () => {
-      render(<RuleTable rules={mockRules} onToggle={vi.fn()} />)
+      render(<RuleTable rules={mockRules} onToggle={mock(() => {})} />)
 
       const toggles = screen.getAllByRole('switch')
-      // First rule is enabled, so tooltip should say "Disable rule"
       expect(toggles[0]).toHaveAttribute('title', 'Disable rule')
-      // Second rule is disabled, so tooltip should say "Enable rule"
       expect(toggles[1]).toHaveAttribute('title', 'Enable rule')
     })
 
     it('should have tooltip on backtest button', () => {
-      render(<RuleTable rules={mockRules} onTest={vi.fn()} />)
+      render(<RuleTable rules={mockRules} onTest={mock(() => {})} />)
 
       const backtestButtons = screen.getAllByRole('button', { name: /backtest rule/i })
       backtestButtons.forEach((btn) => {
@@ -418,7 +396,7 @@ describe('RuleTable', () => {
     })
 
     it('should have tooltip on edit button', () => {
-      render(<RuleTable rules={mockRules} onEdit={vi.fn()} />)
+      render(<RuleTable rules={mockRules} onEdit={mock(() => {})} />)
 
       const editButtons = screen.getAllByRole('button', { name: /edit rule/i })
       editButtons.forEach((btn) => {
@@ -427,7 +405,7 @@ describe('RuleTable', () => {
     })
 
     it('should have tooltip on delete button', () => {
-      render(<RuleTable rules={mockRules} onDelete={vi.fn()} />)
+      render(<RuleTable rules={mockRules} onDelete={mock(() => {})} />)
 
       const deleteButtons = screen.getAllByRole('button', { name: /delete rule/i })
       deleteButtons.forEach((btn) => {
