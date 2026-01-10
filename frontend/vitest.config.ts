@@ -151,6 +151,11 @@ export default mergeConfig(
         // Batch 28 - More dashboard widget tests (2026-01-09)
         'src/features/dashboard/widgets/NetWorthWidget.test.tsx',
         'src/features/dashboard/widgets/AccountCardsWidget.test.tsx',
+        // Batch 29 - Hook and context tests (2026-01-09)
+        'src/shared/hooks/useCopyToClipboard.test.tsx',
+        'src/features/dashboard/context/DashboardContext.test.tsx',
+        'src/features/budgets/hooks/useMilestoneTracking.test.tsx',
+        'src/features/budgets/hooks/usePreviewCategories.test.tsx',
       ],
       coverage: {
         provider: 'v8',
