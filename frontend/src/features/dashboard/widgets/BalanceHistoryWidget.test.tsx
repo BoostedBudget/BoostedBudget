@@ -1,53 +1,57 @@
-/**
- * Balance History Widget Tests
- *
- * Tests the BalanceHistoryWidget component including loading,
- * error, empty states, and breakdown toggle.
- *
- * Issue #418: Fresh implementation from scratch
- */
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { render, screen, fireEvent } from '@testing-library/react'
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+const mockUseDashboardContext = mock(() => ({
+  filters: {
+    startDate: '2024-01-01',
+    endDate: '2024-01-31',
+    accountTypes: undefined,
+  },
+  setFilters: mock(() => {}),
+  timeframe: 'month',
+  setTimeframe: mock(() => {}),
+  isEditing: false,
+  setIsEditing: mock(() => {}),
+}))
 
-// Mock dependencies before importing the component
-vi.mock('../context/DashboardContext', () => ({
-  useDashboardContext: vi.fn(),
-}));
+const mockUseDashboardData = mock(() => ({
+  summary: null,
+  history: null,
+  accountTypes: null,
+  loading: false,
+  error: null,
+  refetch: mock(() => {}),
+}))
 
-vi.mock('../hooks/useDashboardData', () => ({
-  useDashboardData: vi.fn(),
-}));
+mock.module('../context/DashboardContext', () => ({
+  useDashboardContext: mockUseDashboardContext,
+}))
 
-vi.mock('../components/BalanceHistoryChart', () => ({
+mock.module('../hooks/useDashboardData', () => ({
+  useDashboardData: mockUseDashboardData,
+}))
+
+mock.module('../components/BalanceHistoryChart', () => ({
   BalanceHistoryChart: ({
     showTypeBreakdown,
   }: {
-    history: unknown;
-    showTypeBreakdown: boolean;
+    history: unknown
+    showTypeBreakdown: boolean
   }) => (
     <div data-testid="balance-history-chart">
       History Chart - Breakdown: {showTypeBreakdown ? 'Yes' : 'No'}
     </div>
   ),
-}));
+}))
 
-vi.mock('./registry', () => ({
-  registerWidget: vi.fn(),
-}));
+mock.module('./registry', () => ({
+  registerWidget: mock(() => {}),
+}))
 
-import { BalanceHistoryWidget } from './BalanceHistoryWidget';
-import { useDashboardContext } from '../context/DashboardContext';
-import { useDashboardData } from '../hooks/useDashboardData';
-import type { BalanceHistory } from '../types';
+import { BalanceHistoryWidget } from './BalanceHistoryWidget'
+import type { BalanceHistory } from '../types'
 
 describe('BalanceHistoryWidget', () => {
-  const mockFilters = {
-    startDate: '2024-01-01',
-    endDate: '2024-01-31',
-    accountTypes: undefined,
-  };
-
   const mockHistory: BalanceHistory = {
     start_date: '2024-01-01',
     end_date: '2024-01-31',
@@ -57,171 +61,89 @@ describe('BalanceHistoryWidget', () => {
       { date: '2024-01-15', balance: 10500 },
       { date: '2024-01-31', balance: 11000 },
     ],
-  };
+  }
+
+  const mockDashboardData = (overrides = {}) => ({
+    summary: null,
+    history: null,
+    accountTypes: null,
+    loading: false,
+    error: null,
+    refetch: mock(() => {}),
+    ...overrides,
+  })
 
   beforeEach(() => {
-    vi.clearAllMocks();
-
-    vi.mocked(useDashboardContext).mockReturnValue({
-      filters: mockFilters,
-      setFilters: vi.fn(),
-      timeframe: 'month',
-      setTimeframe: vi.fn(),
-      isEditing: false,
-      setIsEditing: vi.fn(),
-    });
-  });
+    mockUseDashboardContext.mockClear()
+    mockUseDashboardData.mockClear()
+  })
 
   describe('Loading State', () => {
     it('should show loading spinner when loading', () => {
-      vi.mocked(useDashboardData).mockReturnValue({
-        summary: null,
-        history: null,
-        accountTypes: null,
-        loading: true,
-        error: null,
-        refetch: vi.fn(),
-      });
-
-      render(<BalanceHistoryWidget widgetId="test-1" onRemove={vi.fn()} />);
-
-      const spinner = document.querySelector('.animate-spin');
-      expect(spinner).toBeInTheDocument();
-    });
-  });
+      mockUseDashboardData.mockReturnValue(mockDashboardData({ loading: true }))
+      render(<BalanceHistoryWidget widgetId="test-1" onRemove={mock(() => {})} />)
+      expect(document.querySelector('.animate-spin')).toBeInTheDocument()
+    })
+  })
 
   describe('Error State', () => {
     it('should show error message when error occurs', () => {
-      vi.mocked(useDashboardData).mockReturnValue({
-        summary: null,
-        history: null,
-        accountTypes: null,
-        loading: false,
-        error: new Error('Failed to load history'),
-        refetch: vi.fn(),
-      });
-
-      render(<BalanceHistoryWidget widgetId="test-1" onRemove={vi.fn()} />);
-
-      expect(screen.getByText('Failed to load history')).toBeInTheDocument();
-    });
-  });
+      mockUseDashboardData.mockReturnValue(
+        mockDashboardData({ error: new Error('Failed to load history') })
+      )
+      render(<BalanceHistoryWidget widgetId="test-1" onRemove={mock(() => {})} />)
+      expect(screen.getByText('Failed to load history')).toBeInTheDocument()
+    })
+  })
 
   describe('Empty State', () => {
     it('should show no data message when history is null', () => {
-      vi.mocked(useDashboardData).mockReturnValue({
-        summary: null,
-        history: null,
-        accountTypes: null,
-        loading: false,
-        error: null,
-        refetch: vi.fn(),
-      });
-
-      render(<BalanceHistoryWidget widgetId="test-1" onRemove={vi.fn()} />);
-
-      expect(
-        screen.getByText('No history data available')
-      ).toBeInTheDocument();
-    });
-  });
+      mockUseDashboardData.mockReturnValue(mockDashboardData())
+      render(<BalanceHistoryWidget widgetId="test-1" onRemove={mock(() => {})} />)
+      expect(screen.getByText('No history data available')).toBeInTheDocument()
+    })
+  })
 
   describe('Success State', () => {
     it('should render BalanceHistoryChart with data', () => {
-      vi.mocked(useDashboardData).mockReturnValue({
-        summary: null,
-        history: mockHistory,
-        accountTypes: null,
-        loading: false,
-        error: null,
-        refetch: vi.fn(),
-      });
-
-      render(<BalanceHistoryWidget widgetId="test-1" onRemove={vi.fn()} />);
-
-      expect(screen.getByTestId('balance-history-chart')).toBeInTheDocument();
-    });
+      mockUseDashboardData.mockReturnValue(mockDashboardData({ history: mockHistory }))
+      render(<BalanceHistoryWidget widgetId="test-1" onRemove={mock(() => {})} />)
+      expect(screen.getByTestId('balance-history-chart')).toBeInTheDocument()
+    })
 
     it('should use h-full for proper height propagation', () => {
-      vi.mocked(useDashboardData).mockReturnValue({
-        summary: null,
-        history: mockHistory,
-        accountTypes: null,
-        loading: false,
-        error: null,
-        refetch: vi.fn(),
-      });
-
+      mockUseDashboardData.mockReturnValue(mockDashboardData({ history: mockHistory }))
       const { container } = render(
-        <BalanceHistoryWidget widgetId="test-1" onRemove={vi.fn()} />
-      );
-
-      const outerDiv = container.firstChild as HTMLElement;
-      expect(outerDiv).toHaveClass('h-full');
-    });
-  });
+        <BalanceHistoryWidget widgetId="test-1" onRemove={mock(() => {})} />
+      )
+      expect((container.firstChild as HTMLElement)).toHaveClass('h-full')
+    })
+  })
 
   describe('Breakdown Toggle', () => {
+    beforeEach(() => {
+      mockUseDashboardData.mockReturnValue(mockDashboardData({ history: mockHistory }))
+    })
+
     it('should show "Breakdown" button initially', () => {
-      vi.mocked(useDashboardData).mockReturnValue({
-        summary: null,
-        history: mockHistory,
-        accountTypes: null,
-        loading: false,
-        error: null,
-        refetch: vi.fn(),
-      });
-
-      render(<BalanceHistoryWidget widgetId="test-1" onRemove={vi.fn()} />);
-
-      expect(screen.getByText('Breakdown')).toBeInTheDocument();
-    });
+      render(<BalanceHistoryWidget widgetId="test-1" onRemove={mock(() => {})} />)
+      expect(screen.getByText('Breakdown')).toBeInTheDocument()
+    })
 
     it('should toggle breakdown when button clicked', () => {
-      vi.mocked(useDashboardData).mockReturnValue({
-        summary: null,
-        history: mockHistory,
-        accountTypes: null,
-        loading: false,
-        error: null,
-        refetch: vi.fn(),
-      });
-
-      render(<BalanceHistoryWidget widgetId="test-1" onRemove={vi.fn()} />);
-
-      // Check initial state - breakdown is off
-      expect(screen.getByTestId('balance-history-chart')).toHaveTextContent(
-        'Breakdown: No'
-      );
-
-      fireEvent.click(screen.getByText('Breakdown'));
-
-      // After toggle - breakdown is on
-      expect(screen.getByText('Total')).toBeInTheDocument();
-      expect(screen.getByTestId('balance-history-chart')).toHaveTextContent(
-        'Breakdown: Yes'
-      );
-    });
+      render(<BalanceHistoryWidget widgetId="test-1" onRemove={mock(() => {})} />)
+      expect(screen.getByTestId('balance-history-chart')).toHaveTextContent('Breakdown: No')
+      fireEvent.click(screen.getByText('Breakdown'))
+      expect(screen.getByText('Total')).toBeInTheDocument()
+      expect(screen.getByTestId('balance-history-chart')).toHaveTextContent('Breakdown: Yes')
+    })
 
     it('should toggle back to total view', () => {
-      vi.mocked(useDashboardData).mockReturnValue({
-        summary: null,
-        history: mockHistory,
-        accountTypes: null,
-        loading: false,
-        error: null,
-        refetch: vi.fn(),
-      });
-
-      render(<BalanceHistoryWidget widgetId="test-1" onRemove={vi.fn()} />);
-
-      // Click to show breakdown
-      fireEvent.click(screen.getByText('Breakdown'));
-      expect(screen.getByText('Total')).toBeInTheDocument();
-
-      // Click to go back to total
-      fireEvent.click(screen.getByText('Total'));
-      expect(screen.getByText('Breakdown')).toBeInTheDocument();
-    });
-  });
-});
+      render(<BalanceHistoryWidget widgetId="test-1" onRemove={mock(() => {})} />)
+      fireEvent.click(screen.getByText('Breakdown'))
+      expect(screen.getByText('Total')).toBeInTheDocument()
+      fireEvent.click(screen.getByText('Total'))
+      expect(screen.getByText('Breakdown')).toBeInTheDocument()
+    })
+  })
+})
