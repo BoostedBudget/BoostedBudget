@@ -156,6 +156,11 @@ export default mergeConfig(
         'src/features/dashboard/context/DashboardContext.test.tsx',
         'src/features/budgets/hooks/useMilestoneTracking.test.tsx',
         'src/features/budgets/hooks/usePreviewCategories.test.tsx',
+        // Batch 30 - Dashboard and auto-categorization tests (2026-01-09)
+        'src/features/dashboard/widgets/BalanceHistoryWidget.test.tsx',
+        'src/features/dashboard/hooks/useDefaultDashboardLayout.test.tsx',
+        'src/features/auto-categorization/components/AutoCategorizationPage.test.tsx',
+        'src/features/auto-categorization/components/AutoCategorizationPageWrapper.test.tsx',
       ],
       coverage: {
         provider: 'v8',
