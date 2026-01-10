@@ -140,6 +140,10 @@ export default mergeConfig(
         // Batch 25 - Table component tests (2026-01-09)
         'src/features/accounts/components/AccountTable.test.tsx',
         'src/features/transactions/components/TransactionTable.test.tsx',
+        // Batch 26 - Transaction filter tests (2026-01-09)
+        'src/features/transactions/components/filters/TransactionCategoryFilter.test.tsx',
+        'src/features/transactions/components/filters/TransactionAmountFilter.test.tsx',
+        'src/features/transactions/components/filters/TransactionAccountFilter.test.tsx',
       ],
       coverage: {
         provider: 'v8',

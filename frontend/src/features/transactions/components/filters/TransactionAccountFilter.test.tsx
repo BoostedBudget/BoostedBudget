@@ -1,9 +1,4 @@
-/**
- * TransactionAccountFilter Component Tests
- * Issue #529: Transaction page filtering
- */
-
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, mock } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TransactionAccountFilter } from './TransactionAccountFilter'
@@ -36,7 +31,6 @@ describe('TransactionAccountFilter', () => {
   const defaultProps = {
     accounts: mockAccounts,
     selectedIds: [] as string[],
-    onChange: vi.fn(),
   }
 
   it('should render dropdown button', () => {
@@ -77,8 +71,7 @@ describe('TransactionAccountFilter', () => {
 
     render(<TransactionAccountFilter {...defaultProps} />)
 
-    const button = screen.getByRole('button', { expanded: false })
-    await user.click(button)
+    await user.click(screen.getByRole('button', { expanded: false }))
 
     expect(screen.getByRole('listbox')).toBeInTheDocument()
   })
@@ -98,7 +91,7 @@ describe('TransactionAccountFilter', () => {
 
   it('should toggle account selection', async () => {
     const user = userEvent.setup()
-    const onChange = vi.fn()
+    const onChange = mock(() => {})
 
     render(<TransactionAccountFilter {...defaultProps} onChange={onChange} />)
 
@@ -110,7 +103,7 @@ describe('TransactionAccountFilter', () => {
 
   it('should deselect already selected account', async () => {
     const user = userEvent.setup()
-    const onChange = vi.fn()
+    const onChange = mock(() => {})
 
     render(
       <TransactionAccountFilter
@@ -128,7 +121,7 @@ describe('TransactionAccountFilter', () => {
 
   it('should select all accounts', async () => {
     const user = userEvent.setup()
-    const onChange = vi.fn()
+    const onChange = mock(() => {})
 
     render(<TransactionAccountFilter {...defaultProps} onChange={onChange} />)
 
@@ -140,7 +133,7 @@ describe('TransactionAccountFilter', () => {
 
   it('should clear all selections', async () => {
     const user = userEvent.setup()
-    const onChange = vi.fn()
+    const onChange = mock(() => {})
 
     render(
       <TransactionAccountFilter

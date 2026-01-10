@@ -1,9 +1,4 @@
-/**
- * TransactionCategoryFilter Component Tests
- * Issue #529: Transaction page filtering
- */
-
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, mock } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TransactionCategoryFilter } from './TransactionCategoryFilter'
@@ -14,7 +9,6 @@ describe('TransactionCategoryFilter', () => {
   const defaultProps = {
     categories: mockCategories,
     selectedCategories: [] as string[],
-    onChange: vi.fn(),
   }
 
   it('should render dropdown button', () => {
@@ -55,10 +49,8 @@ describe('TransactionCategoryFilter', () => {
 
     render(<TransactionCategoryFilter {...defaultProps} />)
 
-    const button = screen.getByRole('button', { expanded: false })
-    await user.click(button)
+    await user.click(screen.getByRole('button', { expanded: false }))
 
-    // Check dropdown opened - listbox should be visible
     expect(screen.getByRole('listbox')).toBeInTheDocument()
   })
 
@@ -80,7 +72,6 @@ describe('TransactionCategoryFilter', () => {
     await user.click(screen.getByRole('button', { expanded: false }))
     await user.type(screen.getByPlaceholderText('Search categories...'), 'foo')
 
-    // Only Food should be visible
     expect(screen.getByText('Food')).toBeInTheDocument()
     expect(screen.queryByText('Shopping')).not.toBeInTheDocument()
     expect(screen.queryByText('Travel')).not.toBeInTheDocument()
@@ -88,7 +79,7 @@ describe('TransactionCategoryFilter', () => {
 
   it('should toggle category selection', async () => {
     const user = userEvent.setup()
-    const onChange = vi.fn()
+    const onChange = mock(() => {})
 
     render(<TransactionCategoryFilter {...defaultProps} onChange={onChange} />)
 
@@ -100,7 +91,7 @@ describe('TransactionCategoryFilter', () => {
 
   it('should deselect already selected category', async () => {
     const user = userEvent.setup()
-    const onChange = vi.fn()
+    const onChange = mock(() => {})
 
     render(
       <TransactionCategoryFilter
@@ -118,7 +109,7 @@ describe('TransactionCategoryFilter', () => {
 
   it('should select all categories', async () => {
     const user = userEvent.setup()
-    const onChange = vi.fn()
+    const onChange = mock(() => {})
 
     render(<TransactionCategoryFilter {...defaultProps} onChange={onChange} />)
 
@@ -130,7 +121,7 @@ describe('TransactionCategoryFilter', () => {
 
   it('should clear all selections', async () => {
     const user = userEvent.setup()
-    const onChange = vi.fn()
+    const onChange = mock(() => {})
 
     render(
       <TransactionCategoryFilter
