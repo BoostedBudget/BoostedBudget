@@ -5,6 +5,8 @@
  * including filter state, timeframe management, and editing mode.
  *
  * Issue #354: Customizable Dashboard Widget System
+ * Note: Stays on vitest - tests REAL implementation that conflicts with
+ * centralized dashboard-context.ts mock in bun:test preload
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
