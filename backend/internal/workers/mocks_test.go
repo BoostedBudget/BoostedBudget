@@ -97,6 +97,33 @@ func (m *MockLinkedItemRepository) GetByUserAndInstitution(ctx context.Context, 
 	return args.Get(0).(*domain.LinkedItem), args.Error(1)
 }
 
+// Issue #668: Plaid Item Management for Cost Optimization - Cleanup tracking methods
+func (m *MockLinkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays, staleDays int) ([]domain.LinkedItem, error) {
+	args := m.Called(ctx, errorDays, staleDays)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.LinkedItem), args.Error(1)
+}
+
+func (m *MockLinkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]domain.LinkedItem, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.LinkedItem), args.Error(1)
+}
+
+func (m *MockLinkedItemRepository) MarkForCleanup(ctx context.Context, itemID string, cleanupAt time.Time) error {
+	args := m.Called(ctx, itemID, cleanupAt)
+	return args.Error(0)
+}
+
+func (m *MockLinkedItemRepository) ClearCleanupSchedule(ctx context.Context, itemID string) error {
+	args := m.Called(ctx, itemID)
+	return args.Error(0)
+}
+
 // MockTransactionRepository is a mock for TransactionRepository
 type MockTransactionRepository struct {
 	mock.Mock

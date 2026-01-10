@@ -165,6 +165,33 @@ func (m *MockLinkedItemRepository) GetByUserAndInstitution(ctx context.Context, 
 	return args.Get(0).(*domain.LinkedItem), args.Error(1)
 }
 
+// Issue #668: Plaid Item Management for Cost Optimization - Cleanup tracking methods
+func (m *MockLinkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays, staleDays int) ([]domain.LinkedItem, error) {
+	args := m.Called(ctx, errorDays, staleDays)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.LinkedItem), args.Error(1)
+}
+
+func (m *MockLinkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]domain.LinkedItem, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.LinkedItem), args.Error(1)
+}
+
+func (m *MockLinkedItemRepository) MarkForCleanup(ctx context.Context, itemID string, cleanupAt time.Time) error {
+	args := m.Called(ctx, itemID, cleanupAt)
+	return args.Error(0)
+}
+
+func (m *MockLinkedItemRepository) ClearCleanupSchedule(ctx context.Context, itemID string) error {
+	args := m.Called(ctx, itemID)
+	return args.Error(0)
+}
+
 type MockAccountRepository struct {
 	mock.Mock
 }
@@ -264,6 +291,12 @@ func (m *MockAccountRepository) GetByUserAccountID(ctx context.Context, userAcco
 func (m *MockAccountRepository) UpdateStatus(ctx context.Context, accountID, userID string, status domain.AccountStatus, replacedByID *string) error {
 	args := m.Called(ctx, accountID, userID, status, replacedByID)
 	return args.Error(0)
+}
+
+// Issue #668: Plaid Item Management for Cost Optimization - Zero-account detection
+func (m *MockAccountRepository) CountActiveByLinkedItemID(ctx context.Context, linkedItemID string) (int, error) {
+	args := m.Called(ctx, linkedItemID)
+	return args.Int(0), args.Error(1)
 }
 
 type MockUserRepository struct {
@@ -714,17 +747,30 @@ func TestAccountService_GetAccounts_WithInternalUUID(t *testing.T) {
 }
 
 // TestDeleteAccount_Success tests successful account deletion
+// Updated for Issue #668: Now includes GetByIDAndUser call for zero-account detection
 func TestDeleteAccount_Success(t *testing.T) {
 	// Setup mocks
 	mockAccountRepo := &MockAccountRepository{}
 
 	service := &accountService{
 		accountRepo: mockAccountRepo,
+		jobQueue:    nil, // No job queue - skips zero-account cleanup check
 	}
 
 	ctx := context.Background()
 	accountID := uuid.New().String()
 	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	// Account to be deleted
+	account := &domain.Account{
+		ID:           accountID,
+		LinkedItemID: linkedItemID,
+		UserID:       userID,
+	}
+
+	// Mock getting the account before deletion
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
 
 	// Mock successful deletion
 	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
@@ -737,7 +783,8 @@ func TestDeleteAccount_Success(t *testing.T) {
 	mockAccountRepo.AssertExpectations(t)
 }
 
-// TestDeleteAccount_RepositoryError tests account deletion when repository returns error
+// TestDeleteAccount_RepositoryError tests account deletion when GetByIDAndUser returns error
+// Updated for Issue #668: Error now comes from GetByIDAndUser (called first)
 func TestDeleteAccount_RepositoryError(t *testing.T) {
 	// Setup mocks
 	mockAccountRepo := &MockAccountRepository{}
@@ -750,8 +797,8 @@ func TestDeleteAccount_RepositoryError(t *testing.T) {
 	accountID := uuid.New().String()
 	userID := uuid.New().String()
 
-	// Mock repository error
-	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(assert.AnError)
+	// Mock GetByIDAndUser error (account not found)
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(nil, assert.AnError)
 
 	// Execute
 	err := service.DeleteAccount(ctx, accountID, userID)
@@ -759,6 +806,273 @@ func TestDeleteAccount_RepositoryError(t *testing.T) {
 	// Assert
 	require.Error(t, err, "DeleteAccount should return repository error")
 	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestDeleteAccount_DeleteError tests when Delete() fails after GetByIDAndUser succeeds
+func TestDeleteAccount_DeleteError(t *testing.T) {
+	// Setup mocks
+	mockAccountRepo := &MockAccountRepository{}
+
+	service := &accountService{
+		accountRepo: mockAccountRepo,
+	}
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	// Account to be deleted
+	account := &domain.Account{
+		ID:           accountID,
+		LinkedItemID: linkedItemID,
+		UserID:       userID,
+	}
+
+	// Mock getting the account before deletion
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
+
+	// Mock Delete error
+	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(assert.AnError)
+
+	// Execute
+	err := service.DeleteAccount(ctx, accountID, userID)
+
+	// Assert
+	require.Error(t, err, "DeleteAccount should return delete error")
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// ===========================================================================
+// Zero-Account Cleanup Tests (Issue #668: Plaid Item Management for Cost Optimization)
+// ===========================================================================
+
+// TestDeleteAccount_EnqueuesCleanupWhenZeroRemaining tests that when the last account
+// is deleted, a cleanup job is enqueued for the linked item.
+// Issue #668: Zero-account item detection and cleanup
+func TestDeleteAccount_EnqueuesCleanupWhenZeroRemaining(t *testing.T) {
+	// Setup mocks
+	mockAccountRepo := &MockAccountRepository{}
+	mockJobQueue := &MockJobQueue{}
+
+	service := &accountService{
+		accountRepo: mockAccountRepo,
+		jobQueue:    mockJobQueue,
+		logger:      slog.Default(),
+	}
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	// Account to be deleted
+	account := &domain.Account{
+		ID:           accountID,
+		LinkedItemID: linkedItemID,
+		UserID:       userID,
+	}
+
+	// Mock getting the account before deletion
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
+
+	// Mock successful deletion
+	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+
+	// Mock count returning 0 (no remaining accounts)
+	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, nil)
+
+	// Mock enqueue - expect cleanup job with "item_cleanup" kind
+	// Note: We can't import jobs package here (import cycle), so we verify the job Kind() method
+	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		return job.Kind() == "item_cleanup"
+	}), mock.Anything).Return(&queue.JobResult{ID: 1}, nil)
+
+	// Execute
+	err := service.DeleteAccount(ctx, accountID, userID)
+
+	// Assert
+	require.NoError(t, err, "DeleteAccount should succeed")
+	mockAccountRepo.AssertExpectations(t)
+	mockJobQueue.AssertExpectations(t)
+}
+
+// TestDeleteAccount_DoesNotCleanupWhenAccountsRemain tests that no cleanup is triggered
+// when other accounts still remain on the linked item.
+// Issue #668: Zero-account item detection and cleanup
+func TestDeleteAccount_DoesNotCleanupWhenAccountsRemain(t *testing.T) {
+	// Setup mocks
+	mockAccountRepo := &MockAccountRepository{}
+	mockJobQueue := &MockJobQueue{}
+
+	service := &accountService{
+		accountRepo: mockAccountRepo,
+		jobQueue:    mockJobQueue,
+		logger:      slog.Default(),
+	}
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	// Account to be deleted
+	account := &domain.Account{
+		ID:           accountID,
+		LinkedItemID: linkedItemID,
+		UserID:       userID,
+	}
+
+	// Mock getting the account before deletion
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
+
+	// Mock successful deletion
+	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+
+	// Mock count returning 2 (other accounts remain)
+	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(2, nil)
+
+	// Execute
+	err := service.DeleteAccount(ctx, accountID, userID)
+
+	// Assert
+	require.NoError(t, err, "DeleteAccount should succeed")
+	mockAccountRepo.AssertExpectations(t)
+	// Verify Enqueue was NOT called
+	mockJobQueue.AssertNotCalled(t, "Enqueue", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestDeleteAccount_ContinuesOnCountError tests graceful degradation when
+// counting remaining accounts fails. The deletion should still succeed.
+// Issue #668: Zero-account item detection and cleanup
+func TestDeleteAccount_ContinuesOnCountError(t *testing.T) {
+	// Setup mocks
+	mockAccountRepo := &MockAccountRepository{}
+	mockJobQueue := &MockJobQueue{}
+
+	service := &accountService{
+		accountRepo: mockAccountRepo,
+		jobQueue:    mockJobQueue,
+		logger:      slog.Default(),
+	}
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	// Account to be deleted
+	account := &domain.Account{
+		ID:           accountID,
+		LinkedItemID: linkedItemID,
+		UserID:       userID,
+	}
+
+	// Mock getting the account before deletion
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
+
+	// Mock successful deletion
+	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+
+	// Mock count error
+	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, errors.New("database error"))
+
+	// Execute
+	err := service.DeleteAccount(ctx, accountID, userID)
+
+	// Assert - deletion should still succeed despite count error
+	require.NoError(t, err, "DeleteAccount should succeed even if count fails")
+	mockAccountRepo.AssertExpectations(t)
+	// Verify Enqueue was NOT called due to error
+	mockJobQueue.AssertNotCalled(t, "Enqueue", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestDeleteAccount_SkipsZeroAccountCheckWhenNoJobQueue tests that zero-account
+// cleanup is skipped when jobQueue is nil (optional dependency).
+// Issue #668: Zero-account item detection and cleanup
+func TestDeleteAccount_SkipsZeroAccountCheckWhenNoJobQueue(t *testing.T) {
+	// Setup mocks
+	mockAccountRepo := &MockAccountRepository{}
+
+	service := &accountService{
+		accountRepo: mockAccountRepo,
+		jobQueue:    nil, // No job queue
+		logger:      slog.Default(),
+	}
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	// Account to be deleted
+	account := &domain.Account{
+		ID:           accountID,
+		LinkedItemID: linkedItemID,
+		UserID:       userID,
+	}
+
+	// Mock getting the account before deletion
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
+
+	// Mock successful deletion
+	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+
+	// Execute - should not call CountActiveByLinkedItemID when no jobQueue
+	err := service.DeleteAccount(ctx, accountID, userID)
+
+	// Assert
+	require.NoError(t, err, "DeleteAccount should succeed")
+	mockAccountRepo.AssertExpectations(t)
+	// CountActiveByLinkedItemID should NOT be called when jobQueue is nil
+	mockAccountRepo.AssertNotCalled(t, "CountActiveByLinkedItemID", mock.Anything, mock.Anything)
+}
+
+// TestDeleteAccount_EnqueueErrorDoesNotFailDeletion tests that an enqueue error
+// does not fail the overall deletion operation.
+// Issue #668: Zero-account item detection and cleanup
+func TestDeleteAccount_EnqueueErrorDoesNotFailDeletion(t *testing.T) {
+	// Setup mocks
+	mockAccountRepo := &MockAccountRepository{}
+	mockJobQueue := &MockJobQueue{}
+
+	service := &accountService{
+		accountRepo: mockAccountRepo,
+		jobQueue:    mockJobQueue,
+		logger:      slog.Default(),
+	}
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	// Account to be deleted
+	account := &domain.Account{
+		ID:           accountID,
+		LinkedItemID: linkedItemID,
+		UserID:       userID,
+	}
+
+	// Mock getting the account before deletion
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
+
+	// Mock successful deletion
+	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+
+	// Mock count returning 0 (no remaining accounts)
+	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, nil)
+
+	// Mock enqueue failure
+	mockJobQueue.On("Enqueue", ctx, mock.Anything, mock.Anything).Return(nil, errors.New("queue error"))
+
+	// Execute
+	err := service.DeleteAccount(ctx, accountID, userID)
+
+	// Assert - deletion should still succeed despite enqueue error
+	require.NoError(t, err, "DeleteAccount should succeed even if enqueue fails")
+	mockAccountRepo.AssertExpectations(t)
+	mockJobQueue.AssertExpectations(t)
 }
 
 // TestDisconnectInstitution_Success tests successful institution disconnection
