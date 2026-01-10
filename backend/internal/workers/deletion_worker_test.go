@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -30,6 +31,11 @@ func (m *MockDeletionServiceForWorker) CancelDeletion(ctx context.Context, token
 func (m *MockDeletionServiceForWorker) ExecuteDeletion(ctx context.Context, userID string) error {
 	args := m.Called(ctx, userID)
 	return args.Error(0)
+}
+
+// Issue #668: Plaid Item Management for Cost Optimization
+func (m *MockDeletionServiceForWorker) SetPlaidCleanupService(svc services.PlaidItemCleanupService) {
+	m.Called(svc)
 }
 
 // MockProfileRepoForWorker for testing

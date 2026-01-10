@@ -110,6 +110,12 @@ func main() {
 	var accountDeletionWorker *jobs.AccountDeletionWorker
 	var scheduledDeletionCheckWorker *jobs.ScheduledDeletionCheckWorker
 
+	// Issue #668: Declare cleanup workers for Plaid item lifecycle management
+	var itemCleanupCheckWorker *jobs.ItemCleanupCheckWorker
+	var itemCleanupWorker *jobs.ItemCleanupWorker
+	var plaidCleanupService services.PlaidItemCleanupService
+	var deletionService services.DeletionService // Declared here for late binding of plaidCleanupService
+
 	// Issue #37: Declare rule scheduler manager at package scope for graceful shutdown
 	var ruleSchedulerManager *workers.RuleSchedulerManager
 
@@ -229,18 +235,18 @@ func main() {
 			log.Println("✅ Clerk Backend API service initialized")
 
 			// Initialize Deletion service (reuses auditLogger and emailService created earlier)
-			deletionService := services.NewDeletionService(
+			// Issue #668: plaidCleanupSvc is nil here - will be wired later after plaidService is created
+			// Uses assignment (=) not declaration (:=) to assign to outer-scoped deletionService variable
+			deletionService = services.NewDeletionService(
 				profileRepo,
 				emailService,
 				clerkService,
 				auditLogger,
+				nil, // plaidCleanupSvc - wired up later via SetPlaidCleanupService() if Plaid is configured
 				cfg.DeletionGracePeriodDays,
 				cfg.DeletionTokenSecret,
 			)
 			log.Println("✅ Deletion service initialized (30-day grace period)")
-
-			// deletionHandler (Echo) no longer needed - migrated to Huma
-			_ = deletionService // Used by Huma handler below
 
 			// Register Huma deletion routes (Issue #559: Huma migration)
 			humaDeletionHandler := operations.NewDeletionHandler(deletionService)
@@ -306,6 +312,22 @@ func main() {
 				log.Println("✅ Plaid service initialized")
 				log.Println("✅ Account linking service initialized")
 
+				// Issue #668: Create PlaidItemCleanupService for Plaid item lifecycle management
+				// This service handles calling Plaid /item/remove to stop billing
+				plaidCleanupService = services.NewPlaidItemCleanupService(
+					linkedItemRepo,
+					plaidService,
+					encryptionService,
+				)
+				log.Println("✅ Plaid item cleanup service initialized")
+
+				// Issue #668: Wire cleanup service to deletion service (resolves nil dependency from earlier)
+				// DeletionService was created before Plaid was available, now we can inject via setter
+				if deletionService != nil {
+					deletionService.SetPlaidCleanupService(plaidCleanupService)
+					log.Println("✅ Plaid cleanup service wired to deletion service")
+				}
+
 				// Issue #36: Transaction Monitor Service for auto-detecting completed transfers
 				transactionMonitorService := services.NewTransactionMonitorService(transferSuggestionRepo)
 
@@ -352,22 +374,42 @@ func main() {
 				riverConfig.ErrorHandler = deadLetterHandler.ErrorHandlerFunc()
 				log.Println("✅ Dead letter handler configured for failed jobs")
 
-				// Issue #629: Configure periodic job for scheduled deletion check (hourly)
+				// Issue #629: Configure periodic jobs
+				var periodicJobs []*river.PeriodicJob
+
+				// Scheduled deletion check (hourly) - checks for users scheduled for deletion
 				if scheduledDeletionCheckWorker != nil {
-					riverConfig.PeriodicJobs = []*river.PeriodicJob{
-						river.NewPeriodicJob(
-							river.PeriodicInterval(1*time.Hour),
-							func() (river.JobArgs, *river.InsertOpts) {
-								return jobs.ScheduledDeletionCheckArgs{
-									TriggerSource: "periodic",
-								}, &river.InsertOpts{
-									Queue: "low", // Deletions run on low priority queue
-								}
-							},
-							&river.PeriodicJobOpts{RunOnStart: true}, // Run immediately on startup to catch any pending deletions
-						),
-					}
+					periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+						river.PeriodicInterval(1*time.Hour),
+						func() (river.JobArgs, *river.InsertOpts) {
+							return jobs.ScheduledDeletionCheckArgs{
+								TriggerSource: "periodic",
+							}, &river.InsertOpts{
+								Queue: "low", // Deletions run on low priority queue
+							}
+						},
+						&river.PeriodicJobOpts{RunOnStart: true}, // Run immediately on startup to catch any pending deletions
+					))
 					log.Println("✅ Scheduled deletion check periodic job configured (hourly)")
+				}
+
+				// Issue #668: Item cleanup check (daily at 3 AM) - checks for orphaned Plaid items
+				// Detects: items in error state > 30 days, revoked items, stale items > 60 days, zero-account items
+				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+					river.PeriodicInterval(24*time.Hour), // Run once per day
+					func() (river.JobArgs, *river.InsertOpts) {
+						return jobs.ItemCleanupCheckArgs{
+							TriggerSource: "periodic",
+						}, &river.InsertOpts{
+							Queue: "low", // Cleanup runs on low priority queue
+						}
+					},
+					&river.PeriodicJobOpts{RunOnStart: false}, // Don't run on startup - wait for daily schedule
+				))
+				log.Println("✅ Item cleanup check periodic job configured (daily)")
+
+				if len(periodicJobs) > 0 {
+					riverConfig.PeriodicJobs = periodicJobs
 				}
 
 				// Create WebhookProcessingWorker with all dependencies
@@ -389,6 +431,28 @@ func main() {
 				})
 				log.Println("✅ Plaid sync worker created")
 
+				// Issue #668: Create ItemCleanupCheckWorker for periodic orphaned item detection
+				// Checks for items in error state, revoked, stale, or with zero accounts
+				itemCleanupCheckWorker = jobs.NewItemCleanupCheckWorker(jobs.ItemCleanupCheckWorkerDeps{
+					LinkedItemRepo:     linkedItemRepo,
+					AccountRepo:        accountRepo, // For zero-account detection
+					JobQueue:           nil,         // Set after River client created (circular dependency)
+					Logger:             logger,
+					GracePeriodDays:    7,  // Days to wait before cleanup (error/stale/revoked items)
+					ErrorDaysThreshold: 30, // Days in error state before cleanup candidate
+					StaleDaysThreshold: 60, // Days since last sync before cleanup candidate
+				})
+				log.Println("✅ Item cleanup check worker created")
+
+				// Issue #668: Create ItemCleanupWorker for executing individual item cleanup
+				// Calls Plaid /item/remove to stop billing for orphaned items
+				itemCleanupWorker = jobs.NewItemCleanupWorker(jobs.ItemCleanupWorkerDeps{
+					PlaidCleanupSvc: plaidCleanupService,
+					LinkedItemRepo:  linkedItemRepo,
+					Logger:          logger,
+				})
+				log.Println("✅ Item cleanup worker created")
+
 				// Create River workers and register all workers
 				riverWorkers := river.NewWorkers()
 				river.AddWorker(riverWorkers, webhookProcessingWorker)
@@ -405,6 +469,16 @@ func main() {
 				if scheduledDeletionCheckWorker != nil {
 					river.AddWorker(riverWorkers, scheduledDeletionCheckWorker)
 					log.Println("✅ Scheduled deletion check worker registered with River")
+				}
+
+				// Issue #668: Register cleanup workers
+				if itemCleanupCheckWorker != nil {
+					river.AddWorker(riverWorkers, itemCleanupCheckWorker)
+					log.Println("✅ Item cleanup check worker registered with River")
+				}
+				if itemCleanupWorker != nil {
+					river.AddWorker(riverWorkers, itemCleanupWorker)
+					log.Println("✅ Item cleanup worker registered with River")
 				}
 
 				// Create River client
@@ -427,6 +501,12 @@ func main() {
 					}
 					plaidSyncWorker.SetJobQueue(jobQueue)
 					log.Println("✅ Plaid sync worker connected to job queue for follow-up jobs")
+
+					// Issue #668: Wire up job queue to cleanup check worker
+					if itemCleanupCheckWorker != nil {
+						itemCleanupCheckWorker.SetJobQueue(jobQueue)
+						log.Println("✅ Item cleanup check worker connected to job queue")
+					}
 				}
 
 				log.Println("✅ Transaction sync service initialized")

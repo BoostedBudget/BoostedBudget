@@ -54,6 +54,11 @@ type LinkedItem struct {
 	ReplacedAt   *time.Time `json:"replaced_at,omitempty" db:"replaced_at"`     // When this item was replaced
 	ReplacedByID *string    `json:"replaced_by_id,omitempty" db:"replaced_by_id"` // UUID of replacement linked_item
 
+	// Cleanup tracking fields (Issue #668: Plaid Item Management for Cost Optimization)
+	// Used to track items scheduled for automatic cleanup due to error/stale/revoked status
+	CleanupNotifiedAt  *time.Time `json:"cleanup_notified_at,omitempty" db:"cleanup_notified_at"`   // When user was notified
+	CleanupScheduledAt *time.Time `json:"cleanup_scheduled_at,omitempty" db:"cleanup_scheduled_at"` // When cleanup will execute
+
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }

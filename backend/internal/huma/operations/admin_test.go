@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/jackc/pgx/v5"
@@ -125,6 +126,23 @@ func (m *mockLinkedItemRepo) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, id
 // Issue #171 - Plaid Re-Link Handling
 func (m *mockLinkedItemRepo) GetByUserAndInstitution(ctx context.Context, userID, institutionID, status string) (*domain.LinkedItem, error) {
 	return nil, repository.ErrLinkedItemNotFound
+}
+
+// Issue #668: Plaid Item Management for Cost Optimization - Cleanup tracking methods
+func (m *mockLinkedItemRepo) GetItemsForCleanup(ctx context.Context, errorDays, staleDays int) ([]domain.LinkedItem, error) {
+	return nil, nil
+}
+
+func (m *mockLinkedItemRepo) GetItemsPendingCleanup(ctx context.Context) ([]domain.LinkedItem, error) {
+	return nil, nil
+}
+
+func (m *mockLinkedItemRepo) MarkForCleanup(ctx context.Context, itemID string, cleanupAt time.Time) error {
+	return nil
+}
+
+func (m *mockLinkedItemRepo) ClearCleanupSchedule(ctx context.Context, itemID string) error {
+	return nil
 }
 
 // mockEncryptionService is a mock implementation of services.EncryptionService
