@@ -148,6 +148,9 @@ export default mergeConfig(
         'src/features/dashboard/widgets/BudgetOverviewWidget.test.tsx',
         'src/features/dashboard/widgets/BalanceOverviewWidget.test.tsx',
         'src/features/dashboard/widgets/CashFlowSummaryWidget.test.tsx',
+        // Batch 28 - More dashboard widget tests (2026-01-09)
+        'src/features/dashboard/widgets/NetWorthWidget.test.tsx',
+        'src/features/dashboard/widgets/AccountCardsWidget.test.tsx',
       ],
       coverage: {
         provider: 'v8',
