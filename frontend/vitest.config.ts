@@ -168,6 +168,11 @@ export default mergeConfig(
         'src/features/budgets/components/category-management/BudgetCategoryManager.test.tsx',
         // Batch 33 - More rules (2026-01-09)
         'src/features/rules/components/RulesPage.test.tsx',
+        // Batch 34 - Simple vi.mock() files (2026-01-09)
+        'src/features/dashboard/widgets/CashFlowChartWidget.test.tsx',
+        'src/features/dashboard/widgets/DashboardGrid.test.tsx',
+        'src/features/budgets/components/category-management/BudgetCategoryForm.test.tsx',
+        'src/features/budgets/components/CreateSavingsGoalDialog.test.tsx',
       ],
       coverage: {
         provider: 'v8',
