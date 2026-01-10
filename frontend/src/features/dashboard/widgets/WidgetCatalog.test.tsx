@@ -4,20 +4,23 @@
  * Issue #127: Added API mock for widget types validation
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
-import { WidgetCatalog } from './WidgetCatalog'
-import * as registry from './registry'
 import type { WidgetDefinition } from '../types'
 
+// Create mock functions
+const mockGetAllWidgets = mock(() => [] as WidgetDefinition[])
+const mockOnClose = mock(() => {})
+const mockOnAddWidget = mock(() => {})
+
 // Mock the registry
-vi.mock('./registry', () => ({
-  getAllWidgets: vi.fn(),
+mock.module('./registry', () => ({
+  getAllWidgets: mockGetAllWidgets,
 }))
 
 // Mock the API hook - returns all widget types as valid
-vi.mock('@/api/generated/endpoints/dashboard/dashboard', () => ({
-  useGetWidgetTypes: vi.fn(() => ({
+mock.module('@/api/generated/endpoints/dashboard/dashboard', () => ({
+  useGetWidgetTypes: mock(() => ({
     data: {
       widgetTypes: [
         { type: 'balance-overview', name: 'Balance Overview', category: 'overview' },
@@ -33,10 +36,9 @@ vi.mock('@/api/generated/endpoints/dashboard/dashboard', () => ({
   })),
 }))
 
-describe('WidgetCatalog', () => {
-  const mockOnClose = vi.fn()
-  const mockOnAddWidget = vi.fn()
+import { WidgetCatalog } from './WidgetCatalog'
 
+describe('WidgetCatalog', () => {
   const mockWidgets: WidgetDefinition[] = [
     {
       type: 'balance-overview',
@@ -81,8 +83,10 @@ describe('WidgetCatalog', () => {
   ]
 
   beforeEach(() => {
-    vi.clearAllMocks()
-    vi.mocked(registry.getAllWidgets).mockReturnValue(mockWidgets)
+    mockOnClose.mockClear()
+    mockOnAddWidget.mockClear()
+    mockGetAllWidgets.mockClear()
+    mockGetAllWidgets.mockReturnValue(mockWidgets)
   })
 
   describe('Modal Display', () => {
@@ -297,7 +301,7 @@ describe('WidgetCatalog', () => {
 
   describe('Empty State', () => {
     it('should handle empty widget list', () => {
-      vi.mocked(registry.getAllWidgets).mockReturnValue([])
+      mockGetAllWidgets.mockReturnValue([])
 
       render(
         <WidgetCatalog
@@ -338,7 +342,7 @@ describe('WidgetCatalog', () => {
         />
       )
 
-      expect(registry.getAllWidgets).toHaveBeenCalled()
+      expect(mockGetAllWidgets).toHaveBeenCalled()
     })
   })
 })
