@@ -39,6 +39,12 @@ type AccountRepository interface {
 	// CountByUserID counts the total number of accounts for a user
 	CountByUserID(ctx context.Context, userID string) (int, error)
 
+	// CountActiveByLinkedItemID counts active accounts for a linked item.
+	// Only counts accounts with status='active', excludes 'replaced' accounts.
+	// Used for zero-account item detection and cleanup.
+	// Issue #668: Plaid Item Management for Cost Optimization
+	CountActiveByLinkedItemID(ctx context.Context, linkedItemID string) (int, error)
+
 	// Delete removes an account from the database with ownership validation.
 	// The account is only deleted if both the account ID and user ID match (WHERE id = $1 AND user_id = $2).
 	// This prevents users from deleting accounts they don't own.
@@ -260,12 +266,10 @@ func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID 
 		return nil, err
 	}
 
-	// Return empty slice instead of nil if no accounts found
-	if accounts == nil {
-		accounts = []domain.Account{}
+	if accounts != nil {
+		return accounts, nil
 	}
-
-	return accounts, nil
+	return []domain.Account{}, nil
 }
 
 // GetByUserID retrieves all accounts for a specific user
@@ -315,12 +319,10 @@ func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]d
 		return nil, err
 	}
 
-	// Return empty slice instead of nil if no accounts found
-	if accounts == nil {
-		accounts = []domain.Account{}
+	if accounts != nil {
+		return accounts, nil
 	}
-
-	return accounts, nil
+	return []domain.Account{}, nil
 }
 
 // GetAccountsWithInstitution retrieves all accounts for a user with institution names from linked_items
@@ -372,12 +374,10 @@ func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, user
 		return nil, err
 	}
 
-	// Return empty slice instead of nil if no accounts found
-	if accounts == nil {
-		accounts = []domain.Account{}
+	if accounts != nil {
+		return accounts, nil
 	}
-
-	return accounts, nil
+	return []domain.Account{}, nil
 }
 
 // CountByUserID counts the total number of accounts for a user
@@ -390,6 +390,25 @@ func (r *accountRepository) CountByUserID(ctx context.Context, userID string) (i
 
 	var count int
 	err := r.db.QueryRow(ctx, query, userID).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+
+	return count, nil
+}
+
+// CountActiveByLinkedItemID counts active accounts for a linked item.
+// Only counts accounts with status='active', excludes 'replaced' accounts.
+// Issue #668: Plaid Item Management for Cost Optimization
+func (r *accountRepository) CountActiveByLinkedItemID(ctx context.Context, linkedItemID string) (int, error) {
+	query := `
+		SELECT COUNT(*)
+		FROM accounts
+		WHERE linked_item_id = $1 AND status = 'active'
+	`
+
+	var count int
+	err := r.db.QueryRow(ctx, query, linkedItemID).Scan(&count)
 	if err != nil {
 		return 0, err
 	}
@@ -521,6 +540,11 @@ func (r *accountRepository) UpdateDisplayOrders(ctx context.Context, userID stri
 
 // GetAccountsWithInstitutionFiltered retrieves accounts with institution names and hidden filtering.
 func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error) {
+	hiddenClause := ""
+	if !includeHidden {
+		hiddenClause = " AND a.is_hidden = FALSE"
+	}
+
 	query := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
@@ -530,14 +554,8 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 		       a.created_at, a.updated_at, l.institution_name
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
-		WHERE a.user_id = $1
-	`
-
-	if !includeHidden {
-		query += " AND a.is_hidden = FALSE"
-	}
-
-	query += " ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC"
+		WHERE a.user_id = $1` + hiddenClause + `
+		ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC`
 
 	rows, err := r.db.Query(ctx, query, userID)
 	if err != nil {
@@ -566,11 +584,10 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 		return nil, err
 	}
 
-	if accounts == nil {
-		accounts = []domain.Account{}
+	if accounts != nil {
+		return accounts, nil
 	}
-
-	return accounts, nil
+	return []domain.Account{}, nil
 }
 
 // GetByUserAccountAndStatus retrieves accounts by user_account_id and status.
@@ -616,11 +633,10 @@ func (r *accountRepository) GetByUserAccountAndStatus(ctx context.Context, userA
 		return nil, err
 	}
 
-	if accounts == nil {
-		accounts = []domain.Account{}
+	if accounts != nil {
+		return accounts, nil
 	}
-
-	return accounts, nil
+	return []domain.Account{}, nil
 }
 
 // GetByUserAccountID retrieves all accounts for a user_account (any status).
@@ -666,11 +682,10 @@ func (r *accountRepository) GetByUserAccountID(ctx context.Context, userAccountI
 		return nil, err
 	}
 
-	if accounts == nil {
-		accounts = []domain.Account{}
+	if accounts != nil {
+		return accounts, nil
 	}
-
-	return accounts, nil
+	return []domain.Account{}, nil
 }
 
 // UpdateStatus updates an account's status and soft-delete fields with ownership validation.

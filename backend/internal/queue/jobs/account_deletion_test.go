@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/assert"
@@ -34,6 +35,10 @@ func (m *MockDeletionService) CancelDeletion(ctx context.Context, token string) 
 func (m *MockDeletionService) ExecuteDeletion(ctx context.Context, userID string) error {
 	args := m.Called(ctx, userID)
 	return args.Error(0)
+}
+
+func (m *MockDeletionService) SetPlaidCleanupService(svc services.PlaidItemCleanupService) {
+	m.Called(svc)
 }
 
 func newTestAccountDeletionJob(args AccountDeletionArgs) *river.Job[AccountDeletionArgs] {
