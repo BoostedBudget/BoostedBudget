@@ -125,6 +125,10 @@ export default mergeConfig(
         // Batch 20 - Dashboard and tags tests (2026-01-09)
         'src/features/dashboard/components/TimeframeSelector.test.tsx',
         'src/features/tags/components/TagEditor.test.tsx',
+        // Batch 21 - Hook and widget tests (2026-01-09)
+        'src/shared/hooks/useCookieState.test.tsx',
+        'src/features/dashboard/widgets/WidgetCatalog.test.tsx',
+        'src/features/budgets/hooks/useAvailableCategories.test.tsx',
       ],
       coverage: {
         provider: 'v8',

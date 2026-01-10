@@ -2,25 +2,29 @@
  * useAvailableCategories Hook Tests
  * Issue #497: Budget Category Manager + Match Config UI
  * Issue #564: Migrated to generated React Query hooks
- *
- * TDD RED Phase: Write failing tests first
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { renderHook, waitFor, act } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { ReactNode } from 'react';
-import { useAvailableCategories } from './useAvailableCategories';
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { renderHook, waitFor, act } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
+
+// Create mock functions
+const mockRefetch = mock(() => Promise.resolve())
+const mockUseGetAvailableCategories = mock(() => ({
+  data: undefined,
+  isLoading: true,
+  error: null,
+  refetch: mockRefetch,
+}))
 
 // Mock the generated hook
-const mockRefetch = vi.fn();
-vi.mock('@/api/generated/endpoints/budgets/budgets', () => ({
-  useGetAvailableCategories: vi.fn(),
-  getGetAvailableCategoriesQueryKey: vi.fn(() => ['budgets', 'available-categories']),
-}));
+mock.module('@/api/generated/endpoints/budgets/budgets', () => ({
+  useGetAvailableCategories: mockUseGetAvailableCategories,
+  getGetAvailableCategoriesQueryKey: mock(() => ['budgets', 'available-categories']),
+}))
 
-// Import the mock after vi.mock
-import { useGetAvailableCategories } from '@/api/generated/endpoints/budgets/budgets';
+import { useAvailableCategories } from './useAvailableCategories'
 
 // Helper to create wrapper with QueryClient
 function createWrapper() {
@@ -30,10 +34,10 @@ function createWrapper() {
         retry: false,
       },
     },
-  });
+  })
   return function Wrapper({ children }: { children: ReactNode }) {
-    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
-  };
+    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  }
 }
 
 describe('useAvailableCategories', () => {
@@ -44,7 +48,7 @@ describe('useAvailableCategories', () => {
     'Transportation > Gas',
     'Transportation > Public Transit',
     'Shopping > Clothing',
-  ];
+  ]
 
   // Expected transformed result: string[][] format
   const expectedCategories: string[][] = [
@@ -53,42 +57,42 @@ describe('useAvailableCategories', () => {
     ['Transportation', 'Gas'],
     ['Transportation', 'Public Transit'],
     ['Shopping', 'Clothing'],
-  ];
+  ]
 
   beforeEach(() => {
-    vi.clearAllMocks();
-    mockRefetch.mockClear();
-  });
+    mockRefetch.mockClear()
+    mockUseGetAvailableCategories.mockClear()
+  })
 
   // Helper to configure the mock for loading state
   function configureLoading() {
-    vi.mocked(useGetAvailableCategories).mockReturnValue({
+    mockUseGetAvailableCategories.mockReturnValue({
       data: undefined,
       isLoading: true,
       error: null,
       refetch: mockRefetch,
-    } as unknown as ReturnType<typeof useGetAvailableCategories>);
+    })
   }
 
   // Helper to configure the mock for success state
   // Generated hook returns string[] directly, not { categories: string[] }
   function configureSuccess(categories: string[]) {
-    vi.mocked(useGetAvailableCategories).mockReturnValue({
+    mockUseGetAvailableCategories.mockReturnValue({
       data: categories,
       isLoading: false,
       error: null,
       refetch: mockRefetch,
-    } as unknown as ReturnType<typeof useGetAvailableCategories>);
+    })
   }
 
   // Helper to configure the mock for error state
   function configureError(error: Error) {
-    vi.mocked(useGetAvailableCategories).mockReturnValue({
+    mockUseGetAvailableCategories.mockReturnValue({
       data: undefined,
       isLoading: false,
       error,
       refetch: mockRefetch,
-    } as unknown as ReturnType<typeof useGetAvailableCategories>);
+    })
   }
 
   describe('Initial State', () => {
@@ -169,21 +173,21 @@ describe('useAvailableCategories', () => {
     });
 
     it('should wrap non-Error objects in Error', () => {
-      vi.mocked(useGetAvailableCategories).mockReturnValue({
+      mockUseGetAvailableCategories.mockReturnValue({
         data: undefined,
         isLoading: false,
         error: 'String error' as unknown as Error,
         refetch: mockRefetch,
-      } as unknown as ReturnType<typeof useGetAvailableCategories>);
+      })
 
       const { result } = renderHook(() => useAvailableCategories(), {
         wrapper: createWrapper(),
-      });
+      })
 
-      expect(result.current.error).toBeTruthy();
-      expect(result.current.error?.message).toBe('Failed to fetch categories');
-    });
-  });
+      expect(result.current.error).toBeTruthy()
+      expect(result.current.error?.message).toBe('Failed to fetch categories')
+    })
+  })
 
   describe('Refetch', () => {
     it('should provide refetch function', () => {
@@ -243,19 +247,19 @@ describe('useAvailableCategories', () => {
     });
 
     it('should handle undefined data', () => {
-      vi.mocked(useGetAvailableCategories).mockReturnValue({
+      mockUseGetAvailableCategories.mockReturnValue({
         data: undefined,
         isLoading: false,
         error: null,
         refetch: mockRefetch,
-      } as unknown as ReturnType<typeof useGetAvailableCategories>);
+      })
 
       const { result } = renderHook(() => useAvailableCategories(), {
         wrapper: createWrapper(),
-      });
+      })
 
-      expect(result.current.categories).toEqual([]);
-      expect(result.current.error).toBeNull();
-    });
-  });
-});
+      expect(result.current.categories).toEqual([])
+      expect(result.current.error).toBeNull()
+    })
+  })
+})
