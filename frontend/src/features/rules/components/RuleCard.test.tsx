@@ -6,7 +6,7 @@
  * TDD RED: Writing tests before implementation.
  */
 
-import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { RuleCard } from './RuleCard'
 import type { AutomationRule } from '@/api/generated/models'
