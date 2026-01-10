@@ -9,6 +9,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -34,6 +35,11 @@ func (m *mockDeletionService) CancelDeletion(ctx context.Context, token string) 
 
 func (m *mockDeletionService) ExecuteDeletion(ctx context.Context, userID string) error {
 	return nil
+}
+
+// Issue #668: Plaid Item Management for Cost Optimization
+func (m *mockDeletionService) SetPlaidCleanupService(svc services.PlaidItemCleanupService) {
+	// No-op for mock
 }
 
 // TestRequestDeletion_Success tests successful deletion request.

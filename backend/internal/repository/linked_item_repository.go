@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -71,6 +72,23 @@ type LinkedItemRepository interface {
 	//
 	// Returns nil, nil if no matching item found (not an error).
 	GetByUserAndInstitution(ctx context.Context, userID, institutionID, status string) (*domain.LinkedItem, error)
+
+	// Issue #668: Plaid Item Management for Cost Optimization - Cleanup tracking methods
+
+	// GetItemsForCleanup retrieves items that are candidates for cleanup.
+	// Criteria: items in error/login_required state > errorDays, OR revoked status, OR not synced > staleDays.
+	// Only returns items that haven't been notified yet (cleanup_scheduled_at IS NULL).
+	GetItemsForCleanup(ctx context.Context, errorDays, staleDays int) ([]domain.LinkedItem, error)
+
+	// GetItemsPendingCleanup retrieves items where cleanup is scheduled and past due.
+	// Returns items where cleanup_scheduled_at < NOW().
+	GetItemsPendingCleanup(ctx context.Context) ([]domain.LinkedItem, error)
+
+	// MarkForCleanup marks an item for cleanup with notification and scheduled cleanup timestamp.
+	MarkForCleanup(ctx context.Context, itemID string, cleanupAt time.Time) error
+
+	// ClearCleanupSchedule clears the cleanup schedule for an item (e.g., if user reconnected).
+	ClearCleanupSchedule(ctx context.Context, itemID string) error
 }
 
 // linkedItemRepository implements LinkedItemRepository using PostgreSQL
@@ -228,12 +246,10 @@ func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) (
 		return nil, err
 	}
 
-	// Return empty slice instead of nil if no items found
-	if items == nil {
-		items = []domain.LinkedItem{}
+	if items != nil {
+		return items, nil
 	}
-
-	return items, nil
+	return []domain.LinkedItem{}, nil
 }
 
 // GetByItemID retrieves a linked item by its Plaid item ID
@@ -576,4 +592,199 @@ func (r *linkedItemRepository) GetByUserAndInstitution(ctx context.Context, user
 	}
 
 	return &item, nil
+}
+
+// Issue #668: Plaid Item Management for Cost Optimization - Cleanup tracking methods
+
+// GetItemsForCleanup retrieves items that are candidates for cleanup.
+// Criteria:
+//   - Items in error/login_required state > errorDays
+//   - Items with revoked status (immediate cleanup candidate)
+//   - Items not synced > staleDays
+//   - Items with zero active accounts (no connected accounts remaining)
+//
+// Only returns items that haven't been scheduled yet (cleanup_scheduled_at IS NULL).
+// Issue #668: Plaid Item Management for Cost Optimization
+func (r *linkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays, staleDays int) ([]domain.LinkedItem, error) {
+	query := `
+		SELECT li.id, li.user_id, li.item_id, li.access_token_encrypted,
+		       li.institution_id, li.institution_name, li.provider, li.cursor, li.last_synced_at,
+		       li.status, li.error_code, li.error_message, li.last_error_at, li.retry_count, li.next_retry_at,
+		       li.replaced_at, li.replaced_by_id,
+		       li.cleanup_notified_at, li.cleanup_scheduled_at,
+		       li.created_at, li.updated_at
+		FROM linked_items li
+		WHERE li.cleanup_scheduled_at IS NULL
+		  AND li.status NOT IN ('replaced', 'disconnected')
+		  AND (
+		      -- Items in error state for > errorDays
+		      (li.status IN ('error', 'login_required') AND li.last_error_at < NOW() - $1::interval)
+		      -- OR items with revoked status (immediate cleanup candidate)
+		      OR li.status = 'revoked'
+		      -- OR items not synced for > staleDays
+		      OR (li.last_synced_at IS NOT NULL AND li.last_synced_at < NOW() - $2::interval)
+		      -- OR items with zero active accounts (immediate cleanup candidate)
+		      OR NOT EXISTS (
+		          SELECT 1 FROM accounts a
+		          WHERE a.linked_item_id = li.id AND a.status = 'active'
+		      )
+		  )
+		ORDER BY li.last_error_at ASC NULLS LAST, li.last_synced_at ASC NULLS LAST
+	`
+
+	rows, err := r.db.Query(ctx, query,
+		strings.TrimSpace(fmt.Sprintf("%d days", errorDays)),
+		strings.TrimSpace(fmt.Sprintf("%d days", staleDays)),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []domain.LinkedItem
+	for rows.Next() {
+		var item domain.LinkedItem
+		err := rows.Scan(
+			&item.ID,
+			&item.UserID,
+			&item.ItemID,
+			&item.AccessTokenEncrypted,
+			&item.InstitutionID,
+			&item.InstitutionName,
+			&item.Provider,
+			&item.Cursor,
+			&item.LastSyncedAt,
+			&item.Status,
+			&item.ErrorCode,
+			&item.ErrorMessage,
+			&item.LastErrorAt,
+			&item.RetryCount,
+			&item.NextRetryAt,
+			&item.ReplacedAt,
+			&item.ReplacedByID,
+			&item.CleanupNotifiedAt,
+			&item.CleanupScheduledAt,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if items != nil {
+		return items, nil
+	}
+	return []domain.LinkedItem{}, nil
+}
+
+// GetItemsPendingCleanup retrieves items where cleanup is scheduled and past due.
+func (r *linkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]domain.LinkedItem, error) {
+	query := `
+		SELECT id, user_id, item_id, access_token_encrypted,
+		       institution_id, institution_name, provider, cursor, last_synced_at,
+		       status, error_code, error_message, last_error_at, retry_count, next_retry_at,
+		       replaced_at, replaced_by_id,
+		       cleanup_notified_at, cleanup_scheduled_at,
+		       created_at, updated_at
+		FROM linked_items
+		WHERE cleanup_scheduled_at IS NOT NULL
+		  AND cleanup_scheduled_at < NOW()
+		  AND status NOT IN ('replaced', 'disconnected')
+		ORDER BY cleanup_scheduled_at ASC
+	`
+
+	rows, err := r.db.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []domain.LinkedItem
+	for rows.Next() {
+		var item domain.LinkedItem
+		err := rows.Scan(
+			&item.ID,
+			&item.UserID,
+			&item.ItemID,
+			&item.AccessTokenEncrypted,
+			&item.InstitutionID,
+			&item.InstitutionName,
+			&item.Provider,
+			&item.Cursor,
+			&item.LastSyncedAt,
+			&item.Status,
+			&item.ErrorCode,
+			&item.ErrorMessage,
+			&item.LastErrorAt,
+			&item.RetryCount,
+			&item.NextRetryAt,
+			&item.ReplacedAt,
+			&item.ReplacedByID,
+			&item.CleanupNotifiedAt,
+			&item.CleanupScheduledAt,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if items != nil {
+		return items, nil
+	}
+	return []domain.LinkedItem{}, nil
+}
+
+// MarkForCleanup marks an item for cleanup with notification and scheduled cleanup timestamp.
+func (r *linkedItemRepository) MarkForCleanup(ctx context.Context, itemID string, cleanupAt time.Time) error {
+	now := time.Now()
+
+	query := `
+		UPDATE linked_items
+		SET cleanup_notified_at = $1,
+		    cleanup_scheduled_at = $2,
+		    updated_at = $3
+		WHERE id = $4
+		  AND cleanup_scheduled_at IS NULL
+	`
+
+	ct, err := r.db.Exec(ctx, query, now, cleanupAt, now, itemID)
+	if err != nil {
+		return err
+	}
+
+	if ct.RowsAffected() == 0 {
+		// Item not found or already scheduled for cleanup
+		return ErrLinkedItemNotFound
+	}
+
+	return nil
+}
+
+// ClearCleanupSchedule clears the cleanup schedule for an item (e.g., if user reconnected).
+func (r *linkedItemRepository) ClearCleanupSchedule(ctx context.Context, itemID string) error {
+	now := time.Now()
+
+	query := `
+		UPDATE linked_items
+		SET cleanup_notified_at = NULL,
+		    cleanup_scheduled_at = NULL,
+		    updated_at = $1
+		WHERE id = $2
+	`
+
+	_, err := r.db.Exec(ctx, query, now, itemID)
+	return err
 }
