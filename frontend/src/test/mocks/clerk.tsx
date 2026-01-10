@@ -1,4 +1,7 @@
-import { vi } from 'vitest'
+// Issue #575: Centralized Clerk mock to prevent mock.module() pollution
+// This file is preloaded via bunfig.toml before all tests
+
+import { mock } from 'bun:test'
 import React from 'react'
 
 // Mock user for testing (Clerk format)
@@ -22,7 +25,7 @@ export const createMockClerkAuth = (overrides = {}) => ({
   isLoaded: true,
   userId: null,
   sessionId: null,
-  getToken: vi.fn().mockResolvedValue('mock-token'),
+  getToken: mock(() => Promise.resolve('mock-token')),
   ...overrides,
 })
 
@@ -36,9 +39,9 @@ export const createMockClerkUser = (overrides = {}) => ({
 
 // Mock Clerk context values for useClerk
 export const createMockClerk = (overrides = {}) => ({
-  openSignIn: vi.fn(),
-  openSignUp: vi.fn(),
-  signOut: vi.fn(),
+  openSignIn: mock(() => {}),
+  openSignUp: mock(() => {}),
+  signOut: mock(() => Promise.resolve()),
   ...overrides,
 })
 
@@ -52,15 +55,24 @@ export const MockClerkProvider: React.FC<{
   return <>{children}</>
 }
 
+// Configurable mock functions that tests can customize
+export const mockUseAuth = mock(() => createMockClerkAuth())
+export const mockUseUser = mock(() => createMockClerkUser())
+export const mockUseClerk = mock(() => createMockClerk())
+
 // Default mock for @clerk/react-router
-// This can be imported in test files that need to mock Clerk
 export const defaultClerkMock = {
-  useAuth: vi.fn(() => createMockClerkAuth()),
-  useUser: vi.fn(() => createMockClerkUser()),
-  useClerk: vi.fn(() => createMockClerk()),
+  useAuth: mockUseAuth,
+  useUser: mockUseUser,
+  useClerk: mockUseClerk,
   ClerkProvider: MockClerkProvider,
   SignedIn: ({ children: _children }: { children: React.ReactNode }) => null,
   SignedOut: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  SignInButton: ({ children }: { children?: React.ReactNode }) => <button>{children || 'Sign In'}</button>,
+  SignInButton: ({ children }: { children?: React.ReactNode }) => (
+    <button>{children || 'Sign In'}</button>
+  ),
   UserButton: () => <button>User</button>,
 }
+
+// Single mock.module() call - called once at preload time
+mock.module('@clerk/react-router', () => defaultClerkMock)

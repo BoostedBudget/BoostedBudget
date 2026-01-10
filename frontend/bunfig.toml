@@ -9,12 +9,22 @@ frozen = false
 # Preload files for bun test (order matters!)
 # 1. happydom.ts - Register DOM globals first
 # 2. testing-library.ts - Setup testing library matchers
-# 3-5. Centralized mocks (Issue #575) - prevent mock.module() pollution
+# 3+. Centralized mocks (Issue #575) - prevent mock.module() pollution
 preload = [
   "./src/test/happydom.ts",
   "./src/test/testing-library.ts",
   "./src/test/mocks/registry.ts",
-  "./src/test/mocks/budgets-api.ts"
+  "./src/test/mocks/budgets-api.ts",
+  "./src/test/mocks/dashboard-hooks.ts",
+  "./src/test/mocks/dashboard-context.ts",
+  "./src/test/mocks/tags-api.ts",
+  "./src/test/mocks/profile-api.ts",
+  "./src/test/mocks/subscription-api.ts",
+  "./src/test/mocks/user-api.ts",
+  "./src/test/mocks/accounts-api.ts",
+  "./src/test/mocks/auto-categorization-api.ts",
+  "./src/test/mocks/clerk.tsx",
+  "./src/test/mocks/user-accounts-api.ts"
 ]
 
 # Match vitest's generous timeout for CI stability (Issues #180, #219, #422)

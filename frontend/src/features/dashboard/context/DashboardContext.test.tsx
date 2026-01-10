@@ -7,7 +7,7 @@
  * Issue #354: Customizable Dashboard Widget System
  */
 
-import { describe, it, expect, beforeEach, afterEach, spyOn, setSystemTime } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, renderHook, act } from '@testing-library/react'
 import { format, subDays, startOfMonth, endOfMonth } from 'date-fns'
 import { DashboardProvider, useDashboardContext, DashboardContext } from './DashboardContext'
@@ -21,11 +21,12 @@ describe('DashboardContext', () => {
   const mockToday = new Date('2024-06-15')
 
   beforeEach(() => {
-    setSystemTime(mockToday)
+    vi.useFakeTimers()
+    vi.setSystemTime(mockToday)
   })
 
   afterEach(() => {
-    setSystemTime()
+    vi.useRealTimers()
   })
 
   describe('DashboardProvider', () => {
@@ -68,7 +69,7 @@ describe('DashboardContext', () => {
     })
 
     it('should throw error outside provider', () => {
-      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {})
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
       expect(() => {
         renderHook(() => useDashboardContext())
