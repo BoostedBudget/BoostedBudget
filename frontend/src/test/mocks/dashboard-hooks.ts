@@ -1,76 +1,34 @@
 // Issue #575: Centralized dashboard hooks mock to prevent mock.module() pollution
 // This file is preloaded via bunfig.toml before all tests
+//
+// IMPORTANT: This file does NOT mock any hook implementations because:
+// - Hook implementation tests need REAL hooks with mocked APIs
+// - Component tests should use API-level mocks for more realistic behavior
+//
+// Previously this file mocked useDashboardData, useCashFlowSummary, useDefaultDashboardLayout etc.
+// but that conflicted with hook implementation tests. Now we only export utility constants and
+// functions that tests can use.
 
 import { mock } from 'bun:test'
 
 // Default refetch function
 export const mockRefetch = mock(() => {})
 
-// Default data state for useDashboardData
-export const defaultDashboardDataState = {
-  summary: null,
-  history: null,
-  accountTypes: null,
-  loading: false,
-  error: null,
-  refetch: mockRefetch,
+// Default layout (matches config/default_dashboard_layout.yaml version 4)
+export const MOCK_DEFAULT_LAYOUT = {
+  widgets: [
+    { i: 'cash-flow-chart-1', type: 'cash-flow-chart', x: 0, y: 0, w: 12, h: 5, minW: 4, minH: 4 },
+    { i: 'balance-history-1', type: 'balance-history', x: 0, y: 5, w: 12, h: 4, minW: 4, minH: 4 },
+  ],
+  version: 4,
 }
 
-// Default data state for useNetWorthData
-export const defaultNetWorthDataState = {
-  summary: null,
-  history: null,
-  loading: false,
-  error: null,
-  refetch: mockRefetch,
-}
-
-// Default data state for useCashFlowSummary
-export const defaultCashFlowSummaryState = {
-  data: null,
-  loading: false,
-  error: null,
-  refetch: mockRefetch,
-}
-
-// Default data state for useCashFlowHistory
-export const defaultCashFlowHistoryState = {
-  data: null,
-  loading: false,
-  error: null,
-  refetch: mockRefetch,
-}
-
-// Configurable mock functions - tests customize in beforeEach
-export const mockUseDashboardData = mock(() => defaultDashboardDataState)
-export const mockUseNetWorthData = mock(() => defaultNetWorthDataState)
-export const mockUseCashFlowSummary = mock(() => defaultCashFlowSummaryState)
-export const mockUseCashFlowHistory = mock(() => defaultCashFlowHistoryState)
-
-// Single mock.module() calls - called once at preload time
-mock.module('@/features/dashboard/hooks/useDashboardData', () => ({
-  useDashboardData: (...args: unknown[]) => mockUseDashboardData(...args),
-}))
-
-mock.module('@/features/dashboard/hooks/useNetWorthData', () => ({
-  useNetWorthData: (...args: unknown[]) => mockUseNetWorthData(...args),
-}))
-
-mock.module('@/features/dashboard/hooks/useCashFlowData', () => ({
-  useCashFlowSummary: (...args: unknown[]) => mockUseCashFlowSummary(...args),
-  useCashFlowHistory: (...args: unknown[]) => mockUseCashFlowHistory(...args),
-}))
-
-// Also mock relative path imports
-mock.module('../hooks/useDashboardData', () => ({
-  useDashboardData: (...args: unknown[]) => mockUseDashboardData(...args),
-}))
-
-mock.module('../hooks/useNetWorthData', () => ({
-  useNetWorthData: (...args: unknown[]) => mockUseNetWorthData(...args),
-}))
-
-mock.module('../hooks/useCashFlowData', () => ({
-  useCashFlowSummary: (...args: unknown[]) => mockUseCashFlowSummary(...args),
-  useCashFlowHistory: (...args: unknown[]) => mockUseCashFlowHistory(...args),
-}))
+// NOTE: We intentionally do NOT mock any hooks here because:
+// - useDefaultDashboardLayout is tested in useDefaultDashboardLayout.test.tsx with API-level mocks
+// - useDashboardData is tested in useDashboardData.test.tsx with API-level mocks
+// - useCashFlowSummary/useCashFlowHistory are tested in useCashFlowData.test.tsx with API-level mocks
+// - useDashboardLayout is tested in useDashboardLayout.test.tsx with API-level mocks
+//
+// Component tests that need dashboard data should use API-level mocks from:
+// - dashboard-api.ts (for useGetDashboardPreferences, useGetBalanceSummary, etc.)
+// - analytics-api.ts (for useGetCashFlowSummary, useGetCashFlowHistory)
