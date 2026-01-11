@@ -191,6 +191,8 @@ export default mergeConfig(
         'src/features/deletion/components/CancelDeletionPage.test.tsx',
         'src/components/layout/Header.test.tsx',
         'src/features/categories/components/CategoryEditor.test.tsx',
+        // Phase 4B: More page tests (2026-01-10)
+        'src/features/profile/ProfileForm.test.tsx',
       ],
       coverage: {
         provider: 'v8',

@@ -15,11 +15,22 @@ export const mockUseGetUserProfile = mock(() => ({
 
 // === useUpdateUserProfile ===
 export const mockUpdateUserProfileMutateAsync = mock(() => Promise.resolve())
+export const mockUpdateUserProfileMutate = mock(() => {})
+export let mockUpdateUserProfileIsPending = false
+export const setMockUpdateUserProfileIsPending = (value: boolean) => {
+  mockUpdateUserProfileIsPending = value
+}
 export const mockUseUpdateUserProfile = mock(() => ({
+  mutate: mockUpdateUserProfileMutate,
   mutateAsync: mockUpdateUserProfileMutateAsync,
-  isPending: false,
+  get isPending() {
+    return mockUpdateUserProfileIsPending
+  },
   isError: false,
+  isSuccess: false,
   error: null,
+  data: null,
+  reset: mock(() => {}),
 }))
 
 // Single mock.module() call - called once at preload time

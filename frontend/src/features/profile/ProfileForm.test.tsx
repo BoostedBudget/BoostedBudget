@@ -1,34 +1,26 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+/**
+ * ProfileForm Component Tests
+ * Issue #575: Migrated to bun:test with centralized profile-api mocks
+ */
+
+import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ProfileForm } from './ProfileForm'
 import type { User } from './types'
-
-// Mock the generated useUpdateUserProfile hook with configurable behavior
-const mockMutate = vi.fn()
-let mockIsPending = false
-vi.mock('@/api/generated/endpoints/profile/profile', () => ({
-  useUpdateUserProfile: vi.fn(() => ({
-    mutate: mockMutate,
-    mutateAsync: vi.fn(),
-    get isPending() {
-      return mockIsPending
-    },
-    isError: false,
-    isSuccess: false,
-    error: null,
-    data: null,
-    reset: vi.fn(),
-  })),
-}))
+import {
+  mockUpdateUserProfileMutate,
+  setMockUpdateUserProfileIsPending,
+} from '@/test/mocks/profile-api'
 
 // Mock sonner toast
-const mockToast = vi.hoisted(() => ({
-  success: vi.fn(),
-  error: vi.fn(),
-}))
-vi.mock('sonner', () => ({
-  toast: mockToast,
+const mockToastSuccess = mock(() => {})
+const mockToastError = mock(() => {})
+mock.module('sonner', () => ({
+  toast: {
+    success: (...args: unknown[]) => mockToastSuccess(...args),
+    error: (...args: unknown[]) => mockToastError(...args),
+  },
 }))
 
 describe('ProfileForm', () => {
@@ -48,22 +40,28 @@ describe('ProfileForm', () => {
   }
 
   beforeEach(() => {
-    vi.clearAllMocks()
-    mockIsPending = false
+    mockUpdateUserProfileMutate.mockClear()
+    mockToastSuccess.mockClear()
+    mockToastError.mockClear()
+    setMockUpdateUserProfileIsPending(false)
   })
 
-  // Helper to make mockMutate call onSuccess with the given result
   function configureMutateSuccess(result: User) {
-    mockMutate.mockImplementation((_data, options) => {
+    mockUpdateUserProfileMutate.mockImplementation((_data: unknown, options?: { onSuccess?: (r: User) => void }) => {
       options?.onSuccess?.(result)
     })
   }
 
-  // Helper to make mockMutate call onError with the given error
   function configureMutateError(error: Error) {
-    mockMutate.mockImplementation((_data, options) => {
+    mockUpdateUserProfileMutate.mockImplementation((_data: unknown, options?: { onError?: (e: Error) => void }) => {
       options?.onError?.(error)
     })
+  }
+
+  async function updateEmailField(user: ReturnType<typeof userEvent.setup>, newEmail: string) {
+    const emailInput = screen.getByLabelText(/email/i)
+    await user.tripleClick(emailInput)
+    await user.keyboard(newEmail)
   }
 
   describe('Form rendering', () => {
@@ -89,14 +87,13 @@ describe('ProfileForm', () => {
   })
 
   describe('Email validation', () => {
-    it('should show error for empty email', async () => {
+    it('should validate empty email', async () => {
       const user = userEvent.setup({ delay: null })
       render(<ProfileForm user={mockUser} />)
 
-      const emailInput = screen.getByLabelText(/email/i) as HTMLInputElement
+      const emailInput = screen.getByLabelText(/email/i)
       const saveButton = screen.getByRole('button', { name: /save changes/i })
 
-      // Clear email by selecting all and deleting (more reliable than clear() in vitest 4.x)
       await user.tripleClick(emailInput)
       await user.keyboard('{Backspace}')
       await user.click(saveButton)
@@ -106,17 +103,15 @@ describe('ProfileForm', () => {
       })
     })
 
-    it('should show error for invalid email format', async () => {
+    it('should validate invalid email format', async () => {
       const user = userEvent.setup({ delay: null })
       render(<ProfileForm user={mockUser} />)
 
       const emailInput = screen.getByLabelText(/email/i)
       const saveButton = screen.getByRole('button', { name: /save changes/i })
 
-      // Enter invalid email
-      // Triple-click to select all, then type to replace (more reliable than clear() in vitest 4.x)
       await user.tripleClick(emailInput)
-      await user.keyboard( 'invalid-email')
+      await user.keyboard('invalid-email')
       await user.click(saveButton)
 
       await waitFor(() => {
@@ -124,50 +119,37 @@ describe('ProfileForm', () => {
       })
     })
 
-    it('should accept valid email format', async () => {
-      configureMutateSuccess({
-        ...mockUser,
-        email: 'newemail@example.com',
-      })
+    it('should accept valid email and submit', async () => {
+      configureMutateSuccess({ ...mockUser, email: 'newemail@example.com' })
 
       const user = userEvent.setup({ delay: null })
       render(<ProfileForm user={mockUser} />)
 
-      const emailInput = screen.getByLabelText(/email/i)
-      const saveButton = screen.getByRole('button', { name: /save changes/i })
-
-      // Triple-click to select all, then type to replace (more reliable than clear() in vitest 4.x)
-      await user.tripleClick(emailInput)
-      await user.keyboard('newemail@example.com')
-      await user.click(saveButton)
+      await updateEmailField(user, 'newemail@example.com')
+      await user.click(screen.getByRole('button', { name: /save changes/i }))
 
       await waitFor(() => {
-        expect(mockMutate).toHaveBeenCalled()
+        expect(mockUpdateUserProfileMutate).toHaveBeenCalled()
       })
     })
   })
 
   describe('Form submission', () => {
-    it('should update email when changed', async () => {
-      const updatedUser = { ...mockUser, email: 'updated@example.com' }
-      configureMutateSuccess(updatedUser)
+    it('should submit email changes and show success toast', async () => {
+      configureMutateSuccess({ ...mockUser, email: 'updated@example.com' })
 
       const user = userEvent.setup({ delay: null })
       render(<ProfileForm user={mockUser} />)
 
-      const emailInput = screen.getByLabelText(/email/i)
-      const saveButton = screen.getByRole('button', { name: /save changes/i })
-
-      // Triple-click to select all, then type to replace (more reliable than clear() in vitest 4.x)
-      await user.tripleClick(emailInput)
-      await user.keyboard('updated@example.com')
-      await user.click(saveButton)
+      await updateEmailField(user, 'updated@example.com')
+      await user.click(screen.getByRole('button', { name: /save changes/i }))
 
       await waitFor(() => {
-        expect(mockMutate).toHaveBeenCalledWith(
+        expect(mockUpdateUserProfileMutate).toHaveBeenCalledWith(
           { data: { email: 'updated@example.com' } },
           expect.any(Object)
         )
+        expect(mockToastSuccess).toHaveBeenCalledWith('Profile updated successfully!')
       })
     })
 
@@ -184,17 +166,15 @@ describe('ProfileForm', () => {
       await user.selectOptions(regionSelect, 'lhr')
       await user.click(saveButton)
 
-      // Confirmation dialog should appear
       await waitFor(() => {
         expect(screen.getByText(/change data region/i)).toBeInTheDocument()
       })
 
-      // Click confirm button
       const confirmButton = screen.getByRole('button', { name: /confirm change/i })
       await user.click(confirmButton)
 
       await waitFor(() => {
-        expect(mockMutate).toHaveBeenCalledWith(
+        expect(mockUpdateUserProfileMutate).toHaveBeenCalledWith(
           { data: { email: 'test@example.com', primary_region: 'lhr' } },
           expect.any(Object)
         )
@@ -208,74 +188,39 @@ describe('ProfileForm', () => {
       const saveButton = screen.getByRole('button', { name: /save changes/i })
       await user.click(saveButton)
 
-      expect(mockMutate).not.toHaveBeenCalled()
-    })
-
-    it('should show success toast after successful update', async () => {
-      const updatedUser = { ...mockUser, email: 'updated@example.com' }
-      configureMutateSuccess(updatedUser)
-      mockToast.success.mockClear()
-
-      const user = userEvent.setup({ delay: null })
-      render(<ProfileForm user={mockUser} />)
-
-      const emailInput = screen.getByLabelText(/email/i)
-      const saveButton = screen.getByRole('button', { name: /save changes/i })
-
-      // Triple-click to select all, then type to replace (more reliable than clear() in vitest 4.x)
-      await user.tripleClick(emailInput)
-      await user.keyboard('updated@example.com')
-      await user.click(saveButton)
-
-      await waitFor(() => {
-        expect(mockToast.success).toHaveBeenCalledWith('Profile updated successfully!')
-      })
+      expect(mockUpdateUserProfileMutate).not.toHaveBeenCalled()
     })
 
     it('should show error toast on update failure', async () => {
       configureMutateError(new Error('Update failed'))
-      mockToast.error.mockClear()
 
       const user = userEvent.setup({ delay: null })
       render(<ProfileForm user={mockUser} />)
 
-      const emailInput = screen.getByLabelText(/email/i)
-      const saveButton = screen.getByRole('button', { name: /save changes/i })
-
-      // Triple-click to select all, then type to replace (more reliable than clear() in vitest 4.x)
-      await user.tripleClick(emailInput)
-      await user.keyboard('updated@example.com')
-      await user.click(saveButton)
+      await updateEmailField(user, 'updated@example.com')
+      await user.click(screen.getByRole('button', { name: /save changes/i }))
 
       await waitFor(() => {
-        expect(mockToast.error).toHaveBeenCalledWith('Failed to update profile. Please try again.')
+        expect(mockToastError).toHaveBeenCalledWith('Failed to update profile. Please try again.')
       })
     })
 
     it('should disable form while submitting', async () => {
-      // Configure mutate to set isPending flag when called
-      mockMutate.mockImplementation(() => {
-        mockIsPending = true
+      mockUpdateUserProfileMutate.mockImplementation(() => {
+        setMockUpdateUserProfileIsPending(true)
       })
 
       const user = userEvent.setup({ delay: null })
       const { rerender } = render(<ProfileForm user={mockUser} />)
 
-      const emailInput = screen.getByLabelText(/email/i)
-      const regionSelect = screen.getByLabelText(/primary region/i)
-      const saveButton = screen.getByRole('button', { name: /save changes/i })
+      await updateEmailField(user, 'updated@example.com')
+      await user.click(screen.getByRole('button', { name: /save changes/i }))
 
-      // Triple-click to select all, then type to replace (more reliable than clear() in vitest 4.x)
-      await user.tripleClick(emailInput)
-      await user.keyboard('updated@example.com')
-      await user.click(saveButton)
-
-      // Rerender to reflect the pending state
       rerender(<ProfileForm user={mockUser} />)
 
       await waitFor(() => {
-        expect(emailInput).toBeDisabled()
-        expect(regionSelect).toBeDisabled()
+        expect(screen.getByLabelText(/email/i)).toBeDisabled()
+        expect(screen.getByLabelText(/primary region/i)).toBeDisabled()
         expect(screen.getByRole('button', { name: /saving/i })).toBeDisabled()
       })
     })
@@ -283,18 +228,13 @@ describe('ProfileForm', () => {
     it('should call onProfileUpdate callback after successful update', async () => {
       const updatedUser = { ...mockUser, email: 'updated@example.com' }
       configureMutateSuccess(updatedUser)
+      const onProfileUpdate = mock(() => {})
 
-      const onProfileUpdate = vi.fn()
       const user = userEvent.setup({ delay: null })
       render(<ProfileForm user={mockUser} onProfileUpdate={onProfileUpdate} />)
 
-      const emailInput = screen.getByLabelText(/email/i)
-      const saveButton = screen.getByRole('button', { name: /save changes/i })
-
-      // Triple-click to select all, then type to replace (more reliable than clear() in vitest 4.x)
-      await user.tripleClick(emailInput)
-      await user.keyboard('updated@example.com')
-      await user.click(saveButton)
+      await updateEmailField(user, 'updated@example.com')
+      await user.click(screen.getByRole('button', { name: /save changes/i }))
 
       await waitFor(() => {
         expect(onProfileUpdate).toHaveBeenCalledWith(updatedUser)
@@ -303,31 +243,21 @@ describe('ProfileForm', () => {
   })
 
   describe('Form state management', () => {
-    it('should update local state when editing email', async () => {
+    it('should track form field changes', async () => {
       const user = userEvent.setup({ delay: null })
       render(<ProfileForm user={mockUser} />)
 
-      const emailInput = screen.getByLabelText(/email/i) as HTMLInputElement
-
-      // Triple-click to select all, then type to replace
-      await user.tripleClick(emailInput)
-      await user.keyboard('new@example.com')
-
-      expect(emailInput).toHaveValue('new@example.com')
-    })
-
-    it('should update local state when selecting region', async () => {
-      const user = userEvent.setup({ delay: null })
-      render(<ProfileForm user={mockUser} />)
-
+      const emailInput = screen.getByLabelText(/email/i)
       const regionSelect = screen.getByLabelText(/primary region/i)
 
-      await user.selectOptions(regionSelect, 'lhr')
+      await updateEmailField(user, 'new@example.com')
+      expect(emailInput).toHaveValue('new@example.com')
 
+      await user.selectOptions(regionSelect, 'lhr')
       expect(regionSelect).toHaveValue('lhr')
     })
 
-    it('should reset to user data after successful update', async () => {
+    it('should reset form to updated user data after successful submission', async () => {
       const updatedUser = { ...mockUser, email: 'final@example.com' }
       configureMutateSuccess(updatedUser)
 
@@ -335,12 +265,8 @@ describe('ProfileForm', () => {
       render(<ProfileForm user={mockUser} />)
 
       const emailInput = screen.getByLabelText(/email/i)
-      const saveButton = screen.getByRole('button', { name: /save changes/i })
-
-      // Triple-click to select all, then type to replace (more reliable than clear() in vitest 4.x)
-      await user.tripleClick(emailInput)
-      await user.keyboard( 'final@example.com')
-      await user.click(saveButton)
+      await updateEmailField(user, 'final@example.com')
+      await user.click(screen.getByRole('button', { name: /save changes/i }))
 
       await waitFor(() => {
         expect(emailInput).toHaveValue('final@example.com')
