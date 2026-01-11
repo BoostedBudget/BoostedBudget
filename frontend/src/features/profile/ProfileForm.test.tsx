@@ -3,7 +3,8 @@
  * Issue #575: Migrated to bun:test with centralized profile-api mocks
  */
 
-import { describe, it, expect, beforeEach, mock } from 'bun:test'
+import { describe, it, expect, beforeEach } from 'bun:test'
+import { mock } from 'bun:test'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ProfileForm } from './ProfileForm'
@@ -12,16 +13,7 @@ import {
   mockUpdateUserProfileMutate,
   setMockUpdateUserProfileIsPending,
 } from '@/test/mocks/profile-api'
-
-// Mock sonner toast
-const mockToastSuccess = mock(() => {})
-const mockToastError = mock(() => {})
-mock.module('sonner', () => ({
-  toast: {
-    success: (...args: unknown[]) => mockToastSuccess(...args),
-    error: (...args: unknown[]) => mockToastError(...args),
-  },
-}))
+import { mockToastSuccess, mockToastError } from '@/test/mocks/sonner'
 
 describe('ProfileForm', () => {
   const mockUser: User = {

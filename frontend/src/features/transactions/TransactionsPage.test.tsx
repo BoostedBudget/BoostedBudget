@@ -1,12 +1,12 @@
 /**
  * TransactionsPage Component Tests
  *
- * TDD RED: These tests are written first and will initially fail.
  * Tests the transactions page container component.
  * Issue #564: Migrated to mock generated React Query hooks
+ * Issue #575: Migrated to bun:test with centralized mocks
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
@@ -17,53 +17,36 @@ import type { Transaction } from './types'
 import type { UserTag } from '../tags/types'
 import type { CustomCategory } from '../categories/types'
 
-// Use vi.hoisted for mock functions
-const { mockRefetch, mockUpdateTagsMutateAsync, mockUpdateCategoryMutateAsync } = vi.hoisted(() => ({
-  mockRefetch: vi.fn().mockResolvedValue({}),
-  mockUpdateTagsMutateAsync: vi.fn(),
-  mockUpdateCategoryMutateAsync: vi.fn(),
-}))
+// Import centralized mocks
+import {
+  mockUseGetTransactions,
+  mockRefetchTransactions,
+  mockUpdateTransactionTagsMutateAsync,
+  mockUpdateTransactionCategoryMutateAsync,
+} from '@/test/mocks/transactions-api'
+import {
+  mockUseGetUserTags,
+  mockCreateTagMutateAsync,
+  mockUseCreateTag,
+} from '@/test/mocks/tags-api'
+import {
+  mockUseGetUserCategories,
+  mockUseGetPlaidCategories,
+  mockCreateCategoryMutateAsync,
+  mockUseCreateCategory,
+} from '@/test/mocks/categories-api'
+import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
 
-// Mock the generated hooks
-vi.mock('@/api/generated/endpoints/transactions/transactions', () => ({
-  useGetTransactions: vi.fn(),
-  useUpdateTransactionTags: vi.fn(() => ({ mutateAsync: mockUpdateTagsMutateAsync })),
-  useUpdateTransactionCategory: vi.fn(() => ({ mutateAsync: mockUpdateCategoryMutateAsync })),
-  getGetTransactionsQueryKey: vi.fn(() => ['transactions']),
-}))
-
-vi.mock('@/api/generated/endpoints/tags/tags', () => ({
-  useGetUserTags: vi.fn(),
-  useCreateTag: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
-  getGetUserTagsQueryKey: vi.fn(() => ['user-tags']),
-}))
-
-vi.mock('@/api/generated/endpoints/categories/categories', () => ({
-  useGetUserCategories: vi.fn(),
-  useGetPlaidCategories: vi.fn(),
-  useCreateCategory: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
-  getGetUserCategoriesQueryKey: vi.fn(() => ['user-categories']),
-}))
-
-vi.mock('@/api/generated/endpoints/accounts/accounts', () => ({
-  useGetAccounts: vi.fn(),
-}))
-
-// Import mocked hooks
-import { useGetTransactions } from '@/api/generated/endpoints/transactions/transactions'
-import { useGetUserTags } from '@/api/generated/endpoints/tags/tags'
-import { useGetUserCategories, useGetPlaidCategories } from '@/api/generated/endpoints/categories/categories'
-import { useGetAccounts } from '@/api/generated/endpoints/accounts/accounts'
-
-// Helper to create wrapper with QueryClient and Router
-function createWrapper() {
-  const queryClient = new QueryClient({
+function createTestQueryClient() {
+  return new QueryClient({
     defaultOptions: {
-      queries: {
-        retry: false,
-      },
+      queries: { retry: false, gcTime: 0 },
     },
   })
+}
+
+function createWrapper() {
+  const queryClient = createTestQueryClient()
   return function Wrapper({ children }: { children: ReactNode }) {
     return (
       <QueryClientProvider client={queryClient}>
@@ -151,7 +134,6 @@ describe('TransactionsPage', () => {
     },
   ]
 
-  // Helper to configure all query mocks
   function configureQueries(overrides?: {
     transactions?: Transaction[]
     isLoading?: boolean
@@ -159,7 +141,6 @@ describe('TransactionsPage', () => {
     hasMore?: boolean
     totalCount?: number
   }) {
-    // When loading, data should be undefined to match React Query behavior
     const transactionsData = overrides?.isLoading
       ? undefined
       : {
@@ -170,40 +151,61 @@ describe('TransactionsPage', () => {
           has_more: overrides?.hasMore ?? false,
         }
 
-    vi.mocked(useGetTransactions).mockReturnValue({
+    mockUseGetTransactions.mockReturnValue({
       data: transactionsData,
       isLoading: overrides?.isLoading ?? false,
       error: overrides?.error ?? null,
-      refetch: mockRefetch,
-    } as unknown as ReturnType<typeof useGetTransactions>)
+      refetch: mockRefetchTransactions,
+    })
 
-    vi.mocked(useGetUserTags).mockReturnValue({
+    mockUseGetUserTags.mockReturnValue({
       data: mockTags,
       isLoading: false,
       error: null,
-    } as unknown as ReturnType<typeof useGetUserTags>)
+    })
 
-    vi.mocked(useGetUserCategories).mockReturnValue({
+    mockUseGetUserCategories.mockReturnValue({
       data: mockCategories,
       isLoading: false,
       error: null,
-    } as unknown as ReturnType<typeof useGetUserCategories>)
+    })
 
-    vi.mocked(useGetPlaidCategories).mockReturnValue({
+    mockUseGetPlaidCategories.mockReturnValue({
       data: [],
       isLoading: false,
       error: null,
-    } as unknown as ReturnType<typeof useGetPlaidCategories>)
+    })
 
-    vi.mocked(useGetAccounts).mockReturnValue({
+    mockUseGetAccounts.mockReturnValue({
       data: { accounts: [] },
       isLoading: false,
       error: null,
-    } as unknown as ReturnType<typeof useGetAccounts>)
+    })
+
+    mockUseCreateTag.mockReturnValue({
+      mutateAsync: mockCreateTagMutateAsync,
+      isPending: false,
+    })
+
+    mockUseCreateCategory.mockReturnValue({
+      mutateAsync: mockCreateCategoryMutateAsync,
+      isPending: false,
+    })
   }
 
   beforeEach(() => {
-    vi.clearAllMocks()
+    // Clear all mocks
+    mockUseGetTransactions.mockClear()
+    mockRefetchTransactions.mockClear()
+    mockUpdateTransactionTagsMutateAsync.mockClear()
+    mockUpdateTransactionCategoryMutateAsync.mockClear()
+    mockUseGetUserTags.mockClear()
+    mockUseGetUserCategories.mockClear()
+    mockUseGetPlaidCategories.mockClear()
+    mockUseGetAccounts.mockClear()
+    mockUseCreateTag.mockClear()
+    mockUseCreateCategory.mockClear()
+
     configureQueries()
   })
 
@@ -254,7 +256,14 @@ describe('TransactionsPage', () => {
 
     it('should retry loading when retry button clicked', async () => {
       const user = userEvent.setup()
+      const localRefetch = mock(() => Promise.resolve({}))
       configureQueries({ error: new Error('Network error'), transactions: [] })
+      mockUseGetTransactions.mockReturnValue({
+        data: undefined,
+        isLoading: false,
+        error: new Error('Network error'),
+        refetch: localRefetch,
+      })
 
       const Wrapper = createWrapper()
       render(<TransactionsPage />, { wrapper: Wrapper })
@@ -266,7 +275,7 @@ describe('TransactionsPage', () => {
       const retryButton = screen.getByRole('button', { name: /retry/i })
       await user.click(retryButton)
 
-      expect(mockRefetch).toHaveBeenCalled()
+      expect(localRefetch).toHaveBeenCalled()
     })
   })
 
@@ -357,8 +366,6 @@ describe('TransactionsPage', () => {
       const nextButton = screen.getByRole('button', { name: /next/i })
       await user.click(nextButton)
 
-      // Pagination works via offset state change which triggers a new query
-      // Verify the button click was handled without error and Previous button now appears
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /previous/i })).toBeInTheDocument()
       })
@@ -389,7 +396,6 @@ describe('TransactionsPage', () => {
       const searchInput = screen.getByPlaceholderText(/search/i)
       await user.type(searchInput, 'starbucks')
 
-      // Search should update URL params and trigger refetch
       await waitFor(
         () => {
           expect(searchInput).toHaveValue('starbucks')
@@ -427,8 +433,8 @@ describe('TransactionsPage', () => {
       render(<TransactionsPage />, { wrapper: Wrapper })
 
       await waitFor(() => {
-        expect(useGetUserTags).toHaveBeenCalled()
-        expect(useGetUserCategories).toHaveBeenCalled()
+        expect(mockUseGetUserTags).toHaveBeenCalled()
+        expect(mockUseGetUserCategories).toHaveBeenCalled()
       })
     })
 
@@ -441,12 +447,10 @@ describe('TransactionsPage', () => {
         expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
       })
 
-      // Issue #584: Click the edit button (table row has edit action button)
       const editButtons = screen.getAllByRole('button', { name: /edit transaction/i })
       expect(editButtons.length).toBeGreaterThan(0)
       await user.click(editButtons[0])
 
-      // Editor should open
       await waitFor(() => {
         expect(screen.getByText('Edit Transaction')).toBeInTheDocument()
       })
@@ -461,13 +465,11 @@ describe('TransactionsPage', () => {
         expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
       })
 
-      // Issue #584: Click edit button to open editor
       const editButtons = screen.getAllByRole('button', { name: /edit transaction/i })
       await user.click(editButtons[0])
 
       await waitFor(() => {
         expect(screen.getByText('Edit Transaction')).toBeInTheDocument()
-        // Check amount is displayed (formatted)
         expect(screen.getByText('$25.50')).toBeInTheDocument()
       })
     })
@@ -481,7 +483,6 @@ describe('TransactionsPage', () => {
         expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
       })
 
-      // Issue #584: Click edit button to open editor
       const editButtons = screen.getAllByRole('button', { name: /edit transaction/i })
       await user.click(editButtons[0])
 
@@ -489,30 +490,27 @@ describe('TransactionsPage', () => {
         expect(screen.getByText('Edit Transaction')).toBeInTheDocument()
       })
 
-      // Click cancel
       const cancelButton = screen.getByRole('button', { name: /cancel/i })
       await user.click(cancelButton)
 
-      // Editor should close
       await waitFor(() => {
         expect(screen.queryByText('Edit Transaction')).not.toBeInTheDocument()
       })
     })
 
     it('should handle tag/category fetch errors gracefully', async () => {
-      vi.mocked(useGetUserTags).mockReturnValue({
+      mockUseGetUserTags.mockReturnValue({
         data: undefined,
         isLoading: false,
         error: new Error('Failed to fetch tags'),
-      } as unknown as ReturnType<typeof useGetUserTags>)
+      })
 
-      vi.mocked(useGetUserCategories).mockReturnValue({
+      mockUseGetUserCategories.mockReturnValue({
         data: undefined,
         isLoading: false,
         error: new Error('Failed to fetch categories'),
-      } as unknown as ReturnType<typeof useGetUserCategories>)
+      })
 
-      // Should not crash
       const Wrapper = createWrapper()
       render(<TransactionsPage />, { wrapper: Wrapper })
 
@@ -529,10 +527,8 @@ describe('TransactionsPage', () => {
         expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
       })
 
-      // Issue #584: Transactions are now in a table with edit buttons
       expect(screen.getByRole('table')).toBeInTheDocument()
       const editButtons = screen.getAllByRole('button', { name: /edit transaction/i })
-      // Should have edit buttons for each transaction
       expect(editButtons.length).toBeGreaterThan(0)
     })
   })
