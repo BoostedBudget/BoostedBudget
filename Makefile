@@ -111,9 +111,9 @@ test-fast:
 	@cd backend && go tool cover -html=coverage.out -o coverage.html
 	@echo "✅ Backend coverage: backend/coverage.html"
 	@echo ""
-	@echo "3️⃣  Frontend Tests..."
+	@echo "3️⃣  Frontend Tests (bun:test + vitest combined coverage)..."
 	@cd frontend && bun run test:ci
-	@echo "✅ Frontend coverage: frontend/coverage/index.html"
+	@echo "✅ Frontend coverage: frontend/coverage/combined.lcov"
 	@echo ""
 	@echo "4️⃣  Linting..."
 	@cd frontend && bun run lint
@@ -125,7 +125,8 @@ test-fast:
 	@echo ""
 	@echo "📄 Coverage Reports:"
 	@echo "  Backend:  backend/coverage.html (open in browser)"
-	@echo "  Frontend: frontend/coverage/index.html (open in browser)"
+	@echo "  Frontend: frontend/coverage/combined.lcov (bun:test + vitest combined)"
+	@echo "            frontend/coverage/html/index.html (if lcov/genhtml installed)"
 	@echo ""
 	@echo "⚠️  Remember: Run 'make test-all' to include E2E tests before creating PRs!"
 
@@ -164,9 +165,9 @@ test-all:
 	@cd backend && go tool cover -html=coverage.out -o coverage.html
 	@echo "✅ Backend coverage: backend/coverage.html"
 	@echo ""
-	@echo "3️⃣  Frontend Tests..."
+	@echo "3️⃣  Frontend Tests (bun:test + vitest combined coverage)..."
 	@cd frontend && bun run test:ci
-	@echo "✅ Frontend coverage: frontend/coverage/index.html"
+	@echo "✅ Frontend coverage: frontend/coverage/combined.lcov"
 	@echo ""
 	@echo "4️⃣  Building Backend Binary for E2E Tests..."
 	@cd backend && go build -o bin/server ./cmd/server
@@ -181,7 +182,8 @@ test-all:
 	@echo ""
 	@echo "📄 Coverage Reports:"
 	@echo "  Backend:  backend/coverage.html (open in browser)"
-	@echo "  Frontend: frontend/coverage/index.html (open in browser)"
+	@echo "  Frontend: frontend/coverage/combined.lcov (bun:test + vitest combined)"
+	@echo "            frontend/coverage/html/index.html (if lcov/genhtml installed)"
 
 # Frontend
 frontend-install:

@@ -49,6 +49,9 @@ export const mockUseUpdateTag = mock(() => ({
   error: null,
 }))
 
+// Query key mock
+export const mockGetUserTagsQueryKey = mock(() => ['user-tags'])
+
 // Single mock.module() call - called once at preload time
 mock.module('@/api/generated/endpoints/tags/tags', () => ({
   ...RealTagsModule,
@@ -57,4 +60,5 @@ mock.module('@/api/generated/endpoints/tags/tags', () => ({
   useDeleteTag: (...args: unknown[]) => mockUseDeleteTag(...args),
   useGetTagByID: (...args: unknown[]) => mockUseGetTagByID(...args),
   useUpdateTag: (...args: unknown[]) => mockUseUpdateTag(...args),
+  getGetUserTagsQueryKey: () => mockGetUserTagsQueryKey(),
 }))
