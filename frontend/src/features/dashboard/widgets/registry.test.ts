@@ -5,13 +5,13 @@
  * lookup, and configuration creation.
  *
  * Issue #354: Customizable Dashboard Widget System
- * Issue #575: Migrated to bun:test
+ * Issue #575: Migrated to bun:test with isolated config (bunfig.real.toml)
  *
- * NOTE: Registry uses a shared Map that persists across tests.
- * Tests are designed to work with this shared state.
+ * NOTE: This test runs with bunfig.real.toml to test the REAL registry,
+ * not the centralized mock. Run with: bun test --config bunfig.real.toml
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
 import type { WidgetDefinition, WidgetType, WidgetProps } from '../types'
 import {
   registerWidget,
@@ -162,7 +162,7 @@ describe('Widget Registry', () => {
 
     it('should include timestamp component', () => {
       const mockTimestamp = 1700000000000
-      Date.now = vi.fn(() => mockTimestamp)
+      Date.now = mock(() => mockTimestamp)
 
       const id = generateWidgetId('balance-history')
       expect(id).toContain(mockTimestamp.toString())
@@ -170,7 +170,7 @@ describe('Widget Registry', () => {
 
     it('should include random component for uniqueness', () => {
       const mockTimestamp = 1700000000000
-      Date.now = vi.fn(() => mockTimestamp)
+      Date.now = mock(() => mockTimestamp)
 
       const id1 = generateWidgetId('account-cards')
       const id2 = generateWidgetId('account-cards')

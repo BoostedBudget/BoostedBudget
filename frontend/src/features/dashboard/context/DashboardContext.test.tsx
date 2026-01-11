@@ -5,11 +5,13 @@
  * including filter state, timeframe management, and editing mode.
  *
  * Issue #354: Customizable Dashboard Widget System
- * Note: Stays on vitest - tests REAL implementation that conflicts with
- * centralized dashboard-context.ts mock in bun:test preload
+ * Issue #575: Migrated to bun:test with isolated config (bunfig.real.toml)
+ *
+ * NOTE: This test runs with bunfig.real.toml to test the REAL context,
+ * not the centralized mock. Run with: scripts/test-real-implementations.sh
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, spyOn, setSystemTime } from 'bun:test'
 import { render, screen, renderHook, act } from '@testing-library/react'
 import { format, subDays, startOfMonth, endOfMonth } from 'date-fns'
 import { DashboardProvider, useDashboardContext, DashboardContext } from './DashboardContext'
@@ -23,12 +25,11 @@ describe('DashboardContext', () => {
   const mockToday = new Date('2024-06-15')
 
   beforeEach(() => {
-    vi.useFakeTimers()
-    vi.setSystemTime(mockToday)
+    setSystemTime(mockToday)
   })
 
   afterEach(() => {
-    vi.useRealTimers()
+    setSystemTime()
   })
 
   describe('DashboardProvider', () => {
@@ -71,7 +72,7 @@ describe('DashboardContext', () => {
     })
 
     it('should throw error outside provider', () => {
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {})
 
       expect(() => {
         renderHook(() => useDashboardContext())

@@ -193,6 +193,9 @@ export default mergeConfig(
         'src/features/categories/components/CategoryEditor.test.tsx',
         // Phase 4B: More page tests (2026-01-10)
         'src/features/profile/ProfileForm.test.tsx',
+        // Phase 5: Real-implementation tests (isolated config) (2026-01-11)
+        'src/features/dashboard/widgets/registry.test.ts',
+        'src/features/dashboard/context/DashboardContext.test.tsx',
       ],
       coverage: {
         provider: 'v8',
