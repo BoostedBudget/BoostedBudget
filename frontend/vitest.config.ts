@@ -212,6 +212,8 @@ export default mergeConfig(
         'src/features/auto-categorization/components/AutoCategorizationRuleEditor.test.tsx',
         // Phase 2H: Budget detail page (2026-01-12)
         'src/features/budgets/components/BudgetDetailPage.test.tsx',
+        // Phase 2I: Budgets page (2026-01-12)
+        'src/features/budgets/components/BudgetsPage.test.tsx',
       ],
       coverage: {
         provider: 'v8',
