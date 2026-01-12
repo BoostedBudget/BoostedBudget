@@ -210,6 +210,8 @@ export default mergeConfig(
         'src/features/accounts/components/AccountCustomizationModal.test.tsx',
         // Phase 2G: Auto-categorization rule editor (2026-01-12)
         'src/features/auto-categorization/components/AutoCategorizationRuleEditor.test.tsx',
+        // Phase 2H: Budget detail page (2026-01-12)
+        'src/features/budgets/components/BudgetDetailPage.test.tsx',
       ],
       coverage: {
         provider: 'v8',
