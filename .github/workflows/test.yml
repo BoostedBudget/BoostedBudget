@@ -673,7 +673,7 @@ jobs:
       # =========================================================================
       - name: Setup Go
         if: matrix.component == 'backend'
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: ${{ env.UNIQUE_WORKSPACE }}/backend/go.mod
           cache-dependency-path: ${{ env.UNIQUE_WORKSPACE }}/backend/go.sum
@@ -690,7 +690,7 @@ jobs:
       # =========================================================================
       - name: Setup Bun
         if: matrix.component == 'frontend'
-        uses: oven-sh/setup-bun@v2
+>>>>>>> origin/staging
         with:
           bun-version: latest
 
