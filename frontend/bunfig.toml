@@ -34,7 +34,8 @@ preload = [
   "./src/test/mocks/transactions-api.ts",
   "./src/test/mocks/categories-api.ts",
   "./src/test/mocks/privacy-api.ts",
-  "./src/test/mocks/sonner.ts"
+  "./src/test/mocks/sonner.ts",
+  "./src/test/mocks/automation-rules-api.ts"
 ]
 
 # Match vitest's generous timeout for CI stability (Issues #180, #219, #422)
