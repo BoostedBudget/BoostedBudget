@@ -208,6 +208,8 @@ export default mergeConfig(
         'src/features/rules/components/RuleBuilder.test.tsx',
         // Phase 2F: Account customization modal (2026-01-12)
         'src/features/accounts/components/AccountCustomizationModal.test.tsx',
+        // Phase 2G: Auto-categorization rule editor (2026-01-12)
+        'src/features/auto-categorization/components/AutoCategorizationRuleEditor.test.tsx',
       ],
       coverage: {
         provider: 'v8',
