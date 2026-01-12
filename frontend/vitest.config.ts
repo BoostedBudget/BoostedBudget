@@ -205,6 +205,7 @@ export default mergeConfig(
         'src/App.test.tsx',
         // Phase 2E: Rules tests (2026-01-12)
         'src/features/rules/components/RulesPage.test.tsx',
+        'src/features/rules/components/RuleBuilder.test.tsx',
       ],
       coverage: {
         provider: 'v8',

@@ -98,10 +98,19 @@ export const mockUseTriggerAutomationRule = mock(() => ({
   reset: mock(() => {}),
 }))
 
+// === useGetAutomationRuleByID ===
+export const mockUseGetAutomationRuleByID = mock(() => ({
+  data: null,
+  isLoading: false,
+  error: null,
+  refetch: mock(() => Promise.resolve()),
+}))
+
 // Single mock.module() call - called once at preload time
 mock.module('@/api/generated/endpoints/automation-rules/automation-rules', () => ({
   ...RealAutomationRulesModule,
   useGetAutomationRules: (...args: unknown[]) => mockUseGetAutomationRules(...args),
+  useGetAutomationRuleByID: (...args: unknown[]) => mockUseGetAutomationRuleByID(...args),
   useCreateAutomationRule: (...args: unknown[]) => mockUseCreateAutomationRule(...args),
   useUpdateAutomationRule: (...args: unknown[]) => mockUseUpdateAutomationRule(...args),
   useDeleteAutomationRule: (...args: unknown[]) => mockUseDeleteAutomationRule(...args),
