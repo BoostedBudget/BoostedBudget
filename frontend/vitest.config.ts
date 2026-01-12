@@ -199,6 +199,8 @@ export default mergeConfig(
         // Phase 5: Real-implementation tests (isolated config) (2026-01-11)
         'src/features/dashboard/widgets/registry.test.ts',
         'src/features/dashboard/context/DashboardContext.test.tsx',
+        // Phase 5A: App component tests (2026-01-11)
+        'src/App.test.tsx',
       ],
       coverage: {
         provider: 'v8',
