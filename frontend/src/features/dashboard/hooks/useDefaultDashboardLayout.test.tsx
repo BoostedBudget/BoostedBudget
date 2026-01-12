@@ -1,41 +1,15 @@
-import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach } from 'bun:test'
 import { renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import type { DashboardLayout } from '../types'
 
-const mockRefetch = mock(() => {})
-
-const mockUseGetDefaultLayout = mock(() => ({
-  data: undefined,
-  isLoading: false,
-  error: null,
-  refetch: mockRefetch,
-  isSuccess: false,
-}))
-
-mock.module('@/api/generated/endpoints/dashboard/dashboard', () => ({
-  useGetDefaultLayout: mockUseGetDefaultLayout,
-  getGetDefaultLayoutQueryKey: mock(() => ['dashboard', 'default-layout']),
-}))
-
-mock.module('../widgets/registry', () => ({
-  DEFAULT_LAYOUT: {
-    widgets: [
-      {
-        i: 'fallback-widget-1',
-        type: 'cash-flow-chart',
-        x: 0,
-        y: 0,
-        w: 12,
-        h: 5,
-        minW: 4,
-        minH: 3,
-      },
-    ],
-    version: 1,
-  },
-}))
+// Import centralized mocks - no inline mock.module() calls
+import {
+  mockUseGetDefaultLayout,
+  mockRefetchDefaultLayout,
+  mockGetDefaultLayoutQueryKey,
+} from '@/test/mocks/dashboard-api'
 
 import { useDefaultDashboardLayout } from './useDefaultDashboardLayout'
 
@@ -79,19 +53,33 @@ describe('useDefaultDashboardLayout', () => {
     version: 3,
   }
 
-  const configureMock = (data: unknown = undefined, isLoading = false, error: unknown = null, isSuccess = false) => {
+  const configureMock = (
+    data: unknown = undefined,
+    isLoading = false,
+    error: unknown = null,
+    isSuccess = false
+  ) => {
     mockUseGetDefaultLayout.mockReturnValue({
       data,
       isLoading,
       error,
-      refetch: mockRefetch,
+      refetch: mockRefetchDefaultLayout,
       isSuccess,
     })
   }
 
   beforeEach(() => {
     mockUseGetDefaultLayout.mockClear()
-    mockRefetch.mockClear()
+    mockRefetchDefaultLayout.mockClear()
+    mockGetDefaultLayoutQueryKey.mockClear()
+    // Reset to default loading state
+    mockUseGetDefaultLayout.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      error: null,
+      refetch: mockRefetchDefaultLayout,
+      isSuccess: false,
+    })
   })
 
   it('should return loading state initially', () => {
@@ -125,7 +113,8 @@ describe('useDefaultDashboardLayout', () => {
     expect(result.current.error).toBeDefined()
     expect(result.current.error?.message).toBe('Failed to fetch layout')
     expect(result.current.defaultLayout).toBeDefined()
-    expect(result.current.defaultLayout.version).toBe(1)
+    // Fallback uses centralized mock's DEFAULT_LAYOUT (version: 4)
+    expect(result.current.defaultLayout.version).toBe(4)
     expect(result.current.isFromApi).toBe(false)
   })
 
@@ -144,7 +133,7 @@ describe('useDefaultDashboardLayout', () => {
     })
     result.current.refetch()
     await waitFor(() => {
-      expect(mockRefetch).toHaveBeenCalled()
+      expect(mockRefetchDefaultLayout).toHaveBeenCalled()
     })
   })
 

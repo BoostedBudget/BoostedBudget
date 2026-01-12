@@ -26,7 +26,7 @@ The primary purpose of these scripts is to generate TypeScript types from `confi
 2. **Generates Types**: Creates TypeScript interfaces and constants
 3. **Writes Robustly**: Uses fsync to force kernel buffer flush to disk
 4. **Verifies**: Reads back and validates content with retry logic
-5. **Auto-triggers**: pnpm hooks and Vite plugin ensure automatic generation
+5. **Auto-triggers**: bun hooks and Vite plugin ensure automatic generation
 
 ### Generated Output
 
@@ -55,18 +55,18 @@ export const SUBSCRIPTION_TIERS: {
 
 **Manual Generation**:
 ```bash
-pnpm run generate:types
+bun run generate:types
 ```
 
 **With Verification**:
 ```bash
-pnpm run generate:types:verify
+bun run generate:types:verify
 ```
 
 **Automatic Generation** (you usually don't need to run manually):
-- `pnpm run dev` - Vite plugin generates before server starts
-- `pnpm run build` - prebuild hook generates
-- `pnpm test` - pretest hook generates
+- `bun run dev` - Vite plugin generates before server starts
+- `bun run build` - prebuild hook generates
+- `bun test` - pretest hook generates
 
 ### Timing Issue Prevention
 
@@ -94,19 +94,19 @@ Historical Context: Early implementations had race conditions on macOS APFS wher
 
 **Unit Tests**:
 ```bash
-pnpm test -- scripts/generate-tier-types.test.ts --run
+bun test -- scripts/generate-tier-types.test.ts --run
 ```
 
 **Integration Tests** (timing reliability):
 ```bash
-pnpm test -- scripts/integration/generation-timing.test.ts --run
+bun test -- scripts/integration/generation-timing.test.ts --run
 ```
 
 **Stress Test** (manual):
 ```bash
 # Run generation 100 times rapidly
 for i in {1..100}; do
-  pnpm run generate:types || exit 1
+  bun run generate:types || exit 1
 done
 ```
 
@@ -118,10 +118,10 @@ The generated file doesn't exist. This is normal on fresh clone.
 
 Fix: Run any of these commands:
 ```bash
-pnpm run generate:types
-pnpm run dev
-pnpm test
-pnpm run build
+bun run generate:types
+bun run dev
+bun test
+bun run build
 ```
 
 **Error: "File verification failed after 10 attempts"**
@@ -147,7 +147,7 @@ The generation script produced unexpected output. This could indicate:
 
 Fix:
 1. Check `config/subscription_tiers.yaml` is valid
-2. Run: `pnpm run generate:types -- --verbose`
+2. Run: `bun run generate:types -- --verbose`
 3. Check the generated file manually
 4. Report if it persists
 
@@ -181,20 +181,20 @@ git commit -m "Untrack generated file"
 
 **Adding New Tiers**:
 1. Edit `config/subscription_tiers.yaml`
-2. Run `pnpm test` (auto-generates + runs tests)
+2. Run `bun test` (auto-generates + runs tests)
 3. Check `src/types/generated/subscriptionTiers.ts` was updated
 4. **Do NOT commit the generated file**
 
 **Modifying Generation Logic**:
 1. Edit `generate-tier-types.ts`
-2. Run tests: `pnpm test -- scripts/generate-tier-types.test.ts`
-3. Test manually: `pnpm run generate:types`
+2. Run tests: `bun test -- scripts/generate-tier-types.test.ts`
+3. Test manually: `bun run generate:types`
 4. Check generated output looks correct
 
 **Debugging Generation**:
 ```bash
 # Verbose output
-pnpm run generate:types
+bun run generate:types
 
 # Check what was generated
 cat src/types/generated/subscriptionTiers.ts
@@ -226,7 +226,7 @@ node --inspect-brk ./node_modules/.bin/tsx scripts/generate-tier-types-cli.ts
 **Why Vite plugin?**
 - Ensures generation before module resolution
 - Prevents "Cannot find module" errors
-- Works even if pnpm hooks somehow don't run
+- Works even if bun hooks somehow don't run
 - Defense in depth (multiple safety nets)
 
 ### Contributing
@@ -236,14 +236,14 @@ When modifying generation scripts:
 2. ✅ Test on macOS, Linux, Windows
 3. ✅ Run integration tests 10+ times
 4. ✅ Update this README
-5. ✅ Document any new pnpm scripts
+5. ✅ Document any new bun scripts
 
 ### References
 
 - YAML Config: `config/subscription_tiers.yaml`
 - Generated Output: `src/types/generated/subscriptionTiers.ts` (git-ignored)
 - Vite Plugin: `vite.config.ts` (`tierTypesGeneratorPlugin`)
-- pnpm Scripts: `package.json`
+- bun Scripts: `package.json`
 - CI Workflow: `.github/workflows/ci-cd.yml`
 - Main Documentation: `config/README.md`
 

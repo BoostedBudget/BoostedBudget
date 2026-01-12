@@ -1,119 +1,38 @@
 /**
  * DashboardPage Component Tests
- * Issue #575: Migrated to bun:test
+ * Issue #575: Migrated to bun:test with centralized mocks
  */
 
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
-import type { ReactNode } from 'react'
 import type {
   BalanceSummary,
   BalanceHistory,
   AccountTypesResponse,
-  WidgetType,
 } from '../types'
 
-// Mock Clerk
-const mockGetToken = mock(() => Promise.resolve('mock-token'))
-const mockUseAuth = mock(() => ({
-  isSignedIn: true,
-  isLoaded: true,
-  getToken: mockGetToken,
-}))
+// Import centralized mocks - no inline mock.module() calls for these
+import { mockUseAuth, createMockClerkAuth } from '@/test/mocks/clerk'
+import {
+  mockUseDashboardContext,
+  mockSetFilters,
+  mockSetTimeframe,
+  mockSetIsEditing,
+} from '@/test/mocks/dashboard-context'
+import {
+  mockUseDashboardData,
+  mockDashboardDataRefetch,
+  mockUseDashboardLayout,
+  mockUpdateLayout,
+  mockAddWidget,
+  mockRemoveWidget,
+  mockResetToDefault,
+  mockSaveNow,
+  DEFAULT_LAYOUT_MOCK,
+  mockUseDashboardOnboarding,
+  mockDismissHint,
+} from '@/test/mocks/dashboard-wrapper-hooks'
 
-mock.module('@clerk/react-router', () => ({
-  useAuth: (...args: unknown[]) => mockUseAuth(...args),
-}))
-
-// Mock useDashboardData
-const mockRefetch = mock(() => {})
-const mockUseDashboardData = mock(() => ({
-  summary: null,
-  history: null,
-  accountTypes: null,
-  loading: false,
-  error: null,
-  refetch: mockRefetch,
-}))
-
-mock.module('../hooks/useDashboardData', () => ({
-  useDashboardData: (...args: unknown[]) => mockUseDashboardData(...args),
-}))
-
-// Mock useDashboardLayout
-const mockUpdateLayout = mock(() => {})
-const mockAddWidget = mock(() => {})
-const mockRemoveWidget = mock(() => {})
-const mockResetToDefault = mock(() => {})
-const mockSaveNow = mock(() => {})
-
-const defaultLayoutMock = {
-  layout: {
-    widgets: [
-      { i: 'balance-overview-1', type: 'balance-overview' as WidgetType, x: 0, y: 0, w: 4, h: 2 },
-      { i: 'cash-flow-summary-1', type: 'cash-flow-summary' as WidgetType, x: 4, y: 0, w: 8, h: 2 },
-      { i: 'balance-history-1', type: 'balance-history' as WidgetType, x: 0, y: 2, w: 6, h: 4 },
-      { i: 'cash-flow-chart-1', type: 'cash-flow-chart' as WidgetType, x: 6, y: 2, w: 6, h: 4 },
-      { i: 'account-cards-1', type: 'account-cards' as WidgetType, x: 0, y: 6, w: 12, h: 3 },
-    ],
-    version: 1,
-  },
-  loading: false,
-  error: null,
-  saving: false,
-  updateLayout: mockUpdateLayout,
-  addWidget: mockAddWidget,
-  removeWidget: mockRemoveWidget,
-  resetToDefault: mockResetToDefault,
-  saveNow: mockSaveNow,
-}
-
-const mockUseDashboardLayout = mock(() => defaultLayoutMock)
-
-mock.module('../hooks/useDashboardLayout', () => ({
-  useDashboardLayout: (...args: unknown[]) => mockUseDashboardLayout(...args),
-}))
-
-// Mock useDashboardOnboarding
-const mockDismissHint = mock(() => {})
-const mockUseDashboardOnboarding = mock(() => ({
-  showHint: false,
-  dismissHint: mockDismissHint,
-}))
-
-mock.module('../hooks/useDashboardOnboarding', () => ({
-  useDashboardOnboarding: (...args: unknown[]) => mockUseDashboardOnboarding(...args),
-}))
-
-// Mock DashboardContext to have direct control over state
-const mockSetFilters = mock(() => {})
-const mockSetTimeframe = mock(() => {})
-const mockSetIsEditing = mock(() => {})
-
-const defaultContextValue = {
-  filters: {
-    startDate: '2025-01-01',
-    endDate: '2025-01-31',
-    accountTypes: undefined,
-    includeTransfers: false,
-  },
-  setFilters: mockSetFilters,
-  timeframe: 'month' as const,
-  setTimeframe: mockSetTimeframe,
-  isEditing: false,
-  setIsEditing: mockSetIsEditing,
-}
-
-const mockUseDashboardContext = mock(() => defaultContextValue)
-
-mock.module('../context/DashboardContext', () => ({
-  useDashboardContext: (...args: unknown[]) => mockUseDashboardContext(...args),
-  DashboardProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
-  DashboardContext: {
-    Provider: ({ children }: { children: ReactNode }) => <>{children}</>,
-  },
-}))
-
-// Mock child components
+// Mock child components (these are isolated mocks specific to this test)
 mock.module('../widgets/DashboardGrid', () => ({
   DashboardGrid: () => <div data-testid="dashboard-grid">Dashboard Grid</div>,
 }))
@@ -125,9 +44,7 @@ mock.module('../widgets/WidgetCatalog', () => ({
 
 mock.module('./BalanceOverview', () => ({
   BalanceOverview: ({ summary }: { summary: BalanceSummary }) => (
-    <div data-testid="balance-overview">
-      Balance Overview: ${summary.total_balance}
-    </div>
+    <div data-testid="balance-overview">Balance Overview: ${summary.total_balance}</div>
   ),
 }))
 
@@ -157,9 +74,7 @@ mock.module('./AccountTypeFilter', () => ({
     onChange: (types: string[]) => void
   }) => (
     <div data-testid="account-type-filter">
-      <button onClick={() => onChange(['depository'])}>
-        Filter: {accountTypes.types.length} types
-      </button>
+      <button onClick={() => onChange(['depository'])}>Filter: {accountTypes.types.length} types</button>
       <span>Selected: {selectedTypes.length}</span>
     </div>
   ),
@@ -172,9 +87,7 @@ mock.module('./TimeframeSelector', () => ({
     onRangeChange: (start: string, end: string) => void
   }) => (
     <div data-testid="timeframe-selector">
-      <button onClick={() => onRangeChange('2025-10-01', '2025-11-15')}>
-        Change Timeframe
-      </button>
+      <button onClick={() => onRangeChange('2025-10-01', '2025-11-15')}>Change Timeframe</button>
     </div>
   ),
 }))
@@ -195,27 +108,25 @@ import { DashboardPage } from './DashboardPage'
 describe('DashboardPage', () => {
   const mockSummary: BalanceSummary = {
     as_of_date: '2025-11-15',
-    total_balance: 15000.50,
+    total_balance: 15000.5,
     by_type: {
       depository: {
-        balance: 5000.00,
+        balance: 5000.0,
         account_count: 2,
         accounts: [
-          { id: 'acc-1', name: 'Checking', balance: 3000.00 },
-          { id: 'acc-2', name: 'Savings', balance: 2000.00 },
+          { id: 'acc-1', name: 'Checking', balance: 3000.0 },
+          { id: 'acc-2', name: 'Savings', balance: 2000.0 },
         ],
       },
       credit: {
-        balance: -2000.00,
+        balance: -2000.0,
         account_count: 1,
-        accounts: [
-          { id: 'acc-3', name: 'Credit Card', balance: -2000.00 },
-        ],
+        accounts: [{ id: 'acc-3', name: 'Credit Card', balance: -2000.0 }],
       },
     },
     period_comparison: {
-      previous_balance: 14000.00,
-      change_amount: 1000.50,
+      previous_balance: 14000.0,
+      change_amount: 1000.5,
       change_percent: 7.15,
     },
   }
@@ -227,58 +138,91 @@ describe('DashboardPage', () => {
     snapshots: [
       {
         date: '2025-10-16',
-        balance: 14000.00,
-        by_type: { depository: 4500.00, credit: -1500.00 },
+        balance: 14000.0,
+        by_type: { depository: 4500.0, credit: -1500.0 },
       },
       {
         date: '2025-11-15',
-        balance: 15000.50,
-        by_type: { depository: 5000.00, credit: -2000.00 },
+        balance: 15000.5,
+        by_type: { depository: 5000.0, credit: -2000.0 },
       },
     ],
   }
 
   const mockAccountTypes: AccountTypesResponse = {
     types: [
-      { key: 'depository', label: 'Checking & Savings', count: 2, total_balance: 5000.00 },
-      { key: 'credit', label: 'Credit Cards', count: 1, total_balance: -2000.00 },
+      { key: 'depository', label: 'Checking & Savings', count: 2, total_balance: 5000.0 },
+      { key: 'credit', label: 'Credit Cards', count: 1, total_balance: -2000.0 },
     ],
+  }
+
+  // Default context value
+  const defaultContextValue = {
+    filters: {
+      startDate: '2025-01-01',
+      endDate: '2025-01-31',
+      accountTypes: undefined,
+      includeTransfers: false,
+    },
+    setFilters: mockSetFilters,
+    timeframe: 'month' as const,
+    setTimeframe: mockSetTimeframe,
+    isEditing: false,
+    setIsEditing: mockSetIsEditing,
   }
 
   // Store original window.location for restoration
   const originalLocation = window.location
 
   beforeEach(() => {
-    // Clear all mocks
+    // Clear all centralized mocks
     mockUseAuth.mockClear()
     mockUseDashboardData.mockClear()
     mockUseDashboardLayout.mockClear()
     mockUseDashboardOnboarding.mockClear()
     mockUseDashboardContext.mockClear()
-    mockRefetch.mockClear()
+    mockDashboardDataRefetch.mockClear()
     mockUpdateLayout.mockClear()
     mockAddWidget.mockClear()
     mockRemoveWidget.mockClear()
     mockResetToDefault.mockClear()
     mockSaveNow.mockClear()
     mockDismissHint.mockClear()
-    mockGetToken.mockClear()
     mockSetFilters.mockClear()
     mockSetTimeframe.mockClear()
     mockSetIsEditing.mockClear()
 
     // Default mock returns
-    mockUseAuth.mockReturnValue({
-      isSignedIn: true,
-      isLoaded: true,
-      getToken: mockGetToken,
+    mockUseAuth.mockReturnValue(
+      createMockClerkAuth({
+        isSignedIn: true,
+        isLoaded: true,
+      })
+    )
+    mockUseDashboardLayout.mockReturnValue({
+      layout: DEFAULT_LAYOUT_MOCK,
+      loading: false,
+      error: null,
+      saving: false,
+      updateLayout: mockUpdateLayout,
+      addWidget: mockAddWidget,
+      removeWidget: mockRemoveWidget,
+      resetToDefault: mockResetToDefault,
+      saveNow: mockSaveNow,
     })
-    mockUseDashboardLayout.mockReturnValue(defaultLayoutMock)
     mockUseDashboardOnboarding.mockReturnValue({
       showHint: false,
       dismissHint: mockDismissHint,
     })
     mockUseDashboardContext.mockReturnValue(defaultContextValue)
+    mockUseDashboardData.mockReturnValue({
+      summary: null,
+      history: null,
+      accountTypes: null,
+      loading: false,
+      error: null,
+      refetch: mockDashboardDataRefetch,
+    })
   })
 
   afterEach(() => {
@@ -295,16 +239,15 @@ describe('DashboardPage', () => {
   describe('Loading State', () => {
     it('should show loading spinner when layout loading=true', () => {
       mockUseDashboardLayout.mockReturnValue({
-        ...defaultLayoutMock,
+        layout: DEFAULT_LAYOUT_MOCK,
         loading: true,
-      })
-      mockUseDashboardData.mockReturnValue({
-        summary: null,
-        history: null,
-        accountTypes: null,
-        loading: false,
         error: null,
-        refetch: mockRefetch,
+        saving: false,
+        updateLayout: mockUpdateLayout,
+        addWidget: mockAddWidget,
+        removeWidget: mockRemoveWidget,
+        resetToDefault: mockResetToDefault,
+        saveNow: mockSaveNow,
       })
 
       render(<DashboardPage />)
@@ -316,16 +259,15 @@ describe('DashboardPage', () => {
 
     it('should display "Loading dashboard..." text when layout loading', () => {
       mockUseDashboardLayout.mockReturnValue({
-        ...defaultLayoutMock,
+        layout: DEFAULT_LAYOUT_MOCK,
         loading: true,
-      })
-      mockUseDashboardData.mockReturnValue({
-        summary: null,
-        history: null,
-        accountTypes: null,
-        loading: false,
         error: null,
-        refetch: mockRefetch,
+        saving: false,
+        updateLayout: mockUpdateLayout,
+        addWidget: mockAddWidget,
+        removeWidget: mockRemoveWidget,
+        resetToDefault: mockResetToDefault,
+        saveNow: mockSaveNow,
       })
 
       render(<DashboardPage />)
@@ -335,16 +277,15 @@ describe('DashboardPage', () => {
 
     it('should not render dashboard grid while loading', () => {
       mockUseDashboardLayout.mockReturnValue({
-        ...defaultLayoutMock,
+        layout: DEFAULT_LAYOUT_MOCK,
         loading: true,
-      })
-      mockUseDashboardData.mockReturnValue({
-        summary: null,
-        history: null,
-        accountTypes: null,
-        loading: false,
         error: null,
-        refetch: mockRefetch,
+        saving: false,
+        updateLayout: mockUpdateLayout,
+        addWidget: mockAddWidget,
+        removeWidget: mockRemoveWidget,
+        resetToDefault: mockResetToDefault,
+        saveNow: mockSaveNow,
       })
 
       render(<DashboardPage />)
@@ -356,16 +297,15 @@ describe('DashboardPage', () => {
   describe('Error State', () => {
     it('should show error message when layout error exists', () => {
       mockUseDashboardLayout.mockReturnValue({
-        ...defaultLayoutMock,
-        error: 'Failed to fetch dashboard layout',
-      })
-      mockUseDashboardData.mockReturnValue({
-        summary: null,
-        history: null,
-        accountTypes: null,
+        layout: DEFAULT_LAYOUT_MOCK,
         loading: false,
-        error: null,
-        refetch: mockRefetch,
+        error: 'Failed to fetch dashboard layout',
+        saving: false,
+        updateLayout: mockUpdateLayout,
+        addWidget: mockAddWidget,
+        removeWidget: mockRemoveWidget,
+        resetToDefault: mockResetToDefault,
+        saveNow: mockSaveNow,
       })
 
       render(<DashboardPage />)
@@ -376,16 +316,15 @@ describe('DashboardPage', () => {
 
     it('should display error details from layout error', () => {
       mockUseDashboardLayout.mockReturnValue({
-        ...defaultLayoutMock,
-        error: 'Network timeout error',
-      })
-      mockUseDashboardData.mockReturnValue({
-        summary: null,
-        history: null,
-        accountTypes: null,
+        layout: DEFAULT_LAYOUT_MOCK,
         loading: false,
-        error: null,
-        refetch: mockRefetch,
+        error: 'Network timeout error',
+        saving: false,
+        updateLayout: mockUpdateLayout,
+        addWidget: mockAddWidget,
+        removeWidget: mockRemoveWidget,
+        resetToDefault: mockResetToDefault,
+        saveNow: mockSaveNow,
       })
 
       render(<DashboardPage />)
@@ -395,16 +334,15 @@ describe('DashboardPage', () => {
 
     it('should show "Try Again" button on error', () => {
       mockUseDashboardLayout.mockReturnValue({
-        ...defaultLayoutMock,
-        error: 'API error',
-      })
-      mockUseDashboardData.mockReturnValue({
-        summary: null,
-        history: null,
-        accountTypes: null,
+        layout: DEFAULT_LAYOUT_MOCK,
         loading: false,
-        error: null,
-        refetch: mockRefetch,
+        error: 'API error',
+        saving: false,
+        updateLayout: mockUpdateLayout,
+        addWidget: mockAddWidget,
+        removeWidget: mockRemoveWidget,
+        resetToDefault: mockResetToDefault,
+        saveNow: mockSaveNow,
       })
 
       render(<DashboardPage />)
@@ -423,16 +361,15 @@ describe('DashboardPage', () => {
       })
 
       mockUseDashboardLayout.mockReturnValue({
-        ...defaultLayoutMock,
-        error: 'API error',
-      })
-      mockUseDashboardData.mockReturnValue({
-        summary: null,
-        history: null,
-        accountTypes: null,
+        layout: DEFAULT_LAYOUT_MOCK,
         loading: false,
-        error: null,
-        refetch: mockRefetch,
+        error: 'API error',
+        saving: false,
+        updateLayout: mockUpdateLayout,
+        addWidget: mockAddWidget,
+        removeWidget: mockRemoveWidget,
+        resetToDefault: mockResetToDefault,
+        saveNow: mockSaveNow,
       })
 
       render(<DashboardPage />)
@@ -445,16 +382,15 @@ describe('DashboardPage', () => {
 
     it('should not render dashboard grid on error', () => {
       mockUseDashboardLayout.mockReturnValue({
-        ...defaultLayoutMock,
-        error: 'API error',
-      })
-      mockUseDashboardData.mockReturnValue({
-        summary: null,
-        history: null,
-        accountTypes: null,
+        layout: DEFAULT_LAYOUT_MOCK,
         loading: false,
-        error: null,
-        refetch: mockRefetch,
+        error: 'API error',
+        saving: false,
+        updateLayout: mockUpdateLayout,
+        addWidget: mockAddWidget,
+        removeWidget: mockRemoveWidget,
+        resetToDefault: mockResetToDefault,
+        saveNow: mockSaveNow,
       })
 
       render(<DashboardPage />)
@@ -472,7 +408,7 @@ describe('DashboardPage', () => {
         accountTypes: mockAccountTypes,
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockDashboardDataRefetch,
       })
 
       render(<DashboardPage />)
@@ -488,7 +424,7 @@ describe('DashboardPage', () => {
         accountTypes: mockAccountTypes,
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockDashboardDataRefetch,
       })
 
       render(<DashboardPage />)
@@ -504,7 +440,7 @@ describe('DashboardPage', () => {
         accountTypes: null,
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockDashboardDataRefetch,
       })
 
       render(<DashboardPage />)
@@ -514,15 +450,6 @@ describe('DashboardPage', () => {
     })
 
     it('should render dashboard grid when all data is null', () => {
-      mockUseDashboardData.mockReturnValue({
-        summary: null,
-        history: null,
-        accountTypes: null,
-        loading: false,
-        error: null,
-        refetch: mockRefetch,
-      })
-
       render(<DashboardPage />)
 
       expect(screen.getByTestId('dashboard-grid')).toBeInTheDocument()
@@ -530,15 +457,6 @@ describe('DashboardPage', () => {
     })
 
     it('should still render dashboard with widget grid when data is empty', () => {
-      mockUseDashboardData.mockReturnValue({
-        summary: null,
-        history: null,
-        accountTypes: null,
-        loading: false,
-        error: null,
-        refetch: mockRefetch,
-      })
-
       render(<DashboardPage />)
 
       expect(screen.getByTestId('dashboard-grid')).toBeInTheDocument()
@@ -546,15 +464,6 @@ describe('DashboardPage', () => {
     })
 
     it('should render widget grid even when data is empty', () => {
-      mockUseDashboardData.mockReturnValue({
-        summary: null,
-        history: null,
-        accountTypes: null,
-        loading: false,
-        error: null,
-        refetch: mockRefetch,
-      })
-
       render(<DashboardPage />)
 
       expect(screen.getByTestId('dashboard-grid')).toBeInTheDocument()
@@ -569,7 +478,7 @@ describe('DashboardPage', () => {
         accountTypes: mockAccountTypes,
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockDashboardDataRefetch,
       })
     })
 
@@ -618,7 +527,7 @@ describe('DashboardPage', () => {
         accountTypes: mockAccountTypes,
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockDashboardDataRefetch,
       })
     })
 
@@ -628,7 +537,11 @@ describe('DashboardPage', () => {
       const calls = mockUseDashboardData.mock.calls
       expect(calls.length).toBeGreaterThan(0)
 
-      const filters = calls[0][0] as { startDate?: string; endDate?: string; accountTypes?: string[] }
+      const filters = calls[0][0] as {
+        startDate?: string
+        endDate?: string
+        accountTypes?: string[]
+      }
       expect(filters).toBeDefined()
       expect(filters?.startDate).toBeDefined()
       expect(filters?.endDate).toBeDefined()
@@ -641,13 +554,8 @@ describe('DashboardPage', () => {
       const filterButton = screen.getByText(/Filter: 2 types/)
       await user.click(filterButton)
 
-      // Verify the component was rendered and button exists
-      // The actual filter state change flows through DashboardContext
-      // which triggers a re-render with updated selectedTypes
       await waitFor(() => {
-        // After clicking, useDashboardData should have been called again with updated filters
         const calls = mockUseDashboardData.mock.calls
-        // The context state update should trigger re-render with accountTypes filter
         expect(calls.length).toBeGreaterThanOrEqual(1)
       })
     })
@@ -659,8 +567,6 @@ describe('DashboardPage', () => {
       const timeframeButton = screen.getByText('Change Timeframe')
       await user.click(timeframeButton)
 
-      // Verify the button was clicked - the state change flows through DashboardContext
-      // which should eventually trigger useDashboardData with updated dates
       await waitFor(() => {
         const calls = mockUseDashboardData.mock.calls
         expect(calls.length).toBeGreaterThanOrEqual(1)
@@ -690,7 +596,7 @@ describe('DashboardPage', () => {
         accountTypes: mockAccountTypes,
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockDashboardDataRefetch,
       })
     })
 
@@ -716,7 +622,7 @@ describe('DashboardPage', () => {
         accountTypes: mockAccountTypes,
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockDashboardDataRefetch,
       })
     })
 
@@ -741,8 +647,6 @@ describe('DashboardPage', () => {
       const button = screen.getByText('Change Timeframe')
       await user.click(button)
 
-      // Verify the callback was triggered - the button click invokes onRangeChange
-      // which flows through DashboardContext to update filters
       await waitFor(() => {
         const calls = mockUseDashboardData.mock.calls
         expect(calls.length).toBeGreaterThanOrEqual(1)
@@ -758,7 +662,7 @@ describe('DashboardPage', () => {
         accountTypes: mockAccountTypes,
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockDashboardDataRefetch,
       })
 
       render(<DashboardPage />)
@@ -774,7 +678,7 @@ describe('DashboardPage', () => {
         accountTypes: mockAccountTypes,
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockDashboardDataRefetch,
       })
 
       render(<DashboardPage />)
@@ -790,7 +694,7 @@ describe('DashboardPage', () => {
         accountTypes: null,
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockDashboardDataRefetch,
       })
 
       render(<DashboardPage />)
@@ -808,7 +712,7 @@ describe('DashboardPage', () => {
         accountTypes: mockAccountTypes,
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockDashboardDataRefetch,
       })
     })
 
@@ -831,11 +735,12 @@ describe('DashboardPage', () => {
 
       render(<DashboardPage />)
 
-      expect(screen.queryByText(/Click "Edit" to customize your dashboard/i)).not.toBeInTheDocument()
+      expect(
+        screen.queryByText(/Click "Edit" to customize your dashboard/i)
+      ).not.toBeInTheDocument()
     })
 
     it('should not show onboarding hint when editing', () => {
-      // Set context to editing mode directly via mock
       mockUseDashboardContext.mockReturnValue({
         ...defaultContextValue,
         isEditing: true,
@@ -847,8 +752,9 @@ describe('DashboardPage', () => {
 
       render(<DashboardPage />)
 
-      // When isEditing is true, the hint should not be shown (condition: showHint && !isEditing)
-      expect(screen.queryByText(/Click "Edit" to customize your dashboard/i)).not.toBeInTheDocument()
+      expect(
+        screen.queryByText(/Click "Edit" to customize your dashboard/i)
+      ).not.toBeInTheDocument()
     })
 
     it('should call setIsEditing when Edit button clicked', async () => {
@@ -862,7 +768,6 @@ describe('DashboardPage', () => {
 
       await user.click(screen.getByRole('button', { name: /Edit/i }))
 
-      // Verify setIsEditing was called with true
       expect(mockSetIsEditing).toHaveBeenCalledWith(true)
     })
 

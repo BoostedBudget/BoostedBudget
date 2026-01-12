@@ -1,7 +1,7 @@
 /**
  * BudgetsPage Tests
  * Issue #111: Goals Dashboard & Progress Visualization
- * Issue #575: Migrated to bun:test
+ * Issue #575: Migrated to bun:test with centralized mocks
  *
  * TDD tests for the main budgets page component.
  */
@@ -9,72 +9,25 @@
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
 import type { Budget, SavingsGoal } from '../types'
 
-// Mock functions for useBudgets hook
-const mockRefetchBudgets = mock(() => Promise.resolve())
-const mockCreateBudget = mock(() => Promise.resolve())
-const mockUpdateBudget = mock(() => Promise.resolve())
-const mockDeleteBudget = mock(() => Promise.resolve())
-const mockGetAvailableCategories = mock(() => Promise.resolve([]))
-const mockAddCategory = mock(() => Promise.resolve())
-const mockUpdateCategory = mock(() => Promise.resolve())
-const mockDeleteCategory = mock(() => Promise.resolve())
+// Import centralized mocks - no inline mock.module() calls for wrapper hooks
+import {
+  mockUseBudgets,
+  mockRefetchBudgets,
+  mockCreateBudget,
+  mockUpdateBudget,
+  mockDeleteBudget,
+  mockGetAvailableCategories,
+  mockAddCategory,
+  mockUpdateCategory,
+  mockDeleteCategory,
+  mockUseSavingsGoals,
+  mockRefetchGoals,
+  mockCreateGoal,
+  mockUpdateGoal,
+  mockDeleteGoal,
+} from '@/test/mocks/budgets-wrapper'
 
-const mockUseBudgets = mock(() => ({
-  budgets: [] as Budget[],
-  loading: false,
-  error: null as Error | null,
-  refetch: mockRefetchBudgets,
-  createBudget: mockCreateBudget,
-  updateBudget: mockUpdateBudget,
-  deleteBudget: mockDeleteBudget,
-  getAvailableCategories: mockGetAvailableCategories,
-  addCategory: mockAddCategory,
-  updateCategory: mockUpdateCategory,
-  deleteCategory: mockDeleteCategory,
-}))
-
-// Mock functions for useSavingsGoals hook
-const mockRefetchGoals = mock(() => Promise.resolve())
-const mockCreateGoal = mock(() => Promise.resolve())
-const mockUpdateGoal = mock(() => Promise.resolve())
-const mockDeleteGoal = mock(() => Promise.resolve())
-
-const mockUseSavingsGoals = mock(() => ({
-  goals: [] as SavingsGoal[],
-  goalsWithProgress: [],
-  loading: false,
-  error: null as Error | null,
-  totalTarget: 0,
-  totalSaved: 0,
-  refetch: mockRefetchGoals,
-  createGoal: mockCreateGoal,
-  updateGoal: mockUpdateGoal,
-  deleteGoal: mockDeleteGoal,
-}))
-
-// Mock wrapper hooks BEFORE importing the component
-mock.module('../hooks/useBudgets', () => ({
-  useBudgets: () => mockUseBudgets(),
-}))
-
-mock.module('../hooks/useSavingsGoals', () => ({
-  useSavingsGoals: () => mockUseSavingsGoals(),
-}))
-
-mock.module('../hooks/useBudgetFilters', () => ({
-  useBudgetFilters: () => ({
-    filters: { period: [], progressMin: undefined, progressMax: undefined },
-    periodFilter: [],
-    progressRange: null,
-    setPeriodFilter: mock(() => {}),
-    setProgressRange: mock(() => {}),
-    clearAllFilters: mock(() => {}),
-    activeFilterCount: 0,
-    hasActiveFilters: false,
-  }),
-}))
-
-// Mock child components to simplify testing
+// Mock child components to simplify testing (isolated to this test file)
 mock.module('./BudgetCard', () => ({
   BudgetCard: ({
     budget,
@@ -86,10 +39,7 @@ mock.module('./BudgetCard', () => ({
     <div data-testid={`budget-card-${budget.id}`}>
       {budget.name}
       {onDelete && (
-        <button
-          data-testid={`delete-budget-${budget.id}`}
-          onClick={() => onDelete(budget.id)}
-        >
+        <button data-testid={`delete-budget-${budget.id}`} onClick={() => onDelete(budget.id)}>
           Delete Budget
         </button>
       )}
@@ -108,10 +58,7 @@ mock.module('./SavingsGoalCard', () => ({
     <div data-testid={`goal-card-${goal.id}`}>
       {goal.name}
       {onDelete && (
-        <button
-          data-testid={`delete-goal-${goal.id}`}
-          onClick={() => onDelete(goal.id)}
-        >
+        <button data-testid={`delete-goal-${goal.id}`} onClick={() => onDelete(goal.id)}>
           Delete Goal
         </button>
       )}
@@ -321,6 +268,7 @@ describe('BudgetsPage', () => {
   }
 
   beforeEach(() => {
+    // Clear all centralized mocks
     mockRefetchBudgets.mockClear()
     mockCreateBudget.mockClear()
     mockUpdateBudget.mockClear()
@@ -335,6 +283,33 @@ describe('BudgetsPage', () => {
     mockDeleteGoal.mockClear()
     mockUseBudgets.mockClear()
     mockUseSavingsGoals.mockClear()
+
+    // Reset to default state
+    mockUseBudgets.mockReturnValue({
+      budgets: [],
+      loading: false,
+      error: null,
+      refetch: mockRefetchBudgets,
+      createBudget: mockCreateBudget,
+      updateBudget: mockUpdateBudget,
+      deleteBudget: mockDeleteBudget,
+      getAvailableCategories: mockGetAvailableCategories,
+      addCategory: mockAddCategory,
+      updateCategory: mockUpdateCategory,
+      deleteCategory: mockDeleteCategory,
+    })
+    mockUseSavingsGoals.mockReturnValue({
+      goals: [],
+      goalsWithProgress: [],
+      loading: false,
+      error: null,
+      totalTarget: 0,
+      totalSaved: 0,
+      refetch: mockRefetchGoals,
+      createGoal: mockCreateGoal,
+      updateGoal: mockUpdateGoal,
+      deleteGoal: mockDeleteGoal,
+    })
   })
 
   afterEach(() => {
@@ -679,18 +654,6 @@ describe('BudgetsPage', () => {
         updateCategory: mockUpdateCategory,
         deleteCategory: mockDeleteCategory,
       })
-      mockUseSavingsGoals.mockReturnValue({
-        goals: [],
-        goalsWithProgress: [],
-        loading: false,
-        error: null,
-        totalTarget: 0,
-        totalSaved: 0,
-        refetch: mockRefetchGoals,
-        createGoal: mockCreateGoal,
-        updateGoal: mockUpdateGoal,
-        deleteGoal: mockDeleteGoal,
-      })
       render(<BudgetsPage />)
       await user.click(screen.getByTestId('delete-budget-budget-1'))
       await user.click(screen.getByText('Confirm Delete Budget'))
@@ -712,18 +675,6 @@ describe('BudgetsPage', () => {
         addCategory: mockAddCategory,
         updateCategory: mockUpdateCategory,
         deleteCategory: mockDeleteCategory,
-      })
-      mockUseSavingsGoals.mockReturnValue({
-        goals: [],
-        goalsWithProgress: [],
-        loading: false,
-        error: null,
-        totalTarget: 0,
-        totalSaved: 0,
-        refetch: mockRefetchGoals,
-        createGoal: mockCreateGoal,
-        updateGoal: mockUpdateGoal,
-        deleteGoal: mockDeleteGoal,
       })
       render(<BudgetsPage />)
       await user.click(screen.getByTestId('delete-budget-budget-2'))
@@ -757,19 +708,6 @@ describe('BudgetsPage', () => {
     it('calls deleteGoal when confirm clicked', async () => {
       const user = userEvent.setup()
       const localMockDeleteGoal = mock(() => Promise.resolve())
-      mockUseBudgets.mockReturnValue({
-        budgets: [],
-        loading: false,
-        error: null,
-        refetch: mockRefetchBudgets,
-        createBudget: mockCreateBudget,
-        updateBudget: mockUpdateBudget,
-        deleteBudget: mockDeleteBudget,
-        getAvailableCategories: mockGetAvailableCategories,
-        addCategory: mockAddCategory,
-        updateCategory: mockUpdateCategory,
-        deleteCategory: mockDeleteCategory,
-      })
       mockUseSavingsGoals.mockReturnValue({
         goals: [mockActiveGoal],
         goalsWithProgress: [],
@@ -791,19 +729,6 @@ describe('BudgetsPage', () => {
     it('can delete completed goal', async () => {
       const user = userEvent.setup()
       const localMockDeleteGoal = mock(() => Promise.resolve())
-      mockUseBudgets.mockReturnValue({
-        budgets: [],
-        loading: false,
-        error: null,
-        refetch: mockRefetchBudgets,
-        createBudget: mockCreateBudget,
-        updateBudget: mockUpdateBudget,
-        deleteBudget: mockDeleteBudget,
-        getAvailableCategories: mockGetAvailableCategories,
-        addCategory: mockAddCategory,
-        updateCategory: mockUpdateCategory,
-        deleteCategory: mockDeleteCategory,
-      })
       mockUseSavingsGoals.mockReturnValue({
         goals: [mockActiveGoal, mockCompletedGoal],
         goalsWithProgress: [],

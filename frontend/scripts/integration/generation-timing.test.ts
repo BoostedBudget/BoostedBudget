@@ -4,10 +4,10 @@
  * These tests validate that the robust file writing with fsync and verification
  * prevents timing issues that were occurring on macOS APFS and other filesystems.
  *
- * Run with: npm test -- scripts/integration/generation-timing.test.ts --run
+ * Run with: bun test scripts/integration/generation-timing.test.ts
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { existsSync, unlinkSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { generateOutputFile, readYamlConfig } from '../generate-tier-types'
