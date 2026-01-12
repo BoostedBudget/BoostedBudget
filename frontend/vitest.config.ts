@@ -206,6 +206,8 @@ export default mergeConfig(
         // Phase 2E: Rules tests (2026-01-12)
         'src/features/rules/components/RulesPage.test.tsx',
         'src/features/rules/components/RuleBuilder.test.tsx',
+        // Phase 2F: Account customization modal (2026-01-12)
+        'src/features/accounts/components/AccountCustomizationModal.test.tsx',
       ],
       coverage: {
         provider: 'v8',
