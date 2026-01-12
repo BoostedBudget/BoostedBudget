@@ -196,6 +196,8 @@ export default mergeConfig(
         'src/features/profile/ProfilePage.test.tsx',
         'src/features/pricing/PricingPage.test.tsx',
         'src/features/transactions/TransactionsPage.test.tsx',
+        // Phase 2C: CreateBudgetDialog (2026-01-11)
+        'src/features/budgets/components/CreateBudgetDialog.test.tsx',
         // Phase 5: Real-implementation tests (isolated config) (2026-01-11)
         'src/features/dashboard/widgets/registry.test.ts',
         'src/features/dashboard/context/DashboardContext.test.tsx',
