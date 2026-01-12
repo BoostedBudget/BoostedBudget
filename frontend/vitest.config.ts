@@ -165,8 +165,6 @@ export default mergeConfig(
         'src/features/budgets/components/BudgetTable.test.tsx',
         // Batch 32 - Rules and category management (2026-01-09)
         'src/features/rules/components/ConditionBuilder.test.tsx',
-        // NOTE: BudgetCategoryManager stays on vitest - mocks BudgetCategoryCard causing pollution
-        // NOTE: RulesPage stays on vitest - mocks useRuleTierLimits, useProfile, useSubscriptionTiers causing pollution
         // Batch 34 - Simple vi.mock() files (2026-01-09)
         'src/features/dashboard/widgets/CashFlowChartWidget.test.tsx',
         // DashboardGrid uses centralized registry mock now
@@ -214,6 +212,8 @@ export default mergeConfig(
         'src/features/budgets/components/BudgetDetailPage.test.tsx',
         // Phase 2I: Budgets page (2026-01-12)
         'src/features/budgets/components/BudgetsPage.test.tsx',
+        // Phase 2J: Budget category manager (2026-01-12)
+        'src/features/budgets/components/category-management/BudgetCategoryManager.test.tsx',
       ],
       coverage: {
         provider: 'v8',
