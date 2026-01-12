@@ -6,16 +6,13 @@
  *
  * Issue #307: Account Customization
  * Issue #544: Add unit tests for account customization components
+ * Issue #575: Migrated to bun:test
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
-import { AccountCustomizationModal } from './AccountCustomizationModal'
-import type { Account } from '../types'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 
-// Mock child components to simplify testing
-vi.mock('./ColorPicker', () => ({
+// Mock child components BEFORE importing the component under test
+mock.module('./ColorPicker', () => ({
   ColorPicker: ({
     value,
     onChange,
@@ -31,7 +28,7 @@ vi.mock('./ColorPicker', () => ({
   ),
 }))
 
-vi.mock('./IconSelector', () => ({
+mock.module('./IconSelector', () => ({
   IconSelector: ({
     value,
     onChange,
@@ -47,7 +44,7 @@ vi.mock('./IconSelector', () => ({
   ),
 }))
 
-vi.mock('./EmojiInput', () => ({
+mock.module('./EmojiInput', () => ({
   EmojiInput: ({
     value,
     onChange,
@@ -63,7 +60,7 @@ vi.mock('./EmojiInput', () => ({
   ),
 }))
 
-vi.mock('./AccountIconDisplay', () => ({
+mock.module('./AccountIconDisplay', () => ({
   AccountIconDisplay: ({ icon, className }: { icon: string; className?: string }) => (
     <span data-testid="account-icon" data-icon={icon} className={className}>
       [{icon}]
@@ -71,9 +68,14 @@ vi.mock('./AccountIconDisplay', () => ({
   ),
 }))
 
+import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { AccountCustomizationModal } from './AccountCustomizationModal'
+import type { Account } from '../types'
+
 describe('AccountCustomizationModal', () => {
-  const mockOnOpenChange = vi.fn()
-  const mockOnSave = vi.fn()
+  const mockOnOpenChange = mock(() => {})
+  const mockOnSave = mock(() => Promise.resolve())
 
   const mockAccount: Account = {
     id: '550e8400-e29b-41d4-a716-446655440000',
@@ -96,7 +98,8 @@ describe('AccountCustomizationModal', () => {
   }
 
   beforeEach(() => {
-    vi.clearAllMocks()
+    mockOnOpenChange.mockClear()
+    mockOnSave.mockClear()
   })
 
   describe('Modal Open/Close', () => {
@@ -137,7 +140,6 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
-      // Dialog exists but content is not rendered
       expect(screen.queryByText('Customize Account')).not.toBeInTheDocument()
       expect(screen.queryByLabelText('Nickname')).not.toBeInTheDocument()
     })
@@ -175,7 +177,6 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
-      // Preview should show nickname
       expect(screen.getByText('My Checking')).toBeInTheDocument()
     })
 
@@ -189,7 +190,6 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
-      // Should show official_name in preview
       expect(screen.getByText('Chase Total Checking')).toBeInTheDocument()
     })
 
@@ -267,7 +267,6 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
-      // Emoji tab should be active
       const emojiTab = screen.getByRole('tab', { name: 'Emoji' })
       expect(emojiTab).toHaveAttribute('data-state', 'active')
     })
@@ -282,7 +281,6 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
-      // Icon tab should be active by default
       const iconTab = screen.getByRole('tab', { name: 'Icon' })
       expect(iconTab).toHaveAttribute('data-state', 'active')
     })
@@ -291,7 +289,6 @@ describe('AccountCustomizationModal', () => {
   describe('Save Logic', () => {
     it('calls onSave with changed fields', async () => {
       const user = userEvent.setup()
-      mockOnSave.mockResolvedValue(undefined)
 
       render(
         <AccountCustomizationModal
@@ -302,14 +299,11 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
-      // Change nickname
       const nicknameInput = screen.getByLabelText('Nickname')
       await user.type(nicknameInput, 'New Name')
 
-      // Save
       await user.click(screen.getByRole('button', { name: 'Save Changes' }))
 
-      // Issue #171: onSave now receives full account object for user_account_id resolution
       await waitFor(() => {
         expect(mockOnSave).toHaveBeenCalledWith(mockAccount, expect.objectContaining({
           nickname: 'New Name',
@@ -329,17 +323,14 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
-      // Click save without making changes
       await user.click(screen.getByRole('button', { name: 'Save Changes' }))
 
-      // Should close modal without calling onSave
       expect(mockOnSave).not.toHaveBeenCalled()
       expect(mockOnOpenChange).toHaveBeenCalledWith(false)
     })
 
     it('closes modal after successful save', async () => {
       const user = userEvent.setup()
-      mockOnSave.mockResolvedValue(undefined)
 
       render(
         <AccountCustomizationModal
@@ -350,7 +341,6 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
-      // Change nickname and save
       const nicknameInput = screen.getByLabelText('Nickname')
       await user.type(nicknameInput, 'New Name')
       await user.click(screen.getByRole('button', { name: 'Save Changes' }))
@@ -373,7 +363,6 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
-      // Should have Loader2 icon (animate-spin class)
       const saveButton = screen.getByRole('button', { name: /Save Changes/i })
       expect(saveButton.querySelector('.animate-spin')).toBeInTheDocument()
     })
@@ -425,7 +414,6 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
-      // Preview should contain the emoji (multiple matches expected due to mock)
       const emojis = screen.getAllByText('💰')
       expect(emojis.length).toBeGreaterThan(0)
     })
@@ -445,7 +433,6 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
-      // Should render AccountIconDisplay
       expect(screen.getByTestId('account-icon')).toHaveAttribute('data-icon', 'wallet')
     })
 
@@ -459,7 +446,6 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
-      // Should show first letter of display name (C for Chase Total Checking)
       expect(screen.getByText('C')).toBeInTheDocument()
     })
 
@@ -469,8 +455,6 @@ describe('AccountCustomizationModal', () => {
         custom_color: '#EF4444',
       }
 
-      // Verify the component renders without errors when color is set
-      // The color is applied via inline styles to the preview container
       render(
         <AccountCustomizationModal
           account={accountWithColor}
@@ -480,9 +464,7 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
-      // Verify dialog renders with account having custom color
       expect(screen.getByRole('dialog')).toBeInTheDocument()
-      // Account name should be visible (this exercises the color branch)
       expect(screen.getByText('Chase Total Checking')).toBeInTheDocument()
     })
   })
@@ -554,7 +536,6 @@ describe('AccountCustomizationModal', () => {
       const toggle = screen.getByRole('switch')
       await user.click(toggle)
 
-      // Hidden badge should appear
       expect(screen.getByText('Hidden')).toBeInTheDocument()
     })
   })
