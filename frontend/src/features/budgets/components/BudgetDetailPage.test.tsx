@@ -1,60 +1,46 @@
 /**
  * BudgetDetailPage Component Tests
  * Issue #564: Frontend Test Coverage Improvement
+ * Issue #575: Migrated to bun:test
  *
  * Tests the budget detail page component with loading, error, and success states.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { MemoryRouter, Routes, Route } from 'react-router-dom'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { BudgetDetailPage } from './BudgetDetailPage'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 
-// Mock hooks
-const mockRefetch = vi.fn()
-const mockUseBudgetDetail = vi.fn()
-const mockUseAvailableCategories = vi.fn()
-const mockUseTags = vi.fn()
-const mockNavigate = vi.fn()
+// Import centralized mocks
+import { mockNavigate } from '@/test/mocks/react-router'
 
-vi.mock('../hooks/useBudgetDetail', () => ({
+// Mock hook functions - defined BEFORE mock.module() calls
+const mockRefetch = mock(() => Promise.resolve())
+const mockUseBudgetDetail = mock(() => ({
+  budget: null,
+  loading: true,
+  error: null,
+  refetch: mockRefetch,
+}))
+const mockUseAvailableCategories = mock(() => ({ categories: [] }))
+const mockUseTags = mock(() => ({ tags: [] }))
+
+// Mock wrapper hooks BEFORE importing the component
+mock.module('../hooks/useBudgetDetail', () => ({
   useBudgetDetail: (...args: unknown[]) => mockUseBudgetDetail(...args),
 }))
 
-vi.mock('../hooks/useAvailableCategories', () => ({
+mock.module('../hooks/useAvailableCategories', () => ({
   useAvailableCategories: () => mockUseAvailableCategories(),
 }))
 
-vi.mock('../../tags/hooks/useTags', () => ({
+mock.module('../../tags/hooks/useTags', () => ({
   useTags: () => mockUseTags(),
 }))
 
-vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual('react-router-dom')
-  return {
-    ...actual,
-    useNavigate: () => mockNavigate,
-  }
-})
-
-// Mock mutation hooks
-const mockAddMutateAsync = vi.fn()
-const mockUpdateMutateAsync = vi.fn()
-const mockDeleteMutateAsync = vi.fn()
-
-vi.mock('@/api/generated/endpoints/budgets/budgets', () => ({
-  useAddBudgetCategory: () => ({ mutateAsync: mockAddMutateAsync }),
-  useUpdateBudgetCategory: () => ({ mutateAsync: mockUpdateMutateAsync }),
-  useDeleteBudgetCategory: () => ({ mutateAsync: mockDeleteMutateAsync }),
-}))
-
-// Mock child components
-vi.mock('./category-management/BudgetCategoryManager', () => ({
+// Mock child components BEFORE importing the parent
+mock.module('./category-management/BudgetCategoryManager', () => ({
   BudgetCategoryManager: () => <div data-testid="budget-category-manager">Budget Category Manager</div>,
 }))
 
-vi.mock('./budget-detail/BudgetIncomeSection', () => ({
+mock.module('./budget-detail/BudgetIncomeSection', () => ({
   BudgetIncomeSection: ({ expectedIncome, actualIncome }: { expectedIncome: number; actualIncome: number }) => (
     <div data-testid="budget-income-section">
       <span data-testid="expected-income">{expectedIncome}</span>
@@ -63,7 +49,7 @@ vi.mock('./budget-detail/BudgetIncomeSection', () => ({
   ),
 }))
 
-vi.mock('./budget-detail/UnallocatedFundsCard', () => ({
+mock.module('./budget-detail/UnallocatedFundsCard', () => ({
   UnallocatedFundsCard: ({ unallocatedAmount, onCreateSavingsGoal }: { unallocatedAmount: number; onCreateSavingsGoal: () => void }) => (
     <div data-testid="unallocated-funds-card">
       <span data-testid="unallocated-amount">{unallocatedAmount}</span>
@@ -72,7 +58,12 @@ vi.mock('./budget-detail/UnallocatedFundsCard', () => ({
   ),
 }))
 
-// Mock budget data
+// NOW import the component and testing utilities AFTER mocks
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { MemoryRouter, Routes, Route } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { BudgetDetailPage } from './BudgetDetailPage'
+
 function createMockBudget(overrides: Record<string, unknown> = {}) {
   return {
     id: 'budget-1',
@@ -121,7 +112,11 @@ function renderWithRouter(budgetId = 'budget-1') {
 
 describe('BudgetDetailPage', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    mockRefetch.mockClear()
+    mockUseBudgetDetail.mockClear()
+    mockUseAvailableCategories.mockClear()
+    mockUseTags.mockClear()
+    mockNavigate.mockClear()
     mockUseAvailableCategories.mockReturnValue({ categories: [] })
     mockUseTags.mockReturnValue({ tags: [] })
   })
@@ -317,7 +312,6 @@ describe('BudgetDetailPage', () => {
 
       renderWithRouter()
 
-      // Check for the Dates label and date pattern (handles timezone variations)
       expect(screen.getByText('Dates')).toBeInTheDocument()
       expect(screen.getByText(/Jan 1\d, 2025/)).toBeInTheDocument()
     })
@@ -397,7 +391,6 @@ describe('BudgetDetailPage', () => {
 
       renderWithRouter()
 
-      // 5000 - 2000 - 1500 = 1500
       expect(screen.getByTestId('unallocated-amount').textContent).toBe('1500')
     })
 
@@ -609,9 +602,7 @@ describe('BudgetDetailPage', () => {
 
       renderWithRouter()
 
-      // Should render without crashing - check that Dates label exists
       expect(screen.getByText('Dates')).toBeInTheDocument()
-      // Should show a date (handles timezone variations)
       expect(screen.getByText(/Jan 1\d, 2025/)).toBeInTheDocument()
     })
   })
