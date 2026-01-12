@@ -203,6 +203,8 @@ export default mergeConfig(
         'src/features/dashboard/context/DashboardContext.test.tsx',
         // Phase 5A: App component tests (2026-01-11)
         'src/App.test.tsx',
+        // Phase 2E: Rules tests (2026-01-12)
+        'src/features/rules/components/RulesPage.test.tsx',
       ],
       coverage: {
         provider: 'v8',
