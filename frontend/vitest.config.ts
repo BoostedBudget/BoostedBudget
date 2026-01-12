@@ -214,6 +214,8 @@ export default mergeConfig(
         'src/features/budgets/components/BudgetsPage.test.tsx',
         // Phase 2J: Budget category manager (2026-01-12)
         'src/features/budgets/components/category-management/BudgetCategoryManager.test.tsx',
+        // Phase 2K: Dashboard page (2026-01-12)
+        'src/features/dashboard/components/DashboardPage.test.tsx',
       ],
       coverage: {
         provider: 'v8',
