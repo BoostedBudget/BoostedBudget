@@ -109,6 +109,14 @@ export const mockUseGetBudget = mock(() => ({
 }))
 export const mockGetBudgetQueryKey = mock((id: string) => ['budgets', id])
 
+// === useGetSavingsGoals ===
+export const mockUseGetSavingsGoals = mock(() => ({
+  data: [],
+  isLoading: false,
+  error: null,
+  refetch: mock(() => Promise.resolve()),
+}))
+
 // Single mock.module() call - called once at preload time
 // Re-export ALL real exports, only override the specific hooks we need to mock
 mock.module('@/api/generated/endpoints/budgets/budgets', () => ({
@@ -146,4 +154,7 @@ mock.module('@/api/generated/endpoints/budgets/budgets', () => ({
   // useBudgetDetail hook mocks
   useGetBudget: (...args: unknown[]) => mockUseGetBudget(...args),
   getGetBudgetQueryKey: (...args: unknown[]) => mockGetBudgetQueryKey(...(args as [string])),
+
+  // Savings goals
+  useGetSavingsGoals: (...args: unknown[]) => mockUseGetSavingsGoals(...args),
 }))

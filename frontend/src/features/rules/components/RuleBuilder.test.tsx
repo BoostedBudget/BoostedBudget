@@ -1,17 +1,33 @@
 /**
  * RuleBuilder Component Tests
  * Issue #39: Rule Builder UI
+ * Issue #575: Migrated to bun:test with centralized mocks
  *
  * Tests for the main rule builder form.
- * TDD RED: Writing tests before implementation.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { RuleBuilder } from './RuleBuilder'
 import type { AutomationRule } from '@/api/generated/models'
+
+// Import centralized mocks for configuration
+import {
+  mockUseGetAutomationRules,
+  mockUseGetAutomationRuleByID,
+  mockCreateAutomationRuleMutateAsync,
+  mockUpdateAutomationRuleMutateAsync,
+} from '@/test/mocks/automation-rules-api'
+import { mockUseGetUserProfile } from '@/test/mocks/profile-api'
+import { mockUseGetSubscriptionTiers } from '@/test/mocks/subscription-api'
+import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
+import { mockUseGetSavingsGoals } from '@/test/mocks/budgets-api'
+import { mockNavigate } from '@/test/mocks/react-router'
+import { mockUseRuleTierLimits } from '@/test/mocks/rule-tier-limits'
+import { mockUseBudgets } from '@/test/mocks/budgets-wrapper'
+import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
 
 const mockRule: AutomationRule = {
   id: 'rule-1',
@@ -38,111 +54,17 @@ const mockRule: AutomationRule = {
   updated_at: '2024-01-01T00:00:00Z',
 }
 
-// Mocks
-const mockCreateRuleAsync = vi.fn()
-const mockUpdateRuleAsync = vi.fn()
-const mockNavigate = vi.fn()
-
-vi.mock('@/api/generated/endpoints/automation-rules/automation-rules', () => ({
-  useCreateAutomationRule: () => ({
-    mutate: vi.fn(),
-    mutateAsync: mockCreateRuleAsync.mockResolvedValue(mockRule),
-    isPending: false,
-  }),
-  useUpdateAutomationRule: () => ({
-    mutate: vi.fn(),
-    mutateAsync: mockUpdateRuleAsync.mockResolvedValue(mockRule),
-    isPending: false,
-  }),
-  useGetAutomationRuleByID: () => ({
-    data: null,
-    isLoading: false,
-    error: null,
-  }),
-  useGetAutomationRules: () => ({
-    data: [],
-    isLoading: false,
-    error: null,
-  }),
-}))
-
-// Mock profile hook
-vi.mock('@/features/profile/hooks/useProfile', () => ({
-  useProfile: () => ({
-    user: { subscription_tier: 'premium' },
-    loading: false,
-    error: null,
-  }),
-}))
-
-// Mock subscription tiers hook
-vi.mock('@/features/subscription/hooks/useSubscriptionTiers', () => ({
-  useSubscriptionTiers: () => ({
-    tiers: {
-      tiers: {
-        free: { features: { max_rules: 1 } },
-        premium_lite: { features: { max_rules: 5 } },
-        premium: { features: { max_rules: 15 } },
-        premium_plus: { features: { max_rules: -1 } },
-      },
-    },
-    loading: false,
-    error: null,
-  }),
-}))
-
-vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual('react-router-dom')
-  return {
-    ...actual,
-    useNavigate: () => mockNavigate,
-  }
-})
-
-vi.mock('../hooks/useRuleTierLimits', () => ({
-  useRuleTierLimits: () => ({
-    ruleLimit: 5,
-    isUnlimited: false,
-    currentRuleCount: 1,
-    isAtLimit: false,
-    canUseEventTriggers: true,
-    shouldShowUpgradeBanner: false,
-    rulesCountDisplay: '1/5 rules used',
-  }),
-}))
-
-// Mock budgets hook
-vi.mock('@/features/budgets/hooks/useBudgets', () => ({
-  useBudgets: () => ({
-    budgets: [
-      { id: 'budget-1', name: 'Monthly Budget', categories: [] },
-    ],
-    loading: false,
-    error: null,
-  }),
-}))
-
-// Mock accounts hook
-vi.mock('@/api/generated/endpoints/accounts/accounts', () => ({
-  useGetAccounts: () => ({
-    data: [
-      { id: 'acc-1', name: 'Checking', type: 'depository' },
-    ],
-    isLoading: false,
-    error: null,
-  }),
-}))
-
-// Mock savings goals hook
-vi.mock('@/api/generated/endpoints/budgets/budgets', () => ({
-  useGetSavingsGoals: () => ({
-    data: [
-      { id: 'goal-1', name: 'Emergency Fund', target_amount: 10000, current_amount: 2500 },
-    ],
-    isLoading: false,
-    error: null,
-  }),
-}))
+const mockUser = {
+  id: 'user-1',
+  email: 'test@example.com',
+  subscription_tier: 'premium' as const,
+  display_name: 'Test User',
+  timezone: 'America/New_York',
+  currency_code: 'USD',
+  locale: 'en-US',
+  created_at: '2024-01-01T00:00:00Z',
+  updated_at: '2024-01-01T00:00:00Z',
+}
 
 function createQueryClient() {
   return new QueryClient({
@@ -172,53 +94,130 @@ function renderWithProviders(
 
 describe('RuleBuilder', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    // Clear all mocks
+    mockNavigate.mockClear()
+    mockCreateAutomationRuleMutateAsync.mockClear()
+    mockUpdateAutomationRuleMutateAsync.mockClear()
+    mockUseGetAutomationRules.mockClear()
+    mockUseGetAutomationRuleByID.mockClear()
+    mockUseRuleTierLimits.mockClear()
+    mockUseBudgets.mockClear()
+
+    // Configure API mocks
+    mockCreateAutomationRuleMutateAsync.mockResolvedValue(mockRule)
+    mockUpdateAutomationRuleMutateAsync.mockResolvedValue(mockRule)
+
+    mockUseGetAutomationRules.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+    })
+
+    mockUseGetAutomationRuleByID.mockReturnValue({
+      data: null,
+      isLoading: false,
+      error: null,
+    })
+
+    mockUseGetUserProfile.mockReturnValue({
+      data: mockUser,
+      isLoading: false,
+      error: null,
+    })
+
+    mockUseGetSubscriptionTiers.mockReturnValue({
+      data: mockSubscriptionTiersResponse,
+      isLoading: false,
+      error: null,
+    })
+
+    mockUseRuleTierLimits.mockReturnValue({
+      ruleLimit: 5,
+      isUnlimited: false,
+      currentRuleCount: 1,
+      isAtLimit: false,
+      canUseEventTriggers: true,
+      shouldShowUpgradeBanner: false,
+      rulesCountDisplay: '1/5 rules used',
+    })
+
+    mockUseBudgets.mockReturnValue({
+      budgets: [{ id: 'budget-1', name: 'Monthly Budget', categories: [] }],
+      loading: false,
+      error: null,
+    })
+
+    mockUseGetAccounts.mockReturnValue({
+      data: [{ id: 'acc-1', name: 'Checking', type: 'depository' }],
+      isLoading: false,
+      error: null,
+    })
+
+    mockUseGetSavingsGoals.mockReturnValue({
+      data: [{ id: 'goal-1', name: 'Emergency Fund', target_amount: 10000, current_amount: 2500 }],
+      isLoading: false,
+      error: null,
+    })
   })
 
   describe('Rendering - Create Mode', () => {
-    it('should render page title for new rule', () => {
+    it('should render page title for new rule', async () => {
       renderWithProviders(<RuleBuilder />)
 
-      expect(screen.getByRole('heading', { name: /create.*rule/i })).toBeInTheDocument()
+      await waitFor(() => {
+        expect(screen.getByRole('heading', { name: /create.*rule/i })).toBeInTheDocument()
+      })
     })
 
-    it('should render name input', () => {
+    it('should render name input', async () => {
       renderWithProviders(<RuleBuilder />)
 
-      expect(screen.getByLabelText(/rule name/i)).toBeInTheDocument()
+      await waitFor(() => {
+        expect(screen.getByLabelText(/rule name/i)).toBeInTheDocument()
+      })
     })
 
-    it('should render description input', () => {
+    it('should render description input', async () => {
       renderWithProviders(<RuleBuilder />)
 
-      expect(screen.getByLabelText(/description/i)).toBeInTheDocument()
+      await waitFor(() => {
+        expect(screen.getByLabelText(/description/i)).toBeInTheDocument()
+      })
     })
 
-    it('should render rule type selector', () => {
+    it('should render rule type selector', async () => {
       renderWithProviders(<RuleBuilder />)
 
-      expect(screen.getByLabelText(/rule type/i)).toBeInTheDocument()
+      await waitFor(() => {
+        expect(screen.getByLabelText(/rule type/i)).toBeInTheDocument()
+      })
     })
 
-    it('should show all rule type options', () => {
+    it('should show all rule type options', async () => {
       renderWithProviders(<RuleBuilder />)
 
-      expect(screen.getByText(/budget alert/i)).toBeInTheDocument()
+      await waitFor(() => {
+        expect(screen.getByText(/budget alert/i)).toBeInTheDocument()
+      })
       expect(screen.getByText(/transfer suggestion/i)).toBeInTheDocument()
       expect(screen.getByText(/category rollover/i)).toBeInTheDocument()
       expect(screen.getByText(/savings goal/i)).toBeInTheDocument()
     })
 
-    it('should render trigger section', () => {
+    it('should render trigger section', async () => {
       renderWithProviders(<RuleBuilder />)
 
-      expect(screen.getByText(/trigger/i)).toBeInTheDocument()
+      await waitFor(() => {
+        expect(screen.getByText(/trigger/i)).toBeInTheDocument()
+      })
     })
 
-    it('should render save and cancel buttons', () => {
+    it('should render save and cancel buttons', async () => {
       renderWithProviders(<RuleBuilder />)
 
-      expect(screen.getByRole('button', { name: /save/i })).toBeInTheDocument()
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /save/i })).toBeInTheDocument()
+      })
       expect(screen.getByRole('button', { name: /cancel/i })).toBeInTheDocument()
     })
   })
@@ -227,7 +226,10 @@ describe('RuleBuilder', () => {
     it('should show budget alert action form when budget_alert selected', async () => {
       renderWithProviders(<RuleBuilder />)
 
-      // Select budget alert
+      await waitFor(() => {
+        expect(screen.getByLabelText(/rule type/i)).toBeInTheDocument()
+      })
+
       const typeSelect = screen.getByLabelText(/rule type/i)
       fireEvent.change(typeSelect, { target: { value: 'budget_alert' } })
 
@@ -238,6 +240,10 @@ describe('RuleBuilder', () => {
 
     it('should show transfer action form when transfer_suggestion selected', async () => {
       renderWithProviders(<RuleBuilder />)
+
+      await waitFor(() => {
+        expect(screen.getByLabelText(/rule type/i)).toBeInTheDocument()
+      })
 
       const typeSelect = screen.getByLabelText(/rule type/i)
       fireEvent.change(typeSelect, { target: { value: 'transfer_suggestion' } })
@@ -250,6 +256,10 @@ describe('RuleBuilder', () => {
     it('should show rollover action form when category_rollover selected', async () => {
       renderWithProviders(<RuleBuilder />)
 
+      await waitFor(() => {
+        expect(screen.getByLabelText(/rule type/i)).toBeInTheDocument()
+      })
+
       const typeSelect = screen.getByLabelText(/rule type/i)
       fireEvent.change(typeSelect, { target: { value: 'category_rollover' } })
 
@@ -260,6 +270,10 @@ describe('RuleBuilder', () => {
 
     it('should show savings goal action form when savings_goal selected', async () => {
       renderWithProviders(<RuleBuilder />)
+
+      await waitFor(() => {
+        expect(screen.getByLabelText(/rule type/i)).toBeInTheDocument()
+      })
 
       const typeSelect = screen.getByLabelText(/rule type/i)
       fireEvent.change(typeSelect, { target: { value: 'savings_goal' } })
@@ -274,7 +288,10 @@ describe('RuleBuilder', () => {
     it('should require name', async () => {
       renderWithProviders(<RuleBuilder />)
 
-      // Try to save without name
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /save/i })).toBeInTheDocument()
+      })
+
       const saveButton = screen.getByRole('button', { name: /save/i })
       fireEvent.click(saveButton)
 
@@ -286,7 +303,10 @@ describe('RuleBuilder', () => {
     it('should require rule type', async () => {
       renderWithProviders(<RuleBuilder />)
 
-      // Fill name but not type
+      await waitFor(() => {
+        expect(screen.getByLabelText(/rule name/i)).toBeInTheDocument()
+      })
+
       const nameInput = screen.getByLabelText(/rule name/i)
       fireEvent.change(nameInput, { target: { value: 'Test Rule' } })
 
@@ -303,26 +323,31 @@ describe('RuleBuilder', () => {
     it('should call createRule mutation on save', async () => {
       renderWithProviders(<RuleBuilder />)
 
-      // Fill form
+      await waitFor(() => {
+        expect(screen.getByLabelText(/rule name/i)).toBeInTheDocument()
+      })
+
       const nameInput = screen.getByLabelText(/rule name/i)
       fireEvent.change(nameInput, { target: { value: 'New Test Rule' } })
 
       const typeSelect = screen.getByLabelText(/rule type/i)
       fireEvent.change(typeSelect, { target: { value: 'budget_alert' } })
 
-      // Save
       const saveButton = screen.getByRole('button', { name: /save/i })
       fireEvent.click(saveButton)
 
       await waitFor(() => {
-        expect(mockCreateRuleAsync).toHaveBeenCalled()
+        expect(mockCreateAutomationRuleMutateAsync).toHaveBeenCalled()
       })
     })
 
     it('should navigate back after successful save', async () => {
       renderWithProviders(<RuleBuilder />)
 
-      // Fill minimum required fields
+      await waitFor(() => {
+        expect(screen.getByLabelText(/rule name/i)).toBeInTheDocument()
+      })
+
       const nameInput = screen.getByLabelText(/rule name/i)
       fireEvent.change(nameInput, { target: { value: 'New Test Rule' } })
 
@@ -339,8 +364,12 @@ describe('RuleBuilder', () => {
   })
 
   describe('Cancel', () => {
-    it('should navigate back on cancel', () => {
+    it('should navigate back on cancel', async () => {
       renderWithProviders(<RuleBuilder />)
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /cancel/i })).toBeInTheDocument()
+      })
 
       const cancelButton = screen.getByRole('button', { name: /cancel/i })
       fireEvent.click(cancelButton)
@@ -350,14 +379,20 @@ describe('RuleBuilder', () => {
   })
 
   describe('Trigger Configuration', () => {
-    it('should show schedule trigger by default', () => {
+    it('should show schedule trigger by default', async () => {
       renderWithProviders(<RuleBuilder />)
 
-      expect(screen.getByText(/scheduled/i)).toBeInTheDocument()
+      await waitFor(() => {
+        expect(screen.getByText(/scheduled/i)).toBeInTheDocument()
+      })
     })
 
     it('should allow switching to event trigger when permitted', async () => {
       renderWithProviders(<RuleBuilder />)
+
+      await waitFor(() => {
+        expect(screen.getByLabelText(/event/i)).toBeInTheDocument()
+      })
 
       const eventRadio = screen.getByLabelText(/event/i)
       fireEvent.click(eventRadio)
@@ -369,21 +404,29 @@ describe('RuleBuilder', () => {
   })
 
   describe('Priority', () => {
-    it('should render priority input', () => {
+    it('should render priority input', async () => {
       renderWithProviders(<RuleBuilder />)
 
-      expect(screen.getByLabelText(/priority/i)).toBeInTheDocument()
+      await waitFor(() => {
+        expect(screen.getByLabelText(/priority/i)).toBeInTheDocument()
+      })
     })
 
-    it('should default to priority 10', () => {
+    it('should default to priority 10', async () => {
       renderWithProviders(<RuleBuilder />)
 
-      const priorityInput = screen.getByLabelText(/priority/i)
-      expect(priorityInput).toHaveValue(10)
+      await waitFor(() => {
+        const priorityInput = screen.getByLabelText(/priority/i)
+        expect(priorityInput).toHaveValue(10)
+      })
     })
 
-    it('should allow changing priority', () => {
+    it('should allow changing priority', async () => {
       renderWithProviders(<RuleBuilder />)
+
+      await waitFor(() => {
+        expect(screen.getByLabelText(/priority/i)).toBeInTheDocument()
+      })
 
       const priorityInput = screen.getByLabelText(/priority/i)
       fireEvent.change(priorityInput, { target: { value: '5' } })
@@ -393,22 +436,28 @@ describe('RuleBuilder', () => {
   })
 
   describe('Accessibility', () => {
-    it('should have accessible form structure', () => {
+    it('should have accessible form structure', async () => {
       renderWithProviders(<RuleBuilder />)
 
-      expect(screen.getByRole('form')).toBeInTheDocument()
+      await waitFor(() => {
+        expect(screen.getByRole('form')).toBeInTheDocument()
+      })
     })
 
-    it('should have accessible heading', () => {
+    it('should have accessible heading', async () => {
       renderWithProviders(<RuleBuilder />)
 
-      expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument()
+      await waitFor(() => {
+        expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument()
+      })
     })
 
-    it('should have labeled inputs', () => {
+    it('should have labeled inputs', async () => {
       renderWithProviders(<RuleBuilder />)
 
-      expect(screen.getByLabelText(/rule name/i)).toBeInTheDocument()
+      await waitFor(() => {
+        expect(screen.getByLabelText(/rule name/i)).toBeInTheDocument()
+      })
       expect(screen.getByLabelText(/description/i)).toBeInTheDocument()
       expect(screen.getByLabelText(/rule type/i)).toBeInTheDocument()
       expect(screen.getByLabelText(/priority/i)).toBeInTheDocument()
