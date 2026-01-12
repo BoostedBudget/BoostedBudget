@@ -1,8 +1,14 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+/**
+ * BudgetCategoryManager Tests
+ * Issue #575: Migrated to bun:test
+ */
+
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import type { BudgetCategory, CreateBudgetCategoryRequest, UpdateBudgetCategoryRequest } from '../../types'
 import type { UserTag } from '@/features/tags/types'
 
-vi.mock('./BudgetCategoryCard', () => ({
+// Mock child components BEFORE importing the component
+mock.module('./BudgetCategoryCard', () => ({
   BudgetCategoryCard: ({
     category,
     onEdit,
@@ -27,7 +33,7 @@ vi.mock('./BudgetCategoryCard', () => ({
   ),
 }))
 
-vi.mock('./BudgetCategoryForm', () => ({
+mock.module('./BudgetCategoryForm', () => ({
   BudgetCategoryForm: ({
     isOpen,
     onClose,
@@ -67,7 +73,7 @@ vi.mock('./BudgetCategoryForm', () => ({
     ) : null,
 }))
 
-vi.mock('./AllocationBreakdown', () => ({
+mock.module('./AllocationBreakdown', () => ({
   AllocationBreakdown: ({
     categories,
     totalIncome,
@@ -85,6 +91,7 @@ vi.mock('./AllocationBreakdown', () => ({
   ),
 }))
 
+// NOW import testing utilities and component AFTER mocks
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BudgetCategoryManager } from './BudgetCategoryManager'
@@ -132,9 +139,9 @@ const createMockCategory = (overrides?: Partial<BudgetCategory>): BudgetCategory
 })
 
 describe('BudgetCategoryManager', () => {
-  let mockOnAddCategory: ReturnType<typeof vi.fn>
-  let mockOnUpdateCategory: ReturnType<typeof vi.fn>
-  let mockOnDeleteCategory: ReturnType<typeof vi.fn>
+  let mockOnAddCategory: ReturnType<typeof mock>
+  let mockOnUpdateCategory: ReturnType<typeof mock>
+  let mockOnDeleteCategory: ReturnType<typeof mock>
 
   const renderManager = (props: Partial<Parameters<typeof BudgetCategoryManager>[0]> = {}) =>
     render(
@@ -152,9 +159,9 @@ describe('BudgetCategoryManager', () => {
     )
 
   beforeEach(() => {
-    mockOnAddCategory = vi.fn(() => Promise.resolve({} as BudgetCategory))
-    mockOnUpdateCategory = vi.fn(() => Promise.resolve({} as BudgetCategory))
-    mockOnDeleteCategory = vi.fn(() => Promise.resolve(undefined))
+    mockOnAddCategory = mock(() => Promise.resolve({} as BudgetCategory))
+    mockOnUpdateCategory = mock(() => Promise.resolve({} as BudgetCategory))
+    mockOnDeleteCategory = mock(() => Promise.resolve(undefined))
   })
 
   it('should render empty state when no categories', () => {
@@ -167,7 +174,6 @@ describe('BudgetCategoryManager', () => {
       createMockCategory({ id: 'cat-1', category: ['Food and Drink', 'Restaurants'] }),
       createMockCategory({ id: 'cat-2', category: ['Transportation', 'Gas'] }),
     ]
-
     renderManager({ categories })
     expect(screen.getByTestId('category-card-cat-1')).toBeInTheDocument()
     expect(screen.getByTestId('category-card-cat-2')).toBeInTheDocument()
@@ -186,7 +192,7 @@ describe('BudgetCategoryManager', () => {
   it('should not render AllocationBreakdown when no categories', () => {
     renderManager()
     expect(screen.queryByTestId('allocation-breakdown')).not.toBeInTheDocument()
-  });
+  })
 
   it('should open form in create mode when add button clicked', async () => {
     const user = userEvent.setup({ delay: null })
@@ -223,7 +229,7 @@ describe('BudgetCategoryManager', () => {
     await waitFor(() => {
       expect(screen.getByTestId('available-categories-count')).toHaveTextContent('4')
     })
-  });
+  })
 
   it('should open form in edit mode when edit button clicked', async () => {
     const user = userEvent.setup({ delay: null })
@@ -252,7 +258,7 @@ describe('BudgetCategoryManager', () => {
     await waitFor(() => {
       expect(mockOnUpdateCategory).toHaveBeenCalledWith('cat-1', expect.any(Object))
     })
-  });
+  })
 
   it('should show confirmation dialog when delete button clicked', async () => {
     const user = userEvent.setup({ delay: null })
@@ -295,7 +301,7 @@ describe('BudgetCategoryManager', () => {
     })
 
     expect(mockOnDeleteCategory).not.toHaveBeenCalled()
-  });
+  })
 
   it('should disable add button when disabled=true', () => {
     renderManager({ disabled: true })
@@ -304,25 +310,23 @@ describe('BudgetCategoryManager', () => {
 
   it('should pass disabled prop to category cards', () => {
     const categories = [createMockCategory({ id: 'cat-1' })]
-
     renderManager({ categories, disabled: true })
     const card = screen.getByTestId('category-card-cat-1')
     expect(within(card).getByTestId('edit-btn')).toBeDisabled()
     expect(within(card).getByTestId('delete-btn')).toBeDisabled()
-  });
+  })
 
   it('should pass correct props to AllocationBreakdown', () => {
     const categories = [
       createMockCategory({ id: 'cat-1', allocated_amount: 500 }),
       createMockCategory({ id: 'cat-2', allocated_amount: 1000 }),
     ]
-
     renderManager({ categories })
     const breakdown = screen.getByTestId('allocation-breakdown')
     expect(within(breakdown).getByTestId('breakdown-total-income')).toHaveTextContent('3000')
     expect(within(breakdown).getByTestId('breakdown-unallocated')).toHaveTextContent('1500')
     expect(within(breakdown).getByTestId('breakdown-category-count')).toHaveTextContent('2')
-  });
+  })
 
   it('should have role="list" on category list container', () => {
     renderManager({ categories: [createMockCategory()] })
@@ -331,7 +335,6 @@ describe('BudgetCategoryManager', () => {
 
   it('should have role="listitem" and tabIndex=0 on category items', () => {
     const categories = [createMockCategory({ id: 'cat-1' }), createMockCategory({ id: 'cat-2' })]
-
     renderManager({ categories })
     const items = screen.getAllByRole('listitem')
     expect(items).toHaveLength(2)
@@ -347,7 +350,6 @@ describe('BudgetCategoryManager', () => {
       createMockCategory({ id: 'cat-2' }),
       createMockCategory({ id: 'cat-3' }),
     ]
-
     renderManager({ categories })
     const items = screen.getAllByRole('listitem')
     items[0].focus()
@@ -367,7 +369,6 @@ describe('BudgetCategoryManager', () => {
       createMockCategory({ id: 'cat-2' }),
       createMockCategory({ id: 'cat-3' }),
     ]
-
     renderManager({ categories })
     const items = screen.getAllByRole('listitem')
     items[2].focus()
@@ -424,24 +425,20 @@ describe('BudgetCategoryManager', () => {
   it('should not navigate past first item on ArrowUp', async () => {
     const user = userEvent.setup({ delay: null })
     const categories = [createMockCategory({ id: 'cat-1' }), createMockCategory({ id: 'cat-2' })]
-
     renderManager({ categories })
     const items = screen.getAllByRole('listitem')
     items[0].focus()
     await user.keyboard('{ArrowUp}')
-
     expect(document.activeElement).toBe(items[0])
   })
 
   it('should not navigate past last item on ArrowDown', async () => {
     const user = userEvent.setup({ delay: null })
     const categories = [createMockCategory({ id: 'cat-1' }), createMockCategory({ id: 'cat-2' })]
-
     renderManager({ categories })
     const items = screen.getAllByRole('listitem')
     items[1].focus()
     await user.keyboard('{ArrowDown}')
-
     expect(document.activeElement).toBe(items[1])
   })
 })
