@@ -750,7 +750,7 @@ jobs:
       # =========================================================================
       - name: Setup Go
         if: matrix.component == 'backend'
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: ${{ env.UNIQUE_WORKSPACE }}/backend/go.mod
           cache-dependency-path: ${{ env.UNIQUE_WORKSPACE }}/backend/go.sum
@@ -769,7 +769,7 @@ jobs:
       # =========================================================================
       - name: Setup Node.js
         if: matrix.component == 'frontend'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '22'
 
