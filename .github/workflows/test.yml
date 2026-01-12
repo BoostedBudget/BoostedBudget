@@ -318,25 +318,18 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: bun run lint
 
-      - name: Run Vitest tests (legacy - migrating to bun:test)
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
-        run: |
-          echo "::group::Running Vitest tests with coverage"
-          NODE_OPTIONS='--max-old-space-size=6144' bun run vitest run --no-cache --coverage --reporter=verbose
-          echo "::endgroup::"
-
-      - name: Run bun:test tests with coverage (migrated tests)
+      - name: Run bun:test tests with coverage
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
           echo "::group::Running bun:test tests with coverage"
-          bun run test:bun:coverage
+          bun run test:coverage
           echo "::endgroup::"
 
-      - name: Run bun:test real implementation tests with coverage
+      - name: Run real implementation tests with coverage
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
           echo "::group::Running real-implementation tests with coverage"
-          bun run test:bun:real:coverage
+          bun run test:real:coverage
           echo "::endgroup::"
 
       - name: Combine coverage reports
@@ -690,7 +683,7 @@ jobs:
       # =========================================================================
       - name: Setup Bun
         if: matrix.component == 'frontend'
->>>>>>> origin/staging
+        uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
