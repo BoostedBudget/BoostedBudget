@@ -1,14 +1,15 @@
 # Multi-stage production Dockerfile for Frontend
-# Stage 1: Builder
-FROM oven/bun:1 AS builder
+# Stage 1: Builder - Use Node.js for cross-platform compatibility
+# Note: Bun crashes with SIGILL on QEMU-emulated x64 builds (ARM64 runners)
+FROM node:20-slim AS builder
 
 WORKDIR /build
 
-# Copy package files
-COPY frontend/package.json frontend/bun.lock ./
+# Copy package files (only package.json needed for npm)
+COPY frontend/package.json ./
 
-# Install dependencies
-RUN bun install --frozen-lockfile
+# Install dependencies using npm (Bun crashes on emulated x64)
+RUN npm install
 
 # Copy config directory (needed for type generation)
 COPY config/ /config/
@@ -17,7 +18,7 @@ COPY config/ /config/
 COPY frontend/ .
 
 # Build the application
-RUN bun run build
+RUN npm run build
 
 # Stage 2: Runtime with Nginx (Debian-based)
 FROM nginx:stable
@@ -41,7 +42,7 @@ RUN chmod +x /docker-entrypoint.sh
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:80/ || exit 1
+    CMD curl -f http://localhost/ || exit 1
 
 # Expose ports (HTTP and HTTPS)
 EXPOSE 80 443

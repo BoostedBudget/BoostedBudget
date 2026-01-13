@@ -41,7 +41,7 @@ jobs:
             frontend:
               - 'frontend/**'
               - 'package.json'
-              - 'bun.lockb'
+              - 'bun.lock'
             api:
               - 'api/**'
               - 'api/openapi.yaml'
@@ -148,7 +148,8 @@ jobs:
 
       - name: Generate TypeScript client
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
-        run: bun run generate:api
+        # Use npx to run orval with Node.js (Bun has AJV compatibility issues)
+        run: npx orval
 
       - name: Check if generated client is up to date
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
