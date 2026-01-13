@@ -332,6 +332,13 @@ jobs:
           bun run test:real:coverage
           echo "::endgroup::"
 
+      - name: Run isolated tests with coverage
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        run: |
+          echo "::group::Running isolated tests with coverage"
+          bun run test:isolated:coverage
+          echo "::endgroup::"
+
       - name: Combine coverage reports
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |

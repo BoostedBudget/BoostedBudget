@@ -1,0 +1,86 @@
+#!/bin/bash
+# Run regular tests (excluding real-implementation tests)
+# Issue #575: Exclude tests that need real implementations
+#
+# This script runs all tests EXCEPT those that need real implementations.
+# The real-implementation tests are run separately via test-real-implementations.sh
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FRONTEND_DIR="$(dirname "$SCRIPT_DIR")"
+cd "$FRONTEND_DIR"
+
+# Parse arguments
+COVERAGE=false
+for arg in "$@"; do
+    case $arg in
+        --coverage)
+            COVERAGE=true
+            shift
+            ;;
+    esac
+done
+
+# Test files that need real implementations (will be excluded)
+# These are run separately via test-real-implementations.sh
+EXCLUDE_PATTERNS=(
+    # Real implementation tests (no centralized mocks)
+    "src/features/dashboard/widgets/registry.test.ts"
+    "src/features/dashboard/context/DashboardContext.test.tsx"
+    # Hook implementation tests (need API-level mocks, not wrapper mocks)
+    "src/features/dashboard/hooks/useDashboardData.test.tsx"
+    "src/features/dashboard/hooks/useDashboardLayout.test.tsx"
+    "src/features/dashboard/hooks/useDashboardOnboarding.test.ts"
+    "src/features/budgets/hooks/useBudgetFilters.test.ts"
+    "src/features/budgets/hooks/useBudgets.test.ts"
+    "src/features/budgets/hooks/useSavingsGoals.test.tsx"
+    "src/features/budgets/hooks/useBudgetDetail.test.tsx"
+    "src/features/budgets/hooks/useAvailableCategories.test.tsx"
+    "src/features/rules/hooks/useRuleTierLimits.test.ts"
+    # Isolated tests polluted by other tests (run via test-isolated.sh)
+    "src/features/dashboard/widgets/DashboardGrid.test.tsx"
+    "src/features/dashboard/widgets/WidgetCatalog.test.tsx"
+    "src/features/rules/components/RulesPage.test.tsx"
+)
+
+echo "Running regular tests (excluding real-implementation tests)..."
+
+# Find all test files and exclude the real-implementation ones
+ALL_TESTS=$(find src -name "*.test.ts" -o -name "*.test.tsx" | sort)
+
+# Build the exclude pattern for grep
+EXCLUDE_GREP=""
+for pattern in "${EXCLUDE_PATTERNS[@]}"; do
+    if [ -z "$EXCLUDE_GREP" ]; then
+        EXCLUDE_GREP="$pattern"
+    else
+        EXCLUDE_GREP="$EXCLUDE_GREP\|$pattern"
+    fi
+done
+
+# Filter out excluded files
+REGULAR_TESTS=$(echo "$ALL_TESTS" | grep -v "$EXCLUDE_GREP" || true)
+
+if [ -z "$REGULAR_TESTS" ]; then
+    echo "No regular tests found!"
+    exit 1
+fi
+
+# Count tests
+TOTAL_COUNT=$(echo "$ALL_TESTS" | wc -l | tr -d ' ')
+REGULAR_COUNT=$(echo "$REGULAR_TESTS" | wc -l | tr -d ' ')
+EXCLUDED_COUNT=$((TOTAL_COUNT - REGULAR_COUNT))
+
+echo "Found $REGULAR_COUNT regular tests (excluding $EXCLUDED_COUNT real-implementation tests)"
+
+# Build test command
+if [ "$COVERAGE" = true ]; then
+    echo "Coverage enabled - generating to coverage/"
+    TEST_CMD="bun test --coverage --coverage-reporter=lcov --coverage-dir=coverage $REGULAR_TESTS"
+else
+    TEST_CMD="bun test $REGULAR_TESTS"
+fi
+
+# Run the tests
+$TEST_CMD

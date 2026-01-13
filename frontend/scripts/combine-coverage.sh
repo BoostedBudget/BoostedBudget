@@ -7,7 +7,7 @@
 # This script:
 # 1. Looks for coverage files in coverage/ and coverage-real/
 # 2. Merges lcov files into coverage/combined.lcov
-# 3. Optionally checks thresholds from vitest.config.ts (lines: 25, functions: 67, branches: 68)
+# 3. Optionally checks thresholds (lines: 25, functions: 67, branches: 68)
 
 set -e
 
@@ -41,6 +41,10 @@ fi
 if [ -f "coverage-real/lcov.info" ]; then
     LCOV_FILES="$LCOV_FILES coverage-real/lcov.info"
     echo "Found: coverage-real/lcov.info"
+fi
+if [ -f "coverage-isolated/lcov.info" ]; then
+    LCOV_FILES="$LCOV_FILES coverage-isolated/lcov.info"
+    echo "Found: coverage-isolated/lcov.info"
 fi
 
 if [ -z "$LCOV_FILES" ]; then
@@ -80,7 +84,7 @@ if command -v lcov &> /dev/null; then
         FUNCTIONS=$(echo "$SUMMARY" | grep "functions" | grep -oE '[0-9]+\.[0-9]+%' | head -1 | sed 's/%//')
         BRANCHES=$(echo "$SUMMARY" | grep "branches" | grep -oE '[0-9]+\.[0-9]+%' | head -1 | sed 's/%//')
 
-        # Thresholds from vitest.config.ts
+        # Coverage thresholds
         LINES_THRESHOLD=25
         FUNCTIONS_THRESHOLD=67
         BRANCHES_THRESHOLD=68

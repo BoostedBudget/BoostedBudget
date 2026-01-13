@@ -1,49 +1,15 @@
-import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import type { BalanceHistory } from '../types'
 
-const mockPlot = mock(({ data, config, style, useResizeHandler }: { data: { name: string }[], config?: { responsive?: boolean }, style?: React.CSSProperties, useResizeHandler?: boolean }) => (
-  <div
-    data-testid="plotly-chart"
-    data-trace-count={data.length}
-    data-trace-names={JSON.stringify(data.map((d: { name: string }) => d.name))}
-    data-use-resize-handler={useResizeHandler}
-    data-responsive={config?.responsive}
-    style={style}
-  >
-    Plotly Chart Mock
-  </div>
-))
-const mockUseDarkMode = mock(() => false)
-const mockGetBaseLayout = mock(() => ({
-  autosize: true,
-  margin: { t: 10, r: 10, b: 40, l: 60 },
-  xaxis: { gridcolor: '#e5e7eb' },
-  yaxis: { gridcolor: '#e5e7eb' },
-  legend: { font: {} },
-}))
-const mockFormatCurrency = mock((value: number) => `$${value.toLocaleString()}`)
-
-mock.module('@/shared/charts', () => ({
-  Plot: mockPlot,
-  useDarkMode: mockUseDarkMode,
-  getBaseLayout: mockGetBaseLayout,
-  DEFAULT_CONFIG: {
-    responsive: true,
-    displayModeBar: 'hover',
-    scrollZoom: false,
-    modeBarButtonsToRemove: ['lasso2d', 'select2d'],
-    displaylogo: false,
-  },
-  ACCOUNT_TYPE_COLORS: {
-    balance: '#3b82f6',
-    depository: '#10b981',
-    credit: '#ef4444',
-    investment: '#8b5cf6',
-    loan: '#f59e0b',
-  },
-  formatCurrency: mockFormatCurrency,
-}))
+// Issue #575: Use centralized @/shared/charts mock to prevent pollution
+import '@/test/mocks/shared-charts'
+import {
+  MockPlot as mockPlot,
+  mockUseDarkMode,
+  mockGetBaseLayout,
+  mockFormatCurrency,
+} from '@/test/mocks/shared-charts'
 
 import { BalanceHistoryChart } from './BalanceHistoryChart'
 
