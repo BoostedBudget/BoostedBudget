@@ -276,11 +276,12 @@ jobs:
           bun-version: latest
 
       - name: Install dependencies
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        # Install at root level - Bun handles workspace:* protocol
         run: bun install --frozen-lockfile
 
       - name: Build frontend
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         env:
           VITE_API_URL: https://staging-api.boostedbudget.com
           VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
@@ -293,7 +294,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: ${{ env.UNIQUE_WORKSPACE }}
-          command: pages deploy frontend/dist --project-name=boostedbudget
+          command: pages deploy apps/web/dist --project-name=boostedbudget
 
       - name: Deployment summary
         run: |
