@@ -148,10 +148,10 @@ make test-ci
 cd backend && go test -v -race -coverprofile=coverage.out ./...
 
 # Frontend only
-cd frontend && bun run test:ci
+cd apps/web && bun run test:ci
 
 # E2E only
-cd frontend && bun run test:e2e
+cd apps/web && bun run test:e2e
 ```
 
 ### Build Docker images locally

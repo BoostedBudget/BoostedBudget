@@ -167,17 +167,17 @@ operations.RegisterResourceRoutes(humaAPI, resourceHandler)
 cd backend && go run cmd/server/main.go --generate-spec
 
 # Generate frontend types with orval
-cd frontend && pnpm run generate:api
+cd packages/api-client && bun run generate:api
 ```
 
 This generates:
-- `frontend/src/api/generated/endpoints/resources/resources.ts` - React Query hooks
-- `frontend/src/api/generated/models/resource*.ts` - TypeScript types
+- `packages/api-client/src/endpoints/resources/resources.ts` - React Query hooks
+- `packages/api-client/src/models/resource*.ts` - TypeScript types
 
 ### 8. Use Generated Hooks in Frontend
 
 ```typescript
-import { useGetResources, useCreateResource } from '@/api/generated/endpoints/resources/resources'
+import { useGetResources, useCreateResource } from '@boostedbudget/api-client/endpoints/resources/resources'
 
 function ResourcesPage() {
   const { data, isLoading } = useGetResources({ limit: 50 })
@@ -195,7 +195,7 @@ function ResourcesPage() {
 - [ ] Repository interface and implementation
 - [ ] Error mapping added
 - [ ] Wired in main.go
-- [ ] `pnpm run generate:api` executed
+- [ ] `bun run generate:api` executed (in packages/api-client)
 - [ ] Frontend hooks usable
 
 ## Related
