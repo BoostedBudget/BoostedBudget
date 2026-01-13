@@ -765,11 +765,12 @@ jobs:
           grype version
 
       - name: Scan Docker image with Grype
-        run: grype test-${{ matrix.component }}:${{ github.sha }} \
-          --config ${{ env.UNIQUE_WORKSPACE }}/.grype.yaml \
-          --fail-on high \
-          --only-fixed \
-          --output table
+        run: |
+          grype test-${{ matrix.component }}:${{ github.sha }} \
+            --config ${{ env.UNIQUE_WORKSPACE }}/.grype.yaml \
+            --fail-on high \
+            --only-fixed \
+            --output table
 
       - name: Cleanup Docker image
         if: always()
