@@ -137,18 +137,18 @@ jobs:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          bun-version: latest
+          node-version: '22'
 
       - name: Install frontend dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
-        run: bun install --frozen-lockfile
+        # Use npm install (not bun) - Bun's dependency resolution pulls buggy AJV version
+        run: npm install
 
       - name: Generate TypeScript client
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
-        # Use npx to run orval with Node.js (Bun has AJV compatibility issues)
         run: npx orval
 
       - name: Check if generated client is up to date
