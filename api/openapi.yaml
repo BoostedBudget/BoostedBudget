@@ -1945,8 +1945,8 @@ components:
           type: integer
       required:
         - accounts
-        - executions_per_day
         - transaction_history_days
+        - executions_per_day
       type: object
     SubscriptionPricing:
       additionalProperties: false
@@ -1970,6 +1970,8 @@ components:
       required:
         - price_monthly
         - price_yearly
+        - mobile_price_yearly
+        - users_included
       type: object
     SubscriptionTier:
       additionalProperties: false
@@ -2667,9 +2669,9 @@ components:
         last_login_at:
           format: date-time
           type: string
-        primary_region:
-          type: string
         paddle_customer_id:
+          type: string
+        primary_region:
           type: string
         subscription_ends_at:
           format: date-time
