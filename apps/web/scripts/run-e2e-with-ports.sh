@@ -17,7 +17,7 @@ set -e
 
 # Get script directory for relative paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BACKEND_DIR="${SCRIPT_DIR}/../../backend"
+BACKEND_DIR="${SCRIPT_DIR}/../../../backend"
 
 # Source postgres helper functions
 source "${SCRIPT_DIR}/e2e-postgres.sh"
