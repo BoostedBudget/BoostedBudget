@@ -59,6 +59,53 @@ if [[ "$MIGRATION_URL" == *"neon.tech"* ]]; then
   fi
 fi
 
+# Auto-heal dirty migration 40 (from failed #674-678 tier restructure)
+# This is idempotent and can be safely run multiple times
+check_output=$(migrate -database "$MIGRATION_URL" -path /app/migrations version 2>&1 || true)
+if echo "$check_output" | grep -q "40 (dirty)"; then
+  echo "Detected dirty migration 40, applying auto-fix..."
+
+  # Execute idempotent SQL to complete migration 40
+  psql "$MIGRATION_URL" <<'EOSQL'
+DO $$ BEGIN
+  -- Rename column if still using old name
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_name = 'users' AND column_name = 'stripe_customer_id') THEN
+    ALTER TABLE users RENAME COLUMN stripe_customer_id TO paddle_customer_id;
+  END IF;
+END $$;
+
+-- Drop old constraints
+ALTER TABLE users DROP CONSTRAINT IF EXISTS valid_subscription_tier;
+ALTER TABLE users DROP CONSTRAINT IF EXISTS valid_subscription_status;
+
+-- Migrate tier data (idempotent via WHERE clause)
+UPDATE users SET subscription_tier = 'premium', subscription_status = 'trial'
+  WHERE subscription_tier = 'free';
+UPDATE users SET subscription_tier = 'premium'
+  WHERE subscription_tier = 'premium_lite';
+UPDATE users SET subscription_tier = 'household_5'
+  WHERE subscription_tier = 'premium_plus';
+
+-- Add new constraints
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'valid_subscription_tier') THEN
+    ALTER TABLE users ADD CONSTRAINT valid_subscription_tier
+      CHECK (subscription_tier IN ('premium', 'household_2', 'household_3', 'household_4', 'household_5'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'valid_subscription_status') THEN
+    ALTER TABLE users ADD CONSTRAINT valid_subscription_status
+      CHECK (subscription_status IN ('active', 'inactive', 'cancelled', 'past_due', 'trial'));
+  END IF;
+END $$;
+
+-- Clear dirty flag
+UPDATE schema_migrations SET dirty = false WHERE version = 40;
+EOSQL
+
+  echo "Migration 40 auto-fix completed successfully"
+fi
+
 # Run migrations with retry logic
 echo "Applying database migrations..."
 MAX_ATTEMPTS=5
