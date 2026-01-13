@@ -42,10 +42,6 @@ describe('SearchableSelect', () => {
     placeholder: 'Search...',
   }
 
-  beforeEach(() => {
-    // mocks cleared individually
-  })
-
   describe('Rendering', () => {
     it('should render with placeholder when no selection', () => {
       render(<SearchableSelect {...defaultProps} />)

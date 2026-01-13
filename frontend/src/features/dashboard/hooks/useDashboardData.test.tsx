@@ -109,6 +109,18 @@ describe('useDashboardData', () => {
     mockRefetchAccountTypes.mockClear()
   })
 
+  const configureQuery = (
+    mock: typeof mockUseGetBalanceSummary,
+    refetch: typeof mockRefetchBalanceSummary,
+    config?: { data?: unknown | null; isLoading?: boolean; error?: Error | null }
+  ) =>
+    mock.mockReturnValue({
+      data: config?.data ?? undefined,
+      isLoading: config?.isLoading ?? false,
+      error: config?.error ?? null,
+      refetch,
+    })
+
   function configureQueries(config: {
     summary?: {
       data?: BalanceSummary | null
@@ -126,26 +138,9 @@ describe('useDashboardData', () => {
       error?: Error | null
     }
   }) {
-    mockUseGetBalanceSummary.mockReturnValue({
-      data: config.summary?.data ?? undefined,
-      isLoading: config.summary?.isLoading ?? false,
-      error: config.summary?.error ?? null,
-      refetch: mockRefetchBalanceSummary,
-    })
-
-    mockUseGetBalanceHistory.mockReturnValue({
-      data: config.history?.data ?? undefined,
-      isLoading: config.history?.isLoading ?? false,
-      error: config.history?.error ?? null,
-      refetch: mockRefetchBalanceHistory,
-    })
-
-    mockUseGetAccountTypes.mockReturnValue({
-      data: config.types?.data ?? undefined,
-      isLoading: config.types?.isLoading ?? false,
-      error: config.types?.error ?? null,
-      refetch: mockRefetchAccountTypes,
-    })
+    configureQuery(mockUseGetBalanceSummary, mockRefetchBalanceSummary, config.summary)
+    configureQuery(mockUseGetBalanceHistory, mockRefetchBalanceHistory, config.history)
+    configureQuery(mockUseGetAccountTypes, mockRefetchAccountTypes, config.types)
   }
 
   describe('Basic Functionality', () => {

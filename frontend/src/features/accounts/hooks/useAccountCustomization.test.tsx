@@ -43,7 +43,6 @@ const mockAccountLegacy: Account = {
   nickname: 'My Primary',
   custom_color: '#3B82F6',
   display_order: 0,
-  is_hidden: false,
   status: 'active',
   created_at: '2025-10-18T14:30:00Z',
   updated_at: '2025-10-20T10:15:00Z',
@@ -56,17 +55,13 @@ const mockAccountWithUserAccount: Account = {
   user_account_id: 'ua-789',
 }
 
-function createTestQueryClient() {
-  return new QueryClient({
+function createWrapper() {
+  const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: 0 },
       mutations: { retry: false },
     },
   })
-}
-
-function createWrapper() {
-  const queryClient = createTestQueryClient()
   return function Wrapper({ children }: { children: React.ReactNode }) {
     return (
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
@@ -77,20 +72,16 @@ function createWrapper() {
 describe('useAccountCustomization', () => {
   beforeEach(() => {
     // Clear all mocks
-    mockUseUpdateAccount.mockClear()
-    mockUpdateAccountMutateAsync.mockClear()
-    mockUpdateAccountReset.mockClear()
-    mockUseReorderAccounts.mockClear()
-    mockReorderAccountsMutateAsync.mockClear()
-    mockReorderAccountsReset.mockClear()
-    mockUseUpdateUserAccount.mockClear()
-    mockUpdateUserAccountMutateAsync.mockClear()
+    ;[
+      mockUseUpdateAccount, mockUpdateAccountMutateAsync, mockUpdateAccountReset,
+      mockUseReorderAccounts, mockReorderAccountsMutateAsync, mockReorderAccountsReset,
+      mockUseUpdateUserAccount, mockUpdateUserAccountMutateAsync,
+    ].forEach((mock) => mock.mockClear())
 
     // Default successful responses
     mockUpdateAccountMutateAsync.mockResolvedValue({
       account: { ...mockAccountLegacy, nickname: 'Updated Name' },
     })
-
     mockUseUpdateAccount.mockReturnValue({
       mutateAsync: mockUpdateAccountMutateAsync,
       isPending: false,
@@ -104,7 +95,6 @@ describe('useAccountCustomization', () => {
       nickname: 'Updated Name',
       custom_color: '#FF0000',
     })
-
     mockUseUpdateUserAccount.mockReturnValue({
       mutateAsync: mockUpdateUserAccountMutateAsync,
       isPending: false,
@@ -114,7 +104,6 @@ describe('useAccountCustomization', () => {
     })
 
     mockReorderAccountsMutateAsync.mockResolvedValue({ success: true })
-
     mockUseReorderAccounts.mockReturnValue({
       mutateAsync: mockReorderAccountsMutateAsync,
       isPending: false,

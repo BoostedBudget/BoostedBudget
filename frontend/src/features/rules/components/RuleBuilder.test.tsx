@@ -49,10 +49,10 @@ const mockRule: AutomationRule = {
     notification_channels: ['in_app'],
     threshold_type: 'percentage',
     threshold_value: 80,
-  },
+  } as any,
   created_at: '2024-01-01T00:00:00Z',
   updated_at: '2024-01-01T00:00:00Z',
-}
+} as any
 
 const mockUser = {
   id: 'user-1',
@@ -66,20 +66,16 @@ const mockUser = {
   updated_at: '2024-01-01T00:00:00Z',
 }
 
-function createQueryClient() {
-  return new QueryClient({
+function renderWithProviders(
+  ui: React.ReactElement,
+  { route = '/rules/new' } = {}
+) {
+  const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
       mutations: { retry: false },
     },
   })
-}
-
-function renderWithProviders(
-  ui: React.ReactElement,
-  { route = '/rules/new' } = {}
-) {
-  const queryClient = createQueryClient()
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[route]}>

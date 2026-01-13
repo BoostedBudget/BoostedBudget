@@ -1,10 +1,3 @@
-/**
- * AllocationBreakdown Tests
- * Issue #497: Budget Category Manager + Match Config UI
- *
- * TDD RED Phase: Write failing tests first
- */
-
 import { describe, it, expect } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import { AllocationBreakdown } from './AllocationBreakdown'

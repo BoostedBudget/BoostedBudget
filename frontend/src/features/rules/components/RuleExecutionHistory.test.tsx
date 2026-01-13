@@ -8,10 +8,7 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { RuleExecution } from '@/api/generated/models'
 
-// Mock refetch function
 const mockRefetch = mock(() => Promise.resolve())
-
-// Mock the API hook
 const mockUseGetRuleExecutions = mock(() => ({
   data: undefined,
   isLoading: true,

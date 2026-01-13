@@ -1,10 +1,3 @@
-/**
- * useMilestoneTracking Tests
- * Issue #111: Goals Dashboard & Progress Visualization
- *
- * TDD tests for milestone tracking hook.
- */
-
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
 import { renderHook, act } from '@testing-library/react'
 import { useMilestoneTracking } from './useMilestoneTracking'

@@ -1,8 +1,3 @@
-/**
- * CategoryMatchConfig Tests
- * Issue #497: Budget Category Manager + Match Config UI
- */
-
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'

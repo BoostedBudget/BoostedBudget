@@ -1,8 +1,3 @@
-/**
- * IncomeSourceItem Tests
- * Issue #496: Income Source Configuration UI for Envelope Budgeting
- */
-
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -15,10 +10,6 @@ describe('IncomeSourceItem', () => {
   beforeEach(() => {
     mockOnRemove.mockClear()
   })
-
-  // ==========================================================================
-  // Rendering Tests
-  // ==========================================================================
 
   describe('Rendering', () => {
     it('renders plaid_category source with category icon and value', () => {

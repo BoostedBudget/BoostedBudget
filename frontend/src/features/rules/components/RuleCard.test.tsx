@@ -32,7 +32,7 @@ const mockRule: AutomationRule = {
   updated_at: '2024-01-15T00:00:00Z',
   last_executed_at: '2024-01-15T09:00:00Z',
   last_successful_at: '2024-01-15T09:00:00Z',
-}
+} as const
 
 describe('RuleCard', () => {
 

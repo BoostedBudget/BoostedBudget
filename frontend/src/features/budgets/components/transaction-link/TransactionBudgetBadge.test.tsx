@@ -1,10 +1,3 @@
-/**
- * TransactionBudgetBadge Component Tests
- * Issue #499: Transaction-Budget Linking UI
- *
- * TDD RED Phase: Write comprehensive tests before implementation
- */
-
 import { describe, it, expect } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'

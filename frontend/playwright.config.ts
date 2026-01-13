@@ -38,7 +38,6 @@ const databaseUrl = process.env.DATABASE_URL || '';
 
 // Auth session file path
 const authFile = join(__dirname, 'e2e/.auth/user.json');
-const hasAuthSession = existsSync(authFile);
 
 export default defineConfig({
   // Test directory
@@ -113,7 +112,7 @@ export default defineConfig({
         ...devices['Desktop Chrome'],
         // Use saved auth state from auth.setup.ts if it exists
         // When auth setup is skipped (no TEST_CLERK_* env vars), tests run unauthenticated
-        ...(hasAuthSession ? { storageState: authFile } : {}),
+        ...(existsSync(authFile) ? { storageState: authFile } : {}),
       },
       dependencies: ['auth'],
     },

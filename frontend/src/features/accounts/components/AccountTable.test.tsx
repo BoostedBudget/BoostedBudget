@@ -3,14 +3,14 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { AccountTable } from './AccountTable'
 import type { Account } from '@/api/generated/models'
 
-const mockAccounts: Account[] = [
-  {
+// Mock account factory for reusable test data
+function createMockAccount(overrides?: Partial<Account>): Account {
+  return {
     id: 'acc-1',
     user_id: 'user-1',
     linked_item_id: 'item-1',
     plaid_account_id: 'plaid-1',
     name: 'Primary Checking',
-    nickname: 'My Checking',
     official_name: 'Chase Total Checking',
     type: 'depository',
     subtype: 'checking',
@@ -19,50 +19,48 @@ const mockAccounts: Account[] = [
     available_balance: 2400.0,
     currency_code: 'USD',
     institution_name: 'Chase',
-    custom_color: '#3B82F6',
-    custom_emoji: '💰',
-    is_hidden: false,
     status: 'active',
     display_order: 0,
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-01T00:00:00Z',
-  },
-  {
+    ...overrides,
+  }
+}
+
+const mockAccounts: Account[] = [
+  createMockAccount({
+    nickname: 'My Checking',
+    custom_color: '#3B82F6',
+    custom_emoji: '💰',
+  }),
+  createMockAccount({
     id: 'acc-2',
-    user_id: 'user-1',
-    linked_item_id: 'item-1',
-    plaid_account_id: 'plaid-2',
     name: 'Savings Account',
-    type: 'depository',
+    plaid_account_id: 'plaid-2',
     subtype: 'savings',
     mask: '5678',
     current_balance: 15000.0,
-    currency_code: 'USD',
-    institution_name: 'Chase',
-    is_hidden: false,
-    status: 'active',
+    available_balance: undefined,
     display_order: 1,
     created_at: '2024-01-02T00:00:00Z',
     updated_at: '2024-01-02T00:00:00Z',
-  },
-  {
+  }),
+  createMockAccount({
     id: 'acc-3',
-    user_id: 'user-1',
     linked_item_id: 'item-2',
-    plaid_account_id: 'plaid-3',
     name: 'Credit Card',
+    plaid_account_id: 'plaid-3',
     type: 'credit',
     subtype: 'credit card',
     mask: '9012',
     current_balance: -1250.75,
-    currency_code: 'USD',
+    available_balance: undefined,
     institution_name: 'American Express',
     is_hidden: true,
-    status: 'active',
     display_order: 2,
     created_at: '2024-01-03T00:00:00Z',
     updated_at: '2024-01-03T00:00:00Z',
-  },
+  }),
 ]
 
 describe('AccountTable', () => {

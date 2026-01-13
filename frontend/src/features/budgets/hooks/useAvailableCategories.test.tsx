@@ -1,9 +1,3 @@
-/**
- * useAvailableCategories Hook Tests
- * Issue #497: Budget Category Manager + Match Config UI
- * Issue #564: Migrated to generated React Query hooks
- */
-
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { renderHook, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -14,7 +8,6 @@ import {
 } from '@/test/mocks/budgets-api'
 import { useAvailableCategories } from './useAvailableCategories'
 
-// Helper to create wrapper with QueryClient
 function createWrapper() {
   const queryClient = new QueryClient({
     defaultOptions: {

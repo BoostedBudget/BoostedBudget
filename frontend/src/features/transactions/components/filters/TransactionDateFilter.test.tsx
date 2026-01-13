@@ -8,10 +8,10 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TransactionDateFilter } from './TransactionDateFilter'
 
-const mockOnPresetChange = mock(() => {})
-const mockOnCustomRangeChange = mock(() => {})
-
 describe('TransactionDateFilter', () => {
+  const mockOnPresetChange = mock(() => {})
+  const mockOnCustomRangeChange = mock(() => {})
+
   beforeEach(() => {
     mockOnPresetChange.mockClear()
     mockOnCustomRangeChange.mockClear()

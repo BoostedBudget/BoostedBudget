@@ -41,7 +41,6 @@ describe('AccountCustomizationModal', () => {
     available_balance: 2300.50,
     currency_code: 'USD',
     institution_name: 'Chase',
-    is_hidden: false,
     status: 'active',
     created_at: '2025-10-18T14:30:00Z',
     updated_at: '2025-10-20T10:15:00Z',
@@ -424,7 +423,7 @@ describe('AccountCustomizationModal', () => {
 
   describe('Hidden Toggle', () => {
     it('shows hidden badge when is_hidden is true', () => {
-      const hiddenAccount = {
+      const hiddenAccount: Account = {
         ...mockAccount,
         is_hidden: true,
       }

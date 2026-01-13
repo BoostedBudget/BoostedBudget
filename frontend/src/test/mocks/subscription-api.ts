@@ -16,5 +16,5 @@ export const mockUseGetSubscriptionTiers = mock(() => ({
 // Single mock.module() call - called once at preload time
 mock.module('@/api/generated/endpoints/subscription/subscription', () => ({
   ...RealSubscriptionModule,
-  useGetSubscriptionTiers: (...args: unknown[]) => mockUseGetSubscriptionTiers(...args),
+  useGetSubscriptionTiers: mockUseGetSubscriptionTiers,
 }))

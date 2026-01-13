@@ -1,8 +1,3 @@
-/**
- * CreateSavingsGoalDialog Component Tests
- * Issue #564: Frontend Test Coverage Improvement
- */
-
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import React from 'react'
 

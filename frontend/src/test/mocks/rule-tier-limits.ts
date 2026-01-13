@@ -16,5 +16,5 @@ export const mockUseRuleTierLimits = mock(() => ({
 
 // Single mock.module() call - called once at preload time
 mock.module('@/features/rules/hooks/useRuleTierLimits', () => ({
-  useRuleTierLimits: (...args: unknown[]) => mockUseRuleTierLimits(...args),
+  useRuleTierLimits: mockUseRuleTierLimits,
 }))

@@ -29,7 +29,7 @@ function createMockUser(tier: string = 'free'): User {
 }
 
 function createMockTiers(): SubscriptionTiersResponse {
-  const createFeatures = (overrides: Record<string, boolean> = {}) => ({
+  const defaultFeatures = {
     ads_enabled: false,
     api_access: false,
     priority_support: false,
@@ -38,12 +38,14 @@ function createMockTiers(): SubscriptionTiersResponse {
     custom_categories: false,
     custom_tags: false,
     event_triggers: false,
+  }
+
+  const createFeatures = (overrides: Record<string, boolean> = {}) => ({
+    ...defaultFeatures,
     ...overrides,
   })
 
-  const createLimits = (accounts: number, rules: number) => ({
-    accounts,
-    rules,
+  const defaultLimits = {
     accounts_synced_per_month: 100,
     api_calls_per_month: 1000,
     custom_categories_max: 10,
@@ -52,6 +54,12 @@ function createMockTiers(): SubscriptionTiersResponse {
     executions_per_day: 10,
     min_execution_interval_minutes: 60,
     transaction_history_days: 365,
+  }
+
+  const createLimits = (accounts: number, rules: number) => ({
+    accounts,
+    rules,
+    ...defaultLimits,
   })
 
   return {

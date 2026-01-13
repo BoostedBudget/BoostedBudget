@@ -5,7 +5,7 @@ import { FilterPill } from './FilterPill'
 
 describe('FilterPill', () => {
   it('should render label and value', () => {
-    render(<FilterPill label="Category" value="Food" onRemove={() => {}} />)
+    render(<FilterPill label="Category" value="Food" onRemove={mock(() => {})} />)
 
     expect(screen.getByText('Category:')).toBeInTheDocument()
     expect(screen.getByText('Food')).toBeInTheDocument()
@@ -25,7 +25,7 @@ describe('FilterPill', () => {
 
   it('should truncate long values', () => {
     const longValue = 'This is a very long category name that should be truncated'
-    render(<FilterPill label="Category" value={longValue} onRemove={() => {}} />)
+    render(<FilterPill label="Category" value={longValue} onRemove={mock(() => {})} />)
 
     const valueElement = screen.getByText(longValue)
     expect(valueElement).toHaveClass('truncate')

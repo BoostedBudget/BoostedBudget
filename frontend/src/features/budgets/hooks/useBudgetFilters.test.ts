@@ -1,24 +1,9 @@
-/**
- * useBudgetFilters Hook Tests
- * Issue #590: Inline Column Filtering
- * Issue #575: Fixed for bun:test with MemoryRouter
- *
- * Tests the budget filter hook with URL state synchronization.
- *
- * NOTE: This test file passes when run alone (bun test useBudgetFilters.test.ts)
- * but may fail when run in the full suite due to mock pollution from
- * BudgetsPage.test.tsx which runs first alphabetically and mocks useBudgetFilters.
- * This is a known limitation of Bun's mock.module() persistence.
- */
-
 import { describe, it, expect } from 'bun:test'
 import { renderHook, act } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import React from 'react'
 import { useBudgetFilters } from './useBudgetFilters'
 
-// Wrapper component with MemoryRouter for useSearchParams
-// Uses initialEntries to set the initial URL state
 function createWrapper(initialEntry = '/') {
   return function Wrapper({ children }: { children: React.ReactNode }) {
     return React.createElement(MemoryRouter, { initialEntries: [initialEntry] }, children)

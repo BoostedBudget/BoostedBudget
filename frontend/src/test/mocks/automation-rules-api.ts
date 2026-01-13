@@ -16,9 +16,8 @@ export const mockUseGetAutomationRules = mock(() => ({
 
 // === useCreateAutomationRule ===
 export const mockCreateAutomationRuleMutateAsync = mock(() => Promise.resolve())
-export const mockCreateAutomationRuleMutate = mock(() => {})
 export const mockUseCreateAutomationRule = mock(() => ({
-  mutate: mockCreateAutomationRuleMutate,
+  mutate: mock(() => {}),
   mutateAsync: mockCreateAutomationRuleMutateAsync,
   isPending: false,
   isError: false,
@@ -30,9 +29,8 @@ export const mockUseCreateAutomationRule = mock(() => ({
 
 // === useUpdateAutomationRule ===
 export const mockUpdateAutomationRuleMutateAsync = mock(() => Promise.resolve())
-export const mockUpdateAutomationRuleMutate = mock(() => {})
 export const mockUseUpdateAutomationRule = mock(() => ({
-  mutate: mockUpdateAutomationRuleMutate,
+  mutate: mock(() => {}),
   mutateAsync: mockUpdateAutomationRuleMutateAsync,
   isPending: false,
   isError: false,
@@ -43,8 +41,8 @@ export const mockUseUpdateAutomationRule = mock(() => ({
 }))
 
 // === useDeleteAutomationRule ===
-export const mockDeleteAutomationRuleMutateAsync = mock(() => Promise.resolve())
 export const mockDeleteAutomationRuleMutate = mock(() => {})
+export const mockDeleteAutomationRuleMutateAsync = mock(() => Promise.resolve())
 export const mockUseDeleteAutomationRule = mock(() => ({
   mutate: mockDeleteAutomationRuleMutate,
   mutateAsync: mockDeleteAutomationRuleMutateAsync,
@@ -57,8 +55,8 @@ export const mockUseDeleteAutomationRule = mock(() => ({
 }))
 
 // === useToggleAutomationRule ===
-export const mockToggleAutomationRuleMutateAsync = mock(() => Promise.resolve())
 export const mockToggleAutomationRuleMutate = mock(() => {})
+export const mockToggleAutomationRuleMutateAsync = mock(() => Promise.resolve())
 export const mockUseToggleAutomationRule = mock(() => ({
   mutate: mockToggleAutomationRuleMutate,
   mutateAsync: mockToggleAutomationRuleMutateAsync,
@@ -71,8 +69,8 @@ export const mockUseToggleAutomationRule = mock(() => ({
 }))
 
 // === useTestAutomationRule ===
-export const mockTestAutomationRuleMutateAsync = mock(() => Promise.resolve())
 export const mockTestAutomationRuleMutate = mock(() => {})
+export const mockTestAutomationRuleMutateAsync = mock(() => Promise.resolve())
 export const mockUseTestAutomationRule = mock(() => ({
   mutate: mockTestAutomationRuleMutate,
   mutateAsync: mockTestAutomationRuleMutateAsync,
@@ -86,9 +84,8 @@ export const mockUseTestAutomationRule = mock(() => ({
 
 // === useTriggerAutomationRule ===
 export const mockTriggerAutomationRuleMutateAsync = mock(() => Promise.resolve())
-export const mockTriggerAutomationRuleMutate = mock(() => {})
 export const mockUseTriggerAutomationRule = mock(() => ({
-  mutate: mockTriggerAutomationRuleMutate,
+  mutate: mock(() => {}),
   mutateAsync: mockTriggerAutomationRuleMutateAsync,
   isPending: false,
   isError: false,
@@ -109,12 +106,12 @@ export const mockUseGetAutomationRuleByID = mock(() => ({
 // Single mock.module() call - called once at preload time
 mock.module('@/api/generated/endpoints/automation-rules/automation-rules', () => ({
   ...RealAutomationRulesModule,
-  useGetAutomationRules: (...args: unknown[]) => mockUseGetAutomationRules(...args),
-  useGetAutomationRuleByID: (...args: unknown[]) => mockUseGetAutomationRuleByID(...args),
-  useCreateAutomationRule: (...args: unknown[]) => mockUseCreateAutomationRule(...args),
-  useUpdateAutomationRule: (...args: unknown[]) => mockUseUpdateAutomationRule(...args),
-  useDeleteAutomationRule: (...args: unknown[]) => mockUseDeleteAutomationRule(...args),
-  useToggleAutomationRule: (...args: unknown[]) => mockUseToggleAutomationRule(...args),
-  useTestAutomationRule: (...args: unknown[]) => mockUseTestAutomationRule(...args),
-  useTriggerAutomationRule: (...args: unknown[]) => mockUseTriggerAutomationRule(...args),
+  useGetAutomationRules: mockUseGetAutomationRules,
+  useGetAutomationRuleByID: mockUseGetAutomationRuleByID,
+  useCreateAutomationRule: mockUseCreateAutomationRule,
+  useUpdateAutomationRule: mockUseUpdateAutomationRule,
+  useDeleteAutomationRule: mockUseDeleteAutomationRule,
+  useToggleAutomationRule: mockUseToggleAutomationRule,
+  useTestAutomationRule: mockUseTestAutomationRule,
+  useTriggerAutomationRule: mockUseTriggerAutomationRule,
 }))

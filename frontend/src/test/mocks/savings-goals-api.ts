@@ -70,13 +70,13 @@ export const mockGetGetSavingsGoalQueryKey = mock((id?: string) => ['savings-goa
 // Single mock.module() call - called once at preload time
 mock.module('@/api/generated/endpoints/savings-goals/savings-goals', () => ({
   ...RealSavingsGoalsModule,
-  useGetSavingsGoals: (...args: unknown[]) => mockUseGetSavingsGoals(...args),
-  useGetActiveSavingsGoals: (...args: unknown[]) => mockUseGetActiveSavingsGoals(...args),
-  useGetSavingsGoal: (...args: unknown[]) => mockUseGetSavingsGoal(...args),
-  useCreateSavingsGoal: (...args: unknown[]) => mockUseCreateSavingsGoal(...args),
-  useUpdateSavingsGoal: (...args: unknown[]) => mockUseUpdateSavingsGoal(...args),
-  useDeleteSavingsGoal: (...args: unknown[]) => mockUseDeleteSavingsGoal(...args),
-  getGetSavingsGoalsQueryKey: (...args: unknown[]) => mockGetGetSavingsGoalsQueryKey(...args),
-  getGetActiveSavingsGoalsQueryKey: (...args: unknown[]) => mockGetGetActiveSavingsGoalsQueryKey(...args),
-  getGetSavingsGoalQueryKey: (...args: unknown[]) => mockGetGetSavingsGoalQueryKey(...args),
+  useGetSavingsGoals: mockUseGetSavingsGoals,
+  useGetActiveSavingsGoals: mockUseGetActiveSavingsGoals,
+  useGetSavingsGoal: mockUseGetSavingsGoal,
+  useCreateSavingsGoal: mockUseCreateSavingsGoal,
+  useUpdateSavingsGoal: mockUseUpdateSavingsGoal,
+  useDeleteSavingsGoal: mockUseDeleteSavingsGoal,
+  getGetSavingsGoalsQueryKey: mockGetGetSavingsGoalsQueryKey,
+  getGetActiveSavingsGoalsQueryKey: mockGetGetActiveSavingsGoalsQueryKey,
+  getGetSavingsGoalQueryKey: mockGetGetSavingsGoalQueryKey,
 }))

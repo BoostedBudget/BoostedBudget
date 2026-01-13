@@ -6,31 +6,30 @@ import { mock } from 'bun:test'
 import React from 'react'
 
 // === Plot component mock ===
-export const MockPlot = mock(
-  ({
-    data,
-    layout,
-    config,
+const PlotMockComponent = ({
+  data,
+  layout,
+  config,
+  style,
+  useResizeHandler,
+}: {
+  data: Array<{ name: string }>
+  layout: { shapes?: unknown }
+  config: { responsive?: boolean }
+  style: React.CSSProperties
+  useResizeHandler: boolean
+}) =>
+  React.createElement('div', {
+    'data-testid': 'plotly-chart',
+    'data-trace-count': data.length,
+    'data-trace-names': JSON.stringify(data.map((d) => d.name)),
+    'data-use-resize-handler': useResizeHandler,
+    'data-responsive': config?.responsive,
+    'data-has-shapes': layout?.shapes ? 'true' : 'false',
     style,
-    useResizeHandler,
-  }: {
-    data: Array<{ name: string }>
-    layout: { shapes?: unknown }
-    config: { responsive?: boolean }
-    style: React.CSSProperties
-    useResizeHandler: boolean
-  }) =>
-    React.createElement('div', {
-      'data-testid': 'plotly-chart',
-      'data-trace-count': data.length,
-      'data-trace-names': JSON.stringify(data.map((d) => d.name)),
-      'data-use-resize-handler': useResizeHandler,
-      'data-responsive': config?.responsive,
-      'data-has-shapes': layout?.shapes ? 'true' : 'false',
-      style,
-      children: 'Plotly Chart Mock',
-    })
-)
+    children: 'Plotly Chart Mock',
+  })
+export const MockPlot = mock(PlotMockComponent)
 
 // === Plotly instance mock ===
 export const MockPlotly = {}

@@ -58,9 +58,9 @@ export const mockUseDisconnectInstitution = mock(() => ({
 // Single mock.module() call - called once at preload time
 mock.module('@/api/generated/endpoints/accounts/accounts', () => ({
   ...RealAccountsModule,
-  useGetAccounts: (...args: unknown[]) => mockUseGetAccounts(...args),
-  useReorderAccounts: (...args: unknown[]) => mockUseReorderAccounts(...args),
-  useDeleteAccount: (...args: unknown[]) => mockUseDeleteAccount(...args),
-  useUpdateAccount: (...args: unknown[]) => mockUseUpdateAccount(...args),
-  useDisconnectInstitution: (...args: unknown[]) => mockUseDisconnectInstitution(...args),
+  useGetAccounts: mockUseGetAccounts,
+  useReorderAccounts: mockUseReorderAccounts,
+  useDeleteAccount: mockUseDeleteAccount,
+  useUpdateAccount: mockUseUpdateAccount,
+  useDisconnectInstitution: mockUseDisconnectInstitution,
 }))

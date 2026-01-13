@@ -15,19 +15,15 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { CancelDeletionPage } from './CancelDeletionPage'
 import { mockCancelDeletion } from '@/test/mocks/user-api'
 
-const createTestQueryClient = () =>
-  new QueryClient({
-    defaultOptions: {
-      queries: { retry: false, gcTime: 0 },
-      mutations: { retry: false },
-    },
-  })
-
 function renderWithProviders(token?: string) {
-  const queryClient = createTestQueryClient()
   const path = token ? `/cancel-deletion/${token}` : '/cancel-deletion/'
   return render(
-    <QueryClientProvider client={queryClient}>
+    <QueryClientProvider client={new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, gcTime: 0 },
+        mutations: { retry: false },
+      },
+    })}>
       <MemoryRouter initialEntries={[path]}>
         <Routes>
           <Route path="/cancel-deletion/:token?" element={<CancelDeletionPage />} />

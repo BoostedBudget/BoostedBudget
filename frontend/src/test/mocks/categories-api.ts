@@ -46,9 +46,9 @@ export const mockGetUserCategoriesQueryKey = mock(() => ['user-categories'])
 // Single mock.module() call - called once at preload time
 mock.module('@/api/generated/endpoints/categories/categories', () => ({
   ...RealCategoriesModule,
-  useCreateCategory: (...args: unknown[]) => mockUseCreateCategory(...args),
-  useGetCategories: (...args: unknown[]) => mockUseGetCategories(...args),
-  useGetUserCategories: (...args: unknown[]) => mockUseGetUserCategories(...args),
-  useGetPlaidCategories: (...args: unknown[]) => mockUseGetPlaidCategories(...args),
-  getGetUserCategoriesQueryKey: () => mockGetUserCategoriesQueryKey(),
+  useCreateCategory: mockUseCreateCategory,
+  useGetCategories: mockUseGetCategories,
+  useGetUserCategories: mockUseGetUserCategories,
+  useGetPlaidCategories: mockUseGetPlaidCategories,
+  getGetUserCategoriesQueryKey: mockGetUserCategoriesQueryKey,
 }))

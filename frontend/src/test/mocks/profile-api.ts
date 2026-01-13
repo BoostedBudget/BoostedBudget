@@ -14,18 +14,16 @@ export const mockUseGetUserProfile = mock(() => ({
 }))
 
 // === useUpdateUserProfile ===
-export const mockUpdateUserProfileMutateAsync = mock(() => Promise.resolve())
 export const mockUpdateUserProfileMutate = mock(() => {})
-export let mockUpdateUserProfileIsPending = false
+export const mockUpdateUserProfileMutateAsync = mock(() => Promise.resolve())
+let _isPending = false
 export const setMockUpdateUserProfileIsPending = (value: boolean) => {
-  mockUpdateUserProfileIsPending = value
+  _isPending = value
 }
 export const mockUseUpdateUserProfile = mock(() => ({
   mutate: mockUpdateUserProfileMutate,
   mutateAsync: mockUpdateUserProfileMutateAsync,
-  get isPending() {
-    return mockUpdateUserProfileIsPending
-  },
+  isPending: _isPending,
   isError: false,
   isSuccess: false,
   error: null,
@@ -36,6 +34,6 @@ export const mockUseUpdateUserProfile = mock(() => ({
 // Single mock.module() call - called once at preload time
 mock.module('@/api/generated/endpoints/profile/profile', () => ({
   ...RealProfileModule,
-  useGetUserProfile: (...args: unknown[]) => mockUseGetUserProfile(...args),
-  useUpdateUserProfile: (...args: unknown[]) => mockUseUpdateUserProfile(...args),
+  useGetUserProfile: mockUseGetUserProfile,
+  useUpdateUserProfile: mockUseUpdateUserProfile,
 }))

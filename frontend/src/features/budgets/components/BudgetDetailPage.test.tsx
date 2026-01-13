@@ -1,15 +1,5 @@
-/**
- * BudgetDetailPage Component Tests
- * Issue #564: Frontend Test Coverage Improvement
- * Issue #575: Migrated to bun:test, refactored to use centralized mocks
- *
- * Tests the budget detail page component with loading, error, and success states.
- */
-
 import { describe, it, expect, beforeEach } from 'bun:test'
 
-// Issue #575: Use centralized mocks to prevent mock.module() pollution
-// No inline mock.module() calls for wrapper hooks
 import { mockNavigate } from '@/test/mocks/react-router'
 import {
   mockUseBudgetDetail,
@@ -17,12 +7,6 @@ import {
   mockBudgetDetailRefetch,
 } from '@/test/mocks/budget-detail-hooks'
 import { mockUseTags } from '@/test/mocks/tags-hooks'
-
-// Issue #575: DO NOT mock child components (BudgetCategoryManager, BudgetIncomeSection,
-// UnallocatedFundsCard) - it causes pollution to their test files via Bun's global
-// mock.module() persistence. The real components work fine in tests.
-
-// NOW import the component and testing utilities AFTER mocks
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -41,7 +25,6 @@ function createMockBudget(overrides: Record<string, unknown> = {}) {
     end_date: '2025-01-31',
     is_active: true,
     currency_code: 'USD',
-    // Issue #575: Categories must match real BudgetCategory type with category: string[]
     categories: [
       {
         id: 'cat-1',

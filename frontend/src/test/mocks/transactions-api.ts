@@ -34,10 +34,8 @@ export const mockGetTransactionsQueryKey = mock(() => ['transactions'])
 // Single mock.module() call - called once at preload time
 mock.module('@/api/generated/endpoints/transactions/transactions', () => ({
   ...RealTransactionsModule,
-  useGetTransactions: (...args: unknown[]) => mockUseGetTransactions(...args),
-  useUpdateTransactionTags: (...args: unknown[]) =>
-    mockUseUpdateTransactionTags(...args),
-  useUpdateTransactionCategory: (...args: unknown[]) =>
-    mockUseUpdateTransactionCategory(...args),
-  getGetTransactionsQueryKey: () => mockGetTransactionsQueryKey(),
+  useGetTransactions: mockUseGetTransactions,
+  useUpdateTransactionTags: mockUseUpdateTransactionTags,
+  useUpdateTransactionCategory: mockUseUpdateTransactionCategory,
+  getGetTransactionsQueryKey: mockGetTransactionsQueryKey,
 }))

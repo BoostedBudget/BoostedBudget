@@ -23,5 +23,5 @@ export const mockUseUpdateUserAccount = mock(() => ({
 // Single mock.module() call - called once at preload time
 mock.module('@/api/generated/endpoints/user-accounts/user-accounts', () => ({
   ...RealUserAccountsModule,
-  useUpdateUserAccount: (...args: unknown[]) => mockUseUpdateUserAccount(...args),
+  useUpdateUserAccount: mockUseUpdateUserAccount,
 }))

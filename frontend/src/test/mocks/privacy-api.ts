@@ -34,6 +34,6 @@ export const mockUseUpdatePrivacySettings = mock(() => ({
 // Single mock.module() call - called once at preload time
 mock.module('@/api/generated/endpoints/privacy/privacy', () => ({
   ...RealPrivacyModule,
-  useGetPrivacySettings: (...args: unknown[]) => mockUseGetPrivacySettings(...args),
-  useUpdatePrivacySettings: (...args: unknown[]) => mockUseUpdatePrivacySettings(...args),
+  useGetPrivacySettings: mockUseGetPrivacySettings,
+  useUpdatePrivacySettings: mockUseUpdatePrivacySettings,
 }))

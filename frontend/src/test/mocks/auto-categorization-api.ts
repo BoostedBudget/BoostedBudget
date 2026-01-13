@@ -61,10 +61,10 @@ export const mockUseToggleRule = mock(() => ({
 // Single mock.module() call - called once at preload time
 mock.module('@/api/generated/endpoints/auto-categorization/auto-categorization', () => ({
   ...RealAutoCategorizationModule,
-  useGetUserRules: (...args: unknown[]) => mockUseGetUserRules(...args),
-  useCreateRule: (...args: unknown[]) => mockUseCreateRule(...args),
-  useDeleteRule: (...args: unknown[]) => mockUseDeleteRule(...args),
-  useGetRuleByID: (...args: unknown[]) => mockUseGetRuleByID(...args),
-  useUpdateRule: (...args: unknown[]) => mockUseUpdateRule(...args),
-  useToggleRule: (...args: unknown[]) => mockUseToggleRule(...args),
+  useGetUserRules: mockUseGetUserRules,
+  useCreateRule: mockUseCreateRule,
+  useDeleteRule: mockUseDeleteRule,
+  useGetRuleByID: mockUseGetRuleByID,
+  useUpdateRule: mockUseUpdateRule,
+  useToggleRule: mockUseToggleRule,
 }))

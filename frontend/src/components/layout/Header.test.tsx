@@ -36,13 +36,12 @@ const setupAuthenticatedMocks = (user = mockClerkUser) => {
   })
 }
 
-const renderHeader = (props = {}) => {
-  return render(
+const renderHeader = (props?: object) =>
+  render(
     <BrowserRouter>
       <Header {...props} />
     </BrowserRouter>
   )
-}
 
 describe('Header', () => {
   beforeEach(() => {

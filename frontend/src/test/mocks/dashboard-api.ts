@@ -80,20 +80,15 @@ export const mockGetDefaultLayoutQueryKey = mock(() => ['dashboard', 'default-la
 // Single mock.module() call - called once at preload time
 mock.module('@/api/generated/endpoints/dashboard/dashboard', () => ({
   ...RealDashboardModule,
-  useGetBalanceSummary: (...args: unknown[]) => mockUseGetBalanceSummary(...args),
-  useGetBalanceHistory: (...args: unknown[]) => mockUseGetBalanceHistory(...args),
-  useGetAccountTypes: (...args: unknown[]) => mockUseGetAccountTypes(...args),
-  useGetDashboardPreferences: (...args: unknown[]) =>
-    mockUseGetDashboardPreferences(...args),
-  useSaveDashboardPreferences: (...args: unknown[]) =>
-    mockUseSaveDashboardPreferences(...args),
-  useResetDashboardPreferences: (...args: unknown[]) =>
-    mockUseResetDashboardPreferences(...args),
-  useGetDefaultLayout: (...args: unknown[]) => mockUseGetDefaultLayout(...args),
-  getGetBalanceSummaryQueryKey: (...args: unknown[]) =>
-    mockGetBalanceSummaryQueryKey(...args),
-  getGetBalanceHistoryQueryKey: (...args: unknown[]) =>
-    mockGetBalanceHistoryQueryKey(...args),
-  getGetAccountTypesQueryKey: () => mockGetAccountTypesQueryKey(),
-  getGetDefaultLayoutQueryKey: () => mockGetDefaultLayoutQueryKey(),
+  useGetBalanceSummary: mockUseGetBalanceSummary,
+  useGetBalanceHistory: mockUseGetBalanceHistory,
+  useGetAccountTypes: mockUseGetAccountTypes,
+  useGetDashboardPreferences: mockUseGetDashboardPreferences,
+  useSaveDashboardPreferences: mockUseSaveDashboardPreferences,
+  useResetDashboardPreferences: mockUseResetDashboardPreferences,
+  useGetDefaultLayout: mockUseGetDefaultLayout,
+  getGetBalanceSummaryQueryKey: mockGetBalanceSummaryQueryKey,
+  getGetBalanceHistoryQueryKey: mockGetBalanceHistoryQueryKey,
+  getGetAccountTypesQueryKey: mockGetAccountTypesQueryKey,
+  getGetDefaultLayoutQueryKey: mockGetDefaultLayoutQueryKey,
 }))

@@ -14,15 +14,16 @@ import { mockCreateCategoryMutateAsync } from '@/test/mocks/categories-api'
 
 // Helper to create wrapper with QueryClient
 function createWrapper() {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: {
-        retry: false,
-      },
-    },
-  })
   return function Wrapper({ children }: { children: ReactNode }) {
-    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    return (
+      <QueryClientProvider client={new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+        },
+      })}>
+        {children}
+      </QueryClientProvider>
+    )
   }
 }
 

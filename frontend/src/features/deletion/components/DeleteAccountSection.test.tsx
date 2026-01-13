@@ -19,17 +19,13 @@ import {
 } from '@/test/mocks/user-api'
 import type { RequestDeletionResponse } from '../types'
 
-function createTestQueryClient() {
-  return new QueryClient({
+function renderWithQuery(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: 0 },
       mutations: { retry: false },
     },
   })
-}
-
-function renderWithQuery(ui: React.ReactElement) {
-  const queryClient = createTestQueryClient()
   return {
     ...render(
       <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>

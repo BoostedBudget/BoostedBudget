@@ -1,19 +1,6 @@
-/**
- * BudgetCategoryManager Tests
- * Issue #575: Migrated to bun:test
- *
- * Issue #575: DO NOT mock BudgetCategoryCard - it causes pollution to
- * BudgetCategoryCard.test.tsx via Bun's global mock.module() persistence.
- * The real component works fine in tests.
- */
-
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import type { BudgetCategory } from '../../types'
 import type { UserTag } from '@/features/tags/types'
-
-// Issue #575: DO NOT mock BudgetCategoryForm - it causes pollution to
-// BudgetCategoryForm.test.tsx via Bun's global mock.module() persistence.
-// Tests are updated to work with the real form component.
 
 mock.module('./AllocationBreakdown', () => ({
   AllocationBreakdown: ({
@@ -32,8 +19,6 @@ mock.module('./AllocationBreakdown', () => ({
     </div>
   ),
 }))
-
-// NOW import testing utilities and component AFTER mocks
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'

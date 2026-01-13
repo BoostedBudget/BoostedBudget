@@ -19,18 +19,15 @@ import {
   mockRefetchSubscriptionTiers,
 } from '@/test/mocks/subscription-api'
 
-function createTestQueryClient() {
-  return new QueryClient({
-    defaultOptions: {
-      queries: { retry: false, gcTime: 0 },
-    },
-  })
-}
-
 function renderWithProviders(ui: React.ReactElement) {
-  const queryClient = createTestQueryClient()
   return render(
-    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>
+    <QueryClientProvider client={new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, gcTime: 0 },
+      },
+    })}>
+      {ui}
+    </QueryClientProvider>
   )
 }
 

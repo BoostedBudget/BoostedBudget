@@ -100,18 +100,17 @@ describe('useCashFlowData', () => {
     })
   }
 
-  function configureHistoryQuery(config: {
+  const configureHistoryQuery = (config: {
     data?: CashFlowHistory | null
     isLoading?: boolean
     error?: Error | null
-  }) {
+  }) =>
     mockUseGetCashFlowHistory.mockReturnValue({
       data: config.data ?? undefined,
       isLoading: config.isLoading ?? false,
       error: config.error ?? null,
       refetch: mockRefetchCashFlowHistory,
     })
-  }
 
   describe('useCashFlowSummary', () => {
     describe('Initial State', () => {

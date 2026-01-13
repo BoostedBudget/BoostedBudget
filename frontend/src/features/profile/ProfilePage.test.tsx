@@ -38,21 +38,15 @@ import {
 import { mockUseAuth } from '@/test/mocks/clerk.tsx'
 import { mockToastSuccess, mockToastError } from '@/test/mocks/sonner'
 
-// Create a fresh QueryClient for each test
-function createTestQueryClient() {
-  return new QueryClient({
-    defaultOptions: {
-      queries: { retry: false, gcTime: 0 },
-      mutations: { retry: false },
-    },
-  })
-}
-
 // Test wrapper with React Router and QueryClient
 function renderWithProviders(ui: React.ReactElement, { initialUrl = '/profile' } = {}) {
-  const queryClient = createTestQueryClient()
   return render(
-    <QueryClientProvider client={queryClient}>
+    <QueryClientProvider client={new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, gcTime: 0 },
+        mutations: { retry: false },
+      },
+    })}>
       <MemoryRouter initialEntries={[initialUrl]}>
         <Routes>
           <Route path="/profile" element={ui} />
@@ -448,9 +442,13 @@ describe('ProfilePage', () => {
       await user.click(saveButton)
 
       // Rerender to reflect the pending state
-      const queryClient = createTestQueryClient()
       rerender(
-        <QueryClientProvider client={queryClient}>
+        <QueryClientProvider client={new QueryClient({
+          defaultOptions: {
+            queries: { retry: false, gcTime: 0 },
+            mutations: { retry: false },
+          },
+        })}>
           <MemoryRouter initialEntries={['/profile']}>
             <Routes>
               <Route path="/profile" element={<ProfilePage />} />

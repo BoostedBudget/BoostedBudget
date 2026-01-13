@@ -93,12 +93,11 @@ describe('TransactionAmountFilter', () => {
     expect(screen.getByText('Amount Range')).toBeInTheDocument()
   })
 
-  const SHORTCUTS = ['<$25', '$50+', '$100+', '$500+']
-
   it('should render all shortcut buttons', () => {
+    const shortcuts = ['<$25', '$50+', '$100+', '$500+']
     render(<TransactionAmountFilter onChange={() => {}} />)
 
-    SHORTCUTS.forEach((name) => {
+    shortcuts.forEach((name) => {
       expect(screen.getByRole('button', { name })).toBeInTheDocument()
     })
   })
@@ -151,9 +150,10 @@ describe('TransactionAmountFilter', () => {
   })
 
   it('should disable shortcuts when disabled prop is true', () => {
+    const shortcuts = ['<$25', '$50+', '$100+', '$500+']
     render(<TransactionAmountFilter onChange={() => {}} disabled />)
 
-    SHORTCUTS.forEach((name) => {
+    shortcuts.forEach((name) => {
       expect(screen.getByRole('button', { name })).toBeDisabled()
     })
   })

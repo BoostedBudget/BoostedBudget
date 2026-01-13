@@ -15,7 +15,7 @@ const defaultTriggerConfig: TriggerFormState = {
   type: 'schedule',
   cron: '0 9 * * *',
   timezone: 'America/New_York',
-}
+} as const
 
 describe('TriggerSelector', () => {
   describe('Rendering', () => {

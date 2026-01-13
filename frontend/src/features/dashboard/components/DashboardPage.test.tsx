@@ -372,72 +372,33 @@ describe('DashboardPage', () => {
   })
 
   describe('Empty State', () => {
-    it('should render dashboard grid when summary is null', () => {
-      mockUseDashboardData.mockReturnValue({
-        summary: null,
-        history: mockHistory,
-        accountTypes: mockAccountTypes,
-        loading: false,
-        error: null,
-        refetch: mockDashboardDataRefetch,
+    const testEmptyDataScenarios: Array<[string, Record<string, unknown>]> = [
+      ['summary is null', { summary: null, history: mockHistory, accountTypes: mockAccountTypes }],
+      ['history is null', { summary: mockSummary, history: null, accountTypes: mockAccountTypes }],
+      ['accountTypes is null', { summary: mockSummary, history: mockHistory, accountTypes: null }],
+    ]
+
+    testEmptyDataScenarios.forEach(([description, dataState]) => {
+      it(`should render dashboard grid when ${description}`, () => {
+        mockUseDashboardData.mockReturnValue({
+          summary: null,
+          history: null,
+          accountTypes: null,
+          loading: false,
+          error: null,
+          refetch: mockDashboardDataRefetch,
+          ...dataState,
+        })
+        render(<DashboardPage />)
+        expect(screen.getByTestId('dashboard-grid')).toBeInTheDocument()
+        expect(screen.getByText('Dashboard')).toBeInTheDocument()
       })
-
-      render(<DashboardPage />)
-
-      expect(screen.getByTestId('dashboard-grid')).toBeInTheDocument()
-      expect(screen.getByText('Dashboard')).toBeInTheDocument()
     })
 
-    it('should render dashboard grid when history is null', () => {
-      mockUseDashboardData.mockReturnValue({
-        summary: mockSummary,
-        history: null,
-        accountTypes: mockAccountTypes,
-        loading: false,
-        error: null,
-        refetch: mockDashboardDataRefetch,
-      })
-
+    it('should render dashboard grid and title when all data is null', () => {
       render(<DashboardPage />)
-
       expect(screen.getByTestId('dashboard-grid')).toBeInTheDocument()
       expect(screen.getByText('Dashboard')).toBeInTheDocument()
-    })
-
-    it('should render dashboard grid when accountTypes is null', () => {
-      mockUseDashboardData.mockReturnValue({
-        summary: mockSummary,
-        history: mockHistory,
-        accountTypes: null,
-        loading: false,
-        error: null,
-        refetch: mockDashboardDataRefetch,
-      })
-
-      render(<DashboardPage />)
-
-      expect(screen.getByTestId('dashboard-grid')).toBeInTheDocument()
-      expect(screen.getByText('Dashboard')).toBeInTheDocument()
-    })
-
-    it('should render dashboard grid when all data is null', () => {
-      render(<DashboardPage />)
-
-      expect(screen.getByTestId('dashboard-grid')).toBeInTheDocument()
-      expect(screen.getByText('Dashboard')).toBeInTheDocument()
-    })
-
-    it('should still render dashboard with widget grid when data is empty', () => {
-      render(<DashboardPage />)
-
-      expect(screen.getByTestId('dashboard-grid')).toBeInTheDocument()
-      expect(screen.getByText('Dashboard')).toBeInTheDocument()
-    })
-
-    it('should render widget grid even when data is empty', () => {
-      render(<DashboardPage />)
-
-      expect(screen.getByTestId('dashboard-grid')).toBeInTheDocument()
     })
   })
 
@@ -628,52 +589,29 @@ describe('DashboardPage', () => {
   })
 
   describe('Edge Cases', () => {
-    it('should handle null summary gracefully', () => {
-      mockUseDashboardData.mockReturnValue({
-        summary: null,
-        history: mockHistory,
-        accountTypes: mockAccountTypes,
-        loading: false,
-        error: null,
-        refetch: mockDashboardDataRefetch,
+    it('should handle null data fields gracefully', () => {
+      const testNullCases = [
+        { summary: null, history: mockHistory, accountTypes: mockAccountTypes },
+        { summary: mockSummary, history: null, accountTypes: mockAccountTypes },
+        { summary: mockSummary, history: mockHistory, accountTypes: null },
+      ]
+
+      testNullCases.forEach((dataCase) => {
+        mockUseDashboardData.mockReturnValue({
+          summary: null,
+          history: null,
+          accountTypes: null,
+          loading: false,
+          error: null,
+          refetch: mockDashboardDataRefetch,
+          ...dataCase,
+        })
+
+        const { unmount } = render(<DashboardPage />)
+        expect(screen.getByTestId('dashboard-grid')).toBeInTheDocument()
+        expect(screen.getByText('Dashboard')).toBeInTheDocument()
+        unmount()
       })
-
-      render(<DashboardPage />)
-
-      expect(screen.getByTestId('dashboard-grid')).toBeInTheDocument()
-      expect(screen.getByText('Dashboard')).toBeInTheDocument()
-    })
-
-    it('should handle null history gracefully', () => {
-      mockUseDashboardData.mockReturnValue({
-        summary: mockSummary,
-        history: null,
-        accountTypes: mockAccountTypes,
-        loading: false,
-        error: null,
-        refetch: mockDashboardDataRefetch,
-      })
-
-      render(<DashboardPage />)
-
-      expect(screen.getByTestId('dashboard-grid')).toBeInTheDocument()
-      expect(screen.getByText('Dashboard')).toBeInTheDocument()
-    })
-
-    it('should handle null accountTypes gracefully', () => {
-      mockUseDashboardData.mockReturnValue({
-        summary: mockSummary,
-        history: mockHistory,
-        accountTypes: null,
-        loading: false,
-        error: null,
-        refetch: mockDashboardDataRefetch,
-      })
-
-      render(<DashboardPage />)
-
-      expect(screen.getByTestId('dashboard-grid')).toBeInTheDocument()
-      expect(screen.getByText('Dashboard')).toBeInTheDocument()
     })
   })
 

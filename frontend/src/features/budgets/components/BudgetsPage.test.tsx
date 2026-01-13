@@ -1,15 +1,6 @@
-/**
- * BudgetsPage Tests
- * Issue #111: Goals Dashboard & Progress Visualization
- * Issue #575: Migrated to bun:test with centralized mocks
- *
- * TDD tests for the main budgets page component.
- */
-
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
 import type { Budget, SavingsGoal } from '../types'
 
-// Import centralized mocks - no inline mock.module() calls for wrapper hooks
 import {
   mockUseBudgets,
   mockRefetchBudgets,
@@ -26,8 +17,6 @@ import {
   mockUpdateGoal,
   mockDeleteGoal,
 } from '@/test/mocks/budgets-wrapper'
-
-// Mock child components to simplify testing (isolated to this test file)
 mock.module('./BudgetCard', () => ({
   BudgetCard: ({
     budget,

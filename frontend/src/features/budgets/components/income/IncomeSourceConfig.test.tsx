@@ -1,8 +1,3 @@
-/**
- * IncomeSourceConfig Tests
- * Issue #496: Income Source Configuration UI for Envelope Budgeting
- */
-
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -28,10 +23,6 @@ describe('IncomeSourceConfig', () => {
   beforeEach(() => {
     mockOnChange.mockClear()
   })
-
-  // ==========================================================================
-  // Rendering Tests
-  // ==========================================================================
 
   describe('Rendering', () => {
     it('renders empty state when no sources', () => {

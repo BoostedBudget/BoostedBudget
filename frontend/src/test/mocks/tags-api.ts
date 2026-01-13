@@ -55,12 +55,12 @@ export const mockGetUserTagsQueryKey = mock(() => ['user-tags'])
 // Single mock.module() call - called once at preload time
 mock.module('@/api/generated/endpoints/tags/tags', () => ({
   ...RealTagsModule,
-  useGetUserTags: (...args: unknown[]) => mockUseGetUserTags(...args),
-  useCreateTag: (...args: unknown[]) => mockUseCreateTag(...args),
-  useDeleteTag: (...args: unknown[]) => mockUseDeleteTag(...args),
-  useGetTagByID: (...args: unknown[]) => mockUseGetTagByID(...args),
-  useUpdateTag: (...args: unknown[]) => mockUseUpdateTag(...args),
-  getGetUserTagsQueryKey: () => mockGetUserTagsQueryKey(),
+  useGetUserTags: mockUseGetUserTags,
+  useCreateTag: mockUseCreateTag,
+  useDeleteTag: mockUseDeleteTag,
+  useGetTagByID: mockUseGetTagByID,
+  useUpdateTag: mockUseUpdateTag,
+  getGetUserTagsQueryKey: mockGetUserTagsQueryKey,
 }))
 
 // NOTE: useTags wrapper hook mock is in tags-hooks.ts (NOT preloaded)

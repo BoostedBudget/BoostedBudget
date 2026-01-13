@@ -5,13 +5,10 @@ import * as matchers from '@testing-library/jest-dom/matchers'
 
 expect.extend(matchers)
 
-// Ensure cleanup runs after each test (critical for memory management)
-// This unmounts React trees from render() and renderHook() calls
-// Also resets URL state to prevent pollution between tests
+// Cleanup after each test: unmount React trees and reset URL state
+// Prevents pollution between tests and memory exhaustion
 afterEach(() => {
   cleanup()
-  // Reset URL state to prevent pollution between test files (Issue #575)
-  // Tests using useSearchParams or window.location need consistent initial state
   if (typeof window !== 'undefined' && window.history) {
     window.history.replaceState({}, '', 'http://localhost:3000/')
   }

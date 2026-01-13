@@ -1,19 +1,9 @@
-/**
- * useIncomeTracking Tests
- * Issue #496: Income Source Configuration UI for Envelope Budgeting
- */
-
 import { describe, it, expect } from 'bun:test'
 import { renderHook } from '@testing-library/react'
 import { useIncomeTracking } from './useIncomeTracking'
 import type { IncomeSource } from '../types'
 
 describe('useIncomeTracking', () => {
-
-  // ==========================================================================
-  // Expected Manual Total Tests
-  // ==========================================================================
-
   describe('Expected Manual Total', () => {
     it('returns 0 when no sources', () => {
       const { result } = renderHook(() =>

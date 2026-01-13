@@ -13,7 +13,6 @@ import { ListViewToggle } from './ListViewToggle'
 describe('ListViewToggle', () => {
   beforeEach(() => {
     localStorage.clear()
-    // mocks cleared individually
   })
 
   afterEach(() => {

@@ -4,17 +4,14 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import { useTabState } from './useTabState'
 
-function createWrapper(initialUrl = '/') {
-  return function Wrapper({ children }: { children: ReactNode }) {
-    return (
-      <MemoryRouter initialEntries={[initialUrl]}>
-        <Routes>
-          <Route path="*" element={<>{children}</>} />
-        </Routes>
-      </MemoryRouter>
-    )
-  }
-}
+const createWrapper = (initialUrl = '/') => ({ children }: { children: ReactNode }) =>
+  (
+    <MemoryRouter initialEntries={[initialUrl]}>
+      <Routes>
+        <Route path="*" element={<>{children}</>} />
+      </Routes>
+    </MemoryRouter>
+  )
 
 describe('useTabState', () => {
   describe('Initialization', () => {

@@ -44,11 +44,12 @@ mock.module('./AutoCategorizationPage', () => ({
 import { AutoCategorizationPageWrapper } from './AutoCategorizationPageWrapper'
 
 function createWrapper() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  })
   return ({ children }: { children: ReactNode }) => (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <QueryClientProvider client={new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })}>
+      {children}
+    </QueryClientProvider>
   )
 }
 

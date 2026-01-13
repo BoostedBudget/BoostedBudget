@@ -34,18 +34,12 @@ mkdir -p coverage
 
 # Find all lcov files
 LCOV_FILES=""
-if [ -f "coverage/lcov.info" ]; then
-    LCOV_FILES="$LCOV_FILES coverage/lcov.info"
-    echo "Found: coverage/lcov.info"
-fi
-if [ -f "coverage-real/lcov.info" ]; then
-    LCOV_FILES="$LCOV_FILES coverage-real/lcov.info"
-    echo "Found: coverage-real/lcov.info"
-fi
-if [ -f "coverage-isolated/lcov.info" ]; then
-    LCOV_FILES="$LCOV_FILES coverage-isolated/lcov.info"
-    echo "Found: coverage-isolated/lcov.info"
-fi
+for dir in coverage coverage-real coverage-isolated; do
+    if [ -f "$dir/lcov.info" ]; then
+        LCOV_FILES="$LCOV_FILES $dir/lcov.info"
+        echo "Found: $dir/lcov.info"
+    fi
+done
 
 if [ -z "$LCOV_FILES" ]; then
     echo "❌ No coverage files found!"
@@ -58,14 +52,8 @@ if command -v lcov &> /dev/null; then
     echo ""
     echo "Merging coverage files with lcov..."
 
-    # Build lcov merge command
-    LCOV_CMD="lcov"
-    for f in $LCOV_FILES; do
-        LCOV_CMD="$LCOV_CMD -a $f"
-    done
-    LCOV_CMD="$LCOV_CMD -o coverage/combined.lcov"
-
-    $LCOV_CMD
+    # Build and execute lcov merge command
+    lcov $(printf -- '-a %s ' $LCOV_FILES) -o coverage/combined.lcov
 
     echo "✅ Combined coverage written to coverage/combined.lcov"
 
@@ -91,35 +79,24 @@ if command -v lcov &> /dev/null; then
 
         FAILED=false
 
-        if [ -n "$LINES" ]; then
-            LINES_INT=$(echo "$LINES" | cut -d. -f1)
-            if [ "$LINES_INT" -lt "$LINES_THRESHOLD" ]; then
-                echo "❌ Lines coverage ${LINES}% is below threshold ${LINES_THRESHOLD}%"
-                FAILED=true
-            else
-                echo "✅ Lines coverage ${LINES}% meets threshold ${LINES_THRESHOLD}%"
+        # Helper function to check threshold
+        check_threshold() {
+            local metric=$1 value=$2 threshold=$3
+            if [ -n "$value" ]; then
+                local int_value=$(echo "$value" | cut -d. -f1)
+                if [ "$int_value" -lt "$threshold" ]; then
+                    echo "❌ $metric coverage ${value}% is below threshold ${threshold}%"
+                    return 1
+                else
+                    echo "✅ $metric coverage ${value}% meets threshold ${threshold}%"
+                fi
             fi
-        fi
+            return 0
+        }
 
-        if [ -n "$FUNCTIONS" ]; then
-            FUNCTIONS_INT=$(echo "$FUNCTIONS" | cut -d. -f1)
-            if [ "$FUNCTIONS_INT" -lt "$FUNCTIONS_THRESHOLD" ]; then
-                echo "❌ Functions coverage ${FUNCTIONS}% is below threshold ${FUNCTIONS_THRESHOLD}%"
-                FAILED=true
-            else
-                echo "✅ Functions coverage ${FUNCTIONS}% meets threshold ${FUNCTIONS_THRESHOLD}%"
-            fi
-        fi
-
-        if [ -n "$BRANCHES" ]; then
-            BRANCHES_INT=$(echo "$BRANCHES" | cut -d. -f1)
-            if [ "$BRANCHES_INT" -lt "$BRANCHES_THRESHOLD" ]; then
-                echo "❌ Branches coverage ${BRANCHES}% is below threshold ${BRANCHES_THRESHOLD}%"
-                FAILED=true
-            else
-                echo "✅ Branches coverage ${BRANCHES}% meets threshold ${BRANCHES_THRESHOLD}%"
-            fi
-        fi
+        check_threshold "Lines" "$LINES" "$LINES_THRESHOLD" || FAILED=true
+        check_threshold "Functions" "$FUNCTIONS" "$FUNCTIONS_THRESHOLD" || FAILED=true
+        check_threshold "Branches" "$BRANCHES" "$BRANCHES_THRESHOLD" || FAILED=true
 
         if [ "$FAILED" = true ]; then
             exit 1
