@@ -43,10 +43,12 @@ const mockRules: AutomationRule[] = [
     },
     conditions: [],
     condition_logic: 'AND',
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     actions: {} as any,
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-15T00:00:00Z',
     last_executed_at: '2024-01-15T09:00:00Z',
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any,
   {
     id: 'rule-2',
@@ -63,9 +65,11 @@ const mockRules: AutomationRule[] = [
     },
     conditions: [],
     condition_logic: 'AND',
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     actions: {} as any,
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-10T00:00:00Z',
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any,
 ]
 

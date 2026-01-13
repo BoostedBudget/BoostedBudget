@@ -49,9 +49,11 @@ const mockRule: AutomationRule = {
     notification_channels: ['in_app'],
     threshold_type: 'percentage',
     threshold_value: 80,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any,
   created_at: '2024-01-01T00:00:00Z',
   updated_at: '2024-01-01T00:00:00Z',
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
 } as any
 
 const mockUser = {
