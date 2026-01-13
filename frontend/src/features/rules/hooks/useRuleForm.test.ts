@@ -6,7 +6,7 @@
  * TDD RED: Writing tests before implementation.
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect } from 'bun:test'
 import { renderHook, act } from '@testing-library/react'
 import { useRuleForm } from './useRuleForm'
 import type { RuleType, TriggerFormState, RuleCondition, RuleAction } from '../types'

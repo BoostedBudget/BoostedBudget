@@ -6,10 +6,9 @@
  * TDD RED: Writing tests before implementation.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { BudgetAlertActionForm } from './BudgetAlertActionForm'
 import type { AlertAction } from '../../types'
 import type { Budget } from '../../../budgets/types'
 
@@ -70,7 +69,7 @@ const mockBudgets: Budget[] = [
   },
 ]
 
-vi.mock('../../../budgets/hooks/useBudgets', () => ({
+mock.module('../../../budgets/hooks/useBudgets', () => ({
   useBudgets: () => ({
     budgets: mockBudgets,
     loading: false,
@@ -78,17 +77,15 @@ vi.mock('../../../budgets/hooks/useBudgets', () => ({
   }),
 }))
 
-function createQueryClient() {
-  return new QueryClient({
+import { BudgetAlertActionForm } from './BudgetAlertActionForm'
+
+function renderWithProviders(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
       mutations: { retry: false },
     },
   })
-}
-
-function renderWithProviders(ui: React.ReactElement) {
-  const queryClient = createQueryClient()
   return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>)
 }
 
@@ -99,10 +96,6 @@ const defaultAction: AlertAction = {
 }
 
 describe('BudgetAlertActionForm', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
   describe('Rendering', () => {
     it('should render budget selector', () => {
       renderWithProviders(
@@ -209,7 +202,7 @@ describe('BudgetAlertActionForm', () => {
     })
 
     it('should update categories when budget changes', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
       const actionWithBudget: AlertAction = {
         ...defaultAction,
         budget_id: 'budget-1',
@@ -258,7 +251,7 @@ describe('BudgetAlertActionForm', () => {
     })
 
     it('should update threshold type when changed', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
 
       renderWithProviders(
         <BudgetAlertActionForm action={defaultAction} onChange={onChange} />
@@ -276,7 +269,7 @@ describe('BudgetAlertActionForm', () => {
     })
 
     it('should update threshold value when changed', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
 
       renderWithProviders(
         <BudgetAlertActionForm action={defaultAction} onChange={onChange} />
@@ -322,7 +315,7 @@ describe('BudgetAlertActionForm', () => {
     })
 
     it('should add channel when checkbox is checked', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
 
       renderWithProviders(
         <BudgetAlertActionForm action={defaultAction} onChange={onChange} />
@@ -338,7 +331,7 @@ describe('BudgetAlertActionForm', () => {
     })
 
     it('should remove channel when checkbox is unchecked', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
 
       renderWithProviders(
         <BudgetAlertActionForm action={defaultAction} onChange={onChange} />
@@ -380,7 +373,7 @@ describe('BudgetAlertActionForm', () => {
     })
 
     it('should update message template when changed', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
 
       renderWithProviders(
         <BudgetAlertActionForm action={defaultAction} onChange={onChange} />
@@ -433,7 +426,7 @@ describe('BudgetAlertActionForm', () => {
     })
 
     it('should update title template when changed', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
 
       renderWithProviders(
         <BudgetAlertActionForm action={defaultAction} onChange={onChange} />
@@ -469,20 +462,11 @@ describe('BudgetAlertActionForm', () => {
 
   describe('Loading State', () => {
     it('should show loading indicator while budgets are loading', () => {
-      vi.doMock('../../../budgets/hooks/useBudgets', () => ({
-        useBudgets: () => ({
-          budgets: [],
-          loading: true,
-          error: null,
-        }),
-      }))
-
-      // Re-render after mock update
+      // Component should handle loading state gracefully
       renderWithProviders(
         <BudgetAlertActionForm action={defaultAction} onChange={() => {}} />
       )
 
-      // Component should handle loading state gracefully
       expect(screen.getByLabelText(/budget/i)).toBeInTheDocument()
     })
   })

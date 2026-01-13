@@ -1,12 +1,4 @@
-/**
- * TransactionTable Component Tests
- * Issue #584: Unified Card/Table View System
- *
- * Tests for the transaction table display component.
- * TDD RED: Writing tests before implementation.
- */
-
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { TransactionTable } from './TransactionTable'
 import type { Transaction } from '../types'
@@ -107,29 +99,23 @@ const mockTransactions: Transaction[] = [
 ]
 
 describe('TransactionTable', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
+  const renderTable = (props = {}) =>
+    render(
+      <TransactionTable
+        transactions={mockTransactions}
+        accountsMap={mockAccounts}
+        {...props}
+      />
+    )
 
   describe('Rendering', () => {
     it('should render a table', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-        />
-      )
-
+      renderTable()
       expect(screen.getByRole('table')).toBeInTheDocument()
     })
 
     it('should render table headers', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-        />
-      )
+      renderTable()
 
       expect(screen.getByText('Date')).toBeInTheDocument()
       expect(screen.getByText('Description')).toBeInTheDocument()
@@ -139,12 +125,7 @@ describe('TransactionTable', () => {
     })
 
     it('should render all transactions', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-        />
-      )
+      renderTable()
 
       expect(screen.getByText('Amazon')).toBeInTheDocument()
       expect(screen.getByText('DIRECT DEPOSIT - PAYROLL')).toBeInTheDocument()
@@ -152,55 +133,28 @@ describe('TransactionTable', () => {
     })
 
     it('should display merchant name when available, otherwise transaction name', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-        />
-      )
+      renderTable()
 
-      // txn-1 has merchant_name "Amazon"
       expect(screen.getByText('Amazon')).toBeInTheDocument()
-      // txn-2 has no merchant_name, should show transaction name
       expect(screen.getByText('DIRECT DEPOSIT - PAYROLL')).toBeInTheDocument()
     })
 
     it('should display account information from accountsMap', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-        />
-      )
+      renderTable()
 
-      // Should use nickname if available (appears twice for acc-1)
-      const checkingBadges = screen.getAllByText('My Checking')
-      expect(checkingBadges.length).toBeGreaterThan(0)
-      // Should use name if nickname not available
+      expect(screen.getAllByText('My Checking').length).toBeGreaterThan(0)
       expect(screen.getByText('Savings')).toBeInTheDocument()
     })
 
     it('should display formatted amounts with proper signs', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-        />
-      )
+      renderTable()
 
-      // Expense should have minus sign
       expect(screen.getByText('-$45.99')).toBeInTheDocument()
-      // Income should have plus sign
       expect(screen.getByText('+$2,500.00')).toBeInTheDocument()
     })
 
     it('should display category labels', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-        />
-      )
+      renderTable()
 
       expect(screen.getByText('Shopping')).toBeInTheDocument()
       expect(screen.getByText('Income')).toBeInTheDocument()
@@ -208,24 +162,13 @@ describe('TransactionTable', () => {
     })
 
     it('should display pending badge for pending transactions', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-        />
-      )
+      renderTable()
 
-      const pendingBadges = screen.getAllByText('Pending')
-      expect(pendingBadges.length).toBe(1)
+      expect(screen.getAllByText('Pending').length).toBe(1)
     })
 
     it('should display tags when present', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-        />
-      )
+      renderTable()
 
       expect(screen.getByText('subscription')).toBeInTheDocument()
       expect(screen.getByText('household')).toBeInTheDocument()
@@ -238,13 +181,7 @@ describe('TransactionTable', () => {
     })
 
     it('should apply loading class when loading', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-          loading
-        />
-      )
+      renderTable({ loading: true })
 
       expect(screen.getByRole('table')).toHaveClass('transaction-table--loading')
     })
@@ -252,66 +189,32 @@ describe('TransactionTable', () => {
 
   describe('Date Formatting', () => {
     it('should use authorized_date when available', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-        />
-      )
-
-      // txn-1 has authorized_date '2025-01-14'
+      renderTable()
       expect(screen.getByText('Jan 14, 2025')).toBeInTheDocument()
     })
 
     it('should fall back to date when authorized_date not available', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-        />
-      )
-
-      // txn-2 has no authorized_date, should use date '2025-01-10'
+      renderTable()
       expect(screen.getByText('Jan 10, 2025')).toBeInTheDocument()
     })
   })
 
   describe('Amount Styling', () => {
     it('should apply credit class to positive amounts', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-        />
-      )
-
-      const incomeAmount = screen.getByText('+$2,500.00')
-      expect(incomeAmount).toHaveClass('transaction-table__amount--credit')
+      renderTable()
+      expect(screen.getByText('+$2,500.00')).toHaveClass('transaction-table__amount--credit')
     })
 
     it('should apply debit class to negative amounts', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-        />
-      )
-
-      const expenseAmount = screen.getByText('-$45.99')
-      expect(expenseAmount).toHaveClass('transaction-table__amount--debit')
+      renderTable()
+      expect(screen.getByText('-$45.99')).toHaveClass('transaction-table__amount--debit')
     })
   })
 
   describe('Row Actions', () => {
     it('should call onEdit when edit button is clicked', () => {
-      const onEdit = vi.fn()
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-          onEdit={onEdit}
-        />
-      )
+      const onEdit = mock(() => {})
+      renderTable({ onEdit })
 
       const editButtons = screen.getAllByRole('button', { name: /edit/i })
       fireEvent.click(editButtons[0])
@@ -320,14 +223,8 @@ describe('TransactionTable', () => {
     })
 
     it('should call onCategorize when categorize button is clicked', () => {
-      const onCategorize = vi.fn()
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-          onCategorize={onCategorize}
-        />
-      )
+      const onCategorize = mock(() => {})
+      renderTable({ onCategorize })
 
       const categorizeButtons = screen.getAllByRole('button', { name: /categorize/i })
       fireEvent.click(categorizeButtons[0])
@@ -336,37 +233,17 @@ describe('TransactionTable', () => {
     })
 
     it('should not show actions column when no handlers provided', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-        />
-      )
-
+      renderTable()
       expect(screen.queryByText('Actions')).not.toBeInTheDocument()
     })
 
     it('should show actions column when handlers provided', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-          onEdit={() => {}}
-        />
-      )
-
+      renderTable({ onEdit: () => {} })
       expect(screen.getByText('Actions')).toBeInTheDocument()
     })
 
     it('should disable actions when loading', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-          onEdit={() => {}}
-          loading
-        />
-      )
+      renderTable({ onEdit: () => {}, loading: true })
 
       const editButtons = screen.getAllByRole('button', { name: /edit/i })
       editButtons.forEach((btn) => expect(btn).toBeDisabled())
@@ -375,30 +252,17 @@ describe('TransactionTable', () => {
 
   describe('Row Click', () => {
     it('should call onRowClick when row is clicked', () => {
-      const onRowClick = vi.fn()
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-          onRowClick={onRowClick}
-        />
-      )
+      const onRowClick = mock(() => {})
+      renderTable({ onRowClick })
 
       const rows = screen.getAllByRole('row')
-      // Skip header row
       fireEvent.click(rows[1])
 
       expect(onRowClick).toHaveBeenCalledWith(mockTransactions[0])
     })
 
     it('should make rows clickable when onRowClick provided', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-          onRowClick={() => {}}
-        />
-      )
+      renderTable({ onRowClick: () => {} })
 
       const rows = screen.getAllByRole('row')
       expect(rows[1]).toHaveClass('transaction-table__row--clickable')
@@ -407,28 +271,15 @@ describe('TransactionTable', () => {
 
   describe('Sorting', () => {
     it('should make date column sortable', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-          sortable
-        />
-      )
+      renderTable({ sortable: true })
 
       const dateHeader = screen.getByText('Date')
       expect(dateHeader.closest('button')).toBeInTheDocument()
     })
 
     it('should call onSort when clicking sortable header', () => {
-      const onSort = vi.fn()
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-          sortable
-          onSort={onSort}
-        />
-      )
+      const onSort = mock(() => {})
+      renderTable({ sortable: true, onSort })
 
       const dateHeader = screen.getByText('Date').closest('button')!
       fireEvent.click(dateHeader)
@@ -437,17 +288,13 @@ describe('TransactionTable', () => {
     })
 
     it('should toggle sort direction on second click', () => {
-      const onSort = vi.fn()
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-          sortable
-          onSort={onSort}
-          sortColumn="date"
-          sortDirection="asc"
-        />
-      )
+      const onSort = mock(() => {})
+      renderTable({
+        sortable: true,
+        onSort,
+        sortColumn: 'date',
+        sortDirection: 'asc',
+      })
 
       const dateHeader = screen.getByText('Date').closest('button')!
       fireEvent.click(dateHeader)
@@ -456,15 +303,11 @@ describe('TransactionTable', () => {
     })
 
     it('should show sort indicator on sorted column', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-          sortable
-          sortColumn="date"
-          sortDirection="asc"
-        />
-      )
+      renderTable({
+        sortable: true,
+        sortColumn: 'date',
+        sortDirection: 'asc',
+      })
 
       const dateHeader = screen.getByText('Date').closest('button')!
       expect(dateHeader).toHaveAttribute('aria-sort', 'ascending')
@@ -473,41 +316,22 @@ describe('TransactionTable', () => {
 
   describe('Accessibility', () => {
     it('should have accessible table structure', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-        />
-      )
+      renderTable()
 
       expect(screen.getByRole('table')).toBeInTheDocument()
-      // Table has two rowgroups: thead and tbody
-      const rowgroups = screen.getAllByRole('rowgroup')
-      expect(rowgroups.length).toBe(2)
-      expect(screen.getAllByRole('row').length).toBe(4) // 1 header + 3 data rows
+      expect(screen.getAllByRole('rowgroup').length).toBe(2)
+      expect(screen.getAllByRole('row').length).toBe(4)
     })
 
     it('should have accessible column headers', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-        />
-      )
+      renderTable()
 
       const headers = screen.getAllByRole('columnheader')
       expect(headers.length).toBeGreaterThan(0)
     })
 
     it('should have aria-label on action buttons', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-          onEdit={() => {}}
-          onCategorize={() => {}}
-        />
-      )
+      renderTable({ onEdit: () => {}, onCategorize: () => {} })
 
       const editButtons = screen.getAllByRole('button', { name: /edit transaction/i })
       const categorizeButtons = screen.getAllByRole('button', { name: /categorize transaction/i })
@@ -519,37 +343,22 @@ describe('TransactionTable', () => {
 
   describe('Action Button Tooltips', () => {
     it('should have tooltip on edit button', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-          onEdit={vi.fn()}
-        />
-      )
+      renderTable({ onEdit: mock(() => {}) })
 
-      const editButtons = screen.getAllByRole('button', { name: /edit transaction/i })
-      editButtons.forEach((btn) => {
+      screen.getAllByRole('button', { name: /edit transaction/i }).forEach((btn) => {
         expect(btn).toHaveAttribute('title', 'Edit transaction')
       })
     })
 
     it('should have tooltip on categorize button', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-          onCategorize={vi.fn()}
-        />
-      )
+      renderTable({ onCategorize: mock(() => {}) })
 
-      const categorizeButtons = screen.getAllByRole('button', { name: /categorize transaction/i })
-      categorizeButtons.forEach((btn) => {
+      screen.getAllByRole('button', { name: /categorize transaction/i }).forEach((btn) => {
         expect(btn).toHaveAttribute('title', 'Categorize transaction')
       })
     })
   })
 
-  // Issue #590: Inline Column Filtering Tests
   describe('Inline Filtering', () => {
     const accountOptions = [
       { value: 'acc-1', label: 'My Checking' },
@@ -563,65 +372,39 @@ describe('TransactionTable', () => {
     ]
 
     it('should render account filter when accountOptions provided', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-          accountOptions={accountOptions}
-          onAccountFilterChange={() => {}}
-        />
-      )
+      renderTable({ accountOptions, onAccountFilterChange: () => {} })
 
-      // Should have a filter button in the Account column header
       const filterButtons = screen.getAllByRole('button', { name: /filter by account/i })
       expect(filterButtons.length).toBeGreaterThan(0)
     })
 
     it('should render category filter when categoryOptions provided', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-          categoryOptions={categoryOptions}
-          onCategoryFilterChange={() => {}}
-        />
-      )
+      renderTable({ categoryOptions, onCategoryFilterChange: () => {} })
 
       const filterButtons = screen.getAllByRole('button', { name: /filter by category/i })
       expect(filterButtons.length).toBeGreaterThan(0)
     })
 
     it('should render amount range filter when onAmountRangeChange provided', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-          onAmountRangeChange={() => {}}
-        />
-      )
+      renderTable({ onAmountRangeChange: () => {} })
 
       const filterButtons = screen.getAllByRole('button', { name: /filter by amount/i })
       expect(filterButtons.length).toBeGreaterThan(0)
     })
 
     it('should call onAccountFilterChange when account filter changed', async () => {
-      const onAccountFilterChange = vi.fn()
+      const onAccountFilterChange = mock(() => {})
       const userEvent = await import('@testing-library/user-event')
       const user = userEvent.default.setup()
 
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-          accountOptions={accountOptions}
-          onAccountFilterChange={onAccountFilterChange}
-        />
-      )
+      renderTable({
+        accountOptions,
+        onAccountFilterChange,
+      })
 
       const filterButton = screen.getByRole('button', { name: /filter by account/i })
       await user.click(filterButton)
 
-      // For multi-select dropdowns, use checkboxes
       const checkbox = screen.getByRole('checkbox', { name: /my checking/i })
       await user.click(checkbox)
 
@@ -629,23 +412,18 @@ describe('TransactionTable', () => {
     })
 
     it('should call onCategoryFilterChange when category filter changed', async () => {
-      const onCategoryFilterChange = vi.fn()
+      const onCategoryFilterChange = mock(() => {})
       const userEvent = await import('@testing-library/user-event')
       const user = userEvent.default.setup()
 
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-          categoryOptions={categoryOptions}
-          onCategoryFilterChange={onCategoryFilterChange}
-        />
-      )
+      renderTable({
+        categoryOptions,
+        onCategoryFilterChange,
+      })
 
       const filterButton = screen.getByRole('button', { name: /filter by category/i })
       await user.click(filterButton)
 
-      // For multi-select dropdowns, use checkboxes
       const checkbox = screen.getByRole('checkbox', { name: /shopping/i })
       await user.click(checkbox)
 
@@ -653,42 +431,29 @@ describe('TransactionTable', () => {
     })
 
     it('should show active filter indicator when account filter has value', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-          accountOptions={accountOptions}
-          accountFilter={['acc-1']}
-          onAccountFilterChange={() => {}}
-        />
-      )
+      renderTable({
+        accountOptions,
+        accountFilter: ['acc-1'],
+        onAccountFilterChange: () => {},
+      })
 
       const filterButton = screen.getByRole('button', { name: /filter by account/i })
       expect(filterButton).toHaveClass('column-filter__trigger--active')
     })
 
     it('should show active filter indicator when category filter has value', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-          categoryOptions={categoryOptions}
-          categoryFilter={['Shopping']}
-          onCategoryFilterChange={() => {}}
-        />
-      )
+      renderTable({
+        categoryOptions,
+        categoryFilter: ['Shopping'],
+        onCategoryFilterChange: () => {},
+      })
 
       const filterButton = screen.getByRole('button', { name: /filter by category/i })
       expect(filterButton).toHaveClass('column-filter__trigger--active')
     })
 
     it('should not show filter icons when filter props not provided', () => {
-      render(
-        <TransactionTable
-          transactions={mockTransactions}
-          accountsMap={mockAccounts}
-        />
-      )
+      renderTable()
 
       expect(screen.queryByRole('button', { name: /filter by account/i })).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: /filter by category/i })).not.toBeInTheDocument()

@@ -5,7 +5,7 @@
  * TDD RED phase: Write failing tests for conversion utilities
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'bun:test';
 import {
   toGridStackWidget,
   toWidgetConfig,

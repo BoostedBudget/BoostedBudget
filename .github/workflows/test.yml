@@ -41,7 +41,7 @@ jobs:
             frontend:
               - 'frontend/**'
               - 'package.json'
-              - 'pnpm-lock.yaml'
+              - 'bun.lock'
             api:
               - 'api/**'
               - 'api/openapi.yaml'
@@ -137,38 +137,19 @@ jobs:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          version: 10
-          standalone: true
-          dest: ${{ github.workspace }}/${{ env.UNIQUE_WORKSPACE }}/.pnpm-home
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'pnpm'
-          cache-dependency-path: ${{ env.UNIQUE_WORKSPACE }}/frontend/pnpm-lock.yaml
+          node-version: '22'
 
       - name: Install frontend dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
-        run: |
-          for i in 1 2 3; do
-            echo "📦 pnpm install attempt $i/3..."
-            pnpm install --frozen-lockfile && {
-              echo "✅ Dependencies installed"
-              break
-            } || {
-              echo "⚠️ Install failed, cleaning pnpm store..."
-              pnpm store prune
-              [ $i -lt 3 ] && sleep 5
-            }
-          done
+        # Use npm install (not bun) - Bun's dependency resolution pulls buggy AJV version
+        run: npm install
 
       - name: Generate TypeScript client
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
-        run: pnpm run generate:api
+        run: npx orval
 
       - name: Check if generated client is up to date
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
@@ -178,7 +159,7 @@ jobs:
           else
             echo "::error::Generated TypeScript client is outdated!"
             echo "The generated client differs from the committed version."
-            echo "Run 'cd frontend && pnpm run generate:api' locally and commit the changes."
+            echo "Run 'cd frontend && bun run generate:api' locally and commit the changes."
             echo ""
             echo "Diff (first 100 lines):"
             git diff frontend/src/api/generated | head -100
@@ -226,13 +207,7 @@ jobs:
 
       - name: Download Go dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
-        run: |
-          if [ "${{ steps.cache-go-modules.outputs.cache-hit }}" == "true" ]; then
-            echo "✅ Go modules restored from cache"
-          else
-            echo "📦 Cache miss, downloading Go modules..."
-          fi
-          go mod download
+        run: go mod download
 
       - name: Run Go tests with coverage
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
@@ -331,47 +306,56 @@ jobs:
           clean: false
           fetch-depth: 1
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          version: 10
-          standalone: true
-          dest: ${{ github.workspace }}/${{ env.UNIQUE_WORKSPACE }}/.pnpm-home
-
-      - name: Set up Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'pnpm'
-          cache-dependency-path: ${{ env.UNIQUE_WORKSPACE }}/frontend/pnpm-lock.yaml
+          bun-version: latest
 
       - name: Install frontend dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
-        run: |
-          for i in 1 2 3; do
-            echo "📦 pnpm install attempt $i/3..."
-            pnpm install --frozen-lockfile && {
-              echo "✅ Dependencies installed"
-              break
-            } || {
-              echo "⚠️ Install failed, cleaning pnpm store..."
-              pnpm store prune
-              [ $i -lt 3 ] && sleep 5
-            }
-          done
+        run: bun install --frozen-lockfile
 
-      - name: Lint and test frontend
+      - name: Lint frontend
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        run: bun run lint
+
+      - name: Run bun:test tests with coverage
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
-          pnpm run lint
-          pnpm run test:ci
+          echo "::group::Running bun:test tests with coverage"
+          bun run test:coverage
+          echo "::endgroup::"
 
-      - name: Upload coverage report
+      - name: Run real implementation tests with coverage
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        run: |
+          echo "::group::Running real-implementation tests with coverage"
+          bun run test:real:coverage
+          echo "::endgroup::"
+
+      - name: Run isolated tests with coverage
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        run: |
+          echo "::group::Running isolated tests with coverage"
+          bun run test:isolated:coverage
+          echo "::endgroup::"
+
+      - name: Combine coverage reports
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        run: |
+          echo "::group::Combining coverage reports"
+          bun run test:coverage:combine
+          echo "::endgroup::"
+
+      - name: Upload combined coverage report
         uses: actions/upload-artifact@v6
         with:
           name: frontend-coverage
-          path: ${{ env.UNIQUE_WORKSPACE }}/frontend/coverage/
+          path: |
+            ${{ env.UNIQUE_WORKSPACE }}/frontend/coverage/combined.lcov
+            ${{ env.UNIQUE_WORKSPACE }}/frontend/coverage/html/
           retention-days: 30
+          if-no-files-found: warn
 
       - name: Final workspace cleanup
         if: always()
@@ -400,48 +384,18 @@ jobs:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          version: 10
-          standalone: true
-          dest: ${{ github.workspace }}/${{ env.UNIQUE_WORKSPACE }}/.pnpm-home
-
-      - name: Set up Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'pnpm'
-          cache-dependency-path: ${{ env.UNIQUE_WORKSPACE }}/frontend/pnpm-lock.yaml
+          bun-version: latest
 
       - name: Install frontend dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
-        run: |
-          for i in 1 2 3; do
-            echo "📦 pnpm install attempt $i/3..."
-            pnpm install --frozen-lockfile && {
-              echo "✅ Dependencies installed"
-              break
-            } || {
-              echo "⚠️ Install failed, cleaning pnpm store..."
-              pnpm store prune
-              [ $i -lt 3 ] && sleep 5
-            }
-          done
+        run: bun install --frozen-lockfile
 
       - name: Install Playwright browsers
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
-        run: |
-          echo "Installing Playwright browsers..."
-          for i in 1 2 3; do
-            pnpm exec playwright install --with-deps chromium && {
-              echo "Browsers installed"
-              break
-            } || {
-              echo "Install attempt $i/3 failed"
-              [ $i -lt 3 ] && sleep 15
-            }
-          done
+        run: bunx playwright install --with-deps chromium
 
       - name: Restore backend binary from cache
         id: cache-backend-binary
@@ -462,10 +416,8 @@ jobs:
         if: steps.cache-backend-binary.outputs.cache-hit != 'true' && needs.backend-test.result == 'skipped'
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
         run: |
-          echo "📦 Building backend binary (cache miss, backend-test skipped)..."
           mkdir -p bin
           go build -o bin/server ./cmd/server
-          echo "✅ Backend binary built successfully"
 
       - name: Download backend binary artifact (fallback)
         if: steps.cache-backend-binary.outputs.cache-hit != 'true' && needs.backend-test.result == 'success'
@@ -480,7 +432,6 @@ jobs:
             echo "::error::Backend binary not found. Run backend tests first to populate cache."
             exit 1
           fi
-          echo "✅ Backend binary found"
 
       - name: Make backend binary executable
         run: chmod +x $GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
@@ -498,22 +449,13 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         env:
           CI: true
-          # Clerk Testing Token - required for @clerk/testing/playwright
           CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
-          # Backend encryption key - required when running with DATABASE_URL
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
-          # Pass to Playwright test process for conditional skip logic in test files
-          # (separate from CLERK_PUBLISHABLE_KEY which goes to Vite via playwright.config.ts)
           VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
-          # Test user credentials for authenticated E2E tests
-          # Create test user in Clerk Dashboard with username+password (not OAuth)
           TEST_CLERK_EMAIL: ${{ secrets.TEST_CLERK_EMAIL }}
           TEST_CLERK_PASSWORD: ${{ secrets.TEST_CLERK_PASSWORD }}
-        run: |
-          echo "::group::Running Playwright E2E tests"
-          pnpm run test:e2e
-          echo "::endgroup::"
+        run: bun run test:e2e
 
       - name: Upload E2E test results
         if: success() || failure()
@@ -663,16 +605,11 @@ jobs:
 
       - name: Install migration tools
         run: |
-          # Install golang-migrate to user bin (no sudo needed on self-hosted runners)
           mkdir -p $HOME/bin
           curl -sSfL https://github.com/golang-migrate/migrate/releases/latest/download/migrate.darwin-arm64.tar.gz | tar -xz
           mv migrate $HOME/bin/
           echo "$HOME/bin" >> $GITHUB_PATH
-
-          # Install Squawk
           npm install -g squawk-cli
-
-          # Verify
           $HOME/bin/migrate --version && squawk --version
 
       - name: Lint migrations with Squawk
@@ -683,22 +620,9 @@ jobs:
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
         run: |
-          echo "::group::Comprehensive Migration Testing"
           cd ${{ env.UNIQUE_WORKSPACE }}
-
-          # Make script executable
           chmod +x scripts/test-migrations.sh
-
-          # Run comprehensive tests (idempotency, performance, data integrity, schema validation, rollback testing)
           ./scripts/test-migrations.sh
-
-          if [ $? -ne 0 ]; then
-            echo "::error::Migration tests failed - see output above for details"
-            exit 1
-          fi
-
-          echo "::notice::✅ All migration tests passed (idempotency, performance, data integrity, schema constraints, rollback testing)"
-          echo "::endgroup::"
 
       - name: Upload performance benchmarks
         if: always()
@@ -720,11 +644,11 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
-  # Security Scan - Native Tools (govulncheck, pnpm audit, Hadolint)
+  # Security Scan - Native Tools (govulncheck, npm audit, Hadolint)
   # =============================================================================
   # Replaces Trivy with official/native tools to avoid SSL download issues
   # - Backend: govulncheck (official Go vulnerability scanner with reachability analysis)
-  # - Frontend: pnpm audit (native npm/pnpm security audit)
+  # - Frontend: npm audit (security audit via Bun)
   # - Dockerfiles: Hadolint (Dockerfile best practices linter)
   security-scan:
     name: Security Scan (${{ matrix.component }})
@@ -759,40 +683,31 @@ jobs:
         if: matrix.component == 'backend'
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
         run: |
-          echo "::group::Go Vulnerability Scan (govulncheck)"
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
-          echo "::endgroup::"
 
       # =========================================================================
-      # Frontend Security: pnpm audit (native npm security audit)
+      # Frontend Security: npm audit (Bun uses npm-compatible packages)
       # =========================================================================
-      - name: Setup Node.js
+      - name: Setup Bun
         if: matrix.component == 'frontend'
-        uses: actions/setup-node@v6
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: '22'
+          bun-version: latest
 
-      - name: Run pnpm audit (JS vulnerabilities)
+      - name: Run bun audit (JS vulnerabilities)
         if: matrix.component == 'frontend'
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
-          echo "::group::JavaScript Vulnerability Scan (pnpm audit)"
-          corepack enable
-          pnpm install --frozen-lockfile
-          pnpm audit --audit-level=high
-          echo "::endgroup::"
+          bun install --frozen-lockfile
+          bun audit --audit-level=high
 
       # =========================================================================
       # Dockerfile Linting: Hadolint (pre-installed on Mac Mini runner)
       # =========================================================================
       - name: Lint Dockerfile (Hadolint)
-        run: |
-          echo "::group::Dockerfile Linting (Hadolint)"
-          echo "Hadolint version: $(/opt/homebrew/bin/hadolint --version)"
-          /opt/homebrew/bin/hadolint "${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile" \
-            --failure-threshold warning || echo "::warning::Dockerfile linting issues found"
-          echo "::endgroup::"
+        run: /opt/homebrew/bin/hadolint "${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile" \
+          --failure-threshold warning || echo "::warning::Dockerfile linting issues found"
 
       - name: Final workspace cleanup
         if: always()
@@ -852,13 +767,11 @@ jobs:
 
       - name: Scan Docker image with Grype
         run: |
-          echo "::group::Docker Image Vulnerability Scan (Grype)"
           grype test-${{ matrix.component }}:${{ github.sha }} \
             --config ${{ env.UNIQUE_WORKSPACE }}/.grype.yaml \
             --fail-on high \
             --only-fixed \
             --output table
-          echo "::endgroup::"
 
       - name: Cleanup Docker image
         if: always()

@@ -1,10 +1,5 @@
-/**
- * TransactionAmountFilter Component Tests
- * Issue #529: Transaction page filtering
- */
-
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, mock } from 'bun:test'
+import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TransactionAmountFilter } from './TransactionAmountFilter'
 
@@ -14,7 +9,6 @@ describe('TransactionAmountFilter', () => {
 
     expect(screen.getByLabelText('Minimum amount')).toBeInTheDocument()
     expect(screen.getByLabelText('Maximum amount')).toBeInTheDocument()
-    // Check for $ symbols
     expect(screen.getAllByText('$')).toHaveLength(2)
   })
 
@@ -36,20 +30,20 @@ describe('TransactionAmountFilter', () => {
 
   it('should call onChange on blur with parsed values', async () => {
     const user = userEvent.setup()
-    const onChange = vi.fn()
+    const onChange = mock(() => {})
 
     render(<TransactionAmountFilter onChange={onChange} />)
 
     const minInput = screen.getByLabelText('Minimum amount')
     await user.type(minInput, '25.50')
-    fireEvent.blur(minInput)
+    minInput.blur()
 
     expect(onChange).toHaveBeenCalledWith(25.5, undefined)
   })
 
   it('should handle Enter key to commit value', async () => {
     const user = userEvent.setup()
-    const onChange = vi.fn()
+    const onChange = mock(() => {})
 
     render(<TransactionAmountFilter onChange={onChange} />)
 
@@ -62,26 +56,26 @@ describe('TransactionAmountFilter', () => {
 
   it('should strip non-numeric characters', async () => {
     const user = userEvent.setup()
-    const onChange = vi.fn()
+    const onChange = mock(() => {})
 
     render(<TransactionAmountFilter onChange={onChange} />)
 
     const minInput = screen.getByLabelText('Minimum amount')
     await user.type(minInput, '$1,234.56')
-    fireEvent.blur(minInput)
+    minInput.blur()
 
     expect(onChange).toHaveBeenCalledWith(1234.56, undefined)
   })
 
   it('should preserve max amount when min changes', async () => {
     const user = userEvent.setup()
-    const onChange = vi.fn()
+    const onChange = mock(() => {})
 
     render(<TransactionAmountFilter maxAmount={100} onChange={onChange} />)
 
     const minInput = screen.getByLabelText('Minimum amount')
     await user.type(minInput, '10')
-    fireEvent.blur(minInput)
+    minInput.blur()
 
     expect(onChange).toHaveBeenCalledWith(10, 100)
   })
@@ -99,75 +93,68 @@ describe('TransactionAmountFilter', () => {
     expect(screen.getByText('Amount Range')).toBeInTheDocument()
   })
 
-  describe('amount shortcuts', () => {
-    it('should render all shortcut buttons', () => {
-      render(<TransactionAmountFilter onChange={() => {}} />)
+  it('should render all shortcut buttons', () => {
+    const shortcuts = ['<$25', '$50+', '$100+', '$500+']
+    render(<TransactionAmountFilter onChange={() => {}} />)
 
-      expect(screen.getByRole('button', { name: '<$25' })).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: '$50+' })).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: '$100+' })).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: '$500+' })).toBeInTheDocument()
+    shortcuts.forEach((name) => {
+      expect(screen.getByRole('button', { name })).toBeInTheDocument()
     })
+  })
 
-    it('should apply shortcut on click', async () => {
-      const user = userEvent.setup()
-      const onChange = vi.fn()
+  it('should apply shortcut on click', async () => {
+    const user = userEvent.setup()
+    const onChange = mock(() => {})
 
-      render(<TransactionAmountFilter onChange={onChange} />)
+    render(<TransactionAmountFilter onChange={onChange} />)
+    await user.click(screen.getByRole('button', { name: '$50+' }))
 
-      await user.click(screen.getByRole('button', { name: '$50+' }))
+    expect(onChange).toHaveBeenCalledWith(50, undefined)
+  })
 
-      expect(onChange).toHaveBeenCalledWith(50, undefined)
-    })
+  it('should apply max-only shortcut on click', async () => {
+    const user = userEvent.setup()
+    const onChange = mock(() => {})
 
-    it('should apply max-only shortcut on click', async () => {
-      const user = userEvent.setup()
-      const onChange = vi.fn()
+    render(<TransactionAmountFilter onChange={onChange} />)
+    await user.click(screen.getByRole('button', { name: '<$25' }))
 
-      render(<TransactionAmountFilter onChange={onChange} />)
+    expect(onChange).toHaveBeenCalledWith(undefined, 25)
+  })
 
-      await user.click(screen.getByRole('button', { name: '<$25' }))
+  it('should highlight active shortcut', () => {
+    render(
+      <TransactionAmountFilter
+        minAmount={100}
+        onChange={() => {}}
+      />
+    )
 
-      expect(onChange).toHaveBeenCalledWith(undefined, 25)
-    })
+    expect(screen.getByRole('button', { name: '$100+' })).toHaveClass('bg-blue-600')
+  })
 
-    it('should highlight active shortcut', () => {
-      render(
-        <TransactionAmountFilter
-          minAmount={100}
-          maxAmount={undefined}
-          onChange={() => {}}
-        />
-      )
+  it('should clear shortcut when clicking active one', async () => {
+    const user = userEvent.setup()
+    const onChange = mock(() => {})
 
-      const activeButton = screen.getByRole('button', { name: '$100+' })
-      expect(activeButton).toHaveClass('bg-blue-600')
-    })
+    render(
+      <TransactionAmountFilter
+        minAmount={50}
+        onChange={onChange}
+      />
+    )
 
-    it('should clear shortcut when clicking active one', async () => {
-      const user = userEvent.setup()
-      const onChange = vi.fn()
+    await user.click(screen.getByRole('button', { name: '$50+' }))
 
-      render(
-        <TransactionAmountFilter
-          minAmount={50}
-          maxAmount={undefined}
-          onChange={onChange}
-        />
-      )
+    expect(onChange).toHaveBeenCalledWith(undefined, undefined)
+  })
 
-      await user.click(screen.getByRole('button', { name: '$50+' }))
+  it('should disable shortcuts when disabled prop is true', () => {
+    const shortcuts = ['<$25', '$50+', '$100+', '$500+']
+    render(<TransactionAmountFilter onChange={() => {}} disabled />)
 
-      expect(onChange).toHaveBeenCalledWith(undefined, undefined)
-    })
-
-    it('should disable shortcuts when disabled prop is true', () => {
-      render(<TransactionAmountFilter onChange={() => {}} disabled />)
-
-      expect(screen.getByRole('button', { name: '<$25' })).toBeDisabled()
-      expect(screen.getByRole('button', { name: '$50+' })).toBeDisabled()
-      expect(screen.getByRole('button', { name: '$100+' })).toBeDisabled()
-      expect(screen.getByRole('button', { name: '$500+' })).toBeDisabled()
+    shortcuts.forEach((name) => {
+      expect(screen.getByRole('button', { name })).toBeDisabled()
     })
   })
 })

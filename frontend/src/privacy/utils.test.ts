@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect } from 'bun:test'
 import { cookieToPrivacySettings, privacySettingsToCookie } from './utils'
 import type { CookieConsentSettings } from './types'
 import type { PrivacySettings } from '../features/profile/types'

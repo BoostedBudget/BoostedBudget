@@ -1,26 +1,15 @@
-/**
- * IncomeSourceItem Tests
- * Issue #496: Income Source Configuration UI for Envelope Budgeting
- *
- * TDD RED Phase: Tests for displaying a single income source.
- */
-
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { IncomeSourceItem } from './IncomeSourceItem';
-import type { IncomeSource } from '../../types';
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { IncomeSourceItem } from './IncomeSourceItem'
+import type { IncomeSource } from '../../types'
 
 describe('IncomeSourceItem', () => {
-  const mockOnRemove = vi.fn();
+  const mockOnRemove = mock(() => {})
 
   beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  // ==========================================================================
-  // Rendering Tests
-  // ==========================================================================
+    mockOnRemove.mockClear()
+  })
 
   describe('Rendering', () => {
     it('renders plaid_category source with category icon and value', () => {

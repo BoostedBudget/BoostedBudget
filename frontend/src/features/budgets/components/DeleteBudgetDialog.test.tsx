@@ -1,19 +1,11 @@
-/**
- * DeleteBudgetDialog Tests
- * Issue #521: Enable Budget and Savings Goal Deletion in UI
- *
- * Tests the confirmation dialog for deleting budgets.
- * Includes name confirmation validation - user must type exact budget name to enable Delete.
- */
-
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { DeleteBudgetDialog } from './DeleteBudgetDialog';
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { DeleteBudgetDialog } from './DeleteBudgetDialog'
 
 describe('DeleteBudgetDialog', () => {
-  const mockOnConfirm = vi.fn();
-  const mockOnCancel = vi.fn();
+  const mockOnConfirm = mock(() => {})
+  const mockOnCancel = mock(() => {})
 
   const defaultProps = {
     isOpen: true,
@@ -22,11 +14,12 @@ describe('DeleteBudgetDialog', () => {
     onConfirm: mockOnConfirm,
     onCancel: mockOnCancel,
     isDeleting: false,
-  };
+  }
 
   beforeEach(() => {
-    vi.clearAllMocks();
-  });
+    mockOnConfirm.mockClear()
+    mockOnCancel.mockClear()
+  })
 
   describe('Display', () => {
     it('should render when open', () => {

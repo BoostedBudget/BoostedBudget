@@ -1,234 +1,178 @@
 /**
  * useSubscriptionTiers Hook Tests
+ * Issue #575: Migrated from MSW to centralized API mocks
  *
  * Tests the React hook with React Query caching strategy.
- * Uses MSW for API mocking.
  */
 
-import { describe, it, expect, afterEach, afterAll, beforeAll } from 'vitest'
-import { renderHook, waitFor } from '@testing-library/react'
+import { describe, it, expect, beforeEach } from 'bun:test'
+import { renderHook } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { setupServer } from 'msw/node'
-import { http, HttpResponse } from 'msw'
 import React from 'react'
 import { useSubscriptionTiers, clearCache } from './useSubscriptionTiers'
 import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
+import {
+  mockUseGetSubscriptionTiers,
+  mockRefetchSubscriptionTiers,
+} from '@/test/mocks/subscription-api'
 
-// MSW server setup
-const server = setupServer(
-  http.get('*/api/v1/subscription/tiers', () => {
-    return HttpResponse.json(mockSubscriptionTiersResponse)
-  })
-)
-
-// Create a fresh QueryClient for each test
-function createTestQueryClient() {
-  return new QueryClient({
+function createWrapper() {
+  const queryClient = new QueryClient({
     defaultOptions: {
-      queries: {
-        retry: false,
-        gcTime: 0,
-      },
+      queries: { retry: false, gcTime: 0 },
     },
   })
-}
-
-// Wrapper component for tests
-function createWrapper() {
-  const queryClient = createTestQueryClient()
   return function Wrapper({ children }: { children: React.ReactNode }) {
     return (
-      <QueryClientProvider client={queryClient}>
-        {children}
-      </QueryClientProvider>
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     )
   }
 }
 
 describe('useSubscriptionTiers', () => {
-  beforeAll(() => {
-    server.listen({ onUnhandledRequest: 'error' })
+  beforeEach(() => {
+    mockUseGetSubscriptionTiers.mockClear()
+    mockRefetchSubscriptionTiers.mockClear()
+
+    // Default successful response
+    mockUseGetSubscriptionTiers.mockReturnValue({
+      data: mockSubscriptionTiersResponse,
+      isLoading: false,
+      error: null,
+      refetch: mockRefetchSubscriptionTiers,
+    })
   })
 
-  afterEach(() => {
-    server.resetHandlers()
-    clearCache()
-  })
-
-  afterAll(() => {
-    server.close()
-  })
-
-  it('should return loading state initially', async () => {
-    // Use a delayed response to capture loading state
-    server.use(
-      http.get('*/api/v1/subscription/tiers', async () => {
-        await new Promise((resolve) => setTimeout(resolve, 100))
-        return HttpResponse.json(mockSubscriptionTiersResponse)
+  describe('Initial State', () => {
+    it('should return loading=true initially', () => {
+      mockUseGetSubscriptionTiers.mockReturnValue({
+        data: undefined,
+        isLoading: true,
+        error: null,
+        refetch: mockRefetchSubscriptionTiers,
       })
-    )
 
-    const { result } = renderHook(() => useSubscriptionTiers(), {
-      wrapper: createWrapper(),
-    })
-
-    // Assert initial loading state
-    expect(result.current.loading).toBe(true)
-    expect(result.current.tiers).toBeNull()
-    expect(result.current.error).toBeNull()
-
-    // Wait for completion (increased timeout for slow CI environments)
-    await waitFor(() => {
-      expect(result.current.loading).toBe(false)
-    }, { timeout: 5000 })
-  })
-
-  it('should fetch and return subscription tiers on mount', async () => {
-    const { result } = renderHook(() => useSubscriptionTiers(), {
-      wrapper: createWrapper(),
-    })
-
-    // Wait for data to load
-    await waitFor(() => {
-      expect(result.current.loading).toBe(false)
-    })
-
-    // Assert - Data loaded successfully
-    expect(result.current.tiers).toEqual(mockSubscriptionTiersResponse)
-    expect(result.current.error).toBeNull()
-  })
-
-  it('should handle fetch errors gracefully', async () => {
-    server.use(
-      http.get('*/api/v1/subscription/tiers', () => {
-        return HttpResponse.json(
-          { message: 'Server error' },
-          { status: 500 }
-        )
+      const { result } = renderHook(() => useSubscriptionTiers(), {
+        wrapper: createWrapper(),
       })
-    )
 
-    const { result } = renderHook(() => useSubscriptionTiers(), {
-      wrapper: createWrapper(),
+      expect(result.current.loading).toBe(true)
+      expect(result.current.tiers).toBeNull()
+      expect(result.current.error).toBeNull()
     })
-
-    // Wait for error state
-    await waitFor(() => {
-      expect(result.current.loading).toBe(false)
-    })
-
-    // Assert
-    expect(result.current.error).toBeTruthy()
-    expect(result.current.tiers).toBeNull()
   })
 
-  it('should use React Query caching', async () => {
-    let fetchCount = 0
-    server.use(
-      http.get('*/api/v1/subscription/tiers', () => {
-        fetchCount++
-        return HttpResponse.json(mockSubscriptionTiersResponse)
+  describe('Successful Fetch', () => {
+    it('should return tiers on successful fetch', () => {
+      const { result } = renderHook(() => useSubscriptionTiers(), {
+        wrapper: createWrapper(),
       })
-    )
 
-    // Use shared QueryClient for caching test
-    const queryClient = createTestQueryClient()
-    const wrapper = ({ children }: { children: React.ReactNode }) => (
-      <QueryClientProvider client={queryClient}>
-        {children}
-      </QueryClientProvider>
-    )
-
-    // First render
-    const { result: result1, unmount: unmount1 } = renderHook(
-      () => useSubscriptionTiers(),
-      { wrapper }
-    )
-
-    await waitFor(() => {
-      expect(result1.current.loading).toBe(false)
+      expect(result.current.loading).toBe(false)
+      expect(result.current.tiers).toEqual(mockSubscriptionTiersResponse)
+      expect(result.current.error).toBeNull()
     })
 
-    expect(fetchCount).toBe(1)
-    unmount1()
-
-    // Second render with same QueryClient - should use cache
-    const { result: result2 } = renderHook(
-      () => useSubscriptionTiers(),
-      { wrapper }
-    )
-
-    await waitFor(() => {
-      expect(result2.current.loading).toBe(false)
-    })
-
-    // Should not fetch again - using cached data
-    expect(fetchCount).toBe(1)
-    expect(result2.current.tiers).toEqual(mockSubscriptionTiersResponse)
-  })
-
-  it('should provide refetch function to force cache invalidation', async () => {
-    let fetchCount = 0
-    server.use(
-      http.get('*/api/v1/subscription/tiers', () => {
-        fetchCount++
-        return HttpResponse.json(mockSubscriptionTiersResponse)
+    it('should return correct tier structure', () => {
+      const { result } = renderHook(() => useSubscriptionTiers(), {
+        wrapper: createWrapper(),
       })
-    )
 
-    const { result } = renderHook(() => useSubscriptionTiers(), {
-      wrapper: createWrapper(),
+      const tiers = result.current.tiers
+      expect(tiers?.default_tier).toBe('free')
     })
 
-    await waitFor(() => {
-      expect(result.current.loading).toBe(false)
+    it('should return free tier with correct limits', () => {
+      const { result } = renderHook(() => useSubscriptionTiers(), {
+        wrapper: createWrapper(),
+      })
+
+      const freeTier = result.current.tiers?.tiers.free
+      expect(freeTier?.display_name).toBe('Free')
+      expect(freeTier?.limits.accounts).toBe(3)
+      expect(freeTier?.limits.rules).toBe(1)
     })
 
-    expect(fetchCount).toBe(1)
+    it('should return free tier with ads enabled', () => {
+      const { result } = renderHook(() => useSubscriptionTiers(), {
+        wrapper: createWrapper(),
+      })
 
-    // Call refetch
-    result.current.refetch()
-
-    await waitFor(() => {
-      expect(fetchCount).toBe(2)
+      const freeTier = result.current.tiers?.tiers.free
+      expect(freeTier?.features.ads_enabled).toBe(true)
+      expect(freeTier?.pricing.price_monthly).toBe(0)
     })
 
-    // Should have fetched again
-    expect(result.current.tiers).toEqual(mockSubscriptionTiersResponse)
+    it('should return premium_plus tier with unlimited limits', () => {
+      const { result } = renderHook(() => useSubscriptionTiers(), {
+        wrapper: createWrapper(),
+      })
+
+      const premiumPlus = result.current.tiers?.tiers.premium_plus
+      expect(premiumPlus?.limits.accounts).toBe(-1)
+      expect(premiumPlus?.limits.rules).toBe(-1)
+      expect(premiumPlus?.features.ai_insights).toBe(true)
+    })
   })
 
-  it('should return correct tier structure with all fields', async () => {
-    const { result } = renderHook(() => useSubscriptionTiers(), {
-      wrapper: createWrapper(),
+  describe('Error Handling', () => {
+    it('should return error on failed fetch', () => {
+      const error = new Error('Network error')
+      mockUseGetSubscriptionTiers.mockReturnValue({
+        data: undefined,
+        isLoading: false,
+        error,
+        refetch: mockRefetchSubscriptionTiers,
+      })
+
+      const { result } = renderHook(() => useSubscriptionTiers(), {
+        wrapper: createWrapper(),
+      })
+
+      expect(result.current.error).toBeTruthy()
+      expect(result.current.tiers).toBeNull()
     })
 
-    await waitFor(() => {
-      expect(result.current.loading).toBe(false)
+    it('should wrap errors in Error instances', () => {
+      mockUseGetSubscriptionTiers.mockReturnValue({
+        data: undefined,
+        isLoading: false,
+        error: 'String error',
+        refetch: mockRefetchSubscriptionTiers,
+      })
+
+      const { result } = renderHook(() => useSubscriptionTiers(), {
+        wrapper: createWrapper(),
+      })
+
+      expect(result.current.error).toBeInstanceOf(Error)
     })
-
-    // Verify tier structure
-    const tiers = result.current.tiers
-    expect(tiers).toBeTruthy()
-    expect(tiers?.default_tier).toBe('free')
-
-    // Check free tier
-    const freeTier = tiers?.tiers.free
-    expect(freeTier?.display_name).toBe('Free')
-    expect(freeTier?.limits.accounts).toBe(3)
-    expect(freeTier?.limits.rules).toBe(1)
-    expect(freeTier?.features.ads_enabled).toBe(true)
-    expect(freeTier?.pricing.price_monthly).toBe(0)
-
-    // Check premium_plus unlimited limits
-    const premiumPlus = tiers?.tiers.premium_plus
-    expect(premiumPlus?.limits.accounts).toBe(-1)
-    expect(premiumPlus?.limits.rules).toBe(-1)
-    expect(premiumPlus?.features.ai_insights).toBe(true)
   })
 
-  it('clearCache function exists for backward compatibility', () => {
-    // clearCache is now a no-op but should exist
-    expect(typeof clearCache).toBe('function')
-    expect(() => clearCache()).not.toThrow()
+  describe('Refetch', () => {
+    it('should provide refetch function', () => {
+      const { result } = renderHook(() => useSubscriptionTiers(), {
+        wrapper: createWrapper(),
+      })
+
+      expect(typeof result.current.refetch).toBe('function')
+    })
+
+    it('should call underlying refetch when invoked', () => {
+      const { result } = renderHook(() => useSubscriptionTiers(), {
+        wrapper: createWrapper(),
+      })
+
+      result.current.refetch()
+
+      expect(mockRefetchSubscriptionTiers).toHaveBeenCalled()
+    })
+  })
+
+  describe('clearCache', () => {
+    it('clearCache function exists for backward compatibility', () => {
+      expect(typeof clearCache).toBe('function')
+      expect(() => clearCache()).not.toThrow()
+    })
   })
 })

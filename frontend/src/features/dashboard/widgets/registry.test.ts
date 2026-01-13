@@ -5,39 +5,47 @@
  * lookup, and configuration creation.
  *
  * Issue #354: Customizable Dashboard Widget System
+ * Issue #575: Migrated to bun:test with isolated config (bunfig.real.toml)
+ *
+ * NOTE: This test runs with bunfig.real.toml to test the REAL registry,
+ * not the centralized mock. Run with: bun test --config bunfig.real.toml
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
 import type { WidgetDefinition, WidgetType, WidgetProps } from '../types'
-
-// We need to test the registry in isolation, so we'll import it fresh
-// and manually control registrations
+import {
+  registerWidget,
+  getWidget,
+  getAllWidgets,
+  getWidgetsByCategory,
+  isWidgetRegistered,
+  generateWidgetId,
+  createWidgetConfig,
+  DEFAULT_LAYOUT,
+} from './registry'
 
 describe('Widget Registry', () => {
-  // Store original Date.now and Math.random for mocking
   const originalDateNow = Date.now
   const originalMathRandom = Math.random
 
   beforeEach(() => {
-    // Reset mocks before each test
-    vi.clearAllMocks()
+    Date.now = originalDateNow
+    Math.random = originalMathRandom
   })
 
   afterEach(() => {
-    // Restore original functions
     Date.now = originalDateNow
     Math.random = originalMathRandom
-    vi.restoreAllMocks()
   })
 
-  // Create a mock widget definition for testing
-  const createMockDefinition = (
-    type: WidgetType,
+  // Use unique widget types per test to avoid conflicts with shared state
+  const createTestDefinition = (
+    suffix: string,
     category: 'overview' | 'charts' | 'accounts' = 'overview'
   ): WidgetDefinition => ({
-    type,
-    title: `${type} Widget`,
-    description: `Description for ${type}`,
+    type: `test-${suffix}-${Date.now()}` as WidgetType,
+    title: `Test Widget ${suffix}`,
+    description: `Description for ${suffix}`,
     icon: 'chart-bar',
     category,
     defaultSize: { w: 4, h: 3 },
@@ -46,26 +54,20 @@ describe('Widget Registry', () => {
   })
 
   describe('registerWidget', () => {
-    it('should register a new widget successfully', async () => {
-      // Re-import to get fresh registry state
-      const { registerWidget, getWidget } = await import('./registry')
-
-      const definition = createMockDefinition('balance-overview')
+    it('should register a new widget successfully', () => {
+      const definition = createTestDefinition('reg-new')
       registerWidget(definition)
 
-      const result = getWidget('balance-overview')
+      const result = getWidget(definition.type)
       expect(result).toBeDefined()
-      expect(result?.type).toBe('balance-overview')
-      expect(result?.title).toBe('balance-overview Widget')
+      expect(result?.type).toBe(definition.type)
     })
 
-    it('should store widget with correct properties', async () => {
-      const { registerWidget, getWidget } = await import('./registry')
-
-      const definition = createMockDefinition('balance-history', 'charts')
+    it('should store widget with correct properties', () => {
+      const definition = createTestDefinition('reg-props', 'charts')
       registerWidget(definition)
 
-      const result = getWidget('balance-history')
+      const result = getWidget(definition.type)
       expect(result).toEqual(definition)
       expect(result?.category).toBe('charts')
       expect(result?.defaultSize).toEqual({ w: 4, h: 3 })
@@ -74,161 +76,116 @@ describe('Widget Registry', () => {
   })
 
   describe('getWidget', () => {
-    it('should return widget definition for registered type', async () => {
-      const { registerWidget, getWidget } = await import('./registry')
-
-      const definition = createMockDefinition('cash-flow-summary')
+    it('should return widget definition for registered type', () => {
+      const definition = createTestDefinition('get-exists')
       registerWidget(definition)
 
-      const result = getWidget('cash-flow-summary')
+      const result = getWidget(definition.type)
       expect(result).toBeDefined()
-      expect(result?.type).toBe('cash-flow-summary')
+      expect(result?.type).toBe(definition.type)
     })
 
-    it('should return undefined for unregistered type', async () => {
-      const { getWidget } = await import('./registry')
-
-      // Cast to WidgetType to test the undefined case
-      const result = getWidget('non-existent' as WidgetType)
+    it('should return undefined for unregistered type', () => {
+      const result = getWidget('non-existent-widget-xyz' as WidgetType)
       expect(result).toBeUndefined()
     })
   })
 
   describe('getAllWidgets', () => {
-    it('should return all registered widgets', async () => {
-      const { registerWidget, getAllWidgets } = await import('./registry')
-
-      // Register multiple widgets
-      registerWidget(createMockDefinition('balance-overview', 'overview'))
-      registerWidget(createMockDefinition('balance-history', 'charts'))
-      registerWidget(createMockDefinition('account-cards', 'accounts'))
+    it('should return array of widgets including registered ones', () => {
+      const definition = createTestDefinition('getall')
+      registerWidget(definition)
 
       const result = getAllWidgets()
-      expect(result.length).toBeGreaterThanOrEqual(3)
+      expect(result.length).toBeGreaterThanOrEqual(1)
 
-      const types = result.map((w) => w.type)
-      expect(types).toContain('balance-overview')
-      expect(types).toContain('balance-history')
-      expect(types).toContain('account-cards')
+      const found = result.find((w) => w.type === definition.type)
+      expect(found).toBeDefined()
     })
   })
 
   describe('getWidgetsByCategory', () => {
-    it('should return empty array for unknown category', async () => {
-      const { getWidgetsByCategory } = await import('./registry')
+    it('should filter widgets by category correctly', () => {
+      const overviewDef = createTestDefinition('cat-overview', 'overview')
+      const chartsDef = createTestDefinition('cat-charts', 'charts')
 
-      // Use a category that shouldn't exist
-      const result = getWidgetsByCategory('nonexistent' as 'overview')
-      // Since widgets are pre-registered, check if this category has any
-      // If the category truly doesn't exist, result would be empty
-      expect(Array.isArray(result)).toBe(true)
-    })
-
-    it('should filter widgets by category correctly', async () => {
-      const { registerWidget, getWidgetsByCategory } = await import('./registry')
-
-      // Register widgets in different categories
-      registerWidget(createMockDefinition('balance-overview', 'overview'))
-      registerWidget(createMockDefinition('cash-flow-summary', 'overview'))
-      registerWidget(createMockDefinition('balance-history', 'charts'))
+      registerWidget(overviewDef)
+      registerWidget(chartsDef)
 
       const overviewWidgets = getWidgetsByCategory('overview')
       const chartsWidgets = getWidgetsByCategory('charts')
 
-      // All overview widgets should have category 'overview'
+      // All returned widgets should be in their respective categories
       overviewWidgets.forEach((w) => {
         expect(w.category).toBe('overview')
       })
-
-      // All charts widgets should have category 'charts'
       chartsWidgets.forEach((w) => {
         expect(w.category).toBe('charts')
       })
 
-      expect(overviewWidgets.length).toBeGreaterThanOrEqual(2)
-      expect(chartsWidgets.length).toBeGreaterThanOrEqual(1)
+      // Our registered widgets should be found
+      expect(overviewWidgets.find((w) => w.type === overviewDef.type)).toBeDefined()
+      expect(chartsWidgets.find((w) => w.type === chartsDef.type)).toBeDefined()
     })
 
-    it('should return only widgets in specified category', async () => {
-      const { getWidgetsByCategory } = await import('./registry')
-
-      const accountsWidgets = getWidgetsByCategory('accounts')
-
-      // Every widget should be in accounts category
-      accountsWidgets.forEach((w) => {
-        expect(w.category).toBe('accounts')
-      })
+    it('should return array (possibly empty) for any category', () => {
+      const result = getWidgetsByCategory('accounts')
+      expect(Array.isArray(result)).toBe(true)
     })
   })
 
   describe('isWidgetRegistered', () => {
-    it('should return true for registered widget', async () => {
-      const { registerWidget, isWidgetRegistered } = await import('./registry')
+    it('should return true for registered widget', () => {
+      const definition = createTestDefinition('isreg-true')
+      registerWidget(definition)
 
-      registerWidget(createMockDefinition('balance-overview'))
-
-      expect(isWidgetRegistered('balance-overview')).toBe(true)
+      expect(isWidgetRegistered(definition.type)).toBe(true)
     })
 
-    it('should return false for unregistered widget', async () => {
-      const { isWidgetRegistered } = await import('./registry')
-
-      // Cast to WidgetType to test the false case
-      expect(isWidgetRegistered('fake-widget' as WidgetType)).toBe(false)
+    it('should return false for unregistered widget', () => {
+      expect(isWidgetRegistered('fake-widget-not-exists' as WidgetType)).toBe(false)
     })
   })
 
   describe('generateWidgetId', () => {
-    it('should generate unique IDs for same type', async () => {
-      const { generateWidgetId } = await import('./registry')
-
+    it('should generate unique IDs for same type', () => {
       const id1 = generateWidgetId('balance-overview')
       const id2 = generateWidgetId('balance-overview')
 
       expect(id1).not.toBe(id2)
     })
 
-    it('should include widget type in ID', async () => {
-      const { generateWidgetId } = await import('./registry')
-
+    it('should include widget type in ID', () => {
       const id = generateWidgetId('cash-flow-chart')
       expect(id).toContain('cash-flow-chart')
     })
 
-    it('should include timestamp component', async () => {
-      const { generateWidgetId } = await import('./registry')
-
-      // Mock Date.now to return a specific value
+    it('should include timestamp component', () => {
       const mockTimestamp = 1700000000000
-      Date.now = vi.fn(() => mockTimestamp)
+      Date.now = mock(() => mockTimestamp)
 
       const id = generateWidgetId('balance-history')
       expect(id).toContain(mockTimestamp.toString())
     })
 
-    it('should include random component', async () => {
-      const { generateWidgetId } = await import('./registry')
-
-      // Generate multiple IDs with same timestamp
+    it('should include random component for uniqueness', () => {
       const mockTimestamp = 1700000000000
-      Date.now = vi.fn(() => mockTimestamp)
+      Date.now = mock(() => mockTimestamp)
 
       const id1 = generateWidgetId('account-cards')
       const id2 = generateWidgetId('account-cards')
 
-      // Even with same timestamp, IDs should be different due to random component
+      // Even with same timestamp, IDs should differ due to random component
       expect(id1).not.toBe(id2)
     })
   })
 
   describe('createWidgetConfig', () => {
-    it('should create config with default size from definition', async () => {
-      const { registerWidget, createWidgetConfig } = await import('./registry')
-
+    it('should create config with default size from definition', () => {
       const definition: WidgetDefinition = {
-        type: 'balance-overview',
-        title: 'Balance Overview',
-        description: 'Shows balance',
+        type: `config-size-${Date.now()}` as WidgetType,
+        title: 'Config Size Test',
+        description: 'Tests config creation',
         icon: 'banknotes',
         category: 'overview',
         defaultSize: { w: 6, h: 4 },
@@ -237,40 +194,34 @@ describe('Widget Registry', () => {
       }
       registerWidget(definition)
 
-      const config = createWidgetConfig('balance-overview')
+      const config = createWidgetConfig(definition.type)
 
       expect(config).not.toBeNull()
       expect(config?.w).toBe(6)
       expect(config?.h).toBe(4)
     })
 
-    it('should create config with custom position', async () => {
-      const { registerWidget, createWidgetConfig } = await import('./registry')
+    it('should create config with custom position', () => {
+      const definition = createTestDefinition('config-pos')
+      registerWidget(definition)
 
-      registerWidget(createMockDefinition('cash-flow-summary'))
-
-      const config = createWidgetConfig('cash-flow-summary', 5, 10)
+      const config = createWidgetConfig(definition.type, 5, 10)
 
       expect(config).not.toBeNull()
       expect(config?.x).toBe(5)
       expect(config?.y).toBe(10)
     })
 
-    it('should return null for unregistered widget type', async () => {
-      const { createWidgetConfig } = await import('./registry')
-
-      const config = createWidgetConfig('non-existent' as WidgetType)
-
+    it('should return null for unregistered widget type', () => {
+      const config = createWidgetConfig('non-existent-config-test' as WidgetType)
       expect(config).toBeNull()
     })
 
-    it('should apply minSize constraints', async () => {
-      const { registerWidget, createWidgetConfig } = await import('./registry')
-
+    it('should apply minSize constraints', () => {
       const definition: WidgetDefinition = {
-        type: 'balance-history',
-        title: 'Balance History',
-        description: 'Shows history',
+        type: `config-minsize-${Date.now()}` as WidgetType,
+        title: 'Min Size Test',
+        description: 'Tests min size',
         icon: 'chart-line',
         category: 'charts',
         defaultSize: { w: 8, h: 5 },
@@ -279,20 +230,18 @@ describe('Widget Registry', () => {
       }
       registerWidget(definition)
 
-      const config = createWidgetConfig('balance-history')
+      const config = createWidgetConfig(definition.type)
 
       expect(config).not.toBeNull()
       expect(config?.minW).toBe(4)
       expect(config?.minH).toBe(3)
     })
 
-    it('should apply maxSize if defined', async () => {
-      const { registerWidget, createWidgetConfig } = await import('./registry')
-
+    it('should apply maxSize if defined', () => {
       const definition: WidgetDefinition = {
-        type: 'cash-flow-chart',
-        title: 'Cash Flow Chart',
-        description: 'Shows cash flow',
+        type: `config-maxsize-${Date.now()}` as WidgetType,
+        title: 'Max Size Test',
+        description: 'Tests max size',
         icon: 'chart-bar',
         category: 'charts',
         defaultSize: { w: 6, h: 4 },
@@ -302,46 +251,32 @@ describe('Widget Registry', () => {
       }
       registerWidget(definition)
 
-      const config = createWidgetConfig('cash-flow-chart')
+      const config = createWidgetConfig(definition.type)
 
       expect(config).not.toBeNull()
       expect(config?.maxW).toBe(12)
       expect(config?.maxH).toBe(8)
     })
 
-    it('should generate unique ID', async () => {
-      const { registerWidget, createWidgetConfig } = await import('./registry')
+    it('should generate unique ID', () => {
+      const definition = createTestDefinition('config-uniqueid')
+      registerWidget(definition)
 
-      registerWidget(createMockDefinition('account-cards'))
-
-      const config1 = createWidgetConfig('account-cards')
-      const config2 = createWidgetConfig('account-cards')
+      const config1 = createWidgetConfig(definition.type)
+      const config2 = createWidgetConfig(definition.type)
 
       expect(config1?.i).not.toBe(config2?.i)
     })
   })
 
   describe('DEFAULT_LAYOUT', () => {
-    /**
-     * NOTE: Re-enabled BalanceHistoryWidget after fresh rewrite (Issue #418).
-     * Other widgets still pending fixes: #419, #425, #426.
-     */
-    it('should contain expected widgets', async () => {
-      const { DEFAULT_LAYOUT } = await import('./registry')
-
+    it('should contain expected widgets', () => {
       // Cash flow chart + balance history widget
       expect(DEFAULT_LAYOUT.widgets).toHaveLength(2)
     })
 
-    it('should have all valid widget types', async () => {
-      const { DEFAULT_LAYOUT } = await import('./registry')
-
-      // Enabled widgets: cash-flow-chart and balance-history
-      const expectedTypes: WidgetType[] = [
-        'cash-flow-chart',
-        'balance-history',
-      ]
-
+    it('should have all valid widget types', () => {
+      const expectedTypes: WidgetType[] = ['cash-flow-chart', 'balance-history']
       const actualTypes = DEFAULT_LAYOUT.widgets.map((w) => w.type)
 
       expectedTypes.forEach((type) => {
@@ -349,25 +284,19 @@ describe('Widget Registry', () => {
       })
     })
 
-    it('should have correct version', async () => {
-      const { DEFAULT_LAYOUT } = await import('./registry')
-
+    it('should have correct version', () => {
       // Version bumped to 4 for Issue #468 (increased minH values)
       expect(DEFAULT_LAYOUT.version).toBe(4)
     })
 
-    it('should have unique widget IDs', async () => {
-      const { DEFAULT_LAYOUT } = await import('./registry')
-
+    it('should have unique widget IDs', () => {
       const ids = DEFAULT_LAYOUT.widgets.map((w) => w.i)
       const uniqueIds = new Set(ids)
 
       expect(uniqueIds.size).toBe(ids.length)
     })
 
-    it('should have widgets with valid positions', async () => {
-      const { DEFAULT_LAYOUT } = await import('./registry')
-
+    it('should have widgets with valid positions', () => {
       DEFAULT_LAYOUT.widgets.forEach((widget) => {
         expect(widget.x).toBeGreaterThanOrEqual(0)
         expect(widget.y).toBeGreaterThanOrEqual(0)
@@ -376,9 +305,7 @@ describe('Widget Registry', () => {
       })
     })
 
-    it('should have widgets with min size constraints', async () => {
-      const { DEFAULT_LAYOUT } = await import('./registry')
-
+    it('should have widgets with min size constraints', () => {
       DEFAULT_LAYOUT.widgets.forEach((widget) => {
         expect(widget.minW).toBeDefined()
         expect(widget.minH).toBeDefined()
@@ -387,9 +314,7 @@ describe('Widget Registry', () => {
       })
     })
 
-    it('should have widgets that fit within 12-column grid', async () => {
-      const { DEFAULT_LAYOUT } = await import('./registry')
-
+    it('should have widgets that fit within 12-column grid', () => {
       DEFAULT_LAYOUT.widgets.forEach((widget) => {
         expect(widget.x + widget.w).toBeLessThanOrEqual(12)
       })

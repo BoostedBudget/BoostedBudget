@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BrowserRouter } from 'react-router-dom'
@@ -10,26 +10,19 @@ const mockUser = {
   picture: 'https://example.com/avatar.jpg',
 }
 
-type UserProps = {
-  name?: string
-  email?: string
-  picture?: string
-}
+const mockOnLogout = mock(() => {})
 
 describe('UserDropdown', () => {
-  const mockOnLogout = vi.fn()
-
   beforeEach(() => {
-    vi.clearAllMocks()
+    mockOnLogout.mockClear()
   })
 
-  const renderDropdown = (user: UserProps = mockUser) => {
-    return render(
+  const renderDropdown = (user = mockUser) =>
+    render(
       <BrowserRouter>
         <UserDropdown user={user} onLogout={mockOnLogout} />
       </BrowserRouter>
     )
-  }
 
   it('renders avatar button with user menu aria-label', () => {
     renderDropdown()
@@ -51,7 +44,7 @@ describe('UserDropdown', () => {
     })
   })
 
-  it('shows View Profile link in dropdown', async () => {
+  it('shows menu items in dropdown', async () => {
     const user = userEvent.setup()
     renderDropdown()
 
@@ -59,27 +52,7 @@ describe('UserDropdown', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('menuitem', { name: /view profile/i })).toBeInTheDocument()
-    })
-  })
-
-  it('shows Privacy Settings link in dropdown', async () => {
-    const user = userEvent.setup()
-    renderDropdown()
-
-    await user.click(screen.getByRole('button', { name: /user menu/i }))
-
-    await waitFor(() => {
       expect(screen.getByRole('menuitem', { name: /privacy settings/i })).toBeInTheDocument()
-    })
-  })
-
-  it('shows Log out button in dropdown', async () => {
-    const user = userEvent.setup()
-    renderDropdown()
-
-    await user.click(screen.getByRole('button', { name: /user menu/i }))
-
-    await waitFor(() => {
       expect(screen.getByRole('menuitem', { name: /log out/i })).toBeInTheDocument()
     })
   })
@@ -94,8 +67,7 @@ describe('UserDropdown', () => {
       expect(screen.getByRole('menuitem', { name: /log out/i })).toBeInTheDocument()
     })
 
-    const logoutItem = screen.getByRole('menuitem', { name: /log out/i })
-    await user.click(logoutItem)
+    await user.click(screen.getByRole('menuitem', { name: /log out/i }))
 
     expect(mockOnLogout).toHaveBeenCalledTimes(1)
   })
@@ -120,9 +92,6 @@ describe('UserDropdown', () => {
   it('shows fallback initials when no picture', () => {
     renderDropdown({ ...mockUser, picture: undefined })
 
-    // Avatar should show initials fallback (TU for Test User)
-    const trigger = screen.getByRole('button', { name: /user menu/i })
-    expect(trigger).toBeInTheDocument()
     expect(screen.getByText('TU')).toBeInTheDocument()
   })
 
@@ -133,7 +102,6 @@ describe('UserDropdown', () => {
       </BrowserRouter>
     )
 
-    // The outer wrapper should have the class
     const container = screen.getByRole('button', { name: /user menu/i }).parentElement
     expect(container).toHaveClass('custom-class')
   })

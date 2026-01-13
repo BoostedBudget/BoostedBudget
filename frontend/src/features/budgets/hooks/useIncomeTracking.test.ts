@@ -1,24 +1,9 @@
-/**
- * useIncomeTracking Tests
- * Issue #496: Income Source Configuration UI for Envelope Budgeting
- *
- * TDD RED Phase: Tests for the income tracking hook.
- */
-
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { renderHook } from '@testing-library/react';
-import { useIncomeTracking } from './useIncomeTracking';
-import type { IncomeSource } from '../types';
+import { describe, it, expect } from 'bun:test'
+import { renderHook } from '@testing-library/react'
+import { useIncomeTracking } from './useIncomeTracking'
+import type { IncomeSource } from '../types'
 
 describe('useIncomeTracking', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  // ==========================================================================
-  // Expected Manual Total Tests
-  // ==========================================================================
-
   describe('Expected Manual Total', () => {
     it('returns 0 when no sources', () => {
       const { result } = renderHook(() =>

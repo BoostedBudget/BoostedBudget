@@ -6,7 +6,7 @@
  * TDD RED: Writing tests before implementation.
  */
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { TriggerSelector } from './TriggerSelector'
 import type { TriggerFormState } from '../types'
@@ -15,7 +15,7 @@ const defaultTriggerConfig: TriggerFormState = {
   type: 'schedule',
   cron: '0 9 * * *',
   timezone: 'America/New_York',
-}
+} as const
 
 describe('TriggerSelector', () => {
   describe('Rendering', () => {
@@ -92,7 +92,7 @@ describe('TriggerSelector', () => {
     })
 
     it('should call onChange with updated cron when preset is clicked', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
       render(
         <TriggerSelector
           config={defaultTriggerConfig}
@@ -131,7 +131,7 @@ describe('TriggerSelector', () => {
     })
 
     it('should call onChange when event type is changed', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
       const eventConfig: TriggerFormState = {
         type: 'event',
         event: 'budget_updated',
@@ -219,7 +219,7 @@ describe('TriggerSelector', () => {
 
   describe('Type Switching', () => {
     it('should call onChange with schedule type when schedule is selected', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
       const eventConfig: TriggerFormState = {
         type: 'event',
         event: 'budget_updated',
@@ -243,7 +243,7 @@ describe('TriggerSelector', () => {
     })
 
     it('should call onChange with event type when event is selected', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
 
       render(
         <TriggerSelector

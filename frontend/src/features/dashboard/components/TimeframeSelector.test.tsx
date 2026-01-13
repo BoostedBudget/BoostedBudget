@@ -1,26 +1,23 @@
 /**
  * TimeframeSelector Component Tests
  * Issue #564: Frontend Test Coverage Improvement
- *
- * Tests the timeframe/date range selector for dashboard filtering.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, mock, beforeEach, afterEach, setSystemTime } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { TimeframeSelector } from './TimeframeSelector'
 
 describe('TimeframeSelector', () => {
-  const mockOnRangeChange = vi.fn()
+  const mockOnRangeChange = mock(() => {})
   const mockDate = new Date('2025-01-15T12:00:00.000Z')
 
   beforeEach(() => {
-    vi.clearAllMocks()
-    vi.useFakeTimers()
-    vi.setSystemTime(mockDate)
+    mockOnRangeChange.mockClear()
+    setSystemTime(mockDate)
   })
 
   afterEach(() => {
-    vi.useRealTimers()
+    setSystemTime()
   })
 
   describe('Rendering', () => {
@@ -57,44 +54,20 @@ describe('TimeframeSelector', () => {
   })
 
   describe('Preset Period Selection', () => {
-    it('should call onRangeChange with correct dates for 7 Days', () => {
-      render(<TimeframeSelector onRangeChange={mockOnRangeChange} />)
+    const testCases: [string, string, string][] = [
+      ['7 Days', '2025-01-08', '2025-01-15'],
+      ['30 Days', '2024-12-16', '2025-01-15'],
+      ['90 Days', '2024-10-17', '2025-01-15'],
+      ['1 Year', '2024-01-15', '2025-01-15'],
+      ['All Time', '2015-01-15', '2025-01-15'],
+    ]
 
-      fireEvent.click(screen.getByText('7 Days'))
-
-      expect(mockOnRangeChange).toHaveBeenCalledWith('2025-01-08', '2025-01-15')
-    })
-
-    it('should call onRangeChange with correct dates for 30 Days', () => {
-      render(<TimeframeSelector onRangeChange={mockOnRangeChange} />)
-
-      fireEvent.click(screen.getByText('30 Days'))
-
-      expect(mockOnRangeChange).toHaveBeenCalledWith('2024-12-16', '2025-01-15')
-    })
-
-    it('should call onRangeChange with correct dates for 90 Days', () => {
-      render(<TimeframeSelector onRangeChange={mockOnRangeChange} />)
-
-      fireEvent.click(screen.getByText('90 Days'))
-
-      expect(mockOnRangeChange).toHaveBeenCalledWith('2024-10-17', '2025-01-15')
-    })
-
-    it('should call onRangeChange with correct dates for 1 Year', () => {
-      render(<TimeframeSelector onRangeChange={mockOnRangeChange} />)
-
-      fireEvent.click(screen.getByText('1 Year'))
-
-      expect(mockOnRangeChange).toHaveBeenCalledWith('2024-01-15', '2025-01-15')
-    })
-
-    it('should call onRangeChange with correct dates for All Time', () => {
-      render(<TimeframeSelector onRangeChange={mockOnRangeChange} />)
-
-      fireEvent.click(screen.getByText('All Time'))
-
-      expect(mockOnRangeChange).toHaveBeenCalledWith('2015-01-15', '2025-01-15')
+    testCases.forEach(([label, startDate, endDate]) => {
+      it(`should call onRangeChange with correct dates for ${label}`, () => {
+        render(<TimeframeSelector onRangeChange={mockOnRangeChange} />)
+        fireEvent.click(screen.getByText(label))
+        expect(mockOnRangeChange).toHaveBeenCalledWith(startDate, endDate)
+      })
     })
 
     it('should not call onRangeChange when Custom is selected', () => {

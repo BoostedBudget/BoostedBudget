@@ -34,7 +34,7 @@ help:
 	@echo "Tools:"
 	@echo "  make generate-openapi     - Generate api/openapi.yaml from Huma routes"
 	@echo "  make validate-openapi     - Verify spec is up to date (for CI)"
-	@echo "  make generate-api-client  - Generate TypeScript client from OpenAPI"
+	@echo "  make generate-api-client  - Generate TypeScript client from OpenAPI (uses npm+orval)"
 	@echo "  make validate-api-client  - Verify TypeScript client is up to date"
 	@echo "  make generate-all         - Generate OpenAPI spec + TypeScript client"
 	@echo "  make validate-all         - Verify all generated code is up to date"
@@ -57,9 +57,7 @@ docker-rebuild:
 
 # Backend
 backend-test:
-	@cd backend && go test ./... -v -race -coverprofile=coverage.out -covermode=atomic -json > test-output.json 2>&1 || true
-	@cd backend && cat test-output.json | jq -s '[.[] | select(.Action == "pass" or .Action == "fail")] | {passed: ([.[] | select(.Action == "pass")] | length), failed: ([.[] | select(.Action == "fail")] | length), total: length}' > test-results.json 2>/dev/null || echo '{"passed":0,"failed":0,"total":0}' > test-results.json
-	@cd backend && cat test-output.json | grep -v "^{" || true
+	@cd backend && go test ./... -v -race -coverprofile=coverage.out -covermode=atomic ./...
 
 backend-build: backend-test
 	cd backend && go build -o bin/server ./cmd/server
@@ -73,7 +71,7 @@ test-ci:
 	cd backend && go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
 	@echo "Checking backend coverage threshold..."
 	./scripts/check-coverage.sh backend/coverage.out 60
-	cd frontend && pnpm run test:ci
+	cd frontend && bun run test:ci
 	@echo "All CI tests passed!"
 
 # Fast Tests (No E2E) - For rapid iteration during development
@@ -87,7 +85,6 @@ test-fast:
 	@echo "⚠️  E2E tests skipped for speed. Run 'make test-all' before creating PRs."
 	@echo ""
 	@echo "1️⃣  Linting Migrations..."
-	@# Run Squawk migration linter (no database connection needed)
 	@if command -v squawk &> /dev/null; then \
 		echo "Running Squawk migration linter..."; \
 		squawk backend/migrations/*.up.sql || true; \
@@ -97,11 +94,7 @@ test-fast:
 	fi
 	@echo ""
 	@echo "2️⃣  Backend Tests..."
-	@# Limit parallelism to prevent memory exhaustion: -p=2 (max 2 packages), -parallel=4 (max 4 tests/pkg)
-	@# See: Memory leak investigation Oct 2025 - saves 1.2GB vs unlimited (was 8 packages on 8-core system)
-	@cd backend && go test ./... -v -race -p=2 -parallel=4 -coverprofile=coverage.out -covermode=atomic -json > test-output.json 2>&1 || true
-	@cd backend && cat test-output.json | jq -s '[.[] | select(.Action == "pass" or .Action == "fail")] | {passed: ([.[] | select(.Action == "pass")] | length), failed: ([.[] | select(.Action == "fail")] | length), total: length}' > test-results.json 2>/dev/null || echo '{"passed":0,"failed":0,"total":0}' > test-results.json
-	@cd backend && cat test-output.json | grep -v "^{" || true
+	@cd backend && go test ./... -v -race -p=2 -parallel=4 -coverprofile=coverage.out -covermode=atomic ./...
 	@echo ""
 	@echo "📊 Checking backend coverage threshold (≥60%)..."
 	@cd backend && COVERAGE=$$(go tool cover -func=coverage.out | grep total | awk '{print $$3}' | sed 's/%//'); \
@@ -118,12 +111,12 @@ test-fast:
 	@cd backend && go tool cover -html=coverage.out -o coverage.html
 	@echo "✅ Backend coverage: backend/coverage.html"
 	@echo ""
-	@echo "3️⃣  Frontend Tests..."
-	@cd frontend && pnpm run test:ci
-	@echo "✅ Frontend coverage: frontend/coverage/index.html"
+	@echo "3️⃣  Frontend Tests (bun:test + vitest combined coverage)..."
+	@cd frontend && bun run test:ci
+	@echo "✅ Frontend coverage: frontend/coverage/combined.lcov"
 	@echo ""
 	@echo "4️⃣  Linting..."
-	@cd frontend && pnpm run lint
+	@cd frontend && bun run lint
 	@echo "✅ Linting passed"
 	@echo ""
 	@echo "========================================"
@@ -132,7 +125,8 @@ test-fast:
 	@echo ""
 	@echo "📄 Coverage Reports:"
 	@echo "  Backend:  backend/coverage.html (open in browser)"
-	@echo "  Frontend: frontend/coverage/index.html (open in browser)"
+	@echo "  Frontend: frontend/coverage/combined.lcov (bun:test + vitest combined)"
+	@echo "            frontend/coverage/html/index.html (if lcov/genhtml installed)"
 	@echo ""
 	@echo "⚠️  Remember: Run 'make test-all' to include E2E tests before creating PRs!"
 
@@ -154,11 +148,7 @@ test-all:
 	fi
 	@echo ""
 	@echo "2️⃣  Backend Tests..."
-	@# Limit parallelism to prevent memory exhaustion: -p=2 (max 2 packages), -parallel=4 (max 4 tests/pkg)
-	@# See: Memory leak investigation Oct 2025 - saves 1.2GB vs unlimited (was 8 packages on 8-core system)
-	@cd backend && go test ./... -v -race -p=2 -parallel=4 -coverprofile=coverage.out -covermode=atomic -json > test-output.json 2>&1 || true
-	@cd backend && cat test-output.json | jq -s '[.[] | select(.Action == "pass" or .Action == "fail")] | {passed: ([.[] | select(.Action == "pass")] | length), failed: ([.[] | select(.Action == "fail")] | length), total: length}' > test-results.json 2>/dev/null || echo '{"passed":0,"failed":0,"total":0}' > test-results.json
-	@cd backend && cat test-output.json | grep -v "^{" || true
+	@cd backend && go test ./... -v -race -p=2 -parallel=4 -coverprofile=coverage.out -covermode=atomic ./...
 	@echo ""
 	@echo "📊 Checking backend coverage threshold (≥60%)..."
 	@cd backend && COVERAGE=$$(go tool cover -func=coverage.out | grep total | awk '{print $$3}' | sed 's/%//'); \
@@ -175,16 +165,16 @@ test-all:
 	@cd backend && go tool cover -html=coverage.out -o coverage.html
 	@echo "✅ Backend coverage: backend/coverage.html"
 	@echo ""
-	@echo "3️⃣  Frontend Tests..."
-	@cd frontend && pnpm run test:ci
-	@echo "✅ Frontend coverage: frontend/coverage/index.html"
+	@echo "3️⃣  Frontend Tests (bun:test + vitest combined coverage)..."
+	@cd frontend && bun run test:ci
+	@echo "✅ Frontend coverage: frontend/coverage/combined.lcov"
 	@echo ""
 	@echo "4️⃣  Building Backend Binary for E2E Tests..."
 	@cd backend && go build -o bin/server ./cmd/server
 	@echo "✅ Backend binary: backend/bin/server"
 	@echo ""
 	@echo "5️⃣  E2E Tests..."
-	@cd frontend && pnpm run test:e2e -- --reporter=line
+	@cd frontend && bun run test:e2e -- --reporter=line
 	@echo ""
 	@echo "========================================"
 	@echo "✅ All tests complete!"
@@ -192,24 +182,21 @@ test-all:
 	@echo ""
 	@echo "📄 Coverage Reports:"
 	@echo "  Backend:  backend/coverage.html (open in browser)"
-	@echo "  Frontend: frontend/coverage/index.html (open in browser)"
-	@echo ""
-	@echo "📊 Test Results:"
-	@echo "  Backend:  backend/test-results.json"
-	@echo "  Frontend: frontend/test-results.json"
+	@echo "  Frontend: frontend/coverage/combined.lcov (bun:test + vitest combined)"
+	@echo "            frontend/coverage/html/index.html (if lcov/genhtml installed)"
 
 # Frontend
 frontend-install:
-	cd frontend && pnpm install
+	cd frontend && bun install
 
 frontend-dev:
-	cd frontend && pnpm run dev
+	cd frontend && bun run dev
 
 frontend-build: frontend-test
-	cd frontend && pnpm run build
+	cd frontend && bun run build
 
 frontend-test:
-	cd frontend && pnpm run test:ci
+	cd frontend && bun run test:ci
 
 # Database migrations
 migrate-up:
@@ -254,10 +241,16 @@ validate-openapi: generate-openapi
 	fi
 
 # TypeScript API client generation from OpenAPI spec
+# Uses npm install + npx orval because Bun's dependency resolution pulls buggy AJV version
 .PHONY: generate-api-client validate-api-client generate-all validate-all
 generate-api-client:
 	@echo "Generating TypeScript API client from OpenAPI spec..."
-	@cd frontend && pnpm run generate:api
+	@echo "📦 Installing dependencies with npm (required for orval - Bun has AJV bug)..."
+	@cd frontend && rm -rf node_modules && npm install --silent
+	@echo "🔄 Running orval..."
+	@cd frontend && npx orval
+	@echo "📦 Restoring Bun dependencies..."
+	@cd frontend && rm -rf node_modules && bun install --frozen-lockfile
 	@echo "✅ Generated frontend/src/api/generated/"
 
 validate-api-client: generate-api-client
@@ -291,7 +284,7 @@ generate:
 # Linting
 lint:
 	cd backend && golangci-lint run
-	cd frontend && pnpm run lint
+	cd frontend && bun run lint
 
 # Cleanup
 clean:

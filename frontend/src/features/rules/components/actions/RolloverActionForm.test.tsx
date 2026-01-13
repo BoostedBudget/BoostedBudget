@@ -6,10 +6,9 @@
  * TDD RED: Writing tests before implementation.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { RolloverActionForm } from './RolloverActionForm'
 import type { RolloverAction } from '../../types'
 import type { Budget } from '../../../budgets/types'
 
@@ -93,7 +92,7 @@ const mockBudgets: Budget[] = [
   },
 ]
 
-vi.mock('../../../budgets/hooks/useBudgets', () => ({
+mock.module('../../../budgets/hooks/useBudgets', () => ({
   useBudgets: () => ({
     budgets: mockBudgets,
     loading: false,
@@ -101,17 +100,15 @@ vi.mock('../../../budgets/hooks/useBudgets', () => ({
   }),
 }))
 
-function createQueryClient() {
-  return new QueryClient({
+import { RolloverActionForm } from './RolloverActionForm'
+
+function renderWithProviders(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
       mutations: { retry: false },
     },
   })
-}
-
-function renderWithProviders(ui: React.ReactElement) {
-  const queryClient = createQueryClient()
   return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>)
 }
 
@@ -122,9 +119,6 @@ const defaultAction: RolloverAction = {
 }
 
 describe('RolloverActionForm', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
 
   describe('Rendering', () => {
     it('should render source budget selector', () => {
@@ -201,7 +195,7 @@ describe('RolloverActionForm', () => {
     })
 
     it('should update source category when source budget changes', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
 
       renderWithProviders(
         <RolloverActionForm action={defaultAction} onChange={onChange} />
@@ -220,7 +214,7 @@ describe('RolloverActionForm', () => {
     })
 
     it('should call onChange when source category is changed', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
 
       renderWithProviders(
         <RolloverActionForm action={defaultAction} onChange={onChange} />
@@ -275,7 +269,7 @@ describe('RolloverActionForm', () => {
     })
 
     it('should call onChange when target is set to Unallocated Funds', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
 
       renderWithProviders(
         <RolloverActionForm action={defaultAction} onChange={onChange} />
@@ -343,7 +337,7 @@ describe('RolloverActionForm', () => {
     })
 
     it('should call onChange when cap amount is changed', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
 
       renderWithProviders(
         <RolloverActionForm action={cappedAction} onChange={onChange} />
@@ -393,7 +387,7 @@ describe('RolloverActionForm', () => {
     })
 
     it('should call onChange when percentage is changed', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
 
       renderWithProviders(
         <RolloverActionForm action={percentageAction} onChange={onChange} />
@@ -431,7 +425,7 @@ describe('RolloverActionForm', () => {
 
   describe('Rollover Type Switching', () => {
     it('should call onChange when rollover type is changed to capped', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
 
       renderWithProviders(
         <RolloverActionForm action={defaultAction} onChange={onChange} />
@@ -449,7 +443,7 @@ describe('RolloverActionForm', () => {
     })
 
     it('should call onChange when rollover type is changed to percentage', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
 
       renderWithProviders(
         <RolloverActionForm action={defaultAction} onChange={onChange} />

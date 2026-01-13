@@ -7,7 +7,7 @@
  * Issue #353: Balance Tracking Dashboard
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import { BalanceOverview } from './BalanceOverview'
 import type { BalanceSummary } from '../types'
@@ -382,35 +382,14 @@ describe('BalanceOverview', () => {
    * The component should NOT have its own card styling to avoid double-cards.
    */
   describe('Widget Styling Compliance - Issue #422', () => {
-    it('should NOT have redundant bg-white card styling', () => {
-      // WidgetWrapper provides bg-white, so component should not
+    it('should NOT have redundant wrapper styling (bg-white, rounded-lg, shadow, p-6)', () => {
+      // WidgetWrapper provides wrapper styling, so component should not duplicate
       const { container } = render(<BalanceOverview summary={mockSummaryWithPositiveChange} />)
-
       const outerDiv = container.firstChild as HTMLElement
+
       expect(outerDiv).not.toHaveClass('bg-white')
-    })
-
-    it('should NOT have redundant rounded-lg styling', () => {
-      // WidgetWrapper provides rounded corners, so component should not
-      const { container } = render(<BalanceOverview summary={mockSummaryWithPositiveChange} />)
-
-      const outerDiv = container.firstChild as HTMLElement
       expect(outerDiv).not.toHaveClass('rounded-lg')
-    })
-
-    it('should NOT have redundant shadow styling', () => {
-      // WidgetWrapper provides shadow, so component should not
-      const { container } = render(<BalanceOverview summary={mockSummaryWithPositiveChange} />)
-
-      const outerDiv = container.firstChild as HTMLElement
       expect(outerDiv).not.toHaveClass('shadow')
-    })
-
-    it('should NOT have redundant p-6 padding', () => {
-      // WidgetWrapper provides p-4 padding, so component should not add more
-      const { container } = render(<BalanceOverview summary={mockSummaryWithPositiveChange} />)
-
-      const outerDiv = container.firstChild as HTMLElement
       expect(outerDiv).not.toHaveClass('p-6')
     })
 

@@ -1,22 +1,15 @@
-/**
- * CategoryMatchConfig Tests
- * Issue #497: Budget Category Manager + Match Config UI
- *
- * TDD RED Phase: Write failing tests first
- */
-
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { CategoryMatchConfig } from './CategoryMatchConfig';
-import { MATCH_LOGIC_LABELS, MATCH_LOGIC_DESCRIPTIONS } from '@/shared/types/matching';
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { CategoryMatchConfig } from './CategoryMatchConfig'
+import { MATCH_LOGIC_LABELS, MATCH_LOGIC_DESCRIPTIONS } from '@/shared/types/matching'
 
 describe('CategoryMatchConfig', () => {
-  const mockOnChange = vi.fn();
+  const mockOnChange = mock(() => {})
 
   beforeEach(() => {
-    vi.clearAllMocks();
-  });
+    mockOnChange.mockClear()
+  })
 
   describe('Rendering', () => {
     it('should render all four match logic options as radio buttons', () => {

@@ -1,22 +1,10 @@
-/**
- * UnallocatedFundsCard Component Tests
- * Issue #498: Budget Detail Page for Envelope Budgeting
- *
- * TDD RED: These tests are written first and will initially fail.
- * Tests the unallocated funds display card with action buttons.
- */
+import { describe, it, expect, mock } from 'bun:test'
+import { render, screen, fireEvent } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
+import { UnallocatedFundsCard } from './UnallocatedFundsCard'
 
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
-import { UnallocatedFundsCard } from './UnallocatedFundsCard';
-
-/**
- * Helper to render with router context (for Link components)
- */
-function renderWithRouter(ui: React.ReactElement) {
-  return render(<MemoryRouter>{ui}</MemoryRouter>);
-}
+const renderWithRouter = (ui: React.ReactElement) =>
+  render(<MemoryRouter>{ui}</MemoryRouter>)
 
 describe('UnallocatedFundsCard', () => {
   const defaultProps = {
@@ -35,7 +23,6 @@ describe('UnallocatedFundsCard', () => {
     it('should show percentage of total income', () => {
       renderWithRouter(<UnallocatedFundsCard {...defaultProps} />);
 
-      // 900 / 4000 * 100 = 22.5%, rounded to 23%
       expect(screen.getByText(/23%/)).toBeInTheDocument();
     });
 
@@ -92,7 +79,7 @@ describe('UnallocatedFundsCard', () => {
     it('should show descriptive text about unallocated funds', () => {
       renderWithRouter(<UnallocatedFundsCard {...defaultProps} />);
 
-      expect(screen.getByText(/not assigned to any.*category/i)).toBeInTheDocument();
+      expect(screen.getByText(/not assigned to any/i)).toBeInTheDocument();
     });
   });
 
@@ -135,7 +122,7 @@ describe('UnallocatedFundsCard', () => {
   });
 
   describe('Over-Allocated (Negative)', () => {
-    it('should show warning styling when over-allocated (negative)', () => {
+    it('should show warning styling when over-allocated', () => {
       const { container } = renderWithRouter(
         <UnallocatedFundsCard
           unallocatedAmount={-500}
@@ -168,14 +155,13 @@ describe('UnallocatedFundsCard', () => {
         />
       );
 
-      // Should display the absolute value
       expect(screen.getByText('$500.00')).toBeInTheDocument();
     });
   });
 
   describe('Action Buttons', () => {
     it('should render "Create Savings Goal" button when callback provided', () => {
-      const onCreateSavingsGoal = vi.fn();
+      const onCreateSavingsGoal = mock(() => {});
       renderWithRouter(
         <UnallocatedFundsCard
           {...defaultProps}
@@ -187,7 +173,7 @@ describe('UnallocatedFundsCard', () => {
     });
 
     it('should call onCreateSavingsGoal when button clicked', () => {
-      const onCreateSavingsGoal = vi.fn();
+      const onCreateSavingsGoal = mock(() => {});
       renderWithRouter(
         <UnallocatedFundsCard
           {...defaultProps}
@@ -202,7 +188,7 @@ describe('UnallocatedFundsCard', () => {
     });
 
     it('should render "Allocate to Category" button when callback provided', () => {
-      const onAllocateToCategory = vi.fn();
+      const onAllocateToCategory = mock(() => {});
       renderWithRouter(
         <UnallocatedFundsCard
           {...defaultProps}
@@ -214,7 +200,7 @@ describe('UnallocatedFundsCard', () => {
     });
 
     it('should call onAllocateToCategory when button clicked', () => {
-      const onAllocateToCategory = vi.fn();
+      const onAllocateToCategory = mock(() => {});
       renderWithRouter(
         <UnallocatedFundsCard
           {...defaultProps}
@@ -236,7 +222,7 @@ describe('UnallocatedFundsCard', () => {
     });
 
     it('should hide action buttons when over-allocated', () => {
-      const onCreateSavingsGoal = vi.fn();
+      const onCreateSavingsGoal = mock(() => {});
       renderWithRouter(
         <UnallocatedFundsCard
           unallocatedAmount={-500}
@@ -268,7 +254,6 @@ describe('UnallocatedFundsCard', () => {
     it('should include screen reader text for percentage', () => {
       const { container } = renderWithRouter(<UnallocatedFundsCard {...defaultProps} />);
 
-      // Percentage should be accessible
       const srText = container.querySelector('.sr-only');
       expect(srText).toBeInTheDocument();
     });
@@ -282,7 +267,6 @@ describe('UnallocatedFundsCard', () => {
         />
       );
 
-      // Warning state should have distinct styling
       expect(container.querySelector('.unallocated-card--warning')).toBeInTheDocument();
     });
   });
@@ -311,7 +295,6 @@ describe('UnallocatedFundsCard', () => {
         />
       );
 
-      // Should not crash and show reasonable output
       expect(screen.getByText(/unallocated funds/i)).toBeInTheDocument();
     });
 
@@ -324,7 +307,6 @@ describe('UnallocatedFundsCard', () => {
         />
       );
 
-      // 1 / 10000 = 0.01% - should show at least "< 1%" or round appropriately
       expect(screen.getByText(/0%|<\s*1%/)).toBeInTheDocument();
     });
 
@@ -337,7 +319,6 @@ describe('UnallocatedFundsCard', () => {
         />
       );
 
-      // 5000 / 4000 = 125%
       expect(screen.getByText(/125%/)).toBeInTheDocument();
     });
   });
