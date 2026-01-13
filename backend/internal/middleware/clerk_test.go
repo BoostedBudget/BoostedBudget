@@ -539,7 +539,7 @@ func (m *mockRegistrationService) RegisterUser(ctx context.Context, clerkUserID,
 // - Error paths that don't require valid JWT (missing header, invalid format, invalid token)
 // - Context value handling
 //
-// For end-to-end testing with real tokens, see the E2E test suite in frontend/e2e/
+// For end-to-end testing with real tokens, see the E2E test suite in apps/web/e2e/
 
 // TestClerkMiddleware_ContextValuesSet verifies context values are accessible
 // This test simulates what happens after successful JWT verification

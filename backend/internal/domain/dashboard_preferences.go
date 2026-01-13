@@ -134,14 +134,14 @@ func (p *DashboardPreferences) Validate() error {
 // DefaultDashboardLayout returns the default widget layout for new users
 // NOTE: Keep in sync with:
 //   - config/default_dashboard_layout.yaml (SOURCE OF TRUTH)
-//   - frontend/src/features/dashboard/widgets/registry.ts DEFAULT_LAYOUT
+//   - apps/web/src/features/dashboard/widgets/registry.ts DEFAULT_LAYOUT
 //
 // Issue #474: This function is now only used as a fallback when YAML config fails to load.
 // The primary source of truth is the YAML config file.
 //
 // CRITICAL: If you update this, you MUST also update:
 //  1. config/default_dashboard_layout.yaml (layout_version field)
-//  2. frontend/src/features/dashboard/widgets/registry.ts (DEFAULT_LAYOUT.version)
+//  2. apps/web/src/features/dashboard/widgets/registry.ts (DEFAULT_LAYOUT.version)
 //
 // Version 4: Issue #468 - Increased minH values for proper chart rendering
 func DefaultDashboardLayout() *DashboardLayout {

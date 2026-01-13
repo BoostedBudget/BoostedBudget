@@ -43,9 +43,9 @@ Thumbs.db
 !config/**/*.md
 
 # E2E tests (not needed in production image)
-frontend/e2e/
-frontend/playwright-report/
-frontend/test-results/
+apps/web/e2e/
+apps/web/playwright-report/
+apps/web/test-results/
 
 # Backend specific (when building frontend only)
 backend/tmp/

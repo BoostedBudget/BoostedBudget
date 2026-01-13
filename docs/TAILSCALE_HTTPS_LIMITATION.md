@@ -76,10 +76,10 @@ openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -node
   -subj "/CN=yingyues-mac-mini.tailce219d.ts.net"
 
 # Move to project
-mv key.pem cert.pem /Users/yingyueliu/coding/BoostedBudget/frontend/
+mv key.pem cert.pem /Users/yingyueliu/coding/BoostedBudget/apps/web/
 ```
 
-Update `frontend/vite.config.ts`:
+Update `apps/web/vite.config.ts`:
 ```typescript
 import fs from 'fs'
 
@@ -122,8 +122,8 @@ ssh -L 3000:localhost:3000 yingyueliu@mac-mini-ip
 
 ## Files Modified
 
-- `frontend/public/config.js` - Created to fix config.js loading in dev mode
-- `frontend/vite.config.ts` - Updated CORS and host settings for Tailscale compatibility
+- `apps/web/public/config.js` - Created to fix config.js loading in dev mode
+- `apps/web/vite.config.ts` - Updated CORS and host settings for Tailscale compatibility
 - `docs/TAILSCALE_HTTPS_LIMITATION.md` - This documentation
 
 ## Verification

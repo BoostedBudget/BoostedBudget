@@ -6,7 +6,7 @@
 # in centralized preloads. They run with bunfig.real.toml which
 # excludes mock preloads.
 #
-# CRITICAL: Must run from OUTSIDE frontend/ directory to avoid
+# CRITICAL: Must run from OUTSIDE apps/web/ directory to avoid
 # loading bunfig.toml from CWD. Bun's --config is ADDITIVE, not
 # a replacement. Running from /tmp ensures only bunfig.real.toml
 # is loaded. We pass preload files directly since paths in config

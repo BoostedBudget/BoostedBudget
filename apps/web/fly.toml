@@ -1,5 +1,5 @@
 # Fly.io configuration for BoostedBudget Frontend Web App
-# Deploy with: fly deploy --config frontend/fly.toml
+# Deploy with: fly deploy --config apps/web/fly.toml
 
 app = "boostedbudget-web"
 primary_region = "iad"  # US East (Virginia) - Single region for MVP
@@ -7,7 +7,7 @@ kill_signal = "SIGTERM"
 kill_timeout = 10
 
 [build]
-  # Build Docker image from frontend/Dockerfile
+  # Build Docker image from apps/web/Dockerfile
   dockerfile = "Dockerfile"
 
 [env]

@@ -30,7 +30,7 @@ The primary purpose of these scripts is to generate TypeScript types from `confi
 
 ### Generated Output
 
-**Location**: `frontend/src/types/generated/subscriptionTiers.ts`
+**Location**: `apps/web/src/types/generated/subscriptionTiers.ts`
 
 **Git Status**: Git-ignored (never commit this file!)
 

@@ -1220,7 +1220,7 @@ tiers:
 
 ### Delete Account Confirmation Modal
 
-**Location**: `frontend/src/features/accounts/components/DeleteAccountModal.tsx`
+**Location**: `apps/web/src/features/accounts/components/DeleteAccountModal.tsx`
 
 ```typescript
 import { useState } from 'react'
@@ -1344,7 +1344,7 @@ export function DeleteAccountModal({ account, userStats, onClose, onDeleted }: D
 
 ### Lifetime Stats Display
 
-**Location**: `frontend/src/features/accounts/components/AccountLimitsBanner.tsx`
+**Location**: `apps/web/src/features/accounts/components/AccountLimitsBanner.tsx`
 
 ```typescript
 interface AccountLimitsBannerProps {
@@ -1580,7 +1580,7 @@ func TestFullDeletionCycle(t *testing.T) {
 
 ### E2E Tests
 
-**Test**: `frontend/e2e/account-deletion.spec.ts`
+**Test**: `apps/web/e2e/account-deletion.spec.ts`
 
 ```typescript
 test('Free tier user cannot exceed lifetime account limit', async ({ page }) => {

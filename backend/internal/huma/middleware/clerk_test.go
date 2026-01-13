@@ -362,7 +362,7 @@ func parseFloat(s string) (float64, error) {
 // - Error response format (RFC 9457 Problem Details)
 // - Content-Type header verification
 //
-// For end-to-end testing with real tokens, see the E2E test suite in frontend/e2e/
+// For end-to-end testing with real tokens, see the E2E test suite in apps/web/e2e/
 
 // Tests for auth input resolvers
 

@@ -29,7 +29,7 @@ Examples:
 
 ```bash
 # Check environment variables
-grep -E "CLERK_(SECRET|PUBLISHABLE)_KEY" backend/.env frontend/.env
+grep -E "CLERK_(SECRET|PUBLISHABLE)_KEY" backend/.env apps/web/.env
 
 # Test health endpoint (if backend running)
 curl -s http://localhost:8080/health | jq '.services.clerk // "not available"'
