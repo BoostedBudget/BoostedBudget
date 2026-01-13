@@ -192,7 +192,10 @@ func TestFireWebhook_Success(t *testing.T) {
 	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt)
 
 	input := &FireWebhookInput{
-		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			ClerkUserID:        "clerk_user_123",
+		},
 	}
 	input.Body = FireWebhookRequestBody{
 		ItemID:      "plaid-item-123",
@@ -220,7 +223,10 @@ func TestFireWebhook_ItemNotFound(t *testing.T) {
 	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt)
 
 	input := &FireWebhookInput{
-		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			ClerkUserID:        "clerk_user_123",
+		},
 	}
 	input.Body = FireWebhookRequestBody{
 		ItemID:      "nonexistent-item",
@@ -247,7 +253,10 @@ func TestFireWebhook_DecryptionError(t *testing.T) {
 	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt)
 
 	input := &FireWebhookInput{
-		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			ClerkUserID:        "clerk_user_123",
+		},
 	}
 	input.Body = FireWebhookRequestBody{
 		ItemID:      "plaid-item-123",
@@ -276,7 +285,10 @@ func TestFireWebhook_PlaidAPIError(t *testing.T) {
 	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt)
 
 	input := &FireWebhookInput{
-		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			ClerkUserID:        "clerk_user_123",
+		},
 	}
 	input.Body = FireWebhookRequestBody{
 		ItemID:      "plaid-item-123",
