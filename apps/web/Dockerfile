@@ -19,6 +19,9 @@ COPY packages/ ./packages/
 # Copy config directory (needed for type generation)
 COPY config/ /config/
 
+# Copy root tsconfig.json (apps/web/tsconfig.json extends it)
+COPY tsconfig.json ./
+
 # Copy web app source
 COPY apps/web/ ./apps/web/
 
