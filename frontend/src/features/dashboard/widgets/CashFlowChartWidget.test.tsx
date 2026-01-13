@@ -6,78 +6,21 @@
  *
  * Issue #354: Customizable Dashboard Widget System
  * Issue #445: Migrated from Recharts to Plotly
+ * Issue #575: Refactored to use centralized mocks (no inline mock.module)
  */
 
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import React from 'react'
-// Issue #575: Use centralized registry mock to prevent mock.module() pollution
+
+// Issue #575: Use centralized mocks to prevent mock.module() pollution
+// No inline mock.module() calls - mocks are preloaded via bunfig.toml
 import '@/test/mocks/registry'
-
-const mockUseCashFlowHistory = mock(() => ({
-  data: null,
-  loading: false,
-  error: null,
-  refetch: mock(() => {}),
-}))
-
-mock.module('../hooks/useCashFlowData', () => ({
-  useCashFlowHistory: mockUseCashFlowHistory,
-}))
-
-mock.module('@/shared/charts', () => ({
-  Plot: mock(({ data, layout, config, style, useResizeHandler }: {
-    data: Array<{ name: string }>
-    layout: { shapes?: unknown }
-    config: { responsive?: boolean }
-    style: React.CSSProperties
-    useResizeHandler: boolean
-  }) => (
-    <div
-      data-testid="plotly-chart"
-      data-trace-count={data.length}
-      data-trace-names={JSON.stringify(data.map((d) => d.name))}
-      data-use-resize-handler={useResizeHandler}
-      data-responsive={config?.responsive}
-      data-has-shapes={layout?.shapes ? 'true' : 'false'}
-      style={style}
-    >
-      Plotly Chart Mock
-    </div>
-  )),
-  useDarkMode: mock(() => false),
-  getBarChartLayout: mock(() => ({
-    autosize: true,
-    margin: { t: 10, r: 10, b: 40, l: 60 },
-    barmode: 'group',
-    xaxis: { gridcolor: '#e5e7eb' },
-    yaxis: { gridcolor: '#e5e7eb' },
-    legend: { font: {} },
-  })),
-  createHorizontalReferenceLine: mock(() => [
-    { type: 'line', y0: 0, y1: 0, line: { color: '#e5e7eb' } },
-  ]),
-  DEFAULT_CONFIG: {
-    responsive: true,
-    displayModeBar: 'hover',
-    scrollZoom: false,
-    modeBarButtonsToRemove: ['lasso2d', 'select2d'],
-    displaylogo: false,
-  },
-  CASH_FLOW_COLORS: {
-    income: '#3b82f6',
-    expenses: '#f97316',
-    netPositive: '#10b981',
-    netNegative: '#ef4444',
-  },
-  formatCurrencyFull: mock((value: number) =>
-    `$${value.toLocaleString('en-US', { minimumFractionDigits: 2 })}`
-  ),
-  formatCurrencyCompact: mock((value: number) => {
-    if (Math.abs(value) >= 1000) return `$${(value / 1000).toFixed(1)}k`
-    return `$${value.toFixed(0)}`
-  }),
-}))
+import '@/test/mocks/shared-charts'
+import {
+  mockUseCashFlowHistory,
+  mockCashFlowHistoryRefetch,
+} from '@/test/mocks/cash-flow-hooks'
 
 import { CashFlowChartWidget } from './CashFlowChartWidget'
 import {
@@ -137,6 +80,14 @@ describe('CashFlowChartWidget', () => {
 
   beforeEach(() => {
     mockUseCashFlowHistory.mockClear()
+    mockCashFlowHistoryRefetch.mockClear()
+    // Reset to default return value
+    mockUseCashFlowHistory.mockReturnValue({
+      data: null,
+      loading: false,
+      error: null,
+      refetch: mockCashFlowHistoryRefetch,
+    })
   })
 
   describe('State Handling', () => {
@@ -150,7 +101,7 @@ describe('CashFlowChartWidget', () => {
         data: null,
         loading: false,
         error: null,
-        refetch: mock(() => {}),
+        refetch: mockCashFlowHistoryRefetch,
       })
 
       render(
@@ -169,7 +120,7 @@ describe('CashFlowChartWidget', () => {
         data: null,
         loading: true,
         error: null,
-        refetch: mock(() => {}),
+        refetch: mockCashFlowHistoryRefetch,
       })
 
       render(
@@ -187,7 +138,7 @@ describe('CashFlowChartWidget', () => {
         data: null,
         loading: false,
         error: 'Failed to load chart data',
-        refetch: mock(() => {}),
+        refetch: mockCashFlowHistoryRefetch,
       })
 
       render(
@@ -204,7 +155,7 @@ describe('CashFlowChartWidget', () => {
         data: null,
         loading: false,
         error: null,
-        refetch: mock(() => {}),
+        refetch: mockCashFlowHistoryRefetch,
       })
 
       render(
@@ -223,7 +174,7 @@ describe('CashFlowChartWidget', () => {
         data: { ...mockHistoryData, periods: [] },
         loading: false,
         error: null,
-        refetch: mock(() => {}),
+        refetch: mockCashFlowHistoryRefetch,
       })
 
       render(
@@ -244,7 +195,7 @@ describe('CashFlowChartWidget', () => {
         data: mockHistoryData,
         loading: false,
         error: null,
-        refetch: mock(() => {}),
+        refetch: mockCashFlowHistoryRefetch,
       })
 
       render(
@@ -261,7 +212,7 @@ describe('CashFlowChartWidget', () => {
         data: mockHistoryData,
         loading: false,
         error: null,
-        refetch: mock(() => {}),
+        refetch: mockCashFlowHistoryRefetch,
       })
 
       render(
@@ -286,7 +237,7 @@ describe('CashFlowChartWidget', () => {
         data: mockHistoryData,
         loading: false,
         error: null,
-        refetch: mock(() => {}),
+        refetch: mockCashFlowHistoryRefetch,
       })
 
       render(
@@ -308,7 +259,7 @@ describe('CashFlowChartWidget', () => {
         data: null,
         loading: false,
         error: null,
-        refetch: mock(() => {}),
+        refetch: mockCashFlowHistoryRefetch,
       })
 
       render(
@@ -335,7 +286,7 @@ describe('CashFlowChartWidget', () => {
         data: mockHistoryData,
         loading: false,
         error: null,
-        refetch: mock(() => {}),
+        refetch: mockCashFlowHistoryRefetch,
       })
 
       const { container } = render(

@@ -39,8 +39,18 @@ preload = [
   "./src/test/mocks/automation-rules-api.ts",
   "./src/test/mocks/react-router.ts",
   "./src/test/mocks/rule-tier-limits.ts",
-  "./src/test/mocks/budgets-wrapper.ts"
+  "./src/test/mocks/budgets-wrapper.ts",
+  "./src/test/mocks/shared-charts.ts",
+  "./src/test/mocks/net-worth-hooks.ts",
+  "./src/test/mocks/react-colorful.tsx"
 ]
+# NOTE: cash-flow-hooks.ts is NOT preloaded because hook implementation tests
+# (useCashFlowData.test.tsx) need real hooks with API-level mocks.
+# Component tests that need wrapper mocks should import cash-flow-hooks.ts directly.
+
+# NOTE: DashboardContext.test.tsx and registry.test.ts need real implementations.
+# They must be run separately with: bun test --config bunfig.real.toml <file>
+# Bun doesn't support exclude patterns for test files (feature request #21395)
 
 # Match vitest's generous timeout for CI stability (Issues #180, #219, #422)
 timeout = 30000

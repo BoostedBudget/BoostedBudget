@@ -1,20 +1,19 @@
+/**
+ * Cash Flow Summary Widget Tests
+ * Issue #575: Refactored to use centralized mocks (no inline mock.module)
+ */
+
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import React from 'react'
-// Issue #575: Use centralized registry mock to prevent mock.module() pollution
+
+// Issue #575: Use centralized mocks to prevent mock.module() pollution
+// No inline mock.module() calls - mocks are preloaded via bunfig.toml
 import '@/test/mocks/registry'
-
-const mockRefetch = mock(() => {})
-const mockUseCashFlowSummary = mock(() => ({
-  data: null,
-  loading: true,
-  error: null,
-  refetch: mockRefetch,
-}))
-
-mock.module('../hooks/useCashFlowData', () => ({
-  useCashFlowSummary: mockUseCashFlowSummary,
-}))
+import {
+  mockUseCashFlowSummary,
+  mockCashFlowSummaryRefetch,
+} from '@/test/mocks/cash-flow-hooks'
 
 import { CashFlowSummaryWidget } from './CashFlowSummaryWidget'
 import { DashboardContext, DashboardContextValue } from '../context/DashboardContext'
@@ -75,14 +74,14 @@ describe('CashFlowSummaryWidget', () => {
       data: null,
       loading: false,
       error: null,
-      refetch: mockRefetch,
+      refetch: mockCashFlowSummaryRefetch,
       ...state,
     })
   }
 
   beforeEach(() => {
     mockUseCashFlowSummary.mockClear()
-    mockRefetch.mockClear()
+    mockCashFlowSummaryRefetch.mockClear()
   })
 
   describe('Missing Date Range', () => {

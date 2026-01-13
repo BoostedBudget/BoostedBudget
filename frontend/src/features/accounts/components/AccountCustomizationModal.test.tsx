@@ -11,62 +11,12 @@
 
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 
-// Mock child components BEFORE importing the component under test
-mock.module('./ColorPicker', () => ({
-  ColorPicker: ({
-    value,
-    onChange,
-  }: {
-    value: string | null
-    onChange: (color: string | null) => void
-  }) => (
-    <div data-testid="color-picker">
-      <button onClick={() => onChange('#FF0000')}>Select Red</button>
-      <button onClick={() => onChange(null)}>Clear Color</button>
-      <span data-testid="color-value">{value || 'none'}</span>
-    </div>
-  ),
-}))
-
-mock.module('./IconSelector', () => ({
-  IconSelector: ({
-    value,
-    onChange,
-  }: {
-    value: string | null
-    onChange: (icon: string | null) => void
-  }) => (
-    <div data-testid="icon-selector">
-      <button onClick={() => onChange('wallet')}>Select Wallet</button>
-      <button onClick={() => onChange(null)}>Clear Icon</button>
-      <span data-testid="icon-value">{value || 'none'}</span>
-    </div>
-  ),
-}))
-
-mock.module('./EmojiInput', () => ({
-  EmojiInput: ({
-    value,
-    onChange,
-  }: {
-    value: string | null
-    onChange: (emoji: string | null) => void
-  }) => (
-    <div data-testid="emoji-input">
-      <button onClick={() => onChange('💰')}>Select Money</button>
-      <button onClick={() => onChange(null)}>Clear Emoji</button>
-      <span data-testid="emoji-value">{value || 'none'}</span>
-    </div>
-  ),
-}))
-
-mock.module('./AccountIconDisplay', () => ({
-  AccountIconDisplay: ({ icon, className }: { icon: string; className?: string }) => (
-    <span data-testid="account-icon" data-icon={icon} className={className}>
-      [{icon}]
-    </span>
-  ),
-}))
+// Issue #575: DO NOT mock child components (ColorPicker, IconSelector, EmojiInput,
+// AccountIconDisplay) - they work fine in tests and mocking them causes pollution
+// to their own test files via Bun's global mock.module() persistence.
+// - ColorPicker uses react-colorful which is mocked globally via bunfig.toml preload
+// - IconSelector and EmojiInput work directly in happy-dom
+// - AccountIconDisplay renders Lucide SVGs which work in happy-dom
 
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -433,7 +383,10 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
-      expect(screen.getByTestId('account-icon')).toHaveAttribute('data-icon', 'wallet')
+      // Dialog renders in a portal, so use document.body to query
+      // Real AccountIconDisplay renders SVGs with lucide class names
+      const iconSvg = document.body.querySelector('svg.h-5')
+      expect(iconSvg).toBeInTheDocument()
     })
 
     it('shows first letter when no icon or emoji', () => {
@@ -575,7 +528,8 @@ describe('AccountCustomizationModal', () => {
       const emojiTab = screen.getByRole('tab', { name: 'Emoji' })
       await user.click(emojiTab)
 
-      expect(screen.getByTestId('emoji-input')).toBeInTheDocument()
+      // Real EmojiInput renders "Suggestions" label
+      expect(screen.getByText('Suggestions')).toBeInTheDocument()
     })
 
     it('shows icon selector when icon tab is active', () => {
@@ -588,7 +542,8 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
-      expect(screen.getByTestId('icon-selector')).toBeInTheDocument()
+      // Real IconSelector renders buttons with aria-label "Select X icon"
+      expect(screen.getByLabelText('Select Wallet icon')).toBeInTheDocument()
     })
   })
 
@@ -676,7 +631,8 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
-      expect(screen.getByTestId('color-picker')).toBeInTheDocument()
+      // Real ColorPicker renders hex-color-picker from mocked react-colorful
+      expect(screen.getByTestId('hex-color-picker')).toBeInTheDocument()
     })
   })
 })

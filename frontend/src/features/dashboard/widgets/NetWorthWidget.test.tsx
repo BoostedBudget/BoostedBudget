@@ -1,45 +1,25 @@
+/**
+ * NetWorthWidget Tests
+ * Issue #575: Refactored to use centralized mocks (no inline mock.module)
+ */
+
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import type { NetWorthSummary, NetWorthHistory } from '../types'
-// Issue #575: Use centralized registry mock to prevent mock.module() pollution
+
+// Issue #575: Use centralized mocks to prevent mock.module() pollution
+// No inline mock.module() calls for DashboardContext or useNetWorthData
 import '@/test/mocks/registry'
-
-const mockSetFilters = mock(() => {})
-const mockSetTimeframe = mock(() => {})
-const mockSetIsEditing = mock(() => {})
-
-const mockUseDashboardContext = mock(() => ({
-  filters: {
-    startDate: '2024-01-01',
-    endDate: '2024-01-31',
-    accountTypes: undefined,
-  },
-  setFilters: mockSetFilters,
-  timeframe: 'month' as const,
-  setTimeframe: mockSetTimeframe,
-  isEditing: false,
-  setIsEditing: mockSetIsEditing,
-}))
-
-const mockRefetch = mock(() => {})
-
-const defaultDataState = {
-  summary: null,
-  history: null,
-  loading: false,
-  error: null,
-  refetch: mockRefetch,
-}
-
-const mockUseNetWorthData = mock(() => defaultDataState)
-
-mock.module('../context/DashboardContext', () => ({
-  useDashboardContext: mockUseDashboardContext,
-}))
-
-mock.module('../hooks/useNetWorthData', () => ({
-  useNetWorthData: mockUseNetWorthData,
-}))
+import {
+  mockUseDashboardContext,
+  mockSetFilters,
+  mockSetTimeframe,
+  mockSetIsEditing,
+} from '@/test/mocks/dashboard-context'
+import {
+  mockUseNetWorthData,
+  mockNetWorthRefetch,
+} from '@/test/mocks/net-worth-hooks'
 
 import { NetWorthWidget } from './NetWorthWidget'
 
@@ -82,6 +62,28 @@ describe('NetWorthWidget', () => {
     ],
   }
 
+  // Default states for the centralized mocks
+  const defaultContextState = {
+    filters: {
+      startDate: '2024-01-01',
+      endDate: '2024-01-31',
+      accountTypes: undefined,
+    },
+    setFilters: mockSetFilters,
+    timeframe: 'month' as const,
+    setTimeframe: mockSetTimeframe,
+    isEditing: false,
+    setIsEditing: mockSetIsEditing,
+  }
+
+  const defaultDataState = {
+    summary: null,
+    history: null,
+    loading: false,
+    error: null,
+    refetch: mockNetWorthRefetch,
+  }
+
   const setMockDataState = (state: Partial<typeof defaultDataState>) => {
     mockUseNetWorthData.mockReturnValue({ ...defaultDataState, ...state })
   }
@@ -89,7 +91,12 @@ describe('NetWorthWidget', () => {
   beforeEach(() => {
     mockUseDashboardContext.mockClear()
     mockUseNetWorthData.mockClear()
-    mockRefetch.mockClear()
+    mockNetWorthRefetch.mockClear()
+    mockSetFilters.mockClear()
+    mockSetTimeframe.mockClear()
+    mockSetIsEditing.mockClear()
+    mockUseDashboardContext.mockReturnValue(defaultContextState)
+    mockUseNetWorthData.mockReturnValue(defaultDataState)
   })
 
   describe('Loading State', () => {

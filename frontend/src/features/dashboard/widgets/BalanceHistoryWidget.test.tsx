@@ -1,38 +1,26 @@
+/**
+ * BalanceHistoryWidget Tests
+ * Issue #575: Refactored to use centralized mocks (no inline mock.module)
+ */
+
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
-// Issue #575: Use centralized registry mock to prevent mock.module() pollution
+
+// Issue #575: Use centralized mocks to prevent mock.module() pollution
+// No inline mock.module() calls for DashboardContext or useDashboardData
 import '@/test/mocks/registry'
+import {
+  mockUseDashboardContext,
+  mockSetFilters,
+  mockSetTimeframe,
+  mockSetIsEditing,
+} from '@/test/mocks/dashboard-context'
+import {
+  mockUseDashboardData,
+  mockDashboardDataRefetch,
+} from '@/test/mocks/dashboard-wrapper-hooks'
 
-const mockUseDashboardContext = mock(() => ({
-  filters: {
-    startDate: '2024-01-01',
-    endDate: '2024-01-31',
-    accountTypes: undefined,
-  },
-  setFilters: mock(() => {}),
-  timeframe: 'month',
-  setTimeframe: mock(() => {}),
-  isEditing: false,
-  setIsEditing: mock(() => {}),
-}))
-
-const mockUseDashboardData = mock(() => ({
-  summary: null,
-  history: null,
-  accountTypes: null,
-  loading: false,
-  error: null,
-  refetch: mock(() => {}),
-}))
-
-mock.module('../context/DashboardContext', () => ({
-  useDashboardContext: mockUseDashboardContext,
-}))
-
-mock.module('../hooks/useDashboardData', () => ({
-  useDashboardData: mockUseDashboardData,
-}))
-
+// Child component mock is OK to keep inline (isolated to this test file)
 mock.module('../components/BalanceHistoryChart', () => ({
   BalanceHistoryChart: ({
     showTypeBreakdown,
@@ -61,24 +49,47 @@ describe('BalanceHistoryWidget', () => {
     ],
   }
 
-  const mockDashboardData = (overrides = {}) => ({
+  // Default states for the centralized mocks
+  const defaultContextState = {
+    filters: {
+      startDate: '2024-01-01',
+      endDate: '2024-01-31',
+      accountTypes: undefined,
+    },
+    setFilters: mockSetFilters,
+    timeframe: 'month' as const,
+    setTimeframe: mockSetTimeframe,
+    isEditing: false,
+    setIsEditing: mockSetIsEditing,
+  }
+
+  const defaultDataState = {
     summary: null,
     history: null,
     accountTypes: null,
     loading: false,
     error: null,
-    refetch: mock(() => {}),
-    ...overrides,
-  })
+    refetch: mockDashboardDataRefetch,
+  }
+
+  const setMockDataState = (state: Partial<typeof defaultDataState>) => {
+    mockUseDashboardData.mockReturnValue({ ...defaultDataState, ...state })
+  }
 
   beforeEach(() => {
     mockUseDashboardContext.mockClear()
     mockUseDashboardData.mockClear()
+    mockDashboardDataRefetch.mockClear()
+    mockSetFilters.mockClear()
+    mockSetTimeframe.mockClear()
+    mockSetIsEditing.mockClear()
+    mockUseDashboardContext.mockReturnValue(defaultContextState)
+    mockUseDashboardData.mockReturnValue(defaultDataState)
   })
 
   describe('Loading State', () => {
     it('should show loading spinner when loading', () => {
-      mockUseDashboardData.mockReturnValue(mockDashboardData({ loading: true }))
+      setMockDataState({ loading: true })
       render(<BalanceHistoryWidget widgetId="test-1" onRemove={mock(() => {})} />)
       expect(document.querySelector('.animate-spin')).toBeInTheDocument()
     })
@@ -86,9 +97,7 @@ describe('BalanceHistoryWidget', () => {
 
   describe('Error State', () => {
     it('should show error message when error occurs', () => {
-      mockUseDashboardData.mockReturnValue(
-        mockDashboardData({ error: new Error('Failed to load history') })
-      )
+      setMockDataState({ error: new Error('Failed to load history') })
       render(<BalanceHistoryWidget widgetId="test-1" onRemove={mock(() => {})} />)
       expect(screen.getByText('Failed to load history')).toBeInTheDocument()
     })
@@ -96,7 +105,7 @@ describe('BalanceHistoryWidget', () => {
 
   describe('Empty State', () => {
     it('should show no data message when history is null', () => {
-      mockUseDashboardData.mockReturnValue(mockDashboardData())
+      setMockDataState({})
       render(<BalanceHistoryWidget widgetId="test-1" onRemove={mock(() => {})} />)
       expect(screen.getByText('No history data available')).toBeInTheDocument()
     })
@@ -104,23 +113,23 @@ describe('BalanceHistoryWidget', () => {
 
   describe('Success State', () => {
     it('should render BalanceHistoryChart with data', () => {
-      mockUseDashboardData.mockReturnValue(mockDashboardData({ history: mockHistory }))
+      setMockDataState({ history: mockHistory })
       render(<BalanceHistoryWidget widgetId="test-1" onRemove={mock(() => {})} />)
       expect(screen.getByTestId('balance-history-chart')).toBeInTheDocument()
     })
 
     it('should use h-full for proper height propagation', () => {
-      mockUseDashboardData.mockReturnValue(mockDashboardData({ history: mockHistory }))
+      setMockDataState({ history: mockHistory })
       const { container } = render(
         <BalanceHistoryWidget widgetId="test-1" onRemove={mock(() => {})} />
       )
-      expect((container.firstChild as HTMLElement)).toHaveClass('h-full')
+      expect(container.firstChild as HTMLElement).toHaveClass('h-full')
     })
   })
 
   describe('Breakdown Toggle', () => {
     beforeEach(() => {
-      mockUseDashboardData.mockReturnValue(mockDashboardData({ history: mockHistory }))
+      setMockDataState({ history: mockHistory })
     })
 
     it('should show "Breakdown" button initially', () => {
