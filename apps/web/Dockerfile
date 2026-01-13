@@ -1,17 +1,21 @@
 # Multi-stage production Dockerfile for Frontend (Turborepo monorepo)
-# Stage 1: Builder - Use Alpine Bun for QEMU x86 emulation compatibility (no AVX required)
-FROM oven/bun:1-alpine AS builder
+# Stage 1: Builder - Use Node.js Alpine (QEMU compatible, no AVX required)
+# Note: Bun crashes under QEMU x86 emulation due to AVX instruction requirements
+FROM node:22-alpine AS builder
+
+# Install pnpm (supports workspace:* protocol like Bun)
+RUN corepack enable && corepack prepare pnpm@latest --activate
 
 WORKDIR /build
 
 # Copy root workspace files
-COPY package.json bun.lock ./
+COPY package.json pnpm-workspace.yaml ./
 COPY apps/web/package.json ./apps/web/
 COPY packages/api-client/package.json ./packages/api-client/
 COPY packages/shared-types/package.json ./packages/shared-types/
 
-# Install all workspace dependencies (npm doesn't support workspace:* protocol)
-RUN bun install --frozen-lockfile
+# Install dependencies (no frozen-lockfile since we use bun.lock locally)
+RUN pnpm install
 
 # Copy workspace packages first (for dependency resolution)
 COPY packages/ ./packages/
@@ -27,7 +31,7 @@ COPY apps/web/ ./apps/web/
 
 # Build the web application
 WORKDIR /build/apps/web
-RUN bun run build
+RUN pnpm run build
 
 # Stage 2: Runtime with Nginx (Debian-based)
 FROM nginx:stable
