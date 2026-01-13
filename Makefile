@@ -34,7 +34,7 @@ help:
 	@echo "Tools:"
 	@echo "  make generate-openapi     - Generate api/openapi.yaml from Huma routes"
 	@echo "  make validate-openapi     - Verify spec is up to date (for CI)"
-	@echo "  make generate-api-client  - Generate TypeScript client from OpenAPI"
+	@echo "  make generate-api-client  - Generate TypeScript client from OpenAPI (uses npm+orval)"
 	@echo "  make validate-api-client  - Verify TypeScript client is up to date"
 	@echo "  make generate-all         - Generate OpenAPI spec + TypeScript client"
 	@echo "  make validate-all         - Verify all generated code is up to date"
@@ -241,10 +241,16 @@ validate-openapi: generate-openapi
 	fi
 
 # TypeScript API client generation from OpenAPI spec
+# Uses npm install + npx orval because Bun's dependency resolution pulls buggy AJV version
 .PHONY: generate-api-client validate-api-client generate-all validate-all
 generate-api-client:
 	@echo "Generating TypeScript API client from OpenAPI spec..."
-	@cd frontend && bun run generate:api
+	@echo "📦 Installing dependencies with npm (required for orval - Bun has AJV bug)..."
+	@cd frontend && rm -rf node_modules && npm install --silent
+	@echo "🔄 Running orval..."
+	@cd frontend && npx orval
+	@echo "📦 Restoring Bun dependencies..."
+	@cd frontend && rm -rf node_modules && bun install --frozen-lockfile
 	@echo "✅ Generated frontend/src/api/generated/"
 
 validate-api-client: generate-api-client
