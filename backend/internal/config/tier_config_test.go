@@ -20,8 +20,8 @@ func TestLoadTierConfig(t *testing.T) {
 	assert.NotNil(t, config)
 
 	// Verify tiers loaded
-	assert.Len(t, config.Tiers, 4)
-	assert.Equal(t, domain.TierFree, config.DefaultTier)
+	assert.Len(t, config.Tiers, 5)
+	assert.Equal(t, domain.TierPremium, config.DefaultTier)
 }
 
 func TestLoadTierConfig_Singleton(t *testing.T) {
@@ -41,10 +41,10 @@ func TestTierConfig_GetTier(t *testing.T) {
 	config, err := LoadTierConfig()
 	require.NoError(t, err)
 
-	tier, err := config.GetTier(domain.TierFree)
+	tier, err := config.GetTier(domain.TierPremium)
 	require.NoError(t, err)
-	assert.Equal(t, domain.TierFree, tier.Name)
-	assert.Equal(t, "Free", tier.DisplayName)
+	assert.Equal(t, domain.TierPremium, tier.Name)
+	assert.Equal(t, "Premium", tier.DisplayName)
 }
 
 func TestTierConfig_GetTier_NotFound(t *testing.T) {
@@ -61,7 +61,7 @@ func TestTierConfig_GetDefaultTier(t *testing.T) {
 
 	tier, err := config.GetDefaultTier()
 	require.NoError(t, err)
-	assert.Equal(t, domain.TierFree, tier.Name)
+	assert.Equal(t, domain.TierPremium, tier.Name)
 }
 
 func TestTierConfig_ListTiers(t *testing.T) {
@@ -69,7 +69,7 @@ func TestTierConfig_ListTiers(t *testing.T) {
 	require.NoError(t, err)
 
 	tiers := config.ListTiers()
-	assert.Len(t, tiers, 4)
+	assert.Len(t, tiers, 5)
 }
 
 func TestTierConfig_GetTierNames(t *testing.T) {
@@ -77,11 +77,12 @@ func TestTierConfig_GetTierNames(t *testing.T) {
 	require.NoError(t, err)
 
 	names := config.GetTierNames()
-	assert.Len(t, names, 4)
-	assert.Contains(t, names, domain.TierFree)
-	assert.Contains(t, names, domain.TierPremiumLite)
+	assert.Len(t, names, 5)
 	assert.Contains(t, names, domain.TierPremium)
-	assert.Contains(t, names, domain.TierPremiumPlus)
+	assert.Contains(t, names, domain.TierHousehold2)
+	assert.Contains(t, names, domain.TierHousehold3)
+	assert.Contains(t, names, domain.TierHousehold4)
+	assert.Contains(t, names, domain.TierHousehold5)
 }
 
 func TestTierConfig_Validation(t *testing.T) {
@@ -97,9 +98,8 @@ func TestTierConfig_Validation(t *testing.T) {
 		t.Run(string(name), func(t *testing.T) {
 			assert.NotEmpty(t, tier.DisplayName)
 			assert.GreaterOrEqual(t, tier.Limits.Accounts, -1)
-			assert.GreaterOrEqual(t, tier.Limits.Rules, -1)
+			assert.GreaterOrEqual(t, tier.Limits.TransactionHistoryDays, -1)
 			assert.GreaterOrEqual(t, tier.Limits.ExecutionsPerDay, 0)
-			assert.GreaterOrEqual(t, tier.Limits.MinExecutionIntervalMinutes, 0)
 		})
 	}
 }
@@ -131,5 +131,5 @@ func TestTierConfig_Reload(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Verify still has tiers
-	assert.Len(t, config.Tiers, 4)
+	assert.Len(t, config.Tiers, 5)
 }

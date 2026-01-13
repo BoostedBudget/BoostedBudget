@@ -1,6 +1,7 @@
 /**
  * useSubscriptionTiers Hook Tests
  * Issue #575: Migrated from MSW to centralized API mocks
+ * Updated for simplified tier structure: premium + household tiers (no free tier)
  *
  * Tests the React hook with React Query caching strategy.
  */
@@ -79,39 +80,42 @@ describe('useSubscriptionTiers', () => {
       })
 
       const tiers = result.current.tiers
-      expect(tiers?.default_tier).toBe('free')
+      // Default tier is now 'premium' (no free tier)
+      expect(tiers?.default_tier).toBe('premium')
     })
 
-    it('should return free tier with correct limits', () => {
+    it('should return premium tier with correct limits', () => {
       const { result } = renderHook(() => useSubscriptionTiers(), {
         wrapper: createWrapper(),
       })
 
-      const freeTier = result.current.tiers?.tiers.free
-      expect(freeTier?.display_name).toBe('Free')
-      expect(freeTier?.limits.accounts).toBe(3)
-      expect(freeTier?.limits.rules).toBe(1)
+      const premiumTier = result.current.tiers?.tiers.premium
+      expect(premiumTier?.display_name).toBe('Premium')
+      expect(premiumTier?.limits.accounts).toBe(10)
+      // All tiers have unlimited rules
+      expect(premiumTier?.limits.rules).toBe(-1)
     })
 
-    it('should return free tier with ads enabled', () => {
+    it('should return premium tier as ad-free', () => {
       const { result } = renderHook(() => useSubscriptionTiers(), {
         wrapper: createWrapper(),
       })
 
-      const freeTier = result.current.tiers?.tiers.free
-      expect(freeTier?.features.ads_enabled).toBe(true)
-      expect(freeTier?.pricing.price_monthly).toBe(0)
+      const premiumTier = result.current.tiers?.tiers.premium
+      // All tiers are now ad-free
+      expect(premiumTier?.features.ads_enabled).toBe(false)
+      expect(premiumTier?.pricing.price_monthly).toBe(9.99)
     })
 
-    it('should return premium_plus tier with unlimited limits', () => {
+    it('should return household_5 tier with unlimited limits', () => {
       const { result } = renderHook(() => useSubscriptionTiers(), {
         wrapper: createWrapper(),
       })
 
-      const premiumPlus = result.current.tiers?.tiers.premium_plus
-      expect(premiumPlus?.limits.accounts).toBe(-1)
-      expect(premiumPlus?.limits.rules).toBe(-1)
-      expect(premiumPlus?.features.ai_insights).toBe(true)
+      const household5 = result.current.tiers?.tiers.household_5
+      expect(household5?.limits.accounts).toBe(-1)
+      expect(household5?.limits.rules).toBe(-1)
+      expect(household5?.features.ai_insights).toBe(true)
     })
   })
 

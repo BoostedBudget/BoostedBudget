@@ -29,13 +29,6 @@ All data is stored in the us-east-1 (iad) region. Multi-region support planned f
 
 export interface SubscriptionLimits {
   accounts: number;
-  accounts_synced_per_month: number;
-  api_calls_per_month: number;
-  custom_categories_max: number;
-  custom_tags_max: number;
-  data_export_requests_per_month: number;
   executions_per_day: number;
-  min_execution_interval_minutes: number;
-  rules: number;
   transaction_history_days: number;
 }

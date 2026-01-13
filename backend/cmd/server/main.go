@@ -156,10 +156,10 @@ func main() {
 		// Issue #353: Dashboard service for balance tracking
 		dashboardService := services.NewDashboardService(balanceSnapshotRepo, accountRepo)
 		// Issue #345: Tag and category services
-		userTagService := services.NewUserTagService(userTagRepo, subscriptionService, profileRepo)
-		customCategoryService := services.NewCustomCategoryService(customCategoryRepo, subscriptionService, profileRepo)
+		userTagService := services.NewUserTagService(userTagRepo)
+		customCategoryService := services.NewCustomCategoryService(customCategoryRepo)
 		// Issue #346: Categorization rules services
-		categorizationRuleService := services.NewCategorizationRuleService(categorizationRuleRepo, subscriptionService, profileRepo)
+		categorizationRuleService := services.NewCategorizationRuleService(categorizationRuleRepo)
 		ruleApplicationService := services.NewRuleApplicationService(categorizationRuleRepo)
 		// Issue #354: Cash flow analytics and dashboard preferences services
 		analyticsService := services.NewAnalyticsService(analyticsRepo)
@@ -187,7 +187,7 @@ func main() {
 		)
 
 		// Issue #37: Automation Rule Service and Rule Scheduler
-		automationRuleService := services.NewAutomationRuleService(automationRuleRepo, subscriptionService, profileRepo)
+		automationRuleService := services.NewAutomationRuleService(automationRuleRepo)
 		log.Println("✅ Automation rule service initialized")
 
 		// Issue #37: Rule Execution Service

@@ -187,37 +187,8 @@ func (s *ruleExecutionService) ExecuteRule(ctx context.Context, rule *domain.Aut
 }
 
 // ProcessEventTrigger processes an event trigger for all matching rules.
+// Simplified: No tier restrictions on event-based triggers.
 func (s *ruleExecutionService) ProcessEventTrigger(ctx context.Context, userID, eventType string, eventData map[string]interface{}) error {
-	// Get user for tier checking
-	user, err := s.userGetter.GetUserByID(ctx, userID)
-	if err != nil {
-		return err
-	}
-
-	// Get effective subscription
-	effectiveSub, err := s.subscriptionChecker.GetEffectiveSubscription(ctx, user)
-	if err != nil {
-		return err
-	}
-
-	// Check if tier allows event-based triggers
-	// Free tier (min_interval >= 1440) = scheduled only
-	if effectiveSub.Limits.MinExecutionIntervalMinutes >= MinExecutionIntervalForEventTriggers {
-		// Silently skip for free tier - they use scheduled execution via Issue #37
-		return nil
-	}
-
-	// Check daily execution limit
-	todayCount, err := s.executionRepo.GetTodayExecutionCount(ctx, userID)
-	if err != nil {
-		return err
-	}
-
-	limit := effectiveSub.Limits.ExecutionsPerDay
-	if !domain.IsUnlimited(limit) && todayCount >= limit {
-		return domain.ErrExecutionLimitExceeded
-	}
-
 	// Get matching rules for this event
 	rules, err := s.ruleRepo.GetRulesByEventTrigger(ctx, userID, eventType)
 	if err != nil {

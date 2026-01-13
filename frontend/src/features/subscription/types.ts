@@ -15,4 +15,5 @@ export type {
 } from '@/api/generated/models'
 
 // TierName type for strict tier key typing
-export type TierName = 'free' | 'premium_lite' | 'premium' | 'premium_plus'
+// Updated for simplified tiers: premium + household tiers (no free tier)
+export type TierName = 'premium' | 'household_2' | 'household_3' | 'household_4' | 'household_5'

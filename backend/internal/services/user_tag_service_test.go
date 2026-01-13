@@ -68,62 +68,20 @@ func (m *MockUserTagRepository) DecrementUsageCount(ctx context.Context, userID,
 	return args.Error(0)
 }
 
-// MockSubscriptionChecker is a mock implementation of SubscriptionChecker
-type MockSubscriptionChecker struct {
-	mock.Mock
-}
-
-func (m *MockSubscriptionChecker) GetEffectiveSubscription(ctx context.Context, user *domain.User) (*domain.EffectiveSubscription, error) {
-	args := m.Called(ctx, user)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*domain.EffectiveSubscription), args.Error(1)
-}
-
-// MockUserGetter is a mock for UserGetter interface used in tag tests
-type MockUserGetter struct {
-	mock.Mock
-}
-
-func (m *MockUserGetter) GetUserByID(ctx context.Context, userID string) (*domain.User, error) {
-	args := m.Called(ctx, userID)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*domain.User), args.Error(1)
-}
-
 // TestUserTagService_CreateTag tests successful tag creation
 func TestUserTagService_CreateTag(t *testing.T) {
 	mockTagRepo := new(MockUserTagRepository)
-	mockSubChecker := new(MockSubscriptionChecker)
-	mockUserGetter := new(MockUserGetter)
 
-	service := NewUserTagService(mockTagRepo, mockSubChecker, mockUserGetter)
+	service := NewUserTagService(mockTagRepo)
 
 	ctx := context.Background()
 	userID := "user-123"
-
-	user := &domain.User{
-		ID:               userID,
-		SubscriptionTier: "free",
-	}
-
-	effectiveSub := &domain.EffectiveSubscription{
-		Limits: domain.SubscriptionLimits{
-			CustomTagsMax: 50,
-		},
-	}
 
 	req := &domain.CreateUserTagRequest{
 		Name: "business",
 	}
 
-	// Setup mocks
-	mockTagRepo.On("CountByUserID", ctx, userID).Return(5, nil)
-	mockUserGetter.On("GetUserByID", ctx, userID).Return(user, nil)
-	mockSubChecker.On("GetEffectiveSubscription", ctx, user).Return(effectiveSub, nil)
+	// Tags are unlimited, so we just need Create
 	mockTagRepo.On("Create", ctx, mock.AnythingOfType("*domain.UserTag")).Return(nil)
 
 	// Execute
@@ -135,80 +93,22 @@ func TestUserTagService_CreateTag(t *testing.T) {
 	assert.Equal(t, "business", tag.Name)
 	assert.Equal(t, userID, tag.UserID)
 	mockTagRepo.AssertExpectations(t)
-	mockSubChecker.AssertExpectations(t)
-	mockUserGetter.AssertExpectations(t)
 }
 
-// TestUserTagService_CreateTag_LimitExceeded tests tag creation when limit is exceeded
-func TestUserTagService_CreateTag_LimitExceeded(t *testing.T) {
+// TestUserTagService_CreateTag_ManyTags tests tag creation with many existing tags (unlimited)
+func TestUserTagService_CreateTag_ManyTags(t *testing.T) {
 	mockTagRepo := new(MockUserTagRepository)
-	mockSubChecker := new(MockSubscriptionChecker)
-	mockUserGetter := new(MockUserGetter)
 
-	service := NewUserTagService(mockTagRepo, mockSubChecker, mockUserGetter)
+	service := NewUserTagService(mockTagRepo)
 
 	ctx := context.Background()
 	userID := "user-123"
-
-	user := &domain.User{
-		ID:               userID,
-		SubscriptionTier: "free",
-	}
-
-	effectiveSub := &domain.EffectiveSubscription{
-		Limits: domain.SubscriptionLimits{
-			CustomTagsMax: 50,
-		},
-	}
-
-	req := &domain.CreateUserTagRequest{
-		Name: "one-more-tag",
-	}
-
-	// Setup mocks - user already has 50 tags (at limit)
-	mockTagRepo.On("CountByUserID", ctx, userID).Return(50, nil)
-	mockUserGetter.On("GetUserByID", ctx, userID).Return(user, nil)
-	mockSubChecker.On("GetEffectiveSubscription", ctx, user).Return(effectiveSub, nil)
-
-	// Execute
-	tag, err := service.CreateTag(ctx, userID, req)
-
-	// Assert
-	assert.ErrorIs(t, err, domain.ErrTagLimitExceeded)
-	assert.Nil(t, tag)
-	mockTagRepo.AssertExpectations(t)
-}
-
-// TestUserTagService_CreateTag_Unlimited tests tag creation with unlimited tier
-func TestUserTagService_CreateTag_Unlimited(t *testing.T) {
-	mockTagRepo := new(MockUserTagRepository)
-	mockSubChecker := new(MockSubscriptionChecker)
-	mockUserGetter := new(MockUserGetter)
-
-	service := NewUserTagService(mockTagRepo, mockSubChecker, mockUserGetter)
-
-	ctx := context.Background()
-	userID := "user-123"
-
-	user := &domain.User{
-		ID:               userID,
-		SubscriptionTier: "premium_plus",
-	}
-
-	effectiveSub := &domain.EffectiveSubscription{
-		Limits: domain.SubscriptionLimits{
-			CustomTagsMax: -1, // Unlimited
-		},
-	}
 
 	req := &domain.CreateUserTagRequest{
 		Name: "unlimited-tag",
 	}
 
-	// Setup mocks - user has many tags but unlimited tier
-	mockTagRepo.On("CountByUserID", ctx, userID).Return(1000, nil)
-	mockUserGetter.On("GetUserByID", ctx, userID).Return(user, nil)
-	mockSubChecker.On("GetEffectiveSubscription", ctx, user).Return(effectiveSub, nil)
+	// Tags are unlimited for all tiers
 	mockTagRepo.On("Create", ctx, mock.AnythingOfType("*domain.UserTag")).Return(nil)
 
 	// Execute
@@ -223,10 +123,8 @@ func TestUserTagService_CreateTag_Unlimited(t *testing.T) {
 // TestUserTagService_GetUserTags tests retrieving all user tags
 func TestUserTagService_GetUserTags(t *testing.T) {
 	mockTagRepo := new(MockUserTagRepository)
-	mockSubChecker := new(MockSubscriptionChecker)
-	mockUserGetter := new(MockUserGetter)
 
-	service := NewUserTagService(mockTagRepo, mockSubChecker, mockUserGetter)
+	service := NewUserTagService(mockTagRepo)
 
 	ctx := context.Background()
 	userID := "user-123"
@@ -250,10 +148,8 @@ func TestUserTagService_GetUserTags(t *testing.T) {
 // TestUserTagService_UpdateTag tests successful tag update
 func TestUserTagService_UpdateTag(t *testing.T) {
 	mockTagRepo := new(MockUserTagRepository)
-	mockSubChecker := new(MockSubscriptionChecker)
-	mockUserGetter := new(MockUserGetter)
 
-	service := NewUserTagService(mockTagRepo, mockSubChecker, mockUserGetter)
+	service := NewUserTagService(mockTagRepo)
 
 	ctx := context.Background()
 	userID := "user-123"
@@ -289,10 +185,8 @@ func TestUserTagService_UpdateTag(t *testing.T) {
 // TestUserTagService_UpdateTag_WrongOwner tests update attempt by wrong user
 func TestUserTagService_UpdateTag_WrongOwner(t *testing.T) {
 	mockTagRepo := new(MockUserTagRepository)
-	mockSubChecker := new(MockSubscriptionChecker)
-	mockUserGetter := new(MockUserGetter)
 
-	service := NewUserTagService(mockTagRepo, mockSubChecker, mockUserGetter)
+	service := NewUserTagService(mockTagRepo)
 
 	ctx := context.Background()
 	userID := "user-123"
@@ -324,10 +218,8 @@ func TestUserTagService_UpdateTag_WrongOwner(t *testing.T) {
 // TestUserTagService_DeleteTag tests successful tag deletion
 func TestUserTagService_DeleteTag(t *testing.T) {
 	mockTagRepo := new(MockUserTagRepository)
-	mockSubChecker := new(MockSubscriptionChecker)
-	mockUserGetter := new(MockUserGetter)
 
-	service := NewUserTagService(mockTagRepo, mockSubChecker, mockUserGetter)
+	service := NewUserTagService(mockTagRepo)
 
 	ctx := context.Background()
 	userID := "user-123"
@@ -353,10 +245,8 @@ func TestUserTagService_DeleteTag(t *testing.T) {
 // TestUserTagService_GetOrCreateTag_Existing tests getting an existing tag
 func TestUserTagService_GetOrCreateTag_Existing(t *testing.T) {
 	mockTagRepo := new(MockUserTagRepository)
-	mockSubChecker := new(MockSubscriptionChecker)
-	mockUserGetter := new(MockUserGetter)
 
-	service := NewUserTagService(mockTagRepo, mockSubChecker, mockUserGetter)
+	service := NewUserTagService(mockTagRepo)
 
 	ctx := context.Background()
 	userID := "user-123"
@@ -383,32 +273,16 @@ func TestUserTagService_GetOrCreateTag_Existing(t *testing.T) {
 // TestUserTagService_GetOrCreateTag_New tests creating a new tag when it doesn't exist
 func TestUserTagService_GetOrCreateTag_New(t *testing.T) {
 	mockTagRepo := new(MockUserTagRepository)
-	mockSubChecker := new(MockSubscriptionChecker)
-	mockUserGetter := new(MockUserGetter)
 
-	service := NewUserTagService(mockTagRepo, mockSubChecker, mockUserGetter)
+	service := NewUserTagService(mockTagRepo)
 
 	ctx := context.Background()
 	userID := "user-123"
 	tagName := "new-tag"
 
-	user := &domain.User{
-		ID:               userID,
-		SubscriptionTier: "free",
-	}
-
-	effectiveSub := &domain.EffectiveSubscription{
-		Limits: domain.SubscriptionLimits{
-			CustomTagsMax: 50,
-		},
-	}
-
 	// Tag doesn't exist
 	mockTagRepo.On("GetByName", ctx, userID, tagName).Return(nil, domain.ErrTagNotFound)
-	// CreateTag path
-	mockTagRepo.On("CountByUserID", ctx, userID).Return(5, nil)
-	mockUserGetter.On("GetUserByID", ctx, userID).Return(user, nil)
-	mockSubChecker.On("GetEffectiveSubscription", ctx, user).Return(effectiveSub, nil)
+	// CreateTag path - tags are unlimited
 	mockTagRepo.On("Create", ctx, mock.AnythingOfType("*domain.UserTag")).Return(nil)
 
 	// Execute

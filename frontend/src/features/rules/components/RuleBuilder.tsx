@@ -14,8 +14,6 @@ import {
   useGetAutomationRuleByID,
   useGetAutomationRules,
 } from '@/api/generated/endpoints/automation-rules/automation-rules'
-import { useProfile } from '@/features/profile/hooks/useProfile'
-import { useSubscriptionTiers } from '@/features/subscription/hooks/useSubscriptionTiers'
 import { useRuleTierLimits } from '../hooks/useRuleTierLimits'
 import {
   RULE_TYPE_LABELS,
@@ -108,18 +106,12 @@ export function RuleBuilder() {
   const createMutation = useCreateAutomationRule()
   const updateMutation = useUpdateAutomationRule()
 
-  // Fetch user, tiers, and rules for tier limits
-  const { user } = useProfile()
-  const { tiers } = useSubscriptionTiers()
+  // Fetch rules for tier limits display
   const { data: rulesData } = useGetAutomationRules()
   const currentRuleCount = rulesData?.length ?? 0
 
-  // Tier limits
-  const tierLimits = useRuleTierLimits({
-    user: user ?? null,
-    tiers: tiers ?? null,
-    currentRuleCount,
-  })
+  // Tier limits (simplified - all tiers have unlimited rules)
+  const tierLimits = useRuleTierLimits({ currentRuleCount })
 
   // Form state
   const [name, setName] = useState('')

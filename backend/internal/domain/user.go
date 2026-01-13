@@ -22,8 +22,8 @@ type User struct {
 	SubscriptionStartedAt *time.Time `json:"subscription_started_at,omitempty" db:"subscription_started_at"`
 	SubscriptionEndsAt    *time.Time `json:"subscription_ends_at,omitempty" db:"subscription_ends_at"`
 
-	// Stripe customer ID (for payments)
-	StripeCustomerID *string `json:"stripe_customer_id,omitempty" db:"stripe_customer_id"`
+	// Paddle customer ID (for payments)
+	PaddleCustomerID *string `json:"paddle_customer_id,omitempty" db:"paddle_customer_id"`
 
 	// GDPR: Primary region for data residency (Fly.io IATA codes)
 	PrimaryRegion string `json:"primary_region" db:"primary_region"` // iad, lhr, syd
@@ -50,7 +50,7 @@ type UpdateProfileRequest struct {
 	PrimaryRegion *string `json:"primary_region,omitempty"`
 }
 
-// NewUser creates a new user with default values (free tier, iad region)
+// NewUser creates a new user with default values (premium trial, iad region)
 // Used when a user logs in for the first time via Clerk
 func NewUser(clerkUserID, email string, emailVerified bool) *User {
 	now := time.Now()
@@ -58,8 +58,8 @@ func NewUser(clerkUserID, email string, emailVerified bool) *User {
 		ClerkUserID:        clerkUserID,
 		Email:              email,
 		EmailVerified:      emailVerified,
-		SubscriptionTier:   "free",
-		SubscriptionStatus: "active",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "trial",
 		PrimaryRegion:      DefaultRegion, // iad - uses constant from regions.go
 		IsActive:           true,
 		IsDeleted:          false,

@@ -39,7 +39,7 @@ func TestGetUserByClerkID_Success(t *testing.T) {
 	rows := pgxmock.NewRows([]string{
 		"id", "clerk_user_id", "email", "email_verified",
 		"subscription_tier", "subscription_status", "subscription_started_at", "subscription_ends_at",
-		"stripe_customer_id", "primary_region", "is_active", "is_deleted",
+		"paddle_customer_id", "primary_region", "is_active", "is_deleted",
 		"deletion_requested_at", "deletion_scheduled_at",
 		"created_at", "updated_at", "last_login_at",
 	}).AddRow(
@@ -50,7 +50,7 @@ func TestGetUserByClerkID_Success(t *testing.T) {
 		now, now, &now,
 	)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, stripe_customer_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at FROM users WHERE clerk_user_id = $1 AND is_deleted = FALSE`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, paddle_customer_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at FROM users WHERE clerk_user_id = $1 AND is_deleted = FALSE`)).
 		WithArgs(clerkUserID).
 		WillReturnRows(rows)
 
@@ -76,7 +76,7 @@ func TestGetUserByClerkID_NotFound(t *testing.T) {
 	ctx := context.Background()
 	clerkUserID := "user_nonexistent"
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, stripe_customer_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at FROM users WHERE clerk_user_id = $1 AND is_deleted = FALSE`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, paddle_customer_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at FROM users WHERE clerk_user_id = $1 AND is_deleted = FALSE`)).
 		WithArgs(clerkUserID).
 		WillReturnError(pgx.ErrNoRows)
 
@@ -103,7 +103,7 @@ func TestGetUserByID_Success(t *testing.T) {
 	rows := pgxmock.NewRows([]string{
 		"id", "clerk_user_id", "email", "email_verified",
 		"subscription_tier", "subscription_status", "subscription_started_at", "subscription_ends_at",
-		"stripe_customer_id", "primary_region", "is_active", "is_deleted",
+		"paddle_customer_id", "primary_region", "is_active", "is_deleted",
 		"deletion_requested_at", "deletion_scheduled_at",
 		"created_at", "updated_at", "last_login_at",
 	}).AddRow(
@@ -114,7 +114,7 @@ func TestGetUserByID_Success(t *testing.T) {
 		now, now, &now,
 	)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, stripe_customer_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at FROM users WHERE id = $1 AND is_deleted = FALSE`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, paddle_customer_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at FROM users WHERE id = $1 AND is_deleted = FALSE`)).
 		WithArgs(userID).
 		WillReturnRows(rows)
 
@@ -126,8 +126,8 @@ func TestGetUserByID_Success(t *testing.T) {
 	assert.NotNil(t, user)
 	assert.Equal(t, userID, user.ID)
 	assert.Equal(t, "premium", user.SubscriptionTier)
-	assert.NotNil(t, user.StripeCustomerID)
-	assert.Equal(t, "cus_ABC123", *user.StripeCustomerID)
+	assert.NotNil(t, user.PaddleCustomerID)
+	assert.Equal(t, "cus_ABC123", *user.PaddleCustomerID)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -139,7 +139,7 @@ func TestGetUserByID_NotFound(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New().String()
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, stripe_customer_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at FROM users WHERE id = $1 AND is_deleted = FALSE`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, paddle_customer_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at FROM users WHERE id = $1 AND is_deleted = FALSE`)).
 		WithArgs(userID).
 		WillReturnError(pgx.ErrNoRows)
 
@@ -162,7 +162,7 @@ func TestCreateUser_Success(t *testing.T) {
 	user := domain.NewUser("user_newuser", "newuser@example.com", true)
 
 	// Expect INSERT query (match full query for consistency)
-	mock.ExpectExec(`INSERT INTO users \( id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, stripe_customer_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at \) VALUES`).
+	mock.ExpectExec(`INSERT INTO users \( id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, paddle_customer_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at \) VALUES`).
 		WithArgs(
 			pgxmock.AnyArg(), // id (generated UUID)
 			user.ClerkUserID,
@@ -172,7 +172,7 @@ func TestCreateUser_Success(t *testing.T) {
 			user.SubscriptionStatus,
 			user.SubscriptionStartedAt,
 			user.SubscriptionEndsAt,
-			user.StripeCustomerID,
+			user.PaddleCustomerID,
 			user.PrimaryRegion,
 			user.IsActive,
 			user.IsDeleted,
@@ -212,7 +212,7 @@ func TestCreateUser_DuplicateEmail(t *testing.T) {
 			user.SubscriptionStatus,
 			user.SubscriptionStartedAt,
 			user.SubscriptionEndsAt,
-			user.StripeCustomerID,
+			user.PaddleCustomerID,
 			user.PrimaryRegion,
 			user.IsActive,
 			user.IsDeleted,
