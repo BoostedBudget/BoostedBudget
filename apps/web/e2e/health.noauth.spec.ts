@@ -1,14 +1,18 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 
 /**
  * Health Endpoint E2E Tests
  * Verifies the backend health check endpoint is accessible and returns correct status
+ *
+ * Issue #691: Uses custom apiRequest fixture to make direct calls to the backend API.
+ * The built-in `request` fixture uses `baseURL` (frontend), which serves HTML via
+ * Vite's SPA catch-all. The `apiRequest` fixture uses `apiURL` (backend) directly.
  */
 
 test.describe('Health Endpoint', () => {
-  test('should return healthy status from backend', async ({ page: _page, request }) => {
-    // Test the API health endpoint directly (uses apiURL from playwright.config.ts)
-    const response = await request.get('/health');
+  test('should return healthy status from backend', async ({ apiRequest }) => {
+    // Test the API health endpoint directly using apiRequest fixture
+    const response = await apiRequest.get('/health');
 
     expect(response.status()).toBe(200);
 
@@ -29,9 +33,9 @@ test.describe('Health Endpoint', () => {
     await expect(page).toHaveTitle(/BoostedBudget/i);
   });
 
-  test('should have backend API accessible', async ({ request }) => {
-    // Verify backend is running and accessible (uses apiURL from playwright.config.ts)
-    const response = await request.get('/health');
+  test('should have backend API accessible', async ({ apiRequest }) => {
+    // Verify backend is running and accessible using apiRequest fixture
+    const response = await apiRequest.get('/health');
 
     expect(response.ok()).toBeTruthy();
 

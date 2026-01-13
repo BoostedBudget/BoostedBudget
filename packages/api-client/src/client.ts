@@ -29,6 +29,7 @@ export function getApiUrl(): string {
 // Create axios instance with base configuration
 export const AXIOS_INSTANCE = Axios.create({
   baseURL: getApiUrl(),
+  timeout: 30000, // 30 second timeout to prevent infinite loading states
   headers: {
     'Content-Type': 'application/json',
   },
