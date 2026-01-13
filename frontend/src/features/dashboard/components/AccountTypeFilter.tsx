@@ -50,7 +50,7 @@ export function AccountTypeFilter({
   }
 
   return (
-    <div className="bg-white rounded-lg shadow p-6">
+    <div className="bg-white rounded-lg shadow p-6" data-testid="account-type-filter">
       <h3 className="text-lg font-semibold text-gray-900 mb-4">
         Account Types
       </h3>
