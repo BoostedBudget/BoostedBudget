@@ -5,7 +5,7 @@ Run end-to-end tests locally for BoostedBudget using Playwright.
 ## Quick Start
 
 ```bash
-cd frontend
+cd apps/web
 set -a && source .env.e2e && set +a && \
 mv cert.pem cert.pem.bak 2>/dev/null; mv key.pem key.pem.bak 2>/dev/null; \
 bash scripts/run-e2e-with-ports.sh 2>&1 | tee e2e-output.log; \
@@ -242,6 +242,6 @@ test('shows landing page', async ({ page }) => {
 ## Related
 
 - `SKILL.md` - Quick reference for running tests
-- `frontend/playwright.config.ts` - Playwright configuration
-- `frontend/scripts/run-e2e-with-ports.sh` - Test runner script
+- `apps/web/playwright.config.ts` - Playwright configuration
+- `apps/web/scripts/run-e2e-with-ports.sh` - Test runner script
 - `.github/workflows/test.yml` - CI configuration

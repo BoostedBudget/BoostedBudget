@@ -356,10 +356,10 @@ jobs:
 
       - name: Restore SSL certificates from secrets
         run: |
-          mkdir -p ${{ env.UNIQUE_WORKSPACE }}/frontend
-          echo "${{ secrets.QA_SSL_CERT }}" | base64 -d > ${{ env.UNIQUE_WORKSPACE }}/frontend/cert.pem
-          echo "${{ secrets.QA_SSL_KEY }}" | base64 -d > ${{ env.UNIQUE_WORKSPACE }}/frontend/key.pem
-          chmod 600 ${{ env.UNIQUE_WORKSPACE }}/frontend/*.pem
+          mkdir -p ${{ env.UNIQUE_WORKSPACE }}/apps/web
+          echo "${{ secrets.QA_SSL_CERT }}" | base64 -d > ${{ env.UNIQUE_WORKSPACE }}/apps/web/cert.pem
+          echo "${{ secrets.QA_SSL_KEY }}" | base64 -d > ${{ env.UNIQUE_WORKSPACE }}/apps/web/key.pem
+          chmod 600 ${{ env.UNIQUE_WORKSPACE }}/apps/web/*.pem
           echo "✓ SSL certificates restored for HTTPS QA access"
 
       - name: Create .env.qa from secrets

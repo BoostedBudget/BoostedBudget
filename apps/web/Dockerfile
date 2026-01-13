@@ -1,0 +1,58 @@
+# Multi-stage production Dockerfile for Frontend (Turborepo monorepo)
+# Stage 1: Builder - Use Bun for workspace:* protocol support
+FROM oven/bun:1 AS builder
+
+WORKDIR /build
+
+# Copy root workspace files
+COPY package.json bun.lock ./
+COPY apps/web/package.json ./apps/web/
+COPY packages/api-client/package.json ./packages/api-client/
+COPY packages/shared-types/package.json ./packages/shared-types/
+
+# Install all workspace dependencies (npm doesn't support workspace:* protocol)
+RUN bun install --frozen-lockfile
+
+# Copy workspace packages first (for dependency resolution)
+COPY packages/ ./packages/
+
+# Copy config directory (needed for type generation)
+COPY config/ /config/
+
+# Copy web app source
+COPY apps/web/ ./apps/web/
+
+# Build the web application
+WORKDIR /build/apps/web
+RUN bun run build
+
+# Stage 2: Runtime with Nginx (Debian-based)
+FROM nginx:stable
+
+# Install runtime dependencies
+RUN for i in 1 2 3; do \
+      apt-get update && apt-get install -y --no-install-recommends curl && \
+      rm -rf /var/lib/apt/lists/* && break || \
+      { [ $i -lt 3 ] && sleep 5; }; \
+    done
+
+# Copy custom nginx configuration
+COPY apps/web/nginx.conf /etc/nginx/nginx.conf
+
+# Copy built assets from builder
+COPY --from=builder /build/apps/web/dist /usr/share/nginx/html
+
+# Copy runtime config injection script
+COPY apps/web/docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost/ || exit 1
+
+# Expose ports (HTTP and HTTPS)
+EXPOSE 80 443
+
+# Use entrypoint script for runtime config injection
+ENTRYPOINT ["/docker-entrypoint.sh"]
+CMD ["nginx", "-g", "daemon off;"]

@@ -39,7 +39,8 @@ jobs:
               - 'go.mod'
               - 'go.sum'
             frontend:
-              - 'frontend/**'
+              - 'apps/web/**'
+              - 'packages/**'
               - 'package.json'
               - 'bun.lock'
             api:
@@ -137,32 +138,38 @@ jobs:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
 
-      - name: Setup Node.js
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Node.js (for npx orval)
         uses: actions/setup-node@v4
         with:
           node-version: '22'
 
-      - name: Install frontend dependencies
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
-        # Use npm install (not bun) - Bun's dependency resolution pulls buggy AJV version
-        run: npm install
+      - name: Install workspace dependencies
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        # Bun handles workspace:* protocol, npm doesn't
+        run: bun install
 
       - name: Generate TypeScript client
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/packages/api-client
+        # Use npx orval (not bunx) - Bun's AJV version has compatibility issues
         run: npx orval
 
       - name: Check if generated client is up to date
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: |
-          if git diff --exit-code frontend/src/api/generated; then
+          if git diff --exit-code packages/api-client/src; then
             echo "::notice::Generated TypeScript client is up to date"
           else
             echo "::error::Generated TypeScript client is outdated!"
             echo "The generated client differs from the committed version."
-            echo "Run 'cd frontend && bun run generate:api' locally and commit the changes."
+            echo "Run 'make generate-api-client' locally and commit the changes."
             echo ""
             echo "Diff (first 100 lines):"
-            git diff frontend/src/api/generated | head -100
+            git diff packages/api-client/src | head -100
             exit 1
           fi
 
@@ -311,37 +318,37 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Install frontend dependencies
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+      - name: Install workspace dependencies
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bun install --frozen-lockfile
 
       - name: Lint frontend
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: bun run lint
 
       - name: Run bun:test tests with coverage
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: |
           echo "::group::Running bun:test tests with coverage"
           bun run test:coverage
           echo "::endgroup::"
 
       - name: Run real implementation tests with coverage
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: |
           echo "::group::Running real-implementation tests with coverage"
           bun run test:real:coverage
           echo "::endgroup::"
 
       - name: Run isolated tests with coverage
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: |
           echo "::group::Running isolated tests with coverage"
           bun run test:isolated:coverage
           echo "::endgroup::"
 
       - name: Combine coverage reports
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: |
           echo "::group::Combining coverage reports"
           bun run test:coverage:combine
@@ -352,8 +359,8 @@ jobs:
         with:
           name: frontend-coverage
           path: |
-            ${{ env.UNIQUE_WORKSPACE }}/frontend/coverage/combined.lcov
-            ${{ env.UNIQUE_WORKSPACE }}/frontend/coverage/html/
+            ${{ env.UNIQUE_WORKSPACE }}/apps/web/coverage/combined.lcov
+            ${{ env.UNIQUE_WORKSPACE }}/apps/web/coverage/html/
           retention-days: 30
           if-no-files-found: warn
 
@@ -389,12 +396,12 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Install frontend dependencies
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+      - name: Install workspace dependencies
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bun install --frozen-lockfile
 
       - name: Install Playwright browsers
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: bunx playwright install --with-deps chromium
 
       - name: Restore backend binary from cache
@@ -446,7 +453,7 @@ jobs:
           $HOME/bin/migrate --version
 
       - name: Run E2E tests
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         env:
           CI: true
           CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
@@ -462,7 +469,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: playwright-report
-          path: ${{ env.UNIQUE_WORKSPACE }}/frontend/playwright-report/
+          path: ${{ env.UNIQUE_WORKSPACE }}/apps/web/playwright-report/
           retention-days: 30
 
       - name: Upload E2E test videos (on failure)
@@ -470,7 +477,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: playwright-videos
-          path: ${{ env.UNIQUE_WORKSPACE }}/frontend/test-results/
+          path: ${{ env.UNIQUE_WORKSPACE }}/apps/web/test-results/
           retention-days: 7
 
       - name: Final workspace cleanup
@@ -697,7 +704,7 @@ jobs:
 
       - name: Run bun audit (JS vulnerabilities)
         if: matrix.component == 'frontend'
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: |
           bun install --frozen-lockfile
           bun audit --audit-level=high
@@ -705,8 +712,14 @@ jobs:
       # =========================================================================
       # Dockerfile Linting: Hadolint (pre-installed on Mac Mini runner)
       # =========================================================================
-      - name: Lint Dockerfile (Hadolint)
-        run: /opt/homebrew/bin/hadolint "${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile" \
+      - name: Lint Dockerfile (Hadolint) - Backend
+        if: matrix.component == 'backend'
+        run: /opt/homebrew/bin/hadolint "${{ env.UNIQUE_WORKSPACE }}/backend/Dockerfile" \
+          --failure-threshold warning || echo "::warning::Dockerfile linting issues found"
+
+      - name: Lint Dockerfile (Hadolint) - Frontend
+        if: matrix.component == 'frontend'
+        run: /opt/homebrew/bin/hadolint "${{ env.UNIQUE_WORKSPACE }}/apps/web/Dockerfile" \
           --failure-threshold warning || echo "::warning::Dockerfile linting issues found"
 
       - name: Final workspace cleanup
@@ -745,11 +758,20 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Set Dockerfile path
+        id: dockerfile
+        run: |
+          if [ "${{ matrix.component }}" = "frontend" ]; then
+            echo "path=apps/web/Dockerfile" >> $GITHUB_OUTPUT
+          else
+            echo "path=${{ matrix.component }}/Dockerfile" >> $GITHUB_OUTPUT
+          fi
+
       - name: Build Docker image (local only)
         uses: docker/build-push-action@v6
         with:
           context: ${{ env.UNIQUE_WORKSPACE }}
-          file: ${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile
+          file: ${{ env.UNIQUE_WORKSPACE }}/${{ steps.dockerfile.outputs.path }}
           platforms: linux/amd64
           push: false
           load: true

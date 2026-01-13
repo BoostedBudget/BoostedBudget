@@ -172,7 +172,7 @@ cd backend && go test ./internal/handlers/... -v
 cd backend && go test ./... -cover
 
 # Frontend tests
-cd frontend && pnpm test
+cd apps/web && bun run test
 ```
 
 ### API Testing
@@ -212,13 +212,16 @@ boostedbudget/
 │   │   └── config/      # Configuration
 │   ├── migrations/       # Database migrations
 │   └── tests/           # Integration tests
-├── frontend/             # React frontend
-│   ├── src/
-│   │   ├── features/    # Feature modules
-│   │   ├── auth/        # Clerk integration
-│   │   ├── shared/      # Shared components
-│   │   └── privacy/     # GDPR components
-│   └── public/          # Static assets
+├── apps/
+│   └── web/              # React frontend
+│       ├── src/
+│       │   ├── features/ # Feature modules
+│       │   ├── auth/     # Clerk integration
+│       │   └── shared/   # Shared components
+│       └── public/       # Static assets
+├── packages/
+│   ├── api-client/       # Orval-generated API hooks
+│   └── shared-types/     # Shared TypeScript types
 ├── infrastructure/       # K8s, Terraform, Docker configs
 ├── scripts/             # Build and deployment scripts
 ├── legal/               # Privacy policy, ToS, GDPR docs
