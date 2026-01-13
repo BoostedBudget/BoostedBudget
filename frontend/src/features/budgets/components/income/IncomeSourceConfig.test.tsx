@@ -1,39 +1,28 @@
-/**
- * IncomeSourceConfig Tests
- * Issue #496: Income Source Configuration UI for Envelope Budgeting
- *
- * TDD RED Phase: Tests for the container component managing income sources.
- */
-
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { IncomeSourceConfig } from './IncomeSourceConfig';
-import type { IncomeSource } from '../../types';
-import type { UserTag } from '@/features/tags/types';
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { IncomeSourceConfig } from './IncomeSourceConfig'
+import type { IncomeSource } from '../../types'
+import type { UserTag } from '@/features/tags/types'
 
 describe('IncomeSourceConfig', () => {
-  const mockOnChange = vi.fn();
+  const mockOnChange = mock(() => {})
 
-  const mockCategories = ['INCOME', 'TRANSFER_IN', 'LOAN_PAYMENTS'];
+  const mockCategories = ['INCOME', 'TRANSFER_IN', 'LOAN_PAYMENTS']
   const mockTags: UserTag[] = [
     { id: '1', user_id: 'user-1', name: 'Salary', color: '#22c55e', usage_count: 5, created_at: '', updated_at: '' },
     { id: '2', user_id: 'user-1', name: 'Freelance', color: '#3b82f6', usage_count: 3, created_at: '', updated_at: '' },
-  ];
+  ]
 
   const mockSources: IncomeSource[] = [
     { type: 'plaid_category', value: 'INCOME' },
     { type: 'tag', value: 'Freelance' },
     { type: 'manual', value: '500', description: 'Side gig' },
-  ];
+  ]
 
   beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  // ==========================================================================
-  // Rendering Tests
-  // ==========================================================================
+    mockOnChange.mockClear()
+  })
 
   describe('Rendering', () => {
     it('renders empty state when no sources', () => {

@@ -6,7 +6,7 @@
  * TDD RED: Writing tests before implementation.
  */
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { CronBuilder } from './CronBuilder'
 import { CRON_PRESETS, COMMON_TIMEZONES } from '../constants'
@@ -49,7 +49,7 @@ describe('CronBuilder', () => {
     })
 
     it('should call onChange when a preset is clicked', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
       render(<CronBuilder cron="0 9 * * *" onChange={onChange} />)
 
       fireEvent.click(screen.getByRole('button', { name: 'Weekly (Monday)' }))
@@ -87,7 +87,7 @@ describe('CronBuilder', () => {
     })
 
     it('should call onChange when custom cron is entered', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
       render(<CronBuilder cron="0 9 * * *" onChange={onChange} />)
 
       fireEvent.click(screen.getByRole('button', { name: /custom/i }))
@@ -141,7 +141,7 @@ describe('CronBuilder', () => {
     })
 
     it('should call onTimezoneChange when timezone is selected', () => {
-      const onTimezoneChange = vi.fn()
+      const onTimezoneChange = mock(() => {})
       render(
         <CronBuilder
           cron="0 9 * * *"

@@ -1,21 +1,10 @@
-/**
- * Transaction Budget Matcher Utility Tests
- * Issue #499: Transaction-Budget Linking UI
- *
- * TDD RED Phase: Write comprehensive tests before implementation
- */
-
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect } from 'bun:test'
 import type { Transaction } from '../../transactions/types'
 import type { BudgetCategory } from '../types'
 import {
   parseTransactionCategory,
   matchTransactionToBudgetCategories,
 } from './transactionBudgetMatcher'
-
-// =============================================================================
-// Test Helpers
-// =============================================================================
 
 function createTransaction(overrides: Partial<Transaction> = {}): Transaction {
   return {

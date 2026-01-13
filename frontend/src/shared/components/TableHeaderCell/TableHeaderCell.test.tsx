@@ -5,16 +5,12 @@
  * TDD RED: Writing tests before implementation.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TableHeaderCell } from './TableHeaderCell'
 
 describe('TableHeaderCell', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
   describe('Basic Rendering', () => {
     it('should render label text', () => {
       render(<TableHeaderCell label="Account" />)
@@ -48,7 +44,7 @@ describe('TableHeaderCell', () => {
     })
 
     it('should call onSort when sort button clicked', async () => {
-      const onSort = vi.fn()
+      const onSort = mock(() => {})
       render(
         <TableHeaderCell
           label="Date"
@@ -63,7 +59,7 @@ describe('TableHeaderCell', () => {
     })
 
     it('should toggle sort direction when same column clicked', async () => {
-      const onSort = vi.fn()
+      const onSort = mock(() => {})
       render(
         <TableHeaderCell
           label="Date"
@@ -173,7 +169,7 @@ describe('TableHeaderCell', () => {
     })
 
     it('should call onFilterChange when filter option selected', async () => {
-      const onFilterChange = vi.fn()
+      const onFilterChange = mock(() => {})
       render(
         <TableHeaderCell
           label="Type"
@@ -207,7 +203,7 @@ describe('TableHeaderCell', () => {
     })
 
     it('should support multi-select filter', async () => {
-      const onFilterChange = vi.fn()
+      const onFilterChange = mock(() => {})
       render(
         <TableHeaderCell
           label="Category"
@@ -226,7 +222,7 @@ describe('TableHeaderCell', () => {
     })
 
     it('should support range filter', async () => {
-      const onFilterChange = vi.fn()
+      const onFilterChange = mock(() => {})
       render(
         <TableHeaderCell
           label="Amount"
@@ -243,7 +239,7 @@ describe('TableHeaderCell', () => {
     })
 
     it('should apply range filter values', async () => {
-      const onFilterChange = vi.fn()
+      const onFilterChange = mock(() => {})
       render(
         <TableHeaderCell
           label="Amount"
@@ -297,8 +293,8 @@ describe('TableHeaderCell', () => {
     })
 
     it('should allow sorting and filtering independently', async () => {
-      const onSort = vi.fn()
-      const onFilterChange = vi.fn()
+      const onSort = mock(() => {})
+      const onFilterChange = mock(() => {})
 
       render(
         <TableHeaderCell

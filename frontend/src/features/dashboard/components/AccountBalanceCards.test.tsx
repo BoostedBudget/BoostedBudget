@@ -8,7 +8,7 @@
  * Issue #422: Widget styling compliance and dark mode support
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import { AccountBalanceCards } from './AccountBalanceCards'
 import type { BalanceSummary } from '../types'
@@ -110,35 +110,14 @@ describe('AccountBalanceCards', () => {
    * The component should NOT have its own card wrapper styling to avoid double-cards.
    */
   describe('Widget Styling Compliance - Issue #422', () => {
-    it('empty state should NOT have redundant bg-white styling', () => {
-      // WidgetWrapper provides bg-white, so empty state should not add another
+    it('empty state should NOT have redundant wrapper styling (bg-white, shadow, rounded-lg, p-6)', () => {
+      // WidgetWrapper provides wrapper styling, so empty state should not duplicate
       const { container } = render(<AccountBalanceCards summary={mockSummaryEmpty} />)
-
       const outerDiv = container.firstChild as HTMLElement
+
       expect(outerDiv).not.toHaveClass('bg-white')
-    })
-
-    it('empty state should NOT have redundant shadow styling', () => {
-      // WidgetWrapper provides shadow, so empty state should not add another
-      const { container } = render(<AccountBalanceCards summary={mockSummaryEmpty} />)
-
-      const outerDiv = container.firstChild as HTMLElement
       expect(outerDiv).not.toHaveClass('shadow')
-    })
-
-    it('empty state should NOT have redundant rounded-lg styling', () => {
-      // WidgetWrapper provides rounded corners, so empty state should not add another
-      const { container } = render(<AccountBalanceCards summary={mockSummaryEmpty} />)
-
-      const outerDiv = container.firstChild as HTMLElement
       expect(outerDiv).not.toHaveClass('rounded-lg')
-    })
-
-    it('empty state should NOT have redundant p-6 padding', () => {
-      // WidgetWrapper provides padding, so empty state should not add another
-      const { container } = render(<AccountBalanceCards summary={mockSummaryEmpty} />)
-
-      const outerDiv = container.firstChild as HTMLElement
       expect(outerDiv).not.toHaveClass('p-6')
     })
 

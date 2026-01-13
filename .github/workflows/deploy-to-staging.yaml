@@ -46,31 +46,18 @@ jobs:
           LOCKDIR=~/.docker/config.lock
           TIMEOUT=30
           ELAPSED=0
-
           while ! mkdir "$LOCKDIR" 2>/dev/null; do
-            echo "[backend] Waiting for config.json lock..."
             sleep 1
             ELAPSED=$((ELAPSED + 1))
-            if [ $ELAPSED -ge $TIMEOUT ]; then
-              echo "Timeout waiting for lock"
-              exit 1
-            fi
+            [ $ELAPSED -ge $TIMEOUT ] && exit 1
           done
-
           trap "rmdir '$LOCKDIR' 2>/dev/null || true" EXIT
 
           mkdir -p ~/.docker
-          if [ -f ~/.docker/config.json ]; then
-            if command -v jq &> /dev/null; then
-              TEMP_FILE=~/.docker/config.json.tmp.backend
-              if jq 'del(.credsStore)' ~/.docker/config.json > "$TEMP_FILE" 2>/dev/null; then
-                mv "$TEMP_FILE" ~/.docker/config.json
-              else
-                rm -f "$TEMP_FILE"
-              fi
-            fi
-          else
-            echo "{}" > ~/.docker/config.json
+          [ -f ~/.docker/config.json ] || echo "{}" > ~/.docker/config.json
+          if command -v jq &> /dev/null; then
+            TEMP_FILE=~/.docker/config.json.tmp
+            jq 'del(.credsStore)' ~/.docker/config.json > "$TEMP_FILE" 2>/dev/null && mv "$TEMP_FILE" ~/.docker/config.json || rm -f "$TEMP_FILE"
           fi
 
       - name: Log in to GitHub Container Registry (with retry)
@@ -78,32 +65,18 @@ jobs:
           LOCKDIR=~/.docker/login.lock
           TIMEOUT=30
           ELAPSED=0
-
           while ! mkdir "$LOCKDIR" 2>/dev/null; do
-            echo "[backend] Waiting for docker login lock..."
             sleep 1
             ELAPSED=$((ELAPSED + 1))
-            if [ $ELAPSED -ge $TIMEOUT ]; then
-              echo "Timeout waiting for lock"
-              exit 1
-            fi
+            [ $ELAPSED -ge $TIMEOUT ] && exit 1
           done
-
           trap "rmdir '$LOCKDIR' 2>/dev/null || true" EXIT
 
-          MAX_ATTEMPTS=3
-          for i in $(seq 1 $MAX_ATTEMPTS); do
-            if echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin; then
-              echo "Login successful"
-              exit 0
-            else
-              if [ $i -lt $MAX_ATTEMPTS ]; then
-                sleep 10
-              else
-                exit 1
-              fi
-            fi
+          for i in 1 2 3; do
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin && exit 0
+            [ $i -lt 3 ] && sleep 10
           done
+          exit 1
 
       - name: Build and push backend image
         id: build
@@ -150,15 +123,12 @@ jobs:
           LOCKDIR=~/.docker/prune.lock
           TIMEOUT=60
           ELAPSED=0
-
           while ! mkdir "$LOCKDIR" 2>/dev/null; do
             sleep 2
             ELAPSED=$((ELAPSED + 2))
             [ $ELAPSED -ge $TIMEOUT ] && exit 1
           done
-
           trap "rmdir '$LOCKDIR' 2>/dev/null || true" EXIT
-
           docker system prune -f --filter "until=24h"
 
       - name: Setup Fly.io CLI
@@ -169,15 +139,12 @@ jobs:
           LOCKDIR=~/.docker/config.lock
           TIMEOUT=30
           ELAPSED=0
-
           while ! mkdir "$LOCKDIR" 2>/dev/null; do
             sleep 1
             ELAPSED=$((ELAPSED + 1))
             [ $ELAPSED -ge $TIMEOUT ] && exit 1
           done
-
           trap "rmdir '$LOCKDIR' 2>/dev/null || true" EXIT
-
           mkdir -p ~/.docker
           [ -f ~/.docker/config.json ] || echo "{}" > ~/.docker/config.json
 
@@ -194,37 +161,19 @@ jobs:
       - name: Pull and push to Fly.io registry
         run: |
           GHCR_IMAGE="${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:staging-${{ github.sha }}"
-
-          echo "Pulling from GHCR..."
           for i in 1 2 3; do
-            docker pull --platform linux/amd64 ${GHCR_IMAGE} && {
-              echo "Pull successful"
-              break
-            } || {
-              [ $i -lt 3 ] && echo "Pull attempt $i/3 failed, retrying..." && sleep 15
-            }
+            docker pull --platform linux/amd64 ${GHCR_IMAGE} && break
+            [ $i -lt 3 ] && sleep 15
           done
-
           docker tag ${GHCR_IMAGE} registry.fly.io/staging-boostedbudget-api:staging-${{ github.sha }}
           docker tag ${GHCR_IMAGE} registry.fly.io/staging-boostedbudget-api:latest
-
-          echo "Pushing to Fly.io registry..."
           for i in 1 2 3; do
-            docker push registry.fly.io/staging-boostedbudget-api:staging-${{ github.sha }} && {
-              echo "SHA push successful"
-              break
-            } || {
-              [ $i -lt 3 ] && echo "SHA push attempt $i/3 failed, retrying..." && sleep 15
-            }
+            docker push registry.fly.io/staging-boostedbudget-api:staging-${{ github.sha }} && break
+            [ $i -lt 3 ] && sleep 15
           done
-
           for i in 1 2 3; do
-            docker push registry.fly.io/staging-boostedbudget-api:latest && {
-              echo "Latest push successful"
-              break
-            } || {
-              [ $i -lt 3 ] && echo "Latest push attempt $i/3 failed, retrying..." && sleep 15
-            }
+            docker push registry.fly.io/staging-boostedbudget-api:latest && break
+            [ $i -lt 3 ] && sleep 15
           done
 
       - name: Cleanup images
@@ -264,23 +213,17 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          echo "Deploying backend: registry.fly.io/staging-boostedbudget-api:staging-${{ github.sha }}"
-          echo "Note: Database migrations run automatically via docker-entrypoint.sh"
-
           for attempt in 1 2 3; do
             flyctl deploy \
               --app staging-boostedbudget-api \
               --image registry.fly.io/staging-boostedbudget-api:staging-${{ github.sha }} \
               --config backend/fly.staging.toml && {
-              echo "Deployment successful on attempt $attempt"
               echo "deploy-attempts=$attempt" >> $GITHUB_OUTPUT
               break
             } || {
               if [ $attempt -eq 3 ]; then
-                echo "Deployment failed after 3 attempts"
                 exit 1
               else
-                echo "Deploy attempt $attempt/3 failed, retrying in 30s..."
                 sleep 30
               fi
             }
@@ -327,21 +270,14 @@ jobs:
           ref: staging
           path: ${{ env.UNIQUE_WORKSPACE }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: '22'
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10
-          standalone: true
-          dest: ${{ github.workspace }}/${{ env.UNIQUE_WORKSPACE }}/.pnpm-home
+          bun-version: latest
 
       - name: Install dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
-        run: pnpm install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - name: Build frontend
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
@@ -349,7 +285,7 @@ jobs:
           VITE_API_URL: https://staging-api.boostedbudget.com
           VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
           VITE_ENVIRONMENT: staging
-        run: pnpm run build
+        run: bun run build
 
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3

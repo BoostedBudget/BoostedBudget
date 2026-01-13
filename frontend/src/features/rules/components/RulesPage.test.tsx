@@ -1,17 +1,30 @@
 /**
  * RulesPage Component Tests
  * Issue #39: Rule Builder UI
+ * Issue #575: Migrated to bun:test with centralized API mocks
  *
  * Tests for the main rules list page.
- * TDD RED: Writing tests before implementation.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, beforeEach } from 'bun:test'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router-dom'
-import { RulesPage } from './RulesPage'
 import type { AutomationRule } from '@/api/generated/models'
+import { RulesPage } from './RulesPage'
+
+// Import centralized mocks for configuration
+import {
+  mockUseGetAutomationRules,
+  mockToggleAutomationRuleMutate,
+  mockDeleteAutomationRuleMutate,
+  mockTestAutomationRuleMutate,
+  mockRefetchAutomationRules,
+} from '@/test/mocks/automation-rules-api'
+import { mockUseGetUserProfile } from '@/test/mocks/profile-api'
+import { mockUseGetSubscriptionTiers } from '@/test/mocks/subscription-api'
+import { mockUseRuleTierLimits } from '@/test/mocks/rule-tier-limits'
+import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
 
 const mockRules: AutomationRule[] = [
   {
@@ -30,11 +43,13 @@ const mockRules: AutomationRule[] = [
     },
     conditions: [],
     condition_logic: 'AND',
-    actions: {},
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    actions: {} as any,
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-15T00:00:00Z',
     last_executed_at: '2024-01-15T09:00:00Z',
-  },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any,
   {
     id: 'rule-2',
     user_id: 'user-1',
@@ -50,86 +65,34 @@ const mockRules: AutomationRule[] = [
     },
     conditions: [],
     condition_logic: 'AND',
-    actions: {},
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    actions: {} as any,
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-10T00:00:00Z',
-  },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any,
 ]
 
-// Mock the API hooks
-const mockUseGetAutomationRules = vi.fn()
-const mockToggleRule = vi.fn()
-const mockDeleteRule = vi.fn()
-const mockTestRule = vi.fn()
+// Mock user data with premium tier (15 rule limit)
+const mockUser = {
+  id: 'user-1',
+  email: 'test@example.com',
+  subscription_tier: 'premium' as const,
+  display_name: 'Test User',
+  timezone: 'America/New_York',
+  currency_code: 'USD',
+  locale: 'en-US',
+  created_at: '2024-01-01T00:00:00Z',
+  updated_at: '2024-01-01T00:00:00Z',
+}
 
-vi.mock('@/api/generated/endpoints/automation-rules/automation-rules', () => ({
-  useGetAutomationRules: () => mockUseGetAutomationRules(),
-  useToggleAutomationRule: () => ({
-    mutate: mockToggleRule,
-    isPending: false,
-  }),
-  useDeleteAutomationRule: () => ({
-    mutate: mockDeleteRule,
-    isPending: false,
-  }),
-  useTestAutomationRule: () => ({
-    mutate: mockTestRule,
-    mutateAsync: mockTestRule,
-    isPending: false,
-    data: null,
-    reset: vi.fn(),
-  }),
-}))
-
-// Mock tier limits hook
-vi.mock('../hooks/useRuleTierLimits', () => ({
-  useRuleTierLimits: () => ({
-    ruleLimit: 5,
-    isUnlimited: false,
-    currentRuleCount: 2,
-    isAtLimit: false,
-    canUseEventTriggers: true,
-    shouldShowUpgradeBanner: false,
-    rulesCountDisplay: '2/5 rules used',
-  }),
-}))
-
-// Mock profile hook
-vi.mock('@/features/profile/hooks/useProfile', () => ({
-  useProfile: () => ({
-    user: { subscription_tier: 'premium' },
-    loading: false,
-    error: null,
-  }),
-}))
-
-// Mock subscription tiers hook
-vi.mock('@/features/subscription/hooks/useSubscriptionTiers', () => ({
-  useSubscriptionTiers: () => ({
-    tiers: {
-      tiers: {
-        free: { features: { max_rules: 1 } },
-        premium_lite: { features: { max_rules: 5 } },
-        premium: { features: { max_rules: 15 } },
-        premium_plus: { features: { max_rules: -1 } },
-      },
-    },
-    loading: false,
-    error: null,
-  }),
-}))
-
-function createQueryClient() {
-  return new QueryClient({
+function renderWithProviders(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
       mutations: { retry: false },
     },
   })
-}
-
-function renderWithProviders(ui: React.ReactElement) {
-  const queryClient = createQueryClient()
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter>{ui}</MemoryRouter>
@@ -139,238 +102,303 @@ function renderWithProviders(ui: React.ReactElement) {
 
 describe('RulesPage', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
-    // Clear localStorage to reset view preference
+    // Clear all mock call history
+    mockUseGetAutomationRules.mockClear()
+    mockToggleAutomationRuleMutate.mockClear()
+    mockDeleteAutomationRuleMutate.mockClear()
+    mockTestAutomationRuleMutate.mockClear()
+    mockRefetchAutomationRules.mockClear()
+    mockUseGetUserProfile.mockClear()
+    mockUseGetSubscriptionTiers.mockClear()
+    mockUseRuleTierLimits.mockClear()
     localStorage.clear()
+
+    // Configure automation rules mock
     mockUseGetAutomationRules.mockReturnValue({
       data: mockRules,
       isLoading: false,
       error: null,
+      refetch: mockRefetchAutomationRules,
+    })
+
+    // Configure profile mock - user with premium tier
+    mockUseGetUserProfile.mockReturnValue({
+      data: mockUser,
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    })
+
+    // Configure subscription tiers mock
+    mockUseGetSubscriptionTiers.mockReturnValue({
+      data: mockSubscriptionTiersResponse,
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    })
+
+    // Configure tier limits to match test data:
+    // - mockRules has 2 items
+    // - mockUser has subscription_tier: 'premium' (15 rule limit)
+    mockUseRuleTierLimits.mockReturnValue({
+      ruleLimit: 15,
+      isUnlimited: false,
+      currentRuleCount: 2,
+      isAtLimit: false,
+      canUseEventTriggers: true,
+      shouldShowUpgradeBanner: false,
+      rulesCountDisplay: '2/15 rules used',
     })
   })
 
-  describe('Rendering', () => {
-    it('should render page title', () => {
-      renderWithProviders(<RulesPage />)
+  it('should render page title', async () => {
+    renderWithProviders(<RulesPage />)
 
+    await waitFor(() => {
       expect(screen.getByText(/automation rules/i)).toBeInTheDocument()
     })
+  })
 
-    it('should render tier limit display', () => {
-      renderWithProviders(<RulesPage />)
+  it('should render tier limit display', async () => {
+    renderWithProviders(<RulesPage />)
 
-      expect(screen.getByText(/2\/5 rules used/i)).toBeInTheDocument()
-    })
-
-    it('should render create button', () => {
-      renderWithProviders(<RulesPage />)
-
-      expect(screen.getByRole('button', { name: /create.*rule/i })).toBeInTheDocument()
-    })
-
-    it('should render view toggle', () => {
-      renderWithProviders(<RulesPage />)
-
-      expect(screen.getByRole('group', { name: /view toggle/i })).toBeInTheDocument()
-    })
-
-    it('should render rules list', () => {
-      renderWithProviders(<RulesPage />)
-
-      expect(screen.getByText('Daily Budget Check')).toBeInTheDocument()
-      expect(screen.getByText('Monthly Savings')).toBeInTheDocument()
+    // With 2 rules and premium tier (15 limit), should show "2/15 rules"
+    await waitFor(() => {
+      expect(screen.getByText(/2\/15 rules/i)).toBeInTheDocument()
     })
   })
 
-  describe('Loading State', () => {
-    it('should show loading state', () => {
-      mockUseGetAutomationRules.mockReturnValue({
-        data: null,
-        isLoading: true,
-        error: null,
-      })
+  it('should render create button', async () => {
+    renderWithProviders(<RulesPage />)
 
-      renderWithProviders(<RulesPage />)
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /create.*rule/i })).toBeInTheDocument()
+    })
+  })
 
+  it('should render view toggle', async () => {
+    renderWithProviders(<RulesPage />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('group', { name: /view toggle/i })).toBeInTheDocument()
+    })
+  })
+
+  it('should render rules list', async () => {
+    renderWithProviders(<RulesPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Daily Budget Check')).toBeInTheDocument()
+    })
+    expect(screen.getByText('Monthly Savings')).toBeInTheDocument()
+  })
+
+  it('should show loading state', async () => {
+    mockUseGetAutomationRules.mockReturnValue({
+      data: null,
+      isLoading: true,
+      error: null,
+      refetch: mockRefetchAutomationRules,
+    })
+    renderWithProviders(<RulesPage />)
+
+    await waitFor(() => {
       expect(screen.getByText(/loading/i)).toBeInTheDocument()
     })
   })
 
-  describe('Error State', () => {
-    it('should show error state', () => {
-      mockUseGetAutomationRules.mockReturnValue({
-        data: null,
-        isLoading: false,
-        error: new Error('Failed to load'),
-      })
+  it('should show error state', async () => {
+    mockUseGetAutomationRules.mockReturnValue({
+      data: null,
+      isLoading: false,
+      error: new Error('Failed to load'),
+      refetch: mockRefetchAutomationRules,
+    })
+    renderWithProviders(<RulesPage />)
 
-      renderWithProviders(<RulesPage />)
-
+    await waitFor(() => {
       expect(screen.getByText(/error/i)).toBeInTheDocument()
     })
+  })
 
-    it('should show retry button on error', () => {
-      mockUseGetAutomationRules.mockReturnValue({
-        data: null,
-        isLoading: false,
-        error: new Error('Failed to load'),
-        refetch: vi.fn(),
-      })
+  it('should show retry button on error', async () => {
+    mockUseGetAutomationRules.mockReturnValue({
+      data: null,
+      isLoading: false,
+      error: new Error('Failed to load'),
+      refetch: mockRefetchAutomationRules,
+    })
+    renderWithProviders(<RulesPage />)
 
-      renderWithProviders(<RulesPage />)
-
+    await waitFor(() => {
       expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
     })
   })
 
-  describe('Empty State', () => {
-    it('should show empty state when no rules', () => {
-      mockUseGetAutomationRules.mockReturnValue({
-        data: [],
-        isLoading: false,
-        error: null,
-      })
+  it('should show empty state when no rules', async () => {
+    mockUseGetAutomationRules.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+      refetch: mockRefetchAutomationRules,
+    })
+    renderWithProviders(<RulesPage />)
 
-      renderWithProviders(<RulesPage />)
-
+    await waitFor(() => {
       expect(screen.getByText(/no automation rules/i)).toBeInTheDocument()
     })
+  })
 
-    it('should show create button in empty state', () => {
-      mockUseGetAutomationRules.mockReturnValue({
-        data: [],
-        isLoading: false,
-        error: null,
-      })
+  it('should show create button in empty state', async () => {
+    mockUseGetAutomationRules.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+      refetch: mockRefetchAutomationRules,
+    })
+    renderWithProviders(<RulesPage />)
 
-      renderWithProviders(<RulesPage />)
-
+    await waitFor(() => {
       const createButtons = screen.getAllByRole('button', { name: /create/i })
       expect(createButtons.length).toBeGreaterThan(0)
     })
   })
 
-  describe('View Toggle', () => {
-    it('should default to cards view', () => {
-      renderWithProviders(<RulesPage />)
+  it('should default to cards view', async () => {
+    renderWithProviders(<RulesPage />)
 
+    await waitFor(() => {
       const cardsButton = screen.getByRole('button', { name: /cards/i })
       expect(cardsButton).toHaveAttribute('aria-pressed', 'true')
     })
+  })
 
-    it('should switch to table view when clicked', () => {
-      renderWithProviders(<RulesPage />)
+  it('should switch to table view when clicked', async () => {
+    renderWithProviders(<RulesPage />)
 
-      const tableButton = screen.getByRole('button', { name: /table/i })
-      fireEvent.click(tableButton)
-
-      expect(tableButton).toHaveAttribute('aria-pressed', 'true')
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /table/i })).toBeInTheDocument()
     })
 
-    it('should show cards in cards view', () => {
-      renderWithProviders(<RulesPage />)
+    const tableButton = screen.getByRole('button', { name: /table/i })
+    fireEvent.click(tableButton)
+    expect(tableButton).toHaveAttribute('aria-pressed', 'true')
+  })
 
-      // Cards should have article role
+  it('should show cards in cards view', async () => {
+    renderWithProviders(<RulesPage />)
+
+    await waitFor(() => {
       const cards = screen.getAllByRole('article')
       expect(cards.length).toBe(2)
     })
+  })
 
-    it('should show table in table view', () => {
-      renderWithProviders(<RulesPage />)
+  it('should show table in table view', async () => {
+    renderWithProviders(<RulesPage />)
 
-      const tableButton = screen.getByRole('button', { name: /table/i })
-      fireEvent.click(tableButton)
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /table/i })).toBeInTheDocument()
+    })
 
+    const tableButton = screen.getByRole('button', { name: /table/i })
+    fireEvent.click(tableButton)
+
+    await waitFor(() => {
       expect(screen.getByRole('table')).toBeInTheDocument()
     })
   })
 
-  describe('Rule Actions', () => {
-    it('should toggle rule when switch is clicked', async () => {
-      renderWithProviders(<RulesPage />)
+  it('should toggle rule when switch is clicked', async () => {
+    renderWithProviders(<RulesPage />)
 
-      const toggles = screen.getAllByRole('switch')
-      fireEvent.click(toggles[0])
-
-      expect(mockToggleRule).toHaveBeenCalled()
+    await waitFor(() => {
+      expect(screen.getAllByRole('switch').length).toBeGreaterThan(0)
     })
 
-    it('should open delete confirmation when delete is clicked', () => {
-      renderWithProviders(<RulesPage />)
+    const toggles = screen.getAllByRole('switch')
+    fireEvent.click(toggles[0])
+    expect(mockToggleAutomationRuleMutate).toHaveBeenCalled()
+  })
 
-      const deleteButtons = screen.getAllByRole('button', { name: /delete/i })
-      fireEvent.click(deleteButtons[0])
+  it('should open delete confirmation when delete is clicked', async () => {
+    renderWithProviders(<RulesPage />)
 
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: /delete/i }).length).toBeGreaterThan(0)
+    })
+
+    const deleteButtons = screen.getAllByRole('button', { name: /delete/i })
+    fireEvent.click(deleteButtons[0])
+
+    await waitFor(() => {
       expect(screen.getByText(/are you sure/i)).toBeInTheDocument()
     })
-
-    it('should call delete mutation when confirmed', async () => {
-      renderWithProviders(<RulesPage />)
-
-      const deleteButtons = screen.getAllByRole('button', { name: /delete/i })
-      fireEvent.click(deleteButtons[0])
-
-      const confirmButton = screen.getByRole('button', { name: /confirm/i })
-      fireEvent.click(confirmButton)
-
-      expect(mockDeleteRule).toHaveBeenCalled()
-    })
   })
 
-  describe('Tier Limits', () => {
-    it('should disable create button when at limit', () => {
-      // This test verifies the component handles tier limits from the hook
-      // The mock is set up in beforeEach - this test just verifies integration
-      renderWithProviders(<RulesPage />)
+  it('should call delete mutation when confirmed', async () => {
+    renderWithProviders(<RulesPage />)
 
-      // The component should handle isAtLimit by disabling the create button
-      // This test verifies the integration works
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: /delete/i }).length).toBeGreaterThan(0)
     })
 
-    it('should show upgrade banner when at limit', () => {
-      // This test verifies the component shows upgrade banner based on tier limits
-      // The mock is set up in beforeEach - this test just verifies integration
-      renderWithProviders(<RulesPage />)
+    const deleteButtons = screen.getAllByRole('button', { name: /delete/i })
+    fireEvent.click(deleteButtons[0])
 
-      // Component should show upgrade banner when shouldShowUpgradeBanner is true
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /confirm/i })).toBeInTheDocument()
     })
+
+    const confirmButton = screen.getByRole('button', { name: /confirm/i })
+    fireEvent.click(confirmButton)
+    expect(mockDeleteAutomationRuleMutate).toHaveBeenCalled()
   })
 
-  describe('Accessibility', () => {
-    it('should have accessible page heading', () => {
-      renderWithProviders(<RulesPage />)
+  it('should have accessible page heading', async () => {
+    renderWithProviders(<RulesPage />)
 
+    await waitFor(() => {
       expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument()
     })
+  })
 
-    it('should have accessible view toggle group', () => {
-      renderWithProviders(<RulesPage />)
+  it('should have accessible view toggle group', async () => {
+    renderWithProviders(<RulesPage />)
 
+    await waitFor(() => {
       expect(screen.getByRole('group', { name: /view toggle/i })).toBeInTheDocument()
     })
   })
 
-  describe('Test Rule', () => {
-    it('should call test mutation when test button is clicked in cards view', () => {
-      renderWithProviders(<RulesPage />)
+  it('should call test mutation when test button is clicked in cards view', async () => {
+    renderWithProviders(<RulesPage />)
 
-      const testButtons = screen.getAllByRole('button', { name: /test/i })
-      fireEvent.click(testButtons[0])
-
-      expect(mockTestRule).toHaveBeenCalled()
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: /test/i }).length).toBeGreaterThan(0)
     })
 
-    it('should call test mutation when test button is clicked in table view', () => {
-      renderWithProviders(<RulesPage />)
+    const testButtons = screen.getAllByRole('button', { name: /test/i })
+    fireEvent.click(testButtons[0])
+    expect(mockTestAutomationRuleMutate).toHaveBeenCalled()
+  })
 
-      // Switch to table view
-      const tableButton = screen.getByRole('button', { name: /table/i })
-      fireEvent.click(tableButton)
+  it('should call test mutation when test button is clicked in table view', async () => {
+    renderWithProviders(<RulesPage />)
 
-      const testButtons = screen.getAllByRole('button', { name: /test/i })
-      fireEvent.click(testButtons[0])
-
-      expect(mockTestRule).toHaveBeenCalled()
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /table/i })).toBeInTheDocument()
     })
+
+    const tableButton = screen.getByRole('button', { name: /table/i })
+    fireEvent.click(tableButton)
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: /test/i }).length).toBeGreaterThan(0)
+    })
+
+    const testButtons = screen.getAllByRole('button', { name: /test/i })
+    fireEvent.click(testButtons[0])
+    expect(mockTestAutomationRuleMutate).toHaveBeenCalled()
   })
 })

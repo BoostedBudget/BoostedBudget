@@ -5,7 +5,7 @@
  * Tests the account filter hook with URL state synchronization.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach } from 'bun:test'
 import { renderHook, act } from '@testing-library/react'
 import { BrowserRouter } from 'react-router-dom'
 import React from 'react'
@@ -22,10 +22,6 @@ describe('useAccountFilters', () => {
   beforeEach(() => {
     // Reset URL before each test
     window.history.replaceState({}, '', '/')
-  })
-
-  afterEach(() => {
-    vi.restoreAllMocks()
   })
 
   describe('Initialization', () => {

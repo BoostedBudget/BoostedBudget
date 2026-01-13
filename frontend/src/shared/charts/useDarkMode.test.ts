@@ -3,102 +3,89 @@
  * Issue #445: Recharts to Plotly Migration
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
-import { useDarkMode } from './useDarkMode';
+import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
+import { renderHook, act } from '@testing-library/react'
+import { useDarkMode } from './useDarkMode'
 
 describe('useDarkMode', () => {
   let matchMediaMock: {
-    matches: boolean;
-    addEventListener: ReturnType<typeof vi.fn>;
-    removeEventListener: ReturnType<typeof vi.fn>;
-  };
+    matches: boolean
+    addEventListener: ReturnType<typeof mock>
+    removeEventListener: ReturnType<typeof mock>
+  }
+  const originalMatchMedia = window.matchMedia
 
   beforeEach(() => {
     matchMediaMock = {
       matches: false,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    };
-
-    vi.stubGlobal('matchMedia', vi.fn(() => matchMediaMock));
-  });
+      addEventListener: mock(() => {}),
+      removeEventListener: mock(() => {}),
+    }
+    // @ts-expect-error - mocking matchMedia
+    window.matchMedia = mock(() => matchMediaMock)
+  })
 
   afterEach(() => {
-    vi.unstubAllGlobals();
-  });
+    window.matchMedia = originalMatchMedia
+  })
 
   it('returns false when system prefers light mode', () => {
-    matchMediaMock.matches = false;
-
-    const { result } = renderHook(() => useDarkMode());
-
-    expect(result.current).toBe(false);
-  });
+    matchMediaMock.matches = false
+    const { result } = renderHook(() => useDarkMode())
+    expect(result.current).toBe(false)
+  })
 
   it('returns true when system prefers dark mode', () => {
-    matchMediaMock.matches = true;
-
-    const { result } = renderHook(() => useDarkMode());
-
-    expect(result.current).toBe(true);
-  });
+    matchMediaMock.matches = true
+    const { result } = renderHook(() => useDarkMode())
+    expect(result.current).toBe(true)
+  })
 
   it('queries the correct media feature', () => {
-    renderHook(() => useDarkMode());
-
-    expect(window.matchMedia).toHaveBeenCalledWith('(prefers-color-scheme: dark)');
-  });
+    renderHook(() => useDarkMode())
+    expect(window.matchMedia).toHaveBeenCalledWith('(prefers-color-scheme: dark)')
+  })
 
   it('adds event listener on mount', () => {
-    renderHook(() => useDarkMode());
-
+    renderHook(() => useDarkMode())
     expect(matchMediaMock.addEventListener).toHaveBeenCalledWith(
       'change',
       expect.any(Function)
-    );
-  });
+    )
+  })
 
   it('removes event listener on unmount', () => {
-    const { unmount } = renderHook(() => useDarkMode());
-
-    unmount();
-
+    const { unmount } = renderHook(() => useDarkMode())
+    unmount()
     expect(matchMediaMock.removeEventListener).toHaveBeenCalledWith(
       'change',
       expect.any(Function)
-    );
-  });
+    )
+  })
 
   it('updates when preference changes', () => {
-    matchMediaMock.matches = false;
+    matchMediaMock.matches = false
+    const { result } = renderHook(() => useDarkMode())
+    expect(result.current).toBe(false)
 
-    const { result } = renderHook(() => useDarkMode());
-
-    expect(result.current).toBe(false);
-
-    // Simulate preference change
     act(() => {
-      const changeHandler = matchMediaMock.addEventListener.mock.calls[0][1];
-      changeHandler({ matches: true } as MediaQueryListEvent);
-    });
+      const changeHandler = matchMediaMock.addEventListener.mock.calls[0][1]
+      changeHandler({ matches: true } as MediaQueryListEvent)
+    })
 
-    expect(result.current).toBe(true);
-  });
+    expect(result.current).toBe(true)
+  })
 
   it('updates when preference changes back', () => {
-    matchMediaMock.matches = true;
+    matchMediaMock.matches = true
+    const { result } = renderHook(() => useDarkMode())
+    expect(result.current).toBe(true)
 
-    const { result } = renderHook(() => useDarkMode());
-
-    expect(result.current).toBe(true);
-
-    // Simulate preference change to light
     act(() => {
-      const changeHandler = matchMediaMock.addEventListener.mock.calls[0][1];
-      changeHandler({ matches: false } as MediaQueryListEvent);
-    });
+      const changeHandler = matchMediaMock.addEventListener.mock.calls[0][1]
+      changeHandler({ matches: false } as MediaQueryListEvent)
+    })
 
-    expect(result.current).toBe(false);
-  });
-});
+    expect(result.current).toBe(false)
+  })
+})

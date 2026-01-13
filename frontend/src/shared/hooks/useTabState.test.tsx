@@ -1,24 +1,17 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect } from 'bun:test'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { useTabState } from './useTabState'
 
-/**
- * Test wrapper component that provides React Router context
- * Required for useSearchParams hook
- */
-function createWrapper(initialUrl = '/') {
-  return function Wrapper({ children }: { children: ReactNode }) {
-    return (
-      <MemoryRouter initialEntries={[initialUrl]}>
-        <Routes>
-          <Route path="*" element={<>{children}</>} />
-        </Routes>
-      </MemoryRouter>
-    )
-  }
-}
+const createWrapper = (initialUrl = '/') => ({ children }: { children: ReactNode }) =>
+  (
+    <MemoryRouter initialEntries={[initialUrl]}>
+      <Routes>
+        <Route path="*" element={<>{children}</>} />
+      </Routes>
+    </MemoryRouter>
+  )
 
 describe('useTabState', () => {
   describe('Initialization', () => {

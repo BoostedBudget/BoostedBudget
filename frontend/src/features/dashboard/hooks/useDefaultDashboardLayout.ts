@@ -19,7 +19,7 @@ import {
   useGetDefaultLayout,
   getGetDefaultLayoutQueryKey,
 } from '@/api/generated/endpoints/dashboard/dashboard'
-import { DEFAULT_LAYOUT } from '../widgets/registry'
+import { DEFAULT_LAYOUT } from '@/features/dashboard/widgets/registry'
 import type { DashboardLayout } from '../types'
 
 // Cache TTL: 1 hour (React Query handles caching natively)

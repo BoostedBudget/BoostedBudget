@@ -1,14 +1,7 @@
-/**
- * AllocationBreakdown Tests
- * Issue #497: Budget Category Manager + Match Config UI
- *
- * TDD RED Phase: Write failing tests first
- */
-
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import { AllocationBreakdown } from './AllocationBreakdown';
-import type { BudgetCategory } from '../../types';
+import { describe, it, expect } from 'bun:test'
+import { render, screen } from '@testing-library/react'
+import { AllocationBreakdown } from './AllocationBreakdown'
+import type { BudgetCategory } from '../../types'
 
 describe('AllocationBreakdown', () => {
   const createMockCategory = (overrides?: Partial<BudgetCategory>): BudgetCategory => ({

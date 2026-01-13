@@ -6,89 +6,40 @@
  *
  * Issue #354: Customizable Dashboard Widget System
  * Issue #445: Migrated from Recharts to Plotly
+ * Issue #575: Refactored to use centralized mocks (no inline mock.module)
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import React from 'react';
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { render, screen } from '@testing-library/react'
+import React from 'react'
 
-// Mock hooks and registry
-vi.mock('../hooks/useCashFlowData', () => ({
-  useCashFlowHistory: vi.fn(),
-}));
+// Issue #575: Use centralized mocks to prevent mock.module() pollution
+// No inline mock.module() calls - mocks are preloaded via bunfig.toml
+import '@/test/mocks/registry'
+import '@/test/mocks/shared-charts'
+import {
+  mockUseCashFlowHistory,
+  mockCashFlowHistoryRefetch,
+} from '@/test/mocks/cash-flow-hooks'
 
-vi.mock('./registry', () => ({
-  registerWidget: vi.fn(),
-}));
-
-// Mock the shared charts module
-vi.mock('@/shared/charts', () => ({
-  Plot: vi.fn(({ data, layout, config, style, useResizeHandler }) => (
-    <div
-      data-testid="plotly-chart"
-      data-trace-count={data.length}
-      data-trace-names={JSON.stringify(data.map((d: { name: string }) => d.name))}
-      data-use-resize-handler={useResizeHandler}
-      data-responsive={config?.responsive}
-      data-has-shapes={layout?.shapes ? 'true' : 'false'}
-      style={style}
-    >
-      Plotly Chart Mock
-    </div>
-  )),
-  useDarkMode: vi.fn(() => false),
-  getBarChartLayout: vi.fn(() => ({
-    autosize: true,
-    margin: { t: 10, r: 10, b: 40, l: 60 },
-    barmode: 'group',
-    xaxis: { gridcolor: '#e5e7eb' },
-    yaxis: { gridcolor: '#e5e7eb' },
-    legend: { font: {} },
-  })),
-  createHorizontalReferenceLine: vi.fn(() => [
-    { type: 'line', y0: 0, y1: 0, line: { color: '#e5e7eb' } },
-  ]),
-  DEFAULT_CONFIG: {
-    responsive: true,
-    displayModeBar: 'hover',
-    scrollZoom: false,
-    modeBarButtonsToRemove: ['lasso2d', 'select2d'],
-    displaylogo: false,
-  },
-  CASH_FLOW_COLORS: {
-    income: '#3b82f6',
-    expenses: '#f97316',
-    netPositive: '#10b981',
-    netNegative: '#ef4444',
-  },
-  formatCurrencyFull: vi.fn((value: number) =>
-    `$${value.toLocaleString('en-US', { minimumFractionDigits: 2 })}`
-  ),
-  formatCurrencyCompact: vi.fn((value: number) => {
-    if (Math.abs(value) >= 1000) return `$${(value / 1000).toFixed(1)}k`;
-    return `$${value.toFixed(0)}`;
-  }),
-}));
-
-import { CashFlowChartWidget } from './CashFlowChartWidget';
-import { useCashFlowHistory } from '../hooks/useCashFlowData';
+import { CashFlowChartWidget } from './CashFlowChartWidget'
 import {
   DashboardContext,
   DashboardContextValue,
-} from '../context/DashboardContext';
+} from '../context/DashboardContext'
 
 // Wrapper with context
 const TestWrapper = ({
   children,
   contextValue,
 }: {
-  children: React.ReactNode;
-  contextValue: DashboardContextValue | null;
+  children: React.ReactNode
+  contextValue: DashboardContextValue | null
 }) => (
   <DashboardContext.Provider value={contextValue}>
     {children}
   </DashboardContext.Provider>
-);
+)
 
 describe('CashFlowChartWidget', () => {
   const mockContextValue: DashboardContextValue = {
@@ -96,12 +47,12 @@ describe('CashFlowChartWidget', () => {
       startDate: '2024-01-01',
       endDate: '2024-01-31',
     },
-    setFilters: vi.fn(),
+    setFilters: mock(() => {}),
     timeframe: 'month',
-    setTimeframe: vi.fn(),
+    setTimeframe: mock(() => {}),
     isEditing: false,
-    setIsEditing: vi.fn(),
-  };
+    setIsEditing: mock(() => {}),
+  }
 
   const mockHistoryData = {
     start_date: '2024-01-01',
@@ -125,247 +76,199 @@ describe('CashFlowChartWidget', () => {
         transaction_count: 8,
       },
     ],
-  };
+  }
 
   beforeEach(() => {
-    vi.clearAllMocks();
-  });
+    mockUseCashFlowHistory.mockClear()
+    mockCashFlowHistoryRefetch.mockClear()
+    // Reset to default return value
+    mockUseCashFlowHistory.mockReturnValue({
+      data: null,
+      loading: false,
+      error: null,
+      refetch: mockCashFlowHistoryRefetch,
+    })
+  })
 
-  describe('Missing Date Range', () => {
+  describe('State Handling', () => {
     it('should show prompt when no date range', () => {
       const contextWithoutDates = {
         ...mockContextValue,
         filters: { startDate: '', endDate: '' },
-      };
+      }
 
-      vi.mocked(useCashFlowHistory).mockReturnValue({
+      mockUseCashFlowHistory.mockReturnValue({
         data: null,
         loading: false,
         error: null,
-        refetch: vi.fn(),
-      });
+        refetch: mockCashFlowHistoryRefetch,
+      })
 
       render(
         <TestWrapper contextValue={contextWithoutDates}>
-          <CashFlowChartWidget widgetId="test-1" onRemove={vi.fn()} />
+          <CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} />
         </TestWrapper>
-      );
+      )
 
       expect(
         screen.getByText('Select a date range to view cash flow chart')
-      ).toBeInTheDocument();
-    });
-  });
+      ).toBeInTheDocument()
+    })
 
-  describe('Loading State', () => {
     it('should show loading spinner when loading', () => {
-      vi.mocked(useCashFlowHistory).mockReturnValue({
+      mockUseCashFlowHistory.mockReturnValue({
         data: null,
         loading: true,
         error: null,
-        refetch: vi.fn(),
-      });
+        refetch: mockCashFlowHistoryRefetch,
+      })
 
       render(
         <TestWrapper contextValue={mockContextValue}>
-          <CashFlowChartWidget widgetId="test-1" onRemove={vi.fn()} />
+          <CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} />
         </TestWrapper>
-      );
+      )
 
-      const spinner = document.querySelector('.animate-spin');
-      expect(spinner).toBeInTheDocument();
-    });
-  });
+      const spinner = document.querySelector('.animate-spin')
+      expect(spinner).toBeInTheDocument()
+    })
 
-  describe('Error State', () => {
     it('should show error message when error occurs', () => {
-      vi.mocked(useCashFlowHistory).mockReturnValue({
+      mockUseCashFlowHistory.mockReturnValue({
         data: null,
         loading: false,
         error: 'Failed to load chart data',
-        refetch: vi.fn(),
-      });
+        refetch: mockCashFlowHistoryRefetch,
+      })
 
       render(
         <TestWrapper contextValue={mockContextValue}>
-          <CashFlowChartWidget widgetId="test-1" onRemove={vi.fn()} />
+          <CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} />
         </TestWrapper>
-      );
+      )
 
-      expect(screen.getByText('Failed to load chart data')).toBeInTheDocument();
-    });
-  });
+      expect(screen.getByText('Failed to load chart data')).toBeInTheDocument()
+    })
 
-  describe('Empty State', () => {
     it('should show no data message when data is null', () => {
-      vi.mocked(useCashFlowHistory).mockReturnValue({
+      mockUseCashFlowHistory.mockReturnValue({
         data: null,
         loading: false,
         error: null,
-        refetch: vi.fn(),
-      });
+        refetch: mockCashFlowHistoryRefetch,
+      })
 
       render(
         <TestWrapper contextValue={mockContextValue}>
-          <CashFlowChartWidget widgetId="test-1" onRemove={vi.fn()} />
+          <CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} />
         </TestWrapper>
-      );
+      )
 
       expect(
         screen.getByText('No cash flow data available for this period')
-      ).toBeInTheDocument();
-    });
+      ).toBeInTheDocument()
+    })
 
     it('should show no data message when periods array is empty', () => {
-      vi.mocked(useCashFlowHistory).mockReturnValue({
+      mockUseCashFlowHistory.mockReturnValue({
         data: { ...mockHistoryData, periods: [] },
         loading: false,
         error: null,
-        refetch: vi.fn(),
-      });
+        refetch: mockCashFlowHistoryRefetch,
+      })
 
       render(
         <TestWrapper contextValue={mockContextValue}>
-          <CashFlowChartWidget widgetId="test-1" onRemove={vi.fn()} />
+          <CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} />
         </TestWrapper>
-      );
+      )
 
       expect(
         screen.getByText('No cash flow data available for this period')
-      ).toBeInTheDocument();
-    });
-  });
+      ).toBeInTheDocument()
+    })
+  })
 
-  describe('Success State - Plotly Chart', () => {
+  describe('Plotly Chart Rendering', () => {
     it('should render Plotly chart component', () => {
-      vi.mocked(useCashFlowHistory).mockReturnValue({
+      mockUseCashFlowHistory.mockReturnValue({
         data: mockHistoryData,
         loading: false,
         error: null,
-        refetch: vi.fn(),
-      });
+        refetch: mockCashFlowHistoryRefetch,
+      })
 
       render(
         <TestWrapper contextValue={mockContextValue}>
-          <CashFlowChartWidget widgetId="test-1" onRemove={vi.fn()} />
+          <CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} />
         </TestWrapper>
-      );
+      )
 
-      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
-    });
+      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument()
+    })
 
-    it('should render 3 traces (income bar, expenses bar, net line)', () => {
-      vi.mocked(useCashFlowHistory).mockReturnValue({
+    it('should render 3 traces with correct names and configuration', () => {
+      mockUseCashFlowHistory.mockReturnValue({
         data: mockHistoryData,
         loading: false,
         error: null,
-        refetch: vi.fn(),
-      });
+        refetch: mockCashFlowHistoryRefetch,
+      })
 
       render(
         <TestWrapper contextValue={mockContextValue}>
-          <CashFlowChartWidget widgetId="test-1" onRemove={vi.fn()} />
+          <CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} />
         </TestWrapper>
-      );
+      )
 
-      const chart = screen.getByTestId('plotly-chart');
-      expect(chart.getAttribute('data-trace-count')).toBe('3');
-    });
+      const chart = screen.getByTestId('plotly-chart')
+      expect(chart.getAttribute('data-trace-count')).toBe('3')
 
-    it('should have correct trace names', () => {
-      vi.mocked(useCashFlowHistory).mockReturnValue({
-        data: mockHistoryData,
-        loading: false,
-        error: null,
-        refetch: vi.fn(),
-      });
-
-      render(
-        <TestWrapper contextValue={mockContextValue}>
-          <CashFlowChartWidget widgetId="test-1" onRemove={vi.fn()} />
-        </TestWrapper>
-      );
-
-      const chart = screen.getByTestId('plotly-chart');
       const traceNames = JSON.parse(
         chart.getAttribute('data-trace-names') || '[]'
-      );
-      expect(traceNames).toContain('Income');
-      expect(traceNames).toContain('Expenses');
-      expect(traceNames).toContain('Net Cash Flow');
-    });
+      )
+      expect(traceNames).toContain('Income')
+      expect(traceNames).toContain('Expenses')
+      expect(traceNames).toContain('Net Cash Flow')
+    })
 
-    it('should have reference line at y=0', () => {
-      vi.mocked(useCashFlowHistory).mockReturnValue({
+    it('should have reference line and responsive config enabled', () => {
+      mockUseCashFlowHistory.mockReturnValue({
         data: mockHistoryData,
         loading: false,
         error: null,
-        refetch: vi.fn(),
-      });
+        refetch: mockCashFlowHistoryRefetch,
+      })
 
       render(
         <TestWrapper contextValue={mockContextValue}>
-          <CashFlowChartWidget widgetId="test-1" onRemove={vi.fn()} />
+          <CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} />
         </TestWrapper>
-      );
+      )
 
-      const chart = screen.getByTestId('plotly-chart');
-      expect(chart.getAttribute('data-has-shapes')).toBe('true');
-    });
-
-    it('should pass responsive config to Plot', () => {
-      vi.mocked(useCashFlowHistory).mockReturnValue({
-        data: mockHistoryData,
-        loading: false,
-        error: null,
-        refetch: vi.fn(),
-      });
-
-      render(
-        <TestWrapper contextValue={mockContextValue}>
-          <CashFlowChartWidget widgetId="test-1" onRemove={vi.fn()} />
-        </TestWrapper>
-      );
-
-      const chart = screen.getByTestId('plotly-chart');
-      expect(chart.getAttribute('data-responsive')).toBe('true');
-    });
-
-    it('should enable resize handler', () => {
-      vi.mocked(useCashFlowHistory).mockReturnValue({
-        data: mockHistoryData,
-        loading: false,
-        error: null,
-        refetch: vi.fn(),
-      });
-
-      render(
-        <TestWrapper contextValue={mockContextValue}>
-          <CashFlowChartWidget widgetId="test-1" onRemove={vi.fn()} />
-        </TestWrapper>
-      );
-
-      const chart = screen.getByTestId('plotly-chart');
-      expect(chart.getAttribute('data-use-resize-handler')).toBe('true');
-    });
-  });
+      const chart = screen.getByTestId('plotly-chart')
+      expect(chart.getAttribute('data-has-shapes')).toBe('true')
+      expect(chart.getAttribute('data-responsive')).toBe('true')
+      expect(chart.getAttribute('data-use-resize-handler')).toBe('true')
+    })
+  })
 
   describe('Context Integration', () => {
     it('should pass correct filters to useCashFlowHistory', () => {
-      vi.mocked(useCashFlowHistory).mockReturnValue({
+      mockUseCashFlowHistory.mockReturnValue({
         data: null,
         loading: false,
         error: null,
-        refetch: vi.fn(),
-      });
+        refetch: mockCashFlowHistoryRefetch,
+      })
 
       render(
         <TestWrapper contextValue={mockContextValue}>
-          <CashFlowChartWidget widgetId="test-1" onRemove={vi.fn()} />
+          <CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} />
         </TestWrapper>
-      );
+      )
 
-      expect(useCashFlowHistory).toHaveBeenCalledWith(
+      expect(mockUseCashFlowHistory).toHaveBeenCalledWith(
         expect.objectContaining({
           filters: expect.objectContaining({
             startDate: '2024-01-01',
@@ -373,103 +276,37 @@ describe('CashFlowChartWidget', () => {
           }),
           enabled: true,
         })
-      );
-    });
-  });
+      )
+    })
+  })
 
-  /**
-   * Flex Layout Structure Tests - Issue #420
-   *
-   * These tests verify that the widget uses the correct flex pattern
-   * to ensure the chart can properly calculate dimensions.
-   *
-   * Pattern: h-full flex flex-col -> flex-1 min-h-0 wrapper -> Plot
-   */
-  describe('Flex Layout Structure - Issue #420', () => {
-    it('should have flex-col container for proper height propagation', () => {
-      vi.mocked(useCashFlowHistory).mockReturnValue({
+  describe('Layout and Styling - Issues #420, #422', () => {
+    it('should have proper flex layout and responsive dimensions', () => {
+      mockUseCashFlowHistory.mockReturnValue({
         data: mockHistoryData,
         loading: false,
         error: null,
-        refetch: vi.fn(),
-      });
+        refetch: mockCashFlowHistoryRefetch,
+      })
 
       const { container } = render(
         <TestWrapper contextValue={mockContextValue}>
-          <CashFlowChartWidget widgetId="test-1" onRemove={vi.fn()} />
+          <CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} />
         </TestWrapper>
-      );
+      )
 
-      // Find the outer wrapper div
-      const outerWrapper = container.firstChild as HTMLElement;
-      expect(outerWrapper).toHaveClass('h-full');
-      expect(outerWrapper).toHaveClass('flex');
-      expect(outerWrapper).toHaveClass('flex-col');
-    });
+      const outerWrapper = container.firstChild as HTMLElement
+      expect(outerWrapper).toHaveClass('h-full')
+      expect(outerWrapper).toHaveClass('flex')
+      expect(outerWrapper).toHaveClass('flex-col')
 
-    it('should have flex-1 min-h-0 wrapper around Plot component', () => {
-      vi.mocked(useCashFlowHistory).mockReturnValue({
-        data: mockHistoryData,
-        loading: false,
-        error: null,
-        refetch: vi.fn(),
-      });
+      const plotChart = screen.getByTestId('plotly-chart')
+      const chartWrapper = plotChart.parentElement
+      expect(chartWrapper).toHaveClass('flex-1')
+      expect(chartWrapper).toHaveClass('min-h-0')
 
-      render(
-        <TestWrapper contextValue={mockContextValue}>
-          <CashFlowChartWidget widgetId="test-1" onRemove={vi.fn()} />
-        </TestWrapper>
-      );
-
-      // The wrapper around Plot should have flex-1 min-h-0
-      const plotChart = screen.getByTestId('plotly-chart');
-      const chartWrapper = plotChart.parentElement;
-      expect(chartWrapper).toHaveClass('flex-1');
-      expect(chartWrapper).toHaveClass('min-h-0');
-    });
-  });
-
-  /**
-   * Responsive Layout Tests - Issue #422
-   *
-   * These tests verify that the chart uses responsive sizing
-   * to prevent dimension calculation issues.
-   */
-  describe('Responsive Layout - Issue #422', () => {
-    it('should use 100% width and height styling', () => {
-      vi.mocked(useCashFlowHistory).mockReturnValue({
-        data: mockHistoryData,
-        loading: false,
-        error: null,
-        refetch: vi.fn(),
-      });
-
-      render(
-        <TestWrapper contextValue={mockContextValue}>
-          <CashFlowChartWidget widgetId="test-1" onRemove={vi.fn()} />
-        </TestWrapper>
-      );
-
-      const chart = screen.getByTestId('plotly-chart');
-      expect(chart).toHaveStyle({ width: '100%', height: '100%' });
-    });
-
-    it('should have minHeight of 200px as fallback', () => {
-      vi.mocked(useCashFlowHistory).mockReturnValue({
-        data: mockHistoryData,
-        loading: false,
-        error: null,
-        refetch: vi.fn(),
-      });
-
-      render(
-        <TestWrapper contextValue={mockContextValue}>
-          <CashFlowChartWidget widgetId="test-1" onRemove={vi.fn()} />
-        </TestWrapper>
-      );
-
-      const chart = screen.getByTestId('plotly-chart');
-      expect(chart).toHaveStyle({ minHeight: '200px' });
-    });
-  });
-});
+      expect(plotChart).toHaveStyle({ width: '100%', height: '100%' })
+      expect(plotChart).toHaveStyle({ minHeight: '200px' })
+    })
+  })
+})

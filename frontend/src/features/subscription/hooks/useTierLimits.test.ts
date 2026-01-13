@@ -1,16 +1,13 @@
 /**
- * useTierLimits Hook Tests
- * Issue #564: Frontend Test Coverage Improvement
- *
- * Tests the subscription tier limits calculation hook.
+ * useTierLimits Hook Tests - Issue #564/575
+ * Tests subscription tier limits calculation hook
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect } from 'bun:test'
 import { useTierLimits } from './useTierLimits'
 import type { User } from '@/features/profile/types'
 import type { SubscriptionTiersResponse } from '../types'
 
-// Mock user factory
 function createMockUser(tier: string = 'free'): User {
   return {
     id: 'user-1',
@@ -27,7 +24,6 @@ function createMockUser(tier: string = 'free'): User {
   }
 }
 
-// Mock tiers factory - creates properly typed mock data
 function createMockTiers(): SubscriptionTiersResponse {
   const createFeatures = (overrides: Record<string, boolean> = {}) => ({
     ads_enabled: false,
@@ -374,8 +370,6 @@ describe('useTierLimits', () => {
           currentAccountCount: 5,
         })
 
-        // When accountLimit is null, isUnlimited is false, so it uses the limited format
-        // but with null for the limit - this tests the actual behavior
         expect(result.accountCountDisplay).toBe('5/null accounts used')
       })
     })
@@ -389,7 +383,6 @@ describe('useTierLimits', () => {
         currentAccountCount: 5,
       })
 
-      // Unknown tier should result in undefined limit
       expect(result.accountLimit).toBeUndefined()
     })
 

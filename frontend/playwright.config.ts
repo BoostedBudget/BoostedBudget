@@ -38,7 +38,6 @@ const databaseUrl = process.env.DATABASE_URL || '';
 
 // Auth session file path
 const authFile = join(__dirname, 'e2e/.auth/user.json');
-const hasAuthSession = existsSync(authFile);
 
 export default defineConfig({
   // Test directory
@@ -113,7 +112,7 @@ export default defineConfig({
         ...devices['Desktop Chrome'],
         // Use saved auth state from auth.setup.ts if it exists
         // When auth setup is skipped (no TEST_CLERK_* env vars), tests run unauthenticated
-        ...(hasAuthSession ? { storageState: authFile } : {}),
+        ...(existsSync(authFile) ? { storageState: authFile } : {}),
       },
       dependencies: ['auth'],
     },
@@ -137,7 +136,7 @@ export default defineConfig({
       // Pass PORT, E2E_BACKEND_PORT, and VITE_CLERK_PUBLISHABLE_KEY env vars to Vite
       // E2E_BACKEND_PORT is needed for the Vite proxy configuration
       // VITE_CLERK_PUBLISHABLE_KEY enables Clerk authentication (Vite only exposes VITE_* vars)
-      command: `PORT=${frontendPort} E2E_BACKEND_PORT=${backendPort} VITE_CLERK_PUBLISHABLE_KEY=${process.env.CLERK_PUBLISHABLE_KEY || ''} pnpm run dev`,
+      command: `PORT=${frontendPort} E2E_BACKEND_PORT=${backendPort} VITE_CLERK_PUBLISHABLE_KEY=${process.env.CLERK_PUBLISHABLE_KEY || ''} bun run dev`,
       url: `http://localhost:${frontendPort}`,
       reuseExistingServer: !process.env.CI,
       timeout: 120 * 1000,

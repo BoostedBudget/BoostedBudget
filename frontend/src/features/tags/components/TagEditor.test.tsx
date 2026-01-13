@@ -1,23 +1,17 @@
 /**
  * TagEditor Component Tests
  * Issue #564: Frontend Test Coverage Improvement
- *
- * Tests the tag editor component with multi-select and inline creation.
+ * Issue #575: Uses centralized tags-api mock
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { TagEditor } from './TagEditor'
 import type { UserTag } from '../types'
-
-// Mock the generated mutation hook
-const mockMutateAsync = vi.fn()
-vi.mock('@/api/generated/endpoints/tags/tags', () => ({
-  useCreateTag: () => ({
-    mutateAsync: mockMutateAsync,
-    isPending: false,
-  }),
-}))
+import { TagEditor } from './TagEditor'
+import {
+  mockUseCreateTag,
+  mockCreateTagMutateAsync,
+} from '@/test/mocks/tags-api'
 
 // Mock tags data
 function createMockTags(): UserTag[] {
@@ -28,12 +22,23 @@ function createMockTags(): UserTag[] {
   ]
 }
 
-describe('TagEditor', () => {
-  const mockOnChange = vi.fn()
-  const mockOnTagCreated = vi.fn()
+const mockOnChange = mock(() => {})
+const mockOnTagCreated = mock(() => {})
 
+describe('TagEditor', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    mockCreateTagMutateAsync.mockClear()
+    mockOnChange.mockClear()
+    mockOnTagCreated.mockClear()
+
+    // Default: successful tag creation
+    mockCreateTagMutateAsync.mockResolvedValue({})
+    mockUseCreateTag.mockReturnValue({
+      mutateAsync: mockCreateTagMutateAsync,
+      isPending: false,
+      isError: false,
+      error: null,
+    })
   })
 
   describe('Rendering', () => {
@@ -84,7 +89,8 @@ describe('TagEditor', () => {
       )
 
       const tagChip = screen.getByText('Essential').closest('.tag-chip') as HTMLElement
-      expect(tagChip.style.backgroundColor).toBe('rgb(255, 87, 51)')
+      // Happy-dom returns hex, jsdom returns rgb
+      expect(['rgb(255, 87, 51)', '#FF5733']).toContain(tagChip.style.backgroundColor)
     })
 
     it('should render remove button for each selected tag', () => {
@@ -320,7 +326,7 @@ describe('TagEditor', () => {
 
     it('should call mutation when Create clicked', async () => {
       const newTag = { id: 'tag-4', user_id: 'user-1', name: 'New Tag', color: '#6B7280', usage_count: 0, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' }
-      mockMutateAsync.mockResolvedValueOnce(newTag)
+      mockCreateTagMutateAsync.mockResolvedValueOnce(newTag)
 
       render(
         <TagEditor
@@ -337,7 +343,7 @@ describe('TagEditor', () => {
       fireEvent.click(screen.getByText('Create'))
 
       await waitFor(() => {
-        expect(mockMutateAsync).toHaveBeenCalledWith({
+        expect(mockCreateTagMutateAsync).toHaveBeenCalledWith({
           data: { name: 'New Tag', color: '#6B7280' },
         })
       })
@@ -345,7 +351,7 @@ describe('TagEditor', () => {
 
     it('should add new tag to selection after creation', async () => {
       const newTag = { id: 'tag-4', user_id: 'user-1', name: 'New Tag', color: '#6B7280', usage_count: 0, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' }
-      mockMutateAsync.mockResolvedValueOnce(newTag)
+      mockCreateTagMutateAsync.mockResolvedValueOnce(newTag)
 
       render(
         <TagEditor
@@ -368,7 +374,7 @@ describe('TagEditor', () => {
 
     it('should call onTagCreated callback after creation', async () => {
       const newTag = { id: 'tag-4', user_id: 'user-1', name: 'New Tag', color: '#6B7280', usage_count: 0, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' }
-      mockMutateAsync.mockResolvedValueOnce(newTag)
+      mockCreateTagMutateAsync.mockResolvedValueOnce(newTag)
 
       render(
         <TagEditor
@@ -463,8 +469,8 @@ describe('TagEditor', () => {
       )
 
       const tagChip = screen.getByText('NoColor').closest('.tag-chip') as HTMLElement
-      // Should use default gray color
-      expect(tagChip.style.backgroundColor).toBe('rgb(107, 114, 128)')
+      // Should use default gray color (happy-dom returns hex, jsdom returns rgb)
+      expect(['rgb(107, 114, 128)', '#6B7280']).toContain(tagChip.style.backgroundColor)
     })
   })
 })

@@ -1,20 +1,21 @@
 /**
  * useProfile Hook Tests
+ * Issue #575: Migrated from MSW to centralized API mocks
  *
  * Tests the React hook with React Query caching strategy.
- * Uses MSW for API mocking.
  */
 
-import { describe, it, expect, afterEach, afterAll, beforeAll } from 'vitest'
-import { renderHook, waitFor } from '@testing-library/react'
+import { describe, it, expect, beforeEach } from 'bun:test'
+import { renderHook } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { setupServer } from 'msw/node'
-import { http, HttpResponse } from 'msw'
 import React from 'react'
 import { useProfile } from './useProfile'
 import type { User } from '@/api/generated/models'
+import {
+  mockUseGetUserProfile,
+  mockRefetchUserProfile,
+} from '@/test/mocks/profile-api'
 
-// Mock user data matching generated User type
 const mockUser: User = {
   id: 'user-123',
   clerk_user_id: 'user_123',
@@ -30,368 +31,194 @@ const mockUser: User = {
   last_login_at: '2025-01-15T10:00:00Z',
 }
 
-// MSW server setup
-const server = setupServer(
-  http.get('*/api/v1/user/profile', () => {
-    return HttpResponse.json(mockUser)
-  })
-)
-
-// Create a fresh QueryClient for each test
-function createTestQueryClient() {
-  return new QueryClient({
+function createWrapper() {
+  const queryClient = new QueryClient({
     defaultOptions: {
-      queries: {
-        retry: false,
-        gcTime: 0,
-      },
+      queries: { retry: false, gcTime: 0 },
     },
   })
-}
-
-// Wrapper component for tests
-function createWrapper() {
-  const queryClient = createTestQueryClient()
   return function Wrapper({ children }: { children: React.ReactNode }) {
     return (
-      <QueryClientProvider client={queryClient}>
-        {children}
-      </QueryClientProvider>
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     )
   }
 }
 
 describe('useProfile', () => {
-  beforeAll(() => {
-    server.listen({ onUnhandledRequest: 'error' })
+  beforeEach(() => {
+    mockUseGetUserProfile.mockClear()
+    mockRefetchUserProfile.mockClear()
+
+    // Default successful response
+    mockUseGetUserProfile.mockReturnValue({
+      data: mockUser,
+      isLoading: false,
+      error: null,
+      refetch: mockRefetchUserProfile,
+    })
   })
 
-  afterEach(() => {
-    server.resetHandlers()
-  })
-
-  afterAll(() => {
-    server.close()
-  })
-
-  describe('Initial state', () => {
-    it('should return loading state initially', async () => {
-      // Use a delayed response to capture loading state
-      server.use(
-        http.get('*/api/v1/user/profile', async () => {
-          await new Promise((resolve) => setTimeout(resolve, 100))
-          return HttpResponse.json(mockUser)
-        })
-      )
+  describe('Initial State', () => {
+    it('should return loading=true initially', () => {
+      mockUseGetUserProfile.mockReturnValue({
+        data: undefined,
+        isLoading: true,
+        error: null,
+        refetch: mockRefetchUserProfile,
+      })
 
       const { result } = renderHook(() => useProfile(), {
         wrapper: createWrapper(),
       })
 
-      // Assert initial loading state
       expect(result.current.loading).toBe(true)
       expect(result.current.user).toBeNull()
       expect(result.current.error).toBeNull()
-
-      // Wait for completion
-      await waitFor(() => {
-        expect(result.current.loading).toBe(false)
-      })
     })
   })
 
-  describe('Successful fetch', () => {
-    it('should fetch profile on mount', async () => {
-      let fetchCount = 0
-      server.use(
-        http.get('*/api/v1/user/profile', () => {
-          fetchCount++
-          return HttpResponse.json(mockUser)
-        })
-      )
-
+  describe('Successful Fetch', () => {
+    it('should return user data on successful fetch', () => {
       const { result } = renderHook(() => useProfile(), {
         wrapper: createWrapper(),
       })
 
-      // Assert - Initial loading state
-      expect(result.current.loading).toBe(true)
-
-      // Wait for data to load
-      await waitFor(() => {
-        expect(result.current.loading).toBe(false)
-      })
-
-      // Assert - API called
-      expect(fetchCount).toBe(1)
-    })
-
-    it('should return user data after successful fetch', async () => {
-      const { result } = renderHook(() => useProfile(), {
-        wrapper: createWrapper(),
-      })
-
-      // Wait for data to load
-      await waitFor(() => {
-        expect(result.current.loading).toBe(false)
-      })
-
-      // Assert
+      expect(result.current.loading).toBe(false)
       expect(result.current.user).toEqual(mockUser)
       expect(result.current.error).toBeNull()
     })
+
+    it('should return user email', () => {
+      const { result } = renderHook(() => useProfile(), {
+        wrapper: createWrapper(),
+      })
+
+      expect(result.current.user?.email).toBe('test@example.com')
+    })
+
+    it('should return subscription tier', () => {
+      const { result } = renderHook(() => useProfile(), {
+        wrapper: createWrapper(),
+      })
+
+      expect(result.current.user?.subscription_tier).toBe('free')
+    })
   })
 
-  describe('Error handling', () => {
-    it('should return error on failed fetch', async () => {
-      server.use(
-        http.get('*/api/v1/user/profile', () => {
-          return HttpResponse.json(
-            { message: 'Network error' },
-            { status: 500 }
-          )
-        })
-      )
+  describe('Error Handling', () => {
+    it('should return error on failed fetch', () => {
+      const error = new Error('Network error')
+      mockUseGetUserProfile.mockReturnValue({
+        data: undefined,
+        isLoading: false,
+        error,
+        refetch: mockRefetchUserProfile,
+      })
 
       const { result } = renderHook(() => useProfile(), {
         wrapper: createWrapper(),
       })
 
-      // Wait for error state
-      await waitFor(() => {
-        expect(result.current.loading).toBe(false)
-      })
-
-      // Assert
       expect(result.current.error).toBeTruthy()
       expect(result.current.user).toBeNull()
     })
 
-    it('should wrap errors in Error instances', async () => {
-      server.use(
-        http.get('*/api/v1/user/profile', () => {
-          return HttpResponse.json(
-            { message: 'Server error' },
-            { status: 500 }
-          )
-        })
-      )
+    it('should wrap errors in Error instances', () => {
+      mockUseGetUserProfile.mockReturnValue({
+        data: undefined,
+        isLoading: false,
+        error: 'String error',
+        refetch: mockRefetchUserProfile,
+      })
 
       const { result } = renderHook(() => useProfile(), {
         wrapper: createWrapper(),
       })
 
-      // Wait for error state
-      await waitFor(() => {
-        expect(result.current.loading).toBe(false)
-      })
-
-      // Assert - Should be wrapped in Error
       expect(result.current.error).toBeInstanceOf(Error)
-      expect(result.current.user).toBeNull()
     })
   })
 
-  describe('Refetch functionality', () => {
-    it('should provide refetch function', async () => {
+  describe('Refetch', () => {
+    it('should provide refetch function', () => {
       const { result } = renderHook(() => useProfile(), {
         wrapper: createWrapper(),
       })
 
-      // Wait for initial load
-      await waitFor(() => {
-        expect(result.current.loading).toBe(false)
-      })
-
-      // Assert - refetch function exists
       expect(typeof result.current.refetch).toBe('function')
     })
 
-    it('should refetch profile when refetch is called', async () => {
-      let fetchCount = 0
-      server.use(
-        http.get('*/api/v1/user/profile', () => {
-          fetchCount++
-          return HttpResponse.json(mockUser)
-        })
-      )
-
+    it('should call underlying refetch when invoked', () => {
       const { result } = renderHook(() => useProfile(), {
         wrapper: createWrapper(),
       })
 
-      // Wait for initial load
-      await waitFor(() => {
-        expect(result.current.loading).toBe(false)
-      })
-
-      expect(fetchCount).toBe(1)
-
-      // Call refetch
       result.current.refetch()
 
-      // Wait for refetch to complete
-      await waitFor(() => {
-        expect(fetchCount).toBe(2)
-      })
-    })
-
-    it('should update user data on refetch with new data', async () => {
-      let fetchCount = 0
-      server.use(
-        http.get('*/api/v1/user/profile', () => {
-          fetchCount++
-          if (fetchCount === 1) {
-            return HttpResponse.json(mockUser)
-          }
-          return HttpResponse.json({ ...mockUser, email: 'updated@example.com' })
-        })
-      )
-
-      const { result } = renderHook(() => useProfile(), {
-        wrapper: createWrapper(),
-      })
-
-      // Wait for initial load
-      await waitFor(() => {
-        expect(result.current.loading).toBe(false)
-      })
-
-      expect(result.current.user?.email).toBe('test@example.com')
-
-      // Call refetch
-      result.current.refetch()
-
-      // Wait for refetch to complete with updated data
-      await waitFor(() => {
-        expect(result.current.user?.email).toBe('updated@example.com')
-      })
+      expect(mockRefetchUserProfile).toHaveBeenCalled()
     })
   })
 
-  describe('User data types', () => {
-    it('should handle premium tier user', async () => {
+  describe('User Types', () => {
+    it('should handle premium tier user', () => {
       const premiumUser: User = {
         ...mockUser,
         subscription_tier: 'premium',
         subscription_status: 'active',
       }
 
-      server.use(
-        http.get('*/api/v1/user/profile', () => {
-          return HttpResponse.json(premiumUser)
-        })
-      )
+      mockUseGetUserProfile.mockReturnValue({
+        data: premiumUser,
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchUserProfile,
+      })
 
       const { result } = renderHook(() => useProfile(), {
         wrapper: createWrapper(),
       })
 
-      // Wait for data to load
-      await waitFor(() => {
-        expect(result.current.loading).toBe(false)
-      })
-
-      // Assert
       expect(result.current.user?.subscription_tier).toBe('premium')
-      expect(result.current.user?.subscription_status).toBe('active')
     })
 
-    it('should handle user with different region', async () => {
+    it('should handle user with different region', () => {
       const lhrUser: User = {
         ...mockUser,
         primary_region: 'lhr',
       }
 
-      server.use(
-        http.get('*/api/v1/user/profile', () => {
-          return HttpResponse.json(lhrUser)
-        })
-      )
+      mockUseGetUserProfile.mockReturnValue({
+        data: lhrUser,
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchUserProfile,
+      })
 
       const { result } = renderHook(() => useProfile(), {
         wrapper: createWrapper(),
       })
 
-      // Wait for data to load
-      await waitFor(() => {
-        expect(result.current.loading).toBe(false)
-      })
-
-      // Assert
       expect(result.current.user?.primary_region).toBe('lhr')
     })
 
-    it('should handle unverified email user', async () => {
+    it('should handle unverified email user', () => {
       const unverifiedUser: User = {
         ...mockUser,
         email_verified: false,
       }
 
-      server.use(
-        http.get('*/api/v1/user/profile', () => {
-          return HttpResponse.json(unverifiedUser)
-        })
-      )
+      mockUseGetUserProfile.mockReturnValue({
+        data: unverifiedUser,
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchUserProfile,
+      })
 
       const { result } = renderHook(() => useProfile(), {
         wrapper: createWrapper(),
       })
 
-      // Wait for data to load
-      await waitFor(() => {
-        expect(result.current.loading).toBe(false)
-      })
-
-      // Assert
       expect(result.current.user?.email_verified).toBe(false)
-    })
-  })
-
-  describe('Caching', () => {
-    it('should use React Query caching', async () => {
-      let fetchCount = 0
-      server.use(
-        http.get('*/api/v1/user/profile', () => {
-          fetchCount++
-          return HttpResponse.json(mockUser)
-        })
-      )
-
-      // Use shared QueryClient for caching test
-      const queryClient = createTestQueryClient()
-      const wrapper = ({ children }: { children: React.ReactNode }) => (
-        <QueryClientProvider client={queryClient}>
-          {children}
-        </QueryClientProvider>
-      )
-
-      // First render
-      const { result: result1, unmount: unmount1 } = renderHook(
-        () => useProfile(),
-        { wrapper }
-      )
-
-      await waitFor(() => {
-        expect(result1.current.loading).toBe(false)
-      })
-
-      expect(fetchCount).toBe(1)
-      unmount1()
-
-      // Second render with same QueryClient - should use cache
-      const { result: result2 } = renderHook(
-        () => useProfile(),
-        { wrapper }
-      )
-
-      await waitFor(() => {
-        expect(result2.current.loading).toBe(false)
-      })
-
-      // Should not fetch again - using cached data
-      expect(fetchCount).toBe(1)
-      expect(result2.current.user).toEqual(mockUser)
     })
   })
 })

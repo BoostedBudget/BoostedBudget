@@ -6,10 +6,9 @@
  * TDD RED: Writing tests before implementation.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { TransferActionForm } from './TransferActionForm'
 import type { TransferAction } from '../../types'
 
 // Mock accounts
@@ -40,7 +39,7 @@ const mockAccounts = [
   },
 ]
 
-vi.mock('@/api/generated/endpoints/accounts/accounts', () => ({
+mock.module('@/api/generated/endpoints/accounts/accounts', () => ({
   useGetAccounts: () => ({
     data: { accounts: mockAccounts },
     isLoading: false,
@@ -48,17 +47,15 @@ vi.mock('@/api/generated/endpoints/accounts/accounts', () => ({
   }),
 }))
 
-function createQueryClient() {
-  return new QueryClient({
+import { TransferActionForm } from './TransferActionForm'
+
+function renderWithProviders(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
       mutations: { retry: false },
     },
   })
-}
-
-function renderWithProviders(ui: React.ReactElement) {
-  const queryClient = createQueryClient()
   return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>)
 }
 
@@ -70,10 +67,6 @@ const defaultAction: TransferAction = {
 }
 
 describe('TransferActionForm', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
   describe('Rendering', () => {
     it('should render from account selector', () => {
       renderWithProviders(
@@ -135,7 +128,7 @@ describe('TransferActionForm', () => {
 
   describe('Account Selection', () => {
     it('should call onChange when from account is changed', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
 
       renderWithProviders(
         <TransferActionForm action={defaultAction} onChange={onChange} />
@@ -153,7 +146,7 @@ describe('TransferActionForm', () => {
     })
 
     it('should call onChange when to account is changed', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
 
       renderWithProviders(
         <TransferActionForm action={defaultAction} onChange={onChange} />
@@ -205,7 +198,7 @@ describe('TransferActionForm', () => {
     })
 
     it('should call onChange when amount is changed', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
 
       renderWithProviders(
         <TransferActionForm action={defaultAction} onChange={onChange} />
@@ -298,7 +291,7 @@ describe('TransferActionForm', () => {
     })
 
     it('should call onChange when threshold is changed', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
 
       renderWithProviders(
         <TransferActionForm action={excessAction} onChange={onChange} />
@@ -328,7 +321,7 @@ describe('TransferActionForm', () => {
 
   describe('Amount Type Switching', () => {
     it('should call onChange when amount type is changed', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
 
       renderWithProviders(
         <TransferActionForm action={defaultAction} onChange={onChange} />

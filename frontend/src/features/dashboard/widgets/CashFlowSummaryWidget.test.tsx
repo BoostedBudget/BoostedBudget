@@ -1,30 +1,23 @@
 /**
  * Cash Flow Summary Widget Tests
- *
- * Tests the CashFlowSummaryWidget component including loading,
- * error, and success states with summary cards.
- *
- * Issue #354: Customizable Dashboard Widget System
+ * Issue #575: Refactored to use centralized mocks (no inline mock.module)
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import React from 'react'
 
-// Mock hooks and registry
-vi.mock('../hooks/useCashFlowData', () => ({
-  useCashFlowSummary: vi.fn(),
-}))
-
-vi.mock('./registry', () => ({
-  registerWidget: vi.fn(),
-}))
+// Issue #575: Use centralized mocks to prevent mock.module() pollution
+// No inline mock.module() calls - mocks are preloaded via bunfig.toml
+import '@/test/mocks/registry'
+import {
+  mockUseCashFlowSummary,
+  mockCashFlowSummaryRefetch,
+} from '@/test/mocks/cash-flow-hooks'
 
 import { CashFlowSummaryWidget } from './CashFlowSummaryWidget'
-import { useCashFlowSummary } from '../hooks/useCashFlowData'
 import { DashboardContext, DashboardContextValue } from '../context/DashboardContext'
 
-// Wrapper with context
 const TestWrapper = ({
   children,
   contextValue,
@@ -43,11 +36,11 @@ describe('CashFlowSummaryWidget', () => {
       startDate: '2024-01-01',
       endDate: '2024-01-31',
     },
-    setFilters: vi.fn(),
+    setFilters: mock(() => {}),
     timeframe: 'month',
-    setTimeframe: vi.fn(),
+    setTimeframe: mock(() => {}),
     isEditing: false,
-    setIsEditing: vi.fn(),
+    setIsEditing: mock(() => {}),
   }
 
   const mockSummaryData = {
@@ -71,8 +64,24 @@ describe('CashFlowSummaryWidget', () => {
     },
   }
 
+  const defaultProps = {
+    widgetId: 'test-1',
+    onRemove: mock(() => {}),
+  }
+
+  const setMockCashFlowState = (state: Partial<ReturnType<typeof mockUseCashFlowSummary>>) => {
+    mockUseCashFlowSummary.mockReturnValue({
+      data: null,
+      loading: false,
+      error: null,
+      refetch: mockCashFlowSummaryRefetch,
+      ...state,
+    })
+  }
+
   beforeEach(() => {
-    vi.clearAllMocks()
+    mockUseCashFlowSummary.mockClear()
+    mockCashFlowSummaryRefetch.mockClear()
   })
 
   describe('Missing Date Range', () => {
@@ -82,16 +91,11 @@ describe('CashFlowSummaryWidget', () => {
         filters: { startDate: '', endDate: '' },
       }
 
-      vi.mocked(useCashFlowSummary).mockReturnValue({
-        data: null,
-        loading: false,
-        error: null,
-        refetch: vi.fn(),
-      })
+      setMockCashFlowState({})
 
       render(
         <TestWrapper contextValue={contextWithoutDates}>
-          <CashFlowSummaryWidget widgetId="test-1" onRemove={vi.fn()} />
+          <CashFlowSummaryWidget {...defaultProps} />
         </TestWrapper>
       )
 
@@ -101,16 +105,11 @@ describe('CashFlowSummaryWidget', () => {
 
   describe('Loading State', () => {
     it('should show loading spinner when loading', () => {
-      vi.mocked(useCashFlowSummary).mockReturnValue({
-        data: null,
-        loading: true,
-        error: null,
-        refetch: vi.fn(),
-      })
+      setMockCashFlowState({ loading: true })
 
       render(
         <TestWrapper contextValue={mockContextValue}>
-          <CashFlowSummaryWidget widgetId="test-1" onRemove={vi.fn()} />
+          <CashFlowSummaryWidget {...defaultProps} />
         </TestWrapper>
       )
 
@@ -121,16 +120,11 @@ describe('CashFlowSummaryWidget', () => {
 
   describe('Error State', () => {
     it('should show error message when error occurs', () => {
-      vi.mocked(useCashFlowSummary).mockReturnValue({
-        data: null,
-        loading: false,
-        error: 'Network error',
-        refetch: vi.fn(),
-      })
+      setMockCashFlowState({ error: 'Network error' })
 
       render(
         <TestWrapper contextValue={mockContextValue}>
-          <CashFlowSummaryWidget widgetId="test-1" onRemove={vi.fn()} />
+          <CashFlowSummaryWidget {...defaultProps} />
         </TestWrapper>
       )
 
@@ -140,16 +134,11 @@ describe('CashFlowSummaryWidget', () => {
 
   describe('Empty State', () => {
     it('should show no data message when data is null', () => {
-      vi.mocked(useCashFlowSummary).mockReturnValue({
-        data: null,
-        loading: false,
-        error: null,
-        refetch: vi.fn(),
-      })
+      setMockCashFlowState({})
 
       render(
         <TestWrapper contextValue={mockContextValue}>
-          <CashFlowSummaryWidget widgetId="test-1" onRemove={vi.fn()} />
+          <CashFlowSummaryWidget {...defaultProps} />
         </TestWrapper>
       )
 
@@ -158,17 +147,14 @@ describe('CashFlowSummaryWidget', () => {
   })
 
   describe('Success State', () => {
-    it('should render three summary cards', () => {
-      vi.mocked(useCashFlowSummary).mockReturnValue({
-        data: mockSummaryData,
-        loading: false,
-        error: null,
-        refetch: vi.fn(),
-      })
+    beforeEach(() => {
+      setMockCashFlowState({ data: mockSummaryData })
+    })
 
+    it('should render three summary cards', () => {
       render(
         <TestWrapper contextValue={mockContextValue}>
-          <CashFlowSummaryWidget widgetId="test-1" onRemove={vi.fn()} />
+          <CashFlowSummaryWidget {...defaultProps} />
         </TestWrapper>
       )
 
@@ -178,36 +164,21 @@ describe('CashFlowSummaryWidget', () => {
     })
 
     it('should display formatted currency values', () => {
-      vi.mocked(useCashFlowSummary).mockReturnValue({
-        data: mockSummaryData,
-        loading: false,
-        error: null,
-        refetch: vi.fn(),
-      })
-
       render(
         <TestWrapper contextValue={mockContextValue}>
-          <CashFlowSummaryWidget widgetId="test-1" onRemove={vi.fn()} />
+          <CashFlowSummaryWidget {...defaultProps} />
         </TestWrapper>
       )
 
-      // Check for formatted currency (e.g., "$5,000")
-      expect(screen.getByText('$5,000')).toBeInTheDocument() // Income
-      expect(screen.getByText('$3,000')).toBeInTheDocument() // Expenses
-      expect(screen.getByText('$2,000')).toBeInTheDocument() // Net
+      expect(screen.getByText('$5,000')).toBeInTheDocument()
+      expect(screen.getByText('$3,000')).toBeInTheDocument()
+      expect(screen.getByText('$2,000')).toBeInTheDocument()
     })
 
     it('should display transaction counts', () => {
-      vi.mocked(useCashFlowSummary).mockReturnValue({
-        data: mockSummaryData,
-        loading: false,
-        error: null,
-        refetch: vi.fn(),
-      })
-
       render(
         <TestWrapper contextValue={mockContextValue}>
-          <CashFlowSummaryWidget widgetId="test-1" onRemove={vi.fn()} />
+          <CashFlowSummaryWidget {...defaultProps} />
         </TestWrapper>
       )
 
@@ -216,40 +187,24 @@ describe('CashFlowSummaryWidget', () => {
     })
 
     it('should display period comparison percentages', () => {
-      vi.mocked(useCashFlowSummary).mockReturnValue({
-        data: mockSummaryData,
-        loading: false,
-        error: null,
-        refetch: vi.fn(),
-      })
-
       render(
         <TestWrapper contextValue={mockContextValue}>
-          <CashFlowSummaryWidget widgetId="test-1" onRemove={vi.fn()} />
+          <CashFlowSummaryWidget {...defaultProps} />
         </TestWrapper>
       )
 
-      // Check for formatted percentages
-      expect(screen.getByText('+11.1%')).toBeInTheDocument() // Income change
-      expect(screen.getByText('+7.1%')).toBeInTheDocument() // Expense change
-      expect(screen.getByText('+17.6%')).toBeInTheDocument() // Net change
+      expect(screen.getByText('+11.1%')).toBeInTheDocument()
+      expect(screen.getByText('+7.1%')).toBeInTheDocument()
+      expect(screen.getByText('+17.6%')).toBeInTheDocument()
     })
 
     it('should show vs prior period text', () => {
-      vi.mocked(useCashFlowSummary).mockReturnValue({
-        data: mockSummaryData,
-        loading: false,
-        error: null,
-        refetch: vi.fn(),
-      })
-
       render(
         <TestWrapper contextValue={mockContextValue}>
-          <CashFlowSummaryWidget widgetId="test-1" onRemove={vi.fn()} />
+          <CashFlowSummaryWidget {...defaultProps} />
         </TestWrapper>
       )
 
-      // Should appear for each card with comparison
       const priorPeriodTexts = screen.getAllByText('vs prior period')
       expect(priorPeriodTexts.length).toBe(3)
     })
@@ -257,20 +212,15 @@ describe('CashFlowSummaryWidget', () => {
 
   describe('Context Integration', () => {
     it('should pass correct filters to useCashFlowSummary', () => {
-      vi.mocked(useCashFlowSummary).mockReturnValue({
-        data: null,
-        loading: false,
-        error: null,
-        refetch: vi.fn(),
-      })
+      setMockCashFlowState({})
 
       render(
         <TestWrapper contextValue={mockContextValue}>
-          <CashFlowSummaryWidget widgetId="test-1" onRemove={vi.fn()} />
+          <CashFlowSummaryWidget {...defaultProps} />
         </TestWrapper>
       )
 
-      expect(useCashFlowSummary).toHaveBeenCalledWith(
+      expect(mockUseCashFlowSummary).toHaveBeenCalledWith(
         expect.objectContaining({
           filters: expect.objectContaining({
             startDate: '2024-01-01',

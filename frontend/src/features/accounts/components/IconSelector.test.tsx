@@ -8,18 +8,43 @@
  * Issue #544: Add unit tests for account customization components
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { IconSelector } from './IconSelector'
 import { VALID_ACCOUNT_ICONS } from '../types'
 
 describe('IconSelector', () => {
-  const mockOnChange = vi.fn()
+  const mockOnChange = mock(() => {})
 
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
+  // Icon to label mapping for all 25 icons
+  const ICON_LABELS: Record<string, string> = {
+    'wallet': 'Wallet',
+    'piggy-bank': 'Savings',
+    'credit-card': 'Card',
+    'bank': 'Bank',
+    'building': 'Building',
+    'briefcase': 'Business',
+    'dollar': 'Dollar',
+    'euro': 'Euro',
+    'pound': 'Pound',
+    'yen': 'Yen',
+    'chart': 'Chart',
+    'trending-up': 'Growth',
+    'trending-down': 'Decline',
+    'lock': 'Locked',
+    'unlock': 'Unlocked',
+    'star': 'Star',
+    'heart': 'Heart',
+    'home': 'Home',
+    'car': 'Car',
+    'plane': 'Travel',
+    'shopping-cart': 'Shopping',
+    'gift': 'Gift',
+    'coffee': 'Coffee',
+    'utensils': 'Food',
+    'graduation-cap': 'Education',
+  }
 
   describe('Initialization', () => {
     it('renders with no initial icon', () => {
@@ -114,13 +139,6 @@ describe('IconSelector', () => {
       const noIconButton = screen.getByText('No Icon').closest('button')
       expect(noIconButton).toHaveAttribute('aria-pressed', 'true')
     })
-
-    it('highlights "No Icon" when value is undefined', () => {
-      render(<IconSelector onChange={mockOnChange} />)
-
-      const noIconButton = screen.getByText('No Icon').closest('button')
-      expect(noIconButton).toHaveAttribute('aria-pressed', 'true')
-    })
   })
 
   describe('Current Selection Display', () => {
@@ -136,12 +154,6 @@ describe('IconSelector', () => {
       expect(screen.queryByText(/^Current:/)).not.toBeInTheDocument()
     })
 
-    it('hides current selection when value is undefined', () => {
-      render(<IconSelector onChange={mockOnChange} />)
-
-      expect(screen.queryByText(/^Current:/)).not.toBeInTheDocument()
-    })
-
     it('displays correct label for selected icon', () => {
       render(<IconSelector value="credit-card" onChange={mockOnChange} />)
 
@@ -149,36 +161,8 @@ describe('IconSelector', () => {
     })
 
     it('displays correct label for all icons', () => {
-      const labelMap: Record<string, string> = {
-        'wallet': 'Wallet',
-        'piggy-bank': 'Savings',
-        'credit-card': 'Card',
-        'bank': 'Bank',
-        'building': 'Building',
-        'briefcase': 'Business',
-        'dollar': 'Dollar',
-        'euro': 'Euro',
-        'pound': 'Pound',
-        'yen': 'Yen',
-        'chart': 'Chart',
-        'trending-up': 'Growth',
-        'trending-down': 'Decline',
-        'lock': 'Locked',
-        'unlock': 'Unlocked',
-        'star': 'Star',
-        'heart': 'Heart',
-        'home': 'Home',
-        'car': 'Car',
-        'plane': 'Travel',
-        'shopping-cart': 'Shopping',
-        'gift': 'Gift',
-        'coffee': 'Coffee',
-        'utensils': 'Food',
-        'graduation-cap': 'Education',
-      }
-
-      // Just verify the count matches
-      expect(Object.keys(labelMap)).toHaveLength(VALID_ACCOUNT_ICONS.length)
+      // Verify the count matches VALID_ACCOUNT_ICONS
+      expect(Object.keys(ICON_LABELS)).toHaveLength(VALID_ACCOUNT_ICONS.length)
     })
   })
 

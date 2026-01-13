@@ -2,34 +2,48 @@
  * PricingPage Tests
  *
  * Tests for the pricing page component that displays subscription tier comparison.
+ * Migrated to bun:test with centralized mocks (Issue #575).
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { PricingPage } from './PricingPage'
-import * as useSubscriptionTiersHook from '../subscription/hooks/useSubscriptionTiers'
 import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
 
-// Mock useUser using vi.hoisted pattern (avoids strict type checking)
-const mockUseUser = vi.hoisted(() => vi.fn())
+// Import centralized mocks
+import { mockUseUser } from '@/test/mocks/clerk'
+import {
+  mockUseGetSubscriptionTiers,
+  mockRefetchSubscriptionTiers,
+} from '@/test/mocks/subscription-api'
 
-vi.mock('@clerk/react-router', () => ({
-  useUser: mockUseUser,
-}))
-
-// Mock useSubscriptionTiers
-vi.mock('../subscription/hooks/useSubscriptionTiers')
+function renderWithProviders(ui: React.ReactElement) {
+  return render(
+    <QueryClientProvider client={new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, gcTime: 0 },
+      },
+    })}>
+      {ui}
+    </QueryClientProvider>
+  )
+}
 
 describe('PricingPage', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    // Reset all mocks
+    mockUseUser.mockClear()
+    mockUseGetSubscriptionTiers.mockClear()
+    mockRefetchSubscriptionTiers.mockClear()
+
     // Default: successful load with no authenticated user
-    vi.mocked(useSubscriptionTiersHook.useSubscriptionTiers).mockReturnValue({
-      tiers: mockSubscriptionTiersResponse,
-      loading: false,
+    mockUseGetSubscriptionTiers.mockReturnValue({
+      data: mockSubscriptionTiersResponse,
+      isLoading: false,
       error: null,
-      refetch: vi.fn(),
+      refetch: mockRefetchSubscriptionTiers,
     })
     mockUseUser.mockReturnValue({
       user: undefined,
@@ -40,14 +54,14 @@ describe('PricingPage', () => {
 
   describe('Loading state', () => {
     it('should show loading state when tiers are loading', () => {
-      vi.mocked(useSubscriptionTiersHook.useSubscriptionTiers).mockReturnValue({
-        tiers: null,
-        loading: true,
+      mockUseGetSubscriptionTiers.mockReturnValue({
+        data: undefined,
+        isLoading: true,
         error: null,
-        refetch: vi.fn(),
+        refetch: mockRefetchSubscriptionTiers,
       })
 
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       expect(screen.getByText(/loading pricing plans/i)).toBeInTheDocument()
     })
@@ -56,55 +70,55 @@ describe('PricingPage', () => {
   describe('Error state', () => {
     it('should show error message when tiers fail to load', () => {
       const error = new Error('Network error')
-      vi.mocked(useSubscriptionTiersHook.useSubscriptionTiers).mockReturnValue({
-        tiers: null,
-        loading: false,
+      mockUseGetSubscriptionTiers.mockReturnValue({
+        data: undefined,
+        isLoading: false,
         error,
-        refetch: vi.fn(),
+        refetch: mockRefetchSubscriptionTiers,
       })
 
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       expect(screen.getByText(/failed to load pricing plans/i)).toBeInTheDocument()
     })
 
     it('should show retry button on error', () => {
       const error = new Error('Network error')
-      vi.mocked(useSubscriptionTiersHook.useSubscriptionTiers).mockReturnValue({
-        tiers: null,
-        loading: false,
+      mockUseGetSubscriptionTiers.mockReturnValue({
+        data: undefined,
+        isLoading: false,
         error,
-        refetch: vi.fn(),
+        refetch: mockRefetchSubscriptionTiers,
       })
 
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument()
     })
 
     it('should call refetch when retry button is clicked', async () => {
       const user = userEvent.setup()
-      const mockRefetch = vi.fn()
+      const localRefetch = mock(() => {})
       const error = new Error('Network error')
-      vi.mocked(useSubscriptionTiersHook.useSubscriptionTiers).mockReturnValue({
-        tiers: null,
-        loading: false,
+      mockUseGetSubscriptionTiers.mockReturnValue({
+        data: undefined,
+        isLoading: false,
         error,
-        refetch: mockRefetch,
+        refetch: localRefetch,
       })
 
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       const retryButton = screen.getByRole('button', { name: /try again/i })
       await user.click(retryButton)
 
-      expect(mockRefetch).toHaveBeenCalledTimes(1)
+      expect(localRefetch).toHaveBeenCalledTimes(1)
     })
   })
 
   describe('Tier cards', () => {
     it('should render all 4 tier cards', () => {
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       // "Free" appears multiple times (tier name and price)
       expect(screen.getAllByText('Free').length).toBeGreaterThan(0)
@@ -115,7 +129,7 @@ describe('PricingPage', () => {
     })
 
     it('should display correct tier names', () => {
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       // Check tier heading names (h2 elements)
       const headings = screen.getAllByRole('heading', { level: 2 })
@@ -128,7 +142,7 @@ describe('PricingPage', () => {
     })
 
     it('should display correct prices', () => {
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       // Free tier shows "Free" as price
       const freeElements = screen.getAllByText('Free')
@@ -140,7 +154,7 @@ describe('PricingPage', () => {
     })
 
     it('should show features for each tier', () => {
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       // Free tier features
       expect(screen.getByText('3 bank accounts')).toBeInTheDocument()
@@ -152,7 +166,7 @@ describe('PricingPage', () => {
     })
 
     it('should show tier descriptions', () => {
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       // Descriptions from mockSubscriptionTiersResponse fixture
       expect(screen.getByText(/basic plan with limited features/i)).toBeInTheDocument()
@@ -174,7 +188,7 @@ describe('PricingPage', () => {
         isLoaded: true,
       })
 
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       // Should show "Current Plan" badge (appears as badge and button)
       const currentPlanElements = screen.getAllByText('Current Plan')
@@ -194,7 +208,7 @@ describe('PricingPage', () => {
         isLoaded: true,
       })
 
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       // Should show "Select Plan" buttons for premium_lite and premium tiers
       // (premium_plus shows "Go Premium+" instead)
@@ -215,7 +229,7 @@ describe('PricingPage', () => {
         isLoaded: true,
       })
 
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       // Find button elements
       const currentPlanButtons = screen.getAllByRole('button', { name: /current plan/i })
@@ -227,7 +241,7 @@ describe('PricingPage', () => {
 
   describe('Unauthenticated user', () => {
     it('should render all tiers when not authenticated', () => {
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       // All 4 tier names should be visible (plus FAQ section = 5 h2 headings total)
       const headings = screen.getAllByRole('heading', { level: 2 })
@@ -241,7 +255,7 @@ describe('PricingPage', () => {
     })
 
     it('should default to free tier when user not authenticated', () => {
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       // Should show "Current Plan" for free tier (appears as badge and button)
       const currentPlanElements = screen.getAllByText('Current Plan')
@@ -251,13 +265,13 @@ describe('PricingPage', () => {
 
   describe('FAQ section', () => {
     it('should render FAQ section with title', () => {
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       expect(screen.getByText('Frequently Asked Questions')).toBeInTheDocument()
     })
 
     it('should render FAQ questions', () => {
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       expect(screen.getByText('Can I change plans anytime?')).toBeInTheDocument()
       expect(screen.getByText('What payment methods do you accept?')).toBeInTheDocument()
@@ -266,7 +280,7 @@ describe('PricingPage', () => {
     })
 
     it('should render FAQ answers', () => {
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       expect(screen.getByText(/you can upgrade or downgrade/i)).toBeInTheDocument()
       expect(screen.getByText(/major credit cards/i)).toBeInTheDocument()
@@ -277,13 +291,13 @@ describe('PricingPage', () => {
 
   describe('Header', () => {
     it('should display page title', () => {
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       expect(screen.getByRole('heading', { name: /choose your plan/i })).toBeInTheDocument()
     })
 
     it('should display subtitle', () => {
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       expect(screen.getByText(/select the plan that best fits/i)).toBeInTheDocument()
     })
@@ -291,13 +305,13 @@ describe('PricingPage', () => {
 
   describe('Premium+ highlighting', () => {
     it('should show "Best Value" badge on Premium+ card', () => {
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       expect(screen.getByText('Best Value')).toBeInTheDocument()
     })
 
     it('should have special styling class on Premium+ card', () => {
-      const { container } = render(<PricingPage />)
+      const { container } = renderWithProviders(<PricingPage />)
 
       const featuredCard = container.querySelector('.pricing-card.featured')
       expect(featuredCard).toBeInTheDocument()
@@ -306,7 +320,7 @@ describe('PricingPage', () => {
 
   describe('Feature display', () => {
     it('should show ad-free experience as excluded for free tier', () => {
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       // Ad-free should appear multiple times (once per card)
       const adFreeTexts = screen.getAllByText('Ad-free experience')
@@ -314,7 +328,7 @@ describe('PricingPage', () => {
     })
 
     it('should show AI insights feature for Premium+ tier', () => {
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       expect(screen.getAllByText('AI-powered insights').length).toBeGreaterThan(0)
     })
@@ -322,21 +336,21 @@ describe('PricingPage', () => {
 
   describe('Billing period toggle', () => {
     it('should render Monthly and Yearly options', () => {
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       expect(screen.getByRole('radio', { name: /monthly/i })).toBeInTheDocument()
       expect(screen.getByRole('radio', { name: /yearly/i })).toBeInTheDocument()
     })
 
     it('should default to Monthly view', () => {
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       const monthlyButton = screen.getByRole('radio', { name: /monthly/i })
       expect(monthlyButton).toHaveAttribute('aria-checked', 'true')
     })
 
     it('should show monthly prices by default', () => {
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       // Premium Lite monthly price
       expect(screen.getByText('$4.99')).toBeInTheDocument()
@@ -347,7 +361,7 @@ describe('PricingPage', () => {
 
     it('should switch to yearly prices when Yearly clicked', async () => {
       const user = userEvent.setup()
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       await user.click(screen.getByRole('radio', { name: /yearly/i }))
 
@@ -360,7 +374,7 @@ describe('PricingPage', () => {
 
     it('should show savings badge in yearly view for paid tiers', async () => {
       const user = userEvent.setup()
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       await user.click(screen.getByRole('radio', { name: /yearly/i }))
 
@@ -371,7 +385,7 @@ describe('PricingPage', () => {
 
     it('should not show savings badge for free tier in yearly view', async () => {
       const user = userEvent.setup()
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       await user.click(screen.getByRole('radio', { name: /yearly/i }))
 
@@ -382,7 +396,7 @@ describe('PricingPage', () => {
 
     it('should show equivalent monthly price in yearly view', async () => {
       const user = userEvent.setup()
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       await user.click(screen.getByRole('radio', { name: /yearly/i }))
 
@@ -392,7 +406,7 @@ describe('PricingPage', () => {
 
     it('should toggle back to monthly view when Monthly clicked', async () => {
       const user = userEvent.setup()
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       // Switch to yearly
       await user.click(screen.getByRole('radio', { name: /yearly/i }))
@@ -404,7 +418,7 @@ describe('PricingPage', () => {
     })
 
     it('should be keyboard accessible', async () => {
-      render(<PricingPage />)
+      renderWithProviders(<PricingPage />)
 
       const monthlyButton = screen.getByRole('radio', { name: /monthly/i })
       const yearlyButton = screen.getByRole('radio', { name: /yearly/i })

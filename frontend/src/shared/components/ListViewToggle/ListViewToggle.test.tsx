@@ -6,14 +6,13 @@
  * TDD RED: Writing tests before implementation.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { ListViewToggle } from './ListViewToggle'
 
 describe('ListViewToggle', () => {
   beforeEach(() => {
     localStorage.clear()
-    vi.clearAllMocks()
   })
 
   afterEach(() => {
@@ -58,7 +57,7 @@ describe('ListViewToggle', () => {
 
   describe('Interaction', () => {
     it('should call onChange with "table" when table button is clicked', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
       render(<ListViewToggle view="cards" onChange={onChange} />)
 
       fireEvent.click(screen.getByRole('button', { name: /table/i }))
@@ -67,7 +66,7 @@ describe('ListViewToggle', () => {
     })
 
     it('should call onChange with "cards" when cards button is clicked', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
       render(<ListViewToggle view="table" onChange={onChange} />)
 
       fireEvent.click(screen.getByRole('button', { name: /cards/i }))
@@ -76,7 +75,7 @@ describe('ListViewToggle', () => {
     })
 
     it('should not call onChange when clicking already selected view', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
       render(<ListViewToggle view="cards" onChange={onChange} />)
 
       fireEvent.click(screen.getByRole('button', { name: /cards/i }))
@@ -87,7 +86,7 @@ describe('ListViewToggle', () => {
 
   describe('LocalStorage persistence', () => {
     it('should save to localStorage when storageKey is provided', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
       render(<ListViewToggle view="cards" onChange={onChange} storageKey="test-view" />)
 
       fireEvent.click(screen.getByRole('button', { name: /table/i }))
@@ -96,7 +95,7 @@ describe('ListViewToggle', () => {
     })
 
     it('should not save to localStorage when storageKey is not provided', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
       render(<ListViewToggle view="cards" onChange={onChange} />)
 
       fireEvent.click(screen.getByRole('button', { name: /table/i }))
@@ -121,7 +120,7 @@ describe('ListViewToggle', () => {
     })
 
     it('should be keyboard accessible', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
       render(<ListViewToggle view="cards" onChange={onChange} />)
 
       const tableButton = screen.getByRole('button', { name: /table/i })
@@ -162,7 +161,7 @@ describe('ListViewToggle', () => {
     })
 
     it('should not call onChange when disabled', () => {
-      const onChange = vi.fn()
+      const onChange = mock(() => {})
       render(<ListViewToggle view="cards" onChange={onChange} disabled />)
 
       fireEvent.click(screen.getByRole('button', { name: /table/i }))
