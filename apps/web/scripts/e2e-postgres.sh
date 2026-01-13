@@ -29,7 +29,7 @@ E2E_POSTGRES_CONTAINER=""
 # This is needed because BASH_SOURCE behaves differently when called from functions
 # Note: Using E2E_ prefix (no leading underscore) to avoid conflicts with $_ special variable
 E2E_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-E2E_BACKEND_DIR="${E2E_SCRIPT_DIR}/../../backend"
+E2E_BACKEND_DIR="${E2E_SCRIPT_DIR}/../../../backend"
 
 # =============================================================================
 # Helper Functions
