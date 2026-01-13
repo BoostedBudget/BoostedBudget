@@ -16,3 +16,4 @@ e2e/.auth/*.json
 e2e-output.log
 coverage-real/
 coverage-isolated/
+package-lock.json
