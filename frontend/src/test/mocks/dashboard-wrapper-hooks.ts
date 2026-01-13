@@ -1,9 +1,19 @@
-// Issue #575: Centralized dashboard wrapper hook mocks
-// These mock the WRAPPER hooks (useDashboardData, useDashboardLayout, useDashboardOnboarding)
-// for component tests that need to test in isolation from the actual hook implementation.
+// Issue #575: Dashboard wrapper hook mock exports
+// These are EXPORTS ONLY - NOT globally registered via mock.module()
 //
-// NOTE: Hook implementation tests (e.g., useDashboardData.test.tsx) use API-level mocks
-// from dashboard-api.ts instead, so they test real hook behavior.
+// The hook implementation tests (useDashboardData.test.tsx, useDashboardLayout.test.tsx,
+// useDashboardOnboarding.test.tsx) need to test the REAL hook implementations with
+// API-level mocks from dashboard-api.ts.
+//
+// Component tests that need wrapper-level mocks should import these exports and
+// apply mock.module() inline BEFORE importing the component.
+//
+// Example usage in component tests:
+//   import { mockUseDashboardLayout, ... } from '@/test/mocks/dashboard-wrapper-hooks'
+//   mock.module('@/features/dashboard/hooks/useDashboardLayout', () => ({
+//     useDashboardLayout: () => mockUseDashboardLayout(),
+//   }))
+//   // NOW import the component
 
 import { mock } from 'bun:test'
 import type { WidgetType } from '@/features/dashboard/types'
@@ -17,15 +27,6 @@ export const mockUseDashboardData = mock(() => ({
   loading: false,
   error: null,
   refetch: mockDashboardDataRefetch,
-}))
-
-// Mock both absolute and relative paths
-mock.module('@/features/dashboard/hooks/useDashboardData', () => ({
-  useDashboardData: (...args: unknown[]) => mockUseDashboardData(...args),
-}))
-
-mock.module('../hooks/useDashboardData', () => ({
-  useDashboardData: (...args: unknown[]) => mockUseDashboardData(...args),
 }))
 
 // === useDashboardLayout mock ===
@@ -86,25 +87,9 @@ export const mockUseDashboardLayout = mock(() => ({
   saveNow: mockSaveNow,
 }))
 
-mock.module('@/features/dashboard/hooks/useDashboardLayout', () => ({
-  useDashboardLayout: (...args: unknown[]) => mockUseDashboardLayout(...args),
-}))
-
-mock.module('../hooks/useDashboardLayout', () => ({
-  useDashboardLayout: (...args: unknown[]) => mockUseDashboardLayout(...args),
-}))
-
 // === useDashboardOnboarding mock ===
 export const mockDismissHint = mock(() => {})
 export const mockUseDashboardOnboarding = mock(() => ({
   showHint: false,
   dismissHint: mockDismissHint,
-}))
-
-mock.module('@/features/dashboard/hooks/useDashboardOnboarding', () => ({
-  useDashboardOnboarding: (...args: unknown[]) => mockUseDashboardOnboarding(...args),
-}))
-
-mock.module('../hooks/useDashboardOnboarding', () => ({
-  useDashboardOnboarding: (...args: unknown[]) => mockUseDashboardOnboarding(...args),
 }))

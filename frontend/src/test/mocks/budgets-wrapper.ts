@@ -30,14 +30,12 @@ export const mockUseBudgets = mock(() => ({
   deleteCategory: mockDeleteCategory,
 }))
 
-// Mock both absolute and relative paths
-mock.module('@/features/budgets/hooks/useBudgets', () => ({
-  useBudgets: () => mockUseBudgets(),
-}))
-
-mock.module('../hooks/useBudgets', () => ({
-  useBudgets: () => mockUseBudgets(),
-}))
+// REMOVED: Global mock.module() for useBudgets
+// Tests that need this mock should use inline mock.module():
+// import { mockUseBudgets } from '@/test/mocks/budgets-wrapper'
+// mock.module('@/features/budgets/hooks/useBudgets', () => ({
+//   useBudgets: () => mockUseBudgets(),
+// }))
 
 // === useSavingsGoals wrapper hook mock ===
 // NOTE: These mocks are exported but NOT applied via mock.module() globally.
@@ -70,6 +68,11 @@ export const mockUseSavingsGoals = mock(() => ({
 // }))
 
 // === useBudgetFilters wrapper hook mock ===
+// NOTE: These mocks are exported but NOT applied via mock.module() globally.
+// This is because useBudgetFilters.test.ts needs to test the REAL implementation
+// with MemoryRouter for URL state synchronization.
+// Component tests that need useBudgetFilters mocked should import from this file
+// and apply mock.module() inline.
 export const mockSetPeriodFilter = mock(() => {})
 export const mockSetProgressRange = mock(() => {})
 export const mockClearAllFilters = mock(() => {})
@@ -85,10 +88,9 @@ export const mockUseBudgetFilters = mock(() => ({
   hasActiveFilters: false,
 }))
 
-mock.module('@/features/budgets/hooks/useBudgetFilters', () => ({
-  useBudgetFilters: () => mockUseBudgetFilters(),
-}))
-
-mock.module('../hooks/useBudgetFilters', () => ({
-  useBudgetFilters: () => mockUseBudgetFilters(),
-}))
+// REMOVED: Global mock.module() for useBudgetFilters
+// Tests that need this mock should use inline mock.module():
+// import { mockUseBudgetFilters } from '@/test/mocks/budgets-wrapper'
+// mock.module('@/features/budgets/hooks/useBudgetFilters', () => ({
+//   useBudgetFilters: () => mockUseBudgetFilters(),
+// }))
