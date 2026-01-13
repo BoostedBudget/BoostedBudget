@@ -143,14 +143,32 @@ mock.module('./CreateSavingsGoalDialog', () => ({
   },
 }))
 
-// Mock useSavingsGoals wrapper hook (not globally preloaded to allow hook tests to work)
+// Mock wrapper hooks (not globally preloaded to allow hook tests to work)
 // This must be BEFORE importing BudgetsPage
+import { mockUseBudgetFilters } from '@/test/mocks/budgets-wrapper'
+
+mock.module('@/features/budgets/hooks/useBudgets', () => ({
+  useBudgets: () => mockUseBudgets(),
+}))
+
+mock.module('../hooks/useBudgets', () => ({
+  useBudgets: () => mockUseBudgets(),
+}))
+
 mock.module('@/features/budgets/hooks/useSavingsGoals', () => ({
   useSavingsGoals: () => mockUseSavingsGoals(),
 }))
 
 mock.module('../hooks/useSavingsGoals', () => ({
   useSavingsGoals: () => mockUseSavingsGoals(),
+}))
+
+mock.module('@/features/budgets/hooks/useBudgetFilters', () => ({
+  useBudgetFilters: () => mockUseBudgetFilters(),
+}))
+
+mock.module('../hooks/useBudgetFilters', () => ({
+  useBudgetFilters: () => mockUseBudgetFilters(),
 }))
 
 // NOW import testing utilities and component AFTER mocks

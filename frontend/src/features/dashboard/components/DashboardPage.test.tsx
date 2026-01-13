@@ -10,7 +10,7 @@ import type {
   AccountTypesResponse,
 } from '../types'
 
-// Import centralized mocks - no inline mock.module() calls for these
+// Import centralized mocks
 import { mockUseAuth, createMockClerkAuth } from '@/test/mocks/clerk'
 import {
   mockUseDashboardContext,
@@ -31,6 +31,30 @@ import {
   mockUseDashboardOnboarding,
   mockDismissHint,
 } from '@/test/mocks/dashboard-wrapper-hooks'
+
+// Issue #575: Register wrapper hook mocks inline (not globally preloaded)
+// This must be BEFORE importing the component
+// Note: We use spread args to capture arguments for test assertions
+mock.module('@/features/dashboard/hooks/useDashboardData', () => ({
+  useDashboardData: (...args: unknown[]) => mockUseDashboardData(...args),
+}))
+mock.module('../hooks/useDashboardData', () => ({
+  useDashboardData: (...args: unknown[]) => mockUseDashboardData(...args),
+}))
+
+mock.module('@/features/dashboard/hooks/useDashboardLayout', () => ({
+  useDashboardLayout: (...args: unknown[]) => mockUseDashboardLayout(...args),
+}))
+mock.module('../hooks/useDashboardLayout', () => ({
+  useDashboardLayout: (...args: unknown[]) => mockUseDashboardLayout(...args),
+}))
+
+mock.module('@/features/dashboard/hooks/useDashboardOnboarding', () => ({
+  useDashboardOnboarding: (...args: unknown[]) => mockUseDashboardOnboarding(...args),
+}))
+mock.module('../hooks/useDashboardOnboarding', () => ({
+  useDashboardOnboarding: (...args: unknown[]) => mockUseDashboardOnboarding(...args),
+}))
 
 // Mock child components (these are isolated mocks specific to this test)
 mock.module('../widgets/DashboardGrid', () => ({
