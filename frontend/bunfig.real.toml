@@ -1,11 +1,14 @@
 # Bun configuration for tests that need REAL implementations
 # Issue #575: These tests cannot use centralized mocks
 #
-# Use with: bun test --config bunfig.real.toml <files>
+# IMPORTANT: Must run from OUTSIDE frontend/ directory, e.g.:
+#   cd /tmp && bun test --config /path/to/frontend/bunfig.real.toml /path/to/test.ts
+# Bun always loads bunfig.toml from CWD, so --config is ADDITIVE, not replacement.
 #
 # Files that use this config:
 # - src/features/dashboard/widgets/registry.test.ts (tests real registry)
 # - src/features/dashboard/context/DashboardContext.test.tsx (tests real context)
+# - src/features/rules/hooks/useRuleTierLimits.test.ts (tests real hook)
 
 [test]
 # Only preload DOM and testing-library - NO mocks!

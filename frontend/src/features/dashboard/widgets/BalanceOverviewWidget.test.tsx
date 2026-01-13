@@ -1,43 +1,27 @@
+/**
+ * BalanceOverviewWidget Tests
+ * Issue #575: Refactored to use centralized mocks (no inline mock.module)
+ */
+
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import type { BalanceSummary } from '../types'
-// Issue #575: Use centralized registry mock to prevent mock.module() pollution
+
+// Issue #575: Use centralized mocks to prevent mock.module() pollution
+// No inline mock.module() calls for DashboardContext or useDashboardData
 import '@/test/mocks/registry'
+import {
+  mockUseDashboardContext,
+  mockSetFilters,
+  mockSetTimeframe,
+  mockSetIsEditing,
+} from '@/test/mocks/dashboard-context'
+import {
+  mockUseDashboardData,
+  mockDashboardDataRefetch,
+} from '@/test/mocks/dashboard-wrapper-hooks'
 
-const mockSetFilters = mock(() => {})
-const mockSetTimeframe = mock(() => {})
-const mockSetIsEditing = mock(() => {})
-const mockUseDashboardContext = mock(() => ({
-  filters: {
-    startDate: '2024-01-01',
-    endDate: '2024-01-31',
-    accountTypes: undefined,
-  },
-  setFilters: mockSetFilters,
-  timeframe: 'month',
-  setTimeframe: mockSetTimeframe,
-  isEditing: false,
-  setIsEditing: mockSetIsEditing,
-}))
-
-const mockRefetch = mock(() => {})
-const mockUseDashboardData = mock(() => ({
-  summary: null,
-  history: null,
-  accountTypes: null,
-  loading: true,
-  error: null,
-  refetch: mockRefetch,
-}))
-
-mock.module('../context/DashboardContext', () => ({
-  useDashboardContext: mockUseDashboardContext,
-}))
-
-mock.module('../hooks/useDashboardData', () => ({
-  useDashboardData: mockUseDashboardData,
-}))
-
+// Child component mock is OK to keep inline (isolated to this test file)
 mock.module('../components/BalanceOverview', () => ({
   BalanceOverview: ({ summary }: { summary: unknown }) => (
     <div data-testid="balance-overview">
@@ -65,22 +49,42 @@ describe('BalanceOverviewWidget', () => {
     onRemove: mock(() => {}),
   }
 
-  const setMockDataState = (state: Partial<ReturnType<typeof mockUseDashboardData>>) => {
-    mockUseDashboardData.mockReturnValue({
-      summary: null,
-      history: null,
-      accountTypes: null,
-      loading: false,
-      error: null,
-      refetch: mockRefetch,
-      ...state,
-    })
+  // Default states for the centralized mocks
+  const defaultContextState = {
+    filters: {
+      startDate: '2024-01-01',
+      endDate: '2024-01-31',
+      accountTypes: undefined,
+    },
+    setFilters: mockSetFilters,
+    timeframe: 'month' as const,
+    setTimeframe: mockSetTimeframe,
+    isEditing: false,
+    setIsEditing: mockSetIsEditing,
+  }
+
+  const defaultDataState = {
+    summary: null,
+    history: null,
+    accountTypes: null,
+    loading: false,
+    error: null,
+    refetch: mockDashboardDataRefetch,
+  }
+
+  const setMockDataState = (state: Partial<typeof defaultDataState>) => {
+    mockUseDashboardData.mockReturnValue({ ...defaultDataState, ...state })
   }
 
   beforeEach(() => {
     mockUseDashboardContext.mockClear()
     mockUseDashboardData.mockClear()
-    mockRefetch.mockClear()
+    mockDashboardDataRefetch.mockClear()
+    mockSetFilters.mockClear()
+    mockSetTimeframe.mockClear()
+    mockSetIsEditing.mockClear()
+    mockUseDashboardContext.mockReturnValue(defaultContextState)
+    mockUseDashboardData.mockReturnValue(defaultDataState)
   })
 
   describe('Loading State', () => {

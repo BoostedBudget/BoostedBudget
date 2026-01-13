@@ -62,3 +62,6 @@ mock.module('@/api/generated/endpoints/tags/tags', () => ({
   useUpdateTag: (...args: unknown[]) => mockUseUpdateTag(...args),
   getGetUserTagsQueryKey: () => mockGetUserTagsQueryKey(),
 }))
+
+// NOTE: useTags wrapper hook mock is in tags-hooks.ts (NOT preloaded)
+// because useTags.test.tsx needs the real hook with API-level mocks

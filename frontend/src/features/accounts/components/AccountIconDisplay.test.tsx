@@ -10,7 +10,10 @@
 
 import { describe, it, expect } from 'bun:test'
 import { render } from '@testing-library/react'
-import { AccountIconDisplay } from './AccountIconDisplay'
+// Issue #575: Use absolute import to avoid mock.module() pollution
+// AccountCustomizationModal.test.tsx mocks './AccountIconDisplay' (relative)
+// so we use absolute path to get the REAL implementation
+import { AccountIconDisplay } from '@/features/accounts/components/AccountIconDisplay'
 import { VALID_ACCOUNT_ICONS } from '../types'
 import type { AccountIcon } from '../types'
 

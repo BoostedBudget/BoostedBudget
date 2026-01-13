@@ -11,27 +11,7 @@
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-
-// Mock react-colorful as it uses canvas which isn't available in happy-dom
-mock.module('react-colorful', () => ({
-  HexColorPicker: ({
-    color,
-    onChange,
-    style,
-  }: {
-    color: string
-    onChange: (color: string) => void
-    style?: React.CSSProperties
-  }) => (
-    <div
-      data-testid="hex-color-picker"
-      data-color={color}
-      style={style}
-      onClick={() => onChange('#FF0000')}
-    />
-  ),
-}))
-
+// Issue #575: react-colorful is mocked globally via bunfig.toml preload
 import { ColorPicker } from './ColorPicker'
 
 describe('ColorPicker', () => {

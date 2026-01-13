@@ -1,39 +1,22 @@
 /**
  * BudgetDetailPage Component Tests
  * Issue #564: Frontend Test Coverage Improvement
- * Issue #575: Migrated to bun:test
+ * Issue #575: Migrated to bun:test, refactored to use centralized mocks
  *
  * Tests the budget detail page component with loading, error, and success states.
  */
 
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 
-// Import centralized mocks
+// Issue #575: Use centralized mocks to prevent mock.module() pollution
+// No inline mock.module() calls for wrapper hooks
 import { mockNavigate } from '@/test/mocks/react-router'
-
-// Mock hook functions - defined BEFORE mock.module() calls
-const mockRefetch = mock(() => Promise.resolve())
-const mockUseBudgetDetail = mock(() => ({
-  budget: null,
-  loading: true,
-  error: null,
-  refetch: mockRefetch,
-}))
-const mockUseAvailableCategories = mock(() => ({ categories: [] }))
-const mockUseTags = mock(() => ({ tags: [] }))
-
-// Mock wrapper hooks BEFORE importing the component
-mock.module('../hooks/useBudgetDetail', () => ({
-  useBudgetDetail: (...args: unknown[]) => mockUseBudgetDetail(...args),
-}))
-
-mock.module('../hooks/useAvailableCategories', () => ({
-  useAvailableCategories: () => mockUseAvailableCategories(),
-}))
-
-mock.module('../../tags/hooks/useTags', () => ({
-  useTags: () => mockUseTags(),
-}))
+import {
+  mockUseBudgetDetail,
+  mockUseAvailableCategories,
+  mockBudgetDetailRefetch,
+} from '@/test/mocks/budget-detail-hooks'
+import { mockUseTags } from '@/test/mocks/tags-hooks'
 
 // Mock child components BEFORE importing the parent
 mock.module('./category-management/BudgetCategoryManager', () => ({
@@ -112,11 +95,18 @@ function renderWithRouter(budgetId = 'budget-1') {
 
 describe('BudgetDetailPage', () => {
   beforeEach(() => {
-    mockRefetch.mockClear()
+    mockBudgetDetailRefetch.mockClear()
     mockUseBudgetDetail.mockClear()
     mockUseAvailableCategories.mockClear()
     mockUseTags.mockClear()
     mockNavigate.mockClear()
+    // Set default return values
+    mockUseBudgetDetail.mockReturnValue({
+      budget: null,
+      loading: true,
+      error: null,
+      refetch: mockBudgetDetailRefetch,
+    })
     mockUseAvailableCategories.mockReturnValue({ categories: [] })
     mockUseTags.mockReturnValue({ tags: [] })
   })
@@ -127,7 +117,7 @@ describe('BudgetDetailPage', () => {
         budget: null,
         loading: true,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -140,7 +130,7 @@ describe('BudgetDetailPage', () => {
         budget: null,
         loading: true,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       const { container } = renderWithRouter()
@@ -155,7 +145,7 @@ describe('BudgetDetailPage', () => {
         budget: null,
         loading: false,
         error: new Error('Network error'),
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -168,7 +158,7 @@ describe('BudgetDetailPage', () => {
         budget: null,
         loading: false,
         error: new Error('Network error'),
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -181,14 +171,14 @@ describe('BudgetDetailPage', () => {
         budget: null,
         loading: false,
         error: new Error('Network error'),
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
 
       fireEvent.click(screen.getByText('Retry'))
 
-      expect(mockRefetch).toHaveBeenCalled()
+      expect(mockBudgetDetailRefetch).toHaveBeenCalled()
     })
   })
 
@@ -198,7 +188,7 @@ describe('BudgetDetailPage', () => {
         budget: null,
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -211,7 +201,7 @@ describe('BudgetDetailPage', () => {
         budget: null,
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -226,7 +216,7 @@ describe('BudgetDetailPage', () => {
         budget: createMockBudget(),
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -239,7 +229,7 @@ describe('BudgetDetailPage', () => {
         budget: createMockBudget({ is_active: true }),
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -252,7 +242,7 @@ describe('BudgetDetailPage', () => {
         budget: createMockBudget({ is_active: false }),
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -265,7 +255,7 @@ describe('BudgetDetailPage', () => {
         budget: createMockBudget({ description: 'Test description' }),
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -278,7 +268,7 @@ describe('BudgetDetailPage', () => {
         budget: createMockBudget({ description: '' }),
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -291,7 +281,7 @@ describe('BudgetDetailPage', () => {
         budget: createMockBudget({ period: 'monthly' }),
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -307,7 +297,7 @@ describe('BudgetDetailPage', () => {
         }),
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -321,7 +311,7 @@ describe('BudgetDetailPage', () => {
         budget: createMockBudget({ amount: 5000 }),
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -334,7 +324,7 @@ describe('BudgetDetailPage', () => {
         budget: createMockBudget({ income_amount: 6000 }),
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -354,7 +344,7 @@ describe('BudgetDetailPage', () => {
         }),
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -367,7 +357,7 @@ describe('BudgetDetailPage', () => {
         budget: createMockBudget({ income_amount: 7500 }),
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -386,7 +376,7 @@ describe('BudgetDetailPage', () => {
         }),
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -402,7 +392,7 @@ describe('BudgetDetailPage', () => {
         }),
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -419,7 +409,7 @@ describe('BudgetDetailPage', () => {
         }),
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -434,7 +424,7 @@ describe('BudgetDetailPage', () => {
         }),
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -447,7 +437,7 @@ describe('BudgetDetailPage', () => {
         budget: createMockBudget(),
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -460,7 +450,7 @@ describe('BudgetDetailPage', () => {
         budget: createMockBudget(),
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -475,7 +465,7 @@ describe('BudgetDetailPage', () => {
         budget: createMockBudget(),
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -492,7 +482,7 @@ describe('BudgetDetailPage', () => {
         budget: createMockBudget(),
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -508,7 +498,7 @@ describe('BudgetDetailPage', () => {
         budget: createMockBudget(),
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -521,7 +511,7 @@ describe('BudgetDetailPage', () => {
         budget: createMockBudget(),
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -534,7 +524,7 @@ describe('BudgetDetailPage', () => {
         budget: createMockBudget(),
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter('test-budget-123')
@@ -548,7 +538,7 @@ describe('BudgetDetailPage', () => {
         budget: createMockBudget(),
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter('test-budget-456')
@@ -566,7 +556,7 @@ describe('BudgetDetailPage', () => {
         }),
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -581,7 +571,7 @@ describe('BudgetDetailPage', () => {
         }),
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
@@ -597,7 +587,7 @@ describe('BudgetDetailPage', () => {
         }),
         loading: false,
         error: null,
-        refetch: mockRefetch,
+        refetch: mockBudgetDetailRefetch,
       })
 
       renderWithRouter()
