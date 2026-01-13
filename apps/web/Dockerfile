@@ -3,21 +3,19 @@
 # Note: Bun crashes under QEMU x86 emulation due to AVX instruction requirements
 FROM node:22-alpine AS builder
 
-# Install pnpm (supports workspace:* protocol like Bun)
-RUN corepack enable && corepack prepare pnpm@latest --activate
-
 WORKDIR /build
 
-# Copy root workspace files
-COPY package.json pnpm-workspace.yaml ./
+# Copy package files
+COPY package.json ./
 COPY apps/web/package.json ./apps/web/
 COPY packages/api-client/package.json ./packages/api-client/
 COPY packages/shared-types/package.json ./packages/shared-types/
 
-# Install dependencies (no frozen-lockfile since we use bun.lock locally)
-RUN pnpm install
+# Install dependencies with npm (doesn't enforce packageManager field)
+# --legacy-peer-deps handles any peer dependency conflicts
+RUN npm install --legacy-peer-deps
 
-# Copy workspace packages first (for dependency resolution)
+# Copy workspace packages
 COPY packages/ ./packages/
 
 # Copy config directory (needed for type generation)
@@ -31,7 +29,7 @@ COPY apps/web/ ./apps/web/
 
 # Build the web application
 WORKDIR /build/apps/web
-RUN pnpm run build
+RUN npm run build
 
 # Stage 2: Runtime with Nginx (Debian-based)
 FROM nginx:stable
