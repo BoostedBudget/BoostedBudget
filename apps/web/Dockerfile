@@ -1,6 +1,6 @@
 # Multi-stage production Dockerfile for Frontend (Turborepo monorepo)
-# Stage 1: Builder - Use Bun for workspace:* protocol support
-FROM oven/bun:1 AS builder
+# Stage 1: Builder - Use Alpine Bun for QEMU x86 emulation compatibility (no AVX required)
+FROM oven/bun:1-alpine AS builder
 
 WORKDIR /build
 
