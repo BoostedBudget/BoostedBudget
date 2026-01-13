@@ -40,6 +40,10 @@ mock.module('../hooks/useBudgets', () => ({
 }))
 
 // === useSavingsGoals wrapper hook mock ===
+// NOTE: These mocks are exported but NOT applied via mock.module() globally.
+// This is because useSavingsGoals.test.tsx needs to test the REAL implementation.
+// Component tests that need useSavingsGoals mocked should import from savings-goals-api.ts
+// or use the centralized mockUseSavingsGoals from this file with inline mock.module().
 export const mockRefetchGoals = mock(() => Promise.resolve())
 export const mockCreateGoal = mock(() => Promise.resolve())
 export const mockUpdateGoal = mock(() => Promise.resolve())
@@ -58,13 +62,12 @@ export const mockUseSavingsGoals = mock(() => ({
   deleteGoal: mockDeleteGoal,
 }))
 
-mock.module('@/features/budgets/hooks/useSavingsGoals', () => ({
-  useSavingsGoals: () => mockUseSavingsGoals(),
-}))
-
-mock.module('../hooks/useSavingsGoals', () => ({
-  useSavingsGoals: () => mockUseSavingsGoals(),
-}))
+// REMOVED: Global mock.module() for useSavingsGoals
+// Tests that need this mock should use:
+// import { mockUseSavingsGoals } from '@/test/mocks/budgets-wrapper'
+// mock.module('@/features/budgets/hooks/useSavingsGoals', () => ({
+//   useSavingsGoals: () => mockUseSavingsGoals(),
+// }))
 
 // === useBudgetFilters wrapper hook mock ===
 export const mockSetPeriodFilter = mock(() => {})

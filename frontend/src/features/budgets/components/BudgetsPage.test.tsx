@@ -143,6 +143,16 @@ mock.module('./CreateSavingsGoalDialog', () => ({
   },
 }))
 
+// Mock useSavingsGoals wrapper hook (not globally preloaded to allow hook tests to work)
+// This must be BEFORE importing BudgetsPage
+mock.module('@/features/budgets/hooks/useSavingsGoals', () => ({
+  useSavingsGoals: () => mockUseSavingsGoals(),
+}))
+
+mock.module('../hooks/useSavingsGoals', () => ({
+  useSavingsGoals: () => mockUseSavingsGoals(),
+}))
+
 // NOW import testing utilities and component AFTER mocks
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
