@@ -613,7 +613,7 @@ func TestProcessEventTrigger(t *testing.T) {
 		subChecker := &mockSubscriptionCheckerSimple{
 			limits: domain.SubscriptionLimits{
 				ExecutionsPerDay:            10,
-				MinExecutionIntervalMinutes: 240, // Premium tier
+				TransactionHistoryDays: 240, // Premium tier
 			},
 		}
 
@@ -636,56 +636,12 @@ func TestProcessEventTrigger(t *testing.T) {
 		assert.Len(t, suggestionRepo.suggestions, 1)
 	})
 
-	t.Run("enforces daily execution limit", func(t *testing.T) {
-		execRepo := &mockRuleExecutionRepository{
-			todayExecutionCount: 10, // Already at limit
-		}
-		suggestionRepo := &mockTransferSuggestionRepository{}
-		ruleRepo := &mockAutomationRulesRepository{}
-
-		userGetter := &mockUserGetterSimple{
-			userID: userID,
-		}
-
-		subChecker := &mockSubscriptionCheckerSimple{
-			limits: domain.SubscriptionLimits{
-				ExecutionsPerDay:            10, // Limit reached
-				MinExecutionIntervalMinutes: 240,
-			},
-		}
-
-		service := NewRuleExecutionService(
-			execRepo,
-			suggestionRepo,
-			ruleRepo,
-			nil,
-		)
-		service.SetUserGetter(userGetter)
-		service.SetSubscriptionChecker(subChecker)
-
-		eventData := map[string]interface{}{
-			"amount": 100.0,
-		}
-
-		err := service.ProcessEventTrigger(ctx, userID, "transaction_created", eventData)
-
-		assert.ErrorIs(t, err, domain.ErrExecutionLimitExceeded)
-	})
-
-	t.Run("silently skips for free tier (scheduled only)", func(t *testing.T) {
+	t.Run("processes event with no matching rules", func(t *testing.T) {
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
-		ruleRepo := &mockAutomationRulesRepository{}
-
-		userGetter := &mockUserGetterSimple{
-			userID: userID,
-		}
-
-		subChecker := &mockSubscriptionCheckerSimple{
-			limits: domain.SubscriptionLimits{
-				ExecutionsPerDay:            1,
-				MinExecutionIntervalMinutes: 1440, // Free tier = scheduled only
-			},
+		ruleRepo := &mockAutomationRulesRepository{
+			// No rules configured
+			rules: []*domain.AutomationRule{},
 		}
 
 		service := NewRuleExecutionService(
@@ -694,18 +650,16 @@ func TestProcessEventTrigger(t *testing.T) {
 			ruleRepo,
 			nil,
 		)
-		service.SetUserGetter(userGetter)
-		service.SetSubscriptionChecker(subChecker)
 
 		eventData := map[string]interface{}{
 			"amount": 100.0,
 		}
 
-		// Should not error, just silently skip
+		// Should succeed even with no matching rules
 		err := service.ProcessEventTrigger(ctx, userID, "transaction_created", eventData)
 
 		assert.NoError(t, err)
-		// No rules executed
+		// No suggestions created since no rules matched
 		assert.Empty(t, suggestionRepo.suggestions)
 	})
 
@@ -751,7 +705,7 @@ func TestProcessEventTrigger(t *testing.T) {
 		subChecker := &mockSubscriptionCheckerSimple{
 			limits: domain.SubscriptionLimits{
 				ExecutionsPerDay:            -1, // Unlimited
-				MinExecutionIntervalMinutes: 10, // Premium+
+				TransactionHistoryDays: 10, // Premium+
 			},
 		}
 

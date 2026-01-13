@@ -68,7 +68,7 @@ func (r *profileRepository) GetUserByClerkID(ctx context.Context, clerkUserID st
 	query := `
 		SELECT id, clerk_user_id, email, email_verified,
 		       subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
-		       stripe_customer_id, primary_region, is_active, is_deleted,
+		       paddle_customer_id, primary_region, is_active, is_deleted,
 		       deletion_requested_at, deletion_scheduled_at,
 		       created_at, updated_at, last_login_at
 		FROM users
@@ -85,7 +85,7 @@ func (r *profileRepository) GetUserByClerkID(ctx context.Context, clerkUserID st
 		&user.SubscriptionStatus,
 		&user.SubscriptionStartedAt,
 		&user.SubscriptionEndsAt,
-		&user.StripeCustomerID,
+		&user.PaddleCustomerID,
 		&user.PrimaryRegion,
 		&user.IsActive,
 		&user.IsDeleted,
@@ -111,7 +111,7 @@ func (r *profileRepository) GetUserByID(ctx context.Context, id string) (*domain
 	query := `
 		SELECT id, clerk_user_id, email, email_verified,
 		       subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
-		       stripe_customer_id, primary_region, is_active, is_deleted,
+		       paddle_customer_id, primary_region, is_active, is_deleted,
 		       deletion_requested_at, deletion_scheduled_at,
 		       created_at, updated_at, last_login_at
 		FROM users
@@ -128,7 +128,7 @@ func (r *profileRepository) GetUserByID(ctx context.Context, id string) (*domain
 		&user.SubscriptionStatus,
 		&user.SubscriptionStartedAt,
 		&user.SubscriptionEndsAt,
-		&user.StripeCustomerID,
+		&user.PaddleCustomerID,
 		&user.PrimaryRegion,
 		&user.IsActive,
 		&user.IsDeleted,
@@ -165,7 +165,7 @@ func (r *profileRepository) CreateUser(ctx context.Context, user *domain.User) e
 		INSERT INTO users (
 			id, clerk_user_id, email, email_verified,
 			subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
-			stripe_customer_id, primary_region, is_active, is_deleted,
+			paddle_customer_id, primary_region, is_active, is_deleted,
 			deletion_requested_at, deletion_scheduled_at,
 			created_at, updated_at, last_login_at
 		) VALUES (
@@ -186,7 +186,7 @@ func (r *profileRepository) CreateUser(ctx context.Context, user *domain.User) e
 		user.SubscriptionStatus,
 		user.SubscriptionStartedAt,
 		user.SubscriptionEndsAt,
-		user.StripeCustomerID,
+		user.PaddleCustomerID,
 		user.PrimaryRegion,
 		user.IsActive,
 		user.IsDeleted,
@@ -226,7 +226,7 @@ func (r *profileRepository) CreateUserTx(ctx context.Context, tx pgx.Tx, user *d
 		INSERT INTO users (
 			id, clerk_user_id, email, email_verified,
 			subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
-			stripe_customer_id, primary_region, is_active, is_deleted,
+			paddle_customer_id, primary_region, is_active, is_deleted,
 			deletion_requested_at, deletion_scheduled_at,
 			created_at, updated_at, last_login_at
 		) VALUES (
@@ -247,7 +247,7 @@ func (r *profileRepository) CreateUserTx(ctx context.Context, tx pgx.Tx, user *d
 		user.SubscriptionStatus,
 		user.SubscriptionStartedAt,
 		user.SubscriptionEndsAt,
-		user.StripeCustomerID,
+		user.PaddleCustomerID,
 		user.PrimaryRegion,
 		user.IsActive,
 		user.IsDeleted,
@@ -392,7 +392,7 @@ func (r *profileRepository) GetUsersScheduledForDeletion(ctx context.Context) ([
 	query := `
 		SELECT id, clerk_user_id, email, email_verified,
 		       subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
-		       stripe_customer_id, primary_region, is_active, is_deleted,
+		       paddle_customer_id, primary_region, is_active, is_deleted,
 		       deletion_requested_at, deletion_scheduled_at,
 		       created_at, updated_at, last_login_at
 		FROM users
@@ -420,7 +420,7 @@ func (r *profileRepository) GetUsersScheduledForDeletion(ctx context.Context) ([
 			&user.SubscriptionStatus,
 			&user.SubscriptionStartedAt,
 			&user.SubscriptionEndsAt,
-			&user.StripeCustomerID,
+			&user.PaddleCustomerID,
 			&user.PrimaryRegion,
 			&user.IsActive,
 			&user.IsDeleted,
@@ -526,7 +526,7 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 		    is_active = FALSE,
 		    email = CONCAT('deleted_', id, '@deleted.local'),
 		    clerk_user_id = CONCAT('deleted_', id),
-		    stripe_customer_id = NULL,
+		    paddle_customer_id = NULL,
 		    deletion_requested_at = NULL,
 		    deletion_scheduled_at = NULL,
 		    updated_at = $1

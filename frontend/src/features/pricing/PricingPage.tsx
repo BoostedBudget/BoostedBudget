@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useUser } from '@clerk/react-router'
-import { Star, Award, Gem, Check, X } from 'lucide-react'
+import { Award, Gem, Check, X } from 'lucide-react'
 import { useSubscriptionTiers } from '../subscription/hooks/useSubscriptionTiers'
 import type { TierName, SubscriptionTier } from '../subscription/types'
 import './PricingPage.css'
@@ -58,15 +58,8 @@ function buildFeatureList(
     })
   }
 
-  // Rules limit
-  if (limits.rules === -1) {
-    features.push({ feature: 'Unlimited automation rules', included: true })
-  } else {
-    features.push({
-      feature: `${limits.rules} automation rule${limits.rules > 1 ? 's' : ''}`,
-      included: true,
-    })
-  }
+  // Rules are unlimited for all tiers
+  features.push({ feature: 'Unlimited automation rules', included: true })
 
   // Execution frequency
   const execsPerDay = limits.executions_per_day
@@ -113,8 +106,7 @@ interface TierCardProps {
 
 function TierCard({ tierKey, tierData, isCurrentTier, billingPeriod }: TierCardProps) {
   const features = buildFeatureList(tierData)
-  const isFreeTier = tierKey === 'free'
-  const isPremiumPlus = tierKey === 'premium_plus'
+  const isHousehold5 = tierKey === 'household_5'
 
   // Get the appropriate price based on billing period
   const currentPrice = billingPeriod === 'monthly'
@@ -122,25 +114,21 @@ function TierCard({ tierKey, tierData, isCurrentTier, billingPeriod }: TierCardP
     : tierData.pricing.price_yearly
   const isPaidTier = tierData.pricing.price_monthly > 0
 
-  // Get the icon component based on tier
+  // Get the icon component based on tier (all tiers use Award now)
   const renderTierIcon = () => {
     const iconProps = { className: 'pricing-tier-icon', 'aria-hidden': true as const }
-    switch (tierKey) {
-      case 'free':
-        return <Star {...iconProps} />
-      case 'premium_plus':
-        return <Gem {...iconProps} />
-      default:
-        return <Award {...iconProps} />
+    if (tierKey === 'household_5') {
+      return <Gem {...iconProps} />
     }
+    return <Award {...iconProps} />
   }
 
   return (
     <div
-      className={`pricing-card ${isCurrentTier ? 'current' : ''} ${isPremiumPlus ? 'featured' : ''}`}
+      className={`pricing-card ${isCurrentTier ? 'current' : ''} ${isHousehold5 ? 'featured' : ''}`}
     >
       {isCurrentTier && <div className="current-badge">Current Plan</div>}
-      {isPremiumPlus && !isCurrentTier && (
+      {isHousehold5 && !isCurrentTier && (
         <div className="featured-badge">Best Value</div>
       )}
 
@@ -183,11 +171,9 @@ function TierCard({ tierKey, tierData, isCurrentTier, billingPeriod }: TierCardP
           <button className="btn-current" disabled>
             Current Plan
           </button>
-        ) : isFreeTier ? (
-          <button className="btn-downgrade">Downgrade</button>
         ) : (
           <button className="btn-select">
-            {tierKey === 'premium_plus' ? 'Go Premium+' : 'Select Plan'}
+            {tierKey === 'household_5' ? 'Go Household 5' : 'Select Plan'}
           </button>
         )}
       </div>
@@ -200,10 +186,10 @@ export function PricingPage() {
   const { tiers, loading, error, refetch } = useSubscriptionTiers()
   const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>('monthly')
 
-  // Get current user's tier from Clerk publicMetadata or default to 'free'
+  // Get current user's tier from Clerk publicMetadata or default to 'premium'
   // Note: In production, this would come from your user state/context
   const currentTier: TierName =
-    (user?.publicMetadata?.subscription_tier as TierName) || 'free'
+    (user?.publicMetadata?.subscription_tier as TierName) || 'premium'
 
   if (loading) {
     return (
@@ -226,8 +212,8 @@ export function PricingPage() {
     )
   }
 
-  // Order tiers for display
-  const tierOrder: TierName[] = ['free', 'premium_lite', 'premium', 'premium_plus']
+  // Order tiers for display (free tier removed, household tiers added)
+  const tierOrder: TierName[] = ['premium', 'household_2', 'household_3', 'household_4', 'household_5']
 
   return (
     <div className="pricing-page">

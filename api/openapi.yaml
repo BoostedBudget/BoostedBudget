@@ -1937,28 +1937,7 @@ components:
         accounts:
           format: int64
           type: integer
-        accounts_synced_per_month:
-          format: int64
-          type: integer
-        api_calls_per_month:
-          format: int64
-          type: integer
-        custom_categories_max:
-          format: int64
-          type: integer
-        custom_tags_max:
-          format: int64
-          type: integer
-        data_export_requests_per_month:
-          format: int64
-          type: integer
         executions_per_day:
-          format: int64
-          type: integer
-        min_execution_interval_minutes:
-          format: int64
-          type: integer
-        rules:
           format: int64
           type: integer
         transaction_history_days:
@@ -1966,29 +1945,28 @@ components:
           type: integer
       required:
         - accounts
-        - rules
         - executions_per_day
-        - min_execution_interval_minutes
-        - api_calls_per_month
-        - data_export_requests_per_month
-        - accounts_synced_per_month
         - transaction_history_days
-        - custom_categories_max
-        - custom_tags_max
       type: object
     SubscriptionPricing:
       additionalProperties: false
       properties:
+        mobile_price_yearly:
+          format: double
+          type: number
+        paddle_price_id_monthly:
+          type: string
+        paddle_price_id_yearly:
+          type: string
         price_monthly:
           format: double
           type: number
         price_yearly:
           format: double
           type: number
-        stripe_price_id_monthly:
-          type: string
-        stripe_price_id_yearly:
-          type: string
+        users_included:
+          format: int64
+          type: integer
       required:
         - price_monthly
         - price_yearly
@@ -2691,7 +2669,7 @@ components:
           type: string
         primary_region:
           type: string
-        stripe_customer_id:
+        paddle_customer_id:
           type: string
         subscription_ends_at:
           format: date-time

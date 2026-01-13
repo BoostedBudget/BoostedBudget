@@ -43,45 +43,32 @@ describe('SubscriptionCard', () => {
   })
 
   describe('Tier display', () => {
-    it('should display free tier with upgrade button', () => {
-      renderWithRouter(<SubscriptionCard tier="free" status="active" />)
-
-      expect(screen.getByText(/free/i)).toBeInTheDocument()
-      expect(screen.getByText(/\$0/i)).toBeInTheDocument()
-      expect(screen.getByText(/1 automation rules/i)).toBeInTheDocument()
-      expect(screen.getByText(/3 bank accounts/i)).toBeInTheDocument()
-      expect(screen.getByText(/ad-supported/i)).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: /upgrade/i })).toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: /manage/i })).not.toBeInTheDocument()
-    })
-
-    it('should display premium lite tier with manage button', () => {
-      renderWithRouter(<SubscriptionCard tier="premium_lite" status="active" />)
-
-      expect(screen.getByText(/premium lite/i)).toBeInTheDocument()
-      expect(screen.getByText(/\$4\.99/i)).toBeInTheDocument()
-      expect(screen.getByText(/5 automation rules/i)).toBeInTheDocument()
-      expect(screen.getByText(/15 bank accounts/i)).toBeInTheDocument()
-      expect(screen.getByText(/no ads/i)).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: /manage/i })).toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: /upgrade/i })).not.toBeInTheDocument()
-    })
-
     it('should display premium tier with manage button', () => {
       renderWithRouter(<SubscriptionCard tier="premium" status="active" />)
 
       expect(screen.getByText(/premium/i)).toBeInTheDocument()
       expect(screen.getByText(/\$9\.99/i)).toBeInTheDocument()
-      expect(screen.getByText(/15 automation rules/i)).toBeInTheDocument()
-      expect(screen.getByText(/30 bank accounts/i)).toBeInTheDocument()
+      expect(screen.getByText(/unlimited automation rules/i)).toBeInTheDocument()
+      expect(screen.getByText(/10 bank accounts/i)).toBeInTheDocument()
+      expect(screen.getByText(/no ads/i)).toBeInTheDocument()
       expect(screen.getByRole('button', { name: /manage/i })).toBeInTheDocument()
     })
 
-    it('should display premium+ tier with unlimited features', () => {
-      renderWithRouter(<SubscriptionCard tier="premium_plus" status="active" />)
+    it('should display household_2 tier with manage button', () => {
+      renderWithRouter(<SubscriptionCard tier="household_2" status="active" />)
 
-      expect(screen.getByText(/premium\+/i)).toBeInTheDocument()
-      expect(screen.getByText(/\$19\.99/i)).toBeInTheDocument()
+      expect(screen.getByText(/household \(2 members\)/i)).toBeInTheDocument()
+      expect(screen.getByText(/\$14\.99/i)).toBeInTheDocument()
+      expect(screen.getByText(/unlimited automation rules/i)).toBeInTheDocument()
+      expect(screen.getByText(/20 bank accounts/i)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /manage/i })).toBeInTheDocument()
+    })
+
+    it('should display household_5 tier with unlimited features', () => {
+      renderWithRouter(<SubscriptionCard tier="household_5" status="active" />)
+
+      expect(screen.getByText(/household \(5 members\)/i)).toBeInTheDocument()
+      expect(screen.getByText(/\$29\.99/i)).toBeInTheDocument()
       expect(screen.getByText(/unlimited bank accounts/i)).toBeInTheDocument()
       expect(screen.getByText(/unlimited automation rules/i)).toBeInTheDocument()
       expect(screen.getByText(/ai-powered insights/i)).toBeInTheDocument()
@@ -95,16 +82,28 @@ describe('SubscriptionCard', () => {
       expect(screen.getByText(/active/i)).toBeInTheDocument()
 
       rerender(
-        <MemoryRouter>
-          <SubscriptionCard tier="premium" status="inactive" />
-        </MemoryRouter>
+        <QueryClientProvider client={new QueryClient({
+          defaultOptions: {
+            queries: { retry: false, gcTime: 0 },
+          },
+        })}>
+          <MemoryRouter>
+            <SubscriptionCard tier="premium" status="inactive" />
+          </MemoryRouter>
+        </QueryClientProvider>
       )
       expect(screen.getByText(/inactive/i)).toBeInTheDocument()
 
       rerender(
-        <MemoryRouter>
-          <SubscriptionCard tier="free" status="cancelled" />
-        </MemoryRouter>
+        <QueryClientProvider client={new QueryClient({
+          defaultOptions: {
+            queries: { retry: false, gcTime: 0 },
+          },
+        })}>
+          <MemoryRouter>
+            <SubscriptionCard tier="premium" status="cancelled" />
+          </MemoryRouter>
+        </QueryClientProvider>
       )
       expect(screen.getByText(/cancelled/i)).toBeInTheDocument()
     })
@@ -112,10 +111,11 @@ describe('SubscriptionCard', () => {
 
   describe('Visual styling', () => {
     const tierClasses = [
-      { tier: 'free', class: 'tier-free' },
-      { tier: 'premium_lite', class: 'tier-premium_lite' },
       { tier: 'premium', class: 'tier-premium' },
-      { tier: 'premium_plus', class: 'tier-premium_plus' },
+      { tier: 'household_2', class: 'tier-household_2' },
+      { tier: 'household_3', class: 'tier-household_3' },
+      { tier: 'household_4', class: 'tier-household_4' },
+      { tier: 'household_5', class: 'tier-household_5' },
     ]
 
     tierClasses.forEach(({ tier, class: tierClass }) => {
@@ -139,7 +139,7 @@ describe('SubscriptionCard', () => {
 
     it('should handle missing status gracefully', () => {
       expect(() => {
-        renderWithRouter(<SubscriptionCard tier="free" status={undefined as unknown as User['subscription_status']} />)
+        renderWithRouter(<SubscriptionCard tier="premium" status={undefined as unknown as User['subscription_status']} />)
       }).not.toThrow()
     })
 
@@ -161,7 +161,7 @@ describe('SubscriptionCard', () => {
         refetch: mockRefetchSubscriptionTiers,
       })
 
-      renderWithRouter(<SubscriptionCard tier="free" status="active" />)
+      renderWithRouter(<SubscriptionCard tier="premium" status="active" />)
 
       expect(screen.getByText(/loading subscription details/i)).toBeInTheDocument()
     })
@@ -175,16 +175,16 @@ describe('SubscriptionCard', () => {
         refetch: mockRefetchSubscriptionTiers,
       })
 
-      renderWithRouter(<SubscriptionCard tier="free" status="active" />)
+      renderWithRouter(<SubscriptionCard tier="premium" status="active" />)
 
       expect(screen.getByText(/error loading subscription/i)).toBeInTheDocument()
       expect(screen.getByText(/failed to fetch tiers/i)).toBeInTheDocument()
     })
 
     it('should render normally when hook succeeds', () => {
-      renderWithRouter(<SubscriptionCard tier="free" status="active" />)
+      renderWithRouter(<SubscriptionCard tier="premium" status="active" />)
 
-      expect(screen.getByText(/free/i)).toBeInTheDocument()
+      expect(screen.getByText(/premium/i)).toBeInTheDocument()
       expect(screen.queryByText(/loading/i)).not.toBeInTheDocument()
       expect(screen.queryByText(/error/i)).not.toBeInTheDocument()
     })

@@ -53,32 +53,10 @@ export const getGetSubscriptionTiersResponseMock = (
       },
       limits: {
         accounts: faker.number.int({ min: undefined, max: undefined }),
-        accounts_synced_per_month: faker.number.int({
-          min: undefined,
-          max: undefined,
-        }),
-        api_calls_per_month: faker.number.int({
-          min: undefined,
-          max: undefined,
-        }),
-        custom_categories_max: faker.number.int({
-          min: undefined,
-          max: undefined,
-        }),
-        custom_tags_max: faker.number.int({ min: undefined, max: undefined }),
-        data_export_requests_per_month: faker.number.int({
-          min: undefined,
-          max: undefined,
-        }),
         executions_per_day: faker.number.int({
           min: undefined,
           max: undefined,
         }),
-        min_execution_interval_minutes: faker.number.int({
-          min: undefined,
-          max: undefined,
-        }),
-        rules: faker.number.int({ min: undefined, max: undefined }),
         transaction_history_days: faker.number.int({
           min: undefined,
           max: undefined,
@@ -86,6 +64,22 @@ export const getGetSubscriptionTiersResponseMock = (
       },
       name: faker.string.alpha({ length: { min: 10, max: 20 } }),
       pricing: {
+        mobile_price_yearly: faker.helpers.arrayElement([
+          faker.number.float({
+            min: undefined,
+            max: undefined,
+            fractionDigits: 2,
+          }),
+          undefined,
+        ]),
+        paddle_price_id_monthly: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+        paddle_price_id_yearly: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
         price_monthly: faker.number.float({
           min: undefined,
           max: undefined,
@@ -96,12 +90,8 @@ export const getGetSubscriptionTiersResponseMock = (
           max: undefined,
           fractionDigits: 2,
         }),
-        stripe_price_id_monthly: faker.helpers.arrayElement([
-          faker.string.alpha({ length: { min: 10, max: 20 } }),
-          undefined,
-        ]),
-        stripe_price_id_yearly: faker.helpers.arrayElement([
-          faker.string.alpha({ length: { min: 10, max: 20 } }),
+        users_included: faker.helpers.arrayElement([
+          faker.number.int({ min: undefined, max: undefined }),
           undefined,
         ]),
       },
