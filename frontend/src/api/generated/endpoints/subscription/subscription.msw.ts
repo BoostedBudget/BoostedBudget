@@ -64,14 +64,11 @@ export const getGetSubscriptionTiersResponseMock = (
       },
       name: faker.string.alpha({ length: { min: 10, max: 20 } }),
       pricing: {
-        mobile_price_yearly: faker.helpers.arrayElement([
-          faker.number.float({
-            min: undefined,
-            max: undefined,
-            fractionDigits: 2,
-          }),
-          undefined,
-        ]),
+        mobile_price_yearly: faker.number.float({
+          min: undefined,
+          max: undefined,
+          fractionDigits: 2,
+        }),
         paddle_price_id_monthly: faker.helpers.arrayElement([
           faker.string.alpha({ length: { min: 10, max: 20 } }),
           undefined,
@@ -90,10 +87,7 @@ export const getGetSubscriptionTiersResponseMock = (
           max: undefined,
           fractionDigits: 2,
         }),
-        users_included: faker.helpers.arrayElement([
-          faker.number.int({ min: undefined, max: undefined }),
-          undefined,
-        ]),
+        users_included: faker.number.int({ min: undefined, max: undefined }),
       },
     },
   },
