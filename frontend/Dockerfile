@@ -1,7 +1,7 @@
 # Multi-stage production Dockerfile for Frontend
 # Stage 1: Builder - Use Node.js for cross-platform compatibility
 # Note: Bun crashes with SIGILL on QEMU-emulated x64 builds (ARM64 runners)
-FROM node:20-slim AS builder
+FROM node:22-slim AS builder
 
 WORKDIR /build
 
