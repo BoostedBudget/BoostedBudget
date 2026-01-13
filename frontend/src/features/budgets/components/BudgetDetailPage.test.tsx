@@ -6,7 +6,7 @@
  * Tests the budget detail page component with loading, error, and success states.
  */
 
-import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach } from 'bun:test'
 
 // Issue #575: Use centralized mocks to prevent mock.module() pollution
 // No inline mock.module() calls for wrapper hooks

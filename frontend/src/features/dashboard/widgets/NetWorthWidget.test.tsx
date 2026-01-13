@@ -3,7 +3,7 @@
  * Issue #575: Refactored to use centralized mocks (no inline mock.module)
  */
 
-import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import type { NetWorthSummary, NetWorthHistory } from '../types'
 
