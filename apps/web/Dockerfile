@@ -11,8 +11,11 @@ COPY apps/web/package.json ./apps/web/
 COPY packages/api-client/package.json ./packages/api-client/
 COPY packages/shared-types/package.json ./packages/shared-types/
 
+# Remove workspace:* dependencies from apps/web/package.json
+# (npm doesn't support workspace: protocol, Vite resolve.alias handles these imports)
+RUN sed -i '/@boostedbudget/d' apps/web/package.json
+
 # Install dependencies with npm (doesn't enforce packageManager field)
-# --legacy-peer-deps handles any peer dependency conflicts
 RUN npm install --legacy-peer-deps
 
 # Copy workspace packages
