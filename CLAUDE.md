@@ -29,11 +29,10 @@ bun run test                # Unit tests (bun:test)
 bun run lint                # ESLint
 bun run test:e2e            # Playwright E2E
 bun run test:e2e -- --headed  # E2E with browser
-bun run generate:api        # Orval → TypeScript hooks from OpenAPI
 
 # Code Generation
 make generate-openapi       # Go Huma → api/openapi.yaml
-make generate-api-client    # OpenAPI → frontend TypeScript
+make generate-api-client    # OpenAPI → frontend TypeScript (uses npm+orval, restores bun)
 make generate-all           # Both
 
 # Migrations (requires DATABASE_URL)
@@ -67,7 +66,7 @@ config/
 
 **Key Patterns**:
 - OpenAPI spec generated FROM Huma routes (not hand-written)
-- Frontend hooks auto-generated via Orval
+- Frontend hooks auto-generated via Orval (**use `make generate-api-client`** - Bun has AJV bug)
 - Migrations MUST be idempotent (`IF NOT EXISTS`, `DO $$` blocks)
 - All auth via Clerk (JWT middleware), never custom auth
 - `*InRegion` method signatures for future multi-region
