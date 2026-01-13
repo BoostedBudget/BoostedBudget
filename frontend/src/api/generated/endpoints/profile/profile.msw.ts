@@ -57,7 +57,7 @@ export const getGetUserProfileResponseMock = (
     undefined,
   ]),
   primary_region: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  stripe_customer_id: faker.helpers.arrayElement([
+  paddle_customer_id: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
@@ -99,7 +99,7 @@ export const getUpdateUserProfileResponseMock = (
     undefined,
   ]),
   primary_region: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  stripe_customer_id: faker.helpers.arrayElement([
+  paddle_customer_id: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),

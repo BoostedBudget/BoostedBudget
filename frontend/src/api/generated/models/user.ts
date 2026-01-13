@@ -41,7 +41,7 @@ export interface User {
   is_deleted: boolean;
   last_login_at?: string;
   primary_region: string;
-  stripe_customer_id?: string;
+  paddle_customer_id?: string;
   subscription_ends_at?: string;
   subscription_started_at?: string;
   subscription_status: string;

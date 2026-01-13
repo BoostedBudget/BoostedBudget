@@ -57,23 +57,26 @@ func TestSubscriptionTiersHandler_GetSubscriptionTiers_ResponseStructure(t *test
 	// Assert structure
 	assert.NotNil(t, response.Tiers)
 	assert.NotEmpty(t, response.DefaultTier)
-	assert.Len(t, response.Tiers, 4, "Should have 4 tiers")
+	assert.Len(t, response.Tiers, 5, "Should have 5 tiers")
 
 	// Verify all expected tiers exist
-	_, hasFreeTier := response.Tiers[domain.TierFree]
-	assert.True(t, hasFreeTier, "Should have free tier")
-
-	_, hasPremiumLite := response.Tiers[domain.TierPremiumLite]
-	assert.True(t, hasPremiumLite, "Should have premium_lite tier")
-
 	_, hasPremium := response.Tiers[domain.TierPremium]
 	assert.True(t, hasPremium, "Should have premium tier")
 
-	_, hasPremiumPlus := response.Tiers[domain.TierPremiumPlus]
-	assert.True(t, hasPremiumPlus, "Should have premium_plus tier")
+	_, hasHousehold2 := response.Tiers[domain.TierHousehold2]
+	assert.True(t, hasHousehold2, "Should have household_2 tier")
 
-	// Verify default tier is "free"
-	assert.Equal(t, domain.TierFree, response.DefaultTier)
+	_, hasHousehold3 := response.Tiers[domain.TierHousehold3]
+	assert.True(t, hasHousehold3, "Should have household_3 tier")
+
+	_, hasHousehold4 := response.Tiers[domain.TierHousehold4]
+	assert.True(t, hasHousehold4, "Should have household_4 tier")
+
+	_, hasHousehold5 := response.Tiers[domain.TierHousehold5]
+	assert.True(t, hasHousehold5, "Should have household_5 tier")
+
+	// Verify default tier is "premium"
+	assert.Equal(t, domain.TierPremium, response.DefaultTier)
 }
 
 // TestSubscriptionTiersHandler_GetSubscriptionTiers_TierFields tests tier fields.
@@ -98,18 +101,17 @@ func TestSubscriptionTiersHandler_GetSubscriptionTiers_TierFields(t *testing.T) 
 	err = json.Unmarshal(resp.Body.Bytes(), &response)
 	require.NoError(t, err)
 
-	// Verify free tier fields
-	freeTier := response.Tiers[domain.TierFree]
-	assert.Equal(t, domain.TierFree, freeTier.Name)
-	assert.Equal(t, "Free", freeTier.DisplayName)
-	assert.NotEmpty(t, freeTier.Description)
-	assert.Equal(t, 3, freeTier.Limits.Accounts)
-	assert.Equal(t, 1, freeTier.Limits.Rules)
-	assert.Equal(t, 1, freeTier.Limits.ExecutionsPerDay)
-	assert.Equal(t, 1440, freeTier.Limits.MinExecutionIntervalMinutes)
-	assert.True(t, freeTier.Features.AdsEnabled)
-	assert.False(t, freeTier.Features.AIInsights)
-	assert.Equal(t, 0.0, freeTier.Pricing.PriceMonthly)
+	// Verify premium tier fields
+	premiumTier := response.Tiers[domain.TierPremium]
+	assert.Equal(t, domain.TierPremium, premiumTier.Name)
+	assert.Equal(t, "Premium", premiumTier.DisplayName)
+	assert.NotEmpty(t, premiumTier.Description)
+	assert.Equal(t, 30, premiumTier.Limits.Accounts)
+	assert.Equal(t, 730, premiumTier.Limits.TransactionHistoryDays)
+	assert.Equal(t, 6, premiumTier.Limits.ExecutionsPerDay)
+	assert.False(t, premiumTier.Features.AdsEnabled)
+	assert.True(t, premiumTier.Features.AIInsights)
+	assert.Equal(t, 8.99, premiumTier.Pricing.PriceMonthly)
 }
 
 // TestSubscriptionTiersHandler_GetSubscriptionTiers_CacheHeaders tests cache headers.

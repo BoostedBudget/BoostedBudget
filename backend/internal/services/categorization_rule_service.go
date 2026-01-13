@@ -9,7 +9,7 @@ import (
 
 // CategorizationRuleService defines the interface for categorization rule business logic.
 type CategorizationRuleService interface {
-	// CreateRule creates a new categorization rule after checking subscription limits.
+	// CreateRule creates a new categorization rule (unlimited rules for all tiers).
 	CreateRule(ctx context.Context, userID string, req *domain.CreateCategorizationRuleRequest) (*domain.CategorizationRule, error)
 
 	// GetUserRules retrieves all rules for a user, ordered by priority.
@@ -33,50 +33,20 @@ type CategorizationRuleService interface {
 
 // categorizationRuleService implements CategorizationRuleService.
 type categorizationRuleService struct {
-	ruleRepo            repository.CategorizationRuleRepository
-	subscriptionChecker SubscriptionChecker
-	userGetter          UserGetter
+	ruleRepo repository.CategorizationRuleRepository
 }
 
 // NewCategorizationRuleService creates a new CategorizationRuleService instance.
 func NewCategorizationRuleService(
 	ruleRepo repository.CategorizationRuleRepository,
-	subscriptionChecker SubscriptionChecker,
-	userGetter UserGetter,
 ) CategorizationRuleService {
 	return &categorizationRuleService{
-		ruleRepo:            ruleRepo,
-		subscriptionChecker: subscriptionChecker,
-		userGetter:          userGetter,
+		ruleRepo: ruleRepo,
 	}
 }
 
-// CreateRule creates a new categorization rule after checking subscription limits.
+// CreateRule creates a new categorization rule (unlimited rules for all tiers).
 func (s *categorizationRuleService) CreateRule(ctx context.Context, userID string, req *domain.CreateCategorizationRuleRequest) (*domain.CategorizationRule, error) {
-	// Get user to check subscription
-	user, err := s.userGetter.GetUserByID(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Get effective subscription limits
-	effectiveSub, err := s.subscriptionChecker.GetEffectiveSubscription(ctx, user)
-	if err != nil {
-		return nil, err
-	}
-
-	// Check subscription limit
-	currentCount, err := s.ruleRepo.CountByUserID(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Check limit (-1 = unlimited)
-	limit := effectiveSub.Limits.Rules
-	if !domain.IsUnlimited(limit) && currentCount >= limit {
-		return nil, domain.ErrRuleLimitExceeded
-	}
-
 	// Create the rule
 	rule := &domain.CategorizationRule{
 		UserID:         userID,

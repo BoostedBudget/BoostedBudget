@@ -1,5 +1,5 @@
 // Package services provides business logic for automation rules.
-// Issue #35: Rules Engine Core - CRUD operations with tier limit enforcement.
+// Issue #35: Rules Engine Core - CRUD operations.
 package services
 
 import (
@@ -9,14 +9,9 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
-// MinExecutionIntervalForEventTriggers is the threshold that determines if a tier
-// allows event-based triggers. Tiers with min_execution_interval_minutes >= this value
-// are scheduled-only (free tier). Premium tiers have lower intervals.
-const MinExecutionIntervalForEventTriggers = 1440 // 24 hours = free tier
-
 // AutomationRuleService defines the interface for automation rule business logic.
 type AutomationRuleService interface {
-	// CreateRule creates a new automation rule after checking subscription limits.
+	// CreateRule creates a new automation rule (unlimited rules for all tiers).
 	CreateRule(ctx context.Context, userID string, req *domain.CreateAutomationRuleRequest) (*domain.AutomationRule, error)
 
 	// GetUserRules retrieves all automation rules for a user, ordered by priority.
@@ -39,66 +34,24 @@ type AutomationRuleService interface {
 
 	// GetRulesByType retrieves enabled rules of a specific type.
 	GetRulesByType(ctx context.Context, userID string, ruleType domain.RuleType) ([]*domain.AutomationRule, error)
-
-	// TierAllowsEventTriggers checks if the user's tier allows event-based triggers.
-	TierAllowsEventTriggers(ctx context.Context, userID string) (bool, error)
 }
 
 // automationRuleService implements AutomationRuleService.
 type automationRuleService struct {
-	ruleRepo            repository.AutomationRulesRepository
-	subscriptionChecker SubscriptionChecker
-	userGetter          UserGetter
+	ruleRepo repository.AutomationRulesRepository
 }
 
 // NewAutomationRuleService creates a new AutomationRuleService instance.
 func NewAutomationRuleService(
 	ruleRepo repository.AutomationRulesRepository,
-	subscriptionChecker SubscriptionChecker,
-	userGetter UserGetter,
 ) AutomationRuleService {
 	return &automationRuleService{
-		ruleRepo:            ruleRepo,
-		subscriptionChecker: subscriptionChecker,
-		userGetter:          userGetter,
+		ruleRepo: ruleRepo,
 	}
 }
 
-// CreateRule creates a new automation rule after checking subscription limits.
+// CreateRule creates a new automation rule (unlimited rules for all tiers).
 func (s *automationRuleService) CreateRule(ctx context.Context, userID string, req *domain.CreateAutomationRuleRequest) (*domain.AutomationRule, error) {
-	// Get user to check subscription
-	user, err := s.userGetter.GetUserByID(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Get effective subscription limits
-	effectiveSub, err := s.subscriptionChecker.GetEffectiveSubscription(ctx, user)
-	if err != nil {
-		return nil, err
-	}
-
-	// Check subscription limit for rules
-	currentCount, err := s.ruleRepo.CountByUserID(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Check limit (-1 = unlimited)
-	limit := effectiveSub.Limits.Rules
-	if !domain.IsUnlimited(limit) && currentCount >= limit {
-		return nil, domain.ErrAutomationRuleLimitExceeded
-	}
-
-	// Check if event triggers are allowed for this tier
-	// Free tier (min_interval >= 1440) = scheduled only
-	// Premium tiers (min_interval < 1440) = event-based allowed
-	if req.TriggerConfig.Type == domain.TriggerTypeEvent {
-		if !s.tierAllowsEventTriggersFromSub(effectiveSub) {
-			return nil, domain.ErrEventTriggersNotAllowed
-		}
-	}
-
 	// Create the rule
 	rule := &domain.AutomationRule{
 		UserID:         userID,
@@ -162,17 +115,6 @@ func (s *automationRuleService) UpdateRule(ctx context.Context, userID, ruleID s
 	// Verify ownership
 	if rule.UserID != userID {
 		return nil, domain.ErrAutomationRuleNotFound
-	}
-
-	// If changing to event trigger, check if tier allows it
-	if req.TriggerConfig != nil && req.TriggerConfig.Type == domain.TriggerTypeEvent {
-		allowed, err := s.TierAllowsEventTriggers(ctx, userID)
-		if err != nil {
-			return nil, err
-		}
-		if !allowed {
-			return nil, domain.ErrEventTriggersNotAllowed
-		}
 	}
 
 	// Apply updates
@@ -261,29 +203,4 @@ func (s *automationRuleService) GetEnabledRules(ctx context.Context, userID stri
 // GetRulesByType retrieves enabled rules of a specific type.
 func (s *automationRuleService) GetRulesByType(ctx context.Context, userID string, ruleType domain.RuleType) ([]*domain.AutomationRule, error) {
 	return s.ruleRepo.GetRulesByType(ctx, userID, ruleType)
-}
-
-// TierAllowsEventTriggers checks if the user's tier allows event-based triggers.
-// Free tier (min_execution_interval_minutes >= 1440) = scheduled only
-// Premium tiers (min_execution_interval_minutes < 1440) = event-based allowed
-func (s *automationRuleService) TierAllowsEventTriggers(ctx context.Context, userID string) (bool, error) {
-	user, err := s.userGetter.GetUserByID(ctx, userID)
-	if err != nil {
-		return false, err
-	}
-
-	effectiveSub, err := s.subscriptionChecker.GetEffectiveSubscription(ctx, user)
-	if err != nil {
-		return false, err
-	}
-
-	return s.tierAllowsEventTriggersFromSub(effectiveSub), nil
-}
-
-// tierAllowsEventTriggersFromSub checks if the subscription allows event-based triggers.
-func (s *automationRuleService) tierAllowsEventTriggersFromSub(sub *domain.EffectiveSubscription) bool {
-	// Free tier has min_execution_interval_minutes = 1440 (24 hours)
-	// Premium tiers have lower values: 720 (12h), 240 (4h), 10 (10min)
-	// If interval >= 1440, user is on free tier and should use scheduled triggers only
-	return sub.Limits.MinExecutionIntervalMinutes < MinExecutionIntervalForEventTriggers
 }

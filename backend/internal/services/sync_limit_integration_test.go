@@ -39,8 +39,35 @@ func (m *MockSyncAuditRepository) GetSyncStats(ctx context.Context, userID, mont
 	return args.Get(0).(*domain.SyncStats), args.Error(1)
 }
 
-// TestSyncLimitService_Integration tests the complete sync limit flow
-func TestSyncLimitService_Integration(t *testing.T) {
+// TestSyncLimitService_CheckSyncLimit_AlwaysAllowed tests that sync limits are removed
+// All users can sync unlimited accounts
+func TestSyncLimitService_CheckSyncLimit_AlwaysAllowed(t *testing.T) {
+	ctx := context.Background()
+
+	// Load real tier config
+	tierConfig, err := config.LoadTierConfig()
+	assert.NoError(t, err)
+
+	subscriptionService := NewSubscriptionService(tierConfig, nil)
+
+	mockSyncAuditRepo := new(MockSyncAuditRepository)
+	mockProfileRepo := new(MockUserRepository)
+
+	// Create service
+	service := NewSyncLimitService(mockSyncAuditRepo, mockProfileRepo, subscriptionService)
+
+	// Test CheckSyncLimit - should always return true (no limits)
+	allowed, reason, err := service.CheckSyncLimit(ctx, "any-user-id", "any-plaid-account-id")
+
+	assert.NoError(t, err)
+	assert.True(t, allowed, "Sync should always be allowed - no monthly sync limits")
+	assert.Empty(t, reason, "No reason should be given when allowed")
+
+	// No mock expectations - mocks should NOT be called since limits are removed
+}
+
+// TestSyncLimitService_GetHistoricalDepthLimit tests getting historical depth by tier
+func TestSyncLimitService_GetHistoricalDepthLimit(t *testing.T) {
 	ctx := context.Background()
 
 	// Load real tier config
@@ -52,49 +79,21 @@ func TestSyncLimitService_Integration(t *testing.T) {
 	testCases := []struct {
 		name               string
 		userTier           domain.TierName
-		accountsSynced     int
-		expectedAllowed    bool
-		expectedLimit      int
 		expectedHistorical int
 	}{
 		{
-			name:               "free_tier_under_limit",
-			userTier:           domain.TierFree,
-			accountsSynced:     2,
-			expectedAllowed:    true,
-			expectedLimit:      3,
-			expectedHistorical: 30,
-		},
-		{
-			name:               "free_tier_at_limit",
-			userTier:           domain.TierFree,
-			accountsSynced:     3,
-			expectedAllowed:    false,
-			expectedLimit:      3,
-			expectedHistorical: 30,
-		},
-		{
-			name:               "premium_lite_under_limit",
-			userTier:           domain.TierPremiumLite,
-			accountsSynced:     10,
-			expectedAllowed:    true,
-			expectedLimit:      15,
-			expectedHistorical: 365,
-		},
-		{
-			name:               "premium_unlimited",
+			name:               "premium_tier",
 			userTier:           domain.TierPremium,
-			accountsSynced:     25,
-			expectedAllowed:    true,
-			expectedLimit:      30,
 			expectedHistorical: 730,
 		},
 		{
-			name:               "premium_plus_unlimited",
-			userTier:           domain.TierPremiumPlus,
-			accountsSynced:     100,
-			expectedAllowed:    true,
-			expectedLimit:      -1, // Unlimited
+			name:               "household_2_tier",
+			userTier:           domain.TierHousehold2,
+			expectedHistorical: 730,
+		},
+		{
+			name:               "household_5_tier",
+			userTier:           domain.TierHousehold5,
 			expectedHistorical: 730,
 		},
 	}
@@ -102,18 +101,9 @@ func TestSyncLimitService_Integration(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			userID := "user-" + string(tc.userTier)
-			plaidAccountID := "plaid-acc-123"
-			currentMonth := time.Now().Format("2006-01")
 
-			// Setup mocks
 			mockSyncAuditRepo := new(MockSyncAuditRepository)
 			mockProfileRepo := new(MockUserRepository)
-
-			// User hasn't synced this specific account yet
-			mockSyncAuditRepo.On("HasSyncedThisMonth", ctx, userID, plaidAccountID, currentMonth).Return(false, nil)
-
-			// User has synced N accounts this month
-			mockSyncAuditRepo.On("CountSyncsThisMonth", ctx, userID, currentMonth).Return(tc.accountsSynced, nil)
 
 			// Mock user with specified tier
 			user := &domain.User{
@@ -125,57 +115,14 @@ func TestSyncLimitService_Integration(t *testing.T) {
 			// Create service
 			service := NewSyncLimitService(mockSyncAuditRepo, mockProfileRepo, subscriptionService)
 
-			// Test CheckSyncLimit
-			allowed, reason, err := service.CheckSyncLimit(ctx, userID, plaidAccountID)
-			assert.NoError(t, err)
-			assert.Equal(t, tc.expectedAllowed, allowed)
-
-			if !allowed {
-				assert.Contains(t, reason, "monthly sync limit reached")
-			}
-
 			// Test GetHistoricalDepthLimit
 			daysHistorical, err := service.GetHistoricalDepthLimit(ctx, userID)
 			assert.NoError(t, err)
 			assert.Equal(t, tc.expectedHistorical, daysHistorical)
 
-			mockSyncAuditRepo.AssertExpectations(t)
 			mockProfileRepo.AssertExpectations(t)
 		})
 	}
-}
-
-// TestSyncLimitService_ReSyncAllowed tests that re-syncing doesn't count against limit
-func TestSyncLimitService_ReSyncAllowed(t *testing.T) {
-	ctx := context.Background()
-	userID := "user-123"
-	plaidAccountID := "plaid-acc-already-synced"
-	currentMonth := time.Now().Format("2006-01")
-
-	mockSyncAuditRepo := new(MockSyncAuditRepository)
-	mockProfileRepo := new(MockUserRepository)
-
-	tierConfig, err := config.LoadTierConfig()
-	assert.NoError(t, err)
-
-	subscriptionService := NewSubscriptionService(tierConfig, nil)
-
-	// User HAS already synced this account this month
-	mockSyncAuditRepo.On("HasSyncedThisMonth", ctx, userID, plaidAccountID, currentMonth).Return(true, nil)
-
-	// Note: CountSyncsThisMonth should NOT be called for re-syncs
-	// Note: GetUserByID should NOT be called for re-syncs
-
-	service := NewSyncLimitService(mockSyncAuditRepo, mockProfileRepo, subscriptionService)
-
-	allowed, reason, err := service.CheckSyncLimit(ctx, userID, plaidAccountID)
-
-	assert.NoError(t, err)
-	assert.True(t, allowed)
-	assert.Empty(t, reason)
-
-	mockSyncAuditRepo.AssertExpectations(t)
-	// ProfileRepo should have NO expectations (not called for re-syncs)
 }
 
 // TestSyncLimitService_RecordSync tests recording a successful sync
@@ -184,8 +131,8 @@ func TestSyncLimitService_RecordSync(t *testing.T) {
 	userID := "user-123"
 	accountID := "acc-456"
 	plaidAccountID := "plaid-acc-789"
-	tier := domain.TierFree
-	daysHistorical := 30
+	tier := domain.TierPremium
+	daysHistorical := 730
 	transactionCount := 150
 
 	mockSyncAuditRepo := new(MockSyncAuditRepository)
@@ -232,14 +179,14 @@ func TestSyncLimitService_GetSyncStats(t *testing.T) {
 	mockSyncAuditRepo.On("GetSyncStats", ctx, userID, currentMonth).Return(&domain.SyncStats{
 		UserID:            userID,
 		Month:             currentMonth,
-		AccountsSynced:    2,
+		AccountsSynced:    10,
 		TotalTransactions: 450,
 	}, nil)
 
 	// Mock user lookup
 	user := &domain.User{
 		ID:               userID,
-		SubscriptionTier: string(domain.TierFree),
+		SubscriptionTier: string(domain.TierPremium),
 	}
 	mockProfileRepo.On("GetUserByID", ctx, userID).Return(user, nil)
 
@@ -249,10 +196,10 @@ func TestSyncLimitService_GetSyncStats(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.NotNil(t, stats)
-	assert.Equal(t, 2, stats.AccountsSynced)
-	assert.Equal(t, 3, stats.AccountsLimit) // Free tier limit
+	assert.Equal(t, 10, stats.AccountsSynced)
+	assert.Equal(t, 30, stats.AccountsLimit) // Premium tier limit
 	assert.Equal(t, 450, stats.TotalTransactions)
-	assert.True(t, stats.CanSyncMore) // 2 < 3
+	assert.True(t, stats.CanSyncMore) // 10 < 30
 
 	mockSyncAuditRepo.AssertExpectations(t)
 	mockProfileRepo.AssertExpectations(t)

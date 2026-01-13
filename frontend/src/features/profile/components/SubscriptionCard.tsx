@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { Star, Award, Gem, Check } from 'lucide-react'
+import { Award, Check } from 'lucide-react'
 import { useSubscriptionTiers } from '../../subscription/hooks/useSubscriptionTiers'
 import type { SubscriptionTier, TierName } from '../../subscription/types'
 import './SubscriptionCard.css'
@@ -10,18 +10,11 @@ interface SubscriptionCardProps {
 }
 
 /**
- * Render the icon for a tier
+ * Render the icon for a tier (all tiers use Award now)
  */
-function renderTierIcon(tier: TierName) {
+function renderTierIcon(_tier: TierName) {
   const iconProps = { className: 'tier-icon', 'aria-hidden': true as const }
-  switch (tier) {
-    case 'free':
-      return <Star {...iconProps} />
-    case 'premium_plus':
-      return <Gem {...iconProps} />
-    default:
-      return <Award {...iconProps} />
-  }
+  return <Award {...iconProps} />
 }
 
 /**
@@ -48,12 +41,8 @@ function buildFeatureList(tierData: SubscriptionTier): string[] {
     features.push(`${limits.accounts} bank accounts`)
   }
 
-  // Add rules limit
-  if (limits.rules === -1) {
-    features.push('Unlimited automation rules')
-  } else {
-    features.push(`${limits.rules} automation rules`)
-  }
+  // Rules are unlimited for all tiers
+  features.push('Unlimited automation rules')
 
   // Add execution frequency
   const execsPerDay = limits.executions_per_day
@@ -125,7 +114,7 @@ export function SubscriptionCard({ tier, status }: SubscriptionCardProps) {
     )
   }
 
-  const isPaidTier = tier !== 'free'
+  const isPaidTier = true // All tiers are now paid
 
   // Generate CSS class name for tier (tier names use underscores: premium_plus)
   const tierClassName = tier

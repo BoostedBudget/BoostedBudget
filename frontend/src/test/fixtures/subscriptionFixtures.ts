@@ -15,77 +15,15 @@ import type {
 
 /**
  * Complete mock subscription tiers response matching the generated types
+ * Simplified tier structure: premium + household tiers (2-5 members)
+ * All tiers have unlimited rules
  */
 export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
   tiers: {
-    free: {
-      name: 'free',
-      display_name: 'Free',
-      description: 'Basic plan with limited features',
-      pricing: {
-        price_monthly: 0,
-        price_yearly: 0,
-        stripe_price_id_monthly: undefined,
-        stripe_price_id_yearly: undefined,
-      },
-      limits: {
-        accounts: 3,
-        rules: 1,
-        executions_per_day: 1,
-        min_execution_interval_minutes: 1440,
-        accounts_synced_per_month: 100,
-        api_calls_per_month: 0,
-        custom_categories_max: 5,
-        custom_tags_max: 10,
-        data_export_requests_per_month: 1,
-        transaction_history_days: 30,
-      },
-      features: {
-        ads_enabled: true,
-        ai_insights: false,
-        api_access: false,
-        priority_support: false,
-        custom_categories: false,
-        custom_tags: false,
-        advanced_reports: false,
-      },
-    },
-    premium_lite: {
-      name: 'premium_lite',
-      display_name: 'Premium Lite',
-      description: 'Enhanced features for casual users',
-      pricing: {
-        price_monthly: 4.99,
-        price_yearly: 49.99,
-        stripe_price_id_monthly: 'price_lite_monthly',
-        stripe_price_id_yearly: 'price_lite_yearly',
-      },
-      limits: {
-        accounts: 15,
-        rules: 5,
-        executions_per_day: 2,
-        min_execution_interval_minutes: 720,
-        accounts_synced_per_month: 500,
-        api_calls_per_month: 100,
-        custom_categories_max: 20,
-        custom_tags_max: 50,
-        data_export_requests_per_month: 5,
-        transaction_history_days: 365,
-      },
-      features: {
-        ads_enabled: false,
-        ai_insights: false,
-        api_access: false,
-        priority_support: false,
-        custom_categories: true,
-        custom_tags: true,
-        advanced_reports: false,
-      },
-    },
     premium: {
       name: 'premium',
       display_name: 'Premium',
-      description: 'Full-featured budgeting experience',
+      description: 'Full-featured budgeting for individuals',
       pricing: {
         price_monthly: 9.99,
         price_yearly: 99.99,
@@ -93,8 +31,8 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
         stripe_price_id_yearly: 'price_premium_yearly',
       },
       limits: {
-        accounts: 30,
-        rules: 15,
+        accounts: 10,
+        rules: -1,
         executions_per_day: 6,
         min_execution_interval_minutes: 240,
         accounts_synced_per_month: 1000,
@@ -114,15 +52,111 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
         advanced_reports: true,
       },
     },
-    premium_plus: {
-      name: 'premium_plus',
-      display_name: 'Premium+',
-      description: 'Unlimited access with AI insights and API',
+    household_2: {
+      name: 'household_2',
+      display_name: 'Household (2 members)',
+      description: 'Perfect for couples or small households',
+      pricing: {
+        price_monthly: 14.99,
+        price_yearly: 149.99,
+        stripe_price_id_monthly: 'price_household_2_monthly',
+        stripe_price_id_yearly: 'price_household_2_yearly',
+      },
+      limits: {
+        accounts: 20,
+        rules: -1,
+        executions_per_day: 12,
+        min_execution_interval_minutes: 120,
+        accounts_synced_per_month: 2000,
+        api_calls_per_month: 1000,
+        custom_categories_max: 100,
+        custom_tags_max: 200,
+        data_export_requests_per_month: 20,
+        transaction_history_days: 1095,
+      },
+      features: {
+        ads_enabled: false,
+        ai_insights: false,
+        api_access: false,
+        priority_support: false,
+        custom_categories: true,
+        custom_tags: true,
+        advanced_reports: true,
+      },
+    },
+    household_3: {
+      name: 'household_3',
+      display_name: 'Household (3 members)',
+      description: 'Great for growing families',
       pricing: {
         price_monthly: 19.99,
         price_yearly: 199.99,
-        stripe_price_id_monthly: 'price_plus_monthly',
-        stripe_price_id_yearly: 'price_plus_yearly',
+        stripe_price_id_monthly: 'price_household_3_monthly',
+        stripe_price_id_yearly: 'price_household_3_yearly',
+      },
+      limits: {
+        accounts: 30,
+        rules: -1,
+        executions_per_day: 24,
+        min_execution_interval_minutes: 60,
+        accounts_synced_per_month: 3000,
+        api_calls_per_month: 1500,
+        custom_categories_max: 150,
+        custom_tags_max: 300,
+        data_export_requests_per_month: 30,
+        transaction_history_days: 1460,
+      },
+      features: {
+        ads_enabled: false,
+        ai_insights: true,
+        api_access: false,
+        priority_support: false,
+        custom_categories: true,
+        custom_tags: true,
+        advanced_reports: true,
+      },
+    },
+    household_4: {
+      name: 'household_4',
+      display_name: 'Household (4 members)',
+      description: 'Ideal for medium-sized families',
+      pricing: {
+        price_monthly: 24.99,
+        price_yearly: 249.99,
+        stripe_price_id_monthly: 'price_household_4_monthly',
+        stripe_price_id_yearly: 'price_household_4_yearly',
+      },
+      limits: {
+        accounts: 40,
+        rules: -1,
+        executions_per_day: 48,
+        min_execution_interval_minutes: 30,
+        accounts_synced_per_month: 4000,
+        api_calls_per_month: 2000,
+        custom_categories_max: 200,
+        custom_tags_max: 400,
+        data_export_requests_per_month: 40,
+        transaction_history_days: 1825,
+      },
+      features: {
+        ads_enabled: false,
+        ai_insights: true,
+        api_access: true,
+        priority_support: false,
+        custom_categories: true,
+        custom_tags: true,
+        advanced_reports: true,
+      },
+    },
+    household_5: {
+      name: 'household_5',
+      display_name: 'Household (5 members)',
+      description: 'Best value for large families',
+      pricing: {
+        price_monthly: 29.99,
+        price_yearly: 299.99,
+        stripe_price_id_monthly: 'price_household_5_monthly',
+        stripe_price_id_yearly: 'price_household_5_yearly',
       },
       limits: {
         accounts: -1,
@@ -147,7 +181,7 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
       },
     },
   },
-  default_tier: 'free',
+  default_tier: 'premium',
 }
 
 /**
@@ -170,16 +204,16 @@ export function createMockTier(overrides: Partial<SubscriptionTier> = {}): Subsc
  */
 export function createMockLimits(overrides: Partial<SubscriptionLimits> = {}): SubscriptionLimits {
   return {
-    accounts: 3,
-    rules: 1,
-    executions_per_day: 1,
-    min_execution_interval_minutes: 1440,
-    accounts_synced_per_month: 100,
-    api_calls_per_month: 0,
-    custom_categories_max: 5,
-    custom_tags_max: 10,
-    data_export_requests_per_month: 1,
-    transaction_history_days: 30,
+    accounts: 10,
+    rules: -1,
+    executions_per_day: 6,
+    min_execution_interval_minutes: 240,
+    accounts_synced_per_month: 1000,
+    api_calls_per_month: 500,
+    custom_categories_max: 50,
+    custom_tags_max: 100,
+    data_export_requests_per_month: 10,
+    transaction_history_days: 730,
     ...overrides,
   }
 }
@@ -189,13 +223,13 @@ export function createMockLimits(overrides: Partial<SubscriptionLimits> = {}): S
  */
 export function createMockFeatures(overrides: Partial<SubscriptionFeatures> = {}): SubscriptionFeatures {
   return {
-    ads_enabled: true,
+    ads_enabled: false,
     ai_insights: false,
     api_access: false,
     priority_support: false,
-    custom_categories: false,
-    custom_tags: false,
-    advanced_reports: false,
+    custom_categories: true,
+    custom_tags: true,
+    advanced_reports: true,
     ...overrides,
   }
 }
@@ -216,6 +250,6 @@ export function createMockPricing(overrides: Partial<SubscriptionPricing> = {}):
 /**
  * Get a specific tier from the mock response
  */
-export function getMockTier(tierName: 'free' | 'premium_lite' | 'premium' | 'premium_plus'): SubscriptionTier {
+export function getMockTier(tierName: 'premium' | 'household_2' | 'household_3' | 'household_4' | 'household_5'): SubscriptionTier {
   return mockSubscriptionTiersResponse.tiers[tierName]
 }

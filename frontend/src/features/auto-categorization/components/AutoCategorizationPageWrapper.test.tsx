@@ -186,12 +186,13 @@ describe('AutoCategorizationPageWrapper', () => {
     })
   })
 
-  it('should pass maxRules from tier config based on user subscription', async () => {
+  it('should pass maxRules as undefined (unlimited rules for all tiers)', async () => {
     render(<AutoCategorizationPageWrapper />, { wrapper: createWrapper() })
     await waitFor(() => {
       expect(screen.getByTestId('auto-categorization-page')).toBeInTheDocument()
     })
-    expect(screen.getByTestId('max-rules')).toHaveTextContent('15')
+    // All tiers now have unlimited rules, so maxRules is undefined
+    expect(screen.getByTestId('max-rules')).toHaveTextContent('undefined')
   })
 
   it('should pass currentTier from user profile', async () => {
@@ -202,14 +203,16 @@ describe('AutoCategorizationPageWrapper', () => {
     expect(screen.getByTestId('current-tier')).toHaveTextContent('premium')
   })
 
-  it('should default to free tier when user is null', async () => {
+  it('should default to premium tier when user is null', async () => {
     configureHooks({ user: null })
     render(<AutoCategorizationPageWrapper />, { wrapper: createWrapper() })
     await waitFor(() => {
       expect(screen.getByTestId('auto-categorization-page')).toBeInTheDocument()
     })
-    expect(screen.getByTestId('current-tier')).toHaveTextContent('free')
-    expect(screen.getByTestId('max-rules')).toHaveTextContent('1')
+    // Default tier is now 'premium' instead of 'free'
+    expect(screen.getByTestId('current-tier')).toHaveTextContent('premium')
+    // All tiers have unlimited rules
+    expect(screen.getByTestId('max-rules')).toHaveTextContent('undefined')
   })
 
   it('should handle data fetch error gracefully', async () => {

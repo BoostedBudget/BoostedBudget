@@ -28,8 +28,10 @@ All data is stored in the us-east-1 (iad) region. Multi-region support planned f
  */
 
 export interface SubscriptionPricing {
+  mobile_price_yearly?: number;
+  paddle_price_id_monthly?: string;
+  paddle_price_id_yearly?: string;
   price_monthly: number;
   price_yearly: number;
-  stripe_price_id_monthly?: string;
-  stripe_price_id_yearly?: string;
+  users_included?: number;
 }
