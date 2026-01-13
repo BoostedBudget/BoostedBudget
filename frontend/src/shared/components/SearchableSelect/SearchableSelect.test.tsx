@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SearchableSelect } from './SearchableSelect'

@@ -5,7 +5,7 @@
  * TDD RED: Writing tests before implementation.
  */
 
-import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ColumnFilterDropdown } from './ColumnFilterDropdown'
