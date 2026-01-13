@@ -38,7 +38,7 @@ export const mockUseCancelDeletion = mock(() => ({
 // Single mock.module() call - called once at preload time
 mock.module('@/api/generated/endpoints/user/user', () => ({
   ...RealUserModule,
-  useRequestDeletion: (...args: unknown[]) => mockUseRequestDeletion(...args),
-  cancelDeletion: (...args: unknown[]) => mockCancelDeletion(...args),
-  useCancelDeletion: (...args: unknown[]) => mockUseCancelDeletion(...args),
+  useRequestDeletion: mockUseRequestDeletion,
+  cancelDeletion: mockCancelDeletion,
+  useCancelDeletion: mockUseCancelDeletion,
 }))

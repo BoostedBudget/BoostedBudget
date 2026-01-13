@@ -3,6 +3,11 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { AutoCategorizationRuleCard } from './AutoCategorizationRuleCard'
 import type { CategorizationRule } from '../types'
 
+// Global mocks for assertions
+const mockOnToggle = mock(() => Promise.resolve())
+const mockOnEdit = mock(() => {})
+const mockOnDelete = mock(() => Promise.resolve())
+
 describe('AutoCategorizationRuleCard', () => {
   const mockRule: CategorizationRule = {
     id: 'rule-1',
@@ -27,14 +32,10 @@ describe('AutoCategorizationRuleCard', () => {
     updated_at: '2025-01-15T10:00:00Z',
   }
 
-  let mockOnToggle: ReturnType<typeof mock>
-  let mockOnEdit: ReturnType<typeof mock>
-  let mockOnDelete: ReturnType<typeof mock>
-
   beforeEach(() => {
-    mockOnToggle = mock(() => {})
-    mockOnEdit = mock(() => {})
-    mockOnDelete = mock(() => {})
+    mockOnToggle.mockClear()
+    mockOnEdit.mockClear()
+    mockOnDelete.mockClear()
   })
 
   const renderCard = (rule = mockRule, handlers = {}) =>

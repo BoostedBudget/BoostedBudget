@@ -27,9 +27,6 @@ const createBudgetCategoryMatch = (
   matchReason,
 })
 
-const renderWithRouter = (ui: React.ReactElement) =>
-  render(<MemoryRouter>{ui}</MemoryRouter>)
-
 const createMockAccount = (overrides: Partial<Account> = {}): Account => ({
   id: 'account-456',
   linked_item_id: 'item-789',
@@ -50,6 +47,9 @@ const createMockAccount = (overrides: Partial<Account> = {}): Account => ({
   updated_at: '2025-01-01T00:00:00Z',
   ...overrides,
 })
+
+const renderWithRouter = (ui: React.ReactElement) =>
+  render(<MemoryRouter>{ui}</MemoryRouter>)
 
 describe('TransactionCard', () => {
   const mockTransaction: Transaction = {

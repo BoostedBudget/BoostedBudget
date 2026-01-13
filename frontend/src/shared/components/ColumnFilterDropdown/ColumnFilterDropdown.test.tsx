@@ -11,10 +11,6 @@ import userEvent from '@testing-library/user-event'
 import { ColumnFilterDropdown } from './ColumnFilterDropdown'
 
 describe('ColumnFilterDropdown', () => {
-  beforeEach(() => {
-    // mocks cleared individually
-  })
-
   describe('Rendering', () => {
     it('should render filter button', () => {
       render(

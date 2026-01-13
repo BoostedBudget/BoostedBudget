@@ -13,13 +13,12 @@ const ROUTES = [
 ]
 
 describe('Navigation', () => {
-  const renderWithRouter = (initialEntries = ['/dashboard']) => {
-    return render(
+  const renderWithRouter = (initialEntries = ['/dashboard']) =>
+    render(
       <MemoryRouter initialEntries={initialEntries}>
         <Navigation />
       </MemoryRouter>
     )
-  }
 
   it('renders all navigation links', () => {
     renderWithRouter()

@@ -11,10 +11,6 @@ import userEvent from '@testing-library/user-event'
 import { TableHeaderCell } from './TableHeaderCell'
 
 describe('TableHeaderCell', () => {
-  beforeEach(() => {
-    // mocks cleared individually
-  })
-
   describe('Basic Rendering', () => {
     it('should render label text', () => {
       render(<TableHeaderCell label="Account" />)

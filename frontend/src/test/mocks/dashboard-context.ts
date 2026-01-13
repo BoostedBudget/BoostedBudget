@@ -23,15 +23,14 @@ export const mockUseDashboardContext = mock(() => ({
   setIsEditing: mockSetIsEditing,
 }))
 
-// Single mock.module() call - called once at preload time
-// Re-export ALL real exports, only override useDashboardContext
+// Single mock.module() calls - called once at preload time
 mock.module('@/features/dashboard/context/DashboardContext', () => ({
   ...RealDashboardContext,
-  useDashboardContext: () => mockUseDashboardContext(),
+  useDashboardContext: mockUseDashboardContext,
 }))
 
 // Also mock relative path imports (widget tests use relative paths)
 mock.module('../context/DashboardContext', () => ({
   ...RealDashboardContext,
-  useDashboardContext: () => mockUseDashboardContext(),
+  useDashboardContext: mockUseDashboardContext,
 }))

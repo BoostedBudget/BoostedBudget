@@ -102,17 +102,13 @@ mock.module('../../../budgets/hooks/useBudgets', () => ({
 
 import { RolloverActionForm } from './RolloverActionForm'
 
-function createQueryClient() {
-  return new QueryClient({
+function renderWithProviders(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
       mutations: { retry: false },
     },
   })
-}
-
-function renderWithProviders(ui: React.ReactElement) {
-  const queryClient = createQueryClient()
   return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>)
 }
 

@@ -26,17 +26,13 @@ import {
   mockUseToggleRule,
 } from '@/test/mocks/auto-categorization-api'
 
-function createTestQueryClient() {
-  return new QueryClient({
+function renderWithProviders(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: 0 },
       mutations: { retry: false },
     },
   })
-}
-
-function renderWithProviders(ui: React.ReactElement) {
-  const queryClient = createTestQueryClient()
   return render(
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>{ui}</BrowserRouter>

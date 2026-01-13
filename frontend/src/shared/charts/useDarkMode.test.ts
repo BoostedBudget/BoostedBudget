@@ -30,76 +30,62 @@ describe('useDarkMode', () => {
   })
 
   it('returns false when system prefers light mode', () => {
-    matchMediaMock.matches = false;
-
-    const { result } = renderHook(() => useDarkMode());
-
-    expect(result.current).toBe(false);
-  });
+    matchMediaMock.matches = false
+    const { result } = renderHook(() => useDarkMode())
+    expect(result.current).toBe(false)
+  })
 
   it('returns true when system prefers dark mode', () => {
-    matchMediaMock.matches = true;
-
-    const { result } = renderHook(() => useDarkMode());
-
-    expect(result.current).toBe(true);
-  });
+    matchMediaMock.matches = true
+    const { result } = renderHook(() => useDarkMode())
+    expect(result.current).toBe(true)
+  })
 
   it('queries the correct media feature', () => {
-    renderHook(() => useDarkMode());
-
-    expect(window.matchMedia).toHaveBeenCalledWith('(prefers-color-scheme: dark)');
-  });
+    renderHook(() => useDarkMode())
+    expect(window.matchMedia).toHaveBeenCalledWith('(prefers-color-scheme: dark)')
+  })
 
   it('adds event listener on mount', () => {
-    renderHook(() => useDarkMode());
-
+    renderHook(() => useDarkMode())
     expect(matchMediaMock.addEventListener).toHaveBeenCalledWith(
       'change',
       expect.any(Function)
-    );
-  });
+    )
+  })
 
   it('removes event listener on unmount', () => {
-    const { unmount } = renderHook(() => useDarkMode());
-
-    unmount();
-
+    const { unmount } = renderHook(() => useDarkMode())
+    unmount()
     expect(matchMediaMock.removeEventListener).toHaveBeenCalledWith(
       'change',
       expect.any(Function)
-    );
-  });
+    )
+  })
 
   it('updates when preference changes', () => {
-    matchMediaMock.matches = false;
+    matchMediaMock.matches = false
+    const { result } = renderHook(() => useDarkMode())
+    expect(result.current).toBe(false)
 
-    const { result } = renderHook(() => useDarkMode());
-
-    expect(result.current).toBe(false);
-
-    // Simulate preference change
     act(() => {
-      const changeHandler = matchMediaMock.addEventListener.mock.calls[0][1];
-      changeHandler({ matches: true } as MediaQueryListEvent);
-    });
+      const changeHandler = matchMediaMock.addEventListener.mock.calls[0][1]
+      changeHandler({ matches: true } as MediaQueryListEvent)
+    })
 
-    expect(result.current).toBe(true);
-  });
+    expect(result.current).toBe(true)
+  })
 
   it('updates when preference changes back', () => {
-    matchMediaMock.matches = true;
+    matchMediaMock.matches = true
+    const { result } = renderHook(() => useDarkMode())
+    expect(result.current).toBe(true)
 
-    const { result } = renderHook(() => useDarkMode());
-
-    expect(result.current).toBe(true);
-
-    // Simulate preference change to light
     act(() => {
-      const changeHandler = matchMediaMock.addEventListener.mock.calls[0][1];
-      changeHandler({ matches: false } as MediaQueryListEvent);
-    });
+      const changeHandler = matchMediaMock.addEventListener.mock.calls[0][1]
+      changeHandler({ matches: false } as MediaQueryListEvent)
+    })
 
-    expect(result.current).toBe(false);
-  });
-});
+    expect(result.current).toBe(false)
+  })
+})

@@ -1,11 +1,3 @@
-/**
- * DeleteSavingsGoalDialog Tests
- * Issue #521: Enable Budget and Savings Goal Deletion in UI
- *
- * Tests the confirmation dialog for deleting savings goals.
- * Includes name confirmation validation - user must type exact goal name to enable Delete.
- */
-
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'

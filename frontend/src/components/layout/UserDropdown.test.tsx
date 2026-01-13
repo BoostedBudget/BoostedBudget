@@ -17,13 +17,12 @@ describe('UserDropdown', () => {
     mockOnLogout.mockClear()
   })
 
-  const renderDropdown = (user = mockUser) => {
-    return render(
+  const renderDropdown = (user = mockUser) =>
+    render(
       <BrowserRouter>
         <UserDropdown user={user} onLogout={mockOnLogout} />
       </BrowserRouter>
     )
-  }
 
   it('renders avatar button with user menu aria-label', () => {
     renderDropdown()

@@ -1,23 +1,12 @@
-/**
- * goalTemplates Tests
- * Issue #111: Goals Dashboard & Progress Visualization
- *
- * TDD tests for goal template utilities.
- */
-
-import { describe, it, expect, beforeEach, afterEach, setSystemTime } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, setSystemTime } from 'bun:test'
 import {
   GOAL_TEMPLATES,
   getGoalTemplate,
   calculateDeadlineFromTemplate,
   type GoalTemplate,
-} from './goalTemplates';
+} from './goalTemplates'
 
 describe('goalTemplates', () => {
-  // ==========================================================================
-  // GOAL_TEMPLATES constant tests
-  // ==========================================================================
-
   describe('GOAL_TEMPLATES', () => {
     it('exports 6 templates', () => {
       expect(GOAL_TEMPLATES).toHaveLength(6);
@@ -60,10 +49,6 @@ describe('goalTemplates', () => {
       expect(custom?.suggestedDeadlineMonths).toBeUndefined();
     });
   });
-
-  // ==========================================================================
-  // getGoalTemplate tests
-  // ==========================================================================
 
   describe('getGoalTemplate', () => {
     it('returns template for valid ID', () => {
@@ -122,10 +107,6 @@ describe('goalTemplates', () => {
       expect(template?.suggestedDeadlineMonths).toBe(24);
     });
   });
-
-  // ==========================================================================
-  // calculateDeadlineFromTemplate tests
-  // ==========================================================================
 
   describe('calculateDeadlineFromTemplate', () => {
     // Mock Date for predictable testing

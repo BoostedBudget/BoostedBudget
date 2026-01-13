@@ -1,8 +1,3 @@
-/**
- * BudgetProgressBar Component Tests - Issue #575
- * Tests the visual progress bar for budget usage
- */
-
 import { describe, it, expect } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import { BudgetProgressBar } from './BudgetProgressBar'

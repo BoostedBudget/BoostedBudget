@@ -1,11 +1,3 @@
-/**
- * usePreviewCategories Hook Tests
- * Issue #497: Budget Category Manager + Match Config UI
- * Issue #564: Migrated to mock generated React Query hooks
- *
- * TDD RED Phase: Write failing tests first
- */
-
 import { describe, it, expect, mock, beforeEach, setSystemTime } from 'bun:test'
 import { renderHook, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'

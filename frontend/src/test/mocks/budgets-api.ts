@@ -120,41 +120,24 @@ export const mockUseGetSavingsGoals = mock(() => ({
 // Single mock.module() call - called once at preload time
 // Re-export ALL real exports, only override the specific hooks we need to mock
 mock.module('@/api/generated/endpoints/budgets/budgets', () => ({
-  // Re-export ALL real exports (functions, constants, types will be re-exported)
   ...RealBudgetsModule,
-
-  // Override only the specific hooks used by tests
-  useGetCurrentBudget: (...args: unknown[]) => mockUseGetCurrentBudget(...args),
-  getGetCurrentBudgetQueryKey: () => mockGetCurrentBudgetQueryKey(),
-
-  useGetCategoryTransactions: (...args: unknown[]) =>
-    mockUseGetCategoryTransactions(...args),
-  getGetCategoryTransactionsQueryKey: (...args: unknown[]) =>
-    mockGetCategoryTransactionsQueryKey(
-      ...(args as [string, string, unknown])
-    ),
-  getCategoryTransactions: (...args: unknown[]) =>
-    mockGetCategoryTransactions(...args),
-
-  useGetAvailableCategories: (...args: unknown[]) =>
-    mockUseGetAvailableCategories(...args),
-  getGetAvailableCategoriesQueryKey: () => mockGetAvailableCategoriesQueryKey(),
-
-  // useBudgets hook mocks
-  useGetBudgets: (...args: unknown[]) => mockUseGetBudgets(...args),
-  getGetBudgetsQueryKey: () => mockGetBudgetsQueryKey(),
-  useCreateBudget: (...args: unknown[]) => mockUseCreateBudget(...args),
-  useUpdateBudget: (...args: unknown[]) => mockUseUpdateBudget(...args),
-  useDeleteBudget: (...args: unknown[]) => mockUseDeleteBudget(...args),
-  useAddBudgetCategory: (...args: unknown[]) => mockUseAddBudgetCategory(...args),
-  useUpdateBudgetCategory: (...args: unknown[]) => mockUseUpdateBudgetCategory(...args),
-  useDeleteBudgetCategory: (...args: unknown[]) => mockUseDeleteBudgetCategory(...args),
-  getAvailableCategories: (...args: unknown[]) => mockGetAvailableCategoriesFn(...args),
-
-  // useBudgetDetail hook mocks
-  useGetBudget: (...args: unknown[]) => mockUseGetBudget(...args),
-  getGetBudgetQueryKey: (...args: unknown[]) => mockGetBudgetQueryKey(...(args as [string])),
-
-  // Savings goals
-  useGetSavingsGoals: (...args: unknown[]) => mockUseGetSavingsGoals(...args),
+  useGetCurrentBudget: mockUseGetCurrentBudget,
+  getGetCurrentBudgetQueryKey: mockGetCurrentBudgetQueryKey,
+  useGetCategoryTransactions: mockUseGetCategoryTransactions,
+  getGetCategoryTransactionsQueryKey: mockGetCategoryTransactionsQueryKey,
+  getCategoryTransactions: mockGetCategoryTransactions,
+  useGetAvailableCategories: mockUseGetAvailableCategories,
+  getGetAvailableCategoriesQueryKey: mockGetAvailableCategoriesQueryKey,
+  useGetBudgets: mockUseGetBudgets,
+  getGetBudgetsQueryKey: mockGetBudgetsQueryKey,
+  useCreateBudget: mockUseCreateBudget,
+  useUpdateBudget: mockUseUpdateBudget,
+  useDeleteBudget: mockUseDeleteBudget,
+  useAddBudgetCategory: mockUseAddBudgetCategory,
+  useUpdateBudgetCategory: mockUseUpdateBudgetCategory,
+  useDeleteBudgetCategory: mockUseDeleteBudgetCategory,
+  getAvailableCategories: mockGetAvailableCategoriesFn,
+  useGetBudget: mockUseGetBudget,
+  getGetBudgetQueryKey: mockGetBudgetQueryKey,
+  useGetSavingsGoals: mockUseGetSavingsGoals,
 }))

@@ -20,65 +20,32 @@ describe('AccountTypeFilter', () => {
     mockOnChange.mockClear()
   })
 
-  it('should render the component with title', () => {
+  const renderComponent = (selectedTypes: string[] = []) =>
     render(
       <AccountTypeFilter
         accountTypes={createMockAccountTypes()}
-        selectedTypes={[]}
+        selectedTypes={selectedTypes}
         onChange={mockOnChange}
       />
     )
+
+  it('should render the component with title, All Types checkbox, and all account type options', () => {
+    renderComponent()
     expect(screen.getByText('Account Types')).toBeInTheDocument()
-  })
-
-  it('should render All Types checkbox', () => {
-    render(
-      <AccountTypeFilter
-        accountTypes={createMockAccountTypes()}
-        selectedTypes={[]}
-        onChange={mockOnChange}
-      />
-    )
     expect(screen.getByText('All Types')).toBeInTheDocument()
-  })
-
-  it('should render all account type options', () => {
-    render(
-      <AccountTypeFilter
-        accountTypes={createMockAccountTypes()}
-        selectedTypes={[]}
-        onChange={mockOnChange}
-      />
-    )
     expect(screen.getByText('Checking & Savings')).toBeInTheDocument()
     expect(screen.getByText('Credit Cards')).toBeInTheDocument()
     expect(screen.getByText('Investments')).toBeInTheDocument()
   })
 
-  it('should render account counts with plural form', () => {
-    render(
-      <AccountTypeFilter
-        accountTypes={createMockAccountTypes()}
-        selectedTypes={[]}
-        onChange={mockOnChange}
-      />
-    )
+  it('should render account counts with plural and singular forms', () => {
+    renderComponent()
     expect(screen.getByText('2 accounts')).toBeInTheDocument()
     expect(screen.getByText('3 accounts')).toBeInTheDocument()
-  })
-
-  it('should render account count with singular form', () => {
-    render(
-      <AccountTypeFilter
-        accountTypes={createMockAccountTypes()}
-        selectedTypes={[]}
-        onChange={mockOnChange}
-      />
-    )
     expect(screen.getByText('1 account')).toBeInTheDocument()
   })
 
-  it('should render empty state with no types', () => {
+  it('should render with empty account types', () => {
     render(
       <AccountTypeFilter
         accountTypes={{ types: [] }}

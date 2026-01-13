@@ -694,12 +694,12 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Run npm audit (JS vulnerabilities)
+      - name: Run bun audit (JS vulnerabilities)
         if: matrix.component == 'frontend'
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/frontend
         run: |
           bun install --frozen-lockfile
-          bunx npm-audit-html || npm audit --audit-level=high
+          bun audit --audit-level=high
 
       # =========================================================================
       # Dockerfile Linting: Hadolint (pre-installed on Mac Mini runner)

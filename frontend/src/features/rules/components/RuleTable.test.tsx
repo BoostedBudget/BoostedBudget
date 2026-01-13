@@ -20,12 +20,12 @@ const mockRules: AutomationRule[] = [
     },
     conditions: [],
     condition_logic: 'AND',
-    actions: {},
+    actions: {} as any,
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-15T00:00:00Z',
     last_executed_at: '2024-01-15T09:00:00Z',
     last_successful_at: '2024-01-15T09:00:00Z',
-  },
+  } as any,
   {
     id: 'rule-2',
     user_id: 'user-1',
@@ -42,10 +42,10 @@ const mockRules: AutomationRule[] = [
     },
     conditions: [],
     condition_logic: 'AND',
-    actions: {},
+    actions: {} as any,
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-10T00:00:00Z',
-  },
+  } as any,
   {
     id: 'rule-3',
     user_id: 'user-1',
@@ -57,13 +57,13 @@ const mockRules: AutomationRule[] = [
     trigger_config: {
       type: 'event',
       event: 'transaction_created',
-    },
+    } as any,
     conditions: [],
     condition_logic: 'AND',
-    actions: {},
+    actions: {} as any,
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-05T00:00:00Z',
-  },
+  } as any,
 ]
 
 describe('RuleTable', () => {

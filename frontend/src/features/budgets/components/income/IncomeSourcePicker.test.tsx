@@ -1,8 +1,3 @@
-/**
- * IncomeSourcePicker Tests
- * Issue #496: Income Source Configuration UI for Envelope Budgeting
- */
-
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -23,10 +18,6 @@ describe('IncomeSourcePicker', () => {
   beforeEach(() => {
     mockOnAdd.mockClear()
   })
-
-  // ==========================================================================
-  // Type Selection Tests
-  // ==========================================================================
 
   describe('Type Selection', () => {
     it('renders type selector with three options', () => {

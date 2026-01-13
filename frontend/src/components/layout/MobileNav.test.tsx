@@ -19,8 +19,8 @@ describe('MobileNav', () => {
     mockOnLogin.mockClear()
   })
 
-  const renderMobileNav = (isAuthenticated = true, user: typeof mockUser | null = mockUser) => {
-    return render(
+  const renderMobileNav = (isAuthenticated = true, user: typeof mockUser | null = mockUser) =>
+    render(
       <BrowserRouter>
         <MobileNav
           isAuthenticated={isAuthenticated}
@@ -30,7 +30,6 @@ describe('MobileNav', () => {
         />
       </BrowserRouter>
     )
-  }
 
   it('renders hamburger menu button with open menu aria-label', () => {
     renderMobileNav()

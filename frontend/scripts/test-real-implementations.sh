@@ -68,10 +68,7 @@ PRELOAD_FILES=(
 )
 
 # Build preload arguments
-PRELOAD_ARGS=""
-for f in "${PRELOAD_FILES[@]}"; do
-    PRELOAD_ARGS="$PRELOAD_ARGS --preload $f"
-done
+PRELOAD_ARGS=$(printf -- '--preload %s ' "${PRELOAD_FILES[@]}")
 
 # CRITICAL: Run from /tmp to avoid loading bunfig.toml from frontend CWD
 # Bun's --config is ADDITIVE, not replacement. By running from /tmp,

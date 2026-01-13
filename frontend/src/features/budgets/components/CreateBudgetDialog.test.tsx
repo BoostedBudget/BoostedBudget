@@ -1,10 +1,3 @@
-/**
- * CreateBudgetDialog Tests
- * Issue #111: Goals Dashboard & Progress Visualization
- * Issue #564: Migrated to mock generated React Query hooks
- * Issue #575: Migrated to bun:test with centralized mocks
- */
-
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -13,7 +6,6 @@ import type { ReactNode } from 'react'
 import { CreateBudgetDialog } from './CreateBudgetDialog'
 import type { Budget } from '../types'
 
-// Import centralized mocks
 import {
   mockUseCreateBudget,
   mockCreateBudgetMutateAsync,

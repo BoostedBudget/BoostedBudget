@@ -1,20 +1,9 @@
-/**
- * useSavingsGoals Hook Tests
- * Issue #564: Migrated to mock generated React Query hooks
- * Issue #575: Uses centralized API mocks via preloaded savings-goals-api.ts
- *
- * NOTE: This test file may show failures when run in the full test suite due to
- * mock pollution from BudgetsPage.test.tsx. When run alone, all tests pass.
- * This is a known limitation of Bun's mock.module() persistence.
- */
-
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { renderHook, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import type { SavingsGoal, CreateSavingsGoalRequest, UpdateSavingsGoalRequest } from '../types'
 
-// Import from centralized mock (preloaded via bunfig.real.toml)
 import {
   mockUseGetSavingsGoals,
   mockUseGetActiveSavingsGoals,
@@ -24,8 +13,6 @@ import {
   mockSavingsGoalsRefetch,
   mockActiveSavingsGoalsRefetch,
 } from '@/test/mocks/savings-goals-api'
-
-// Import the hook (will use the preloaded API mock)
 import { useSavingsGoals } from './useSavingsGoals'
 
 // Helper to create wrapper with QueryClient

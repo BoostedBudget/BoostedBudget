@@ -43,11 +43,11 @@ const mockRules: AutomationRule[] = [
     },
     conditions: [],
     condition_logic: 'AND',
-    actions: {},
+    actions: {} as any,
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-15T00:00:00Z',
     last_executed_at: '2024-01-15T09:00:00Z',
-  },
+  } as any,
   {
     id: 'rule-2',
     user_id: 'user-1',
@@ -63,10 +63,10 @@ const mockRules: AutomationRule[] = [
     },
     conditions: [],
     condition_logic: 'AND',
-    actions: {},
+    actions: {} as any,
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-10T00:00:00Z',
-  },
+  } as any,
 ]
 
 // Mock user data with premium tier (15 rule limit)
@@ -82,17 +82,13 @@ const mockUser = {
   updated_at: '2024-01-01T00:00:00Z',
 }
 
-function createQueryClient() {
-  return new QueryClient({
+function renderWithProviders(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
       mutations: { retry: false },
     },
   })
-}
-
-function renderWithProviders(ui: React.ReactElement) {
-  const queryClient = createQueryClient()
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter>{ui}</MemoryRouter>

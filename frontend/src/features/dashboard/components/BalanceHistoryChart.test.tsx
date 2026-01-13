@@ -237,24 +237,15 @@ describe('BalanceHistoryChart', () => {
     });
   });
   describe('Styling', () => {
-    it('should apply h-full height propagation class', () => {
-      const { container } = render(
-        <BalanceHistoryChart history={mockHistory} />
-      );
-      expect(container.firstChild).toHaveClass('h-full');
-    });
-
-    it('should use responsive height and min-height', () => {
-      render(<BalanceHistoryChart history={mockHistory} />);
-      const chart = screen.getByTestId('plotly-chart');
-      expect(chart).toHaveStyle({ height: '100%', minHeight: '200px' });
-    });
-
-    it('should not include padding/bg/shadow (delegated to WidgetWrapper)', () => {
+    it('should apply h-full and responsive dimensions without wrapper styling', () => {
       const { container } = render(
         <BalanceHistoryChart history={mockHistory} />
       );
       const outerDiv = container.firstChild as HTMLElement;
+      expect(outerDiv).toHaveClass('h-full');
+
+      const chart = screen.getByTestId('plotly-chart');
+      expect(chart).toHaveStyle({ height: '100%', minHeight: '200px' });
       expect(outerDiv).not.toHaveClass('bg-white', 'shadow', 'p-6', 'rounded-lg');
     });
   });

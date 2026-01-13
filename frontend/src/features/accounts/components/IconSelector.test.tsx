@@ -17,6 +17,35 @@ import { VALID_ACCOUNT_ICONS } from '../types'
 describe('IconSelector', () => {
   const mockOnChange = mock(() => {})
 
+  // Icon to label mapping for all 25 icons
+  const ICON_LABELS: Record<string, string> = {
+    'wallet': 'Wallet',
+    'piggy-bank': 'Savings',
+    'credit-card': 'Card',
+    'bank': 'Bank',
+    'building': 'Building',
+    'briefcase': 'Business',
+    'dollar': 'Dollar',
+    'euro': 'Euro',
+    'pound': 'Pound',
+    'yen': 'Yen',
+    'chart': 'Chart',
+    'trending-up': 'Growth',
+    'trending-down': 'Decline',
+    'lock': 'Locked',
+    'unlock': 'Unlocked',
+    'star': 'Star',
+    'heart': 'Heart',
+    'home': 'Home',
+    'car': 'Car',
+    'plane': 'Travel',
+    'shopping-cart': 'Shopping',
+    'gift': 'Gift',
+    'coffee': 'Coffee',
+    'utensils': 'Food',
+    'graduation-cap': 'Education',
+  }
+
   describe('Initialization', () => {
     it('renders with no initial icon', () => {
       render(<IconSelector onChange={mockOnChange} />)
@@ -132,36 +161,8 @@ describe('IconSelector', () => {
     })
 
     it('displays correct label for all icons', () => {
-      const labelMap: Record<string, string> = {
-        'wallet': 'Wallet',
-        'piggy-bank': 'Savings',
-        'credit-card': 'Card',
-        'bank': 'Bank',
-        'building': 'Building',
-        'briefcase': 'Business',
-        'dollar': 'Dollar',
-        'euro': 'Euro',
-        'pound': 'Pound',
-        'yen': 'Yen',
-        'chart': 'Chart',
-        'trending-up': 'Growth',
-        'trending-down': 'Decline',
-        'lock': 'Locked',
-        'unlock': 'Unlocked',
-        'star': 'Star',
-        'heart': 'Heart',
-        'home': 'Home',
-        'car': 'Car',
-        'plane': 'Travel',
-        'shopping-cart': 'Shopping',
-        'gift': 'Gift',
-        'coffee': 'Coffee',
-        'utensils': 'Food',
-        'graduation-cap': 'Education',
-      }
-
-      // Just verify the count matches
-      expect(Object.keys(labelMap)).toHaveLength(VALID_ACCOUNT_ICONS.length)
+      // Verify the count matches VALID_ACCOUNT_ICONS
+      expect(Object.keys(ICON_LABELS)).toHaveLength(VALID_ACCOUNT_ICONS.length)
     })
   })
 

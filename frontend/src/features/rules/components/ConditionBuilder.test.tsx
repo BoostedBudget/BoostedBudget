@@ -20,7 +20,7 @@ const renderConditionBuilder = (props: Partial<Parameters<typeof ConditionBuilde
   )
 
 describe('ConditionBuilder', () => {
-  it('should show empty state message when no conditions', () => {
+  it('should show empty state when no conditions', () => {
     renderConditionBuilder()
     expect(screen.getByText(/no conditions/i)).toBeInTheDocument()
   })

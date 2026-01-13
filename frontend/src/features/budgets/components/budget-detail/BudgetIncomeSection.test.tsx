@@ -1,11 +1,3 @@
-/**
- * BudgetIncomeSection Component Tests
- * Issue #498: Budget Detail Page for Envelope Budgeting
- *
- * TDD RED: These tests are written first and will initially fail.
- * Tests the income comparison section showing expected vs actual income.
- */
-
 import { describe, it, expect } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { BudgetIncomeSection } from './BudgetIncomeSection'

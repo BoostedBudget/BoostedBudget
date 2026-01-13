@@ -16,6 +16,14 @@ import { EmojiInput } from './EmojiInput'
 describe('EmojiInput', () => {
   const mockOnChange = mock(() => {})
 
+  // Suggested emojis used throughout tests
+  const SUGGESTED_EMOJIS = [
+    '💰', '💵', '💳', '🏦', '🏠',
+    '🚗', '✈️', '🛒', '🎁', '☕',
+    '🍽️', '🎓', '💼', '📈', '📉',
+    '⭐', '❤️', '🔒', '🔓', '🐷',
+  ]
+
   describe('Initialization', () => {
     it('renders with no initial emoji', () => {
       render(<EmojiInput onChange={mockOnChange} />)
@@ -168,14 +176,7 @@ describe('EmojiInput', () => {
     it('renders specific suggested emojis', () => {
       render(<EmojiInput onChange={mockOnChange} />)
 
-      const expectedEmojis = [
-        '💰', '💵', '💳', '🏦', '🏠',
-        '🚗', '✈️', '🛒', '🎁', '☕',
-        '🍽️', '🎓', '💼', '📈', '📉',
-        '⭐', '❤️', '🔒', '🔓', '🐷',
-      ]
-
-      expectedEmojis.forEach((emoji) => {
+      SUGGESTED_EMOJIS.forEach((emoji) => {
         expect(screen.getByLabelText(`Select emoji ${emoji}`)).toBeInTheDocument()
       })
     })

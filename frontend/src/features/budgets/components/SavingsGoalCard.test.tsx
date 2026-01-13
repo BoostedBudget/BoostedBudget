@@ -1,9 +1,3 @@
-/**
- * SavingsGoalCard Component Tests
- *
- * TDD RED: These tests are written first.
- */
-
 import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { SavingsGoalCard } from './SavingsGoalCard'

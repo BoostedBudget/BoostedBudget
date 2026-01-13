@@ -12,7 +12,6 @@ mock.module('sonner', () => ({
   },
 }))
 
-
 describe('useCopyToClipboard', () => {
   const originalClipboard = navigator.clipboard
   let mockWriteText: ReturnType<typeof mock>

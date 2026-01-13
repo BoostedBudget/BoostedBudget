@@ -24,15 +24,14 @@ const MOCK_DEFAULT_LAYOUT: DashboardLayout = {
 }
 
 // Single mock.module() call - called once at preload time
-// All tests share this mock, but can customize behavior via mockImplementation
 mock.module('@/features/dashboard/widgets/registry', () => ({
-  getWidget: (...args: unknown[]) => mockGetWidget(...args),
-  getAllWidgets: () => mockGetAllWidgets(),
-  registerWidget: (...args: unknown[]) => mockRegisterWidget(...args),
-  getWidgetsByCategory: (...args: unknown[]) => mockGetWidgetsByCategory(...args),
-  isWidgetRegistered: (...args: unknown[]) => mockIsWidgetRegistered(...args),
-  generateWidgetId: (...args: unknown[]) => mockGenerateWidgetId(...(args as [WidgetType])),
-  createWidgetConfig: (...args: unknown[]) => mockCreateWidgetConfig(...args),
+  getWidget: mockGetWidget,
+  getAllWidgets: mockGetAllWidgets,
+  registerWidget: mockRegisterWidget,
+  getWidgetsByCategory: mockGetWidgetsByCategory,
+  isWidgetRegistered: mockIsWidgetRegistered,
+  generateWidgetId: mockGenerateWidgetId,
+  createWidgetConfig: mockCreateWidgetConfig,
   DEFAULT_LAYOUT: MOCK_DEFAULT_LAYOUT,
 }))
 

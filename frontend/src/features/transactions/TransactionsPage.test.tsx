@@ -37,16 +37,12 @@ import {
 } from '@/test/mocks/categories-api'
 import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
 
-function createTestQueryClient() {
-  return new QueryClient({
+function createWrapper() {
+  const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: 0 },
     },
   })
-}
-
-function createWrapper() {
-  const queryClient = createTestQueryClient()
   return function Wrapper({ children }: { children: ReactNode }) {
     return (
       <QueryClientProvider client={queryClient}>
@@ -195,16 +191,18 @@ describe('TransactionsPage', () => {
 
   beforeEach(() => {
     // Clear all mocks
-    mockUseGetTransactions.mockClear()
-    mockRefetchTransactions.mockClear()
-    mockUpdateTransactionTagsMutateAsync.mockClear()
-    mockUpdateTransactionCategoryMutateAsync.mockClear()
-    mockUseGetUserTags.mockClear()
-    mockUseGetUserCategories.mockClear()
-    mockUseGetPlaidCategories.mockClear()
-    mockUseGetAccounts.mockClear()
-    mockUseCreateTag.mockClear()
-    mockUseCreateCategory.mockClear()
+    ;[
+      mockUseGetTransactions,
+      mockRefetchTransactions,
+      mockUpdateTransactionTagsMutateAsync,
+      mockUpdateTransactionCategoryMutateAsync,
+      mockUseGetUserTags,
+      mockUseGetUserCategories,
+      mockUseGetPlaidCategories,
+      mockUseGetAccounts,
+      mockUseCreateTag,
+      mockUseCreateCategory,
+    ].forEach((mock) => mock.mockClear())
 
     configureQueries()
   })

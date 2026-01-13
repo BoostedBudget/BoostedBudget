@@ -36,10 +36,8 @@ export const mockGetCashFlowHistoryQueryKey = mock((params: unknown) => [
 // Single mock.module() call - called once at preload time
 mock.module('@/api/generated/endpoints/analytics/analytics', () => ({
   ...RealAnalyticsModule,
-  useGetCashFlowSummary: (...args: unknown[]) => mockUseGetCashFlowSummary(...args),
-  useGetCashFlowHistory: (...args: unknown[]) => mockUseGetCashFlowHistory(...args),
-  getGetCashFlowSummaryQueryKey: (...args: unknown[]) =>
-    mockGetCashFlowSummaryQueryKey(...args),
-  getGetCashFlowHistoryQueryKey: (...args: unknown[]) =>
-    mockGetCashFlowHistoryQueryKey(...args),
+  useGetCashFlowSummary: mockUseGetCashFlowSummary,
+  useGetCashFlowHistory: mockUseGetCashFlowHistory,
+  getGetCashFlowSummaryQueryKey: mockGetCashFlowSummaryQueryKey,
+  getGetCashFlowHistoryQueryKey: mockGetCashFlowHistoryQueryKey,
 }))

@@ -1,8 +1,3 @@
-/**
- * useBudgets Hook Tests
- * Issue #575: Migrated to bun:test with centralized API mocks
- */
-
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { renderHook, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'

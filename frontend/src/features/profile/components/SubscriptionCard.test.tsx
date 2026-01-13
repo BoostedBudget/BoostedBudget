@@ -11,18 +11,13 @@ import {
 
 import { SubscriptionCard } from './SubscriptionCard'
 
-function createTestQueryClient() {
-  return new QueryClient({
-    defaultOptions: {
-      queries: { retry: false, gcTime: 0 },
-    },
-  })
-}
-
 function renderWithRouter(ui: React.ReactElement) {
-  const queryClient = createTestQueryClient()
   return render(
-    <QueryClientProvider client={queryClient}>
+    <QueryClientProvider client={new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, gcTime: 0 },
+      },
+    })}>
       <MemoryRouter>{ui}</MemoryRouter>
     </QueryClientProvider>
   )

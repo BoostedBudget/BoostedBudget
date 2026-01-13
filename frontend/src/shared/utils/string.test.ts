@@ -3,15 +3,11 @@ import { abbreviateUUID } from './string'
 
 describe('abbreviateUUID', () => {
   it('abbreviates standard UUID format', () => {
-    expect(abbreviateUUID('ad8d6c49-4f4a-4756-945a-603fea50d77a')).toBe(
-      'ad8d6c49...d77a'
-    )
+    expect(abbreviateUUID('ad8d6c49-4f4a-4756-945a-603fea50d77a')).toBe('ad8d6c49...d77a')
   })
 
   it('abbreviates another UUID correctly', () => {
-    expect(abbreviateUUID('12345678-1234-1234-1234-123456789012')).toBe(
-      '12345678...9012'
-    )
+    expect(abbreviateUUID('12345678-1234-1234-1234-123456789012')).toBe('12345678...9012')
   })
 
   it('returns empty string for null input', () => {

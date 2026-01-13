@@ -18,18 +18,13 @@ import {
   mockCancelDeletion,
 } from '@/test/mocks/user-api'
 
-// Create a fresh QueryClient for each test
-function createTestQueryClient() {
-  return new QueryClient({
+function createWrapper() {
+  const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: 0 },
       mutations: { retry: false },
     },
   })
-}
-
-function createWrapper() {
-  const queryClient = createTestQueryClient()
   return function Wrapper({ children }: { children: React.ReactNode }) {
     return (
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>

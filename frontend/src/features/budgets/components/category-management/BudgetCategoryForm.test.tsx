@@ -1,14 +1,6 @@
-/**
- * BudgetCategoryForm Tests
- * Issue #497: Budget Category Manager + Match Config UI
- */
-
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import type { BudgetCategory } from '../../types'
 import type { UserTag } from '@/features/tags/types'
-
-// Note: We don't mock CategoryMatchConfig - use the real component with radio buttons
-// This prevents mock pollution affecting CategoryMatchConfig.test.tsx
 
 const mockUsePreviewCategories = mock(() => ({
   preview: null,

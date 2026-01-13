@@ -11,7 +11,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import App from './App'
 
-// Import centralized mocks
 import {
   mockUseAuth,
   mockUseUser,
@@ -23,7 +22,6 @@ import {
 } from '@/test/mocks/clerk'
 import { mockUseUpdatePrivacySettings } from '@/test/mocks/privacy-api'
 
-// Mock fetch globally
 const mockFetch = mock(() =>
   Promise.resolve({
     json: () =>
@@ -37,34 +35,29 @@ const mockFetch = mock(() =>
 )
 globalThis.fetch = mockFetch as unknown as typeof fetch
 
-function createTestQueryClient() {
-  return new QueryClient({
+const createTestQueryClient = () =>
+  new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: 0 },
     },
   })
+
+const createWrapper = () => {
+  const queryClient = createTestQueryClient()
+  return ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>{children}</BrowserRouter>
+    </QueryClientProvider>
+  )
 }
 
-function createWrapper() {
+const createMemoryWrapper = (initialEntries: string[]) => {
   const queryClient = createTestQueryClient()
-  return function Wrapper({ children }: { children: ReactNode }) {
-    return (
-      <QueryClientProvider client={queryClient}>
-        <BrowserRouter>{children}</BrowserRouter>
-      </QueryClientProvider>
-    )
-  }
-}
-
-function createMemoryWrapper(initialEntries: string[]) {
-  const queryClient = createTestQueryClient()
-  return function Wrapper({ children }: { children: ReactNode }) {
-    return (
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={initialEntries}>{children}</MemoryRouter>
-      </QueryClientProvider>
-    )
-  }
+  return ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={initialEntries}>{children}</MemoryRouter>
+    </QueryClientProvider>
+  )
 }
 
 describe('App', () => {

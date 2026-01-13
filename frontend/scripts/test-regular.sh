@@ -49,18 +49,12 @@ echo "Running regular tests (excluding real-implementation tests)..."
 # Find all test files and exclude the real-implementation ones
 ALL_TESTS=$(find src -name "*.test.ts" -o -name "*.test.tsx" | sort)
 
-# Build the exclude pattern for grep
-EXCLUDE_GREP=""
-for pattern in "${EXCLUDE_PATTERNS[@]}"; do
-    if [ -z "$EXCLUDE_GREP" ]; then
-        EXCLUDE_GREP="$pattern"
-    else
-        EXCLUDE_GREP="$EXCLUDE_GREP\|$pattern"
-    fi
-done
+# Build the exclude pattern for grep -E (extended regex)
+# Join patterns with | for alternation
+EXCLUDE_GREP=$(printf '%s|' "${EXCLUDE_PATTERNS[@]}" | sed 's/|$//')
 
-# Filter out excluded files
-REGULAR_TESTS=$(echo "$ALL_TESTS" | grep -v "$EXCLUDE_GREP" || true)
+# Filter out excluded files using extended regex
+REGULAR_TESTS=$(echo "$ALL_TESTS" | grep -vE "$EXCLUDE_GREP" || true)
 
 if [ -z "$REGULAR_TESTS" ]; then
     echo "No regular tests found!"

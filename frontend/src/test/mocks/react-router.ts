@@ -44,7 +44,7 @@ import {
   useRouteLoaderData,
 } from 'react-router-dom'
 
-// Export mockNavigate for tests to configure and assert
+// Configurable mock for useNavigate - tests can set behavior via mockImplementation
 export const mockNavigate = mock(() => {})
 
 // Mock only useNavigate, re-export everything else from the real module

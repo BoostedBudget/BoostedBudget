@@ -1,10 +1,3 @@
-/**
- * MilestoneIndicator Tests
- * Issue #111: Goals Dashboard & Progress Visualization
- *
- * TDD tests for milestone markers on progress bars.
- */
-
 import { describe, it, expect } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import { MilestoneIndicator } from './MilestoneIndicator'
