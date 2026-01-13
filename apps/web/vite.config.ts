@@ -10,10 +10,11 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      // Workspace packages - bypass package.json exports resolution for Vite/esbuild compatibility
+      // (esbuild has limited support for wildcard exports like "./endpoints/*/*")
+      '@boostedbudget/api-client': path.resolve(__dirname, '../../packages/api-client/src'),
+      '@boostedbudget/shared-types': path.resolve(__dirname, '../../packages/shared-types/src'),
     },
-  },
-  optimizeDeps: {
-    include: ['@boostedbudget/api-client', '@boostedbudget/shared-types'],
   },
   server: {
     // Support dynamic port allocation via PORT or E2E_FRONTEND_PORT env var
