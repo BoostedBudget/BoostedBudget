@@ -1,5 +1,5 @@
 import ReactDOM from 'react-dom/client'
-import { StrictMode, useEffect, useState } from 'react'
+import { StrictMode, useLayoutEffect, useRef } from 'react'
 import { ClerkProvider, useAuth } from '@clerk/react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Provider } from 'react-redux'
@@ -60,27 +60,26 @@ if (isTestEnv) {
  */
 const AuthReadyGate = ({ children }: { children: React.ReactNode }) => {
   const { getToken, isLoaded } = useAuth()
-  const [isReady, setIsReady] = useState(false)
+  const hasSetProviderRef = useRef(false)
 
-  useEffect(() => {
-    if (isLoaded) {
-      // Set up auth token provider BEFORE marking ready
-      const tokenProvider = async () => {
+  // Set up token provider in useLayoutEffect (runs synchronously before paint)
+  // This ensures the provider is set before any children render and make API calls
+  useLayoutEffect(() => {
+    if (isLoaded && !hasSetProviderRef.current) {
+      setAuthTokenProvider(async () => {
         try {
           return await getToken({ template: 'BoostedBudget' })
         } catch {
           return null
         }
-      }
-
-      setAuthTokenProvider(tokenProvider)
-      setIsReady(true)
+      })
+      hasSetProviderRef.current = true
     }
   }, [getToken, isLoaded])
 
-  // Don't render children until auth is ready
-  // This ensures API calls have access to the token provider
-  if (!isReady) {
+  // Don't render children until Clerk is loaded
+  // The useLayoutEffect above ensures token provider is set before children render
+  if (!isLoaded) {
     return null
   }
 
