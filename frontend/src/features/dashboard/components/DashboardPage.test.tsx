@@ -42,63 +42,10 @@ mock.module('../widgets/WidgetCatalog', () => ({
     isOpen ? <div data-testid="widget-catalog">Widget Catalog</div> : null,
 }))
 
-mock.module('./BalanceOverview', () => ({
-  BalanceOverview: ({ summary }: { summary: BalanceSummary }) => (
-    <div data-testid="balance-overview">Balance Overview: ${summary.total_balance}</div>
-  ),
-}))
-
-mock.module('./BalanceHistoryChart', () => ({
-  BalanceHistoryChart: ({
-    history,
-    showTypeBreakdown,
-  }: {
-    history: BalanceHistory
-    showTypeBreakdown: boolean
-  }) => (
-    <div data-testid="balance-history-chart">
-      Chart: {history.snapshots.length} snapshots
-      {showTypeBreakdown ? ' (breakdown)' : ' (total)'}
-    </div>
-  ),
-}))
-
-mock.module('./AccountTypeFilter', () => ({
-  AccountTypeFilter: ({
-    accountTypes,
-    selectedTypes,
-    onChange,
-  }: {
-    accountTypes: AccountTypesResponse
-    selectedTypes: string[]
-    onChange: (types: string[]) => void
-  }) => (
-    <div data-testid="account-type-filter">
-      <button onClick={() => onChange(['depository'])}>Filter: {accountTypes.types.length} types</button>
-      <span>Selected: {selectedTypes.length}</span>
-    </div>
-  ),
-}))
-
-mock.module('./TimeframeSelector', () => ({
-  TimeframeSelector: ({
-    onRangeChange,
-  }: {
-    onRangeChange: (start: string, end: string) => void
-  }) => (
-    <div data-testid="timeframe-selector">
-      <button onClick={() => onRangeChange('2025-10-01', '2025-11-15')}>Change Timeframe</button>
-    </div>
-  ),
-}))
-
-mock.module('./AccountBalanceCards', () => ({
-  AccountBalanceCards: ({ summary }: { summary: BalanceSummary }) => (
-    <div data-testid="account-balance-cards">
-      Accounts: {Object.keys(summary.by_type).length} types
-    </div>
-  ),
-}))
+// Issue #575: Use REAL AccountTypeFilter and TimeframeSelector components
+// They have data-testid attributes for test queries.
+// We don't mock them to prevent pollution of their standalone tests.
+// The real components work with the mocked hook data (mockUseDashboardData).
 
 // NOW import testing utilities and component AFTER mocks
 import { render, screen, waitFor } from '@testing-library/react'
@@ -551,12 +498,12 @@ describe('DashboardPage', () => {
       const user = userEvent.setup()
       render(<DashboardPage />)
 
-      const filterButton = screen.getByText(/Filter: 2 types/)
-      await user.click(filterButton)
+      // Click on "Checking & Savings" checkbox in real AccountTypeFilter
+      const checkbox = screen.getByRole('checkbox', { name: /Checking & Savings/i })
+      await user.click(checkbox)
 
       await waitFor(() => {
-        const calls = mockUseDashboardData.mock.calls
-        expect(calls.length).toBeGreaterThanOrEqual(1)
+        expect(mockSetFilters).toHaveBeenCalled()
       })
     })
 
@@ -564,12 +511,12 @@ describe('DashboardPage', () => {
       const user = userEvent.setup()
       render(<DashboardPage />)
 
-      const timeframeButton = screen.getByText('Change Timeframe')
+      // Click on "7 Days" button in real TimeframeSelector
+      const timeframeButton = screen.getByRole('button', { name: '7 Days' })
       await user.click(timeframeButton)
 
       await waitFor(() => {
-        const calls = mockUseDashboardData.mock.calls
-        expect(calls.length).toBeGreaterThanOrEqual(1)
+        expect(mockSetFilters).toHaveBeenCalled()
       })
     })
 
@@ -629,27 +576,29 @@ describe('DashboardPage', () => {
     it('should pass accountTypes to AccountTypeFilter', () => {
       render(<DashboardPage />)
 
-      const filter = screen.getByTestId('account-type-filter')
-      expect(filter).toHaveTextContent('2 types')
+      // Real AccountTypeFilter shows the account type labels
+      expect(screen.getByText('Checking & Savings')).toBeInTheDocument()
+      expect(screen.getByText('Credit Cards')).toBeInTheDocument()
     })
 
     it('should pass selected account types to filter', () => {
       render(<DashboardPage />)
 
-      const filter = screen.getByTestId('account-type-filter')
-      expect(filter).toHaveTextContent('Selected: 0')
+      // Real AccountTypeFilter shows "All Types" checkbox that is checked when no filter selected
+      const allTypesCheckbox = screen.getByRole('checkbox', { name: 'All Types' })
+      expect(allTypesCheckbox).toBeChecked()
     })
 
     it('should pass onRangeChange callback to TimeframeSelector', async () => {
       const user = userEvent.setup()
       render(<DashboardPage />)
 
-      const button = screen.getByText('Change Timeframe')
+      // Click "7 Days" in real TimeframeSelector
+      const button = screen.getByRole('button', { name: '7 Days' })
       await user.click(button)
 
       await waitFor(() => {
-        const calls = mockUseDashboardData.mock.calls
-        expect(calls.length).toBeGreaterThanOrEqual(1)
+        expect(mockSetFilters).toHaveBeenCalled()
       })
     })
   })

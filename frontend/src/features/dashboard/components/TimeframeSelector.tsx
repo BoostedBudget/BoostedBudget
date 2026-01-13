@@ -72,7 +72,7 @@ export function TimeframeSelector({ onRangeChange }: TimeframeSelectorProps) {
   ]
 
   return (
-    <div className="bg-white rounded-lg shadow p-6">
+    <div className="bg-white rounded-lg shadow p-6" data-testid="timeframe-selector">
       <h3 className="text-lg font-semibold text-gray-900 mb-4">Timeframe</h3>
 
       {/* Preset buttons */}
