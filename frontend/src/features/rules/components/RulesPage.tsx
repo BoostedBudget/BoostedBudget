@@ -20,8 +20,6 @@ import {
 import type { AutomationRule } from '@/api/generated/models'
 import { ListViewToggle } from '@/shared/components/ListViewToggle'
 import type { ListView } from '@/shared/components/ListViewToggle'
-import { useProfile } from '@/features/profile/hooks/useProfile'
-import { useSubscriptionTiers } from '@/features/subscription/hooks/useSubscriptionTiers'
 import { useRuleTierLimits } from '../hooks/useRuleTierLimits'
 import { STORAGE_KEY_LIST_VIEW } from '../constants'
 import { RuleCard } from './RuleCard'
@@ -107,16 +105,8 @@ export function RulesPage() {
   const deleteMutation = useDeleteAutomationRule()
   const testMutation = useTestAutomationRule()
 
-  // User and tier info for limits
-  const { user } = useProfile()
-  const { tiers } = useSubscriptionTiers()
-
-  // Tier limits
-  const tierLimits = useRuleTierLimits({
-    user: user ?? null,
-    tiers: tiers ?? null,
-    currentRuleCount: rules.length,
-  })
+  // Tier limits (simplified - all tiers have unlimited rules)
+  const tierLimits = useRuleTierLimits({ currentRuleCount: rules.length })
 
   // Handlers
   const handleCreateRule = useCallback(() => {
