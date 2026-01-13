@@ -18,7 +18,7 @@ afterEach(() => {
 })
 
 // Force cleanup of any pending handles after all tests complete
-// Prevents hanging processes (matches vitest setup.ts pattern from Issues #180, #219, #422)
+// Prevents hanging processes (Issues #180, #219, #422)
 afterAll(async () => {
   await new Promise((resolve) => setTimeout(resolve, 100))
 })

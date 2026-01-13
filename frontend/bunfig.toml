@@ -1,5 +1,5 @@
 # Bun configuration for BoostedBudget frontend
-# Issue #575: Migration from pnpm/Vitest/Vite to Bun
+# Issue #575: Bun-native test configuration
 
 [install]
 # Don't freeze lockfile during development
@@ -53,13 +53,8 @@ preload = [
 # They must be run separately with: bun test --config bunfig.real.toml <file>
 # Bun doesn't support exclude patterns for test files (feature request #21395)
 
-# Match vitest's generous timeout for CI stability (Issues #180, #219, #422)
+# Generous timeout for CI stability (Issues #180, #219, #422)
 timeout = 30000
 
 # Note: Coverage thresholds will be enforced in CI scripts
 # Bun's built-in coverage is used via --coverage flag
-
-# During hybrid migration (Issue #575):
-# - Vitest runs all tests EXCEPT those in vitest.config.ts exclusions
-# - Bun runs specific migrated files via package.json script
-# - After full migration, bunfig.toml will handle all test discovery

@@ -1,16 +1,34 @@
 #!/bin/bash
 # Run tests that need REAL implementations (not centralized mocks)
-# Issue #575: registry.test.ts and DashboardContext.test.tsx
+# Issue #575: Hook implementation tests and registry tests
 #
 # These tests verify the REAL behavior of modules that are mocked
 # in centralized preloads. They run with bunfig.real.toml which
 # excludes mock preloads.
+#
+# CRITICAL: Must run from OUTSIDE frontend/ directory to avoid
+# loading bunfig.toml from CWD. Bun's --config is ADDITIVE, not
+# a replacement. Running from /tmp ensures only bunfig.real.toml
+# is loaded. We pass preload files directly since paths in config
+# are resolved from CWD.
+#
+# Test files included:
+# - registry.test.ts - Widget registry real implementation
+# - DashboardContext.test.tsx - Dashboard context real implementation
+# - useDashboardData.test.tsx - Dashboard data hook
+# - useDashboardLayout.test.tsx - Dashboard layout hook
+# - useDashboardOnboarding.test.ts - Dashboard onboarding hook
+# - useBudgetFilters.test.ts - Budget filters hook
+# - useBudgets.test.ts - Budgets hook
+# - useSavingsGoals.test.tsx - Savings goals hook
+# - useBudgetDetail.test.tsx - Budget detail hook
+# - useAvailableCategories.test.tsx - Available categories hook
+# - useRuleTierLimits.test.ts - Rule tier limits hook
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRONTEND_DIR="$(dirname "$SCRIPT_DIR")"
-cd "$FRONTEND_DIR"
 
 # Parse arguments
 COVERAGE=false
@@ -24,36 +42,54 @@ for arg in "$@"; do
 done
 
 echo "Running real-implementation tests..."
-echo "Temporarily swapping bunfig.toml for bunfig.real.toml"
 
-# Backup current bunfig.toml
-mv bunfig.toml bunfig.toml.bak
+# Test files that need real implementations (absolute paths)
+TEST_FILES=(
+    "$FRONTEND_DIR/src/features/dashboard/widgets/registry.test.ts"
+    "$FRONTEND_DIR/src/features/dashboard/context/DashboardContext.test.tsx"
+    "$FRONTEND_DIR/src/features/dashboard/hooks/useDashboardData.test.tsx"
+    "$FRONTEND_DIR/src/features/dashboard/hooks/useDashboardLayout.test.tsx"
+    "$FRONTEND_DIR/src/features/dashboard/hooks/useDashboardOnboarding.test.ts"
+    "$FRONTEND_DIR/src/features/budgets/hooks/useBudgetFilters.test.ts"
+    "$FRONTEND_DIR/src/features/budgets/hooks/useBudgets.test.ts"
+    "$FRONTEND_DIR/src/features/budgets/hooks/useSavingsGoals.test.tsx"
+    "$FRONTEND_DIR/src/features/budgets/hooks/useBudgetDetail.test.tsx"
+    "$FRONTEND_DIR/src/features/budgets/hooks/useAvailableCategories.test.tsx"
+    "$FRONTEND_DIR/src/features/rules/hooks/useRuleTierLimits.test.ts"
+)
 
-# Use the real-implementation config
-cp bunfig.real.toml bunfig.toml
+# Preload files for real implementation tests (absolute paths)
+# Only DOM, testing-library, and savings-goals-api (for useSavingsGoals.test.tsx)
+# NO wrapper-level mocks that would interfere with testing real hook implementations
+PRELOAD_FILES=(
+    "$FRONTEND_DIR/src/test/happydom.ts"
+    "$FRONTEND_DIR/src/test/testing-library.ts"
+    "$FRONTEND_DIR/src/test/mocks/savings-goals-api.ts"
+)
+
+# Build preload arguments
+PRELOAD_ARGS=""
+for f in "${PRELOAD_FILES[@]}"; do
+    PRELOAD_ARGS="$PRELOAD_ARGS --preload $f"
+done
+
+# CRITICAL: Run from /tmp to avoid loading bunfig.toml from frontend CWD
+# Bun's --config is ADDITIVE, not replacement. By running from /tmp,
+# there's no bunfig.toml to load. We pass preload files directly via CLI
+# with absolute paths to ensure they're found.
+cd /tmp
 
 # Build test command
 if [ "$COVERAGE" = true ]; then
     echo "Coverage enabled - generating to coverage-real/"
-    TEST_CMD="bun test --coverage --coverage-reporter=lcov --coverage-dir=coverage-real src/features/dashboard/widgets/registry.test.ts src/features/dashboard/context/DashboardContext.test.tsx"
+    bun test $PRELOAD_ARGS \
+        --timeout 30000 \
+        --coverage --coverage-reporter=lcov \
+        --coverage-dir="$FRONTEND_DIR/coverage-real" \
+        "${TEST_FILES[@]}"
 else
-    TEST_CMD="bun test src/features/dashboard/widgets/registry.test.ts src/features/dashboard/context/DashboardContext.test.tsx"
+    bun test $PRELOAD_ARGS --timeout 30000 "${TEST_FILES[@]}"
 fi
-
-# Run the tests
-set +e
-$TEST_CMD
-TEST_EXIT_CODE=$?
-set -e
-
-# Restore original bunfig.toml
-mv bunfig.toml.bak bunfig.toml
 
 echo ""
-if [ $TEST_EXIT_CODE -eq 0 ]; then
-    echo "✓ Real-implementation tests passed!"
-else
-    echo "✗ Real-implementation tests failed (exit code: $TEST_EXIT_CODE)"
-fi
-
-exit $TEST_EXIT_CODE
+echo "✓ Real-implementation tests completed!"

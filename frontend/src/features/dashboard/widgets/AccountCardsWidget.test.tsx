@@ -1,14 +1,13 @@
 /**
  * AccountCardsWidget Tests
- * Issue #575: Refactored to use centralized mocks (no inline mock.module)
+ * Issue #575: Refactored to use centralized mocks
  */
 
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import type { BalanceSummary } from '../types'
 
-// Issue #575: Use centralized mocks to prevent mock.module() pollution
-// No inline mock.module() calls for DashboardContext or useDashboardData
+// Issue #575: Import centralized mock exports
 import '@/test/mocks/registry'
 import {
   mockUseDashboardContext,
@@ -20,6 +19,15 @@ import {
   mockUseDashboardData,
   mockDashboardDataRefetch,
 } from '@/test/mocks/dashboard-wrapper-hooks'
+
+// Issue #575: Register useDashboardData mock inline (wrapper hooks are export-only)
+// This must be BEFORE importing the component
+mock.module('@/features/dashboard/hooks/useDashboardData', () => ({
+  useDashboardData: (...args: unknown[]) => mockUseDashboardData(...args),
+}))
+mock.module('../hooks/useDashboardData', () => ({
+  useDashboardData: (...args: unknown[]) => mockUseDashboardData(...args),
+}))
 
 // Child component mock is OK to keep inline (isolated to this test file)
 mock.module('../components/AccountBalanceCards', () => ({

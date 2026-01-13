@@ -23,6 +23,7 @@ import {
 } from '@/test/mocks/automation-rules-api'
 import { mockUseGetUserProfile } from '@/test/mocks/profile-api'
 import { mockUseGetSubscriptionTiers } from '@/test/mocks/subscription-api'
+import { mockUseRuleTierLimits } from '@/test/mocks/rule-tier-limits'
 import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
 
 const mockRules: AutomationRule[] = [
@@ -109,6 +110,7 @@ describe('RulesPage', () => {
     mockRefetchAutomationRules.mockClear()
     mockUseGetUserProfile.mockClear()
     mockUseGetSubscriptionTiers.mockClear()
+    mockUseRuleTierLimits.mockClear()
     localStorage.clear()
 
     // Configure automation rules mock
@@ -133,6 +135,19 @@ describe('RulesPage', () => {
       isLoading: false,
       error: null,
       refetch: () => Promise.resolve(),
+    })
+
+    // Configure tier limits to match test data:
+    // - mockRules has 2 items
+    // - mockUser has subscription_tier: 'premium' (15 rule limit)
+    mockUseRuleTierLimits.mockReturnValue({
+      ruleLimit: 15,
+      isUnlimited: false,
+      currentRuleCount: 2,
+      isAtLimit: false,
+      canUseEventTriggers: true,
+      shouldShowUpgradeBanner: false,
+      rulesCountDisplay: '2/15 rules used',
     })
   })
 
