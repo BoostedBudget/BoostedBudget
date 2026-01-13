@@ -149,9 +149,9 @@ go tool cover -func=coverage.out
 
 ## Frontend Implementation (Week 4)
 
-1. **API Client** (`frontend/src/api/deletionApi.ts`)
-2. **Delete Account Component** (`frontend/src/features/profile/components/DeleteAccountSection.tsx`)
-3. **Cancellation Page** (`frontend/src/features/profile/pages/CancelDeletionPage.tsx`)
+1. **API Client** (`apps/web/src/api/deletionApi.ts`)
+2. **Delete Account Component** (`apps/web/src/features/profile/components/DeleteAccountSection.tsx`)
+3. **Cancellation Page** (`apps/web/src/features/profile/pages/CancelDeletionPage.tsx`)
 4. **Routes** (add to app router)
 5. **Component Tests**
 6. **E2E Tests** (Playwright)

@@ -229,7 +229,7 @@ boostedbudget/
 │   ├── tests/
 │   ├── Dockerfile
 │   └── Dockerfile.test
-├── frontend/
+├── apps/web/
 │   ├── src/
 │   │   ├── api/
 │   │   ├── auth/           # Clerk React SDK
@@ -660,7 +660,7 @@ func (s *UserService) ExportUserData(ctx context.Context, userID string) (*UserD
 ### 0.5 Frontend Clerk Integration
 - [ ] Configure Clerk React SDK:
 ```typescript
-// frontend/src/index.tsx
+// apps/web/src/index.tsx
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { ClerkProvider } from '@clerk/clerk-react';
@@ -692,7 +692,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 
 - [ ] Create authentication wrapper:
 ```typescript
-// frontend/src/auth/AuthWrapper.tsx
+// apps/web/src/auth/AuthWrapper.tsx
 import { useClerk } from '@clerk/clerk-react';
 import { useEffect } from 'react';
 import { useAppDispatch } from '@/app/hooks';
@@ -734,7 +734,7 @@ export const AuthWrapper: React.FC<{ children: React.ReactNode }> = ({ children 
 
 - [ ] Create protected routes:
 ```typescript
-// frontend/src/auth/ProtectedRoute.tsx
+// apps/web/src/auth/ProtectedRoute.tsx
 import { withAuthenticationRequired } from '@clerk/clerk-react';
 import { LoadingSpinner } from '@/shared/components/LoadingSpinner';
 
@@ -752,7 +752,7 @@ export const ProtectedRoute: React.FC<{ component: React.ComponentType }> = ({
 ### 0.6 GDPR Compliance Components
 - [ ] Create cookie consent banner:
 ```typescript
-// frontend/src/privacy/CookieConsent.tsx
+// apps/web/src/privacy/CookieConsent.tsx
 import { useState, useEffect } from 'react';
 import { useCookies } from 'react-cookie';
 
@@ -1142,7 +1142,7 @@ func (s *SubscriptionService) CheckLimit(ctx context.Context, userID string, lim
 ### 1.3 Frontend Profile Components
 - [ ] Create profile management UI:
 ```typescript
-// frontend/src/features/profile/ProfilePage.tsx
+// apps/web/src/features/profile/ProfilePage.tsx
 import { useClerk } from '@clerk/clerk-react';
 import { useQuery } from '@tanstack/react-query';
 
@@ -1496,7 +1496,7 @@ func (s *BudgetService) CreateBudget(ctx context.Context, userID string, req Cre
 ### 3.2 Budget Progress Tracking
 - [ ] Real-time budget tracking:
 ```typescript
-// frontend/src/features/budgets/BudgetDashboard.tsx
+// apps/web/src/features/budgets/BudgetDashboard.tsx
 import { useQuery, useSubscription } from '@tanstack/react-query';
 
 export const BudgetDashboard: React.FC = () => {
@@ -1665,7 +1665,7 @@ func (e *RulesEngine) suggestTransfer(ctx context.Context, userID string, params
 ### 4.2 Pre-built Rule Templates
 - [ ] Create common rule templates:
 ```typescript
-// frontend/src/features/rules/RuleTemplates.tsx
+// apps/web/src/features/rules/RuleTemplates.tsx
 export const ruleTemplates = [
   {
     id: 'savings-sweep',
@@ -1734,7 +1734,7 @@ export const ruleTemplates = [
 ### 4.3 Rule Builder UI
 - [ ] Visual rule builder:
 ```typescript
-// frontend/src/features/rules/RuleBuilder.tsx
+// apps/web/src/features/rules/RuleBuilder.tsx
 import { useState } from 'react';
 import { useClerk } from '@clerk/clerk-react';
 
@@ -1894,7 +1894,7 @@ func (s *PaymentService) HandleWebhook(ctx context.Context, payload []byte, sign
 ### 5.2 Google AdSense Integration
 - [ ] Implement ad components:
 ```typescript
-// frontend/src/features/ads/AdBanner.tsx
+// apps/web/src/features/ads/AdBanner.tsx
 import { useEffect } from 'react';
 import { useClerk } from '@clerk/clerk-react';
 import { useCookies } from 'react-cookie';
@@ -1980,7 +1980,7 @@ export const TransactionListAd: React.FC = () => (
 ### 5.3 Pricing Page
 - [ ] Create pricing page:
 ```typescript
-// frontend/src/pages/PricingPage.tsx
+// apps/web/src/pages/PricingPage.tsx
 export const PricingPage: React.FC = () => {
   const plans = [
     {
@@ -2263,7 +2263,7 @@ func (r *UserRepository) CreateInRegion(ctx context.Context, user *User, region 
 
 **Frontend Region Selection**:
 ```typescript
-// frontend/src/features/auth/RegionSelector.tsx
+// apps/web/src/features/auth/RegionSelector.tsx
 export const RegionSelector: React.FC = () => {
   const regions = [
     { code: 'us-east-1', name: '🇺🇸 United States', flag: '🇺🇸' },
@@ -2400,7 +2400,7 @@ func (s *MigrationService) MigrateUserRegion(ctx context.Context, userID string,
 
 **Migration UI**:
 ```typescript
-// frontend/src/features/settings/RegionMigration.tsx
+// apps/web/src/features/settings/RegionMigration.tsx
 export const RegionMigrationTool: React.FC = () => {
   const [selectedRegion, setSelectedRegion] = useState('');
   const { data: user } = useQuery(['profile'], api.getProfile);

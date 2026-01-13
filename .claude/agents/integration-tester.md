@@ -29,7 +29,7 @@ Clerk works in all environments using test mode:
 **Verify JWT Middleware:**
 ```bash
 # Check Clerk config
-grep -r "CLERK_SECRET_KEY" backend/.env* frontend/.env*
+grep -r "CLERK_SECRET_KEY" backend/.env* apps/web/.env*
 
 # Test JWT validation (requires valid token)
 curl -H "Authorization: Bearer $TEST_JWT" http://localhost:8080/api/v1/profile

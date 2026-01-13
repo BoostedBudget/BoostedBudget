@@ -84,7 +84,7 @@ Set via: `flyctl secrets set KEY=value --app boostedbudget-web`
 
 ### Frontend Environment Variables (Non-Secret)
 
-Set in `frontend/fly.toml`:
+Set in `apps/web/fly.toml`:
 
 ```toml
 [env]
@@ -123,7 +123,7 @@ ENABLE_METRICS=true
 PRIMARY_REGION=us-east-1
 ```
 
-### frontend/.env.local
+### apps/web/.env.local
 
 ```bash
 # API

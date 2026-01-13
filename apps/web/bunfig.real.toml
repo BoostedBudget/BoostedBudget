@@ -1,8 +1,8 @@
 # Bun configuration for tests that need REAL implementations
 # Issue #575: These tests cannot use centralized mocks
 #
-# IMPORTANT: Must run from OUTSIDE frontend/ directory, e.g.:
-#   cd /tmp && bun test --config /path/to/frontend/bunfig.real.toml /path/to/test.ts
+# IMPORTANT: Must run from OUTSIDE apps/web/ directory, e.g.:
+#   cd /tmp && bun test --config /path/to/apps/web/bunfig.real.toml /path/to/test.ts
 # Bun always loads bunfig.toml from CWD, so --config is ADDITIVE, not replacement.
 #
 # Files that use this config:
