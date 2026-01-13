@@ -8,7 +8,7 @@
  * This is a known limitation of Bun's mock.module() persistence.
  */
 
-import { describe, it, expect, beforeEach, beforeAll } from 'bun:test'
+import { describe, it, expect, beforeEach } from 'bun:test'
 import { renderHook, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'

@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
-import type { BudgetCategory, CreateBudgetCategoryRequest, UpdateBudgetCategoryRequest } from '../../types'
+import type { BudgetCategory } from '../../types'
 import type { UserTag } from '@/features/tags/types'
 
 // Issue #575: DO NOT mock BudgetCategoryForm - it causes pollution to
