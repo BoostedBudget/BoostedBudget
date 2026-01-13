@@ -85,51 +85,58 @@ export function useDashboardLayout(options?: UseDashboardLayoutOptions): UseDash
     }
 
     async function processInitialLoad() {
-      const response = preferencesQuery.data as DashboardPreferencesResponse | undefined;
+      try {
+        const response = preferencesQuery.data as DashboardPreferencesResponse | undefined;
 
-      if (response) {
-        // Version-based migration: auto-reset if stored version is outdated
-        // This ensures users get working layouts when default changes
-        // Issue #449: Now uses fetched default layout for comparison
-        // Issue #472: ONLY reset if defaultLayout came from API (not fallback)
-        // Resetting based on fallback version would cause data loss when backend fails
-        if (isFromApi && response.layout.version < defaultLayout.version) {
-          console.log(
-            `Dashboard layout version ${response.layout.version} is outdated, ` +
-            `resetting to version ${defaultLayout.version}`
-          );
-          try {
-            const resetResponse = await resetMutation.mutateAsync();
-            setLayout((resetResponse as DashboardPreferencesResponse).layout);
-          } catch (resetErr) {
-            console.error('Failed to reset outdated layout:', resetErr);
-            // Fall back to fetched default layout
-            setLayout(defaultLayout);
+        if (response && response.layout) {
+          // Version-based migration: auto-reset if stored version is outdated
+          // This ensures users get working layouts when default changes
+          // Issue #449: Now uses fetched default layout for comparison
+          // Issue #472: ONLY reset if defaultLayout came from API (not fallback)
+          // Resetting based on fallback version would cause data loss when backend fails
+          const responseVersion = response.layout.version ?? 0;
+          if (isFromApi && responseVersion < defaultLayout.version) {
+            console.log(
+              `Dashboard layout version ${responseVersion} is outdated, ` +
+              `resetting to version ${defaultLayout.version}`
+            );
+            try {
+              const resetResponse = await resetMutation.mutateAsync();
+              setLayout((resetResponse as DashboardPreferencesResponse).layout);
+            } catch (resetErr) {
+              console.error('Failed to reset outdated layout:', resetErr);
+              // Fall back to fetched default layout
+              setLayout(defaultLayout);
+            }
+          } else {
+            // Either versions match, user version is newer, or using fallback
+            // In all cases, preserve user's saved layout
+            setLayout(response.layout);
+          }
+          setError(null);
+        } else if (preferencesQuery.error) {
+          console.error('Failed to load dashboard preferences:', preferencesQuery.error);
+          // Use fetched default layout on error (Issue #449)
+          setLayout(defaultLayout);
+          // Only set error for non-404 errors (404 means new user, use default)
+          const errorMessage = preferencesQuery.error instanceof Error
+            ? preferencesQuery.error.message
+            : '';
+          if (!errorMessage.includes('404')) {
+            setError('Failed to load dashboard preferences');
           }
         } else {
-          // Either versions match, user version is newer, or using fallback
-          // In all cases, preserve user's saved layout
-          setLayout(response.layout);
+          // No data and no error - use default layout
+          setLayout(defaultLayout);
         }
-        setError(null);
-      } else if (preferencesQuery.error) {
-        console.error('Failed to load dashboard preferences:', preferencesQuery.error);
-        // Use fetched default layout on error (Issue #449)
+      } catch (err) {
+        console.error('Error in processInitialLoad:', err);
         setLayout(defaultLayout);
-        // Only set error for non-404 errors (404 means new user, use default)
-        const errorMessage = preferencesQuery.error instanceof Error
-          ? preferencesQuery.error.message
-          : '';
-        if (!errorMessage.includes('404')) {
-          setError('Failed to load dashboard preferences');
-        }
-      } else {
-        // No data and no error - use default layout
-        setLayout(defaultLayout);
+        setError('Failed to initialize dashboard');
+      } finally {
+        setLoading(false);
+        setHasProcessedInitialLoad(true);
       }
-
-      setLoading(false);
-      setHasProcessedInitialLoad(true);
     }
 
     processInitialLoad();

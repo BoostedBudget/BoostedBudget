@@ -84,7 +84,25 @@ setup('authenticate', async ({ page }) => {
   // This confirms the session is properly established
   console.log('   Verifying access to protected page...');
   await page.goto('/dashboard');
-  await page.waitForSelector('h1:has-text("Dashboard")', { timeout: 15000 });
+
+  // Wait for page to stabilize
+  await page.waitForLoadState('networkidle');
+
+  // Handle cookie consent again if it reappears after navigation
+  try {
+    const acceptBtn = page.locator('button:has-text("Accept All")');
+    if (await acceptBtn.isVisible({ timeout: 1000 })) {
+      await acceptBtn.click();
+      console.log('   Dismissed cookie consent dialog (post-navigation)');
+    }
+  } catch {
+    // Cookie dialog may not be present, continue
+  }
+
+  // Wait for dashboard to finish loading and show the h1
+  // Issue #691: Dashboard may take time to load API data
+  // Use longer timeout (30s) to account for API call completion
+  await page.waitForSelector('h1:has-text("Dashboard")', { timeout: 30000 });
 
   console.log('✅ Authentication successful - saving session state');
   await page.context().storageState({ path: authFile });

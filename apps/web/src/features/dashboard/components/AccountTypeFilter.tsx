@@ -21,7 +21,9 @@ export function AccountTypeFilter({
   selectedTypes,
   onChange,
 }: AccountTypeFilterProps) {
-  const allTypes = accountTypes.types.map((t) => t.key)
+  // Handle null/undefined types (no accounts case)
+  const types = accountTypes.types ?? []
+  const allTypes = types.map((t) => t.key)
   const allSelected = selectedTypes.length === 0 || selectedTypes.length === allTypes.length
 
   const handleToggleAll = () => {
@@ -70,7 +72,7 @@ export function AccountTypeFilter({
         <div className="border-t border-gray-200 pt-3"></div>
 
         {/* Individual account types */}
-        {accountTypes.types.map((type) => {
+        {types.map((type) => {
           const isSelected =
             selectedTypes.length === 0 || selectedTypes.includes(type.key)
 

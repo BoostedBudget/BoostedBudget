@@ -1,5 +1,5 @@
 import ReactDOM from 'react-dom/client'
-import { StrictMode, useEffect } from 'react'
+import { StrictMode, useEffect, useState } from 'react'
 import { ClerkProvider, useAuth } from '@clerk/react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Provider } from 'react-redux'
@@ -49,24 +49,42 @@ if (isTestEnv) {
   }
 }
 
-// Component to initialize axios interceptor with Clerk token
-const InitializeAuth = () => {
-  const { getToken } = useAuth()
+/**
+ * Auth gate component that ensures token provider is set before children render.
+ *
+ * This fixes a race condition where Dashboard's React Query hooks would fire
+ * API calls before setAuthTokenProvider had run, causing 401 errors.
+ *
+ * Issue #691: E2E auth.setup.ts was failing because API calls were made
+ * without auth tokens after page.goto('/dashboard').
+ */
+const AuthReadyGate = ({ children }: { children: React.ReactNode }) => {
+  const { getToken, isLoaded } = useAuth()
+  const [isReady, setIsReady] = useState(false)
 
   useEffect(() => {
-    const tokenProvider = async () => {
-      try {
-        return await getToken({ template: 'BoostedBudget' })
-      } catch {
-        return null
+    if (isLoaded) {
+      // Set up auth token provider BEFORE marking ready
+      const tokenProvider = async () => {
+        try {
+          return await getToken({ template: 'BoostedBudget' })
+        } catch {
+          return null
+        }
       }
+
+      setAuthTokenProvider(tokenProvider)
+      setIsReady(true)
     }
+  }, [getToken, isLoaded])
 
-    // Setup auth token provider for generated API calls
-    setAuthTokenProvider(tokenProvider)
-  }, [getToken])
+  // Don't render children until auth is ready
+  // This ensures API calls have access to the token provider
+  if (!isReady) {
+    return null
+  }
 
-  return null
+  return <>{children}</>
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
@@ -75,10 +93,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <ClerkProvider publishableKey={clerkPublishableKey}>
         <ErrorBoundary>
           <Provider store={store}>
-            <InitializeAuth />
-            <QueryClientProvider client={queryClient}>
-              <App />
-            </QueryClientProvider>
+            <AuthReadyGate>
+              <QueryClientProvider client={queryClient}>
+                <App />
+              </QueryClientProvider>
+            </AuthReadyGate>
           </Provider>
         </ErrorBoundary>
       </ClerkProvider>
