@@ -41,7 +41,7 @@ RUN echo "📦 Installing runtime dependencies..." && \
     for i in 1 2 3; do \
       echo "Attempt $i/3..." && \
       apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl tzdata && \
+        ca-certificates curl tzdata postgresql-client && \
       rm -rf /var/lib/apt/lists/* && \
       echo "✓ Dependencies installed" && break || \
       { echo "⚠ apt-get attempt $i/3 failed"; \
