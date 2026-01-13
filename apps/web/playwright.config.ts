@@ -144,7 +144,7 @@ export default defineConfig({
     {
       // Pass PORT and DATABASE_URL env vars to backend for dynamic port allocation
       // DATABASE_URL is set by run-e2e-with-ports.sh when PostgreSQL container is available
-      command: `cd ../backend && PORT=${backendPort} DATABASE_URL="${databaseUrl}" ./bin/server`,
+      command: `cd ../../backend && PORT=${backendPort} DATABASE_URL="${databaseUrl}" ./bin/server`,
       url: `http://localhost:${backendPort}/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 120 * 1000,
