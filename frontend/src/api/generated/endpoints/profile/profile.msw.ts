@@ -56,11 +56,11 @@ export const getGetUserProfileResponseMock = (
     `${faker.date.past().toISOString().split(".")[0]}Z`,
     undefined,
   ]),
-  primary_region: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  stripe_customer_id: faker.helpers.arrayElement([
+  paddle_customer_id: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
+  primary_region: faker.string.alpha({ length: { min: 10, max: 20 } }),
   subscription_ends_at: faker.helpers.arrayElement([
     `${faker.date.past().toISOString().split(".")[0]}Z`,
     undefined,
@@ -98,11 +98,11 @@ export const getUpdateUserProfileResponseMock = (
     `${faker.date.past().toISOString().split(".")[0]}Z`,
     undefined,
   ]),
-  primary_region: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  stripe_customer_id: faker.helpers.arrayElement([
+  paddle_customer_id: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
+  primary_region: faker.string.alpha({ length: { min: 10, max: 20 } }),
   subscription_ends_at: faker.helpers.arrayElement([
     `${faker.date.past().toISOString().split(".")[0]}Z`,
     undefined,

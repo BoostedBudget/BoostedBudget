@@ -92,12 +92,12 @@ func TestRegisterUser_Success(t *testing.T) {
 	// Identity doesn't exist (new user)
 	mockIdentityRepo.On("GetByClerkID", ctx, clerkUserID).Return(nil, repository.ErrIdentityNotFound)
 
-	// Expect user creation
+	// Expect user creation (new users get premium trial, not free tier)
 	mockProfileRepo.On("CreateUser", ctx, mock.MatchedBy(func(u *domain.User) bool {
 		return u.ClerkUserID == clerkUserID &&
 			u.Email == email &&
-			u.SubscriptionTier == "free" &&
-			u.SubscriptionStatus == "active" &&
+			u.SubscriptionTier == "premium" &&
+			u.SubscriptionStatus == "trial" &&
 			u.PrimaryRegion == "iad"
 	})).Return(nil)
 
@@ -128,8 +128,8 @@ func TestRegisterUser_Success(t *testing.T) {
 	assert.NotNil(t, user)
 	assert.Equal(t, clerkUserID, user.ClerkUserID)
 	assert.Equal(t, email, user.Email)
-	assert.Equal(t, "free", user.SubscriptionTier)
-	assert.Equal(t, "active", user.SubscriptionStatus)
+	assert.Equal(t, "premium", user.SubscriptionTier)
+	assert.Equal(t, "trial", user.SubscriptionStatus)
 	assert.Equal(t, "iad", user.PrimaryRegion)
 
 	mockIdentityRepo.AssertExpectations(t)

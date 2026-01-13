@@ -9,7 +9,7 @@ import (
 
 // CustomCategoryService defines the interface for custom category business logic
 type CustomCategoryService interface {
-	// CreateCategory creates a new custom category after checking subscription limits
+	// CreateCategory creates a new custom category (unlimited categories for all tiers)
 	CreateCategory(ctx context.Context, userID string, req *domain.CreateCustomCategoryRequest) (*domain.CustomCategory, error)
 
 	// GetUserCategories retrieves all categories for a user
@@ -30,50 +30,20 @@ type CustomCategoryService interface {
 
 // customCategoryService implements CustomCategoryService
 type customCategoryService struct {
-	categoryRepo        repository.CustomCategoryRepository
-	subscriptionChecker SubscriptionChecker
-	userGetter          UserGetter
+	categoryRepo repository.CustomCategoryRepository
 }
 
 // NewCustomCategoryService creates a new CustomCategoryService instance
 func NewCustomCategoryService(
 	categoryRepo repository.CustomCategoryRepository,
-	subscriptionChecker SubscriptionChecker,
-	userGetter UserGetter,
 ) CustomCategoryService {
 	return &customCategoryService{
-		categoryRepo:        categoryRepo,
-		subscriptionChecker: subscriptionChecker,
-		userGetter:          userGetter,
+		categoryRepo: categoryRepo,
 	}
 }
 
-// CreateCategory creates a new custom category after checking subscription limits
+// CreateCategory creates a new custom category (unlimited categories for all tiers)
 func (s *customCategoryService) CreateCategory(ctx context.Context, userID string, req *domain.CreateCustomCategoryRequest) (*domain.CustomCategory, error) {
-	// Check subscription limit
-	currentCount, err := s.categoryRepo.CountByUserID(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Get user to check subscription
-	user, err := s.userGetter.GetUserByID(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Get effective subscription limits
-	effectiveSub, err := s.subscriptionChecker.GetEffectiveSubscription(ctx, user)
-	if err != nil {
-		return nil, err
-	}
-
-	// Check limit (-1 = unlimited)
-	limit := effectiveSub.Limits.CustomCategoriesMax
-	if !domain.IsUnlimited(limit) && currentCount >= limit {
-		return nil, domain.ErrCategoryLimitExceeded
-	}
-
 	// Create the category
 	category := &domain.CustomCategory{
 		UserID:         userID,

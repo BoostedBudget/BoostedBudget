@@ -20,14 +20,12 @@ import { AutoCategorizationPage } from './AutoCategorizationPage'
 import { useGetUserCategories, useGetPlaidCategories } from '@/api/generated/endpoints/categories/categories'
 import { useGetAccounts } from '@/api/generated/endpoints/accounts/accounts'
 import { useGetUserTags } from '@/api/generated/endpoints/tags/tags'
-import { useSubscriptionTiers } from '../../subscription/hooks/useSubscriptionTiers'
 import { useProfile } from '../../profile/hooks/useProfile'
 import type { CustomCategory } from '../../categories/types'
 import type { UserTag } from '../../tags/types'
 
 export function AutoCategorizationPageWrapper() {
   const { user } = useProfile()
-  const { tiers } = useSubscriptionTiers()
 
   // Fetch data using generated hooks
   const { data: customCategoriesData } = useGetUserCategories()
@@ -49,9 +47,8 @@ export function AutoCategorizationPageWrapper() {
   const accounts = accountsData?.accounts ?? []
   const tags = (userTagsData as unknown as UserTag[]) ?? []
 
-  // Get max rules from tier config based on user's subscription tier
-  const userTier = user?.subscription_tier ?? 'free'
-  const maxRules = tiers?.tiers[userTier]?.limits?.rules
+  // All tiers now have unlimited rules
+  const userTier = user?.subscription_tier ?? 'premium'
 
   return (
     <AutoCategorizationPage
@@ -59,7 +56,7 @@ export function AutoCategorizationPageWrapper() {
       plaidCategories={plaidCategories}
       accounts={accounts}
       tags={tags}
-      maxRules={maxRules}
+      maxRules={undefined}
       currentTier={userTier}
     />
   )

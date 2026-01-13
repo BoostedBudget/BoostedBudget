@@ -3,6 +3,7 @@
  *
  * Tests for the pricing page component that displays subscription tier comparison.
  * Migrated to bun:test with centralized mocks (Issue #575).
+ * Updated for simplified tier structure: premium + household tiers (no free tier).
  */
 
 import { describe, it, expect, beforeEach, mock } from 'bun:test'
@@ -117,15 +118,14 @@ describe('PricingPage', () => {
   })
 
   describe('Tier cards', () => {
-    it('should render all 4 tier cards', () => {
+    it('should render all 5 tier cards', () => {
       renderWithProviders(<PricingPage />)
 
-      // "Free" appears multiple times (tier name and price)
-      expect(screen.getAllByText('Free').length).toBeGreaterThan(0)
-      expect(screen.getByText('Premium Lite')).toBeInTheDocument()
-      // There are 5 h2 headings: 4 tier names + 1 FAQ section header
-      expect(screen.getAllByRole('heading', { level: 2 }).length).toBe(5)
-      expect(screen.getByText('Premium+')).toBeInTheDocument()
+      // 5 tier names + 1 FAQ section header = 6 h2 headings
+      expect(screen.getAllByRole('heading', { level: 2 }).length).toBe(6)
+      expect(screen.getByText('Premium')).toBeInTheDocument()
+      expect(screen.getByText('Household (2 members)')).toBeInTheDocument()
+      expect(screen.getByText('Household (5 members)')).toBeInTheDocument()
     })
 
     it('should display correct tier names', () => {
@@ -135,42 +135,43 @@ describe('PricingPage', () => {
       const headings = screen.getAllByRole('heading', { level: 2 })
       const headingTexts = headings.map(h => h.textContent)
 
-      expect(headingTexts).toContain('Free')
-      expect(headingTexts).toContain('Premium Lite')
       expect(headingTexts).toContain('Premium')
-      expect(headingTexts).toContain('Premium+')
+      expect(headingTexts).toContain('Household (2 members)')
+      expect(headingTexts).toContain('Household (3 members)')
+      expect(headingTexts).toContain('Household (4 members)')
+      expect(headingTexts).toContain('Household (5 members)')
     })
 
     it('should display correct prices', () => {
       renderWithProviders(<PricingPage />)
 
-      // Free tier shows "Free" as price
-      const freeElements = screen.getAllByText('Free')
-      expect(freeElements.length).toBeGreaterThan(0)
-
-      expect(screen.getByText('$4.99')).toBeInTheDocument()
       expect(screen.getByText('$9.99')).toBeInTheDocument()
+      expect(screen.getByText('$14.99')).toBeInTheDocument()
       expect(screen.getByText('$19.99')).toBeInTheDocument()
+      expect(screen.getByText('$24.99')).toBeInTheDocument()
+      expect(screen.getByText('$29.99')).toBeInTheDocument()
     })
 
     it('should show features for each tier', () => {
       renderWithProviders(<PricingPage />)
 
-      // Free tier features
-      expect(screen.getByText('3 bank accounts')).toBeInTheDocument()
-      expect(screen.getByText('1 automation rule')).toBeInTheDocument()
+      // Premium tier features
+      expect(screen.getByText('10 bank accounts')).toBeInTheDocument()
 
-      // Premium+ features
+      // Household 5 features (unlimited)
       expect(screen.getByText('Unlimited bank accounts')).toBeInTheDocument()
-      expect(screen.getByText('Unlimited automation rules')).toBeInTheDocument()
+
+      // All tiers should have unlimited automation rules
+      const unlimitedRulesElements = screen.getAllByText('Unlimited automation rules')
+      expect(unlimitedRulesElements.length).toBe(5) // One per tier
     })
 
     it('should show tier descriptions', () => {
       renderWithProviders(<PricingPage />)
 
       // Descriptions from mockSubscriptionTiersResponse fixture
-      expect(screen.getByText(/basic plan with limited features/i)).toBeInTheDocument()
-      expect(screen.getByText(/unlimited access with ai insights and api/i)).toBeInTheDocument()
+      expect(screen.getByText(/full-featured budgeting for individuals/i)).toBeInTheDocument()
+      expect(screen.getByText(/best value for large families/i)).toBeInTheDocument()
     })
   })
 
@@ -196,12 +197,12 @@ describe('PricingPage', () => {
     })
 
     it('should show "Select Plan" for non-current tiers', () => {
-      // Mock authenticated user with free tier (using Clerk publicMetadata)
+      // Mock authenticated user with premium tier (using Clerk publicMetadata)
       mockUseUser.mockReturnValue({
         user: {
           id: 'user_123',
           publicMetadata: {
-            subscription_tier: 'free',
+            subscription_tier: 'premium',
           },
         },
         isSignedIn: true,
@@ -210,8 +211,8 @@ describe('PricingPage', () => {
 
       renderWithProviders(<PricingPage />)
 
-      // Should show "Select Plan" buttons for premium_lite and premium tiers
-      // (premium_plus shows "Go Premium+" instead)
+      // Should show "Select Plan" buttons for household tiers
+      // (household_5 shows "Go Household 5" instead)
       const selectButtons = screen.getAllByRole('button', { name: /select plan/i })
       expect(selectButtons.length).toBeGreaterThan(0)
     })
@@ -243,21 +244,20 @@ describe('PricingPage', () => {
     it('should render all tiers when not authenticated', () => {
       renderWithProviders(<PricingPage />)
 
-      // All 4 tier names should be visible (plus FAQ section = 5 h2 headings total)
+      // All 5 tier names should be visible (plus FAQ section = 6 h2 headings total)
       const headings = screen.getAllByRole('heading', { level: 2 })
-      expect(headings.length).toBe(5)
+      expect(headings.length).toBe(6)
       // Verify tier names are present
       const headingTexts = headings.map(h => h.textContent)
-      expect(headingTexts).toContain('Free')
-      expect(headingTexts).toContain('Premium Lite')
       expect(headingTexts).toContain('Premium')
-      expect(headingTexts).toContain('Premium+')
+      expect(headingTexts).toContain('Household (2 members)')
+      expect(headingTexts).toContain('Household (5 members)')
     })
 
-    it('should default to free tier when user not authenticated', () => {
+    it('should default to premium tier when user not authenticated', () => {
       renderWithProviders(<PricingPage />)
 
-      // Should show "Current Plan" for free tier (appears as badge and button)
+      // Should show "Current Plan" for premium tier (appears as badge and button)
       const currentPlanElements = screen.getAllByText('Current Plan')
       expect(currentPlanElements.length).toBeGreaterThan(0)
     })
@@ -303,14 +303,14 @@ describe('PricingPage', () => {
     })
   })
 
-  describe('Premium+ highlighting', () => {
-    it('should show "Best Value" badge on Premium+ card', () => {
+  describe('Household 5 highlighting', () => {
+    it('should show "Best Value" badge on Household 5 card', () => {
       renderWithProviders(<PricingPage />)
 
       expect(screen.getByText('Best Value')).toBeInTheDocument()
     })
 
-    it('should have special styling class on Premium+ card', () => {
+    it('should have special styling class on Household 5 card', () => {
       const { container } = renderWithProviders(<PricingPage />)
 
       const featuredCard = container.querySelector('.pricing-card.featured')
@@ -319,15 +319,15 @@ describe('PricingPage', () => {
   })
 
   describe('Feature display', () => {
-    it('should show ad-free experience as excluded for free tier', () => {
+    it('should show ad-free experience for all tiers', () => {
       renderWithProviders(<PricingPage />)
 
       // Ad-free should appear multiple times (once per card)
       const adFreeTexts = screen.getAllByText('Ad-free experience')
-      expect(adFreeTexts.length).toBeGreaterThan(0)
+      expect(adFreeTexts.length).toBe(5) // All 5 tiers are ad-free
     })
 
-    it('should show AI insights feature for Premium+ tier', () => {
+    it('should show AI insights feature for household_3+ tiers', () => {
       renderWithProviders(<PricingPage />)
 
       expect(screen.getAllByText('AI-powered insights').length).toBeGreaterThan(0)
@@ -352,8 +352,8 @@ describe('PricingPage', () => {
     it('should show monthly prices by default', () => {
       renderWithProviders(<PricingPage />)
 
-      // Premium Lite monthly price
-      expect(screen.getByText('$4.99')).toBeInTheDocument()
+      // Premium monthly price
+      expect(screen.getByText('$9.99')).toBeInTheDocument()
       // Check for /month period label
       const monthLabels = screen.getAllByText('/month')
       expect(monthLabels.length).toBeGreaterThan(0)
@@ -365,8 +365,8 @@ describe('PricingPage', () => {
 
       await user.click(screen.getByRole('radio', { name: /yearly/i }))
 
-      // Premium Lite yearly price
-      expect(screen.getByText('$49.99')).toBeInTheDocument()
+      // Premium yearly price
+      expect(screen.getByText('$99.99')).toBeInTheDocument()
       // Check for /year period label
       const yearLabels = screen.getAllByText('/year')
       expect(yearLabels.length).toBeGreaterThan(0)
@@ -383,25 +383,14 @@ describe('PricingPage', () => {
       expect(savingsBadges.length).toBeGreaterThan(0)
     })
 
-    it('should not show savings badge for free tier in yearly view', async () => {
-      const user = userEvent.setup()
-      renderWithProviders(<PricingPage />)
-
-      await user.click(screen.getByRole('radio', { name: /yearly/i }))
-
-      // Free tier should show "Free" not a savings badge
-      const freeElements = screen.getAllByText('Free')
-      expect(freeElements.length).toBeGreaterThan(0)
-    })
-
     it('should show equivalent monthly price in yearly view', async () => {
       const user = userEvent.setup()
       renderWithProviders(<PricingPage />)
 
       await user.click(screen.getByRole('radio', { name: /yearly/i }))
 
-      // $49.99/12 = $4.17/mo
-      expect(screen.getByText(/\$4\.17\/mo, billed annually/i)).toBeInTheDocument()
+      // $99.99/12 = $8.33/mo
+      expect(screen.getByText(/\$8\.33\/mo, billed annually/i)).toBeInTheDocument()
     })
 
     it('should toggle back to monthly view when Monthly clicked', async () => {
@@ -410,11 +399,11 @@ describe('PricingPage', () => {
 
       // Switch to yearly
       await user.click(screen.getByRole('radio', { name: /yearly/i }))
-      expect(screen.getByText('$49.99')).toBeInTheDocument()
+      expect(screen.getByText('$99.99')).toBeInTheDocument()
 
       // Switch back to monthly
       await user.click(screen.getByRole('radio', { name: /monthly/i }))
-      expect(screen.getByText('$4.99')).toBeInTheDocument()
+      expect(screen.getByText('$9.99')).toBeInTheDocument()
     })
 
     it('should be keyboard accessible', async () => {

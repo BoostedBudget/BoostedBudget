@@ -122,6 +122,11 @@ func (tc *TierConfig) validate() error {
 		return fmt.Errorf("no tiers defined in configuration")
 	}
 
+	// Expect 5 tiers: premium, household_2, household_3, household_4, household_5
+	if len(tc.Tiers) != 5 {
+		return fmt.Errorf("expected 5 tiers (premium + 4 household tiers), got %d", len(tc.Tiers))
+	}
+
 	// Check that default tier exists
 	if _, exists := tc.Tiers[tc.DefaultTier]; !exists {
 		return fmt.Errorf("default tier '%s' not found in tier definitions", tc.DefaultTier)
@@ -133,18 +138,16 @@ func (tc *TierConfig) validate() error {
 			return fmt.Errorf("tier '%s' missing display name", name)
 		}
 
-		// Validate limits are non-negative (except unlimited = -1)
+		// Validate the 3 configurable limits are non-negative (except unlimited = -1)
+		// After simplification, only accounts, transaction_history_days, and executions_per_day are configurable
 		if tier.Limits.Accounts < -1 {
 			return fmt.Errorf("tier '%s' has invalid accounts limit: %d", name, tier.Limits.Accounts)
 		}
-		if tier.Limits.Rules < -1 {
-			return fmt.Errorf("tier '%s' has invalid rules limit: %d", name, tier.Limits.Rules)
+		if tier.Limits.TransactionHistoryDays < 0 {
+			return fmt.Errorf("tier '%s' has invalid transaction_history_days: %d", name, tier.Limits.TransactionHistoryDays)
 		}
 		if tier.Limits.ExecutionsPerDay < 0 {
 			return fmt.Errorf("tier '%s' has invalid executions_per_day: %d", name, tier.Limits.ExecutionsPerDay)
-		}
-		if tier.Limits.MinExecutionIntervalMinutes < 0 {
-			return fmt.Errorf("tier '%s' has invalid min_execution_interval_minutes: %d", name, tier.Limits.MinExecutionIntervalMinutes)
 		}
 	}
 

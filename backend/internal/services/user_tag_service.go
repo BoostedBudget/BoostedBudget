@@ -21,7 +21,7 @@ type UserGetter interface {
 
 // UserTagService defines the interface for user tag business logic
 type UserTagService interface {
-	// CreateTag creates a new user tag after checking subscription limits
+	// CreateTag creates a new user tag (unlimited tags for all tiers)
 	CreateTag(ctx context.Context, userID string, req *domain.CreateUserTagRequest) (*domain.UserTag, error)
 
 	// GetUserTags retrieves all tags for a user
@@ -43,50 +43,20 @@ type UserTagService interface {
 
 // userTagService implements UserTagService
 type userTagService struct {
-	tagRepo             repository.UserTagRepository
-	subscriptionChecker SubscriptionChecker
-	userGetter          UserGetter
+	tagRepo repository.UserTagRepository
 }
 
 // NewUserTagService creates a new UserTagService instance
 func NewUserTagService(
 	tagRepo repository.UserTagRepository,
-	subscriptionChecker SubscriptionChecker,
-	userGetter UserGetter,
 ) UserTagService {
 	return &userTagService{
-		tagRepo:             tagRepo,
-		subscriptionChecker: subscriptionChecker,
-		userGetter:          userGetter,
+		tagRepo: tagRepo,
 	}
 }
 
-// CreateTag creates a new user tag after checking subscription limits
+// CreateTag creates a new user tag (unlimited tags for all tiers)
 func (s *userTagService) CreateTag(ctx context.Context, userID string, req *domain.CreateUserTagRequest) (*domain.UserTag, error) {
-	// Check subscription limit
-	currentCount, err := s.tagRepo.CountByUserID(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Get user to check subscription
-	user, err := s.userGetter.GetUserByID(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Get effective subscription limits
-	effectiveSub, err := s.subscriptionChecker.GetEffectiveSubscription(ctx, user)
-	if err != nil {
-		return nil, err
-	}
-
-	// Check limit (-1 = unlimited)
-	limit := effectiveSub.Limits.CustomTagsMax
-	if !domain.IsUnlimited(limit) && currentCount >= limit {
-		return nil, domain.ErrTagLimitExceeded
-	}
-
 	// Create the tag
 	tag := &domain.UserTag{
 		UserID:     userID,

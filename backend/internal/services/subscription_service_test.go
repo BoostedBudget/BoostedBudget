@@ -21,46 +21,6 @@ func TestNewSubscriptionService(t *testing.T) {
 	assert.NotNil(t, service, "Service should not be nil")
 }
 
-// TestGetTierLimits_FreeTier tests that free tier has correct limits
-func TestGetTierLimits_FreeTier(t *testing.T) {
-	tierConfig, err := config.LoadTierConfig()
-	require.NoError(t, err)
-
-	service := NewSubscriptionService(tierConfig, nil)
-	ctx := context.Background()
-
-	// Get free tier limits
-	tier, err := service.GetTier(ctx, domain.TierFree)
-	require.NoError(t, err)
-
-	// Assert free tier limits match configuration
-	assert.Equal(t, 3, tier.Limits.Accounts, "Free tier should have 3 accounts")
-	assert.Equal(t, 1, tier.Limits.Rules, "Free tier should have 1 rule")
-	assert.Equal(t, 1, tier.Limits.ExecutionsPerDay, "Free tier should have 1 execution per day")
-	assert.Equal(t, 1440, tier.Limits.MinExecutionIntervalMinutes, "Free tier should have 24-hour interval")
-	assert.True(t, tier.Features.AdsEnabled, "Free tier should have ads enabled")
-	assert.False(t, tier.Features.AIInsights, "Free tier should not have AI insights")
-	assert.False(t, tier.Features.APIAccess, "Free tier should not have API access")
-}
-
-// TestGetTierLimits_PremiumLite tests premium lite tier limits
-func TestGetTierLimits_PremiumLite(t *testing.T) {
-	tierConfig, err := config.LoadTierConfig()
-	require.NoError(t, err)
-
-	service := NewSubscriptionService(tierConfig, nil)
-	ctx := context.Background()
-
-	tier, err := service.GetTier(ctx, domain.TierPremiumLite)
-	require.NoError(t, err)
-
-	assert.Equal(t, 15, tier.Limits.Accounts, "Premium Lite should have 15 accounts")
-	assert.Equal(t, 5, tier.Limits.Rules, "Premium Lite should have 5 rules")
-	assert.Equal(t, 2, tier.Limits.ExecutionsPerDay, "Premium Lite should have 2 executions per day")
-	assert.Equal(t, 720, tier.Limits.MinExecutionIntervalMinutes, "Premium Lite should have 12-hour interval")
-	assert.False(t, tier.Features.AdsEnabled, "Premium Lite should not have ads")
-}
-
 // TestGetTierLimits_Premium tests premium tier limits
 func TestGetTierLimits_Premium(t *testing.T) {
 	tierConfig, err := config.LoadTierConfig()
@@ -73,31 +33,29 @@ func TestGetTierLimits_Premium(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, 30, tier.Limits.Accounts, "Premium should have 30 accounts")
-	assert.Equal(t, 15, tier.Limits.Rules, "Premium should have 15 rules")
+	assert.Equal(t, 730, tier.Limits.TransactionHistoryDays, "Premium should have 730 transaction history days")
 	assert.Equal(t, 6, tier.Limits.ExecutionsPerDay, "Premium should have 6 executions per day")
-	assert.Equal(t, 240, tier.Limits.MinExecutionIntervalMinutes, "Premium should have 4-hour interval")
 	assert.True(t, tier.Features.PrioritySupport, "Premium should have priority support")
 	assert.True(t, tier.Features.AdvancedReports, "Premium should have advanced reports")
+	assert.False(t, tier.Features.AdsEnabled, "Premium should not have ads")
 }
 
-// TestGetTierLimits_PremiumPlus tests premium+ tier has unlimited limits
-func TestGetTierLimits_PremiumPlus(t *testing.T) {
+// TestGetTierLimits_Household5 tests household_5 tier has highest limits
+func TestGetTierLimits_Household5(t *testing.T) {
 	tierConfig, err := config.LoadTierConfig()
 	require.NoError(t, err)
 
 	service := NewSubscriptionService(tierConfig, nil)
 	ctx := context.Background()
 
-	tier, err := service.GetTier(ctx, domain.TierPremiumPlus)
+	tier, err := service.GetTier(ctx, domain.TierHousehold5)
 	require.NoError(t, err)
 
-	// Check for unlimited (-1)
-	assert.Equal(t, domain.Unlimited, tier.Limits.Accounts, "Premium+ should have unlimited accounts")
-	assert.Equal(t, domain.Unlimited, tier.Limits.Rules, "Premium+ should have unlimited rules")
-	assert.Equal(t, 144, tier.Limits.ExecutionsPerDay, "Premium+ should have 144 executions per day (every 10min)")
-	assert.Equal(t, 10, tier.Limits.MinExecutionIntervalMinutes, "Premium+ should have 10-minute interval")
-	assert.True(t, tier.Features.AIInsights, "Premium+ should have AI insights")
-	assert.True(t, tier.Features.APIAccess, "Premium+ should have API access")
+	assert.Equal(t, 150, tier.Limits.Accounts, "Household5 should have 150 accounts")
+	assert.Equal(t, 730, tier.Limits.TransactionHistoryDays, "Household5 should have 730 transaction history days")
+	assert.Equal(t, 30, tier.Limits.ExecutionsPerDay, "Household5 should have 30 executions per day")
+	assert.True(t, tier.Features.AIInsights, "Household5 should have AI insights")
+	assert.True(t, tier.Features.APIAccess, "Household5 should have API access")
 }
 
 // TestCheckLimit_UnderLimit tests limit checking when user is under limit
@@ -108,19 +66,19 @@ func TestCheckLimit_UnderLimit(t *testing.T) {
 	service := NewSubscriptionService(tierConfig, nil)
 	ctx := context.Background()
 
-	// Create mock user with free tier
+	// Create user with premium tier
 	user := &domain.User{
 		ID:               "user-123",
-		SubscriptionTier: string(domain.TierFree),
+		SubscriptionTier: string(domain.TierPremium),
 	}
 
-	// Check if user can create 1st rule (under limit of 1 - at 0 currently)
-	result, err := service.CheckLimit(ctx, user, domain.ResourceRules, 0)
+	// Check if user can add more accounts (under limit of 30 - at 5 currently)
+	result, err := service.CheckLimit(ctx, user, domain.ResourceAccounts, 5)
 	require.NoError(t, err)
 	assert.True(t, result.Allowed, "Should allow creation under limit")
-	assert.Equal(t, 1, result.Limit, "Free tier limit should be 1")
-	assert.Equal(t, 0, result.CurrentUsage, "Current usage should be 0")
-	assert.Equal(t, 1, result.RemainingUsage, "Should have 1 remaining")
+	assert.Equal(t, 30, result.Limit, "Premium tier account limit should be 30")
+	assert.Equal(t, 5, result.CurrentUsage, "Current usage should be 5")
+	assert.Equal(t, 25, result.RemainingUsage, "Should have 25 remaining")
 }
 
 // TestCheckLimit_AtLimit tests limit checking when user is at the limit
@@ -133,15 +91,15 @@ func TestCheckLimit_AtLimit(t *testing.T) {
 
 	user := &domain.User{
 		ID:               "user-123",
-		SubscriptionTier: string(domain.TierFree),
+		SubscriptionTier: string(domain.TierPremium),
 	}
 
-	// Check if user can create 2nd rule (at limit of 1, should fail)
-	result, err := service.CheckLimit(ctx, user, domain.ResourceRules, 1)
+	// Check if user can add more accounts (at limit of 30)
+	result, err := service.CheckLimit(ctx, user, domain.ResourceAccounts, 30)
 	require.NoError(t, err)
 	assert.False(t, result.Allowed, "Should NOT allow creation at limit")
-	assert.Equal(t, 1, result.Limit, "Free tier limit should be 1")
-	assert.Equal(t, 1, result.CurrentUsage, "Current usage should be 1")
+	assert.Equal(t, 30, result.Limit, "Premium tier account limit should be 30")
+	assert.Equal(t, 30, result.CurrentUsage, "Current usage should be 30")
 	assert.Equal(t, 0, result.RemainingUsage, "Should have 0 remaining")
 }
 
@@ -155,18 +113,18 @@ func TestCheckLimit_OverLimit(t *testing.T) {
 
 	user := &domain.User{
 		ID:               "user-123",
-		SubscriptionTier: string(domain.TierFree),
+		SubscriptionTier: string(domain.TierPremium),
 	}
 
-	// Try to check with 10 accounts (over limit of 3)
-	result, err := service.CheckLimit(ctx, user, domain.ResourceAccounts, 10)
+	// Try to check with 40 accounts (over limit of 30)
+	result, err := service.CheckLimit(ctx, user, domain.ResourceAccounts, 40)
 	require.NoError(t, err)
 	assert.False(t, result.Allowed, "Should NOT allow over limit")
-	assert.Equal(t, 3, result.Limit, "Free tier account limit should be 3")
+	assert.Equal(t, 30, result.Limit, "Premium tier account limit should be 30")
 }
 
-// TestCheckLimit_Unlimited tests limit checking for unlimited tier
-func TestCheckLimit_Unlimited(t *testing.T) {
+// TestCheckLimit_HouseholdTier tests limit checking for household tier with higher limits
+func TestCheckLimit_HouseholdTier(t *testing.T) {
 	tierConfig, err := config.LoadTierConfig()
 	require.NoError(t, err)
 
@@ -174,16 +132,15 @@ func TestCheckLimit_Unlimited(t *testing.T) {
 	ctx := context.Background()
 
 	user := &domain.User{
-		ID:               "user-premium-plus",
-		SubscriptionTier: string(domain.TierPremiumPlus),
+		ID:               "user-household",
+		SubscriptionTier: string(domain.TierHousehold5),
 	}
 
-	// Check with large number for unlimited tier
-	result, err := service.CheckLimit(ctx, user, domain.ResourceRules, 1000)
+	// Check with large number for household tier
+	result, err := service.CheckLimit(ctx, user, domain.ResourceAccounts, 100)
 	require.NoError(t, err)
-	assert.True(t, result.Allowed, "Unlimited tier should allow any usage")
-	assert.True(t, result.IsUnlimited, "Should be marked as unlimited")
-	assert.Equal(t, domain.Unlimited, result.Limit, "Limit should be -1 (unlimited)")
+	assert.True(t, result.Allowed, "Household5 tier should allow 100 accounts")
+	assert.Equal(t, 150, result.Limit, "Household5 account limit should be 150")
 }
 
 // TestGetEffectiveSubscription_NoOverrides tests getting effective subscription without overrides
@@ -208,18 +165,13 @@ func TestGetEffectiveSubscription_NoOverrides(t *testing.T) {
 }
 
 // TestGetEffectiveSubscription_WithOverrides tests effective subscription with custom overrides
-// This will test the database override functionality
 func TestGetEffectiveSubscription_WithOverrides(t *testing.T) {
 	t.Skip("Requires database mock - will implement after repository is created")
-	// TODO: Implement after creating override repository
-	// Should test that overrides increase limits beyond base tier
 }
 
 // TestApplyOverride tests applying a custom override for enterprise deals
 func TestApplyOverride(t *testing.T) {
 	t.Skip("Requires database mock - will implement after repository is created")
-	// TODO: Implement after creating override repository
-	// Should test creating custom limits for specific users
 }
 
 // TestListAllTiers tests listing all available tiers
@@ -232,7 +184,7 @@ func TestListAllTiers(t *testing.T) {
 
 	tiers, err := service.ListTiers(ctx)
 	require.NoError(t, err)
-	assert.Len(t, tiers, 4, "Should have 4 tiers (free, premium_lite, premium, premium_plus)")
+	assert.Len(t, tiers, 5, "Should have 5 tiers (premium, household_2, household_3, household_4, household_5)")
 
 	// Verify all expected tiers exist
 	tierNames := make(map[domain.TierName]bool)
@@ -240,10 +192,11 @@ func TestListAllTiers(t *testing.T) {
 		tierNames[tier.Name] = true
 	}
 
-	assert.True(t, tierNames[domain.TierFree], "Should include free tier")
-	assert.True(t, tierNames[domain.TierPremiumLite], "Should include premium lite tier")
 	assert.True(t, tierNames[domain.TierPremium], "Should include premium tier")
-	assert.True(t, tierNames[domain.TierPremiumPlus], "Should include premium plus tier")
+	assert.True(t, tierNames[domain.TierHousehold2], "Should include household_2 tier")
+	assert.True(t, tierNames[domain.TierHousehold3], "Should include household_3 tier")
+	assert.True(t, tierNames[domain.TierHousehold4], "Should include household_4 tier")
+	assert.True(t, tierNames[domain.TierHousehold5], "Should include household_5 tier")
 }
 
 // TestGetDefaultTier tests getting the default tier
@@ -256,7 +209,7 @@ func TestGetDefaultTier(t *testing.T) {
 
 	tier, err := service.GetDefaultTier(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, domain.TierFree, tier.Name, "Default tier should be free")
+	assert.Equal(t, domain.TierPremium, tier.Name, "Default tier should be premium")
 }
 
 // TestInvalidTier tests handling of invalid tier names
@@ -281,19 +234,17 @@ func TestCheckLimit_AllResourceTypes(t *testing.T) {
 
 	user := &domain.User{
 		ID:               "user-123",
-		SubscriptionTier: string(domain.TierFree),
+		SubscriptionTier: string(domain.TierPremium),
 	}
 
 	testCases := []struct {
-		name         string
-		resourceType domain.ResourceType
+		name          string
+		resourceType  domain.ResourceType
 		expectedLimit int
 	}{
-		{"accounts", domain.ResourceAccounts, 3},
-		{"rules", domain.ResourceRules, 1},
-		{"executions_per_day", domain.ResourceExecutionsPerDay, 1},
-		{"api_calls_per_month", domain.ResourceAPICallsPerMonth, 0},
-		{"data_export_per_month", domain.ResourceDataExportPerMonth, 1},
+		{"accounts", domain.ResourceAccounts, 30},
+		{"transaction_history_days", domain.ResourceTransactionHistoryDays, 730},
+		{"executions_per_day", domain.ResourceExecutionsPerDay, 6},
 	}
 
 	for _, tc := range testCases {

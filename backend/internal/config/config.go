@@ -34,10 +34,10 @@ type Config struct {
 	PlaidWebhookURL  string
 	PlaidRedirectURI string
 
-	// Stripe
-	StripeSecretKey      string
-	StripePublishableKey string
-	StripeWebhookSecret  string
+	// Paddle
+	PaddleAPIKey        string
+	PaddleWebhookSecret string
+	PaddleEnvironment   string
 
 	// Encryption
 	EncryptionKey string
@@ -86,10 +86,10 @@ func Load() (*Config, error) {
 		PlaidWebhookURL:  getEnv("PLAID_WEBHOOK_URL", ""),
 		PlaidRedirectURI: getEnv("PLAID_REDIRECT_URI", ""),
 
-		// Stripe
-		StripeSecretKey:      getEnv("STRIPE_SECRET_KEY", ""),
-		StripePublishableKey: getEnv("STRIPE_PUBLISHABLE_KEY", ""),
-		StripeWebhookSecret:  getEnv("STRIPE_WEBHOOK_SECRET", ""),
+		// Paddle
+		PaddleAPIKey:        getEnv("PADDLE_API_KEY", ""),
+		PaddleWebhookSecret: getEnv("PADDLE_WEBHOOK_SECRET", ""),
+		PaddleEnvironment:   getEnv("PADDLE_ENVIRONMENT", "sandbox"),
 
 		// Encryption
 		EncryptionKey: getEnv("ENCRYPTION_KEY", ""),

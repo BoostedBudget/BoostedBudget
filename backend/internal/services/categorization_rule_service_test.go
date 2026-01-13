@@ -119,21 +119,11 @@ func createTestRuleRequest() *domain.CreateCategorizationRuleRequest {
 // TestCategorizationRuleService_CreateRule tests successful rule creation
 func TestCategorizationRuleService_CreateRule(t *testing.T) {
 	mockRepo := new(mockRuleRepository)
-	mockSubChecker := new(mockSubscriptionChecker)
-	mockUserGet := new(mockUserGetter)
 
-	service := NewCategorizationRuleService(mockRepo, mockSubChecker, mockUserGet)
+	service := NewCategorizationRuleService(mockRepo)
 	ctx := context.Background()
 	userID := "user-123"
 
-	user := &domain.User{ID: userID, SubscriptionTier: string(domain.TierFree)}
-	effectiveSub := &domain.EffectiveSubscription{
-		Limits: domain.SubscriptionLimits{Rules: 1},
-	}
-
-	mockUserGet.On("GetUserByID", ctx, userID).Return(user, nil)
-	mockSubChecker.On("GetEffectiveSubscription", ctx, user).Return(effectiveSub, nil)
-	mockRepo.On("CountByUserID", ctx, userID).Return(0, nil)
 	mockRepo.On("Create", ctx, mock.AnythingOfType("*domain.CategorizationRule")).Return(nil)
 
 	req := createTestRuleRequest()
@@ -147,51 +137,15 @@ func TestCategorizationRuleService_CreateRule(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 }
 
-// TestCategorizationRuleService_CreateRule_LimitExceeded tests creation at limit
-func TestCategorizationRuleService_CreateRule_LimitExceeded(t *testing.T) {
+// TestCategorizationRuleService_CreateRule_ManyRules tests creation with many existing rules (unlimited)
+func TestCategorizationRuleService_CreateRule_ManyRules(t *testing.T) {
 	mockRepo := new(mockRuleRepository)
-	mockSubChecker := new(mockSubscriptionChecker)
-	mockUserGet := new(mockUserGetter)
 
-	service := NewCategorizationRuleService(mockRepo, mockSubChecker, mockUserGet)
+	service := NewCategorizationRuleService(mockRepo)
 	ctx := context.Background()
 	userID := "user-123"
 
-	user := &domain.User{ID: userID, SubscriptionTier: string(domain.TierFree)}
-	effectiveSub := &domain.EffectiveSubscription{
-		Limits: domain.SubscriptionLimits{Rules: 1},
-	}
-
-	mockUserGet.On("GetUserByID", ctx, userID).Return(user, nil)
-	mockSubChecker.On("GetEffectiveSubscription", ctx, user).Return(effectiveSub, nil)
-	mockRepo.On("CountByUserID", ctx, userID).Return(1, nil) // Already at limit
-
-	req := createTestRuleRequest()
-	rule, err := service.CreateRule(ctx, userID, req)
-
-	assert.Error(t, err)
-	assert.Nil(t, rule)
-	assert.Equal(t, domain.ErrRuleLimitExceeded, err)
-}
-
-// TestCategorizationRuleService_CreateRule_UnlimitedTier tests creation with unlimited tier
-func TestCategorizationRuleService_CreateRule_UnlimitedTier(t *testing.T) {
-	mockRepo := new(mockRuleRepository)
-	mockSubChecker := new(mockSubscriptionChecker)
-	mockUserGet := new(mockUserGetter)
-
-	service := NewCategorizationRuleService(mockRepo, mockSubChecker, mockUserGet)
-	ctx := context.Background()
-	userID := "user-premium-plus"
-
-	user := &domain.User{ID: userID, SubscriptionTier: string(domain.TierPremiumPlus)}
-	effectiveSub := &domain.EffectiveSubscription{
-		Limits: domain.SubscriptionLimits{Rules: domain.Unlimited}, // -1 = unlimited
-	}
-
-	mockUserGet.On("GetUserByID", ctx, userID).Return(user, nil)
-	mockSubChecker.On("GetEffectiveSubscription", ctx, user).Return(effectiveSub, nil)
-	mockRepo.On("CountByUserID", ctx, userID).Return(1000, nil) // Many rules
+	// Rules are unlimited for all tiers, so creating with many existing rules should succeed
 	mockRepo.On("Create", ctx, mock.AnythingOfType("*domain.CategorizationRule")).Return(nil)
 
 	req := createTestRuleRequest()
@@ -199,12 +153,14 @@ func TestCategorizationRuleService_CreateRule_UnlimitedTier(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.NotNil(t, rule)
+	assert.Equal(t, userID, rule.UserID)
+	mockRepo.AssertExpectations(t)
 }
 
 // TestCategorizationRuleService_GetUserRules tests retrieving all rules for a user
 func TestCategorizationRuleService_GetUserRules(t *testing.T) {
 	mockRepo := new(mockRuleRepository)
-	service := NewCategorizationRuleService(mockRepo, nil, nil)
+	service := NewCategorizationRuleService(mockRepo)
 	ctx := context.Background()
 	userID := "user-123"
 
@@ -225,7 +181,7 @@ func TestCategorizationRuleService_GetUserRules(t *testing.T) {
 // TestCategorizationRuleService_GetRuleByID tests retrieving a single rule
 func TestCategorizationRuleService_GetRuleByID(t *testing.T) {
 	mockRepo := new(mockRuleRepository)
-	service := NewCategorizationRuleService(mockRepo, nil, nil)
+	service := NewCategorizationRuleService(mockRepo)
 	ctx := context.Background()
 	userID := "user-123"
 	ruleID := "rule-123"
@@ -248,7 +204,7 @@ func TestCategorizationRuleService_GetRuleByID(t *testing.T) {
 // TestCategorizationRuleService_GetRuleByID_NotOwner tests access control
 func TestCategorizationRuleService_GetRuleByID_NotOwner(t *testing.T) {
 	mockRepo := new(mockRuleRepository)
-	service := NewCategorizationRuleService(mockRepo, nil, nil)
+	service := NewCategorizationRuleService(mockRepo)
 	ctx := context.Background()
 	userID := "user-123"
 	ruleID := "rule-123"
@@ -271,7 +227,7 @@ func TestCategorizationRuleService_GetRuleByID_NotOwner(t *testing.T) {
 // TestCategorizationRuleService_UpdateRule tests successful rule update
 func TestCategorizationRuleService_UpdateRule(t *testing.T) {
 	mockRepo := new(mockRuleRepository)
-	service := NewCategorizationRuleService(mockRepo, nil, nil)
+	service := NewCategorizationRuleService(mockRepo)
 	ctx := context.Background()
 	userID := "user-123"
 	ruleID := "rule-123"
@@ -307,7 +263,7 @@ func TestCategorizationRuleService_UpdateRule(t *testing.T) {
 // TestCategorizationRuleService_DeleteRule tests successful rule deletion
 func TestCategorizationRuleService_DeleteRule(t *testing.T) {
 	mockRepo := new(mockRuleRepository)
-	service := NewCategorizationRuleService(mockRepo, nil, nil)
+	service := NewCategorizationRuleService(mockRepo)
 	ctx := context.Background()
 	userID := "user-123"
 	ruleID := "rule-123"
@@ -329,7 +285,7 @@ func TestCategorizationRuleService_DeleteRule(t *testing.T) {
 // TestCategorizationRuleService_ToggleRule tests enabling/disabling a rule
 func TestCategorizationRuleService_ToggleRule(t *testing.T) {
 	mockRepo := new(mockRuleRepository)
-	service := NewCategorizationRuleService(mockRepo, nil, nil)
+	service := NewCategorizationRuleService(mockRepo)
 	ctx := context.Background()
 	userID := "user-123"
 	ruleID := "rule-123"
@@ -358,7 +314,7 @@ func TestCategorizationRuleService_ToggleRule(t *testing.T) {
 // TestCategorizationRuleService_GetEnabledRules tests retrieving enabled rules only
 func TestCategorizationRuleService_GetEnabledRules(t *testing.T) {
 	mockRepo := new(mockRuleRepository)
-	service := NewCategorizationRuleService(mockRepo, nil, nil)
+	service := NewCategorizationRuleService(mockRepo)
 	ctx := context.Background()
 	userID := "user-123"
 

@@ -77,46 +77,10 @@ func (s *syncLimitService) getUserSubscription(ctx context.Context, userID strin
 	return user, subscription, nil
 }
 
-// CheckSyncLimit checks if a user is allowed to sync a specific account this month
+// CheckSyncLimit checks if a user is allowed to sync a specific account this month.
+// Simplified: Always returns true (no monthly sync limits for any tier).
 func (s *syncLimitService) CheckSyncLimit(ctx context.Context, userID, plaidAccountID string) (bool, string, error) {
-	currentMonth := time.Now().Format(monthFormat)
-
-	// Step 1: Check if this account has already synced this month (re-sync scenario)
-	hasSynced, err := s.syncAuditRepo.HasSyncedThisMonth(ctx, userID, plaidAccountID, currentMonth)
-	if err != nil {
-		return false, "", fmt.Errorf("failed to check if account synced this month: %w", err)
-	}
-
-	// Re-syncs are always allowed (UPSERT pattern handles counter)
-	if hasSynced {
-		return true, "", nil
-	}
-
-	// Step 2: Count how many unique accounts have synced this month
-	currentSyncs, err := s.syncAuditRepo.CountSyncsThisMonth(ctx, userID, currentMonth)
-	if err != nil {
-		return false, "", fmt.Errorf("failed to count syncs this month: %w", err)
-	}
-
-	// Step 3: Look up user and subscription (using helper to reduce duplication)
-	user, _, err := s.getUserSubscription(ctx, userID)
-	if err != nil {
-		return false, "", err // Error already wrapped by helper
-	}
-
-	// Step 4: Check user's subscription limit
-	limitCheck, err := s.subscriptionService.CheckLimit(ctx, user, domain.ResourceAccountsSyncedPerMonth, currentSyncs)
-	if err != nil {
-		return false, "", fmt.Errorf("failed to check subscription limit: %w", err)
-	}
-
-	// Step 5: Return result
-	if !limitCheck.Allowed {
-		reason := fmt.Sprintf("monthly sync limit reached: %d of %d accounts synced this month. Upgrade to sync more accounts.",
-			limitCheck.CurrentUsage, limitCheck.Limit)
-		return false, reason, nil
-	}
-
+	// No monthly sync limits - all users can sync unlimited accounts
 	return true, "", nil
 }
 
@@ -167,8 +131,9 @@ func (s *syncLimitService) GetSyncStats(ctx context.Context, userID string) (*do
 	}
 
 	// Step 3: Populate limit and calculate remaining capacity
-	stats.AccountsLimit = subscription.Limits.AccountsSyncedPerMonth
-	stats.CanSyncMore = domain.IsUnlimited(stats.AccountsLimit) || stats.AccountsSynced < stats.AccountsLimit
+	// No monthly sync limits - use account limit and always allow more syncs
+	stats.AccountsLimit = subscription.Limits.Accounts
+	stats.CanSyncMore = true // No monthly sync limits
 
 	// Step 4: Calculate reset date (first day of next month)
 	stats.ResetDate = stats.CalculateResetDate()
