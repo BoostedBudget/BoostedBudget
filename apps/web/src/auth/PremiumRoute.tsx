@@ -36,15 +36,52 @@ function LoadingSkeleton() {
   )
 }
 
+/**
+ * Error state displayed when profile API fails
+ */
+function ProfileError() {
+  return (
+    <div className="flex justify-center items-center min-h-screen bg-gray-50 dark:bg-gray-900">
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8 max-w-md text-center">
+        <div className="text-red-600 text-5xl mb-4" aria-hidden="true">⚠️</div>
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
+          Unable to Load Profile
+        </h2>
+        <p className="text-gray-600 dark:text-gray-400 mb-6">
+          Please try refreshing the page. If the problem persists, try signing out and back in.
+        </p>
+        <button
+          onClick={() => window.location.reload()}
+          className="px-6 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors"
+        >
+          Refresh Page
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export function PremiumRoute({ children }: PremiumRouteProps) {
-  const { user, loading } = useProfile()
+  const { user, loading, error } = useProfile()
   const location = useLocation()
 
   if (loading) {
     return <LoadingSkeleton />
   }
 
-  const hasActiveSubscription = user?.subscription_status === 'active' || user?.subscription_status === 'trial'
+  // Handle API error - show error state instead of redirecting to pricing
+  // This prevents false redirects when the profile API temporarily fails
+  if (error) {
+    return <ProfileError />
+  }
+
+  // Safety guard: if user is null without error, keep showing loading
+  // This shouldn't happen normally but prevents incorrect redirect
+  if (!user) {
+    return <LoadingSkeleton />
+  }
+
+  const hasActiveSubscription = user.subscription_status === 'active' || user.subscription_status === 'trial'
 
   if (!hasActiveSubscription) {
     return (
