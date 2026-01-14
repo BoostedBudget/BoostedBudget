@@ -25,7 +25,7 @@ test.describe('Landing Page - Unauthenticated', () => {
     });
 
     test('should display primary CTA button', async ({ page }) => {
-      const ctaButton = page.getByRole('button', { name: /start free today/i });
+      const ctaButton = page.getByRole('button', { name: /start free today/i }).first();
       await expect(ctaButton).toBeVisible();
     });
 
@@ -34,8 +34,8 @@ test.describe('Landing Page - Unauthenticated', () => {
     });
 
     test('should display trust badges', async ({ page }) => {
-      await expect(page.getByText(/no credit card required/i)).toBeVisible();
-      await expect(page.getByText(/gdpr compliant/i)).toBeVisible();
+      await expect(page.getByText(/no credit card required/i).first()).toBeVisible();
+      await expect(page.getByText(/gdpr compliant/i).first()).toBeVisible();
     });
   });
 
@@ -46,7 +46,7 @@ test.describe('Landing Page - Unauthenticated', () => {
     });
 
     test('should display key features', async ({ page }) => {
-      await expect(page.getByText(/see all your money in one place/i)).toBeVisible();
+      await expect(page.getByText(/all your accounts in one place/i)).toBeVisible();
       await expect(page.getByText(/bank-level security/i)).toBeVisible();
     });
   });
@@ -79,7 +79,7 @@ test.describe('Landing Page - Unauthenticated', () => {
 
   test.describe('Social Proof Section', () => {
     test('should display security messaging', async ({ page }) => {
-      await expect(page.getByText(/your security is our priority/i)).toBeVisible();
+      await expect(page.getByText(/your privacy is our priority/i)).toBeVisible();
     });
 
     test('should display trust badges', async ({ page }) => {
