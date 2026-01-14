@@ -1,6 +1,7 @@
 import { useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { useUser } from '@clerk/react-router'
-import { Award, Gem, Check, X } from 'lucide-react'
+import { Award, Gem, Check, X, AlertTriangle } from 'lucide-react'
 import { useSubscriptionTiers } from '../subscription/hooks/useSubscriptionTiers'
 import type { TierName, SubscriptionTier } from '../subscription/types'
 import './PricingPage.css'
@@ -97,6 +98,21 @@ function buildFeatureList(
   return features
 }
 
+function FrozenAccountBanner() {
+  return (
+    <div className="frozen-account-banner" role="alert">
+      <AlertTriangle className="frozen-account-banner__icon" aria-hidden="true" />
+      <div className="frozen-account-banner__content">
+        <h2 className="frozen-account-banner__title">Your subscription has expired</h2>
+        <p className="frozen-account-banner__message">
+          Subscribe to continue using BoostedBudget. Your data is safe and will be
+          available once you resubscribe.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 interface TierCardProps {
   tierKey: TierName
   tierData: SubscriptionTier
@@ -183,11 +199,11 @@ function TierCard({ tierKey, tierData, isCurrentTier, billingPeriod }: TierCardP
 
 export function PricingPage() {
   const { user } = useUser()
+  const location = useLocation()
   const { tiers, loading, error, refetch } = useSubscriptionTiers()
   const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>('monthly')
 
-  // Get current user's tier from Clerk publicMetadata or default to 'premium'
-  // Note: In production, this would come from your user state/context
+  const isFrozen = (location.state as { frozen?: boolean } | null)?.frozen === true
   const currentTier: TierName =
     (user?.publicMetadata?.subscription_tier as TierName) || 'premium'
 
@@ -217,6 +233,8 @@ export function PricingPage() {
 
   return (
     <div className="pricing-page">
+      {isFrozen && <FrozenAccountBanner />}
+
       <div className="pricing-header">
         <h1>Choose Your Plan</h1>
         <p>Select the plan that best fits your financial goals</p>

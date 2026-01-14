@@ -77,6 +77,33 @@ func (m *MockProfileRepositoryForDeletion) DeleteUserCascade(ctx context.Context
 	return args.Error(0)
 }
 
+// Issue #679, #680: Trial expiration methods
+func (m *MockProfileRepositoryForDeletion) GetUsersWithExpiredTrials(ctx context.Context) ([]*domain.User, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
+}
+
+func (m *MockProfileRepositoryForDeletion) GetUsersWithExpiringTrials(ctx context.Context, withinDays int) ([]*domain.User, error) {
+	args := m.Called(ctx, withinDays)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
+}
+
+func (m *MockProfileRepositoryForDeletion) UpdateSubscriptionStatus(ctx context.Context, userID string, status string) error {
+	args := m.Called(ctx, userID, status)
+	return args.Error(0)
+}
+
+func (m *MockProfileRepositoryForDeletion) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error {
+	args := m.Called(ctx, userID, status, trialStartedAt, trialEndsAt, hadTrial)
+	return args.Error(0)
+}
+
 // MockEmailService for testing
 type MockEmailService struct {
 	mock.Mock
@@ -447,6 +474,12 @@ func (m *MockPlaidItemCleanupService) RemoveAllUserItems(ctx context.Context, us
 
 func (m *MockPlaidItemCleanupService) RemoveItem(ctx context.Context, linkedItemID string) error {
 	args := m.Called(ctx, linkedItemID)
+	return args.Error(0)
+}
+
+// Issue #679, #680: DisconnectAllUserItems for trial expiration
+func (m *MockPlaidItemCleanupService) DisconnectAllUserItems(ctx context.Context, userID string) error {
+	args := m.Called(ctx, userID)
 	return args.Error(0)
 }
 

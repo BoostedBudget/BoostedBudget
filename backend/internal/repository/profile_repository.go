@@ -38,6 +38,20 @@ type ProfileRepository interface {
 	// UpdateLastLogin updates the last_login_at timestamp for a user
 	UpdateLastLogin(ctx context.Context, clerkUserID string) error
 
+	// Trial-related methods (Issue #679)
+
+	// UpdateTrialStatus updates trial-related fields for a user
+	UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error
+
+	// UpdateSubscriptionStatus updates just the subscription status
+	UpdateSubscriptionStatus(ctx context.Context, userID string, status string) error
+
+	// GetUsersWithExpiredTrials returns users with trial status but past trial_ends_at
+	GetUsersWithExpiredTrials(ctx context.Context) ([]*domain.User, error)
+
+	// GetUsersWithExpiringTrials returns users whose trial ends within N days
+	GetUsersWithExpiringTrials(ctx context.Context, withinDays int) ([]*domain.User, error)
+
 	// Deletion-related methods
 
 	// MarkForDeletion marks a user for deletion with a scheduled date
@@ -68,6 +82,7 @@ func (r *profileRepository) GetUserByClerkID(ctx context.Context, clerkUserID st
 	query := `
 		SELECT id, clerk_user_id, email, email_verified,
 		       subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
+		       trial_started_at, trial_ends_at, had_trial,
 		       paddle_customer_id, primary_region, is_active, is_deleted,
 		       deletion_requested_at, deletion_scheduled_at,
 		       created_at, updated_at, last_login_at
@@ -85,6 +100,9 @@ func (r *profileRepository) GetUserByClerkID(ctx context.Context, clerkUserID st
 		&user.SubscriptionStatus,
 		&user.SubscriptionStartedAt,
 		&user.SubscriptionEndsAt,
+		&user.TrialStartedAt,
+		&user.TrialEndsAt,
+		&user.HadTrial,
 		&user.PaddleCustomerID,
 		&user.PrimaryRegion,
 		&user.IsActive,
@@ -111,6 +129,7 @@ func (r *profileRepository) GetUserByID(ctx context.Context, id string) (*domain
 	query := `
 		SELECT id, clerk_user_id, email, email_verified,
 		       subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
+		       trial_started_at, trial_ends_at, had_trial,
 		       paddle_customer_id, primary_region, is_active, is_deleted,
 		       deletion_requested_at, deletion_scheduled_at,
 		       created_at, updated_at, last_login_at
@@ -128,6 +147,9 @@ func (r *profileRepository) GetUserByID(ctx context.Context, id string) (*domain
 		&user.SubscriptionStatus,
 		&user.SubscriptionStartedAt,
 		&user.SubscriptionEndsAt,
+		&user.TrialStartedAt,
+		&user.TrialEndsAt,
+		&user.HadTrial,
 		&user.PaddleCustomerID,
 		&user.PrimaryRegion,
 		&user.IsActive,
@@ -165,15 +187,17 @@ func (r *profileRepository) CreateUser(ctx context.Context, user *domain.User) e
 		INSERT INTO users (
 			id, clerk_user_id, email, email_verified,
 			subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
+			trial_started_at, trial_ends_at, had_trial,
 			paddle_customer_id, primary_region, is_active, is_deleted,
 			deletion_requested_at, deletion_scheduled_at,
 			created_at, updated_at, last_login_at
 		) VALUES (
 			$1, $2, $3, $4,
 			$5, $6, $7, $8,
-			$9, $10, $11, $12,
-			$13, $14,
-			$15, $16, $17
+			$9, $10, $11,
+			$12, $13, $14, $15,
+			$16, $17,
+			$18, $19, $20
 		)
 	`
 
@@ -186,6 +210,9 @@ func (r *profileRepository) CreateUser(ctx context.Context, user *domain.User) e
 		user.SubscriptionStatus,
 		user.SubscriptionStartedAt,
 		user.SubscriptionEndsAt,
+		user.TrialStartedAt,
+		user.TrialEndsAt,
+		user.HadTrial,
 		user.PaddleCustomerID,
 		user.PrimaryRegion,
 		user.IsActive,
@@ -226,15 +253,17 @@ func (r *profileRepository) CreateUserTx(ctx context.Context, tx pgx.Tx, user *d
 		INSERT INTO users (
 			id, clerk_user_id, email, email_verified,
 			subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
+			trial_started_at, trial_ends_at, had_trial,
 			paddle_customer_id, primary_region, is_active, is_deleted,
 			deletion_requested_at, deletion_scheduled_at,
 			created_at, updated_at, last_login_at
 		) VALUES (
 			$1, $2, $3, $4,
 			$5, $6, $7, $8,
-			$9, $10, $11, $12,
-			$13, $14,
-			$15, $16, $17
+			$9, $10, $11,
+			$12, $13, $14, $15,
+			$16, $17,
+			$18, $19, $20
 		)
 	`
 
@@ -247,6 +276,9 @@ func (r *profileRepository) CreateUserTx(ctx context.Context, tx pgx.Tx, user *d
 		user.SubscriptionStatus,
 		user.SubscriptionStartedAt,
 		user.SubscriptionEndsAt,
+		user.TrialStartedAt,
+		user.TrialEndsAt,
+		user.HadTrial,
 		user.PaddleCustomerID,
 		user.PrimaryRegion,
 		user.IsActive,
@@ -392,6 +424,7 @@ func (r *profileRepository) GetUsersScheduledForDeletion(ctx context.Context) ([
 	query := `
 		SELECT id, clerk_user_id, email, email_verified,
 		       subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
+		       trial_started_at, trial_ends_at, had_trial,
 		       paddle_customer_id, primary_region, is_active, is_deleted,
 		       deletion_requested_at, deletion_scheduled_at,
 		       created_at, updated_at, last_login_at
@@ -420,6 +453,9 @@ func (r *profileRepository) GetUsersScheduledForDeletion(ctx context.Context) ([
 			&user.SubscriptionStatus,
 			&user.SubscriptionStartedAt,
 			&user.SubscriptionEndsAt,
+			&user.TrialStartedAt,
+			&user.TrialEndsAt,
+			&user.HadTrial,
 			&user.PaddleCustomerID,
 			&user.PrimaryRegion,
 			&user.IsActive,
@@ -542,4 +578,186 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	}
 
 	return nil
+}
+
+// UpdateTrialStatus updates trial-related fields for a user
+// Issue #679: Trial service and auto-grant logic
+func (r *profileRepository) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error {
+	now := time.Now()
+
+	query := `
+		UPDATE users
+		SET subscription_status = $1,
+		    subscription_tier = 'premium',
+		    trial_started_at = $2,
+		    trial_ends_at = $3,
+		    had_trial = $4,
+		    updated_at = $5
+		WHERE id = $6 AND is_deleted = FALSE
+	`
+
+	ct, err := r.db.Exec(ctx, query, status, trialStartedAt, trialEndsAt, hadTrial, now, userID)
+	if err != nil {
+		return err
+	}
+
+	if ct.RowsAffected() == 0 {
+		return ErrUserNotFound
+	}
+
+	return nil
+}
+
+// UpdateSubscriptionStatus updates just the subscription status for a user
+// Issue #679, #680: Trial expiration
+func (r *profileRepository) UpdateSubscriptionStatus(ctx context.Context, userID string, status string) error {
+	now := time.Now()
+
+	query := `
+		UPDATE users
+		SET subscription_status = $1,
+		    updated_at = $2
+		WHERE id = $3 AND is_deleted = FALSE
+	`
+
+	ct, err := r.db.Exec(ctx, query, status, now, userID)
+	if err != nil {
+		return err
+	}
+
+	if ct.RowsAffected() == 0 {
+		return ErrUserNotFound
+	}
+
+	return nil
+}
+
+// GetUsersWithExpiredTrials returns users with trial status but past trial_ends_at
+// Issue #680: Trial expiration cron job
+func (r *profileRepository) GetUsersWithExpiredTrials(ctx context.Context) ([]*domain.User, error) {
+	now := time.Now()
+
+	query := `
+		SELECT id, clerk_user_id, email, email_verified,
+		       subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
+		       trial_started_at, trial_ends_at, had_trial,
+		       paddle_customer_id, primary_region, is_active, is_deleted,
+		       deletion_requested_at, deletion_scheduled_at,
+		       created_at, updated_at, last_login_at
+		FROM users
+		WHERE subscription_status = 'trial'
+		  AND trial_ends_at IS NOT NULL
+		  AND trial_ends_at <= $1
+		  AND is_deleted = FALSE
+		ORDER BY trial_ends_at ASC
+	`
+
+	rows, err := r.db.Query(ctx, query, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []*domain.User
+	for rows.Next() {
+		var user domain.User
+		err := rows.Scan(
+			&user.ID,
+			&user.ClerkUserID,
+			&user.Email,
+			&user.EmailVerified,
+			&user.SubscriptionTier,
+			&user.SubscriptionStatus,
+			&user.SubscriptionStartedAt,
+			&user.SubscriptionEndsAt,
+			&user.TrialStartedAt,
+			&user.TrialEndsAt,
+			&user.HadTrial,
+			&user.PaddleCustomerID,
+			&user.PrimaryRegion,
+			&user.IsActive,
+			&user.IsDeleted,
+			&user.DeletionRequestedAt,
+			&user.DeletionScheduledAt,
+			&user.CreatedAt,
+			&user.UpdatedAt,
+			&user.LastLoginAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, &user)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return users, nil
+}
+
+// GetUsersWithExpiringTrials returns users whose trial ends within N days
+// Issue #680: Trial expiration notification (3 days before)
+func (r *profileRepository) GetUsersWithExpiringTrials(ctx context.Context, withinDays int) ([]*domain.User, error) {
+	now := time.Now()
+	threshold := now.Add(time.Duration(withinDays) * 24 * time.Hour)
+
+	query := `
+		SELECT id, clerk_user_id, email, email_verified,
+		       subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
+		       trial_started_at, trial_ends_at, had_trial,
+		       paddle_customer_id, primary_region, is_active, is_deleted,
+		       deletion_requested_at, deletion_scheduled_at,
+		       created_at, updated_at, last_login_at
+		FROM users
+		WHERE subscription_status = 'trial'
+		  AND trial_ends_at IS NOT NULL
+		  AND trial_ends_at > $1
+		  AND trial_ends_at <= $2
+		  AND is_deleted = FALSE
+		ORDER BY trial_ends_at ASC
+	`
+
+	rows, err := r.db.Query(ctx, query, now, threshold)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []*domain.User
+	for rows.Next() {
+		var user domain.User
+		err := rows.Scan(
+			&user.ID,
+			&user.ClerkUserID,
+			&user.Email,
+			&user.EmailVerified,
+			&user.SubscriptionTier,
+			&user.SubscriptionStatus,
+			&user.SubscriptionStartedAt,
+			&user.SubscriptionEndsAt,
+			&user.TrialStartedAt,
+			&user.TrialEndsAt,
+			&user.HadTrial,
+			&user.PaddleCustomerID,
+			&user.PrimaryRegion,
+			&user.IsActive,
+			&user.IsDeleted,
+			&user.DeletionRequestedAt,
+			&user.DeletionScheduledAt,
+			&user.CreatedAt,
+			&user.UpdatedAt,
+			&user.LastLoginAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, &user)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return users, nil
 }

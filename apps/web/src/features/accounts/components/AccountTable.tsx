@@ -6,7 +6,7 @@
  */
 
 import { useCallback } from 'react'
-import { Edit, Trash2, ChevronUp, ChevronDown, EyeOff } from 'lucide-react'
+import { Edit, Trash2, ChevronUp, ChevronDown, EyeOff, Unplug } from 'lucide-react'
 import type { Account } from '@boostedbudget/api-client/models'
 import {
   ColumnFilterDropdown,
@@ -293,11 +293,13 @@ export function AccountTable({
           const balanceFormatted = formatBalance(account.current_balance)
           const isNegativeBalance =
             account.current_balance !== undefined && account.current_balance < 0
+          // Issue #679, #680: Check if linked item is disconnected
+          const isDisconnected = account.linked_item_status === 'disconnected'
 
           return (
             <tr
               key={account.id}
-              className={`account-table__row ${onRowClick ? 'account-table__row--clickable' : ''} ${account.is_hidden ? 'account-table__row--hidden' : ''}`}
+              className={`account-table__row ${onRowClick ? 'account-table__row--clickable' : ''} ${account.is_hidden ? 'account-table__row--hidden' : ''} ${isDisconnected ? 'account-table__row--disconnected' : ''}`}
               onClick={onRowClick ? () => onRowClick(account) : undefined}
             >
               <td className="account-table__td account-table__td--institution">
@@ -322,6 +324,13 @@ export function AccountTable({
                   >
                     {displayName}
                   </span>
+                  {/* Issue #679, #680: Disconnected badge */}
+                  {isDisconnected && (
+                    <span className="account-table__disconnected-badge" title="Account disconnected - resubscribe to reconnect">
+                      <Unplug className="account-table__disconnected-icon" aria-hidden="true" />
+                      Disconnected
+                    </span>
+                  )}
                   {account.is_hidden && (
                     <span className="account-table__hidden-badge">
                       <EyeOff className="account-table__hidden-icon" aria-hidden="true" />

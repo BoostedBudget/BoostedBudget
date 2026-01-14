@@ -27,6 +27,9 @@ type Account struct {
 	CurrencyCode     string     `json:"currency_code" db:"currency_code"` // ISO 4217 currency code
 	InstitutionName  string     `json:"institution_name,omitempty" db:"institution_name"` // From linked_items JOIN (optional)
 
+	// Linked item status (Issue #679, #680: Shows 'disconnected' when subscription expires)
+	LinkedItemStatus string     `json:"linked_item_status,omitempty" db:"linked_item_status"` // From linked_items JOIN (optional)
+
 	// Stable reference for re-link handling (Issue #171)
 	UserAccountID *string `json:"user_account_id,omitempty" db:"user_account_id"` // FK to user_accounts
 

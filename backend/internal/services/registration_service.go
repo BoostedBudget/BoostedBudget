@@ -20,6 +20,13 @@ type TxBeginner interface {
 // Email validation regex (basic RFC 5322 compliant)
 var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
 
+// TrialGranter defines the interface for granting trials to users
+// Issue #679: Used to auto-grant trial during registration
+type TrialGranter interface {
+	// GrantTrial grants a trial to the user
+	GrantTrial(ctx context.Context, userID string) error
+}
+
 // RegistrationService handles user registration and onboarding
 //
 // TRANSACTION SAFETY:
@@ -60,6 +67,10 @@ type RegistrationService interface {
 	//   - Idempotent: Safe to call multiple times with same clerkUserID
 	//   - Validated: Email format checked, required fields enforced
 	RegisterUser(ctx context.Context, clerkUserID, email string, emailVerified bool) (*domain.User, error)
+
+	// SetTrialGranter sets the trial granter for auto-granting trials on registration
+	// Issue #679: Called during server initialization to wire up the trial service
+	SetTrialGranter(tg TrialGranter)
 }
 
 type registrationService struct {
@@ -67,7 +78,8 @@ type registrationService struct {
 	identityRepo repository.UserIdentityRepository
 	privacyRepo  repository.PrivacyRepository
 	auditLogger  AuditLogger
-	db           TxBeginner // Database connection pool for transaction management
+	db           TxBeginner   // Database connection pool for transaction management
+	trialGranter TrialGranter // Issue #679: Optional trial granter for auto-grant on registration
 }
 
 // NewRegistrationService creates a new RegistrationService
@@ -85,6 +97,12 @@ func NewRegistrationService(
 		auditLogger:  auditLogger,
 		db:           db,
 	}
+}
+
+// SetTrialGranter sets the trial granter for auto-granting trials on registration
+// Issue #679: Called during server initialization to wire up the trial service
+func (s *registrationService) SetTrialGranter(tg TrialGranter) {
+	s.trialGranter = tg
 }
 
 // RegisterUser implements idempotent user registration with atomic transaction safety
@@ -144,8 +162,11 @@ func (s *registrationService) RegisterUser(ctx context.Context, clerkUserID, ema
 	}
 
 	// New user - create user, identity, and privacy settings
+	user := domain.NewUser(clerkUserID, email, emailVerified)
+	identity := domain.NewUserIdentity(user.ID, clerkUserID, email, emailVerified, true)
+	privacy := domain.NewPrivacySettings(user.ID)
+
 	// Use atomic transaction if db is available (production), otherwise use non-transactional (unit tests)
-	var user *domain.User
 	if s.db != nil {
 		// Production path: Use atomic transaction
 		tx, err := s.db.Begin(ctx)
@@ -155,24 +176,18 @@ func (s *registrationService) RegisterUser(ctx context.Context, clerkUserID, ema
 		defer tx.Rollback(ctx) // Rollback if not committed
 
 		// Step 1: Create user profile within transaction
-		user = domain.NewUser(clerkUserID, email, emailVerified)
-		err = s.profileRepo.CreateUserTx(ctx, tx, user)
-		if err != nil {
+		if err = s.profileRepo.CreateUserTx(ctx, tx, user); err != nil {
 			return nil, fmt.Errorf("failed to create user: %w", err)
 		}
 
 		// Step 2: Create user identity within transaction
 		// First identity is always primary; emailVerified from Clerk JWT
-		identity := domain.NewUserIdentity(user.ID, clerkUserID, email, emailVerified, true)
-		err = s.identityRepo.CreateTx(ctx, tx, identity)
-		if err != nil {
+		if err = s.identityRepo.CreateTx(ctx, tx, identity); err != nil {
 			return nil, fmt.Errorf("failed to create identity: %w", err)
 		}
 
 		// Step 3: Create privacy settings with GDPR defaults within transaction
-		privacy := domain.NewPrivacySettings(user.ID)
-		err = s.privacyRepo.CreateTx(ctx, tx, privacy)
-		if err != nil {
+		if err = s.privacyRepo.CreateTx(ctx, tx, privacy); err != nil {
 			return nil, fmt.Errorf("failed to create privacy settings: %w", err)
 		}
 
@@ -182,30 +197,29 @@ func (s *registrationService) RegisterUser(ctx context.Context, clerkUserID, ema
 		}
 	} else {
 		// Unit test path: Use non-transactional methods
-		// Step 1: Create user profile
-		user = domain.NewUser(clerkUserID, email, emailVerified)
-		err = s.profileRepo.CreateUser(ctx, user)
-		if err != nil {
+		if err := s.profileRepo.CreateUser(ctx, user); err != nil {
 			return nil, fmt.Errorf("failed to create user: %w", err)
 		}
-
-		// Step 2: Create user identity
-		// First identity is always primary; emailVerified from Clerk JWT
-		identity := domain.NewUserIdentity(user.ID, clerkUserID, email, emailVerified, true)
-		err = s.identityRepo.Create(ctx, identity)
-		if err != nil {
+		if err := s.identityRepo.Create(ctx, identity); err != nil {
 			return nil, fmt.Errorf("failed to create identity: %w", err)
 		}
-
-		// Step 3: Create privacy settings with GDPR defaults
-		privacy := domain.NewPrivacySettings(user.ID)
-		err = s.privacyRepo.Create(ctx, privacy)
-		if err != nil {
+		if err := s.privacyRepo.Create(ctx, privacy); err != nil {
 			return nil, fmt.Errorf("failed to create privacy settings: %w", err)
 		}
 	}
 
-	// Step 4: Log audit event for new user registration
+	// Issue #679: Auto-grant trial to new users
+	// Step 4: Grant trial if trial granter is configured
+	if s.trialGranter != nil {
+		err = s.trialGranter.GrantTrial(ctx, user.ID)
+		if err != nil {
+			// Log error but don't fail registration
+			// Trial granting failure shouldn't block user registration
+			fmt.Printf("Warning: failed to grant trial for user %s: %v\n", user.ID, err)
+		}
+	}
+
+	// Step 5: Log audit event for new user registration
 	if s.auditLogger != nil {
 		err = s.auditLogger.Log(ctx, "user.registration", "user", user.ID)
 		if err != nil {

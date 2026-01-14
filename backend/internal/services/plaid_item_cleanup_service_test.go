@@ -33,6 +33,20 @@ func (m *MockLinkedItemRepoForCleanup) GetByID(ctx context.Context, id string) (
 	return args.Get(0).(*domain.LinkedItem), args.Error(1)
 }
 
+// Issue #679, #680: Trial expiration - methods for disconnecting items
+func (m *MockLinkedItemRepoForCleanup) GetActiveItemsByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.LinkedItem), args.Error(1)
+}
+
+func (m *MockLinkedItemRepoForCleanup) MarkAllUserItemsDisconnected(ctx context.Context, userID string) error {
+	args := m.Called(ctx, userID)
+	return args.Error(0)
+}
+
 // MockPlaidServiceForCleanup is a mock for PlaidService
 type MockPlaidServiceForCleanup struct {
 	mock.Mock

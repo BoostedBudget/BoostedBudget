@@ -21,8 +21,10 @@ import (
 // - User deletion: Remove all Plaid items before deleting user data
 // - Orphaned item cleanup: Remove items in error state or not synced for extended periods
 // - Subscription downgrade: Remove excess items when user loses premium access
+// - Trial/subscription expiration: Disconnect items while preserving transaction history
 //
 // Issue #668: Plaid Item Management for Cost Optimization
+// Issue #679, #680: Trial expiration
 type PlaidItemCleanupService interface {
 	// RemoveAllUserItems calls Plaid /item/remove for all of a user's linked items.
 	// This should be called BEFORE deleting user data from the database to stop Plaid billing.
@@ -45,6 +47,19 @@ type PlaidItemCleanupService interface {
 	// Plaid API errors are logged but not returned (graceful degradation).
 	// This is because the access token may already be invalid.
 	RemoveItem(ctx context.Context, linkedItemID string) error
+
+	// DisconnectAllUserItems calls Plaid /item/remove for all items, then marks
+	// them as 'disconnected' in the database. This preserves transaction history
+	// while stopping Plaid billing.
+	//
+	// Issue #679, #680: Used when trial/subscription expires to:
+	// 1. Stop Plaid billing by calling /item/remove
+	// 2. Preserve accounts and transactions by NOT deleting from database
+	// 3. Mark items as 'disconnected' status
+	//
+	// Returns error only if the initial repository query fails.
+	// Plaid API errors are logged but processing continues.
+	DisconnectAllUserItems(ctx context.Context, userID string) error
 }
 
 // linkedItemRepoForCleanup is a minimal interface for the repository operations
@@ -52,6 +67,8 @@ type PlaidItemCleanupService interface {
 type linkedItemRepoForCleanup interface {
 	GetByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error)
 	GetByID(ctx context.Context, id string) (*domain.LinkedItem, error)
+	GetActiveItemsByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error)
+	MarkAllUserItemsDisconnected(ctx context.Context, userID string) error
 }
 
 // plaidServiceForCleanup is a minimal interface for the Plaid operations
@@ -187,4 +204,61 @@ func (s *plaidItemCleanupService) removeItemInternal(ctx context.Context, item *
 // Used by cleanup workers to determine if cleanup can be skipped (item already removed).
 func IsItemNotFoundError(err error) bool {
 	return errors.Is(err, repository.ErrLinkedItemNotFound)
+}
+
+// DisconnectAllUserItems implements PlaidItemCleanupService.DisconnectAllUserItems
+// Issue #679, #680: Trial expiration - disconnect items while preserving history
+func (s *plaidItemCleanupService) DisconnectAllUserItems(ctx context.Context, userID string) error {
+	// Get all active linked items for the user (non-replaced, non-disconnected)
+	items, err := s.linkedItemRepo.GetActiveItemsByUserID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("failed to get active linked items for user %s: %w", userID, err)
+	}
+
+	// No items to disconnect
+	if len(items) == 0 {
+		s.logger.Info("no active linked items to disconnect for user", "user_id", userID)
+		return nil
+	}
+
+	s.logger.Info("disconnecting Plaid items for user",
+		"user_id", userID,
+		"item_count", len(items),
+	)
+
+	// First, call Plaid /item/remove for each item to stop billing
+	// Continue on errors (graceful degradation)
+	var successCount, failCount int
+	for _, item := range items {
+		if err := s.removeItemInternal(ctx, &item); err != nil {
+			s.logger.Warn("failed to remove Plaid item from Plaid",
+				"item_id", item.ID,
+				"plaid_item_id", item.ItemID,
+				"user_id", userID,
+				"error", err,
+			)
+			failCount++
+		} else {
+			successCount++
+		}
+	}
+
+	// Now mark all items as disconnected in the database
+	// This preserves accounts and transactions
+	if err := s.linkedItemRepo.MarkAllUserItemsDisconnected(ctx, userID); err != nil {
+		s.logger.Error("failed to mark items as disconnected in database",
+			"user_id", userID,
+			"error", err,
+		)
+		return fmt.Errorf("failed to mark items as disconnected: %w", err)
+	}
+
+	s.logger.Info("Plaid item disconnection completed",
+		"user_id", userID,
+		"plaid_removed_success", successCount,
+		"plaid_removed_fail", failCount,
+		"db_status_updated", true,
+	)
+
+	return nil
 }

@@ -192,6 +192,20 @@ func (m *MockLinkedItemRepository) ClearCleanupSchedule(ctx context.Context, ite
 	return args.Error(0)
 }
 
+// Issue #679, #680: Trial expiration - methods for disconnecting items
+func (m *MockLinkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.LinkedItem), args.Error(1)
+}
+
+func (m *MockLinkedItemRepository) MarkAllUserItemsDisconnected(ctx context.Context, userID string) error {
+	args := m.Called(ctx, userID)
+	return args.Error(0)
+}
+
 type MockAccountRepository struct {
 	mock.Mock
 }
@@ -359,6 +373,33 @@ func (m *MockUserRepository) GetUsersScheduledForDeletion(ctx context.Context) (
 
 func (m *MockUserRepository) DeleteUserCascade(ctx context.Context, userID string) error {
 	args := m.Called(ctx, userID)
+	return args.Error(0)
+}
+
+// Issue #679, #680: Trial expiration methods
+func (m *MockUserRepository) GetUsersWithExpiredTrials(ctx context.Context) ([]*domain.User, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
+}
+
+func (m *MockUserRepository) GetUsersWithExpiringTrials(ctx context.Context, withinDays int) ([]*domain.User, error) {
+	args := m.Called(ctx, withinDays)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
+}
+
+func (m *MockUserRepository) UpdateSubscriptionStatus(ctx context.Context, userID string, status string) error {
+	args := m.Called(ctx, userID, status)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error {
+	args := m.Called(ctx, userID, status, trialStartedAt, trialEndsAt, hadTrial)
 	return args.Error(0)
 }
 

@@ -13,6 +13,7 @@ import {
   type CookieConsentData
 } from './privacy'
 import { ProtectedRoute } from './auth'
+import { PremiumRoute } from './auth/PremiumRoute'
 import { Header } from './components/layout'
 import { ProfilePage } from './features/profile/ProfilePage'
 import { PricingPage } from './features/pricing/PricingPage'
@@ -30,53 +31,19 @@ import { RulesPage, RuleBuilder } from './features/rules'
 import { Toaster } from 'sonner'
 import './App.css'
 
-interface HealthCheck {
-  status: string
-  version: string
-  timestamp: string
-  checks: {
-    database: boolean
-    redis: boolean
-  }
-}
-
-// Home page content component
-function HomePage({ health, loading }: { health: HealthCheck | null; loading: boolean }) {
+function HomePage() {
   return (
-    <>
-      <section className="health-check">
-        <h2>System Status</h2>
-        {loading ? (
-          <p>Loading...</p>
-        ) : health ? (
-          <div className="health-status">
-            <p className={`status status-${health.status}`}>
-              Status: {health.status.toUpperCase()}
-            </p>
-            <p>Version: {health.version}</p>
-            <p>Region: us-east-1 (MVP)</p>
-            <div className="checks">
-              <p>Database: {health.checks.database ? '✅' : '❌'}</p>
-              <p>Redis: {health.checks.redis ? '✅' : '❌'}</p>
-            </div>
-          </div>
-        ) : (
-          <p className="error">Failed to load system status</p>
-        )}
-      </section>
-
-      <section className="info">
-        <h2>Phase 0: Foundation</h2>
-        <p>✅ Backend API with health endpoint</p>
-        <p>✅ OpenAPI specification</p>
-        <p>✅ Frontend skeleton (React + TypeScript + Vite)</p>
-        <p>✅ GDPR Cookie Consent</p>
-        <p>✅ Clerk integration</p>
-        <p>✅ User Profile Management</p>
-        <p>⏳ Database & migrations (coming next)</p>
-        <p>⏳ Docker development environment (coming next)</p>
-      </section>
-    </>
+    <section className="info">
+      <h2>Phase 0: Foundation</h2>
+      <p>✅ Backend API with health endpoint</p>
+      <p>✅ OpenAPI specification</p>
+      <p>✅ Frontend skeleton (React + TypeScript + Vite)</p>
+      <p>✅ GDPR Cookie Consent</p>
+      <p>✅ Clerk integration</p>
+      <p>✅ User Profile Management</p>
+      <p>⏳ Database & migrations (coming next)</p>
+      <p>⏳ Docker development environment (coming next)</p>
+    </section>
   )
 }
 
@@ -86,11 +53,6 @@ function App() {
 
   // Use generated mutation hook for privacy settings
   const updatePrivacyMutation = useUpdatePrivacySettings()
-
-  // Health check removed - was calling frontend /health which returns text/plain
-  // Backend health is checked by workflow smoke tests
-  const health = null
-  const loading = false
 
   // Helper function to update cookie consent data
   const updateConsentCookie = (consents: CookieConsentSettings) => {
@@ -172,7 +134,7 @@ function App() {
                 isAuthenticated ? (
                   <Navigate to="/dashboard" replace />
                 ) : (
-                  <HomePage health={health} loading={loading} />
+                  <HomePage />
                 )
               }
             />
@@ -180,16 +142,20 @@ function App() {
               path="/dashboard"
               element={
                 <ProtectedRoute>
-                  <DashboardPage />
+                  <PremiumRoute>
+                    <DashboardPage />
+                  </PremiumRoute>
                 </ProtectedRoute>
               }
             />
-            <Route path="/callback" element={<HomePage health={health} loading={loading} />} />
+            <Route path="/callback" element={<HomePage />} />
             <Route
               path="/oauth-callback"
               element={
                 <ProtectedRoute>
-                  <PlaidOAuthCallback />
+                  <PremiumRoute>
+                    <PlaidOAuthCallback />
+                  </PremiumRoute>
                 </ProtectedRoute>
               }
             />
@@ -197,7 +163,9 @@ function App() {
               path="/accounts"
               element={
                 <ProtectedRoute>
-                  <AccountsPage />
+                  <PremiumRoute>
+                    <AccountsPage />
+                  </PremiumRoute>
                 </ProtectedRoute>
               }
             />
@@ -205,7 +173,9 @@ function App() {
               path="/transactions"
               element={
                 <ProtectedRoute>
-                  <TransactionsPage />
+                  <PremiumRoute>
+                    <TransactionsPage />
+                  </PremiumRoute>
                 </ProtectedRoute>
               }
             />
@@ -213,7 +183,9 @@ function App() {
               path="/budgets"
               element={
                 <ProtectedRoute>
-                  <BudgetsPage />
+                  <PremiumRoute>
+                    <BudgetsPage />
+                  </PremiumRoute>
                 </ProtectedRoute>
               }
             />
@@ -221,7 +193,9 @@ function App() {
               path="/budgets/:budgetId"
               element={
                 <ProtectedRoute>
-                  <BudgetDetailPage />
+                  <PremiumRoute>
+                    <BudgetDetailPage />
+                  </PremiumRoute>
                 </ProtectedRoute>
               }
             />
@@ -229,7 +203,9 @@ function App() {
               path="/auto-categorization"
               element={
                 <ProtectedRoute>
-                  <AutoCategorizationPageWrapper />
+                  <PremiumRoute>
+                    <AutoCategorizationPageWrapper />
+                  </PremiumRoute>
                 </ProtectedRoute>
               }
             />
@@ -238,7 +214,9 @@ function App() {
               path="/rules"
               element={
                 <ProtectedRoute>
-                  <RulesPage />
+                  <PremiumRoute>
+                    <RulesPage />
+                  </PremiumRoute>
                 </ProtectedRoute>
               }
             />
@@ -246,7 +224,9 @@ function App() {
               path="/rules/new"
               element={
                 <ProtectedRoute>
-                  <RuleBuilder />
+                  <PremiumRoute>
+                    <RuleBuilder />
+                  </PremiumRoute>
                 </ProtectedRoute>
               }
             />
@@ -254,10 +234,13 @@ function App() {
               path="/rules/:id/edit"
               element={
                 <ProtectedRoute>
-                  <RuleBuilder />
+                  <PremiumRoute>
+                    <RuleBuilder />
+                  </PremiumRoute>
                 </ProtectedRoute>
               }
             />
+            {/* Non-premium routes - accessible even when frozen */}
             <Route
               path="/profile"
               element={
