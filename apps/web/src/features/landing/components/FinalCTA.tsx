@@ -44,7 +44,7 @@ export function FinalCTA() {
         <div className="mt-10">
           <Button
             size="lg"
-            onClick={openSignUp}
+            onClick={() => openSignUp()}
             className="bg-white px-12 py-7 text-lg font-semibold text-blue-600 shadow-lg shadow-blue-900/20 hover:bg-blue-50 hover:shadow-xl"
           >
             Start Free Today

@@ -111,7 +111,7 @@ export function LandingHeader() {
               : 'text-white/80 hover:bg-white/10 hover:text-white'
             }
           >
-            Sign In
+            Log In
           </Button>
           <Button
             size="sm"
@@ -158,7 +158,7 @@ export function LandingHeader() {
                 }}
                 className="w-full"
               >
-                Sign In
+                Log In
               </Button>
               <Button
                 size="sm"
