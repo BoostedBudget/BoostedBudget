@@ -42,10 +42,21 @@ export function useSubscriptionTiers(): UseSubscriptionTiersResult {
     },
   })
 
+  // Issue #698: Validate response structure
+  // Backend may return malformed data if config file is missing
+  const isValidResponse = data && data.tiers && typeof data.tiers === 'object'
+
+  // Create error for invalid response structure
+  const validationError = !isLoading && data && !isValidResponse
+    ? new Error('Invalid subscription tiers response: missing tiers data')
+    : null
+
   return {
-    tiers: data ?? null,
+    tiers: isValidResponse ? data : null,
     loading: isLoading,
-    error: error ? (error instanceof Error ? error : new Error('Failed to fetch subscription tiers')) : null,
+    error: error
+      ? (error instanceof Error ? error : new Error('Failed to fetch subscription tiers'))
+      : validationError,
     refetch: queryRefetch,
   }
 }

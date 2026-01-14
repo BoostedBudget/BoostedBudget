@@ -215,7 +215,9 @@ export function PricingPage() {
     )
   }
 
-  if (error || !tiers) {
+  // Issue #698: Add defensive check for malformed API response
+  // tiers.tiers could be undefined if backend config file is missing
+  if (error || !tiers || !tiers.tiers) {
     return (
       <div className="pricing-page">
         <div className="pricing-error">
