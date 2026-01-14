@@ -68,6 +68,14 @@ body {
   text-align: center;
 }
 
+/* Landing page needs full viewport width - remove app constraints */
+#root:has(.landing-page) {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  text-align: left;
+}
+
 @theme inline {
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
