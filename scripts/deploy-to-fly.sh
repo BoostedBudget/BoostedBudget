@@ -178,7 +178,7 @@ deploy_frontend() {
     return 1
   fi
 
-  cd frontend
+  cd apps/web
 
   echo -e "${BLUE}Image:${NC} ${FRONTEND_IMAGE}"
   echo -e "${BLUE}App:${NC}   ${FRONTEND_APP}"

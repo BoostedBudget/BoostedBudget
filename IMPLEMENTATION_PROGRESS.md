@@ -398,8 +398,8 @@ if err := s.createBalanceSnapshots(ctx, linkedItem, accessToken); err != nil {
 - [ ] `backend/internal/domain/dashboard.go`
 
 ### Frontend
-- [ ] `frontend/src/features/dashboard/` (entire directory)
-- [ ] `frontend/e2e/dashboard.spec.ts`
+- [ ] `apps/web/src/features/dashboard/` (entire directory)
+- [ ] `apps/web/e2e/dashboard.spec.ts`
 
 ### Tracking
 - [x] `IMPLEMENTATION_PROGRESS.md` ← **CURRENT FILE**
@@ -414,8 +414,8 @@ if err := s.createBalanceSnapshots(ctx, linkedItem, accessToken); err != nil {
 - [ ] `backend/cmd/server/main.go` (register dashboard routes)
 
 ### Frontend
-- [ ] `frontend/src/App.tsx` (conditional routing)
-- [ ] `frontend/package.json` (dependencies)
+- [ ] `apps/web/src/App.tsx` (conditional routing)
+- [ ] `apps/web/package.json` (dependencies)
 
 ---
 

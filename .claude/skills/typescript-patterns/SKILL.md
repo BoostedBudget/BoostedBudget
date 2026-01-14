@@ -8,7 +8,7 @@ description: "TypeScript/React patterns for BoostedBudget: feature structure, ho
 ## Directory Structure
 
 ```
-frontend/src/
+apps/web/src/
 ├── api/
 │   ├── generated/          # Orval-generated (DO NOT EDIT)
 │   │   ├── endpoints/      # React Query hooks
@@ -103,7 +103,7 @@ import { useState, useCallback, useMemo } from 'react'
 import {
   useGetTransactions,
   getGetTransactionsQueryKey,
-} from '@/api/generated/endpoints/transactions/transactions'
+} from '@boostedbudget/api-client/endpoints/transactions/transactions'
 import type { Transaction, TransactionFilters } from '../types'
 
 export interface UseTransactionsOptions {
@@ -169,7 +169,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import {
   useUpdateTransactionTags,
   getGetTransactionsQueryKey,
-} from '@/api/generated/endpoints/transactions/transactions'
+} from '@boostedbudget/api-client/endpoints/transactions/transactions'
 
 export function useUpdateTransactionTags() {
   const queryClient = useQueryClient()
@@ -378,7 +378,7 @@ const { mockUseGetTransactions } = vi.hoisted(() => ({
   mockUseGetTransactions: vi.fn(),
 }))
 
-vi.mock('@/api/generated/endpoints/transactions/transactions', () => ({
+vi.mock('@boostedbudget/api-client/endpoints/transactions/transactions', () => ({
   useGetTransactions: mockUseGetTransactions,
   getGetTransactionsQueryKey: vi.fn(() => ['transactions']),
 }))

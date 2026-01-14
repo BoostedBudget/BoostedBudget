@@ -233,6 +233,7 @@ web_modules/
 .env.test.local
 .env.production.local
 .env.local
+.env.e2e
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
@@ -305,7 +306,10 @@ backend/bin/
 backend/server
 backend/cmd/server/server
 backend/tmp/
-frontend/dist/
+apps/web/dist/
+
+# Turborepo
+.turbo
 in-memoria.db
 # Claude Code - ignore settings but track skills, commands, agents
 .claude/*
@@ -321,12 +325,12 @@ in-memoria.db
 backend/test-output.json
 backend/test-results.json
 backend/coverage.html
-frontend/test-results.json
+apps/web/test-results.json
 
 # Playwright E2E Tests
-frontend/playwright-report/
-frontend/test-results/
-frontend/e2e/.env.test
+apps/web/playwright-report/
+apps/web/test-results/
+apps/web/e2e/.env.test
 .playwright-mcp/
 
 # Fly.io

@@ -20,14 +20,14 @@ cd backend && go test ./... -v
 
 ### 2. Frontend Tests
 ```bash
-cd frontend && pnpm test -- --run
+cd apps/web && bun run test -- --run
 ```
 - Run unit tests
 - Check for failures
 
 ### 3. Linting
 ```bash
-cd frontend && pnpm run lint
+cd apps/web && bun run lint
 cd backend && go vet ./...
 ```
 - Check for lint errors
@@ -35,7 +35,7 @@ cd backend && go vet ./...
 
 ### 4. TypeScript Type Check
 ```bash
-cd frontend && pnpm run build
+cd apps/web && bun run build
 ```
 - Verify TypeScript compiles
 - Check for type errors

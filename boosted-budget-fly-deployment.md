@@ -182,7 +182,7 @@ ENTRYPOINT ["/app/boostedbudget-api"]
 ### Frontend Multi-Stage Dockerfile
 
 ```dockerfile
-# frontend/Dockerfile
+# apps/web/Dockerfile
 # Stage 1: Build the React application
 FROM node:18-alpine AS builder
 
@@ -240,7 +240,7 @@ CMD ["nginx", "-g", "daemon off;"]
 
 ```bash
 #!/bin/sh
-# frontend/docker-entrypoint.sh
+# apps/web/docker-entrypoint.sh
 # This script allows runtime environment variable injection
 
 # Create runtime config
@@ -306,7 +306,7 @@ jobs:
       with:
         node-version: '18'
         cache: 'pnpm'
-        cache-dependency-path: frontend/pnpm-lock.yaml
+        cache-dependency-path: apps/web/pnpm-lock.yaml
 
     - name: Install pnpm
       uses: pnpm/action-setup@v4
@@ -382,7 +382,7 @@ jobs:
       uses: docker/build-push-action@v5
       with:
         context: ./frontend
-        file: ./frontend/Dockerfile
+        file: ./apps/web/Dockerfile
         push: true
         tags: ${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ github.sha }}
         labels: ${{ steps.meta.outputs.labels }}
@@ -449,7 +449,7 @@ jobs:
         flyctl deploy \
           --app boostedbudget-staging-web \
           --image ${{ needs.build-images.outputs.frontend-image }} \
-          --config ./frontend/fly.staging.toml \
+          --config ./apps/web/fly.staging.toml \
           --strategy immediate
 
     - name: Run smoke tests
@@ -491,7 +491,7 @@ jobs:
         flyctl deploy \
           --app boostedbudget-web \
           --image ${{ needs.build-images.outputs.frontend-image }} \
-          --config ./frontend/fly.toml \
+          --config ./apps/web/fly.toml \
           --strategy bluegreen
 
     - name: Verify deployment
@@ -601,7 +601,7 @@ kill_timeout = 30
 ### Frontend Fly Configuration
 
 ```toml
-# frontend/fly.toml
+# apps/web/fly.toml
 app = "boostedbudget-web"
 primary_region = "iad"
 
@@ -767,8 +767,8 @@ docker build \
   -t ${REGISTRY}/${NAMESPACE}/boostedbudget-frontend:latest \
   --build-arg VITE_CLERK_DOMAIN=${CLERK_DOMAIN} \
   --build-arg VITE_CLERK_CLIENT_ID=${CLERK_CLIENT_ID} \
-  -f frontend/Dockerfile \
-  frontend/
+  -f apps/web/Dockerfile \
+  apps/web/
 
 # Push images
 if [ "$1" == "--push" ]; then
@@ -838,7 +838,7 @@ echo "Deploying frontend..."
 flyctl deploy \
   --app ${FRONTEND_APP} \
   --image ${REGISTRY}/${NAMESPACE}/boostedbudget-frontend:${VERSION} \
-  --config frontend/${FLY_CONFIG} \
+  --config apps/web/${FLY_CONFIG} \
   --strategy bluegreen
 
 # Verify deployment
@@ -1395,7 +1395,7 @@ func (r *RegionRouter) Close() error {
 #### Frontend Region Selection
 
 ```typescript
-// frontend/src/features/onboarding/RegionSelector.tsx
+// apps/web/src/features/onboarding/RegionSelector.tsx
 import { useState } from 'react';
 import { useClerk } from '@clerk/clerk-react';
 

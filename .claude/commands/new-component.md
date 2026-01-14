@@ -15,7 +15,7 @@ Example: `/new-component transactions TransactionFilters`
 For a new feature page, create this structure:
 
 ```
-frontend/src/features/featurename/
+apps/web/src/features/featurename/
 ├── types.ts
 ├── constants.ts (if needed)
 ├── components/
@@ -55,7 +55,7 @@ export type FeatureStatus = 'active' | 'inactive' | 'pending'
 
 ```typescript
 import { useState, useCallback, useMemo } from 'react'
-import { useGetFeatures } from '@/api/generated/endpoints/features/features'
+import { useGetFeatures } from '@boostedbudget/api-client/endpoints/features/features'
 import type { Feature, FeatureFilters } from '../types'
 
 export interface UseFeatureDataOptions {
@@ -102,7 +102,7 @@ const { mockUseGetFeatures } = vi.hoisted(() => ({
   mockUseGetFeatures: vi.fn(),
 }))
 
-vi.mock('@/api/generated/endpoints/features/features', () => ({
+vi.mock('@boostedbudget/api-client/endpoints/features/features', () => ({
   useGetFeatures: mockUseGetFeatures,
 }))
 
@@ -239,7 +239,7 @@ export * from './types'
 
 ## Add Route
 
-In `frontend/src/App.tsx`:
+In `apps/web/src/App.tsx`:
 
 ```typescript
 import { FeatureNamePage } from '@/features/featurename'

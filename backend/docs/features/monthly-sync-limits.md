@@ -201,7 +201,7 @@ func (h *SyncStatsHandler) GetSyncStats(c echo.Context) error {
 
 ### Frontend Integration
 
-**Component**: `SyncStatsCard` (`frontend/src/features/accounts/SyncStatsCard.tsx`)
+**Component**: `SyncStatsCard` (`apps/web/src/features/accounts/SyncStatsCard.tsx`)
 
 **Features**:
 - Real-time progress bar (visual % of limit used)
@@ -218,7 +218,7 @@ func (h *SyncStatsHandler) GetSyncStats(c echo.Context) error {
 4. **At Limit**: Progress bar in orange + warning alert
 5. **Unlimited**: No progress bar, shows unlimited badge
 
-**API Client**: `frontend/src/features/accounts/api/syncStatsApi.ts`
+**API Client**: `apps/web/src/features/accounts/api/syncStatsApi.ts`
 
 ```typescript
 export async function fetchSyncStats(): Promise<SyncStats> {

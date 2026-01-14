@@ -238,7 +238,7 @@ flyctl secrets set \
   --app boostedbudget-web
 
 # Redeploy to pick up new URL
-cd frontend
+cd apps/web
 flyctl deploy
 ```
 

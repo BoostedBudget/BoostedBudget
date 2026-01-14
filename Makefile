@@ -71,7 +71,7 @@ test-ci:
 	cd backend && go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
 	@echo "Checking backend coverage threshold..."
 	./scripts/check-coverage.sh backend/coverage.out 60
-	cd frontend && bun run test:ci
+	cd apps/web && bun run test:ci
 	@echo "All CI tests passed!"
 
 # Fast Tests (No E2E) - For rapid iteration during development
@@ -112,11 +112,11 @@ test-fast:
 	@echo "✅ Backend coverage: backend/coverage.html"
 	@echo ""
 	@echo "3️⃣  Frontend Tests (bun:test + vitest combined coverage)..."
-	@cd frontend && bun run test:ci
-	@echo "✅ Frontend coverage: frontend/coverage/combined.lcov"
+	@cd apps/web && bun run test:ci
+	@echo "✅ Frontend coverage: apps/web/coverage/combined.lcov"
 	@echo ""
 	@echo "4️⃣  Linting..."
-	@cd frontend && bun run lint
+	@cd apps/web && bun run lint
 	@echo "✅ Linting passed"
 	@echo ""
 	@echo "========================================"
@@ -125,8 +125,8 @@ test-fast:
 	@echo ""
 	@echo "📄 Coverage Reports:"
 	@echo "  Backend:  backend/coverage.html (open in browser)"
-	@echo "  Frontend: frontend/coverage/combined.lcov (bun:test + vitest combined)"
-	@echo "            frontend/coverage/html/index.html (if lcov/genhtml installed)"
+	@echo "  Frontend: apps/web/coverage/combined.lcov (bun:test + vitest combined)"
+	@echo "            apps/web/coverage/html/index.html (if lcov/genhtml installed)"
 	@echo ""
 	@echo "⚠️  Remember: Run 'make test-all' to include E2E tests before creating PRs!"
 
@@ -166,15 +166,15 @@ test-all:
 	@echo "✅ Backend coverage: backend/coverage.html"
 	@echo ""
 	@echo "3️⃣  Frontend Tests (bun:test + vitest combined coverage)..."
-	@cd frontend && bun run test:ci
-	@echo "✅ Frontend coverage: frontend/coverage/combined.lcov"
+	@cd apps/web && bun run test:ci
+	@echo "✅ Frontend coverage: apps/web/coverage/combined.lcov"
 	@echo ""
 	@echo "4️⃣  Building Backend Binary for E2E Tests..."
 	@cd backend && go build -o bin/server ./cmd/server
 	@echo "✅ Backend binary: backend/bin/server"
 	@echo ""
 	@echo "5️⃣  E2E Tests..."
-	@cd frontend && bun run test:e2e -- --reporter=line
+	@cd apps/web && bun run test:e2e -- --reporter=line
 	@echo ""
 	@echo "========================================"
 	@echo "✅ All tests complete!"
@@ -182,21 +182,21 @@ test-all:
 	@echo ""
 	@echo "📄 Coverage Reports:"
 	@echo "  Backend:  backend/coverage.html (open in browser)"
-	@echo "  Frontend: frontend/coverage/combined.lcov (bun:test + vitest combined)"
-	@echo "            frontend/coverage/html/index.html (if lcov/genhtml installed)"
+	@echo "  Frontend: apps/web/coverage/combined.lcov (bun:test + vitest combined)"
+	@echo "            apps/web/coverage/html/index.html (if lcov/genhtml installed)"
 
 # Frontend
 frontend-install:
-	cd frontend && bun install
+	bun install
 
 frontend-dev:
-	cd frontend && bun run dev
+	cd apps/web && bun run dev
 
 frontend-build: frontend-test
-	cd frontend && bun run build
+	cd apps/web && bun run build
 
 frontend-test:
-	cd frontend && bun run test:ci
+	cd apps/web && bun run test:ci
 
 # Database migrations
 migrate-up:
@@ -246,22 +246,22 @@ validate-openapi: generate-openapi
 generate-api-client:
 	@echo "Generating TypeScript API client from OpenAPI spec..."
 	@echo "📦 Installing dependencies with npm (required for orval - Bun has AJV bug)..."
-	@cd frontend && rm -rf node_modules && npm install --silent
+	@cd packages/api-client && rm -rf node_modules && npm install --silent
 	@echo "🔄 Running orval..."
-	@cd frontend && npx orval
+	@cd packages/api-client && npx orval
 	@echo "📦 Restoring Bun dependencies..."
-	@cd frontend && rm -rf node_modules && bun install --frozen-lockfile
-	@echo "✅ Generated frontend/src/api/generated/"
+	@cd packages/api-client && rm -rf node_modules && bun install
+	@echo "✅ Generated packages/api-client/src/"
 
 validate-api-client: generate-api-client
 	@echo "Checking if TypeScript client is up to date..."
-	@if git diff --exit-code frontend/src/api/generated > /dev/null 2>&1; then \
+	@if git diff --exit-code packages/api-client/src > /dev/null 2>&1; then \
 		echo "✅ TypeScript API client is up to date"; \
 	else \
 		echo "❌ ERROR: TypeScript API client is outdated!"; \
 		echo "The generated client differs from the committed version."; \
 		echo "Run 'make generate-api-client' and commit the changes."; \
-		git diff frontend/src/api/generated | head -50; \
+		git diff packages/api-client/src | head -50; \
 		exit 1; \
 	fi
 
@@ -284,11 +284,12 @@ generate:
 # Linting
 lint:
 	cd backend && golangci-lint run
-	cd frontend && bun run lint
+	cd apps/web && bun run lint
 
 # Cleanup
 clean:
 	rm -rf backend/bin
-	rm -rf frontend/dist
+	rm -rf apps/web/dist
 	rm -rf backend/tmp
+	rm -rf .turbo
 	docker-compose down -v
