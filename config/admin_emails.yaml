@@ -1,0 +1,9 @@
+# Hardcoded admin emails - these users always have admin access
+# regardless of their Clerk privateMetadata.roles setting.
+# Use for: platform owners, developers who need guaranteed access.
+#
+# Note: Email matching is case-insensitive.
+admin_emails:
+  - "owner-1@example.com"
+  - "owner-2@example.com"
+  - "owner-3@example.com"

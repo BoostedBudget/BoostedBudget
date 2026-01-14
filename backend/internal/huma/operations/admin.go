@@ -11,13 +11,7 @@ import (
 )
 
 // AdminHandler handles admin-only endpoints for testing and troubleshooting.
-//
-// Security: These endpoints are protected by:
-//  1. Route registration only in qa environment (main.go)
-//  2. AdminMiddleware returns 404 in production (security through obscurity)
-//  3. Service-level validations (e.g., PlaidService checks sandbox environment)
-//
-// Future: Issue #309 will add role-based access control requiring "admin" role in JWT.
+// Routes are protected by AdminMiddleware with role validation and environment checks.
 type AdminHandler struct {
 	plaidService      services.PlaidService
 	linkedItemRepo    repository.LinkedItemRepository
@@ -41,7 +35,7 @@ func NewAdminHandler(
 
 // FireWebhookInput represents the input for firing a Plaid webhook.
 type FireWebhookInput struct {
-	inputs.AuthenticatedInput
+	inputs.AdminAuthenticatedInput
 	Body FireWebhookRequestBody
 }
 
@@ -70,17 +64,12 @@ type FireWebhookResponseBody struct {
 //
 // POST /api/v1/admin/plaid/fire-webhook
 //
-// Security:
-//   - QA-only (AdminMiddleware returns 404 in production)
-//   - Requires Clerk JWT authentication
-//   - Future (Issue #309): Will require "admin" role in JWT
-//
 // Error Responses:
 //   - 400: Invalid request body or validation failure
+//   - 401: Not authenticated
+//   - 403: Not an admin (checked by AdminMiddleware)
 //   - 404: Linked item not found
 //   - 500: Decryption failure or Plaid API error
-//
-// Issue #308: Admin API for Manual Webhook Firing in QA
 func (h *AdminHandler) FireWebhook(ctx context.Context, input *FireWebhookInput) (*FireWebhookOutput, error) {
 	// 1. Fetch linked item by Plaid item ID (not database primary key)
 	// Issue #331: item_id is the Plaid identifier, not the database primary key
@@ -116,7 +105,7 @@ func (h *AdminHandler) FireWebhook(ctx context.Context, input *FireWebhookInput)
 }
 
 // RegisterAdminRoutes registers admin routes with the Huma API.
-// Note: These routes should ONLY be registered in QA environment.
+// Routes are protected by AdminMiddleware (environment and role validation).
 func RegisterAdminRoutes(api huma.API, handler *AdminHandler) {
 	// POST /api/v1/admin/plaid/fire-webhook - Fire a Plaid webhook (QA only)
 	huma.Register(api, huma.Operation{

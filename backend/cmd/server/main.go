@@ -15,6 +15,7 @@ import (
 	echomiddleware "github.com/labstack/echo/v4/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/database"
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	humaconfig "github.com/maxnussbaum/BoostedBudget/internal/huma"
 	humamiddleware "github.com/maxnussbaum/BoostedBudget/internal/huma/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/operations"
@@ -557,6 +558,20 @@ func main() {
 		humaAPI.UseMiddleware(humaClerkMiddleware)
 		log.Println("✅ Huma Clerk middleware applied")
 
+		// Load admin email config and create AdminService (Issue #309)
+		adminEmailConfig, err := config.LoadAdminEmailConfig()
+		if err != nil {
+			log.Printf("⚠️  Failed to load admin email config: %v (using empty list)", err)
+			adminEmailConfig = &domain.AdminEmailConfig{AdminEmails: []string{}}
+		}
+		adminService := services.NewAdminService(cfg.ClerkSecretKey, adminEmailConfig.AdminEmails)
+		log.Printf("✅ Admin service initialized with %d hardcoded admin emails", len(adminEmailConfig.AdminEmails))
+
+		// Apply Huma Admin middleware for admin routes (Issue #309)
+		humaAdminMiddleware := humamiddleware.NewAdminMiddleware(cfg, adminService)
+		humaAPI.UseMiddleware(humaAdminMiddleware)
+		log.Println("✅ Huma Admin middleware applied")
+
 		// Register Huma tag routes (Issue #345: User tag management)
 		humaTagHandler := operations.NewTagHandler(userTagService)
 		operations.RegisterTagRoutes(humaAPI, humaTagHandler)
@@ -640,12 +655,12 @@ func main() {
 		operations.RegisterCategoryPreviewRoutes(humaAPI, humaCategoryPreviewHandler)
 		log.Println("✅ Huma category preview routes registered")
 
-		// Register Huma admin routes (Issue #559: Huma migration) - qa only
-		// Security: Only registered in qa environment
-		if plaidService != nil && encryptionService != nil && cfg.Environment == "qa" {
+		// Register Huma admin routes (Issue #559: Huma migration)
+		// Security: AdminMiddleware handles environment check (404 in non-qa) and role validation (Issue #309)
+		if plaidService != nil && encryptionService != nil {
 			humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, encryptionService)
 			operations.RegisterAdminRoutes(humaAPI, humaAdminHandler)
-			log.Println("✅ Huma admin routes registered (qa only)")
+			log.Println("✅ Huma admin routes registered (protected by AdminMiddleware)")
 		}
 
 		// API v1 routes (Echo - to be migrated to Huma incrementally)
