@@ -235,4 +235,91 @@ describe('LandingPage', () => {
       })
     })
   })
+
+  /**
+   * CRITICAL: Centering Layout Tests
+   *
+   * These tests lock in the CSS centering behavior. The centering depends on:
+   * 1. The wrapper having "landing-page" class (triggers CSS :has() rule in index.css)
+   * 2. Section containers having "mx-auto" class (centered via LandingPage.css)
+   * 3. Content constrained with "max-w-7xl" class
+   *
+   * DO NOT REMOVE THESE TESTS - they prevent regression of centering issues.
+   * See Issue #699 for the fix history.
+   */
+  describe('Centering Layout (CRITICAL)', () => {
+    it('should have landing-page class on wrapper to trigger CSS :has() rule', () => {
+      renderWithProviders(<LandingPage />)
+
+      // The landing-page class is CRITICAL - it triggers the CSS :has() rule
+      // in index.css that removes #root constraints
+      const wrapper = document.querySelector('.landing-page')
+      expect(wrapper).not.toBeNull()
+    })
+
+    it('should have mx-auto class on section containers for horizontal centering', () => {
+      renderWithProviders(<LandingPage />)
+
+      // Every major section needs mx-auto for centering
+      // The CSS rule .landing-page .mx-auto { margin-left/right: auto } handles this
+      const centeredContainers = document.querySelectorAll('.landing-page .mx-auto')
+      expect(centeredContainers.length).toBeGreaterThanOrEqual(5) // Hero, Features, HowItWorks, FAQ, Pricing
+    })
+
+    it('should have max-w-7xl class on content containers for consistent width', () => {
+      renderWithProviders(<LandingPage />)
+
+      // Content containers should be width-constrained
+      const constrainedContainers = document.querySelectorAll('.landing-page .max-w-7xl')
+      expect(constrainedContainers.length).toBeGreaterThanOrEqual(4)
+    })
+
+    it('should have text-center class on section headers', () => {
+      renderWithProviders(<LandingPage />)
+
+      // Section headers should be centered
+      const centeredTextElements = document.querySelectorAll('.landing-page .text-center')
+      expect(centeredTextElements.length).toBeGreaterThanOrEqual(4) // Multiple sections
+    })
+
+    it('hero section should have mx-auto on content container', () => {
+      renderWithProviders(<LandingPage />)
+
+      const heroSection = document.querySelector('.hero-section')
+      expect(heroSection).not.toBeNull()
+
+      const heroContainer = heroSection?.querySelector('.mx-auto')
+      expect(heroContainer).not.toBeNull()
+    })
+
+    it('features section should have mx-auto on content container', () => {
+      renderWithProviders(<LandingPage />)
+
+      const featuresSection = document.querySelector('.features-section')
+      expect(featuresSection).not.toBeNull()
+
+      const featuresContainer = featuresSection?.querySelector('.mx-auto')
+      expect(featuresContainer).not.toBeNull()
+    })
+
+    it('how-it-works section should have mx-auto on content container', () => {
+      renderWithProviders(<LandingPage />)
+
+      const howItWorksSection = document.querySelector('.how-it-works-section')
+      expect(howItWorksSection).not.toBeNull()
+
+      const howItWorksContainer = howItWorksSection?.querySelector('.mx-auto')
+      expect(howItWorksContainer).not.toBeNull()
+    })
+
+    it('faq section should have mx-auto on content container', () => {
+      renderWithProviders(<LandingPage />)
+
+      const faqSection = document.querySelector('.faq-section')
+      expect(faqSection).not.toBeNull()
+
+      const faqContainer = faqSection?.querySelector('.mx-auto')
+      expect(faqContainer).not.toBeNull()
+    })
+  })
 })
