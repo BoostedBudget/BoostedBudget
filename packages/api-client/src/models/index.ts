@@ -121,6 +121,7 @@ export * from './getUserAccountsParams';
 export * from './getUserCategories200';
 export * from './getUserRules200';
 export * from './getUserTags200';
+export * from './grantTrialResponseBody';
 export * from './healthChecks';
 export * from './healthResponse';
 export * from './incomeSource';

@@ -39,7 +39,8 @@ import type {
 import type {
   ErrorModel,
   FireWebhookRequestBody,
-  FireWebhookResponseBody
+  FireWebhookResponseBody,
+  GrantTrialResponseBody
 } from '../../models';
 
 import { customInstance } from '../../client';
@@ -139,6 +140,69 @@ export const useFireWebhook = <TError = ErrorType<ErrorModel>,
       > => {
 
       const mutationOptions = getFireWebhookMutationOptions(options);
+
+      return useMutation(mutationOptions, queryClient);
+    }
+    /**
+ * Grants a 60-day trial to the authenticated user. For E2E testing. Returns success if user already has trial.
+ * @summary Grant trial subscription (QA only)
+ */
+export const grantTrial = (
+    
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+      
+      
+      return customInstance<GrantTrialResponseBody>(
+      {url: `/api/v1/admin/subscription/grant-trial`, method: 'POST', signal
+    },
+      options);
+    }
+  
+
+
+export const getGrantTrialMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof grantTrial>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof grantTrial>>, TError,void, TContext> => {
+
+const mutationKey = ['grantTrial'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof grantTrial>>, void> = () => {
+          
+
+          return  grantTrial(requestOptions)
+        }
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type GrantTrialMutationResult = NonNullable<Awaited<ReturnType<typeof grantTrial>>>
+    
+    export type GrantTrialMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Grant trial subscription (QA only)
+ */
+export const useGrantTrial = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof grantTrial>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof grantTrial>>,
+        TError,
+        void,
+        TContext
+      > => {
+
+      const mutationOptions = getGrantTrialMutationOptions(options);
 
       return useMutation(mutationOptions, queryClient);
     }
