@@ -62,31 +62,31 @@ test.describe('Navigation - Unauthenticated', () => {
     test('should open mobile nav drawer', async ({ page }) => {
       await page.click('button[aria-label="Open menu"]');
 
-      // Sheet should open (dialog role)
-      await expect(page.getByRole('dialog')).toBeVisible();
+      // Sheet should open - use data-slot to distinguish from cookie consent dialog
+      await expect(page.locator('[data-slot="sheet-content"]')).toBeVisible();
     });
 
     test('should show logo in mobile drawer', async ({ page }) => {
       await page.click('button[aria-label="Open menu"]');
 
-      // Logo should appear in the drawer
-      await expect(page.locator('[role="dialog"]').getByText('BoostedBudget')).toBeVisible();
+      // Logo should appear in the drawer - use data-slot for Sheet component
+      await expect(page.locator('[data-slot="sheet-content"]').getByText('BoostedBudget')).toBeVisible();
     });
 
     test('should show login button in mobile drawer when not authenticated', async ({ page }) => {
       await page.click('button[aria-label="Open menu"]');
 
-      await expect(page.locator('[role="dialog"]').getByRole('button', { name: /log in/i })).toBeVisible();
+      await expect(page.locator('[data-slot="sheet-content"]').getByRole('button', { name: /log in/i })).toBeVisible();
     });
 
     test('should close drawer on close button click', async ({ page }) => {
       await page.click('button[aria-label="Open menu"]');
-      await expect(page.getByRole('dialog')).toBeVisible();
+      await expect(page.locator('[data-slot="sheet-content"]')).toBeVisible();
 
       // Click close button (X) in the sheet
-      await page.locator('[role="dialog"]').getByRole('button', { name: 'Close' }).click();
+      await page.locator('[data-slot="sheet-content"]').getByRole('button', { name: 'Close' }).click();
 
-      await expect(page.getByRole('dialog')).not.toBeVisible();
+      await expect(page.locator('[data-slot="sheet-content"]')).not.toBeVisible();
     });
   });
 
