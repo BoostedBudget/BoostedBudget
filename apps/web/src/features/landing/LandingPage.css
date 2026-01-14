@@ -10,7 +10,7 @@
   scroll-behavior: smooth;
 }
 
-/* Center content containers - Tailwind mx-auto doesn't generate CSS in this project */
+/* Ensure mx-auto works for centering */
 .landing-page .mx-auto {
   margin-left: auto;
   margin-right: auto;

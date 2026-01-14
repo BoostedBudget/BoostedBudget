@@ -12,10 +12,6 @@ import { Rocket, CreditCard, Calendar, X } from 'lucide-react'
 export function FinalCTA() {
   const { openSignUp } = useClerk()
 
-  const handleGetStarted = () => {
-    openSignUp()
-  }
-
   return (
     <section
       className="final-cta-section relative overflow-hidden bg-gradient-to-br from-blue-600 to-blue-700 py-24 sm:py-32"
@@ -48,7 +44,7 @@ export function FinalCTA() {
         <div className="mt-10">
           <Button
             size="lg"
-            onClick={handleGetStarted}
+            onClick={openSignUp}
             className="bg-white px-12 py-7 text-lg font-semibold text-blue-600 shadow-lg shadow-blue-900/20 hover:bg-blue-50 hover:shadow-xl"
           >
             Start Free Today

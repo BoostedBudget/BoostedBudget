@@ -16,9 +16,9 @@ const previewTiers: TierName[] = ['premium', 'household_3', 'household_5']
 // Key features to highlight for each tier
 const tierHighlights: Record<TierName, string[]> = {
   premium: ['Unlimited bank accounts', 'Unlimited automation rules', 'Ad-free experience'],
-  household_2: ['Unlimited bank accounts', '2 household members', 'AI-powered insights'],
+  household_2: [],
   household_3: ['Unlimited bank accounts', '3 household members', 'AI-powered insights'],
-  household_4: ['Unlimited bank accounts', '4 household members', 'Priority support'],
+  household_4: [],
   household_5: [
     'Unlimited bank accounts',
     '5+ household members',

@@ -18,6 +18,41 @@ const navLinks = [
   { label: 'FAQ', href: '#faq' },
 ]
 
+function NavLink({
+  link,
+  isScrolled,
+  onNavigate,
+}: {
+  link: (typeof navLinks)[0]
+  isScrolled: boolean
+  onNavigate?: () => void
+}) {
+  const baseClass = `text-sm font-medium transition-colors hover:text-blue-500 ${
+    isScrolled ? 'text-slate-600 dark:text-slate-300' : 'text-white/80 hover:text-white'
+  }`
+
+  if (link.href.startsWith('#')) {
+    return (
+      <button
+        onClick={() => {
+          const element = document.querySelector(link.href)
+          element?.scrollIntoView({ behavior: 'smooth' })
+          onNavigate?.()
+        }}
+        className={baseClass}
+      >
+        {link.label}
+      </button>
+    )
+  }
+
+  return (
+    <Link to={link.href} className={baseClass} onClick={onNavigate}>
+      {link.label}
+    </Link>
+  )
+}
+
 export function LandingHeader() {
   const { openSignUp, openSignIn } = useClerk()
   const [isScrolled, setIsScrolled] = useState(false)
@@ -30,16 +65,6 @@ export function LandingHeader() {
     window.addEventListener('scroll', handleScroll)
     return () => window.removeEventListener('scroll', handleScroll)
   }, [])
-
-  const handleNavClick = (href: string) => {
-    setIsMobileMenuOpen(false)
-    if (href.startsWith('#')) {
-      const element = document.querySelector(href)
-      if (element) {
-        element.scrollIntoView({ behavior: 'smooth' })
-      }
-    }
-  }
 
   return (
     <header
@@ -59,7 +84,7 @@ export function LandingHeader() {
           <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${
             isScrolled ? 'bg-blue-600' : 'bg-white/10'
           }`}>
-            <Rocket className={`h-5 w-5 ${isScrolled ? 'text-white' : 'text-white'}`} />
+            <Rocket className="h-5 w-5 text-white" />
           </div>
           <span className={`text-xl font-bold ${
             isScrolled ? 'text-slate-900 dark:text-white' : 'text-white'
@@ -71,27 +96,7 @@ export function LandingHeader() {
         {/* Desktop Navigation */}
         <div className="hidden items-center gap-8 md:flex">
           {navLinks.map((link) => (
-            link.href.startsWith('#') ? (
-              <button
-                key={link.label}
-                onClick={() => handleNavClick(link.href)}
-                className={`text-sm font-medium transition-colors hover:text-blue-500 ${
-                  isScrolled ? 'text-slate-600 dark:text-slate-300' : 'text-white/80 hover:text-white'
-                }`}
-              >
-                {link.label}
-              </button>
-            ) : (
-              <Link
-                key={link.label}
-                to={link.href}
-                className={`text-sm font-medium transition-colors hover:text-blue-500 ${
-                  isScrolled ? 'text-slate-600 dark:text-slate-300' : 'text-white/80 hover:text-white'
-                }`}
-              >
-                {link.label}
-              </Link>
-            )
+            <NavLink key={link.label} link={link} isScrolled={isScrolled} />
           ))}
         </div>
 
@@ -136,24 +141,12 @@ export function LandingHeader() {
         <div className="border-t border-slate-200 bg-white px-4 py-4 dark:border-slate-700 dark:bg-slate-900 md:hidden">
           <div className="flex flex-col gap-4">
             {navLinks.map((link) => (
-              link.href.startsWith('#') ? (
-                <button
-                  key={link.label}
-                  onClick={() => handleNavClick(link.href)}
-                  className="text-left text-sm font-medium text-slate-600 transition-colors hover:text-blue-500 dark:text-slate-300"
-                >
-                  {link.label}
-                </button>
-              ) : (
-                <Link
-                  key={link.label}
-                  to={link.href}
-                  onClick={() => setIsMobileMenuOpen(false)}
-                  className="text-sm font-medium text-slate-600 transition-colors hover:text-blue-500 dark:text-slate-300"
-                >
-                  {link.label}
-                </Link>
-              )
+              <NavLink
+                key={link.label}
+                link={link}
+                isScrolled={true}
+                onNavigate={() => setIsMobileMenuOpen(false)}
+              />
             ))}
             <div className="flex flex-col gap-2 border-t border-slate-200 pt-4 dark:border-slate-700">
               <Button
