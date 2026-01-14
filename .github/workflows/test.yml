@@ -257,13 +257,6 @@ jobs:
           go build -o bin/server ./cmd/server
           echo "::endgroup::"
 
-      - name: Upload backend binary artifact
-        uses: actions/upload-artifact@v6
-        with:
-          name: backend-binary
-          path: ${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
-          retention-days: 1
-
       - name: Upload backend coverage report
         uses: actions/upload-artifact@v6
         with:
@@ -369,13 +362,12 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
-  # E2E Tests (depends on backend-test for binary)
+  # E2E Tests (runs in parallel with backend/frontend tests)
   # =============================================================================
   e2e-test:
     name: E2E Tests
-    needs: [detect-changes, backend-test]
-    # Run if backend-test succeeded OR was skipped (frontend-only changes)
-    if: always() && !cancelled() && (needs.backend-test.result == 'success' || needs.backend-test.result == 'skipped')
+    needs: [detect-changes]
+    if: always() && !cancelled()
     runs-on: [self-hosted, macOS, mac-mini]
     environment: e2e  # Access Clerk secrets from e2e environment
     env:
@@ -414,24 +406,17 @@ jobs:
             backend-binary-${{ runner.os }}-
 
       - name: Set up Go (for building backend if needed)
-        if: steps.cache-backend-binary.outputs.cache-hit != 'true' && needs.backend-test.result == 'skipped'
+        if: steps.cache-backend-binary.outputs.cache-hit != 'true'
         uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
 
       - name: Build backend binary (cache miss fallback)
-        if: steps.cache-backend-binary.outputs.cache-hit != 'true' && needs.backend-test.result == 'skipped'
+        if: steps.cache-backend-binary.outputs.cache-hit != 'true'
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
         run: |
           mkdir -p bin
           go build -o bin/server ./cmd/server
-
-      - name: Download backend binary artifact (fallback)
-        if: steps.cache-backend-binary.outputs.cache-hit != 'true' && needs.backend-test.result == 'success'
-        uses: actions/download-artifact@v7
-        with:
-          name: backend-binary
-          path: ${{ env.UNIQUE_WORKSPACE }}/backend/bin
 
       - name: Verify backend binary exists
         run: |
