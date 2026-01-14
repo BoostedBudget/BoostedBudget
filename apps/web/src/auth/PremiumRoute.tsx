@@ -36,10 +36,17 @@ function LoadingSkeleton() {
   )
 }
 
+interface ProfileErrorProps {
+  error: Error | null
+}
+
 /**
  * Error state displayed when profile API fails
  */
-function ProfileError() {
+function ProfileError({ error }: ProfileErrorProps) {
+  // Log error for debugging - will appear in Playwright console output
+  console.error('[PremiumRoute] Profile API error:', error?.message, error)
+
   return (
     <div className="flex justify-center items-center min-h-screen bg-gray-50 dark:bg-gray-900">
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8 max-w-md text-center">
@@ -50,6 +57,12 @@ function ProfileError() {
         <p className="text-gray-600 dark:text-gray-400 mb-6">
           Please try refreshing the page. If the problem persists, try signing out and back in.
         </p>
+        {/* Show error details in development/E2E for debugging */}
+        {import.meta.env.DEV && error && (
+          <pre className="text-xs text-red-500 mb-4 text-left bg-red-50 dark:bg-red-900/20 p-3 rounded overflow-auto max-h-32">
+            {error.message}
+          </pre>
+        )}
         <button
           onClick={() => window.location.reload()}
           className="px-6 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors"
@@ -72,7 +85,7 @@ export function PremiumRoute({ children }: PremiumRouteProps) {
   // Handle API error - show error state instead of redirecting to pricing
   // This prevents false redirects when the profile API temporarily fails
   if (error) {
-    return <ProfileError />
+    return <ProfileError error={error} />
   }
 
   // Safety guard: if user is null without error, keep showing loading
