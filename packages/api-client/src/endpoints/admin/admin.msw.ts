@@ -40,11 +40,14 @@ import type {
 } from 'msw';
 
 import type {
-  FireWebhookResponseBody
+  FireWebhookResponseBody,
+  GrantTrialResponseBody
 } from '../../models';
 
 
 export const getFireWebhookResponseMock = (overrideResponse: Partial< FireWebhookResponseBody > = {}): FireWebhookResponseBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), item_id: faker.string.alpha({length: {min: 10, max: 20}}), request_id: faker.string.alpha({length: {min: 10, max: 20}}), webhook_code: faker.string.alpha({length: {min: 10, max: 20}}), webhook_fired: faker.datatype.boolean(), ...overrideResponse})
+
+export const getGrantTrialResponseMock = (overrideResponse: Partial< GrantTrialResponseBody > = {}): GrantTrialResponseBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), message: faker.string.alpha({length: {min: 10, max: 20}}), success: faker.datatype.boolean(), ...overrideResponse})
 
 
 export const getFireWebhookMockHandler = (overrideResponse?: FireWebhookResponseBody | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<FireWebhookResponseBody> | FireWebhookResponseBody), options?: RequestHandlerOptions) => {
@@ -58,6 +61,19 @@ export const getFireWebhookMockHandler = (overrideResponse?: FireWebhookResponse
       })
   }, options)
 }
+
+export const getGrantTrialMockHandler = (overrideResponse?: GrantTrialResponseBody | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<GrantTrialResponseBody> | GrantTrialResponseBody), options?: RequestHandlerOptions) => {
+  return http.post('*/api/v1/admin/subscription/grant-trial', async (info) => {await delay(500);
+  
+    return new HttpResponse(JSON.stringify(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getGrantTrialResponseMock()),
+      { status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      })
+  }, options)
+}
 export const getAdminMock = () => [
-  getFireWebhookMockHandler()
+  getFireWebhookMockHandler(),
+  getGrantTrialMockHandler()
 ]
