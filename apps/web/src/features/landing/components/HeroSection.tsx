@@ -16,10 +16,6 @@ interface HeroSectionProps {
 export function HeroSection({ onScrollToHowItWorks }: HeroSectionProps) {
   const { openSignUp } = useClerk()
 
-  const handleGetStarted = () => {
-    openSignUp()
-  }
-
   const handleScrollToHowItWorks = () => {
     if (onScrollToHowItWorks) {
       onScrollToHowItWorks()
@@ -84,7 +80,7 @@ export function HeroSection({ onScrollToHowItWorks }: HeroSectionProps) {
           <div className="mt-12 flex flex-col items-center justify-center gap-4 sm:flex-row">
             <Button
               size="lg"
-              onClick={handleGetStarted}
+              onClick={openSignUp}
               className="w-full bg-blue-600 px-10 py-6 text-lg font-semibold shadow-lg shadow-blue-500/25 hover:bg-blue-500 hover:shadow-blue-500/30 sm:w-auto"
             >
               Start Free Today
