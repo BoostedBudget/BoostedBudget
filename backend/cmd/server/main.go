@@ -117,6 +117,10 @@ func main() {
 	var plaidCleanupService services.PlaidItemCleanupService
 	var deletionService services.DeletionService // Declared here for late binding of plaidCleanupService
 
+	// Issue #679, #680: Declare trial service and expiration check worker
+	var trialService *services.TrialService
+	var trialExpirationCheckWorker *jobs.TrialExpirationCheckWorker
+
 	// Issue #37: Declare rule scheduler manager at package scope for graceful shutdown
 	var ruleSchedulerManager *workers.RuleSchedulerManager
 
@@ -329,6 +333,22 @@ func main() {
 					log.Println("✅ Plaid cleanup service wired to deletion service")
 				}
 
+				// Issue #679, #680: Create TrialService for trial management
+				trialService = services.NewTrialService(tierConfig, profileRepo, plaidCleanupService)
+				log.Println("✅ Trial service initialized")
+
+				// Issue #679: Wire trial service to registration service for auto-grant on signup
+				registrationService.SetTrialGranter(trialService)
+				log.Println("✅ Trial service wired to registration service")
+
+				// Issue #679, #680: Create trial expiration check worker
+				trialExpirationCheckWorker = jobs.NewTrialExpirationCheckWorker(jobs.TrialExpirationCheckWorkerDeps{
+					ProfileRepo:  profileRepo,
+					TrialService: trialService,
+					Logger:       slog.New(slog.NewJSONHandler(os.Stdout, nil)),
+				})
+				log.Println("✅ Trial expiration check worker created (River)")
+
 				// Issue #36: Transaction Monitor Service for auto-detecting completed transfers
 				transactionMonitorService := services.NewTransactionMonitorService(transferSuggestionRepo)
 
@@ -409,6 +429,23 @@ func main() {
 				))
 				log.Println("✅ Item cleanup check periodic job configured (daily)")
 
+				// Issue #679, #680: Trial expiration check (daily) - finds expired trials and freezes accounts
+				// Expires trial: sets subscription_status='inactive', disconnects all Plaid items
+				if trialExpirationCheckWorker != nil {
+					periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+						river.PeriodicInterval(24*time.Hour), // Run once per day
+						func() (river.JobArgs, *river.InsertOpts) {
+							return jobs.TrialExpirationCheckArgs{
+								TriggerSource: "periodic",
+							}, &river.InsertOpts{
+								Queue: "low", // Trial checks run on low priority queue
+							}
+						},
+						&river.PeriodicJobOpts{RunOnStart: true}, // Run on startup to catch any expired trials
+					))
+					log.Println("✅ Trial expiration check periodic job configured (daily)")
+				}
+
 				if len(periodicJobs) > 0 {
 					riverConfig.PeriodicJobs = periodicJobs
 				}
@@ -480,6 +517,12 @@ func main() {
 				if itemCleanupWorker != nil {
 					river.AddWorker(riverWorkers, itemCleanupWorker)
 					log.Println("✅ Item cleanup worker registered with River")
+				}
+
+				// Issue #679, #680: Register trial expiration check worker
+				if trialExpirationCheckWorker != nil {
+					river.AddWorker(riverWorkers, trialExpirationCheckWorker)
+					log.Println("✅ Trial expiration check worker registered with River")
 				}
 
 				// Create River client

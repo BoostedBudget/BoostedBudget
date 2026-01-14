@@ -145,6 +145,15 @@ func (m *mockLinkedItemRepo) ClearCleanupSchedule(ctx context.Context, itemID st
 	return nil
 }
 
+// Issue #679, #680: Trial expiration - methods for disconnecting items
+func (m *mockLinkedItemRepo) GetActiveItemsByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error) {
+	return nil, nil
+}
+
+func (m *mockLinkedItemRepo) MarkAllUserItemsDisconnected(ctx context.Context, userID string) error {
+	return nil
+}
+
 // mockEncryptionService is a mock implementation of services.EncryptionService
 type mockEncryptionService struct {
 	decryptedToken string

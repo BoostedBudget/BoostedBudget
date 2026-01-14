@@ -1,4 +1,4 @@
-import { Pencil, EyeOff, GripVertical } from 'lucide-react'
+import { Pencil, EyeOff, GripVertical, Unplug } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { AccountIconDisplay } from './components/AccountIconDisplay'
 import type { Account, AccountIcon } from './types'
@@ -73,7 +73,12 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
     custom_icon,
     custom_emoji,
     is_hidden,
+    // Issue #679, #680: Linked item status for disconnected accounts
+    linked_item_status,
   } = account
+
+  // Check if the linked item is disconnected (subscription expired)
+  const isDisconnected = linked_item_status === 'disconnected'
 
   // Display name: nickname > official_name > name
   const displayName = nickname || official_name || name
@@ -105,7 +110,8 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
       className={cn(
         'account-card',
         isDragging && 'account-card--dragging',
-        is_hidden && 'account-card--hidden'
+        is_hidden && 'account-card--hidden',
+        isDisconnected && 'account-card--disconnected'
       )}
       style={custom_color ? { borderLeftColor: custom_color, borderLeftWidth: '4px', borderLeftStyle: 'solid' } : undefined}
     >
@@ -122,6 +128,13 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
         </div>
 
         <div className="account-card__header-right">
+          {/* Issue #679, #680: Disconnected badge when subscription expires */}
+          {isDisconnected && (
+            <span className="account-card__badge account-card__badge--disconnected" title="Account disconnected - resubscribe to reconnect">
+              <Unplug className="h-3 w-3" />
+              <span>Disconnected</span>
+            </span>
+          )}
           {is_hidden && (
             <span className="account-card__badge account-card__badge--hidden" title="Hidden account">
               <EyeOff className="h-3 w-3" />

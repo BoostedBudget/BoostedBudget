@@ -89,6 +89,16 @@ type LinkedItemRepository interface {
 
 	// ClearCleanupSchedule clears the cleanup schedule for an item (e.g., if user reconnected).
 	ClearCleanupSchedule(ctx context.Context, itemID string) error
+
+	// Issue #679, #680: Trial expiration - mark items as disconnected to preserve history
+
+	// MarkAllUserItemsDisconnected marks all linked items for a user as 'disconnected'.
+	// This is used when a subscription expires to preserve transaction history while
+	// stopping Plaid syncing. Unlike Delete, this does NOT cascade delete accounts/transactions.
+	MarkAllUserItemsDisconnected(ctx context.Context, userID string) error
+
+	// GetActiveItemsByUserID retrieves all active (non-replaced, non-disconnected) linked items for a user
+	GetActiveItemsByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error)
 }
 
 // linkedItemRepository implements LinkedItemRepository using PostgreSQL
@@ -787,4 +797,84 @@ func (r *linkedItemRepository) ClearCleanupSchedule(ctx context.Context, itemID 
 
 	_, err := r.db.Exec(ctx, query, now, itemID)
 	return err
+}
+
+// MarkAllUserItemsDisconnected marks all linked items for a user as 'disconnected'.
+// This preserves transaction history while indicating the Plaid connection is no longer active.
+// Issue #679, #680: Trial expiration
+func (r *linkedItemRepository) MarkAllUserItemsDisconnected(ctx context.Context, userID string) error {
+	now := time.Now()
+
+	query := `
+		UPDATE linked_items
+		SET status = 'disconnected',
+		    updated_at = $1
+		WHERE user_id = $2
+		  AND status NOT IN ('disconnected', 'replaced')
+	`
+
+	_, err := r.db.Exec(ctx, query, now, userID)
+	return err
+}
+
+// GetActiveItemsByUserID retrieves all active (non-replaced, non-disconnected) linked items for a user
+func (r *linkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error) {
+	query := `
+		SELECT id, user_id, item_id, access_token_encrypted,
+		       institution_id, institution_name, provider,
+		       cursor, last_synced_at,
+		       status, error_code, error_message, last_error_at,
+		       retry_count, next_retry_at,
+		       replaced_at, replaced_by_id,
+		       created_at, updated_at
+		FROM linked_items
+		WHERE user_id = $1
+		  AND status NOT IN ('disconnected', 'replaced')
+		ORDER BY created_at DESC
+	`
+
+	rows, err := r.db.Query(ctx, query, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []domain.LinkedItem
+	for rows.Next() {
+		var item domain.LinkedItem
+		err := rows.Scan(
+			&item.ID,
+			&item.UserID,
+			&item.ItemID,
+			&item.AccessTokenEncrypted,
+			&item.InstitutionID,
+			&item.InstitutionName,
+			&item.Provider,
+			&item.Cursor,
+			&item.LastSyncedAt,
+			&item.Status,
+			&item.ErrorCode,
+			&item.ErrorMessage,
+			&item.LastErrorAt,
+			&item.RetryCount,
+			&item.NextRetryAt,
+			&item.ReplacedAt,
+			&item.ReplacedByID,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if items != nil {
+		return items, nil
+	}
+	return []domain.LinkedItem{}, nil
 }

@@ -1919,6 +1919,33 @@ func (m *mockProfileRepoForCursorTests) DeleteUserCascade(ctx context.Context, u
 	return args.Error(0)
 }
 
+// Issue #679, #680: Trial expiration - methods for trial management
+func (m *mockProfileRepoForCursorTests) GetUsersWithExpiredTrials(ctx context.Context) ([]*domain.User, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
+}
+
+func (m *mockProfileRepoForCursorTests) GetUsersWithExpiringTrials(ctx context.Context, withinDays int) ([]*domain.User, error) {
+	args := m.Called(ctx, withinDays)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
+}
+
+func (m *mockProfileRepoForCursorTests) UpdateSubscriptionStatus(ctx context.Context, userID string, status string) error {
+	args := m.Called(ctx, userID, status)
+	return args.Error(0)
+}
+
+func (m *mockProfileRepoForCursorTests) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error {
+	args := m.Called(ctx, userID, status, trialStartedAt, trialEndsAt, hadTrial)
+	return args.Error(0)
+}
+
 // ============================================================================
 // CURSOR PERSISTENCE TESTS (Critical)
 // Plaid Staging Validation - Cursor handling edge cases

@@ -31,6 +31,8 @@ components:
           type: boolean
         linked_item_id:
           type: string
+        linked_item_status:
+          type: string
         mask:
           type: string
         name:
@@ -2660,6 +2662,8 @@ components:
           type: string
         email_verified:
           type: boolean
+        had_trial:
+          type: boolean
         id:
           type: string
         is_active:
@@ -2683,6 +2687,15 @@ components:
           type: string
         subscription_tier:
           type: string
+        trial_days_remaining:
+          format: int64
+          type: integer
+        trial_ends_at:
+          format: date-time
+          type: string
+        trial_started_at:
+          format: date-time
+          type: string
         updated_at:
           format: date-time
           type: string
@@ -2693,6 +2706,7 @@ components:
         - email_verified
         - subscription_tier
         - subscription_status
+        - had_trial
         - primary_region
         - is_active
         - is_deleted
