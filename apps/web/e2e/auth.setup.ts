@@ -98,7 +98,9 @@ setup('authenticate', async ({ page }) => {
   // Issue #698: Grant trial subscription for E2E test user
   // This ensures the test user has an active subscription so PremiumRoute allows access to /dashboard
   console.log('   Granting trial subscription for E2E test...');
-  const apiUrl = process.env.VITE_API_URL || 'http://localhost:32600';
+  // Use E2E_BACKEND_PORT which is set by run-e2e-with-ports.sh for dynamic port allocation
+  const backendPort = process.env.E2E_BACKEND_PORT || '8080';
+  const apiUrl = `http://localhost:${backendPort}`;
   try {
     const trialResponse = await page.request.post(`${apiUrl}/api/v1/admin/subscription/grant-trial`);
     if (trialResponse.ok()) {
