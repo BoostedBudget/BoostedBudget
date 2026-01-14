@@ -95,6 +95,25 @@ setup('authenticate', async ({ page }) => {
     // Continue anyway - some UI may not show user button
   }
 
+  // Issue #698: Grant trial subscription for E2E test user
+  // This ensures the test user has an active subscription so PremiumRoute allows access to /dashboard
+  console.log('   Granting trial subscription for E2E test...');
+  const apiUrl = process.env.VITE_API_URL || 'http://localhost:32600';
+  try {
+    const trialResponse = await page.request.post(`${apiUrl}/api/v1/admin/subscription/grant-trial`);
+    if (trialResponse.ok()) {
+      const body = await trialResponse.json();
+      console.log(`   ✓ Trial grant: ${body.message}`);
+    } else {
+      const body = await trialResponse.text();
+      console.log(`   [Warning] Trial grant failed: ${trialResponse.status()} - ${body}`);
+      // Continue anyway - user might already have active subscription
+    }
+  } catch (error) {
+    console.log(`   [Warning] Trial grant request error: ${error}`);
+    // Continue anyway - endpoint might not be available in some environments
+  }
+
   // Verify by accessing protected page
   // This confirms the session is properly established
   console.log('   Verifying access to protected page...');
@@ -119,15 +138,20 @@ setup('authenticate', async ({ page }) => {
   const dashboard = page.locator('h1:has-text("Dashboard")');
   const profileError = page.locator('h2:has-text("Unable to Load Profile")');
   const pricing = page.locator('text=Choose your plan');
+  const pricingLoading = page.locator('text=Loading pricing plans');
+  const pricingError = page.locator('text=Failed to load pricing plans');
   const loadingSkeleton = page.locator('[data-testid="premium-loading"]');
 
   console.log('   Waiting for page to show dashboard or error state...');
 
   // Use Promise.race to detect which component appears first
+  // Include all possible states for better diagnostics
   const result = await Promise.race([
     dashboard.waitFor({ timeout: 30000 }).then(() => 'dashboard' as const),
     profileError.waitFor({ timeout: 30000 }).then(() => 'profileError' as const),
     pricing.waitFor({ timeout: 30000 }).then(() => 'pricing' as const),
+    pricingLoading.waitFor({ timeout: 30000 }).then(() => 'pricingLoading' as const),
+    pricingError.waitFor({ timeout: 30000 }).then(() => 'pricingError' as const),
   ]).catch(() => 'timeout' as const);
 
   console.log(`   [Diagnostic] Page showing: ${result}`);
@@ -146,6 +170,11 @@ setup('authenticate', async ({ page }) => {
     const isLoading = await loadingSkeleton.isVisible().catch(() => false);
     if (isLoading) {
       console.log('   [Diagnostic] Still showing loading skeleton - profile API may be hanging');
+    }
+
+    // Provide specific guidance based on result
+    if (result === 'pricing' || result === 'pricingLoading' || result === 'pricingError') {
+      console.log('   [Diagnostic] User appears to not have active subscription - trial grant may have failed');
     }
 
     throw new Error(`Auth verification failed - expected Dashboard but got: ${result}`);

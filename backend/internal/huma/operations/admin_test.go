@@ -171,6 +171,16 @@ func (m *mockEncryptionService) Decrypt(ciphertext string) (string, error) {
 	return m.decryptedToken, nil
 }
 
+// mockTrialService is a mock implementation of TrialGranter for admin tests
+// Issue #698: Used to test trial grant endpoint
+type mockTrialService struct {
+	grantTrialErr error
+}
+
+func (m *mockTrialService) GrantTrial(ctx context.Context, userID string) error {
+	return m.grantTrialErr
+}
+
 // Helper function to create test linked item
 func createTestLinkedItem() *domain.LinkedItem {
 	return &domain.LinkedItem{
@@ -198,7 +208,7 @@ func TestFireWebhook_Success(t *testing.T) {
 		decryptedToken: "decrypted-access-token",
 	}
 
-	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt)
+	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil)
 
 	input := &FireWebhookInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -229,7 +239,7 @@ func TestFireWebhook_ItemNotFound(t *testing.T) {
 	}
 	mockEncrypt := &mockEncryptionService{}
 
-	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt)
+	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil)
 
 	input := &FireWebhookInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -259,7 +269,7 @@ func TestFireWebhook_DecryptionError(t *testing.T) {
 		decryptErr: errors.New("decryption failed"),
 	}
 
-	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt)
+	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil)
 
 	input := &FireWebhookInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -291,7 +301,7 @@ func TestFireWebhook_PlaidAPIError(t *testing.T) {
 		decryptedToken: "decrypted-access-token",
 	}
 
-	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt)
+	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil)
 
 	input := &FireWebhookInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -318,7 +328,7 @@ func TestAdminRouteRegistration(t *testing.T) {
 	mockEncrypt := &mockEncryptionService{}
 
 	_, api := humatest.New(t)
-	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt)
+	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil)
 	RegisterAdminRoutes(api, handler)
 
 	// Test POST /api/v1/admin/plaid/fire-webhook (without auth, should fail with 401)
@@ -327,4 +337,88 @@ func TestAdminRouteRegistration(t *testing.T) {
 		"webhook_code": "DEFAULT_UPDATE",
 	})
 	assert.Equal(t, http.StatusUnauthorized, resp.Code)
+}
+
+// --- GrantTrial Tests (Issue #698) ---
+
+// TestGrantTrial_Success tests successful trial grant.
+func TestGrantTrial_Success(t *testing.T) {
+	mockTrial := &mockTrialService{}
+	handler := NewAdminHandler(nil, nil, nil, mockTrial)
+
+	input := &GrantTrialInput{
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			ClerkUserID:        "clerk_user_123",
+		},
+	}
+
+	output, err := handler.GrantTrial(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.True(t, output.Body.Success)
+	assert.Equal(t, "Trial granted successfully", output.Body.Message)
+}
+
+// TestGrantTrial_UserAlreadyHadTrial tests graceful handling when user already had trial.
+func TestGrantTrial_UserAlreadyHadTrial(t *testing.T) {
+	mockTrial := &mockTrialService{
+		grantTrialErr: errors.New("user has already had a trial"),
+	}
+	handler := NewAdminHandler(nil, nil, nil, mockTrial)
+
+	input := &GrantTrialInput{
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			ClerkUserID:        "clerk_user_123",
+		},
+	}
+
+	output, err := handler.GrantTrial(context.Background(), input)
+
+	// Should return success (not error) for E2E test purposes
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.True(t, output.Body.Success)
+	assert.Contains(t, output.Body.Message, "already has or had a trial")
+}
+
+// TestGrantTrial_ServiceNotConfigured tests 503 when trial service is nil.
+func TestGrantTrial_ServiceNotConfigured(t *testing.T) {
+	handler := NewAdminHandler(nil, nil, nil, nil)
+
+	input := &GrantTrialInput{
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			ClerkUserID:        "clerk_user_123",
+		},
+	}
+
+	output, err := handler.GrantTrial(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Trial service not configured")
+}
+
+// TestGrantTrial_ServiceError tests 500 when trial service returns unexpected error.
+func TestGrantTrial_ServiceError(t *testing.T) {
+	mockTrial := &mockTrialService{
+		grantTrialErr: errors.New("database connection error"),
+	}
+	handler := NewAdminHandler(nil, nil, nil, mockTrial)
+
+	input := &GrantTrialInput{
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			ClerkUserID:        "clerk_user_123",
+		},
+	}
+
+	output, err := handler.GrantTrial(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Failed to grant trial")
 }

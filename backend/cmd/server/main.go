@@ -700,8 +700,9 @@ func main() {
 
 		// Register Huma admin routes (Issue #559: Huma migration)
 		// Security: AdminMiddleware handles environment check (404 in non-qa) and role validation (Issue #309)
+		// Issue #698: Pass trialService for E2E test trial grant endpoint
 		if plaidService != nil && encryptionService != nil {
-			humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, encryptionService)
+			humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, encryptionService, trialService)
 			operations.RegisterAdminRoutes(humaAPI, humaAdminHandler)
 			log.Println("✅ Huma admin routes registered (protected by AdminMiddleware)")
 		}
