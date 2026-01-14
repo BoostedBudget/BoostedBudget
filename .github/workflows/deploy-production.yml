@@ -289,7 +289,7 @@ jobs:
             deploy-strategy: ""
           - component: frontend
             fly-app: boostedbudget-web
-            fly-config: frontend/fly.toml
+            fly-config: apps/web/fly.toml
             deploy-strategy: "--strategy rolling"
     environment:
       name: production

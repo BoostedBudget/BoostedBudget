@@ -24,7 +24,7 @@ go test ./internal/handlers/... -v  # Single package
 go test -coverprofile=coverage.out ./...  # With coverage
 make -C backend lint        # golangci-lint
 
-# Frontend (from /frontend)
+# Frontend (from /apps/web)
 bun run test                # Unit tests (bun:test)
 bun run lint                # ESLint
 bun run test:e2e            # Playwright E2E
@@ -53,11 +53,13 @@ backend/
     middleware/         # Auth, logging, etc.
     domain/             # Domain models
   migrations/           # .up.sql/.down.sql pairs
-frontend/
+apps/web/
   src/
     features/           # Feature modules (domain-based)
-    api/generated/      # Orval-generated hooks
     shared/             # Shared components/hooks
+packages/
+  api-client/           # Orval-generated React Query hooks
+  shared-types/         # Shared TypeScript types
 api/openapi.yaml        # Source of truth for API
 config/
   subscription_tiers.yaml     # Tier limits/features
@@ -96,8 +98,8 @@ Every implementation task MUST end with these steps in order:
 2. Run `code-simplifier` subagent to clean up code
 3. Run ALL tests to validate:
    cd backend && go test ./... -v
-   cd frontend && bun run test && bun run lint
-   cd frontend && bun run test:e2e -- --reporter=line
+   cd apps/web && bun run test && bun run lint
+   cd apps/web && bun run test:e2e -- --reporter=line
 4. Run `/commit-push-pr` to commit, push, and create PR with "Closes #N"
 ```
 
@@ -110,7 +112,7 @@ Every implementation task MUST end with these steps in order:
 ### Dashboard Layout Version Sync (CRITICAL)
 These THREE locations MUST match version numbers:
 | Source of Truth | `config/default_dashboard_layout.yaml` → `layout_version` |
-| Frontend fallback | `frontend/src/features/dashboard/widgets/registry.ts` → `DEFAULT_LAYOUT.version` |
+| Frontend fallback | `apps/web/src/features/dashboard/widgets/registry.ts` → `DEFAULT_LAYOUT.version` |
 | Backend fallback | `backend/internal/domain/dashboard_preferences.go` → `DefaultDashboardLayout().Version` |
 
 Out-of-sync causes infinite dashboard reset loops. Increment when adding/removing/reordering default widgets.

@@ -9,7 +9,7 @@ description: "Run E2E tests locally for BoostedBudget. Use when testing frontend
 
 Run all E2E tests (one-liner with output logging):
 ```bash
-cd frontend
+cd apps/web
 set -a && source .env.e2e && set +a && mv cert.pem cert.pem.bak 2>/dev/null; mv key.pem key.pem.bak 2>/dev/null; bash scripts/run-e2e-with-ports.sh 2>&1 | tee e2e-output.log; mv cert.pem.bak cert.pem 2>/dev/null; mv key.pem.bak key.pem 2>/dev/null
 ```
 
@@ -24,7 +24,7 @@ This command:
 
 ### Step-by-step alternative:
 ```bash
-cd frontend
+cd apps/web
 set -a && source .env.e2e && set +a
 mv cert.pem cert.pem.bak 2>/dev/null; mv key.pem key.pem.bak 2>/dev/null
 bash scripts/run-e2e-with-ports.sh
@@ -36,7 +36,7 @@ mv cert.pem.bak cert.pem 2>/dev/null; mv key.pem.bak key.pem 2>/dev/null
 1. **Docker** running (for PostgreSQL container)
 2. **Frontend dependencies** installed (`pnpm install`)
 3. **Backend binary** exists (`../backend/bin/server`) - auto-built if missing
-4. **Clerk credentials** in `frontend/.env.e2e`:
+4. **Clerk credentials** in `apps/web/.env.e2e`:
    - VITE_CLERK_PUBLISHABLE_KEY
    - CLERK_PUBLISHABLE_KEY
    - CLERK_SECRET_KEY

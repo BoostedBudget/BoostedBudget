@@ -110,8 +110,8 @@ services:
       VITE_CLERK_PUBLISHABLE_KEY: "${CLERK_PUBLISHABLE_KEY}"
       VITE_GOOGLE_ADSENSE_CLIENT: "${GOOGLE_ADSENSE_CLIENT:-}"
     volumes:
-      - ./frontend/cert.pem:/etc/nginx/ssl/cert.pem:ro  # SSL cert (CI/CD restores from GitHub secrets)
-      - ./frontend/key.pem:/etc/nginx/ssl/key.pem:ro    # SSL key (CI/CD restores from GitHub secrets)
+      - ./apps/web/cert.pem:/etc/nginx/ssl/cert.pem:ro  # SSL cert (CI/CD restores from GitHub secrets)
+      - ./apps/web/key.pem:/etc/nginx/ssl/key.pem:ro    # SSL key (CI/CD restores from GitHub secrets)
     depends_on:
       backend:
         condition: service_healthy

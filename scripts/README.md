@@ -78,7 +78,7 @@ Builds Docker images for backend and frontend, tags them, and optionally pushes 
 - Checks Docker is running
 - Verifies GHCR authentication (if pushing)
 - Builds backend image from `backend/Dockerfile`
-- Builds frontend image from `frontend/Dockerfile`
+- Builds frontend image from `apps/web/Dockerfile`
 - Tags images with specified version and `latest`
 - Pushes to `ghcr.io/maxnussbaum/boostedbudget-backend` and `boostedbudget-frontend`
 

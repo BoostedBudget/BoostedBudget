@@ -18,7 +18,7 @@ Run verification before committing:
 cd backend && go vet ./... && go test ./... -v
 
 # Frontend checks
-cd frontend && pnpm run lint && pnpm test -- --run
+cd apps/web && pnpm run lint && pnpm test -- --run
 ```
 
 ### 2. Stage Changes
