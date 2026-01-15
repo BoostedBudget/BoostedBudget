@@ -77,6 +77,8 @@ func TestComputeTrialDaysRemaining_InactiveTrial(t *testing.T) {
 func TestNewUser_DefaultValues(t *testing.T) {
 	user := NewUser("clerk_123", "test@example.com", true)
 
+	// Verify UUID is generated
+	assert.NotEmpty(t, user.ID, "NewUser should generate a UUID for ID")
 	assert.NotEmpty(t, user.ClerkUserID)
 	assert.Equal(t, "clerk_123", user.ClerkUserID)
 	assert.Equal(t, "test@example.com", user.Email)

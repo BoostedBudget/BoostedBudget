@@ -2,6 +2,8 @@ package domain
 
 import (
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // User represents a user account in the system with GDPR-compliant data residency
@@ -76,6 +78,7 @@ func (u *User) ComputeTrialDaysRemaining() {
 func NewUser(clerkUserID, email string, emailVerified bool) *User {
 	now := time.Now()
 	return &User{
+		ID:                 uuid.New().String(),
 		ClerkUserID:        clerkUserID,
 		Email:              email,
 		EmailVerified:      emailVerified,
