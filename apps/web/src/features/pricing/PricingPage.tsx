@@ -199,7 +199,7 @@ export function PricingPage() {
     )
   }
 
-  if (error || !tiers) {
+  if (error || !tiers || !tiers.tiers) {
     return (
       <div className="pricing-page">
         <div className="pricing-error">
