@@ -40,15 +40,30 @@ import type {
 } from 'msw';
 
 import type {
+  CheckRoleResponseBody,
   FireWebhookResponseBody,
   GrantTrialResponseBody
 } from '../../models';
 
 
+export const getCheckRoleResponseMock = (overrideResponse: Partial< CheckRoleResponseBody > = {}): CheckRoleResponseBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), is_admin: faker.datatype.boolean(), ...overrideResponse})
+
 export const getFireWebhookResponseMock = (overrideResponse: Partial< FireWebhookResponseBody > = {}): FireWebhookResponseBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), item_id: faker.string.alpha({length: {min: 10, max: 20}}), request_id: faker.string.alpha({length: {min: 10, max: 20}}), webhook_code: faker.string.alpha({length: {min: 10, max: 20}}), webhook_fired: faker.datatype.boolean(), ...overrideResponse})
 
 export const getGrantTrialResponseMock = (overrideResponse: Partial< GrantTrialResponseBody > = {}): GrantTrialResponseBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), message: faker.string.alpha({length: {min: 10, max: 20}}), success: faker.datatype.boolean(), ...overrideResponse})
 
+
+export const getCheckRoleMockHandler = (overrideResponse?: CheckRoleResponseBody | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<CheckRoleResponseBody> | CheckRoleResponseBody), options?: RequestHandlerOptions) => {
+  return http.get('*/api/v1/admin/check-role', async (info) => {await delay(500);
+  
+    return new HttpResponse(JSON.stringify(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getCheckRoleResponseMock()),
+      { status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      })
+  }, options)
+}
 
 export const getFireWebhookMockHandler = (overrideResponse?: FireWebhookResponseBody | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<FireWebhookResponseBody> | FireWebhookResponseBody), options?: RequestHandlerOptions) => {
   return http.post('*/api/v1/admin/plaid/fire-webhook', async (info) => {await delay(500);
@@ -74,6 +89,7 @@ export const getGrantTrialMockHandler = (overrideResponse?: GrantTrialResponseBo
   }, options)
 }
 export const getAdminMock = () => [
+  getCheckRoleMockHandler(),
   getFireWebhookMockHandler(),
   getGrantTrialMockHandler()
 ]
