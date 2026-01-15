@@ -68,6 +68,7 @@ export function LandingHeader() {
 
   return (
     <header
+      role="banner"
       className={`fixed left-0 right-0 top-0 z-50 transition-all duration-300 ${
         isScrolled
           ? 'bg-white/95 shadow-sm backdrop-blur-sm dark:bg-slate-900/95'

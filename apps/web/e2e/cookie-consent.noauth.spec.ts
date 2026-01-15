@@ -178,13 +178,16 @@ test.describe('Cookie Consent Banner', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
 
-    // Verify privacy policy link exists
-    const privacyLink = page.locator('a:has-text("Privacy Policy")');
+    // Target the cookie consent banner specifically
+    const banner = page.locator('.cookie-consent-banner');
+
+    // Verify privacy policy link exists within the cookie consent banner
+    const privacyLink = banner.locator('a:has-text("Privacy Policy")');
     await expect(privacyLink).toBeVisible();
     await expect(privacyLink).toHaveAttribute('href', '/legal/privacy-policy');
 
-    // Verify cookie policy link exists
-    const cookieLink = page.locator('a:has-text("Cookie Policy")');
+    // Verify cookie policy link exists within the cookie consent banner
+    const cookieLink = banner.locator('a:has-text("Cookie Policy")');
     await expect(cookieLink).toBeVisible();
     await expect(cookieLink).toHaveAttribute('href', '/legal/cookie-policy');
   });

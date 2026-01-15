@@ -58,10 +58,10 @@ test.describe('Landing Page - Unauthenticated', () => {
     });
 
     test('should display 3 steps', async ({ page }) => {
-      // All steps should be visible
-      await expect(page.getByText('Connect')).toBeVisible();
-      await expect(page.getByText('Organize')).toBeVisible();
-      await expect(page.getByText('Automate')).toBeVisible();
+      // All steps should be visible (using heading role with exact match to avoid nav links)
+      await expect(page.getByRole('heading', { name: 'Connect', exact: true })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Organize', exact: true })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Automate', exact: true })).toBeVisible();
     });
 
     test('should scroll to how it works when secondary CTA clicked', async ({ page }) => {
@@ -79,7 +79,8 @@ test.describe('Landing Page - Unauthenticated', () => {
 
   test.describe('Social Proof Section', () => {
     test('should display security messaging', async ({ page }) => {
-      await expect(page.getByText(/your privacy is our priority/i)).toBeVisible();
+      // Test the visible label (tooltip text is hidden by default)
+      await expect(page.getByText(/gdpr compliant/i).first()).toBeVisible();
     });
 
     test('should display trust badges', async ({ page }) => {
@@ -88,6 +89,38 @@ test.describe('Landing Page - Unauthenticated', () => {
   });
 
   test.describe('Pricing Preview Section', () => {
+    // Mock subscription tiers API for pricing tests
+    test.beforeEach(async ({ page }) => {
+      await page.route('**/api/v1/subscription/tiers', async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            tiers: {
+              premium: {
+                display_name: 'Premium',
+                description: 'Best for individuals',
+                pricing: { price_monthly: 9.99 },
+              },
+              household_3: {
+                display_name: 'Household 3',
+                description: 'For small families',
+                pricing: { price_monthly: 14.99 },
+              },
+              household_5: {
+                display_name: 'Household 5',
+                description: 'For large families',
+                pricing: { price_monthly: 24.99 },
+              },
+            },
+          }),
+        });
+      });
+      // Re-navigate to apply the mock
+      await page.goto('/');
+      await acceptCookieConsent(page);
+    });
+
     test('should display pricing section', async ({ page }) => {
       const pricingHeading = page.getByRole('heading', { name: /simple.*pricing/i });
       await expect(pricingHeading).toBeVisible();
@@ -95,7 +128,7 @@ test.describe('Landing Page - Unauthenticated', () => {
 
     test('should display pricing cards', async ({ page }) => {
       // At least one tier should be visible
-      await expect(page.getByText('Premium')).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Premium' })).toBeVisible();
     });
 
     test('should have link to full pricing page', async ({ page }) => {
@@ -207,6 +240,23 @@ test.describe('Landing Page - Unauthenticated', () => {
     });
 
     test('should display correctly on desktop', async ({ page }) => {
+      // Mock subscription tiers API for pricing section
+      await page.route('**/api/v1/subscription/tiers', async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            tiers: {
+              premium: { display_name: 'Premium', description: 'Test', pricing: { price_monthly: 9.99 } },
+              household_3: { display_name: 'Household 3', description: 'Test', pricing: { price_monthly: 14.99 } },
+              household_5: { display_name: 'Household 5', description: 'Test', pricing: { price_monthly: 24.99 } },
+            },
+          }),
+        });
+      });
+      // Re-navigate with mock
+      await page.goto('/');
+      await acceptCookieConsent(page);
       await page.setViewportSize({ width: 1280, height: 720 });
 
       // Full layout should be visible
@@ -216,9 +266,11 @@ test.describe('Landing Page - Unauthenticated', () => {
   });
 
   test.describe('Navigation', () => {
-    test('should not show main navigation header on landing page', async ({ page }) => {
-      // Landing page uses its own layout without the standard header
-      await expect(page.locator('header[role="banner"]')).not.toBeVisible();
+    test('should show landing page header with proper accessibility', async ({ page }) => {
+      // Landing page has its own header with role="banner"
+      await expect(page.locator('header[role="banner"]')).toBeVisible();
+      // Should show the BoostedBudget logo
+      await expect(page.locator('header').getByText('BoostedBudget')).toBeVisible();
     });
   });
 });
