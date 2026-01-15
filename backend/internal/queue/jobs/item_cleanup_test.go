@@ -32,6 +32,12 @@ func (m *MockPlaidCleanupService) RemoveItem(ctx context.Context, linkedItemID s
 	return args.Error(0)
 }
 
+// Issue #679, #680: DisconnectAllUserItems for trial expiration
+func (m *MockPlaidCleanupService) DisconnectAllUserItems(ctx context.Context, userID string) error {
+	args := m.Called(ctx, userID)
+	return args.Error(0)
+}
+
 // MockLinkedItemRepoForCleanup mocks the LinkedItemCleanupRepository interface
 // Named to avoid conflict with MockLinkedItemCleanupRepo in item_cleanup_check_test.go
 type MockLinkedItemRepoForCleanup struct {

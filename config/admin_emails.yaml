@@ -7,3 +7,4 @@ admin_emails:
   - "mbnuss27@gmail.com"
   - "maxnussbaum@live.com"
   - "yingyuemaggieliu@gmail.com"
+  - "e2e+clerk_test@boostedbudget.com"  # E2E test user for CI

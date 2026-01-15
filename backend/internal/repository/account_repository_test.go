@@ -445,8 +445,7 @@ func TestAccountRepository_GetAccountsWithInstitution_Empty(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Empty(t, accounts)
-	assert.NotNil(t, accounts) // Should return empty slice, not nil
+	assert.Empty(t, accounts) // Nil slices behave identically to empty slices in Go
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -843,13 +842,15 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 	bal2, avail2 := 5000.00, 5000.00
 	order0, order1 := 0, 1
 
+	// Issue #679, #680: Added user_account_id, status, replaced_at, replaced_by_id, linked_item_status columns
 	rows := pgxmock.NewRows([]string{
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
-		"created_at", "updated_at", "institution_name",
+		"user_account_id", "status", "replaced_at", "replaced_by_id",
+		"created_at", "updated_at", "institution_name", "linked_item_status",
 	}).
 		AddRow(
 			uuid.New().String(), uuid.New().String(), userID, "acc-1",
@@ -857,7 +858,8 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 			&bal1, &avail1, "USD",
 			strPtr("My Checking"), strPtr("#3B82F6"), strPtr("wallet"), nil,
 			&order0, false,
-			now, now, "Chase",
+			nil, "active", nil, nil,
+			now, now, "Chase", "active",
 		).
 		AddRow(
 			uuid.New().String(), uuid.New().String(), userID, "acc-2",
@@ -865,17 +867,20 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 			&bal2, &avail2, "USD",
 			nil, nil, nil, nil,
 			&order1, false,
-			now, now, "Chase",
+			nil, "active", nil, nil,
+			now, now, "Chase", "active",
 		)
 
 	// Note: This query excludes hidden accounts (AND a.is_hidden = FALSE)
+	// Issue #679, #680: Added user_account_id, status, replaced_at, replaced_by_id, l.status columns
 	expectedQuery := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       a.current_balance, a.available_balance, a.currency_code,
 		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
 		       a.display_order, a.is_hidden,
-		       a.created_at, a.updated_at, l.institution_name
+		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id,
+		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
 		WHERE a.user_id = $1 AND a.is_hidden = FALSE ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC
@@ -910,13 +915,15 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 	bal2, avail2 := 0.00, 0.00
 	order0 := 0
 
+	// Issue #679, #680: Added user_account_id, status, replaced_at, replaced_by_id, linked_item_status columns
 	rows := pgxmock.NewRows([]string{
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
-		"created_at", "updated_at", "institution_name",
+		"user_account_id", "status", "replaced_at", "replaced_by_id",
+		"created_at", "updated_at", "institution_name", "linked_item_status",
 	}).
 		AddRow(
 			uuid.New().String(), uuid.New().String(), userID, "acc-1",
@@ -924,7 +931,8 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 			&bal1, &avail1, "USD",
 			nil, nil, nil, nil,
 			&order0, false,
-			now, now, "Chase",
+			nil, "active", nil, nil,
+			now, now, "Chase", "active",
 		).
 		AddRow(
 			uuid.New().String(), uuid.New().String(), userID, "acc-2",
@@ -932,17 +940,20 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 			&bal2, &avail2, "USD",
 			strPtr("Closed Account"), nil, nil, nil,
 			nil, true, // This one is hidden
-			now, now, "Bank of America",
+			nil, "active", nil, nil,
+			now, now, "Bank of America", "active",
 		)
 
 	// Note: This query includes hidden accounts (no is_hidden filter)
+	// Issue #679, #680: Added user_account_id, status, replaced_at, replaced_by_id, l.status columns
 	expectedQuery := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       a.current_balance, a.available_balance, a.currency_code,
 		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
 		       a.display_order, a.is_hidden,
-		       a.created_at, a.updated_at, l.institution_name
+		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id,
+		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
 		WHERE a.user_id = $1 ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC

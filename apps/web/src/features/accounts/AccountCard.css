@@ -74,6 +74,17 @@
   color: #6b7280;
 }
 
+/* Disconnected account badge and styling (Issue #679, #680) */
+.account-card__badge--disconnected {
+  background-color: #fef3c7;
+  color: #b45309;
+}
+
+.account-card--disconnected {
+  opacity: 0.8;
+  border: 1px dashed #f59e0b;
+}
+
 .account-card__mask {
   font-family: 'Courier New', monospace;
   font-size: 0.875rem;
@@ -241,6 +252,15 @@
   .account-card__badge--hidden {
     background-color: #374151;
     color: #9ca3af;
+  }
+
+  .account-card__badge--disconnected {
+    background-color: #451a03;
+    color: #fcd34d;
+  }
+
+  .account-card--disconnected {
+    border-color: #b45309;
   }
 
   .account-card__edit-btn {

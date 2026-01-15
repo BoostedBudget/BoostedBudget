@@ -133,3 +133,13 @@ func TestTierConfig_Reload(t *testing.T) {
 	// Verify still has tiers
 	assert.Len(t, config.Tiers, 5)
 }
+
+func TestTierConfig_GetTrialConfig(t *testing.T) {
+	config, err := LoadTierConfig()
+	require.NoError(t, err)
+
+	trialConfig := config.GetTrialConfig()
+
+	assert.Equal(t, 60, trialConfig.DurationDays)
+	assert.Equal(t, domain.TierPremium, trialConfig.Tier)
+}

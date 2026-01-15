@@ -78,6 +78,33 @@ func (m *MockProfileRepository) DeleteUserCascade(ctx context.Context, userID st
 	return args.Error(0)
 }
 
+// Issue #679, #680: Trial expiration - methods for trial management
+func (m *MockProfileRepository) GetUsersWithExpiredTrials(ctx context.Context) ([]*domain.User, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
+}
+
+func (m *MockProfileRepository) GetUsersWithExpiringTrials(ctx context.Context, withinDays int) ([]*domain.User, error) {
+	args := m.Called(ctx, withinDays)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
+}
+
+func (m *MockProfileRepository) UpdateSubscriptionStatus(ctx context.Context, userID string, status string) error {
+	args := m.Called(ctx, userID, status)
+	return args.Error(0)
+}
+
+func (m *MockProfileRepository) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error {
+	args := m.Called(ctx, userID, status, trialStartedAt, trialEndsAt, hadTrial)
+	return args.Error(0)
+}
+
 // TestGetProfile_ExistingUser tests retrieving an existing user
 // NOTE: After PR #197, GetProfile now receives internal user UUID, not Clerk ID
 func TestGetProfile_ExistingUser(t *testing.T) {

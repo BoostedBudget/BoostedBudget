@@ -15,6 +15,27 @@ const (
 	TierHousehold5 TierName = "household_5"
 )
 
+// SubscriptionStatus represents the status of a user's subscription
+type SubscriptionStatus string
+
+const (
+	// SubscriptionStatusActive indicates an active paid subscription
+	SubscriptionStatusActive SubscriptionStatus = "active"
+	// SubscriptionStatusInactive indicates a frozen account (expired subscription)
+	SubscriptionStatusInactive SubscriptionStatus = "inactive"
+	// SubscriptionStatusTrial indicates an active trial period
+	SubscriptionStatusTrial SubscriptionStatus = "trial"
+	// SubscriptionStatusCancelled indicates a cancelled subscription
+	SubscriptionStatusCancelled SubscriptionStatus = "cancelled"
+	// SubscriptionStatusPastDue indicates payment is overdue
+	SubscriptionStatusPastDue SubscriptionStatus = "past_due"
+)
+
+// IsActiveSubscription returns true if the status allows access to the app
+func (s SubscriptionStatus) IsActiveSubscription() bool {
+	return s == SubscriptionStatusActive || s == SubscriptionStatusTrial
+}
+
 // Unlimited represents unlimited resources (stored as -1 in config)
 const Unlimited = -1
 

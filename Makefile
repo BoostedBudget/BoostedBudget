@@ -241,16 +241,14 @@ validate-openapi: generate-openapi
 	fi
 
 # TypeScript API client generation from OpenAPI spec
-# Uses npm install + npx orval because Bun's dependency resolution pulls buggy AJV version
+# Uses bun install + npx orval (Node.js runtime needed for orval compatibility)
 .PHONY: generate-api-client validate-api-client generate-all validate-all
 generate-api-client:
 	@echo "Generating TypeScript API client from OpenAPI spec..."
-	@echo "📦 Installing dependencies with npm (required for orval - Bun has AJV bug)..."
-	@cd packages/api-client && rm -rf node_modules && npm install --silent
-	@echo "🔄 Running orval..."
+	@echo "📦 Installing dependencies with bun..."
+	@bun install
+	@echo "🔄 Running orval (via npx for Node.js runtime)..."
 	@cd packages/api-client && npx orval
-	@echo "📦 Restoring Bun dependencies..."
-	@cd packages/api-client && rm -rf node_modules && bun install
 	@echo "✅ Generated packages/api-client/src/"
 
 validate-api-client: generate-api-client

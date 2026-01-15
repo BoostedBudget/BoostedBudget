@@ -218,3 +218,20 @@ func (tc *TierConfig) Reload() error {
 
 	return nil
 }
+
+// GetTrialConfig returns the trial configuration
+// Issue #679: Trial service and auto-grant logic
+func (tc *TierConfig) GetTrialConfig() TrialConfig {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return tc.Trial
+}
+
+// NewTierConfig creates a new TierConfig instance
+// If configPath is empty, uses default path
+func NewTierConfig(configPath string) (*TierConfig, error) {
+	if configPath != "" {
+		os.Setenv("SUBSCRIPTION_TIERS_CONFIG", configPath)
+	}
+	return LoadTierConfig()
+}

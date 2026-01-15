@@ -148,6 +148,21 @@ func (m *MockLinkedItemRepository) ClearCleanupSchedule(ctx context.Context, ite
 	return args.Error(0)
 }
 
+// GetActiveItemsByUserID - Issue #679, #680: Trial expiration
+func (m *MockLinkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.LinkedItem), args.Error(1)
+}
+
+// MarkAllUserItemsDisconnected - Issue #679, #680: Trial expiration
+func (m *MockLinkedItemRepository) MarkAllUserItemsDisconnected(ctx context.Context, userID string) error {
+	args := m.Called(ctx, userID)
+	return args.Error(0)
+}
+
 // MockJobQueue mocks the JobQueue interface
 type MockJobQueue struct {
 	mock.Mock

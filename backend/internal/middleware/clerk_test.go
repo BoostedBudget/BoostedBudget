@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/labstack/echo/v4"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -525,6 +526,11 @@ func (m *mockRegistrationService) RegisterUser(ctx context.Context, clerkUserID,
 		return m.registerUserFunc(ctx, clerkUserID, email, emailVerified)
 	}
 	return nil, nil
+}
+
+// Issue #679: SetTrialGranter for auto-granting trials on registration
+func (m *mockRegistrationService) SetTrialGranter(_ services.TrialGranter) {
+	// No-op for tests
 }
 
 // Integration test note:

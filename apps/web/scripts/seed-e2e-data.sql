@@ -15,34 +15,87 @@
 \set test_email '''e2e+clerk_test@boostedbudget.com'''
 
 -- =============================================================================
--- Step 1: Create test user (or update if exists)
+-- Step 1: Create test user, identity, and privacy settings in a single DO block
+-- Uses email for conflict resolution since clerk_user_id no longer has unique constraint
 -- =============================================================================
-INSERT INTO users (
-    clerk_user_id,
-    email,
-    email_verified,
-    primary_region,
-    subscription_tier,
-    subscription_status,
-    is_active,
-    is_deleted
-) VALUES (
-    :clerk_user_id,
-    :test_email,
-    true,
-    'us-east-1',
-    'premium',  -- Premium tier for full E2E testing
-    'active',
-    true,
-    false
-)
-ON CONFLICT (clerk_user_id) DO UPDATE SET
-    email = EXCLUDED.email,
-    subscription_tier = EXCLUDED.subscription_tier,
-    subscription_status = EXCLUDED.subscription_status,
-    is_active = EXCLUDED.is_active,
-    is_deleted = EXCLUDED.is_deleted,
-    updated_at = NOW();
+DO $$
+DECLARE
+    v_user_id UUID;
+    v_clerk_user_id VARCHAR := '__E2E_CLERK_USER_ID__';
+    v_test_email VARCHAR := 'e2e+clerk_test@boostedbudget.com';
+BEGIN
+    -- Delete any existing E2E test user to ensure clean slate
+    -- This handles the case where a previous run created the user
+    DELETE FROM user_identities WHERE clerk_user_id = v_clerk_user_id;
+    DELETE FROM privacy_settings WHERE user_id IN (SELECT id FROM users WHERE email = v_test_email);
+    DELETE FROM users WHERE email = v_test_email;
+
+    -- Create new user with premium subscription
+    INSERT INTO users (
+        clerk_user_id,
+        email,
+        email_verified,
+        primary_region,
+        subscription_tier,
+        subscription_status,
+        is_active,
+        is_deleted
+    ) VALUES (
+        v_clerk_user_id,
+        v_test_email,
+        true,
+        'iad',  -- Fly.io IATA code for us-east-1
+        'premium',  -- Premium tier for full E2E testing
+        'active',
+        true,
+        false
+    )
+    RETURNING id INTO v_user_id;
+
+    IF v_user_id IS NULL THEN
+        RAISE EXCEPTION 'Failed to create test user';
+    END IF;
+
+    RAISE NOTICE 'Created E2E test user with ID: %', v_user_id;
+
+    -- Insert into user_identities (CRITICAL - required for Clerk middleware to find the user)
+    -- Without this, the middleware won't find the user and will auto-register a NEW user
+    INSERT INTO user_identities (
+        user_id,
+        clerk_user_id,
+        provider,
+        provider_user_id,
+        email,
+        email_verified,
+        is_primary
+    ) VALUES (
+        v_user_id,
+        v_clerk_user_id,
+        'clerk',
+        v_clerk_user_id,
+        v_test_email,
+        true,
+        true
+    );
+
+    RAISE NOTICE 'Created user identity for Clerk auth';
+
+    -- Insert into privacy_settings (required for registration consistency)
+    INSERT INTO privacy_settings (
+        user_id,
+        gdpr_necessary_consent,
+        gdpr_analytics_consent,
+        gdpr_advertising_consent
+    ) VALUES (
+        v_user_id,
+        true,
+        false,
+        false
+    );
+
+    RAISE NOTICE 'Created privacy settings';
+    RAISE NOTICE 'E2E test user setup complete: % (subscription_status=active, subscription_tier=premium)', v_user_id;
+END $$;
 
 -- Store user ID for subsequent inserts
 DO $$
@@ -314,6 +367,10 @@ END $$;
 -- Verification: Show seeded data summary
 -- =============================================================================
 SELECT 'Users' as table_name, COUNT(*) as count FROM users WHERE email = 'e2e+clerk_test@boostedbudget.com'
+UNION ALL
+SELECT 'User Identities', COUNT(*) FROM user_identities ui JOIN users u ON ui.user_id = u.id WHERE u.email = 'e2e+clerk_test@boostedbudget.com'
+UNION ALL
+SELECT 'Privacy Settings', COUNT(*) FROM privacy_settings ps JOIN users u ON ps.user_id = u.id WHERE u.email = 'e2e+clerk_test@boostedbudget.com'
 UNION ALL
 SELECT 'Linked Items', COUNT(*) FROM linked_items li JOIN users u ON li.user_id = u.id WHERE u.email = 'e2e+clerk_test@boostedbudget.com'
 UNION ALL
