@@ -294,6 +294,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: ${{ env.UNIQUE_WORKSPACE }}
+          packageManager: bun
           command: pages deploy apps/web/dist --project-name=boostedbudget
 
       - name: Deployment summary
