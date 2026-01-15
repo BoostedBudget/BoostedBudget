@@ -59,26 +59,29 @@ if (isTestEnv) {
  * without auth tokens after page.goto('/dashboard').
  */
 const AuthReadyGate = ({ children }: { children: React.ReactNode }) => {
-  const { getToken, isLoaded } = useAuth()
-  const hasSetProviderRef = useRef(false)
+  const { getToken, isLoaded, isSignedIn } = useAuth()
+  // Store getToken in a ref so the closure always uses the latest version
+  const getTokenRef = useRef(getToken)
 
-  // Set up token provider in useLayoutEffect (runs synchronously before paint)
-  // This ensures the provider is set before any children render and make API calls
+  // Always keep ref up to date
+  getTokenRef.current = getToken
+
+  // Set up token provider - re-register when isSignedIn changes to ensure fresh getToken
   useLayoutEffect(() => {
-    if (isLoaded && !hasSetProviderRef.current) {
+    if (isLoaded) {
       setAuthTokenProvider(async () => {
         try {
-          return await getToken({ template: 'BoostedBudget' })
-        } catch {
+          // Always use the ref which has the latest getToken
+          return await getTokenRef.current()
+        } catch (error) {
+          console.error('[AuthReadyGate] getToken() error:', error)
           return null
         }
       })
-      hasSetProviderRef.current = true
     }
-  }, [getToken, isLoaded])
+  }, [isLoaded, isSignedIn]) // Re-register when sign-in state changes
 
   // Don't render children until Clerk is loaded
-  // The useLayoutEffect above ensures token provider is set before children render
   if (!isLoaded) {
     return null
   }

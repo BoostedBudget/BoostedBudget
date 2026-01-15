@@ -56,7 +56,16 @@ func NewAdminMiddleware(
 		// 3. Get email from Clerk claims for hardcoded admin check
 		email := extractEmailFromContext(ctx)
 
-		// 4. Check hardcoded admin list first (bypasses Clerk API call)
+		// 3b. Fallback: If email not in JWT claims, try fetching from Clerk API
+		// This handles cases where JWT template doesn't include email custom claim
+		if email == "" {
+			if apiEmail, err := auth.FetchEmailFromClerkAPI(ctx.Context(), clerkUserID); err == nil {
+				email = apiEmail
+			}
+			// Ignore errors - will fall through to role check
+		}
+
+		// 4. Check hardcoded admin list first (bypasses Clerk API call for role)
 		if email != "" && adminService.IsHardcodedAdmin(email) {
 			next(ctx)
 			return

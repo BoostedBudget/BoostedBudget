@@ -76,6 +76,21 @@ func (a *AuthenticatedWithEmailInput) Resolve(ctx huma.Context) []error {
 
 	// Extract email from custom claims (set via JWT template in Clerk)
 	email := auth.ExtractEmailFromClaims(claims)
+
+	// FALLBACK: If email not in JWT claims, fetch from Clerk API
+	// This handles cases where JWT template claims aren't populated correctly
+	// (e.g., no JWT template configured, or using default Clerk token)
+	if email == "" {
+		clerkUserID, ok := ctx.Context().Value(ClerkUserIDKey).(string)
+		if ok && clerkUserID != "" {
+			var fetchErr error
+			email, fetchErr = auth.FetchEmailFromClerkAPI(ctx.Context(), clerkUserID)
+			if fetchErr != nil {
+				return []error{huma.Error401Unauthorized("Email not found in token and failed to fetch from Clerk API")}
+			}
+		}
+	}
+
 	if email == "" {
 		return []error{huma.Error401Unauthorized("Email not found in token")}
 	}
