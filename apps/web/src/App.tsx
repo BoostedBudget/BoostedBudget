@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@clerk/react-router'
 import { useCookieState } from './shared/hooks/useCookieState'
 import {
@@ -28,31 +28,20 @@ import { CancelDeletionPage } from './features/deletion/components/CancelDeletio
 import { AutoCategorizationPageWrapper } from './features/auto-categorization/components/AutoCategorizationPageWrapper'
 import { BudgetsPage, BudgetDetailPage } from './features/budgets'
 import { RulesPage, RuleBuilder } from './features/rules'
+import { LandingPage } from './features/landing'
 import { Toaster } from 'sonner'
 import './App.css'
 
-function HomePage() {
-  return (
-    <section className="info">
-      <h2>Phase 0: Foundation</h2>
-      <p>✅ Backend API with health endpoint</p>
-      <p>✅ OpenAPI specification</p>
-      <p>✅ Frontend skeleton (React + TypeScript + Vite)</p>
-      <p>✅ GDPR Cookie Consent</p>
-      <p>✅ Clerk integration</p>
-      <p>✅ User Profile Management</p>
-      <p>⏳ Database & migrations (coming next)</p>
-      <p>⏳ Docker development environment (coming next)</p>
-    </section>
-  )
-}
-
 function App() {
   const { isSignedIn: isAuthenticated } = useAuth()
+  const location = useLocation()
   const [, setConsentCookie] = useCookieState<CookieConsentData>(COOKIE_CONSENT_NAME)
 
   // Use generated mutation hook for privacy settings
   const updatePrivacyMutation = useUpdatePrivacySettings()
+
+  // Check if we're on the landing page (unauthenticated home)
+  const isLandingPage = location.pathname === '/' && !isAuthenticated
 
   // Helper function to update cookie consent data
   const updateConsentCookie = (consents: CookieConsentSettings) => {
@@ -123,20 +112,20 @@ function App() {
   }
 
   return (
-    <div className="app">
-        <Header />
+    <div className={`app ${isLandingPage ? 'app--landing' : ''}`}>
+        {/* Hide header on landing page - it has its own navigation */}
+        {!isLandingPage && <Header />}
 
+        {isLandingPage ? (
+          <Routes>
+            <Route path="/" element={<LandingPage />} />
+          </Routes>
+        ) : (
         <main className="app-main">
           <Routes>
             <Route
               path="/"
-              element={
-                isAuthenticated ? (
-                  <Navigate to="/dashboard" replace />
-                ) : (
-                  <HomePage />
-                )
-              }
+              element={<Navigate to="/dashboard" replace />}
             />
             <Route
               path="/dashboard"
@@ -148,7 +137,7 @@ function App() {
                 </ProtectedRoute>
               }
             />
-            <Route path="/callback" element={<HomePage />} />
+            <Route path="/callback" element={<Navigate to="/dashboard" replace />} />
             <Route
               path="/oauth-callback"
               element={
@@ -256,10 +245,14 @@ function App() {
             <Route path="/cancel-deletion/:token?" element={<CancelDeletionPage />} />
           </Routes>
         </main>
+        )}
 
-        <footer className="app-footer">
-          <p>BoostedBudget © 2025 | GDPR Compliant | Single Region MVP (us-east-1)</p>
-        </footer>
+        {/* Hide footer on landing page - it has its own footer */}
+        {!isLandingPage && (
+          <footer className="app-footer">
+            <p>BoostedBudget © 2025 | GDPR Compliant | Single Region MVP (us-east-1)</p>
+          </footer>
+        )}
 
         {/* Cookie Consent Banner */}
         <CookieConsent onConsentChange={handleConsentChange} />

@@ -10,9 +10,17 @@ import { acceptCookieConsent } from './helpers/auth';
  * - Accessibility features
  *
  * These tests run in chromium-no-auth project (user not logged in)
+ *
+ * NOTE: These tests are designed for the app's standard header component.
+ * The landing page uses a custom LandingHeader with different structure.
+ * Landing-specific navigation tests are in landing.noauth.spec.ts.
+ *
+ * SKIPPED: Unauthenticated users are now redirected to landing page which has
+ * a custom LandingHeader component. These tests are for the authenticated app
+ * header. See landing.noauth.spec.ts for landing page navigation tests.
  */
 
-test.describe('Navigation - Unauthenticated', () => {
+test.describe.skip('Navigation - Unauthenticated', () => {
   test.beforeEach(async ({ page }) => {
     // No Clerk auth token - these tests verify unauthenticated behavior
     await page.goto('/');
@@ -122,7 +130,8 @@ test.describe('Navigation - Unauthenticated', () => {
   });
 });
 
-test.describe('Navigation - Logo Links', () => {
+// SKIPPED: See note above - landing page has custom header
+test.describe.skip('Navigation - Logo Links', () => {
   test('should link logo to home when not authenticated', async ({ page }) => {
     await page.goto('/');
     await acceptCookieConsent(page);
