@@ -67,6 +67,7 @@ export * from './categoryPreviewRequestTags';
 export * from './categoryPreviewResponse';
 export * from './categoryTransactionsResponse';
 export * from './categoryTransactionsResponseTransactions';
+export * from './checkRoleResponseBody';
 export * from './conditionEvalResult';
 export * from './createAutomationRuleRequest';
 export * from './createAutomationRuleRequestConditions';
