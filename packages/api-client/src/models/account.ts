@@ -40,6 +40,7 @@ export interface Account {
   institution_name?: string;
   is_hidden: boolean;
   linked_item_id: string;
+  linked_item_status?: string;
   mask?: string;
   name: string;
   nickname?: string;

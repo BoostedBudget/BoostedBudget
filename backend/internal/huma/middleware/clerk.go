@@ -4,6 +4,7 @@ package middleware
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -72,12 +73,19 @@ func NewClerkMiddleware(
 		tokenString := parts[1]
 
 		// Verify the JWT token using Clerk SDK
+		// Use a fresh context with timeout to prevent JWKS fetch from being canceled
+		// when the request context is closed prematurely
+		verifyCtx, verifyCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer verifyCancel()
+
 		// CustomClaimsConstructor is required to parse custom claims from JWT template
-		sessionClaims, err := jwt.Verify(ctx.Context(), &jwt.VerifyParams{
+		sessionClaims, err := jwt.Verify(verifyCtx, &jwt.VerifyParams{
 			Token:                   tokenString,
 			CustomClaimsConstructor: auth.CustomClaimsConstructor,
 		})
+
 		if err != nil {
+			log.Printf("[ClerkMiddleware] JWT verify failed: %v", err)
 			writeClerkJSONError(ctx, http.StatusUnauthorized, "Invalid or expired token")
 			return
 		}
@@ -102,6 +110,7 @@ func NewClerkMiddleware(
 					var fetchErr error
 					email, fetchErr = auth.FetchEmailFromClerkAPI(ctx.Context(), clerkUserID)
 					if fetchErr != nil {
+						log.Printf("[ClerkMiddleware] Failed to fetch email from Clerk API: %v", fetchErr)
 						writeClerkJSONError(ctx, http.StatusInternalServerError, "Failed to retrieve user email")
 						return
 					}
@@ -111,16 +120,19 @@ func NewClerkMiddleware(
 
 				_, err = registrationService.RegisterUser(ctx.Context(), clerkUserID, email, emailVerified)
 				if err != nil {
+					log.Printf("[ClerkMiddleware] Failed to register user: %v", err)
 					writeClerkJSONError(ctx, http.StatusInternalServerError, "Failed to create user account")
 					return
 				}
 
 				identity, err = identityRepo.GetByClerkID(ctx.Context(), clerkUserID)
 				if err != nil {
+					log.Printf("[ClerkMiddleware] Failed to get identity after registration: %v", err)
 					writeClerkJSONError(ctx, http.StatusInternalServerError, "Failed to complete registration")
 					return
 				}
 			} else {
+				log.Printf("[ClerkMiddleware] Identity lookup error: %v", err)
 				writeClerkJSONError(ctx, http.StatusInternalServerError, "Failed to authenticate user")
 				return
 			}
@@ -138,7 +150,6 @@ func NewClerkMiddleware(
 			identityRepo.UpdateLastUsed(updateCtx, clerkUserID)
 		}()
 
-		// Continue with updated context
 		next(huma.WithContext(ctx, newCtx))
 	}
 }

@@ -31,6 +31,8 @@ components:
           type: boolean
         linked_item_id:
           type: string
+        linked_item_status:
+          type: string
         mask:
           type: string
         name:
@@ -1271,6 +1273,26 @@ components:
           type: integer
       required:
         - count
+      type: object
+    GrantTrialResponseBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/GrantTrialResponseBody.json
+          format: uri
+          readOnly: true
+          type: string
+        message:
+          description: Description of the result
+          type: string
+        success:
+          description: Whether the trial was granted successfully
+          type: boolean
+      required:
+        - success
+        - message
       type: object
     HealthChecks:
       additionalProperties: false
@@ -2660,6 +2682,8 @@ components:
           type: string
         email_verified:
           type: boolean
+        had_trial:
+          type: boolean
         id:
           type: string
         is_active:
@@ -2683,6 +2707,15 @@ components:
           type: string
         subscription_tier:
           type: string
+        trial_days_remaining:
+          format: int64
+          type: integer
+        trial_ends_at:
+          format: date-time
+          type: string
+        trial_started_at:
+          format: date-time
+          type: string
         updated_at:
           format: date-time
           type: string
@@ -2693,6 +2726,7 @@ components:
         - email_verified
         - subscription_tier
         - subscription_status
+        - had_trial
         - primary_region
         - is_active
         - is_deleted
@@ -3067,6 +3101,28 @@ paths:
       security:
         - clerk: []
       summary: Fire a Plaid webhook (QA only)
+      tags:
+        - Admin
+  /api/v1/admin/subscription/grant-trial:
+    post:
+      description: Grants a 60-day trial to the authenticated user. For E2E testing. Returns success if user already has trial.
+      operationId: grantTrial
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GrantTrialResponseBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Grant trial subscription (QA only)
       tags:
         - Admin
   /api/v1/analytics/cash-flow-history:

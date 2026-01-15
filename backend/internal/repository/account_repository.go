@@ -266,10 +266,7 @@ func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID 
 		return nil, err
 	}
 
-	if accounts != nil {
-		return accounts, nil
-	}
-	return []domain.Account{}, nil
+	return accounts, nil
 }
 
 // GetByUserID retrieves all accounts for a specific user
@@ -319,10 +316,7 @@ func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]d
 		return nil, err
 	}
 
-	if accounts != nil {
-		return accounts, nil
-	}
-	return []domain.Account{}, nil
+	return accounts, nil
 }
 
 // GetAccountsWithInstitution retrieves all accounts for a user with institution names from linked_items
@@ -374,10 +368,7 @@ func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, user
 		return nil, err
 	}
 
-	if accounts != nil {
-		return accounts, nil
-	}
-	return []domain.Account{}, nil
+	return accounts, nil
 }
 
 // CountByUserID counts the total number of accounts for a user
@@ -539,6 +530,7 @@ func (r *accountRepository) UpdateDisplayOrders(ctx context.Context, userID stri
 }
 
 // GetAccountsWithInstitutionFiltered retrieves accounts with institution names and hidden filtering.
+// Issue #679, #680: Also includes linked_item status to show 'disconnected' when subscription expires.
 func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error) {
 	hiddenClause := ""
 	if !includeHidden {
@@ -551,7 +543,8 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 		       a.current_balance, a.available_balance, a.currency_code,
 		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
 		       a.display_order, a.is_hidden,
-		       a.created_at, a.updated_at, l.institution_name
+		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id,
+		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
 		WHERE a.user_id = $1` + hiddenClause + `
@@ -572,7 +565,8 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 			&account.CurrentBalance, &account.AvailableBalance, &account.CurrencyCode,
 			&account.Nickname, &account.CustomColor, &account.CustomIcon, &account.CustomEmoji,
 			&account.DisplayOrder, &account.IsHidden,
-			&account.CreatedAt, &account.UpdatedAt, &account.InstitutionName,
+			&account.UserAccountID, &account.Status, &account.ReplacedAt, &account.ReplacedByID,
+			&account.CreatedAt, &account.UpdatedAt, &account.InstitutionName, &account.LinkedItemStatus,
 		)
 		if err != nil {
 			return nil, err
@@ -584,10 +578,7 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 		return nil, err
 	}
 
-	if accounts != nil {
-		return accounts, nil
-	}
-	return []domain.Account{}, nil
+	return accounts, nil
 }
 
 // GetByUserAccountAndStatus retrieves accounts by user_account_id and status.
@@ -633,10 +624,7 @@ func (r *accountRepository) GetByUserAccountAndStatus(ctx context.Context, userA
 		return nil, err
 	}
 
-	if accounts != nil {
-		return accounts, nil
-	}
-	return []domain.Account{}, nil
+	return accounts, nil
 }
 
 // GetByUserAccountID retrieves all accounts for a user_account (any status).
@@ -682,10 +670,7 @@ func (r *accountRepository) GetByUserAccountID(ctx context.Context, userAccountI
 		return nil, err
 	}
 
-	if accounts != nil {
-		return accounts, nil
-	}
-	return []domain.Account{}, nil
+	return accounts, nil
 }
 
 // UpdateStatus updates an account's status and soft-delete fields with ownership validation.

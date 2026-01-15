@@ -2,6 +2,8 @@ package domain
 
 import (
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // User represents a user account in the system with GDPR-compliant data residency
@@ -17,10 +19,16 @@ type User struct {
 	EmailVerified bool   `json:"email_verified" db:"email_verified"`
 
 	// Subscription information
-	SubscriptionTier   string     `json:"subscription_tier" db:"subscription_tier"`       // free, premium, premium_plus
-	SubscriptionStatus string     `json:"subscription_status" db:"subscription_status"`   // active, cancelled, past_due, unpaid
+	SubscriptionTier      string     `json:"subscription_tier" db:"subscription_tier"`             // premium, household_2, household_3, household_4, household_5
+	SubscriptionStatus    string     `json:"subscription_status" db:"subscription_status"`         // active, inactive, trial, cancelled, past_due
 	SubscriptionStartedAt *time.Time `json:"subscription_started_at,omitempty" db:"subscription_started_at"`
 	SubscriptionEndsAt    *time.Time `json:"subscription_ends_at,omitempty" db:"subscription_ends_at"`
+
+	// Trial information (Issue #679)
+	TrialStartedAt     *time.Time `json:"trial_started_at,omitempty" db:"trial_started_at"`
+	TrialEndsAt        *time.Time `json:"trial_ends_at,omitempty" db:"trial_ends_at"`
+	HadTrial           bool       `json:"had_trial" db:"had_trial"`
+	TrialDaysRemaining *int       `json:"trial_days_remaining,omitempty"` // Computed field, not stored in DB
 
 	// Paddle customer ID (for payments)
 	PaddleCustomerID *string `json:"paddle_customer_id,omitempty" db:"paddle_customer_id"`
@@ -50,11 +58,27 @@ type UpdateProfileRequest struct {
 	PrimaryRegion *string `json:"primary_region,omitempty"`
 }
 
+// ComputeTrialDaysRemaining calculates and sets the TrialDaysRemaining field
+// Returns the number of days remaining in trial, or nil if not on trial
+func (u *User) ComputeTrialDaysRemaining() {
+	if u.SubscriptionStatus != "trial" || u.TrialEndsAt == nil {
+		u.TrialDaysRemaining = nil
+		return
+	}
+
+	daysRemaining := int(time.Until(*u.TrialEndsAt).Hours() / 24)
+	if daysRemaining < 0 {
+		daysRemaining = 0
+	}
+	u.TrialDaysRemaining = &daysRemaining
+}
+
 // NewUser creates a new user with default values (premium trial, iad region)
 // Used when a user logs in for the first time via Clerk
 func NewUser(clerkUserID, email string, emailVerified bool) *User {
 	now := time.Now()
 	return &User{
+		ID:                 uuid.New().String(),
 		ClerkUserID:        clerkUserID,
 		Email:              email,
 		EmailVerified:      emailVerified,

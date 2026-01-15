@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { MemoryRouter } from 'react-router-dom'
 import { PricingPage } from './PricingPage'
 import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
 
@@ -20,14 +21,16 @@ import {
   mockRefetchSubscriptionTiers,
 } from '@/test/mocks/subscription-api'
 
-function renderWithProviders(ui: React.ReactElement) {
+function renderWithProviders(ui: React.ReactElement, routerState?: { frozen?: boolean }) {
   return render(
     <QueryClientProvider client={new QueryClient({
       defaultOptions: {
         queries: { retry: false, gcTime: 0 },
       },
     })}>
-      {ui}
+      <MemoryRouter initialEntries={[{ pathname: '/pricing', state: routerState }]}>
+        {ui}
+      </MemoryRouter>
     </QueryClientProvider>
   )
 }
@@ -415,6 +418,22 @@ describe('PricingPage', () => {
       // Both buttons should be focusable
       expect(monthlyButton).not.toHaveAttribute('tabindex', '-1')
       expect(yearlyButton).not.toHaveAttribute('tabindex', '-1')
+    })
+  })
+
+  // Issue #679, #680: Frozen account banner tests
+  describe('Frozen account banner', () => {
+    it('should show frozen account banner when redirected with frozen state', () => {
+      renderWithProviders(<PricingPage />, { frozen: true })
+
+      expect(screen.getByText(/your subscription has expired/i)).toBeInTheDocument()
+      expect(screen.getByText(/your data is safe/i)).toBeInTheDocument()
+    })
+
+    it('should not show frozen account banner without frozen state', () => {
+      renderWithProviders(<PricingPage />)
+
+      expect(screen.queryByText(/your subscription has expired/i)).not.toBeInTheDocument()
     })
   })
 })

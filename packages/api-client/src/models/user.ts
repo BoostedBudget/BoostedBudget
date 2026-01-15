@@ -36,6 +36,7 @@ export interface User {
   deletion_scheduled_at?: string;
   email: string;
   email_verified: boolean;
+  had_trial: boolean;
   id: string;
   is_active: boolean;
   is_deleted: boolean;
@@ -46,5 +47,8 @@ export interface User {
   subscription_started_at?: string;
   subscription_status: string;
   subscription_tier: string;
+  trial_days_remaining?: number;
+  trial_ends_at?: string;
+  trial_started_at?: string;
   updated_at: string;
 }

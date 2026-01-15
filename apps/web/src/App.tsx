@@ -13,6 +13,7 @@ import {
   type CookieConsentData
 } from './privacy'
 import { ProtectedRoute } from './auth'
+import { PremiumRoute } from './auth/PremiumRoute'
 import { Header } from './components/layout'
 import { ProfilePage } from './features/profile/ProfilePage'
 import { PricingPage } from './features/pricing/PricingPage'
@@ -130,7 +131,9 @@ function App() {
               path="/dashboard"
               element={
                 <ProtectedRoute>
-                  <DashboardPage />
+                  <PremiumRoute>
+                    <DashboardPage />
+                  </PremiumRoute>
                 </ProtectedRoute>
               }
             />
@@ -139,7 +142,9 @@ function App() {
               path="/oauth-callback"
               element={
                 <ProtectedRoute>
-                  <PlaidOAuthCallback />
+                  <PremiumRoute>
+                    <PlaidOAuthCallback />
+                  </PremiumRoute>
                 </ProtectedRoute>
               }
             />
@@ -147,7 +152,9 @@ function App() {
               path="/accounts"
               element={
                 <ProtectedRoute>
-                  <AccountsPage />
+                  <PremiumRoute>
+                    <AccountsPage />
+                  </PremiumRoute>
                 </ProtectedRoute>
               }
             />
@@ -155,7 +162,9 @@ function App() {
               path="/transactions"
               element={
                 <ProtectedRoute>
-                  <TransactionsPage />
+                  <PremiumRoute>
+                    <TransactionsPage />
+                  </PremiumRoute>
                 </ProtectedRoute>
               }
             />
@@ -163,7 +172,9 @@ function App() {
               path="/budgets"
               element={
                 <ProtectedRoute>
-                  <BudgetsPage />
+                  <PremiumRoute>
+                    <BudgetsPage />
+                  </PremiumRoute>
                 </ProtectedRoute>
               }
             />
@@ -171,7 +182,9 @@ function App() {
               path="/budgets/:budgetId"
               element={
                 <ProtectedRoute>
-                  <BudgetDetailPage />
+                  <PremiumRoute>
+                    <BudgetDetailPage />
+                  </PremiumRoute>
                 </ProtectedRoute>
               }
             />
@@ -179,7 +192,9 @@ function App() {
               path="/auto-categorization"
               element={
                 <ProtectedRoute>
-                  <AutoCategorizationPageWrapper />
+                  <PremiumRoute>
+                    <AutoCategorizationPageWrapper />
+                  </PremiumRoute>
                 </ProtectedRoute>
               }
             />
@@ -188,7 +203,9 @@ function App() {
               path="/rules"
               element={
                 <ProtectedRoute>
-                  <RulesPage />
+                  <PremiumRoute>
+                    <RulesPage />
+                  </PremiumRoute>
                 </ProtectedRoute>
               }
             />
@@ -196,7 +213,9 @@ function App() {
               path="/rules/new"
               element={
                 <ProtectedRoute>
-                  <RuleBuilder />
+                  <PremiumRoute>
+                    <RuleBuilder />
+                  </PremiumRoute>
                 </ProtectedRoute>
               }
             />
@@ -204,10 +223,13 @@ function App() {
               path="/rules/:id/edit"
               element={
                 <ProtectedRoute>
-                  <RuleBuilder />
+                  <PremiumRoute>
+                    <RuleBuilder />
+                  </PremiumRoute>
                 </ProtectedRoute>
               }
             />
+            {/* Non-premium routes - accessible even when frozen */}
             <Route
               path="/profile"
               element={

@@ -54,7 +54,7 @@ func (h *ProfileHandler) GetProfile(ctx context.Context, input *GetProfileInput)
 		return nil, huma.Error500InternalServerError("Failed to retrieve profile")
 	}
 
-	return &GetProfileOutput{Body: user}, nil
+	return &GetProfileOutput{Body: h.enrichUserProfile(user)}, nil
 }
 
 // UpdateProfile handles PUT /api/v1/user/profile requests.
@@ -72,7 +72,13 @@ func (h *ProfileHandler) UpdateProfile(ctx context.Context, input *UpdateProfile
 		}
 	}
 
-	return &UpdateProfileOutput{Body: user}, nil
+	return &UpdateProfileOutput{Body: h.enrichUserProfile(user)}, nil
+}
+
+// enrichUserProfile computes trial days remaining for the user profile.
+func (h *ProfileHandler) enrichUserProfile(user *domain.User) *domain.User {
+	user.ComputeTrialDaysRemaining()
+	return user
 }
 
 // RegisterProfileRoutes registers profile routes with the Huma API.

@@ -2,6 +2,7 @@ package middleware_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	humamiddleware "github.com/maxnussbaum/BoostedBudget/internal/huma/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -68,6 +70,11 @@ func (m *mockRegistrationService) RegisterUser(ctx context.Context, clerkUserID,
 		return m.registerUserFunc(ctx, clerkUserID, email, emailVerified)
 	}
 	return nil, nil
+}
+
+// Issue #679: SetTrialGranter for auto-granting trials on registration
+func (m *mockRegistrationService) SetTrialGranter(_ services.TrialGranter) {
+	// No-op for tests
 }
 
 // Ensure mocks implement the interfaces
@@ -269,84 +276,7 @@ func TestHumaClerkMiddleware_ErrorResponse_Format(t *testing.T) {
 
 // Helper function to decode JSON response
 func decodeJSON(resp *http.Response, v interface{}) error {
-	return jsonDecode(resp.Body, v)
-}
-
-// jsonDecode is a simple JSON decoder
-func jsonDecode(r interface{ Read([]byte) (int, error) }, v interface{}) error {
-	data := make([]byte, 4096)
-	n, _ := r.Read(data)
-	data = data[:n]
-
-	// Simple JSON parsing without importing encoding/json
-	// This is a test helper, so it's okay to be basic
-	return parseBasicJSON(data, v)
-}
-
-func parseBasicJSON(data []byte, v interface{}) error {
-	// For the error response test, we just need to verify the structure
-	m, ok := v.(*map[string]interface{})
-	if !ok {
-		return nil
-	}
-
-	*m = make(map[string]interface{})
-
-	// Very basic JSON parsing for test purposes
-	str := string(data)
-	if len(str) > 0 && str[0] == '{' {
-		// Extract "status":401
-		if idx := indexOf(str, `"status":`); idx >= 0 {
-			start := idx + 9
-			end := start
-			for end < len(str) && (str[end] >= '0' && str[end] <= '9') {
-				end++
-			}
-			if num, err := parseFloat(str[start:end]); err == nil {
-				(*m)["status"] = num
-			}
-		}
-
-		// Extract "title":"Unauthorized"
-		if idx := indexOf(str, `"title":"`); idx >= 0 {
-			start := idx + 9
-			end := indexOf(str[start:], `"`)
-			if end >= 0 {
-				(*m)["title"] = str[start : start+end]
-			}
-		}
-
-		// Extract "detail":"..."
-		if idx := indexOf(str, `"detail":"`); idx >= 0 {
-			start := idx + 10
-			end := indexOf(str[start:], `"`)
-			if end >= 0 {
-				(*m)["detail"] = str[start : start+end]
-			}
-		}
-	}
-
-	return nil
-}
-
-func indexOf(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
-}
-
-func parseFloat(s string) (float64, error) {
-	var result float64
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			break
-		}
-		result = result*10 + float64(c-'0')
-	}
-	return result, nil
+	return json.NewDecoder(resp.Body).Decode(v)
 }
 
 // Integration test note:
