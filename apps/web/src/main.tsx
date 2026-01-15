@@ -63,11 +63,11 @@ const AuthReadyGate = ({ children }: { children: React.ReactNode }) => {
   // Store getToken in a ref so the closure always uses the latest version
   const getTokenRef = useRef(getToken)
 
-  // Always keep ref up to date
-  getTokenRef.current = getToken
-
   // Set up token provider - re-register when isSignedIn changes to ensure fresh getToken
   useLayoutEffect(() => {
+    // Update ref inside effect (not during render) to comply with React rules
+    getTokenRef.current = getToken
+
     if (isLoaded) {
       setAuthTokenProvider(async () => {
         try {
@@ -79,7 +79,7 @@ const AuthReadyGate = ({ children }: { children: React.ReactNode }) => {
         }
       })
     }
-  }, [isLoaded, isSignedIn]) // Re-register when sign-in state changes
+  }, [getToken, isLoaded, isSignedIn]) // Re-register when sign-in state or getToken changes
 
   // Don't render children until Clerk is loaded
   if (!isLoaded) {
