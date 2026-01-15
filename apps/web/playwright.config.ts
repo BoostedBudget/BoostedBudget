@@ -142,9 +142,13 @@ export default defineConfig({
       timeout: 120 * 1000,
     },
     {
-      // Pass PORT and DATABASE_URL env vars to backend for dynamic port allocation
-      // DATABASE_URL is set by run-e2e-with-ports.sh when PostgreSQL container is available
-      command: `cd ../../backend && PORT=${backendPort} DATABASE_URL="${databaseUrl}" ./bin/server`,
+      // Pass env vars to backend for E2E testing:
+      // - PORT: Dynamic port allocation
+      // - ENVIRONMENT: Set to "qa" to enable admin endpoints
+      // - DATABASE_URL: PostgreSQL connection (set by run-e2e-with-ports.sh)
+      // - CLERK_SECRET_KEY: For Clerk API calls (admin role verification)
+      // - CLERK_PUBLISHABLE_KEY: For JWT validation
+      command: `cd ../../backend && PORT=${backendPort} ENVIRONMENT=qa DATABASE_URL="${databaseUrl}" CLERK_SECRET_KEY="${process.env.CLERK_SECRET_KEY || ''}" CLERK_PUBLISHABLE_KEY="${process.env.CLERK_PUBLISHABLE_KEY || ''}" ./bin/server`,
       url: `http://localhost:${backendPort}/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 120 * 1000,

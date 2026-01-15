@@ -36,7 +36,13 @@ export default defineConfig({
     },
     proxy: {
       // Proxy backend routes (use Docker service name for container communication)
-      '/(api|health)': {
+      // Note: Use separate keys instead of regex pattern for Vite compatibility
+      '/api': {
+        target: process.env.DOCKER_ENV ? 'http://backend:8080' : `http://localhost:${process.env.E2E_BACKEND_PORT || '8080'}`,
+        changeOrigin: true,
+        secure: false, // Allow self-signed certificates
+      },
+      '/health': {
         target: process.env.DOCKER_ENV ? 'http://backend:8080' : `http://localhost:${process.env.E2E_BACKEND_PORT || '8080'}`,
         changeOrigin: true,
         secure: false, // Allow self-signed certificates

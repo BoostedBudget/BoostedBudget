@@ -342,9 +342,10 @@ seed_e2e_data() {
   # Copy the temp file to the container and execute it
   docker cp "$temp_file" "${E2E_POSTGRES_CONTAINER}:/tmp/seed.sql"
 
+  # Show seed output for debugging (Issue #698)
   docker exec "$E2E_POSTGRES_CONTAINER" \
     psql -U "$E2E_POSTGRES_USER" -d "$E2E_POSTGRES_DB" -f /tmp/seed.sql \
-    > /dev/null 2>&1
+    2>&1 | grep -E "NOTICE|ERROR|count|table_name" || true
 
   local exit_code=$?
 
