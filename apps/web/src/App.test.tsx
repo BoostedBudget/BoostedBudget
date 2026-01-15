@@ -88,30 +88,32 @@ describe('App', () => {
       mockUseClerk.mockReturnValue(createMockClerk())
     })
 
-    it('should render login button', async () => {
+    it('should render landing page with hero section', async () => {
       const Wrapper = createWrapper()
       render(<App />, { wrapper: Wrapper })
 
       await waitFor(() => {
-        expect(screen.getByText(/log in/i)).toBeInTheDocument()
+        expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/take control/i)
       })
     })
 
-    it('should not render logout button', async () => {
+    it('should render start free today CTA', async () => {
       const Wrapper = createWrapper()
       render(<App />, { wrapper: Wrapper })
 
       await waitFor(() => {
-        expect(screen.queryByText(/log out/i)).not.toBeInTheDocument()
+        // Multiple CTAs on landing page
+        const ctaButtons = screen.getAllByRole('button', { name: /start free today/i })
+        expect(ctaButtons.length).toBeGreaterThanOrEqual(1)
       })
     })
 
-    it('should not display user profile', async () => {
+    it('should not render user menu', async () => {
       const Wrapper = createWrapper()
       render(<App />, { wrapper: Wrapper })
 
       await waitFor(() => {
-        expect(screen.queryByText(/welcome/i)).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /user menu/i })).not.toBeInTheDocument()
       })
     })
   })
@@ -193,58 +195,37 @@ describe('App', () => {
     }, 60000)
   })
 
-  describe('phase status', () => {
+  describe('landing page sections', () => {
     beforeEach(() => {
       mockUseAuth.mockReturnValue(createMockClerkAuth({ isSignedIn: false, isLoaded: true }))
       mockUseUser.mockReturnValue(createMockClerkUser({ user: null }))
       mockUseClerk.mockReturnValue(createMockClerk())
     })
 
-    it('should show Clerk integration as complete', async () => {
+    it('should display features section', async () => {
       const Wrapper = createMemoryWrapper(['/'])
       render(<App />, { wrapper: Wrapper })
 
       await waitFor(() => {
-        expect(screen.getByText(/✅ Clerk integration/i)).toBeInTheDocument()
+        expect(screen.getByRole('heading', { name: /why choose boostedbudget/i })).toBeInTheDocument()
       })
     })
 
-    it('should not show Clerk as coming next', async () => {
+    it('should display how it works section', async () => {
       const Wrapper = createMemoryWrapper(['/'])
       render(<App />, { wrapper: Wrapper })
 
       await waitFor(() => {
-        expect(
-          screen.queryByText(/⏳ Clerk integration \(coming next\)/i)
-        ).not.toBeInTheDocument()
-      })
-    })
-  })
-
-  // TODO: System status feature was removed or never implemented
-  // These tests reference non-existent functionality
-  describe.skip('health check section', () => {
-    beforeEach(() => {
-      mockUseAuth.mockReturnValue(createMockClerkAuth({ isSignedIn: false, isLoaded: true }))
-      mockUseUser.mockReturnValue(createMockClerkUser({ user: null }))
-      mockUseClerk.mockReturnValue(createMockClerk())
-    })
-
-    it('should still display system status section', async () => {
-      const Wrapper = createMemoryWrapper(['/'])
-      render(<App />, { wrapper: Wrapper })
-
-      await waitFor(() => {
-        expect(screen.getByRole('heading', { name: /system status/i })).toBeInTheDocument()
+        expect(screen.getByRole('heading', { name: /how it works/i })).toBeInTheDocument()
       })
     })
 
-    it('should display health check error message', async () => {
+    it('should display FAQ section', async () => {
       const Wrapper = createMemoryWrapper(['/'])
       render(<App />, { wrapper: Wrapper })
 
       await waitFor(() => {
-        expect(screen.getByText(/Failed to load system status/i)).toBeInTheDocument()
+        expect(screen.getByRole('heading', { name: /frequently asked questions/i })).toBeInTheDocument()
       })
     })
   })
