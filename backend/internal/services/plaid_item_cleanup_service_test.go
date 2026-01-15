@@ -3,9 +3,11 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -314,4 +316,40 @@ func Test_RemoveItem_ItemNotFound(t *testing.T) {
 
 	// Verify - not found error should be returned
 	assert.Error(t, err)
+}
+
+// TestIsItemNotFoundError verifies the IsItemNotFoundError helper function
+func TestIsItemNotFoundError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "ErrLinkedItemNotFound",
+			err:  repository.ErrLinkedItemNotFound,
+			want: true,
+		},
+		{
+			name: "wrapped ErrLinkedItemNotFound",
+			err:  fmt.Errorf("operation failed: %w", repository.ErrLinkedItemNotFound),
+			want: true,
+		},
+		{
+			name: "different error",
+			err:  errors.New("some other error"),
+			want: false,
+		},
+		{
+			name: "nil error",
+			err:  nil,
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, IsItemNotFoundError(tt.err))
+		})
+	}
 }

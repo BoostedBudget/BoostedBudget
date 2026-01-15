@@ -841,3 +841,13 @@ func TestRegisterUser_TransactionPrivacyCreationError(t *testing.T) {
 	// Verify rollback happened
 	assert.NoError(t, mockPool.ExpectationsWereMet())
 }
+
+// MockTrialGranter is a mock implementation of the TrialGranter interface
+type MockTrialGranter struct {
+	mock.Mock
+}
+
+func (m *MockTrialGranter) GrantTrial(ctx context.Context, userID string) error {
+	args := m.Called(ctx, userID)
+	return args.Error(0)
+}
