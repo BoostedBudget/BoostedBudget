@@ -38,6 +38,20 @@ func NewAdminMiddleware(
 			return
 		}
 
+		// Issue #638: Skip environment and role checks for check-role endpoint
+		// This endpoint allows any authenticated user to check their admin status.
+		// It's informational only and available in all environments.
+		if path == "/api/v1/admin/check-role" {
+			// Only require authentication, skip environment + role checks
+			clerkUserID, ok := ctx.Context().Value(inputs.ClerkUserIDKey).(string)
+			if !ok || clerkUserID == "" {
+				writeAdminJSONError(ctx, http.StatusUnauthorized, "User not authenticated")
+				return
+			}
+			next(ctx)
+			return
+		}
+
 		// 1. Environment check FIRST: Only allow qa environment
 		// Returns 404 instead of 403 for security through obscurity
 		// (prevents revealing endpoint existence to unauthorized users)
@@ -53,16 +67,13 @@ func NewAdminMiddleware(
 			return
 		}
 
-		// 3. Get email from Clerk claims for hardcoded admin check
+		// 3. Get email from Clerk claims (with fallback to Clerk API if needed)
 		email := extractEmailFromContext(ctx)
-
-		// 3b. Fallback: If email not in JWT claims, try fetching from Clerk API
-		// This handles cases where JWT template doesn't include email custom claim
 		if email == "" {
+			// Fallback: Fetch from Clerk API if JWT claims don't include email
 			if apiEmail, err := auth.FetchEmailFromClerkAPI(ctx.Context(), clerkUserID); err == nil {
 				email = apiEmail
 			}
-			// Ignore errors - will fall through to role check
 		}
 
 		// 4. Check hardcoded admin list first (bypasses Clerk API call for role)

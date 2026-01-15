@@ -50,26 +50,23 @@ func (m *MockAdminService) IsHardcodedAdmin(email string) bool {
 // Ensure mock implements the interface
 var _ services.AdminService = (*MockAdminService)(nil)
 
-// Helper to create test API with admin middleware
-func setupAdminTestAPI(t *testing.T, cfg *config.Config, adminService services.AdminService) (*httptest.Server, huma.API) {
+// setupAdminTestAPIBase creates a test API with admin middleware and simulated Clerk middleware.
+// The returned server can be used to test admin endpoints.
+func setupAdminTestAPIBase(t *testing.T, cfg *config.Config, adminService services.AdminService) (*httptest.Server, huma.API) {
 	router := chi.NewRouter()
 	api := humachi.New(router, huma.DefaultConfig("Test API", "1.0.0"))
 
-	// Add a middleware that simulates Clerk middleware by setting context values
+	// Add middleware that simulates Clerk by setting context values from test headers
 	api.UseMiddleware(func(ctx huma.Context, next func(huma.Context)) {
-		// Get clerk_user_id and email from custom headers (for testing)
 		clerkUserID := ctx.Header("X-Test-Clerk-User-ID")
 		email := ctx.Header("X-Test-Email")
 
 		if clerkUserID != "" {
 			newCtx := context.WithValue(ctx.Context(), inputs.ClerkUserIDKey, clerkUserID)
 
-			// Create mock claims with email
 			if email != "" {
 				claims := &clerk.SessionClaims{
-					Custom: map[string]interface{}{
-						"email": email,
-					},
+					Custom: map[string]interface{}{"email": email},
 				}
 				newCtx = context.WithValue(newCtx, inputs.ClerkClaimsKey, claims)
 			}
@@ -84,14 +81,20 @@ func setupAdminTestAPI(t *testing.T, cfg *config.Config, adminService services.A
 	adminMiddleware := humamiddleware.NewAdminMiddleware(cfg, adminService)
 	api.UseMiddleware(adminMiddleware)
 
-	// Register an admin test operation
+	server := httptest.NewServer(router)
+	t.Cleanup(server.Close)
+
+	return server, api
+}
+
+// registerTestEndpoints registers test endpoints for admin middleware testing.
+func registerTestEndpoints(api huma.API) {
+	// Admin endpoint
 	huma.Register(api, huma.Operation{
 		OperationID: "admin-endpoint",
 		Method:      http.MethodGet,
 		Path:        "/api/v1/admin/test",
-		Security: []map[string][]string{
-			{"clerk": {}},
-		},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, func(ctx context.Context, input *struct{}) (*struct {
 		Body struct {
 			Message string `json:"message"`
@@ -106,14 +109,12 @@ func setupAdminTestAPI(t *testing.T, cfg *config.Config, adminService services.A
 		}{Message: "admin success"}}, nil
 	})
 
-	// Register a non-admin endpoint (should not be affected by admin middleware)
+	// Non-admin endpoint
 	huma.Register(api, huma.Operation{
 		OperationID: "normal-endpoint",
 		Method:      http.MethodGet,
 		Path:        "/api/v1/users/me",
-		Security: []map[string][]string{
-			{"clerk": {}},
-		},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, func(ctx context.Context, input *struct{}) (*struct {
 		Body struct {
 			Message string `json:"message"`
@@ -128,9 +129,31 @@ func setupAdminTestAPI(t *testing.T, cfg *config.Config, adminService services.A
 		}{Message: "user success"}}, nil
 	})
 
-	server := httptest.NewServer(router)
-	t.Cleanup(server.Close)
+	// Check-role endpoint (Issue #638)
+	huma.Register(api, huma.Operation{
+		OperationID: "checkRole",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/admin/check-role",
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, func(ctx context.Context, input *struct{}) (*struct {
+		Body struct {
+			IsAdmin bool `json:"is_admin"`
+		}
+	}, error) {
+		return &struct {
+			Body struct {
+				IsAdmin bool `json:"is_admin"`
+			}
+		}{Body: struct {
+			IsAdmin bool `json:"is_admin"`
+		}{IsAdmin: true}}, nil
+	})
+}
 
+// Helper to create test API with admin middleware
+func setupAdminTestAPI(t *testing.T, cfg *config.Config, adminService services.AdminService) (*httptest.Server, huma.API) {
+	server, api := setupAdminTestAPIBase(t, cfg, adminService)
+	registerTestEndpoints(api)
 	return server, api
 }
 
@@ -300,6 +323,62 @@ func TestAdminMiddleware_AdminServiceError_Returns500(t *testing.T) {
 	// THEN: Should return 500 Internal Server Error
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	mockAdminService.AssertExpectations(t)
+}
+
+// --- Issue #638: Check-Role Endpoint Tests ---
+
+// TestAdminMiddleware_CheckRole_SkipsEnvironmentCheck tests that check-role works in all environments
+func TestAdminMiddleware_CheckRole_SkipsEnvironmentCheck(t *testing.T) {
+	// Test in multiple environments - check-role should work in all of them
+	environments := []string{"production", "development", "staging", "qa"}
+
+	for _, env := range environments {
+		t.Run("Environment_"+env, func(t *testing.T) {
+			// GIVEN: Any environment and authenticated non-admin user
+			cfg := &config.Config{Environment: env}
+			mockAdminService := new(MockAdminService)
+			// Admin service should NOT be called by middleware (only by handler)
+
+			server, _ := setupAdminTestAPI(t, cfg, mockAdminService)
+
+			// WHEN: Non-admin user requests check-role endpoint
+			req, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/admin/check-role", nil)
+			require.NoError(t, err)
+			req.Header.Set("X-Test-Clerk-User-ID", "user_regular")
+			req.Header.Set("X-Test-Email", "regular@example.com")
+
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			// THEN: Should allow access (middleware skips env and role checks for this endpoint)
+			assert.Equal(t, http.StatusOK, resp.StatusCode)
+			// Middleware should NOT call admin service - that's the handler's job
+			mockAdminService.AssertNotCalled(t, "HasRole")
+			mockAdminService.AssertNotCalled(t, "IsHardcodedAdmin")
+		})
+	}
+}
+
+// TestAdminMiddleware_CheckRole_RequiresAuthentication tests that check-role still requires auth
+func TestAdminMiddleware_CheckRole_RequiresAuthentication(t *testing.T) {
+	// GIVEN: Any environment but no authentication
+	cfg := &config.Config{Environment: "production"}
+	mockAdminService := new(MockAdminService)
+
+	server, _ := setupAdminTestAPI(t, cfg, mockAdminService)
+
+	// WHEN: Unauthenticated user requests check-role endpoint
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/admin/check-role", nil)
+	require.NoError(t, err)
+	// Not setting X-Test-Clerk-User-ID header
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	// THEN: Should return 401 Unauthorized
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
 
 // TestAdminMiddleware_NonAdminEndpoint_Passthrough tests that non-admin endpoints are not affected
