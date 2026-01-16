@@ -13,8 +13,24 @@ export const mockUseCheckRole = mock(() => ({
   refetch: mockRefetchCheckRole,
 }))
 
+// === useListAdminUsers (Issue #644) ===
+export const mockUseListAdminUsers = mock(() => ({
+  data: undefined,
+  isLoading: true,
+  error: null,
+}))
+
+// === useGetAdminUserDetail (Issue #644) ===
+export const mockUseGetAdminUserDetail = mock(() => ({
+  data: undefined,
+  isLoading: true,
+  error: null,
+}))
+
 // Single mock.module() call - called once at preload time
 mock.module('@boostedbudget/api-client/endpoints/admin/admin', () => ({
   ...RealAdminModule,
   useCheckRole: mockUseCheckRole,
+  useListAdminUsers: mockUseListAdminUsers,
+  useGetAdminUserDetail: mockUseGetAdminUserDetail,
 }))

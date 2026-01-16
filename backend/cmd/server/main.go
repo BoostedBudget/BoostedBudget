@@ -145,6 +145,7 @@ func main() {
 		dashboardPrefsRepo := repository.NewDashboardPreferencesRepository(db) // Issue #354: Dashboard preferences
 		transferSuggestionRepo := repository.NewTransferSuggestionRepository(db) // Issue #36: Transfer suggestions
 		automationRuleRepo := repository.NewAutomationRulesRepository(db) // Issue #37: Automation rules
+		adminUserRepo := repository.NewAdminUserRepository(db)            // Issue #639: Admin user management
 
 		// Create mock audit logger (will be replaced with real implementation later)
 		auditLogger := &mockAuditLogger{}
@@ -168,6 +169,7 @@ func main() {
 		ruleApplicationService := services.NewRuleApplicationService(categorizationRuleRepo)
 		// Issue #354: Cash flow analytics and dashboard preferences services
 		analyticsService := services.NewAnalyticsService(analyticsRepo)
+		adminUserService := services.NewAdminUserService(adminUserRepo) // Issue #639: Admin user management
 		// Issue #474: Load dashboard layout config for preferences service
 		// This ensures reset-to-default uses YAML config version, not hardcoded version 2
 		dashboardLayoutConfig, err := config.LoadDashboardLayoutConfig()
@@ -702,8 +704,9 @@ func main() {
 		// Security: AdminMiddleware handles environment check (404 in non-qa) and role validation (Issue #309)
 		// Issue #698: Pass trialService for E2E test trial grant endpoint
 		// Issue #638: Pass adminService for check-role endpoint
+		// Issue #639: Pass adminUserService for user management endpoints
 		if plaidService != nil && encryptionService != nil {
-			humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, encryptionService, trialService, adminService)
+			humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, encryptionService, trialService, adminService, adminUserService)
 			operations.RegisterAdminRoutes(humaAPI, humaAdminHandler)
 			log.Println("✅ Huma admin routes registered (protected by AdminMiddleware)")
 		}
