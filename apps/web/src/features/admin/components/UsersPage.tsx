@@ -103,7 +103,8 @@ export function UsersPage() {
   }
 
   // Empty state
-  const isEmpty = !data?.users || data.users.length === 0
+  const users = data?.users ?? []
+  const isEmpty = users.length === 0
 
   return (
     <div className="users-page">
@@ -172,7 +173,7 @@ export function UsersPage() {
               </tr>
             </thead>
             <tbody>
-              {data.users.map((user) => (
+              {users.map((user) => (
                 <tr
                   key={user.id}
                   className="users-page__row--clickable"
