@@ -13,8 +13,10 @@ type AdminUserListItem struct {
 	CreatedAt            time.Time  `json:"created_at"`
 	LastLoginAt          *time.Time `json:"last_login_at,omitempty"`
 	IsActive             bool       `json:"is_active"`
+	IsAdmin              bool       `json:"is_admin"`
 	LinkedAccountsCount  int        `json:"linked_accounts_count"`
 	AutomationRulesCount int        `json:"automation_rules_count"`
+	ReferralsCount       int        `json:"referrals_count"`
 }
 
 // AdminUserDetail extends AdminUserListItem with additional statistics.

@@ -7,18 +7,20 @@
 
 import { useState } from 'react'
 import { useListAdminUsers, useGetAdminUserDetail } from '@boostedbudget/api-client/endpoints/admin/admin'
-import { Search, Users, ChevronLeft, ChevronRight, AlertCircle } from 'lucide-react'
+import { Search, Users, ChevronLeft, ChevronRight, AlertCircle, Shield } from 'lucide-react'
 import { useUserFilters } from '../hooks/useUserFilters'
 import { UserDetailModal } from './UserDetailModal'
 import './UsersPage.css'
 
-// Subscription tier options for filter
+// Subscription tier options for filter (matches config/subscription_tiers.yaml)
 const TIER_OPTIONS = [
   { value: '', label: 'All Tiers' },
-  { value: 'free', label: 'Free' },
-  { value: 'premium_lite', label: 'Premium Lite' },
+  { value: 'trial', label: 'Trial' },
   { value: 'premium', label: 'Premium' },
-  { value: 'premium_plus', label: 'Premium+' },
+  { value: 'household_2', label: 'Household (2)' },
+  { value: 'household_3', label: 'Household (3)' },
+  { value: 'household_4', label: 'Household (4)' },
+  { value: 'household_5', label: 'Household (5+)' },
 ]
 
 const formatDate = (dateString: string | undefined): string => {
@@ -30,11 +32,6 @@ const formatDate = (dateString: string | undefined): string => {
   })
 }
 
-const getTierBadgeClass = (tier: string): string =>
-  `users-page__tier-badge users-page__tier-badge--${tier}`
-
-const getStatusBadgeClass = (status: string): string =>
-  `users-page__status-badge users-page__status-badge--${status}`
 
 /**
  * UsersPage - Admin user management page
@@ -58,25 +55,9 @@ export function UsersPage() {
   const totalCount = data?.total_count ?? 0
   const hasMore = data?.has_more ?? false
 
-  // Handle search with debounce
-  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setSearch(e.target.value)
-  }
-
-  // Handle tier filter change
-  const handleTierChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    setTier(e.target.value)
-  }
-
-  // Handle row click
-  const handleRowClick = (userId: string) => {
-    setSelectedUserId(userId)
-  }
-
-  // Handle modal close
-  const handleCloseModal = () => {
-    setSelectedUserId(null)
-  }
+  // Inline handlers for simplicity
+  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => setSearch(e.target.value)
+  const handleTierChange = (e: React.ChangeEvent<HTMLSelectElement>) => setTier(e.target.value)
 
   // Loading state
   if (isLoading) {
@@ -170,6 +151,7 @@ export function UsersPage() {
                 <th>Last Login</th>
                 <th className="users-page__numeric">Accounts</th>
                 <th className="users-page__numeric">Rules</th>
+                <th className="users-page__numeric">Referrals</th>
               </tr>
             </thead>
             <tbody>
@@ -177,16 +159,21 @@ export function UsersPage() {
                 <tr
                   key={user.id}
                   className="users-page__row--clickable"
-                  onClick={() => handleRowClick(user.id)}
+                  onClick={() => setSelectedUserId(user.id)}
                 >
-                  <td>{user.email}</td>
                   <td>
-                    <span className={getTierBadgeClass(user.subscription_tier)}>
+                    {user.email}
+                    {user.is_admin && (
+                      <Shield className="users-page__admin-icon" size={14} title="Administrator" />
+                    )}
+                  </td>
+                  <td>
+                    <span className={`users-page__tier-badge users-page__tier-badge--${user.subscription_tier}`}>
                       {user.subscription_tier}
                     </span>
                   </td>
                   <td>
-                    <span className={getStatusBadgeClass(user.subscription_status)}>
+                    <span className={`users-page__status-badge users-page__status-badge--${user.subscription_status}`}>
                       {user.subscription_status}
                     </span>
                   </td>
@@ -194,6 +181,7 @@ export function UsersPage() {
                   <td>{formatDate(user.last_login_at)}</td>
                   <td className="users-page__numeric">{user.linked_accounts_count}</td>
                   <td className="users-page__numeric">{user.automation_rules_count}</td>
+                  <td className="users-page__numeric">{user.referrals_count}</td>
                 </tr>
               ))}
             </tbody>
@@ -237,7 +225,7 @@ export function UsersPage() {
         user={userDetail}
         loading={detailLoading}
         open={!!selectedUserId}
-        onClose={handleCloseModal}
+        onClose={() => setSelectedUserId(null)}
       />
     </div>
   )

@@ -37,7 +37,7 @@ func (m *MockAdminUserRepository) GetUserDetail(ctx context.Context, userID stri
 // TestAdminUserService_ListUsers_Success tests successful listing of users
 func TestAdminUserService_ListUsers_Success(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo)
+	service := NewAdminUserService(mockRepo, nil)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -92,7 +92,7 @@ func TestAdminUserService_ListUsers_Success(t *testing.T) {
 // TestAdminUserService_ListUsers_WithPagination tests pagination calculations
 func TestAdminUserService_ListUsers_WithPagination(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo)
+	service := NewAdminUserService(mockRepo, nil)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -129,7 +129,7 @@ func TestAdminUserService_ListUsers_WithPagination(t *testing.T) {
 // TestAdminUserService_ListUsers_LastPage tests last page has no more
 func TestAdminUserService_ListUsers_LastPage(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo)
+	service := NewAdminUserService(mockRepo, nil)
 
 	ctx := context.Background()
 
@@ -149,7 +149,7 @@ func TestAdminUserService_ListUsers_LastPage(t *testing.T) {
 // TestAdminUserService_ListUsers_WithFilters tests filtering passes through
 func TestAdminUserService_ListUsers_WithFilters(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo)
+	service := NewAdminUserService(mockRepo, nil)
 
 	ctx := context.Background()
 
@@ -173,7 +173,7 @@ func TestAdminUserService_ListUsers_WithFilters(t *testing.T) {
 // TestAdminUserService_ListUsers_RepositoryError tests error propagation
 func TestAdminUserService_ListUsers_RepositoryError(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo)
+	service := NewAdminUserService(mockRepo, nil)
 
 	ctx := context.Background()
 
@@ -193,7 +193,7 @@ func TestAdminUserService_ListUsers_RepositoryError(t *testing.T) {
 // TestAdminUserService_ListUsers_InvalidPage tests validation of page
 func TestAdminUserService_ListUsers_InvalidPage(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo)
+	service := NewAdminUserService(mockRepo, nil)
 
 	ctx := context.Background()
 	filters := domain.AdminUserFilters{}
@@ -210,7 +210,7 @@ func TestAdminUserService_ListUsers_InvalidPage(t *testing.T) {
 // TestAdminUserService_ListUsers_InvalidPageSize tests validation of page size
 func TestAdminUserService_ListUsers_InvalidPageSize(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo)
+	service := NewAdminUserService(mockRepo, nil)
 
 	ctx := context.Background()
 	filters := domain.AdminUserFilters{}
@@ -227,7 +227,7 @@ func TestAdminUserService_ListUsers_InvalidPageSize(t *testing.T) {
 // TestAdminUserService_GetUserDetail_Success tests successful retrieval
 func TestAdminUserService_GetUserDetail_Success(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo)
+	service := NewAdminUserService(mockRepo, nil)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -268,7 +268,7 @@ func TestAdminUserService_GetUserDetail_Success(t *testing.T) {
 // TestAdminUserService_GetUserDetail_NotFound tests user not found
 func TestAdminUserService_GetUserDetail_NotFound(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo)
+	service := NewAdminUserService(mockRepo, nil)
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -288,7 +288,7 @@ func TestAdminUserService_GetUserDetail_NotFound(t *testing.T) {
 // TestAdminUserService_GetUserDetail_EmptyUserID tests validation
 func TestAdminUserService_GetUserDetail_EmptyUserID(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo)
+	service := NewAdminUserService(mockRepo, nil)
 
 	ctx := context.Background()
 
@@ -299,4 +299,162 @@ func TestAdminUserService_GetUserDetail_EmptyUserID(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "user_id is required")
 	assert.Nil(t, detail)
+}
+
+// MockAdminService is a mock implementation of AdminService for testing
+type MockAdminService struct {
+	mock.Mock
+}
+
+func (m *MockAdminService) HasRole(ctx context.Context, clerkUserID string, role domain.AdminRole) (bool, error) {
+	args := m.Called(ctx, clerkUserID, role)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockAdminService) GetRoles(ctx context.Context, clerkUserID string) ([]domain.AdminRole, error) {
+	args := m.Called(ctx, clerkUserID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.AdminRole), args.Error(1)
+}
+
+func (m *MockAdminService) InvalidateCache(clerkUserID string) {
+	m.Called(clerkUserID)
+}
+
+func (m *MockAdminService) IsHardcodedAdmin(email string) bool {
+	args := m.Called(email)
+	return args.Bool(0)
+}
+
+// TestAdminUserService_ListUsers_EnrichesAdminStatus tests that admin users get marked
+func TestAdminUserService_ListUsers_EnrichesAdminStatus(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	mockAdminService := new(MockAdminService)
+	service := NewAdminUserService(mockRepo, mockAdminService)
+
+	ctx := context.Background()
+	now := time.Now()
+
+	// Regular user and admin user
+	repoUsers := []domain.AdminUserListItem{
+		{
+			ID:                 uuid.New().String(),
+			Email:              "regular@example.com",
+			SubscriptionTier:   "trial",
+			SubscriptionStatus: "trial",
+			CreatedAt:          now,
+			IsActive:           true,
+		},
+		{
+			ID:                 uuid.New().String(),
+			Email:              "admin@boostedbudget.com",
+			SubscriptionTier:   "trial",
+			SubscriptionStatus: "trial",
+			CreatedAt:          now,
+			IsActive:           true,
+		},
+	}
+
+	filters := domain.AdminUserFilters{}
+	mockRepo.On("ListUsers", ctx, filters, 20, 0).Return(repoUsers, 2, nil)
+	mockAdminService.On("IsHardcodedAdmin", "regular@example.com").Return(false)
+	mockAdminService.On("IsHardcodedAdmin", "admin@boostedbudget.com").Return(true)
+
+	// Execute
+	response, err := service.ListUsers(ctx, filters, 1, 20)
+
+	// Assert
+	require.NoError(t, err)
+	assert.Len(t, response.Users, 2)
+
+	// Regular user should NOT be admin
+	assert.False(t, response.Users[0].IsAdmin)
+	assert.Equal(t, "trial", response.Users[0].SubscriptionTier)
+	assert.Equal(t, "trial", response.Users[0].SubscriptionStatus)
+
+	// Admin user should be marked as admin with premium tier
+	assert.True(t, response.Users[1].IsAdmin)
+	assert.Equal(t, "premium", response.Users[1].SubscriptionTier)
+	assert.Equal(t, "active", response.Users[1].SubscriptionStatus)
+
+	mockRepo.AssertExpectations(t)
+	mockAdminService.AssertExpectations(t)
+}
+
+// TestAdminUserService_GetUserDetail_EnrichesAdminStatus tests admin detail enrichment
+func TestAdminUserService_GetUserDetail_EnrichesAdminStatus(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	mockAdminService := new(MockAdminService)
+	service := NewAdminUserService(mockRepo, mockAdminService)
+
+	ctx := context.Background()
+	now := time.Now()
+	userID := uuid.New().String()
+
+	repoDetail := &domain.AdminUserDetail{
+		AdminUserListItem: domain.AdminUserListItem{
+			ID:                 userID,
+			Email:              "admin@boostedbudget.com",
+			SubscriptionTier:   "trial",
+			SubscriptionStatus: "trial",
+			CreatedAt:          now,
+			IsActive:           true,
+		},
+		TransactionsCount: 100,
+		BudgetsCount:      5,
+	}
+
+	mockRepo.On("GetUserDetail", ctx, userID).Return(repoDetail, nil)
+	mockAdminService.On("IsHardcodedAdmin", "admin@boostedbudget.com").Return(true)
+
+	// Execute
+	detail, err := service.GetUserDetail(ctx, userID)
+
+	// Assert
+	require.NoError(t, err)
+	assert.True(t, detail.IsAdmin)
+	assert.Equal(t, "premium", detail.SubscriptionTier)
+	assert.Equal(t, "active", detail.SubscriptionStatus)
+	// Other fields unchanged
+	assert.Equal(t, 100, detail.TransactionsCount)
+	assert.Equal(t, 5, detail.BudgetsCount)
+
+	mockRepo.AssertExpectations(t)
+	mockAdminService.AssertExpectations(t)
+}
+
+// TestAdminUserService_ListUsers_NilAdminService tests graceful handling of nil AdminService
+func TestAdminUserService_ListUsers_NilAdminService(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil) // nil AdminService
+
+	ctx := context.Background()
+	now := time.Now()
+
+	repoUsers := []domain.AdminUserListItem{
+		{
+			ID:                 uuid.New().String(),
+			Email:              "admin@boostedbudget.com",
+			SubscriptionTier:   "trial",
+			SubscriptionStatus: "trial",
+			CreatedAt:          now,
+			IsActive:           true,
+		},
+	}
+
+	filters := domain.AdminUserFilters{}
+	mockRepo.On("ListUsers", ctx, filters, 20, 0).Return(repoUsers, 1, nil)
+
+	// Execute
+	response, err := service.ListUsers(ctx, filters, 1, 20)
+
+	// Assert - should work without enrichment
+	require.NoError(t, err)
+	assert.Len(t, response.Users, 1)
+	assert.False(t, response.Users[0].IsAdmin) // Not enriched
+	assert.Equal(t, "trial", response.Users[0].SubscriptionTier) // Not overridden
+
+	mockRepo.AssertExpectations(t)
 }

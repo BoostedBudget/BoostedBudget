@@ -47,7 +47,8 @@ func (r *adminUserRepository) ListUsers(ctx context.Context, filters domain.Admi
 		SELECT u.id, u.email, u.subscription_tier, u.subscription_status,
 		       u.primary_region, u.created_at, u.last_login_at, u.is_active,
 		       COALESCE(la.count, 0) as linked_accounts_count,
-		       COALESCE(r.count, 0) as automation_rules_count
+		       COALESCE(r.count, 0) as automation_rules_count,
+		       COALESCE(ref.count, 0) as referrals_count
 		FROM users u
 		LEFT JOIN (
 			SELECT user_id, COUNT(*) as count
@@ -60,6 +61,12 @@ func (r *adminUserRepository) ListUsers(ctx context.Context, filters domain.Admi
 			FROM rules
 			GROUP BY user_id
 		) r ON r.user_id = u.id
+		LEFT JOIN (
+			SELECT referrer_id, COUNT(*) as count
+			FROM referrals
+			WHERE status = 'completed'
+			GROUP BY referrer_id
+		) ref ON ref.referrer_id = u.id
 		WHERE u.is_deleted = FALSE%s
 		ORDER BY u.created_at DESC LIMIT $%d OFFSET $%d`, whereClause, argIndex, argIndex+1)
 	args = append(args, limit, offset)
@@ -85,6 +92,7 @@ func (r *adminUserRepository) ListUsers(ctx context.Context, filters domain.Admi
 			&user.IsActive,
 			&user.LinkedAccountsCount,
 			&user.AutomationRulesCount,
+			&user.ReferralsCount,
 		)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to scan user: %w", err)
@@ -106,6 +114,7 @@ func (r *adminUserRepository) GetUserDetail(ctx context.Context, userID string) 
 		       u.primary_region, u.created_at, u.last_login_at, u.is_active,
 		       COALESCE(la.count, 0) as linked_accounts_count,
 		       COALESCE(r.count, 0) as automation_rules_count,
+		       COALESCE(ref.count, 0) as referrals_count,
 		       COALESCE(t.count, 0) as transactions_count,
 		       COALESCE(b.count, 0) as budgets_count
 		FROM users u
@@ -120,6 +129,12 @@ func (r *adminUserRepository) GetUserDetail(ctx context.Context, userID string) 
 			FROM rules
 			GROUP BY user_id
 		) r ON r.user_id = u.id
+		LEFT JOIN (
+			SELECT referrer_id, COUNT(*) as count
+			FROM referrals
+			WHERE status = 'completed'
+			GROUP BY referrer_id
+		) ref ON ref.referrer_id = u.id
 		LEFT JOIN (
 			SELECT user_id, COUNT(*) as count
 			FROM transactions
@@ -145,6 +160,7 @@ func (r *adminUserRepository) GetUserDetail(ctx context.Context, userID string) 
 		&detail.IsActive,
 		&detail.LinkedAccountsCount,
 		&detail.AutomationRulesCount,
+		&detail.ReferralsCount,
 		&detail.TransactionsCount,
 		&detail.BudgetsCount,
 	)

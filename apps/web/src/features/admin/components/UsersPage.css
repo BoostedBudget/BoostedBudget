@@ -146,14 +146,9 @@
   font-weight: 500;
 }
 
-.users-page__tier-badge--free {
+.users-page__tier-badge--trial {
   background-color: var(--color-gray-100);
   color: var(--color-gray-700);
-}
-
-.users-page__tier-badge--premium_lite {
-  background-color: var(--color-blue-100);
-  color: var(--color-blue-700);
 }
 
 .users-page__tier-badge--premium {
@@ -161,9 +156,12 @@
   color: var(--color-purple-700);
 }
 
-.users-page__tier-badge--premium_plus {
-  background-color: var(--color-gold-100);
-  color: var(--color-gold-700);
+.users-page__tier-badge--household_2,
+.users-page__tier-badge--household_3,
+.users-page__tier-badge--household_4,
+.users-page__tier-badge--household_5 {
+  background-color: var(--color-blue-100);
+  color: var(--color-blue-700);
 }
 
 /* Status badge */
@@ -301,4 +299,11 @@
   width: 3rem;
   height: 3rem;
   margin-bottom: 1rem;
+}
+
+/* Admin icon */
+.users-page__admin-icon {
+  margin-left: 0.5rem;
+  color: var(--color-amber-500);
+  vertical-align: middle;
 }
