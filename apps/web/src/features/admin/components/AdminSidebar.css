@@ -1,0 +1,84 @@
+/**
+ * AdminSidebar Component Styles
+ * Issue #642: Admin feature foundation
+ */
+
+.admin-sidebar {
+  width: 240px;
+  min-height: calc(100vh - 3rem);
+  background: #f8fafc;
+  border-right: 1px solid #e2e8f0;
+  padding: 1rem 0;
+}
+
+.admin-sidebar__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.admin-sidebar__item {
+  margin: 0;
+}
+
+.admin-sidebar__link {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.5rem;
+  color: #475569;
+  text-decoration: none;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.admin-sidebar__link:hover {
+  background: #f1f5f9;
+  color: #1e293b;
+}
+
+.admin-sidebar__link--active {
+  background: #fef3c7;
+  color: #92400e;
+  border-right: 3px solid #f59e0b;
+}
+
+.admin-sidebar__link--active:hover {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .admin-sidebar {
+    background: #1f2937;
+    border-right-color: #374151;
+  }
+
+  .admin-sidebar__link {
+    color: #9ca3af;
+  }
+
+  .admin-sidebar__link:hover {
+    background: #374151;
+    color: #f3f4f6;
+  }
+
+  .admin-sidebar__link--active {
+    background: #451a03;
+    color: #fcd34d;
+    border-right-color: #f59e0b;
+  }
+
+  .admin-sidebar__link--active:hover {
+    background: #451a03;
+    color: #fcd34d;
+  }
+}
+
+/* Responsive - hide on mobile */
+@media (max-width: 768px) {
+  .admin-sidebar {
+    display: none;
+  }
+}
