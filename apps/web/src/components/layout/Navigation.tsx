@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom'
 import { cn } from '@/lib/utils'
+import { useIsAdmin, useAdminMode, ADMIN_NAV_ITEMS } from '@/features/admin'
 
 interface NavigationProps {
   className?: string
@@ -7,7 +8,7 @@ interface NavigationProps {
   onLinkClick?: () => void
 }
 
-const navItems = [
+const baseNavItems = [
   { to: '/dashboard', label: 'Dashboard' },
   { to: '/accounts', label: 'Accounts' },
   { to: '/transactions', label: 'Transactions' },
@@ -16,11 +17,12 @@ const navItems = [
   { to: '/auto-categorization', label: 'Auto-Cat' },
 ]
 
-export function Navigation({
-  className,
-  orientation = 'horizontal',
-  onLinkClick,
-}: NavigationProps) {
+export function Navigation({ className, orientation = 'horizontal', onLinkClick }: NavigationProps) {
+  const { isAdmin } = useIsAdmin()
+  const { adminModeEnabled } = useAdminMode()
+
+  const navItems = isAdmin && adminModeEnabled ? [...baseNavItems, ...ADMIN_NAV_ITEMS] : baseNavItems
+
   return (
     <nav
       aria-label="Main navigation"
