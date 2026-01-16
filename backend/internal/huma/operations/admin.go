@@ -2,6 +2,7 @@ package operations
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"strings"
 
@@ -120,6 +121,19 @@ func (c *CheckRoleInput) Resolve(ctx huma.Context) []error {
 	claims, ok := ctx.Context().Value(inputs.ClerkClaimsKey).(*clerk.SessionClaims)
 	if ok && claims != nil {
 		c.Email = auth.ExtractEmailFromClaims(claims)
+	}
+
+	// FALLBACK: If email not in JWT claims, fetch from Clerk API
+	// This handles cases where JWT template claims aren't populated correctly
+	// (e.g., no JWT template configured, or using default Clerk token)
+	if c.Email == "" && c.ClerkUserID != "" {
+		var fetchErr error
+		c.Email, fetchErr = auth.FetchEmailFromClerkAPI(ctx.Context(), c.ClerkUserID)
+		if fetchErr != nil {
+			// Log but don't fail - email is optional for admin check
+			// The hardcoded admin check just won't work, but Clerk metadata check still will
+			log.Printf("[CheckRoleInput] Failed to fetch email from Clerk API: %v", fetchErr)
+		}
 	}
 
 	return nil
