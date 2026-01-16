@@ -3,6 +3,7 @@ import { SubscriptionCard } from './components/SubscriptionCard'
 import { ProfileForm } from './ProfileForm'
 import { PrivacySettings } from './PrivacySettings'
 import { useProfile } from './hooks/useProfile'
+import { useIsAdmin, useAdminMode, AdminSettingsSection } from '@/features/admin'
 import { getRegionWithFlag } from '../../config/regions'
 import { useTabState, useCopyToClipboard } from '../../shared/hooks'
 import { abbreviateUUID } from '../../shared/utils'
@@ -15,6 +16,8 @@ interface ProfilePageProps {
 
 export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
   const { user, loading, error, refetch } = useProfile()
+  const { isAdmin, loading: adminLoading } = useIsAdmin()
+  const { adminModeEnabled, toggleAdminMode } = useAdminMode()
   const [activeTab, setActiveTab] = useTabState('tab', 'profile', ['profile', 'privacy'] as const)
   const { copy, copied } = useCopyToClipboard()
 
@@ -66,7 +69,6 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
     <div className="profile-page responsive">
       <h1>My Profile</h1>
 
-      {/* Tab Navigation */}
       <div className="profile-tabs">
         <button
           className={`tab-button ${activeTab === 'profile' ? 'active' : ''}`}
@@ -82,10 +84,8 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
         </button>
       </div>
 
-      {/* Profile Tab Content */}
       {activeTab === 'profile' && (
         <>
-          {/* User Info Section */}
           <section className="profile-section">
             <h2>Account Information</h2>
             <div className="info-grid">
@@ -142,18 +142,22 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
             </div>
           </section>
 
-          {/* Subscription Section */}
           <section className="profile-section">
             <h2>Subscription</h2>
             <SubscriptionCard tier={user.subscription_tier} status={user.subscription_status} />
           </section>
 
-          {/* Edit Profile Form */}
           <ProfileForm user={user} onProfileUpdate={handleProfileUpdate} />
+
+          {!adminLoading && isAdmin && (
+            <AdminSettingsSection
+              adminModeEnabled={adminModeEnabled}
+              onToggle={toggleAdminMode}
+            />
+          )}
         </>
       )}
 
-      {/* Privacy Settings Tab Content */}
       {activeTab === 'privacy' && <PrivacySettings onSettingsChange={onPrivacySettingsChange} />}
     </div>
   )
