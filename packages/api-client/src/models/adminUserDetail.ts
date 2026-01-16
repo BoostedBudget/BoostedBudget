@@ -36,9 +36,11 @@ export interface AdminUserDetail {
   email: string;
   id: string;
   is_active: boolean;
+  is_admin: boolean;
   last_login_at?: string;
   linked_accounts_count: number;
   primary_region: string;
+  referrals_count: number;
   subscription_status: string;
   subscription_tier: string;
   transactions_count: number;

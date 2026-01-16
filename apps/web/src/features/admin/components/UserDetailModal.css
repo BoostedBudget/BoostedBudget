@@ -24,12 +24,6 @@
   animation: spin 1s linear infinite;
 }
 
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 /* Title */
 .user-detail-modal__title {
   display: flex;
@@ -160,4 +154,18 @@
   justify-content: center;
   padding: 3rem;
   color: var(--text-secondary);
+}
+
+/* Admin badge */
+.user-detail-modal__admin-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: 0.5rem;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  background-color: var(--color-amber-100);
+  color: var(--color-amber-700);
+  border-radius: 9999px;
 }

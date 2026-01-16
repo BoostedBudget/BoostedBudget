@@ -35,12 +35,14 @@ type AdminUserService interface {
 
 // adminUserService implements AdminUserService
 type adminUserService struct {
-	repo repository.AdminUserRepository
+	repo         repository.AdminUserRepository
+	adminService AdminService
 }
 
-// NewAdminUserService creates a new AdminUserService instance
-func NewAdminUserService(repo repository.AdminUserRepository) AdminUserService {
-	return &adminUserService{repo: repo}
+// NewAdminUserService creates a new AdminUserService instance.
+// adminService is used to check if users are admins (can be nil if not needed).
+func NewAdminUserService(repo repository.AdminUserRepository, adminService AdminService) AdminUserService {
+	return &adminUserService{repo: repo, adminService: adminService}
 }
 
 // ListUsers returns a paginated list of users with optional filtering
@@ -68,6 +70,9 @@ func (s *adminUserService) ListUsers(ctx context.Context, filters domain.AdminUs
 	if users == nil {
 		users = []domain.AdminUserListItem{}
 	}
+
+	// Enrich users with admin status and override tier for admins
+	s.enrichUsersWithAdminStatus(users)
 
 	// Calculate pagination metadata
 	totalPages := 0
@@ -97,5 +102,28 @@ func (s *adminUserService) GetUserDetail(ctx context.Context, userID string) (*d
 		return nil, err
 	}
 
+	// Enrich with admin status and override tier for admins
+	s.enrichAdminUser(&detail.AdminUserListItem)
+
 	return detail, nil
+}
+
+// enrichUsersWithAdminStatus sets IsAdmin flag and overrides tier for admin users.
+// Admins always show as "premium" tier with "active" status.
+func (s *adminUserService) enrichUsersWithAdminStatus(users []domain.AdminUserListItem) {
+	for i := range users {
+		s.enrichAdminUser(&users[i])
+	}
+}
+
+// enrichAdminUser checks if user is admin and updates their info accordingly.
+func (s *adminUserService) enrichAdminUser(user *domain.AdminUserListItem) {
+	if s.adminService == nil {
+		return
+	}
+	if s.adminService.IsHardcodedAdmin(user.Email) {
+		user.IsAdmin = true
+		user.SubscriptionTier = "premium"
+		user.SubscriptionStatus = "active"
+	}
 }

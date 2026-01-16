@@ -14,7 +14,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { Loader2, User, Calendar, MapPin, CreditCard, Link2, Zap, Receipt, PiggyBank } from 'lucide-react'
+import { Loader2, User, Calendar, MapPin, CreditCard, Link2, Zap, Receipt, PiggyBank, Shield } from 'lucide-react'
 import type { AdminUserDetail } from '@boostedbudget/api-client/models'
 import './UserDetailModal.css'
 
@@ -42,14 +42,16 @@ const formatDate = (dateString: string | undefined): string => {
 
 const formatNumber = (num: number): string => num.toLocaleString()
 
+// Tier display names (matches config/subscription_tiers.yaml)
 const TIER_DISPLAY_MAP: Record<string, string> = {
-  free: 'Free',
-  premium_lite: 'Premium Lite',
+  trial: 'Trial',
   premium: 'Premium',
-  premium_plus: 'Premium+',
+  household_2: 'Household (2)',
+  household_3: 'Household (3)',
+  household_4: 'Household (4)',
+  household_5: 'Household (5+)',
 }
 
-const getTierDisplay = (tier: string): string => TIER_DISPLAY_MAP[tier] ?? tier
 
 /**
  * UserDetailModal - Modal for viewing user details
@@ -69,6 +71,12 @@ export function UserDetailModal({ user, loading, open, onClose }: UserDetailModa
               <DialogTitle className="user-detail-modal__title">
                 <User className="user-detail-modal__title-icon" />
                 {user.email}
+                {user.is_admin && (
+                  <span className="user-detail-modal__admin-badge">
+                    <Shield size={14} />
+                    Admin
+                  </span>
+                )}
               </DialogTitle>
               <DialogDescription id="user-detail-description">
                 User ID: {user.id}
@@ -85,7 +93,7 @@ export function UserDetailModal({ user, loading, open, onClose }: UserDetailModa
                     <div className="user-detail-modal__field-content">
                       <span className="user-detail-modal__field-label">Subscription</span>
                       <span className="user-detail-modal__field-value">
-                        {getTierDisplay(user.subscription_tier)} ({user.subscription_status})
+                        {TIER_DISPLAY_MAP[user.subscription_tier] ?? user.subscription_tier} ({user.subscription_status})
                       </span>
                     </div>
                   </div>

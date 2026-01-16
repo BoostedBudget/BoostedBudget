@@ -169,7 +169,7 @@ func main() {
 		ruleApplicationService := services.NewRuleApplicationService(categorizationRuleRepo)
 		// Issue #354: Cash flow analytics and dashboard preferences services
 		analyticsService := services.NewAnalyticsService(analyticsRepo)
-		adminUserService := services.NewAdminUserService(adminUserRepo) // Issue #639: Admin user management
+		// Issue #639: adminUserService is created later after adminService is initialized
 		// Issue #474: Load dashboard layout config for preferences service
 		// This ensures reset-to-default uses YAML config version, not hardcoded version 2
 		dashboardLayoutConfig, err := config.LoadDashboardLayoutConfig()
@@ -611,6 +611,9 @@ func main() {
 		}
 		adminService := services.NewAdminService(cfg.ClerkSecretKey, adminEmailConfig.AdminEmails)
 		log.Printf("✅ Admin service initialized with %d hardcoded admin emails", len(adminEmailConfig.AdminEmails))
+
+		// Issue #639: Admin user management - needs adminService for admin status checks
+		adminUserService := services.NewAdminUserService(adminUserRepo, adminService)
 
 		// Apply Huma Admin middleware for admin routes (Issue #309)
 		humaAdminMiddleware := humamiddleware.NewAdminMiddleware(cfg, adminService)
