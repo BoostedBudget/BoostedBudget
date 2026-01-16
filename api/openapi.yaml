@@ -755,6 +755,22 @@ components:
         - total_amount
         - has_more
       type: object
+    CheckRoleResponseBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CheckRoleResponseBody.json
+          format: uri
+          readOnly: true
+          type: string
+        is_admin:
+          description: Whether the user has admin role
+          type: boolean
+      required:
+        - is_admin
+      type: object
     ConditionEvalResult:
       additionalProperties: false
       properties:
@@ -3075,6 +3091,28 @@ paths:
       summary: Update account
       tags:
         - Accounts
+  /api/v1/admin/check-role:
+    get:
+      description: Returns whether the authenticated user has admin role. Callable by any authenticated user, available in all environments.
+      operationId: checkRole
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckRoleResponseBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Check if current user is admin
+      tags:
+        - Admin
   /api/v1/admin/plaid/fire-webhook:
     post:
       description: Fires a Plaid webhook for testing in QA environment. Requires Clerk authentication.

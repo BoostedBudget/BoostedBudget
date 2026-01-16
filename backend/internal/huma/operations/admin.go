@@ -5,7 +5,10 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/clerk/clerk-sdk-go/v2"
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/maxnussbaum/BoostedBudget/internal/auth"
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
@@ -24,21 +27,24 @@ type AdminHandler struct {
 	linkedItemRepo    repository.LinkedItemRepository
 	encryptionService services.EncryptionService
 	trialService      TrialGranter
+	adminService      services.AdminService
 }
 
 // NewAdminHandler creates a new AdminHandler with required dependencies.
-// The trialService parameter can be nil if trial grant functionality is not needed.
+// The trialService and adminService parameters can be nil if not needed.
 func NewAdminHandler(
 	plaidService services.PlaidService,
 	linkedItemRepo repository.LinkedItemRepository,
 	encryptionService services.EncryptionService,
 	trialService TrialGranter,
+	adminService services.AdminService,
 ) *AdminHandler {
 	return &AdminHandler{
 		plaidService:      plaidService,
 		linkedItemRepo:    linkedItemRepo,
 		encryptionService: encryptionService,
 		trialService:      trialService,
+		adminService:      adminService,
 	}
 }
 
@@ -84,6 +90,49 @@ type GrantTrialOutput struct {
 type GrantTrialResponseBody struct {
 	Success bool   `json:"success" doc:"Whether the trial was granted successfully"`
 	Message string `json:"message" doc:"Description of the result"`
+}
+
+// CheckRoleInput represents the input for checking admin role.
+// Issue #638: Allows any authenticated user to check their admin status.
+type CheckRoleInput struct {
+	inputs.AuthenticatedInput
+	// ClerkUserID is needed to check Clerk privateMetadata for roles.
+	ClerkUserID string `json:"-" doc:"Clerk user ID (resolved from JWT)"`
+	// Email is needed to check hardcoded admin list.
+	Email string `json:"-" doc:"User email from Clerk claims"`
+}
+
+// Resolve implements huma.Resolver to extract user context from request.
+func (c *CheckRoleInput) Resolve(ctx huma.Context) []error {
+	// First resolve the base AuthenticatedInput
+	if errs := c.AuthenticatedInput.Resolve(ctx); len(errs) > 0 {
+		return errs
+	}
+
+	// Extract ClerkUserID from context
+	clerkUserID, ok := ctx.Context().Value(inputs.ClerkUserIDKey).(string)
+	if !ok || clerkUserID == "" {
+		return []error{huma.Error401Unauthorized("Clerk user ID not found in context")}
+	}
+	c.ClerkUserID = clerkUserID
+
+	// Extract email from Clerk claims (optional for hardcoded admin check)
+	claims, ok := ctx.Context().Value(inputs.ClerkClaimsKey).(*clerk.SessionClaims)
+	if ok && claims != nil {
+		c.Email = auth.ExtractEmailFromClaims(claims)
+	}
+
+	return nil
+}
+
+// CheckRoleOutput represents the response for role check.
+type CheckRoleOutput struct {
+	Body CheckRoleResponseBody
+}
+
+// CheckRoleResponseBody defines the response body for role check.
+type CheckRoleResponseBody struct {
+	IsAdmin bool `json:"is_admin" doc:"Whether the user has admin role"`
 }
 
 // --- Handler Methods ---
@@ -172,6 +221,46 @@ func (h *AdminHandler) GrantTrial(ctx context.Context, input *GrantTrialInput) (
 	}, nil
 }
 
+// CheckRole checks if the current user has admin role.
+// Issue #638: Allows frontend to check admin status since roles are in Clerk privateMetadata.
+//
+// GET /api/v1/admin/check-role
+//
+// Unlike other admin endpoints, this is callable by ANY authenticated user (not just admins).
+// The middleware is modified to skip role verification for this specific endpoint.
+//
+// Error Responses:
+//   - 401: Not authenticated
+//   - 500: Failed to check admin role
+//   - 503: Admin service not configured
+func (h *AdminHandler) CheckRole(ctx context.Context, input *CheckRoleInput) (*CheckRoleOutput, error) {
+	// Check if admin service is configured
+	if h.adminService == nil {
+		return nil, huma.Error503ServiceUnavailable("Admin service not configured")
+	}
+
+	// 1. Check hardcoded admin list first (avoids Clerk API call)
+	if input.Email != "" && h.adminService.IsHardcodedAdmin(input.Email) {
+		return &CheckRoleOutput{
+			Body: CheckRoleResponseBody{
+				IsAdmin: true,
+			},
+		}, nil
+	}
+
+	// 2. Check admin role via Clerk privateMetadata
+	hasAdminRole, err := h.adminService.HasRole(ctx, input.ClerkUserID, domain.RoleAdmin)
+	if err != nil {
+		return nil, huma.Error500InternalServerError("Failed to check admin role")
+	}
+
+	return &CheckRoleOutput{
+		Body: CheckRoleResponseBody{
+			IsAdmin: hasAdminRole,
+		},
+	}, nil
+}
+
 // RegisterAdminRoutes registers admin routes with the Huma API.
 // Routes are protected by AdminMiddleware (environment and role validation).
 func RegisterAdminRoutes(api huma.API, handler *AdminHandler) {
@@ -197,4 +286,16 @@ func RegisterAdminRoutes(api huma.API, handler *AdminHandler) {
 		Tags:        []string{"Admin"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GrantTrial)
+
+	// GET /api/v1/admin/check-role - Check if current user is admin
+	// Issue #638: Available to all authenticated users (not just admins).
+	huma.Register(api, huma.Operation{
+		OperationID: "checkRole",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/admin/check-role",
+		Summary:     "Check if current user is admin",
+		Description: "Returns whether the authenticated user has admin role. Callable by any authenticated user, available in all environments.",
+		Tags:        []string{"Admin"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.CheckRole)
 }
