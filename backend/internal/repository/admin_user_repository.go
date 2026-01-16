@@ -52,7 +52,7 @@ func (r *adminUserRepository) ListUsers(ctx context.Context, filters domain.Admi
 		LEFT JOIN (
 			SELECT user_id, COUNT(*) as count
 			FROM linked_items
-			WHERE is_active = TRUE
+			WHERE status = 'active'
 			GROUP BY user_id
 		) la ON la.user_id = u.id
 		LEFT JOIN (
@@ -112,7 +112,7 @@ func (r *adminUserRepository) GetUserDetail(ctx context.Context, userID string) 
 		LEFT JOIN (
 			SELECT user_id, COUNT(*) as count
 			FROM linked_items
-			WHERE is_active = TRUE
+			WHERE status = 'active'
 			GROUP BY user_id
 		) la ON la.user_id = u.id
 		LEFT JOIN (
