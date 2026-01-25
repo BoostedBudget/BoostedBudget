@@ -17,10 +17,58 @@ jobs:
 
     steps:
       - name: Delete old artifacts
-        uses: geekyeggo/delete-artifact@v5
+        uses: actions/github-script@v7
         with:
-          name: "*"
-          useGlob: true
-          failOnError: false
-          token: ${{ secrets.GITHUB_TOKEN }}
-          retentionDays: ${{ github.event.inputs.retention_days }}
+          script: |
+            const retentionDays = parseInt('${{ github.event.inputs.retention_days }}');
+            const cutoffDate = new Date();
+            cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
+
+            console.log(`Deleting artifacts older than ${retentionDays} days (before ${cutoffDate.toISOString()})`);
+
+            let deletedCount = 0;
+            let page = 1;
+            let hasMore = true;
+
+            const perPage = 100;
+
+            // Paginate through all artifacts
+            while (hasMore) {
+              const response = await github.rest.actions.listArtifactsForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: perPage,
+                page: page
+              });
+
+              const artifacts = response.data.artifacts;
+
+              if (artifacts.length === 0) {
+                hasMore = false;
+              }
+
+              for (const artifact of artifacts) {
+                const createdAt = new Date(artifact.created_at);
+                if (createdAt < cutoffDate) {
+                  try {
+                    await github.rest.actions.deleteArtifact({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      artifact_id: artifact.id
+                    });
+                    deletedCount++;
+                    console.log(`✓ Deleted: ${artifact.name} (created: ${artifact.created_at})`);
+                  } catch (error) {
+                    console.error(`✗ Failed to delete ${artifact.name}: ${error.message}`);
+                  }
+                } else {
+                  console.log(`○ Keeping: ${artifact.name} (created: ${artifact.created_at})`);
+                }
+              }
+
+              // Check if there are more pages
+              hasMore = artifacts.length === perPage;
+              page++;
+            }
+
+            console.log(`\nSummary: Deleted ${deletedCount} artifact(s);`);
