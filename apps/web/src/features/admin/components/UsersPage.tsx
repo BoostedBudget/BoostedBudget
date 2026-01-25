@@ -164,7 +164,7 @@ export function UsersPage() {
                   <td>
                     {user.email}
                     {user.is_admin && (
-                      <Shield className="users-page__admin-icon" size={14} title="Administrator" />
+                      <Shield className="users-page__admin-icon" size={14} aria-label="Administrator" />
                     )}
                   </td>
                   <td>
