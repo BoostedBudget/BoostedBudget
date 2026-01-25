@@ -1,0 +1,26 @@
+name: Cleanup Artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      retention_days:
+        description: "Days to keep artifacts (delete older than X days)"
+        required: true
+        default: "1"
+        type: string
+
+jobs:
+  delete-artifacts:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+
+    steps:
+      - name: Delete old artifacts
+        uses: geekyeggo/delete-artifact@v5
+        with:
+          name: "*"
+          useGlob: true
+          failOnError: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+          retentionDays: ${{ github.event.inputs.retention_days }}

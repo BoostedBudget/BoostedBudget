@@ -264,7 +264,7 @@ jobs:
           path: |
             ${{ env.UNIQUE_WORKSPACE }}/backend/coverage.out
             ${{ env.UNIQUE_WORKSPACE }}/backend/coverage.html
-          retention-days: 30
+          retention-days: 1
 
       - name: Save Go modules cache
         if: always() && steps.cache-go-modules.outputs.cache-hit != 'true'
@@ -354,7 +354,7 @@ jobs:
           path: |
             ${{ env.UNIQUE_WORKSPACE }}/apps/web/coverage/combined.lcov
             ${{ env.UNIQUE_WORKSPACE }}/apps/web/coverage/html/
-          retention-days: 30
+          retention-days: 1
           if-no-files-found: warn
 
       - name: Final workspace cleanup
@@ -455,7 +455,7 @@ jobs:
         with:
           name: playwright-report
           path: ${{ env.UNIQUE_WORKSPACE }}/apps/web/playwright-report/
-          retention-days: 30
+          retention-days: 3
 
       - name: Upload E2E test videos (on failure)
         if: failure()
@@ -463,7 +463,7 @@ jobs:
         with:
           name: playwright-videos
           path: ${{ env.UNIQUE_WORKSPACE }}/apps/web/test-results/
-          retention-days: 7
+          retention-days: 3
 
       - name: Final workspace cleanup
         if: always()
@@ -622,7 +622,7 @@ jobs:
         with:
           name: migration-performance-${{ github.run_id }}
           path: ${{ env.UNIQUE_WORKSPACE }}/migration-performance.json
-          retention-days: 30
+          retention-days: 1
           if-no-files-found: warn
 
       - name: Cleanup PostgreSQL container
