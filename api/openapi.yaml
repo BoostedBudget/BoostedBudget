@@ -932,6 +932,31 @@ components:
         - actual
         - met
       type: object
+    ConnectionPoolStats:
+      additionalProperties: false
+      properties:
+        active:
+          format: int32
+          type: integer
+        constructing:
+          format: int32
+          type: integer
+        idle:
+          format: int32
+          type: integer
+        max:
+          format: int32
+          type: integer
+        total:
+          format: int32
+          type: integer
+      required:
+        - active
+        - idle
+        - max
+        - constructing
+        - total
+      type: object
     CreateAutomationRuleRequest:
       additionalProperties: false
       properties:
@@ -1240,6 +1265,34 @@ components:
       required:
         - layout
         - updated_at
+      type: object
+    DatabaseHealth:
+      additionalProperties: false
+      properties:
+        connections:
+          $ref: "#/components/schemas/ConnectionPoolStats"
+        latency_ms:
+          format: int64
+          type: integer
+        status:
+          type: string
+      required:
+        - status
+        - connections
+        - latency_ms
+      type: object
+    DeadLetterMetrics:
+      additionalProperties: false
+      properties:
+        count:
+          format: int64
+          type: integer
+        oldest_job_age_hours:
+          format: int64
+          type: integer
+      required:
+        - count
+        - oldest_job_age_hours
       type: object
     ErrorDetail:
       additionalProperties: false
@@ -1738,6 +1791,17 @@ components:
         - change_amount
         - change_percent
       type: object
+    PlaidHealth:
+      additionalProperties: false
+      properties:
+        environment:
+          type: string
+        status:
+          type: string
+      required:
+        - status
+        - environment
+      type: object
     PlaidWebhookResponseBody:
       additionalProperties: false
       properties:
@@ -1808,6 +1872,27 @@ components:
         - data_sharing_enabled
         - created_at
         - updated_at
+      type: object
+    QueueMetrics:
+      additionalProperties: false
+      properties:
+        completed_last_hour:
+          format: int64
+          type: integer
+        failed:
+          format: int64
+          type: integer
+        pending:
+          format: int64
+          type: integer
+        running:
+          format: int64
+          type: integer
+      required:
+        - pending
+        - running
+        - failed
+        - completed_last_hour
       type: object
     ReorderAccountsOutputBody:
       additionalProperties: false
@@ -2086,6 +2171,32 @@ components:
         - status
         - response_time_ms
       type: object
+    ServiceHealth:
+      additionalProperties: false
+      properties:
+        latency_ms:
+          format: int64
+          type: integer
+        status:
+          type: string
+      required:
+        - status
+        - latency_ms
+      type: object
+    ServiceHealthStatuses:
+      additionalProperties: false
+      properties:
+        clerk:
+          $ref: "#/components/schemas/ServiceHealth"
+        database:
+          $ref: "#/components/schemas/DatabaseHealth"
+        plaid:
+          $ref: "#/components/schemas/PlaidHealth"
+      required:
+        - database
+        - clerk
+        - plaid
+      type: object
     SubscriptionFeatures:
       additionalProperties: false
       properties:
@@ -2235,6 +2346,56 @@ components:
         - total_transactions
         - can_sync_more
         - reset_date
+      type: object
+    SyncStatusMetrics:
+      additionalProperties: false
+      properties:
+        active_syncs:
+          format: int64
+          type: integer
+        average_duration_ms:
+          format: int64
+          type: integer
+        failed_last_hour:
+          format: int64
+          type: integer
+      required:
+        - active_syncs
+        - failed_last_hour
+        - average_duration_ms
+      type: object
+    SystemHealthResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/SystemHealthResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        dead_letter_queue:
+          $ref: "#/components/schemas/DeadLetterMetrics"
+        job_queues:
+          additionalProperties:
+            $ref: "#/components/schemas/QueueMetrics"
+          type: object
+        services:
+          $ref: "#/components/schemas/ServiceHealthStatuses"
+        status:
+          type: string
+        sync_status:
+          $ref: "#/components/schemas/SyncStatusMetrics"
+        timestamp:
+          format: date-time
+          type: string
+      required:
+        - status
+        - timestamp
+        - services
+        - job_queues
+        - sync_status
+        - dead_letter_queue
       type: object
     TagSource:
       additionalProperties: false
@@ -3304,6 +3465,28 @@ paths:
       security:
         - clerk: []
       summary: Grant trial subscription (QA only)
+      tags:
+        - Admin
+  /api/v1/admin/system/health:
+    get:
+      description: Returns comprehensive system health metrics including database, job queues, and sync status. Requires admin role.
+      operationId: getSystemHealth
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemHealthResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get system health metrics (admin)
       tags:
         - Admin
   /api/v1/admin/users:

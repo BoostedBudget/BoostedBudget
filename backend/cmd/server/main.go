@@ -145,7 +145,9 @@ func main() {
 		dashboardPrefsRepo := repository.NewDashboardPreferencesRepository(db) // Issue #354: Dashboard preferences
 		transferSuggestionRepo := repository.NewTransferSuggestionRepository(db) // Issue #36: Transfer suggestions
 		automationRuleRepo := repository.NewAutomationRulesRepository(db) // Issue #37: Automation rules
-		adminUserRepo := repository.NewAdminUserRepository(db)            // Issue #639: Admin user management
+		adminUserRepo := repository.NewAdminUserRepository(db)                   // Issue #639: Admin user management
+		systemHealthRepo := repository.NewSystemHealthRepository(db)             // Issue #640: System health monitoring
+		deadLetterJobRepo := repository.NewDeadLetterJobRepository(db)           // Issue #640: Dead letter queue metrics
 
 		// Create mock audit logger (will be replaced with real implementation later)
 		auditLogger := &mockAuditLogger{}
@@ -615,6 +617,14 @@ func main() {
 		// Issue #639: Admin user management - needs adminService for admin status checks
 		adminUserService := services.NewAdminUserService(adminUserRepo, adminService)
 
+		// Issue #640: System health monitoring service
+			systemHealthService := services.NewSystemHealthService(
+			systemHealthRepo,
+			deadLetterJobRepo,
+			&dbPoolAdapter{db},
+			cfg.PlaidEnv,
+		)
+
 		// Apply Huma Admin middleware for admin routes (Issue #309)
 		humaAdminMiddleware := humamiddleware.NewAdminMiddleware(cfg, adminService)
 		humaAPI.UseMiddleware(humaAdminMiddleware)
@@ -708,8 +718,9 @@ func main() {
 		// Issue #698: Pass trialService for E2E test trial grant endpoint
 		// Issue #638: Pass adminService for check-role endpoint
 		// Issue #639: Pass adminUserService for user management endpoints
+		// Issue #640: Pass systemHealthService for system health monitoring
 		if plaidService != nil && encryptionService != nil {
-			humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, encryptionService, trialService, adminService, adminUserService)
+			humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, encryptionService, trialService, adminService, adminUserService, systemHealthService)
 			operations.RegisterAdminRoutes(humaAPI, humaAdminHandler)
 			log.Println("✅ Huma admin routes registered (protected by AdminMiddleware)")
 		}
@@ -916,6 +927,23 @@ type mockAuditLogger struct{}
 func (m *mockAuditLogger) Log(ctx context.Context, action, resourceType, resourceID string) error {
 	log.Printf("AUDIT: %s - %s - %s", action, resourceType, resourceID)
 	return nil
+}
+
+// dbPoolAdapter adapts *pgxpool.Pool to services.DatabasePool interface (Issue #640)
+// Lightweight wrapper that embeds pgxpool and delegates to its methods
+type dbPoolAdapter struct {
+	*pgxpool.Pool
+}
+
+func (a *dbPoolAdapter) GetStats() services.PoolStats {
+	s := a.Stat()
+	return services.PoolStats{
+		AcquiredConns:     s.AcquiredConns(),
+		IdleConns:         s.IdleConns(),
+		MaxConns:          s.MaxConns(),
+		ConstructingConns: s.ConstructingConns(),
+		TotalConns:        s.TotalConns(),
+	}
 }
 
 // createDBCheck creates a database health check function

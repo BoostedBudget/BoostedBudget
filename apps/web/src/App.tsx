@@ -29,7 +29,7 @@ import { AutoCategorizationPageWrapper } from './features/auto-categorization/co
 import { BudgetsPage, BudgetDetailPage } from './features/budgets'
 import { RulesPage, RuleBuilder } from './features/rules'
 import { LandingPage } from './features/landing'
-import { AdminRoute, AdminLayout, AdminDashboardPage, UsersPage } from './features/admin'
+import { AdminRoute, AdminLayout, AdminDashboardPage, UsersPage, HealthDashboardPage } from './features/admin'
 import { Toaster } from 'sonner'
 import './App.css'
 
@@ -245,7 +245,7 @@ function App() {
               <Route index element={<AdminDashboardPage />} />
               <Route path="users" element={<UsersPage />} />
               <Route path="subscriptions" element={<ComingSoon title="Subscriptions" />} />
-              <Route path="health" element={<ComingSoon title="System Health" />} />
+              <Route path="health" element={<HealthDashboardPage />} />
               <Route path="webhooks" element={<ComingSoon title="Webhooks" />} />
             </Route>
           </Routes>

@@ -51,7 +51,7 @@ func TestCheckRole_ReturnsTrue_ForAdminUser(t *testing.T) {
 	mockAdmin := &mockAdminService{
 		hasRoleResult: true,
 	}
-	handler := NewAdminHandler(nil, nil, nil, nil, mockAdmin, nil)
+	handler := NewAdminHandler(nil, nil, nil, nil, mockAdmin, nil, nil)
 
 	input := &CheckRoleInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -72,7 +72,7 @@ func TestCheckRole_ReturnsFalse_ForNonAdminUser(t *testing.T) {
 		hasRoleResult:    false,
 		isHardcodedAdmin: false,
 	}
-	handler := NewAdminHandler(nil, nil, nil, nil, mockAdmin, nil)
+	handler := NewAdminHandler(nil, nil, nil, nil, mockAdmin, nil, nil)
 
 	input := &CheckRoleInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-456"},
@@ -93,7 +93,7 @@ func TestCheckRole_ReturnsTrue_ForHardcodedAdmin(t *testing.T) {
 		hasRoleResult:    false, // Not in Clerk roles
 		isHardcodedAdmin: true,  // But is hardcoded admin
 	}
-	handler := NewAdminHandler(nil, nil, nil, nil, mockAdmin, nil)
+	handler := NewAdminHandler(nil, nil, nil, nil, mockAdmin, nil, nil)
 
 	input := &CheckRoleInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-789"},
@@ -114,7 +114,7 @@ func TestCheckRole_ReturnsError_WhenAdminServiceFails(t *testing.T) {
 		hasRoleErr:       errors.New("clerk API error"),
 		isHardcodedAdmin: false,
 	}
-	handler := NewAdminHandler(nil, nil, nil, nil, mockAdmin, nil)
+	handler := NewAdminHandler(nil, nil, nil, nil, mockAdmin, nil, nil)
 
 	input := &CheckRoleInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-999"},
@@ -136,7 +136,7 @@ func TestCheckRole_ChecksHardcodedAdminFirst(t *testing.T) {
 		isHardcodedAdmin: true,
 		hasRoleErr:       errors.New("should not be called"),
 	}
-	handler := NewAdminHandler(nil, nil, nil, nil, mockAdmin, nil)
+	handler := NewAdminHandler(nil, nil, nil, nil, mockAdmin, nil, nil)
 
 	input := &CheckRoleInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -155,7 +155,7 @@ func TestCheckRole_ChecksHardcodedAdminFirst(t *testing.T) {
 // TestCheckRole_RouteRegistration tests that the route is properly registered.
 func TestCheckRole_RouteRegistration(t *testing.T) {
 	mockAdmin := &mockAdminService{}
-	handler := NewAdminHandler(nil, nil, nil, nil, mockAdmin, nil)
+	handler := NewAdminHandler(nil, nil, nil, nil, mockAdmin, nil, nil)
 
 	_, api := humatest.New(t)
 	RegisterAdminRoutes(api, handler)
@@ -167,7 +167,7 @@ func TestCheckRole_RouteRegistration(t *testing.T) {
 
 // TestCheckRole_NilAdminService tests that nil AdminService returns error.
 func TestCheckRole_NilAdminService(t *testing.T) {
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil)
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil)
 
 	input := &CheckRoleInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
