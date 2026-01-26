@@ -29,16 +29,18 @@ type AdminHandler struct {
 	encryptionService services.EncryptionService
 	trialService      TrialGranter
 	adminService      services.AdminService
+	adminUserService  services.AdminUserService
 }
 
 // NewAdminHandler creates a new AdminHandler with required dependencies.
-// The trialService and adminService parameters can be nil if not needed.
+// The trialService, adminService, and adminUserService parameters can be nil if not needed.
 func NewAdminHandler(
 	plaidService services.PlaidService,
 	linkedItemRepo repository.LinkedItemRepository,
 	encryptionService services.EncryptionService,
 	trialService TrialGranter,
 	adminService services.AdminService,
+	adminUserService services.AdminUserService,
 ) *AdminHandler {
 	return &AdminHandler{
 		plaidService:      plaidService,
@@ -46,6 +48,7 @@ func NewAdminHandler(
 		encryptionService: encryptionService,
 		trialService:      trialService,
 		adminService:      adminService,
+		adminUserService:  adminUserService,
 	}
 }
 
@@ -147,6 +150,32 @@ type CheckRoleOutput struct {
 // CheckRoleResponseBody defines the response body for role check.
 type CheckRoleResponseBody struct {
 	IsAdmin bool `json:"is_admin" doc:"Whether the user has admin role"`
+}
+
+// --- Admin User Management Types (Issue #639) ---
+
+// ListUsersInput represents the input for listing users with pagination and filters.
+type ListUsersInput struct {
+	inputs.AdminAuthenticatedInput
+	inputs.PagePaginationInput
+	Search string `query:"search" doc:"Search by email (partial match)"`
+	Tier   string `query:"tier" doc:"Filter by subscription tier"`
+}
+
+// ListUsersOutput represents the response for user listing.
+type ListUsersOutput struct {
+	Body *domain.AdminUserListResponse
+}
+
+// GetUserDetailInput represents the input for getting user details.
+type GetUserDetailInput struct {
+	inputs.AdminAuthenticatedInput
+	UserID string `path:"user_id" doc:"User UUID"`
+}
+
+// GetUserDetailOutput represents the response for user details.
+type GetUserDetailOutput struct {
+	Body *domain.AdminUserDetail
 }
 
 // --- Handler Methods ---
@@ -275,6 +304,68 @@ func (h *AdminHandler) CheckRole(ctx context.Context, input *CheckRoleInput) (*C
 	}, nil
 }
 
+// --- Admin User Management Handlers (Issue #639) ---
+
+// ListUsers returns a paginated list of users with optional search and tier filter.
+// Issue #639: Admin user management API
+//
+// GET /api/v1/admin/users
+//
+// Error Responses:
+//   - 401: Not authenticated
+//   - 403: Not an admin (checked by AdminMiddleware)
+//   - 500: Internal server error
+//   - 503: Admin user service not configured
+func (h *AdminHandler) ListUsers(ctx context.Context, input *ListUsersInput) (*ListUsersOutput, error) {
+	// Check if admin user service is configured
+	if h.adminUserService == nil {
+		return nil, huma.Error503ServiceUnavailable("Admin user service not configured")
+	}
+
+	// Build filters from input
+	filters := domain.AdminUserFilters{
+		Search: input.Search,
+		Tier:   input.Tier,
+	}
+
+	// Get users from service
+	response, err := h.adminUserService.ListUsers(ctx, filters, input.Page, input.PageSize)
+	if err != nil {
+		return nil, huma.Error500InternalServerError("Failed to list users: " + err.Error())
+	}
+
+	return &ListUsersOutput{Body: response}, nil
+}
+
+// GetUserDetail returns detailed user information with statistics.
+// Issue #639: Admin user management API
+//
+// GET /api/v1/admin/users/{user_id}
+//
+// Error Responses:
+//   - 401: Not authenticated
+//   - 403: Not an admin (checked by AdminMiddleware)
+//   - 404: User not found
+//   - 500: Internal server error
+//   - 503: Admin user service not configured
+func (h *AdminHandler) GetUserDetail(ctx context.Context, input *GetUserDetailInput) (*GetUserDetailOutput, error) {
+	// Check if admin user service is configured
+	if h.adminUserService == nil {
+		return nil, huma.Error503ServiceUnavailable("Admin user service not configured")
+	}
+
+	// Get user detail from service
+	detail, err := h.adminUserService.GetUserDetail(ctx, input.UserID)
+	if err != nil {
+		if err == services.ErrAdminUserNotFound {
+			return nil, huma.Error404NotFound("User not found")
+		}
+		return nil, huma.Error500InternalServerError("Failed to get user detail: " + err.Error())
+	}
+
+	return &GetUserDetailOutput{Body: detail}, nil
+}
+
 // RegisterAdminRoutes registers admin routes with the Huma API.
 // Routes are protected by AdminMiddleware (environment and role validation).
 func RegisterAdminRoutes(api huma.API, handler *AdminHandler) {
@@ -312,4 +403,28 @@ func RegisterAdminRoutes(api huma.API, handler *AdminHandler) {
 		Tags:        []string{"Admin"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.CheckRole)
+
+	// --- Admin User Management Routes (Issue #639) ---
+
+	// GET /api/v1/admin/users - List users with pagination and filters
+	huma.Register(api, huma.Operation{
+		OperationID: "listAdminUsers",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/admin/users",
+		Summary:     "List users (admin)",
+		Description: "Returns a paginated list of users with optional email search and tier filtering. Requires admin role.",
+		Tags:        []string{"Admin"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.ListUsers)
+
+	// GET /api/v1/admin/users/{user_id} - Get user details
+	huma.Register(api, huma.Operation{
+		OperationID: "getAdminUserDetail",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/admin/users/{user_id}",
+		Summary:     "Get user details (admin)",
+		Description: "Returns detailed user information including statistics. Requires admin role.",
+		Tags:        []string{"Admin"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.GetUserDetail)
 }

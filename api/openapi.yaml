@@ -159,6 +159,149 @@ components:
       required:
         - types
       type: object
+    AdminUserDetail:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/AdminUserDetail.json
+          format: uri
+          readOnly: true
+          type: string
+        automation_rules_count:
+          format: int64
+          type: integer
+        budgets_count:
+          format: int64
+          type: integer
+        created_at:
+          format: date-time
+          type: string
+        email:
+          type: string
+        id:
+          type: string
+        is_active:
+          type: boolean
+        is_admin:
+          type: boolean
+        last_login_at:
+          format: date-time
+          type: string
+        linked_accounts_count:
+          format: int64
+          type: integer
+        primary_region:
+          type: string
+        referrals_count:
+          format: int64
+          type: integer
+        subscription_status:
+          type: string
+        subscription_tier:
+          type: string
+        transactions_count:
+          format: int64
+          type: integer
+      required:
+        - transactions_count
+        - budgets_count
+        - id
+        - email
+        - subscription_tier
+        - subscription_status
+        - primary_region
+        - created_at
+        - is_active
+        - is_admin
+        - linked_accounts_count
+        - automation_rules_count
+        - referrals_count
+      type: object
+    AdminUserListItem:
+      additionalProperties: false
+      properties:
+        automation_rules_count:
+          format: int64
+          type: integer
+        created_at:
+          format: date-time
+          type: string
+        email:
+          type: string
+        id:
+          type: string
+        is_active:
+          type: boolean
+        is_admin:
+          type: boolean
+        last_login_at:
+          format: date-time
+          type: string
+        linked_accounts_count:
+          format: int64
+          type: integer
+        primary_region:
+          type: string
+        referrals_count:
+          format: int64
+          type: integer
+        subscription_status:
+          type: string
+        subscription_tier:
+          type: string
+      required:
+        - id
+        - email
+        - subscription_tier
+        - subscription_status
+        - primary_region
+        - created_at
+        - is_active
+        - is_admin
+        - linked_accounts_count
+        - automation_rules_count
+        - referrals_count
+      type: object
+    AdminUserListResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/AdminUserListResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        has_more:
+          type: boolean
+        page:
+          format: int64
+          type: integer
+        page_size:
+          format: int64
+          type: integer
+        total_count:
+          format: int64
+          type: integer
+        total_pages:
+          format: int64
+          type: integer
+        users:
+          items:
+            $ref: "#/components/schemas/AdminUserListItem"
+          type:
+            - array
+            - "null"
+      required:
+        - users
+        - total_count
+        - page
+        - page_size
+        - total_pages
+        - has_more
+      type: object
     AutomationRule:
       additionalProperties: false
       properties:
@@ -3161,6 +3304,94 @@ paths:
       security:
         - clerk: []
       summary: Grant trial subscription (QA only)
+      tags:
+        - Admin
+  /api/v1/admin/users:
+    get:
+      description: Returns a paginated list of users with optional email search and tier filtering. Requires admin role.
+      operationId: listAdminUsers
+      parameters:
+        - description: Page number (1-indexed)
+          explode: false
+          in: query
+          name: page
+          schema:
+            default: 1
+            description: Page number (1-indexed)
+            format: int64
+            minimum: 1
+            type: integer
+        - description: Number of items per page (1-100)
+          explode: false
+          in: query
+          name: page_size
+          schema:
+            default: 20
+            description: Number of items per page (1-100)
+            format: int64
+            maximum: 100
+            minimum: 1
+            type: integer
+        - description: Search by email (partial match)
+          explode: false
+          in: query
+          name: search
+          schema:
+            description: Search by email (partial match)
+            type: string
+        - description: Filter by subscription tier
+          explode: false
+          in: query
+          name: tier
+          schema:
+            description: Filter by subscription tier
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUserListResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: List users (admin)
+      tags:
+        - Admin
+  /api/v1/admin/users/{user_id}:
+    get:
+      description: Returns detailed user information including statistics. Requires admin role.
+      operationId: getAdminUserDetail
+      parameters:
+        - description: User UUID
+          in: path
+          name: user_id
+          required: true
+          schema:
+            description: User UUID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUserDetail"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get user details (admin)
       tags:
         - Admin
   /api/v1/analytics/cash-flow-history:
