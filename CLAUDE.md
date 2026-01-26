@@ -68,7 +68,9 @@ config/
 
 **Key Patterns**:
 - OpenAPI spec generated FROM Huma routes (not hand-written)
-- Frontend hooks auto-generated via Orval (**use `make generate-api-client`** - Bun has AJV bug)
+- Frontend hooks auto-generated via Orval (**use `make generate-api-client`**)
+  - Uses `npx orval` (Node.js runtime) instead of `bunx` due to Bun runtime compatibility issues
+  - Single lock file: `bun.lock` only (npx uses packages installed by Bun)
 - Migrations MUST be idempotent (`IF NOT EXISTS`, `DO $$` blocks)
 - All auth via Clerk (JWT middleware), never custom auth
 - `*InRegion` method signatures for future multi-region
