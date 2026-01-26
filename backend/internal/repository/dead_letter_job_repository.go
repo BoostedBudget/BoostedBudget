@@ -230,6 +230,24 @@ func (r *DeadLetterJobRepository) GetStatsByKind(ctx context.Context) (map[strin
 	return stats, rows.Err()
 }
 
+// GetOldestJobAge returns the age in hours of the oldest unretried dead letter job.
+// Returns 0 if no unretried jobs exist.
+func (r *DeadLetterJobRepository) GetOldestJobAge(ctx context.Context) (int64, error) {
+	query := `
+		SELECT COALESCE(EXTRACT(epoch FROM (NOW() - MIN(failed_at)))::BIGINT / 3600, 0)
+		FROM dead_letter_jobs
+		WHERE retried_at IS NULL
+	`
+
+	var ageHours int64
+	err := r.db.QueryRow(ctx, query).Scan(&ageHours)
+	if err != nil {
+		return 0, err
+	}
+
+	return ageHours, nil
+}
+
 // DeadLetterStats contains aggregate statistics about dead letter jobs.
 type DeadLetterStats struct {
 	Total       int64 `json:"total"`

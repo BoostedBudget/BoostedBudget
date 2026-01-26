@@ -24,16 +24,17 @@ type TrialGranter interface {
 // AdminHandler handles admin-only endpoints for testing and troubleshooting.
 // Routes are protected by AdminMiddleware with role validation and environment checks.
 type AdminHandler struct {
-	plaidService      services.PlaidService
-	linkedItemRepo    repository.LinkedItemRepository
-	encryptionService services.EncryptionService
-	trialService      TrialGranter
-	adminService      services.AdminService
-	adminUserService  services.AdminUserService
+	plaidService        services.PlaidService
+	linkedItemRepo      repository.LinkedItemRepository
+	encryptionService   services.EncryptionService
+	trialService        TrialGranter
+	adminService        services.AdminService
+	adminUserService    services.AdminUserService
+	systemHealthService services.SystemHealthService
 }
 
 // NewAdminHandler creates a new AdminHandler with required dependencies.
-// The trialService, adminService, and adminUserService parameters can be nil if not needed.
+// The trialService, adminService, adminUserService, and systemHealthService parameters can be nil if not needed.
 func NewAdminHandler(
 	plaidService services.PlaidService,
 	linkedItemRepo repository.LinkedItemRepository,
@@ -41,14 +42,16 @@ func NewAdminHandler(
 	trialService TrialGranter,
 	adminService services.AdminService,
 	adminUserService services.AdminUserService,
+	systemHealthService services.SystemHealthService,
 ) *AdminHandler {
 	return &AdminHandler{
-		plaidService:      plaidService,
-		linkedItemRepo:    linkedItemRepo,
-		encryptionService: encryptionService,
-		trialService:      trialService,
-		adminService:      adminService,
-		adminUserService:  adminUserService,
+		plaidService:        plaidService,
+		linkedItemRepo:      linkedItemRepo,
+		encryptionService:   encryptionService,
+		trialService:        trialService,
+		adminService:        adminService,
+		adminUserService:    adminUserService,
+		systemHealthService: systemHealthService,
 	}
 }
 
@@ -176,6 +179,18 @@ type GetUserDetailInput struct {
 // GetUserDetailOutput represents the response for user details.
 type GetUserDetailOutput struct {
 	Body *domain.AdminUserDetail
+}
+
+// --- System Health Types (Issue #640) ---
+
+// GetSystemHealthInput represents the input for getting system health metrics.
+type GetSystemHealthInput struct {
+	inputs.AdminAuthenticatedInput
+}
+
+// GetSystemHealthOutput represents the response for system health metrics.
+type GetSystemHealthOutput struct {
+	Body *domain.SystemHealthResponse
 }
 
 // --- Handler Methods ---
@@ -366,6 +381,31 @@ func (h *AdminHandler) GetUserDetail(ctx context.Context, input *GetUserDetailIn
 	return &GetUserDetailOutput{Body: detail}, nil
 }
 
+// GetSystemHealth returns comprehensive system health metrics.
+// Issue #640: System health dashboard API
+//
+// GET /api/v1/admin/system/health
+//
+// Error Responses:
+//   - 401: Not authenticated
+//   - 403: Not an admin (checked by AdminMiddleware)
+//   - 500: Internal server error
+//   - 503: System health service not configured
+func (h *AdminHandler) GetSystemHealth(ctx context.Context, input *GetSystemHealthInput) (*GetSystemHealthOutput, error) {
+	// Check if system health service is configured
+	if h.systemHealthService == nil {
+		return nil, huma.Error503ServiceUnavailable("System health service not configured")
+	}
+
+	// Get system health from service
+	health, err := h.systemHealthService.GetSystemHealth(ctx)
+	if err != nil {
+		return nil, huma.Error500InternalServerError("Failed to get system health: " + err.Error())
+	}
+
+	return &GetSystemHealthOutput{Body: health}, nil
+}
+
 // RegisterAdminRoutes registers admin routes with the Huma API.
 // Routes are protected by AdminMiddleware (environment and role validation).
 func RegisterAdminRoutes(api huma.API, handler *AdminHandler) {
@@ -427,4 +467,15 @@ func RegisterAdminRoutes(api huma.API, handler *AdminHandler) {
 		Tags:        []string{"Admin"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetUserDetail)
+
+	// GET /api/v1/admin/system/health - Get system health metrics (Issue #640)
+	huma.Register(api, huma.Operation{
+		OperationID: "getSystemHealth",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/admin/system/health",
+		Summary:     "Get system health metrics (admin)",
+		Description: "Returns comprehensive system health metrics including database, job queues, and sync status. Requires admin role.",
+		Tags:        []string{"Admin"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.GetSystemHealth)
 }

@@ -138,6 +138,7 @@ Out-of-sync causes infinite dashboard reset loops. Increment when adding/removin
 - `integration-guides`: Clerk JWT, Plaid webhooks, Paddle events
 - `queueing`: River job queue patterns
 - `plaid-sync`: Transaction sync, webhooks, cursors
+- `system-health-updater`: Guide for updating health dashboard when adding new systems/services/queues
 
 ## Subagents
 
@@ -152,6 +153,27 @@ Out-of-sync causes infinite dashboard reset loops. Increment when adding/removin
 - **Clerk**: JWT validation middleware, tier in metadata, GDPR consent
 - **Plaid**: Sandbox mode, Link tokens, encrypted access tokens, webhooks
 - **Paddle**: Payment webhooks, subscription management (replaces Stripe)
+
+## System Health Dashboard Maintenance
+
+**Location**: `/admin/health` (admin-only)
+
+**Endpoint**: `/api/v1/admin/system/health` aggregates:
+- Database connection pool stats (pgxpool)
+- River job queue metrics (pending/running/failed per queue)
+- Plaid sync status (active syncs, failures, avg duration)
+- Dead letter queue (failed job count, oldest job age)
+- Service health checks (Database, Clerk, Plaid)
+
+**IMPORTANT**: When adding new systems, services, or job queues:
+1. **Use `/system-health-updater` skill** for guided updates
+2. Update `SystemHealthService.GetSystemHealth()` to include new metrics
+3. Update `SystemHealthRepository` with new queries if needed
+4. Update frontend `HealthDashboardPage` to display new metrics
+5. Add tests for new metrics (domain, service, repository, component)
+6. Run `make generate-openapi` and `make generate-api-client`
+
+**Example**: Adding new `email` queue - Add to queues list in service, frontend auto-renders from API response.
 
 ## Key Files
 
