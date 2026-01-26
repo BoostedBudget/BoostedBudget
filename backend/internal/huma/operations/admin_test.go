@@ -208,7 +208,7 @@ func TestFireWebhook_Success(t *testing.T) {
 		decryptedToken: "decrypted-access-token",
 	}
 
-	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil)
+	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil, nil)
 
 	input := &FireWebhookInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -239,7 +239,7 @@ func TestFireWebhook_ItemNotFound(t *testing.T) {
 	}
 	mockEncrypt := &mockEncryptionService{}
 
-	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil)
+	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil, nil)
 
 	input := &FireWebhookInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -269,7 +269,7 @@ func TestFireWebhook_DecryptionError(t *testing.T) {
 		decryptErr: errors.New("decryption failed"),
 	}
 
-	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil)
+	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil, nil)
 
 	input := &FireWebhookInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -301,7 +301,7 @@ func TestFireWebhook_PlaidAPIError(t *testing.T) {
 		decryptedToken: "decrypted-access-token",
 	}
 
-	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil)
+	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil, nil)
 
 	input := &FireWebhookInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -328,7 +328,7 @@ func TestAdminRouteRegistration(t *testing.T) {
 	mockEncrypt := &mockEncryptionService{}
 
 	_, api := humatest.New(t)
-	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil)
+	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil, nil)
 	RegisterAdminRoutes(api, handler)
 
 	// Test POST /api/v1/admin/plaid/fire-webhook (without auth, should fail with 401)
@@ -344,7 +344,7 @@ func TestAdminRouteRegistration(t *testing.T) {
 // TestGrantTrial_Success tests successful trial grant.
 func TestGrantTrial_Success(t *testing.T) {
 	mockTrial := &mockTrialService{}
-	handler := NewAdminHandler(nil, nil, nil, mockTrial, nil, nil)
+	handler := NewAdminHandler(nil, nil, nil, mockTrial, nil, nil, nil)
 
 	input := &GrantTrialInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -366,7 +366,7 @@ func TestGrantTrial_UserAlreadyHadTrial(t *testing.T) {
 	mockTrial := &mockTrialService{
 		grantTrialErr: errors.New("user has already had a trial"),
 	}
-	handler := NewAdminHandler(nil, nil, nil, mockTrial, nil, nil)
+	handler := NewAdminHandler(nil, nil, nil, mockTrial, nil, nil, nil)
 
 	input := &GrantTrialInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -386,7 +386,7 @@ func TestGrantTrial_UserAlreadyHadTrial(t *testing.T) {
 
 // TestGrantTrial_ServiceNotConfigured tests 503 when trial service is nil.
 func TestGrantTrial_ServiceNotConfigured(t *testing.T) {
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil)
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil)
 
 	input := &GrantTrialInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -407,7 +407,7 @@ func TestGrantTrial_ServiceError(t *testing.T) {
 	mockTrial := &mockTrialService{
 		grantTrialErr: errors.New("database connection error"),
 	}
-	handler := NewAdminHandler(nil, nil, nil, mockTrial, nil, nil)
+	handler := NewAdminHandler(nil, nil, nil, mockTrial, nil, nil, nil)
 
 	input := &GrantTrialInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -421,4 +421,118 @@ func TestGrantTrial_ServiceError(t *testing.T) {
 	assert.Nil(t, output)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Failed to grant trial")
+}
+
+// --- System Health Tests (Issue #640) ---
+
+// mockSystemHealthService is a mock implementation of services.SystemHealthService
+type mockSystemHealthService struct {
+	healthResp *domain.SystemHealthResponse
+	healthErr  error
+}
+
+func (m *mockSystemHealthService) GetSystemHealth(ctx context.Context) (*domain.SystemHealthResponse, error) {
+	if m.healthErr != nil {
+		return nil, m.healthErr
+	}
+	return m.healthResp, nil
+}
+
+// TestGetSystemHealth_Success tests successful system health retrieval.
+func TestGetSystemHealth_Success(t *testing.T) {
+	now := time.Now()
+	mockHealth := &mockSystemHealthService{
+		healthResp: &domain.SystemHealthResponse{
+			Status:    "healthy",
+			Timestamp: now,
+			Services: domain.ServiceHealthStatuses{
+				Database: domain.DatabaseHealth{
+					Status: "up",
+					Connections: domain.ConnectionPoolStats{
+						Active: 10,
+						Idle:   5,
+						Max:    100,
+					},
+					LatencyMs: 5,
+				},
+				Clerk: domain.ServiceHealth{Status: "up", LatencyMs: 100},
+				Plaid: domain.PlaidHealth{Status: "up", Environment: "sandbox"},
+			},
+			JobQueues: map[string]domain.QueueMetrics{
+				"default": {Pending: 5, Running: 2, Failed: 0, CompletedLastHour: 100},
+			},
+			SyncStatus: domain.SyncStatusMetrics{
+				ActiveSyncs:       3,
+				FailedLastHour:    1,
+				AverageDurationMs: 3500,
+			},
+			DeadLetterQueue: domain.DeadLetterMetrics{
+				Count:             2,
+				OldestJobAgeHours: 5,
+			},
+		},
+	}
+
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, mockHealth)
+
+	input := &GetSystemHealthInput{
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "admin-123"},
+			ClerkUserID:        "clerk_admin_123",
+		},
+	}
+
+	output, err := handler.GetSystemHealth(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.NotNil(t, output.Body)
+	assert.Equal(t, "healthy", output.Body.Status)
+	assert.Equal(t, "up", output.Body.Services.Database.Status)
+	assert.Equal(t, "up", output.Body.Services.Clerk.Status)
+	assert.Equal(t, "up", output.Body.Services.Plaid.Status)
+	assert.Equal(t, "sandbox", output.Body.Services.Plaid.Environment)
+	assert.Equal(t, int64(3), output.Body.SyncStatus.ActiveSyncs)
+	assert.Equal(t, int64(2), output.Body.DeadLetterQueue.Count)
+	assert.Len(t, output.Body.JobQueues, 1)
+}
+
+// TestGetSystemHealth_ServiceNotConfigured tests 503 when service is nil.
+func TestGetSystemHealth_ServiceNotConfigured(t *testing.T) {
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil)
+
+	input := &GetSystemHealthInput{
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "admin-123"},
+			ClerkUserID:        "clerk_admin_123",
+		},
+	}
+
+	output, err := handler.GetSystemHealth(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "System health service not configured")
+}
+
+// TestGetSystemHealth_ServiceError tests 500 when service returns error.
+func TestGetSystemHealth_ServiceError(t *testing.T) {
+	mockHealth := &mockSystemHealthService{
+		healthErr: errors.New("database connection error"),
+	}
+
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, mockHealth)
+
+	input := &GetSystemHealthInput{
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "admin-123"},
+			ClerkUserID:        "clerk_admin_123",
+		},
+	}
+
+	output, err := handler.GetSystemHealth(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Failed to get system health")
 }
