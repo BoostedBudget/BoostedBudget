@@ -1,14 +1,14 @@
 import { useState } from 'react';
-import { useGetSystemHealth } from '@/packages/api-client';
-import { SummaryCard } from '@/features/dashboard/components/SummaryCard';
+import { useGetSystemHealth } from '@boostedbudget/api-client/endpoints/admin/admin';
+import { SummaryCard } from '@/features/admin';
 import { AlertTriangle, Database, Shield, Landmark, RefreshCw } from 'lucide-react';
 import './HealthDashboardPage.css';
 
-function statusToVariant(status: string): 'success' | 'warning' | 'error' {
+const statusToVariant = (status: string): 'success' | 'warning' | 'error' => {
   if (status === 'up' || status === 'healthy') return 'success';
   if (status === 'degraded') return 'warning';
   return 'error';
-}
+};
 
 export function HealthDashboardPage() {
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -83,24 +83,21 @@ export function HealthDashboardPage() {
         <div className="health-dashboard__grid">
           <SummaryCard
             title="Database"
-            value={data.services.database.status}
+            value={`${data.services.database.connections.active}/${data.services.database.connections.max} connections`}
             icon={<Database size={24} />}
-            variant={statusToVariant(data.services.database.status)}
-            subtitle={`${data.services.database.connections.active}/${data.services.database.connections.max} connections`}
+            status={statusToVariant(data.services.database.status)}
           />
           <SummaryCard
             title="Clerk"
-            value={data.services.clerk.status}
+            value={`${data.services.clerk.latency_ms}ms`}
             icon={<Shield size={24} />}
-            variant={statusToVariant(data.services.clerk.status)}
-            subtitle={`${data.services.clerk.latency_ms}ms latency`}
+            status={statusToVariant(data.services.clerk.status)}
           />
           <SummaryCard
             title="Plaid"
-            value={data.services.plaid.status}
+            value={data.services.plaid.environment}
             icon={<Landmark size={24} />}
-            variant={statusToVariant(data.services.plaid.status)}
-            subtitle={data.services.plaid.environment}
+            status={statusToVariant(data.services.plaid.status)}
           />
         </div>
       </section>
@@ -112,17 +109,17 @@ export function HealthDashboardPage() {
           <SummaryCard
             title="Active Syncs"
             value={data.sync_status.active_syncs.toString()}
-            variant="info"
+            status="neutral"
           />
           <SummaryCard
             title="Failed (Last Hour)"
             value={data.sync_status.failed_last_hour.toString()}
-            variant={data.sync_status.failed_last_hour > 5 ? 'warning' : 'success'}
+            status={data.sync_status.failed_last_hour > 5 ? 'warning' : 'success'}
           />
           <SummaryCard
             title="Avg Duration"
             value={`${Math.round(data.sync_status.average_duration_ms / 1000)}s`}
-            variant="info"
+            status="neutral"
           />
         </div>
       </section>
