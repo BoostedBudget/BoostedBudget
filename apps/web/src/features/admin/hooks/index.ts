@@ -11,3 +11,6 @@ export type { UseAdminModeResult } from './useAdminMode'
 
 export { useEnvironment } from './useEnvironment'
 export type { UseEnvironmentResult, Environment } from './useEnvironment'
+
+export { useUserFilters } from './useUserFilters'
+export type { UseUserFiltersResult, UserFilters } from './useUserFilters'
