@@ -44,7 +44,8 @@ import type {
   AdminUserListResponse,
   CheckRoleResponseBody,
   FireWebhookResponseBody,
-  GrantTrialResponseBody
+  GrantTrialResponseBody,
+  SystemHealthResponse
 } from '../../models';
 
 
@@ -53,6 +54,10 @@ export const getCheckRoleResponseMock = (overrideResponse: Partial< CheckRoleRes
 export const getFireWebhookResponseMock = (overrideResponse: Partial< FireWebhookResponseBody > = {}): FireWebhookResponseBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), item_id: faker.string.alpha({length: {min: 10, max: 20}}), request_id: faker.string.alpha({length: {min: 10, max: 20}}), webhook_code: faker.string.alpha({length: {min: 10, max: 20}}), webhook_fired: faker.datatype.boolean(), ...overrideResponse})
 
 export const getGrantTrialResponseMock = (overrideResponse: Partial< GrantTrialResponseBody > = {}): GrantTrialResponseBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), message: faker.string.alpha({length: {min: 10, max: 20}}), success: faker.datatype.boolean(), ...overrideResponse})
+
+export const getGetSystemHealthResponseMock = (overrideResponse: Partial< SystemHealthResponse > = {}): SystemHealthResponse => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), dead_letter_queue: {count: faker.number.int({min: undefined, max: undefined}), oldest_job_age_hours: faker.number.int({min: undefined, max: undefined})}, job_queues: {
+        [faker.string.alphanumeric(5)]: {completed_last_hour: faker.number.int({min: undefined, max: undefined}), failed: faker.number.int({min: undefined, max: undefined}), pending: faker.number.int({min: undefined, max: undefined}), running: faker.number.int({min: undefined, max: undefined})}
+      }, services: {clerk: {latency_ms: faker.number.int({min: undefined, max: undefined}), status: faker.string.alpha({length: {min: 10, max: 20}})}, database: {connections: {active: faker.number.int({min: undefined, max: undefined}), constructing: faker.number.int({min: undefined, max: undefined}), idle: faker.number.int({min: undefined, max: undefined}), max: faker.number.int({min: undefined, max: undefined}), total: faker.number.int({min: undefined, max: undefined})}, latency_ms: faker.number.int({min: undefined, max: undefined}), status: faker.string.alpha({length: {min: 10, max: 20}})}, plaid: {environment: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}})}}, status: faker.string.alpha({length: {min: 10, max: 20}}), sync_status: {active_syncs: faker.number.int({min: undefined, max: undefined}), average_duration_ms: faker.number.int({min: undefined, max: undefined}), failed_last_hour: faker.number.int({min: undefined, max: undefined})}, timestamp: faker.date.past().toISOString().slice(0, 19) + 'Z', ...overrideResponse})
 
 export const getListAdminUsersResponseMock = (overrideResponse: Partial< AdminUserListResponse > = {}): AdminUserListResponse => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), has_more: faker.datatype.boolean(), page: faker.number.int({min: undefined, max: undefined}), page_size: faker.number.int({min: undefined, max: undefined}), total_count: faker.number.int({min: undefined, max: undefined}), total_pages: faker.number.int({min: undefined, max: undefined}), users: faker.helpers.arrayElement([Array.from({ length: faker.number.int({ min: 1, max: 10 }) }, (_, i) => i + 1).map(() => ({automation_rules_count: faker.number.int({min: undefined, max: undefined}), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', email: faker.string.alpha({length: {min: 10, max: 20}}), id: faker.string.alpha({length: {min: 10, max: 20}}), is_active: faker.datatype.boolean(), is_admin: faker.datatype.boolean(), last_login_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), linked_accounts_count: faker.number.int({min: undefined, max: undefined}), primary_region: faker.string.alpha({length: {min: 10, max: 20}}), referrals_count: faker.number.int({min: undefined, max: undefined}), subscription_status: faker.string.alpha({length: {min: 10, max: 20}}), subscription_tier: faker.string.alpha({length: {min: 10, max: 20}})})), null]), ...overrideResponse})
 
@@ -95,6 +100,18 @@ export const getGrantTrialMockHandler = (overrideResponse?: GrantTrialResponseBo
   }, options)
 }
 
+export const getGetSystemHealthMockHandler = (overrideResponse?: SystemHealthResponse | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<SystemHealthResponse> | SystemHealthResponse), options?: RequestHandlerOptions) => {
+  return http.get('*/api/v1/admin/system/health', async (info) => {await delay(500);
+  
+    return new HttpResponse(JSON.stringify(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getGetSystemHealthResponseMock()),
+      { status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      })
+  }, options)
+}
+
 export const getListAdminUsersMockHandler = (overrideResponse?: AdminUserListResponse | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<AdminUserListResponse> | AdminUserListResponse), options?: RequestHandlerOptions) => {
   return http.get('*/api/v1/admin/users', async (info) => {await delay(500);
   
@@ -122,6 +139,7 @@ export const getAdminMock = () => [
   getCheckRoleMockHandler(),
   getFireWebhookMockHandler(),
   getGrantTrialMockHandler(),
+  getGetSystemHealthMockHandler(),
   getListAdminUsersMockHandler(),
   getGetAdminUserDetailMockHandler()
 ]
