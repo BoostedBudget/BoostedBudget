@@ -1,14 +1,11 @@
 import { useState } from 'react';
 import { useGetSystemHealth } from '@boostedbudget/api-client/endpoints/admin/admin';
 import { SummaryCard } from '@/features/admin';
-import { AlertTriangle, Database, Shield, Landmark, RefreshCw } from 'lucide-react';
+import { AlertTriangle, Database, Shield, Landmark, RefreshCw, Clock } from 'lucide-react';
 import './HealthDashboardPage.css';
 
-const statusToVariant = (status: string): 'success' | 'warning' | 'error' => {
-  if (status === 'up' || status === 'healthy') return 'success';
-  if (status === 'degraded') return 'warning';
-  return 'error';
-};
+const statusToVariant = (status: string): 'success' | 'warning' | 'error' =>
+  status === 'up' || status === 'healthy' ? 'success' : status === 'degraded' ? 'warning' : 'error';
 
 export function HealthDashboardPage() {
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -109,16 +106,19 @@ export function HealthDashboardPage() {
           <SummaryCard
             title="Active Syncs"
             value={data.sync_status.active_syncs.toString()}
+            icon={<RefreshCw size={24} />}
             status="neutral"
           />
           <SummaryCard
             title="Failed (Last Hour)"
             value={data.sync_status.failed_last_hour.toString()}
+            icon={<AlertTriangle size={24} />}
             status={data.sync_status.failed_last_hour > 5 ? 'warning' : 'success'}
           />
           <SummaryCard
             title="Avg Duration"
             value={`${Math.round(data.sync_status.average_duration_ms / 1000)}s`}
+            icon={<Clock size={24} />}
             status="neutral"
           />
         </div>
@@ -144,11 +144,7 @@ export function HealthDashboardPage() {
                 </div>
                 <div className="queue-card__metric">
                   <span className="queue-card__label">Failed:</span>
-                  <span
-                    className={`queue-card__value ${
-                      metrics.failed > 0 ? 'queue-card__value--error' : ''
-                    }`}
-                  >
+                  <span className={`queue-card__value${metrics.failed > 0 ? ' queue-card__value--error' : ''}`}>
                     {metrics.failed}
                   </span>
                 </div>
