@@ -258,13 +258,21 @@ jobs:
           echo "::endgroup::"
 
       - name: Upload backend coverage report
+        id: upload-backend-coverage
         uses: actions/upload-artifact@v6
+        continue-on-error: true
         with:
           name: backend-coverage-${{ github.run_id }}
           path: |
             ${{ env.UNIQUE_WORKSPACE }}/backend/coverage.out
             ${{ env.UNIQUE_WORKSPACE }}/backend/coverage.html
           retention-days: 1
+          if-no-files-found: warn
+
+      - name: Warn if backend coverage upload failed
+        if: steps.upload-backend-coverage.outcome == 'failure'
+        run: |
+          echo "::warning::Backend coverage upload failed (storage quota/network). Test results are valid."
 
       - name: Save Go modules cache
         if: always() && steps.cache-go-modules.outputs.cache-hit != 'true'
@@ -348,13 +356,21 @@ jobs:
           echo "::endgroup::"
 
       - name: Upload combined coverage report
+        id: upload-frontend-coverage
         uses: actions/upload-artifact@v6
+        continue-on-error: true
         with:
           name: frontend-coverage-${{ github.run_id }}
           path: |
             ${{ env.UNIQUE_WORKSPACE }}/apps/web/coverage/combined.lcov
             ${{ env.UNIQUE_WORKSPACE }}/apps/web/coverage/html/
           retention-days: 1
+          if-no-files-found: warn
+
+      - name: Warn if frontend coverage upload failed
+        if: steps.upload-frontend-coverage.outcome == 'failure'
+        run: |
+          echo "::warning::Frontend coverage upload failed (storage quota/network). Test results are valid."
 
       - name: Final workspace cleanup
         if: always()
