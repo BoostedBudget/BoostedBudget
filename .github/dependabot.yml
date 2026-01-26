@@ -35,7 +35,7 @@ updates:
           - "patch"
 
   # =============================================================================
-  # Root Workspace - Turborepo and shared tooling
+  # Root Workspace - Turborepo only
   # =============================================================================
   - package-ecosystem: "npm"
     directory: "/"
@@ -50,14 +50,10 @@ updates:
       - "tooling"
     reviewers:
       - "maxnussbaum"
-    open-pull-requests-limit: 3
-    groups:
-      root-dependencies:
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
+    open-pull-requests-limit: 1
+    # Only monitor turbo to avoid duplicate PRs for workspace dependencies
+    allow:
+      - dependency-name: "turbo"
 
   # =============================================================================
   # Frontend App - /apps/web
