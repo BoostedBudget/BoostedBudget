@@ -11,7 +11,7 @@ on:
 
 jobs:
   delete-artifacts:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, mac-mini]
     permissions:
       actions: write
 
