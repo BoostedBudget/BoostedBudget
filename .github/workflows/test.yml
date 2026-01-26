@@ -355,7 +355,6 @@ jobs:
             ${{ env.UNIQUE_WORKSPACE }}/apps/web/coverage/combined.lcov
             ${{ env.UNIQUE_WORKSPACE }}/apps/web/coverage/html/
           retention-days: 1
-          if-no-files-found: warn
 
       - name: Final workspace cleanup
         if: always()
@@ -450,20 +449,36 @@ jobs:
         run: bun run test:e2e
 
       - name: Upload E2E test results
+        id: upload-playwright-report
         if: success() || failure()
         uses: actions/upload-artifact@v6
+        continue-on-error: true
         with:
           name: playwright-report-${{ github.run_id }}
           path: ${{ env.UNIQUE_WORKSPACE }}/apps/web/playwright-report/
           retention-days: 1
+          if-no-files-found: warn
+
+      - name: Warn if E2E report upload failed
+        if: (success() || failure()) && steps.upload-playwright-report.outcome == 'failure'
+        run: |
+          echo "::warning::E2E test report upload failed (storage quota/network). Test results are valid."
 
       - name: Upload E2E test videos (on failure)
+        id: upload-playwright-videos
         if: failure()
         uses: actions/upload-artifact@v6
+        continue-on-error: true
         with:
           name: playwright-videos-${{ github.run_id }}
           path: ${{ env.UNIQUE_WORKSPACE }}/apps/web/test-results/
           retention-days: 1
+          if-no-files-found: warn
+
+      - name: Warn if E2E videos upload failed
+        if: failure() && steps.upload-playwright-videos.outcome == 'failure'
+        run: |
+          echo "::warning::E2E videos upload failed (storage quota/network). Test results are valid."
 
       - name: Final workspace cleanup
         if: always()
@@ -617,13 +632,20 @@ jobs:
           ./scripts/test-migrations.sh
 
       - name: Upload performance benchmarks
+        id: upload-migration-perf
         if: failure()
         uses: actions/upload-artifact@v6
+        continue-on-error: true
         with:
           name: migration-performance-${{ github.run_id }}
           path: ${{ env.UNIQUE_WORKSPACE }}/migration-performance.json
           retention-days: 1
           if-no-files-found: warn
+
+      - name: Warn if migration performance upload failed
+        if: failure() && steps.upload-migration-perf.outcome == 'failure'
+        run: |
+          echo "::warning::Migration performance upload failed (storage quota/network). Test results are valid."
 
       - name: Cleanup PostgreSQL container
         if: always()
