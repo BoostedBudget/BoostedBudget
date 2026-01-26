@@ -260,7 +260,7 @@ jobs:
       - name: Upload backend coverage report
         uses: actions/upload-artifact@v6
         with:
-          name: backend-coverage
+          name: backend-coverage-${{ github.run_id }}
           path: |
             ${{ env.UNIQUE_WORKSPACE }}/backend/coverage.out
             ${{ env.UNIQUE_WORKSPACE }}/backend/coverage.html
@@ -350,7 +350,7 @@ jobs:
       - name: Upload combined coverage report
         uses: actions/upload-artifact@v6
         with:
-          name: frontend-coverage
+          name: frontend-coverage-${{ github.run_id }}
           path: |
             ${{ env.UNIQUE_WORKSPACE }}/apps/web/coverage/combined.lcov
             ${{ env.UNIQUE_WORKSPACE }}/apps/web/coverage/html/
@@ -453,17 +453,17 @@ jobs:
         if: success() || failure()
         uses: actions/upload-artifact@v6
         with:
-          name: playwright-report
+          name: playwright-report-${{ github.run_id }}
           path: ${{ env.UNIQUE_WORKSPACE }}/apps/web/playwright-report/
-          retention-days: 3
+          retention-days: 1
 
       - name: Upload E2E test videos (on failure)
         if: failure()
         uses: actions/upload-artifact@v6
         with:
-          name: playwright-videos
+          name: playwright-videos-${{ github.run_id }}
           path: ${{ env.UNIQUE_WORKSPACE }}/apps/web/test-results/
-          retention-days: 3
+          retention-days: 1
 
       - name: Final workspace cleanup
         if: always()
@@ -617,7 +617,7 @@ jobs:
           ./scripts/test-migrations.sh
 
       - name: Upload performance benchmarks
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v6
         with:
           name: migration-performance-${{ github.run_id }}

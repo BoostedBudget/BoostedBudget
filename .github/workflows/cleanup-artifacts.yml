@@ -1,6 +1,8 @@
 name: Cleanup Artifacts
 
 on:
+  schedule:
+    - cron: '0 2 * * *'  # Daily at 2 AM UTC
   workflow_dispatch:
     inputs:
       retention_days:
@@ -16,11 +18,20 @@ jobs:
       actions: write
 
     steps:
+      - name: Determine retention days
+        id: retention
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "days=1" >> $GITHUB_OUTPUT
+          else
+            echo "days=${{ github.event.inputs.retention_days }}" >> $GITHUB_OUTPUT
+          fi
+
       - name: Delete old artifacts
         uses: actions/github-script@v7
         with:
           script: |
-            const retentionDays = parseInt('${{ github.event.inputs.retention_days }}');
+            const retentionDays = parseInt('${{ steps.retention.outputs.days }}');
             const cutoffDate = new Date();
             cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
 
