@@ -4,17 +4,13 @@ import { HealthDashboardPage } from './HealthDashboardPage';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 // Mock the API client
-vi.mock('@/packages/api-client', () => ({
+vi.mock('@boostedbudget/api-client/endpoints/admin/admin', () => ({
   useGetSystemHealth: vi.fn(),
 }));
 
 const createTestQueryClient = () =>
   new QueryClient({
-    defaultOptions: {
-      queries: {
-        retry: false,
-      },
-    },
+    defaultOptions: { queries: { retry: false } },
   });
 
 const mockHealthData = {
@@ -66,102 +62,59 @@ const mockHealthData = {
   },
 };
 
+const mockUseGetSystemHealth = async (overrides = {}) => {
+  const { useGetSystemHealth } = await import('@boostedbudget/api-client/endpoints/admin/admin');
+  (useGetSystemHealth as ReturnType<typeof vi.fn>).mockReturnValue({
+    data: mockHealthData,
+    isLoading: false,
+    error: null,
+    refetch: vi.fn(),
+    ...overrides,
+  });
+};
+
+const renderWithQueryClient = (component: React.ReactElement) => {
+  const queryClient = createTestQueryClient();
+  return render(
+    <QueryClientProvider client={queryClient}>
+      {component}
+    </QueryClientProvider>
+  );
+};
+
 describe('HealthDashboardPage', () => {
   it('should render page title', async () => {
-    const { useGetSystemHealth } = await import('@/packages/api-client');
-    (useGetSystemHealth as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: mockHealthData,
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-    });
-
-    const queryClient = createTestQueryClient();
-    render(
-      <QueryClientProvider client={queryClient}>
-        <HealthDashboardPage />
-      </QueryClientProvider>
-    );
-
+    await mockUseGetSystemHealth();
+    renderWithQueryClient(<HealthDashboardPage />);
     expect(screen.getByText(/System Health/i)).toBeInTheDocument();
   });
 
   it('should display service status cards', async () => {
-    const { useGetSystemHealth } = await import('@/packages/api-client');
-    (useGetSystemHealth as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: mockHealthData,
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-    });
-
-    const queryClient = createTestQueryClient();
-    render(
-      <QueryClientProvider client={queryClient}>
-        <HealthDashboardPage />
-      </QueryClientProvider>
-    );
+    await mockUseGetSystemHealth();
+    renderWithQueryClient(<HealthDashboardPage />);
 
     await waitFor(() => {
       expect(screen.getByText(/Database/i)).toBeInTheDocument();
       expect(screen.getByText(/Clerk/i)).toBeInTheDocument();
-      expect(screen.getByText(/Plaid/i)).toBeInTheDocument();
+      expect(screen.getByText(/sandbox/i)).toBeInTheDocument();
     });
   });
 
   it('should show loading state', async () => {
-    const { useGetSystemHealth } = await import('@/packages/api-client');
-    (useGetSystemHealth as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: undefined,
-      isLoading: true,
-      error: null,
-      refetch: vi.fn(),
-    });
-
-    const queryClient = createTestQueryClient();
-    render(
-      <QueryClientProvider client={queryClient}>
-        <HealthDashboardPage />
-      </QueryClientProvider>
-    );
-
+    await mockUseGetSystemHealth({ data: undefined, isLoading: true });
+    renderWithQueryClient(<HealthDashboardPage />);
     expect(screen.getByText(/Loading/i)).toBeInTheDocument();
   });
 
   it('should show error state', async () => {
-    const { useGetSystemHealth } = await import('@/packages/api-client');
-    (useGetSystemHealth as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: undefined,
-      isLoading: false,
-      error: new Error('Failed to fetch'),
-      refetch: vi.fn(),
-    });
-
-    const queryClient = createTestQueryClient();
-    render(
-      <QueryClientProvider client={queryClient}>
-        <HealthDashboardPage />
-      </QueryClientProvider>
-    );
-
+    await mockUseGetSystemHealth({ data: undefined, error: new Error('Failed to fetch') });
+    renderWithQueryClient(<HealthDashboardPage />);
     expect(screen.getByText(/Error/i)).toBeInTheDocument();
   });
 
   it('should render queue cards', async () => {
-    const { useGetSystemHealth } = await import('@/packages/api-client');
-    (useGetSystemHealth as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: mockHealthData,
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-    });
-
-    const queryClient = createTestQueryClient();
-    render(
-      <QueryClientProvider client={queryClient}>
-        <HealthDashboardPage />
-      </QueryClientProvider>
-    );
+    await mockUseGetSystemHealth();
+    renderWithQueryClient(<HealthDashboardPage />);
 
     await waitFor(() => {
       expect(screen.getByText(/default/i)).toBeInTheDocument();
@@ -170,20 +123,8 @@ describe('HealthDashboardPage', () => {
   });
 
   it('should show dead letter alert when count > 0', async () => {
-    const { useGetSystemHealth } = await import('@/packages/api-client');
-    (useGetSystemHealth as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: mockHealthData,
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-    });
-
-    const queryClient = createTestQueryClient();
-    render(
-      <QueryClientProvider client={queryClient}>
-        <HealthDashboardPage />
-      </QueryClientProvider>
-    );
+    await mockUseGetSystemHealth();
+    renderWithQueryClient(<HealthDashboardPage />);
 
     await waitFor(() => {
       expect(screen.getByText(/dead letter/i)).toBeInTheDocument();
