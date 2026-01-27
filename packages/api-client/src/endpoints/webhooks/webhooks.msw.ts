@@ -40,12 +40,27 @@ import type {
 } from 'msw';
 
 import type {
+  PaddleWebhookResponseBody,
   PlaidWebhookResponseBody
 } from '../../models';
 
 
+export const getPaddleWebhookResponseMock = (overrideResponse: Partial< PaddleWebhookResponseBody > = {}): PaddleWebhookResponseBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), message: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+
 export const getHandlePlaidWebhookResponseMock = (overrideResponse: Partial< PlaidWebhookResponseBody > = {}): PlaidWebhookResponseBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), message: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
+
+export const getPaddleWebhookMockHandler = (overrideResponse?: PaddleWebhookResponseBody | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<PaddleWebhookResponseBody> | PaddleWebhookResponseBody), options?: RequestHandlerOptions) => {
+  return http.post('*/webhooks/paddle', async (info) => {await delay(500);
+  
+    return new HttpResponse(JSON.stringify(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getPaddleWebhookResponseMock()),
+      { status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      })
+  }, options)
+}
 
 export const getHandlePlaidWebhookMockHandler = (overrideResponse?: PlaidWebhookResponseBody | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<PlaidWebhookResponseBody> | PlaidWebhookResponseBody), options?: RequestHandlerOptions) => {
   return http.post('*/webhooks/plaid', async (info) => {await delay(500);
@@ -59,5 +74,6 @@ export const getHandlePlaidWebhookMockHandler = (overrideResponse?: PlaidWebhook
   }, options)
 }
 export const getWebhooksMock = () => [
+  getPaddleWebhookMockHandler(),
   getHandlePlaidWebhookMockHandler()
 ]

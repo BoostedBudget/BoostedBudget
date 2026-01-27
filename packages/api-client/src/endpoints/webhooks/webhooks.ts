@@ -38,6 +38,7 @@ import type {
 
 import type {
   ErrorModel,
+  PaddleWebhookResponseBody,
   PlaidWebhookResponseBody
 } from '../../models';
 
@@ -50,6 +51,70 @@ type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 
 /**
+ * Public endpoint for Paddle to send subscription and payment event notifications. Verifies HMAC-SHA256 signature, stores in database, and enqueues async processing job.
+ * @summary Receive Paddle webhook notifications
+ */
+export const paddleWebhook = (
+    paddleWebhookBody: BodyType<Blob>,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+      
+      
+      return customInstance<PaddleWebhookResponseBody>(
+      {url: `/webhooks/paddle`, method: 'POST',
+      headers: {'Content-Type': 'application/octet-stream', },
+      data: paddleWebhookBody, signal
+    },
+      options);
+    }
+  
+
+
+export const getPaddleWebhookMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof paddleWebhook>>, TError,{data: BodyType<Blob>}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof paddleWebhook>>, TError,{data: BodyType<Blob>}, TContext> => {
+
+const mutationKey = ['paddleWebhook'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof paddleWebhook>>, {data: BodyType<Blob>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  paddleWebhook(data,requestOptions)
+        }
+
+
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PaddleWebhookMutationResult = NonNullable<Awaited<ReturnType<typeof paddleWebhook>>>
+    export type PaddleWebhookMutationBody = BodyType<Blob>
+    export type PaddleWebhookMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Receive Paddle webhook notifications
+ */
+export const usePaddleWebhook = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof paddleWebhook>>, TError,{data: BodyType<Blob>}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof paddleWebhook>>,
+        TError,
+        {data: BodyType<Blob>},
+        TContext
+      > => {
+      return useMutation(getPaddleWebhookMutationOptions(options), queryClient);
+    }
+    /**
  * Receives and processes webhook notifications from Plaid. Validates JWT signature and stores for async processing.
  * @summary Handle Plaid webhook
  */
