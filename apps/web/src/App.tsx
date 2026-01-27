@@ -31,7 +31,23 @@ import { RulesPage, RuleBuilder } from './features/rules'
 import { LandingPage } from './features/landing'
 import { AdminRoute, AdminLayout, AdminDashboardPage, UsersPage, HealthDashboardPage } from './features/admin'
 import { Toaster } from 'sonner'
+import { useEffect } from 'react'
 import './App.css'
+
+// Paddle.js types
+declare global {
+  interface Window {
+    Paddle?: {
+      Environment: {
+        set: (env: 'sandbox' | 'production') => void
+      }
+      Initialize: (options: { token: string; eventCallback?: (event: any) => void }) => void
+      Checkout: {
+        open: (options: { settings?: { checkoutURL?: string } }) => void
+      }
+    }
+  }
+}
 
 function ComingSoon({ title }: { title: string }) {
   return (
@@ -51,6 +67,42 @@ function App() {
   const updatePrivacyMutation = useUpdatePrivacySettings()
 
   const isLandingPage = location.pathname === '/' && !isAuthenticated
+
+  // Initialize Paddle.js SDK
+  useEffect(() => {
+    const paddleToken = import.meta.env.VITE_PADDLE_CLIENT_TOKEN
+    const paddleEnv = import.meta.env.VITE_PADDLE_ENV || 'sandbox'
+
+    if (paddleToken && window.Paddle) {
+      try {
+        // Set environment first
+        if (paddleEnv === 'production') {
+          window.Paddle.Environment.set('production')
+        } else {
+          window.Paddle.Environment.set('sandbox')
+        }
+
+        // Initialize Paddle
+        window.Paddle.Initialize({
+          token: paddleToken,
+          eventCallback: (event) => {
+            console.log('Paddle event:', event)
+          },
+        })
+
+        console.log('Paddle initialized successfully', { environment: paddleEnv })
+      } catch (error) {
+        console.error('Failed to initialize Paddle:', error)
+      }
+    } else {
+      if (!paddleToken) {
+        console.warn('Paddle client token not configured (VITE_PADDLE_CLIENT_TOKEN)')
+      }
+      if (!window.Paddle) {
+        console.warn('Paddle.js SDK not loaded')
+      }
+    }
+  }, [])
 
   const updateConsentCookie = (consents: CookieConsentSettings) => {
     const consentData: CookieConsentData = {
