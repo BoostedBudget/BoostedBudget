@@ -156,6 +156,14 @@ Out-of-sync causes infinite dashboard reset loops. Increment when adding/removin
 - **Plaid**: Sandbox mode, Link tokens, encrypted access tokens, webhooks
 - **Paddle**: Payment webhooks, subscription management (replaces Stripe)
 
+## Dependabot
+
+- Configured with **bun** ecosystem for frontend packages (native lockfile support)
+- Updates both `package.json` and `bun.lock` automatically
+- Runs weekly Monday 9:00 AM EST for frontend packages
+- Manual lockfile intervention no longer needed
+- Configuration: `.github/dependabot.yml`
+
 ## System Health Dashboard Maintenance
 
 **Location**: `/admin/health` (admin-only)

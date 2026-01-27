@@ -308,6 +308,9 @@ backend/cmd/server/server
 backend/tmp/
 apps/web/dist/
 
+# Package manager lockfiles - Bun only
+package-lock.json
+
 # Turborepo
 .turbo
 in-memoria.db
