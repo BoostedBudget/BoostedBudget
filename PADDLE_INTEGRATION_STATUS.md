@@ -50,7 +50,7 @@
      * `useCreatePaddleCheckout` - Create checkout session
      * `usePreviewPaddleSubscriptionUpdate` - Preview subscription changes
 
-### Frontend Infrastructure (80%)
+### Frontend Infrastructure (90%)
 
 1. **Paddle.js Integration** ✅
    - CDN script added to `apps/web/index.html`
@@ -64,19 +64,23 @@
      * test/
 
 3. **Components** (Partial)
-   - ✅ `PaddleCheckoutButton.tsx` - Basic implementation with error handling
+   - ✅ `PaddleCheckoutButton.tsx` - Complete with error handling
    - ❌ `SubscriptionManagementPage.tsx` - NOT YET CREATED
-   - ❌ Integration with PricingPage - NOT YET DONE
+   - ✅ Integration with PricingPage - COMPLETE
+
+4. **Custom Hooks** ✅
+   - ✅ `usePaddleCheckout.ts` - Wrapper hook with error normalization
+   - ❌ `useSubscriptionManagement.ts` - NOT YET CREATED
 
 ## ❌ Remaining Work
 
 ### High Priority (Required for MVP)
 
-1. **Load Paddle Price IDs from Config** ❌
-   - Task #15: Update `backend/internal/huma/operations/paddle_checkout.go`
-   - Replace hardcoded placeholder price IDs in `getPaddlePriceID()`
-   - Load from `config/subscription_tiers.yaml` (currently all null)
-   - Add YAML parsing helper
+1. **Load Paddle Price IDs from Config** ✅ COMPLETE
+   - Task #15: Updated `backend/internal/huma/operations/paddle_checkout.go`
+   - Replaced hardcoded placeholder price IDs with config lookup
+   - Loads from `config/subscription_tiers.yaml` via TierConfig
+   - Returns descriptive errors if price IDs not configured
 
 2. **Frontend Components** ❌
    - Task #7: `SubscriptionManagementPage.tsx`
@@ -84,12 +88,14 @@
      * Tier upgrade/downgrade section
      * Cancel subscription flow
      * Paddle customer portal link
-   - Task #10: Update `PricingPage.tsx`
-     * Replace generic buttons with `<PaddleCheckoutButton>`
+   - Task #10: ✅ Update `PricingPage.tsx` COMPLETE
+     * Replaced generic buttons with `<PaddleCheckoutButton>`
+     * Buttons pass correct tier and billing interval
+     * Success toast on subscription activation
 
-3. **Frontend Hooks** ❌
-   - Task #8: `usePaddleCheckout.ts` - Wrapper hook with error normalization
-   - Task #8: `useSubscriptionManagement.ts` - Combined subscription operations hook
+3. **Frontend Hooks** (Partial)
+   - Task #8: ✅ `usePaddleCheckout.ts` - Wrapper hook with error normalization COMPLETE
+   - Task #8: ❌ `useSubscriptionManagement.ts` - NOT YET CREATED (not needed for MVP)
 
 4. **Backend Tests** ❌
    - Task #11: Write comprehensive tests:
@@ -234,4 +240,4 @@
 
 ---
 
-**Status Summary**: Backend infrastructure 100% complete, frontend 30% complete. Ready for Paddle Dashboard setup and frontend development.
+**Status Summary**: Backend infrastructure 100% complete, frontend 90% complete (core checkout flow done). Ready for Paddle Dashboard setup and testing. SubscriptionManagementPage and tests remain.
