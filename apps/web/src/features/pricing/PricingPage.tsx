@@ -4,6 +4,8 @@ import { useUser } from '@clerk/react-router'
 import { Award, Gem, Check, X, AlertTriangle } from 'lucide-react'
 import { useSubscriptionTiers } from '../subscription/hooks/useSubscriptionTiers'
 import type { TierName, SubscriptionTier } from '../subscription/types'
+import { PaddleCheckoutButton } from '../billing/components/PaddleCheckoutButton'
+import { toast } from 'sonner'
 import './PricingPage.css'
 
 /**
@@ -188,9 +190,13 @@ function TierCard({ tierKey, tierData, isCurrentTier, billingPeriod }: TierCardP
             Current Plan
           </button>
         ) : (
-          <button className="btn-select">
-            {tierKey === 'household_5' ? 'Go Household 5' : 'Select Plan'}
-          </button>
+          <PaddleCheckoutButton
+            tier={tierKey}
+            billingInterval={billingPeriod === 'monthly' ? 'month' : 'year'}
+            onSuccess={() => {
+              toast.success('Subscription activated! Welcome to ' + tierData.display_name)
+            }}
+          />
         )}
       </div>
     </div>
