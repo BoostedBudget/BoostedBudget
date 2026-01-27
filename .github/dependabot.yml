@@ -37,7 +37,7 @@ updates:
   # =============================================================================
   # Root Workspace - Turborepo only
   # =============================================================================
-  - package-ecosystem: "npm"
+  - package-ecosystem: "bun"
     directory: "/"
     schedule:
       interval: "weekly"
@@ -58,7 +58,7 @@ updates:
   # =============================================================================
   # Frontend App - /apps/web
   # =============================================================================
-  - package-ecosystem: "npm"
+  - package-ecosystem: "bun"
     directory: "/apps/web"
     schedule:
       interval: "weekly"
@@ -140,7 +140,7 @@ updates:
   # =============================================================================
   # API Client Package - /packages/api-client
   # =============================================================================
-  - package-ecosystem: "npm"
+  - package-ecosystem: "bun"
     directory: "/packages/api-client"
     schedule:
       interval: "weekly"
@@ -169,7 +169,7 @@ updates:
   # =============================================================================
   # Shared Types Package - /packages/shared-types
   # =============================================================================
-  - package-ecosystem: "npm"
+  - package-ecosystem: "bun"
     directory: "/packages/shared-types"
     schedule:
       interval: "weekly"
