@@ -1,9 +1,49 @@
 # Paddle Setup Guide for BoostedBudget
 
 **Last Updated:** 2026-01-26
-**Status:** In Progress - Backend Complete, Awaiting Paddle Account Setup
+**Status:** Backend & Core Frontend Complete ✅ - Awaiting YOUR Manual Setup
 
 This guide contains all the manual steps YOU (the human user) need to perform to set up and configure Paddle for BoostedBudget's subscription payments.
+
+## 🎯 Quick Start Checklist
+
+**What YOU need to do (estimated time: 2-3 hours for sandbox):**
+
+- [ ] **1. Create Paddle Sandbox Account** (15 min)
+  - Sign up at https://sandbox-vendors.paddle.com/signup
+  - Verify email and complete business profile
+
+- [ ] **2. Create Products & Prices** (45 min)
+  - Create 5 products (premium, household_2-5)
+  - Create 10 prices (monthly + yearly for each)
+  - Save all 10 Price IDs in a text file
+
+- [ ] **3. Configure Webhook** (10 min)
+  - Set endpoint URL: `https://your-backend-url.com/webhooks/paddle`
+  - Subscribe to 8 event types
+  - Save webhook secret
+
+- [ ] **4. Get API Credentials** (5 min)
+  - Get API key (backend)
+  - Get client token (frontend)
+
+- [ ] **5. Update Environment Variables** (10 min)
+  - Update backend `.env` with API key, webhook secret
+  - Update frontend `.env.local` with client token
+  - Restart backend and frontend
+
+- [ ] **6. Update subscription_tiers.yaml** (15 min)
+  - Replace all `null` price IDs with your actual Paddle Price IDs
+  - Commit the file to git
+
+- [ ] **7. Test Checkout Flow** (30 min)
+  - Navigate to /pricing
+  - Click "Subscribe" button
+  - Complete test checkout with card `4242 4242 4242 4242`
+  - Verify webhook received
+  - Verify subscription in database
+
+**Once these steps are done, the integration is fully functional!**
 
 ---
 
