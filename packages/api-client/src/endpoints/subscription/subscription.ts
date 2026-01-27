@@ -27,27 +27,62 @@ All data is stored in the us-east-1 (iad) region. Multi-region support planned f
  * OpenAPI spec version: 1.0.0
  */
 import {
+  useMutation,
   useQuery
 } from '@tanstack/react-query';
 import type {
   DataTag,
   DefinedInitialDataOptions,
   DefinedUseQueryResult,
+  MutationFunction,
   QueryClient,
   QueryFunction,
   QueryKey,
   UndefinedInitialDataOptions,
+  UseMutationOptions,
+  UseMutationResult,
   UseQueryOptions,
   UseQueryResult
 } from '@tanstack/react-query';
 
 import type {
+  CheckoutOutputBody,
+  CreateCheckoutInputBody,
   ErrorModel,
+  PreviewUpdateInputBody,
+  PreviewUpdateOutputBody,
   SubscriptionTiersResponse
 } from '../../models';
 
 import { customInstance } from '../../client';
-import type { ErrorType } from '../../client';
+import type { ErrorType , BodyType } from '../../client';
+
+// https://stackoverflow.com/questions/49579094/typescript-conditional-types-filter-out-readonly-properties-pick-only-requir/49579497#49579497
+type IfEquals<X, Y, A = X, B = never> = (<T>() => T extends X ? 1 : 2) extends <
+T,
+>() => T extends Y ? 1 : 2
+? A
+: B;
+
+type WritableKeys<T> = {
+[P in keyof T]-?: IfEquals<
+  { [Q in P]: T[P] },
+  { -readonly [Q in P]: T[P] },
+  P
+>;
+}[keyof T];
+
+type UnionToIntersection<U> =
+  (U extends any ? (k: U)=>void : never) extends ((k: infer I)=>void) ? I : never;
+type DistributeReadOnlyOverUnions<T> = T extends any ? NonReadonly<T> : never;
+
+type Writable<T> = Pick<T, WritableKeys<T>>;
+type NonReadonly<T> = [T] extends [UnionToIntersection<T>] ? {
+  [P in keyof Writable<T>]: T[P] extends object
+    ? NonReadonly<NonNullable<T[P]>>
+    : T[P];
+} : DistributeReadOnlyOverUnions<T>;
+
 
 
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
@@ -55,6 +90,134 @@ type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 
 /**
+ * Creates a Paddle checkout session for purchasing a subscription. Returns checkout URL to open in Paddle.js Overlay or as redirect.
+ * @summary Create Paddle checkout session
+ */
+export const createPaddleCheckout = (
+    createCheckoutInputBody: BodyType<NonReadonly<CreateCheckoutInputBody>>,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+      
+      
+      return customInstance<CheckoutOutputBody>(
+      {url: `/api/v1/subscription/checkout`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: createCheckoutInputBody, signal
+    },
+      options);
+    }
+  
+
+
+export const getCreatePaddleCheckoutMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createPaddleCheckout>>, TError,{data: BodyType<NonReadonly<CreateCheckoutInputBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof createPaddleCheckout>>, TError,{data: BodyType<NonReadonly<CreateCheckoutInputBody>>}, TContext> => {
+
+const mutationKey = ['createPaddleCheckout'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createPaddleCheckout>>, {data: BodyType<NonReadonly<CreateCheckoutInputBody>>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  createPaddleCheckout(data,requestOptions)
+        }
+
+
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreatePaddleCheckoutMutationResult = NonNullable<Awaited<ReturnType<typeof createPaddleCheckout>>>
+    export type CreatePaddleCheckoutMutationBody = BodyType<NonReadonly<CreateCheckoutInputBody>>
+    export type CreatePaddleCheckoutMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Create Paddle checkout session
+ */
+export const useCreatePaddleCheckout = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createPaddleCheckout>>, TError,{data: BodyType<NonReadonly<CreateCheckoutInputBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof createPaddleCheckout>>,
+        TError,
+        {data: BodyType<NonReadonly<CreateCheckoutInputBody>>},
+        TContext
+      > => {
+      return useMutation(getCreatePaddleCheckoutMutationOptions(options), queryClient);
+    }
+    /**
+ * Calculates proration amount when upgrading or downgrading subscription tier. Shows immediate charge/credit and next billing details.
+ * @summary Preview subscription tier change
+ */
+export const previewPaddleSubscriptionUpdate = (
+    previewUpdateInputBody: BodyType<NonReadonly<PreviewUpdateInputBody>>,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+      
+      
+      return customInstance<PreviewUpdateOutputBody>(
+      {url: `/api/v1/subscription/preview-update`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: previewUpdateInputBody, signal
+    },
+      options);
+    }
+  
+
+
+export const getPreviewPaddleSubscriptionUpdateMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof previewPaddleSubscriptionUpdate>>, TError,{data: BodyType<NonReadonly<PreviewUpdateInputBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof previewPaddleSubscriptionUpdate>>, TError,{data: BodyType<NonReadonly<PreviewUpdateInputBody>>}, TContext> => {
+
+const mutationKey = ['previewPaddleSubscriptionUpdate'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof previewPaddleSubscriptionUpdate>>, {data: BodyType<NonReadonly<PreviewUpdateInputBody>>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  previewPaddleSubscriptionUpdate(data,requestOptions)
+        }
+
+
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PreviewPaddleSubscriptionUpdateMutationResult = NonNullable<Awaited<ReturnType<typeof previewPaddleSubscriptionUpdate>>>
+    export type PreviewPaddleSubscriptionUpdateMutationBody = BodyType<NonReadonly<PreviewUpdateInputBody>>
+    export type PreviewPaddleSubscriptionUpdateMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Preview subscription tier change
+ */
+export const usePreviewPaddleSubscriptionUpdate = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof previewPaddleSubscriptionUpdate>>, TError,{data: BodyType<NonReadonly<PreviewUpdateInputBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof previewPaddleSubscriptionUpdate>>,
+        TError,
+        {data: BodyType<NonReadonly<PreviewUpdateInputBody>>},
+        TContext
+      > => {
+      return useMutation(getPreviewPaddleSubscriptionUpdateMutationOptions(options), queryClient);
+    }
+    /**
  * Returns all available subscription tiers with their limits, features, and pricing. This is a public endpoint for displaying pricing information.
  * @summary Get subscription tiers
  */

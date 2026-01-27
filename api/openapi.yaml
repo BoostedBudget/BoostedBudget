@@ -914,6 +914,26 @@ components:
       required:
         - is_admin
       type: object
+    CheckoutOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CheckoutOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        checkout_url:
+          description: URL to open Paddle checkout (Paddle.js Overlay or redirect)
+          type: string
+        transaction_id:
+          description: Paddle transaction ID for tracking
+          type: string
+      required:
+        - checkout_url
+        - transaction_id
+      type: object
     ConditionEvalResult:
       additionalProperties: false
       properties:
@@ -1114,6 +1134,34 @@ components:
       required:
         - name
         - conditions
+      type: object
+    CreateCheckoutInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CreateCheckoutInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        billing_interval:
+          description: Billing interval (month or year)
+          enum:
+            - month
+            - year
+          examples:
+            - month
+          type: string
+        tier:
+          description: Subscription tier (premium, household_2, etc.)
+          examples:
+            - premium
+          minLength: 1
+          type: string
+      required:
+        - tier
+        - billing_interval
       type: object
     CreateCustomCategoryRequest:
       additionalProperties: false
@@ -1774,6 +1822,26 @@ components:
         - created_at
         - updated_at
       type: object
+    PaddleWebhookResponseBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/PaddleWebhookResponseBody.json
+          format: uri
+          readOnly: true
+          type: string
+        message:
+          description: Status message
+          type: string
+        status:
+          description: Processing status (ok or error)
+          type: string
+      required:
+        - status
+        - message
+      type: object
     PeriodComparisonData:
       additionalProperties: false
       properties:
@@ -1821,6 +1889,70 @@ components:
       required:
         - status
         - message
+      type: object
+    PreviewUpdateInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/PreviewUpdateInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        billing_interval:
+          description: Billing interval for new tier (month or year)
+          enum:
+            - month
+            - year
+          examples:
+            - month
+          type: string
+        new_tier:
+          description: New subscription tier to preview
+          examples:
+            - household_2
+          minLength: 1
+          type: string
+      required:
+        - new_tier
+        - billing_interval
+      type: object
+    PreviewUpdateOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/PreviewUpdateOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        currency:
+          description: Currency code (USD, EUR, etc.)
+          examples:
+            - USD
+          type: string
+        next_charge_amount:
+          description: Amount of next regular charge
+          examples:
+            - "12.99"
+          type: string
+        next_charge_date:
+          description: Date of next regular charge
+          examples:
+            - "2026-02-26"
+          type: string
+        proration_amount:
+          description: Amount to charge (positive) or credit (negative) immediately
+          examples:
+            - "5.00"
+          type: string
+      required:
+        - proration_amount
+        - currency
+        - next_charge_date
+        - next_charge_amount
       type: object
     PrivacySettings:
       additionalProperties: false
@@ -5469,6 +5601,60 @@ paths:
       summary: Update savings goal
       tags:
         - Savings Goals
+  /api/v1/subscription/checkout:
+    post:
+      description: Creates a Paddle checkout session for purchasing a subscription. Returns checkout URL to open in Paddle.js Overlay or as redirect.
+      operationId: create-paddle-checkout
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCheckoutInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckoutOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Create Paddle checkout session
+      tags:
+        - Subscription
+        - Paddle
+  /api/v1/subscription/preview-update:
+    post:
+      description: Calculates proration amount when upgrading or downgrading subscription tier. Shows immediate charge/credit and next billing details.
+      operationId: preview-paddle-subscription-update
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PreviewUpdateInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreviewUpdateOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Preview subscription tier change
+      tags:
+        - Subscription
+        - Paddle
   /api/v1/subscription/tiers:
     get:
       description: Returns all available subscription tiers with their limits, features, and pricing. This is a public endpoint for displaying pricing information.
@@ -6177,6 +6363,44 @@ paths:
       summary: Get Prometheus metrics
       tags:
         - Monitoring
+  /webhooks/paddle:
+    post:
+      description: Public endpoint for Paddle to send subscription and payment event notifications. Verifies HMAC-SHA256 signature, stores in database, and enqueues async processing job.
+      operationId: paddle-webhook
+      parameters:
+        - description: HMAC-SHA256 signature from Paddle for verification
+          in: header
+          name: Paddle-Signature
+          schema:
+            description: HMAC-SHA256 signature from Paddle for verification
+            type: string
+      requestBody:
+        content:
+          application/octet-stream:
+            schema:
+              contentMediaType: application/octet-stream
+              format: binary
+              type: string
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaddleWebhookResponseBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - {}
+      summary: Receive Paddle webhook notifications
+      tags:
+        - Webhooks
+        - Paddle
   /webhooks/plaid:
     post:
       description: Receives and processes webhook notifications from Plaid. Validates JWT signature and stores for async processing.
