@@ -332,6 +332,7 @@ func main() {
 					PaddleService: paddleService,
 					ProfileRepo:   profileRepo,
 					Config:        cfg,
+					TierConfig:    tierConfig,
 					Logger:        logger,
 				})
 				log.Println("✅ Paddle checkout handler created")

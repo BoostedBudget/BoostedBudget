@@ -7,6 +7,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
@@ -17,6 +18,7 @@ type PaddleCheckoutHandler struct {
 	paddleService services.PaddleService
 	profileRepo   repository.ProfileRepository
 	config        *config.Config
+	tierConfig    *config.TierConfig
 	logger        *slog.Logger
 }
 
@@ -25,6 +27,7 @@ type PaddleCheckoutHandlerDeps struct {
 	PaddleService services.PaddleService
 	ProfileRepo   repository.ProfileRepository
 	Config        *config.Config
+	TierConfig    *config.TierConfig
 	Logger        *slog.Logger
 }
 
@@ -38,6 +41,7 @@ func NewPaddleCheckoutHandler(deps PaddleCheckoutHandlerDeps) *PaddleCheckoutHan
 		paddleService: deps.PaddleService,
 		profileRepo:   deps.ProfileRepo,
 		config:        deps.Config,
+		tierConfig:    deps.TierConfig,
 		logger:        logger,
 	}
 }
@@ -165,11 +169,14 @@ func (h *PaddleCheckoutHandler) HandleCreateCheckoutSession(
 		customerID = &newCustomerID
 	}
 
-	// Get Paddle price ID for tier and billing interval
-	// TODO: Load from subscription_tiers.yaml
-	// For now, use placeholder price IDs
-	priceID := getPaddlePriceID(input.Body.Tier, input.Body.BillingInterval)
-	if priceID == "" {
+	// Get Paddle price ID for tier and billing interval from config
+	priceID, err := h.getPaddlePriceIDFromConfig(input.Body.Tier, input.Body.BillingInterval)
+	if err != nil {
+		h.logger.Error("failed to get Paddle price ID",
+			"tier", input.Body.Tier,
+			"billing_interval", input.Body.BillingInterval,
+			"error", err,
+		)
 		return nil, huma.Error500InternalServerError("Price ID not configured for this tier")
 	}
 
@@ -296,42 +303,34 @@ func (h *PaddleCheckoutHandler) HandlePreviewSubscriptionUpdate(
 	// }, nil
 }
 
-// getPaddlePriceID returns the Paddle price ID for a given tier and billing interval.
-// TODO: Load from subscription_tiers.yaml config
-func getPaddlePriceID(tier, billingInterval string) string {
-	// Placeholder price IDs - will be replaced with actual values from Paddle Dashboard
-	// After Phase 9 (Paddle Dashboard Setup), these will be loaded from subscription_tiers.yaml
-
-	priceMap := map[string]map[string]string{
-		"premium": {
-			"month": "pri_premium_monthly_placeholder",
-			"year":  "pri_premium_yearly_placeholder",
-		},
-		"household_2": {
-			"month": "pri_household2_monthly_placeholder",
-			"year":  "pri_household2_yearly_placeholder",
-		},
-		"household_3": {
-			"month": "pri_household3_monthly_placeholder",
-			"year":  "pri_household3_yearly_placeholder",
-		},
-		"household_4": {
-			"month": "pri_household4_monthly_placeholder",
-			"year":  "pri_household4_yearly_placeholder",
-		},
-		"household_5": {
-			"month": "pri_household5_monthly_placeholder",
-			"year":  "pri_household5_yearly_placeholder",
-		},
+// getPaddlePriceIDFromConfig returns the Paddle price ID for a given tier and billing interval
+// from the subscription_tiers.yaml configuration file.
+//
+// Issue #45: Paddle Payment Service Implementation
+// Loads actual Paddle price IDs from config instead of hardcoded placeholders
+func (h *PaddleCheckoutHandler) getPaddlePriceIDFromConfig(tierName, billingInterval string) (string, error) {
+	// Get tier from config
+	tier, err := h.tierConfig.GetTier(domain.TierName(tierName))
+	if err != nil {
+		return "", fmt.Errorf("tier not found: %w", err)
 	}
 
-	if tierPrices, ok := priceMap[tier]; ok {
-		if priceID, ok := tierPrices[billingInterval]; ok {
-			return priceID
-		}
+	// Get appropriate price ID based on billing interval
+	var priceID *string
+	if billingInterval == "month" {
+		priceID = tier.Pricing.PaddlePriceIDMonthly
+	} else if billingInterval == "year" {
+		priceID = tier.Pricing.PaddlePriceIDYearly
+	} else {
+		return "", fmt.Errorf("invalid billing interval: %s (must be 'month' or 'year')", billingInterval)
 	}
 
-	return ""
+	// Check if price ID is configured
+	if priceID == nil || *priceID == "" {
+		return "", fmt.Errorf("paddle price ID not configured for tier '%s' with billing interval '%s' (check config/subscription_tiers.yaml)", tierName, billingInterval)
+	}
+
+	return *priceID, nil
 }
 
 // RegisterPaddleCheckoutRoutes registers Paddle checkout routes with the Huma API.
