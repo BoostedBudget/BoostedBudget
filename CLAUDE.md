@@ -70,7 +70,8 @@ config/
 - OpenAPI spec generated FROM Huma routes (not hand-written)
 - Frontend hooks auto-generated via Orval (**use `make generate-api-client`**)
   - Uses `npx orval` (Node.js runtime) instead of `bunx` due to Bun runtime compatibility issues
-  - Single lock file: `bun.lock` only (npx uses packages installed by Bun)
+  - Single lock file: `bun.lock` at root only (workspaces share one lockfile)
+  - Workspace lockfiles (`apps/*/bun.lock`) should NOT exist
 - Migrations MUST be idempotent (`IF NOT EXISTS`, `DO $$` blocks)
 - All auth via Clerk (JWT middleware), never custom auth
 - `*InRegion` method signatures for future multi-region
@@ -159,10 +160,13 @@ Out-of-sync causes infinite dashboard reset loops. Increment when adding/removin
 ## Dependabot
 
 - Configured with **bun** ecosystem for frontend packages (native lockfile support)
-- Updates both `package.json` and `bun.lock` automatically
+- **Monorepo mode:** Single root-level entry monitors ALL workspaces (apps/*, packages/*)
+- Updates both `package.json` files (in any workspace) and root `bun.lock` automatically
 - Runs weekly Monday 9:00 AM EST for frontend packages
 - Manual lockfile intervention no longer needed
 - Configuration: `.github/dependabot.yml`
+
+**Important:** Bun workspaces use a SINGLE root `bun.lock` file. Do NOT commit lockfiles in workspace subdirectories (`apps/web/bun.lock`, `packages/*/bun.lock`). Dependabot must run from the root directory to correctly update the shared lockfile.
 
 ## System Health Dashboard Maintenance
 
