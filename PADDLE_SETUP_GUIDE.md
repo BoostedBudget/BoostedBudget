@@ -258,17 +258,33 @@ VITE_PADDLE_ENV="sandbox"               # Use "production" when going live
 
 ### Step 4.5: Update Subscription Tier Configuration
 
-Edit `config/subscription_tiers.yaml` and replace `null` price IDs with your actual Paddle Price IDs from Step 2.7:
+**NEW: Environment-Specific Configuration Files**
+
+BoostedBudget now supports separate config files for sandbox and production environments, automatically selected based on the `PADDLE_ENVIRONMENT` variable. This allows you to maintain different Paddle Price IDs for each environment.
+
+**Configuration files:**
+- `config/subscription_tiers.sandbox.yaml` - Sandbox Paddle Price IDs (automatically loaded when `PADDLE_ENVIRONMENT=sandbox`)
+- `config/subscription_tiers.production.yaml` - Production Paddle Price IDs (automatically loaded when `PADDLE_ENVIRONMENT=production`)
+- `config/subscription_tiers.yaml` - Default/template (fallback when no environment specified)
+
+**Automatic selection priority:**
+1. `SUBSCRIPTION_TIERS_CONFIG` env var (explicit path override)
+2. `config/subscription_tiers.{PADDLE_ENVIRONMENT}.yaml` (environment-specific)
+3. `config/subscription_tiers.yaml` (default fallback)
+
+**For Sandbox Setup (recommended for initial testing):**
+
+Edit `config/subscription_tiers.sandbox.yaml` and replace `null` price IDs with your actual **SANDBOX** Paddle Price IDs from Step 2.7:
 
 ```yaml
 tiers:
   premium:
-    paddle_price_id_monthly: "pri_01h..."  # Your premium monthly price ID
-    paddle_price_id_yearly: "pri_01h..."   # Your premium yearly price ID
+    paddle_price_id_monthly: "pri_01h..."  # Your SANDBOX premium monthly price ID
+    paddle_price_id_yearly: "pri_01h..."   # Your SANDBOX premium yearly price ID
 
   household_2:
-    paddle_price_id_monthly: "pri_01h..."  # Your household_2 monthly price ID
-    paddle_price_id_yearly: "pri_01h..."   # Your household_2 yearly price ID
+    paddle_price_id_monthly: "pri_01h..."  # Your SANDBOX household_2 monthly price ID
+    paddle_price_id_yearly: "pri_01h..."   # Your SANDBOX household_2 yearly price ID
 
   household_3:
     paddle_price_id_monthly: "pri_01h..."
@@ -283,7 +299,19 @@ tiers:
     paddle_price_id_yearly: "pri_01h..."
 ```
 
-**COMMIT THIS FILE** after updating (price IDs are not secrets).
+**For Production (when ready to go live):**
+
+1. Repeat Phases 1-4 in Paddle Production Dashboard (https://vendors.paddle.com)
+2. Get production Price IDs
+3. Edit `config/subscription_tiers.production.yaml` and add **PRODUCTION** Price IDs
+4. Update backend `.env` to use `PADDLE_ENVIRONMENT="production"`
+5. Update frontend `.env.local` to use `VITE_PADDLE_ENV="production"`
+
+**Important Notes:**
+- Paddle Price IDs are **completely different** between sandbox and production
+- The backend will automatically load the correct config based on `PADDLE_ENVIRONMENT`
+- **COMMIT THESE FILES** after updating (price IDs are not secrets, but ensure you don't mix sandbox/production IDs)
+- Backend logs will show which config file was loaded: `Loading environment-specific config: config/subscription_tiers.sandbox.yaml`
 
 ---
 
