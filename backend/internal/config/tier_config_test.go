@@ -143,3 +143,101 @@ func TestTierConfig_GetTrialConfig(t *testing.T) {
 	assert.Equal(t, 60, trialConfig.DurationDays)
 	assert.Equal(t, domain.TierPremium, trialConfig.Tier)
 }
+
+func TestGetConfigPath_EnvironmentSpecific(t *testing.T) {
+	tests := []struct {
+		name                     string
+		subscriptionTiersConfig  string
+		paddleEnvironment        string
+		expectedPathSuffix       string
+	}{
+		{
+			name:                    "explicit config path overrides all",
+			subscriptionTiersConfig: "config/custom.yaml",
+			paddleEnvironment:       "sandbox",
+			expectedPathSuffix:      "config/custom.yaml",
+		},
+		{
+			name:                    "sandbox environment loads sandbox config",
+			subscriptionTiersConfig: "",
+			paddleEnvironment:       "sandbox",
+			expectedPathSuffix:      "config/subscription_tiers.sandbox.yaml",
+		},
+		{
+			name:                    "production environment loads production config",
+			subscriptionTiersConfig: "",
+			paddleEnvironment:       "production",
+			expectedPathSuffix:      "config/subscription_tiers.production.yaml",
+		},
+		{
+			name:                    "no environment falls back to default",
+			subscriptionTiersConfig: "",
+			paddleEnvironment:       "",
+			expectedPathSuffix:      "config/subscription_tiers.yaml",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Set environment variables
+			if tt.subscriptionTiersConfig != "" {
+				os.Setenv("SUBSCRIPTION_TIERS_CONFIG", tt.subscriptionTiersConfig)
+				defer os.Unsetenv("SUBSCRIPTION_TIERS_CONFIG")
+			} else {
+				os.Unsetenv("SUBSCRIPTION_TIERS_CONFIG")
+			}
+
+			if tt.paddleEnvironment != "" {
+				os.Setenv("PADDLE_ENVIRONMENT", tt.paddleEnvironment)
+				defer os.Unsetenv("PADDLE_ENVIRONMENT")
+			} else {
+				os.Unsetenv("PADDLE_ENVIRONMENT")
+			}
+
+			// Get config path
+			configPath := getConfigPath()
+
+			// Verify path ends with expected suffix
+			assert.Contains(t, configPath, tt.expectedPathSuffix,
+				"Config path %s should contain %s", configPath, tt.expectedPathSuffix)
+		})
+	}
+}
+
+func TestLoadTierConfig_EnvironmentSpecific(t *testing.T) {
+	t.Run("loads sandbox config when PADDLE_ENVIRONMENT=sandbox", func(t *testing.T) {
+		// Set environment
+		os.Setenv("PADDLE_ENVIRONMENT", "sandbox")
+		defer os.Unsetenv("PADDLE_ENVIRONMENT")
+
+		// Reset singleton
+		globalTierConfig = nil
+		configOnce = *new(sync.Once)
+
+		// Load config
+		config, err := LoadTierConfig()
+		require.NoError(t, err)
+		assert.NotNil(t, config)
+
+		// Verify it loaded successfully (sandbox config exists and is valid)
+		assert.Len(t, config.Tiers, 5)
+	})
+
+	t.Run("loads production config when PADDLE_ENVIRONMENT=production", func(t *testing.T) {
+		// Set environment
+		os.Setenv("PADDLE_ENVIRONMENT", "production")
+		defer os.Unsetenv("PADDLE_ENVIRONMENT")
+
+		// Reset singleton
+		globalTierConfig = nil
+		configOnce = *new(sync.Once)
+
+		// Load config
+		config, err := LoadTierConfig()
+		require.NoError(t, err)
+		assert.NotNil(t, config)
+
+		// Verify it loaded successfully (production config exists and is valid)
+		assert.Len(t, config.Tiers, 5)
+	})
+}

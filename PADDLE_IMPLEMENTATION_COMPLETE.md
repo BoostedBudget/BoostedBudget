@@ -132,15 +132,33 @@ VITE_PADDLE_CLIENT_TOKEN="test_01h..."  # From Paddle Dashboard
 VITE_PADDLE_ENV="sandbox"               # Keep as sandbox for testing
 ```
 
-**Config file `config/subscription_tiers.yaml`:**
+**Config files (NEW: Environment-specific):**
 Replace all `null` values with your actual Paddle Price IDs:
+
+**For Sandbox (development/testing):**
+Edit `config/subscription_tiers.sandbox.yaml`:
 ```yaml
 tiers:
   premium:
-    paddle_price_id_monthly: "pri_01h..."  # Your actual ID from Paddle
-    paddle_price_id_yearly: "pri_01h..."   # Your actual ID from Paddle
+    paddle_price_id_monthly: "pri_01h..."  # Your SANDBOX ID from Paddle
+    paddle_price_id_yearly: "pri_01h..."   # Your SANDBOX ID from Paddle
   # ... etc for all 5 tiers
 ```
+
+**For Production (when ready to launch):**
+Edit `config/subscription_tiers.production.yaml`:
+```yaml
+tiers:
+  premium:
+    paddle_price_id_monthly: "pri_01h..."  # Your PRODUCTION ID from Paddle
+    paddle_price_id_yearly: "pri_01h..."   # Your PRODUCTION ID from Paddle
+  # ... etc for all 5 tiers
+```
+
+**Automatic selection based on `PADDLE_ENVIRONMENT` env variable:**
+- `sandbox` → loads `subscription_tiers.sandbox.yaml`
+- `production` → loads `subscription_tiers.production.yaml`
+- (empty) → fallback to `subscription_tiers.yaml`
 
 ### Step 3: Test the Integration
 
