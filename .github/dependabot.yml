@@ -35,31 +35,13 @@ updates:
           - "patch"
 
   # =============================================================================
-  # Root Workspace - Turborepo only
+  # Bun Workspace Monorepo - All frontend dependencies
   # =============================================================================
+  # Monitors ALL workspaces (apps/*, packages/*) from the root directory.
+  # Bun workspaces use a SINGLE root bun.lock file, so Dependabot must run
+  # from the root to correctly update the shared lockfile.
   - package-ecosystem: "bun"
     directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "09:00"
-      timezone: "America/New_York"
-    labels:
-      - "dependencies"
-      - "root"
-      - "tooling"
-    reviewers:
-      - "maxnussbaum"
-    open-pull-requests-limit: 1
-    # Only monitor turbo to avoid duplicate PRs for workspace dependencies
-    allow:
-      - dependency-name: "turbo"
-
-  # =============================================================================
-  # Frontend App - /apps/web
-  # =============================================================================
-  - package-ecosystem: "bun"
-    directory: "/apps/web"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -86,9 +68,10 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "@tanstack/react-query"
         update-types: ["version-update:semver-major"]
-    # Group dependencies by type
+      - dependency-name: "orval"
+        update-types: ["version-update:semver-major"]
+    # Group dependencies by type across ALL workspaces
     groups:
-      # Core framework dependencies
       frontend-framework:
         patterns:
           - "react"
@@ -99,7 +82,6 @@ updates:
         update-types:
           - "minor"
           - "patch"
-      # UI component libraries
       frontend-ui-libraries:
         patterns:
           - "@radix-ui/*"
@@ -111,7 +93,6 @@ updates:
         update-types:
           - "minor"
           - "patch"
-      # State management and data fetching
       frontend-state:
         patterns:
           - "@tanstack/*"
@@ -121,7 +102,6 @@ updates:
         update-types:
           - "minor"
           - "patch"
-      # Development and testing tools
       frontend-dev-dependencies:
         patterns:
           - "@types/*"
@@ -136,57 +116,10 @@ updates:
         update-types:
           - "minor"
           - "patch"
-
-  # =============================================================================
-  # API Client Package - /packages/api-client
-  # =============================================================================
-  - package-ecosystem: "bun"
-    directory: "/packages/api-client"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "09:00"
-      timezone: "America/New_York"
-    labels:
-      - "dependencies"
-      - "api-client"
-      - "packages"
-    reviewers:
-      - "maxnussbaum"
-    open-pull-requests-limit: 3
-    # Protect Orval (code generation tool - breaking changes impact workflow)
-    ignore:
-      - dependency-name: "orval"
-        update-types: ["version-update:semver-major"]
-    groups:
-      api-client-dependencies:
+      build-tools:
         patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
-
-  # =============================================================================
-  # Shared Types Package - /packages/shared-types
-  # =============================================================================
-  - package-ecosystem: "bun"
-    directory: "/packages/shared-types"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "09:00"
-      timezone: "America/New_York"
-    labels:
-      - "dependencies"
-      - "shared-types"
-      - "packages"
-    reviewers:
-      - "maxnussbaum"
-    open-pull-requests-limit: 3
-    groups:
-      shared-types-dependencies:
-        patterns:
-          - "*"
+          - "turbo"
+          - "orval"
         update-types:
           - "minor"
           - "patch"
