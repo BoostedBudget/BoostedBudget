@@ -13,7 +13,6 @@ import (
 )
 
 // PaddleCheckoutHandler handles Paddle checkout and subscription management operations.
-// Issue #45: Paddle Payment Service Implementation
 type PaddleCheckoutHandler struct {
 	paddleService services.PaddleService
 	profileRepo   repository.ProfileRepository
@@ -82,9 +81,6 @@ type PreviewUpdateOutput struct {
 	}
 }
 
-// --- Helper Functions ---
-
-// validSubscriptionTiers returns a map of valid subscription tiers
 func validSubscriptionTiers() map[string]bool {
 	return map[string]bool{
 		"premium":     true,
@@ -95,19 +91,8 @@ func validSubscriptionTiers() map[string]bool {
 	}
 }
 
-// --- Handler Methods ---
-
 // HandleCreateCheckoutSession handles POST /api/v1/subscription/checkout.
 // Creates a Paddle checkout session for the user to purchase a subscription.
-//
-// Flow:
-//  1. Validate tier and billing interval
-//  2. Get/create Paddle customer ID for user
-//  3. Look up Paddle price ID from subscription_tiers.yaml
-//  4. Call Paddle API to create checkout session
-//  5. Return checkout URL for frontend
-//
-// Issue #45: Paddle Payment Service Implementation
 func (h *PaddleCheckoutHandler) HandleCreateCheckoutSession(
 	ctx context.Context,
 	input *CreateCheckoutInput,
@@ -218,21 +203,12 @@ func (h *PaddleCheckoutHandler) HandleCreateCheckoutSession(
 	}, nil
 }
 
-// HandlePreviewSubscriptionUpdate handles GET /api/v1/subscription/preview-update.
+// HandlePreviewSubscriptionUpdate handles POST /api/v1/subscription/preview-update.
 // Calculates proration for upgrading/downgrading subscription tier.
-//
-// Flow:
-//  1. Validate user has active subscription
-//  2. Look up Paddle price ID for new tier
-//  3. Call Paddle API to preview update
-//  4. Return proration details
-//
-// Issue #45: Paddle Payment Service Implementation
 func (h *PaddleCheckoutHandler) HandlePreviewSubscriptionUpdate(
 	ctx context.Context,
 	input *PreviewUpdateInput,
 ) (*PreviewUpdateOutput, error) {
-	// Get user ID from JWT claims
 	userID, ok := ctx.Value("user_id").(string)
 	if !ok || userID == "" {
 		return nil, huma.Error401Unauthorized("User not authenticated")
@@ -243,12 +219,10 @@ func (h *PaddleCheckoutHandler) HandlePreviewSubscriptionUpdate(
 		"new_tier", input.Body.NewTier,
 	)
 
-	// Validate tier
 	if !validSubscriptionTiers()[input.Body.NewTier] {
 		return nil, huma.Error400BadRequest("Invalid tier")
 	}
 
-	// Get user from database
 	user, err := h.profileRepo.GetUserByID(ctx, userID)
 	if err != nil {
 		h.logger.Error("failed to get user",
@@ -258,56 +232,15 @@ func (h *PaddleCheckoutHandler) HandlePreviewSubscriptionUpdate(
 		return nil, huma.Error500InternalServerError("Failed to get user details")
 	}
 
-	// Check if user has active subscription
 	if user.SubscriptionStatus != "active" {
 		return nil, huma.Error400BadRequest("No active subscription to update")
 	}
 
-	// TODO: Get user's current subscription ID from Paddle
-	// For now, return error
 	return nil, huma.Error501NotImplemented("Preview update not yet implemented")
-
-	// Get Paddle price ID for new tier
-	// TODO: Load from subscription_tiers.yaml
-	// newPriceID := getPaddlePriceID(input.Body.NewTier, input.Body.BillingInterval)
-	// if newPriceID == "" {
-	// 	return nil, huma.Error500InternalServerError("Price ID not configured for this tier")
-	// }
-
-	// Preview subscription update
-	// prorationAmount, currency, nextChargeDate, err := h.paddleService.PreviewUpdate(
-	// 	ctx,
-	// 	subscriptionID,
-	// 	newPriceID,
-	// )
-	// if err != nil {
-	// 	h.logger.Error("failed to preview subscription update",
-	// 		"user_id", userID,
-	// 		"error", err,
-	// 	)
-	// 	return nil, huma.Error500InternalServerError("Failed to preview update")
-	// }
-
-	// return &PreviewUpdateOutput{
-	// 	Body: struct {
-	// 		ProrationAmount string `json:"proration_amount" doc:"Amount to charge (positive) or credit (negative) immediately" example:"5.00"`
-	// 		Currency        string `json:"currency" doc:"Currency code (USD, EUR, etc.)" example:"USD"`
-	// 		NextChargeDate  string `json:"next_charge_date" doc:"Date of next regular charge" example:"2026-02-26"`
-	// 		NextChargeAmt   string `json:"next_charge_amount" doc:"Amount of next regular charge" example:"12.99"`
-	// 	}{
-	// 		ProrationAmount: prorationAmount,
-	// 		Currency:        currency,
-	// 		NextChargeDate:  nextChargeDate,
-	// 		NextChargeAmt:   "12.99", // TODO: Calculate from new tier
-	// 	},
-	// }, nil
 }
 
 // getPaddlePriceIDFromConfig returns the Paddle price ID for a given tier and billing interval
 // from the subscription_tiers.yaml configuration file.
-//
-// Issue #45: Paddle Payment Service Implementation
-// Loads actual Paddle price IDs from config instead of hardcoded placeholders
 func (h *PaddleCheckoutHandler) getPaddlePriceIDFromConfig(tierName, billingInterval string) (string, error) {
 	// Get tier from config
 	tier, err := h.tierConfig.GetTier(domain.TierName(tierName))
