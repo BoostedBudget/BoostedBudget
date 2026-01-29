@@ -34,13 +34,15 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     ./cmd/server
 
 # Stage 2: Runtime (Debian Bookworm Slim - Minimal but stable)
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:56ff6d36d4eb3db13a741b342ec466f121480b5edded42e4b7ee850ce7a418ee
 
 # Install runtime dependencies
 RUN echo "📦 Installing runtime dependencies..." && \
     for i in 1 2 3; do \
       echo "Attempt $i/3..." && \
-      apt-get update && apt-get install -y --no-install-recommends \
+      apt-get update && \
+      apt-get upgrade -y --only-upgrade libssl3 openssl && \
+      apt-get install -y --no-install-recommends \
         ca-certificates curl tzdata postgresql-client && \
       rm -rf /var/lib/apt/lists/* && \
       echo "✓ Dependencies installed" && break || \
