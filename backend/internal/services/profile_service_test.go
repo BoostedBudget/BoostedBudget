@@ -105,6 +105,16 @@ func (m *MockProfileRepository) UpdateTrialStatus(ctx context.Context, userID st
 	return args.Error(0)
 }
 
+func (m *MockProfileRepository) UpdatePaddleCustomerID(ctx context.Context, userID, paddleCustomerID string) error {
+	args := m.Called(ctx, userID, paddleCustomerID)
+	return args.Error(0)
+}
+
+func (m *MockProfileRepository) UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time) error {
+	args := m.Called(ctx, userID, tier, status, startedAt, endsAt)
+	return args.Error(0)
+}
+
 // TestGetProfile_ExistingUser tests retrieving an existing user
 // NOTE: After PR #197, GetProfile now receives internal user UUID, not Clerk ID
 func TestGetProfile_ExistingUser(t *testing.T) {

@@ -1,7 +1,6 @@
-import { Button } from '@/shared/components/ui/button'
-import { useCreatePaddleCheckout } from '@boostedbudget/api-client/endpoints/subscription/subscription'
+import { Button } from '@/components/ui/button'
+import { usePaddleCheckout } from '@/features/billing/hooks/usePaddleCheckout'
 import { toast } from 'sonner'
-import { useState } from 'react'
 
 interface PaddleCheckoutButtonProps {
   tier: string
@@ -16,8 +15,7 @@ export function PaddleCheckoutButton({
   disabled,
   onSuccess,
 }: PaddleCheckoutButtonProps) {
-  const [isProcessing, setIsProcessing] = useState(false)
-  const createCheckout = useCreatePaddleCheckout()
+  const { checkout, isLoading, error } = usePaddleCheckout()
 
   const handleCheckout = async () => {
     if (!window.Paddle) {
@@ -25,50 +23,29 @@ export function PaddleCheckoutButton({
       return
     }
 
-    setIsProcessing(true)
-
     try {
-      // Create checkout session
-      const response = await createCheckout.mutateAsync({
-        data: {
-          tier,
-          billing_interval: billingInterval,
-        },
-      })
+      const response = await checkout({ tier, billingInterval })
 
-      // Open Paddle checkout overlay
       window.Paddle.Checkout.open({
         settings: {
           checkoutURL: response.checkout_url,
         },
       })
 
-      // Success handled via Paddle event callback
       onSuccess?.()
-    } catch (error: any) {
-      // Map error codes to user-friendly messages
-      if (error.status === 403) {
-        toast.error('Please sign in to subscribe')
-      } else if (error.status === 400) {
-        toast.error('Invalid subscription tier selected')
-      } else if (error.status === 500) {
-        toast.error('Payment system error. Please try again later.')
-      } else {
-        toast.error('Failed to start checkout. Please try again.')
-      }
-      console.error('Checkout error:', error)
-    } finally {
-      setIsProcessing(false)
+    } catch (err: any) {
+      toast.error(error?.message || 'Failed to start checkout. Please try again.')
+      console.error('Checkout error:', err)
     }
   }
 
   return (
     <Button
       onClick={handleCheckout}
-      disabled={disabled || isProcessing || createCheckout.isPending}
+      disabled={disabled || isLoading}
       className="w-full"
     >
-      {isProcessing || createCheckout.isPending ? 'Loading...' : 'Subscribe'}
+      {isLoading ? 'Loading...' : 'Subscribe'}
     </Button>
   )
 }
