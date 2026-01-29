@@ -34,8 +34,8 @@ tiers:
     price_monthly: 8.99
     price_yearly: 79.00
     mobile_price_yearly: 89.99
-    paddle_price_id_monthly: null
-    paddle_price_id_yearly: null
+    paddle_price_id_monthly: "pri_01kg5a95bscjb9e7rjj5nvb1xg"
+    paddle_price_id_yearly: "pri_01kg5aabvz87p7rdbwzkv038vx"
     users_included: 1
 
     limits:
@@ -58,8 +58,8 @@ tiers:
     price_monthly: 12.99
     price_yearly: 119.00
     mobile_price_yearly: 134.99
-    paddle_price_id_monthly: null
-    paddle_price_id_yearly: null
+    paddle_price_id_monthly: "pri_01kg5abs7yz0wf4y9nyxdcmyby"
+    paddle_price_id_yearly: "pri_01kg5ackvdkskmk002235xwd30"
     users_included: 2
 
     limits:
@@ -82,8 +82,8 @@ tiers:
     price_monthly: 14.99
     price_yearly: 139.00
     mobile_price_yearly: 154.99
-    paddle_price_id_monthly: null
-    paddle_price_id_yearly: null
+    paddle_price_id_monthly: "pri_01kg5adtryhe70fk5ttdfy4p06"
+    paddle_price_id_yearly: "pri_01kg5aemyhhj150qvydhgvrmtk"
     users_included: 3
 
     limits:
@@ -106,8 +106,8 @@ tiers:
     price_monthly: 16.99
     price_yearly: 159.00
     mobile_price_yearly: 179.99
-    paddle_price_id_monthly: null
-    paddle_price_id_yearly: null
+    paddle_price_id_monthly: "pri_01kg5afjp2k37wtx281bwffyst"
+    paddle_price_id_yearly: "pri_01kg5age8s81ytsf4vf8avc9fq"
     users_included: 4
 
     limits:
@@ -130,8 +130,8 @@ tiers:
     price_monthly: 18.99
     price_yearly: 179.00
     mobile_price_yearly: 199.99
-    paddle_price_id_monthly: null
-    paddle_price_id_yearly: null
+    paddle_price_id_monthly: "pri_01kg5ahkcffbe5g4t1hcdbf6d4"
+    paddle_price_id_yearly: "pri_01kg5ajfbb9b90gz638gxe22qe"
     users_included: 5
 
     limits:
