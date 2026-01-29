@@ -14,7 +14,6 @@ import (
 )
 
 // PaddleWebhookHandler handles Paddle webhook HTTP requests.
-// Issue #46: Paddle Webhook Handler Implementation
 type PaddleWebhookHandler struct {
 	webhookService services.PaddleWebhookService
 	webhookRepo    repository.PaddleWebhookRepository
@@ -44,8 +43,6 @@ func NewPaddleWebhookHandler(deps PaddleWebhookHandlerDeps) *PaddleWebhookHandle
 	}
 }
 
-// --- Input/Output Types ---
-
 // PaddleWebhookPayload represents the structure of Paddle webhook notifications.
 // Paddle webhooks have a standard structure with event_id, event_type, and data.
 type PaddleWebhookPayload struct {
@@ -71,32 +68,10 @@ type PaddleWebhookResponseBody struct {
 	Message string `json:"message" doc:"Status message"`
 }
 
-// --- Handler Methods ---
-
 // HandlePaddleWebhook handles POST /webhooks/paddle requests.
 // Receives and processes webhook notifications from Paddle.
-//
-// Issue #46: Paddle Webhook Handler Implementation
-//
-// Webhook Flow:
-//  1. Verify HMAC-SHA256 signature
-//  2. Store webhook in database (audit trail + idempotency)
-//  3. Enqueue River job for async processing
-//  4. Return 200 OK immediately (prevent retry storms)
-//
-// Event Types:
-//   - subscription.created: New subscription initiated
-//   - subscription.activated: Subscription became active (from trial or paused)
-//   - subscription.updated: Subscription tier/billing changed
-//   - subscription.canceled: Subscription cancelled (effective at period end)
-//   - subscription.paused: Subscription temporarily paused
-//   - subscription.past_due: Payment failed, grace period started
-//   - transaction.completed: Payment succeeded
-//   - transaction.payment_failed: Payment failed
-//
-// Security: Verifies HMAC-SHA256 signatures using webhook secret
+// Verifies HMAC-SHA256 signature, stores in database, and enqueues async processing.
 func (h *PaddleWebhookHandler) HandlePaddleWebhook(ctx context.Context, input *PaddleWebhookInput) (*PaddleWebhookOutput, error) {
-	// Verify signature - failures logged but don't fail webhook (ensures audit trail)
 	signatureValid := false
 	if h.webhookService != nil && input.PaddleSignature != "" {
 		valid, err := h.webhookService.VerifyWebhook(input.PaddleSignature, string(input.RawBody))
@@ -107,13 +82,9 @@ func (h *PaddleWebhookHandler) HandlePaddleWebhook(ctx context.Context, input *P
 		}
 	}
 
-	// Parse webhook payload from raw body
 	var payload PaddleWebhookPayload
 	if err := json.Unmarshal(input.RawBody, &payload); err != nil {
-		h.logger.Error("Invalid Paddle webhook JSON payload",
-			"error", err,
-		)
-		// Still return 200 OK to prevent retry storms
+		h.logger.Error("Invalid Paddle webhook JSON payload", "error", err)
 		return &PaddleWebhookOutput{
 			Body: PaddleWebhookResponseBody{
 				Status:  "error",
@@ -122,7 +93,6 @@ func (h *PaddleWebhookHandler) HandlePaddleWebhook(ctx context.Context, input *P
 		}, nil
 	}
 
-	// Validate required fields
 	if payload.EventID == "" || payload.EventType == "" {
 		h.logger.Error("Missing required fields in Paddle webhook",
 			"event_id", payload.EventID,
@@ -131,7 +101,6 @@ func (h *PaddleWebhookHandler) HandlePaddleWebhook(ctx context.Context, input *P
 		return nil, huma.Error400BadRequest("Missing required fields: event_id or event_type")
 	}
 
-	// Store webhook in database for audit trail and idempotency
 	if h.webhookRepo != nil {
 		webhookEvent := &domain.PaddleWebhookEvent{
 			EventID:            payload.EventID,
@@ -143,15 +112,12 @@ func (h *PaddleWebhookHandler) HandlePaddleWebhook(ctx context.Context, input *P
 			ProcessingAttempts: 0,
 		}
 
-		// Check for duplicate event_id (idempotency)
 		existing, err := h.webhookRepo.GetByEventID(ctx, payload.EventID)
 		if err == nil && existing != nil {
-			h.logger.Info("Duplicate Paddle webhook received (already processed)",
+			h.logger.Info("Duplicate Paddle webhook received",
 				"event_id", payload.EventID,
 				"event_type", payload.EventType,
-				"already_processed", existing.Processed,
 			)
-			// Return success - webhook already received and processed
 			return &PaddleWebhookOutput{
 				Body: PaddleWebhookResponseBody{
 					Status:  "ok",
@@ -160,25 +126,20 @@ func (h *PaddleWebhookHandler) HandlePaddleWebhook(ctx context.Context, input *P
 			}, nil
 		}
 
-		// Store new webhook
 		if err := h.webhookRepo.Create(ctx, webhookEvent); err != nil {
 			h.logger.Error("Failed to store Paddle webhook",
 				"event_id", payload.EventID,
 				"event_type", payload.EventType,
 				"error", err,
 			)
-			// Don't fail - return OK to prevent Paddle retry storms
 		} else {
-			h.logger.Info("Paddle webhook stored successfully",
+			h.logger.Info("Paddle webhook stored",
 				"event_id", payload.EventID,
 				"event_type", payload.EventType,
 				"signature_valid", signatureValid,
-				"webhook_db_id", webhookEvent.ID,
 			)
 
-			// Only enqueue processing job if signature is valid
 			if signatureValid && h.jobQueue != nil {
-				// Enqueue async processing job (Issue #573: River Queue)
 				jobArgs := jobs.SubscriptionWebhookArgs{
 					WebhookID: webhookEvent.ID,
 					EventID:   payload.EventID,
@@ -187,31 +148,25 @@ func (h *PaddleWebhookHandler) HandlePaddleWebhook(ctx context.Context, input *P
 
 				_, err := h.jobQueue.Enqueue(ctx, jobArgs)
 				if err != nil {
-					h.logger.Error("Failed to enqueue Paddle webhook processing job",
+					h.logger.Error("Failed to enqueue webhook processing job",
 						"webhook_id", webhookEvent.ID,
 						"event_id", payload.EventID,
-						"event_type", payload.EventType,
 						"error", err,
 					)
-					// Don't fail - webhook is stored, can be replayed manually
 				} else {
-					h.logger.Info("Paddle webhook processing job enqueued",
+					h.logger.Info("Webhook processing job enqueued",
 						"webhook_id", webhookEvent.ID,
 						"event_id", payload.EventID,
-						"event_type", payload.EventType,
 					)
 				}
 			} else if !signatureValid {
-				h.logger.Warn("Paddle webhook NOT enqueued due to invalid signature",
+				h.logger.Warn("Webhook NOT enqueued due to invalid signature",
 					"event_id", payload.EventID,
-					"event_type", payload.EventType,
 				)
 			}
 		}
 	}
 
-	// Always return 200 OK to prevent Paddle retry storms
-	// Processing happens asynchronously via River queue
 	return &PaddleWebhookOutput{
 		Body: PaddleWebhookResponseBody{
 			Status:  "ok",

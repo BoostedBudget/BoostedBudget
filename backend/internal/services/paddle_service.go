@@ -182,7 +182,6 @@ func (s *paddleService) GetCustomer(ctx context.Context, customerID string) (*pa
 }
 
 // CreateCheckoutSession creates a Paddle checkout session for subscription purchase.
-// Issue #45: Paddle Payment Service Implementation
 func (s *paddleService) CreateCheckoutSession(
 	ctx context.Context,
 	customerID, priceID, email, successURL string,
@@ -192,7 +191,6 @@ func (s *paddleService) CreateCheckoutSession(
 		"price_id", priceID,
 	)
 
-	// Build transaction item from catalog (subscription price)
 	item := paddle.NewCreateTransactionItemsTransactionItemFromCatalog(
 		&paddle.TransactionItemFromCatalog{
 			PriceID:  priceID,
@@ -200,17 +198,14 @@ func (s *paddleService) CreateCheckoutSession(
 		},
 	)
 
-	// Create checkout request
 	req := &paddle.CreateTransactionRequest{
 		Items: []paddle.CreateTransactionItems{*item},
 	}
 
-	// Set customer ID if provided
 	if customerID != "" {
 		req.CustomerID = &customerID
 	}
 
-	// Call Paddle API to create transaction (which includes checkout URL)
 	transaction, err := s.client.CreateTransaction(ctx, req)
 	if err != nil {
 		s.logger.Error("failed to create Paddle transaction",
@@ -221,7 +216,6 @@ func (s *paddleService) CreateCheckoutSession(
 		return "", "", fmt.Errorf("failed to create Paddle transaction: %w", err)
 	}
 
-	// Extract checkout URL
 	if transaction.Checkout == nil || transaction.Checkout.URL == nil {
 		s.logger.Error("Paddle transaction missing checkout URL",
 			"transaction_id", transaction.ID,
@@ -231,7 +225,6 @@ func (s *paddleService) CreateCheckoutSession(
 
 	s.logger.Info("Paddle checkout session created successfully",
 		"transaction_id", transaction.ID,
-		"checkout_url", *transaction.Checkout.URL,
 	)
 
 	return *transaction.Checkout.URL, transaction.ID, nil
@@ -260,7 +253,6 @@ func (s *paddleService) GetSubscription(ctx context.Context, subscriptionID stri
 }
 
 // UpdateSubscription changes a subscription to a different price tier.
-// Issue #45: Paddle Payment Service Implementation
 func (s *paddleService) UpdateSubscription(
 	ctx context.Context,
 	subscriptionID, newPriceID, prorationBillingMode string,
@@ -268,16 +260,13 @@ func (s *paddleService) UpdateSubscription(
 	s.logger.Info("updating Paddle subscription",
 		"subscription_id", subscriptionID,
 		"new_price_id", newPriceID,
-		"proration_mode", prorationBillingMode,
 	)
 
-	// Fetch current subscription to get existing items
 	currentSub, err := s.GetSubscription(ctx, subscriptionID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch current subscription: %w", err)
 	}
 
-	// Parse proration billing mode
 	var prorationMode paddle.ProrationBillingMode
 	switch prorationBillingMode {
 	case "prorated_immediately":
@@ -290,20 +279,16 @@ func (s *paddleService) UpdateSubscription(
 		prorationMode = paddle.ProrationBillingModeProratedImmediately
 	}
 
-	// Wrap proration mode in PatchField
 	patchedProrationMode := paddle.NewPatchField(prorationMode)
 
-	// Build updated items array with new price ID using union type
 	var updatedItems []paddle.UpdateSubscriptionItems
 	var catalogItem *paddle.SubscriptionUpdateItemFromCatalog
 	if len(currentSub.Items) > 0 {
-		// Update first item with new price ID
 		catalogItem = &paddle.SubscriptionUpdateItemFromCatalog{
 			PriceID:  newPriceID,
 			Quantity: currentSub.Items[0].Quantity,
 		}
 	} else {
-		// No existing items - create new item
 		catalogItem = &paddle.SubscriptionUpdateItemFromCatalog{
 			PriceID:  newPriceID,
 			Quantity: 1,
@@ -311,17 +296,14 @@ func (s *paddleService) UpdateSubscription(
 	}
 	updatedItems = append(updatedItems, *paddle.NewUpdateSubscriptionItemsSubscriptionUpdateItemFromCatalog(catalogItem))
 
-	// Wrap items in PatchField
 	patchedItems := paddle.NewPatchField(updatedItems)
 
-	// Create update request
 	req := &paddle.UpdateSubscriptionRequest{
 		SubscriptionID:       subscriptionID,
 		Items:                patchedItems,
 		ProrationBillingMode: patchedProrationMode,
 	}
 
-	// Call Paddle API
 	updatedSub, err := s.client.UpdateSubscription(ctx, req)
 	if err != nil {
 		s.logger.Error("failed to update Paddle subscription",
@@ -340,22 +322,18 @@ func (s *paddleService) UpdateSubscription(
 }
 
 // CancelSubscription cancels a subscription at the end of the billing period.
-// Issue #45: Paddle Payment Service Implementation
 func (s *paddleService) CancelSubscription(ctx context.Context, subscriptionID string) error {
 	s.logger.Info("canceling Paddle subscription",
 		"subscription_id", subscriptionID,
 	)
 
-	// Cancel at end of billing period (not immediately)
 	effectiveFrom := paddle.EffectiveFromNextBillingPeriod
 
-	// Create cancel request
 	req := &paddle.CancelSubscriptionRequest{
 		SubscriptionID: subscriptionID,
 		EffectiveFrom:  &effectiveFrom,
 	}
 
-	// Call Paddle API
 	canceledSub, err := s.client.CancelSubscription(ctx, req)
 	if err != nil {
 		s.logger.Error("failed to cancel Paddle subscription",
@@ -368,14 +346,12 @@ func (s *paddleService) CancelSubscription(ctx context.Context, subscriptionID s
 	s.logger.Info("Paddle subscription canceled successfully",
 		"subscription_id", subscriptionID,
 		"status", canceledSub.Status,
-		"scheduled_change", canceledSub.ScheduledChange,
 	)
 
 	return nil
 }
 
 // PreviewUpdate calculates proration for a subscription tier change.
-// Issue #45: Paddle Payment Service Implementation
 func (s *paddleService) PreviewUpdate(
 	ctx context.Context,
 	subscriptionID, newPriceID string,
@@ -385,13 +361,11 @@ func (s *paddleService) PreviewUpdate(
 		"new_price_id", newPriceID,
 	)
 
-	// Fetch current subscription
 	currentSub, err := s.GetSubscription(ctx, subscriptionID)
 	if err != nil {
 		return "", "", "", fmt.Errorf("failed to fetch current subscription: %w", err)
 	}
 
-	// Build updated items array using union type
 	var updatedItems []paddle.PreviewSubscriptionUpdateItems
 	var catalogItem *paddle.SubscriptionUpdateItemFromCatalog
 	if len(currentSub.Items) > 0 {
@@ -407,19 +381,16 @@ func (s *paddleService) PreviewUpdate(
 	}
 	updatedItems = append(updatedItems, *paddle.NewPreviewSubscriptionUpdateItemsSubscriptionUpdateItemFromCatalog(catalogItem))
 
-	// Wrap items and proration mode in PatchField
 	patchedItems := paddle.NewPatchField(updatedItems)
 	prorationMode := paddle.ProrationBillingModeProratedImmediately
 	patchedProrationMode := paddle.NewPatchField(prorationMode)
 
-	// Create preview request with prorated billing
 	req := &paddle.PreviewSubscriptionUpdateRequest{
 		SubscriptionID:       subscriptionID,
 		Items:                patchedItems,
 		ProrationBillingMode: patchedProrationMode,
 	}
 
-	// Call Paddle API
 	preview, err := s.client.PreviewSubscriptionUpdate(ctx, req)
 	if err != nil {
 		s.logger.Error("failed to preview subscription update",
@@ -429,14 +400,12 @@ func (s *paddleService) PreviewUpdate(
 		return "", "", "", fmt.Errorf("failed to preview subscription update: %w", err)
 	}
 
-	// Extract proration amount from immediate transaction
 	var prorationAmt, curr string
 	if preview.ImmediateTransaction != nil {
 		prorationAmt = preview.ImmediateTransaction.Details.Totals.Total
 		curr = string(preview.CurrencyCode)
 	}
 
-	// Extract next charge date from next transaction
 	var nextCharge string
 	if preview.NextTransaction != nil {
 		nextCharge = preview.NextTransaction.BillingPeriod.StartsAt
@@ -446,7 +415,6 @@ func (s *paddleService) PreviewUpdate(
 		"subscription_id", subscriptionID,
 		"proration_amount", prorationAmt,
 		"currency", curr,
-		"next_charge_date", nextCharge,
 	)
 
 	return prorationAmt, curr, nextCharge, nil
