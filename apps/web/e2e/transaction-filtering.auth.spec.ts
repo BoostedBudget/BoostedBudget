@@ -648,6 +648,9 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       await page.goto('/transactions')
       await page.waitForLoadState('networkidle')
 
+      // Dismiss cookie consent if it reappears after navigation
+      await acceptCookieConsent(page)
+
       // Expand filters (Issue #615: renamed to "Date & Status")
       await page.getByText('Date & Status').click()
 
@@ -665,6 +668,9 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       await page.goto('/transactions')
       await page.waitForLoadState('networkidle')
 
+      // Dismiss cookie consent if it reappears after navigation
+      await acceptCookieConsent(page)
+
       // Expand filters (Issue #615: renamed to "Date & Status")
       await page.getByText('Date & Status').click()
 
@@ -680,6 +686,9 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       await mockFilteringAPIs(page)
       await page.goto('/transactions')
       await page.waitForLoadState('networkidle')
+
+      // Dismiss cookie consent if it reappears after navigation
+      await acceptCookieConsent(page)
 
       // Expand filters (Issue #615: renamed to "Date & Status")
       await page.getByText('Date & Status').click()
