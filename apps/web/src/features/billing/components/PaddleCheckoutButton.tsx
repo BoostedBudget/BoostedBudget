@@ -33,7 +33,7 @@ export function PaddleCheckoutButton({
       })
 
       onSuccess?.()
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(error?.message || 'Failed to start checkout. Please try again.')
       console.error('Checkout error:', err)
     }
