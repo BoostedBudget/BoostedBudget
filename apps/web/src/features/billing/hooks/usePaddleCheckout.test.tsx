@@ -1,12 +1,13 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
-import { renderHook, waitFor } from '@testing-library/react'
+import React from 'react'
+import { renderHook } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { usePaddleCheckout } from './usePaddleCheckout'
 import {
   mockUseCreatePaddleCheckout,
   mockCreatePaddleCheckoutMutateAsync,
 } from '@/test/mocks/subscription-api'
-import { mockPaddleCheckoutResponse, mockPaddleErrorResponses } from '@/test/fixtures/paddleFixtures'
+import { mockPaddleCheckoutResponse } from '@/test/fixtures/paddleFixtures'
 
 function createWrapper() {
   const queryClient = new QueryClient({

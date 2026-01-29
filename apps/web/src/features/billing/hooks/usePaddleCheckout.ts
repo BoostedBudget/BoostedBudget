@@ -23,10 +23,12 @@ export function usePaddleCheckout() {
     })
   }
 
-  const normalizeError = (error: any): CheckoutError | null => {
+  const normalizeError = (error: unknown): CheckoutError | null => {
     if (!error) return null
 
-    const status = error.status || error.response?.status
+    // Type assertion for error object structure
+    const err = error as { status?: number; response?: { status?: number }; message?: string }
+    const status = err.status || err.response?.status
 
     switch (status) {
       case 401:
@@ -39,17 +41,22 @@ export function usePaddleCheckout() {
         return { status, message: 'Payment system error. Please try again later.' }
       case 503:
         return { status, message: 'Payment service temporarily unavailable' }
-      default:
-        if (error.message?.includes('network') || error.message?.includes('fetch')) {
+      default: {
+        const lowerMessage = err.message?.toLowerCase() || ''
+        if (lowerMessage.includes('network') || lowerMessage.includes('fetch')) {
           return { status: 0, message: 'Network error. Please check your connection.' }
         }
-        return { status, message: error.message || 'Failed to start checkout. Please try again.' }
+        return { status, message: err.message || 'Failed to start checkout. Please try again.' }
+      }
     }
   }
 
   return {
     checkout,
     isLoading: mutation.isPending,
+    isSuccess: mutation.isSuccess,
+    isError: mutation.isError,
     error: normalizeError(mutation.error),
+    reset: mutation.reset,
   }
 }

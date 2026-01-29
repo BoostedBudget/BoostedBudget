@@ -49,11 +49,11 @@ describe('PaddleCheckoutButton', () => {
     })
 
     // Mock Paddle.js global
-    global.window.Paddle = {
+    globalThis.window.Paddle = {
       Checkout: {
         open: mock(() => {}),
       },
-    } as any
+    }
   })
 
   describe('Rendering', () => {
@@ -278,7 +278,7 @@ describe('PaddleCheckoutButton', () => {
 
   describe('Paddle.js Integration', () => {
     it('should show error if window.Paddle is not loaded', async () => {
-      // @ts-ignore
+      // @ts-expect-error - Deleting window.Paddle to test error handling
       delete window.Paddle
 
       const Wrapper = createWrapper()

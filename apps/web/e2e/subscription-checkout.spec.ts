@@ -1,16 +1,22 @@
 import { test, expect } from '@playwright/test'
 
+interface PaddleCheckoutOptions {
+  settings?: {
+    checkoutURL?: string
+  }
+}
+
 test.describe('Subscription Checkout - Paddle Integration', () => {
   test.beforeEach(async ({ page }) => {
     // Mock Paddle.js to avoid real checkout in E2E tests
     await page.addInitScript(() => {
-      // @ts-ignore
+      // @ts-expect-error - Mocking window.Paddle for test environment
       window.Paddle = {
         Checkout: {
-          open: (options: any) => {
+          open: (options: PaddleCheckoutOptions) => {
             console.log('Paddle.Checkout.open called', options)
             // Store call for verification
-            // @ts-ignore
+            // @ts-expect-error - Adding custom property for test verification
             window.__paddleCheckoutCalled = options
           },
         },
@@ -53,7 +59,7 @@ test.describe('Subscription Checkout - Paddle Integration', () => {
   })
 
   test.skip('should open Paddle checkout overlay when clicking subscribe (requires auth)', async ({
-    page,
+    page: _page,
   }) => {
     // This test would require authentication setup
     // For now, documenting the expected flow:
@@ -64,24 +70,24 @@ test.describe('Subscription Checkout - Paddle Integration', () => {
     // 5. Paddle overlay appears with payment form
   })
 
-  test.skip('should handle checkout for different tiers (requires auth)', async ({ page }) => {
+  test.skip('should handle checkout for different tiers (requires auth)', async ({ page: _page }) => {
     // Would test clicking subscribe on different tiers
     // Verify correct tier and price_id sent to API
   })
 
-  test.skip('should handle monthly vs yearly billing (requires auth)', async ({ page }) => {
+  test.skip('should handle monthly vs yearly billing (requires auth)', async ({ page: _page }) => {
     // Would test toggling between monthly/yearly
     // Verify correct billing_interval sent to API
   })
 
-  test.skip('should show error toast on checkout failure (requires auth)', async ({ page }) => {
+  test.skip('should show error toast on checkout failure (requires auth)', async ({ page: _page }) => {
     // Would test error handling:
     // 1. Mock API to return error
     // 2. Click subscribe
     // 3. Verify error toast appears with user-friendly message
   })
 
-  test.skip('should disable button while checkout is loading (requires auth)', async ({ page }) => {
+  test.skip('should disable button while checkout is loading (requires auth)', async ({ page: _page }) => {
     // Would test loading state:
     // 1. Click subscribe
     // 2. Verify button disabled
@@ -94,7 +100,7 @@ test.describe('Subscription Checkout - Paddle Integration', () => {
 test.describe('Paddle.js Integration (Mocked)', () => {
   test('should load Paddle.js global object', async ({ page }) => {
     await page.addInitScript(() => {
-      // @ts-ignore
+      // @ts-expect-error - Mocking window.Paddle for test environment
       window.Paddle = {
         Checkout: {
           open: () => {},
@@ -110,7 +116,7 @@ test.describe('Paddle.js Integration (Mocked)', () => {
 
   test('should have Paddle.Checkout.open method available', async ({ page }) => {
     await page.addInitScript(() => {
-      // @ts-ignore
+      // @ts-expect-error - Mocking window.Paddle for test environment
       window.Paddle = {
         Checkout: {
           open: () => {},
