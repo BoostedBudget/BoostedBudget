@@ -41,7 +41,10 @@ declare global {
       Environment: {
         set: (env: 'sandbox' | 'production') => void
       }
-      Initialize: (options: { token: string; eventCallback?: (event: any) => void }) => void
+      Initialize: (options: {
+        token: string
+        eventCallback?: (event: { name: string; data?: unknown }) => void
+      }) => void
       Checkout: {
         open: (options: { settings?: { checkoutURL?: string } }) => void
       }
