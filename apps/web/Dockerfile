@@ -35,11 +35,13 @@ WORKDIR /build/apps/web
 RUN npm run build
 
 # Stage 2: Runtime with Nginx (Debian-based)
-FROM nginx:stable
+FROM nginx:stable@sha256:0a1f2fb3231e1c0c1360ba383a2d02728b5912bb13eb87406839e2002e472fae
 
 # Install runtime dependencies
 RUN for i in 1 2 3; do \
-      apt-get update && apt-get install -y --no-install-recommends curl && \
+      apt-get update && \
+      apt-get upgrade -y --only-upgrade libssl3 openssl && \
+      apt-get install -y --no-install-recommends curl && \
       rm -rf /var/lib/apt/lists/* && break || \
       { [ $i -lt 3 ] && sleep 5; }; \
     done
