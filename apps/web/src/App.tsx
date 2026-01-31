@@ -34,24 +34,6 @@ import { Toaster } from 'sonner'
 import { useEffect } from 'react'
 import './App.css'
 
-// Paddle.js types
-declare global {
-  interface Window {
-    Paddle?: {
-      Environment: {
-        set: (env: 'sandbox' | 'production') => void
-      }
-      Initialize: (options: {
-        token: string
-        eventCallback?: (event: { name: string; data?: unknown }) => void
-      }) => void
-      Checkout: {
-        open: (options: { settings?: { checkoutURL?: string } }) => void
-      }
-    }
-  }
-}
-
 function ComingSoon({ title }: { title: string }) {
   return (
     <div className="flex flex-col items-center justify-center p-8 text-center">
@@ -98,12 +80,8 @@ function App() {
         console.error('Failed to initialize Paddle:', error)
       }
     } else {
-      if (!paddleToken) {
-        console.warn('Paddle client token not configured (VITE_PADDLE_CLIENT_TOKEN)')
-      }
-      if (!window.Paddle) {
-        console.warn('Paddle.js SDK not loaded')
-      }
+      !paddleToken && console.warn('Paddle client token not configured (VITE_PADDLE_CLIENT_TOKEN)')
+      !window.Paddle && console.warn('Paddle.js SDK not loaded')
     }
   }, [])
 

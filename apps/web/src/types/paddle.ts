@@ -19,9 +19,19 @@ export interface PaddleCheckout {
   open: (options: PaddleCheckoutOptions) => void
 }
 
+export interface PaddleEnvironment {
+  set: (env: 'sandbox' | 'production') => void
+}
+
+export interface PaddleInitializeOptions {
+  token: string
+  eventCallback?: (event: { name: string; data?: unknown }) => void
+}
+
 export interface Paddle {
+  Environment: PaddleEnvironment
+  Initialize: (options: PaddleInitializeOptions) => void
   Checkout: PaddleCheckout
-  Initialize?: (options?: { token?: string; pwCustomer?: unknown }) => void
 }
 
 declare global {
@@ -30,3 +40,5 @@ declare global {
     __paddleCheckoutCalled?: PaddleCheckoutOptions
   }
 }
+
+export type { Paddle, PaddleCheckout, PaddleCheckoutOptions, PaddleEnvironment, PaddleInitializeOptions }
