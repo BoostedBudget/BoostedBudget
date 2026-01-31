@@ -54,33 +54,14 @@ func (m *mockPaddleWebhookRepository) GetByEventID(ctx context.Context, eventID 
 	return m.existing, nil
 }
 
-func (m *mockPaddleWebhookRepository) GetByID(ctx context.Context, id string) (*domain.PaddleWebhookEvent, error) {
-	return nil, nil
-}
-
-func (m *mockPaddleWebhookRepository) MarkProcessed(ctx context.Context, id string) error {
-	return nil
-}
-
-func (m *mockPaddleWebhookRepository) MarkFailed(ctx context.Context, id string, errorMsg string) error {
-	return nil
-}
-
-func (m *mockPaddleWebhookRepository) GetUnprocessed(ctx context.Context, limit int) ([]domain.PaddleWebhookEvent, error) {
-	return nil, nil
-}
-
-func (m *mockPaddleWebhookRepository) GetUnprocessedByType(ctx context.Context, eventType string, limit int) ([]domain.PaddleWebhookEvent, error) {
-	return nil, nil
-}
-
-func (m *mockPaddleWebhookRepository) Update(ctx context.Context, event *domain.PaddleWebhookEvent) error {
-	return nil
-}
-
-func (m *mockPaddleWebhookRepository) GetRecentWebhooks(ctx context.Context, limit int) ([]domain.PaddleWebhookEvent, error) {
-	return nil, nil
-}
+// Implement other required methods with no-ops (only testing Create and GetByEventID)
+func (m *mockPaddleWebhookRepository) GetByID(ctx context.Context, id string) (*domain.PaddleWebhookEvent, error) { return nil, nil }
+func (m *mockPaddleWebhookRepository) MarkProcessed(ctx context.Context, id string) error                           { return nil }
+func (m *mockPaddleWebhookRepository) MarkFailed(ctx context.Context, id string, errorMsg string) error             { return nil }
+func (m *mockPaddleWebhookRepository) GetUnprocessed(ctx context.Context, limit int) ([]domain.PaddleWebhookEvent, error) { return nil, nil }
+func (m *mockPaddleWebhookRepository) GetUnprocessedByType(ctx context.Context, eventType string, limit int) ([]domain.PaddleWebhookEvent, error) { return nil, nil }
+func (m *mockPaddleWebhookRepository) Update(ctx context.Context, event *domain.PaddleWebhookEvent) error { return nil }
+func (m *mockPaddleWebhookRepository) GetRecentWebhooks(ctx context.Context, limit int) ([]domain.PaddleWebhookEvent, error) { return nil, nil }
 
 // mockJobQueue is a mock implementation of queue.JobQueue
 type mockJobQueue struct {
@@ -109,15 +90,19 @@ func (m *mockJobQueue) EnqueueTx(ctx context.Context, tx pgx.Tx, job queue.Job, 
 }
 
 func (m *mockJobQueue) EnqueueMany(ctx context.Context, jobs []queue.Job, opts ...queue.EnqueueOption) ([]*queue.JobResult, error) {
-	results := make([]*queue.JobResult, len(jobs))
-	for i, job := range jobs {
+	results := make([]*queue.JobResult, 0, len(jobs))
+	for _, job := range jobs {
 		result, err := m.Enqueue(ctx, job, opts...)
 		if err != nil {
 			return nil, err
 		}
-		results[i] = result
+		results = append(results, result)
 	}
 	return results, nil
+}
+
+func (m *mockJobQueue) EnqueueManyTx(ctx context.Context, tx pgx.Tx, jobs []queue.Job, opts ...queue.EnqueueOption) ([]*queue.JobResult, error) {
+	return m.EnqueueMany(ctx, jobs, opts...)
 }
 
 // setupTestHandler creates a handler with mock dependencies
