@@ -67,40 +67,13 @@ func (m *MockProfileRepoForWorker) GetUserByClerkID(ctx context.Context, clerkUs
 	return args.Get(0).(*domain.User), args.Error(1)
 }
 
-func (m *MockProfileRepoForWorker) CreateUser(ctx context.Context, user *domain.User) error {
-	args := m.Called(ctx, user)
-	return args.Error(0)
-}
-
-func (m *MockProfileRepoForWorker) CreateUserTx(ctx context.Context, tx pgx.Tx, user *domain.User) error {
-	args := m.Called(ctx, tx, user)
-	return args.Error(0)
-}
-
-func (m *MockProfileRepoForWorker) UpdateUser(ctx context.Context, user *domain.User) error {
-	args := m.Called(ctx, user)
-	return args.Error(0)
-}
-
-func (m *MockProfileRepoForWorker) UpdateLastLogin(ctx context.Context, clerkUserID string) error {
-	args := m.Called(ctx, clerkUserID)
-	return args.Error(0)
-}
-
-func (m *MockProfileRepoForWorker) MarkForDeletion(ctx context.Context, userID string, scheduledAt time.Time) error {
-	args := m.Called(ctx, userID, scheduledAt)
-	return args.Error(0)
-}
-
-func (m *MockProfileRepoForWorker) CancelDeletion(ctx context.Context, userID string) error {
-	args := m.Called(ctx, userID)
-	return args.Error(0)
-}
-
-func (m *MockProfileRepoForWorker) DeleteUserCascade(ctx context.Context, userID string) error {
-	args := m.Called(ctx, userID)
-	return args.Error(0)
-}
+func (m *MockProfileRepoForWorker) CreateUser(ctx context.Context, user *domain.User) error          { return m.Called(ctx, user).Error(0) }
+func (m *MockProfileRepoForWorker) CreateUserTx(ctx context.Context, tx pgx.Tx, user *domain.User) error { return m.Called(ctx, tx, user).Error(0) }
+func (m *MockProfileRepoForWorker) UpdateUser(ctx context.Context, user *domain.User) error               { return m.Called(ctx, user).Error(0) }
+func (m *MockProfileRepoForWorker) UpdateLastLogin(ctx context.Context, clerkUserID string) error         { return m.Called(ctx, clerkUserID).Error(0) }
+func (m *MockProfileRepoForWorker) MarkForDeletion(ctx context.Context, userID string, scheduledAt time.Time) error { return m.Called(ctx, userID, scheduledAt).Error(0) }
+func (m *MockProfileRepoForWorker) CancelDeletion(ctx context.Context, userID string) error               { return m.Called(ctx, userID).Error(0) }
+func (m *MockProfileRepoForWorker) DeleteUserCascade(ctx context.Context, userID string) error            { return m.Called(ctx, userID).Error(0) }
 
 // Issue #679, #680: Trial expiration methods
 func (m *MockProfileRepoForWorker) GetUsersWithExpiredTrials(ctx context.Context) ([]*domain.User, error) {
@@ -119,15 +92,12 @@ func (m *MockProfileRepoForWorker) GetUsersWithExpiringTrials(ctx context.Contex
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
-func (m *MockProfileRepoForWorker) UpdateSubscriptionStatus(ctx context.Context, userID string, status string) error {
-	args := m.Called(ctx, userID, status)
-	return args.Error(0)
-}
+func (m *MockProfileRepoForWorker) UpdateSubscriptionStatus(ctx context.Context, userID string, status string) error { return m.Called(ctx, userID, status).Error(0) }
+func (m *MockProfileRepoForWorker) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error { return m.Called(ctx, userID, status, trialStartedAt, trialEndsAt, hadTrial).Error(0) }
 
-func (m *MockProfileRepoForWorker) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error {
-	args := m.Called(ctx, userID, status, trialStartedAt, trialEndsAt, hadTrial)
-	return args.Error(0)
-}
+// Issue #44, #45, #46: Paddle integration support
+func (m *MockProfileRepoForWorker) UpdatePaddleCustomerID(ctx context.Context, userID, paddleCustomerID string) error { return m.Called(ctx, userID, paddleCustomerID).Error(0) }
+func (m *MockProfileRepoForWorker) UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time) error { return m.Called(ctx, userID, tier, status, startedAt, endsAt).Error(0) }
 
 // TestWorker_FindsScheduledUsers tests that worker finds users scheduled for deletion
 func TestWorker_FindsScheduledUsers(t *testing.T) {
@@ -227,13 +197,13 @@ func TestWorker_HandlesErrors(t *testing.T) {
 // TestWorker_RespectsContext tests context cancellation
 func TestWorker_RespectsContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	mockService := new(MockDeletionServiceForWorker)
 	mockRepo := new(MockProfileRepoForWorker)
 
 	worker := NewDeletionWorker(mockService, mockRepo, 100*time.Millisecond)
-
-	// Cancel context immediately
-	cancel()
+	cancel() // Cancel immediately
 
 	// Start worker (should respect cancellation)
 	done := make(chan bool)

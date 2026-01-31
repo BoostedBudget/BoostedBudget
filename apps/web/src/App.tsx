@@ -58,30 +58,27 @@ function App() {
     const paddleToken = import.meta.env.VITE_PADDLE_CLIENT_TOKEN
     const paddleEnv = import.meta.env.VITE_PADDLE_ENV || 'sandbox'
 
-    if (paddleToken && window.Paddle) {
-      try {
-        // Set environment first
-        if (paddleEnv === 'production') {
-          window.Paddle.Environment.set('production')
-        } else {
-          window.Paddle.Environment.set('sandbox')
-        }
+    if (!paddleToken) {
+      console.warn('Paddle client token not configured (VITE_PADDLE_CLIENT_TOKEN)')
+      return
+    }
 
-        // Initialize Paddle
-        window.Paddle.Initialize({
-          token: paddleToken,
-          eventCallback: (event) => {
-            console.log('Paddle event:', event)
-          },
-        })
+    if (!window.Paddle) {
+      console.warn('Paddle.js SDK not loaded')
+      return
+    }
 
-        console.log('Paddle initialized successfully', { environment: paddleEnv })
-      } catch (error) {
-        console.error('Failed to initialize Paddle:', error)
-      }
-    } else {
-      !paddleToken && console.warn('Paddle client token not configured (VITE_PADDLE_CLIENT_TOKEN)')
-      !window.Paddle && console.warn('Paddle.js SDK not loaded')
+    try {
+      window.Paddle.Environment.set(paddleEnv === 'production' ? 'production' : 'sandbox')
+      window.Paddle.Initialize({
+        token: paddleToken,
+        eventCallback: (event) => {
+          console.log('Paddle event:', event)
+        },
+      })
+      console.log('Paddle initialized successfully', { environment: paddleEnv })
+    } catch (error) {
+      console.error('Failed to initialize Paddle:', error)
     }
   }, [])
 

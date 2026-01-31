@@ -214,9 +214,9 @@ describe('PricingPage', () => {
 
       renderWithProviders(<PricingPage />)
 
-      // Should show "Select Plan" buttons for household tiers
+      // Should show "Subscribe" buttons for household tiers
       // (household_5 shows "Go Household 5" instead)
-      const selectButtons = screen.getAllByRole('button', { name: /select plan/i })
+      const selectButtons = screen.getAllByRole('button', { name: /subscribe/i })
       expect(selectButtons.length).toBeGreaterThan(0)
     })
 

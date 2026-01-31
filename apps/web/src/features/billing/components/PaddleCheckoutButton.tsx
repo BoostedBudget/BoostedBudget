@@ -15,7 +15,7 @@ export function PaddleCheckoutButton({
   disabled,
   onSuccess,
 }: PaddleCheckoutButtonProps) {
-  const { checkout, isLoading, error } = usePaddleCheckout()
+  const { checkout, isLoading } = usePaddleCheckout()
 
   const handleCheckout = async () => {
     if (!window.Paddle) {
@@ -34,7 +34,17 @@ export function PaddleCheckoutButton({
 
       onSuccess?.()
     } catch (err: unknown) {
-      toast.error(error?.message || 'Failed to start checkout. Please try again.')
+      const status = (err as { status?: number; response?: { status?: number } }).status ||
+                     (err as { status?: number; response?: { status?: number } }).response?.status
+
+      const errorMessages: Record<number, string> = {
+        403: 'Please sign in to subscribe',
+        400: 'Invalid subscription tier selected',
+        500: 'Payment system error. Please try again later.',
+      }
+
+      const errorMessage = errorMessages[status || 0] || 'Failed to start checkout. Please try again.'
+      toast.error(errorMessage)
       console.error('Checkout error:', err)
     }
   }
