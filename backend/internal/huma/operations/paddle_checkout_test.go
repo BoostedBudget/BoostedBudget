@@ -6,7 +6,9 @@ import (
 	"log/slog"
 	"os"
 	"testing"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	paddle "github.com/PaddleHQ/paddle-go-sdk/v4"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -33,7 +35,7 @@ func (m *mockPaddleCheckoutService) GetCustomer(ctx context.Context, customerID 
 	return args.Get(0).(*paddle.Customer), args.Error(1)
 }
 
-func (m *mockPaddleCheckoutService) CreateCheckoutSession(ctx context.Context, customerID, priceID, email, successURL string) (checkoutURL, transactionID string, err error) {
+func (m *mockPaddleCheckoutService) CreateCheckoutSession(ctx context.Context, customerID, priceID, email, successURL string) (string, string, error) {
 	args := m.Called(ctx, customerID, priceID, email, successURL)
 	return args.String(0), args.String(1), args.Error(2)
 }
@@ -59,7 +61,7 @@ func (m *mockPaddleCheckoutService) CancelSubscription(ctx context.Context, subs
 	return args.Error(0)
 }
 
-func (m *mockPaddleCheckoutService) PreviewUpdate(ctx context.Context, subscriptionID, newPriceID string) (prorationAmount, currency, nextChargeDate string, err error) {
+func (m *mockPaddleCheckoutService) PreviewUpdate(ctx context.Context, subscriptionID, newPriceID string) (string, string, string, error) {
 	args := m.Called(ctx, subscriptionID, newPriceID)
 	return args.String(0), args.String(1), args.String(2), args.Error(3)
 }
@@ -86,40 +88,22 @@ func (m *mockProfileRepo) UpdatePaddleCustomerID(ctx context.Context, userID, cu
 	return args.Error(0)
 }
 
-// Implement other required methods with no-ops
-func (m *mockProfileRepo) GetUserByClerkID(ctx context.Context, clerkID string) (*domain.User, error) {
-	return nil, nil
-}
-func (m *mockProfileRepo) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
-	return nil, nil
-}
-func (m *mockProfileRepo) CreateUser(ctx context.Context, user *domain.User) error {
-	return nil
-}
-func (m *mockProfileRepo) UpdateLastLogin(ctx context.Context, userID string) error {
-	return nil
-}
-func (m *mockProfileRepo) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error {
-	return nil
-}
-func (m *mockProfileRepo) GetUsersWithExpiredTrials(ctx context.Context) ([]*domain.User, error) {
-	return nil, nil
-}
-func (m *mockProfileRepo) GetUsersWithExpiringTrials(ctx context.Context, withinDays int) ([]*domain.User, error) {
-	return nil, nil
-}
-func (m *mockProfileRepo) UpdateSubscriptionStatus(ctx context.Context, userID string, status string) error {
-	return nil
-}
-func (m *mockProfileRepo) CancelDeletion(ctx context.Context, userID string) error {
-	return nil
-}
-func (m *mockProfileRepo) UpdatePaddleCustomerID(ctx context.Context, userID, paddleCustomerID string) error {
-	return nil
-}
-func (m *mockProfileRepo) UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time) error {
-	return nil
-}
+// Implement other required methods with no-ops (only testing GetUserByID and UpdatePaddleCustomerID)
+func (m *mockProfileRepo) GetUserByClerkID(ctx context.Context, clerkID string) (*domain.User, error)                                                 { return nil, nil }
+func (m *mockProfileRepo) GetUserByEmail(ctx context.Context, email string) (*domain.User, error)                                                     { return nil, nil }
+func (m *mockProfileRepo) CreateUser(ctx context.Context, user *domain.User) error                                                                    { return nil }
+func (m *mockProfileRepo) UpdateLastLogin(ctx context.Context, userID string) error                                                                   { return nil }
+func (m *mockProfileRepo) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error { return nil }
+func (m *mockProfileRepo) GetUsersWithExpiredTrials(ctx context.Context) ([]*domain.User, error)                                                      { return nil, nil }
+func (m *mockProfileRepo) GetUsersWithExpiringTrials(ctx context.Context, withinDays int) ([]*domain.User, error)                                    { return nil, nil }
+func (m *mockProfileRepo) UpdateSubscriptionStatus(ctx context.Context, userID string, status string) error                                           { return nil }
+func (m *mockProfileRepo) CancelDeletion(ctx context.Context, userID string) error                                                                    { return nil }
+func (m *mockProfileRepo) UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time) error         { return nil }
+func (m *mockProfileRepo) CreateUserTx(ctx context.Context, tx pgx.Tx, user *domain.User) error                                                      { return nil }
+func (m *mockProfileRepo) DeleteUserCascade(ctx context.Context, userID string) error                                                                 { return nil }
+func (m *mockProfileRepo) GetUsersScheduledForDeletion(ctx context.Context) ([]*domain.User, error)                                                  { return nil, nil }
+func (m *mockProfileRepo) MarkForDeletion(ctx context.Context, userID string, scheduledAt time.Time) error                                           { return nil }
+func (m *mockProfileRepo) UpdateUser(ctx context.Context, user *domain.User) error                                                                   { return nil }
 
 // setupTestCheckoutHandler creates a handler with mock dependencies
 func setupTestCheckoutHandler(t *testing.T) (*PaddleCheckoutHandler, *mockPaddleCheckoutService, *mockProfileRepo) {
