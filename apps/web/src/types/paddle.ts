@@ -40,5 +40,3 @@ declare global {
     __paddleCheckoutCalled?: PaddleCheckoutOptions
   }
 }
-
-export type { Paddle, PaddleCheckout, PaddleCheckoutOptions, PaddleEnvironment, PaddleInitializeOptions }
