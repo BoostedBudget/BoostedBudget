@@ -38,6 +38,14 @@ type ProfileRepository interface {
 	// UpdateLastLogin updates the last_login_at timestamp for a user
 	UpdateLastLogin(ctx context.Context, clerkUserID string) error
 
+	// Paddle-related methods (Issue #45, #46: Paddle Payment Integration)
+
+	// UpdatePaddleCustomerID links a Paddle customer ID to a user
+	UpdatePaddleCustomerID(ctx context.Context, userID, paddleCustomerID string) error
+
+	// UpdateSubscriptionFromPaddle updates subscription details from Paddle webhooks
+	UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time) error
+
 	// Trial-related methods (Issue #679)
 
 	// UpdateTrialStatus updates trial-related fields for a user
@@ -362,6 +370,69 @@ func (r *profileRepository) UpdateLastLogin(ctx context.Context, clerkUserID str
 	}
 
 	// Check if any rows were affected
+	if ct.RowsAffected() == 0 {
+		return ErrUserNotFound
+	}
+
+	return nil
+}
+
+// UpdatePaddleCustomerID links a Paddle customer ID to a user
+// Issue #45: Paddle Payment Service Implementation
+func (r *profileRepository) UpdatePaddleCustomerID(ctx context.Context, userID, paddleCustomerID string) error {
+	now := time.Now()
+
+	query := `
+		UPDATE users
+		SET paddle_customer_id = $1,
+		    updated_at = $2
+		WHERE id = $3 AND is_deleted = FALSE
+	`
+
+	ct, err := r.db.Exec(ctx, query, paddleCustomerID, now, userID)
+	if err != nil {
+		return err
+	}
+
+	if ct.RowsAffected() == 0 {
+		return ErrUserNotFound
+	}
+
+	return nil
+}
+
+// UpdateSubscriptionFromPaddle updates subscription details from Paddle webhooks
+// Issue #46: Paddle Webhook Handler Implementation
+// Updates tier, status, and billing dates when subscription changes
+func (r *profileRepository) UpdateSubscriptionFromPaddle(
+	ctx context.Context,
+	userID, tier, status string,
+	startedAt, endsAt *time.Time,
+) error {
+	now := time.Now()
+
+	query := `
+		UPDATE users
+		SET subscription_tier = $1,
+		    subscription_status = $2,
+		    subscription_started_at = $3,
+		    subscription_ends_at = $4,
+		    updated_at = $5
+		WHERE id = $6 AND is_deleted = FALSE
+	`
+
+	ct, err := r.db.Exec(ctx, query,
+		tier,
+		status,
+		startedAt,
+		endsAt,
+		now,
+		userID,
+	)
+	if err != nil {
+		return err
+	}
+
 	if ct.RowsAffected() == 0 {
 		return ErrUserNotFound
 	}

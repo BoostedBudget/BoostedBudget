@@ -124,6 +124,13 @@ func main() {
 	// Issue #37: Declare rule scheduler manager at package scope for graceful shutdown
 	var ruleSchedulerManager *workers.RuleSchedulerManager
 
+	// Issue #45, #46: Declare Paddle services and workers at package scope
+	var paddleService services.PaddleService
+	var paddleWebhookService services.PaddleWebhookService
+	var paddleCheckoutHandler *operations.PaddleCheckoutHandler
+	var subscriptionWebhookWorker *jobs.SubscriptionWebhookWorker
+	var paddleWebhookRepo repository.PaddleWebhookRepository
+
 	if db != nil && cfg.ClerkSecretKey != "" {
 		// Create repositories
 		profileRepo := repository.NewProfileRepository(db)
@@ -132,7 +139,8 @@ func main() {
 		accountRepo := repository.NewAccountRepository(db)
 		transactionRepo := repository.NewTransactionRepository(db)
 		webhookRepo := repository.NewWebhookRepository(db)
-		identityRepo := repository.NewUserIdentityRepository(db) // Maps Clerk IDs to user UUIDs
+		paddleWebhookRepo := repository.NewPaddleWebhookRepository(db) // Issue #45, #46: Paddle webhooks
+		identityRepo := repository.NewUserIdentityRepository(db)       // Maps Clerk IDs to user UUIDs
 		notificationRepo := repository.NewNotificationRepository(db) // Issue #257: Notification storage
 		syncAuditRepo := repository.NewSyncAuditRepository(db) // Issue #242: Monthly sync limits
 		balanceSnapshotRepo := repository.NewBalanceSnapshotRepository(db) // Issue #353: Balance tracking
@@ -293,6 +301,56 @@ func main() {
 			log.Println("✅ Encryption service initialized")
 		} else {
 			log.Fatal("ENCRYPTION_KEY environment variable is required")
+		}
+
+		// Create Paddle services (if configured) - Issue #45, #46: Paddle Payment Integration
+		if cfg.PaddleAPIKey != "" {
+			logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+			var err error
+
+			// Initialize PaddleService for API operations
+			paddleService, err = services.NewPaddleService(cfg, logger)
+			if err != nil {
+				log.Printf("⚠️  Failed to initialize Paddle service: %v", err)
+			} else {
+				log.Println("✅ Paddle service initialized")
+			}
+
+			// Initialize PaddleWebhookService for signature verification
+			if cfg.PaddleWebhookSecret != "" {
+				paddleWebhookService, err = services.NewPaddleWebhookService(cfg, logger)
+				if err != nil {
+					log.Printf("⚠️  Failed to initialize Paddle webhook service: %v", err)
+				} else {
+					log.Println("✅ Paddle webhook service initialized (HMAC-SHA256)")
+				}
+			}
+
+			// Create Paddle checkout handler (authenticated route)
+			if paddleService != nil {
+				paddleCheckoutHandler = operations.NewPaddleCheckoutHandler(operations.PaddleCheckoutHandlerDeps{
+					PaddleService: paddleService,
+					ProfileRepo:   profileRepo,
+					Config:        cfg,
+					TierConfig:    tierConfig,
+					Logger:        logger,
+				})
+				log.Println("✅ Paddle checkout handler created")
+			}
+
+			// Create subscription webhook worker
+			// TODO(#46): Add Clerk service for updating user metadata when Paddle SDK is complete
+			if paddleWebhookService != nil {
+				subscriptionWebhookWorker = jobs.NewSubscriptionWebhookWorker(jobs.SubscriptionWebhookWorkerDeps{
+					PaddleWebhookRepo: paddleWebhookRepo,
+					ProfileRepo:       profileRepo,
+					ClerkService:      nil, // TODO: Add when ClerkService.UpdateUserMetadata is implemented
+					Logger:            logger,
+				})
+				log.Println("✅ Subscription webhook worker created (River)")
+			}
+		} else {
+			log.Println("⚠️  Paddle services disabled (PADDLE_API_KEY not configured)")
 		}
 
 		// Create Plaid service and account linking (if configured)
@@ -527,6 +585,12 @@ func main() {
 				if trialExpirationCheckWorker != nil {
 					river.AddWorker(riverWorkers, trialExpirationCheckWorker)
 					log.Println("✅ Trial expiration check worker registered with River")
+				}
+
+				// Issue #45, #46: Register Paddle subscription webhook worker
+				if subscriptionWebhookWorker != nil {
+					river.AddWorker(riverWorkers, subscriptionWebhookWorker)
+					log.Println("✅ Paddle subscription webhook worker registered with River")
 				}
 
 				// Create River client
@@ -826,6 +890,49 @@ func main() {
 		log.Println("⚠️  Webhook signature verification disabled (Plaid credentials not configured)")
 	} else {
 		log.Println("⚠️  Webhook endpoint disabled (requires DATABASE_URL)")
+	}
+
+	// Paddle webhook endpoint (public - no auth required) - Issue #46: Paddle Webhook Handler
+	// Paddle servers need to POST to this endpoint without authentication
+	// Issue #45, #46: Paddle payment integration with HMAC-SHA256 signature verification
+	if db != nil && paddleWebhookService != nil {
+		// Register Huma paddle webhook route
+		humaPaddleWebhookHandler := operations.NewPaddleWebhookHandler(operations.PaddleWebhookHandlerDeps{
+			WebhookService: paddleWebhookService,
+			WebhookRepo:    paddleWebhookRepo,
+			JobQueue:       jobQueue,
+			Logger:         slog.Default(),
+		})
+		operations.RegisterPaddleWebhookRoutes(humaAPI, humaPaddleWebhookHandler)
+
+		log.Println("✅ Huma Paddle webhook route registered at POST /webhooks/paddle")
+		log.Println("✅ Paddle webhook signature verification enabled (HMAC-SHA256)")
+		log.Println("✅ Paddle webhook audit trail enabled (database storage)")
+		if jobQueue != nil {
+			log.Println("✅ Paddle webhook async processing enabled (River queue)")
+		}
+	} else if db != nil && paddleWebhookRepo != nil {
+		// Fallback: Basic webhook handler without signature verification
+		// Used when Paddle credentials are not configured (e.g., local development)
+		humaPaddleWebhookHandler := operations.NewPaddleWebhookHandler(operations.PaddleWebhookHandlerDeps{
+			WebhookRepo: paddleWebhookRepo,
+			JobQueue:    jobQueue,
+			Logger:      slog.Default(),
+		})
+		operations.RegisterPaddleWebhookRoutes(humaAPI, humaPaddleWebhookHandler)
+		log.Println("✅ Huma Paddle webhook route registered at POST /webhooks/paddle (verification disabled)")
+		log.Println("⚠️  Paddle webhook signature verification disabled (webhook secret not configured)")
+	} else {
+		log.Println("⚠️  Paddle webhook endpoint disabled (requires DATABASE_URL)")
+	}
+
+	// Paddle checkout routes (authenticated) - Issue #45: Paddle Payment Service
+	// These routes require JWT authentication via Clerk middleware
+	if paddleCheckoutHandler != nil {
+		operations.RegisterPaddleCheckoutRoutes(humaAPI, paddleCheckoutHandler)
+		log.Println("✅ Huma Paddle checkout routes registered")
+		log.Println("   - POST /api/v1/subscription/checkout")
+		log.Println("   - POST /api/v1/subscription/preview-update")
 	}
 
 	// Start background workers (if enabled)

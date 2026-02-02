@@ -403,6 +403,16 @@ func (m *MockUserRepository) UpdateTrialStatus(ctx context.Context, userID strin
 	return args.Error(0)
 }
 
+func (m *MockUserRepository) UpdatePaddleCustomerID(ctx context.Context, userID, paddleCustomerID string) error {
+	args := m.Called(ctx, userID, paddleCustomerID)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time) error {
+	args := m.Called(ctx, userID, tier, status, startedAt, endsAt)
+	return args.Error(0)
+}
+
 // TestAccountService_LinkAccounts_Success tests successful account linking flow
 func TestAccountService_LinkAccounts_Success(t *testing.T) {
 	// Given: All dependencies mocked with successful responses
