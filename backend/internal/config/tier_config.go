@@ -42,10 +42,60 @@ func LoadTierConfig() (*TierConfig, error) {
 	return globalTierConfig, configLoadError
 }
 
+// getConfigPath determines which config file to load based on environment
+// Supports environment-specific configs for sandbox vs production Paddle IDs
+//
+// Priority:
+// 1. SUBSCRIPTION_TIERS_CONFIG env var (explicit override)
+// 2. config/subscription_tiers.{PADDLE_ENVIRONMENT}.yaml (e.g., sandbox, production)
+// 3. config/subscription_tiers.yaml (default/template)
+func getConfigPath() string {
+	// Check for explicit config path override
+	if explicitPath := getEnv("SUBSCRIPTION_TIERS_CONFIG", ""); explicitPath != "" {
+		return explicitPath
+	}
+
+	// Check for environment-specific config based on PADDLE_ENVIRONMENT
+	if paddleEnv := getEnv("PADDLE_ENVIRONMENT", ""); paddleEnv != "" {
+		envSpecificPath := fmt.Sprintf("config/subscription_tiers.%s.yaml", paddleEnv)
+
+		// Check if environment-specific file exists
+		// Try multiple locations (current dir, parent dirs)
+		wd, _ := os.Getwd()
+		testPaths := []string{
+			filepath.Join(wd, envSpecificPath),
+			envSpecificPath,
+		}
+
+		// Also try going up directories
+		dir := wd
+		for i := 0; i < 5; i++ {
+			testPaths = append(testPaths, filepath.Join(dir, envSpecificPath))
+			dir = filepath.Dir(dir)
+		}
+
+		for _, path := range testPaths {
+			if _, err := os.Stat(path); err == nil {
+				// Found environment-specific config
+				fmt.Printf("Loading environment-specific config: %s\n", path)
+				return path
+			}
+		}
+
+		// Environment-specific config not found, will fall back to default
+		fmt.Printf("Warning: PADDLE_ENVIRONMENT=%s but %s not found, using default config\n",
+			paddleEnv, envSpecificPath)
+	}
+
+	// Fall back to default config
+	return "config/subscription_tiers.yaml"
+}
+
 // loadTierConfigFromFile reads and parses the subscription tiers YAML file
+// Automatically selects environment-specific config based on PADDLE_ENVIRONMENT
 func loadTierConfigFromFile() (*TierConfig, error) {
-	// Get config file path from environment or use default
-	configPath := getEnv("SUBSCRIPTION_TIERS_CONFIG", "config/subscription_tiers.yaml")
+	// Get config file path - supports environment-specific configs
+	configPath := getConfigPath()
 
 	// Make path absolute if it's relative
 	if !filepath.IsAbs(configPath) {

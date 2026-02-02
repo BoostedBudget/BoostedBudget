@@ -31,6 +31,7 @@ import { RulesPage, RuleBuilder } from './features/rules'
 import { LandingPage } from './features/landing'
 import { AdminRoute, AdminLayout, AdminDashboardPage, UsersPage, HealthDashboardPage } from './features/admin'
 import { Toaster } from 'sonner'
+import { useEffect } from 'react'
 import './App.css'
 
 function ComingSoon({ title }: { title: string }) {
@@ -51,6 +52,35 @@ function App() {
   const updatePrivacyMutation = useUpdatePrivacySettings()
 
   const isLandingPage = location.pathname === '/' && !isAuthenticated
+
+  // Initialize Paddle.js SDK
+  useEffect(() => {
+    const paddleToken = import.meta.env.VITE_PADDLE_CLIENT_TOKEN
+    const paddleEnv = import.meta.env.VITE_PADDLE_ENV || 'sandbox'
+
+    if (!paddleToken) {
+      console.warn('Paddle client token not configured (VITE_PADDLE_CLIENT_TOKEN)')
+      return
+    }
+
+    if (!window.Paddle) {
+      console.warn('Paddle.js SDK not loaded')
+      return
+    }
+
+    try {
+      window.Paddle.Environment.set(paddleEnv === 'production' ? 'production' : 'sandbox')
+      window.Paddle.Initialize({
+        token: paddleToken,
+        eventCallback: (event) => {
+          console.log('Paddle event:', event)
+        },
+      })
+      console.log('Paddle initialized successfully', { environment: paddleEnv })
+    } catch (error) {
+      console.error('Failed to initialize Paddle:', error)
+    }
+  }, [])
 
   const updateConsentCookie = (consents: CookieConsentSettings) => {
     const consentData: CookieConsentData = {

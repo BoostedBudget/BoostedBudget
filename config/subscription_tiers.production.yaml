@@ -1,0 +1,162 @@
+# BoostedBudget Subscription Tiers Configuration - PRODUCTION ENVIRONMENT
+# Last updated: 2026-01-26
+#
+# ⚠️ ENVIRONMENT-SPECIFIC CONFIG FILE ⚠️
+# This file is automatically loaded when PADDLE_ENVIRONMENT=production
+# Use this file for PRODUCTION Paddle Price IDs only
+#
+# Workflow:
+# 1. Create products/prices in Paddle Production Dashboard (https://vendors.paddle.com)
+# 2. Copy the PRODUCTION price IDs to paddle_price_id_monthly and paddle_price_id_yearly below
+# 3. Keep sandbox IDs in subscription_tiers.sandbox.yaml
+# 4. Set PADDLE_ENVIRONMENT=production in your production .env file
+#
+# Automatic Config Selection Priority:
+# 1. SUBSCRIPTION_TIERS_CONFIG env var (explicit override)
+# 2. config/subscription_tiers.{PADDLE_ENVIRONMENT}.yaml (this file when PADDLE_ENVIRONMENT=production)
+# 3. config/subscription_tiers.yaml (default fallback)
+#
+# ⚠️ WARNING: Double-check all price IDs before deploying to production!
+# Using sandbox IDs in production or vice versa will cause checkout failures.
+#
+# Subscription System Simplification (Issues #674-#678):
+# - Removed free tier entirely (users get 60-day premium trial with ads instead)
+# - Switched from Stripe to Paddle for payment processing
+# - Rules, categories, tags, API calls are now UNLIMITED for all tiers
+# - Only 3 configurable limits remain: accounts, transaction_history_days, executions_per_day
+#
+# Tiers: premium, household_2, household_3, household_4, household_5
+#
+# Special Values:
+#   - Use -1 for "unlimited" resources
+
+tiers:
+  premium:
+    display_name: "Premium"
+    description: "Full features for power users"
+    price_monthly: 8.99
+    price_yearly: 79.00
+    mobile_price_yearly: 89.99
+    paddle_price_id_monthly: null
+    paddle_price_id_yearly: null
+    users_included: 1
+
+    limits:
+      accounts: 30
+      transaction_history_days: 730
+      executions_per_day: 6
+
+    features:
+      ads_enabled: false
+      ai_insights: true
+      api_access: true
+      priority_support: true
+      custom_categories: true
+      custom_tags: true
+      advanced_reports: true
+
+  household_2:
+    display_name: "Household (2)"
+    description: "Premium features for 2 family members"
+    price_monthly: 12.99
+    price_yearly: 119.00
+    mobile_price_yearly: 134.99
+    paddle_price_id_monthly: null
+    paddle_price_id_yearly: null
+    users_included: 2
+
+    limits:
+      accounts: 60
+      transaction_history_days: 730
+      executions_per_day: 12
+
+    features:
+      ads_enabled: false
+      ai_insights: true
+      api_access: true
+      priority_support: true
+      custom_categories: true
+      custom_tags: true
+      advanced_reports: true
+
+  household_3:
+    display_name: "Household (3)"
+    description: "Premium features for 3 family members"
+    price_monthly: 14.99
+    price_yearly: 139.00
+    mobile_price_yearly: 154.99
+    paddle_price_id_monthly: null
+    paddle_price_id_yearly: null
+    users_included: 3
+
+    limits:
+      accounts: 90
+      transaction_history_days: 730
+      executions_per_day: 18
+
+    features:
+      ads_enabled: false
+      ai_insights: true
+      api_access: true
+      priority_support: true
+      custom_categories: true
+      custom_tags: true
+      advanced_reports: true
+
+  household_4:
+    display_name: "Household (4)"
+    description: "Premium features for 4 family members"
+    price_monthly: 16.99
+    price_yearly: 159.00
+    mobile_price_yearly: 179.99
+    paddle_price_id_monthly: null
+    paddle_price_id_yearly: null
+    users_included: 4
+
+    limits:
+      accounts: 120
+      transaction_history_days: 730
+      executions_per_day: 24
+
+    features:
+      ads_enabled: false
+      ai_insights: true
+      api_access: true
+      priority_support: true
+      custom_categories: true
+      custom_tags: true
+      advanced_reports: true
+
+  household_5:
+    display_name: "Household (5+)"
+    description: "Premium features for 5+ family members"
+    price_monthly: 18.99
+    price_yearly: 179.00
+    mobile_price_yearly: 199.99
+    paddle_price_id_monthly: null
+    paddle_price_id_yearly: null
+    users_included: 5
+
+    limits:
+      accounts: 150
+      transaction_history_days: 730
+      executions_per_day: 30
+
+    features:
+      ads_enabled: false
+      ai_insights: true
+      api_access: true
+      priority_support: true
+      custom_categories: true
+      custom_tags: true
+      advanced_reports: true
+
+# Default tier for new users (no free tier - premium with trial status)
+default_tier: "premium"
+
+# Trial configuration
+trial:
+  enabled: true
+  duration_days: 60
+  tier: "premium"
+  ads_enabled: true  # Trial users see ads

@@ -104,6 +104,16 @@ func (m *MockProfileRepositoryForDeletion) UpdateTrialStatus(ctx context.Context
 	return args.Error(0)
 }
 
+func (m *MockProfileRepositoryForDeletion) UpdatePaddleCustomerID(ctx context.Context, userID, paddleCustomerID string) error {
+	args := m.Called(ctx, userID, paddleCustomerID)
+	return args.Error(0)
+}
+
+func (m *MockProfileRepositoryForDeletion) UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time) error {
+	args := m.Called(ctx, userID, tier, status, startedAt, endsAt)
+	return args.Error(0)
+}
+
 // MockEmailService for testing
 type MockEmailService struct {
 	mock.Mock
