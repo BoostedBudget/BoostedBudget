@@ -112,6 +112,12 @@ Every implementation task MUST end with these steps in order:
 - [ ] ALL tests pass (backend + frontend + e2e + lint)
 - [ ] PR body includes `Closes #N` to auto-close the issue
 
+### Task Tracking (MANDATORY)
+**When formulating a plan, ALWAYS use TaskCreate to track TODOs:**
+- Create explicit tasks for each step in the plan
+- Update status: `pending` → `in_progress` (when starting) → `completed` (when done)
+- Enables progress visibility and ensures nothing is missed
+
 ### Dashboard Layout Version Sync (CRITICAL)
 These THREE locations MUST match version numbers:
 | Source of Truth | `config/default_dashboard_layout.yaml` → `layout_version` |

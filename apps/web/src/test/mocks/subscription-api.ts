@@ -13,8 +13,27 @@ export const mockUseGetSubscriptionTiers = mock(() => ({
   refetch: mockRefetchSubscriptionTiers,
 }))
 
+// === useCreatePaddleCheckout ===
+// Issue #44, #45, #46, #48: Paddle checkout mock for testing
+export const mockCreatePaddleCheckoutMutateAsync = mock(() =>
+  Promise.resolve({
+    checkout_url: 'https://checkout.paddle.com/txn_123',
+    transaction_id: 'txn_123',
+  })
+)
+
+export const mockUseCreatePaddleCheckout = mock(() => ({
+  mutateAsync: mockCreatePaddleCheckoutMutateAsync,
+  isPending: false,
+  isSuccess: false,
+  isError: false,
+  error: null,
+  reset: mock(() => {}),
+}))
+
 // Single mock.module() call - called once at preload time
 mock.module('@boostedbudget/api-client/endpoints/subscription/subscription', () => ({
   ...RealSubscriptionModule,
   useGetSubscriptionTiers: mockUseGetSubscriptionTiers,
+  useCreatePaddleCheckout: mockUseCreatePaddleCheckout,
 }))
