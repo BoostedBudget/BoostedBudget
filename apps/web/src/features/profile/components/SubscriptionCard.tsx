@@ -153,9 +153,13 @@ export function SubscriptionCard({ tier, status }: SubscriptionCardProps) {
 
       <div className="subscription-actions">
         {isPaidTier ? (
-          <button className="btn-manage">Manage Subscription</button>
+          <Link to="/billing/manage" className="btn-manage">
+            Manage Subscription
+          </Link>
         ) : (
-          <button className="btn-upgrade">Upgrade to Premium</button>
+          <Link to="/pricing" className="btn-upgrade">
+            Upgrade to Premium
+          </Link>
         )}
         <Link to="/pricing" className="compare-plans-link">
           Compare Plans →

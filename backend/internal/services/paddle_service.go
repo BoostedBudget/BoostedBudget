@@ -12,6 +12,14 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 )
 
+const (
+	// paddleBillingPortalProdURL is the Paddle customer portal URL for production
+	paddleBillingPortalProdURL = "https://buy.paddle.com/customer/portal"
+
+	// paddleBillingPortalSandboxURL is the Paddle customer portal URL for sandbox
+	paddleBillingPortalSandboxURL = "https://sandbox-buy.paddle.com/customer/portal"
+)
+
 var (
 	// ErrPaddleNotConfigured is returned when required Paddle credentials (API key) are missing.
 	ErrPaddleNotConfigured = errors.New("paddle API key not configured")
@@ -63,6 +71,10 @@ type PaddleService interface {
 		ctx context.Context,
 		subscriptionID, newPriceID string,
 	) (prorationAmount, currency, nextChargeDate string, err error)
+
+	// GetBillingPortalURL generates a URL for the Paddle billing portal session.
+	// Allows users to manage payment methods and view billing history.
+	GetBillingPortalURL(ctx context.Context, customerID string) (string, error)
 
 	// GetClient returns the underlying Paddle SDK.
 	// Useful for operations not covered by this service interface.
@@ -418,4 +430,39 @@ func (s *paddleService) PreviewUpdate(
 	)
 
 	return prorationAmt, curr, nextCharge, nil
+}
+
+// GetBillingPortalURL generates a URL for the Paddle billing portal session.
+// Returns the customer portal URL where users can manage payment methods and view billing history.
+//
+// Note: Paddle SDK v4 doesn't provide a dedicated portal session creation method.
+// Users will be directed to Paddle's customer portal where they authenticate via email.
+func (s *paddleService) GetBillingPortalURL(ctx context.Context, customerID string) (string, error) {
+	s.logger.Info("generating Paddle billing portal URL",
+		"customer_id", customerID,
+	)
+
+	// Validate customer exists
+	if _, err := s.GetCustomer(ctx, customerID); err != nil {
+		s.logger.Error("failed to validate customer for billing portal",
+			"customer_id", customerID,
+			"error", err,
+		)
+		return "", fmt.Errorf("failed to validate customer: %w", err)
+	}
+
+	// Select appropriate environment URL
+	var portalURL string
+	if s.config.PaddleEnvironment == "production" {
+		portalURL = paddleBillingPortalProdURL
+	} else {
+		portalURL = paddleBillingPortalSandboxURL
+	}
+
+	s.logger.Info("Paddle billing portal URL generated",
+		"customer_id", customerID,
+		"environment", s.config.PaddleEnvironment,
+	)
+
+	return portalURL, nil
 }

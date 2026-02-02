@@ -591,6 +591,35 @@ components:
       required:
         - message
       type: object
+    CancelSubscriptionOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CancelSubscriptionOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        ends_at:
+          description: Date subscription ends
+          examples:
+            - "2026-03-01"
+          type: string
+        message:
+          description: Cancellation confirmation message
+          examples:
+            - Subscription will be cancelled at end of billing period
+          type: string
+        subscription_id:
+          description: Cancelled Paddle subscription ID
+          examples:
+            - sub_01h1234567890
+          type: string
+      required:
+        - subscription_id
+        - message
+      type: object
     CashFlowHistoryResponse:
       additionalProperties: false
       properties:
@@ -1517,6 +1546,83 @@ components:
       required:
         - accounts
         - total_count
+      type: object
+    GetBillingPortalURLOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/GetBillingPortalURLOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        portal_url:
+          description: URL to Paddle billing portal
+          examples:
+            - https://buy.paddle.com/customer/portal
+          type: string
+      required:
+        - portal_url
+      type: object
+    GetCurrentSubscriptionOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/GetCurrentSubscriptionOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        amount:
+          description: Subscription amount
+          examples:
+            - "9.99"
+          type: string
+        billing_interval:
+          description: Billing interval (month/year)
+          examples:
+            - month
+          type: string
+        currency:
+          description: Currency code
+          examples:
+            - USD
+          type: string
+        current_period_end:
+          description: End of current billing period
+          examples:
+            - "2026-03-01"
+          type: string
+        next_billing_date:
+          description: Next billing date
+          examples:
+            - "2026-03-01"
+          type: string
+        status:
+          description: Subscription status
+          examples:
+            - active
+          type: string
+        subscription_id:
+          description: Paddle subscription ID
+          examples:
+            - sub_01h1234567890
+          type: string
+        tier:
+          description: Current subscription tier
+          examples:
+            - premium
+          type: string
+      required:
+        - subscription_id
+        - status
+        - tier
+        - billing_interval
+        - current_period_end
+        - amount
+        - currency
       type: object
     GetUnreadCountOutputBody:
       additionalProperties: false
@@ -3010,6 +3116,73 @@ components:
         target_amount:
           format: double
           type: number
+      type: object
+    UpdateSubscriptionInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/UpdateSubscriptionInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        billing_interval:
+          description: Billing interval (month or year)
+          enum:
+            - month
+            - year
+          examples:
+            - month
+          type: string
+        new_tier:
+          description: New subscription tier
+          examples:
+            - household_2
+          minLength: 1
+          type: string
+        proration_billing_mode:
+          description: Proration mode (prorated_immediately, full_immediately, full_next_billing_period)
+          enum:
+            - prorated_immediately
+            - full_immediately
+            - full_next_billing_period
+          examples:
+            - prorated_immediately
+          type: string
+      required:
+        - new_tier
+        - billing_interval
+      type: object
+    UpdateSubscriptionOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/UpdateSubscriptionOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        message:
+          description: Human-readable update message
+          examples:
+            - Subscription upgraded successfully
+          type: string
+        status:
+          description: Subscription status
+          examples:
+            - active
+          type: string
+        subscription_id:
+          description: Paddle subscription ID
+          examples:
+            - sub_01h1234567890
+          type: string
+      required:
+        - subscription_id
+        - status
+        - message
       type: object
     UpdateTransactionCategoryBody:
       additionalProperties: false
@@ -5601,6 +5774,48 @@ paths:
       summary: Update savings goal
       tags:
         - Savings Goals
+  /api/v1/subscription/billing-portal:
+    get:
+      description: Returns URL to Paddle billing portal where users can manage payment methods and view billing history.
+      operationId: get-billing-portal-url
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetBillingPortalURLOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Get billing portal URL
+      tags:
+        - Subscription
+        - Paddle
+  /api/v1/subscription/cancel:
+    post:
+      description: Cancels subscription at end of current billing period. User retains access until period ends.
+      operationId: cancel-paddle-subscription
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelSubscriptionOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Cancel subscription
+      tags:
+        - Subscription
+        - Paddle
   /api/v1/subscription/checkout:
     post:
       description: Creates a Paddle checkout session for purchasing a subscription. Returns checkout URL to open in Paddle.js Overlay or as redirect.
@@ -5625,6 +5840,27 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       summary: Create Paddle checkout session
+      tags:
+        - Subscription
+        - Paddle
+  /api/v1/subscription/current:
+    get:
+      description: Fetches current subscription details from Paddle API with live status, billing info, and tier information.
+      operationId: get-current-subscription
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetCurrentSubscriptionOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Get current subscription
       tags:
         - Subscription
         - Paddle
@@ -5679,6 +5915,33 @@ paths:
       summary: Get subscription tiers
       tags:
         - Subscription
+  /api/v1/subscription/update:
+    post:
+      description: Updates subscription to a different tier or billing interval. Handles proration automatically.
+      operationId: update-paddle-subscription
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSubscriptionInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdateSubscriptionOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Update subscription tier
+      tags:
+        - Subscription
+        - Paddle
   /api/v1/sync-stats:
     get:
       description: Returns monthly sync usage statistics for the authenticated user.
