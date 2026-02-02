@@ -46,6 +46,10 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	// Automation Rules (Issues #34-38)
 	automationRuleHandler := &AutomationRuleHandler{}
 
+	// Issue #45, #46: Paddle payment integration
+	paddleCheckoutHandler := &PaddleCheckoutHandler{}
+	paddleWebhookHandler := &PaddleWebhookHandler{}
+
 	// Issue #171: Stable user account references
 	userAccountHandler := &UserAccountHandler{}
 
@@ -77,4 +81,8 @@ func RegisterAllRoutesForSpec(api huma.API) {
 
 	// Issue #171: Stable user account references
 	RegisterUserAccountRoutes(api, userAccountHandler)
+
+	// Issue #45, #46: Paddle payment integration
+	RegisterPaddleCheckoutRoutes(api, paddleCheckoutHandler)
+	RegisterPaddleWebhookRoutes(api, paddleWebhookHandler)
 }

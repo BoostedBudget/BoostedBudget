@@ -1,11 +1,12 @@
 # Grype vulnerability scanner configuration
-# Ignore Go stdlib CVEs caused by Docker Hub golang:1.25.5-alpine containing Go 1.25.4
-# TODO: Remove these ignores once Docker Hub fixes their golang image
+# Ignore Go stdlib CVEs caused by Docker Hub golang:1.25.6-alpine containing Go 1.25.4
+# TODO: Remove these 7 CVE ignores once Docker Hub fixes their golang image
+# Ignored CVEs: 61729, 61727, 61726, 61728, 61731, 68119, 61730
 # Tracking: https://github.com/docker-library/golang/issues
 
 ignore:
   # CVE-2025-61729: crypto/x509 vulnerability (High)
-  # Reason: Docker Hub golang:1.25.5-alpine image contains Go 1.25.4 despite the tag
+  # Reason: Docker Hub golang:1.25.6-alpine image contains Go 1.25.4 despite the tag
   - vulnerability: CVE-2025-61729
     package:
       type: go-module
@@ -14,6 +15,41 @@ ignore:
   # CVE-2025-61727: Related crypto/x509 vulnerability (Medium)
   # Reason: Same Docker Hub image issue as above
   - vulnerability: CVE-2025-61727
+    package:
+      type: go-module
+      name: stdlib
+
+  # CVE-2025-61726: crypto/x509 vulnerability (High)
+  # Reason: Docker Hub golang:1.25.6-alpine image contains Go 1.25.4 despite the tag
+  - vulnerability: CVE-2025-61726
+    package:
+      type: go-module
+      name: stdlib
+
+  # CVE-2025-61728: TLS/crypto vulnerability (Medium)
+  # Reason: Same Docker Hub image issue as above
+  - vulnerability: CVE-2025-61728
+    package:
+      type: go-module
+      name: stdlib
+
+  # CVE-2025-61731: net/url vulnerability (High)
+  # Reason: Same Docker Hub image issue as above
+  - vulnerability: CVE-2025-61731
+    package:
+      type: go-module
+      name: stdlib
+
+  # CVE-2025-68119: Memory exhaustion vulnerability (High)
+  # Reason: Same Docker Hub image issue as above
+  - vulnerability: CVE-2025-68119
+    package:
+      type: go-module
+      name: stdlib
+
+  # CVE-2025-61730: Crypto vulnerability (Medium)
+  # Reason: Same Docker Hub image issue as above
+  - vulnerability: CVE-2025-61730
     package:
       type: go-module
       name: stdlib

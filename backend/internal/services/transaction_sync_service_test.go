@@ -1946,6 +1946,17 @@ func (m *mockProfileRepoForCursorTests) UpdateTrialStatus(ctx context.Context, u
 	return args.Error(0)
 }
 
+// Issue #44, #45, #46: Paddle integration support
+func (m *mockProfileRepoForCursorTests) UpdatePaddleCustomerID(ctx context.Context, userID, paddleCustomerID string) error {
+	args := m.Called(ctx, userID, paddleCustomerID)
+	return args.Error(0)
+}
+
+func (m *mockProfileRepoForCursorTests) UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time) error {
+	args := m.Called(ctx, userID, tier, status, startedAt, endsAt)
+	return args.Error(0)
+}
+
 // ============================================================================
 // CURSOR PERSISTENCE TESTS (Critical)
 // Plaid Staging Validation - Cursor handling edge cases

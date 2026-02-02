@@ -693,8 +693,8 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       // Expand filters (Issue #615: renamed to "Date & Status")
       await page.getByText('Date & Status').click()
 
-      // Click Custom
-      await page.getByRole('button', { name: 'Custom' }).click()
+      // Click Custom (exact match to avoid cookie banner "Customize" button)
+      await page.getByRole('button', { name: 'Custom', exact: true }).click()
 
       // Custom date inputs should appear
       await expect(page.getByText('Start date')).toBeVisible()

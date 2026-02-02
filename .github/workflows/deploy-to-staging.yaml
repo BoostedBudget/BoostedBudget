@@ -286,6 +286,7 @@ jobs:
           VITE_API_URL: https://staging-api.boostedbudget.com
           VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
           VITE_ENVIRONMENT: staging
+          VITE_PADDLE_CLIENT_TOKEN: ${{ secrets.VITE_PADDLE_CLIENT_TOKEN }}
         run: bun run build
 
       - name: Deploy to Cloudflare Pages
