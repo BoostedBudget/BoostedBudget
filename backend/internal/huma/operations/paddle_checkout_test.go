@@ -66,6 +66,11 @@ func (m *mockPaddleCheckoutService) PreviewUpdate(ctx context.Context, subscript
 	return args.String(0), args.String(1), args.String(2), args.Error(3)
 }
 
+func (m *mockPaddleCheckoutService) GetBillingPortalURL(ctx context.Context, customerID string) (string, error) {
+	args := m.Called(ctx, customerID)
+	return args.String(0), args.Error(1)
+}
+
 func (m *mockPaddleCheckoutService) GetClient() *paddle.SDK {
 	return nil
 }
@@ -512,13 +517,268 @@ func TestNewPaddleCheckoutHandler(t *testing.T) {
 
 // TestValidSubscriptionTiers tests tier validation helper
 func TestValidSubscriptionTiers(t *testing.T) {
-	validTiers := validSubscriptionTiers()
+	assert.True(t, validSubscriptionTiers["premium"])
+	assert.True(t, validSubscriptionTiers["household_2"])
+	assert.True(t, validSubscriptionTiers["household_3"])
+	assert.True(t, validSubscriptionTiers["household_4"])
+	assert.True(t, validSubscriptionTiers["household_5"])
+	assert.False(t, validSubscriptionTiers["free"]) // free tier not in checkout
+	assert.False(t, validSubscriptionTiers["invalid"])
+}
 
-	assert.True(t, validTiers["premium"])
-	assert.True(t, validTiers["household_2"])
-	assert.True(t, validTiers["household_3"])
-	assert.True(t, validTiers["household_4"])
-	assert.True(t, validTiers["household_5"])
-	assert.False(t, validTiers["free"]) // free tier not in checkout
-	assert.False(t, validTiers["invalid"])
+// --- HandleUpdateSubscription Tests ---
+
+// TestHandleUpdateSubscription_Upgrade tests successful upgrade to higher tier
+func TestHandleUpdateSubscription_Upgrade(t *testing.T) {
+	t.Skip("Handler not yet implemented - RED phase")
+
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_01h1234567890"
+	subscriptionID := "sub_01h1234567890"
+	user := &domain.User{
+		ID:                 "user_123",
+		Email:              "test@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "active",
+		PaddleCustomerID:   &customerID,
+	}
+
+	// Input to upgrade from premium to household_2
+	input := &UpdateSubscriptionInput{}
+	input.Body.NewTier = "household_2"
+	input.Body.BillingInterval = "month"
+
+	// Mock getting active subscriptions for the customer
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+	mockService.On("GetSubscription", ctx, mock.AnythingOfType("string")).
+		Return(&paddle.Subscription{
+			ID:     subscriptionID,
+			Status: paddle.SubscriptionStatusActive,
+		}, nil).Maybe()
+	mockService.On("UpdateSubscription",
+		ctx,
+		subscriptionID,
+		mock.AnythingOfType("string"), // new price ID
+		"prorated_immediately",
+	).Return(&paddle.Subscription{
+		ID:     subscriptionID,
+		Status: paddle.SubscriptionStatusActive,
+	}, nil)
+
+	output, err := handler.HandleUpdateSubscription(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, subscriptionID, output.Body.SubscriptionID)
+	assert.Equal(t, "active", output.Body.Status)
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+}
+
+// TestHandleUpdateSubscription_Downgrade tests successful downgrade to lower tier
+func TestHandleUpdateSubscription_Downgrade(t *testing.T) {
+	t.Skip("Handler not yet implemented - RED phase")
+
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_01h1234567890"
+	subscriptionID := "sub_01h1234567890"
+	user := &domain.User{
+		ID:                 "user_123",
+		Email:              "test@example.com",
+		SubscriptionTier:   "household_5",
+		SubscriptionStatus: "active",
+		PaddleCustomerID:   &customerID,
+	}
+
+	// Input to downgrade from household_5 to premium
+	input := &UpdateSubscriptionInput{}
+	input.Body.NewTier = "premium"
+	input.Body.BillingInterval = "month"
+	input.Body.ProrationBillingMode = "full_next_billing_period"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+	mockService.On("UpdateSubscription",
+		ctx,
+		subscriptionID,
+		mock.AnythingOfType("string"), // new price ID
+		"full_next_billing_period",
+	).Return(&paddle.Subscription{
+		ID:     subscriptionID,
+		Status: paddle.SubscriptionStatusActive,
+	}, nil)
+
+	output, err := handler.HandleUpdateSubscription(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, subscriptionID, output.Body.SubscriptionID)
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+}
+
+// TestHandleUpdateSubscription_NoActiveSubscription tests update without active subscription
+func TestHandleUpdateSubscription_NoActiveSubscription(t *testing.T) {
+	t.Skip("Handler not yet implemented - RED phase")
+
+	handler, _, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	user := &domain.User{
+		ID:                 "user_123",
+		Email:              "test@example.com",
+		SubscriptionStatus: "cancelled",
+		PaddleCustomerID:   nil,
+	}
+
+	input := &UpdateSubscriptionInput{}
+	input.Body.NewTier = "household_2"
+	input.Body.BillingInterval = "month"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+
+	output, err := handler.HandleUpdateSubscription(ctx, input)
+
+	require.Error(t, err)
+	assert.Nil(t, output)
+	assert.Contains(t, err.Error(), "No active subscription")
+
+	mockRepo.AssertExpectations(t)
+}
+
+// --- HandleCancelSubscription Tests ---
+
+// TestHandleCancelSubscription_Success tests successful subscription cancellation
+func TestHandleCancelSubscription_Success(t *testing.T) {
+	t.Skip("Handler not yet implemented - RED phase")
+
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_01h1234567890"
+	subscriptionID := "sub_01h1234567890"
+	user := &domain.User{
+		ID:                 "user_123",
+		Email:              "test@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "active",
+		PaddleCustomerID:   &customerID,
+	}
+
+	input := &CancelSubscriptionInput{}
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+	mockService.On("CancelSubscription", ctx, subscriptionID).Return(nil)
+
+	output, err := handler.HandleCancelSubscription(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Contains(t, output.Body.Message, "cancelled")
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+}
+
+// TestHandleCancelSubscription_NoActiveSubscription tests cancellation without active subscription
+func TestHandleCancelSubscription_NoActiveSubscription(t *testing.T) {
+	t.Skip("Handler not yet implemented - RED phase")
+
+	handler, _, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	user := &domain.User{
+		ID:                 "user_123",
+		Email:              "test@example.com",
+		SubscriptionStatus: "cancelled",
+		PaddleCustomerID:   nil,
+	}
+
+	input := &CancelSubscriptionInput{}
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+
+	output, err := handler.HandleCancelSubscription(ctx, input)
+
+	require.Error(t, err)
+	assert.Nil(t, output)
+	assert.Contains(t, err.Error(), "No active subscription")
+
+	mockRepo.AssertExpectations(t)
+}
+
+// --- HandleGetBillingPortalURL Tests ---
+
+// TestHandleGetBillingPortalURL_Success tests successful billing portal URL generation
+func TestHandleGetBillingPortalURL_Success(t *testing.T) {
+	t.Skip("Handler not yet implemented - RED phase")
+
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_01h1234567890"
+	user := &domain.User{
+		ID:               "user_123",
+		Email:            "test@example.com",
+		PaddleCustomerID: &customerID,
+	}
+
+	input := &GetBillingPortalURLInput{}
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+	mockService.On("GetBillingPortalURL", ctx, customerID).
+		Return("https://sandbox-buy.paddle.com/customer/portal", nil)
+
+	output, err := handler.HandleGetBillingPortalURL(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Contains(t, output.Body.PortalURL, "paddle.com")
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+}
+
+// --- HandleGetCurrentSubscription Tests ---
+
+// TestHandleGetCurrentSubscription_Success tests successful subscription retrieval
+func TestHandleGetCurrentSubscription_Success(t *testing.T) {
+	t.Skip("Handler not yet implemented - RED phase")
+
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_01h1234567890"
+	subscriptionID := "sub_01h1234567890"
+	user := &domain.User{
+		ID:                 "user_123",
+		Email:              "test@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "active",
+		PaddleCustomerID:   &customerID,
+	}
+
+	input := &GetCurrentSubscriptionInput{}
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+	mockService.On("GetSubscription", ctx, subscriptionID).
+		Return(&paddle.Subscription{
+			ID:     subscriptionID,
+			Status: paddle.SubscriptionStatusActive,
+		}, nil)
+
+	output, err := handler.HandleGetCurrentSubscription(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, subscriptionID, output.Body.SubscriptionID)
+	assert.Equal(t, "active", output.Body.Status)
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
 }

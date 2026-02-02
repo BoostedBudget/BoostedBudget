@@ -81,14 +81,75 @@ type PreviewUpdateOutput struct {
 	}
 }
 
-func validSubscriptionTiers() map[string]bool {
-	return map[string]bool{
-		"premium":     true,
-		"household_2": true,
-		"household_3": true,
-		"household_4": true,
-		"household_5": true,
+// UpdateSubscriptionInput represents the input for updating a subscription.
+type UpdateSubscriptionInput struct {
+	Body struct {
+		NewTier              string `json:"new_tier" doc:"New subscription tier" example:"household_2" minLength:"1"`
+		BillingInterval      string `json:"billing_interval" doc:"Billing interval (month or year)" example:"month" enum:"month,year"`
+		ProrationBillingMode string `json:"proration_billing_mode,omitempty" doc:"Proration mode (prorated_immediately, full_immediately, full_next_billing_period)" example:"prorated_immediately" enum:"prorated_immediately,full_immediately,full_next_billing_period"`
 	}
+}
+
+// UpdateSubscriptionOutput represents the response for subscription update.
+type UpdateSubscriptionOutput struct {
+	Body struct {
+		SubscriptionID string `json:"subscription_id" doc:"Paddle subscription ID" example:"sub_01h1234567890"`
+		Status         string `json:"status" doc:"Subscription status" example:"active"`
+		Message        string `json:"message" doc:"Human-readable update message" example:"Subscription upgraded successfully"`
+	}
+}
+
+// CancelSubscriptionInput represents the input for canceling a subscription.
+type CancelSubscriptionInput struct {
+	// No body needed - uses user_id from JWT context
+}
+
+// CancelSubscriptionOutput represents the response for subscription cancellation.
+type CancelSubscriptionOutput struct {
+	Body struct {
+		SubscriptionID string `json:"subscription_id" doc:"Cancelled Paddle subscription ID" example:"sub_01h1234567890"`
+		Message        string `json:"message" doc:"Cancellation confirmation message" example:"Subscription will be cancelled at end of billing period"`
+		EndsAt         string `json:"ends_at,omitempty" doc:"Date subscription ends" example:"2026-03-01"`
+	}
+}
+
+// GetBillingPortalURLInput represents the input for getting billing portal URL.
+type GetBillingPortalURLInput struct {
+	// No body needed - uses user_id from JWT context
+}
+
+// GetBillingPortalURLOutput represents the response for billing portal URL.
+type GetBillingPortalURLOutput struct {
+	Body struct {
+		PortalURL string `json:"portal_url" doc:"URL to Paddle billing portal" example:"https://buy.paddle.com/customer/portal"`
+	}
+}
+
+// GetCurrentSubscriptionInput represents the input for getting current subscription.
+type GetCurrentSubscriptionInput struct {
+	// No body needed - uses user_id from JWT context
+}
+
+// GetCurrentSubscriptionOutput represents the response for current subscription.
+type GetCurrentSubscriptionOutput struct {
+	Body struct {
+		SubscriptionID     string `json:"subscription_id" doc:"Paddle subscription ID" example:"sub_01h1234567890"`
+		Status             string `json:"status" doc:"Subscription status" example:"active"`
+		Tier               string `json:"tier" doc:"Current subscription tier" example:"premium"`
+		BillingInterval    string `json:"billing_interval" doc:"Billing interval (month/year)" example:"month"`
+		CurrentPeriodEnd   string `json:"current_period_end" doc:"End of current billing period" example:"2026-03-01"`
+		NextBillingDate    string `json:"next_billing_date,omitempty" doc:"Next billing date" example:"2026-03-01"`
+		Amount             string `json:"amount" doc:"Subscription amount" example:"9.99"`
+		Currency           string `json:"currency" doc:"Currency code" example:"USD"`
+	}
+}
+
+var validSubscriptionTiers = map[string]bool{
+	"premium":     true,
+	"household_2": true,
+	"household_3": true,
+	"household_4": true,
+	"household_5": true,
 }
 
 // HandleCreateCheckoutSession handles POST /api/v1/subscription/checkout.
@@ -97,20 +158,20 @@ func (h *PaddleCheckoutHandler) HandleCreateCheckoutSession(
 	ctx context.Context,
 	input *CreateCheckoutInput,
 ) (*CheckoutOutput, error) {
-	// Get user ID from JWT claims (set by middleware)
-	userID, ok := ctx.Value("user_id").(string)
-	if !ok || userID == "" {
-		return nil, huma.Error401Unauthorized("User not authenticated")
+	// Get user from context
+	user, err := h.getUserFromContext(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	h.logger.Info("creating Paddle checkout session",
-		"user_id", userID,
+		"user_id", user.ID,
 		"tier", input.Body.Tier,
 		"billing_interval", input.Body.BillingInterval,
 	)
 
 	// Validate tier
-	if !validSubscriptionTiers()[input.Body.Tier] {
+	if !validSubscriptionTiers[input.Body.Tier] {
 		return nil, huma.Error400BadRequest("Invalid tier")
 	}
 
@@ -119,36 +180,24 @@ func (h *PaddleCheckoutHandler) HandleCreateCheckoutSession(
 		return nil, huma.Error400BadRequest("Billing interval must be 'month' or 'year'")
 	}
 
-	// Get user from database
-	user, err := h.profileRepo.GetUserByID(ctx, userID)
-	if err != nil {
-		h.logger.Error("failed to get user",
-			"user_id", userID,
-			"error", err,
-		)
-		return nil, huma.Error500InternalServerError("Failed to get user details")
-	}
-
 	// Get or create Paddle customer ID
 	customerID := user.PaddleCustomerID
 	if customerID == nil || *customerID == "" {
-		// Create new Paddle customer
-		newCustomerID, err := h.paddleService.CreateCustomer(ctx, userID, user.Email)
+		newCustomerID, err := h.paddleService.CreateCustomer(ctx, user.ID, user.Email)
 		if err != nil {
 			h.logger.Error("failed to create Paddle customer",
-				"user_id", userID,
+				"user_id", user.ID,
 				"error", err,
 			)
 			return nil, huma.Error500InternalServerError("Failed to create customer")
 		}
 
-		// Update user with Paddle customer ID
-		if err := h.profileRepo.UpdatePaddleCustomerID(ctx, userID, newCustomerID); err != nil {
+		// Update user with Paddle customer ID (non-critical if fails)
+		if err := h.profileRepo.UpdatePaddleCustomerID(ctx, user.ID, newCustomerID); err != nil {
 			h.logger.Error("failed to update paddle_customer_id",
-				"user_id", userID,
+				"user_id", user.ID,
 				"error", err,
 			)
-			// Continue anyway - we have the customer ID
 		}
 
 		customerID = &newCustomerID
@@ -178,7 +227,7 @@ func (h *PaddleCheckoutHandler) HandleCreateCheckoutSession(
 	)
 	if err != nil {
 		h.logger.Error("failed to create checkout session",
-			"user_id", userID,
+			"user_id", user.ID,
 			"customer_id", *customerID,
 			"price_id", priceID,
 			"error", err,
@@ -187,7 +236,7 @@ func (h *PaddleCheckoutHandler) HandleCreateCheckoutSession(
 	}
 
 	h.logger.Info("checkout session created successfully",
-		"user_id", userID,
+		"user_id", user.ID,
 		"transaction_id", transactionID,
 		"tier", input.Body.Tier,
 	)
@@ -209,18 +258,33 @@ func (h *PaddleCheckoutHandler) HandlePreviewSubscriptionUpdate(
 	ctx context.Context,
 	input *PreviewUpdateInput,
 ) (*PreviewUpdateOutput, error) {
-	userID, ok := ctx.Value("user_id").(string)
-	if !ok || userID == "" {
-		return nil, huma.Error401Unauthorized("User not authenticated")
+	user, err := h.getUserFromContext(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	h.logger.Info("previewing subscription update",
-		"user_id", userID,
+		"user_id", user.ID,
 		"new_tier", input.Body.NewTier,
 	)
 
-	if !validSubscriptionTiers()[input.Body.NewTier] {
+	if !validSubscriptionTiers[input.Body.NewTier] {
 		return nil, huma.Error400BadRequest("Invalid tier")
+	}
+
+	if user.SubscriptionStatus != "active" {
+		return nil, huma.Error400BadRequest("No active subscription to update")
+	}
+
+	return nil, huma.Error501NotImplemented("Preview update not yet implemented")
+}
+
+// getUserFromContext extracts user ID from context and retrieves user details.
+// Returns the user and appropriate HTTP errors if user is not authenticated or not found.
+func (h *PaddleCheckoutHandler) getUserFromContext(ctx context.Context) (*domain.User, error) {
+	userID, ok := ctx.Value("user_id").(string)
+	if !ok || userID == "" {
+		return nil, huma.Error401Unauthorized("User not authenticated")
 	}
 
 	user, err := h.profileRepo.GetUserByID(ctx, userID)
@@ -232,11 +296,7 @@ func (h *PaddleCheckoutHandler) HandlePreviewSubscriptionUpdate(
 		return nil, huma.Error500InternalServerError("Failed to get user details")
 	}
 
-	if user.SubscriptionStatus != "active" {
-		return nil, huma.Error400BadRequest("No active subscription to update")
-	}
-
-	return nil, huma.Error501NotImplemented("Preview update not yet implemented")
+	return user, nil
 }
 
 // getPaddlePriceIDFromConfig returns the Paddle price ID for a given tier and billing interval
@@ -266,6 +326,187 @@ func (h *PaddleCheckoutHandler) getPaddlePriceIDFromConfig(tierName, billingInte
 	return *priceID, nil
 }
 
+// HandleUpdateSubscription handles POST /api/v1/subscription/update.
+// Updates user's subscription to a different tier or billing interval.
+func (h *PaddleCheckoutHandler) HandleUpdateSubscription(
+	ctx context.Context,
+	input *UpdateSubscriptionInput,
+) (*UpdateSubscriptionOutput, error) {
+	user, err := h.getUserFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	h.logger.Info("updating subscription",
+		"user_id", user.ID,
+		"new_tier", input.Body.NewTier,
+	)
+
+	if !validSubscriptionTiers[input.Body.NewTier] {
+		return nil, huma.Error400BadRequest("Invalid tier")
+	}
+
+	if user.SubscriptionStatus != "active" {
+		return nil, huma.Error400BadRequest("No active subscription to update")
+	}
+
+	priceID, err := h.getPaddlePriceIDFromConfig(input.Body.NewTier, input.Body.BillingInterval)
+	if err != nil {
+		h.logger.Error("failed to get price ID", "user_id", user.ID, "tier", input.Body.NewTier, "error", err)
+		return nil, huma.Error500InternalServerError("Price ID not configured")
+	}
+
+	prorationMode := input.Body.ProrationBillingMode
+	if prorationMode == "" {
+		prorationMode = "prorated_immediately"
+	}
+
+	subscriptionID := "sub_placeholder" // TODO: Get actual subscription ID from database
+
+	updatedSub, err := h.paddleService.UpdateSubscription(ctx, subscriptionID, priceID, prorationMode)
+	if err != nil {
+		h.logger.Error("failed to update subscription", "user_id", user.ID, "error", err)
+		return nil, huma.Error500InternalServerError("Failed to update subscription")
+	}
+
+	h.logger.Info("subscription updated successfully", "subscription_id", updatedSub.ID)
+
+	return &UpdateSubscriptionOutput{
+		Body: struct {
+			SubscriptionID string `json:"subscription_id" doc:"Paddle subscription ID" example:"sub_01h1234567890"`
+			Status         string `json:"status" doc:"Subscription status" example:"active"`
+			Message        string `json:"message" doc:"Human-readable update message" example:"Subscription upgraded successfully"`
+		}{
+			SubscriptionID: updatedSub.ID,
+			Status:         string(updatedSub.Status),
+			Message:        "Subscription updated successfully",
+		},
+	}, nil
+}
+
+// HandleCancelSubscription handles POST /api/v1/subscription/cancel.
+// Cancels user's subscription at end of billing period.
+func (h *PaddleCheckoutHandler) HandleCancelSubscription(
+	ctx context.Context,
+	input *CancelSubscriptionInput,
+) (*CancelSubscriptionOutput, error) {
+	user, err := h.getUserFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	h.logger.Info("canceling subscription", "user_id", user.ID)
+
+	if user.SubscriptionStatus != "active" {
+		return nil, huma.Error400BadRequest("No active subscription to cancel")
+	}
+
+	subscriptionID := "sub_placeholder" // TODO: Get actual subscription ID from database
+
+	if err := h.paddleService.CancelSubscription(ctx, subscriptionID); err != nil {
+		h.logger.Error("failed to cancel subscription", "user_id", user.ID, "error", err)
+		return nil, huma.Error500InternalServerError("Failed to cancel subscription")
+	}
+
+	h.logger.Info("subscription cancelled successfully", "user_id", user.ID, "subscription_id", subscriptionID)
+
+	return &CancelSubscriptionOutput{
+		Body: struct {
+			SubscriptionID string `json:"subscription_id" doc:"Cancelled Paddle subscription ID" example:"sub_01h1234567890"`
+			Message        string `json:"message" doc:"Cancellation confirmation message" example:"Subscription will be cancelled at end of billing period"`
+			EndsAt         string `json:"ends_at,omitempty" doc:"Date subscription ends" example:"2026-03-01"`
+		}{
+			SubscriptionID: subscriptionID,
+			Message:        "Subscription will be cancelled at end of billing period",
+			EndsAt:         "",
+		},
+	}, nil
+}
+
+// HandleGetBillingPortalURL handles GET /api/v1/subscription/billing-portal.
+// Returns URL to Paddle billing portal for managing payment methods.
+func (h *PaddleCheckoutHandler) HandleGetBillingPortalURL(
+	ctx context.Context,
+	input *GetBillingPortalURLInput,
+) (*GetBillingPortalURLOutput, error) {
+	user, err := h.getUserFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	h.logger.Info("getting billing portal URL", "user_id", user.ID)
+
+	if user.PaddleCustomerID == nil || *user.PaddleCustomerID == "" {
+		return nil, huma.Error400BadRequest("No Paddle customer found")
+	}
+
+	portalURL, err := h.paddleService.GetBillingPortalURL(ctx, *user.PaddleCustomerID)
+	if err != nil {
+		h.logger.Error("failed to get billing portal URL", "user_id", user.ID, "error", err)
+		return nil, huma.Error500InternalServerError("Failed to get billing portal URL")
+	}
+
+	h.logger.Info("billing portal URL generated", "user_id", user.ID)
+
+	return &GetBillingPortalURLOutput{
+		Body: struct {
+			PortalURL string `json:"portal_url" doc:"URL to Paddle billing portal" example:"https://buy.paddle.com/customer/portal"`
+		}{
+			PortalURL: portalURL,
+		},
+	}, nil
+}
+
+// HandleGetCurrentSubscription handles GET /api/v1/subscription/current.
+// Fetches current subscription details from Paddle API.
+func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
+	ctx context.Context,
+	input *GetCurrentSubscriptionInput,
+) (*GetCurrentSubscriptionOutput, error) {
+	user, err := h.getUserFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	h.logger.Info("getting current subscription", "user_id", user.ID)
+
+	if user.SubscriptionStatus != "active" {
+		return nil, huma.Error400BadRequest("No active subscription")
+	}
+
+	subscriptionID := "sub_placeholder" // TODO: Get actual subscription ID from database
+
+	subscription, err := h.paddleService.GetSubscription(ctx, subscriptionID)
+	if err != nil {
+		h.logger.Error("failed to get subscription", "user_id", user.ID, "error", err)
+		return nil, huma.Error500InternalServerError("Failed to get subscription")
+	}
+
+	h.logger.Info("subscription retrieved", "user_id", user.ID, "subscription_id", subscription.ID)
+
+	return &GetCurrentSubscriptionOutput{
+		Body: struct {
+			SubscriptionID     string `json:"subscription_id" doc:"Paddle subscription ID" example:"sub_01h1234567890"`
+			Status             string `json:"status" doc:"Subscription status" example:"active"`
+			Tier               string `json:"tier" doc:"Current subscription tier" example:"premium"`
+			BillingInterval    string `json:"billing_interval" doc:"Billing interval (month/year)" example:"month"`
+			CurrentPeriodEnd   string `json:"current_period_end" doc:"End of current billing period" example:"2026-03-01"`
+			NextBillingDate    string `json:"next_billing_date,omitempty" doc:"Next billing date" example:"2026-03-01"`
+			Amount             string `json:"amount" doc:"Subscription amount" example:"9.99"`
+			Currency           string `json:"currency" doc:"Currency code" example:"USD"`
+		}{
+			SubscriptionID:     subscription.ID,
+			Status:             string(subscription.Status),
+			Tier:               user.SubscriptionTier,
+			BillingInterval:    "month", // TODO: Extract from subscription
+			CurrentPeriodEnd:   subscription.CurrentBillingPeriod.EndsAt,
+			NextBillingDate:    subscription.CurrentBillingPeriod.EndsAt,
+			Amount:             "", // TODO: Extract from subscription
+			Currency:           string(subscription.CurrencyCode),
+		},
+	}, nil
+}
+
 // RegisterPaddleCheckoutRoutes registers Paddle checkout routes with the Huma API.
 func RegisterPaddleCheckoutRoutes(api huma.API, handler *PaddleCheckoutHandler) {
 	// POST /api/v1/subscription/checkout - Create checkout session
@@ -287,4 +528,44 @@ func RegisterPaddleCheckoutRoutes(api huma.API, handler *PaddleCheckoutHandler) 
 		Description: "Calculates proration amount when upgrading or downgrading subscription tier. Shows immediate charge/credit and next billing details.",
 		Tags:        []string{"Subscription", "Paddle"},
 	}, handler.HandlePreviewSubscriptionUpdate)
+
+	// POST /api/v1/subscription/update - Update subscription
+	huma.Register(api, huma.Operation{
+		OperationID: "update-paddle-subscription",
+		Method:      "POST",
+		Path:        "/api/v1/subscription/update",
+		Summary:     "Update subscription tier",
+		Description: "Updates subscription to a different tier or billing interval. Handles proration automatically.",
+		Tags:        []string{"Subscription", "Paddle"},
+	}, handler.HandleUpdateSubscription)
+
+	// POST /api/v1/subscription/cancel - Cancel subscription
+	huma.Register(api, huma.Operation{
+		OperationID: "cancel-paddle-subscription",
+		Method:      "POST",
+		Path:        "/api/v1/subscription/cancel",
+		Summary:     "Cancel subscription",
+		Description: "Cancels subscription at end of current billing period. User retains access until period ends.",
+		Tags:        []string{"Subscription", "Paddle"},
+	}, handler.HandleCancelSubscription)
+
+	// GET /api/v1/subscription/billing-portal - Get billing portal URL
+	huma.Register(api, huma.Operation{
+		OperationID: "get-billing-portal-url",
+		Method:      "GET",
+		Path:        "/api/v1/subscription/billing-portal",
+		Summary:     "Get billing portal URL",
+		Description: "Returns URL to Paddle billing portal where users can manage payment methods and view billing history.",
+		Tags:        []string{"Subscription", "Paddle"},
+	}, handler.HandleGetBillingPortalURL)
+
+	// GET /api/v1/subscription/current - Get current subscription
+	huma.Register(api, huma.Operation{
+		OperationID: "get-current-subscription",
+		Method:      "GET",
+		Path:        "/api/v1/subscription/current",
+		Summary:     "Get current subscription",
+		Description: "Fetches current subscription details from Paddle API with live status, billing info, and tier information.",
+		Tags:        []string{"Subscription", "Paddle"},
+	}, handler.HandleGetCurrentSubscription)
 }
