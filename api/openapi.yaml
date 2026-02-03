@@ -3320,6 +3320,8 @@ components:
           type: string
         paddle_customer_id:
           type: string
+        paddle_subscription_id:
+          type: string
         primary_region:
           type: string
         subscription_ends_at:

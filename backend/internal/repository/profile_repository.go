@@ -26,6 +26,9 @@ type ProfileRepository interface {
 	// GetUserByID retrieves a user by their internal UUID
 	GetUserByID(ctx context.Context, id string) (*domain.User, error)
 
+	// GetUserByPaddleSubscriptionID retrieves a user by their Paddle subscription ID
+	GetUserByPaddleSubscriptionID(ctx context.Context, subscriptionID string) (*domain.User, error)
+
 	// CreateUser creates a new user in the database
 	CreateUser(ctx context.Context, user *domain.User) error
 
@@ -44,7 +47,7 @@ type ProfileRepository interface {
 	UpdatePaddleCustomerID(ctx context.Context, userID, paddleCustomerID string) error
 
 	// UpdateSubscriptionFromPaddle updates subscription details from Paddle webhooks
-	UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time) error
+	UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time, subscriptionID *string) error
 
 	// Trial-related methods (Issue #679)
 
@@ -91,7 +94,8 @@ func (r *profileRepository) GetUserByClerkID(ctx context.Context, clerkUserID st
 		SELECT id, clerk_user_id, email, email_verified,
 		       subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
 		       trial_started_at, trial_ends_at, had_trial,
-		       paddle_customer_id, primary_region, is_active, is_deleted,
+		       paddle_customer_id, paddle_subscription_id, primary_region,
+		       is_active, is_deleted,
 		       deletion_requested_at, deletion_scheduled_at,
 		       created_at, updated_at, last_login_at
 		FROM users
@@ -112,6 +116,7 @@ func (r *profileRepository) GetUserByClerkID(ctx context.Context, clerkUserID st
 		&user.TrialEndsAt,
 		&user.HadTrial,
 		&user.PaddleCustomerID,
+		&user.PaddleSubscriptionID,
 		&user.PrimaryRegion,
 		&user.IsActive,
 		&user.IsDeleted,
@@ -138,7 +143,8 @@ func (r *profileRepository) GetUserByID(ctx context.Context, id string) (*domain
 		SELECT id, clerk_user_id, email, email_verified,
 		       subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
 		       trial_started_at, trial_ends_at, had_trial,
-		       paddle_customer_id, primary_region, is_active, is_deleted,
+		       paddle_customer_id, paddle_subscription_id, primary_region,
+		       is_active, is_deleted,
 		       deletion_requested_at, deletion_scheduled_at,
 		       created_at, updated_at, last_login_at
 		FROM users
@@ -159,6 +165,56 @@ func (r *profileRepository) GetUserByID(ctx context.Context, id string) (*domain
 		&user.TrialEndsAt,
 		&user.HadTrial,
 		&user.PaddleCustomerID,
+		&user.PaddleSubscriptionID,
+		&user.PrimaryRegion,
+		&user.IsActive,
+		&user.IsDeleted,
+		&user.DeletionRequestedAt,
+		&user.DeletionScheduledAt,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+		&user.LastLoginAt,
+	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrUserNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return &user, nil
+}
+
+// GetUserByPaddleSubscriptionID retrieves a user by their Paddle subscription ID
+func (r *profileRepository) GetUserByPaddleSubscriptionID(ctx context.Context, subscriptionID string) (*domain.User, error) {
+	query := `
+		SELECT id, clerk_user_id, email, email_verified,
+		       subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
+		       trial_started_at, trial_ends_at, had_trial,
+		       paddle_customer_id, paddle_subscription_id, primary_region,
+		       is_active, is_deleted,
+		       deletion_requested_at, deletion_scheduled_at,
+		       created_at, updated_at, last_login_at
+		FROM users
+		WHERE paddle_subscription_id = $1 AND is_deleted = FALSE
+	`
+
+	var user domain.User
+	err := r.db.QueryRow(ctx, query, subscriptionID).Scan(
+		&user.ID,
+		&user.ClerkUserID,
+		&user.Email,
+		&user.EmailVerified,
+		&user.SubscriptionTier,
+		&user.SubscriptionStatus,
+		&user.SubscriptionStartedAt,
+		&user.SubscriptionEndsAt,
+		&user.TrialStartedAt,
+		&user.TrialEndsAt,
+		&user.HadTrial,
+		&user.PaddleCustomerID,
+		&user.PaddleSubscriptionID,
 		&user.PrimaryRegion,
 		&user.IsActive,
 		&user.IsDeleted,
@@ -403,11 +459,13 @@ func (r *profileRepository) UpdatePaddleCustomerID(ctx context.Context, userID, 
 
 // UpdateSubscriptionFromPaddle updates subscription details from Paddle webhooks
 // Issue #46: Paddle Webhook Handler Implementation
-// Updates tier, status, and billing dates when subscription changes
+// Issue #48: Subscription Management UI (added subscriptionID parameter)
+// Updates tier, status, billing dates, and subscription ID when subscription changes
 func (r *profileRepository) UpdateSubscriptionFromPaddle(
 	ctx context.Context,
 	userID, tier, status string,
 	startedAt, endsAt *time.Time,
+	subscriptionID *string,
 ) error {
 	now := time.Now()
 
@@ -417,8 +475,9 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 		    subscription_status = $2,
 		    subscription_started_at = $3,
 		    subscription_ends_at = $4,
-		    updated_at = $5
-		WHERE id = $6 AND is_deleted = FALSE
+		    paddle_subscription_id = $5,
+		    updated_at = $6
+		WHERE id = $7 AND is_deleted = FALSE
 	`
 
 	ct, err := r.db.Exec(ctx, query,
@@ -426,6 +485,7 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 		status,
 		startedAt,
 		endsAt,
+		subscriptionID,
 		now,
 		userID,
 	)

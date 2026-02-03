@@ -36,7 +36,7 @@ type PaddleWebhookRepository interface {
 type SubscriptionProfileRepository interface {
 	GetUserByID(ctx context.Context, id string) (*domain.User, error)
 	UpdatePaddleCustomerID(ctx context.Context, userID, paddleCustomerID string) error
-	UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time) error
+	UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time, subscriptionID *string) error
 }
 
 // ClerkService defines the methods needed to update Clerk metadata.
@@ -186,14 +186,20 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCreated(ctx context.Conte
 	customerID, _ := data["customer_id"].(string)
 	customData, _ := data["custom_data"].(map[string]interface{})
 	userID, _ := customData["user_id"].(string)
+	// Issue #48: Extract subscription ID from webhook data
+	subscriptionID, _ := data["id"].(string)
 
 	if userID == "" || customerID == "" {
 		return errors.New("webhook payload missing user_id or customer_id")
+	}
+	if subscriptionID == "" {
+		return errors.New("webhook payload missing subscription id")
 	}
 
 	w.logger.Info("processing subscription.created",
 		"user_id", userID,
 		"customer_id", customerID,
+		"subscription_id", subscriptionID,
 	)
 
 	if err := w.profileRepo.UpdatePaddleCustomerID(ctx, userID, customerID); err != nil {
@@ -225,7 +231,8 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCreated(ctx context.Conte
 		}
 	}
 
-	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, tier, "active", startedAt, endsAt); err != nil {
+	// Issue #48: Pass subscription ID to repository for storage
+	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, tier, "active", startedAt, endsAt, &subscriptionID); err != nil {
 		return fmt.Errorf("failed to update subscription: %w", err)
 	}
 
@@ -262,6 +269,8 @@ func (w *SubscriptionWebhookWorker) processSubscriptionUpdated(ctx context.Conte
 
 	customData, _ := data["custom_data"].(map[string]interface{})
 	userID, _ := customData["user_id"].(string)
+	// Issue #48: Extract subscription ID from webhook data
+	subscriptionID, _ := data["id"].(string)
 
 	if userID == "" {
 		return errors.New("webhook payload missing user_id")
@@ -279,7 +288,12 @@ func (w *SubscriptionWebhookWorker) processSubscriptionUpdated(ctx context.Conte
 		}
 	}
 
-	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, tier, status, nil, endsAt); err != nil {
+	// Issue #48: Pass subscription ID to repository (may be empty string if not present)
+	var subIDPtr *string
+	if subscriptionID != "" {
+		subIDPtr = &subscriptionID
+	}
+	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, tier, status, nil, endsAt, subIDPtr); err != nil {
 		return fmt.Errorf("failed to update subscription: %w", err)
 	}
 
@@ -305,7 +319,8 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 		return fmt.Errorf("failed to get user: %w", err)
 	}
 
-	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, user.SubscriptionTier, "cancelled", nil, nil); err != nil {
+	// Issue #48: Don't update subscription ID on cancel (keep existing ID)
+	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, user.SubscriptionTier, "cancelled", nil, nil, nil); err != nil {
 		return fmt.Errorf("failed to update subscription status: %w", err)
 	}
 
@@ -331,7 +346,8 @@ func (w *SubscriptionWebhookWorker) processSubscriptionPaused(ctx context.Contex
 		return fmt.Errorf("failed to get user: %w", err)
 	}
 
-	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, user.SubscriptionTier, "inactive", nil, nil); err != nil {
+	// Issue #48: Don't update subscription ID on pause (keep existing ID)
+	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, user.SubscriptionTier, "inactive", nil, nil, nil); err != nil {
 		return fmt.Errorf("failed to update subscription status: %w", err)
 	}
 
@@ -357,7 +373,8 @@ func (w *SubscriptionWebhookWorker) processSubscriptionPastDue(ctx context.Conte
 		return fmt.Errorf("failed to get user: %w", err)
 	}
 
-	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, user.SubscriptionTier, "past_due", nil, nil); err != nil {
+	// Issue #48: Don't update subscription ID on past_due (keep existing ID)
+	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, user.SubscriptionTier, "past_due", nil, nil, nil); err != nil {
 		return fmt.Errorf("failed to update subscription status: %w", err)
 	}
 
