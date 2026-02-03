@@ -33,6 +33,9 @@ type User struct {
 	// Paddle customer ID (for payments)
 	PaddleCustomerID *string `json:"paddle_customer_id,omitempty" db:"paddle_customer_id"`
 
+	// Paddle subscription ID (for subscription management)
+	PaddleSubscriptionID *string `json:"paddle_subscription_id,omitempty" db:"paddle_subscription_id"`
+
 	// GDPR: Primary region for data residency (Fly.io IATA codes)
 	PrimaryRegion string `json:"primary_region" db:"primary_region"` // iad, lhr, syd
 

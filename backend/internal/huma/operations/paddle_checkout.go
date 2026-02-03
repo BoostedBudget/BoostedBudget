@@ -299,6 +299,21 @@ func (h *PaddleCheckoutHandler) getUserFromContext(ctx context.Context) (*domain
 	return user, nil
 }
 
+// getActiveSubscriptionID retrieves user's active Paddle subscription ID from database.
+// Returns error if user has no subscription ID or if user fetch fails.
+func (h *PaddleCheckoutHandler) getActiveSubscriptionID(ctx context.Context, userID string) (string, error) {
+	user, err := h.profileRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch user: %w", err)
+	}
+
+	if user.PaddleSubscriptionID == nil || *user.PaddleSubscriptionID == "" {
+		return "", fmt.Errorf("no active subscription found")
+	}
+
+	return *user.PaddleSubscriptionID, nil
+}
+
 // getPaddlePriceIDFromConfig returns the Paddle price ID for a given tier and billing interval
 // from the subscription_tiers.yaml configuration file.
 func (h *PaddleCheckoutHandler) getPaddlePriceIDFromConfig(tierName, billingInterval string) (string, error) {
@@ -361,7 +376,11 @@ func (h *PaddleCheckoutHandler) HandleUpdateSubscription(
 		prorationMode = "prorated_immediately"
 	}
 
-	subscriptionID := "sub_placeholder" // TODO: Get actual subscription ID from database
+	subscriptionID, err := h.getActiveSubscriptionID(ctx, user.ID)
+	if err != nil {
+		h.logger.Error("failed to get subscription ID", "user_id", user.ID, "error", err)
+		return nil, huma.Error400BadRequest("No active subscription found")
+	}
 
 	updatedSub, err := h.paddleService.UpdateSubscription(ctx, subscriptionID, priceID, prorationMode)
 	if err != nil {
@@ -401,7 +420,11 @@ func (h *PaddleCheckoutHandler) HandleCancelSubscription(
 		return nil, huma.Error400BadRequest("No active subscription to cancel")
 	}
 
-	subscriptionID := "sub_placeholder" // TODO: Get actual subscription ID from database
+	subscriptionID, err := h.getActiveSubscriptionID(ctx, user.ID)
+	if err != nil {
+		h.logger.Error("failed to get subscription ID", "user_id", user.ID, "error", err)
+		return nil, huma.Error400BadRequest("No active subscription found")
+	}
 
 	if err := h.paddleService.CancelSubscription(ctx, subscriptionID); err != nil {
 		h.logger.Error("failed to cancel subscription", "user_id", user.ID, "error", err)
@@ -474,7 +497,11 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 		return nil, huma.Error400BadRequest("No active subscription")
 	}
 
-	subscriptionID := "sub_placeholder" // TODO: Get actual subscription ID from database
+	subscriptionID, err := h.getActiveSubscriptionID(ctx, user.ID)
+	if err != nil {
+		h.logger.Error("failed to get subscription ID", "user_id", user.ID, "error", err)
+		return nil, huma.Error400BadRequest("No active subscription found")
+	}
 
 	subscription, err := h.paddleService.GetSubscription(ctx, subscriptionID)
 	if err != nil {
@@ -483,6 +510,18 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 	}
 
 	h.logger.Info("subscription retrieved", "user_id", user.ID, "subscription_id", subscription.ID)
+
+	// Extract billing interval from subscription (if available)
+	billingInterval := ""
+	if subscription.BillingCycle.Interval != "" {
+		billingInterval = string(subscription.BillingCycle.Interval)
+	}
+
+	// Extract amount from first subscription item (if available)
+	amount := ""
+	if len(subscription.Items) > 0 && subscription.Items[0].Price.UnitPrice.Amount != "" {
+		amount = subscription.Items[0].Price.UnitPrice.Amount
+	}
 
 	return &GetCurrentSubscriptionOutput{
 		Body: struct {
@@ -498,10 +537,10 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 			SubscriptionID:     subscription.ID,
 			Status:             string(subscription.Status),
 			Tier:               user.SubscriptionTier,
-			BillingInterval:    "month", // TODO: Extract from subscription
+			BillingInterval:    billingInterval,
 			CurrentPeriodEnd:   subscription.CurrentBillingPeriod.EndsAt,
 			NextBillingDate:    subscription.CurrentBillingPeriod.EndsAt,
-			Amount:             "", // TODO: Extract from subscription
+			Amount:             amount,
 			Currency:           string(subscription.CurrencyCode),
 		},
 	}, nil

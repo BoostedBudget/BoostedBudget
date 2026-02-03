@@ -372,3 +372,116 @@ func TestUpdateLastLogin_NotFound(t *testing.T) {
 func stringPtr(s string) *string {
 	return &s
 }
+
+// TestGetUserByPaddleSubscriptionID_Success tests successful retrieval by subscription ID
+func TestGetUserByPaddleSubscriptionID_Success(t *testing.T) {
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	subscriptionID := "sub_01h12345"
+	userID := uuid.New().String()
+	now := time.Now()
+
+	rows := pgxmock.NewRows([]string{
+		"id", "clerk_user_id", "email", "email_verified",
+		"subscription_tier", "subscription_status", "subscription_started_at", "subscription_ends_at",
+		"trial_started_at", "trial_ends_at", "had_trial",
+		"paddle_customer_id", "paddle_subscription_id", "primary_region",
+		"is_active", "is_deleted",
+		"deletion_requested_at", "deletion_scheduled_at",
+		"created_at", "updated_at", "last_login_at",
+	}).AddRow(
+		userID, "clerk_123", "test@example.com", true,
+		"premium", "active", &now, nil,
+		nil, nil, false,
+		stringPtr("cus_123"), stringPtr(subscriptionID), "iad",
+		true, false,
+		nil, nil,
+		now, now, &now,
+	)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at FROM users WHERE paddle_subscription_id = $1 AND is_deleted = FALSE`)).
+		WithArgs(subscriptionID).
+		WillReturnRows(rows)
+
+	// Execute
+	user, err := repo.GetUserByPaddleSubscriptionID(ctx, subscriptionID)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.NotNil(t, user)
+	assert.Equal(t, userID, user.ID)
+	assert.NotNil(t, user.PaddleSubscriptionID)
+	assert.Equal(t, subscriptionID, *user.PaddleSubscriptionID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetUserByPaddleSubscriptionID_NotFound tests handling of non-existent subscription ID
+func TestGetUserByPaddleSubscriptionID_NotFound(t *testing.T) {
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	subscriptionID := "sub_nonexistent"
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at FROM users WHERE paddle_subscription_id = $1 AND is_deleted = FALSE`)).
+		WithArgs(subscriptionID).
+		WillReturnError(pgx.ErrNoRows)
+
+	// Execute
+	user, err := repo.GetUserByPaddleSubscriptionID(ctx, subscriptionID)
+
+	// Assert
+	assert.Error(t, err)
+	assert.Nil(t, user)
+	assert.Equal(t, ErrUserNotFound, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestUpdateSubscriptionFromPaddle_WithSubscriptionID tests updating with subscription ID
+func TestUpdateSubscriptionFromPaddle_WithSubscriptionID(t *testing.T) {
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	tier := "premium"
+	status := "active"
+	subscriptionID := "sub_01h12345"
+	now := time.Now()
+
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, updated_at = $6 WHERE id = $7 AND is_deleted = FALSE`)).
+		WithArgs(tier, status, pgxmock.AnyArg(), nil, &subscriptionID, pgxmock.AnyArg(), userID).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	// Execute
+	err := repo.UpdateSubscriptionFromPaddle(ctx, userID, tier, status, &now, nil, &subscriptionID)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestUpdateSubscriptionFromPaddle_WithNullSubscriptionID tests updating with null subscription ID
+func TestUpdateSubscriptionFromPaddle_WithNullSubscriptionID(t *testing.T) {
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	tier := "premium"
+	status := "active"
+	now := time.Now()
+
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, updated_at = $6 WHERE id = $7 AND is_deleted = FALSE`)).
+		WithArgs(tier, status, pgxmock.AnyArg(), nil, nil, pgxmock.AnyArg(), userID).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	// Execute
+	err := repo.UpdateSubscriptionFromPaddle(ctx, userID, tier, status, &now, nil, nil)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
