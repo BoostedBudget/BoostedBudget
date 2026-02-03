@@ -1876,6 +1876,14 @@ func (m *mockProfileRepoForCursorTests) GetUserByID(ctx context.Context, id stri
 	return args.Get(0).(*domain.User), args.Error(1)
 }
 
+func (m *mockProfileRepoForCursorTests) GetUserByPaddleSubscriptionID(ctx context.Context, subscriptionID string) (*domain.User, error) {
+	args := m.Called(ctx, subscriptionID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.User), args.Error(1)
+}
+
 func (m *mockProfileRepoForCursorTests) CreateUser(ctx context.Context, user *domain.User) error {
 	args := m.Called(ctx, user)
 	return args.Error(0)
@@ -1952,8 +1960,8 @@ func (m *mockProfileRepoForCursorTests) UpdatePaddleCustomerID(ctx context.Conte
 	return args.Error(0)
 }
 
-func (m *mockProfileRepoForCursorTests) UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time) error {
-	args := m.Called(ctx, userID, tier, status, startedAt, endsAt)
+func (m *mockProfileRepoForCursorTests) UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time, subscriptionID *string) error {
+	args := m.Called(ctx, userID, tier, status, startedAt, endsAt, subscriptionID)
 	return args.Error(0)
 }
 

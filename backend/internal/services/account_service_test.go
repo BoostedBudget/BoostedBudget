@@ -333,6 +333,14 @@ func (m *MockUserRepository) GetUserByID(ctx context.Context, id string) (*domai
 	return args.Get(0).(*domain.User), args.Error(1)
 }
 
+func (m *MockUserRepository) GetUserByPaddleSubscriptionID(ctx context.Context, subscriptionID string) (*domain.User, error) {
+	args := m.Called(ctx, subscriptionID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.User), args.Error(1)
+}
+
 func (m *MockUserRepository) CreateUser(ctx context.Context, user *domain.User) error {
 	args := m.Called(ctx, user)
 	return args.Error(0)
@@ -408,8 +416,8 @@ func (m *MockUserRepository) UpdatePaddleCustomerID(ctx context.Context, userID,
 	return args.Error(0)
 }
 
-func (m *MockUserRepository) UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time) error {
-	args := m.Called(ctx, userID, tier, status, startedAt, endsAt)
+func (m *MockUserRepository) UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time, subscriptionID *string) error {
+	args := m.Called(ctx, userID, tier, status, startedAt, endsAt, subscriptionID)
 	return args.Error(0)
 }
 

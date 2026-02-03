@@ -252,16 +252,16 @@ func (r *profileRepository) CreateUser(ctx context.Context, user *domain.User) e
 			id, clerk_user_id, email, email_verified,
 			subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
 			trial_started_at, trial_ends_at, had_trial,
-			paddle_customer_id, primary_region, is_active, is_deleted,
+			paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted,
 			deletion_requested_at, deletion_scheduled_at,
 			created_at, updated_at, last_login_at
 		) VALUES (
 			$1, $2, $3, $4,
 			$5, $6, $7, $8,
 			$9, $10, $11,
-			$12, $13, $14, $15,
-			$16, $17,
-			$18, $19, $20
+			$12, $13, $14, $15, $16,
+			$17, $18,
+			$19, $20, $21
 		)
 	`
 
@@ -278,6 +278,7 @@ func (r *profileRepository) CreateUser(ctx context.Context, user *domain.User) e
 		user.TrialEndsAt,
 		user.HadTrial,
 		user.PaddleCustomerID,
+		user.PaddleSubscriptionID,
 		user.PrimaryRegion,
 		user.IsActive,
 		user.IsDeleted,
@@ -318,16 +319,16 @@ func (r *profileRepository) CreateUserTx(ctx context.Context, tx pgx.Tx, user *d
 			id, clerk_user_id, email, email_verified,
 			subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
 			trial_started_at, trial_ends_at, had_trial,
-			paddle_customer_id, primary_region, is_active, is_deleted,
+			paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted,
 			deletion_requested_at, deletion_scheduled_at,
 			created_at, updated_at, last_login_at
 		) VALUES (
 			$1, $2, $3, $4,
 			$5, $6, $7, $8,
 			$9, $10, $11,
-			$12, $13, $14, $15,
-			$16, $17,
-			$18, $19, $20
+			$12, $13, $14, $15, $16,
+			$17, $18,
+			$19, $20, $21
 		)
 	`
 
@@ -344,6 +345,7 @@ func (r *profileRepository) CreateUserTx(ctx context.Context, tx pgx.Tx, user *d
 		user.TrialEndsAt,
 		user.HadTrial,
 		user.PaddleCustomerID,
+		user.PaddleSubscriptionID,
 		user.PrimaryRegion,
 		user.IsActive,
 		user.IsDeleted,

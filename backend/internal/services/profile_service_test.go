@@ -35,6 +35,14 @@ func (m *MockProfileRepository) GetUserByID(ctx context.Context, id string) (*do
 	return args.Get(0).(*domain.User), args.Error(1)
 }
 
+func (m *MockProfileRepository) GetUserByPaddleSubscriptionID(ctx context.Context, subscriptionID string) (*domain.User, error) {
+	args := m.Called(ctx, subscriptionID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.User), args.Error(1)
+}
+
 func (m *MockProfileRepository) CreateUser(ctx context.Context, user *domain.User) error {
 	args := m.Called(ctx, user)
 	return args.Error(0)
@@ -110,8 +118,8 @@ func (m *MockProfileRepository) UpdatePaddleCustomerID(ctx context.Context, user
 	return args.Error(0)
 }
 
-func (m *MockProfileRepository) UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time) error {
-	args := m.Called(ctx, userID, tier, status, startedAt, endsAt)
+func (m *MockProfileRepository) UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time, subscriptionID *string) error {
+	args := m.Called(ctx, userID, tier, status, startedAt, endsAt, subscriptionID)
 	return args.Error(0)
 }
 
