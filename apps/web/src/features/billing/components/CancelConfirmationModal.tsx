@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -39,12 +39,6 @@ export function CancelConfirmationModal({
     setStep('first')
     setConfirmText('')
   }
-
-  useEffect(() => {
-    if (!open) {
-      resetState()
-    }
-  }, [open])
 
   const handleClose = () => {
     resetState()
