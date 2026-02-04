@@ -4,7 +4,7 @@ import {
   useUpdatePaddleSubscription,
   useCancelPaddleSubscription,
   useGetBillingPortalUrl,
-} from '@boostedbudget/api-client';
+} from '@boostedbudget/api-client/endpoints/subscription/subscription';
 import './SubscriptionManagementPage.css';
 
 type NotificationType = 'success' | 'error';
