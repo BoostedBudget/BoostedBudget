@@ -152,6 +152,14 @@ var validSubscriptionTiers = map[string]bool{
 	"household_5": true,
 }
 
+// validateBillingInterval checks if billing interval is valid
+func validateBillingInterval(interval string) error {
+	if interval != "month" && interval != "year" {
+		return huma.Error400BadRequest("Billing interval must be 'month' or 'year'")
+	}
+	return nil
+}
+
 // HandleCreateCheckoutSession handles POST /api/v1/subscription/checkout.
 // Creates a Paddle checkout session for the user to purchase a subscription.
 func (h *PaddleCheckoutHandler) HandleCreateCheckoutSession(
@@ -170,14 +178,12 @@ func (h *PaddleCheckoutHandler) HandleCreateCheckoutSession(
 		"billing_interval", input.Body.BillingInterval,
 	)
 
-	// Validate tier
 	if !validSubscriptionTiers[input.Body.Tier] {
 		return nil, huma.Error400BadRequest("Invalid tier")
 	}
 
-	// Validate billing interval
-	if input.Body.BillingInterval != "month" && input.Body.BillingInterval != "year" {
-		return nil, huma.Error400BadRequest("Billing interval must be 'month' or 'year'")
+	if err := validateBillingInterval(input.Body.BillingInterval); err != nil {
+		return nil, err
 	}
 
 	// Get or create Paddle customer ID
@@ -241,15 +247,10 @@ func (h *PaddleCheckoutHandler) HandleCreateCheckoutSession(
 		"tier", input.Body.Tier,
 	)
 
-	return &CheckoutOutput{
-		Body: struct {
-			CheckoutURL   string `json:"checkout_url" doc:"URL to open Paddle checkout (Paddle.js Overlay or redirect)"`
-			TransactionID string `json:"transaction_id" doc:"Paddle transaction ID for tracking"`
-		}{
-			CheckoutURL:   checkoutURL,
-			TransactionID: transactionID,
-		},
-	}, nil
+	out := &CheckoutOutput{}
+	out.Body.CheckoutURL = checkoutURL
+	out.Body.TransactionID = transactionID
+	return out, nil
 }
 
 // HandlePreviewSubscriptionUpdate handles POST /api/v1/subscription/preview-update.
@@ -390,17 +391,11 @@ func (h *PaddleCheckoutHandler) HandleUpdateSubscription(
 
 	h.logger.Info("subscription updated successfully", "subscription_id", updatedSub.ID)
 
-	return &UpdateSubscriptionOutput{
-		Body: struct {
-			SubscriptionID string `json:"subscription_id" doc:"Paddle subscription ID" example:"sub_01h1234567890"`
-			Status         string `json:"status" doc:"Subscription status" example:"active"`
-			Message        string `json:"message" doc:"Human-readable update message" example:"Subscription upgraded successfully"`
-		}{
-			SubscriptionID: updatedSub.ID,
-			Status:         string(updatedSub.Status),
-			Message:        "Subscription updated successfully",
-		},
-	}, nil
+	out := &UpdateSubscriptionOutput{}
+	out.Body.SubscriptionID = updatedSub.ID
+	out.Body.Status = string(updatedSub.Status)
+	out.Body.Message = "Subscription updated successfully"
+	return out, nil
 }
 
 // HandleCancelSubscription handles POST /api/v1/subscription/cancel.
@@ -433,17 +428,10 @@ func (h *PaddleCheckoutHandler) HandleCancelSubscription(
 
 	h.logger.Info("subscription cancelled successfully", "user_id", user.ID, "subscription_id", subscriptionID)
 
-	return &CancelSubscriptionOutput{
-		Body: struct {
-			SubscriptionID string `json:"subscription_id" doc:"Cancelled Paddle subscription ID" example:"sub_01h1234567890"`
-			Message        string `json:"message" doc:"Cancellation confirmation message" example:"Subscription will be cancelled at end of billing period"`
-			EndsAt         string `json:"ends_at,omitempty" doc:"Date subscription ends" example:"2026-03-01"`
-		}{
-			SubscriptionID: subscriptionID,
-			Message:        "Subscription will be cancelled at end of billing period",
-			EndsAt:         "",
-		},
-	}, nil
+	out := &CancelSubscriptionOutput{}
+	out.Body.SubscriptionID = subscriptionID
+	out.Body.Message = "Subscription will be cancelled at end of billing period"
+	return out, nil
 }
 
 // HandleGetBillingPortalURL handles GET /api/v1/subscription/billing-portal.
@@ -471,13 +459,9 @@ func (h *PaddleCheckoutHandler) HandleGetBillingPortalURL(
 
 	h.logger.Info("billing portal URL generated", "user_id", user.ID)
 
-	return &GetBillingPortalURLOutput{
-		Body: struct {
-			PortalURL string `json:"portal_url" doc:"URL to Paddle billing portal" example:"https://buy.paddle.com/customer/portal"`
-		}{
-			PortalURL: portalURL,
-		},
-	}, nil
+	out := &GetBillingPortalURLOutput{}
+	out.Body.PortalURL = portalURL
+	return out, nil
 }
 
 // HandleGetCurrentSubscription handles GET /api/v1/subscription/current.
@@ -511,39 +495,22 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 
 	h.logger.Info("subscription retrieved", "user_id", user.ID, "subscription_id", subscription.ID)
 
-	// Extract billing interval from subscription (if available)
-	billingInterval := ""
-	if subscription.BillingCycle.Interval != "" {
-		billingInterval = string(subscription.BillingCycle.Interval)
-	}
-
-	// Extract amount from first subscription item (if available)
+	billingInterval := string(subscription.BillingCycle.Interval)
 	amount := ""
-	if len(subscription.Items) > 0 && subscription.Items[0].Price.UnitPrice.Amount != "" {
+	if len(subscription.Items) > 0 {
 		amount = subscription.Items[0].Price.UnitPrice.Amount
 	}
 
-	return &GetCurrentSubscriptionOutput{
-		Body: struct {
-			SubscriptionID     string `json:"subscription_id" doc:"Paddle subscription ID" example:"sub_01h1234567890"`
-			Status             string `json:"status" doc:"Subscription status" example:"active"`
-			Tier               string `json:"tier" doc:"Current subscription tier" example:"premium"`
-			BillingInterval    string `json:"billing_interval" doc:"Billing interval (month/year)" example:"month"`
-			CurrentPeriodEnd   string `json:"current_period_end" doc:"End of current billing period" example:"2026-03-01"`
-			NextBillingDate    string `json:"next_billing_date,omitempty" doc:"Next billing date" example:"2026-03-01"`
-			Amount             string `json:"amount" doc:"Subscription amount" example:"9.99"`
-			Currency           string `json:"currency" doc:"Currency code" example:"USD"`
-		}{
-			SubscriptionID:     subscription.ID,
-			Status:             string(subscription.Status),
-			Tier:               user.SubscriptionTier,
-			BillingInterval:    billingInterval,
-			CurrentPeriodEnd:   subscription.CurrentBillingPeriod.EndsAt,
-			NextBillingDate:    subscription.CurrentBillingPeriod.EndsAt,
-			Amount:             amount,
-			Currency:           string(subscription.CurrencyCode),
-		},
-	}, nil
+	out := &GetCurrentSubscriptionOutput{}
+	out.Body.SubscriptionID = subscription.ID
+	out.Body.Status = string(subscription.Status)
+	out.Body.Tier = user.SubscriptionTier
+	out.Body.BillingInterval = billingInterval
+	out.Body.CurrentPeriodEnd = subscription.CurrentBillingPeriod.EndsAt
+	out.Body.NextBillingDate = subscription.CurrentBillingPeriod.EndsAt
+	out.Body.Amount = amount
+	out.Body.Currency = string(subscription.CurrencyCode)
+	return out, nil
 }
 
 // RegisterPaddleCheckoutRoutes registers Paddle checkout routes with the Huma API.

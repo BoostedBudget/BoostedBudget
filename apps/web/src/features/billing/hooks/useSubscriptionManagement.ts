@@ -45,35 +45,30 @@ export function useSubscriptionManagement() {
     return cancelMutation.mutateAsync({})
   }
 
-  // Error normalization
   const normalizeError = (error: unknown): SubscriptionError | null => {
     if (!error) return null
 
     const err = error as { status?: number; response?: { status?: number }; message?: string }
     const status = err.status || err.response?.status
+    const message = err.message?.toLowerCase() || ''
 
-    switch (status) {
-      case 401:
-        return { status, message: 'Please sign in to manage your subscription' }
-      case 403:
-        return { status, message: 'You do not have permission to perform this action' }
-      case 400:
-        return { status, message: 'Invalid subscription update request' }
-      case 500:
-        return { status, message: 'Subscription service error. Please try again later.' }
-      case 503:
-        return { status, message: 'Subscription service temporarily unavailable' }
-      default: {
-        const lowerMessage = err.message?.toLowerCase() || ''
-        if (lowerMessage.includes('network') || lowerMessage.includes('fetch')) {
-          return { status: 0, message: 'Network error. Please check your connection.' }
-        }
-        return {
-          status,
-          message: err.message || 'Failed to update subscription. Please try again.',
-        }
-      }
+    const errorMessages: Record<number, string> = {
+      401: 'Please sign in to manage your subscription',
+      403: 'You do not have permission to perform this action',
+      400: 'Invalid subscription update request',
+      500: 'Subscription service error. Please try again later.',
+      503: 'Subscription service temporarily unavailable',
     }
+
+    if (status && status in errorMessages) {
+      return { status, message: errorMessages[status] }
+    }
+
+    if (message.includes('network') || message.includes('fetch')) {
+      return { status: 0, message: 'Network error. Please check your connection.' }
+    }
+
+    return { status, message: err.message || 'Failed to update subscription. Please try again.' }
   }
 
   return {

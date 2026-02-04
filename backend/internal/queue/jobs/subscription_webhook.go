@@ -206,17 +206,8 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCreated(ctx context.Conte
 		return fmt.Errorf("failed to update paddle_customer_id: %w", err)
 	}
 
-	var endsAt *time.Time
+	var endsAt, startedAt *time.Time
 	tier := "premium"
-	var startedAt *time.Time
-
-	if items, ok := data["items"].([]interface{}); ok && len(items) > 0 {
-		if item, ok := items[0].(map[string]interface{}); ok {
-			if _, ok := item["price"].(map[string]interface{}); ok {
-				tier = "premium"
-			}
-		}
-	}
 
 	if billingCycle, ok := data["billing_cycle"].(map[string]interface{}); ok {
 		if startsAtStr, ok := billingCycle["starts_at"].(string); ok {
@@ -329,33 +320,16 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 
 // processSubscriptionPaused handles subscription.paused events.
 func (w *SubscriptionWebhookWorker) processSubscriptionPaused(ctx context.Context, webhook *domain.PaddleWebhookEvent) error {
-	data, err := w.parseWebhookPayload(webhook)
-	if err != nil {
-		return err
-	}
-
-	customData, _ := data["custom_data"].(map[string]interface{})
-	userID, _ := customData["user_id"].(string)
-
-	if userID == "" {
-		return errors.New("webhook payload missing user_id")
-	}
-
-	user, err := w.profileRepo.GetUserByID(ctx, userID)
-	if err != nil {
-		return fmt.Errorf("failed to get user: %w", err)
-	}
-
-	// Issue #48: Don't update subscription ID on pause (keep existing ID)
-	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, user.SubscriptionTier, "inactive", nil, nil, nil); err != nil {
-		return fmt.Errorf("failed to update subscription status: %w", err)
-	}
-
-	return nil
+	return w.processSubscriptionStatusChange(ctx, webhook, "inactive")
 }
 
 // processSubscriptionPastDue handles subscription.past_due events.
 func (w *SubscriptionWebhookWorker) processSubscriptionPastDue(ctx context.Context, webhook *domain.PaddleWebhookEvent) error {
+	return w.processSubscriptionStatusChange(ctx, webhook, "past_due")
+}
+
+// processSubscriptionStatusChange is a helper for status-only updates (no subscription ID changes)
+func (w *SubscriptionWebhookWorker) processSubscriptionStatusChange(ctx context.Context, webhook *domain.PaddleWebhookEvent, status string) error {
 	data, err := w.parseWebhookPayload(webhook)
 	if err != nil {
 		return err
@@ -373,11 +347,9 @@ func (w *SubscriptionWebhookWorker) processSubscriptionPastDue(ctx context.Conte
 		return fmt.Errorf("failed to get user: %w", err)
 	}
 
-	// Issue #48: Don't update subscription ID on past_due (keep existing ID)
-	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, user.SubscriptionTier, "past_due", nil, nil, nil); err != nil {
+	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, user.SubscriptionTier, status, nil, nil, nil); err != nil {
 		return fmt.Errorf("failed to update subscription status: %w", err)
 	}
-
 	return nil
 }
 
