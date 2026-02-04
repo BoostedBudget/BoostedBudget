@@ -107,7 +107,7 @@ describe('CurrentSubscriptionDisplay', () => {
   })
 
   it('should apply different styling for different statuses', () => {
-    const { container } = render(<CurrentSubscriptionDisplay {...defaultProps} status="cancelled" />)
+    render(<CurrentSubscriptionDisplay {...defaultProps} status="cancelled" />)
 
     const statusBadge = screen.getByText(/cancelled/i)
     expect(statusBadge.className).toContain('cancelled')
