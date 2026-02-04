@@ -35,16 +35,19 @@ export function CancelConfirmationModal({
   const [step, setStep] = useState<'first' | 'second'>('first')
   const [confirmText, setConfirmText] = useState('')
 
+  const resetState = () => {
+    setStep('first')
+    setConfirmText('')
+  }
+
   useEffect(() => {
     if (!open) {
-      setStep('first')
-      setConfirmText('')
+      resetState()
     }
   }, [open])
 
   const handleClose = () => {
-    setStep('first')
-    setConfirmText('')
+    resetState()
     onClose()
   }
 
@@ -62,8 +65,6 @@ export function CancelConfirmationModal({
       onConfirm()
     }
   }
-
-  const isConfirmDisabled = confirmText !== 'CANCEL'
 
   return (
     <Dialog open={open} onOpenChange={(isOpen) => !isOpen && handleClose()}>
@@ -176,7 +177,7 @@ export function CancelConfirmationModal({
               <Button
                 variant="destructive"
                 onClick={handleConfirm}
-                disabled={isConfirmDisabled}
+                disabled={confirmText !== 'CANCEL'}
               >
                 Confirm Cancellation
               </Button>

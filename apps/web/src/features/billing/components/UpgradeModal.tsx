@@ -33,9 +33,7 @@ export function UpgradeModal({
   onClose,
 }: UpgradeModalProps) {
   const [billingInterval, setBillingInterval] = useState<'month' | 'year'>('month')
-  const [selectedTier] = useState<TierInfo | null>(
-    availableTiers.length > 0 ? availableTiers[0] : null
-  )
+  const selectedTier = availableTiers.length > 0 ? availableTiers[0] : null
 
   const handleUpgrade = () => {
     if (selectedTier) {
@@ -49,7 +47,7 @@ export function UpgradeModal({
 
   const billingPeriodLabel = billingInterval === 'month' ? 'month' : 'year'
 
-  if (availableTiers.length === 0) {
+  if (!selectedTier) {
     return (
       <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
         <DialogContent>

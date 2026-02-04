@@ -42,15 +42,15 @@ export function DowngradeModal({
     )
   }, [currentTier.features, downgradeTier.features])
 
+  const handleClose = () => {
+    setConfirmed(false)
+    onClose()
+  }
+
   const handleDowngrade = () => {
     if (confirmed) {
       onDowngrade(downgradeTier.id)
     }
-  }
-
-  const handleClose = () => {
-    setConfirmed(false)
-    onClose()
   }
 
   const lostFeaturesText = lostFeatures.length > 0 ? lostFeatures.join(', ') : 'some features'
