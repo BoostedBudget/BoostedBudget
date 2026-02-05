@@ -6,7 +6,7 @@ import {
 } from '@boostedbudget/api-client/endpoints/subscription/subscription'
 import type {
   UpdateSubscriptionInputBody,
-  GetCurrentSubscriptionOutput,
+  GetCurrentSubscriptionOutputBody,
 } from '@boostedbudget/api-client/models'
 
 interface UpdateOptions {
@@ -30,20 +30,17 @@ export function useSubscriptionManagement() {
   const cancelMutation = useCancelPaddleSubscription()
 
   // Update subscription
-  const updateSubscription = async (options: UpdateOptions) => {
-    return updateMutation.mutateAsync({
+  const updateSubscription = (options: UpdateOptions) =>
+    updateMutation.mutateAsync({
       data: {
         new_tier: options.newTier,
         billing_interval: options.billingInterval,
         proration_billing_mode: options.prorationBillingMode,
       } as UpdateSubscriptionInputBody,
     })
-  }
 
   // Cancel subscription
-  const cancelSubscription = async () => {
-    return cancelMutation.mutateAsync({})
-  }
+  const cancelSubscription = () => cancelMutation.mutateAsync()
 
   const normalizeError = (error: unknown): SubscriptionError | null => {
     if (!error) return null
@@ -73,7 +70,7 @@ export function useSubscriptionManagement() {
 
   return {
     // Current subscription data
-    subscription: subscriptionQuery.data as GetCurrentSubscriptionOutput | undefined,
+    subscription: subscriptionQuery.data as GetCurrentSubscriptionOutputBody | undefined,
     isLoadingSubscription: subscriptionQuery.isLoading,
     subscriptionError: normalizeError(subscriptionQuery.error),
     refetchSubscription: subscriptionQuery.refetch,
