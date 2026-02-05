@@ -47,7 +47,7 @@ export function SubscriptionManagementPage() {
 
   const handleCancel = async () => {
     try {
-      await cancelSubscription({});
+      await cancelSubscription();
       setShowCancelModal(false);
       showNotification('success', 'Subscription cancelled successfully');
       refetch();
