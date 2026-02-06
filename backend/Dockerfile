@@ -1,6 +1,6 @@
 # Multi-stage production Dockerfile for Backend
 # Stage 1: Builder
-FROM golang:1.25.6-alpine AS builder
+FROM golang:1.25.7-alpine AS builder
 
 # Install build dependencies
 RUN echo "📦 Installing build dependencies..." && \
