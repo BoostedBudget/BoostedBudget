@@ -584,10 +584,10 @@ jobs:
           docker stop test-postgres-${{ github.run_id }} 2>/dev/null || true
           docker rm test-postgres-${{ github.run_id }} 2>/dev/null || true
 
-          echo "🐘 Pulling PostgreSQL image..."
+          echo "Pulling PostgreSQL image..."
           for i in 1 2 3; do
             docker pull postgres:17 && break || {
-              echo "⚠️ Pull attempt $i/3 failed"
+              echo "Pull attempt $i/3 failed"
               [ $i -lt 3 ] && sleep 10
             }
           done
@@ -801,6 +801,8 @@ jobs:
           tags: test-${{ matrix.component }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            GO_VERSION=${{ env.GO_VERSION }}
 
       - name: Ensure Grype is installed
         run: |

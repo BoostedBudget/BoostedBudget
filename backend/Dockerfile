@@ -1,22 +1,24 @@
 # Multi-stage production Dockerfile for Backend
 # Stage 1: Builder
-FROM golang:1.25.7-alpine AS builder
+ARG GO_VERSION=1.25.7
+FROM golang:${GO_VERSION}-alpine AS builder
 
 # Install build dependencies
-RUN echo "📦 Installing build dependencies..." && \
+RUN echo "Installing build dependencies..." && \
+    echo "Using Go version: $(go version)" && \
     for i in 1 2 3; do \
       apk add --no-cache git ca-certificates tzdata && break || \
-      { echo "⚠ apk add attempt $i/3 failed"; [ $i -lt 3 ] && sleep 5; }; \
+      { echo "apk add attempt $i/3 failed"; [ $i -lt 3 ] && sleep 5; }; \
     done
 
 WORKDIR /build
 
 # Copy go mod files and download dependencies
 COPY backend/go.mod backend/go.sum ./
-RUN echo "📦 Downloading Go modules..." && \
+RUN echo "Downloading Go modules..." && \
     for i in 1 2 3; do \
-      go mod download && echo "✓ Modules downloaded" && break || \
-      { echo "⚠ Download attempt $i/3 failed"; [ $i -lt 3 ] && sleep 10; }; \
+      go mod download && echo "Modules downloaded" && break || \
+      { echo "Download attempt $i/3 failed"; [ $i -lt 3 ] && sleep 10; }; \
     done
 
 # Copy config directory (needed for runtime)
@@ -37,7 +39,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 FROM debian:bookworm-slim@sha256:98f4b71de414932439ac6ac690d7060df1f27161073c5036a7553723881bffbe
 
 # Install runtime dependencies
-RUN echo "📦 Installing runtime dependencies..." && \
+RUN echo "Installing runtime dependencies..." && \
     for i in 1 2 3; do \
       echo "Attempt $i/3..." && \
       apt-get update && \
@@ -45,26 +47,26 @@ RUN echo "📦 Installing runtime dependencies..." && \
       apt-get install -y --no-install-recommends \
         ca-certificates curl tzdata postgresql-client && \
       rm -rf /var/lib/apt/lists/* && \
-      echo "✓ Dependencies installed" && break || \
-      { echo "⚠ apt-get attempt $i/3 failed"; \
+      echo "Dependencies installed" && break || \
+      { echo "apt-get attempt $i/3 failed"; \
         [ $i -lt 3 ] && sleep 5; }; \
     done
 
 # Install golang-migrate for database migrations
 # TARGETARCH is automatically set by Docker Buildx (amd64 or arm64)
 ARG TARGETARCH
-RUN echo "📦 Downloading golang-migrate for ${TARGETARCH}..." && \
+RUN echo "Downloading golang-migrate for ${TARGETARCH}..." && \
     for i in 1 2 3 4 5; do \
       echo "Attempt $i/5..." && \
       curl -sSfL --retry 3 --retry-delay 5 --connect-timeout 10 \
         "https://github.com/golang-migrate/migrate/releases/latest/download/migrate.linux-${TARGETARCH}.tar.gz" \
         | tar -xz -C /usr/local/bin && \
       chmod +x /usr/local/bin/migrate && \
-      echo "✓ golang-migrate downloaded successfully" && break || \
-      { echo "⚠ Download attempt $i/5 failed"; \
+      echo "golang-migrate downloaded successfully" && break || \
+      { echo "Download attempt $i/5 failed"; \
         [ $i -lt 5 ] && sleep 10; }; \
     done && \
-    test -x /usr/local/bin/migrate || { echo "✗ golang-migrate installation failed"; exit 1; }
+    test -x /usr/local/bin/migrate || { echo "golang-migrate installation failed"; exit 1; }
 
 WORKDIR /app
 
