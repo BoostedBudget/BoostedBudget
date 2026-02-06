@@ -16,8 +16,8 @@ describe('DowngradeModal', () => {
   const downgradeTier = {
     id: 'premium',
     name: 'Premium',
-    price_monthly: '$9.99',
-    features: ['15 rules', '30 accounts'],
+    price_monthly: '$8.99',
+    features: ['Unlimited rules', '30 accounts'],
   }
 
   const nextBillingDate = '2024-03-15'
@@ -105,7 +105,8 @@ describe('DowngradeModal', () => {
       />
     )
 
-    expect(screen.getByText(/15 rules/i)).toBeDefined()
+    const unlimitedRulesElements = screen.getAllByText(/unlimited rules/i)
+    expect(unlimitedRulesElements.length).toBeGreaterThan(0)
     expect(screen.getByText(/30 accounts/i)).toBeDefined()
   })
 

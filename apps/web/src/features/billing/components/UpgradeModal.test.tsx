@@ -9,18 +9,18 @@ describe('UpgradeModal', () => {
   const currentTier = {
     id: 'premium',
     name: 'Premium',
-    price_monthly: '$9.99',
-    price_yearly: '$99.99',
-    features: ['15 rules', '30 accounts'],
+    price_monthly: '$8.99',
+    price_yearly: '$79.00',
+    features: ['Unlimited rules', '30 accounts'],
   }
 
   const availableTiers = [
     {
-      id: 'premium_plus',
-      name: 'Premium+',
-      price_monthly: '$19.99',
-      price_yearly: '$199.99',
-      features: ['Unlimited rules', 'Unlimited accounts', 'AI insights', 'API access'],
+      id: 'household_5',
+      name: 'Household (5+)',
+      price_monthly: '$18.99',
+      price_yearly: '$179.00',
+      features: ['Unlimited rules', '150 accounts', 'AI insights', 'API access'],
     },
   ]
 
@@ -71,7 +71,7 @@ describe('UpgradeModal', () => {
     const premiumElements = screen.getAllByText(/Premium/i)
     expect(premiumElements.length).toBeGreaterThan(0)
     // Check for current tier features
-    expect(screen.getByText(/15 rules/i)).toBeDefined()
+    expect(screen.getByText(/Unlimited rules/i)).toBeDefined()
     expect(screen.getByText(/30 accounts/i)).toBeDefined()
   })
 
@@ -204,7 +204,7 @@ describe('UpgradeModal', () => {
     )
 
     // Current tier features
-    expect(screen.getByText(/15 rules/i)).toBeDefined()
+    expect(screen.getByText(/Unlimited rules/i)).toBeDefined()
     expect(screen.getByText(/30 accounts/i)).toBeDefined()
 
     // New tier features
