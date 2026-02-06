@@ -2,28 +2,28 @@ import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { UpgradeModal } from './UpgradeModal'
 
+const mockOnUpgrade = mock(() => {})
+const mockOnClose = mock(() => {})
+
+const currentTier = {
+  id: 'premium',
+  name: 'Premium',
+  price_monthly: '$8.99',
+  price_yearly: '$79.00',
+  features: ['Unlimited rules', '30 accounts'],
+}
+
+const availableTiers = [
+  {
+    id: 'household_5',
+    name: 'Household (5+)',
+    price_monthly: '$18.99',
+    price_yearly: '$179.00',
+    features: ['Unlimited rules', '150 accounts', 'AI insights', 'API access'],
+  },
+]
+
 describe('UpgradeModal', () => {
-  const mockOnUpgrade = mock(() => {})
-  const mockOnClose = mock(() => {})
-
-  const currentTier = {
-    id: 'premium',
-    name: 'Premium',
-    price_monthly: '$8.99',
-    price_yearly: '$79.00',
-    features: ['Unlimited rules', '30 accounts'],
-  }
-
-  const availableTiers = [
-    {
-      id: 'household_5',
-      name: 'Household (5+)',
-      price_monthly: '$18.99',
-      price_yearly: '$179.00',
-      features: ['Unlimited rules', '150 accounts', 'AI insights', 'API access'],
-    },
-  ]
-
   beforeEach(() => {
     mockOnUpgrade.mockClear()
     mockOnClose.mockClear()
@@ -57,7 +57,7 @@ describe('UpgradeModal', () => {
     expect(screen.getByText(/Upgrade Your Plan/i)).toBeDefined()
   })
 
-  it('should display current tier information', () => {
+  it('should display current tier and available upgrade tiers with features', () => {
     render(
       <UpgradeModal
         open={true}
@@ -68,27 +68,15 @@ describe('UpgradeModal', () => {
       />
     )
 
+    // Current tier
     const premiumElements = screen.getAllByText(/Premium/i)
     expect(premiumElements.length).toBeGreaterThan(0)
-    // Check for current tier features
-    expect(screen.getByText(/Unlimited rules/i)).toBeDefined()
+    expect(screen.getAllByText(/Unlimited rules/i).length).toBeGreaterThan(0)
     expect(screen.getByText(/30 accounts/i)).toBeDefined()
-  })
 
-  it('should display available upgrade tiers', () => {
-    render(
-      <UpgradeModal
-        open={true}
-        currentTier={currentTier}
-        availableTiers={availableTiers}
-        onUpgrade={mockOnUpgrade}
-        onClose={mockOnClose}
-      />
-    )
-
-    const premiumPlusElements = screen.getAllByText(/Premium\+/i)
-    expect(premiumPlusElements.length).toBeGreaterThan(0)
-    expect(screen.getByText(/Unlimited rules/i)).toBeDefined()
+    // Upgrade tier
+    const householdElements = screen.getAllByText(/Household.*5/i)
+    expect(householdElements.length).toBeGreaterThan(0)
     expect(screen.getByText(/AI insights/i)).toBeDefined()
   })
 
@@ -103,7 +91,7 @@ describe('UpgradeModal', () => {
       />
     )
 
-    expect(screen.getByText(/\$19\.99/i)).toBeDefined()
+    expect(screen.getByText(/\$18\.99/i)).toBeDefined()
   })
 
   it('should toggle to yearly pricing when billing interval changed', () => {
@@ -120,7 +108,7 @@ describe('UpgradeModal', () => {
     const yearlyToggle = screen.getByLabelText(/Yearly/i)
     fireEvent.click(yearlyToggle)
 
-    expect(screen.getByText(/\$199\.99/i)).toBeDefined()
+    expect(screen.getByText(/\$179\.00/i)).toBeDefined()
   })
 
   it('should call onUpgrade with correct parameters when upgrade button clicked', () => {
@@ -134,10 +122,10 @@ describe('UpgradeModal', () => {
       />
     )
 
-    const upgradeButton = screen.getByRole('button', { name: /Upgrade to Premium\+/i })
+    const upgradeButton = screen.getByRole('button', { name: /Upgrade to Household/i })
     fireEvent.click(upgradeButton)
 
-    expect(mockOnUpgrade).toHaveBeenCalledWith('premium_plus', 'month')
+    expect(mockOnUpgrade).toHaveBeenCalledWith('household_5', 'month')
   })
 
   it('should call onUpgrade with yearly interval when yearly selected', () => {
@@ -154,10 +142,10 @@ describe('UpgradeModal', () => {
     const yearlyToggle = screen.getByLabelText(/Yearly/i)
     fireEvent.click(yearlyToggle)
 
-    const upgradeButton = screen.getByRole('button', { name: /Upgrade to Premium\+/i })
+    const upgradeButton = screen.getByRole('button', { name: /Upgrade to Household/i })
     fireEvent.click(upgradeButton)
 
-    expect(mockOnUpgrade).toHaveBeenCalledWith('premium_plus', 'year')
+    expect(mockOnUpgrade).toHaveBeenCalledWith('household_5', 'year')
   })
 
   it('should call onClose when cancel button clicked', () => {
@@ -192,23 +180,4 @@ describe('UpgradeModal', () => {
     expect(prorationText.length).toBeGreaterThan(0)
   })
 
-  it('should show tier comparison with feature differences', () => {
-    render(
-      <UpgradeModal
-        open={true}
-        currentTier={currentTier}
-        availableTiers={availableTiers}
-        onUpgrade={mockOnUpgrade}
-        onClose={mockOnClose}
-      />
-    )
-
-    // Current tier features
-    expect(screen.getByText(/Unlimited rules/i)).toBeDefined()
-    expect(screen.getByText(/30 accounts/i)).toBeDefined()
-
-    // New tier features
-    expect(screen.getByText(/Unlimited rules/i)).toBeDefined()
-    expect(screen.getByText(/Unlimited accounts/i)).toBeDefined()
-  })
 })

@@ -91,7 +91,7 @@ describe('useSubscriptionTiers', () => {
 
       const premiumTier = result.current.tiers?.tiers.premium
       expect(premiumTier?.display_name).toBe('Premium')
-      expect(premiumTier?.limits.accounts).toBe(10)
+      expect(premiumTier?.limits.accounts).toBe(30)
       // All tiers have unlimited rules
       expect(premiumTier?.limits.rules).toBe(-1)
     })
