@@ -148,21 +148,21 @@ describe('PricingPage', () => {
     it('should display correct prices', () => {
       renderWithProviders(<PricingPage />)
 
-      expect(screen.getByText('$9.99')).toBeInTheDocument()
+      expect(screen.getByText('$8.99')).toBeInTheDocument()
+      expect(screen.getByText('$12.99')).toBeInTheDocument()
       expect(screen.getByText('$14.99')).toBeInTheDocument()
-      expect(screen.getByText('$19.99')).toBeInTheDocument()
-      expect(screen.getByText('$24.99')).toBeInTheDocument()
-      expect(screen.getByText('$29.99')).toBeInTheDocument()
+      expect(screen.getByText('$16.99')).toBeInTheDocument()
+      expect(screen.getByText('$18.99')).toBeInTheDocument()
     })
 
     it('should show features for each tier', () => {
       renderWithProviders(<PricingPage />)
 
       // Premium tier features
-      expect(screen.getByText('10 bank accounts')).toBeInTheDocument()
+      expect(screen.getByText('30 bank accounts')).toBeInTheDocument()
 
-      // Household 5 features (unlimited)
-      expect(screen.getByText('Unlimited bank accounts')).toBeInTheDocument()
+      // Household 5 features
+      expect(screen.getByText('150 bank accounts')).toBeInTheDocument()
 
       // All tiers should have unlimited automation rules
       const unlimitedRulesElements = screen.getAllByText('Unlimited automation rules')

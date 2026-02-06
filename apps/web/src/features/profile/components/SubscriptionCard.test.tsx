@@ -11,13 +11,17 @@ import {
 
 import { SubscriptionCard } from './SubscriptionCard'
 
-function renderWithRouter(ui: React.ReactElement) {
+function createQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: 0 },
+    },
+  })
+}
+
+function renderWithRouter(ui: React.ReactElement, queryClient = createQueryClient()) {
   return render(
-    <QueryClientProvider client={new QueryClient({
-      defaultOptions: {
-        queries: { retry: false, gcTime: 0 },
-      },
-    })}>
+    <QueryClientProvider client={queryClient}>
       <MemoryRouter>{ui}</MemoryRouter>
     </QueryClientProvider>
   )
@@ -47,46 +51,43 @@ describe('SubscriptionCard', () => {
       renderWithRouter(<SubscriptionCard tier="premium" status="active" />)
 
       expect(screen.getByText(/premium/i)).toBeInTheDocument()
-      expect(screen.getByText(/\$9\.99/i)).toBeInTheDocument()
+      expect(screen.getByText(/\$8\.99/i)).toBeInTheDocument()
       expect(screen.getByText(/unlimited automation rules/i)).toBeInTheDocument()
-      expect(screen.getByText(/10 bank accounts/i)).toBeInTheDocument()
+      expect(screen.getByText(/30 bank accounts/i)).toBeInTheDocument()
       expect(screen.getByText(/no ads/i)).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: /manage/i })).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: /manage subscription/i })).toBeInTheDocument()
     })
 
     it('should display household_2 tier with manage button', () => {
       renderWithRouter(<SubscriptionCard tier="household_2" status="active" />)
 
       expect(screen.getByText(/household \(2 members\)/i)).toBeInTheDocument()
-      expect(screen.getByText(/\$14\.99/i)).toBeInTheDocument()
+      expect(screen.getByText(/\$12\.99/i)).toBeInTheDocument()
       expect(screen.getByText(/unlimited automation rules/i)).toBeInTheDocument()
-      expect(screen.getByText(/20 bank accounts/i)).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: /manage/i })).toBeInTheDocument()
+      expect(screen.getByText(/60 bank accounts/i)).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: /manage subscription/i })).toBeInTheDocument()
     })
 
     it('should display household_5 tier with unlimited features', () => {
       renderWithRouter(<SubscriptionCard tier="household_5" status="active" />)
 
       expect(screen.getByText(/household \(5 members\)/i)).toBeInTheDocument()
-      expect(screen.getByText(/\$29\.99/i)).toBeInTheDocument()
-      expect(screen.getByText(/unlimited bank accounts/i)).toBeInTheDocument()
+      expect(screen.getByText(/\$18\.99/i)).toBeInTheDocument()
+      expect(screen.getByText(/150 bank accounts/i)).toBeInTheDocument()
       expect(screen.getByText(/unlimited automation rules/i)).toBeInTheDocument()
       expect(screen.getByText(/ai-powered insights/i)).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: /manage/i })).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: /manage subscription/i })).toBeInTheDocument()
     })
   })
 
   describe('Status badges', () => {
     it('should display correct status badges', () => {
-      const { rerender } = renderWithRouter(<SubscriptionCard tier="premium" status="active" />)
+      const queryClient = createQueryClient()
+      const { rerender } = renderWithRouter(<SubscriptionCard tier="premium" status="active" />, queryClient)
       expect(screen.getByText(/active/i)).toBeInTheDocument()
 
       rerender(
-        <QueryClientProvider client={new QueryClient({
-          defaultOptions: {
-            queries: { retry: false, gcTime: 0 },
-          },
-        })}>
+        <QueryClientProvider client={queryClient}>
           <MemoryRouter>
             <SubscriptionCard tier="premium" status="inactive" />
           </MemoryRouter>
@@ -95,11 +96,7 @@ describe('SubscriptionCard', () => {
       expect(screen.getByText(/inactive/i)).toBeInTheDocument()
 
       rerender(
-        <QueryClientProvider client={new QueryClient({
-          defaultOptions: {
-            queries: { retry: false, gcTime: 0 },
-          },
-        })}>
+        <QueryClientProvider client={queryClient}>
           <MemoryRouter>
             <SubscriptionCard tier="premium" status="cancelled" />
           </MemoryRouter>
@@ -187,6 +184,79 @@ describe('SubscriptionCard', () => {
       expect(screen.getByText(/premium/i)).toBeInTheDocument()
       expect(screen.queryByText(/loading/i)).not.toBeInTheDocument()
       expect(screen.queryByText(/error/i)).not.toBeInTheDocument()
+    })
+  })
+
+  describe('Pricing display', () => {
+    it('should display correct pricing for all tiers', () => {
+      const queryClient = createQueryClient()
+      // Premium: $8.99
+      const { rerender } = renderWithRouter(<SubscriptionCard tier="premium" status="active" />, queryClient)
+      expect(screen.getByText(/\$8\.99/i)).toBeInTheDocument()
+
+      // Household 2: $12.99
+      rerender(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>
+            <SubscriptionCard tier="household_2" status="active" />
+          </MemoryRouter>
+        </QueryClientProvider>
+      )
+      expect(screen.getByText(/\$12\.99/i)).toBeInTheDocument()
+
+      // Household 5: $18.99
+      rerender(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>
+            <SubscriptionCard tier="household_5" status="active" />
+          </MemoryRouter>
+        </QueryClientProvider>
+      )
+      expect(screen.getByText(/\$18\.99/i)).toBeInTheDocument()
+    })
+
+    it('should display /month suffix for paid tiers', () => {
+      renderWithRouter(<SubscriptionCard tier="premium" status="active" />)
+      expect(screen.getByText(/\/month/i)).toBeInTheDocument()
+    })
+  })
+
+  describe('Feature display based on tier', () => {
+    it('should show AI insights for all premium tiers', () => {
+      renderWithRouter(<SubscriptionCard tier="premium" status="active" />)
+      expect(screen.getByText(/ai-powered insights/i)).toBeInTheDocument()
+    })
+
+    it('should show correct account limits per tier', () => {
+      const queryClient = createQueryClient()
+      // Premium: 30 accounts
+      const { rerender } = renderWithRouter(<SubscriptionCard tier="premium" status="active" />, queryClient)
+      expect(screen.getByText(/30 bank accounts/i)).toBeInTheDocument()
+
+      // Household 2: 60 accounts
+      rerender(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>
+            <SubscriptionCard tier="household_2" status="active" />
+          </MemoryRouter>
+        </QueryClientProvider>
+      )
+      expect(screen.getByText(/60 bank accounts/i)).toBeInTheDocument()
+
+      // Household 5: 150 accounts
+      rerender(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>
+            <SubscriptionCard tier="household_5" status="active" />
+          </MemoryRouter>
+        </QueryClientProvider>
+      )
+      expect(screen.getByText(/150 bank accounts/i)).toBeInTheDocument()
+    })
+
+    it('should show "no ads" for all paid tiers', () => {
+      renderWithRouter(<SubscriptionCard tier="premium" status="active" />)
+      expect(screen.getByText(/no ads/i)).toBeInTheDocument()
     })
   })
 })

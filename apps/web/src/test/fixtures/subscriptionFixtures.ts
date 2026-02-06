@@ -25,13 +25,13 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
       display_name: 'Premium',
       description: 'Full-featured budgeting for individuals',
       pricing: {
-        price_monthly: 9.99,
-        price_yearly: 99.99,
-        stripe_price_id_monthly: 'price_premium_monthly',
-        stripe_price_id_yearly: 'price_premium_yearly',
+        price_monthly: 8.99,
+        price_yearly: 79.00,
+        stripe_price_id_monthly: undefined,
+        stripe_price_id_yearly: undefined,
       },
       limits: {
-        accounts: 10,
+        accounts: 30,
         rules: -1,
         executions_per_day: 6,
         min_execution_interval_minutes: 240,
@@ -44,9 +44,9 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
       },
       features: {
         ads_enabled: false,
-        ai_insights: false,
-        api_access: false,
-        priority_support: false,
+        ai_insights: true,
+        api_access: true,
+        priority_support: true,
         custom_categories: true,
         custom_tags: true,
         advanced_reports: true,
@@ -57,13 +57,13 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
       display_name: 'Household (2 members)',
       description: 'Perfect for couples or small households',
       pricing: {
-        price_monthly: 14.99,
-        price_yearly: 149.99,
-        stripe_price_id_monthly: 'price_household_2_monthly',
-        stripe_price_id_yearly: 'price_household_2_yearly',
+        price_monthly: 12.99,
+        price_yearly: 119.00,
+        stripe_price_id_monthly: undefined,
+        stripe_price_id_yearly: undefined,
       },
       limits: {
-        accounts: 20,
+        accounts: 60,
         rules: -1,
         executions_per_day: 12,
         min_execution_interval_minutes: 120,
@@ -76,9 +76,9 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
       },
       features: {
         ads_enabled: false,
-        ai_insights: false,
-        api_access: false,
-        priority_support: false,
+        ai_insights: true,
+        api_access: true,
+        priority_support: true,
         custom_categories: true,
         custom_tags: true,
         advanced_reports: true,
@@ -89,15 +89,15 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
       display_name: 'Household (3 members)',
       description: 'Great for growing families',
       pricing: {
-        price_monthly: 19.99,
-        price_yearly: 199.99,
-        stripe_price_id_monthly: 'price_household_3_monthly',
-        stripe_price_id_yearly: 'price_household_3_yearly',
+        price_monthly: 14.99,
+        price_yearly: 139.00,
+        stripe_price_id_monthly: undefined,
+        stripe_price_id_yearly: undefined,
       },
       limits: {
-        accounts: 30,
+        accounts: 90,
         rules: -1,
-        executions_per_day: 24,
+        executions_per_day: 18,
         min_execution_interval_minutes: 60,
         accounts_synced_per_month: 3000,
         api_calls_per_month: 1500,
@@ -109,8 +109,8 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
       features: {
         ads_enabled: false,
         ai_insights: true,
-        api_access: false,
-        priority_support: false,
+        api_access: true,
+        priority_support: true,
         custom_categories: true,
         custom_tags: true,
         advanced_reports: true,
@@ -121,15 +121,15 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
       display_name: 'Household (4 members)',
       description: 'Ideal for medium-sized families',
       pricing: {
-        price_monthly: 24.99,
-        price_yearly: 249.99,
-        stripe_price_id_monthly: 'price_household_4_monthly',
-        stripe_price_id_yearly: 'price_household_4_yearly',
+        price_monthly: 16.99,
+        price_yearly: 159.00,
+        stripe_price_id_monthly: undefined,
+        stripe_price_id_yearly: undefined,
       },
       limits: {
-        accounts: 40,
+        accounts: 120,
         rules: -1,
-        executions_per_day: 48,
+        executions_per_day: 24,
         min_execution_interval_minutes: 30,
         accounts_synced_per_month: 4000,
         api_calls_per_month: 2000,
@@ -142,7 +142,7 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
         ads_enabled: false,
         ai_insights: true,
         api_access: true,
-        priority_support: false,
+        priority_support: true,
         custom_categories: true,
         custom_tags: true,
         advanced_reports: true,
@@ -153,15 +153,15 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
       display_name: 'Household (5 members)',
       description: 'Best value for large families',
       pricing: {
-        price_monthly: 29.99,
-        price_yearly: 299.99,
-        stripe_price_id_monthly: 'price_household_5_monthly',
-        stripe_price_id_yearly: 'price_household_5_yearly',
+        price_monthly: 18.99,
+        price_yearly: 179.00,
+        stripe_price_id_monthly: undefined,
+        stripe_price_id_yearly: undefined,
       },
       limits: {
-        accounts: -1,
+        accounts: 150,
         rules: -1,
-        executions_per_day: 144,
+        executions_per_day: 30,
         min_execution_interval_minutes: 10,
         accounts_synced_per_month: -1,
         api_calls_per_month: -1,
@@ -188,14 +188,15 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
  * Helper to create a partial tier with defaults filled in
  */
 export function createMockTier(overrides: Partial<SubscriptionTier> = {}): SubscriptionTier {
+  const { pricing, limits, features, ...rest } = overrides
   return {
     name: 'test',
     display_name: 'Test Tier',
     description: 'Test tier description',
-    pricing: createMockPricing(overrides.pricing),
-    limits: createMockLimits(overrides.limits),
-    features: createMockFeatures(overrides.features),
-    ...overrides,
+    pricing: createMockPricing(pricing),
+    limits: createMockLimits(limits),
+    features: createMockFeatures(features),
+    ...rest,
   }
 }
 
@@ -250,6 +251,6 @@ export function createMockPricing(overrides: Partial<SubscriptionPricing> = {}):
 /**
  * Get a specific tier from the mock response
  */
-export function getMockTier(tierName: 'premium' | 'household_2' | 'household_3' | 'household_4' | 'household_5'): SubscriptionTier {
+export function getMockTier(tierName: keyof typeof mockSubscriptionTiersResponse.tiers): SubscriptionTier {
   return mockSubscriptionTiersResponse.tiers[tierName]
 }
