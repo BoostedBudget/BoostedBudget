@@ -294,6 +294,22 @@ describe('PricingPage', () => {
 
       expect(screen.getAllByText('AI-powered insights').length).toBeGreaterThan(0)
     })
+
+    it('should show correct grammar for rule execution frequency', () => {
+      renderWithProviders(<PricingPage />)
+
+      // Premium tier (6 execs/day = every 4 hours)
+      expect(screen.getByText('Rules run every 4 hours')).toBeInTheDocument()
+
+      // Household 2 tier (12 execs/day = every 2 hours)
+      expect(screen.getByText('Rules run every 2 hours')).toBeInTheDocument()
+
+      // Household 4 tier (24 execs/day = every 1 hour, should use singular "hour")
+      expect(screen.getByText('Rules run every hour')).toBeInTheDocument()
+
+      // Household 5 tier (30 execs/day = every 48 minutes)
+      expect(screen.getByText('Rules run every 48 minutes')).toBeInTheDocument()
+    })
   })
 
   describe('Billing period toggle', () => {
