@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Menu, LogOut, LogIn, User } from 'lucide-react'
+import { Menu, LogOut, LogIn, User, CreditCard } from 'lucide-react'
 import {
   Sheet,
   SheetContent,
@@ -92,6 +92,15 @@ export function MobileNav({
                 >
                   <User className="h-4 w-4" />
                   View Profile
+                </Link>
+
+                <Link
+                  to="/billing/manage"
+                  onClick={handleLinkClick}
+                  className="flex items-center gap-2 py-2 px-3 rounded-md text-sm hover:bg-accent w-full"
+                >
+                  <CreditCard className="h-4 w-4" />
+                  Manage Subscription
                 </Link>
 
                 <Button
