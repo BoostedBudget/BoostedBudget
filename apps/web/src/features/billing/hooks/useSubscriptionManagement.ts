@@ -23,7 +23,9 @@ interface SubscriptionError {
 export function useSubscriptionManagement() {
   // Query hooks
   const subscriptionQuery = useGetCurrentSubscription()
-  const billingPortalQuery = useGetBillingPortalUrl()
+  const billingPortalQuery = useGetBillingPortalUrl({
+    query: { enabled: subscriptionQuery.data?.status === 'active' },
+  })
 
   // Mutation hooks
   const updateMutation = useUpdatePaddleSubscription()

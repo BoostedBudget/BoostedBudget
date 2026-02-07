@@ -246,7 +246,7 @@ describe('PricingPage', () => {
 
       expect(screen.getByText(/you can upgrade or downgrade/i)).toBeInTheDocument()
       expect(screen.getByText(/major credit cards/i)).toBeInTheDocument()
-      expect(screen.getByText(/14-day free trial/i)).toBeInTheDocument()
+      expect(screen.getByText(/60-day free trial/i)).toBeInTheDocument()
       expect(screen.getByText(/cancel your subscription at any time/i)).toBeInTheDocument()
     })
   })

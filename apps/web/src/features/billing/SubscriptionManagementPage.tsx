@@ -87,32 +87,51 @@ export function SubscriptionManagementPage() {
       <section className="current-subscription">
         <h2>Current Subscription</h2>
         {subscription && (
-          <div className="subscription-details">
-            <div className="detail-row">
-              <span className="label">Tier:</span>
-              <span className="value">{subscription.tier}</span>
+          <>
+            {/* Trial Banner */}
+            {subscription.status === 'trial' && (
+              <div className="trial-banner">
+                ✨ You have {subscription.trial_days_remaining} days left in your free trial
+              </div>
+            )}
+
+            <div className="subscription-details">
+              <div className="detail-row">
+                <span className="label">Tier:</span>
+                <span className="value">{subscription.tier}</span>
+              </div>
+              <div className="detail-row">
+                <span className="label">Status:</span>
+                <span className={`value status-${subscription.status}`}>
+                  {subscription.status}
+                </span>
+              </div>
+              {subscription.billing_interval && (
+                <div className="detail-row">
+                  <span className="label">Billing Interval:</span>
+                  <span className="value">{subscription.billing_interval}</span>
+                </div>
+              )}
+              <div className="detail-row">
+                <span className="label">Amount:</span>
+                <span className="value">
+                  {subscription.currency} {subscription.amount}
+                </span>
+              </div>
+              {subscription.trial_ends_at && subscription.status === 'trial' && (
+                <div className="detail-row">
+                  <span className="label">Trial Ends:</span>
+                  <span className="value">{subscription.trial_ends_at}</span>
+                </div>
+              )}
+              {subscription.next_billing_date && subscription.status !== 'trial' && (
+                <div className="detail-row">
+                  <span className="label">Next Billing Date:</span>
+                  <span className="value">{subscription.next_billing_date}</span>
+                </div>
+              )}
             </div>
-            <div className="detail-row">
-              <span className="label">Status:</span>
-              <span className={`value status-${subscription.status}`}>
-                {subscription.status}
-              </span>
-            </div>
-            <div className="detail-row">
-              <span className="label">Billing Interval:</span>
-              <span className="value">{subscription.billing_interval}</span>
-            </div>
-            <div className="detail-row">
-              <span className="label">Amount:</span>
-              <span className="value">
-                {subscription.currency} {subscription.amount}
-              </span>
-            </div>
-            <div className="detail-row">
-              <span className="label">Next Billing Date:</span>
-              <span className="value">{subscription.next_billing_date}</span>
-            </div>
-          </div>
+          </>
         )}
       </section>
 
@@ -120,31 +139,39 @@ export function SubscriptionManagementPage() {
       <section className="subscription-actions">
         <h2>Actions</h2>
         <div className="action-buttons">
-          <button
-            onClick={() => handleUpgrade('household_2')}
-            disabled={isUpdating}
-            className="btn btn-primary"
-          >
-            {isUpdating ? 'Upgrading...' : 'Upgrade to Household 2'}
-          </button>
-
-          <button
-            onClick={() => setShowCancelModal(true)}
-            disabled={isCancelling}
-            className="btn btn-danger"
-          >
-            Cancel Subscription
-          </button>
-
-          {portalData?.portal_url && (
-            <a
-              href={portalData.portal_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="btn btn-secondary"
-            >
-              Manage Payment Methods
+          {subscription?.status === 'trial' ? (
+            <a href="/pricing" className="btn btn-primary">
+              Subscribe to Premium
             </a>
+          ) : (
+            <>
+              <button
+                onClick={() => handleUpgrade('household_2')}
+                disabled={isUpdating}
+                className="btn btn-primary"
+              >
+                {isUpdating ? 'Upgrading...' : 'Upgrade to Household 2'}
+              </button>
+
+              <button
+                onClick={() => setShowCancelModal(true)}
+                disabled={isCancelling}
+                className="btn btn-danger"
+              >
+                Cancel Subscription
+              </button>
+
+              {portalData?.portal_url && (
+                <a
+                  href={portalData.portal_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn btn-secondary"
+                >
+                  Manage Payment Methods
+                </a>
+              )}
+            </>
           )}
         </div>
       </section>
