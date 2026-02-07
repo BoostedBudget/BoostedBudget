@@ -147,6 +147,7 @@ jobs:
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache-go${{ env.GO_VERSION }}
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache-go${{ env.GO_VERSION }},mode=max
           build-args: |
+            GO_VERSION=${{ env.GO_VERSION }}
             VERSION=${{ github.sha }}
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
           provenance: false
