@@ -1,10 +1,12 @@
 package domain
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestComputeTrialDaysRemaining_ActiveTrial(t *testing.T) {
@@ -88,4 +90,78 @@ func TestNewUser_DefaultValues(t *testing.T) {
 	assert.Equal(t, DefaultRegion, user.PrimaryRegion)
 	assert.True(t, user.IsActive)
 	assert.False(t, user.IsDeleted)
+}
+
+// TestUser_PaddleSubscriptionID_JSONMarshaling tests JSON marshaling/unmarshaling
+func TestUser_PaddleSubscriptionID_JSONMarshaling(t *testing.T) {
+	subscriptionID := "sub_01h12345"
+	user := &User{
+		ID:                   "user-123",
+		ClerkUserID:          "clerk_123",
+		Email:                "test@example.com",
+		PaddleSubscriptionID: &subscriptionID,
+	}
+
+	// Marshal to JSON
+	jsonData, err := json.Marshal(user)
+	require.NoError(t, err)
+
+	// Verify paddle_subscription_id is in JSON
+	assert.Contains(t, string(jsonData), "paddle_subscription_id")
+	assert.Contains(t, string(jsonData), "sub_01h12345")
+
+	// Unmarshal back
+	var unmarshaled User
+	err = json.Unmarshal(jsonData, &unmarshaled)
+	require.NoError(t, err)
+
+	// Verify field is preserved
+	assert.NotNil(t, unmarshaled.PaddleSubscriptionID)
+	assert.Equal(t, "sub_01h12345", *unmarshaled.PaddleSubscriptionID)
+}
+
+// TestUser_PaddleSubscriptionID_NullHandling tests null value handling
+func TestUser_PaddleSubscriptionID_NullHandling(t *testing.T) {
+	user := &User{
+		ID:                   "user-123",
+		ClerkUserID:          "clerk_123",
+		Email:                "test@example.com",
+		PaddleSubscriptionID: nil, // No subscription ID
+	}
+
+	// Marshal to JSON
+	jsonData, err := json.Marshal(user)
+	require.NoError(t, err)
+
+	// Unmarshal back
+	var unmarshaled User
+	err = json.Unmarshal(jsonData, &unmarshaled)
+	require.NoError(t, err)
+
+	// Verify null is handled correctly
+	assert.Nil(t, unmarshaled.PaddleSubscriptionID)
+}
+
+// TestUser_PaddleSubscriptionID_EmptyString tests empty string handling
+func TestUser_PaddleSubscriptionID_EmptyString(t *testing.T) {
+	emptyString := ""
+	user := &User{
+		ID:                   "user-123",
+		ClerkUserID:          "clerk_123",
+		Email:                "test@example.com",
+		PaddleSubscriptionID: &emptyString,
+	}
+
+	// Marshal to JSON
+	jsonData, err := json.Marshal(user)
+	require.NoError(t, err)
+
+	// Unmarshal back
+	var unmarshaled User
+	err = json.Unmarshal(jsonData, &unmarshaled)
+	require.NoError(t, err)
+
+	// Verify empty string is preserved
+	assert.NotNil(t, unmarshaled.PaddleSubscriptionID)
+	assert.Equal(t, "", *unmarshaled.PaddleSubscriptionID)
 }

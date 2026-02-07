@@ -46,12 +46,17 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
+  CancelSubscriptionOutputBody,
   CheckoutOutputBody,
   CreateCheckoutInputBody,
   ErrorModel,
+  GetBillingPortalURLOutputBody,
+  GetCurrentSubscriptionOutputBody,
   PreviewUpdateInputBody,
   PreviewUpdateOutputBody,
-  SubscriptionTiersResponse
+  SubscriptionTiersResponse,
+  UpdateSubscriptionInputBody,
+  UpdateSubscriptionOutputBody
 } from '../../models';
 
 import { customInstance } from '../../client';
@@ -90,6 +95,159 @@ type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 
 /**
+ * Returns URL to Paddle billing portal where users can manage payment methods and view billing history.
+ * @summary Get billing portal URL
+ */
+export const getBillingPortalUrl = (
+    
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+      
+      
+      return customInstance<GetBillingPortalURLOutputBody>(
+      {url: `/api/v1/subscription/billing-portal`, method: 'GET', signal
+    },
+      options);
+    }
+  
+
+
+
+export const getGetBillingPortalUrlQueryKey = () => {
+    return [
+    `/api/v1/subscription/billing-portal`
+    ] as const;
+    }
+
+    
+export const getGetBillingPortalUrlQueryOptions = <TData = Awaited<ReturnType<typeof getBillingPortalUrl>>, TError = ErrorType<ErrorModel>>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getBillingPortalUrl>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetBillingPortalUrlQueryKey();
+
+  
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getBillingPortalUrl>>> = ({ signal }) => getBillingPortalUrl(requestOptions, signal);
+
+      
+
+      
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getBillingPortalUrl>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetBillingPortalUrlQueryResult = NonNullable<Awaited<ReturnType<typeof getBillingPortalUrl>>>
+export type GetBillingPortalUrlQueryError = ErrorType<ErrorModel>
+
+
+export function useGetBillingPortalUrl<TData = Awaited<ReturnType<typeof getBillingPortalUrl>>, TError = ErrorType<ErrorModel>>(
+  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getBillingPortalUrl>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getBillingPortalUrl>>,
+          TError,
+          Awaited<ReturnType<typeof getBillingPortalUrl>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetBillingPortalUrl<TData = Awaited<ReturnType<typeof getBillingPortalUrl>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getBillingPortalUrl>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getBillingPortalUrl>>,
+          TError,
+          Awaited<ReturnType<typeof getBillingPortalUrl>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetBillingPortalUrl<TData = Awaited<ReturnType<typeof getBillingPortalUrl>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getBillingPortalUrl>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get billing portal URL
+ */
+
+export function useGetBillingPortalUrl<TData = Awaited<ReturnType<typeof getBillingPortalUrl>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getBillingPortalUrl>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient 
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetBillingPortalUrlQueryOptions(options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+/**
+ * Cancels subscription at end of current billing period. User retains access until period ends.
+ * @summary Cancel subscription
+ */
+export const cancelPaddleSubscription = (
+    
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+      
+      
+      return customInstance<CancelSubscriptionOutputBody>(
+      {url: `/api/v1/subscription/cancel`, method: 'POST', signal
+    },
+      options);
+    }
+  
+
+
+export const getCancelPaddleSubscriptionMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cancelPaddleSubscription>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof cancelPaddleSubscription>>, TError,void, TContext> => {
+
+const mutationKey = ['cancelPaddleSubscription'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof cancelPaddleSubscription>>, void> = () => {
+          
+
+          return  cancelPaddleSubscription(requestOptions)
+        }
+
+
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CancelPaddleSubscriptionMutationResult = NonNullable<Awaited<ReturnType<typeof cancelPaddleSubscription>>>
+    
+    export type CancelPaddleSubscriptionMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Cancel subscription
+ */
+export const useCancelPaddleSubscription = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cancelPaddleSubscription>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof cancelPaddleSubscription>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getCancelPaddleSubscriptionMutationOptions(options), queryClient);
+    }
+    /**
  * Creates a Paddle checkout session for purchasing a subscription. Returns checkout URL to open in Paddle.js Overlay or as redirect.
  * @summary Create Paddle checkout session
  */
@@ -154,6 +312,97 @@ export const useCreatePaddleCheckout = <TError = ErrorType<ErrorModel>,
       return useMutation(getCreatePaddleCheckoutMutationOptions(options), queryClient);
     }
     /**
+ * Fetches current subscription details from Paddle API with live status, billing info, and tier information.
+ * @summary Get current subscription
+ */
+export const getCurrentSubscription = (
+    
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+      
+      
+      return customInstance<GetCurrentSubscriptionOutputBody>(
+      {url: `/api/v1/subscription/current`, method: 'GET', signal
+    },
+      options);
+    }
+  
+
+
+
+export const getGetCurrentSubscriptionQueryKey = () => {
+    return [
+    `/api/v1/subscription/current`
+    ] as const;
+    }
+
+    
+export const getGetCurrentSubscriptionQueryOptions = <TData = Awaited<ReturnType<typeof getCurrentSubscription>>, TError = ErrorType<ErrorModel>>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCurrentSubscription>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetCurrentSubscriptionQueryKey();
+
+  
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getCurrentSubscription>>> = ({ signal }) => getCurrentSubscription(requestOptions, signal);
+
+      
+
+      
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getCurrentSubscription>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetCurrentSubscriptionQueryResult = NonNullable<Awaited<ReturnType<typeof getCurrentSubscription>>>
+export type GetCurrentSubscriptionQueryError = ErrorType<ErrorModel>
+
+
+export function useGetCurrentSubscription<TData = Awaited<ReturnType<typeof getCurrentSubscription>>, TError = ErrorType<ErrorModel>>(
+  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCurrentSubscription>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getCurrentSubscription>>,
+          TError,
+          Awaited<ReturnType<typeof getCurrentSubscription>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetCurrentSubscription<TData = Awaited<ReturnType<typeof getCurrentSubscription>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCurrentSubscription>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getCurrentSubscription>>,
+          TError,
+          Awaited<ReturnType<typeof getCurrentSubscription>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetCurrentSubscription<TData = Awaited<ReturnType<typeof getCurrentSubscription>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCurrentSubscription>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get current subscription
+ */
+
+export function useGetCurrentSubscription<TData = Awaited<ReturnType<typeof getCurrentSubscription>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCurrentSubscription>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient 
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetCurrentSubscriptionQueryOptions(options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+/**
  * Calculates proration amount when upgrading or downgrading subscription tier. Shows immediate charge/credit and next billing details.
  * @summary Preview subscription tier change
  */
@@ -308,3 +557,68 @@ export function useGetSubscriptionTiers<TData = Awaited<ReturnType<typeof getSub
 
 
 
+/**
+ * Updates subscription to a different tier or billing interval. Handles proration automatically.
+ * @summary Update subscription tier
+ */
+export const updatePaddleSubscription = (
+    updateSubscriptionInputBody: BodyType<NonReadonly<UpdateSubscriptionInputBody>>,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+      
+      
+      return customInstance<UpdateSubscriptionOutputBody>(
+      {url: `/api/v1/subscription/update`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: updateSubscriptionInputBody, signal
+    },
+      options);
+    }
+  
+
+
+export const getUpdatePaddleSubscriptionMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updatePaddleSubscription>>, TError,{data: BodyType<NonReadonly<UpdateSubscriptionInputBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof updatePaddleSubscription>>, TError,{data: BodyType<NonReadonly<UpdateSubscriptionInputBody>>}, TContext> => {
+
+const mutationKey = ['updatePaddleSubscription'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof updatePaddleSubscription>>, {data: BodyType<NonReadonly<UpdateSubscriptionInputBody>>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  updatePaddleSubscription(data,requestOptions)
+        }
+
+
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UpdatePaddleSubscriptionMutationResult = NonNullable<Awaited<ReturnType<typeof updatePaddleSubscription>>>
+    export type UpdatePaddleSubscriptionMutationBody = BodyType<NonReadonly<UpdateSubscriptionInputBody>>
+    export type UpdatePaddleSubscriptionMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Update subscription tier
+ */
+export const useUpdatePaddleSubscription = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updatePaddleSubscription>>, TError,{data: BodyType<NonReadonly<UpdateSubscriptionInputBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof updatePaddleSubscription>>,
+        TError,
+        {data: BodyType<NonReadonly<UpdateSubscriptionInputBody>>},
+        TContext
+      > => {
+      return useMutation(getUpdatePaddleSubscriptionMutationOptions(options), queryClient);
+    }
+    

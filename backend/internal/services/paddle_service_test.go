@@ -522,3 +522,33 @@ func TestPaddleService_ErrorWrapping(t *testing.T) {
 	assert.Contains(t, wrappedErr.Error(), "paddle api error")
 	assert.Contains(t, wrappedErr.Error(), "failed to create Paddle customer")
 }
+
+// TestGetBillingPortalURL_Success tests successful billing portal URL generation
+func TestGetBillingPortalURL_Success(t *testing.T) {
+	t.Skip("Requires Paddle SDK interface refactor for proper mocking")
+
+	// Would test:
+	// 1. Calls Paddle SDK to create billing portal session
+	// 2. Returns valid URL for customer to access billing portal
+	// 3. Logs appropriate messages
+}
+
+// TestGetBillingPortalURL_InvalidCustomer tests with non-existent customer ID
+func TestGetBillingPortalURL_InvalidCustomer(t *testing.T) {
+	t.Skip("Requires Paddle SDK interface refactor for proper mocking")
+
+	// Would test:
+	// 1. Calls Paddle SDK with invalid customer ID
+	// 2. Returns ErrCustomerNotFound error
+	// 3. Wraps error with appropriate message
+}
+
+// TestGetBillingPortalURL_PaddleAPIError tests Paddle API failure
+func TestGetBillingPortalURL_PaddleAPIError(t *testing.T) {
+	t.Skip("Requires Paddle SDK interface refactor for proper mocking")
+
+	// Would test:
+	// 1. Simulates Paddle API failure (network error, rate limit, etc.)
+	// 2. Returns wrapped error with context
+	// 3. Logs error appropriately
+}

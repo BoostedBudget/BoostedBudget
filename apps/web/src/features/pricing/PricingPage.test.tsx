@@ -121,23 +121,14 @@ describe('PricingPage', () => {
   })
 
   describe('Tier cards', () => {
-    it('should render all 5 tier cards', () => {
+    it('should render all 5 tier cards with correct names', () => {
       renderWithProviders(<PricingPage />)
 
       // 5 tier names + 1 FAQ section header = 6 h2 headings
-      expect(screen.getAllByRole('heading', { level: 2 }).length).toBe(6)
-      expect(screen.getByText('Premium')).toBeInTheDocument()
-      expect(screen.getByText('Household (2 members)')).toBeInTheDocument()
-      expect(screen.getByText('Household (5 members)')).toBeInTheDocument()
-    })
-
-    it('should display correct tier names', () => {
-      renderWithProviders(<PricingPage />)
-
-      // Check tier heading names (h2 elements)
       const headings = screen.getAllByRole('heading', { level: 2 })
       const headingTexts = headings.map(h => h.textContent)
 
+      expect(headings.length).toBe(6)
       expect(headingTexts).toContain('Premium')
       expect(headingTexts).toContain('Household (2 members)')
       expect(headingTexts).toContain('Household (3 members)')
@@ -148,21 +139,21 @@ describe('PricingPage', () => {
     it('should display correct prices', () => {
       renderWithProviders(<PricingPage />)
 
-      expect(screen.getByText('$9.99')).toBeInTheDocument()
+      expect(screen.getByText('$8.99')).toBeInTheDocument()
+      expect(screen.getByText('$12.99')).toBeInTheDocument()
       expect(screen.getByText('$14.99')).toBeInTheDocument()
-      expect(screen.getByText('$19.99')).toBeInTheDocument()
-      expect(screen.getByText('$24.99')).toBeInTheDocument()
-      expect(screen.getByText('$29.99')).toBeInTheDocument()
+      expect(screen.getByText('$16.99')).toBeInTheDocument()
+      expect(screen.getByText('$18.99')).toBeInTheDocument()
     })
 
     it('should show features for each tier', () => {
       renderWithProviders(<PricingPage />)
 
       // Premium tier features
-      expect(screen.getByText('10 bank accounts')).toBeInTheDocument()
+      expect(screen.getByText('30 bank accounts')).toBeInTheDocument()
 
-      // Household 5 features (unlimited)
-      expect(screen.getByText('Unlimited bank accounts')).toBeInTheDocument()
+      // Household 5 features
+      expect(screen.getByText('150 bank accounts')).toBeInTheDocument()
 
       // All tiers should have unlimited automation rules
       const unlimitedRulesElements = screen.getAllByText('Unlimited automation rules')
@@ -179,8 +170,8 @@ describe('PricingPage', () => {
   })
 
   describe('Current plan highlighting', () => {
-    it('should show "Current Plan" badge for user\'s tier', () => {
-      // Mock authenticated user with premium tier (using Clerk publicMetadata)
+    beforeEach(() => {
+      // Mock authenticated user with premium tier for all tests in this suite
       mockUseUser.mockReturnValue({
         user: {
           id: 'user_123',
@@ -191,76 +182,44 @@ describe('PricingPage', () => {
         isSignedIn: true,
         isLoaded: true,
       })
+    })
 
+    it('should show "Current Plan" badge for user\'s tier', () => {
       renderWithProviders(<PricingPage />)
 
-      // Should show "Current Plan" badge (appears as badge and button)
       const currentPlanElements = screen.getAllByText('Current Plan')
       expect(currentPlanElements.length).toBeGreaterThan(0)
     })
 
-    it('should show "Select Plan" for non-current tiers', () => {
-      // Mock authenticated user with premium tier (using Clerk publicMetadata)
-      mockUseUser.mockReturnValue({
-        user: {
-          id: 'user_123',
-          publicMetadata: {
-            subscription_tier: 'premium',
-          },
-        },
-        isSignedIn: true,
-        isLoaded: true,
-      })
-
+    it('should show "Subscribe" buttons for non-current tiers', () => {
       renderWithProviders(<PricingPage />)
 
-      // Should show "Subscribe" buttons for household tiers
-      // (household_5 shows "Go Household 5" instead)
       const selectButtons = screen.getAllByRole('button', { name: /subscribe/i })
       expect(selectButtons.length).toBeGreaterThan(0)
     })
 
     it('should disable button for current tier', () => {
-      // Mock authenticated user with premium tier (using Clerk publicMetadata)
-      mockUseUser.mockReturnValue({
-        user: {
-          id: 'user_123',
-          publicMetadata: {
-            subscription_tier: 'premium',
-          },
-        },
-        isSignedIn: true,
-        isLoaded: true,
-      })
-
       renderWithProviders(<PricingPage />)
 
-      // Find button elements
       const currentPlanButtons = screen.getAllByRole('button', { name: /current plan/i })
       expect(currentPlanButtons.length).toBeGreaterThan(0)
-      // The button should be disabled
       expect(currentPlanButtons[0]).toBeDisabled()
     })
   })
 
   describe('Unauthenticated user', () => {
-    it('should render all tiers when not authenticated', () => {
+    it('should render all tiers and default to premium when not authenticated', () => {
       renderWithProviders(<PricingPage />)
 
-      // All 5 tier names should be visible (plus FAQ section = 6 h2 headings total)
       const headings = screen.getAllByRole('heading', { level: 2 })
       expect(headings.length).toBe(6)
-      // Verify tier names are present
+
       const headingTexts = headings.map(h => h.textContent)
       expect(headingTexts).toContain('Premium')
       expect(headingTexts).toContain('Household (2 members)')
       expect(headingTexts).toContain('Household (5 members)')
-    })
 
-    it('should default to premium tier when user not authenticated', () => {
-      renderWithProviders(<PricingPage />)
-
-      // Should show "Current Plan" for premium tier (appears as badge and button)
+      // Should show "Current Plan" for premium tier as default
       const currentPlanElements = screen.getAllByText('Current Plan')
       expect(currentPlanElements.length).toBeGreaterThan(0)
     })
@@ -356,7 +315,7 @@ describe('PricingPage', () => {
       renderWithProviders(<PricingPage />)
 
       // Premium monthly price
-      expect(screen.getByText('$9.99')).toBeInTheDocument()
+      expect(screen.getByText('$8.99')).toBeInTheDocument()
       // Check for /month period label
       const monthLabels = screen.getAllByText('/month')
       expect(monthLabels.length).toBeGreaterThan(0)
@@ -369,7 +328,7 @@ describe('PricingPage', () => {
       await user.click(screen.getByRole('radio', { name: /yearly/i }))
 
       // Premium yearly price
-      expect(screen.getByText('$99.99')).toBeInTheDocument()
+      expect(screen.getByText('$79.00')).toBeInTheDocument()
       // Check for /year period label
       const yearLabels = screen.getAllByText('/year')
       expect(yearLabels.length).toBeGreaterThan(0)
@@ -381,8 +340,8 @@ describe('PricingPage', () => {
 
       await user.click(screen.getByRole('radio', { name: /yearly/i }))
 
-      // All paid tiers save ~17%
-      const savingsBadges = screen.getAllByText(/save 17%/i)
+      // All paid tiers save ~27%
+      const savingsBadges = screen.getAllByText(/save 27%/i)
       expect(savingsBadges.length).toBeGreaterThan(0)
     })
 
@@ -392,8 +351,8 @@ describe('PricingPage', () => {
 
       await user.click(screen.getByRole('radio', { name: /yearly/i }))
 
-      // $99.99/12 = $8.33/mo
-      expect(screen.getByText(/\$8\.33\/mo, billed annually/i)).toBeInTheDocument()
+      // $79.00/12 = $6.58/mo
+      expect(screen.getByText(/\$6\.58\/mo, billed annually/i)).toBeInTheDocument()
     })
 
     it('should toggle back to monthly view when Monthly clicked', async () => {
@@ -402,11 +361,11 @@ describe('PricingPage', () => {
 
       // Switch to yearly
       await user.click(screen.getByRole('radio', { name: /yearly/i }))
-      expect(screen.getByText('$99.99')).toBeInTheDocument()
+      expect(screen.getByText('$79.00')).toBeInTheDocument()
 
       // Switch back to monthly
       await user.click(screen.getByRole('radio', { name: /monthly/i }))
-      expect(screen.getByText('$9.99')).toBeInTheDocument()
+      expect(screen.getByText('$8.99')).toBeInTheDocument()
     })
 
     it('should be keyboard accessible', async () => {

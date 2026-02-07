@@ -60,8 +60,8 @@ func (m *mockSubscriptionProfileRepository) UpdatePaddleCustomerID(ctx context.C
 	return args.Error(0)
 }
 
-func (m *mockSubscriptionProfileRepository) UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time) error {
-	args := m.Called(ctx, userID, tier, status, startedAt, endsAt)
+func (m *mockSubscriptionProfileRepository) UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time, subscriptionID *string) error {
+	args := m.Called(ctx, userID, tier, status, startedAt, endsAt, subscriptionID)
 	return args.Error(0)
 }
 
@@ -160,7 +160,9 @@ func TestWorker_SubscriptionCreated_Success(t *testing.T) {
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
 	mockProfileRepo.On("UpdatePaddleCustomerID", ctx, "user_2abc123def456", "ctm_01h1234567890abcdef").Return(nil)
-	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "active", mock.AnythingOfType("*time.Time"), mock.AnythingOfType("*time.Time")).Return(nil)
+	// Issue #48: Verify subscription ID is extracted from webhook data and stored
+	expectedSubID := "sub_01h1234567890abcdef"
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "active", mock.AnythingOfType("*time.Time"), mock.AnythingOfType("*time.Time"), &expectedSubID).Return(nil)
 	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
 	mockClerk.On("UpdateUserMetadata", ctx, "user_2abc123def456", mock.MatchedBy(func(metadata map[string]interface{}) bool {
 		return metadata["subscription_tier"] == "premium" && metadata["subscription_status"] == "active"
@@ -196,7 +198,8 @@ func TestWorker_SubscriptionCreated_UpdatesClerkMetadata(t *testing.T) {
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
 	mockProfileRepo.On("UpdatePaddleCustomerID", ctx, mock.Anything, mock.Anything).Return(nil)
-	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	// Issue #48: Updated signature to include subscriptionID parameter
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
 
 	// Verify Clerk metadata update is called
@@ -235,7 +238,8 @@ func TestWorker_SubscriptionActivated_Success(t *testing.T) {
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
 	mockProfileRepo.On("UpdatePaddleCustomerID", ctx, mock.Anything, mock.Anything).Return(nil)
-	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	// Issue #48: Updated signature to include subscriptionID parameter
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockProfileRepo.On("GetUserByID", ctx, mock.Anything).Return(user, nil)
 	mockClerk.On("UpdateUserMetadata", ctx, mock.Anything, mock.Anything).Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
@@ -260,7 +264,8 @@ func TestWorker_SubscriptionUpdated_Success(t *testing.T) {
 	job := createRiverJob(args)
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
-	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", mock.Anything, "active", (*time.Time)(nil), mock.AnythingOfType("*time.Time")).Return(nil)
+	// Issue #48: Updated signature to include subscriptionID parameter
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", mock.Anything, "active", (*time.Time)(nil), mock.AnythingOfType("*time.Time"), mock.Anything).Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
 	err := worker.Work(ctx, job)
@@ -289,7 +294,8 @@ func TestWorker_SubscriptionCanceled_Success(t *testing.T) {
 		ID:               "user_2abc123def456",
 		SubscriptionTier: "premium",
 	}, nil)
-	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil)).Return(nil)
+	// Issue #48: Updated signature to include subscriptionID parameter (nil for cancel events)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
 	err := worker.Work(ctx, job)
