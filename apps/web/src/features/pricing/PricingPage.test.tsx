@@ -19,6 +19,7 @@ import { mockUseUser } from '@/test/mocks/clerk'
 import {
   mockUseGetSubscriptionTiers,
   mockRefetchSubscriptionTiers,
+  mockUseGetCurrentSubscription,
 } from '@/test/mocks/subscription-api'
 
 function renderWithProviders(ui: React.ReactElement, routerState?: { frozen?: boolean }) {
@@ -41,6 +42,7 @@ describe('PricingPage', () => {
     mockUseUser.mockClear()
     mockUseGetSubscriptionTiers.mockClear()
     mockRefetchSubscriptionTiers.mockClear()
+    mockUseGetCurrentSubscription.mockClear()
 
     // Default: successful load with no authenticated user
     mockUseGetSubscriptionTiers.mockReturnValue({
@@ -53,6 +55,12 @@ describe('PricingPage', () => {
       user: undefined,
       isSignedIn: false,
       isLoaded: true,
+    })
+    mockUseGetCurrentSubscription.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: null,
+      refetch: mock(() => Promise.resolve()),
     })
   })
 
@@ -409,6 +417,118 @@ describe('PricingPage', () => {
       renderWithProviders(<PricingPage />)
 
       expect(screen.queryByText(/your subscription has expired/i)).not.toBeInTheDocument()
+    })
+  })
+
+  // Issue #772: Trial user detection (GAP 1)
+  describe('Trial user detection', () => {
+    beforeEach(() => {
+      // Mock trial user with premium tier in metadata
+      mockUseUser.mockReturnValue({
+        user: {
+          id: 'user_123',
+          publicMetadata: {
+            subscription_tier: 'premium',
+          },
+        },
+        isSignedIn: true,
+        isLoaded: true,
+      })
+    })
+
+    it('should NOT show "Current Plan" badge for trial users', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        data: {
+          subscription_id: 'sub_123',
+          status: 'trial',
+          tier: 'premium',
+          billing_interval: 'month',
+          amount: '0.00',
+          currency: 'USD',
+          current_period_end: '2026-04-08T00:00:00Z',
+          trial_ends_at: '2026-04-08T00:00:00Z',
+          trial_days_remaining: 60,
+        },
+        isLoading: false,
+        error: null,
+        refetch: mock(() => Promise.resolve()),
+      })
+
+      renderWithProviders(<PricingPage />)
+
+      // No "Current Plan" badges should be visible for trial users
+      expect(screen.queryByText('Current Plan')).not.toBeInTheDocument()
+    })
+
+    it('should show Subscribe buttons for all tiers when user is on trial', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        data: {
+          subscription_id: 'sub_123',
+          status: 'trial',
+          tier: 'premium',
+          billing_interval: 'month',
+          amount: '0.00',
+          currency: 'USD',
+          current_period_end: '2026-04-08T00:00:00Z',
+          trial_ends_at: '2026-04-08T00:00:00Z',
+          trial_days_remaining: 60,
+        },
+        isLoading: false,
+        error: null,
+        refetch: mock(() => Promise.resolve()),
+      })
+
+      renderWithProviders(<PricingPage />)
+
+      // All tiers should have Subscribe buttons (5 tiers)
+      const subscribeButtons = screen.getAllByRole('button', { name: /subscribe/i })
+      expect(subscribeButtons.length).toBe(5)
+    })
+
+    it('should show "Current Plan" badge for paid users (not trial)', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        data: {
+          subscription_id: 'sub_123',
+          status: 'active',
+          tier: 'premium',
+          billing_interval: 'month',
+          amount: '8.99',
+          currency: 'USD',
+          current_period_end: '2026-03-08T00:00:00Z',
+        },
+        isLoading: false,
+        error: null,
+        refetch: mock(() => Promise.resolve()),
+      })
+
+      renderWithProviders(<PricingPage />)
+
+      // Should show "Current Plan" badge for active paid users
+      const currentPlanElements = screen.getAllByText('Current Plan')
+      expect(currentPlanElements.length).toBeGreaterThan(0)
+    })
+
+    it('should show Subscribe buttons for non-current tiers when user has active subscription', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        data: {
+          subscription_id: 'sub_123',
+          status: 'active',
+          tier: 'premium',
+          billing_interval: 'month',
+          amount: '8.99',
+          currency: 'USD',
+          current_period_end: '2026-03-08T00:00:00Z',
+        },
+        isLoading: false,
+        error: null,
+        refetch: mock(() => Promise.resolve()),
+      })
+
+      renderWithProviders(<PricingPage />)
+
+      // Should show Subscribe buttons for other tiers (4 non-current tiers)
+      const subscribeButtons = screen.getAllByRole('button', { name: /subscribe/i })
+      expect(subscribeButtons.length).toBe(4)
     })
   })
 })

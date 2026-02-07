@@ -1,11 +1,11 @@
 import { useState } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useUser } from '@clerk/react-router'
 import { Award, Gem, Check, X, AlertTriangle } from 'lucide-react'
 import { useSubscriptionTiers } from '../subscription/hooks/useSubscriptionTiers'
 import type { TierName, SubscriptionTier } from '../subscription/types'
 import { PaddleCheckoutButton } from '../billing/components/PaddleCheckoutButton'
-import { toast } from 'sonner'
+import { useGetCurrentSubscription } from '@boostedbudget/api-client/endpoints/subscription/subscription'
 import './PricingPage.css'
 
 type BillingPeriod = 'monthly' | 'yearly'
@@ -14,7 +14,7 @@ type BillingPeriod = 'monthly' | 'yearly'
  * Format price for display
  */
 function formatPrice(price: number | undefined): string {
-  if (price === undefined || price === null || price === 0) {
+  if (!price) {
     return 'Free'
   }
   return `$${price.toFixed(2)}`
@@ -126,26 +126,20 @@ interface TierCardProps {
   tierData: SubscriptionTier
   isCurrentTier: boolean
   billingPeriod: BillingPeriod
+  navigate: ReturnType<typeof useNavigate>
 }
 
-function TierCard({ tierKey, tierData, isCurrentTier, billingPeriod }: TierCardProps) {
+function TierCard({ tierKey, tierData, isCurrentTier, billingPeriod, navigate }: TierCardProps) {
   const features = buildFeatureList(tierData)
   const isHousehold5 = tierKey === 'household_5'
+  const isPaidTier = tierData.pricing.price_monthly > 0
 
   // Get the appropriate price based on billing period
   const currentPrice = billingPeriod === 'monthly'
     ? tierData.pricing.price_monthly
     : tierData.pricing.price_yearly
-  const isPaidTier = tierData.pricing.price_monthly > 0
 
-  // Get the icon component based on tier (all tiers use Award now)
-  const renderTierIcon = () => {
-    const iconProps = { className: 'pricing-tier-icon', 'aria-hidden': true as const }
-    if (tierKey === 'household_5') {
-      return <Gem {...iconProps} />
-    }
-    return <Award {...iconProps} />
-  }
+  const TierIcon = isHousehold5 ? Gem : Award
 
   return (
     <div
@@ -157,7 +151,7 @@ function TierCard({ tierKey, tierData, isCurrentTier, billingPeriod }: TierCardP
       )}
 
       <div className="pricing-card-header">
-        {renderTierIcon()}
+        <TierIcon className="pricing-tier-icon" aria-hidden="true" />
         <h2 className="pricing-tier-name">{tierData.display_name}</h2>
         <p className="pricing-tier-description">{tierData.description}</p>
       </div>
@@ -200,7 +194,7 @@ function TierCard({ tierKey, tierData, isCurrentTier, billingPeriod }: TierCardP
             tier={tierKey}
             billingInterval={billingPeriod === 'monthly' ? 'month' : 'year'}
             onSuccess={() => {
-              toast.success('Subscription activated! Welcome to ' + tierData.display_name)
+              navigate(`/billing/success?tier=${encodeURIComponent(tierData.display_name)}`)
             }}
           />
         )}
@@ -212,12 +206,18 @@ function TierCard({ tierKey, tierData, isCurrentTier, billingPeriod }: TierCardP
 export function PricingPage() {
   const { user } = useUser()
   const location = useLocation()
+  const navigate = useNavigate()
   const { tiers, loading, error, refetch } = useSubscriptionTiers()
+  const { data: currentSubscription } = useGetCurrentSubscription()
   const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>('monthly')
 
   const isFrozen = (location.state as { frozen?: boolean } | null)?.frozen === true
-  const currentTier: TierName =
-    (user?.publicMetadata?.subscription_tier as TierName) || 'premium'
+
+  // Check if user is on trial - trial users should not have any tier marked as "current"
+  const isTrialUser = currentSubscription?.status === 'trial'
+  const currentTier: TierName | null = isTrialUser
+    ? null
+    : (user?.publicMetadata?.subscription_tier as TierName) || 'premium'
 
   if (loading) {
     return (
@@ -284,6 +284,7 @@ export function PricingPage() {
               tierData={tierData}
               isCurrentTier={tierKey === currentTier}
               billingPeriod={billingPeriod}
+              navigate={navigate}
             />
           )
         })}

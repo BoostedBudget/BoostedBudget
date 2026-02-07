@@ -42,6 +42,27 @@ func LoadTierConfig() (*TierConfig, error) {
 	return globalTierConfig, configLoadError
 }
 
+// findConfigFile searches for a config file in multiple locations (current dir, parent dirs)
+// Returns the first existing path found, or the original path if none exist
+func findConfigFile(filename string) string {
+	wd, _ := os.Getwd()
+	testPaths := []string{filepath.Join(wd, filename), filename}
+
+	// Try going up to 5 directory levels
+	dir := wd
+	for i := 0; i < 5; i++ {
+		testPaths = append(testPaths, filepath.Join(dir, filename))
+		dir = filepath.Dir(dir)
+	}
+
+	for _, path := range testPaths {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return filename // Return original if not found
+}
+
 // getConfigPath determines which config file to load based on environment
 // Supports environment-specific configs for sandbox vs production Paddle IDs
 //
@@ -58,31 +79,11 @@ func getConfigPath() string {
 	// Check for environment-specific config based on PADDLE_ENVIRONMENT
 	if paddleEnv := getEnv("PADDLE_ENVIRONMENT", ""); paddleEnv != "" {
 		envSpecificPath := fmt.Sprintf("config/subscription_tiers.%s.yaml", paddleEnv)
-
-		// Check if environment-specific file exists
-		// Try multiple locations (current dir, parent dirs)
-		wd, _ := os.Getwd()
-		testPaths := []string{
-			filepath.Join(wd, envSpecificPath),
-			envSpecificPath,
+		found := findConfigFile(envSpecificPath)
+		if found != envSpecificPath {
+			fmt.Printf("Loading environment-specific config: %s\n", found)
+			return found
 		}
-
-		// Also try going up directories
-		dir := wd
-		for i := 0; i < 5; i++ {
-			testPaths = append(testPaths, filepath.Join(dir, envSpecificPath))
-			dir = filepath.Dir(dir)
-		}
-
-		for _, path := range testPaths {
-			if _, err := os.Stat(path); err == nil {
-				// Found environment-specific config
-				fmt.Printf("Loading environment-specific config: %s\n", path)
-				return path
-			}
-		}
-
-		// Environment-specific config not found, will fall back to default
 		fmt.Printf("Warning: PADDLE_ENVIRONMENT=%s but %s not found, using default config\n",
 			paddleEnv, envSpecificPath)
 	}
@@ -94,38 +95,14 @@ func getConfigPath() string {
 // loadTierConfigFromFile reads and parses the subscription tiers YAML file
 // Automatically selects environment-specific config based on PADDLE_ENVIRONMENT
 func loadTierConfigFromFile() (*TierConfig, error) {
-	// Get config file path - supports environment-specific configs
 	configPath := getConfigPath()
 
 	// Make path absolute if it's relative
 	if !filepath.IsAbs(configPath) {
-		// Try multiple paths to find the config file
-		// 1. Relative to current working directory
-		// 2. Relative to project root (go up to find it)
-		wd, err := os.Getwd()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get working directory: %w", err)
-		}
-
-		// Try current directory first
-		if _, err := os.Stat(filepath.Join(wd, configPath)); err == nil {
-			configPath = filepath.Join(wd, configPath)
-		} else {
-			// Try going up directories to find project root
-			dir := wd
-			found := false
-			for i := 0; i < 5; i++ { // Try up to 5 levels up
-				testPath := filepath.Join(dir, configPath)
-				if _, err := os.Stat(testPath); err == nil {
-					configPath = testPath
-					found = true
-					break
-				}
-				dir = filepath.Dir(dir)
-			}
-			if !found {
-				return nil, fmt.Errorf("config file not found at %s (searched from %s)", configPath, wd)
-			}
+		configPath = findConfigFile(configPath)
+		wd, _ := os.Getwd()
+		if _, err := os.Stat(configPath); err != nil {
+			return nil, fmt.Errorf("config file not found at %s (searched from %s)", configPath, wd)
 		}
 	}
 
@@ -275,6 +252,28 @@ func (tc *TierConfig) GetTrialConfig() TrialConfig {
 	tc.mu.RLock()
 	defer tc.mu.RUnlock()
 	return tc.Trial
+}
+
+// GetTierByPriceID returns the tier name for a given Paddle price ID
+// Searches both monthly and yearly price IDs across all tiers
+// Thread-safe with read lock
+// Issue #772: Webhook tier resolution (GAP 3)
+func (tc *TierConfig) GetTierByPriceID(priceID string) (domain.TierName, error) {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+
+	for name, tier := range tc.Tiers {
+		// Check monthly price ID
+		if tier.Pricing.PaddlePriceIDMonthly != nil && *tier.Pricing.PaddlePriceIDMonthly == priceID {
+			return name, nil
+		}
+		// Check yearly price ID
+		if tier.Pricing.PaddlePriceIDYearly != nil && *tier.Pricing.PaddlePriceIDYearly == priceID {
+			return name, nil
+		}
+	}
+
+	return "", fmt.Errorf("no tier found for price_id: %s", priceID)
 }
 
 // NewTierConfig creates a new TierConfig instance
