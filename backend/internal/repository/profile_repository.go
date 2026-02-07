@@ -12,9 +12,7 @@ import (
 )
 
 var (
-	// ErrUserNotFound is returned when a user is not found in the database
-	ErrUserNotFound = errors.New("user not found")
-	// ErrDuplicateEmail is returned when attempting to create/update a user with an email that already exists
+	ErrUserNotFound   = errors.New("user not found")
 	ErrDuplicateEmail = errors.New("email already exists")
 )
 
@@ -25,6 +23,9 @@ type ProfileRepository interface {
 
 	// GetUserByID retrieves a user by their internal UUID
 	GetUserByID(ctx context.Context, id string) (*domain.User, error)
+
+	// GetUserByPaddleSubscriptionID retrieves a user by their Paddle subscription ID
+	GetUserByPaddleSubscriptionID(ctx context.Context, subscriptionID string) (*domain.User, error)
 
 	// CreateUser creates a new user in the database
 	CreateUser(ctx context.Context, user *domain.User) error
@@ -44,7 +45,7 @@ type ProfileRepository interface {
 	UpdatePaddleCustomerID(ctx context.Context, userID, paddleCustomerID string) error
 
 	// UpdateSubscriptionFromPaddle updates subscription details from Paddle webhooks
-	UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time) error
+	UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time, subscriptionID *string) error
 
 	// Trial-related methods (Issue #679)
 
@@ -85,98 +86,74 @@ func NewProfileRepository(db DB) ProfileRepository {
 	return &profileRepository{db: db}
 }
 
-// GetUserByClerkID retrieves a user by their Clerk user ID
-func (r *profileRepository) GetUserByClerkID(ctx context.Context, clerkUserID string) (*domain.User, error) {
-	query := `
-		SELECT id, clerk_user_id, email, email_verified,
-		       subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
-		       trial_started_at, trial_ends_at, had_trial,
-		       paddle_customer_id, primary_region, is_active, is_deleted,
-		       deletion_requested_at, deletion_scheduled_at,
-		       created_at, updated_at, last_login_at
-		FROM users
-		WHERE clerk_user_id = $1 AND is_deleted = FALSE
-	`
+const userSelectQuery = `
+	SELECT id, clerk_user_id, email, email_verified,
+	       subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
+	       trial_started_at, trial_ends_at, had_trial,
+	       paddle_customer_id, paddle_subscription_id, primary_region,
+	       is_active, is_deleted,
+	       deletion_requested_at, deletion_scheduled_at,
+	       created_at, updated_at, last_login_at
+	FROM users`
 
+// queryUser is a helper that scans a user from a query row
+func (r *profileRepository) queryUser(ctx context.Context, query string, args ...interface{}) (*domain.User, error) {
 	var user domain.User
-	err := r.db.QueryRow(ctx, query, clerkUserID).Scan(
-		&user.ID,
-		&user.ClerkUserID,
-		&user.Email,
-		&user.EmailVerified,
-		&user.SubscriptionTier,
-		&user.SubscriptionStatus,
-		&user.SubscriptionStartedAt,
-		&user.SubscriptionEndsAt,
-		&user.TrialStartedAt,
-		&user.TrialEndsAt,
-		&user.HadTrial,
-		&user.PaddleCustomerID,
-		&user.PrimaryRegion,
-		&user.IsActive,
-		&user.IsDeleted,
-		&user.DeletionRequestedAt,
-		&user.DeletionScheduledAt,
-		&user.CreatedAt,
-		&user.UpdatedAt,
-		&user.LastLoginAt,
+	err := r.db.QueryRow(ctx, query, args...).Scan(
+		&user.ID, &user.ClerkUserID, &user.Email, &user.EmailVerified,
+		&user.SubscriptionTier, &user.SubscriptionStatus, &user.SubscriptionStartedAt, &user.SubscriptionEndsAt,
+		&user.TrialStartedAt, &user.TrialEndsAt, &user.HadTrial,
+		&user.PaddleCustomerID, &user.PaddleSubscriptionID, &user.PrimaryRegion,
+		&user.IsActive, &user.IsDeleted,
+		&user.DeletionRequestedAt, &user.DeletionScheduledAt,
+		&user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt,
 	)
-
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrUserNotFound
 	}
+	return &user, err
+}
+
+// queryUsers is a helper that scans multiple users from a query
+func (r *profileRepository) queryUsers(ctx context.Context, query string, args ...interface{}) ([]*domain.User, error) {
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 
-	return &user, nil
+	var users []*domain.User
+	for rows.Next() {
+		var user domain.User
+		if err := rows.Scan(
+			&user.ID, &user.ClerkUserID, &user.Email, &user.EmailVerified,
+			&user.SubscriptionTier, &user.SubscriptionStatus, &user.SubscriptionStartedAt, &user.SubscriptionEndsAt,
+			&user.TrialStartedAt, &user.TrialEndsAt, &user.HadTrial,
+			&user.PaddleCustomerID, &user.PaddleSubscriptionID, &user.PrimaryRegion,
+			&user.IsActive, &user.IsDeleted,
+			&user.DeletionRequestedAt, &user.DeletionScheduledAt,
+			&user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt,
+		); err != nil {
+			return nil, err
+		}
+		users = append(users, &user)
+	}
+	return users, rows.Err()
+}
+
+// GetUserByClerkID retrieves a user by their Clerk user ID
+func (r *profileRepository) GetUserByClerkID(ctx context.Context, clerkUserID string) (*domain.User, error) {
+	return r.queryUser(ctx, userSelectQuery+" WHERE clerk_user_id = $1 AND is_deleted = FALSE", clerkUserID)
 }
 
 // GetUserByID retrieves a user by their internal UUID
 func (r *profileRepository) GetUserByID(ctx context.Context, id string) (*domain.User, error) {
-	query := `
-		SELECT id, clerk_user_id, email, email_verified,
-		       subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
-		       trial_started_at, trial_ends_at, had_trial,
-		       paddle_customer_id, primary_region, is_active, is_deleted,
-		       deletion_requested_at, deletion_scheduled_at,
-		       created_at, updated_at, last_login_at
-		FROM users
-		WHERE id = $1 AND is_deleted = FALSE
-	`
+	return r.queryUser(ctx, userSelectQuery+" WHERE id = $1 AND is_deleted = FALSE", id)
+}
 
-	var user domain.User
-	err := r.db.QueryRow(ctx, query, id).Scan(
-		&user.ID,
-		&user.ClerkUserID,
-		&user.Email,
-		&user.EmailVerified,
-		&user.SubscriptionTier,
-		&user.SubscriptionStatus,
-		&user.SubscriptionStartedAt,
-		&user.SubscriptionEndsAt,
-		&user.TrialStartedAt,
-		&user.TrialEndsAt,
-		&user.HadTrial,
-		&user.PaddleCustomerID,
-		&user.PrimaryRegion,
-		&user.IsActive,
-		&user.IsDeleted,
-		&user.DeletionRequestedAt,
-		&user.DeletionScheduledAt,
-		&user.CreatedAt,
-		&user.UpdatedAt,
-		&user.LastLoginAt,
-	)
-
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrUserNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	return &user, nil
+// GetUserByPaddleSubscriptionID retrieves a user by their Paddle subscription ID
+func (r *profileRepository) GetUserByPaddleSubscriptionID(ctx context.Context, subscriptionID string) (*domain.User, error) {
+	return r.queryUser(ctx, userSelectQuery+" WHERE paddle_subscription_id = $1 AND is_deleted = FALSE", subscriptionID)
 }
 
 // CreateUser creates a new user in the database
@@ -196,16 +173,16 @@ func (r *profileRepository) CreateUser(ctx context.Context, user *domain.User) e
 			id, clerk_user_id, email, email_verified,
 			subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
 			trial_started_at, trial_ends_at, had_trial,
-			paddle_customer_id, primary_region, is_active, is_deleted,
+			paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted,
 			deletion_requested_at, deletion_scheduled_at,
 			created_at, updated_at, last_login_at
 		) VALUES (
 			$1, $2, $3, $4,
 			$5, $6, $7, $8,
 			$9, $10, $11,
-			$12, $13, $14, $15,
-			$16, $17,
-			$18, $19, $20
+			$12, $13, $14, $15, $16,
+			$17, $18,
+			$19, $20, $21
 		)
 	`
 
@@ -222,6 +199,7 @@ func (r *profileRepository) CreateUser(ctx context.Context, user *domain.User) e
 		user.TrialEndsAt,
 		user.HadTrial,
 		user.PaddleCustomerID,
+		user.PaddleSubscriptionID,
 		user.PrimaryRegion,
 		user.IsActive,
 		user.IsDeleted,
@@ -232,27 +210,27 @@ func (r *profileRepository) CreateUser(ctx context.Context, user *domain.User) e
 		user.LastLoginAt,
 	)
 
-	if err != nil {
-		// Check for unique constraint violations
-		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
-			if strings.Contains(err.Error(), "email") {
-				return ErrDuplicateEmail
-			}
-		}
-		return err
-	}
+	return r.checkDuplicateError(err)
+}
 
-	return nil
+// checkDuplicateError maps database constraint errors to domain errors
+func (r *profileRepository) checkDuplicateError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if (strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint")) &&
+		strings.Contains(err.Error(), "email") {
+		return ErrDuplicateEmail
+	}
+	return err
 }
 
 // CreateUserTx creates a new user in the database within a transaction
 func (r *profileRepository) CreateUserTx(ctx context.Context, tx pgx.Tx, user *domain.User) error {
-	// Generate UUID if not already set
 	if user.ID == "" {
 		user.ID = uuid.New().String()
 	}
 
-	// Set timestamps
 	now := time.Now()
 	user.CreatedAt = now
 	user.UpdatedAt = now
@@ -262,60 +240,34 @@ func (r *profileRepository) CreateUserTx(ctx context.Context, tx pgx.Tx, user *d
 			id, clerk_user_id, email, email_verified,
 			subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
 			trial_started_at, trial_ends_at, had_trial,
-			paddle_customer_id, primary_region, is_active, is_deleted,
+			paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted,
 			deletion_requested_at, deletion_scheduled_at,
 			created_at, updated_at, last_login_at
 		) VALUES (
 			$1, $2, $3, $4,
 			$5, $6, $7, $8,
 			$9, $10, $11,
-			$12, $13, $14, $15,
-			$16, $17,
-			$18, $19, $20
+			$12, $13, $14, $15, $16,
+			$17, $18,
+			$19, $20, $21
 		)
 	`
 
 	_, err := tx.Exec(ctx, query,
-		user.ID,
-		user.ClerkUserID,
-		user.Email,
-		user.EmailVerified,
-		user.SubscriptionTier,
-		user.SubscriptionStatus,
-		user.SubscriptionStartedAt,
-		user.SubscriptionEndsAt,
-		user.TrialStartedAt,
-		user.TrialEndsAt,
-		user.HadTrial,
-		user.PaddleCustomerID,
-		user.PrimaryRegion,
-		user.IsActive,
-		user.IsDeleted,
-		user.DeletionRequestedAt,
-		user.DeletionScheduledAt,
-		user.CreatedAt,
-		user.UpdatedAt,
-		user.LastLoginAt,
+		user.ID, user.ClerkUserID, user.Email, user.EmailVerified,
+		user.SubscriptionTier, user.SubscriptionStatus, user.SubscriptionStartedAt, user.SubscriptionEndsAt,
+		user.TrialStartedAt, user.TrialEndsAt, user.HadTrial,
+		user.PaddleCustomerID, user.PaddleSubscriptionID, user.PrimaryRegion, user.IsActive, user.IsDeleted,
+		user.DeletionRequestedAt, user.DeletionScheduledAt,
+		user.CreatedAt, user.UpdatedAt, user.LastLoginAt,
 	)
-
-	if err != nil {
-		// Check for unique constraint violations
-		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
-			if strings.Contains(err.Error(), "email") {
-				return ErrDuplicateEmail
-			}
-		}
-		return err
-	}
-
-	return nil
+	return r.checkDuplicateError(err)
 }
 
 // UpdateUser updates an existing user's information
 // Only updates allowed fields: email, email_verified, primary_region
 // Subscription fields are managed separately through payment webhooks
 func (r *profileRepository) UpdateUser(ctx context.Context, user *domain.User) error {
-	// Update timestamp
 	user.UpdatedAt = time.Now()
 
 	query := `
@@ -328,28 +280,16 @@ func (r *profileRepository) UpdateUser(ctx context.Context, user *domain.User) e
 	`
 
 	ct, err := r.db.Exec(ctx, query,
-		user.Email,
-		user.EmailVerified,
-		user.PrimaryRegion,
-		user.UpdatedAt,
-		user.ID,
+		user.Email, user.EmailVerified, user.PrimaryRegion, user.UpdatedAt, user.ID,
 	)
 
 	if err != nil {
-		// Check for unique constraint violations
-		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
-			if strings.Contains(err.Error(), "email") {
-				return ErrDuplicateEmail
-			}
-		}
-		return err
+		return r.checkDuplicateError(err)
 	}
 
-	// Check if any rows were affected
 	if ct.RowsAffected() == 0 {
 		return ErrUserNotFound
 	}
-
 	return nil
 }
 
@@ -403,11 +343,13 @@ func (r *profileRepository) UpdatePaddleCustomerID(ctx context.Context, userID, 
 
 // UpdateSubscriptionFromPaddle updates subscription details from Paddle webhooks
 // Issue #46: Paddle Webhook Handler Implementation
-// Updates tier, status, and billing dates when subscription changes
+// Issue #48: Subscription Management UI (added subscriptionID parameter)
+// Updates tier, status, billing dates, and subscription ID when subscription changes
 func (r *profileRepository) UpdateSubscriptionFromPaddle(
 	ctx context.Context,
 	userID, tier, status string,
 	startedAt, endsAt *time.Time,
+	subscriptionID *string,
 ) error {
 	now := time.Now()
 
@@ -417,8 +359,9 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 		    subscription_status = $2,
 		    subscription_started_at = $3,
 		    subscription_ends_at = $4,
-		    updated_at = $5
-		WHERE id = $6 AND is_deleted = FALSE
+		    paddle_subscription_id = $5,
+		    updated_at = $6
+		WHERE id = $7 AND is_deleted = FALSE
 	`
 
 	ct, err := r.db.Exec(ctx, query,
@@ -426,6 +369,7 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 		status,
 		startedAt,
 		endsAt,
+		subscriptionID,
 		now,
 		userID,
 	)
@@ -490,64 +434,13 @@ func (r *profileRepository) CancelDeletion(ctx context.Context, userID string) e
 
 // GetUsersScheduledForDeletion returns users whose deletion date has passed
 func (r *profileRepository) GetUsersScheduledForDeletion(ctx context.Context) ([]*domain.User, error) {
-	now := time.Now()
-
-	query := `
-		SELECT id, clerk_user_id, email, email_verified,
-		       subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
-		       trial_started_at, trial_ends_at, had_trial,
-		       paddle_customer_id, primary_region, is_active, is_deleted,
-		       deletion_requested_at, deletion_scheduled_at,
-		       created_at, updated_at, last_login_at
-		FROM users
+	query := userSelectQuery + `
 		WHERE deletion_scheduled_at IS NOT NULL
 		  AND deletion_scheduled_at <= $1
 		  AND is_deleted = FALSE
 		ORDER BY deletion_scheduled_at ASC
 	`
-
-	rows, err := r.db.Query(ctx, query, now)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var users []*domain.User
-	for rows.Next() {
-		var user domain.User
-		err := rows.Scan(
-			&user.ID,
-			&user.ClerkUserID,
-			&user.Email,
-			&user.EmailVerified,
-			&user.SubscriptionTier,
-			&user.SubscriptionStatus,
-			&user.SubscriptionStartedAt,
-			&user.SubscriptionEndsAt,
-			&user.TrialStartedAt,
-			&user.TrialEndsAt,
-			&user.HadTrial,
-			&user.PaddleCustomerID,
-			&user.PrimaryRegion,
-			&user.IsActive,
-			&user.IsDeleted,
-			&user.DeletionRequestedAt,
-			&user.DeletionScheduledAt,
-			&user.CreatedAt,
-			&user.UpdatedAt,
-			&user.LastLoginAt,
-		)
-		if err != nil {
-			return nil, err
-		}
-		users = append(users, &user)
-	}
-
-	if err = rows.Err(); err != nil {
-		return nil, err
-	}
-
-	return users, nil
+	return r.queryUsers(ctx, query, time.Now())
 }
 
 // DeleteUserCascade performs application-level cascade deletion of all user data
@@ -706,65 +599,14 @@ func (r *profileRepository) UpdateSubscriptionStatus(ctx context.Context, userID
 // GetUsersWithExpiredTrials returns users with trial status but past trial_ends_at
 // Issue #680: Trial expiration cron job
 func (r *profileRepository) GetUsersWithExpiredTrials(ctx context.Context) ([]*domain.User, error) {
-	now := time.Now()
-
-	query := `
-		SELECT id, clerk_user_id, email, email_verified,
-		       subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
-		       trial_started_at, trial_ends_at, had_trial,
-		       paddle_customer_id, primary_region, is_active, is_deleted,
-		       deletion_requested_at, deletion_scheduled_at,
-		       created_at, updated_at, last_login_at
-		FROM users
+	query := userSelectQuery + `
 		WHERE subscription_status = 'trial'
 		  AND trial_ends_at IS NOT NULL
 		  AND trial_ends_at <= $1
 		  AND is_deleted = FALSE
 		ORDER BY trial_ends_at ASC
 	`
-
-	rows, err := r.db.Query(ctx, query, now)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var users []*domain.User
-	for rows.Next() {
-		var user domain.User
-		err := rows.Scan(
-			&user.ID,
-			&user.ClerkUserID,
-			&user.Email,
-			&user.EmailVerified,
-			&user.SubscriptionTier,
-			&user.SubscriptionStatus,
-			&user.SubscriptionStartedAt,
-			&user.SubscriptionEndsAt,
-			&user.TrialStartedAt,
-			&user.TrialEndsAt,
-			&user.HadTrial,
-			&user.PaddleCustomerID,
-			&user.PrimaryRegion,
-			&user.IsActive,
-			&user.IsDeleted,
-			&user.DeletionRequestedAt,
-			&user.DeletionScheduledAt,
-			&user.CreatedAt,
-			&user.UpdatedAt,
-			&user.LastLoginAt,
-		)
-		if err != nil {
-			return nil, err
-		}
-		users = append(users, &user)
-	}
-
-	if err = rows.Err(); err != nil {
-		return nil, err
-	}
-
-	return users, nil
+	return r.queryUsers(ctx, query, time.Now())
 }
 
 // GetUsersWithExpiringTrials returns users whose trial ends within N days
@@ -773,14 +615,7 @@ func (r *profileRepository) GetUsersWithExpiringTrials(ctx context.Context, with
 	now := time.Now()
 	threshold := now.Add(time.Duration(withinDays) * 24 * time.Hour)
 
-	query := `
-		SELECT id, clerk_user_id, email, email_verified,
-		       subscription_tier, subscription_status, subscription_started_at, subscription_ends_at,
-		       trial_started_at, trial_ends_at, had_trial,
-		       paddle_customer_id, primary_region, is_active, is_deleted,
-		       deletion_requested_at, deletion_scheduled_at,
-		       created_at, updated_at, last_login_at
-		FROM users
+	query := userSelectQuery + `
 		WHERE subscription_status = 'trial'
 		  AND trial_ends_at IS NOT NULL
 		  AND trial_ends_at > $1
@@ -788,47 +623,5 @@ func (r *profileRepository) GetUsersWithExpiringTrials(ctx context.Context, with
 		  AND is_deleted = FALSE
 		ORDER BY trial_ends_at ASC
 	`
-
-	rows, err := r.db.Query(ctx, query, now, threshold)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var users []*domain.User
-	for rows.Next() {
-		var user domain.User
-		err := rows.Scan(
-			&user.ID,
-			&user.ClerkUserID,
-			&user.Email,
-			&user.EmailVerified,
-			&user.SubscriptionTier,
-			&user.SubscriptionStatus,
-			&user.SubscriptionStartedAt,
-			&user.SubscriptionEndsAt,
-			&user.TrialStartedAt,
-			&user.TrialEndsAt,
-			&user.HadTrial,
-			&user.PaddleCustomerID,
-			&user.PrimaryRegion,
-			&user.IsActive,
-			&user.IsDeleted,
-			&user.DeletionRequestedAt,
-			&user.DeletionScheduledAt,
-			&user.CreatedAt,
-			&user.UpdatedAt,
-			&user.LastLoginAt,
-		)
-		if err != nil {
-			return nil, err
-		}
-		users = append(users, &user)
-	}
-
-	if err = rows.Err(); err != nil {
-		return nil, err
-	}
-
-	return users, nil
+	return r.queryUsers(ctx, query, now, threshold)
 }

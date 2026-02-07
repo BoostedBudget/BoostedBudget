@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  GO_VERSION: '1.25.6'
+  GO_VERSION: '1.25.7'
   NODE_VERSION: '22'
   REGISTRY: ghcr.io
   BACKEND_IMAGE_NAME: boostedbudget/boostedbudget-backend
@@ -94,6 +94,7 @@ jobs:
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:buildcache-go${{ env.GO_VERSION }}
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:buildcache-go${{ env.GO_VERSION }},mode=max
           build-args: |
+            GO_VERSION=${{ env.GO_VERSION }}
             VERSION=staging-${{ github.sha }}
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
           provenance: false

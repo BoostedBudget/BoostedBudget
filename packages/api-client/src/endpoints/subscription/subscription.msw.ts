@@ -40,13 +40,23 @@ import type {
 } from 'msw';
 
 import type {
+  CancelSubscriptionOutputBody,
   CheckoutOutputBody,
+  GetBillingPortalURLOutputBody,
+  GetCurrentSubscriptionOutputBody,
   PreviewUpdateOutputBody,
-  SubscriptionTiersResponse
+  SubscriptionTiersResponse,
+  UpdateSubscriptionOutputBody
 } from '../../models';
 
 
+export const getGetBillingPortalUrlResponseMock = (overrideResponse: Partial< GetBillingPortalURLOutputBody > = {}): GetBillingPortalURLOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), portal_url: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+
+export const getCancelPaddleSubscriptionResponseMock = (overrideResponse: Partial< CancelSubscriptionOutputBody > = {}): CancelSubscriptionOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), ends_at: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), message: faker.string.alpha({length: {min: 10, max: 20}}), subscription_id: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+
 export const getCreatePaddleCheckoutResponseMock = (overrideResponse: Partial< CheckoutOutputBody > = {}): CheckoutOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), checkout_url: faker.string.alpha({length: {min: 10, max: 20}}), transaction_id: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+
+export const getGetCurrentSubscriptionResponseMock = (overrideResponse: Partial< GetCurrentSubscriptionOutputBody > = {}): GetCurrentSubscriptionOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), amount: faker.string.alpha({length: {min: 10, max: 20}}), billing_interval: faker.string.alpha({length: {min: 10, max: 20}}), currency: faker.string.alpha({length: {min: 10, max: 20}}), current_period_end: faker.string.alpha({length: {min: 10, max: 20}}), next_billing_date: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), status: faker.string.alpha({length: {min: 10, max: 20}}), subscription_id: faker.string.alpha({length: {min: 10, max: 20}}), tier: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
 export const getPreviewPaddleSubscriptionUpdateResponseMock = (overrideResponse: Partial< PreviewUpdateOutputBody > = {}): PreviewUpdateOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), currency: faker.string.alpha({length: {min: 10, max: 20}}), next_charge_amount: faker.string.alpha({length: {min: 10, max: 20}}), next_charge_date: faker.string.alpha({length: {min: 10, max: 20}}), proration_amount: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
@@ -54,6 +64,32 @@ export const getGetSubscriptionTiersResponseMock = (overrideResponse: Partial< S
         [faker.string.alphanumeric(5)]: {description: faker.string.alpha({length: {min: 10, max: 20}}), display_name: faker.string.alpha({length: {min: 10, max: 20}}), features: {ads_enabled: faker.datatype.boolean(), advanced_reports: faker.datatype.boolean(), ai_insights: faker.datatype.boolean(), api_access: faker.datatype.boolean(), custom_categories: faker.datatype.boolean(), custom_tags: faker.datatype.boolean(), priority_support: faker.datatype.boolean()}, limits: {accounts: faker.number.int({min: undefined, max: undefined}), executions_per_day: faker.number.int({min: undefined, max: undefined}), transaction_history_days: faker.number.int({min: undefined, max: undefined})}, name: faker.string.alpha({length: {min: 10, max: 20}}), pricing: {mobile_price_yearly: faker.number.float({min: undefined, max: undefined, fractionDigits: 2}), paddle_price_id_monthly: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), paddle_price_id_yearly: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), price_monthly: faker.number.float({min: undefined, max: undefined, fractionDigits: 2}), price_yearly: faker.number.float({min: undefined, max: undefined, fractionDigits: 2}), users_included: faker.number.int({min: undefined, max: undefined})}}
       }, ...overrideResponse})
 
+export const getUpdatePaddleSubscriptionResponseMock = (overrideResponse: Partial< UpdateSubscriptionOutputBody > = {}): UpdateSubscriptionOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), message: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), subscription_id: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+
+
+export const getGetBillingPortalUrlMockHandler = (overrideResponse?: GetBillingPortalURLOutputBody | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<GetBillingPortalURLOutputBody> | GetBillingPortalURLOutputBody), options?: RequestHandlerOptions) => {
+  return http.get('*/api/v1/subscription/billing-portal', async (info) => {await delay(500);
+  
+    return new HttpResponse(JSON.stringify(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getGetBillingPortalUrlResponseMock()),
+      { status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      })
+  }, options)
+}
+
+export const getCancelPaddleSubscriptionMockHandler = (overrideResponse?: CancelSubscriptionOutputBody | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<CancelSubscriptionOutputBody> | CancelSubscriptionOutputBody), options?: RequestHandlerOptions) => {
+  return http.post('*/api/v1/subscription/cancel', async (info) => {await delay(500);
+  
+    return new HttpResponse(JSON.stringify(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getCancelPaddleSubscriptionResponseMock()),
+      { status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      })
+  }, options)
+}
 
 export const getCreatePaddleCheckoutMockHandler = (overrideResponse?: CheckoutOutputBody | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<CheckoutOutputBody> | CheckoutOutputBody), options?: RequestHandlerOptions) => {
   return http.post('*/api/v1/subscription/checkout', async (info) => {await delay(500);
@@ -61,6 +97,18 @@ export const getCreatePaddleCheckoutMockHandler = (overrideResponse?: CheckoutOu
     return new HttpResponse(JSON.stringify(overrideResponse !== undefined
     ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
     : getCreatePaddleCheckoutResponseMock()),
+      { status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      })
+  }, options)
+}
+
+export const getGetCurrentSubscriptionMockHandler = (overrideResponse?: GetCurrentSubscriptionOutputBody | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<GetCurrentSubscriptionOutputBody> | GetCurrentSubscriptionOutputBody), options?: RequestHandlerOptions) => {
+  return http.get('*/api/v1/subscription/current', async (info) => {await delay(500);
+  
+    return new HttpResponse(JSON.stringify(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getGetCurrentSubscriptionResponseMock()),
       { status: 200,
         headers: { 'Content-Type': 'application/json' }
       })
@@ -90,8 +138,24 @@ export const getGetSubscriptionTiersMockHandler = (overrideResponse?: Subscripti
       })
   }, options)
 }
+
+export const getUpdatePaddleSubscriptionMockHandler = (overrideResponse?: UpdateSubscriptionOutputBody | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<UpdateSubscriptionOutputBody> | UpdateSubscriptionOutputBody), options?: RequestHandlerOptions) => {
+  return http.post('*/api/v1/subscription/update', async (info) => {await delay(500);
+  
+    return new HttpResponse(JSON.stringify(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getUpdatePaddleSubscriptionResponseMock()),
+      { status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      })
+  }, options)
+}
 export const getSubscriptionMock = () => [
+  getGetBillingPortalUrlMockHandler(),
+  getCancelPaddleSubscriptionMockHandler(),
   getCreatePaddleCheckoutMockHandler(),
+  getGetCurrentSubscriptionMockHandler(),
   getPreviewPaddleSubscriptionUpdateMockHandler(),
-  getGetSubscriptionTiersMockHandler()
+  getGetSubscriptionTiersMockHandler(),
+  getUpdatePaddleSubscriptionMockHandler()
 ]

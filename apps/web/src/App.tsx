@@ -17,6 +17,7 @@ import { PremiumRoute } from './auth/PremiumRoute'
 import { Header } from './components/layout'
 import { ProfilePage } from './features/profile/ProfilePage'
 import { PricingPage } from './features/pricing/PricingPage'
+import { SubscriptionManagementPage } from './features/billing/SubscriptionManagementPage'
 import { AccountsPage } from './features/accounts/AccountsPage'
 import { PlaidOAuthCallback } from './features/accounts/PlaidOAuthCallback'
 import { TransactionsPage } from './features/transactions/TransactionsPage'
@@ -260,6 +261,14 @@ function App() {
             <Route path="/legal/privacy-policy" element={<PrivacyPolicy />} />
             <Route path="/privacy" element={<PrivacyPolicy />} />
             <Route path="/pricing" element={<PricingPage />} />
+            <Route
+              path="/billing/manage"
+              element={
+                <ProtectedRoute>
+                  <SubscriptionManagementPage />
+                </ProtectedRoute>
+              }
+            />
             <Route path="/cancel-deletion/:token?" element={<CancelDeletionPage />} />
 
             <Route

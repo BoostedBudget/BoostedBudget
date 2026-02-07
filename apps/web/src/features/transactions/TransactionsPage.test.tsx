@@ -23,6 +23,8 @@ import {
   mockRefetchTransactions,
   mockUpdateTransactionTagsMutateAsync,
   mockUpdateTransactionCategoryMutateAsync,
+  mockUseUpdateTransactionTags,
+  mockUseUpdateTransactionCategory,
 } from '@/test/mocks/transactions-api'
 import {
   mockUseGetUserTags,
@@ -187,6 +189,16 @@ describe('TransactionsPage', () => {
       mutateAsync: mockCreateCategoryMutateAsync,
       isPending: false,
     })
+
+    mockUseUpdateTransactionTags.mockReturnValue({
+      mutateAsync: mockUpdateTransactionTagsMutateAsync,
+      isPending: false,
+    })
+
+    mockUseUpdateTransactionCategory.mockReturnValue({
+      mutateAsync: mockUpdateTransactionCategoryMutateAsync,
+      isPending: false,
+    })
   }
 
   beforeEach(() => {
@@ -196,6 +208,8 @@ describe('TransactionsPage', () => {
       mockRefetchTransactions,
       mockUpdateTransactionTagsMutateAsync,
       mockUpdateTransactionCategoryMutateAsync,
+      mockUseUpdateTransactionTags,
+      mockUseUpdateTransactionCategory,
       mockUseGetUserTags,
       mockUseGetUserCategories,
       mockUseGetPlaidCategories,

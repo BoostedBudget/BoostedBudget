@@ -42,6 +42,7 @@ export interface User {
   is_deleted: boolean;
   last_login_at?: string;
   paddle_customer_id?: string;
+  paddle_subscription_id?: string;
   primary_region: string;
   subscription_ends_at?: string;
   subscription_started_at?: string;
