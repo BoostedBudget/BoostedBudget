@@ -12,6 +12,7 @@ import (
 	paddle "github.com/PaddleHQ/paddle-go-sdk/v4"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -148,9 +149,9 @@ func setupTestCheckoutHandler(t *testing.T) (*PaddleCheckoutHandler, *mockPaddle
 	return handler, mockService, mockRepo
 }
 
-// Helper to create context with user_id
+// Helper to create context with user_id using the correct typed context key
 func contextWithUserID(userID string) context.Context {
-	return context.WithValue(context.Background(), "user_id", userID)
+	return context.WithValue(context.Background(), inputs.UserIDKey, userID)
 }
 
 // TestHandleCreateCheckoutSession_Success tests successful checkout creation for premium tier
@@ -168,6 +169,7 @@ func TestHandleCreateCheckoutSession_Success(t *testing.T) {
 	}
 
 	input := &CreateCheckoutInput{}
+	input.UserID = "user_123"
 	input.Body.Tier = "premium"
 	input.Body.BillingInterval = "month"
 
@@ -208,6 +210,7 @@ func TestHandleCreateCheckoutSession_AllTiers(t *testing.T) {
 			}
 
 			input := &CreateCheckoutInput{}
+	input.UserID = "user_123"
 			input.Body.Tier = tier
 			input.Body.BillingInterval = "month"
 
@@ -249,6 +252,7 @@ func TestHandleCreateCheckoutSession_BillingIntervals(t *testing.T) {
 			}
 
 			input := &CreateCheckoutInput{}
+	input.UserID = "user_123"
 			input.Body.Tier = "premium"
 			input.Body.BillingInterval = tc.billingInterval
 
@@ -286,6 +290,7 @@ func TestHandleCreateCheckoutSession_InvalidTier(t *testing.T) {
 	}
 
 	input := &CreateCheckoutInput{}
+	input.UserID = "user_123"
 	input.Body.Tier = "invalid_tier"
 	input.Body.BillingInterval = "month"
 
@@ -327,6 +332,7 @@ func TestHandleCreateCheckoutSession_NoCustomer_CreatesNew(t *testing.T) {
 	}
 
 	input := &CreateCheckoutInput{}
+	input.UserID = "user_123"
 	input.Body.Tier = "premium"
 	input.Body.BillingInterval = "month"
 
@@ -361,6 +367,7 @@ func TestHandleCreateCheckoutSession_PaddleAPIError(t *testing.T) {
 	}
 
 	input := &CreateCheckoutInput{}
+	input.UserID = "user_123"
 	input.Body.Tier = "premium"
 	input.Body.BillingInterval = "month"
 
@@ -384,6 +391,7 @@ func TestHandleCreateCheckoutSession_UserNotFound(t *testing.T) {
 	ctx := contextWithUserID("user_nonexistent")
 
 	input := &CreateCheckoutInput{}
+	input.UserID = "user_nonexistent"
 	input.Body.Tier = "premium"
 	input.Body.BillingInterval = "month"
 
@@ -411,6 +419,7 @@ func TestHandleCreateCheckoutSession_CreateCustomerFails(t *testing.T) {
 	}
 
 	input := &CreateCheckoutInput{}
+	input.UserID = "user_123"
 	input.Body.Tier = "premium"
 	input.Body.BillingInterval = "month"
 
@@ -428,30 +437,42 @@ func TestHandleCreateCheckoutSession_CreateCustomerFails(t *testing.T) {
 	mockService.AssertExpectations(t)
 }
 
-// TestHandlePreviewSubscriptionUpdate_NotImplemented tests preview update endpoint
-func TestHandlePreviewSubscriptionUpdate_NotImplemented(t *testing.T) {
-	handler, _, mockRepo := setupTestCheckoutHandler(t)
+// TestHandlePreviewSubscriptionUpdate_Success tests successful preview update
+func TestHandlePreviewSubscriptionUpdate_Success(t *testing.T) {
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
 	ctx := contextWithUserID("user_123")
 
+	subscriptionID := "sub_01h1234567890"
 	user := &domain.User{
-		ID:                 "user_123",
-		Email:              "test@example.com",
-		SubscriptionStatus: "active",
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionStatus:   "active",
+		SubscriptionTier:     "premium",
+		PaddleSubscriptionID: &subscriptionID,
 	}
 
 	input := &PreviewUpdateInput{}
+	input.UserID = "user_123"
 	input.Body.NewTier = "household_2"
 	input.Body.BillingInterval = "month"
 
-	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+
+	// Mock PreviewUpdate service call
+	mockService.On("PreviewUpdate", ctx, subscriptionID, mock.AnythingOfType("string")).
+		Return("5.00", "USD", "2026-03-01", nil)
 
 	output, err := handler.HandlePreviewSubscriptionUpdate(ctx, input)
 
-	require.Error(t, err)
-	assert.Nil(t, output)
-	assert.Contains(t, err.Error(), "not yet implemented")
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "5.00", output.Body.ProrationAmount)
+	assert.Equal(t, "USD", output.Body.Currency)
+	assert.Equal(t, "2026-03-01", output.Body.NextChargeDate)
 
 	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
 }
 
 // TestHandlePreviewSubscriptionUpdate_Unauthenticated tests missing user_id
@@ -481,6 +502,7 @@ func TestHandlePreviewSubscriptionUpdate_InvalidTier(t *testing.T) {
 	}
 
 	input := &PreviewUpdateInput{}
+	input.UserID = "user_123"
 	input.Body.NewTier = "invalid_tier"
 	input.Body.BillingInterval = "month"
 
@@ -506,6 +528,7 @@ func TestHandlePreviewSubscriptionUpdate_NoActiveSubscription(t *testing.T) {
 	}
 
 	input := &PreviewUpdateInput{}
+	input.UserID = "user_123"
 	input.Body.NewTier = "household_2"
 	input.Body.BillingInterval = "month"
 
@@ -656,6 +679,7 @@ func TestHandleUpdateSubscription_Upgrade(t *testing.T) {
 
 	// Input to upgrade from premium to household_2
 	input := &UpdateSubscriptionInput{}
+	input.UserID = "user_123"
 	input.Body.NewTier = "household_2"
 	input.Body.BillingInterval = "month"
 
@@ -703,6 +727,7 @@ func TestHandleUpdateSubscription_Downgrade(t *testing.T) {
 
 	// Input to downgrade from household_5 to premium
 	input := &UpdateSubscriptionInput{}
+	input.UserID = "user_123"
 	input.Body.NewTier = "premium"
 	input.Body.BillingInterval = "month"
 	input.Body.ProrationBillingMode = "full_next_billing_period"
@@ -746,6 +771,7 @@ func TestHandleUpdateSubscription_NoActiveSubscription(t *testing.T) {
 	}
 
 	input := &UpdateSubscriptionInput{}
+	input.UserID = "user_123"
 	input.Body.NewTier = "household_2"
 	input.Body.BillingInterval = "month"
 
@@ -781,6 +807,7 @@ func TestHandleCancelSubscription_Success(t *testing.T) {
 	}
 
 	input := &CancelSubscriptionInput{}
+	input.UserID = "user_123"
 
 	// Mock: getUserFromContext calls GetUserByID
 	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
@@ -813,6 +840,7 @@ func TestHandleCancelSubscription_NoActiveSubscription(t *testing.T) {
 	}
 
 	input := &CancelSubscriptionInput{}
+	input.UserID = "user_123"
 
 	// Mock: getUserFromContext calls GetUserByID
 	// Handler returns early when SubscriptionStatus != "active", so no second call
@@ -842,6 +870,7 @@ func TestHandleGetBillingPortalURL_Success(t *testing.T) {
 	}
 
 	input := &GetBillingPortalURLInput{}
+	input.UserID = "user_123"
 
 	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
 	mockService.On("GetBillingPortalURL", ctx, customerID).
@@ -876,6 +905,7 @@ func TestHandleGetCurrentSubscription_Success(t *testing.T) {
 	}
 
 	input := &GetCurrentSubscriptionInput{}
+	input.UserID = "user_123"
 
 	// Mock: getUserFromContext calls GetUserByID
 	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
@@ -899,4 +929,40 @@ func TestHandleGetCurrentSubscription_Success(t *testing.T) {
 
 	mockRepo.AssertExpectations(t)
 	mockService.AssertExpectations(t)
+}
+
+// TestHandleGetCurrentSubscription_TrialUser tests subscription retrieval for trial users
+func TestHandleGetCurrentSubscription_TrialUser(t *testing.T) {
+	handler, _, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	// Trial user with trial_ends_at set
+	trialEndsAt := time.Now().Add(45 * 24 * time.Hour) // 45 days from now
+	user := &domain.User{
+		ID:                 "user_123",
+		Email:              "test@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "trial",
+		TrialEndsAt:        &trialEndsAt,
+	}
+
+	input := &GetCurrentSubscriptionInput{}
+	input.UserID = "user_123"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+
+	output, err := handler.HandleGetCurrentSubscription(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "trial", output.Body.Status)
+	assert.Equal(t, "premium", output.Body.Tier)
+	assert.Equal(t, "0.00", output.Body.Amount)
+	assert.Equal(t, "USD", output.Body.Currency)
+	assert.NotEmpty(t, output.Body.TrialEndsAt)
+	assert.NotNil(t, output.Body.TrialDaysRemaining)
+	assert.GreaterOrEqual(t, *output.Body.TrialDaysRemaining, 44) // Allow for time rounding
+	assert.LessOrEqual(t, *output.Body.TrialDaysRemaining, 45)
+
+	mockRepo.AssertExpectations(t)
 }

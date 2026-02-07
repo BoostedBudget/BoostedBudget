@@ -40,10 +40,14 @@ export interface GetCurrentSubscriptionOutputBody {
   current_period_end: string;
   /** Next billing date */
   next_billing_date?: string;
-  /** Subscription status */
+  /** Subscription status (active, trial, cancelled) */
   status: string;
   /** Paddle subscription ID */
   subscription_id: string;
   /** Current subscription tier */
   tier: string;
+  /** Days remaining in trial (for trial users) */
+  trial_days_remaining?: number;
+  /** Trial end date (for trial users) */
+  trial_ends_at?: string;
 }

@@ -8,11 +8,7 @@ import { PaddleCheckoutButton } from '../billing/components/PaddleCheckoutButton
 import { toast } from 'sonner'
 import './PricingPage.css'
 
-/**
- * Billing period type for the toggle
- */
 type BillingPeriod = 'monthly' | 'yearly'
-
 
 /**
  * Format price for display
@@ -221,8 +217,7 @@ export function PricingPage() {
     )
   }
 
-  // Issue #698: Add defensive check for malformed API response
-  // tiers.tiers could be undefined if backend config file is missing
+  // Defensive check for malformed API response
   if (error || !tiers || !tiers.tiers) {
     return (
       <div className="pricing-page">
@@ -298,13 +293,13 @@ export function PricingPage() {
             <h3>What payment methods do you accept?</h3>
             <p>
               We accept all major credit cards through our secure payment
-              processor, Stripe.
+              processor, Paddle.
             </p>
           </div>
           <div className="faq-item">
             <h3>Is there a free trial?</h3>
             <p>
-              Yes! Premium plans come with a 14-day free trial. No credit card
+              Yes! Premium plans come with a 60-day free trial. No credit card
               required to start.
             </p>
           </div>
