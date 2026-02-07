@@ -52,10 +52,10 @@ func NewAdminMiddleware(
 			return
 		}
 
-		// 1. Environment check FIRST: Only allow qa environment
+		// 1. Environment check FIRST: Only allow qa and staging environments
 		// Returns 404 instead of 403 for security through obscurity
 		// (prevents revealing endpoint existence to unauthorized users)
-		if cfg.Environment != "qa" {
+		if cfg.Environment != "qa" && cfg.Environment != "staging" {
 			writeAdminJSONError(ctx, http.StatusNotFound, "Endpoint not available")
 			return
 		}

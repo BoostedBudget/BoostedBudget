@@ -89,7 +89,7 @@ export function SubscriptionManagementPage() {
         {subscription && (
           <>
             {/* Trial Banner */}
-            {subscription.status === 'trial' && (
+            {subscription.status === 'trial' && subscription.trial_days_remaining !== undefined && (
               <div className="trial-banner">
                 ✨ You have {subscription.trial_days_remaining} days left in your free trial
               </div>

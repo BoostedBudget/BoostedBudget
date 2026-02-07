@@ -62,14 +62,24 @@ function buildFeatureList(
 
   // Execution frequency
   const execsPerDay = limits.executions_per_day
+  let frequencyLabel: string
   if (execsPerDay >= 144) {
-    features.push({ feature: 'Rules run every 10 minutes', included: true })
+    frequencyLabel = 'Rules run every 10 minutes'
   } else if (execsPerDay === 1) {
-    features.push({ feature: 'Rules run once daily', included: true })
+    frequencyLabel = 'Rules run once daily'
   } else {
-    const hours = Math.round(24 / execsPerDay)
-    features.push({ feature: `Rules run every ${hours} hours`, included: true })
+    const hours = 24 / execsPerDay
+    if (hours < 1) {
+      const minutes = Math.round(60 * hours)
+      frequencyLabel = `Rules run every ${minutes} minutes`
+    } else if (hours === 1) {
+      frequencyLabel = 'Rules run every hour'
+    } else {
+      const roundedHours = Math.round(hours)
+      frequencyLabel = `Rules run every ${roundedHours} hour${roundedHours === 1 ? '' : 's'}`
+    }
   }
+  features.push({ feature: frequencyLabel, included: true })
 
   // Feature flags
   features.push({
