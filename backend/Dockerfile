@@ -35,6 +35,13 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -o server \
     ./cmd/server
 
+# Build golang-migrate from source with Go 1.25.7 (for security)
+# This ensures migrate binary has no CVEs, unlike pre-compiled releases
+RUN CGO_ENABLED=0 GOOS=linux go install \
+    -tags 'postgres' \
+    -ldflags="-w -s" \
+    github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+
 # Stage 2: Runtime (Debian Bookworm Slim - Minimal but stable)
 FROM debian:bookworm-slim@sha256:98f4b71de414932439ac6ac690d7060df1f27161073c5036a7553723881bffbe
 
@@ -52,21 +59,10 @@ RUN echo "Installing runtime dependencies..." && \
         [ $i -lt 3 ] && sleep 5; }; \
     done
 
-# Install golang-migrate for database migrations
-# TARGETARCH is automatically set by Docker Buildx (amd64 or arm64)
-ARG TARGETARCH
-RUN echo "Downloading golang-migrate for ${TARGETARCH}..." && \
-    for i in 1 2 3 4 5; do \
-      echo "Attempt $i/5..." && \
-      curl -sSfL --retry 3 --retry-delay 5 --connect-timeout 10 \
-        "https://github.com/golang-migrate/migrate/releases/latest/download/migrate.linux-${TARGETARCH}.tar.gz" \
-        | tar -xz -C /usr/local/bin && \
-      chmod +x /usr/local/bin/migrate && \
-      echo "golang-migrate downloaded successfully" && break || \
-      { echo "Download attempt $i/5 failed"; \
-        [ $i -lt 5 ] && sleep 10; }; \
-    done && \
-    test -x /usr/local/bin/migrate || { echo "golang-migrate installation failed"; exit 1; }
+# Copy golang-migrate binary from builder stage (built with Go 1.25.7 for security)
+COPY --from=builder /go/bin/migrate /usr/local/bin/migrate
+RUN chmod +x /usr/local/bin/migrate && \
+    migrate -version
 
 WORKDIR /app
 
