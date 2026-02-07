@@ -215,9 +215,12 @@ func (h *PaddleCheckoutHandler) HandleCreateCheckoutSession(
 		if err != nil {
 			h.logger.Error("failed to create Paddle customer",
 				"user_id", user.ID,
+				"user_email", user.Email,
+				"paddle_environment", h.config.PaddleEnvironment,
 				"error", err,
+				"error_type", fmt.Sprintf("%T", err),
 			)
-			return nil, huma.Error500InternalServerError("Failed to create customer")
+			return nil, huma.Error500InternalServerError(fmt.Sprintf("Failed to create customer: %v", err))
 		}
 
 		// Update user with Paddle customer ID (non-critical if fails)
@@ -258,9 +261,12 @@ func (h *PaddleCheckoutHandler) HandleCreateCheckoutSession(
 			"user_id", user.ID,
 			"customer_id", *customerID,
 			"price_id", priceID,
+			"success_url", successURL,
+			"paddle_environment", h.config.PaddleEnvironment,
 			"error", err,
+			"error_type", fmt.Sprintf("%T", err),
 		)
-		return nil, huma.Error500InternalServerError("Failed to create checkout session")
+		return nil, huma.Error500InternalServerError(fmt.Sprintf("Failed to create checkout session: %v", err))
 	}
 
 	h.logger.Info("checkout session created successfully",
@@ -573,6 +579,20 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 	// Handle trial users separately
 	if user.SubscriptionStatus == "trial" {
 		user.ComputeTrialDaysRemaining()
+
+		// Fallback: If TrialEndsAt is nil but status is "trial", compute from CreatedAt + 60 days
+		if user.TrialEndsAt == nil {
+			defaultTrialEnd := user.CreatedAt.AddDate(0, 0, 60)
+			user.TrialEndsAt = &defaultTrialEnd
+			user.ComputeTrialDaysRemaining()
+			h.logger.Warn("trial_ends_at was nil for trial user, computed fallback",
+				"user_id", user.ID,
+				"created_at", user.CreatedAt,
+				"computed_trial_ends_at", defaultTrialEnd,
+				"trial_days_remaining", user.TrialDaysRemaining,
+			)
+		}
+
 		out := &GetCurrentSubscriptionOutput{}
 		out.Body.Status = "trial"
 		out.Body.Tier = user.SubscriptionTier
@@ -606,11 +626,6 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 
 	h.logger.Info("subscription retrieved", "user_id", user.ID, "subscription_id", subscription.ID)
 
-	amount := ""
-	if len(subscription.Items) > 0 {
-		amount = subscription.Items[0].Price.UnitPrice.Amount
-	}
-
 	out := &GetCurrentSubscriptionOutput{}
 	out.Body.SubscriptionID = subscription.ID
 	out.Body.Status = string(subscription.Status)
@@ -618,7 +633,9 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 	out.Body.BillingInterval = string(subscription.BillingCycle.Interval)
 	out.Body.CurrentPeriodEnd = subscription.CurrentBillingPeriod.EndsAt
 	out.Body.NextBillingDate = subscription.CurrentBillingPeriod.EndsAt
-	out.Body.Amount = amount
+	if len(subscription.Items) > 0 {
+		out.Body.Amount = subscription.Items[0].Price.UnitPrice.Amount
+	}
 	out.Body.Currency = string(subscription.CurrencyCode)
 	return out, nil
 }

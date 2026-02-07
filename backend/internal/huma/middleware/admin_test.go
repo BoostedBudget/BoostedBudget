@@ -279,6 +279,31 @@ func TestAdminMiddleware_DevelopmentEnvironment_Returns404(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
+// TestAdminMiddleware_StagingEnvironment_AdminRole_Allows tests that admin users can access admin endpoints in staging
+func TestAdminMiddleware_StagingEnvironment_AdminRole_Allows(t *testing.T) {
+	// GIVEN: Staging environment and user with admin role via Clerk privateMetadata
+	cfg := &config.Config{Environment: "staging"}
+	mockAdminService := new(MockAdminService)
+	mockAdminService.On("IsHardcodedAdmin", "user@example.com").Return(false)
+	mockAdminService.On("HasRole", mock.Anything, "user_admin", domain.RoleAdmin).Return(true, nil)
+
+	server, _ := setupAdminTestAPI(t, cfg, mockAdminService)
+
+	// WHEN: Admin user requests admin endpoint
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/admin/test", nil)
+	require.NoError(t, err)
+	req.Header.Set("X-Test-Clerk-User-ID", "user_admin")
+	req.Header.Set("X-Test-Email", "user@example.com")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	// THEN: Should allow access
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	mockAdminService.AssertExpectations(t)
+}
+
 // TestAdminMiddleware_NoClerkUserID_Returns401 tests that missing Clerk user ID returns 401
 func TestAdminMiddleware_NoClerkUserID_Returns401(t *testing.T) {
 	// GIVEN: QA environment but no Clerk user ID in context
@@ -330,9 +355,9 @@ func TestAdminMiddleware_AdminServiceError_Returns500(t *testing.T) {
 // TestAdminMiddleware_CheckRole_SkipsEnvironmentCheck tests that check-role works in all environments
 func TestAdminMiddleware_CheckRole_SkipsEnvironmentCheck(t *testing.T) {
 	// Test in multiple environments - check-role should work in all of them
-	environments := []string{"production", "development", "staging", "qa"}
+	envs := []string{"production", "development", "staging", "qa"}
 
-	for _, env := range environments {
+	for _, env := range envs {
 		t.Run("Environment_"+env, func(t *testing.T) {
 			// GIVEN: Any environment and authenticated non-admin user
 			cfg := &config.Config{Environment: env}
