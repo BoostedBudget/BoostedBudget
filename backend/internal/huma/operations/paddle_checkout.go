@@ -8,6 +8,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
@@ -49,6 +50,7 @@ func NewPaddleCheckoutHandler(deps PaddleCheckoutHandlerDeps) *PaddleCheckoutHan
 
 // CreateCheckoutInput represents the input for creating a checkout session.
 type CreateCheckoutInput struct {
+	inputs.AuthenticatedInput
 	Body struct {
 		Tier            string `json:"tier" doc:"Subscription tier (premium, household_2, etc.)" example:"premium" minLength:"1"`
 		BillingInterval string `json:"billing_interval" doc:"Billing interval (month or year)" example:"month" enum:"month,year"`
@@ -65,6 +67,7 @@ type CheckoutOutput struct {
 
 // PreviewUpdateInput represents the input for previewing a subscription update.
 type PreviewUpdateInput struct {
+	inputs.AuthenticatedInput
 	Body struct {
 		NewTier         string `json:"new_tier" doc:"New subscription tier to preview" example:"household_2" minLength:"1"`
 		BillingInterval string `json:"billing_interval" doc:"Billing interval for new tier (month or year)" example:"month" enum:"month,year"`
@@ -83,6 +86,7 @@ type PreviewUpdateOutput struct {
 
 // UpdateSubscriptionInput represents the input for updating a subscription.
 type UpdateSubscriptionInput struct {
+	inputs.AuthenticatedInput
 	Body struct {
 		NewTier              string `json:"new_tier" doc:"New subscription tier" example:"household_2" minLength:"1"`
 		BillingInterval      string `json:"billing_interval" doc:"Billing interval (month or year)" example:"month" enum:"month,year"`
@@ -101,7 +105,7 @@ type UpdateSubscriptionOutput struct {
 
 // CancelSubscriptionInput represents the input for canceling a subscription.
 type CancelSubscriptionInput struct {
-	// No body needed - uses user_id from JWT context
+	inputs.AuthenticatedInput
 }
 
 // CancelSubscriptionOutput represents the response for subscription cancellation.
@@ -115,7 +119,7 @@ type CancelSubscriptionOutput struct {
 
 // GetBillingPortalURLInput represents the input for getting billing portal URL.
 type GetBillingPortalURLInput struct {
-	// No body needed - uses user_id from JWT context
+	inputs.AuthenticatedInput
 }
 
 // GetBillingPortalURLOutput represents the response for billing portal URL.
@@ -127,20 +131,22 @@ type GetBillingPortalURLOutput struct {
 
 // GetCurrentSubscriptionInput represents the input for getting current subscription.
 type GetCurrentSubscriptionInput struct {
-	// No body needed - uses user_id from JWT context
+	inputs.AuthenticatedInput
 }
 
 // GetCurrentSubscriptionOutput represents the response for current subscription.
 type GetCurrentSubscriptionOutput struct {
 	Body struct {
 		SubscriptionID     string `json:"subscription_id" doc:"Paddle subscription ID" example:"sub_01h1234567890"`
-		Status             string `json:"status" doc:"Subscription status" example:"active"`
+		Status             string `json:"status" doc:"Subscription status (active, trial, cancelled)" example:"active"`
 		Tier               string `json:"tier" doc:"Current subscription tier" example:"premium"`
 		BillingInterval    string `json:"billing_interval" doc:"Billing interval (month/year)" example:"month"`
 		CurrentPeriodEnd   string `json:"current_period_end" doc:"End of current billing period" example:"2026-03-01"`
 		NextBillingDate    string `json:"next_billing_date,omitempty" doc:"Next billing date" example:"2026-03-01"`
 		Amount             string `json:"amount" doc:"Subscription amount" example:"9.99"`
 		Currency           string `json:"currency" doc:"Currency code" example:"USD"`
+		TrialEndsAt        string `json:"trial_ends_at,omitempty" doc:"Trial end date (for trial users)" example:"2026-04-08"`
+		TrialDaysRemaining *int   `json:"trial_days_remaining,omitempty" doc:"Days remaining in trial (for trial users)" example:"45"`
 	}
 }
 
@@ -150,6 +156,14 @@ var validSubscriptionTiers = map[string]bool{
 	"household_3": true,
 	"household_4": true,
 	"household_5": true,
+}
+
+// validateUserAuth checks if user is authenticated
+func validateUserAuth(userID string) error {
+	if userID == "" {
+		return huma.Error401Unauthorized("User not authenticated")
+	}
+	return nil
 }
 
 // validateBillingInterval checks if billing interval is valid
@@ -166,10 +180,18 @@ func (h *PaddleCheckoutHandler) HandleCreateCheckoutSession(
 	ctx context.Context,
 	input *CreateCheckoutInput,
 ) (*CheckoutOutput, error) {
-	// Get user from context
-	user, err := h.getUserFromContext(ctx)
-	if err != nil {
+	if err := validateUserAuth(input.UserID); err != nil {
 		return nil, err
+	}
+
+	// Get user from database
+	user, err := h.profileRepo.GetUserByID(ctx, input.UserID)
+	if err != nil {
+		h.logger.Error("failed to get user",
+			"user_id", input.UserID,
+			"error", err,
+		)
+		return nil, huma.Error500InternalServerError("Failed to get user details")
 	}
 
 	h.logger.Info("creating Paddle checkout session",
@@ -259,9 +281,18 @@ func (h *PaddleCheckoutHandler) HandlePreviewSubscriptionUpdate(
 	ctx context.Context,
 	input *PreviewUpdateInput,
 ) (*PreviewUpdateOutput, error) {
-	user, err := h.getUserFromContext(ctx)
-	if err != nil {
+	if err := validateUserAuth(input.UserID); err != nil {
 		return nil, err
+	}
+
+	// Get user from database
+	user, err := h.profileRepo.GetUserByID(ctx, input.UserID)
+	if err != nil {
+		h.logger.Error("failed to get user",
+			"user_id", input.UserID,
+			"error", err,
+		)
+		return nil, huma.Error500InternalServerError("Failed to get user details")
 	}
 
 	h.logger.Info("previewing subscription update",
@@ -277,27 +308,53 @@ func (h *PaddleCheckoutHandler) HandlePreviewSubscriptionUpdate(
 		return nil, huma.Error400BadRequest("No active subscription to update")
 	}
 
-	return nil, huma.Error501NotImplemented("Preview update not yet implemented")
-}
-
-// getUserFromContext extracts user ID from context and retrieves user details.
-// Returns the user and appropriate HTTP errors if user is not authenticated or not found.
-func (h *PaddleCheckoutHandler) getUserFromContext(ctx context.Context) (*domain.User, error) {
-	userID, ok := ctx.Value("user_id").(string)
-	if !ok || userID == "" {
-		return nil, huma.Error401Unauthorized("User not authenticated")
+	if err := validateBillingInterval(input.Body.BillingInterval); err != nil {
+		return nil, err
 	}
 
-	user, err := h.profileRepo.GetUserByID(ctx, userID)
+	// Get active subscription ID
+	subscriptionID, err := h.getActiveSubscriptionID(ctx, user.ID)
 	if err != nil {
-		h.logger.Error("failed to get user",
-			"user_id", userID,
+		h.logger.Error("failed to get active subscription", "user_id", user.ID, "error", err)
+		return nil, huma.Error400BadRequest("No active subscription found")
+	}
+
+	// Get price ID for new tier and interval
+	priceID, err := h.getPaddlePriceIDFromConfig(input.Body.NewTier, input.Body.BillingInterval)
+	if err != nil {
+		h.logger.Error("failed to get Paddle price ID",
+			"tier", input.Body.NewTier,
+			"interval", input.Body.BillingInterval,
 			"error", err,
 		)
-		return nil, huma.Error500InternalServerError("Failed to get user details")
+		return nil, huma.Error500InternalServerError("Price ID not configured for this tier")
 	}
 
-	return user, nil
+	// Call Paddle service to preview update
+	prorationAmount, currency, nextChargeDate, err := h.paddleService.PreviewUpdate(ctx, subscriptionID, priceID)
+	if err != nil {
+		h.logger.Error("failed to preview subscription update",
+			"user_id", user.ID,
+			"subscription_id", subscriptionID,
+			"new_tier", input.Body.NewTier,
+			"error", err,
+		)
+		return nil, huma.Error500InternalServerError("Failed to preview subscription update")
+	}
+
+	out := &PreviewUpdateOutput{}
+	out.Body.ProrationAmount = prorationAmount
+	out.Body.Currency = currency
+	out.Body.NextChargeDate = nextChargeDate
+	out.Body.NextChargeAmt = "0.00" // TODO: Get from Paddle service if available
+
+	h.logger.Info("subscription update preview generated",
+		"user_id", user.ID,
+		"proration_amount", prorationAmount,
+		"next_charge_date", nextChargeDate,
+	)
+
+	return out, nil
 }
 
 // getActiveSubscriptionID retrieves user's active Paddle subscription ID from database.
@@ -348,9 +405,18 @@ func (h *PaddleCheckoutHandler) HandleUpdateSubscription(
 	ctx context.Context,
 	input *UpdateSubscriptionInput,
 ) (*UpdateSubscriptionOutput, error) {
-	user, err := h.getUserFromContext(ctx)
-	if err != nil {
+	if err := validateUserAuth(input.UserID); err != nil {
 		return nil, err
+	}
+
+	// Get user from database
+	user, err := h.profileRepo.GetUserByID(ctx, input.UserID)
+	if err != nil {
+		h.logger.Error("failed to get user",
+			"user_id", input.UserID,
+			"error", err,
+		)
+		return nil, huma.Error500InternalServerError("Failed to get user details")
 	}
 
 	h.logger.Info("updating subscription",
@@ -404,9 +470,18 @@ func (h *PaddleCheckoutHandler) HandleCancelSubscription(
 	ctx context.Context,
 	input *CancelSubscriptionInput,
 ) (*CancelSubscriptionOutput, error) {
-	user, err := h.getUserFromContext(ctx)
-	if err != nil {
+	if err := validateUserAuth(input.UserID); err != nil {
 		return nil, err
+	}
+
+	// Get user from database
+	user, err := h.profileRepo.GetUserByID(ctx, input.UserID)
+	if err != nil {
+		h.logger.Error("failed to get user",
+			"user_id", input.UserID,
+			"error", err,
+		)
+		return nil, huma.Error500InternalServerError("Failed to get user details")
 	}
 
 	h.logger.Info("canceling subscription", "user_id", user.ID)
@@ -440,9 +515,18 @@ func (h *PaddleCheckoutHandler) HandleGetBillingPortalURL(
 	ctx context.Context,
 	input *GetBillingPortalURLInput,
 ) (*GetBillingPortalURLOutput, error) {
-	user, err := h.getUserFromContext(ctx)
-	if err != nil {
+	if err := validateUserAuth(input.UserID); err != nil {
 		return nil, err
+	}
+
+	// Get user from database
+	user, err := h.profileRepo.GetUserByID(ctx, input.UserID)
+	if err != nil {
+		h.logger.Error("failed to get user",
+			"user_id", input.UserID,
+			"error", err,
+		)
+		return nil, huma.Error500InternalServerError("Failed to get user details")
 	}
 
 	h.logger.Info("getting billing portal URL", "user_id", user.ID)
@@ -470,12 +554,39 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 	ctx context.Context,
 	input *GetCurrentSubscriptionInput,
 ) (*GetCurrentSubscriptionOutput, error) {
-	user, err := h.getUserFromContext(ctx)
-	if err != nil {
+	if err := validateUserAuth(input.UserID); err != nil {
 		return nil, err
 	}
 
-	h.logger.Info("getting current subscription", "user_id", user.ID)
+	// Get user from database
+	user, err := h.profileRepo.GetUserByID(ctx, input.UserID)
+	if err != nil {
+		h.logger.Error("failed to get user",
+			"user_id", input.UserID,
+			"error", err,
+		)
+		return nil, huma.Error500InternalServerError("Failed to get user details")
+	}
+
+	h.logger.Info("getting current subscription", "user_id", user.ID, "status", user.SubscriptionStatus)
+
+	// Handle trial users separately
+	if user.SubscriptionStatus == "trial" {
+		user.ComputeTrialDaysRemaining()
+		out := &GetCurrentSubscriptionOutput{}
+		out.Body.Status = "trial"
+		out.Body.Tier = user.SubscriptionTier
+		out.Body.Amount = "0.00"
+		out.Body.Currency = "USD"
+		out.Body.TrialDaysRemaining = user.TrialDaysRemaining
+		if user.TrialEndsAt != nil {
+			trialDate := user.TrialEndsAt.Format("2006-01-02")
+			out.Body.TrialEndsAt = trialDate
+			out.Body.CurrentPeriodEnd = trialDate
+		}
+		h.logger.Info("returning trial subscription info", "user_id", user.ID, "trial_days_remaining", user.TrialDaysRemaining)
+		return out, nil
+	}
 
 	if user.SubscriptionStatus != "active" {
 		return nil, huma.Error400BadRequest("No active subscription")
@@ -495,7 +606,6 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 
 	h.logger.Info("subscription retrieved", "user_id", user.ID, "subscription_id", subscription.ID)
 
-	billingInterval := string(subscription.BillingCycle.Interval)
 	amount := ""
 	if len(subscription.Items) > 0 {
 		amount = subscription.Items[0].Price.UnitPrice.Amount
@@ -505,7 +615,7 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 	out.Body.SubscriptionID = subscription.ID
 	out.Body.Status = string(subscription.Status)
 	out.Body.Tier = user.SubscriptionTier
-	out.Body.BillingInterval = billingInterval
+	out.Body.BillingInterval = string(subscription.BillingCycle.Interval)
 	out.Body.CurrentPeriodEnd = subscription.CurrentBillingPeriod.EndsAt
 	out.Body.NextBillingDate = subscription.CurrentBillingPeriod.EndsAt
 	out.Body.Amount = amount
@@ -523,6 +633,7 @@ func RegisterPaddleCheckoutRoutes(api huma.API, handler *PaddleCheckoutHandler) 
 		Summary:     "Create Paddle checkout session",
 		Description: "Creates a Paddle checkout session for purchasing a subscription. Returns checkout URL to open in Paddle.js Overlay or as redirect.",
 		Tags:        []string{"Subscription", "Paddle"},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.HandleCreateCheckoutSession)
 
 	// POST /api/v1/subscription/preview-update - Preview subscription update
@@ -533,6 +644,7 @@ func RegisterPaddleCheckoutRoutes(api huma.API, handler *PaddleCheckoutHandler) 
 		Summary:     "Preview subscription tier change",
 		Description: "Calculates proration amount when upgrading or downgrading subscription tier. Shows immediate charge/credit and next billing details.",
 		Tags:        []string{"Subscription", "Paddle"},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.HandlePreviewSubscriptionUpdate)
 
 	// POST /api/v1/subscription/update - Update subscription
@@ -543,6 +655,7 @@ func RegisterPaddleCheckoutRoutes(api huma.API, handler *PaddleCheckoutHandler) 
 		Summary:     "Update subscription tier",
 		Description: "Updates subscription to a different tier or billing interval. Handles proration automatically.",
 		Tags:        []string{"Subscription", "Paddle"},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.HandleUpdateSubscription)
 
 	// POST /api/v1/subscription/cancel - Cancel subscription
@@ -553,6 +666,7 @@ func RegisterPaddleCheckoutRoutes(api huma.API, handler *PaddleCheckoutHandler) 
 		Summary:     "Cancel subscription",
 		Description: "Cancels subscription at end of current billing period. User retains access until period ends.",
 		Tags:        []string{"Subscription", "Paddle"},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.HandleCancelSubscription)
 
 	// GET /api/v1/subscription/billing-portal - Get billing portal URL
@@ -563,6 +677,7 @@ func RegisterPaddleCheckoutRoutes(api huma.API, handler *PaddleCheckoutHandler) 
 		Summary:     "Get billing portal URL",
 		Description: "Returns URL to Paddle billing portal where users can manage payment methods and view billing history.",
 		Tags:        []string{"Subscription", "Paddle"},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.HandleGetBillingPortalURL)
 
 	// GET /api/v1/subscription/current - Get current subscription
@@ -573,5 +688,6 @@ func RegisterPaddleCheckoutRoutes(api huma.API, handler *PaddleCheckoutHandler) 
 		Summary:     "Get current subscription",
 		Description: "Fetches current subscription details from Paddle API with live status, billing info, and tier information.",
 		Tags:        []string{"Subscription", "Paddle"},
+		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.HandleGetCurrentSubscription)
 }
