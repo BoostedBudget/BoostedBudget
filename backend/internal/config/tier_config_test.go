@@ -241,3 +241,93 @@ func TestLoadTierConfig_EnvironmentSpecific(t *testing.T) {
 		assert.Len(t, config.Tiers, 5)
 	})
 }
+
+// Issue #772: GetTierByPriceID tests (GAP 3)
+func TestTierConfig_GetTierByPriceID(t *testing.T) {
+	config, err := LoadTierConfig()
+	require.NoError(t, err)
+
+	t.Run("finds tier by monthly price ID", func(t *testing.T) {
+		// Get premium tier to extract its monthly price ID
+		premiumTier, err := config.GetTier(domain.TierPremium)
+		require.NoError(t, err)
+
+		// Skip if price ID not configured (default config doesn't have price IDs)
+		if premiumTier.Pricing.PaddlePriceIDMonthly == nil {
+			t.Skip("Paddle price IDs not configured in default config")
+		}
+
+		// Lookup by monthly price ID
+		tier, err := config.GetTierByPriceID(*premiumTier.Pricing.PaddlePriceIDMonthly)
+		require.NoError(t, err)
+		assert.Equal(t, domain.TierPremium, tier)
+	})
+
+	t.Run("finds tier by yearly price ID", func(t *testing.T) {
+		// Get premium tier to extract its yearly price ID
+		premiumTier, err := config.GetTier(domain.TierPremium)
+		require.NoError(t, err)
+
+		// Skip if price ID not configured
+		if premiumTier.Pricing.PaddlePriceIDYearly == nil {
+			t.Skip("Paddle price IDs not configured in default config")
+		}
+
+		// Lookup by yearly price ID
+		tier, err := config.GetTierByPriceID(*premiumTier.Pricing.PaddlePriceIDYearly)
+		require.NoError(t, err)
+		assert.Equal(t, domain.TierPremium, tier)
+	})
+
+	t.Run("finds household tiers by price ID", func(t *testing.T) {
+		// Test household_2 tier
+		household2, err := config.GetTier(domain.TierHousehold2)
+		require.NoError(t, err)
+
+		// Skip if price ID not configured
+		if household2.Pricing.PaddlePriceIDMonthly == nil {
+			t.Skip("Paddle price IDs not configured in default config")
+		}
+
+		tier, err := config.GetTierByPriceID(*household2.Pricing.PaddlePriceIDMonthly)
+		require.NoError(t, err)
+		assert.Equal(t, domain.TierHousehold2, tier)
+	})
+
+	t.Run("returns error for unknown price ID", func(t *testing.T) {
+		unknownPriceID := "pri_unknown_12345"
+		_, err := config.GetTierByPriceID(unknownPriceID)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no tier found for price_id")
+		assert.Contains(t, err.Error(), unknownPriceID)
+	})
+
+	t.Run("thread-safe concurrent lookups", func(t *testing.T) {
+		// Get a valid price ID
+		premiumTier, err := config.GetTier(domain.TierPremium)
+		require.NoError(t, err)
+
+		// Skip if price ID not configured
+		if premiumTier.Pricing.PaddlePriceIDMonthly == nil {
+			t.Skip("Paddle price IDs not configured in default config")
+		}
+
+		priceID := *premiumTier.Pricing.PaddlePriceIDMonthly
+
+		// Concurrent lookups
+		done := make(chan bool)
+		for i := 0; i < 10; i++ {
+			go func() {
+				tier, err := config.GetTierByPriceID(priceID)
+				assert.NoError(t, err)
+				assert.Equal(t, domain.TierPremium, tier)
+				done <- true
+			}()
+		}
+
+		// Wait for all goroutines
+		for i := 0; i < 10; i++ {
+			<-done
+		}
+	})
+}

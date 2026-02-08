@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -51,6 +52,7 @@ type SubscriptionWebhookWorker struct {
 	paddleWebhookRepo PaddleWebhookRepository
 	profileRepo       SubscriptionProfileRepository
 	clerkService      ClerkService
+	tierConfig        *config.TierConfig
 	logger            *slog.Logger
 }
 
@@ -59,6 +61,7 @@ type SubscriptionWebhookWorkerDeps struct {
 	PaddleWebhookRepo PaddleWebhookRepository
 	ProfileRepo       SubscriptionProfileRepository
 	ClerkService      ClerkService
+	TierConfig        *config.TierConfig
 	Logger            *slog.Logger
 }
 
@@ -72,6 +75,7 @@ func NewSubscriptionWebhookWorker(deps SubscriptionWebhookWorkerDeps) *Subscript
 		paddleWebhookRepo: deps.PaddleWebhookRepo,
 		profileRepo:       deps.ProfileRepo,
 		clerkService:      deps.ClerkService,
+		tierConfig:        deps.TierConfig,
 		logger:            logger,
 	}
 }
@@ -88,6 +92,72 @@ func (w *SubscriptionWebhookWorker) parseWebhookPayload(webhook *domain.PaddleWe
 		return nil, errors.New("webhook payload missing 'data' field")
 	}
 	return data, nil
+}
+
+// getStringFromMap safely extracts a string value from a map with type assertion
+func getStringFromMap(m map[string]interface{}, key string) string {
+	val, _ := m[key].(string)
+	return val
+}
+
+// getMapFromMap safely extracts a nested map from a map with type assertion
+func getMapFromMap(m map[string]interface{}, key string) map[string]interface{} {
+	val, _ := m[key].(map[string]interface{})
+	return val
+}
+
+// resolveTierFromItems extracts the price_id from webhook items and resolves it to a tier name.
+// Falls back to premium tier if price_id is not found or unknown.
+// Issue #772: Webhook tier resolution (GAP 3)
+func (w *SubscriptionWebhookWorker) resolveTierFromItems(data map[string]interface{}) domain.TierName {
+	// Extract items array from webhook data
+	items, ok := data["items"].([]interface{})
+	if !ok || len(items) == 0 {
+		w.logger.Warn("webhook data missing items array, falling back to premium tier")
+		return domain.TierPremium
+	}
+
+	// Get first item (subscriptions should only have one item)
+	firstItem, ok := items[0].(map[string]interface{})
+	if !ok {
+		w.logger.Warn("webhook items[0] is not a map, falling back to premium tier")
+		return domain.TierPremium
+	}
+
+	// Extract price object
+	price, ok := firstItem["price"].(map[string]interface{})
+	if !ok {
+		w.logger.Warn("webhook items[0].price is not a map, falling back to premium tier")
+		return domain.TierPremium
+	}
+
+	// Extract price ID
+	priceID, ok := price["id"].(string)
+	if !ok || priceID == "" {
+		w.logger.Warn("webhook items[0].price.id is missing or empty, falling back to premium tier")
+		return domain.TierPremium
+	}
+
+	// Resolve tier from price ID using TierConfig
+	if w.tierConfig != nil {
+		tier, err := w.tierConfig.GetTierByPriceID(priceID)
+		if err != nil {
+			w.logger.Warn("failed to resolve tier from price_id, falling back to premium tier",
+				"price_id", priceID,
+				"error", err,
+			)
+			return domain.TierPremium
+		}
+		w.logger.Info("resolved tier from price_id",
+			"price_id", priceID,
+			"tier", tier,
+		)
+		return tier
+	}
+
+	// TierConfig not available, fall back to premium
+	w.logger.Warn("TierConfig not available, falling back to premium tier")
+	return domain.TierPremium
 }
 
 // Work processes a subscription webhook processing job.
@@ -183,11 +253,11 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCreated(ctx context.Conte
 		return err
 	}
 
-	customerID, _ := data["customer_id"].(string)
-	customData, _ := data["custom_data"].(map[string]interface{})
-	userID, _ := customData["user_id"].(string)
+	customerID := getStringFromMap(data, "customer_id")
+	customData := getMapFromMap(data, "custom_data")
+	userID := getStringFromMap(customData, "user_id")
 	// Issue #48: Extract subscription ID from webhook data
-	subscriptionID, _ := data["id"].(string)
+	subscriptionID := getStringFromMap(data, "id")
 
 	if userID == "" || customerID == "" {
 		return errors.New("webhook payload missing user_id or customer_id")
@@ -207,7 +277,8 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCreated(ctx context.Conte
 	}
 
 	var endsAt, startedAt *time.Time
-	tier := "premium"
+	// Issue #772: Resolve tier from Paddle price_id instead of hardcoding "premium"
+	tier := w.resolveTierFromItems(data)
 
 	if billingCycle, ok := data["billing_cycle"].(map[string]interface{}); ok {
 		if startsAtStr, ok := billingCycle["starts_at"].(string); ok {
@@ -223,7 +294,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCreated(ctx context.Conte
 	}
 
 	// Issue #48: Pass subscription ID to repository for storage
-	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, tier, "active", startedAt, endsAt, &subscriptionID); err != nil {
+	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, string(tier), "active", startedAt, endsAt, &subscriptionID); err != nil {
 		return fmt.Errorf("failed to update subscription: %w", err)
 	}
 
@@ -234,7 +305,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCreated(ctx context.Conte
 		}
 
 		metadata := map[string]interface{}{
-			"subscription_tier":   tier,
+			"subscription_tier":   string(tier),
 			"subscription_status": "active",
 		}
 
@@ -258,17 +329,18 @@ func (w *SubscriptionWebhookWorker) processSubscriptionUpdated(ctx context.Conte
 		return err
 	}
 
-	customData, _ := data["custom_data"].(map[string]interface{})
-	userID, _ := customData["user_id"].(string)
+	customData := getMapFromMap(data, "custom_data")
+	userID := getStringFromMap(customData, "user_id")
 	// Issue #48: Extract subscription ID from webhook data
-	subscriptionID, _ := data["id"].(string)
+	subscriptionID := getStringFromMap(data, "id")
 
 	if userID == "" {
 		return errors.New("webhook payload missing user_id")
 	}
 
 	status, _ := data["status"].(string)
-	tier := "premium"
+	// Issue #772: Resolve tier from Paddle price_id instead of hardcoding "premium"
+	tier := w.resolveTierFromItems(data)
 
 	var endsAt *time.Time
 	if billingCycle, ok := data["billing_cycle"].(map[string]interface{}); ok {
@@ -284,7 +356,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionUpdated(ctx context.Conte
 	if subscriptionID != "" {
 		subIDPtr = &subscriptionID
 	}
-	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, tier, status, nil, endsAt, subIDPtr); err != nil {
+	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, string(tier), status, nil, endsAt, subIDPtr); err != nil {
 		return fmt.Errorf("failed to update subscription: %w", err)
 	}
 
@@ -298,8 +370,8 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 		return err
 	}
 
-	customData, _ := data["custom_data"].(map[string]interface{})
-	userID, _ := customData["user_id"].(string)
+	customData := getMapFromMap(data, "custom_data")
+	userID := getStringFromMap(customData, "user_id")
 
 	if userID == "" {
 		return errors.New("webhook payload missing user_id")
@@ -335,8 +407,8 @@ func (w *SubscriptionWebhookWorker) processSubscriptionStatusChange(ctx context.
 		return err
 	}
 
-	customData, _ := data["custom_data"].(map[string]interface{})
-	userID, _ := customData["user_id"].(string)
+	customData := getMapFromMap(data, "custom_data")
+	userID := getStringFromMap(customData, "user_id")
 
 	if userID == "" {
 		return errors.New("webhook payload missing user_id")

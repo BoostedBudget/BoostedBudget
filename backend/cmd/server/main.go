@@ -345,6 +345,7 @@ func main() {
 					PaddleWebhookRepo: paddleWebhookRepo,
 					ProfileRepo:       profileRepo,
 					ClerkService:      nil, // TODO: Add when ClerkService.UpdateUserMetadata is implemented
+					TierConfig:        tierConfig,
 					Logger:            logger,
 				})
 				log.Println("✅ Subscription webhook worker created (River)")
