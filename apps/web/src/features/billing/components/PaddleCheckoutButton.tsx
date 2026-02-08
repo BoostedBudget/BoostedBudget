@@ -6,14 +6,12 @@ interface PaddleCheckoutButtonProps {
   tier: string
   billingInterval: 'month' | 'year'
   disabled?: boolean
-  onSuccess?: () => void
 }
 
 export function PaddleCheckoutButton({
   tier,
   billingInterval,
   disabled,
-  onSuccess,
 }: PaddleCheckoutButtonProps) {
   const { checkout, isLoading } = usePaddleCheckout()
 
@@ -32,11 +30,17 @@ export function PaddleCheckoutButton({
         },
       })
 
-      onSuccess?.()
+      // Success navigation happens via Paddle event callback (see App.tsx)
+      // DO NOT navigate here - the overlay needs to stay open for payment completion
     } catch (err: unknown) {
-      const status = (err as { status?: number; response?: { status?: number } }).status ||
-                     (err as { status?: number; response?: { status?: number } }).response?.status
+      // Extract status from error object
+      const getErrorStatus = (error: unknown): number | undefined => {
+        if (typeof error !== 'object' || !error) return undefined
+        const obj = error as Record<string, unknown>
+        return (obj.status as number) || (obj.response as Record<string, unknown>)?.status as number
+      }
 
+      const status = getErrorStatus(err)
       const errorMessages: Record<number, string> = {
         403: 'Please sign in to subscribe',
         400: 'Invalid subscription tier selected',

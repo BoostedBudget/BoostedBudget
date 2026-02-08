@@ -202,22 +202,22 @@ describe('PaddleCheckoutButton', () => {
       })
     })
 
-    it('should call onSuccess callback after checkout creation', async () => {
+    it('should NOT call onSuccess callback after checkout creation', async () => {
+      // onSuccess prop has been removed - the button only opens the Paddle overlay
+      // Success navigation happens via Paddle event callback, not via onSuccess prop
       mockCreatePaddleCheckoutMutateAsync.mockResolvedValue(mockPaddleCheckoutResponse)
 
-      const onSuccess = mock(() => {})
       const Wrapper = createWrapper()
-      render(
-        <PaddleCheckoutButton tier="premium" billingInterval="month" onSuccess={onSuccess} />,
-        { wrapper: Wrapper }
-      )
+      render(<PaddleCheckoutButton tier="premium" billingInterval="month" />, { wrapper: Wrapper })
 
       const button = screen.getByRole('button')
       await userEvent.click(button)
 
       await waitFor(() => {
-        expect(onSuccess).toHaveBeenCalled()
+        expect(window.Paddle.Checkout.open).toHaveBeenCalled()
       })
+
+      // onSuccess should not be called - overlay should remain open for user to complete payment
     })
   })
 
