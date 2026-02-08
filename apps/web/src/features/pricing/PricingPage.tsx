@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useLocation } from 'react-router-dom'
 import { useUser } from '@clerk/react-router'
 import { Award, Gem, Check, X, AlertTriangle } from 'lucide-react'
 import { useSubscriptionTiers } from '../subscription/hooks/useSubscriptionTiers'
 import type { TierName, SubscriptionTier } from '../subscription/types'
 import { PaddleCheckoutButton } from '../billing/components/PaddleCheckoutButton'
+import { usePaddleEvents } from '../billing/hooks/usePaddleEvents'
 import { useGetCurrentSubscription } from '@boostedbudget/api-client/endpoints/subscription/subscription'
 import './PricingPage.css'
 
@@ -126,10 +127,9 @@ interface TierCardProps {
   tierData: SubscriptionTier
   isCurrentTier: boolean
   billingPeriod: BillingPeriod
-  navigate: ReturnType<typeof useNavigate>
 }
 
-function TierCard({ tierKey, tierData, isCurrentTier, billingPeriod, navigate }: TierCardProps) {
+function TierCard({ tierKey, tierData, isCurrentTier, billingPeriod }: TierCardProps) {
   const features = buildFeatureList(tierData)
   const isHousehold5 = tierKey === 'household_5'
   const isPaidTier = tierData.pricing.price_monthly > 0
@@ -193,9 +193,6 @@ function TierCard({ tierKey, tierData, isCurrentTier, billingPeriod, navigate }:
           <PaddleCheckoutButton
             tier={tierKey}
             billingInterval={billingPeriod === 'monthly' ? 'month' : 'year'}
-            onSuccess={() => {
-              navigate(`/billing/success?tier=${encodeURIComponent(tierData.display_name)}`)
-            }}
           />
         )}
       </div>
@@ -206,10 +203,12 @@ function TierCard({ tierKey, tierData, isCurrentTier, billingPeriod, navigate }:
 export function PricingPage() {
   const { user } = useUser()
   const location = useLocation()
-  const navigate = useNavigate()
   const { tiers, loading, error, refetch } = useSubscriptionTiers()
   const { data: currentSubscription } = useGetCurrentSubscription()
   const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>('monthly')
+
+  // Listen for Paddle checkout events (completion/cancellation)
+  usePaddleEvents()
 
   const isFrozen = (location.state as { frozen?: boolean } | null)?.frozen === true
 
@@ -284,7 +283,6 @@ export function PricingPage() {
               tierData={tierData}
               isCurrentTier={tierKey === currentTier}
               billingPeriod={billingPeriod}
-              navigate={navigate}
             />
           )
         })}
