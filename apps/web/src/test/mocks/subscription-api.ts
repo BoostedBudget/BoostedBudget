@@ -13,6 +13,14 @@ export const mockUseGetSubscriptionTiers = mock(() => ({
   refetch: mockRefetchSubscriptionTiers,
 }))
 
+// === useGetCurrentSubscription ===
+export const mockUseGetCurrentSubscription = mock(() => ({
+  data: undefined,
+  isLoading: false,
+  error: null,
+  refetch: mock(() => Promise.resolve()),
+}))
+
 // === useCreatePaddleCheckout ===
 // Issue #44, #45, #46, #48: Paddle checkout mock for testing
 export const mockCreatePaddleCheckoutMutateAsync = mock(() =>
@@ -35,5 +43,6 @@ export const mockUseCreatePaddleCheckout = mock(() => ({
 mock.module('@boostedbudget/api-client/endpoints/subscription/subscription', () => ({
   ...RealSubscriptionModule,
   useGetSubscriptionTiers: mockUseGetSubscriptionTiers,
+  useGetCurrentSubscription: mockUseGetCurrentSubscription,
   useCreatePaddleCheckout: mockUseCreatePaddleCheckout,
 }))

@@ -1,273 +1,196 @@
-# 🚀 BoostedBudget
+[![GitHub Workflow Status (branch)](https://img.shields.io/github/actions/workflow/status/golang-migrate/migrate/ci.yaml?branch=master)](https://github.com/golang-migrate/migrate/actions/workflows/ci.yaml?query=branch%3Amaster)
+[![GoDoc](https://pkg.go.dev/badge/github.com/golang-migrate/migrate)](https://pkg.go.dev/github.com/golang-migrate/migrate/v4)
+[![Coverage Status](https://img.shields.io/coveralls/github/golang-migrate/migrate/master.svg)](https://coveralls.io/github/golang-migrate/migrate?branch=master)
+[![packagecloud.io](https://img.shields.io/badge/deb-packagecloud.io-844fec.svg)](https://packagecloud.io/golang-migrate/migrate?filter=debs)
+[![Docker Pulls](https://img.shields.io/docker/pulls/migrate/migrate.svg)](https://hub.docker.com/r/migrate/migrate/)
+![Supported Go Versions](https://img.shields.io/badge/Go-1.24%2C%201.25-lightgrey.svg)
+[![GitHub Release](https://img.shields.io/github/release/golang-migrate/migrate.svg)](https://github.com/golang-migrate/migrate/releases)
+[![Go Report Card](https://goreportcard.com/badge/github.com/golang-migrate/migrate/v4)](https://goreportcard.com/report/github.com/golang-migrate/migrate/v4)
 
-**Supercharge your finances with intelligent automation**
+# migrate
 
-[![CI/CD Pipeline](https://github.com/maxnussbaum/BoostedBudget/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/maxnussbaum/BoostedBudget/actions/workflows/ci-cd.yml)
+__Database migrations written in Go. Use as [CLI](#cli-usage) or import as [library](#use-in-your-go-project).__
 
-BoostedBudget is a global budgeting platform that helps users optimize their finances through customizable automation rules, GDPR-compliant data handling, and intelligent insights.
+* Migrate reads migrations from [sources](#migration-sources)
+   and applies them in correct order to a [database](#databases).
+* Drivers are "dumb", migrate glues everything together and makes sure the logic is bulletproof.
+   (Keeps the drivers lightweight, too.)
+* Database drivers don't assume things or try to correct user input. When in doubt, fail.
 
-## 📋 Project Status
+Forked from [mattes/migrate](https://github.com/mattes/migrate)
 
-**Phase 0: Foundation** ✅ (In Progress)
-- ✅ Backend API with health endpoint
-- ✅ OpenAPI specification
-- ✅ Frontend skeleton (React + TypeScript + Vite)
-- ✅ Docker development environment
-- ✅ Clerk authentication (Issue #593)
-- ⏳ Database & migrations (Issue #7)
-- ⏳ GDPR components (Issue #8)
+## Databases
 
-## 🏗️ Architecture
+Database drivers run migrations. [Add a new database?](database/driver.go)
 
-### Technology Stack
+* [PostgreSQL](database/postgres)
+* [PGX v4](database/pgx)
+* [PGX v5](database/pgx/v5)
+* [Redshift](database/redshift)
+* [Ql](database/ql)
+* [Cassandra / ScyllaDB](database/cassandra)
+* [SQLite](database/sqlite)
+* [SQLite3](database/sqlite3) ([todo #165](https://github.com/mattes/migrate/issues/165))
+* [SQLCipher](database/sqlcipher)
+* [MySQL / MariaDB](database/mysql)
+* [Neo4j](database/neo4j)
+* [MongoDB](database/mongodb)
+* [CrateDB](database/crate) ([todo #170](https://github.com/mattes/migrate/issues/170))
+* [Shell](database/shell) ([todo #171](https://github.com/mattes/migrate/issues/171))
+* [Google Cloud Spanner](database/spanner)
+* [CockroachDB](database/cockroachdb)
+* [YugabyteDB](database/yugabytedb)
+* [ClickHouse](database/clickhouse)
+* [Firebird](database/firebird)
+* [MS SQL Server](database/sqlserver)
+* [rqlite](database/rqlite)
 
-**Backend:**
-- Go 1.25+ with Echo framework
-- PostgreSQL 15
-- Redis 7
-- RabbitMQ 3
-- OpenAPI 3.1 specification
+### Database URLs
 
-**Frontend:**
-- React 19 + TypeScript 5
-- Vite 7 build tool
-- Redux Toolkit for state management
-- Clerk React SDK
+Database connection strings are specified via URLs. The URL format is driver dependent but generally has the form: `dbdriver://username:password@host:port/dbname?param1=true&param2=false`
 
-**Infrastructure:**
-- Docker + Docker Compose (development)
-- Fly.io (production deployment)
-- Single region (us-east-1) for MVP
-- Multi-region expansion planned for Phase 7+
+Any [reserved URL characters](https://en.wikipedia.org/wiki/Percent-encoding#Percent-encoding_reserved_characters) need to be escaped. Note, the `%` character also [needs to be escaped](https://en.wikipedia.org/wiki/Percent-encoding#Percent-encoding_the_percent_character)
 
-### Business Model
+Explicitly, the following characters need to be escaped:
+`!`, `#`, `$`, `%`, `&`, `'`, `(`, `)`, `*`, `+`, `,`, `/`, `:`, `;`, `=`, `?`, `@`, `[`, `]`
 
-- **Free Tier:** 2-3 automation rules, basic budgeting, ad-supported
-- **Premium ($9.99/mo):** Unlimited rules, no ads, priority execution
-- **Premium Plus ($19.99/mo):** Everything + AI insights, API access
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-- **Docker** and **Docker Compose** (required)
-- **Go 1.25+** (for local backend development)
-- **Node.js 20+** (for local frontend development)
-- **Make** (optional, for convenience commands)
-
-### 1. Clone the Repository
-
-```bash
-git clone https://github.com/maxnussbaum/BoostedBudget.git
-cd BoostedBudget
-```
-
-### 2. Configure Environment
+It's easiest to always run the URL parts of your DB connection URL (e.g. username, password, etc) through an URL encoder. See the example Python snippets below:
 
 ```bash
-cp .env.example .env
-# Edit .env and add your credentials
+$ python3 -c 'import urllib.parse; print(urllib.parse.quote(input("String to encode: "), ""))'
+String to encode: FAKEpassword!#$%&'()*+,/:;=?@[]
+FAKEpassword%21%23%24%25%26%27%28%29%2A%2B%2C%2F%3A%3B%3D%3F%40%5B%5D
+$ python2 -c 'import urllib; print urllib.quote(raw_input("String to encode: "), "")'
+String to encode: FAKEpassword!#$%&'()*+,/:;=?@[]
+FAKEpassword%21%23%24%25%26%27%28%29%2A%2B%2C%2F%3A%3B%3D%3F%40%5B%5D
+$
 ```
 
-**Required Configuration**:
-- **Clerk**: Authentication (publishable key, secret key) - See [Clerk Dashboard](https://dashboard.clerk.com/)
-- **Database**: PostgreSQL connection string (auto-configured with Docker Compose)
-- **Redis**: Cache connection (auto-configured with Docker Compose)
-- **Plaid**: Financial account linking (client ID, secret) - [Get keys](https://dashboard.plaid.com/)
-- **Stripe**: Payment processing (publishable/secret keys, webhook secret) - [Get keys](https://dashboard.stripe.com/)
-- **AdSense**: Ad display for free tier (publisher ID) - [Sign up](https://www.google.com/adsense/)
+## Migration Sources
 
-**Optional Configuration**:
-- **Email**: SMTP settings for notifications (SendGrid, Mailgun, AWS SES)
-- **Sentry**: Error tracking DSN
-- **Feature Flags**: Enable/disable features
+Source drivers read migrations from local or remote sources. [Add a new source?](source/driver.go)
 
-**For CI/CD**: See [docs/GITHUB_SECRETS_SETUP.md](./docs/GITHUB_SECRETS_SETUP.md)
+* [Filesystem](source/file) - read from filesystem
+* [io/fs](source/iofs) - read from a Go [io/fs](https://pkg.go.dev/io/fs#FS)
+* [Go-Bindata](source/go_bindata) - read from embedded binary data ([jteeuwen/go-bindata](https://github.com/jteeuwen/go-bindata))
+* [pkger](source/pkger) - read from embedded binary data ([markbates/pkger](https://github.com/markbates/pkger))
+* [GitHub](source/github) - read from remote GitHub repositories
+* [GitHub Enterprise](source/github_ee) - read from remote GitHub Enterprise repositories
+* [Bitbucket](source/bitbucket) - read from remote Bitbucket repositories
+* [Gitlab](source/gitlab) - read from remote Gitlab repositories
+* [AWS S3](source/aws_s3) - read from Amazon Web Services S3
+* [Google Cloud Storage](source/google_cloud_storage) - read from Google Cloud Platform Storage
 
-### 3. Start Development Environment
+## CLI usage
+
+* Simple wrapper around this library.
+* Handles ctrl+c (SIGINT) gracefully.
+* No config search paths, no config files, no magic ENV var injections.
+
+[CLI Documentation](cmd/migrate) (includes CLI install instructions)
+
+### Basic usage
 
 ```bash
-# Using Make
-make dev
-
-# OR using Docker Compose directly
-docker-compose up
+$ migrate -source file://path/to/migrations -database postgres://localhost:5432/database up 2
 ```
 
-### 4. Run Database Migrations
+### Docker usage
 
 ```bash
-# Apply all migrations
-make migrate-up
-
-# Check migration status
-make migrate-status
+$ docker run -v {{ migration dir }}:/migrations --network host migrate/migrate
+    -path=/migrations/ -database postgres://localhost:5432/database up 2
 ```
 
-This will start:
-- **Backend API** on http://localhost:8080
-- **Frontend** on http://localhost:3000
-- **PostgreSQL** on localhost:5432
-- **Redis** on localhost:6379
-- **RabbitMQ** on localhost:5672 (Management UI: http://localhost:15672)
+## Use in your Go project
 
-### 5. Verify Everything Works
+* API is stable and frozen for this release (v3 & v4).
+* Uses [Go modules](https://golang.org/cmd/go/#hdr-Modules__module_versions__and_more) to manage dependencies.
+* To help prevent database corruptions, it supports graceful stops via `GracefulStop chan bool`.
+* Bring your own logger.
+* Uses `io.Reader` streams internally for low memory overhead.
+* Thread-safe and no goroutine leaks.
+
+__[Go Documentation](https://pkg.go.dev/github.com/golang-migrate/migrate/v4)__
+
+```go
+import (
+    "github.com/golang-migrate/migrate/v4"
+    _ "github.com/golang-migrate/migrate/v4/database/postgres"
+    _ "github.com/golang-migrate/migrate/v4/source/github"
+)
+
+func main() {
+    m, err := migrate.New(
+        "github://mattes:personal-access-token@mattes/migrate_test",
+        "postgres://localhost:5432/database?sslmode=enable")
+    m.Steps(2)
+}
+```
+
+Want to use an existing database client?
+
+```go
+import (
+    "database/sql"
+    _ "github.com/lib/pq"
+    "github.com/golang-migrate/migrate/v4"
+    "github.com/golang-migrate/migrate/v4/database/postgres"
+    _ "github.com/golang-migrate/migrate/v4/source/file"
+)
+
+func main() {
+    db, err := sql.Open("postgres", "postgres://localhost:5432/database?sslmode=enable")
+    driver, err := postgres.WithInstance(db, &postgres.Config{})
+    m, err := migrate.NewWithDatabaseInstance(
+        "file:///migrations",
+        "postgres", driver)
+    m.Up() // or m.Steps(2) if you want to explicitly set the number of migrations to run
+}
+```
+
+## Getting started
+
+Go to [getting started](GETTING_STARTED.md)
+
+## Tutorials
+
+* [CockroachDB](database/cockroachdb/TUTORIAL.md)
+* [PostgreSQL](database/postgres/TUTORIAL.md)
+
+(more tutorials to come)
+
+## Migration files
+
+Each migration has an up and down migration. [Why?](FAQ.md#why-two-separate-files-up-and-down-for-a-migration)
 
 ```bash
-# Check backend health
-curl http://localhost:8080/health
-
-# Verify database schema
-make migrate-status
-
-# Open frontend in browser
-open http://localhost:3000
+1481574547_create_users_table.up.sql
+1481574547_create_users_table.down.sql
 ```
 
-## 🧪 Development
+[Best practices: How to write migrations.](MIGRATIONS.md)
 
-### Backend Development
+## Coming from another db migration tool?
 
-```bash
-# Run tests with coverage
-make backend-test
+Check out [migradaptor](https://github.com/musinit/migradaptor/).
+*Note: migradaptor is not affiliated or supported by this project*
 
-# Or directly with go
-cd backend
-go test ./... -v -cover
+## Versions
 
-# Build backend
-make backend-build
+Version | Supported? | Import | Notes
+--------|------------|--------|------
+**master** | :white_check_mark: | `import "github.com/golang-migrate/migrate/v4"` | New features and bug fixes arrive here first |
+**v4** | :white_check_mark: | `import "github.com/golang-migrate/migrate/v4"` | Used for stable releases |
+**v3** | :x: | `import "github.com/golang-migrate/migrate"` (with package manager) or `import "gopkg.in/golang-migrate/migrate.v3"` (not recommended) | **DO NOT USE** - No longer supported |
 
-# Run backend locally (without Docker)
-make backend-run
-```
+## Development and Contributing
 
-### Frontend Development
+Yes, please! [`Makefile`](Makefile) is your friend,
+read the [development guide](CONTRIBUTING.md).
 
-```bash
-# Install dependencies
-make frontend-install
-
-# Run dev server locally (without Docker)
-make frontend-dev
-
-# Run tests
-make frontend-test
-
-# Build for production
-make frontend-build
-```
-
-### Running Tests
-
-```bash
-# All backend tests
-cd backend && go test ./... -v
-
-# Specific package
-cd backend && go test ./internal/handlers/... -v
-
-# With coverage
-cd backend && go test ./... -cover
-
-# Frontend tests
-cd apps/web && bun run test
-```
-
-### API Testing
-
-```bash
-# Validate OpenAPI spec
-npx @redocly/cli lint api/openapi.yaml
-
-# Run Prism mock server (test API without backend)
-npx @stoplight/prism-cli mock api/openapi.yaml --port 4010
-
-# Test mock endpoints
-curl http://localhost:4010/health
-curl -H "Authorization: Bearer mock-token" http://localhost:4010/user/profile
-```
-
-## 📚 Documentation
-
-- **[Complete Plan](./boosted-budget-complete-plan.md)** - Full project roadmap (Phases 0-7+)
-- **[Deployment Guide](./boosted-budget-fly-deployment.md)** - Fly.io deployment instructions
-- **[CLAUDE.md](./CLAUDE.md)** - Development guidelines and patterns
-- **[GitHub Secrets Setup](./docs/GITHUB_SECRETS_SETUP.md)** - CI/CD secrets configuration
-- **[OpenAPI Spec](./api/openapi.yaml)** - API documentation
-
-## 🔧 Project Structure
-
-```
-boostedbudget/
-├── api/                    # OpenAPI specification
-├── backend/               # Go backend
-│   ├── cmd/server/       # Entry point
-│   ├── internal/         # Business logic
-│   │   ├── handlers/    # HTTP handlers
-│   │   ├── services/    # Business services
-│   │   ├── repository/  # Data access
-│   │   ├── middleware/  # Clerk auth, logging, etc.
-│   │   └── config/      # Configuration
-│   ├── migrations/       # Database migrations
-│   └── tests/           # Integration tests
-├── apps/
-│   └── web/              # React frontend
-│       ├── src/
-│       │   ├── features/ # Feature modules
-│       │   ├── auth/     # Clerk integration
-│       │   └── shared/   # Shared components
-│       └── public/       # Static assets
-├── packages/
-│   ├── api-client/       # Orval-generated API hooks
-│   └── shared-types/     # Shared TypeScript types
-├── infrastructure/       # K8s, Terraform, Docker configs
-├── scripts/             # Build and deployment scripts
-├── legal/               # Privacy policy, ToS, GDPR docs
-└── docker-compose.yml   # Local development environment
-```
-
-## 🔐 Security & Compliance
-
-- **GDPR Compliant:** From day one for all users worldwide
-- **Clerk:** Enterprise-grade authentication
-- **Data Encryption:** At rest and in transit
-- **Single Region MVP:** us-east-1 (USA), multi-region expansion in Phase 7+
-- **Privacy by Design:** Default opt-out, granular consent management
-- **30-day Deletion Grace Period:** GDPR right to erasure
-
-## 🤝 Contributing
-
-This project follows strict development guidelines:
-
-1. **TDD (Test-Driven Development):** Red-Green-Refactor for all business logic
-2. **Issue-Driven:** Every change needs Issue → Branch → PR
-3. **Test Coverage:** >80% required
-4. **Code Review:** All PRs require review before merge
-
-See [CLAUDE.md](./CLAUDE.md) for detailed development guidelines.
-
-## 🐛 Issues & Support
-
-- **Issues:** https://github.com/maxnussbaum/BoostedBudget/issues
-- **Discussions:** https://github.com/maxnussbaum/BoostedBudget/discussions
-
-## 📝 License
-
-Proprietary - All rights reserved
-
-## 🎯 Roadmap
-
-- **Phase 0:** ✅ Foundation (Current)
-- **Phase 1:** User Profile & Subscription Management
-- **Phase 2:** Plaid Integration & Financial Accounts
-- **Phase 3:** Core Budgeting System
-- **Phase 4:** Rules Engine MVP
-- **Phase 5:** Monetization (Stripe + AdSense)
-- **Phase 6:** Advanced Features & AI Insights
-- **Phase 7+:** Multi-Region Expansion
+Also have a look at the [FAQ](FAQ.md).
 
 ---
 
-**Built with ❤️ using Test-Driven Development**
+Looking for alternatives? [https://awesome-go.com/#database](https://awesome-go.com/#database).

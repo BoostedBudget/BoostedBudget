@@ -18,6 +18,7 @@ import { Header } from './components/layout'
 import { ProfilePage } from './features/profile/ProfilePage'
 import { PricingPage } from './features/pricing/PricingPage'
 import { SubscriptionManagementPage } from './features/billing/SubscriptionManagementPage'
+import { CheckoutSuccessPage } from './features/billing/CheckoutSuccessPage'
 import { AccountsPage } from './features/accounts/AccountsPage'
 import { PlaidOAuthCallback } from './features/accounts/PlaidOAuthCallback'
 import { TransactionsPage } from './features/transactions/TransactionsPage'
@@ -266,6 +267,14 @@ function App() {
               element={
                 <ProtectedRoute>
                   <SubscriptionManagementPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/billing/success"
+              element={
+                <ProtectedRoute>
+                  <CheckoutSuccessPage />
                 </ProtectedRoute>
               }
             />
