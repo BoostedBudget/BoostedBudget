@@ -76,6 +76,13 @@ function App() {
         token: paddleToken,
         eventCallback: (event) => {
           console.log('Paddle event:', event)
+
+          // Dispatch custom events for checkout lifecycle
+          if (event.name === 'checkout.completed') {
+            window.dispatchEvent(new CustomEvent('paddle:checkout.completed', { detail: event }))
+          } else if (event.name === 'checkout.closed') {
+            window.dispatchEvent(new CustomEvent('paddle:checkout.closed', { detail: event }))
+          }
         },
       })
       console.log('Paddle initialized successfully', { environment: paddleEnv })

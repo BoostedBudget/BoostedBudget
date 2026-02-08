@@ -966,3 +966,66 @@ func TestHandleGetCurrentSubscription_TrialUser(t *testing.T) {
 
 	mockRepo.AssertExpectations(t)
 }
+
+// TestHandleCreateCheckoutSession_CustomerCreationErrorDetail tests detailed error message when customer creation fails
+func TestHandleCreateCheckoutSession_CustomerCreationErrorDetail(t *testing.T) {
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	user := &domain.User{
+		ID:               "user_123",
+		Email:            "test@example.com",
+		PaddleCustomerID: nil,
+	}
+
+	input := &CreateCheckoutInput{}
+	input.UserID = "user_123"
+	input.Body.Tier = "premium"
+	input.Body.BillingInterval = "month"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+	mockService.On("CreateCustomer", ctx, "user_123", "test@example.com").
+		Return("", errors.New("request_error.customer_email_invalid: Email address is invalid"))
+
+	output, err := handler.HandleCreateCheckoutSession(ctx, input)
+
+	require.Error(t, err)
+	assert.Nil(t, output)
+	// Should return structured error with detail
+	assert.Contains(t, err.Error(), "Failed to create customer")
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+}
+
+// TestHandleCreateCheckoutSession_CheckoutSessionErrorDetail tests detailed error message when checkout session creation fails
+func TestHandleCreateCheckoutSession_CheckoutSessionErrorDetail(t *testing.T) {
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_01h1234567890"
+	user := &domain.User{
+		ID:               "user_123",
+		Email:            "test@example.com",
+		PaddleCustomerID: &customerID,
+	}
+
+	input := &CreateCheckoutInput{}
+	input.UserID = "user_123"
+	input.Body.Tier = "premium"
+	input.Body.BillingInterval = "month"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+	mockService.On("CreateCheckoutSession", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return("", "", errors.New("request_error.transaction_default_checkout_url_not_set: A Default Payment Link has not yet been defined within the Paddle Dashboard"))
+
+	output, err := handler.HandleCreateCheckoutSession(ctx, input)
+
+	require.Error(t, err)
+	assert.Nil(t, output)
+	// Should return structured error with detail
+	assert.Contains(t, err.Error(), "Failed to create checkout session")
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+}
