@@ -81,14 +81,26 @@ export function SubscriptionManagementPage() {
   }
 
   const currentTierData = tiers?.tiers[subscription.tier as keyof typeof tiers.tiers]
-  const availableTiers = tiers?.tiers ? Object.entries(tiers.tiers).map(([name, tier]) => ({ name, ...tier })) : []
+  const availableTiers = tiers?.tiers ? Object.entries(tiers.tiers) : []
 
   // Helper to format tier features for display
-  const formatTierFeatures = (tierData: typeof currentTierData) =>
-    tierData ? Object.entries(tierData.features).map(([key, value]) => ({
-      name: key.replace(/_/g, ' '),
-      enabled: Boolean(value),
-    })) : []
+  const formatTierFeatures = (tierData: typeof currentTierData): string[] => {
+    if (!tierData) return []
+
+    const featureLabels: Record<string, string> = {
+      ads_enabled: 'Ad-free experience',
+      ai_insights: 'AI-powered insights',
+      priority_support: 'Priority support',
+      advanced_reports: 'Advanced reports',
+      api_access: 'API access',
+      custom_categories: 'Custom categories',
+      custom_tags: 'Custom tags',
+    }
+
+    return Object.entries(tierData.features)
+      .filter(([key, value]) => key === 'ads_enabled' ? !value : Boolean(value))
+      .map(([key]) => featureLabels[key] || key.replace(/_/g, ' '))
+  }
 
   const handleUpgrade = async (targetTier: string, billingInterval: 'month' | 'year') => {
     try {
@@ -256,18 +268,18 @@ export function SubscriptionManagementPage() {
         <UpgradeModal
           open={showUpgradeModal}
           currentTier={{
-            name: subscription.tier,
-            display_name: currentTierData.display_name,
-            pricing: currentTierData.pricing,
-            features: currentTierData.features,
-            limits: currentTierData.limits,
+            id: subscription.tier,
+            name: currentTierData.display_name,
+            price_monthly: `$${currentTierData.pricing.price_monthly.toFixed(2)}`,
+            price_yearly: `$${currentTierData.pricing.price_yearly.toFixed(2)}`,
+            features: formatTierFeatures(currentTierData),
           }}
-          availableTiers={availableTiers.map(tier => ({
-            name: tier.name,
-            display_name: tier.display_name,
-            pricing: tier.pricing,
-            features: tier.features,
-            limits: tier.limits,
+          availableTiers={availableTiers.map(([tierKey, tierData]) => ({
+            id: tierKey,
+            name: tierData.display_name,
+            price_monthly: `$${tierData.pricing.price_monthly.toFixed(2)}`,
+            price_yearly: `$${tierData.pricing.price_yearly.toFixed(2)}`,
+            features: formatTierFeatures(tierData),
           }))}
           onUpgrade={(tier, interval) => handleUpgrade(tier, interval)}
           onClose={() => setShowUpgradeModal(false)}
@@ -279,14 +291,16 @@ export function SubscriptionManagementPage() {
         <DowngradeModal
           open={showDowngradeModal}
           currentTier={{
-            name: subscription.tier,
-            display_name: currentTierData.display_name,
-            features: currentTierData.features,
+            id: subscription.tier,
+            name: currentTierData.display_name,
+            price_monthly: `$${currentTierData.pricing.price_monthly.toFixed(2)}`,
+            features: formatTierFeatures(currentTierData),
           }}
           downgradeTier={{
-            name: selectedTargetTier,
-            display_name: tiers?.tiers[selectedTargetTier as keyof typeof tiers.tiers]?.display_name || selectedTargetTier,
-            features: tiers?.tiers[selectedTargetTier as keyof typeof tiers.tiers]?.features || {},
+            id: selectedTargetTier,
+            name: tiers?.tiers[selectedTargetTier as keyof typeof tiers.tiers]?.display_name || selectedTargetTier,
+            price_monthly: `$${(tiers?.tiers[selectedTargetTier as keyof typeof tiers.tiers]?.pricing.price_monthly || 0).toFixed(2)}`,
+            features: formatTierFeatures(tiers?.tiers[selectedTargetTier as keyof typeof tiers.tiers]),
           }}
           nextBillingDate={subscription.next_billing_date || subscription.current_period_end}
           onDowngrade={(tier) => handleDowngrade(tier)}
@@ -298,15 +312,17 @@ export function SubscriptionManagementPage() {
       )}
 
       {/* Cancel Modal */}
-      {showCancelModal && (
+      {showCancelModal && currentTierData && (
         <CancelConfirmationModal
           open={showCancelModal}
           subscription={{
             tier: subscription.tier,
+            status: subscription.status,
             billing_interval: subscription.billing_interval,
             amount: subscription.amount,
             currency: subscription.currency,
             next_billing_date: subscription.next_billing_date || subscription.current_period_end,
+            features: formatTierFeatures(currentTierData),
           }}
           onConfirm={handleCancel}
           onClose={() => setShowCancelModal(false)}
