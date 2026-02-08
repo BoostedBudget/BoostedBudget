@@ -25,9 +25,7 @@ export function PaddleCheckoutButton({
       const response = await checkout({ tier, billingInterval })
 
       window.Paddle.Checkout.open({
-        settings: {
-          checkoutURL: response.checkout_url,
-        },
+        transactionId: response.transaction_id,
       })
 
       // Success navigation happens via Paddle event callback (see App.tsx)

@@ -134,9 +134,7 @@ describe('PaddleCheckoutButton', () => {
 
       await waitFor(() => {
         expect(window.Paddle.Checkout.open).toHaveBeenCalledWith({
-          settings: {
-            checkoutURL: mockPaddleCheckoutResponse.checkout_url,
-          },
+          transactionId: mockPaddleCheckoutResponse.transaction_id,
         })
       })
     })
@@ -297,11 +295,11 @@ describe('PaddleCheckoutButton', () => {
       expect(mockCreatePaddleCheckoutMutateAsync).not.toHaveBeenCalled()
     })
 
-    it('should pass checkout URL to Paddle.Checkout.open', async () => {
-      const customCheckoutURL = 'https://checkout.paddle.com/txn_custom_123'
+    it('should pass transaction ID to Paddle.Checkout.open', async () => {
+      const customTransactionId = 'txn_custom_123'
       mockCreatePaddleCheckoutMutateAsync.mockResolvedValue({
-        checkout_url: customCheckoutURL,
-        transaction_id: 'txn_custom_123',
+        checkout_url: 'https://checkout.paddle.com/txn_custom_123',
+        transaction_id: customTransactionId,
       })
 
       const Wrapper = createWrapper()
@@ -312,9 +310,7 @@ describe('PaddleCheckoutButton', () => {
 
       await waitFor(() => {
         expect(window.Paddle.Checkout.open).toHaveBeenCalledWith({
-          settings: {
-            checkoutURL: customCheckoutURL,
-          },
+          transactionId: customTransactionId,
         })
       })
     })
