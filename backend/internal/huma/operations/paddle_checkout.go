@@ -174,6 +174,11 @@ func validateBillingInterval(interval string) error {
 	return nil
 }
 
+// isSubscriptionModifiable checks if a subscription status allows modifications
+func isSubscriptionModifiable(status string) bool {
+	return status == "active" || status == "trialing"
+}
+
 // HandleCreateCheckoutSession handles POST /api/v1/subscription/checkout.
 // Creates a Paddle checkout session for the user to purchase a subscription.
 func (h *PaddleCheckoutHandler) HandleCreateCheckoutSession(
@@ -196,20 +201,12 @@ func (h *PaddleCheckoutHandler) HandleCreateCheckoutSession(
 
 	// Prevent duplicate subscriptions
 	if user.SubscriptionStatus == "active" {
-		h.logger.Warn("active user attempted duplicate purchase",
-			"user_id", user.ID,
-			"current_status", user.SubscriptionStatus,
-			"requested_tier", input.Body.Tier,
-		)
+		h.logger.Warn("active user attempted duplicate purchase", "user_id", user.ID, "requested_tier", input.Body.Tier)
 		return nil, huma.Error409Conflict("You already have an active subscription. Use the upgrade flow to change plans.")
 	}
 
 	if user.SubscriptionStatus == "trialing" {
-		h.logger.Warn("trialing user attempted duplicate purchase",
-			"user_id", user.ID,
-			"current_status", user.SubscriptionStatus,
-			"requested_tier", input.Body.Tier,
-		)
+		h.logger.Warn("trialing user attempted duplicate purchase", "user_id", user.ID, "requested_tier", input.Body.Tier)
 		return nil, huma.Error409Conflict("You already have a pending subscription that will activate when your trial ends.")
 	}
 
@@ -330,7 +327,7 @@ func (h *PaddleCheckoutHandler) HandlePreviewSubscriptionUpdate(
 		return nil, huma.Error400BadRequest("Invalid tier")
 	}
 
-	if user.SubscriptionStatus != "active" {
+	if !isSubscriptionModifiable(user.SubscriptionStatus) {
 		return nil, huma.Error400BadRequest("No active subscription to update")
 	}
 
@@ -454,7 +451,7 @@ func (h *PaddleCheckoutHandler) HandleUpdateSubscription(
 		return nil, huma.Error400BadRequest("Invalid tier")
 	}
 
-	if user.SubscriptionStatus != "active" {
+	if !isSubscriptionModifiable(user.SubscriptionStatus) {
 		return nil, huma.Error400BadRequest("No active subscription to update")
 	}
 
@@ -512,7 +509,7 @@ func (h *PaddleCheckoutHandler) HandleCancelSubscription(
 
 	h.logger.Info("canceling subscription", "user_id", user.ID)
 
-	if user.SubscriptionStatus != "active" {
+	if !isSubscriptionModifiable(user.SubscriptionStatus) {
 		return nil, huma.Error400BadRequest("No active subscription to cancel")
 	}
 
@@ -532,6 +529,13 @@ func (h *PaddleCheckoutHandler) HandleCancelSubscription(
 	out := &CancelSubscriptionOutput{}
 	out.Body.SubscriptionID = subscriptionID
 	out.Body.Message = "Subscription will be cancelled at end of billing period"
+
+	// Get subscription to populate EndsAt
+	sub, subErr := h.paddleService.GetSubscription(ctx, subscriptionID)
+	if subErr == nil && sub.CurrentBillingPeriod != nil {
+		out.Body.EndsAt = sub.CurrentBillingPeriod.EndsAt
+	}
+
 	return out, nil
 }
 

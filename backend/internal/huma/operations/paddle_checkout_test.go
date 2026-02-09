@@ -817,11 +817,20 @@ func TestHandleCancelSubscription_Success(t *testing.T) {
 
 	mockService.On("CancelSubscription", ctx, subscriptionID).Return(nil)
 
+	// Mock GetSubscription to provide EndsAt data
+	mockService.On("GetSubscription", ctx, subscriptionID).
+		Return(&paddle.Subscription{
+			ID:                   subscriptionID,
+			Status:               paddle.SubscriptionStatusActive,
+			CurrentBillingPeriod: &paddle.TimePeriod{EndsAt: "2026-03-15"},
+		}, nil)
+
 	output, err := handler.HandleCancelSubscription(ctx, input)
 
 	require.NoError(t, err)
 	require.NotNil(t, output)
 	assert.Contains(t, output.Body.Message, "cancelled")
+	assert.Equal(t, "2026-03-15", output.Body.EndsAt)
 
 	mockRepo.AssertExpectations(t)
 	mockService.AssertExpectations(t)
@@ -1236,6 +1245,129 @@ func TestHandleCreateCheckoutSession_CancelledUser_Allowed(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, output)
 	assert.Contains(t, output.Body.CheckoutURL, "checkout.paddle.com")
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+}
+
+// TestHandlePreviewSubscriptionUpdate_TrialingUser tests preview update for trialing users
+func TestHandlePreviewSubscriptionUpdate_TrialingUser(t *testing.T) {
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	subscriptionID := "sub_01h1234567890"
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionStatus:   "trialing", // Trialing user (paid subscription during trial)
+		SubscriptionTier:     "premium",
+		PaddleSubscriptionID: &subscriptionID,
+	}
+
+	input := &PreviewUpdateInput{}
+	input.UserID = "user_123"
+	input.Body.NewTier = "household_2"
+	input.Body.BillingInterval = "month"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+
+	mockService.On("PreviewUpdate", ctx, subscriptionID, mock.AnythingOfType("string")).
+		Return("5.00", "USD", "2026-03-15", nil)
+
+	output, err := handler.HandlePreviewSubscriptionUpdate(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "5.00", output.Body.ProrationAmount)
+	assert.Equal(t, "USD", output.Body.Currency)
+	assert.Equal(t, "2026-03-15", output.Body.NextChargeDate)
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+}
+
+// TestHandleUpdateSubscription_TrialingUser tests subscription update for trialing users
+func TestHandleUpdateSubscription_TrialingUser(t *testing.T) {
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_01h1234567890"
+	subscriptionID := "sub_01h1234567890"
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionTier:     "premium",
+		SubscriptionStatus:   "trialing", // Trialing user
+		PaddleCustomerID:     &customerID,
+		PaddleSubscriptionID: &subscriptionID,
+	}
+
+	input := &UpdateSubscriptionInput{}
+	input.UserID = "user_123"
+	input.Body.NewTier = "household_2"
+	input.Body.BillingInterval = "month"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+
+	mockService.On("UpdateSubscription",
+		ctx,
+		subscriptionID,
+		mock.AnythingOfType("string"),
+		"prorated_immediately",
+	).Return(&paddle.Subscription{
+		ID:     subscriptionID,
+		Status: paddle.SubscriptionStatusTrialing,
+	}, nil)
+
+	output, err := handler.HandleUpdateSubscription(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, subscriptionID, output.Body.SubscriptionID)
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+}
+
+// TestHandleCancelSubscription_TrialingUser tests subscription cancellation for trialing users
+func TestHandleCancelSubscription_TrialingUser(t *testing.T) {
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_01h1234567890"
+	subscriptionID := "sub_01h1234567890"
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionTier:     "premium",
+		SubscriptionStatus:   "trialing", // Trialing user
+		PaddleCustomerID:     &customerID,
+		PaddleSubscriptionID: &subscriptionID,
+	}
+
+	input := &CancelSubscriptionInput{}
+	input.UserID = "user_123"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+
+	mockService.On("CancelSubscription", ctx, subscriptionID).Return(nil)
+
+	mockService.On("GetSubscription", ctx, subscriptionID).
+		Return(&paddle.Subscription{
+			ID:                   subscriptionID,
+			Status:               paddle.SubscriptionStatusActive,
+			CurrentBillingPeriod: &paddle.TimePeriod{EndsAt: "2026-03-15"},
+		}, nil)
+
+	output, err := handler.HandleCancelSubscription(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Contains(t, output.Body.Message, "cancelled")
+	assert.Equal(t, "2026-03-15", output.Body.EndsAt)
 
 	mockRepo.AssertExpectations(t)
 	mockService.AssertExpectations(t)

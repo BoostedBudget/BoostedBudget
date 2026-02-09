@@ -21,6 +21,15 @@ export const mockUseGetCurrentSubscription = mock(() => ({
   refetch: mock(() => Promise.resolve()),
 }))
 
+// Default mutation state for all mutation hooks
+const defaultMutationState = {
+  isPending: false,
+  isSuccess: false,
+  isError: false,
+  error: null,
+  reset: mock(() => {}),
+}
+
 // === useCreatePaddleCheckout ===
 // Issue #44, #45, #46, #48: Paddle checkout mock for testing
 export const mockCreatePaddleCheckoutMutateAsync = mock(() =>
@@ -32,11 +41,57 @@ export const mockCreatePaddleCheckoutMutateAsync = mock(() =>
 
 export const mockUseCreatePaddleCheckout = mock(() => ({
   mutateAsync: mockCreatePaddleCheckoutMutateAsync,
-  isPending: false,
-  isSuccess: false,
-  isError: false,
+  ...defaultMutationState,
+}))
+
+// === usePreviewPaddleSubscriptionUpdate ===
+export const mockPreviewUpdateMutateAsync = mock(() =>
+  Promise.resolve({
+    proration_amount: '5.00',
+    currency: 'USD',
+    next_charge_date: '2026-03-15',
+  })
+)
+
+export const mockUsePreviewPaddleSubscriptionUpdate = mock(() => ({
+  mutateAsync: mockPreviewUpdateMutateAsync,
+  ...defaultMutationState,
+}))
+
+// === useUpdatePaddleSubscription ===
+export const mockUpdateSubscriptionMutateAsync = mock(() =>
+  Promise.resolve({
+    subscription_id: 'sub_123',
+    status: 'active',
+    message: 'Subscription updated successfully',
+  })
+)
+
+export const mockUseUpdatePaddleSubscription = mock(() => ({
+  mutateAsync: mockUpdateSubscriptionMutateAsync,
+  ...defaultMutationState,
+}))
+
+// === useCancelPaddleSubscription ===
+export const mockCancelSubscriptionMutateAsync = mock(() =>
+  Promise.resolve({
+    subscription_id: 'sub_123',
+    message: 'Subscription cancelled',
+    ends_at: '2026-03-15',
+  })
+)
+
+export const mockUseCancelPaddleSubscription = mock(() => ({
+  mutateAsync: mockCancelSubscriptionMutateAsync,
+  ...defaultMutationState,
+}))
+
+// === useGetBillingPortalUrl ===
+export const mockUseGetBillingPortalUrl = mock(() => ({
+  data: undefined,
+  isLoading: false,
   error: null,
-  reset: mock(() => {}),
+  refetch: mock(() => Promise.resolve()),
 }))
 
 // Single mock.module() call - called once at preload time
@@ -45,4 +100,8 @@ mock.module('@boostedbudget/api-client/endpoints/subscription/subscription', () 
   useGetSubscriptionTiers: mockUseGetSubscriptionTiers,
   useGetCurrentSubscription: mockUseGetCurrentSubscription,
   useCreatePaddleCheckout: mockUseCreatePaddleCheckout,
+  usePreviewPaddleSubscriptionUpdate: mockUsePreviewPaddleSubscriptionUpdate,
+  useUpdatePaddleSubscription: mockUseUpdatePaddleSubscription,
+  useCancelPaddleSubscription: mockUseCancelPaddleSubscription,
+  useGetBillingPortalUrl: mockUseGetBillingPortalUrl,
 }))
