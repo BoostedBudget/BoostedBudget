@@ -36,8 +36,8 @@ func (m *mockPaddleCheckoutService) GetCustomer(ctx context.Context, customerID 
 	return args.Get(0).(*paddle.Customer), args.Error(1)
 }
 
-func (m *mockPaddleCheckoutService) CreateCheckoutSession(ctx context.Context, customerID, priceID, email, successURL string) (string, string, error) {
-	args := m.Called(ctx, customerID, priceID, email, successURL)
+func (m *mockPaddleCheckoutService) CreateCheckoutSession(ctx context.Context, customerID, priceID, email, successURL, userID string) (string, string, error) {
+	args := m.Called(ctx, customerID, priceID, email, successURL, userID)
 	return args.String(0), args.String(1), args.Error(2)
 }
 
@@ -180,6 +180,7 @@ func TestHandleCreateCheckoutSession_Success(t *testing.T) {
 		mock.AnythingOfType("string"), // price ID
 		"test@example.com",
 		"https://app.example.com/subscription/success",
+		"user_123", // userID for custom_data
 	).Return("https://checkout.paddle.com/txn_123", "txn_123", nil)
 
 	output, err := handler.HandleCreateCheckoutSession(ctx, input)
@@ -215,7 +216,7 @@ func TestHandleCreateCheckoutSession_AllTiers(t *testing.T) {
 			input.Body.BillingInterval = "month"
 
 			mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
-			mockService.On("CreateCheckoutSession", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			mockService.On("CreateCheckoutSession", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 				Return("https://checkout.paddle.com/txn_123", "txn_123", nil)
 
 			output, err := handler.HandleCreateCheckoutSession(ctx, input)
@@ -260,7 +261,7 @@ func TestHandleCreateCheckoutSession_BillingIntervals(t *testing.T) {
 			mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
 
 			if !tc.expectError {
-				mockService.On("CreateCheckoutSession", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+				mockService.On("CreateCheckoutSession", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 					Return("https://checkout.paddle.com/txn_123", "txn_123", nil)
 			}
 
@@ -341,7 +342,7 @@ func TestHandleCreateCheckoutSession_NoCustomer_CreatesNew(t *testing.T) {
 		Return("ctm_new_customer", nil)
 	mockRepo.On("UpdatePaddleCustomerID", ctx, "user_123", "ctm_new_customer").
 		Return(nil)
-	mockService.On("CreateCheckoutSession", ctx, "ctm_new_customer", mock.Anything, mock.Anything, mock.Anything).
+	mockService.On("CreateCheckoutSession", ctx, "ctm_new_customer", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return("https://checkout.paddle.com/txn_123", "txn_123", nil)
 
 	output, err := handler.HandleCreateCheckoutSession(ctx, input)
@@ -372,7 +373,7 @@ func TestHandleCreateCheckoutSession_PaddleAPIError(t *testing.T) {
 	input.Body.BillingInterval = "month"
 
 	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
-	mockService.On("CreateCheckoutSession", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	mockService.On("CreateCheckoutSession", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return("", "", errors.New("Paddle API rate limit exceeded"))
 
 	output, err := handler.HandleCreateCheckoutSession(ctx, input)
@@ -1016,7 +1017,7 @@ func TestHandleCreateCheckoutSession_CheckoutSessionErrorDetail(t *testing.T) {
 	input.Body.BillingInterval = "month"
 
 	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
-	mockService.On("CreateCheckoutSession", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	mockService.On("CreateCheckoutSession", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return("", "", errors.New("request_error.transaction_default_checkout_url_not_set: A Default Payment Link has not yet been defined within the Paddle Dashboard"))
 
 	output, err := handler.HandleCreateCheckoutSession(ctx, input)
