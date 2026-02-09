@@ -102,35 +102,44 @@ export function SubscriptionManagementPage() {
       .map(([key]) => featureLabels[key] || key.replace(/_/g, ' '))
   }
 
-  const handleUpgrade = async (targetTier: string, billingInterval: 'month' | 'year') => {
+  const handleUpdateSubscription = async (
+    targetTier: string,
+    billingInterval: 'month' | 'year',
+    prorationBillingMode: string,
+    message: string,
+    closeModal: () => void,
+  ) => {
     try {
       await updateSubscription({
         newTier: targetTier,
         billingInterval,
-        prorationBillingMode: 'prorated_immediately',
+        prorationBillingMode,
       })
-      toast.success('Subscription upgraded successfully!')
-      setShowUpgradeModal(false)
+      toast.success(message)
+      closeModal()
       refetchSubscription()
     } catch {
       // Error handled by useEffect
     }
   }
 
-  const handleDowngrade = async (targetTier: string) => {
-    try {
-      await updateSubscription({
-        newTier: targetTier,
-        billingInterval: subscription.billing_interval as 'month' | 'year',
-        prorationBillingMode: 'full_next_billing_period',
-      })
-      toast.success('Subscription will downgrade at the end of your billing period')
-      setShowDowngradeModal(false)
-      refetchSubscription()
-    } catch {
-      // Error handled by useEffect
-    }
-  }
+  const handleUpgrade = (targetTier: string, billingInterval: 'month' | 'year') =>
+    handleUpdateSubscription(
+      targetTier,
+      billingInterval,
+      'prorated_immediately',
+      'Subscription upgraded successfully!',
+      () => setShowUpgradeModal(false),
+    )
+
+  const handleDowngrade = (targetTier: string) =>
+    handleUpdateSubscription(
+      targetTier,
+      subscription.billing_interval as 'month' | 'year',
+      'full_next_billing_period',
+      'Subscription will downgrade at the end of your billing period',
+      () => setShowDowngradeModal(false),
+    )
 
   const handleCancel = async () => {
     try {
@@ -176,7 +185,52 @@ export function SubscriptionManagementPage() {
     )
   }
 
-  if (subscription.status === 'cancelled' || subscription.status === 'canceled') {
+  // Handle trialing status (subscription purchased during trial)
+  if (subscription.status === 'trialing' && subscription.subscription_id) {
+    // User has subscribed but subscription hasn't activated yet (still in trial period)
+    const actualAmount = currentTierData?.pricing?.price_monthly || subscription.amount
+    const trialEndDate = subscription.trial_ends_at ? new Date(subscription.trial_ends_at).toLocaleDateString() : 'soon'
+    const billingPeriod = subscription.billing_interval === 'year' ? 'year' : 'month'
+
+    return (
+      <div className="subscription-management-page">
+        <div className="trial-banner success">
+          <h2>You're Subscribed!</h2>
+          <p>
+            Your {currentTierData?.display_name || subscription.tier} subscription will start when your trial ends.
+            You have {subscription.trial_days_remaining} days remaining in your trial.
+          </p>
+        </div>
+
+        {currentTierData && (
+          <CurrentSubscriptionDisplay
+            tier={subscription.tier}
+            tierName={currentTierData.display_name}
+            status="Subscribed"
+            billingInterval={subscription.billing_interval}
+            amount={actualAmount}
+            currency={subscription.currency}
+            features={formatTierFeatures(currentTierData)}
+          />
+        )}
+
+        <div className="subscription-info">
+          <p>Your plan will automatically activate after your trial ends.</p>
+          <p>You'll be charged {subscription.currency} {actualAmount}/{billingPeriod} starting on {trialEndDate}.</p>
+        </div>
+
+        {billingPortalUrl && (
+          <div className="subscription-actions">
+            <a href={billingPortalUrl} className="btn-secondary" target="_blank" rel="noopener noreferrer">
+              Manage Billing
+            </a>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  if (subscription.status === 'cancelled') {
     return (
       <div className="subscription-management-page">
         <div className="cancelled-banner">

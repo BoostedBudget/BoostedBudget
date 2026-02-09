@@ -47,9 +47,10 @@ type PaddleService interface {
 
 	// CreateCheckoutSession creates a checkout session for subscription purchase.
 	// Returns checkout URL for Paddle.js Overlay or redirect.
+	// userID is passed to Paddle as custom_data for webhook processing.
 	CreateCheckoutSession(
 		ctx context.Context,
-		customerID, priceID, email, successURL string,
+		customerID, priceID, email, successURL, userID string,
 	) (checkoutURL, transactionID string, err error)
 
 	// GetSubscription retrieves subscription details from Paddle.
@@ -196,11 +197,12 @@ func (s *paddleService) GetCustomer(ctx context.Context, customerID string) (*pa
 // CreateCheckoutSession creates a Paddle checkout session for subscription purchase.
 func (s *paddleService) CreateCheckoutSession(
 	ctx context.Context,
-	customerID, priceID, email, successURL string,
+	customerID, priceID, email, successURL, userID string,
 ) (checkoutURL, transactionID string, err error) {
 	s.logger.Info("creating Paddle checkout session",
 		"customer_id", customerID,
 		"price_id", priceID,
+		"user_id", userID,
 	)
 
 	item := paddle.NewCreateTransactionItemsTransactionItemFromCatalog(
@@ -212,6 +214,9 @@ func (s *paddleService) CreateCheckoutSession(
 
 	req := &paddle.CreateTransactionRequest{
 		Items: []paddle.CreateTransactionItems{*item},
+		CustomData: paddle.CustomData{
+			"user_id": userID,
+		},
 	}
 
 	if customerID != "" {

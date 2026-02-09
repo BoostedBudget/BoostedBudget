@@ -293,8 +293,14 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCreated(ctx context.Conte
 		}
 	}
 
+	// Extract status from webhook data (e.g., "active", "trialing")
+	status := getStringFromMap(data, "status")
+	if status == "" {
+		status = "active" // fallback for older webhooks
+	}
+
 	// Issue #48: Pass subscription ID to repository for storage
-	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, string(tier), "active", startedAt, endsAt, &subscriptionID); err != nil {
+	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, string(tier), status, startedAt, endsAt, &subscriptionID); err != nil {
 		return fmt.Errorf("failed to update subscription: %w", err)
 	}
 
@@ -306,7 +312,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCreated(ctx context.Conte
 
 		metadata := map[string]interface{}{
 			"subscription_tier":   string(tier),
-			"subscription_status": "active",
+			"subscription_status": status,
 		}
 
 		if err := w.clerkService.UpdateUserMetadata(ctx, user.ClerkUserID, metadata); err != nil {
