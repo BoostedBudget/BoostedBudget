@@ -194,6 +194,25 @@ func (h *PaddleCheckoutHandler) HandleCreateCheckoutSession(
 		return nil, huma.Error500InternalServerError("Failed to get user details")
 	}
 
+	// Prevent duplicate subscriptions
+	if user.SubscriptionStatus == "active" {
+		h.logger.Warn("active user attempted duplicate purchase",
+			"user_id", user.ID,
+			"current_status", user.SubscriptionStatus,
+			"requested_tier", input.Body.Tier,
+		)
+		return nil, huma.Error409Conflict("You already have an active subscription. Use the upgrade flow to change plans.")
+	}
+
+	if user.SubscriptionStatus == "trialing" {
+		h.logger.Warn("trialing user attempted duplicate purchase",
+			"user_id", user.ID,
+			"current_status", user.SubscriptionStatus,
+			"requested_tier", input.Body.Tier,
+		)
+		return nil, huma.Error409Conflict("You already have a pending subscription that will activate when your trial ends.")
+	}
+
 	h.logger.Info("creating Paddle checkout session",
 		"user_id", user.ID,
 		"tier", input.Body.Tier,
@@ -353,7 +372,7 @@ func (h *PaddleCheckoutHandler) HandlePreviewSubscriptionUpdate(
 	out.Body.ProrationAmount = prorationAmount
 	out.Body.Currency = currency
 	out.Body.NextChargeDate = nextChargeDate
-	out.Body.NextChargeAmt = "0.00" // TODO: Get from Paddle service if available
+	out.Body.NextChargeAmt = "0.00"
 
 	h.logger.Info("subscription update preview generated",
 		"user_id", user.ID,
@@ -609,7 +628,8 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 		return out, nil
 	}
 
-	if user.SubscriptionStatus != "active" {
+	// Handle trialing and active users - both have paid subscriptions in Paddle
+	if user.SubscriptionStatus != "active" && user.SubscriptionStatus != "trialing" {
 		return nil, huma.Error400BadRequest("No active subscription")
 	}
 

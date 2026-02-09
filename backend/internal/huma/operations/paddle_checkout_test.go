@@ -164,8 +164,8 @@ func TestHandleCreateCheckoutSession_Success(t *testing.T) {
 		ID:                "user_123",
 		Email:             "test@example.com",
 		PaddleCustomerID:  &customerID,
-		SubscriptionTier:  "free",
-		SubscriptionStatus: "active",
+		SubscriptionTier:  "premium",
+		SubscriptionStatus: "trial", // Trial user purchasing for first time
 	}
 
 	input := &CreateCheckoutInput{}
@@ -211,7 +211,7 @@ func TestHandleCreateCheckoutSession_AllTiers(t *testing.T) {
 			}
 
 			input := &CreateCheckoutInput{}
-	input.UserID = "user_123"
+			input.UserID = "user_123"
 			input.Body.Tier = tier
 			input.Body.BillingInterval = "month"
 
@@ -887,6 +887,38 @@ func TestHandleGetBillingPortalURL_Success(t *testing.T) {
 	mockService.AssertExpectations(t)
 }
 
+// TestHandleGetBillingPortalURL_TrialingUser tests that trialing users can access billing portal
+func TestHandleGetBillingPortalURL_TrialingUser(t *testing.T) {
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_01h1234567890"
+	subscriptionID := "sub_01h1234567890"
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionStatus:   "trialing", // Trialing user
+		PaddleCustomerID:     &customerID,
+		PaddleSubscriptionID: &subscriptionID,
+	}
+
+	input := &GetBillingPortalURLInput{}
+	input.UserID = "user_123"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+	mockService.On("GetBillingPortalURL", ctx, customerID).
+		Return("https://sandbox-buy.paddle.com/customer/portal", nil)
+
+	output, err := handler.HandleGetBillingPortalURL(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Contains(t, output.Body.PortalURL, "paddle.com")
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+}
+
 // --- HandleGetCurrentSubscription Tests ---
 
 // TestHandleGetCurrentSubscription_Success tests successful subscription retrieval
@@ -968,6 +1000,54 @@ func TestHandleGetCurrentSubscription_TrialUser(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 }
 
+// TestHandleGetCurrentSubscription_TrialingUser tests subscription retrieval for trialing users (paid subscription during trial)
+func TestHandleGetCurrentSubscription_TrialingUser(t *testing.T) {
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	// Trialing user: has purchased subscription but trial period hasn't ended yet
+	customerID := "ctm_01h1234567890"
+	subscriptionID := "sub_01h1234567890"
+	trialEndsAt := time.Now().Add(30 * 24 * time.Hour) // 30 days from now
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionTier:     "premium",
+		SubscriptionStatus:   "trialing", // Paddle's trialing status
+		PaddleCustomerID:     &customerID,
+		PaddleSubscriptionID: &subscriptionID,
+		TrialEndsAt:          &trialEndsAt, // Trial period still active
+	}
+
+	input := &GetCurrentSubscriptionInput{}
+	input.UserID = "user_123"
+
+	// Mock: getUserFromContext calls GetUserByID
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+	// Mock: getActiveSubscriptionID calls GetUserByID again
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+
+	mockService.On("GetSubscription", ctx, subscriptionID).
+		Return(&paddle.Subscription{
+			ID:                   subscriptionID,
+			Status:               paddle.SubscriptionStatusTrialing,
+			CurrentBillingPeriod: &paddle.TimePeriod{EndsAt: "2026-03-15"},
+			CurrencyCode:         "USD",
+		}, nil)
+
+	output, err := handler.HandleGetCurrentSubscription(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, subscriptionID, output.Body.SubscriptionID)
+	assert.Equal(t, "trialing", output.Body.Status)
+	assert.Equal(t, "premium", output.Body.Tier)
+	assert.Equal(t, "USD", output.Body.Currency)
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+}
+
 // TestHandleCreateCheckoutSession_CustomerCreationErrorDetail tests detailed error message when customer creation fails
 func TestHandleCreateCheckoutSession_CustomerCreationErrorDetail(t *testing.T) {
 	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
@@ -1026,6 +1106,136 @@ func TestHandleCreateCheckoutSession_CheckoutSessionErrorDetail(t *testing.T) {
 	assert.Nil(t, output)
 	// Should return structured error with detail
 	assert.Contains(t, err.Error(), "Failed to create checkout session")
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+}
+
+// TestHandleCreateCheckoutSession_ActiveUser_RejectsDuplicate tests that active users cannot purchase again
+func TestHandleCreateCheckoutSession_ActiveUser_RejectsDuplicate(t *testing.T) {
+	handler, _, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_01h1234567890"
+	subscriptionID := "sub_01h1234567890"
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionTier:     "premium",
+		SubscriptionStatus:   "active", // Already active
+		PaddleCustomerID:     &customerID,
+		PaddleSubscriptionID: &subscriptionID,
+	}
+
+	input := &CreateCheckoutInput{}
+	input.UserID = "user_123"
+	input.Body.Tier = "premium"
+	input.Body.BillingInterval = "month"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+
+	output, err := handler.HandleCreateCheckoutSession(ctx, input)
+
+	require.Error(t, err)
+	require.Nil(t, output)
+	assert.Contains(t, err.Error(), "already have an active subscription")
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestHandleCreateCheckoutSession_TrialingUser_RejectsDuplicate tests that trialing users cannot purchase again
+func TestHandleCreateCheckoutSession_TrialingUser_RejectsDuplicate(t *testing.T) {
+	handler, _, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_01h1234567890"
+	subscriptionID := "sub_01h1234567890"
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionTier:     "premium",
+		SubscriptionStatus:   "trialing", // Trialing (paid subscription during trial period)
+		PaddleCustomerID:     &customerID,
+		PaddleSubscriptionID: &subscriptionID,
+	}
+
+	input := &CreateCheckoutInput{}
+	input.UserID = "user_123"
+	input.Body.Tier = "household_2"
+	input.Body.BillingInterval = "year"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+
+	output, err := handler.HandleCreateCheckoutSession(ctx, input)
+
+	require.Error(t, err)
+	require.Nil(t, output)
+	assert.Contains(t, err.Error(), "already have a pending subscription")
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestHandleCreateCheckoutSession_TrialUser_Allowed tests that trial users can purchase
+func TestHandleCreateCheckoutSession_TrialUser_Allowed(t *testing.T) {
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_01h1234567890"
+	user := &domain.User{
+		ID:                 "user_123",
+		Email:              "test@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "trial", // Free trial (not trialing)
+		PaddleCustomerID:   &customerID,
+	}
+
+	input := &CreateCheckoutInput{}
+	input.UserID = "user_123"
+	input.Body.Tier = "premium"
+	input.Body.BillingInterval = "month"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+	mockService.On("CreateCheckoutSession", ctx, customerID, mock.Anything, user.Email, mock.Anything, user.ID).
+		Return("https://checkout.paddle.com/...", "txn_123", nil)
+
+	output, err := handler.HandleCreateCheckoutSession(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Contains(t, output.Body.CheckoutURL, "checkout.paddle.com")
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+}
+
+// TestHandleCreateCheckoutSession_CancelledUser_Allowed tests that cancelled users can re-subscribe
+func TestHandleCreateCheckoutSession_CancelledUser_Allowed(t *testing.T) {
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_01h1234567890"
+	user := &domain.User{
+		ID:                 "user_123",
+		Email:              "test@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "cancelled", // Previously cancelled
+		PaddleCustomerID:   &customerID,
+	}
+
+	input := &CreateCheckoutInput{}
+	input.UserID = "user_123"
+	input.Body.Tier = "premium"
+	input.Body.BillingInterval = "year"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+	mockService.On("CreateCheckoutSession", ctx, customerID, mock.Anything, user.Email, mock.Anything, user.ID).
+		Return("https://checkout.paddle.com/...", "txn_456", nil)
+
+	output, err := handler.HandleCreateCheckoutSession(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Contains(t, output.Body.CheckoutURL, "checkout.paddle.com")
 
 	mockRepo.AssertExpectations(t)
 	mockService.AssertExpectations(t)
