@@ -255,6 +255,7 @@ func (h *PaddleCheckoutHandler) HandleCreateCheckoutSession(
 		priceID,
 		user.Email,
 		successURL,
+		user.ID, // Pass userID for custom_data in Paddle transaction
 	)
 	if err != nil {
 		h.logger.Error("failed to create checkout session",
