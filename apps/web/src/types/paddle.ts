@@ -3,6 +3,7 @@
 // https://developer.paddle.com/paddlejs/overview
 
 export interface PaddleCheckoutOptions {
+  transactionId?: string
   settings?: {
     checkoutURL?: string
     theme?: 'light' | 'dark'
