@@ -105,7 +105,7 @@ export function SubscriptionManagementPage() {
   const handleUpdateSubscription = async (
     targetTier: string,
     billingInterval: 'month' | 'year',
-    prorationBillingMode: string,
+    prorationBillingMode: 'prorated_immediately' | 'full_immediately' | 'full_next_billing_period',
     message: string,
     closeModal: () => void,
   ) => {
@@ -188,7 +188,9 @@ export function SubscriptionManagementPage() {
   // Handle trialing status (subscription purchased during trial)
   if (subscription.status === 'trialing' && subscription.subscription_id) {
     // User has subscribed but subscription hasn't activated yet (still in trial period)
-    const actualAmount = currentTierData?.pricing?.price_monthly || subscription.amount
+    const actualAmount = currentTierData?.pricing?.price_monthly
+      ? currentTierData.pricing.price_monthly.toFixed(2)
+      : subscription.amount
     const trialEndDate = subscription.trial_ends_at ? new Date(subscription.trial_ends_at).toLocaleDateString() : 'soon'
     const billingPeriod = subscription.billing_interval === 'year' ? 'year' : 'month'
 
