@@ -3,15 +3,16 @@ module github.com/maxnussbaum/BoostedBudget
 go 1.25.7
 
 require (
+	github.com/PaddleHQ/paddle-go-sdk/v4 v4.2.0
 	github.com/clerk/clerk-sdk-go/v2 v2.5.1
 	github.com/danielgtaylor/huma/v2 v2.35.0
-	github.com/go-chi/chi/v5 v5.2.4
+	github.com/go-chi/chi/v5 v5.2.5
 	github.com/go-playground/validator/v10 v10.30.1
-	github.com/golang-jwt/jwt/v5 v5.3.0
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/labstack/echo/v4 v4.15.0
-	github.com/lib/pq v1.10.9
+	github.com/lib/pq v1.11.1
 	github.com/pashagolub/pgxmock/v4 v4.9.0
 	github.com/plaid/plaid-go/v13 v13.0.0
 	github.com/plaid/plaid-go/v23 v23.0.0
@@ -27,7 +28,6 @@ require (
 )
 
 require (
-	github.com/PaddleHQ/paddle-go-sdk/v4 v4.2.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
