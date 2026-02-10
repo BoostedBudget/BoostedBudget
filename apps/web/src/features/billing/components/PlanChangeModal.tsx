@@ -9,24 +9,15 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { usePreviewPaddleSubscriptionUpdate } from '@boostedbudget/api-client/endpoints/subscription/subscription'
-
-interface TierData {
-  display_name: string
-  pricing: {
-    price_monthly: number
-    price_yearly: number
-  }
-  users_included: number
-  accounts: number
-}
+import { SubscriptionTier } from '@boostedbudget/api-client/models'
 
 interface PlanChangeModalProps {
   open: boolean
   currentTier: string
   currentBillingInterval: 'month' | 'year'
-  tiers: Record<string, TierData>
+  tiers: Record<string, SubscriptionTier>
   isUpdating: boolean
-  onChangePlan: (tier: string, interval: 'month' | 'year', prorationMode: string) => void
+  onChangePlan: (tier: string, interval: 'month' | 'year', prorationMode: 'prorated_immediately' | 'full_next_billing_period') => void
   onClose: () => void
 }
 
@@ -52,15 +43,16 @@ export function PlanChangeModal({
       setDowngradeConfirmed(false)
       setBillingInterval(currentBillingInterval)
     }
-     
   }, [open, currentBillingInterval])
 
   // Trigger preview when tier is selected
   useEffect(() => {
     if (selectedTier && open && tiers[selectedTier]) {
       previewUpdate.mutateAsync({
-        new_tier: selectedTier,
-        billing_interval: billingInterval,
+        data: {
+          new_tier: selectedTier,
+          billing_interval: billingInterval,
+        }
       })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -70,7 +62,7 @@ export function PlanChangeModal({
   if (!currentTierData) return null
 
   // Helper to get price for billing interval
-  const getPrice = (tier: TierData) =>
+  const getPrice = (tier: SubscriptionTier) =>
     billingInterval === 'month' ? tier.pricing.price_monthly : tier.pricing.price_yearly
 
   // Filter out current tier and sort by price
@@ -82,6 +74,9 @@ export function PlanChangeModal({
 
   // Determine if selected tier is upgrade or downgrade
   const isUpgrade = selectedTierData ? getPrice(selectedTierData) > getPrice(currentTierData) : false
+
+  // Helper for billing interval display
+  const getBillingLabel = () => billingInterval === 'month' ? 'month' : 'year'
 
   const canConfirm = selectedTier && (isUpgrade || downgradeConfirmed)
 
@@ -143,10 +138,15 @@ export function PlanChangeModal({
           {/* Tier selection grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {availableTiers.map(([key, tier]) => {
-              const price = getPrice(tier)
+              const tierPrice = getPrice(tier)
               const currentPrice = getPrice(currentTierData)
-              const isUpgradeTier = price > currentPrice
+              const isUpgradeTier = tierPrice > currentPrice
               const isSelected = selectedTier === key
+
+              const handleSelectTier = () => {
+                setSelectedTier(key)
+                setDowngradeConfirmed(false)
+              }
 
               return (
                 <div
@@ -154,16 +154,12 @@ export function PlanChangeModal({
                   className={`border rounded-lg p-4 cursor-pointer transition-all ${
                     isSelected ? 'border-2 border-blue-500 bg-blue-50' : 'border border-gray-200'
                   }`}
-                  onClick={() => {
-                    setSelectedTier(key)
-                    setDowngradeConfirmed(false)
-                  }}
+                  onClick={handleSelectTier}
                   role="button"
                   tabIndex={0}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
-                      setSelectedTier(key)
-                      setDowngradeConfirmed(false)
+                      handleSelectTier()
                     }
                   }}
                 >
@@ -180,14 +176,12 @@ export function PlanChangeModal({
                     </span>
                   </div>
                   <div className="mb-3">
-                    <div className="text-2xl font-bold">{formatPrice(price)}</div>
-                    <div className="text-sm text-gray-600">
-                      per {billingInterval === 'month' ? 'month' : 'year'}
-                    </div>
+                    <div className="text-2xl font-bold">{formatPrice(tierPrice)}</div>
+                    <div className="text-sm text-gray-600">per {getBillingLabel()}</div>
                   </div>
                   <div className="text-sm space-y-1">
-                    <div className="text-gray-700">{tier.users_included} users</div>
-                    <div className="text-gray-700">{tier.accounts} accounts</div>
+                    <div className="text-gray-700">{tier.pricing.users_included} users</div>
+                    <div className="text-gray-700">{tier.limits.accounts} accounts</div>
                   </div>
                 </div>
               )
@@ -214,13 +208,7 @@ export function PlanChangeModal({
                   </p>
                   <p className="mt-2">
                     <strong>Next billing:</strong> {previewUpdate.data.currency}{' '}
-                    {selectedTierData
-                      ? formatPrice(
-                          billingInterval === 'month'
-                            ? selectedTierData.pricing.price_monthly
-                            : selectedTierData.pricing.price_yearly
-                        )
-                      : ''}{' '}
+                    {selectedTierData ? formatPrice(getPrice(selectedTierData)) : ''}{' '}
                     on {previewUpdate.data.next_charge_date}
                   </p>
                 </div>
@@ -247,7 +235,7 @@ export function PlanChangeModal({
               />
               <label htmlFor="downgrade-confirm" className="text-sm text-gray-700">
                 I understand I'll be switching to {selectedTierData?.display_name} with{' '}
-                {selectedTierData?.accounts} accounts and {selectedTierData?.users_included} users
+                {selectedTierData?.limits.accounts} accounts and {selectedTierData?.pricing.users_included} users
               </label>
             </div>
           )}
