@@ -4,8 +4,7 @@ import { useSubscriptionManagement } from './hooks/useSubscriptionManagement'
 import { useSubscriptionTiers } from '../subscription/hooks/useSubscriptionTiers'
 import { BillingDetails } from './components/BillingDetails'
 import { CurrentSubscriptionDisplay } from './components/CurrentSubscriptionDisplay'
-import { UpgradeModal } from './components/UpgradeModal'
-import { DowngradeModal } from './components/DowngradeModal'
+import { PlanChangeModal } from './components/PlanChangeModal'
 import { CancelConfirmationModal } from './components/CancelConfirmationModal'
 import { toast } from 'sonner'
 import './SubscriptionManagementPage.css'
@@ -33,10 +32,8 @@ export function SubscriptionManagementPage() {
   const { tiers, loading: tiersLoading } = useSubscriptionTiers()
 
   // Modal state
-  const [showUpgradeModal, setShowUpgradeModal] = useState(false)
-  const [showDowngradeModal, setShowDowngradeModal] = useState(false)
+  const [showPlanChangeModal, setShowPlanChangeModal] = useState(false)
   const [showCancelModal, setShowCancelModal] = useState(false)
-  const [selectedTargetTier, setSelectedTargetTier] = useState<string | null>(null)
 
   // Handle subscription errors
   useEffect(() => {
@@ -81,7 +78,6 @@ export function SubscriptionManagementPage() {
   }
 
   const currentTierData = tiers?.tiers[subscription.tier as keyof typeof tiers.tiers]
-  const availableTiers = tiers?.tiers ? Object.entries(tiers.tiers) : []
 
   // Helper to format tier features for display
   const formatTierFeatures = (tierData: typeof currentTierData): string[] => {
@@ -123,23 +119,22 @@ export function SubscriptionManagementPage() {
     }
   }
 
-  const handleUpgrade = (targetTier: string, billingInterval: 'month' | 'year') =>
-    handleUpdateSubscription(
+  const handlePlanChange = (
+    targetTier: string,
+    billingInterval: 'month' | 'year',
+    prorationBillingMode: 'prorated_immediately' | 'full_next_billing_period',
+  ) => {
+    const message = prorationBillingMode === 'prorated_immediately'
+      ? 'Subscription upgraded successfully!'
+      : 'Subscription will change at the end of your billing period'
+    return handleUpdateSubscription(
       targetTier,
       billingInterval,
-      'prorated_immediately',
-      'Subscription upgraded successfully!',
-      () => setShowUpgradeModal(false),
+      prorationBillingMode,
+      message,
+      () => setShowPlanChangeModal(false),
     )
-
-  const handleDowngrade = (targetTier: string) =>
-    handleUpdateSubscription(
-      targetTier,
-      subscription.billing_interval as 'month' | 'year',
-      'full_next_billing_period',
-      'Subscription will downgrade at the end of your billing period',
-      () => setShowDowngradeModal(false),
-    )
+  }
 
   const handleCancel = async () => {
     try {
@@ -151,6 +146,17 @@ export function SubscriptionManagementPage() {
       // Error handled by useEffect
     }
   }
+
+  // Helper to build subscription data for modals
+  const getModalSubscriptionData = () => ({
+    tier: subscription.tier,
+    status: subscription.status,
+    billing_interval: subscription.billing_interval,
+    amount: subscription.amount,
+    currency: subscription.currency,
+    next_billing_date: subscription.next_billing_date || subscription.current_period_end,
+    features: formatTierFeatures(currentTierData),
+  })
 
   // Render based on subscription status
   if (subscription.status === 'trial') {
@@ -221,12 +227,51 @@ export function SubscriptionManagementPage() {
           <p>You'll be charged {subscription.currency} {actualAmount}/{billingPeriod} starting on {trialEndDate}.</p>
         </div>
 
-        {billingPortalUrl && (
-          <div className="subscription-actions">
+        <div className="subscription-actions">
+          <button
+            onClick={() => setShowPlanChangeModal(true)}
+            className="btn-secondary"
+            disabled={isUpdating}
+          >
+            Change Plan
+          </button>
+
+          <button
+            onClick={() => setShowCancelModal(true)}
+            className="btn-danger"
+            disabled={isCanceling}
+          >
+            Cancel Subscription
+          </button>
+
+          {billingPortalUrl && (
             <a href={billingPortalUrl} className="btn-secondary" target="_blank" rel="noopener noreferrer">
               Manage Billing
             </a>
-          </div>
+          )}
+        </div>
+
+        {/* Plan Change Modal */}
+        {showPlanChangeModal && currentTierData && tiers?.tiers && (
+          <PlanChangeModal
+            open={showPlanChangeModal}
+            currentTier={subscription.tier}
+            currentBillingInterval={subscription.billing_interval as 'month' | 'year'}
+            tiers={tiers.tiers}
+            isUpdating={isUpdating}
+            onChangePlan={handlePlanChange}
+            onClose={() => setShowPlanChangeModal(false)}
+          />
+        )}
+
+        {/* Cancel Modal */}
+        {showCancelModal && currentTierData && (
+          <CancelConfirmationModal
+            open={showCancelModal}
+            subscription={getModalSubscriptionData()}
+            onConfirm={handleCancel}
+            onClose={() => setShowCancelModal(false)}
+          />
         )}
       </div>
     )
@@ -237,7 +282,12 @@ export function SubscriptionManagementPage() {
       <div className="subscription-management-page">
         <div className="cancelled-banner">
           <h2>Subscription Cancelled</h2>
-          <p>Your subscription has been cancelled. You can resubscribe at any time.</p>
+          <p>
+            Your subscription has been cancelled.
+            {subscription.current_period_end && (
+              <> You retain access until <strong>{subscription.current_period_end}</strong>.</>
+            )}
+          </p>
         </div>
 
         <div className="cancelled-actions">
@@ -295,15 +345,7 @@ export function SubscriptionManagementPage() {
 
       <div className="subscription-actions">
         <button
-          onClick={() => setShowUpgradeModal(true)}
-          className="btn-secondary"
-          disabled={isUpdating}
-        >
-          Upgrade Plan
-        </button>
-
-        <button
-          onClick={() => setShowDowngradeModal(true)}
+          onClick={() => setShowPlanChangeModal(true)}
           className="btn-secondary"
           disabled={isUpdating}
         >
@@ -319,51 +361,16 @@ export function SubscriptionManagementPage() {
         </button>
       </div>
 
-      {/* Upgrade Modal */}
-      {showUpgradeModal && currentTierData && (
-        <UpgradeModal
-          open={showUpgradeModal}
-          currentTier={{
-            id: subscription.tier,
-            name: currentTierData.display_name,
-            price_monthly: `$${currentTierData.pricing.price_monthly.toFixed(2)}`,
-            price_yearly: `$${currentTierData.pricing.price_yearly.toFixed(2)}`,
-            features: formatTierFeatures(currentTierData),
-          }}
-          availableTiers={availableTiers.map(([tierKey, tierData]) => ({
-            id: tierKey,
-            name: tierData.display_name,
-            price_monthly: `$${tierData.pricing.price_monthly.toFixed(2)}`,
-            price_yearly: `$${tierData.pricing.price_yearly.toFixed(2)}`,
-            features: formatTierFeatures(tierData),
-          }))}
-          onUpgrade={(tier, interval) => handleUpgrade(tier, interval)}
-          onClose={() => setShowUpgradeModal(false)}
-        />
-      )}
-
-      {/* Downgrade Modal */}
-      {showDowngradeModal && currentTierData && selectedTargetTier && (
-        <DowngradeModal
-          open={showDowngradeModal}
-          currentTier={{
-            id: subscription.tier,
-            name: currentTierData.display_name,
-            price_monthly: `$${currentTierData.pricing.price_monthly.toFixed(2)}`,
-            features: formatTierFeatures(currentTierData),
-          }}
-          downgradeTier={{
-            id: selectedTargetTier,
-            name: tiers?.tiers[selectedTargetTier as keyof typeof tiers.tiers]?.display_name || selectedTargetTier,
-            price_monthly: `$${(tiers?.tiers[selectedTargetTier as keyof typeof tiers.tiers]?.pricing.price_monthly || 0).toFixed(2)}`,
-            features: formatTierFeatures(tiers?.tiers[selectedTargetTier as keyof typeof tiers.tiers]),
-          }}
-          nextBillingDate={subscription.next_billing_date || subscription.current_period_end}
-          onDowngrade={(tier) => handleDowngrade(tier)}
-          onClose={() => {
-            setShowDowngradeModal(false)
-            setSelectedTargetTier(null)
-          }}
+      {/* Plan Change Modal */}
+      {showPlanChangeModal && currentTierData && tiers?.tiers && (
+        <PlanChangeModal
+          open={showPlanChangeModal}
+          currentTier={subscription.tier}
+          currentBillingInterval={subscription.billing_interval as 'month' | 'year'}
+          tiers={tiers.tiers}
+          isUpdating={isUpdating}
+          onChangePlan={handlePlanChange}
+          onClose={() => setShowPlanChangeModal(false)}
         />
       )}
 
@@ -371,15 +378,7 @@ export function SubscriptionManagementPage() {
       {showCancelModal && currentTierData && (
         <CancelConfirmationModal
           open={showCancelModal}
-          subscription={{
-            tier: subscription.tier,
-            status: subscription.status,
-            billing_interval: subscription.billing_interval,
-            amount: subscription.amount,
-            currency: subscription.currency,
-            next_billing_date: subscription.next_billing_date || subscription.current_period_end,
-            features: formatTierFeatures(currentTierData),
-          }}
+          subscription={getModalSubscriptionData()}
           onConfirm={handleCancel}
           onClose={() => setShowCancelModal(false)}
         />
