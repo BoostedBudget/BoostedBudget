@@ -9,44 +9,46 @@ import {
 const mockOnChangePlan = mock(() => {})
 const mockOnClose = mock(() => {})
 
+const createMockTier = (
+  name: string,
+  displayName: string,
+  priceMonthly: number,
+  priceYearly: number,
+  usersIncluded: number,
+  accounts: number
+) => ({
+  name,
+  display_name: displayName,
+  description: `${displayName} tier`,
+  pricing: {
+    price_monthly: priceMonthly,
+    price_yearly: priceYearly,
+    users_included: usersIncluded,
+  },
+  limits: {
+    accounts,
+    executions_per_day: Math.max(10, usersIncluded * 100),
+    transaction_history_days: 365,
+  },
+  features: [],
+})
+
 const mockTiers = {
-  premium: {
-    display_name: 'Premium',
-    pricing: {
-      price_monthly: 9.99,
-      price_yearly: 99.0,
-    },
-    users_included: 3,
-    accounts: 30,
-  },
-  household_2: {
-    display_name: 'Household (2 users)',
-    pricing: {
-      price_monthly: 14.99,
-      price_yearly: 149.0,
-    },
-    users_included: 2,
-    accounts: 50,
-  },
-  household_3: {
-    display_name: 'Household (3 users)',
-    pricing: {
-      price_monthly: 19.99,
-      price_yearly: 199.0,
-    },
-    users_included: 3,
-    accounts: 100,
-  },
-  free: {
-    display_name: 'Free',
-    pricing: {
-      price_monthly: 0,
-      price_yearly: 0,
-    },
-    users_included: 1,
-    accounts: 3,
-  },
+  premium: createMockTier('premium', 'Premium', 9.99, 99.0, 3, 30),
+  household_2: createMockTier('household_2', 'Household (2 users)', 14.99, 149.0, 2, 50),
+  household_3: createMockTier('household_3', 'Household (3 users)', 19.99, 199.0, 3, 100),
+  free: createMockTier('free', 'Free', 0, 0, 1, 3),
 }
+
+const createMockPreviewReturn = (overrides = {}) => ({
+  mutateAsync: mockPreviewUpdateMutateAsync,
+  isPending: false,
+  isSuccess: false,
+  isError: false,
+  error: null,
+  reset: mock(() => {}),
+  ...overrides,
+})
 
 describe('PlanChangeModal', () => {
   beforeEach(() => {
@@ -54,14 +56,9 @@ describe('PlanChangeModal', () => {
     mockOnClose.mockClear()
     mockPreviewUpdateMutateAsync.mockClear()
     mockUsePreviewPaddleSubscriptionUpdate.mockClear()
-    mockUsePreviewPaddleSubscriptionUpdate.mockReturnValue({
-      mutateAsync: mockPreviewUpdateMutateAsync,
-      isPending: false,
-      isSuccess: false,
-      isError: false,
-      error: null,
-      reset: mock(() => {}),
-    })
+    mockUsePreviewPaddleSubscriptionUpdate.mockReturnValue(
+      createMockPreviewReturn()
+    )
     mockPreviewUpdateMutateAsync.mockResolvedValue({
       proration_amount: '5.00',
       currency: 'USD',
@@ -240,22 +237,18 @@ describe('PlanChangeModal', () => {
   })
 
   it('should show proration amount for upgrades', async () => {
-    // Set up mock to return success state with data
-    let previewData = {
+    const previewData = {
       proration_amount: '5.00',
       currency: 'USD',
       next_charge_date: '2026-03-15',
     }
 
-    mockUsePreviewPaddleSubscriptionUpdate.mockReturnValue({
-      mutateAsync: mockPreviewUpdateMutateAsync,
-      isPending: false,
-      isSuccess: true,
-      isError: false,
-      error: null,
-      data: previewData,
-      reset: mock(() => {}),
-    })
+    mockUsePreviewPaddleSubscriptionUpdate.mockReturnValue(
+      createMockPreviewReturn({
+        isSuccess: true,
+        data: previewData,
+      })
+    )
 
     const { rerender } = render(
       <PlanChangeModal
@@ -297,22 +290,19 @@ describe('PlanChangeModal', () => {
   })
 
   it('should show effective date for downgrades', async () => {
-    let previewData = {
+    const previewData = {
       proration_amount: '0.00',
       currency: 'USD',
       next_charge_date: '2026-03-15',
     }
 
     mockPreviewUpdateMutateAsync.mockResolvedValue(previewData)
-    mockUsePreviewPaddleSubscriptionUpdate.mockReturnValue({
-      mutateAsync: mockPreviewUpdateMutateAsync,
-      isPending: false,
-      isSuccess: true,
-      isError: false,
-      error: null,
-      data: previewData,
-      reset: mock(() => {}),
-    })
+    mockUsePreviewPaddleSubscriptionUpdate.mockReturnValue(
+      createMockPreviewReturn({
+        isSuccess: true,
+        data: previewData,
+      })
+    )
 
     const { rerender } = render(
       <PlanChangeModal
