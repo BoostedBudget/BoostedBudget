@@ -139,7 +139,7 @@ func main() {
 		accountRepo := repository.NewAccountRepository(db)
 		transactionRepo := repository.NewTransactionRepository(db)
 		webhookRepo := repository.NewWebhookRepository(db)
-		paddleWebhookRepo := repository.NewPaddleWebhookRepository(db) // Issue #45, #46: Paddle webhooks
+		paddleWebhookRepo = repository.NewPaddleWebhookRepository(db) // Issue #45, #46: Paddle webhooks
 		identityRepo := repository.NewUserIdentityRepository(db)       // Maps Clerk IDs to user UUIDs
 		notificationRepo := repository.NewNotificationRepository(db) // Issue #257: Notification storage
 		syncAuditRepo := repository.NewSyncAuditRepository(db) // Issue #242: Monthly sync limits
