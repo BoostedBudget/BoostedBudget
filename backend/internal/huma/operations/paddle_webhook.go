@@ -184,8 +184,6 @@ func RegisterPaddleWebhookRoutes(api huma.API, handler *PaddleWebhookHandler) {
 		Summary:     "Receive Paddle webhook notifications",
 		Description: "Public endpoint for Paddle to send subscription and payment event notifications. Verifies HMAC-SHA256 signature, stores in database, and enqueues async processing job.",
 		Tags:        []string{"Webhooks", "Paddle"},
-		Security: []map[string][]string{
-			{}, // Empty security = public endpoint (no auth required)
-		},
+		// No Security - this is a public endpoint validated by Paddle HMAC signature
 	}, handler.HandlePaddleWebhook)
 }
