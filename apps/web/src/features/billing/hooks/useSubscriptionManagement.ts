@@ -24,7 +24,11 @@ export function useSubscriptionManagement() {
   // Query hooks
   const subscriptionQuery = useGetCurrentSubscription()
   const billingPortalQuery = useGetBillingPortalUrl({
-    query: { enabled: subscriptionQuery.data?.status === 'active' },
+    query: {
+      enabled:
+        subscriptionQuery.data?.status === 'active' ||
+        subscriptionQuery.data?.status === 'trialing',
+    },
   })
 
   // Mutation hooks
