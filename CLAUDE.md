@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Stack**: Go 1.25+/Huma | React 19/TS5/Vite 7/Bun | PostgreSQL 17/Redis 7 | golang-migrate+Squawk | Clerk/Plaid/Paddle | Docker→GHCR→Fly.io
 
-**Tiers** (`config/subscription_tiers.yaml`): Free (1 rule, 3 accounts) | Premium Lite $4.99 (5/15) | Premium $9.99 (15/30) | Premium+ $19.99 (unlimited, AI, API)
+**Tiers** (`config/subscription_tiers.yaml`): Premium $8.99 + household tiers ($12.99-$18.99), no free tier, 60-day trial
 
 ## Commands
 
@@ -20,7 +20,7 @@ make test-all               # ALL tests including e2e (~4min)
 
 # Backend (from /backend)
 go test ./... -v            # All tests
-go test ./internal/handlers/... -v  # Single package
+go test ./internal/huma/operations/... -v  # Single package
 go test -coverprofile=coverage.out ./...  # With coverage
 make -C backend lint        # golangci-lint
 
@@ -28,7 +28,7 @@ make -C backend lint        # golangci-lint
 bun run test                # Unit tests (bun:test)
 bun run lint                # ESLint
 bun run test:e2e            # Playwright E2E
-bun run test:e2e -- --headed  # E2E with browser
+bun run test:e2e:headed     # E2E with browser
 
 # Code Generation
 make generate-openapi       # Go Huma → api/openapi.yaml
@@ -47,11 +47,19 @@ make -C backend migrate-create NAME=add_table
 backend/
   cmd/server/           # Entry point
   internal/
-    handlers/           # Huma operation handlers
+    huma/               # API layer (operations, errors, inputs, middleware)
     services/           # Business logic
     repository/         # Data access layer
-    middleware/         # Auth, logging, etc.
+    auth/               # Authentication (Clerk JWT)
+    config/             # Configuration loading
+    database/           # Database connection, migrations
     domain/             # Domain models
+    events/             # Event definitions
+    integration/        # External service clients (Clerk, Plaid, Paddle)
+    matching/           # Transaction matching logic
+    queue/              # River job queue setup
+    rules/              # Automation rule engine
+    workers/            # Background job workers
   migrations/           # .up.sql/.down.sql pairs
 apps/web/
   src/
@@ -126,36 +134,102 @@ These THREE locations MUST match version numbers:
 
 Out-of-sync causes infinite dashboard reset loops. Increment when adding/removing/reordering default widgets.
 
-## Slash Commands
+## Tooling
 
-| Command | Purpose |
-|---------|---------|
-| `/commit-push-pr` | Stage, commit, push, create PR |
-| `/new-endpoint` | Scaffold Go API endpoint |
-| `/new-component` | Scaffold React component |
-| `/db-migrate` | Create idempotent migration |
-| `/smart-plan` | Plan implementation with exploration |
-| `/run-e2e-tests` | Run E2E tests locally |
-| `/qa-scenario-creator` | Create QA test scenarios |
+### Commands (`/command`)
+| Command | Trigger | What it does |
+|---------|---------|-------------|
+| `/smart-plan` | Starting a GitHub issue | Brainstorm → explore code → reason → plan |
+| `/plan-next-task` | Deciding what to work on | Fetch open issues, prioritize P0-P3, recommend next |
+| `/new-endpoint` | Adding REST API endpoint | Scaffold handler+service+repo+tests+Orval types |
+| `/new-component` | Adding frontend feature/page | Scaffold types+hook+page+card+tests+route |
+| `/db-migrate` | Schema change needed | Create idempotent .up/.down pair, Squawk lint, test |
+| `/commit-push-pr` | Done implementing, tests pass | Stage, commit `#N:`, push, PR with `Closes #N` |
+| `/check-integrations` | Verifying external services | Health-check Clerk/Plaid/Paddle/DB |
 
-## Skills (`.claude/skills/`)
+### Skills (auto-invoked as context)
+| Skill | When referenced |
+|-------|----------------|
+| `git-workflow` | Branch naming, commit format, PR workflow, staging→main sync |
+| `go-patterns` | Huma operations, service/repo layers, error mapping, testify mocks |
+| `typescript-patterns` | Feature modules, custom hooks, CVA variants, `vi.hoisted` test setup |
+| `db-migration-guide` | Idempotency patterns, rollback, migration test suites, dirty state |
+| `integration-guides` | Clerk JWT, Plaid webhooks/encryption, Paddle subscription events |
+| `queueing` | River job args/workers, queue config, retry/uniqueness, dead letters |
+| `plaid-sync` | Transaction sync flow, webhook types, cursor pagination, sync frequency |
+| `plaid-staging-testing` | Staging Plaid validation, MockPlaidService, connectivity/webhook tests |
+| `system-health-updater` | Adding new queues/services to `/admin/health` dashboard |
+| `qa-scenario-creator` | Creating YAML QA data scenarios for test populator |
+| `run-e2e-tests` | Running Playwright E2E locally, SSL certs, Clerk test mode |
 
-- `git-workflow`: Branch naming, commit format, PR workflow
-- `go-patterns`: Huma operations, service/repo layers, testing
-- `typescript-patterns`: Feature structure, React Query, CVA components
-- `db-migration-guide`: Idempotency patterns, testing, rollback
-- `integration-guides`: Clerk JWT, Plaid webhooks, Paddle events
-- `queueing`: River job queue patterns
-- `plaid-sync`: Transaction sync, webhooks, cursors
-- `system-health-updater`: Guide for updating health dashboard when adding new systems/services/queues
+### Subagents (Task tool)
+| Agent | Model | When to use |
+|-------|-------|------------|
+| **`code-simplifier`** | haiku | **MANDATORY** after every implementation, before tests |
+| `verify-app` | sonnet | Full test suite (backend+frontend+lint+e2e) |
+| `api-designer` | haiku | Review Go endpoint patterns (read-only) |
+| `db-migrator` | sonnet | Create/lint/test migrations |
+| `frontend-reviewer` | haiku | Review React/TS conventions (read-only) |
+| `integration-tester` | sonnet | Test Clerk/Plaid/Paddle flows across environments |
 
-## Subagents
+### Generic Agents (always available)
+| Agent | When to use |
+|-------|------------|
+| `Explore` | Codebase exploration, find patterns, trace code paths |
+| `Plan` | Design implementation approaches before coding |
+| `code-simplifier` | Post-implementation cleanup (REQUIRED) |
+| `code-reviewer` | Review against plans and coding standards |
 
-- **`code-simplifier`**: **MANDATORY** - Run after EVERY implementation before tests/PR
-- `verify-app`: Run all tests, check endpoints
-- `api-designer`: Review Go API patterns
-- `db-migrator`: Safe PostgreSQL migrations
-- `frontend-reviewer`: Review React/TS patterns
+### Superpowers Skills
+| Skill | Trigger |
+|-------|---------|
+| `superpowers:brainstorming` | FIRST — before any creative/feature work |
+| `superpowers:writing-plans` | Multi-step implementation planning |
+| `superpowers:executing-plans` | Implementing written plans with checkpoints |
+| `superpowers:test-driven-development` | TDD workflow for any feature/bugfix |
+| `superpowers:systematic-debugging` | Any bug, test failure, unexpected behavior |
+| `superpowers:verification-before-completion` | Before claiming work complete |
+| `superpowers:dispatching-parallel-agents` | 2+ independent concurrent tasks |
+| `superpowers:requesting-code-review` | After completing major features |
+| `superpowers:finishing-a-development-branch` | Deciding merge/PR/cleanup |
+
+### Workflow: Feature Implementation
+```
+1. /plan-next-task                         → pick issue
+2. superpowers:brainstorming               → explore intent/requirements
+3. /smart-plan                             → deep planning (code search + reasoning)
+4. superpowers:test-driven-development     → TDD: red→green→refactor
+5. /new-endpoint or /new-component         → scaffold if needed
+6. /db-migrate                             → if schema changes needed
+7. code-simplifier agent                   → clean up (MANDATORY)
+8. superpowers:verification-before-completion → verify all tests pass
+9. superpowers:requesting-code-review      → review against plan
+10. /commit-push-pr                        → commit, push, PR
+```
+
+### Workflow: Code Review
+```
+1. api-designer agent       → review Go patterns
+2. frontend-reviewer agent  → review React/TS patterns
+3. code-reviewer agent      → review against plan/standards
+4. verify-app agent         → validate tests pass
+```
+
+### Workflow: Integration Work
+```
+1. /check-integrations      → verify service health
+2. integration-tester agent → test auth/sync/payment flows
+3. plaid-staging-testing    → Plaid-specific validation
+```
+
+### Workflow: Debugging
+```
+1. superpowers:systematic-debugging        → investigate root cause
+2. Explore agent                           → trace execution paths
+3. superpowers:test-driven-development     → write regression test
+4. code-simplifier agent                   → clean up fix
+5. superpowers:verification-before-completion → confirm fix
+```
 
 ## External Services
 
@@ -165,11 +239,11 @@ Out-of-sync causes infinite dashboard reset loops. Increment when adding/removin
 
 ## Dependabot
 
-- Configured with **bun** ecosystem for frontend packages (native lockfile support)
-- **Monorepo mode:** Single root-level entry monitors ALL workspaces (apps/*, packages/*)
-- Updates both `package.json` files (in any workspace) and root `bun.lock` automatically
-- Runs weekly Monday 9:00 AM EST for frontend packages
-- Manual lockfile intervention no longer needed
+- **Frontend (bun)**: Monorepo mode monitors ALL workspaces (apps/*, packages/*), updates root `bun.lock` automatically
+- **Backend (gomod)**: Monitors `/backend/go.mod` for Go dependencies
+- **Docker**: Monitors Dockerfiles in `/backend`, `/apps/web`, `/infra`
+- **GitHub Actions**: Monitors `.github/workflows/*.yml`
+- Runs weekly Monday 9:00 AM EST
 - Configuration: `.github/dependabot.yml`
 
 **Important:** Bun workspaces use a SINGLE root `bun.lock` file. Do NOT commit lockfiles in workspace subdirectories (`apps/web/bun.lock`, `packages/*/bun.lock`). Dependabot must run from the root directory to correctly update the shared lockfile.
