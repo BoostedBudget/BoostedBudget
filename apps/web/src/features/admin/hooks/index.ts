@@ -14,3 +14,6 @@ export type { UseEnvironmentResult, Environment } from './useEnvironment'
 
 export { useUserFilters } from './useUserFilters'
 export type { UseUserFiltersResult, UserFilters } from './useUserFilters'
+
+export { useAdminSubscriptionDetail, useUpdateUserTier } from './useAdminSubscription'
+export type { AdminSubscriptionDetailOutputBody } from './useAdminSubscription'
