@@ -212,7 +212,8 @@ export function PricingPage() {
 
   const isFrozen = (location.state as { frozen?: boolean } | null)?.frozen === true
 
-  // Check if user is on trial - trial users should not have any tier marked as "current"
+  // Trial users (status="trial") get all tiers shown as Subscribe, unlike trialing users
+  // who have paid subscriptions and show "Current Plan"
   const isTrialUser = currentSubscription?.status === 'trial'
   const currentTier: TierName | null = isTrialUser
     ? null

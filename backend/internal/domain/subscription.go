@@ -25,6 +25,8 @@ const (
 	SubscriptionStatusInactive SubscriptionStatus = "inactive"
 	// SubscriptionStatusTrial indicates an active trial period
 	SubscriptionStatusTrial SubscriptionStatus = "trial"
+	// SubscriptionStatusTrialing indicates a paid subscription during trial period (Paddle status)
+	SubscriptionStatusTrialing SubscriptionStatus = "trialing"
 	// SubscriptionStatusCancelled indicates a cancelled subscription
 	SubscriptionStatusCancelled SubscriptionStatus = "cancelled"
 	// SubscriptionStatusPastDue indicates payment is overdue
@@ -33,7 +35,7 @@ const (
 
 // IsActiveSubscription returns true if the status allows access to the app
 func (s SubscriptionStatus) IsActiveSubscription() bool {
-	return s == SubscriptionStatusActive || s == SubscriptionStatusTrial
+	return s == SubscriptionStatusActive || s == SubscriptionStatusTrial || s == SubscriptionStatusTrialing
 }
 
 // Unlimited represents unlimited resources (stored as -1 in config)

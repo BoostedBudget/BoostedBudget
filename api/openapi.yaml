@@ -6683,8 +6683,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
-      security:
-        - {}
       summary: Receive Paddle webhook notifications
       tags:
         - Webhooks
