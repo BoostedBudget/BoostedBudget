@@ -332,6 +332,17 @@ in-memoria.db
 !.claude/agents/**
 !.claude/skills/
 !.claude/skills/**
+
+# Agent configurations - ignore settings but track skills and workflows
+.agent/settings.json
+.agent/settings/*
+!.agent/skills/
+!.agent/skills/**
+.agents/settings.json
+.agents/settings/*
+!.agents/workflows/
+!.agents/workflows/**
+
 .serena
 
 # Test artifacts and coverage reports
