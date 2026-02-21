@@ -71,7 +71,7 @@
   },
   "devDependencies": {
     "@clerk/testing": "^1.13.36",
-    "@eslint/js": "^9.39.2",
+    "@eslint/js": "^10.0.1",
     "@faker-js/faker": "^10.3.0",
     "@happy-dom/global-registrator": "^20.6.2",
     "@playwright/test": "^1.58.0",
