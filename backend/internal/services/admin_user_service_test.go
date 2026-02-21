@@ -18,6 +18,11 @@ type MockAdminUserRepository struct {
 	mock.Mock
 }
 
+func (m *MockAdminUserRepository) UpdateUserTier(ctx context.Context, userID string, tier string, reason string, expiresAt *time.Time) error {
+	args := m.Called(ctx, userID, tier, reason, expiresAt)
+	return args.Error(0)
+}
+
 func (m *MockAdminUserRepository) ListUsers(ctx context.Context, filters domain.AdminUserFilters, limit, offset int) ([]domain.AdminUserListItem, int, error) {
 	args := m.Called(ctx, filters, limit, offset)
 	if args.Get(0) == nil {
@@ -453,8 +458,62 @@ func TestAdminUserService_ListUsers_NilAdminService(t *testing.T) {
 	// Assert - should work without enrichment
 	require.NoError(t, err)
 	assert.Len(t, response.Users, 1)
-	assert.False(t, response.Users[0].IsAdmin) // Not enriched
+	assert.False(t, response.Users[0].IsAdmin)                   // Not enriched
 	assert.Equal(t, "trial", response.Users[0].SubscriptionTier) // Not overridden
+
+	mockRepo.AssertExpectations(t)
+}
+
+func TestAdminUserService_UpdateUserTier_Success(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil)
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	tier := "household_2"
+	reason := "manual override"
+
+	// Using empty clerk_user_id to skip clerk API call
+	mockRepo.On("UpdateUserTier", ctx, userID, tier, reason, (*time.Time)(nil)).Return(nil)
+
+	err := service.UpdateUserTier(ctx, "", userID, tier, reason, nil)
+	require.NoError(t, err)
+
+	mockRepo.AssertExpectations(t)
+}
+
+func TestAdminUserService_UpdateUserTier_MissingUserID(t *testing.T) {
+	service := NewAdminUserService(nil, nil)
+	err := service.UpdateUserTier(context.Background(), "", "", "tier", "reason", nil)
+	assert.Equal(t, ErrUserIDRequired, err)
+}
+
+func TestAdminUserService_UpdateUserTier_MissingTier(t *testing.T) {
+	service := NewAdminUserService(nil, nil)
+	err := service.UpdateUserTier(context.Background(), "", "user", "", "reason", nil)
+	assert.ErrorContains(t, err, "tier is required")
+}
+
+func TestAdminUserService_UpdateUserTier_MissingReason(t *testing.T) {
+	service := NewAdminUserService(nil, nil)
+	err := service.UpdateUserTier(context.Background(), "", "user", "tier", "", nil)
+	assert.ErrorContains(t, err, "reason is required")
+}
+
+func TestAdminUserService_UpdateUserTier_RepoError(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil)
+
+	ctx := context.Background()
+	userID := "user"
+	tier := "premium"
+	reason := "promo"
+	repoErr := errors.New("db down")
+
+	mockRepo.On("UpdateUserTier", ctx, userID, tier, reason, (*time.Time)(nil)).Return(repoErr)
+
+	err := service.UpdateUserTier(ctx, "", userID, tier, reason, nil)
+	assert.ErrorContains(t, err, "failed to update user tier in database: db down")
 
 	mockRepo.AssertExpectations(t)
 }

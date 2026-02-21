@@ -23,8 +23,10 @@ type AdminUserListItem struct {
 // Used for the detailed user view in admin panel.
 type AdminUserDetail struct {
 	AdminUserListItem
-	TransactionsCount int `json:"transactions_count"`
-	BudgetsCount      int `json:"budgets_count"`
+	TransactionsCount  int        `json:"transactions_count"`
+	BudgetsCount       int        `json:"budgets_count"`
+	ManualTierOverride *string    `json:"manual_tier_override,omitempty"`
+	ManualTierEndsAt   *time.Time `json:"manual_tier_ends_at,omitempty"`
 }
 
 // AdminUserFilters contains filter parameters for the admin user list.

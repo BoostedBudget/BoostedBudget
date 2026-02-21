@@ -39,6 +39,8 @@ export interface AdminUserDetail {
   is_admin: boolean;
   last_login_at?: string;
   linked_accounts_count: number;
+  manual_tier_ends_at?: string;
+  manual_tier_override?: string;
   primary_region: string;
   referrals_count: number;
   subscription_status: string;

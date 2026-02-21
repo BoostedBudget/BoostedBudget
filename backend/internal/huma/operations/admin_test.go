@@ -208,7 +208,7 @@ func TestFireWebhook_Success(t *testing.T) {
 		decryptedToken: "decrypted-access-token",
 	}
 
-	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil, nil)
+	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil, nil, nil, nil)
 
 	input := &FireWebhookInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -239,7 +239,7 @@ func TestFireWebhook_ItemNotFound(t *testing.T) {
 	}
 	mockEncrypt := &mockEncryptionService{}
 
-	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil, nil)
+	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil, nil, nil, nil)
 
 	input := &FireWebhookInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -269,7 +269,7 @@ func TestFireWebhook_DecryptionError(t *testing.T) {
 		decryptErr: errors.New("decryption failed"),
 	}
 
-	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil, nil)
+	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil, nil, nil, nil)
 
 	input := &FireWebhookInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -301,7 +301,7 @@ func TestFireWebhook_PlaidAPIError(t *testing.T) {
 		decryptedToken: "decrypted-access-token",
 	}
 
-	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil, nil)
+	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil, nil, nil, nil)
 
 	input := &FireWebhookInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -328,7 +328,7 @@ func TestAdminRouteRegistration(t *testing.T) {
 	mockEncrypt := &mockEncryptionService{}
 
 	_, api := humatest.New(t)
-	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil, nil)
+	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil, nil, nil, nil)
 	RegisterAdminRoutes(api, handler)
 
 	// Test POST /api/v1/admin/plaid/fire-webhook (without auth, should fail with 401)
@@ -344,7 +344,7 @@ func TestAdminRouteRegistration(t *testing.T) {
 // TestGrantTrial_Success tests successful trial grant.
 func TestGrantTrial_Success(t *testing.T) {
 	mockTrial := &mockTrialService{}
-	handler := NewAdminHandler(nil, nil, nil, mockTrial, nil, nil, nil)
+	handler := NewAdminHandler(nil, nil, nil, mockTrial, nil, nil, nil, nil, nil)
 
 	input := &GrantTrialInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -366,7 +366,7 @@ func TestGrantTrial_UserAlreadyHadTrial(t *testing.T) {
 	mockTrial := &mockTrialService{
 		grantTrialErr: errors.New("user has already had a trial"),
 	}
-	handler := NewAdminHandler(nil, nil, nil, mockTrial, nil, nil, nil)
+	handler := NewAdminHandler(nil, nil, nil, mockTrial, nil, nil, nil, nil, nil)
 
 	input := &GrantTrialInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -386,7 +386,7 @@ func TestGrantTrial_UserAlreadyHadTrial(t *testing.T) {
 
 // TestGrantTrial_ServiceNotConfigured tests 503 when trial service is nil.
 func TestGrantTrial_ServiceNotConfigured(t *testing.T) {
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	input := &GrantTrialInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -407,7 +407,7 @@ func TestGrantTrial_ServiceError(t *testing.T) {
 	mockTrial := &mockTrialService{
 		grantTrialErr: errors.New("database connection error"),
 	}
-	handler := NewAdminHandler(nil, nil, nil, mockTrial, nil, nil, nil)
+	handler := NewAdminHandler(nil, nil, nil, mockTrial, nil, nil, nil, nil, nil)
 
 	input := &GrantTrialInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -473,7 +473,7 @@ func TestGetSystemHealth_Success(t *testing.T) {
 		},
 	}
 
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, mockHealth)
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, mockHealth, nil, nil)
 
 	input := &GetSystemHealthInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -499,7 +499,7 @@ func TestGetSystemHealth_Success(t *testing.T) {
 
 // TestGetSystemHealth_ServiceNotConfigured tests 503 when service is nil.
 func TestGetSystemHealth_ServiceNotConfigured(t *testing.T) {
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	input := &GetSystemHealthInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -521,7 +521,7 @@ func TestGetSystemHealth_ServiceError(t *testing.T) {
 		healthErr: errors.New("database connection error"),
 	}
 
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, mockHealth)
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, mockHealth, nil, nil)
 
 	input := &GetSystemHealthInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{

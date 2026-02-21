@@ -9,6 +9,7 @@ import (
 	"github.com/clerk/clerk-sdk-go/v2"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/maxnussbaum/BoostedBudget/internal/auth"
+	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -31,6 +32,8 @@ type AdminHandler struct {
 	adminService        services.AdminService
 	adminUserService    services.AdminUserService
 	systemHealthService services.SystemHealthService
+	subService          *services.SubscriptionService
+	config              *config.Config
 }
 
 // NewAdminHandler creates a new AdminHandler with required dependencies.
@@ -43,6 +46,8 @@ func NewAdminHandler(
 	adminService services.AdminService,
 	adminUserService services.AdminUserService,
 	systemHealthService services.SystemHealthService,
+	subService *services.SubscriptionService,
+	cfg *config.Config,
 ) *AdminHandler {
 	return &AdminHandler{
 		plaidService:        plaidService,
@@ -52,6 +57,8 @@ func NewAdminHandler(
 		adminService:        adminService,
 		adminUserService:    adminUserService,
 		systemHealthService: systemHealthService,
+		subService:          subService,
+		config:              cfg,
 	}
 }
 
@@ -478,4 +485,7 @@ func RegisterAdminRoutes(api huma.API, handler *AdminHandler) {
 		Tags:        []string{"Admin"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetSystemHealth)
+
+	// --- Admin Subscription Management Routes (Issue #641) ---
+	RegisterAdminSubscriptionsOperations(api, handler)
 }
