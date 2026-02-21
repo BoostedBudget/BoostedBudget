@@ -350,3 +350,4 @@ apps/web/e2e/.env.test
 .fly/
 fly.toml.bakmigration-performance.json
 migration-performance.json
+.gemini/settings.json
