@@ -197,7 +197,7 @@ export function useDashboardLayout(options?: UseDashboardLayoutOptions): UseDash
       }
 
       // Find the lowest Y position if y is Infinity (append at bottom)
-      let targetY = y;
+      let targetY;
       if (y === Infinity) {
         const maxY = layout.widgets.reduce((max, w) => Math.max(max, w.y + w.h), 0);
         targetY = maxY;
