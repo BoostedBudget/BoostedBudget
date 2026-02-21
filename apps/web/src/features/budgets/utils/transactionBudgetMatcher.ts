@@ -120,8 +120,8 @@ export function matchTransactionToBudgetCategories(
     const categoryMatches = categoryContains(txCategory, budgetCat.category)
     const tagMatches = tagsOverlap(txTags, budgetCat.tags)
 
-    let isMatch = false
-    let matchReason: MatchReason = 'category'
+    let isMatch
+    let matchReason: MatchReason
 
     // Determine match based on match_logic
     switch (budgetCat.match_logic) {
