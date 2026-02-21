@@ -23,10 +23,10 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue/jobs"
 	riverqueue "github.com/maxnussbaum/BoostedBudget/internal/queue/river"
-	"github.com/riverqueue/river"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/maxnussbaum/BoostedBudget/internal/workers"
+	"github.com/riverqueue/river"
 )
 
 func main() {
@@ -57,10 +57,10 @@ func main() {
 	e.Validator = middleware.NewValidator()
 
 	// Middleware (order matters!)
-	e.Use(middleware.RequestID())                      // 1. Generate request IDs first
-	e.Use(middleware.StructuredLogging(os.Stdout))    // 2. Structured JSON logging
-	e.Use(middleware.MetricsMiddleware())             // 3. Prometheus metrics
-	e.Use(echomiddleware.Recover())                    // 4. Panic recovery
+	e.Use(middleware.RequestID())                                                          // 1. Generate request IDs first
+	e.Use(middleware.StructuredLogging(os.Stdout))                                         // 2. Structured JSON logging
+	e.Use(middleware.MetricsMiddleware())                                                  // 3. Prometheus metrics
+	e.Use(echomiddleware.Recover())                                                        // 4. Panic recovery
 	e.Use(echomiddleware.CORSWithConfig(middleware.GetCORSConfig(cfg.CORSAllowedOrigins))) // 5. CORS handling with configured origins
 
 	// Initialize Huma API wrapping Echo for OpenAPI generation
@@ -139,20 +139,20 @@ func main() {
 		accountRepo := repository.NewAccountRepository(db)
 		transactionRepo := repository.NewTransactionRepository(db)
 		webhookRepo := repository.NewWebhookRepository(db)
-		paddleWebhookRepo = repository.NewPaddleWebhookRepository(db) // Issue #45, #46: Paddle webhooks
-		identityRepo := repository.NewUserIdentityRepository(db)       // Maps Clerk IDs to user UUIDs
-		notificationRepo := repository.NewNotificationRepository(db) // Issue #257: Notification storage
-		syncAuditRepo := repository.NewSyncAuditRepository(db) // Issue #242: Monthly sync limits
-		balanceSnapshotRepo := repository.NewBalanceSnapshotRepository(db) // Issue #353: Balance tracking
-		userTagRepo := repository.NewUserTagRepository(db) // Issue #345: User tags
-		customCategoryRepo := repository.NewCustomCategoryRepository(db) // Issue #345: Custom categories
+		paddleWebhookRepo = repository.NewPaddleWebhookRepository(db)            // Issue #45, #46: Paddle webhooks
+		identityRepo := repository.NewUserIdentityRepository(db)                 // Maps Clerk IDs to user UUIDs
+		notificationRepo := repository.NewNotificationRepository(db)             // Issue #257: Notification storage
+		syncAuditRepo := repository.NewSyncAuditRepository(db)                   // Issue #242: Monthly sync limits
+		balanceSnapshotRepo := repository.NewBalanceSnapshotRepository(db)       // Issue #353: Balance tracking
+		userTagRepo := repository.NewUserTagRepository(db)                       // Issue #345: User tags
+		customCategoryRepo := repository.NewCustomCategoryRepository(db)         // Issue #345: Custom categories
 		categorizationRuleRepo := repository.NewCategorizationRuleRepository(db) // Issue #346: Categorization rules
-		analyticsRepo := repository.NewAnalyticsRepository(db) // Issue #354: Cash flow analytics
-		budgetRepo := repository.NewBudgetRepository(db) // Issue #28: Budget management
-		savingsGoalRepo := repository.NewSavingsGoalRepository(db) // Issue #28: Savings goals
-		dashboardPrefsRepo := repository.NewDashboardPreferencesRepository(db) // Issue #354: Dashboard preferences
+		analyticsRepo := repository.NewAnalyticsRepository(db)                   // Issue #354: Cash flow analytics
+		budgetRepo := repository.NewBudgetRepository(db)                         // Issue #28: Budget management
+		savingsGoalRepo := repository.NewSavingsGoalRepository(db)               // Issue #28: Savings goals
+		dashboardPrefsRepo := repository.NewDashboardPreferencesRepository(db)   // Issue #354: Dashboard preferences
 		transferSuggestionRepo := repository.NewTransferSuggestionRepository(db) // Issue #36: Transfer suggestions
-		automationRuleRepo := repository.NewAutomationRulesRepository(db) // Issue #37: Automation rules
+		automationRuleRepo := repository.NewAutomationRulesRepository(db)        // Issue #37: Automation rules
 		adminUserRepo := repository.NewAdminUserRepository(db)                   // Issue #639: Admin user management
 		systemHealthRepo := repository.NewSystemHealthRepository(db)             // Issue #640: System health monitoring
 		deadLetterJobRepo := repository.NewDeadLetterJobRepository(db)           // Issue #640: Dead letter queue metrics
@@ -467,10 +467,10 @@ func main() {
 						river.PeriodicInterval(1*time.Hour),
 						func() (river.JobArgs, *river.InsertOpts) {
 							return jobs.ScheduledDeletionCheckArgs{
-								TriggerSource: "periodic",
-							}, &river.InsertOpts{
-								Queue: "low", // Deletions run on low priority queue
-							}
+									TriggerSource: "periodic",
+								}, &river.InsertOpts{
+									Queue: "low", // Deletions run on low priority queue
+								}
 						},
 						&river.PeriodicJobOpts{RunOnStart: true}, // Run immediately on startup to catch any pending deletions
 					))
@@ -483,10 +483,10 @@ func main() {
 					river.PeriodicInterval(24*time.Hour), // Run once per day
 					func() (river.JobArgs, *river.InsertOpts) {
 						return jobs.ItemCleanupCheckArgs{
-							TriggerSource: "periodic",
-						}, &river.InsertOpts{
-							Queue: "low", // Cleanup runs on low priority queue
-						}
+								TriggerSource: "periodic",
+							}, &river.InsertOpts{
+								Queue: "low", // Cleanup runs on low priority queue
+							}
 					},
 					&river.PeriodicJobOpts{RunOnStart: false}, // Don't run on startup - wait for daily schedule
 				))
@@ -499,10 +499,10 @@ func main() {
 						river.PeriodicInterval(24*time.Hour), // Run once per day
 						func() (river.JobArgs, *river.InsertOpts) {
 							return jobs.TrialExpirationCheckArgs{
-								TriggerSource: "periodic",
-							}, &river.InsertOpts{
-								Queue: "low", // Trial checks run on low priority queue
-							}
+									TriggerSource: "periodic",
+								}, &river.InsertOpts{
+									Queue: "low", // Trial checks run on low priority queue
+								}
 						},
 						&river.PeriodicJobOpts{RunOnStart: true}, // Run on startup to catch any expired trials
 					))
@@ -643,8 +643,8 @@ func main() {
 		// analyticsHandler migrated to Huma (see humaAnalyticsHandler below) - Issue #559
 		// dashboardPrefsHandler migrated to Huma (see humaDashboardPrefsHandler below) - Issue #559
 		// budgetHandler migrated to Huma (see humaBudgetHandler below) - Issue #559
-		_ = budgetService      // Used by Huma handler below
-		_ = budgetSyncService  // Used by Huma handler below
+		_ = budgetService                                                             // Used by Huma handler below
+		_ = budgetSyncService                                                         // Used by Huma handler below
 		categoryPreviewService := services.NewCategoryPreviewService(transactionRepo) // Issue #497: Category preview
 		// categoryPreviewHandler migrated to Huma (see humaCategoryPreviewHandler below) - Issue #559
 		_ = categoryPreviewService // Used by Huma handler below
@@ -657,8 +657,8 @@ func main() {
 		// Create Clerk middleware with identity resolution and auto-registration
 		clerkMiddleware := middleware.ClerkMiddleware(
 			cfg.ClerkSecretKey,
-			identityRepo,         // Resolves Clerk IDs to internal user UUIDs
-			registrationService,  // Auto-registers new users on first login
+			identityRepo,        // Resolves Clerk IDs to internal user UUIDs
+			registrationService, // Auto-registers new users on first login
 		)
 
 		// Apply Huma Clerk middleware for authenticated Huma routes
@@ -683,7 +683,7 @@ func main() {
 		adminUserService := services.NewAdminUserService(adminUserRepo, adminService)
 
 		// Issue #640: System health monitoring service
-			systemHealthService := services.NewSystemHealthService(
+		systemHealthService := services.NewSystemHealthService(
 			systemHealthRepo,
 			deadLetterJobRepo,
 			&dbPoolAdapter{db},
@@ -785,7 +785,7 @@ func main() {
 		// Issue #639: Pass adminUserService for user management endpoints
 		// Issue #640: Pass systemHealthService for system health monitoring
 		if plaidService != nil && encryptionService != nil {
-			humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, encryptionService, trialService, adminService, adminUserService, systemHealthService)
+			humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, encryptionService, trialService, adminService, adminUserService, systemHealthService, subscriptionService, cfg)
 			operations.RegisterAdminRoutes(humaAPI, humaAdminHandler)
 			log.Println("✅ Huma admin routes registered (protected by AdminMiddleware)")
 		}

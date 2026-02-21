@@ -2,9 +2,12 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
+	"github.com/clerk/clerk-sdk-go/v2/user"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
@@ -31,6 +34,9 @@ type AdminUserService interface {
 
 	// GetUserDetail returns detailed user information with statistics
 	GetUserDetail(ctx context.Context, userID string) (*domain.AdminUserDetail, error)
+
+	// UpdateUserTier updates a user's subscription tier natively and in Clerk
+	UpdateUserTier(ctx context.Context, clerkUserID, userID, tier, reason string, expiresAt *time.Time) error
 }
 
 // adminUserService implements AdminUserService
@@ -126,4 +132,51 @@ func (s *adminUserService) enrichAdminUser(user *domain.AdminUserListItem) {
 		user.SubscriptionTier = "premium"
 		user.SubscriptionStatus = "active"
 	}
+}
+
+// UpdateUserTier manually overrides a user's subscription tier locally and updates Clerk JWT claims.
+func (s *adminUserService) UpdateUserTier(ctx context.Context, clerkUserID, userID, tier, reason string, expiresAt *time.Time) error {
+	// Validate inputs
+	if userID == "" {
+		return ErrUserIDRequired
+	}
+	if tier == "" {
+		return errors.New("tier is required")
+	}
+	if reason == "" {
+		return errors.New("reason is required")
+	}
+
+	// 1. Update the database via AdminUserRepository
+	err := s.repo.UpdateUserTier(ctx, userID, tier, reason, expiresAt)
+	if err != nil {
+		return fmt.Errorf("failed to update user tier in database: %w", err)
+	}
+
+	// 2. Update Clerk publicMetadata to reflect the new tier in JWT claims
+	// Note: the original clerk_user_id is needed to update Clerk
+	if clerkUserID != "" {
+		// We're using the Clerk SDK directly via our injected user getter wouldn't support updates directly in this interface
+		// So we interact with the Clerk user API
+		// Prepare the updated metadata
+		metadata := map[string]interface{}{
+			"tier": tier,
+		}
+		metadataJSON, err := json.Marshal(metadata)
+		if err != nil {
+			return fmt.Errorf("failed to marshal metadata: %w", err)
+		}
+		rawMetadata := json.RawMessage(metadataJSON)
+
+		var params user.UpdateParams
+		params.PublicMetadata = &rawMetadata
+
+		_, err = user.Update(ctx, clerkUserID, &params)
+		if err != nil {
+			// Do not block the request if Clerk fails, but log it
+			return fmt.Errorf("failed to update clerk user metadata: %w", err)
+		}
+	}
+
+	return nil
 }

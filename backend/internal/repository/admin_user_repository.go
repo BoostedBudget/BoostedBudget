@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -16,6 +17,9 @@ type AdminUserRepository interface {
 
 	// GetUserDetail returns detailed user information with full statistics
 	GetUserDetail(ctx context.Context, userID string) (*domain.AdminUserDetail, error)
+
+	// UpdateUserTier manually overrides a user's subscription tier, with an optional expiration
+	UpdateUserTier(ctx context.Context, userID string, tier string, reason string, expiresAt *time.Time) error
 }
 
 // adminUserRepository implements AdminUserRepository using PostgreSQL
@@ -173,6 +177,49 @@ func (r *adminUserRepository) GetUserDetail(ctx context.Context, userID string) 
 	}
 
 	return &detail, nil
+}
+
+// UpdateUserTier updates the manual tier override fields inside the users table and creates an audit log
+func (r *adminUserRepository) UpdateUserTier(ctx context.Context, userID string, tier string, reason string, expiresAt *time.Time) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Update the user table
+	updateQuery := `
+		UPDATE users 
+		SET manual_tier_override = $1, manual_tier_ends_at = $2, updated_at = NOW() 
+		WHERE id = $3 AND is_deleted = FALSE
+	`
+	cmdTag, err := tx.Exec(ctx, updateQuery, tier, expiresAt, userID)
+	if err != nil {
+		return fmt.Errorf("failed to update user tier: %w", err)
+	}
+
+	if cmdTag.RowsAffected() == 0 {
+		return ErrUserNotFound
+	}
+
+	// Insert into audit_logs
+	auditQuery := `
+		INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details)
+		VALUES ($1, 'update_manual_tier', 'user', $1, $2)
+	`
+
+	detailsStr := fmt.Sprintf(`{"tier": "%s", "reason": "%s"`, tier, reason)
+	if expiresAt != nil {
+		detailsStr += fmt.Sprintf(`, "expires_at": "%s"`, expiresAt.Format("2006-01-02T15:04:05Z"))
+	}
+	detailsStr += "}"
+
+	_, err = tx.Exec(ctx, auditQuery, userID, detailsStr)
+	if err != nil {
+		return fmt.Errorf("failed to create audit log: %w", err)
+	}
+
+	return tx.Commit(ctx)
 }
 
 // buildFilterClause constructs the WHERE clause and arguments for admin user filters.

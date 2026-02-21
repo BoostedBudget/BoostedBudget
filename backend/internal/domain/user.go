@@ -24,6 +24,10 @@ type User struct {
 	SubscriptionStartedAt *time.Time `json:"subscription_started_at,omitempty" db:"subscription_started_at"`
 	SubscriptionEndsAt    *time.Time `json:"subscription_ends_at,omitempty" db:"subscription_ends_at"`
 
+	// Manual tier overrides (Issue #641)
+	ManualTierOverride *string    `json:"manual_tier_override,omitempty" db:"manual_tier_override"`
+	ManualTierEndsAt   *time.Time `json:"manual_tier_ends_at,omitempty" db:"manual_tier_ends_at"`
+
 	// Trial information (Issue #679)
 	TrialStartedAt     *time.Time `json:"trial_started_at,omitempty" db:"trial_started_at"`
 	TrialEndsAt        *time.Time `json:"trial_ends_at,omitempty" db:"trial_ends_at"`

@@ -41,6 +41,8 @@ export interface User {
   is_active: boolean;
   is_deleted: boolean;
   last_login_at?: string;
+  manual_tier_ends_at?: string;
+  manual_tier_override?: string;
   paddle_customer_id?: string;
   paddle_subscription_id?: string;
   primary_region: string;
