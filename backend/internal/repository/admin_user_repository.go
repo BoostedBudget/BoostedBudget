@@ -19,8 +19,9 @@ type AdminUserRepository interface {
 	// GetUserDetail returns detailed user information with full statistics
 	GetUserDetail(ctx context.Context, userID string) (*domain.AdminUserDetail, error)
 
-	// UpdateUserTier manually overrides a user's subscription tier, with an optional expiration
-	UpdateUserTier(ctx context.Context, userID string, tier string, reason string, expiresAt *time.Time) error
+	// UpdateUserTier manually overrides a user's subscription tier, with an optional expiration.
+	// Returns the target user's clerk_user_id so the caller can sync Clerk metadata.
+	UpdateUserTier(ctx context.Context, userID string, tier string, reason string, expiresAt *time.Time) (string, error)
 }
 
 // adminUserRepository implements AdminUserRepository using PostgreSQL
@@ -183,32 +184,34 @@ func (r *adminUserRepository) GetUserDetail(ctx context.Context, userID string) 
 	return &detail, nil
 }
 
-// UpdateUserTier updates the manual tier override fields inside the users table and creates an audit log
-func (r *adminUserRepository) UpdateUserTier(ctx context.Context, userID string, tier string, reason string, expiresAt *time.Time) error {
+// UpdateUserTier updates the manual tier override fields inside the users table and creates an audit log.
+// Returns the target user's clerk_user_id so the caller can sync Clerk metadata for the correct user.
+func (r *adminUserRepository) UpdateUserTier(ctx context.Context, userID string, tier string, reason string, expiresAt *time.Time) (string, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
+		return "", fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
-	// Update the user table
+	// Update the user table and retrieve clerk_user_id for the Clerk metadata sync
 	updateQuery := `
 		UPDATE users 
 		SET manual_tier_override = $1, manual_tier_ends_at = $2, updated_at = NOW() 
 		WHERE id = $3 AND is_deleted = FALSE
+		RETURNING clerk_user_id
 	`
-	cmdTag, err := tx.Exec(ctx, updateQuery, tier, expiresAt, userID)
+	var clerkUserID string
+	err = tx.QueryRow(ctx, updateQuery, tier, expiresAt, userID).Scan(&clerkUserID)
 	if err != nil {
-		return fmt.Errorf("failed to update user tier: %w", err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrUserNotFound
+		}
+		return "", fmt.Errorf("failed to update user tier: %w", err)
 	}
 
-	if cmdTag.RowsAffected() == 0 {
-		return ErrUserNotFound
-	}
-
-	// Insert into audit_logs
+	// Insert into audit_logs using the correct column names
 	auditQuery := `
-		INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details)
+		INSERT INTO audit_logs (user_id, action, resource_type, resource_id, changes)
 		VALUES ($1, 'update_manual_tier', 'user', $1, $2)
 	`
 
@@ -221,16 +224,18 @@ func (r *adminUserRepository) UpdateUserTier(ctx context.Context, userID string,
 	}
 	detailsBytes, err := json.Marshal(detailsMap)
 	if err != nil {
-		return fmt.Errorf("failed to marshal audit details: %w", err)
+		return "", fmt.Errorf("failed to marshal audit details: %w", err)
 	}
-	detailsStr := string(detailsBytes)
 
-	_, err = tx.Exec(ctx, auditQuery, userID, detailsStr)
+	_, err = tx.Exec(ctx, auditQuery, userID, detailsBytes)
 	if err != nil {
-		return fmt.Errorf("failed to create audit log: %w", err)
+		return "", fmt.Errorf("failed to create audit log: %w", err)
 	}
 
-	return tx.Commit(ctx)
+	if err = tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	return clerkUserID, nil
 }
 
 // buildFilterClause constructs the WHERE clause and arguments for admin user filters.

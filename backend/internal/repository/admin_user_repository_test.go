@@ -441,17 +441,20 @@ func TestUpdateUserTier_AuditLogWithSpecialChars(t *testing.T) {
 	tier := "premium"
 	reason := `Support case "ABC-123" & customer's request`
 
+	clerkUserID := "user_clerk_" + uuid.New().String()
+
 	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta(`UPDATE users SET manual_tier_override`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE users SET manual_tier_override`)).
 		WithArgs(tier, pgxmock.AnyArg(), userID).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+		WillReturnRows(pgxmock.NewRows([]string{"clerk_user_id"}).AddRow(clerkUserID))
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO audit_logs`)).
 		WithArgs(userID, pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
-	err := repo.UpdateUserTier(ctx, userID, tier, reason, nil)
+	gotClerkID, err := repo.UpdateUserTier(ctx, userID, tier, reason, nil)
 
 	assert.NoError(t, err)
+	assert.Equal(t, clerkUserID, gotClerkID)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
