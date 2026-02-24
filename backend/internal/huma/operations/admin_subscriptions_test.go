@@ -165,3 +165,27 @@ func TestGetUserSubscription_Success(t *testing.T) {
 
 	assert.NotNil(t, api)
 }
+
+func TestCreateSubscriptionOverride_RouteRegistered(t *testing.T) {
+	api, _, mockAdminSvc := setupAdminSubscriptionsAPI(t)
+
+	targetUserID := uuid.New().String()
+	clerkUserID := "user_" + uuid.New().String()
+
+	mockAdminSvc.On("IsHardcodedAdmin", mock.Anything).Return(false)
+	mockAdminSvc.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
+
+	ctx := context.WithValue(context.Background(), inputs.ClerkUserIDKey, clerkUserID)
+	claims := &clerk.SessionClaims{
+		Custom: map[string]interface{}{"email": "admin@example.com"},
+	}
+	ctx = context.WithValue(ctx, inputs.ClerkClaimsKey, claims)
+
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "/api/v1/admin/users/"+targetUserID+"/subscription/override", nil)
+	res := httptest.NewRecorder()
+	api.Adapter().ServeHTTP(res, req)
+
+	// Route must exist (not 404/405 — any other status means the route is registered)
+	assert.NotEqual(t, http.StatusNotFound, res.Code)
+	assert.NotEqual(t, http.StatusMethodNotAllowed, res.Code)
+}

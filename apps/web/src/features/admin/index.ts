@@ -45,5 +45,5 @@ export { useUserFilters } from './hooks/useUserFilters'
 export type { UseUserFiltersResult, UserFilters } from './hooks/useUserFilters'
 
 // Hooks for subscription management (Issue #646)
-export { useAdminSubscriptionDetail, useUpdateUserTier } from './hooks/useAdminSubscription'
+export { useAdminSubscriptionDetail, useUpdateUserTier, useCreateOverride } from './hooks/useAdminSubscription'
 export type { AdminSubscriptionDetailOutputBody } from './hooks/useAdminSubscription'

@@ -10,6 +10,7 @@ import {
     useGetAdminUserSubscription,
     getGetAdminUserSubscriptionQueryKey,
     useUpdateAdminUserTier,
+    useCreateAdminSubscriptionOverride,
 } from '@boostedbudget/api-client/endpoints/admin-subscriptions/admin-subscriptions'
 import type { AdminSubscriptionDetailOutputBody } from '@boostedbudget/api-client/models'
 
@@ -30,6 +31,21 @@ export function useUpdateUserTier(userId: string) {
         mutation: {
             onSuccess: () => {
                 // Invalidate the subscription detail so it refetches
+                queryClient.invalidateQueries({
+                    queryKey: getGetAdminUserSubscriptionQueryKey(userId),
+                })
+            },
+        },
+    })
+}
+
+/** Mutation: create a per-resource limit override for a user. */
+export function useCreateOverride(userId: string) {
+    const queryClient = useQueryClient()
+
+    return useCreateAdminSubscriptionOverride({
+        mutation: {
+            onSuccess: () => {
                 queryClient.invalidateQueries({
                     queryKey: getGetAdminUserSubscriptionQueryKey(userId),
                 })

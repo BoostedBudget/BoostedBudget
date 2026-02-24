@@ -12,13 +12,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ReactNode } from 'react'
 import { toast } from 'sonner'
 
-// Mock dependencies (hooks are already mocked in centralized mocks, but we might want to override them here)
-import {
-    mockUseAdminSubscriptionDetail,
-    mockUseUpdateUserTier,
-} from '@/test/hooks/admin-subscription-mocks' // Wait, I didn't create this one yet, I'll just use the ones I need or mock the hook directly if it's easier.
-
-// Wait, I'll create a hooks mock like the others if needed, or just mock the hook file.
+// Mock the hook module directly
 mock.module('../hooks/useAdminSubscription', () => ({
     useAdminSubscriptionDetail: mock(() => ({})),
     useUpdateUserTier: mock(() => ({})),
@@ -58,16 +52,16 @@ const SUB_DETAIL = {
 
 describe('SubscriptionOverrideModal', () => {
     beforeEach(() => {
-        // @ts-ignore
+        // @ts-expect-error mock method added by bun:test mock.module
         useAdminSubscriptionDetail.mockClear()
-        // @ts-ignore
+        // @ts-expect-error mock method added by bun:test mock.module
         useUpdateUserTier.mockClear()
-        // @ts-ignore
+        // @ts-expect-error mock method added by bun:test mock.module
         toast.success.mockClear()
     })
 
     it('renders loading state', () => {
-        // @ts-ignore
+        // @ts-expect-error mock method added by bun:test mock.module
         useAdminSubscriptionDetail.mockReturnValue({ isLoading: true, data: undefined })
         render(
             <SubscriptionOverrideModal userId="u1" open={true} onClose={() => { }} />,
@@ -77,7 +71,7 @@ describe('SubscriptionOverrideModal', () => {
     })
 
     it('renders current subscription info', async () => {
-        // @ts-ignore
+        // @ts-expect-error mock method added by bun:test mock.module
         useAdminSubscriptionDetail.mockReturnValue({ isLoading: false, data: SUB_DETAIL })
         render(
             <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
@@ -91,12 +85,12 @@ describe('SubscriptionOverrideModal', () => {
     })
 
     it('submits override when form is valid', async () => {
-        const mockMutate = mock((data: any, options: any) => {
+        const mockMutate = mock((data: unknown, options: { onSuccess?: () => void } | undefined) => {
             if (options?.onSuccess) options.onSuccess()
         })
-        // @ts-ignore
+        // @ts-expect-error mock method added by bun:test mock.module
         useAdminSubscriptionDetail.mockReturnValue({ isLoading: false, data: SUB_DETAIL })
-        // @ts-ignore
+        // @ts-expect-error mock method added by bun:test mock.module
         useUpdateUserTier.mockReturnValue({ mutate: mockMutate, isPending: false })
 
         const onClose = mock(() => { })
@@ -117,7 +111,7 @@ describe('SubscriptionOverrideModal', () => {
 
         await waitFor(() => {
             expect(mockMutate).toHaveBeenCalled()
-            // @ts-ignore
+            // @ts-expect-error mock method added by bun:test mock.module
             expect(toast.success).toHaveBeenCalled()
             expect(onClose).toHaveBeenCalled()
         })
