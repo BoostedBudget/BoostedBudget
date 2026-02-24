@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS linked_items (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
     -- Foreign key to users
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL,
 
     -- Plaid item information
     item_id VARCHAR(255) NOT NULL,
@@ -25,6 +25,9 @@ CREATE TABLE IF NOT EXISTS linked_items (
     CONSTRAINT unique_user_item UNIQUE (user_id, item_id)
 );
 
+-- Foreign key constraints (NOT VALID for zero-downtime, then VALIDATE)
+ALTER TABLE linked_items ADD CONSTRAINT fk_linked_items_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE linked_items VALIDATE CONSTRAINT fk_linked_items_user_id;
 -- Indexes for performance
 CREATE INDEX idx_linked_items_user_id ON linked_items(user_id);
 CREATE INDEX idx_linked_items_item_id ON linked_items(item_id);

@@ -10,9 +10,9 @@ CREATE TABLE IF NOT EXISTS transactions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
     -- Foreign keys
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-    linked_item_id UUID NOT NULL REFERENCES linked_items(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL,
+    account_id UUID NOT NULL,
+    linked_item_id UUID NOT NULL,
 
     -- Provider abstraction (generic for all sources)
     source VARCHAR(50) NOT NULL, -- 'plaid', 'manual', 'teller', 'finicity', 'yodlee'
@@ -48,6 +48,13 @@ CREATE TABLE IF NOT EXISTS transactions (
     CONSTRAINT valid_source CHECK (source IN ('plaid', 'teller', 'finicity', 'yodlee', 'manual'))
 );
 
+-- Foreign key constraints (NOT VALID for zero-downtime, then VALIDATE)
+ALTER TABLE transactions ADD CONSTRAINT fk_transactions_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE transactions VALIDATE CONSTRAINT fk_transactions_user_id;
+ALTER TABLE transactions ADD CONSTRAINT fk_transactions_account_id FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE transactions VALIDATE CONSTRAINT fk_transactions_account_id;
+ALTER TABLE transactions ADD CONSTRAINT fk_transactions_linked_item_id FOREIGN KEY (linked_item_id) REFERENCES linked_items(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE transactions VALIDATE CONSTRAINT fk_transactions_linked_item_id;
 -- Indexes for performance
 CREATE INDEX idx_transactions_user_id ON transactions(user_id);
 CREATE INDEX idx_transactions_account_id ON transactions(account_id);

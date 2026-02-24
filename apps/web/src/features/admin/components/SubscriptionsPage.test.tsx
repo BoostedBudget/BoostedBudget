@@ -9,14 +9,9 @@ import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { SubscriptionsPage } from './SubscriptionsPage'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { BrowserRouter } from 'react-router-dom'
 import { ReactNode } from 'react'
-
-// Mock dependencies
-const mockUseListAdminUsers = mock(() => ({}))
-
-mock.module('@boostedbudget/api-client/endpoints/admin/admin', () => ({
-    useListAdminUsers: mockUseListAdminUsers,
-}))
+import { mockUseListAdminUsers } from '@/test/mocks/admin-api'
 
 // Mock SubscriptionOverrideModal
 mock.module('./SubscriptionOverrideModal', () => ({
@@ -24,24 +19,14 @@ mock.module('./SubscriptionOverrideModal', () => ({
         open ? <div data-testid="override-modal">{userEmail}</div> : null,
 }))
 
-// Mock useUserFilters
-mock.module('../hooks/useUserFilters', () => ({
-    useUserFilters: () => ({
-        filters: { search: '', tier: '', page: 1 },
-        setSearch: mock(() => ({})),
-        setTier: mock(() => ({})),
-        setPage: mock(() => ({})),
-        apiParams: {},
-        hasActiveFilters: false,
-    }),
-}))
-
 function wrapper({ children }: { children: ReactNode }) {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     return (
-        <QueryClientProvider client={qc}>
-            {children}
-        </QueryClientProvider>
+        <BrowserRouter>
+            <QueryClientProvider client={qc}>
+                {children}
+            </QueryClientProvider>
+        </BrowserRouter>
     )
 }
 
@@ -79,6 +64,7 @@ const USERS = [
 describe('SubscriptionsPage', () => {
     beforeEach(() => {
         mockUseListAdminUsers.mockClear()
+        window.history.replaceState({}, '', '/')
     })
 
     it('shows loading state initially', () => {

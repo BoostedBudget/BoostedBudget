@@ -8,7 +8,7 @@
 
 CREATE TABLE IF NOT EXISTS categorization_rules (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL,
     name VARCHAR(100) NOT NULL,
     description TEXT,
     enabled BOOLEAN NOT NULL DEFAULT true,
@@ -91,6 +91,9 @@ BEGIN
     END IF;
 END $$;
 
+-- Foreign key constraints (NOT VALID for zero-downtime, then VALIDATE)
+ALTER TABLE categorization_rules ADD CONSTRAINT fk_categorization_rules_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE categorization_rules VALIDATE CONSTRAINT fk_categorization_rules_user_id;
 -- Performance indexes
 CREATE INDEX IF NOT EXISTS idx_cat_rules_user_enabled_priority
     ON categorization_rules(user_id, priority DESC) WHERE enabled = true;
@@ -116,8 +119,8 @@ END $$;
 
 CREATE TABLE IF NOT EXISTS rule_execution_history (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    rule_id UUID NOT NULL REFERENCES categorization_rules(id) ON DELETE CASCADE,
-    transaction_id UUID NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+    rule_id UUID NOT NULL,
+    transaction_id UUID NOT NULL,
     action_type VARCHAR(20) NOT NULL,  -- 'category', 'tags', 'both'
     result VARCHAR(20) NOT NULL,  -- 'applied', 'skipped_manual'
     executed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
@@ -152,6 +155,11 @@ BEGIN
     END IF;
 END $$;
 
+-- Foreign key constraints (NOT VALID for zero-downtime, then VALIDATE)
+ALTER TABLE rule_execution_history ADD CONSTRAINT fk_rule_execution_history_rule_id FOREIGN KEY (rule_id) REFERENCES categorization_rules(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE rule_execution_history VALIDATE CONSTRAINT fk_rule_execution_history_rule_id;
+ALTER TABLE rule_execution_history ADD CONSTRAINT fk_rule_execution_history_transaction_id FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE rule_execution_history VALIDATE CONSTRAINT fk_rule_execution_history_transaction_id;
 -- Indexes for rule execution history
 CREATE INDEX IF NOT EXISTS idx_rule_exec_rule_id ON rule_execution_history(rule_id);
 CREATE INDEX IF NOT EXISTS idx_rule_exec_transaction_id ON rule_execution_history(transaction_id);
