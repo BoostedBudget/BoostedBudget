@@ -18,9 +18,9 @@ type MockAdminUserRepository struct {
 	mock.Mock
 }
 
-func (m *MockAdminUserRepository) UpdateUserTier(ctx context.Context, userID string, tier string, reason string, expiresAt *time.Time) error {
+func (m *MockAdminUserRepository) UpdateUserTier(ctx context.Context, userID string, tier string, reason string, expiresAt *time.Time) (string, error) {
 	args := m.Called(ctx, userID, tier, reason, expiresAt)
-	return args.Error(0)
+	return args.String(0), args.Error(1)
 }
 
 func (m *MockAdminUserRepository) ListUsers(ctx context.Context, filters domain.AdminUserFilters, limit, offset int) ([]domain.AdminUserListItem, int, error) {
@@ -473,8 +473,8 @@ func TestAdminUserService_UpdateUserTier_Success(t *testing.T) {
 	tier := "household_2"
 	reason := "manual override"
 
-	// Using empty clerk_user_id to skip clerk API call
-	mockRepo.On("UpdateUserTier", ctx, userID, tier, reason, (*time.Time)(nil)).Return(nil)
+	// Return empty clerk_user_id to skip Clerk API call (best-effort)
+	mockRepo.On("UpdateUserTier", ctx, userID, tier, reason, (*time.Time)(nil)).Return("", nil)
 
 	err := service.UpdateUserTier(ctx, "", userID, tier, reason, nil)
 	require.NoError(t, err)
@@ -510,7 +510,7 @@ func TestAdminUserService_UpdateUserTier_RepoError(t *testing.T) {
 	reason := "promo"
 	repoErr := errors.New("db down")
 
-	mockRepo.On("UpdateUserTier", ctx, userID, tier, reason, (*time.Time)(nil)).Return(repoErr)
+	mockRepo.On("UpdateUserTier", ctx, userID, tier, reason, (*time.Time)(nil)).Return("", repoErr)
 
 	err := service.UpdateUserTier(ctx, "", userID, tier, reason, nil)
 	assert.ErrorContains(t, err, "failed to update user tier in database: db down")

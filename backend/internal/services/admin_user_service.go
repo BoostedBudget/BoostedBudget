@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/clerk/clerk-sdk-go/v2/user"
@@ -135,7 +136,7 @@ func (s *adminUserService) enrichAdminUser(user *domain.AdminUserListItem) {
 }
 
 // UpdateUserTier manually overrides a user's subscription tier locally and updates Clerk JWT claims.
-func (s *adminUserService) UpdateUserTier(ctx context.Context, clerkUserID, userID, tier, reason string, expiresAt *time.Time) error {
+func (s *adminUserService) UpdateUserTier(ctx context.Context, _, userID, tier, reason string, expiresAt *time.Time) error {
 	// Validate inputs
 	if userID == "" {
 		return ErrUserIDRequired
@@ -147,34 +148,32 @@ func (s *adminUserService) UpdateUserTier(ctx context.Context, clerkUserID, user
 		return errors.New("reason is required")
 	}
 
-	// 1. Update the database via AdminUserRepository
-	err := s.repo.UpdateUserTier(ctx, userID, tier, reason, expiresAt)
+	// 1. Update the database via AdminUserRepository.
+	// The repo returns the target user's clerk_user_id for use in step 2.
+	targetClerkUserID, err := s.repo.UpdateUserTier(ctx, userID, tier, reason, expiresAt)
 	if err != nil {
 		return fmt.Errorf("failed to update user tier in database: %w", err)
 	}
 
-	// 2. Update Clerk publicMetadata to reflect the new tier in JWT claims
-	// Note: the original clerk_user_id is needed to update Clerk
-	if clerkUserID != "" {
-		// We're using the Clerk SDK directly via our injected user getter wouldn't support updates directly in this interface
-		// So we interact with the Clerk user API
-		// Prepare the updated metadata
+	// 2. Update Clerk publicMetadata to reflect the new tier in the target user's JWT claims.
+	if targetClerkUserID != "" {
 		metadata := map[string]interface{}{
 			"tier": tier,
 		}
 		metadataJSON, err := json.Marshal(metadata)
 		if err != nil {
-			return fmt.Errorf("failed to marshal metadata: %w", err)
+			slog.ErrorContext(ctx, "failed to marshal clerk metadata", "user_id", userID, "error", err)
+			return nil
 		}
 		rawMetadata := json.RawMessage(metadataJSON)
 
 		var params user.UpdateParams
 		params.PublicMetadata = &rawMetadata
 
-		_, err = user.Update(ctx, clerkUserID, &params)
+		_, err = user.Update(ctx, targetClerkUserID, &params)
 		if err != nil {
-			// Do not block the request if Clerk fails, but log it
-			return fmt.Errorf("failed to update clerk user metadata: %w", err)
+			// Clerk sync is best-effort: the DB update already succeeded, so log and continue.
+			slog.ErrorContext(ctx, "failed to sync tier to clerk metadata", "clerk_user_id", targetClerkUserID, "tier", tier, "error", err)
 		}
 	}
 
