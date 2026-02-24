@@ -11,8 +11,10 @@ assume_in_transaction = true
 
 # Exclude .down.sql files - rollback migrations NEED DROP TABLE statements
 # Only lint .up.sql files for safety checks
+# Exclude River's third-party generated schema (not our code to modify)
 excluded_paths = [
   "*.down.sql",
+  "*000030_add_river_queue*.sql",
 ]
 
 # Rules to exclude from linting

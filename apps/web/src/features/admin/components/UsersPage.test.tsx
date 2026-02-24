@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { MemoryRouter } from 'react-router-dom'
+import { BrowserRouter } from 'react-router-dom'
 import { mockUseListAdminUsers } from '@/test/mocks/admin-api'
 import { UsersPage } from './UsersPage'
 
@@ -58,7 +58,7 @@ function createWrapper() {
   return function Wrapper({ children }: { children: React.ReactNode }) {
     return (
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter>{children}</MemoryRouter>
+        <BrowserRouter>{children}</BrowserRouter>
       </QueryClientProvider>
     )
   }
@@ -67,6 +67,7 @@ function createWrapper() {
 describe('UsersPage', () => {
   beforeEach(() => {
     mockUseListAdminUsers.mockClear()
+    window.history.replaceState({}, '', '/')
   })
 
   describe('loading state', () => {

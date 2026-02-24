@@ -8,7 +8,7 @@
 
 CREATE TABLE IF NOT EXISTS budgets (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL,
     name VARCHAR(100) NOT NULL,
     description TEXT,
 
@@ -58,6 +58,9 @@ BEGIN
     END IF;
 END $$;
 
+-- Foreign key constraints (NOT VALID for zero-downtime, then VALIDATE)
+ALTER TABLE budgets ADD CONSTRAINT fk_budgets_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE budgets VALIDATE CONSTRAINT fk_budgets_user_id;
 -- Performance indexes for budgets
 CREATE INDEX IF NOT EXISTS idx_budgets_user_id ON budgets(user_id);
 CREATE INDEX IF NOT EXISTS idx_budgets_user_active ON budgets(user_id) WHERE is_active = true;
@@ -82,7 +85,7 @@ END $$;
 
 CREATE TABLE IF NOT EXISTS budget_categories (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    budget_id UUID NOT NULL REFERENCES budgets(id) ON DELETE CASCADE,
+    budget_id UUID NOT NULL,
 
     -- Category matching (JSONB array format matching transactions.category)
     -- Example: ["Food & Drink", "Coffee Shops"] or ["Shopping"]
@@ -130,6 +133,9 @@ BEGIN
     END IF;
 END $$;
 
+-- Foreign key constraints (NOT VALID for zero-downtime, then VALIDATE)
+ALTER TABLE budget_categories ADD CONSTRAINT fk_budget_categories_budget_id FOREIGN KEY (budget_id) REFERENCES budgets(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE budget_categories VALIDATE CONSTRAINT fk_budget_categories_budget_id;
 -- Performance indexes for budget_categories
 CREATE INDEX IF NOT EXISTS idx_budget_categories_budget_id ON budget_categories(budget_id);
 CREATE INDEX IF NOT EXISTS idx_budget_categories_category ON budget_categories USING gin(category);
@@ -153,7 +159,7 @@ END $$;
 
 CREATE TABLE IF NOT EXISTS savings_goals (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL,
     name VARCHAR(100) NOT NULL,
     description TEXT,
 
@@ -164,7 +170,7 @@ CREATE TABLE IF NOT EXISTS savings_goals (
 
     -- Required linked account for automatic balance tracking
     -- See Issue #452 for sync implementation
-    account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    account_id UUID NOT NULL,
 
     -- Timeline
     deadline DATE,  -- Optional target date
@@ -207,6 +213,11 @@ BEGIN
     END IF;
 END $$;
 
+-- Foreign key constraints (NOT VALID for zero-downtime, then VALIDATE)
+ALTER TABLE savings_goals ADD CONSTRAINT fk_savings_goals_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE savings_goals VALIDATE CONSTRAINT fk_savings_goals_user_id;
+ALTER TABLE savings_goals ADD CONSTRAINT fk_savings_goals_account_id FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE savings_goals VALIDATE CONSTRAINT fk_savings_goals_account_id;
 -- Performance indexes for savings_goals
 CREATE INDEX IF NOT EXISTS idx_savings_goals_user_id ON savings_goals(user_id);
 CREATE INDEX IF NOT EXISTS idx_savings_goals_account_id ON savings_goals(account_id);
