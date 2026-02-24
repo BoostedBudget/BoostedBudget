@@ -143,6 +143,48 @@ func (h *AdminHandler) GetUserSubscription(ctx context.Context, input *AdminSubs
 	return resp, nil
 }
 
+// AdminCreateOverrideInput is the request body for creating a per-user resource limit override
+type AdminCreateOverrideInput struct {
+	inputs.AdminAuthenticatedInput
+	UserID string `path:"user_id" doc:"ID of the user to override"`
+	Body   struct {
+		ResourceType string `json:"resource_type" enum:"accounts,automation_rules,syncs_per_day,transaction_history_days" doc:"The resource type to override"`
+		LimitValue   int    `json:"limit_value" doc:"The new limit value (-1 for unlimited)"`
+		Reason       string `json:"reason" required:"true" doc:"Reason for the override"`
+	}
+}
+
+// AdminCreateOverrideOutput is the response body for creating a resource limit override
+type AdminCreateOverrideOutput struct {
+	Body struct {
+		Message string `json:"message"`
+	}
+}
+
+// CreateSubscriptionOverride creates a per-user resource limit override.
+//
+// POST /api/v1/admin/users/{user_id}/subscription/override
+func (h *AdminHandler) CreateSubscriptionOverride(ctx context.Context, input *AdminCreateOverrideInput) (*AdminCreateOverrideOutput, error) {
+	if h.subService == nil {
+		return nil, huma.Error503ServiceUnavailable("subscription service not configured")
+	}
+
+	err := h.subService.ApplyOverride(
+		ctx,
+		input.UserID,
+		domain.ResourceType(input.Body.ResourceType),
+		input.Body.LimitValue,
+		input.Body.Reason,
+	)
+	if err != nil {
+		return nil, huma.Error500InternalServerError("failed to create override", err)
+	}
+
+	resp := &AdminCreateOverrideOutput{}
+	resp.Body.Message = "Subscription override created successfully"
+	return resp, nil
+}
+
 // RegisterAdminSubscriptionsOperations registers the admin user operations
 func RegisterAdminSubscriptionsOperations(api huma.API, handler *AdminHandler) {
 	// PUT /api/v1/admin/users/{user_id}/subscription/tier
@@ -176,4 +218,20 @@ func RegisterAdminSubscriptionsOperations(api huma.API, handler *AdminHandler) {
 			humamiddleware.NewAdminMiddleware(handler.config, handler.adminService),
 		},
 	}, handler.GetUserSubscription)
+
+	// POST /api/v1/admin/users/{user_id}/subscription/override
+	huma.Register(api, huma.Operation{
+		OperationID: "create-admin-subscription-override",
+		Method:      http.MethodPost,
+		Path:        "/api/v1/admin/users/{user_id}/subscription/override",
+		Summary:     "Create subscription resource override",
+		Description: "Create a per-user resource limit override (e.g. linked_accounts, automation_rules). Requires admin privileges.",
+		Tags:        []string{"Admin Subscriptions"},
+		Security: []map[string][]string{
+			{"clerk": {}},
+		},
+		Middlewares: huma.Middlewares{
+			humamiddleware.NewAdminMiddleware(handler.config, handler.adminService),
+		},
+	}, handler.CreateSubscriptionOverride)
 }

@@ -159,6 +159,51 @@ components:
       required:
         - types
       type: object
+    AdminCreateOverrideInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/AdminCreateOverrideInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        limit_value:
+          description: The new limit value (-1 for unlimited)
+          format: int64
+          type: integer
+        reason:
+          description: Reason for the override
+          type: string
+        resource_type:
+          description: The resource type to override
+          enum:
+            - accounts
+            - automation_rules
+            - syncs_per_day
+            - transaction_history_days
+          type: string
+      required:
+        - resource_type
+        - limit_value
+        - reason
+      type: object
+    AdminCreateOverrideOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/AdminCreateOverrideOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        message:
+          type: string
+      required:
+        - message
+      type: object
     AdminSubscriptionDetailOutputBody:
       additionalProperties: false
       properties:
@@ -4057,6 +4102,42 @@ paths:
       security:
         - clerk: []
       summary: Get user subscription details
+      tags:
+        - Admin Subscriptions
+  /api/v1/admin/users/{user_id}/subscription/override:
+    post:
+      description: Create a per-user resource limit override (e.g. linked_accounts, automation_rules). Requires admin privileges.
+      operationId: create-admin-subscription-override
+      parameters:
+        - description: ID of the user to override
+          in: path
+          name: user_id
+          required: true
+          schema:
+            description: ID of the user to override
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminCreateOverrideInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCreateOverrideOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Create subscription resource override
       tags:
         - Admin Subscriptions
   /api/v1/admin/users/{user_id}/subscription/tier:

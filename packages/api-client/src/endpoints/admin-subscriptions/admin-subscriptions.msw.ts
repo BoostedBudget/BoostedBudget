@@ -40,12 +40,15 @@ import type {
 } from 'msw';
 
 import type {
+  AdminCreateOverrideOutputBody,
   AdminSubscriptionDetailOutputBody,
   AdminSubscriptionTierOutputBody
 } from '../../models';
 
 
 export const getGetAdminUserSubscriptionResponseMock = (overrideResponse: Partial< AdminSubscriptionDetailOutputBody > = {}): AdminSubscriptionDetailOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), active_overrides_count: faker.number.int({min: undefined, max: undefined}), base_tier: faker.string.alpha({length: {min: 10, max: 20}}), effective_tier: faker.string.alpha({length: {min: 10, max: 20}}), features: {ads_enabled: faker.datatype.boolean(), advanced_reports: faker.datatype.boolean(), ai_insights: faker.datatype.boolean(), api_access: faker.datatype.boolean(), custom_categories: faker.datatype.boolean(), custom_tags: faker.datatype.boolean(), priority_support: faker.datatype.boolean()}, limits: {accounts: faker.number.int({min: undefined, max: undefined}), executions_per_day: faker.number.int({min: undefined, max: undefined}), transaction_history_days: faker.number.int({min: undefined, max: undefined})}, manual_tier_ends_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), manual_tier_override: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), resource_overrides: faker.helpers.arrayElement([Array.from({ length: faker.number.int({ min: 1, max: 10 }) }, (_, i) => i + 1).map(() => ({created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), id: faker.number.int({min: undefined, max: undefined}), limit_value: faker.number.int({min: undefined, max: undefined}), reason: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), resource_type: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user_id: faker.string.alpha({length: {min: 10, max: 20}})})), null]), subscription_status: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+
+export const getCreateAdminSubscriptionOverrideResponseMock = (overrideResponse: Partial< AdminCreateOverrideOutputBody > = {}): AdminCreateOverrideOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), message: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
 export const getUpdateAdminUserTierResponseMock = (overrideResponse: Partial< AdminSubscriptionTierOutputBody > = {}): AdminSubscriptionTierOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), message: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
@@ -56,6 +59,18 @@ export const getGetAdminUserSubscriptionMockHandler = (overrideResponse?: AdminS
     return new HttpResponse(JSON.stringify(overrideResponse !== undefined
     ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
     : getGetAdminUserSubscriptionResponseMock()),
+      { status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      })
+  }, options)
+}
+
+export const getCreateAdminSubscriptionOverrideMockHandler = (overrideResponse?: AdminCreateOverrideOutputBody | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<AdminCreateOverrideOutputBody> | AdminCreateOverrideOutputBody), options?: RequestHandlerOptions) => {
+  return http.post('*/api/v1/admin/users/:userId/subscription/override', async (info) => {await delay(500);
+  
+    return new HttpResponse(JSON.stringify(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getCreateAdminSubscriptionOverrideResponseMock()),
       { status: 200,
         headers: { 'Content-Type': 'application/json' }
       })
@@ -75,5 +90,6 @@ export const getUpdateAdminUserTierMockHandler = (overrideResponse?: AdminSubscr
 }
 export const getAdminSubscriptionsMock = () => [
   getGetAdminUserSubscriptionMockHandler(),
+  getCreateAdminSubscriptionOverrideMockHandler(),
   getUpdateAdminUserTierMockHandler()
 ]

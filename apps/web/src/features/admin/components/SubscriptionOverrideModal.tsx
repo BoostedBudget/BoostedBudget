@@ -6,7 +6,7 @@
  * set a reason, and optionally set an expiration date for the override.
  */
 
-import { useState, useEffect } from 'react'
+import { useState, useMemo } from 'react'
 import { toast } from 'sonner'
 import {
     Dialog,
@@ -60,32 +60,42 @@ export interface SubscriptionOverrideModalProps {
     onClose: () => void
 }
 
-export function SubscriptionOverrideModal({
+export function SubscriptionOverrideModal(props: SubscriptionOverrideModalProps) {
+    const { data: sub, isLoading } = useAdminSubscriptionDetail(props.userId)
+    // Use sub as key so the inner form resets its state when subscription data loads
+    return <SubscriptionOverrideForm {...props} sub={sub} isLoading={isLoading} key={sub ? 'loaded' : 'loading'} />
+}
+
+function SubscriptionOverrideForm({
     userId,
     userEmail,
     open,
     onClose,
-}: SubscriptionOverrideModalProps) {
-    const { data: sub, isLoading } = useAdminSubscriptionDetail(userId)
+    sub,
+    isLoading,
+}: SubscriptionOverrideModalProps & {
+    sub: ReturnType<typeof useAdminSubscriptionDetail>['data']
+    isLoading: boolean
+}) {
     const { mutate: updateTier, isPending: isSaving } = useUpdateUserTier(userId ?? '')
 
-    // Form state
-    const [selectedTier, setSelectedTier] = useState('')
-    const [reason, setReason] = useState('')
-    const [expiresAt, setExpiresAt] = useState('')
+    // Derive initial form values from loaded subscription data
+    const initialTier = useMemo(
+        () => sub?.manual_tier_override ?? sub?.effective_tier ?? '',
+        [sub]
+    )
+    const initialExpiresAt = useMemo(
+        () =>
+            sub?.manual_tier_ends_at
+                ? new Date(sub.manual_tier_ends_at).toISOString().slice(0, 16)
+                : '',
+        [sub]
+    )
 
-    // Populate form when subscription data loads
-    useEffect(() => {
-        if (sub) {
-            setSelectedTier(sub.manual_tier_override ?? sub.effective_tier ?? '')
-            setReason('')
-            setExpiresAt(
-                sub.manual_tier_ends_at
-                    ? new Date(sub.manual_tier_ends_at).toISOString().slice(0, 16) // datetime-local format
-                    : ''
-            )
-        }
-    }, [sub])
+    // Form state initialized from derived values
+    const [selectedTier, setSelectedTier] = useState(initialTier)
+    const [reason, setReason] = useState('')
+    const [expiresAt, setExpiresAt] = useState(initialExpiresAt)
 
     function handleSubmit() {
         if (!userId || !selectedTier || !reason.trim()) return
@@ -102,7 +112,7 @@ export function SubscriptionOverrideModal({
                         | 'household_4'
                         | 'household_5',
                     reason: reason.trim(),
-                    expires_at: expiresAt ? new Date(expiresAt).toISOString() : undefined,
+                    expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
                 },
             },
             {

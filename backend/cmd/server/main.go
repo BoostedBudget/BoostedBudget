@@ -165,8 +165,8 @@ func main() {
 		privacyService := services.NewPrivacyService(privacyRepo)
 		transactionService := services.NewTransactionService(transactionRepo)
 		registrationService := services.NewRegistrationService(profileRepo, identityRepo, privacyRepo, auditLogger, db)
-		// Note: Passing nil for override repo - not yet implemented
-		subscriptionService := services.NewSubscriptionService(tierConfig, nil)
+		subscriptionOverrideRepo := repository.NewSubscriptionOverrideRepository(db)
+		subscriptionService := services.NewSubscriptionService(tierConfig, subscriptionOverrideRepo)
 		// Issue #242: Monthly sync limits service
 		syncLimitService := services.NewSyncLimitService(syncAuditRepo, profileRepo, subscriptionService)
 		// Issue #353: Dashboard service for balance tracking

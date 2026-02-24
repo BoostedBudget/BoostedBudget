@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -120,7 +121,8 @@ func (r *adminUserRepository) GetUserDetail(ctx context.Context, userID string) 
 		       COALESCE(r.count, 0) as automation_rules_count,
 		       COALESCE(ref.count, 0) as referrals_count,
 		       COALESCE(t.count, 0) as transactions_count,
-		       COALESCE(b.count, 0) as budgets_count
+		       COALESCE(b.count, 0) as budgets_count,
+		       u.manual_tier_override, u.manual_tier_ends_at
 		FROM users u
 		LEFT JOIN (
 			SELECT user_id, COUNT(*) as count
@@ -167,6 +169,8 @@ func (r *adminUserRepository) GetUserDetail(ctx context.Context, userID string) 
 		&detail.ReferralsCount,
 		&detail.TransactionsCount,
 		&detail.BudgetsCount,
+		&detail.ManualTierOverride,
+		&detail.ManualTierEndsAt,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -208,11 +212,18 @@ func (r *adminUserRepository) UpdateUserTier(ctx context.Context, userID string,
 		VALUES ($1, 'update_manual_tier', 'user', $1, $2)
 	`
 
-	detailsStr := fmt.Sprintf(`{"tier": "%s", "reason": "%s"`, tier, reason)
-	if expiresAt != nil {
-		detailsStr += fmt.Sprintf(`, "expires_at": "%s"`, expiresAt.Format("2006-01-02T15:04:05Z"))
+	detailsMap := map[string]interface{}{
+		"tier":   tier,
+		"reason": reason,
 	}
-	detailsStr += "}"
+	if expiresAt != nil {
+		detailsMap["expires_at"] = expiresAt.Format("2006-01-02T15:04:05Z")
+	}
+	detailsBytes, err := json.Marshal(detailsMap)
+	if err != nil {
+		return fmt.Errorf("failed to marshal audit details: %w", err)
+	}
+	detailsStr := string(detailsBytes)
 
 	_, err = tx.Exec(ctx, auditQuery, userID, detailsStr)
 	if err != nil {

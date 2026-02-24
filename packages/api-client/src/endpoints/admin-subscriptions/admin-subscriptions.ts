@@ -46,6 +46,8 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
+  AdminCreateOverrideInputBody,
+  AdminCreateOverrideOutputBody,
   AdminSubscriptionDetailOutputBody,
   AdminSubscriptionTierInputBody,
   AdminSubscriptionTierOutputBody,
@@ -179,6 +181,71 @@ export function useGetAdminUserSubscription<TData = Awaited<ReturnType<typeof ge
 
 
 /**
+ * Create a per-user resource limit override (e.g. linked_accounts, automation_rules). Requires admin privileges.
+ * @summary Create subscription resource override
+ */
+export const createAdminSubscriptionOverride = (
+    userId: string,
+    adminCreateOverrideInputBody: BodyType<NonReadonly<AdminCreateOverrideInputBody>>,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+      
+      
+      return customInstance<AdminCreateOverrideOutputBody>(
+      {url: `/api/v1/admin/users/${userId}/subscription/override`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: adminCreateOverrideInputBody, signal
+    },
+      options);
+    }
+  
+
+
+export const getCreateAdminSubscriptionOverrideMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createAdminSubscriptionOverride>>, TError,{userId: string;data: BodyType<NonReadonly<AdminCreateOverrideInputBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof createAdminSubscriptionOverride>>, TError,{userId: string;data: BodyType<NonReadonly<AdminCreateOverrideInputBody>>}, TContext> => {
+
+const mutationKey = ['createAdminSubscriptionOverride'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createAdminSubscriptionOverride>>, {userId: string;data: BodyType<NonReadonly<AdminCreateOverrideInputBody>>}> = (props) => {
+          const {userId,data} = props ?? {};
+
+          return  createAdminSubscriptionOverride(userId,data,requestOptions)
+        }
+
+
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateAdminSubscriptionOverrideMutationResult = NonNullable<Awaited<ReturnType<typeof createAdminSubscriptionOverride>>>
+    export type CreateAdminSubscriptionOverrideMutationBody = BodyType<NonReadonly<AdminCreateOverrideInputBody>>
+    export type CreateAdminSubscriptionOverrideMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Create subscription resource override
+ */
+export const useCreateAdminSubscriptionOverride = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createAdminSubscriptionOverride>>, TError,{userId: string;data: BodyType<NonReadonly<AdminCreateOverrideInputBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof createAdminSubscriptionOverride>>,
+        TError,
+        {userId: string;data: BodyType<NonReadonly<AdminCreateOverrideInputBody>>},
+        TContext
+      > => {
+      return useMutation(getCreateAdminSubscriptionOverrideMutationOptions(options), queryClient);
+    }
+    /**
  * Manually override a user's subscription tier. Requires admin privileges.
  * @summary Update user subscription tier
  */
