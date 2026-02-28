@@ -4,6 +4,9 @@
   "workspaces": {
     "": {
       "name": "boostedbudget",
+      "dependencies": {
+        "plotly.js-basic-dist": "^3.4.0",
+      },
       "devDependencies": {
         "turbo": "^2.8.10",
       },
