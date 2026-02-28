@@ -167,9 +167,9 @@ export function SubscriptionsPage() {
                                         </td>
                                         <td>
                                             <span
-                                                className={`subscriptions-page__tier-badge subscriptions-page__tier-badge--${user.subscription_tier}`}
+                                                className={`subscriptions-page__tier-badge subscriptions-page__tier-badge--${user.manual_tier_override ?? user.subscription_tier}`}
                                             >
-                                                {TIER_DISPLAY[user.subscription_tier] ?? user.subscription_tier}
+                                                {TIER_DISPLAY[user.manual_tier_override ?? user.subscription_tier] ?? user.manual_tier_override ?? user.subscription_tier}
                                             </span>
                                         </td>
                                         <td>
