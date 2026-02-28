@@ -16,5 +16,8 @@
   },
   "overrides": {
     "minimatch": "^10.2.2"
+  },
+  "dependencies": {
+    "plotly.js-basic-dist": "^3.4.0"
   }
 }
