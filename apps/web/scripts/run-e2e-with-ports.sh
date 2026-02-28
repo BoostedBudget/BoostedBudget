@@ -117,6 +117,8 @@ echo ""
 echo "🧪 Starting E2E tests..."
 echo ""
 
-# Run Playwright tests directly (not via npm to avoid circular dependency)
+# Run Playwright tests via bunx (not npx) to use Bun's module resolution.
+# npx uses Node.js realpath caching which creates dual @playwright/test instances
+# in Bun's symlink-based node_modules/.bun/ layout.
 # Scenario tests are excluded via testIgnore in playwright.config.ts (not E2E_SCENARIOS_MODE)
-npx playwright test "$@"
+bunx playwright test "$@"
