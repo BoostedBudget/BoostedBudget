@@ -12,6 +12,7 @@ import {
     useUpdateAdminUserTier,
     useCreateAdminSubscriptionOverride,
 } from '@boostedbudget/api-client/endpoints/admin-subscriptions/admin-subscriptions'
+import { getListAdminUsersQueryKey } from '@boostedbudget/api-client/endpoints/admin/admin'
 import type { AdminSubscriptionDetailOutputBody } from '@boostedbudget/api-client/models'
 
 export type { AdminSubscriptionDetailOutputBody }
@@ -33,6 +34,10 @@ export function useUpdateUserTier(userId: string) {
                 // Invalidate the subscription detail so it refetches
                 queryClient.invalidateQueries({
                     queryKey: getGetAdminUserSubscriptionQueryKey(userId),
+                })
+                // Also invalidate the user list so tier badges update immediately
+                queryClient.invalidateQueries({
+                    queryKey: getListAdminUsersQueryKey(),
                 })
             },
         },

@@ -18,7 +18,7 @@ type AdminSubscriptionTierInput struct {
 	inputs.AdminAuthenticatedInput
 	UserID string `path:"user_id" doc:"ID of the user to update"`
 	Body   struct {
-		Tier      string     `json:"tier" enum:"trial,premium,household_2,household_3,household_4,household_5" doc:"The subscription tier to set"`
+		Tier      string     `json:"tier" enum:"premium,household_2,household_3,household_4,household_5" doc:"The subscription tier to set"`
 		Reason    string     `json:"reason" required:"true" doc:"Reason for the manual tier override"`
 		ExpiresAt *time.Time `json:"expires_at" doc:"Optional expiration date for the manual override"`
 	}

@@ -51,6 +51,7 @@ func (r *adminUserRepository) ListUsers(ctx context.Context, filters domain.Admi
 	// Main query with counts via subqueries
 	query := fmt.Sprintf(`
 		SELECT u.id, u.email, u.subscription_tier, u.subscription_status,
+		       u.manual_tier_override,
 		       u.primary_region, u.created_at, u.last_login_at, u.is_active,
 		       COALESCE(la.count, 0) as linked_accounts_count,
 		       COALESCE(r.count, 0) as automation_rules_count,
@@ -92,6 +93,7 @@ func (r *adminUserRepository) ListUsers(ctx context.Context, filters domain.Admi
 			&user.Email,
 			&user.SubscriptionTier,
 			&user.SubscriptionStatus,
+			&user.ManualTierOverride,
 			&user.PrimaryRegion,
 			&user.CreatedAt,
 			&user.LastLoginAt,

@@ -34,7 +34,6 @@ export type AdminSubscriptionTierInputBodyTier = typeof AdminSubscriptionTierInp
 
 
 export const AdminSubscriptionTierInputBodyTier = {
-  trial: 'trial',
   premium: 'premium',
   household_2: 'household_2',
   household_3: 'household_3',

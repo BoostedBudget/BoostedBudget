@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -11,8 +12,8 @@ import (
 
 // SubscriptionService handles subscription tier management and limit enforcement
 type SubscriptionService struct {
-	tierConfig     *config.TierConfig
-	overrideRepo   repository.SubscriptionOverrideRepository
+	tierConfig   *config.TierConfig
+	overrideRepo repository.SubscriptionOverrideRepository
 }
 
 // NewSubscriptionService creates a new subscription service
@@ -78,8 +79,16 @@ func (s *SubscriptionService) GetEffectiveSubscription(
 	ctx context.Context,
 	user *domain.User,
 ) (*domain.EffectiveSubscription, error) {
-	// Get base tier configuration
+	// Determine the effective tier: manual override takes precedence if set and not expired
 	tierName := domain.TierName(user.SubscriptionTier)
+	if user.ManualTierOverride != nil && *user.ManualTierOverride != "" {
+		expired := user.ManualTierEndsAt != nil && user.ManualTierEndsAt.Before(time.Now())
+		if !expired {
+			tierName = domain.TierName(*user.ManualTierOverride)
+		}
+	}
+
+	// Get tier configuration for the effective tier
 	tier, err := s.GetTier(ctx, tierName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get tier for user: %w", err)

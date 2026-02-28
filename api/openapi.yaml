@@ -269,7 +269,6 @@ components:
         tier:
           description: The subscription tier to set
           enum:
-            - trial
             - premium
             - household_2
             - household_3
@@ -384,6 +383,8 @@ components:
         linked_accounts_count:
           format: int64
           type: integer
+        manual_tier_override:
+          type: string
         primary_region:
           type: string
         referrals_count:
