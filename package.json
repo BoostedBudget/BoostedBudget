@@ -17,10 +17,6 @@
   "overrides": {
     "minimatch": ">=10.2.3",
     "rollup": ">=4.59.0",
-    "markdown-it": ">=14.1.1",
-    "ajv": ">=8.18.0"
-  },
-  "dependencies": {
-    "plotly.js-basic-dist": "^3.4.0"
+    "markdown-it": ">=14.1.1"
   }
 }
