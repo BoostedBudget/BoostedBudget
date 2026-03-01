@@ -27,6 +27,11 @@ type Config struct {
 	ClerkSecretKey      string
 	ClerkPublishableKey string
 
+	// QA Auth Bypass (QA/Staging only - never set in production)
+	QABypassSecret       string
+	QAAdminClerkUserID   string
+	QAPremiumClerkUserID string
+
 	// Plaid
 	PlaidClientID    string
 	PlaidSecret      string
@@ -78,6 +83,11 @@ func Load() (*Config, error) {
 		// Clerk
 		ClerkSecretKey:      getEnv("CLERK_SECRET_KEY", ""),
 		ClerkPublishableKey: getEnv("CLERK_PUBLISHABLE_KEY", ""),
+
+		// QA Auth Bypass
+		QABypassSecret:       getEnv("QA_BYPASS_SECRET", ""),
+		QAAdminClerkUserID:   getEnv("QA_ADMIN_CLERK_USER_ID", ""),
+		QAPremiumClerkUserID: getEnv("QA_PREMIUM_CLERK_USER_ID", ""),
 
 		// Plaid
 		PlaidClientID:    getEnv("PLAID_CLIENT_ID", ""),
