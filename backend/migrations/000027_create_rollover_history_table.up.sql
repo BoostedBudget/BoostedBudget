@@ -19,12 +19,12 @@
 
 CREATE TABLE rollover_history (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    budget_id UUID NOT NULL REFERENCES budgets(id) ON DELETE CASCADE,
-    rule_id UUID REFERENCES rules(id) ON DELETE SET NULL,
-    rule_execution_id UUID REFERENCES rule_executions(id) ON DELETE SET NULL,
-    source_budget_category_id UUID NOT NULL REFERENCES budget_categories(id) ON DELETE CASCADE,
-    target_budget_category_id UUID REFERENCES budget_categories(id) ON DELETE SET NULL, -- NULL = to unallocated
+    user_id UUID NOT NULL,
+    budget_id UUID NOT NULL,
+    rule_id UUID,
+    rule_execution_id UUID,
+    source_budget_category_id UUID NOT NULL,
+    target_budget_category_id UUID, -- NULL = to unallocated
     amount DECIMAL(15,2) NOT NULL CHECK (amount > 0),
     rollover_type VARCHAR(20) NOT NULL CHECK (rollover_type IN ('full', 'capped', 'percentage')),
     budget_period_start TIMESTAMPTZ NOT NULL,
@@ -37,6 +37,19 @@ CREATE TABLE rollover_history (
     CONSTRAINT rollover_period_valid CHECK (budget_period_end > budget_period_start)
 );
 
+-- Foreign key constraints (NOT VALID for zero-downtime, then VALIDATE)
+ALTER TABLE rollover_history ADD CONSTRAINT fk_rollover_history_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE rollover_history VALIDATE CONSTRAINT fk_rollover_history_user_id;
+ALTER TABLE rollover_history ADD CONSTRAINT fk_rollover_history_budget_id FOREIGN KEY (budget_id) REFERENCES budgets(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE rollover_history VALIDATE CONSTRAINT fk_rollover_history_budget_id;
+ALTER TABLE rollover_history ADD CONSTRAINT fk_rollover_history_rule_id FOREIGN KEY (rule_id) REFERENCES rules(id) ON DELETE SET NULL NOT VALID;
+ALTER TABLE rollover_history VALIDATE CONSTRAINT fk_rollover_history_rule_id;
+ALTER TABLE rollover_history ADD CONSTRAINT fk_rollover_history_rule_execution_id FOREIGN KEY (rule_execution_id) REFERENCES rule_executions(id) ON DELETE SET NULL NOT VALID;
+ALTER TABLE rollover_history VALIDATE CONSTRAINT fk_rollover_history_rule_execution_id;
+ALTER TABLE rollover_history ADD CONSTRAINT fk_rollover_history_source_budget_category_id FOREIGN KEY (source_budget_category_id) REFERENCES budget_categories(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE rollover_history VALIDATE CONSTRAINT fk_rollover_history_source_budget_category_id;
+ALTER TABLE rollover_history ADD CONSTRAINT fk_rollover_history_target_budget_category_id FOREIGN KEY (target_budget_category_id) REFERENCES budget_categories(id) ON DELETE SET NULL NOT VALID;
+ALTER TABLE rollover_history VALIDATE CONSTRAINT fk_rollover_history_target_budget_category_id;
 -- Index for user's rollover history (ordered by date, most recent first)
 CREATE INDEX idx_rollover_history_user_id ON rollover_history(user_id, created_at DESC);
 

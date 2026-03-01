@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS privacy_settings (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
     -- Foreign key to users table
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL,
 
     -- GDPR Cookie Consent
     gdpr_necessary_consent BOOLEAN NOT NULL DEFAULT TRUE,
@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS privacy_settings (
     -- Ensure one privacy settings record per user
     CONSTRAINT unique_user_privacy_settings UNIQUE(user_id)
 );
+-- Foreign key constraints (NOT VALID for zero-downtime, then VALIDATE)
+ALTER TABLE privacy_settings ADD CONSTRAINT fk_privacy_settings_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE privacy_settings VALIDATE CONSTRAINT fk_privacy_settings_user_id;
 -- Indexes
 CREATE INDEX idx_privacy_settings_user_id ON privacy_settings(user_id);
 CREATE INDEX idx_privacy_settings_gdpr_consent ON privacy_settings(gdpr_consent_timestamp);

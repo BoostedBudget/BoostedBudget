@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -222,6 +223,97 @@ func TestInvalidTier(t *testing.T) {
 
 	_, err = service.GetTier(ctx, domain.TierName("invalid_tier"))
 	assert.Error(t, err, "Should return error for invalid tier")
+}
+
+// TestGetEffectiveSubscription_ManualOverrideTakesPrecedence tests that a non-expired manual override
+// overrides the base tier when computing the effective subscription.
+func TestGetEffectiveSubscription_ManualOverrideTakesPrecedence(t *testing.T) {
+	tierConfig, err := config.LoadTierConfig()
+	require.NoError(t, err)
+
+	service := NewSubscriptionService(tierConfig, nil)
+	ctx := context.Background()
+
+	overrideTier := string(domain.TierHousehold5)
+	futureExpiry := time.Now().Add(30 * 24 * time.Hour)
+	user := &domain.User{
+		ID:                 "user-123",
+		SubscriptionTier:   string(domain.TierPremium),
+		ManualTierOverride: &overrideTier,
+		ManualTierEndsAt:   &futureExpiry,
+	}
+
+	effective, err := service.GetEffectiveSubscription(ctx, user)
+	require.NoError(t, err)
+	assert.Equal(t, domain.TierHousehold5, effective.Tier, "Override tier should take precedence over base tier")
+	assert.Equal(t, 150, effective.Limits.Accounts, "Should use household_5 account limits")
+}
+
+// TestGetEffectiveSubscription_ExpiredOverrideFallsBackToBase tests that an expired manual override
+// falls back to the base subscription tier.
+func TestGetEffectiveSubscription_ExpiredOverrideFallsBackToBase(t *testing.T) {
+	tierConfig, err := config.LoadTierConfig()
+	require.NoError(t, err)
+
+	service := NewSubscriptionService(tierConfig, nil)
+	ctx := context.Background()
+
+	overrideTier := string(domain.TierHousehold5)
+	pastExpiry := time.Now().Add(-24 * time.Hour)
+	user := &domain.User{
+		ID:                 "user-123",
+		SubscriptionTier:   string(domain.TierPremium),
+		ManualTierOverride: &overrideTier,
+		ManualTierEndsAt:   &pastExpiry,
+	}
+
+	effective, err := service.GetEffectiveSubscription(ctx, user)
+	require.NoError(t, err)
+	assert.Equal(t, domain.TierPremium, effective.Tier, "Expired override should fall back to base tier")
+	assert.Equal(t, 30, effective.Limits.Accounts, "Should use base premium account limits")
+}
+
+// TestGetEffectiveSubscription_NilOverrideUsesBaseTier tests that a nil ManualTierOverride
+// means the base tier is used.
+func TestGetEffectiveSubscription_NilOverrideUsesBaseTier(t *testing.T) {
+	tierConfig, err := config.LoadTierConfig()
+	require.NoError(t, err)
+
+	service := NewSubscriptionService(tierConfig, nil)
+	ctx := context.Background()
+
+	user := &domain.User{
+		ID:                 "user-123",
+		SubscriptionTier:   string(domain.TierPremium),
+		ManualTierOverride: nil,
+	}
+
+	effective, err := service.GetEffectiveSubscription(ctx, user)
+	require.NoError(t, err)
+	assert.Equal(t, domain.TierPremium, effective.Tier, "Nil override should use base tier")
+}
+
+// TestGetEffectiveSubscription_PermanentOverride tests that a nil ManualTierEndsAt means
+// the override never expires (permanent override).
+func TestGetEffectiveSubscription_PermanentOverride(t *testing.T) {
+	tierConfig, err := config.LoadTierConfig()
+	require.NoError(t, err)
+
+	service := NewSubscriptionService(tierConfig, nil)
+	ctx := context.Background()
+
+	overrideTier := string(domain.TierHousehold5)
+	user := &domain.User{
+		ID:                 "user-123",
+		SubscriptionTier:   string(domain.TierPremium),
+		ManualTierOverride: &overrideTier,
+		ManualTierEndsAt:   nil, // nil = permanent (never expires)
+	}
+
+	effective, err := service.GetEffectiveSubscription(ctx, user)
+	require.NoError(t, err)
+	assert.Equal(t, domain.TierHousehold5, effective.Tier, "Permanent override (nil expiry) should always apply")
+	assert.Equal(t, 150, effective.Limits.Accounts, "Should use household_5 account limits for permanent override")
 }
 
 // TestCheckLimit_AllResourceTypes tests all resource types

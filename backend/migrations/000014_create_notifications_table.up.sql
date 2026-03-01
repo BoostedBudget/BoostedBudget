@@ -20,7 +20,7 @@
 
 CREATE TABLE notifications (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL,
     type VARCHAR(50) NOT NULL
         CHECK (type IN ('item_error', 'login_required', 'pending_expiration', 'permission_revoked', 'transaction_sync')),
     title VARCHAR(255) NOT NULL,
@@ -34,6 +34,9 @@ CREATE TABLE notifications (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Foreign key constraints (NOT VALID for zero-downtime, then VALIDATE)
+ALTER TABLE notifications ADD CONSTRAINT fk_notifications_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE notifications VALIDATE CONSTRAINT fk_notifications_user_id;
 -- Create indexes for efficient querying
 -- Index for user's notification feed (ordered by date, most recent first)
 CREATE INDEX idx_notifications_user_id ON notifications(user_id, created_at DESC);

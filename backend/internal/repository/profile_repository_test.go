@@ -35,7 +35,6 @@ func TestGetUserByClerkID_Success(t *testing.T) {
 	userID := uuid.New().String()
 	now := time.Now()
 
-	// Issue #679, #680: Added trial columns (trial_started_at, trial_ends_at, had_trial)
 	rows := pgxmock.NewRows([]string{
 		"id", "clerk_user_id", "email", "email_verified",
 		"subscription_tier", "subscription_status", "subscription_started_at", "subscription_ends_at",
@@ -43,6 +42,7 @@ func TestGetUserByClerkID_Success(t *testing.T) {
 		"paddle_customer_id", "paddle_subscription_id", "primary_region", "is_active", "is_deleted",
 		"deletion_requested_at", "deletion_scheduled_at",
 		"created_at", "updated_at", "last_login_at",
+		"manual_tier_override", "manual_tier_ends_at",
 	}).AddRow(
 		userID, clerkUserID, "test@example.com", true,
 		"free", "active", nil, nil,
@@ -50,9 +50,10 @@ func TestGetUserByClerkID_Success(t *testing.T) {
 		nil, nil, "iad", true, false,
 		nil, nil,
 		now, now, &now,
+		nil, nil,
 	)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at FROM users WHERE clerk_user_id = $1 AND is_deleted = FALSE`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at FROM users WHERE clerk_user_id = $1 AND is_deleted = FALSE`)).
 		WithArgs(clerkUserID).
 		WillReturnRows(rows)
 
@@ -79,7 +80,7 @@ func TestGetUserByClerkID_NotFound(t *testing.T) {
 	clerkUserID := "user_nonexistent"
 
 	// Issue #679, #680: Updated query to include trial columns
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at FROM users WHERE clerk_user_id = $1 AND is_deleted = FALSE`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at FROM users WHERE clerk_user_id = $1 AND is_deleted = FALSE`)).
 		WithArgs(clerkUserID).
 		WillReturnError(pgx.ErrNoRows)
 
@@ -103,7 +104,6 @@ func TestGetUserByID_Success(t *testing.T) {
 	clerkUserID := "user_507f1f77bcf86cd799439011"
 	now := time.Now()
 
-	// Issue #679, #680: Added trial columns (trial_started_at, trial_ends_at, had_trial)
 	rows := pgxmock.NewRows([]string{
 		"id", "clerk_user_id", "email", "email_verified",
 		"subscription_tier", "subscription_status", "subscription_started_at", "subscription_ends_at",
@@ -111,6 +111,7 @@ func TestGetUserByID_Success(t *testing.T) {
 		"paddle_customer_id", "paddle_subscription_id", "primary_region", "is_active", "is_deleted",
 		"deletion_requested_at", "deletion_scheduled_at",
 		"created_at", "updated_at", "last_login_at",
+		"manual_tier_override", "manual_tier_ends_at",
 	}).AddRow(
 		userID, clerkUserID, "test@example.com", true,
 		"premium", "active", &now, nil,
@@ -118,9 +119,10 @@ func TestGetUserByID_Success(t *testing.T) {
 		stringPtr("cus_ABC123"), nil, "iad", true, false,
 		nil, nil,
 		now, now, &now,
+		nil, nil,
 	)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at FROM users WHERE id = $1 AND is_deleted = FALSE`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at FROM users WHERE id = $1 AND is_deleted = FALSE`)).
 		WithArgs(userID).
 		WillReturnRows(rows)
 
@@ -146,7 +148,7 @@ func TestGetUserByID_NotFound(t *testing.T) {
 	userID := uuid.New().String()
 
 	// Issue #679, #680: Updated query to include trial columns
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at FROM users WHERE id = $1 AND is_deleted = FALSE`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at FROM users WHERE id = $1 AND is_deleted = FALSE`)).
 		WithArgs(userID).
 		WillReturnError(pgx.ErrNoRows)
 
@@ -375,6 +377,93 @@ func stringPtr(s string) *string {
 	return &s
 }
 
+// TestGetUserByClerkID_WithManualOverride tests that manual_tier_override is returned
+func TestGetUserByClerkID_WithManualOverride(t *testing.T) {
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	clerkUserID := "user_507f1f77bcf86cd799439011"
+	userID := uuid.New().String()
+	now := time.Now()
+	override := "household_2"
+
+	rows := pgxmock.NewRows([]string{
+		"id", "clerk_user_id", "email", "email_verified",
+		"subscription_tier", "subscription_status", "subscription_started_at", "subscription_ends_at",
+		"trial_started_at", "trial_ends_at", "had_trial",
+		"paddle_customer_id", "paddle_subscription_id", "primary_region", "is_active", "is_deleted",
+		"deletion_requested_at", "deletion_scheduled_at",
+		"created_at", "updated_at", "last_login_at",
+		"manual_tier_override", "manual_tier_ends_at",
+	}).AddRow(
+		userID, clerkUserID, "test@example.com", true,
+		"premium", "trial", nil, nil,
+		nil, nil, false,
+		nil, nil, "iad", true, false,
+		nil, nil,
+		now, now, &now,
+		&override, nil,
+	)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at FROM users WHERE clerk_user_id = $1 AND is_deleted = FALSE`)).
+		WithArgs(clerkUserID).
+		WillReturnRows(rows)
+
+	user, err := repo.GetUserByClerkID(ctx, clerkUserID)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, user)
+	assert.NotNil(t, user.ManualTierOverride)
+	assert.Equal(t, "household_2", *user.ManualTierOverride)
+	assert.Nil(t, user.ManualTierEndsAt)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetUserByID_WithManualOverride tests that manual_tier_override is returned by ID lookup
+func TestGetUserByID_WithManualOverride(t *testing.T) {
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	clerkUserID := "user_507f1f77bcf86cd799439011"
+	now := time.Now()
+	override := "household_3"
+	overrideEndsAt := now.Add(30 * 24 * time.Hour)
+
+	rows := pgxmock.NewRows([]string{
+		"id", "clerk_user_id", "email", "email_verified",
+		"subscription_tier", "subscription_status", "subscription_started_at", "subscription_ends_at",
+		"trial_started_at", "trial_ends_at", "had_trial",
+		"paddle_customer_id", "paddle_subscription_id", "primary_region", "is_active", "is_deleted",
+		"deletion_requested_at", "deletion_scheduled_at",
+		"created_at", "updated_at", "last_login_at",
+		"manual_tier_override", "manual_tier_ends_at",
+	}).AddRow(
+		userID, clerkUserID, "test@example.com", true,
+		"premium", "active", &now, nil,
+		nil, nil, false,
+		nil, nil, "iad", true, false,
+		nil, nil,
+		now, now, &now,
+		&override, &overrideEndsAt,
+	)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at FROM users WHERE id = $1 AND is_deleted = FALSE`)).
+		WithArgs(userID).
+		WillReturnRows(rows)
+
+	user, err := repo.GetUserByID(ctx, userID)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, user)
+	assert.NotNil(t, user.ManualTierOverride)
+	assert.Equal(t, "household_3", *user.ManualTierOverride)
+	assert.NotNil(t, user.ManualTierEndsAt)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // TestGetUserByPaddleSubscriptionID_Success tests successful retrieval by subscription ID
 func TestGetUserByPaddleSubscriptionID_Success(t *testing.T) {
 	mock, repo := setupMockDB(t)
@@ -393,6 +482,7 @@ func TestGetUserByPaddleSubscriptionID_Success(t *testing.T) {
 		"is_active", "is_deleted",
 		"deletion_requested_at", "deletion_scheduled_at",
 		"created_at", "updated_at", "last_login_at",
+		"manual_tier_override", "manual_tier_ends_at",
 	}).AddRow(
 		userID, "clerk_123", "test@example.com", true,
 		"premium", "active", &now, nil,
@@ -401,9 +491,10 @@ func TestGetUserByPaddleSubscriptionID_Success(t *testing.T) {
 		true, false,
 		nil, nil,
 		now, now, &now,
+		nil, nil,
 	)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at FROM users WHERE paddle_subscription_id = $1 AND is_deleted = FALSE`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at FROM users WHERE paddle_subscription_id = $1 AND is_deleted = FALSE`)).
 		WithArgs(subscriptionID).
 		WillReturnRows(rows)
 
@@ -427,7 +518,7 @@ func TestGetUserByPaddleSubscriptionID_NotFound(t *testing.T) {
 	ctx := context.Background()
 	subscriptionID := "sub_nonexistent"
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at FROM users WHERE paddle_subscription_id = $1 AND is_deleted = FALSE`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at FROM users WHERE paddle_subscription_id = $1 AND is_deleted = FALSE`)).
 		WithArgs(subscriptionID).
 		WillReturnError(pgx.ErrNoRows)
 

@@ -299,7 +299,6 @@ function App() {
             >
               <Route index element={<AdminDashboardPage />} />
               <Route path="users" element={<UsersPage />} />
-              <Route path="subscriptions" element={<ComingSoon title="Subscriptions" />} />
               <Route path="health" element={<HealthDashboardPage />} />
               <Route path="webhooks" element={<ComingSoon title="Webhooks" />} />
             </Route>
@@ -315,7 +314,7 @@ function App() {
 
       <CookieConsent onConsentChange={handleConsentChange} />
       <Toaster position="bottom-right" richColors />
-      </div>
+    </div>
   )
 }
 

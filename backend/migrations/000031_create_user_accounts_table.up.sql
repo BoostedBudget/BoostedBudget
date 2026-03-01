@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS user_accounts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
     -- Foreign key to users (required)
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL,
 
     -- Matching criteria for re-link detection
     -- These fields identify a unique real-world bank account
@@ -45,7 +45,13 @@ CREATE TABLE IF NOT EXISTS user_accounts (
 );
 
 -- =============================================================================
--- Step 2: Add Unique Constraint for Re-Link Matching (Idempotent)
+-- Step 2: Add Foreign Key Constraints
+-- =============================================================================
+ALTER TABLE user_accounts ADD CONSTRAINT fk_user_accounts_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE user_accounts VALIDATE CONSTRAINT fk_user_accounts_user_id;
+
+-- =============================================================================
+-- Step 3: Add Unique Constraint for Re-Link Matching (Idempotent)
 -- =============================================================================
 
 -- Unique constraint: one user_account per (user, institution, mask)
@@ -64,7 +70,7 @@ BEGIN
 END $$;
 
 -- =============================================================================
--- Step 3: Add Constraints (Idempotent)
+-- Step 4: Add Constraints (Idempotent)
 -- =============================================================================
 
 -- Add check constraint for hex color format
@@ -112,7 +118,7 @@ BEGIN
 END $$;
 
 -- =============================================================================
--- Step 4: Create Indexes for Performance
+-- Step 5: Create Indexes for Performance
 -- =============================================================================
 
 -- Index for user lookups (most common query pattern)
@@ -132,7 +138,7 @@ CREATE INDEX IF NOT EXISTS idx_user_accounts_display_order
     ON user_accounts(user_id, display_order NULLS LAST);
 
 -- =============================================================================
--- Step 5: Add Column Comments for Documentation
+-- Step 6: Add Column Comments for Documentation
 -- =============================================================================
 
 COMMENT ON TABLE user_accounts IS 'Stable account abstraction that survives Plaid Item re-links. Groups multiple Plaid account_ids representing the same real-world bank account.';

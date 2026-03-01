@@ -5,8 +5,8 @@ CREATE TABLE IF NOT EXISTS accounts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
     -- Foreign keys
-    linked_item_id UUID NOT NULL REFERENCES linked_items(id) ON DELETE CASCADE,
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    linked_item_id UUID NOT NULL,
+    user_id UUID NOT NULL,
 
     -- Plaid account information
     plaid_account_id VARCHAR(255) NOT NULL,
@@ -30,6 +30,11 @@ CREATE TABLE IF NOT EXISTS accounts (
     CONSTRAINT valid_account_type CHECK (type IN ('depository', 'credit', 'loan', 'investment', 'other'))
 );
 
+-- Foreign key constraints (NOT VALID for zero-downtime, then VALIDATE)
+ALTER TABLE accounts ADD CONSTRAINT fk_accounts_linked_item_id FOREIGN KEY (linked_item_id) REFERENCES linked_items(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE accounts VALIDATE CONSTRAINT fk_accounts_linked_item_id;
+ALTER TABLE accounts ADD CONSTRAINT fk_accounts_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE accounts VALIDATE CONSTRAINT fk_accounts_user_id;
 -- Indexes for performance
 CREATE INDEX idx_accounts_user_id ON accounts(user_id);
 CREATE INDEX idx_accounts_linked_item_id ON accounts(linked_item_id);

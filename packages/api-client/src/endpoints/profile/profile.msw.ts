@@ -47,6 +47,10 @@ export const getGetUserProfileResponseMock = (
     faker.date.past().toISOString().slice(0, 19) + "Z",
     undefined,
   ]),
+  effective_tier: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   email: faker.string.alpha({ length: { min: 10, max: 20 } }),
   email_verified: faker.datatype.boolean(),
   had_trial: faker.datatype.boolean(),
@@ -55,6 +59,14 @@ export const getGetUserProfileResponseMock = (
   is_deleted: faker.datatype.boolean(),
   last_login_at: faker.helpers.arrayElement([
     faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  manual_tier_ends_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  manual_tier_override: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
   paddle_customer_id: faker.helpers.arrayElement([
@@ -106,6 +118,10 @@ export const getUpdateUserProfileResponseMock = (
     faker.date.past().toISOString().slice(0, 19) + "Z",
     undefined,
   ]),
+  effective_tier: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   email: faker.string.alpha({ length: { min: 10, max: 20 } }),
   email_verified: faker.datatype.boolean(),
   had_trial: faker.datatype.boolean(),
@@ -114,6 +130,14 @@ export const getUpdateUserProfileResponseMock = (
   is_deleted: faker.datatype.boolean(),
   last_login_at: faker.helpers.arrayElement([
     faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  manual_tier_ends_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  manual_tier_override: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
   paddle_customer_id: faker.helpers.arrayElement([

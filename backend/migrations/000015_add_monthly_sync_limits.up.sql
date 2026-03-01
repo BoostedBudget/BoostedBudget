@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS account_sync_audit (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
     -- References
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL,
     account_id UUID,  -- Can be NULL after account deletion (audit trail persists)
     plaid_account_id VARCHAR(255) NOT NULL,  -- Immutable tracking identifier
 
@@ -53,7 +53,13 @@ CREATE TABLE IF NOT EXISTS account_sync_audit (
 );
 
 -- =============================================================================
--- Step 2: Create Indexes for Fast Limit Checks
+-- Step 2: Add Foreign Key Constraints
+-- =============================================================================
+ALTER TABLE account_sync_audit ADD CONSTRAINT fk_account_sync_audit_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE account_sync_audit VALIDATE CONSTRAINT fk_account_sync_audit_user_id;
+
+-- =============================================================================
+-- Step 3: Create Indexes for Fast Limit Checks
 -- =============================================================================
 
 -- Index for counting syncs this month (most common query)
@@ -73,7 +79,7 @@ CREATE INDEX IF NOT EXISTS idx_sync_audit_tier
     ON account_sync_audit(tier_at_sync, sync_month);
 
 -- =============================================================================
--- Step 3: Add Optional Tracking Columns to accounts Table
+-- Step 4: Add Optional Tracking Columns to accounts Table
 -- =============================================================================
 -- These columns are optional for quick display in UI ("Last synced: Nov 3")
 -- The source of truth is account_sync_audit table
@@ -111,7 +117,7 @@ CREATE INDEX IF NOT EXISTS idx_accounts_last_synced_month
     WHERE last_synced_month IS NOT NULL;
 
 -- =============================================================================
--- Step 4: Add Column Comments for Documentation
+-- Step 5: Add Column Comments for Documentation
 -- =============================================================================
 
 COMMENT ON TABLE account_sync_audit IS 'Tracks monthly transaction syncs to enforce tier-based sync limits and prevent account cycling abuse';

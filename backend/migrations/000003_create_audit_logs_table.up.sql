@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
     -- User who performed the action
-    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    user_id UUID,
     -- NULL if system action or user deleted
 
     -- Action details
@@ -39,6 +39,9 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     -- Constraints
     CONSTRAINT valid_status CHECK (status IN ('success', 'failure', 'error'))
 );
+-- Foreign key constraints (NOT VALID for zero-downtime, then VALIDATE)
+ALTER TABLE audit_logs ADD CONSTRAINT fk_audit_logs_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL NOT VALID;
+ALTER TABLE audit_logs VALIDATE CONSTRAINT fk_audit_logs_user_id;
 -- Indexes for common queries
 CREATE INDEX idx_audit_logs_user_id ON audit_logs(user_id);
 CREATE INDEX idx_audit_logs_action ON audit_logs(action);

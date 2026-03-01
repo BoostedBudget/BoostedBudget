@@ -34,6 +34,7 @@ export interface User {
   created_at: string;
   deletion_requested_at?: string;
   deletion_scheduled_at?: string;
+  effective_tier?: string;
   email: string;
   email_verified: boolean;
   had_trial: boolean;
@@ -41,6 +42,8 @@ export interface User {
   is_active: boolean;
   is_deleted: boolean;
   last_login_at?: string;
+  manual_tier_ends_at?: string;
+  manual_tier_override?: string;
   paddle_customer_id?: string;
   paddle_subscription_id?: string;
   primary_region: string;

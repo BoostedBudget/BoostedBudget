@@ -11,7 +11,7 @@
 -- Create user_identities table
 CREATE TABLE user_identities (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL,
     auth0_user_id VARCHAR(255) NOT NULL UNIQUE,  -- e.g., 'google-oauth2|123456'
     provider VARCHAR(50) NOT NULL,                -- e.g., 'google-oauth2', 'microsoft', 'apple'
     provider_user_id VARCHAR(255) NOT NULL,       -- e.g., '123456' (extracted from auth0_user_id)
@@ -27,6 +27,9 @@ CREATE TABLE user_identities (
     CONSTRAINT valid_provider CHECK (provider IN ('google-oauth2', 'microsoft', 'apple', 'github', 'auth0'))
 );
 
+-- Foreign key constraints (NOT VALID for zero-downtime, then VALIDATE)
+ALTER TABLE user_identities ADD CONSTRAINT fk_user_identities_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE user_identities VALIDATE CONSTRAINT fk_user_identities_user_id;
 -- Performance indexes
 CREATE INDEX idx_user_identities_user_id ON user_identities(user_id);              -- Lookup all identities for a user
 CREATE INDEX idx_user_identities_auth0_user_id ON user_identities(auth0_user_id);  -- Auth0 ID -> user lookup (hot path)

@@ -10,7 +10,7 @@
 
 CREATE TABLE IF NOT EXISTS rules (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL,
 
     -- Rule identification and metadata
     name VARCHAR(100) NOT NULL,
@@ -76,6 +76,9 @@ BEGIN
     END IF;
 END $$;
 
+-- Foreign key constraints (NOT VALID for zero-downtime, then VALIDATE)
+ALTER TABLE rules ADD CONSTRAINT fk_rules_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE rules VALIDATE CONSTRAINT fk_rules_user_id;
 -- Performance indexes for rules table
 CREATE INDEX IF NOT EXISTS idx_rules_user_id ON rules(user_id);
 CREATE INDEX IF NOT EXISTS idx_rules_user_enabled_priority
@@ -107,7 +110,7 @@ END $$;
 
 CREATE TABLE IF NOT EXISTS rule_executions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    rule_id UUID NOT NULL REFERENCES rules(id) ON DELETE CASCADE,
+    rule_id UUID NOT NULL,
 
     -- Execution status and timing
     status VARCHAR(20) NOT NULL DEFAULT 'pending',  -- 'pending', 'running', 'completed', 'failed'
@@ -146,6 +149,9 @@ BEGIN
     END IF;
 END $$;
 
+-- Foreign key constraints (NOT VALID for zero-downtime, then VALIDATE)
+ALTER TABLE rule_executions ADD CONSTRAINT fk_rule_executions_rule_id FOREIGN KEY (rule_id) REFERENCES rules(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE rule_executions VALIDATE CONSTRAINT fk_rule_executions_rule_id;
 -- Performance indexes for rule_executions table
 CREATE INDEX IF NOT EXISTS idx_rule_executions_rule_id ON rule_executions(rule_id);
 CREATE INDEX IF NOT EXISTS idx_rule_executions_started_at ON rule_executions(started_at DESC);
@@ -165,16 +171,16 @@ CREATE INDEX IF NOT EXISTS idx_rule_executions_pending
 
 CREATE TABLE IF NOT EXISTS transfer_suggestions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL,
 
     -- Rule reference (nullable - suggestions can be manual or from rules)
     -- SET NULL on rule/execution delete to preserve historical suggestions
-    rule_id UUID REFERENCES rules(id) ON DELETE SET NULL,
-    rule_execution_id UUID REFERENCES rule_executions(id) ON DELETE SET NULL,
+    rule_id UUID,
+    rule_execution_id UUID,
 
     -- Accounts involved (SET NULL on account delete to preserve history)
-    from_account_id UUID REFERENCES accounts(id) ON DELETE SET NULL,
-    to_account_id UUID REFERENCES accounts(id) ON DELETE SET NULL,
+    from_account_id UUID,
+    to_account_id UUID,
 
     -- Transfer details
     amount DECIMAL(15,2) NOT NULL,
@@ -236,6 +242,17 @@ BEGIN
     END IF;
 END $$;
 
+-- Foreign key constraints (NOT VALID for zero-downtime, then VALIDATE)
+ALTER TABLE transfer_suggestions ADD CONSTRAINT fk_transfer_suggestions_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE transfer_suggestions VALIDATE CONSTRAINT fk_transfer_suggestions_user_id;
+ALTER TABLE transfer_suggestions ADD CONSTRAINT fk_transfer_suggestions_rule_id FOREIGN KEY (rule_id) REFERENCES rules(id) ON DELETE SET NULL NOT VALID;
+ALTER TABLE transfer_suggestions VALIDATE CONSTRAINT fk_transfer_suggestions_rule_id;
+ALTER TABLE transfer_suggestions ADD CONSTRAINT fk_transfer_suggestions_rule_execution_id FOREIGN KEY (rule_execution_id) REFERENCES rule_executions(id) ON DELETE SET NULL NOT VALID;
+ALTER TABLE transfer_suggestions VALIDATE CONSTRAINT fk_transfer_suggestions_rule_execution_id;
+ALTER TABLE transfer_suggestions ADD CONSTRAINT fk_transfer_suggestions_from_account_id FOREIGN KEY (from_account_id) REFERENCES accounts(id) ON DELETE SET NULL NOT VALID;
+ALTER TABLE transfer_suggestions VALIDATE CONSTRAINT fk_transfer_suggestions_from_account_id;
+ALTER TABLE transfer_suggestions ADD CONSTRAINT fk_transfer_suggestions_to_account_id FOREIGN KEY (to_account_id) REFERENCES accounts(id) ON DELETE SET NULL NOT VALID;
+ALTER TABLE transfer_suggestions VALIDATE CONSTRAINT fk_transfer_suggestions_to_account_id;
 -- Performance indexes for transfer_suggestions table
 CREATE INDEX IF NOT EXISTS idx_transfer_sugg_user_id ON transfer_suggestions(user_id);
 CREATE INDEX IF NOT EXISTS idx_transfer_sugg_rule_id ON transfer_suggestions(rule_id);

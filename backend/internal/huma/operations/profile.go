@@ -75,9 +75,10 @@ func (h *ProfileHandler) UpdateProfile(ctx context.Context, input *UpdateProfile
 	return &UpdateProfileOutput{Body: h.enrichUserProfile(user)}, nil
 }
 
-// enrichUserProfile computes trial days remaining for the user profile.
+// enrichUserProfile computes derived fields for the user profile response.
 func (h *ProfileHandler) enrichUserProfile(user *domain.User) *domain.User {
 	user.ComputeTrialDaysRemaining()
+	user.EffectiveTier = user.ComputeEffectiveTier()
 	return user
 }
 

@@ -8,14 +8,13 @@ CREATE TABLE IF NOT EXISTS user_subscription_overrides (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    -- Foreign key to users table
-    CONSTRAINT fk_user_subscription_overrides_user
-        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-
     -- Unique constraint: one override per user per resource type
     CONSTRAINT unique_user_resource_override
         UNIQUE (user_id, resource_type)
 );
+-- Foreign key constraints (NOT VALID for zero-downtime, then VALIDATE)
+ALTER TABLE user_subscription_overrides ADD CONSTRAINT fk_user_subscription_overrides_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE user_subscription_overrides VALIDATE CONSTRAINT fk_user_subscription_overrides_user;
 -- Indexes for performance
 CREATE INDEX idx_user_subscription_overrides_user_id
     ON user_subscription_overrides(user_id);

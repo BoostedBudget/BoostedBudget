@@ -37,7 +37,12 @@ export { EnvironmentBadge } from './components/EnvironmentBadge'
 export { UsersPage } from './components/UsersPage'
 export { UserDetailModal } from './components/UserDetailModal'
 export { HealthDashboardPage } from './components/HealthDashboardPage'
+export { SubscriptionOverrideModal } from './components/SubscriptionOverrideModal'
 
 // Hooks for user management (Issue #644)
 export { useUserFilters } from './hooks/useUserFilters'
 export type { UseUserFiltersResult, UserFilters } from './hooks/useUserFilters'
+
+// Hooks for subscription management (Issue #646)
+export { useAdminSubscriptionDetail, useUpdateUserTier, useCreateOverride } from './hooks/useAdminSubscription'
+export type { AdminSubscriptionDetailOutputBody } from './hooks/useAdminSubscription'

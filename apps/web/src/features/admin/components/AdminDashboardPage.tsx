@@ -1,4 +1,4 @@
-import { Users, CreditCard, Activity, AlertTriangle, Search, BarChart3, Wrench } from 'lucide-react'
+import { Users, CreditCard, Activity, AlertTriangle, Search, Wrench } from 'lucide-react'
 import { useEnvironment } from '../hooks/useEnvironment'
 import { SummaryCard } from './SummaryCard'
 import { QuickActionLink } from './QuickActionLink'
@@ -51,12 +51,6 @@ export function AdminDashboardPage() {
             label="Manage Users"
             description="View and manage user accounts"
             icon={<Search size={20} />}
-          />
-          <QuickActionLink
-            to={ADMIN_ROUTES.SUBSCRIPTIONS}
-            label="View Subscriptions"
-            description="Manage subscription tiers and billing"
-            icon={<BarChart3 size={20} />}
           />
           <QuickActionLink
             to={ADMIN_ROUTES.HEALTH}

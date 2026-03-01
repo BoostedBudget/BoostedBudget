@@ -4,8 +4,8 @@
 
 CREATE TABLE IF NOT EXISTS balance_snapshots (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    account_id UUID NOT NULL,
+    user_id UUID NOT NULL,
     current_balance DECIMAL(15,2),
     available_balance DECIMAL(15,2),
     currency_code VARCHAR(3) DEFAULT 'USD' NOT NULL,
@@ -17,6 +17,11 @@ CREATE TABLE IF NOT EXISTS balance_snapshots (
     CONSTRAINT unique_account_date UNIQUE (account_id, snapshot_date)
 );
 
+-- Foreign key constraints (NOT VALID for zero-downtime, then VALIDATE)
+ALTER TABLE balance_snapshots ADD CONSTRAINT fk_balance_snapshots_account_id FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE balance_snapshots VALIDATE CONSTRAINT fk_balance_snapshots_account_id;
+ALTER TABLE balance_snapshots ADD CONSTRAINT fk_balance_snapshots_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE balance_snapshots VALIDATE CONSTRAINT fk_balance_snapshots_user_id;
 -- Indexes for fast querying
 CREATE INDEX IF NOT EXISTS idx_balance_snapshots_account_id ON balance_snapshots(account_id);
 CREATE INDEX IF NOT EXISTS idx_balance_snapshots_user_id ON balance_snapshots(user_id);

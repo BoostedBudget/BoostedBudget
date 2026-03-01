@@ -619,7 +619,7 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 
 		out := &GetCurrentSubscriptionOutput{}
 		out.Body.Status = "trial"
-		out.Body.Tier = user.SubscriptionTier
+		out.Body.Tier = user.ComputeEffectiveTier()
 		out.Body.Amount = "0.00"
 		out.Body.Currency = "USD"
 		out.Body.TrialDaysRemaining = user.TrialDaysRemaining
@@ -654,7 +654,7 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 	out := &GetCurrentSubscriptionOutput{}
 	out.Body.SubscriptionID = subscription.ID
 	out.Body.Status = string(subscription.Status)
-	out.Body.Tier = user.SubscriptionTier
+	out.Body.Tier = user.ComputeEffectiveTier()
 	out.Body.BillingInterval = string(subscription.BillingCycle.Interval)
 	out.Body.CurrentPeriodEnd = subscription.CurrentBillingPeriod.EndsAt
 	out.Body.NextBillingDate = subscription.CurrentBillingPeriod.EndsAt
