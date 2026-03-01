@@ -383,6 +383,9 @@ components:
         linked_accounts_count:
           format: int64
           type: integer
+        manual_tier_ends_at:
+          format: date-time
+          type: string
         manual_tier_override:
           type: string
         primary_region:
