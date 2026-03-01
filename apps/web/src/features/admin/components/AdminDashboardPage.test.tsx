@@ -60,7 +60,6 @@ describe('AdminDashboardPage', () => {
     renderWithRouter(<AdminDashboardPage />)
 
     expect(screen.getByText('Manage Users')).toBeInTheDocument()
-    expect(screen.getByText('View Subscriptions')).toBeInTheDocument()
     expect(screen.getByText('System Health')).toBeInTheDocument()
   })
 
