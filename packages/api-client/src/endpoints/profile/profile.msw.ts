@@ -57,6 +57,14 @@ export const getGetUserProfileResponseMock = (
     faker.date.past().toISOString().slice(0, 19) + "Z",
     undefined,
   ]),
+  manual_tier_ends_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  manual_tier_override: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   paddle_customer_id: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
@@ -114,6 +122,14 @@ export const getUpdateUserProfileResponseMock = (
   is_deleted: faker.datatype.boolean(),
   last_login_at: faker.helpers.arrayElement([
     faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  manual_tier_ends_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  manual_tier_override: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
   paddle_customer_id: faker.helpers.arrayElement([

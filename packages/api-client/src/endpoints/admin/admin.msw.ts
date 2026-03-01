@@ -140,6 +140,10 @@ export const getListAdminUsersResponseMock = (
         undefined,
       ]),
       linked_accounts_count: faker.number.int(),
+      manual_tier_override: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       primary_region: faker.string.alpha({ length: { min: 10, max: 20 } }),
       referrals_count: faker.number.int(),
       subscription_status: faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -166,6 +170,14 @@ export const getGetAdminUserDetailResponseMock = (
     undefined,
   ]),
   linked_accounts_count: faker.number.int(),
+  manual_tier_ends_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  manual_tier_override: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   primary_region: faker.string.alpha({ length: { min: 10, max: 20 } }),
   referrals_count: faker.number.int(),
   subscription_status: faker.string.alpha({ length: { min: 10, max: 20 } }),
