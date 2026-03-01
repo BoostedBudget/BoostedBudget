@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS paddle_transactions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
     -- User association
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL,
 
     -- Paddle identifiers
     transaction_id VARCHAR(255) NOT NULL UNIQUE, -- Paddle transaction ID (e.g., txn_01h...)
@@ -33,6 +33,9 @@ CREATE TABLE IF NOT EXISTS paddle_transactions (
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Foreign key constraints (NOT VALID for zero-downtime, then VALIDATE)
+ALTER TABLE paddle_transactions ADD CONSTRAINT fk_paddle_transactions_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE paddle_transactions VALIDATE CONSTRAINT fk_paddle_transactions_user_id;
 -- Indexes for efficient querying
 CREATE INDEX idx_paddle_transactions_user_id ON paddle_transactions(user_id);
 CREATE INDEX idx_paddle_transactions_transaction_id ON paddle_transactions(transaction_id);

@@ -41,7 +41,7 @@ CREATE INDEX IF NOT EXISTS idx_transactions_tags ON transactions USING gin(tags)
 
 CREATE TABLE IF NOT EXISTS user_tags (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL,
     name VARCHAR(100) NOT NULL,
     color VARCHAR(7), -- Hex color like #FF5733
     usage_count INT DEFAULT 0,
@@ -52,6 +52,9 @@ CREATE TABLE IF NOT EXISTS user_tags (
     CONSTRAINT unique_user_tag_name UNIQUE(user_id, name)
 );
 
+-- Foreign key constraints (NOT VALID for zero-downtime, then VALIDATE)
+ALTER TABLE user_tags ADD CONSTRAINT fk_user_tags_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE user_tags VALIDATE CONSTRAINT fk_user_tags_user_id;
 -- Indexes for user_tags
 CREATE INDEX IF NOT EXISTS idx_user_tags_user_id ON user_tags(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_tags_name ON user_tags(user_id, name);
@@ -75,7 +78,7 @@ END $$;
 
 CREATE TABLE IF NOT EXISTS custom_categories (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL,
     name VARCHAR(100) NOT NULL,
     parent_category VARCHAR(100), -- Maps to Plaid parent category
     icon VARCHAR(50),
@@ -88,6 +91,9 @@ CREATE TABLE IF NOT EXISTS custom_categories (
     CONSTRAINT unique_user_category_name UNIQUE(user_id, name)
 );
 
+-- Foreign key constraints (NOT VALID for zero-downtime, then VALIDATE)
+ALTER TABLE custom_categories ADD CONSTRAINT fk_custom_categories_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE NOT VALID;
+ALTER TABLE custom_categories VALIDATE CONSTRAINT fk_custom_categories_user_id;
 -- Indexes for custom_categories
 CREATE INDEX IF NOT EXISTS idx_custom_categories_user_id ON custom_categories(user_id);
 CREATE INDEX IF NOT EXISTS idx_custom_categories_name ON custom_categories(user_id, name);

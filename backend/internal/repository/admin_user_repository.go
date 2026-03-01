@@ -2,8 +2,10 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -16,6 +18,10 @@ type AdminUserRepository interface {
 
 	// GetUserDetail returns detailed user information with full statistics
 	GetUserDetail(ctx context.Context, userID string) (*domain.AdminUserDetail, error)
+
+	// UpdateUserTier manually overrides a user's subscription tier, with an optional expiration.
+	// Returns the target user's clerk_user_id so the caller can sync Clerk metadata.
+	UpdateUserTier(ctx context.Context, userID string, tier string, reason string, expiresAt *time.Time) (string, error)
 }
 
 // adminUserRepository implements AdminUserRepository using PostgreSQL
@@ -45,7 +51,8 @@ func (r *adminUserRepository) ListUsers(ctx context.Context, filters domain.Admi
 	// Main query with counts via subqueries
 	query := fmt.Sprintf(`
 		SELECT u.id, u.email, u.subscription_tier, u.subscription_status,
-		       u.primary_region, u.created_at, u.last_login_at, u.is_active,
+		       u.manual_tier_override, u.manual_tier_ends_at, u.primary_region,
+		       u.created_at, u.last_login_at, u.is_active,
 		       COALESCE(la.count, 0) as linked_accounts_count,
 		       COALESCE(r.count, 0) as automation_rules_count,
 		       COALESCE(ref.count, 0) as referrals_count
@@ -86,6 +93,8 @@ func (r *adminUserRepository) ListUsers(ctx context.Context, filters domain.Admi
 			&user.Email,
 			&user.SubscriptionTier,
 			&user.SubscriptionStatus,
+			&user.ManualTierOverride,
+			&user.ManualTierEndsAt,
 			&user.PrimaryRegion,
 			&user.CreatedAt,
 			&user.LastLoginAt,
@@ -111,7 +120,8 @@ func (r *adminUserRepository) ListUsers(ctx context.Context, filters domain.Admi
 func (r *adminUserRepository) GetUserDetail(ctx context.Context, userID string) (*domain.AdminUserDetail, error) {
 	query := `
 		SELECT u.id, u.email, u.subscription_tier, u.subscription_status,
-		       u.primary_region, u.created_at, u.last_login_at, u.is_active,
+		       u.manual_tier_override, u.manual_tier_ends_at, u.primary_region,
+		       u.created_at, u.last_login_at, u.is_active,
 		       COALESCE(la.count, 0) as linked_accounts_count,
 		       COALESCE(r.count, 0) as automation_rules_count,
 		       COALESCE(ref.count, 0) as referrals_count,
@@ -154,6 +164,8 @@ func (r *adminUserRepository) GetUserDetail(ctx context.Context, userID string) 
 		&detail.Email,
 		&detail.SubscriptionTier,
 		&detail.SubscriptionStatus,
+		&detail.ManualTierOverride,
+		&detail.ManualTierEndsAt,
 		&detail.PrimaryRegion,
 		&detail.CreatedAt,
 		&detail.LastLoginAt,
@@ -173,6 +185,60 @@ func (r *adminUserRepository) GetUserDetail(ctx context.Context, userID string) 
 	}
 
 	return &detail, nil
+}
+
+// UpdateUserTier updates the manual tier override fields inside the users table and creates an audit log.
+// Returns the target user's clerk_user_id so the caller can sync Clerk metadata for the correct user.
+func (r *adminUserRepository) UpdateUserTier(ctx context.Context, userID string, tier string, reason string, expiresAt *time.Time) (string, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Update the user table and retrieve clerk_user_id for the Clerk metadata sync
+	updateQuery := `
+		UPDATE users 
+		SET manual_tier_override = $1, manual_tier_ends_at = $2, updated_at = NOW() 
+		WHERE id = $3 AND is_deleted = FALSE
+		RETURNING clerk_user_id
+	`
+	var clerkUserID string
+	err = tx.QueryRow(ctx, updateQuery, tier, expiresAt, userID).Scan(&clerkUserID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrUserNotFound
+		}
+		return "", fmt.Errorf("failed to update user tier: %w", err)
+	}
+
+	// Insert into audit_logs using the correct column names
+	auditQuery := `
+		INSERT INTO audit_logs (user_id, action, resource_type, resource_id, changes)
+		VALUES ($1, 'update_manual_tier', 'user', $1, $2)
+	`
+
+	detailsMap := map[string]interface{}{
+		"tier":   tier,
+		"reason": reason,
+	}
+	if expiresAt != nil {
+		detailsMap["expires_at"] = expiresAt.Format("2006-01-02T15:04:05Z")
+	}
+	detailsBytes, err := json.Marshal(detailsMap)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal audit details: %w", err)
+	}
+
+	_, err = tx.Exec(ctx, auditQuery, userID, detailsBytes)
+	if err != nil {
+		return "", fmt.Errorf("failed to create audit log: %w", err)
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	return clerkUserID, nil
 }
 
 // buildFilterClause constructs the WHERE clause and arguments for admin user filters.

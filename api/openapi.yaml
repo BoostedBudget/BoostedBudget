@@ -159,6 +159,142 @@ components:
       required:
         - types
       type: object
+    AdminCreateOverrideInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/AdminCreateOverrideInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        limit_value:
+          description: The new limit value (-1 for unlimited)
+          format: int64
+          type: integer
+        reason:
+          description: Reason for the override
+          type: string
+        resource_type:
+          description: The resource type to override
+          enum:
+            - accounts
+            - automation_rules
+            - syncs_per_day
+            - transaction_history_days
+          type: string
+      required:
+        - resource_type
+        - limit_value
+        - reason
+      type: object
+    AdminCreateOverrideOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/AdminCreateOverrideOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        message:
+          type: string
+      required:
+        - message
+      type: object
+    AdminSubscriptionDetailOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/AdminSubscriptionDetailOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        active_overrides_count:
+          format: int64
+          type: integer
+        base_tier:
+          type: string
+        effective_tier:
+          type: string
+        features:
+          $ref: "#/components/schemas/SubscriptionFeatures"
+        limits:
+          $ref: "#/components/schemas/SubscriptionLimits"
+        manual_tier_ends_at:
+          format: date-time
+          type: string
+        manual_tier_override:
+          type: string
+        resource_overrides:
+          items:
+            $ref: "#/components/schemas/UserSubscriptionOverride"
+          type:
+            - array
+            - "null"
+        subscription_status:
+          type: string
+      required:
+        - base_tier
+        - subscription_status
+        - effective_tier
+        - limits
+        - features
+        - active_overrides_count
+        - resource_overrides
+      type: object
+    AdminSubscriptionTierInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/AdminSubscriptionTierInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        expires_at:
+          description: Optional expiration date for the manual override
+          format: date-time
+          type:
+            - string
+            - "null"
+        reason:
+          description: Reason for the manual tier override
+          type: string
+        tier:
+          description: The subscription tier to set
+          enum:
+            - premium
+            - household_2
+            - household_3
+            - household_4
+            - household_5
+          type: string
+      required:
+        - tier
+        - reason
+        - expires_at
+      type: object
+    AdminSubscriptionTierOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/AdminSubscriptionTierOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        message:
+          type: string
+      required:
+        - message
+      type: object
     AdminUserDetail:
       additionalProperties: false
       properties:
@@ -192,6 +328,11 @@ components:
         linked_accounts_count:
           format: int64
           type: integer
+        manual_tier_ends_at:
+          format: date-time
+          type: string
+        manual_tier_override:
+          type: string
         primary_region:
           type: string
         referrals_count:
@@ -242,6 +383,11 @@ components:
         linked_accounts_count:
           format: int64
           type: integer
+        manual_tier_ends_at:
+          format: date-time
+          type: string
+        manual_tier_override:
+          type: string
         primary_region:
           type: string
         referrals_count:
@@ -3314,6 +3460,8 @@ components:
         deletion_scheduled_at:
           format: date-time
           type: string
+        effective_tier:
+          type: string
         email:
           type: string
         email_verified:
@@ -3328,6 +3476,11 @@ components:
           type: boolean
         last_login_at:
           format: date-time
+          type: string
+        manual_tier_ends_at:
+          format: date-time
+          type: string
+        manual_tier_override:
           type: string
         paddle_customer_id:
           type: string
@@ -3419,6 +3572,38 @@ components:
         - user_id
         - institution_id
         - is_hidden
+        - created_at
+        - updated_at
+      type: object
+    UserSubscriptionOverride:
+      additionalProperties: false
+      properties:
+        created_at:
+          format: date-time
+          type: string
+        expires_at:
+          format: date-time
+          type: string
+        id:
+          format: int64
+          type: integer
+        limit_value:
+          format: int64
+          type: integer
+        reason:
+          type: string
+        resource_type:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+        user_id:
+          type: string
+      required:
+        - id
+        - user_id
+        - resource_type
+        - limit_value
         - created_at
         - updated_at
       type: object
@@ -3895,6 +4080,108 @@ paths:
       summary: Get user details (admin)
       tags:
         - Admin
+  /api/v1/admin/users/{user_id}/subscription:
+    get:
+      description: View a user's subscription tier, manual overrides, and effective limits.
+      operationId: get-admin-user-subscription
+      parameters:
+        - description: ID of the user to fetch
+          in: path
+          name: user_id
+          required: true
+          schema:
+            description: ID of the user to fetch
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminSubscriptionDetailOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get user subscription details
+      tags:
+        - Admin Subscriptions
+  /api/v1/admin/users/{user_id}/subscription/override:
+    post:
+      description: Create a per-user resource limit override (e.g. linked_accounts, automation_rules). Requires admin privileges.
+      operationId: create-admin-subscription-override
+      parameters:
+        - description: ID of the user to override
+          in: path
+          name: user_id
+          required: true
+          schema:
+            description: ID of the user to override
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminCreateOverrideInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCreateOverrideOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Create subscription resource override
+      tags:
+        - Admin Subscriptions
+  /api/v1/admin/users/{user_id}/subscription/tier:
+    put:
+      description: Manually override a user's subscription tier. Requires admin privileges.
+      operationId: update-admin-user-tier
+      parameters:
+        - description: ID of the user to update
+          in: path
+          name: user_id
+          required: true
+          schema:
+            description: ID of the user to update
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminSubscriptionTierInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminSubscriptionTierOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Update user subscription tier
+      tags:
+        - Admin Subscriptions
   /api/v1/analytics/cash-flow-history:
     get:
       description: Returns time series cash flow data grouped by period for charts.

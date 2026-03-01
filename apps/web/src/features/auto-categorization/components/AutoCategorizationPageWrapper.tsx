@@ -47,8 +47,8 @@ export function AutoCategorizationPageWrapper() {
   const accounts = accountsData?.accounts ?? []
   const tags = (userTagsData as unknown as UserTag[]) ?? []
 
-  // All tiers now have unlimited rules
-  const userTier = user?.subscription_tier ?? 'premium'
+  // Get user's effective tier (includes manual overrides if active)
+  const userTier = user?.effective_tier ?? user?.subscription_tier ?? 'premium'
 
   return (
     <AutoCategorizationPage

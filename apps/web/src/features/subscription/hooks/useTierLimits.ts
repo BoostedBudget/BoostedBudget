@@ -48,10 +48,9 @@ export interface UseTierLimitsParams {
  * ```
  */
 export function useTierLimits({ user, tiers, currentAccountCount }: UseTierLimitsParams): TierLimitsResult {
-  // Calculate account limit based on user tier
-  // Issue #698: Add defensive check for tiers.tiers being undefined
+  // Calculate account limit based on user tier (defensive check for undefined tiers)
   const accountLimit = user && tiers && tiers.tiers
-    ? tiers.tiers[user.subscription_tier]?.limits.accounts
+    ? tiers.tiers[user.effective_tier ?? user.subscription_tier]?.limits.accounts
     : null
 
   // Check if limit is unlimited (-1)

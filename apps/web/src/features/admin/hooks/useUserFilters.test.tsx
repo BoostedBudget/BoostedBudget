@@ -5,22 +5,24 @@
  * Tests for URL-synced user filter state hook.
  */
 
-import { describe, it, expect } from 'bun:test'
+import { describe, it, expect, beforeEach } from 'bun:test'
 import { renderHook, act } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { BrowserRouter } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import { useUserFilters } from './useUserFilters'
 
 // Wrapper with router
-function createWrapper(initialEntries: string[] = ['/admin/users']) {
+function createWrapper() {
   return function Wrapper({ children }: { children: ReactNode }) {
-    return (
-      <MemoryRouter initialEntries={initialEntries}>{children}</MemoryRouter>
-    )
+    return <BrowserRouter>{children}</BrowserRouter>
   }
 }
 
 describe('useUserFilters', () => {
+  beforeEach(() => {
+    window.history.replaceState({}, '', '/')
+  })
+
   describe('initial state', () => {
     it('returns default filter values when URL has no params', () => {
       const { result } = renderHook(() => useUserFilters(), {
@@ -36,40 +38,45 @@ describe('useUserFilters', () => {
     })
 
     it('parses search param from URL', () => {
+      window.history.replaceState({}, '', '/admin/users?search=test%40example.com')
       const { result } = renderHook(() => useUserFilters(), {
-        wrapper: createWrapper(['/admin/users?search=test%40example.com']),
+        wrapper: createWrapper(),
       })
 
       expect(result.current.filters.search).toBe('test@example.com')
     })
 
     it('parses tier param from URL', () => {
+      window.history.replaceState({}, '', '/admin/users?tier=premium')
       const { result } = renderHook(() => useUserFilters(), {
-        wrapper: createWrapper(['/admin/users?tier=premium']),
+        wrapper: createWrapper(),
       })
 
       expect(result.current.filters.tier).toBe('premium')
     })
 
     it('parses page param from URL', () => {
+      window.history.replaceState({}, '', '/admin/users?page=3')
       const { result } = renderHook(() => useUserFilters(), {
-        wrapper: createWrapper(['/admin/users?page=3']),
+        wrapper: createWrapper(),
       })
 
       expect(result.current.filters.page).toBe(3)
     })
 
     it('parses page_size param from URL', () => {
+      window.history.replaceState({}, '', '/admin/users?page_size=50')
       const { result } = renderHook(() => useUserFilters(), {
-        wrapper: createWrapper(['/admin/users?page_size=50']),
+        wrapper: createWrapper(),
       })
 
       expect(result.current.filters.pageSize).toBe(50)
     })
 
     it('parses multiple params from URL', () => {
+      window.history.replaceState({}, '', '/admin/users?search=john&tier=free&page=2&page_size=10')
       const { result } = renderHook(() => useUserFilters(), {
-        wrapper: createWrapper(['/admin/users?search=john&tier=free&page=2&page_size=10']),
+        wrapper: createWrapper(),
       })
 
       expect(result.current.filters).toEqual({
@@ -95,8 +102,9 @@ describe('useUserFilters', () => {
     })
 
     it('resets page to 1 when search changes', () => {
+      window.history.replaceState({}, '', '/admin/users?page=5')
       const { result } = renderHook(() => useUserFilters(), {
-        wrapper: createWrapper(['/admin/users?page=5']),
+        wrapper: createWrapper(),
       })
 
       expect(result.current.filters.page).toBe(5)
@@ -109,8 +117,9 @@ describe('useUserFilters', () => {
     })
 
     it('clears search when empty string passed', () => {
+      window.history.replaceState({}, '', '/admin/users?search=existing')
       const { result } = renderHook(() => useUserFilters(), {
-        wrapper: createWrapper(['/admin/users?search=existing']),
+        wrapper: createWrapper(),
       })
 
       act(() => {
@@ -135,8 +144,9 @@ describe('useUserFilters', () => {
     })
 
     it('resets page to 1 when tier changes', () => {
+      window.history.replaceState({}, '', '/admin/users?page=3&tier=free')
       const { result } = renderHook(() => useUserFilters(), {
-        wrapper: createWrapper(['/admin/users?page=3&tier=free']),
+        wrapper: createWrapper(),
       })
 
       act(() => {
@@ -161,8 +171,9 @@ describe('useUserFilters', () => {
     })
 
     it('does not reset other filters when page changes', () => {
+      window.history.replaceState({}, '', '/admin/users?search=test&tier=premium')
       const { result } = renderHook(() => useUserFilters(), {
-        wrapper: createWrapper(['/admin/users?search=test&tier=premium']),
+        wrapper: createWrapper(),
       })
 
       act(() => {
@@ -189,8 +200,9 @@ describe('useUserFilters', () => {
     })
 
     it('resets page to 1 when page size changes', () => {
+      window.history.replaceState({}, '', '/admin/users?page=5')
       const { result } = renderHook(() => useUserFilters(), {
-        wrapper: createWrapper(['/admin/users?page=5']),
+        wrapper: createWrapper(),
       })
 
       act(() => {
@@ -203,8 +215,9 @@ describe('useUserFilters', () => {
 
   describe('clearFilters', () => {
     it('clears all filters and resets to defaults', () => {
+      window.history.replaceState({}, '', '/admin/users?search=test&tier=premium&page=3&page_size=50')
       const { result } = renderHook(() => useUserFilters(), {
-        wrapper: createWrapper(['/admin/users?search=test&tier=premium&page=3&page_size=50']),
+        wrapper: createWrapper(),
       })
 
       act(() => {
@@ -230,24 +243,27 @@ describe('useUserFilters', () => {
     })
 
     it('returns true when search is active', () => {
+      window.history.replaceState({}, '', '/admin/users?search=test')
       const { result } = renderHook(() => useUserFilters(), {
-        wrapper: createWrapper(['/admin/users?search=test']),
+        wrapper: createWrapper(),
       })
 
       expect(result.current.hasActiveFilters).toBe(true)
     })
 
     it('returns true when tier is active', () => {
+      window.history.replaceState({}, '', '/admin/users?tier=premium')
       const { result } = renderHook(() => useUserFilters(), {
-        wrapper: createWrapper(['/admin/users?tier=premium']),
+        wrapper: createWrapper(),
       })
 
       expect(result.current.hasActiveFilters).toBe(true)
     })
 
     it('does not count page or pageSize as active filters', () => {
+      window.history.replaceState({}, '', '/admin/users?page=3&page_size=50')
       const { result } = renderHook(() => useUserFilters(), {
-        wrapper: createWrapper(['/admin/users?page=3&page_size=50']),
+        wrapper: createWrapper(),
       })
 
       expect(result.current.hasActiveFilters).toBe(false)
@@ -256,8 +272,9 @@ describe('useUserFilters', () => {
 
   describe('apiParams', () => {
     it('returns params formatted for API call', () => {
+      window.history.replaceState({}, '', '/admin/users?search=test&tier=premium&page=2&page_size=50')
       const { result } = renderHook(() => useUserFilters(), {
-        wrapper: createWrapper(['/admin/users?search=test&tier=premium&page=2&page_size=50']),
+        wrapper: createWrapper(),
       })
 
       expect(result.current.apiParams).toEqual({
@@ -269,8 +286,9 @@ describe('useUserFilters', () => {
     })
 
     it('omits empty string values', () => {
+      window.history.replaceState({}, '', '/admin/users?page=1')
       const { result } = renderHook(() => useUserFilters(), {
-        wrapper: createWrapper(['/admin/users?page=1']),
+        wrapper: createWrapper(),
       })
 
       // Should not include search or tier if they're empty
