@@ -27,7 +27,7 @@ import {
     TrendingUp,
     Layers,
 } from 'lucide-react'
-import type { AdminSubscriptionTierInputBodyTier } from '@boostedbudget/api-client'
+import type { AdminSubscriptionTierInputBodyTier } from '@boostedbudget/api-client/models'
 import { useAdminSubscriptionDetail, useUpdateUserTier } from '../hooks/useAdminSubscription'
 import './SubscriptionOverrideModal.css'
 
