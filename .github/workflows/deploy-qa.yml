@@ -429,6 +429,11 @@ jobs:
           # Security
           ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY_QA || '12345678901234567890123456789012' }}
 
+          # QA Auth Bypass (Issue #821)
+          QA_BYPASS_SECRET=${{ secrets.QA_BYPASS_SECRET }}
+          QA_ADMIN_CLERK_USER_ID=${{ secrets.QA_ADMIN_CLERK_USER_ID }}
+          QA_PREMIUM_CLERK_USER_ID=${{ secrets.QA_PREMIUM_CLERK_USER_ID }}
+
           # Logging
           LOG_LEVEL=debug
           LOG_FORMAT=json
