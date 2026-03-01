@@ -25,7 +25,6 @@ import './SubscriptionsPage.css'
 
 const TIER_OPTIONS = [
     { value: '', label: 'All Tiers' },
-    { value: 'trial', label: 'Trial' },
     { value: 'premium', label: 'Premium' },
     { value: 'household_2', label: 'Household (2)' },
     { value: 'household_3', label: 'Household (3)' },
@@ -34,7 +33,6 @@ const TIER_OPTIONS = [
 ]
 
 const TIER_DISPLAY: Record<string, string> = {
-    trial: 'Trial',
     premium: 'Premium',
     household_2: 'Household 2',
     household_3: 'Household 3',

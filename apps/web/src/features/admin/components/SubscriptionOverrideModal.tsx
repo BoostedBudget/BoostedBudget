@@ -27,11 +27,11 @@ import {
     TrendingUp,
     Layers,
 } from 'lucide-react'
+import type { AdminSubscriptionTierInputBodyTier } from '@boostedbudget/api-client'
 import { useAdminSubscriptionDetail, useUpdateUserTier } from '../hooks/useAdminSubscription'
 import './SubscriptionOverrideModal.css'
 
 const TIER_DISPLAY: Record<string, string> = {
-    trial: 'Trial',
     premium: 'Premium',
     household_2: 'Household (2)',
     household_3: 'Household (3)',
@@ -104,13 +104,7 @@ function SubscriptionOverrideForm({
             {
                 userId,
                 data: {
-                    tier: selectedTier as
-                        | 'trial'
-                        | 'premium'
-                        | 'household_2'
-                        | 'household_3'
-                        | 'household_4'
-                        | 'household_5',
+                    tier: selectedTier as AdminSubscriptionTierInputBodyTier,
                     reason: reason.trim(),
                     expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
                 },
