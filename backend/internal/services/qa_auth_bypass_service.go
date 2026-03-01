@@ -64,10 +64,10 @@ func (s *qaAuthBypassService) CreateSignInToken(ctx context.Context, role string
 	switch role {
 	case "admin":
 		clerkUserID = s.adminClerkUserID
-		email = "qa-admin@boostedbudget.test"
+		email = "qa-admin@boostedbudget.com"
 	case "premium":
 		clerkUserID = s.premiumClerkUserID
-		email = "qa-premium@boostedbudget.test"
+		email = "qa-premium@boostedbudget.com"
 	default:
 		return nil, fmt.Errorf("%w: got %q", ErrInvalidQARole, role)
 	}
