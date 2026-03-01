@@ -324,7 +324,7 @@ packages/*/bun.lock
 # Turborepo
 .turbo
 in-memoria.db
-# Claude Code - ignore settings but track skills, commands, agents
+# Claude Code - ignore local settings but track skills, commands, agents, hooks, shared settings
 .claude/*
 !.claude/commands/
 !.claude/commands/**
@@ -332,6 +332,9 @@ in-memoria.db
 !.claude/agents/**
 !.claude/skills/
 !.claude/skills/**
+!.claude/hooks/
+!.claude/hooks/**
+!.claude/settings.json
 
 # Agent configurations - ignore settings but track skills and workflows
 .agent/settings.json
