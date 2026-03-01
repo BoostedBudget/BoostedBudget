@@ -8,3 +8,4 @@ admin_emails:
   - "owner-2@example.com"
   - "owner-3@example.com"
   - "e2e+clerk_test@boostedbudget.com"  # E2E test user for CI
+  - "qa-admin@boostedbudget.com"         # QA test admin user (Issue #821)

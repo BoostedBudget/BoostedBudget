@@ -34,7 +34,7 @@ func TestCreateSignInToken_AdminRole_Success(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, url, result.URL)
-	assert.Equal(t, "qa-admin@boostedbudget.test", result.Email)
+	assert.Equal(t, "qa-admin@boostedbudget.com", result.Email)
 	assert.Equal(t, "premium", result.Tier)
 }
 
@@ -49,7 +49,7 @@ func TestCreateSignInToken_PremiumRole_Success(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, url, result.URL)
-	assert.Equal(t, "qa-premium@boostedbudget.test", result.Email)
+	assert.Equal(t, "qa-premium@boostedbudget.com", result.Email)
 	assert.Equal(t, "premium", result.Tier)
 }
 

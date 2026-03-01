@@ -61,7 +61,7 @@ func TestBypass_InvalidSecret_Returns401(t *testing.T) {
 func TestBypass_AdminRole_Success(t *testing.T) {
 	expected := &services.QAAuthBypassResult{
 		URL:   "https://clerk.example.com/sign-in?token=abc",
-		Email: "qa-admin@boostedbudget.test",
+		Email: "qa-admin@boostedbudget.com",
 		Tier:  "premium",
 	}
 	mock := &mockQAAuthBypassService{result: expected}
@@ -81,7 +81,7 @@ func TestBypass_AdminRole_Success(t *testing.T) {
 func TestBypass_PremiumRole_Success(t *testing.T) {
 	expected := &services.QAAuthBypassResult{
 		URL:   "https://clerk.example.com/sign-in?token=xyz",
-		Email: "qa-premium@boostedbudget.test",
+		Email: "qa-premium@boostedbudget.com",
 		Tier:  "premium",
 	}
 	mock := &mockQAAuthBypassService{result: expected}
