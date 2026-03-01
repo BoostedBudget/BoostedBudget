@@ -60,6 +60,16 @@ describe('SubscriptionOverrideModal', () => {
         toast.success.mockClear()
     })
 
+    it('renders date picker for expires at field', () => {
+        // @ts-expect-error mock method added by bun:test mock.module
+        useAdminSubscriptionDetail.mockReturnValue({ isLoading: false, data: SUB_DETAIL })
+        render(
+            <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
+            { wrapper }
+        )
+        expect(screen.getByPlaceholderText(/select expiry date/i)).toBeInTheDocument()
+    })
+
     it('renders loading state', () => {
         // @ts-expect-error mock method added by bun:test mock.module
         useAdminSubscriptionDetail.mockReturnValue({ isLoading: true, data: undefined })

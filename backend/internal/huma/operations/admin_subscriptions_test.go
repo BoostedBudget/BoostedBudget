@@ -146,8 +146,8 @@ func TestGetUserSubscription_Success(t *testing.T) {
 			SubscriptionTier:   "free",
 			SubscriptionStatus: "active",
 			ManualTierOverride: &tierOverride,
+			ManualTierEndsAt:   &now,
 		},
-		ManualTierEndsAt: &now,
 	}, nil)
 
 	ctx := context.WithValue(context.Background(), inputs.ClerkUserIDKey, clerkUserID)

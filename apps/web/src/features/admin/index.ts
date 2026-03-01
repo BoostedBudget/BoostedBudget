@@ -37,7 +37,6 @@ export { EnvironmentBadge } from './components/EnvironmentBadge'
 export { UsersPage } from './components/UsersPage'
 export { UserDetailModal } from './components/UserDetailModal'
 export { HealthDashboardPage } from './components/HealthDashboardPage'
-export { SubscriptionsPage } from './components/SubscriptionsPage'
 export { SubscriptionOverrideModal } from './components/SubscriptionOverrideModal'
 
 // Hooks for user management (Issue #644)

@@ -2,16 +2,28 @@
  * UsersPage Component Tests
  * Issue #644: Admin User Management UI
  *
- * Tests for admin user management page.
+ * Tests for admin user management page (merged with Subscriptions).
  */
 
-import { describe, it, expect, beforeEach } from 'bun:test'
-import { render, screen, waitFor } from '@testing-library/react'
+import { describe, it, expect, beforeEach, mock } from 'bun:test'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter } from 'react-router-dom'
 import { mockUseListAdminUsers } from '@/test/mocks/admin-api'
 import { UsersPage } from './UsersPage'
+
+// Mock UserDetailModal so it doesn't pull in complex deps
+mock.module('./UserDetailModal', () => ({
+  UserDetailModal: ({ open, user }: { open: boolean; user?: { email?: string } }) =>
+    open ? <div data-testid="user-detail-modal">{user?.email}</div> : null,
+}))
+
+// Mock SubscriptionOverrideModal
+mock.module('./SubscriptionOverrideModal', () => ({
+  SubscriptionOverrideModal: ({ open, userEmail }: { open: boolean; userEmail?: string }) =>
+    open ? <div data-testid="override-modal">{userEmail}</div> : null,
+}))
 
 // Mock test data
 const mockUsers = [
@@ -20,23 +32,32 @@ const mockUsers = [
     email: 'admin@example.com',
     subscription_tier: 'premium',
     subscription_status: 'active',
+    manual_tier_override: null,
+    manual_tier_ends_at: null,
     primary_region: 'iad',
     created_at: '2024-01-15T10:00:00Z',
     last_login_at: '2024-03-15T14:30:00Z',
     is_active: true,
+    is_admin: false,
     linked_accounts_count: 5,
     automation_rules_count: 10,
+    referrals_count: 2,
   },
   {
     id: 'user-2',
     email: 'user@example.com',
-    subscription_tier: 'free',
+    subscription_tier: 'trial',
     subscription_status: 'trial',
+    manual_tier_override: 'premium',
+    manual_tier_ends_at: null,
     primary_region: 'lhr',
     created_at: '2024-02-20T08:00:00Z',
+    last_login_at: null,
     is_active: true,
+    is_admin: false,
     linked_accounts_count: 2,
     automation_rules_count: 1,
+    referrals_count: 0,
   },
 ]
 
@@ -124,12 +145,12 @@ describe('UsersPage', () => {
       expect(screen.getByText('Last Login')).toBeInTheDocument()
       expect(screen.getByText('Accounts')).toBeInTheDocument()
       expect(screen.getByText('Rules')).toBeInTheDocument()
+      expect(screen.getByText('Override Status')).toBeInTheDocument()
+      expect(screen.getByText('Action')).toBeInTheDocument()
 
       // Check user data
       expect(screen.getByText('admin@example.com')).toBeInTheDocument()
       expect(screen.getByText('user@example.com')).toBeInTheDocument()
-      expect(screen.getByText('premium')).toBeInTheDocument()
-      expect(screen.getByText('free')).toBeInTheDocument()
     })
 
     it('should show total count in header', () => {
@@ -142,6 +163,131 @@ describe('UsersPage', () => {
       render(<UsersPage />, { wrapper: createWrapper() })
 
       expect(screen.getByText(/2 users/i)).toBeInTheDocument()
+    })
+
+    it('should display tier using override-aware logic', () => {
+      mockUseListAdminUsers.mockReturnValue({
+        data: mockListResponse,
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      // user-2 has manual_tier_override='premium', so tier badge should show 'Premium'
+      // user-1 has no override, shows 'Premium' from subscription_tier
+      const tierBadges = screen.getAllByText('Premium')
+      expect(tierBadges.length).toBeGreaterThan(0)
+    })
+
+    it('should show "—" in override status column when no override', () => {
+      mockUseListAdminUsers.mockReturnValue({
+        data: mockListResponse,
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      // user-1 has no override → shows "—"
+      expect(screen.getAllByText('—').length).toBeGreaterThan(0)
+    })
+
+    it('should show "Permanent" in override status when override has no expiry', () => {
+      const usersWithPermanentOverride = [
+        {
+          ...mockUsers[1],
+          manual_tier_override: 'premium',
+          manual_tier_ends_at: null,
+        },
+      ]
+
+      mockUseListAdminUsers.mockReturnValue({
+        data: {
+          ...mockListResponse,
+          users: usersWithPermanentOverride,
+          total_count: 1,
+        },
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      expect(screen.getByText('Permanent')).toBeInTheDocument()
+    })
+
+    it('should show "Expired" in override status when expiry is in the past', () => {
+      const usersWithExpiredOverride = [
+        {
+          ...mockUsers[1],
+          manual_tier_override: 'premium',
+          manual_tier_ends_at: '2020-01-01T00:00:00Z',
+        },
+      ]
+
+      mockUseListAdminUsers.mockReturnValue({
+        data: {
+          ...mockListResponse,
+          users: usersWithExpiredOverride,
+          total_count: 1,
+        },
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      expect(screen.getByText('Expired')).toBeInTheDocument()
+    })
+  })
+
+  describe('override button', () => {
+    it('should render override button per row', () => {
+      mockUseListAdminUsers.mockReturnValue({
+        data: mockListResponse,
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      const overrideBtns = screen.getAllByRole('button', { name: /override subscription/i })
+      expect(overrideBtns).toHaveLength(2)
+    })
+
+    it('should open SubscriptionOverrideModal when override button is clicked', async () => {
+      mockUseListAdminUsers.mockReturnValue({
+        data: mockListResponse,
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      const overrideBtns = screen.getAllByRole('button', { name: /override subscription/i })
+      fireEvent.click(overrideBtns[0])
+
+      const modal = await screen.findByTestId('override-modal')
+      expect(modal).toBeInTheDocument()
+      expect(modal).toHaveTextContent('admin@example.com')
+    })
+
+    it('should not trigger row click when override button is clicked', async () => {
+      mockUseListAdminUsers.mockReturnValue({
+        data: mockListResponse,
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      const overrideBtns = screen.getAllByRole('button', { name: /override subscription/i })
+      fireEvent.click(overrideBtns[0])
+
+      // Override modal should open, NOT user detail modal
+      expect(screen.queryByTestId('user-detail-modal')).not.toBeInTheDocument()
+      expect(screen.getByTestId('override-modal')).toBeInTheDocument()
     })
   })
 

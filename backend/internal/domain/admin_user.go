@@ -10,6 +10,7 @@ type AdminUserListItem struct {
 	SubscriptionTier     string     `json:"subscription_tier"`
 	SubscriptionStatus   string     `json:"subscription_status"`
 	ManualTierOverride   *string    `json:"manual_tier_override,omitempty"`
+	ManualTierEndsAt     *time.Time `json:"manual_tier_ends_at,omitempty"`
 	PrimaryRegion        string     `json:"primary_region"`
 	CreatedAt            time.Time  `json:"created_at"`
 	LastLoginAt          *time.Time `json:"last_login_at,omitempty"`
@@ -24,9 +25,8 @@ type AdminUserListItem struct {
 // Used for the detailed user view in admin panel.
 type AdminUserDetail struct {
 	AdminUserListItem
-	TransactionsCount int        `json:"transactions_count"`
-	BudgetsCount      int        `json:"budgets_count"`
-	ManualTierEndsAt  *time.Time `json:"manual_tier_ends_at,omitempty"`
+	TransactionsCount int `json:"transactions_count"`
+	BudgetsCount      int `json:"budgets_count"`
 }
 
 // AdminUserFilters contains filter parameters for the admin user list.

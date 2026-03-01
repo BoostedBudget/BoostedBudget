@@ -7,6 +7,8 @@
  */
 
 import { useState, useMemo } from 'react'
+import DatePicker from 'react-datepicker'
+import 'react-datepicker/dist/react-datepicker.css'
 import { toast } from 'sonner'
 import {
     Dialog,
@@ -84,18 +86,13 @@ function SubscriptionOverrideForm({
         () => sub?.manual_tier_override ?? sub?.effective_tier ?? '',
         [sub]
     )
-    const initialExpiresAt = useMemo(
-        () =>
-            sub?.manual_tier_ends_at
-                ? new Date(sub.manual_tier_ends_at).toISOString().slice(0, 16)
-                : '',
-        [sub]
-    )
 
     // Form state initialized from derived values
     const [selectedTier, setSelectedTier] = useState(initialTier)
     const [reason, setReason] = useState('')
-    const [expiresAt, setExpiresAt] = useState(initialExpiresAt)
+    const [expiresAt, setExpiresAt] = useState<Date | null>(
+        sub?.manual_tier_ends_at ? new Date(sub.manual_tier_ends_at) : null
+    )
 
     function handleSubmit() {
         if (!userId || !selectedTier || !reason.trim()) return
@@ -106,7 +103,7 @@ function SubscriptionOverrideForm({
                 data: {
                     tier: selectedTier as AdminSubscriptionTierInputBodyTier,
                     reason: reason.trim(),
-                    expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
+                    expires_at: expiresAt ? expiresAt.toISOString() : null,
                 },
             },
             {
@@ -259,13 +256,17 @@ function SubscriptionOverrideForm({
                                 <span className="subscription-override-modal__field-label">
                                     Expires at <em>(optional — leave blank for permanent)</em>
                                 </span>
-                                <input
-                                    id="override-expires-at-input"
-                                    type="datetime-local"
+                                <DatePicker
+                                    selected={expiresAt}
+                                    onChange={(date: Date | null) => setExpiresAt(date)}
+                                    showTimeSelect
+                                    timeIntervals={15}
+                                    dateFormat="MMM d, yyyy h:mm aa"
+                                    placeholderText="Select expiry date…"
                                     className="subscription-override-modal__input"
-                                    value={expiresAt}
-                                    onChange={(e) => setExpiresAt(e.target.value)}
                                     disabled={isSaving}
+                                    isClearable
+                                    minDate={new Date()}
                                 />
                             </label>
                         </div>
