@@ -27,6 +27,7 @@ type User struct {
 	// Manual tier overrides (Issue #641)
 	ManualTierOverride *string    `json:"manual_tier_override,omitempty" db:"manual_tier_override"`
 	ManualTierEndsAt   *time.Time `json:"manual_tier_ends_at,omitempty" db:"manual_tier_ends_at"`
+	EffectiveTier      string     `json:"effective_tier,omitempty"` // Computed field, not stored in DB
 
 	// Trial information (Issue #679)
 	TrialStartedAt     *time.Time `json:"trial_started_at,omitempty" db:"trial_started_at"`
@@ -78,6 +79,18 @@ func (u *User) ComputeTrialDaysRemaining() {
 		daysRemaining = 0
 	}
 	u.TrialDaysRemaining = &daysRemaining
+}
+
+// ComputeEffectiveTier returns the effective tier for the user.
+// If a non-expired manual override is set, that tier is returned.
+// Otherwise the base SubscriptionTier is returned.
+func (u *User) ComputeEffectiveTier() string {
+	if u.ManualTierOverride != nil && *u.ManualTierOverride != "" {
+		if u.ManualTierEndsAt == nil || !u.ManualTierEndsAt.Before(time.Now()) {
+			return *u.ManualTierOverride
+		}
+	}
+	return u.SubscriptionTier
 }
 
 // NewUser creates a new user with default values (premium trial, iad region)

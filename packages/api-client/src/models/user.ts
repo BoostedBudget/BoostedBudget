@@ -34,6 +34,7 @@ export interface User {
   created_at: string;
   deletion_requested_at?: string;
   deletion_scheduled_at?: string;
+  effective_tier?: string;
   email: string;
   email_verified: boolean;
   had_trial: boolean;

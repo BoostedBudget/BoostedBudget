@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -80,13 +79,7 @@ func (s *SubscriptionService) GetEffectiveSubscription(
 	user *domain.User,
 ) (*domain.EffectiveSubscription, error) {
 	// Determine the effective tier: manual override takes precedence if set and not expired
-	tierName := domain.TierName(user.SubscriptionTier)
-	if user.ManualTierOverride != nil && *user.ManualTierOverride != "" {
-		expired := user.ManualTierEndsAt != nil && user.ManualTierEndsAt.Before(time.Now())
-		if !expired {
-			tierName = domain.TierName(*user.ManualTierOverride)
-		}
-	}
+	tierName := domain.TierName(user.ComputeEffectiveTier())
 
 	// Get tier configuration for the effective tier
 	tier, err := s.GetTier(ctx, tierName)

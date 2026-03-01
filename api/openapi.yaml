@@ -3457,6 +3457,8 @@ components:
         deletion_scheduled_at:
           format: date-time
           type: string
+        effective_tier:
+          type: string
         email:
           type: string
         email_verified:

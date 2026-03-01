@@ -93,7 +93,8 @@ const userSelectQuery = `
 	       paddle_customer_id, paddle_subscription_id, primary_region,
 	       is_active, is_deleted,
 	       deletion_requested_at, deletion_scheduled_at,
-	       created_at, updated_at, last_login_at
+	       created_at, updated_at, last_login_at,
+	       manual_tier_override, manual_tier_ends_at
 	FROM users`
 
 // queryUser is a helper that scans a user from a query row
@@ -107,6 +108,7 @@ func (r *profileRepository) queryUser(ctx context.Context, query string, args ..
 		&user.IsActive, &user.IsDeleted,
 		&user.DeletionRequestedAt, &user.DeletionScheduledAt,
 		&user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt,
+		&user.ManualTierOverride, &user.ManualTierEndsAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrUserNotFound
@@ -133,6 +135,7 @@ func (r *profileRepository) queryUsers(ctx context.Context, query string, args .
 			&user.IsActive, &user.IsDeleted,
 			&user.DeletionRequestedAt, &user.DeletionScheduledAt,
 			&user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt,
+			&user.ManualTierOverride, &user.ManualTierEndsAt,
 		); err != nil {
 			return nil, err
 		}

@@ -142,6 +142,76 @@ func TestUser_PaddleSubscriptionID_NullHandling(t *testing.T) {
 	assert.Nil(t, unmarshaled.PaddleSubscriptionID)
 }
 
+// TestComputeEffectiveTier_WithOverride tests that an active override returns the override tier
+func TestComputeEffectiveTier_WithOverride(t *testing.T) {
+	override := "household_2"
+	user := &User{
+		SubscriptionTier:   "premium",
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   nil, // permanent override
+	}
+
+	result := user.ComputeEffectiveTier()
+
+	assert.Equal(t, "household_2", result)
+}
+
+// TestComputeEffectiveTier_WithExpiredOverride tests that an expired override returns the base tier
+func TestComputeEffectiveTier_WithExpiredOverride(t *testing.T) {
+	override := "household_2"
+	expired := time.Now().Add(-24 * time.Hour)
+	user := &User{
+		SubscriptionTier:   "premium",
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &expired,
+	}
+
+	result := user.ComputeEffectiveTier()
+
+	assert.Equal(t, "premium", result)
+}
+
+// TestComputeEffectiveTier_WithPermanentOverride tests nil ends_at returns override tier
+func TestComputeEffectiveTier_WithPermanentOverride(t *testing.T) {
+	override := "household_3"
+	user := &User{
+		SubscriptionTier:   "premium",
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   nil,
+	}
+
+	result := user.ComputeEffectiveTier()
+
+	assert.Equal(t, "household_3", result)
+}
+
+// TestComputeEffectiveTier_NoOverride tests that nil override returns base tier
+func TestComputeEffectiveTier_NoOverride(t *testing.T) {
+	user := &User{
+		SubscriptionTier:   "premium",
+		ManualTierOverride: nil,
+	}
+
+	result := user.ComputeEffectiveTier()
+
+	assert.Equal(t, "premium", result)
+}
+
+// TestComputeEffectiveTier_FutureExpiry tests that a future ends_at still returns override
+func TestComputeEffectiveTier_FutureExpiry(t *testing.T) {
+	override := "household_2"
+	future := time.Now().Add(30 * 24 * time.Hour)
+	user := &User{
+		SubscriptionTier:   "premium",
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &future,
+	}
+
+	result := user.ComputeEffectiveTier()
+
+	assert.Equal(t, "household_2", result)
+}
+
 // TestUser_PaddleSubscriptionID_EmptyString tests empty string handling
 func TestUser_PaddleSubscriptionID_EmptyString(t *testing.T) {
 	emptyString := ""
