@@ -12,9 +12,11 @@
     "generate:api": "turbo run generate:api --filter=@boostedbudget/api-client"
   },
   "devDependencies": {
-    "turbo": "^2.8.10"
+    "turbo": "^2.8.12"
   },
   "overrides": {
-    "minimatch": "^10.2.2"
+    "minimatch": ">=10.2.3",
+    "rollup": ">=4.59.0",
+    "markdown-it": ">=14.1.1"
   }
 }
