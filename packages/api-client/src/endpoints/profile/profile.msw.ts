@@ -47,6 +47,10 @@ export const getGetUserProfileResponseMock = (
     faker.date.past().toISOString().slice(0, 19) + "Z",
     undefined,
   ]),
+  effective_tier: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   email: faker.string.alpha({ length: { min: 10, max: 20 } }),
   email_verified: faker.datatype.boolean(),
   had_trial: faker.datatype.boolean(),
@@ -112,6 +116,10 @@ export const getUpdateUserProfileResponseMock = (
   ]),
   deletion_scheduled_at: faker.helpers.arrayElement([
     faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  effective_tier: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
   email: faker.string.alpha({ length: { min: 10, max: 20 } }),

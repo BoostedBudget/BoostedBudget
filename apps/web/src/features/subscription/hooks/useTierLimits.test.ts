@@ -375,6 +375,36 @@ describe('useTierLimits', () => {
     })
   })
 
+  describe('effective_tier override', () => {
+    it('should use effective_tier when set, overriding subscription_tier for limit lookup', () => {
+      const user: User = {
+        ...createMockUser('premium'),
+        effective_tier: 'premium_plus', // admin override to unlimited tier
+      }
+
+      const result = useTierLimits({
+        user,
+        tiers: createMockTiers(),
+        currentAccountCount: 50,
+      })
+
+      expect(result.accountLimit).toBe(-1) // premium_plus is unlimited
+      expect(result.isUnlimited).toBe(true)
+    })
+
+    it('should fall back to subscription_tier when effective_tier is undefined', () => {
+      const user: User = createMockUser('premium') // no effective_tier
+
+      const result = useTierLimits({
+        user,
+        tiers: createMockTiers(),
+        currentAccountCount: 5,
+      })
+
+      expect(result.accountLimit).toBe(30) // premium limit
+    })
+  })
+
   describe('edge cases', () => {
     it('should handle unknown tier name', () => {
       const result = useTierLimits({
