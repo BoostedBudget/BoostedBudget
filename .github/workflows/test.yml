@@ -270,7 +270,7 @@ jobs:
 
       - name: Upload backend coverage report
         id: upload-backend-coverage
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         continue-on-error: true
         with:
           name: backend-coverage-${{ github.run_id }}
@@ -367,7 +367,7 @@ jobs:
 
       - name: Upload combined coverage report
         id: upload-frontend-coverage
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         continue-on-error: true
         with:
           name: frontend-coverage-${{ github.run_id }}
@@ -476,7 +476,7 @@ jobs:
       - name: Upload E2E test results
         id: upload-playwright-report
         if: success() || failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         continue-on-error: true
         with:
           name: playwright-report-${{ github.run_id }}
@@ -491,7 +491,7 @@ jobs:
       - name: Upload E2E test videos (on failure)
         id: upload-playwright-videos
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         continue-on-error: true
         with:
           name: playwright-videos-${{ github.run_id }}
@@ -634,7 +634,7 @@ jobs:
       - name: Upload performance benchmarks
         id: upload-migration-perf
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         continue-on-error: true
         with:
           name: migration-performance-${{ github.run_id }}
