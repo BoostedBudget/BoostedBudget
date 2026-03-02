@@ -280,3 +280,36 @@ Out-of-sync causes infinite dashboard reset loops. Increment when adding/removin
 ## GDPR Compliance
 
 All users (not just EU) get: `primary_region` field, data export, 30-day deletion grace, audit logs, privacy settings endpoint.
+
+## Design Context
+
+### Users
+BoostedBudget serves a broad spectrum: from financially anxious individuals seeking calm reassurance, to budget-conscious families managing shared finances, to finance enthusiasts who want rich data, to busy professionals wanting quick clarity. The common thread is that users come to the app during moments of financial decision-making — they need to feel **in control, not overwhelmed**. The interface must adapt gracefully from "quick glance" to "deep analysis" without mode-switching friction.
+
+### Brand Personality
+**Confident, Modern, Smart** — BoostedBudget is a premium fintech tool that respects its users' intelligence. It communicates with clarity rather than decoration. It feels forward-thinking and polished without being cold or unapproachable. Think "financial copilot" — competent, calm under pressure, always ready with the right information.
+
+### Aesthetic Direction
+- **Visual tone**: Clean, spacious, and data-forward. Generous whitespace with purposeful density where data demands it. Premium but not pretentious.
+- **References**: Stripe (typography hierarchy, whitespace, subtle polish), Notion (content-forward, clear information architecture), Copilot Money / Monarch (warm data visualization, approachable finance UI)
+- **Anti-references**: No dense enterprise dashboards (Bloomberg), no brutalist minimalism (Craigslist), no heavy skeuomorphic decoration. Gamified elements (confetti, streaks, badges) are acceptable only when truly earned.
+- **Theme**: Both light and dark modes are first-class citizens — always design and validate both. Neither is secondary.
+- **Color direction**: Primary blue (`blue-600`) conveys trust and professionalism. Emerald accent for positive states (growth, savings, success). The neutral base keeps the UI calm and lets data and actions stand out. Open to evolving the palette if a stronger brand identity emerges.
+- **Typography**: Inter as the primary typeface — clean, legible, modern. Consider adding a proper font import (currently relies on system availability).
+- **Radius & shape**: Rounded but not bubbly — `rounded-lg` to `rounded-2xl` for cards, `rounded-full` for avatars and badges. Avoid sharp corners (too cold) and overly rounded (too playful).
+- **Motion**: Subtle, purposeful transitions that communicate state changes. No gratuitous animation. Always respect `prefers-reduced-motion`.
+
+### Accessibility
+- **Target**: WCAG 2.1 AA compliance
+- **Color contrast**: Minimum 4.5:1 for normal text, 3:1 for large text and UI components
+- **Keyboard navigation**: All interactive elements must be keyboard accessible with visible focus indicators
+- **Screen readers**: Semantic HTML, proper ARIA labels, meaningful alt text
+- **Motion**: All animations respect `prefers-reduced-motion` (already implemented)
+- **Color independence**: Information never conveyed by color alone (colorblind-safe chart palette already in place)
+
+### Design Principles
+1. **Clarity over cleverness** — Every element earns its place. If it doesn't help the user understand their finances or take action, remove it.
+2. **Calm confidence** — Financial data can be stressful. Use whitespace, clear hierarchy, and steady visual rhythm to create a sense of control, even when showing bad news.
+3. **Progressive disclosure** — Show the essential at a glance, reveal detail on demand. The dashboard should be scannable in 3 seconds, deep-diveable in 30.
+4. **Consistent, not uniform** — Use the design system tokens and patterns consistently, but allow feature-specific expression where it serves the user (e.g., richer visualization in charts, simpler forms for quick entry).
+5. **Accessible by default** — WCAG AA is the floor, not the ceiling. Accessibility decisions are design decisions, not afterthoughts.
