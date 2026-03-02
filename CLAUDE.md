@@ -160,6 +160,7 @@ Out-of-sync causes infinite dashboard reset loops. Increment when adding/removin
 | `plaid-staging-testing` | Staging Plaid validation, MockPlaidService, connectivity/webhook tests |
 | `system-health-updater` | Adding new queues/services to `/admin/health` dashboard |
 | `qa-scenario-creator` | Creating YAML QA data scenarios for test populator |
+| `qa-login` | Authenticate into QA/Staging via bypass endpoint + agent-browser; optionally dogfood |
 | `run-e2e-tests` | Running Playwright E2E locally, SSL certs, Clerk test mode |
 
 ### Subagents (Task tool)

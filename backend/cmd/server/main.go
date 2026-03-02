@@ -790,6 +790,16 @@ func main() {
 			log.Println("✅ Huma admin routes registered (protected by AdminMiddleware)")
 		}
 
+		// Issue #821: QA auth bypass endpoint (QA/Staging only).
+		// Guard 1: Environment check here. Guard 2: Handler rejects production in Bypass().
+		if (cfg.Environment == "qa" || cfg.Environment == "staging") &&
+			cfg.QABypassSecret != "" && cfg.QAAdminClerkUserID != "" && cfg.QAPremiumClerkUserID != "" {
+			qaBypassService := services.NewQAAuthBypassService(cfg.QAAdminClerkUserID, cfg.QAPremiumClerkUserID, nil)
+			qaBypassHandler := operations.NewQAAuthBypassHandler(qaBypassService, cfg.QABypassSecret, cfg.Environment)
+			operations.RegisterQAAuthBypassRoutes(humaAPI, qaBypassHandler)
+			log.Println("✅ QA auth bypass route registered")
+		}
+
 		// API v1 routes (Echo - to be migrated to Huma incrementally)
 		api := e.Group("/api/v1")
 		api.Use(clerkMiddleware)

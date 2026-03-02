@@ -53,6 +53,9 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	// Issue #171: Stable user account references
 	userAccountHandler := &UserAccountHandler{}
 
+	// Issue #821: QA auth bypass (zero-value OK—handler not called during spec generation)
+	qaBypassHandler := &QAAuthBypassHandler{}
+
 	// Register all routes
 	RegisterHealthRoutes(api, healthHandler)
 	RegisterMetricsRoutes(api, metricsHandler)
@@ -85,4 +88,7 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	// Issue #45, #46: Paddle payment integration
 	RegisterPaddleCheckoutRoutes(api, paddleCheckoutHandler)
 	RegisterPaddleWebhookRoutes(api, paddleWebhookHandler)
+
+	// Issue #821: QA auth bypass
+	RegisterQAAuthBypassRoutes(api, qaBypassHandler)
 }
