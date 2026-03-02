@@ -365,3 +365,6 @@ apps/web/e2e/.env.test
 fly.toml.bakmigration-performance.json
 migration-performance.json
 .gemini/settings.json
+
+# Dogfood session output
+dogfood-output/
