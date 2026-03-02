@@ -8,3 +8,4 @@ admin_emails:
   - "maxnussbaum@live.com"
   - "yingyuemaggieliu@gmail.com"
   - "e2e+clerk_test@boostedbudget.com"  # E2E test user for CI
+  - "qa-admin@boostedbudget.com"         # QA test admin user (Issue #821)

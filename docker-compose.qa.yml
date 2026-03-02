@@ -75,6 +75,9 @@ services:
       PLAID_REDIRECT_URI: "${PLAID_REDIRECT_URI}"
       PLAID_WEBHOOK_URL: "${PLAID_WEBHOOK_URL}"
       ENCRYPTION_KEY: "${ENCRYPTION_KEY}"
+      QA_BYPASS_SECRET: "${QA_BYPASS_SECRET}"
+      QA_ADMIN_CLERK_USER_ID: "${QA_ADMIN_CLERK_USER_ID}"
+      QA_PREMIUM_CLERK_USER_ID: "${QA_PREMIUM_CLERK_USER_ID}"
     depends_on:
       postgres:
         condition: service_healthy

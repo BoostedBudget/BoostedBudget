@@ -126,6 +126,8 @@ export * from "./previewUpdateInputBody";
 export * from "./previewUpdateInputBodyBillingInterval";
 export * from "./previewUpdateOutputBody";
 export * from "./privacySettings";
+export * from "./qAAuthBypassRequestBody";
+export * from "./qAAuthBypassResponseBody";
 export * from "./queueMetrics";
 export * from "./reorderAccountsOutputBody";
 export * from "./reorderAccountsRequest";

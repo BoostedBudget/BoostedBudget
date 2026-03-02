@@ -2268,6 +2268,50 @@ components:
         - created_at
         - updated_at
       type: object
+    QAAuthBypassRequestBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/QAAuthBypassRequestBody.json
+          format: uri
+          readOnly: true
+          type: string
+        role:
+          description: "QA test user role: admin or premium"
+          type: string
+        secret:
+          description: QA bypass secret (must match QA_BYPASS_SECRET env var)
+          type: string
+      required:
+        - role
+        - secret
+      type: object
+    QAAuthBypassResponseBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/QAAuthBypassResponseBody.json
+          format: uri
+          readOnly: true
+          type: string
+        email:
+          description: Email address of the QA test user
+          type: string
+        tier:
+          description: Subscription tier of the QA test user
+          type: string
+        url:
+          description: Clerk sign-in token URL - navigate here to authenticate
+          type: string
+      required:
+        - url
+        - email
+        - tier
+      type: object
     QueueMetrics:
       additionalProperties: false
       properties:
@@ -5536,6 +5580,32 @@ paths:
       summary: Create Plaid link token
       tags:
         - Plaid
+  /api/v1/qa/auth/bypass:
+    post:
+      description: Creates a Clerk sign-in token URL for QA test users. Only available in QA/Staging environments.
+      operationId: qaAuthBypass
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QAAuthBypassRequestBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QAAuthBypassResponseBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: QA auth bypass
+      tags:
+        - QA
   /api/v1/rules:
     get:
       description: Retrieves all automation rules for the authenticated user, ordered by priority.
