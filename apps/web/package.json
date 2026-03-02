@@ -70,7 +70,7 @@
     "tailwindcss": "^4.1.18"
   },
   "devDependencies": {
-    "@clerk/testing": "^1.13.36",
+    "@clerk/testing": "^1.14.3",
     "@eslint/js": "^10.0.1",
     "@faker-js/faker": "^10.3.0",
     "@happy-dom/global-registrator": "^20.6.2",
