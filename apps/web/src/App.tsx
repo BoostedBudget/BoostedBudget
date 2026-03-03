@@ -32,6 +32,7 @@ import { BudgetsPage, BudgetDetailPage } from './features/budgets'
 import { RulesPage, RuleBuilder } from './features/rules'
 import { LandingPage } from './features/landing'
 import { AdminRoute, AdminLayout, AdminDashboardPage, UsersPage, HealthDashboardPage } from './features/admin'
+import { NotFoundPage } from './features/not-found/NotFoundPage'
 import { Toaster } from 'sonner'
 import { useEffect } from 'react'
 import './App.css'
@@ -302,6 +303,7 @@ function App() {
               <Route path="health" element={<HealthDashboardPage />} />
               <Route path="webhooks" element={<ComingSoon title="Webhooks" />} />
             </Route>
+            <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </main>
       )}
