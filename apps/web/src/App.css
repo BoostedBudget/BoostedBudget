@@ -66,13 +66,6 @@
   margin: 0.5rem 0;
 }
 
-.app-footer {
-  margin-top: 4rem;
-  padding-top: 2rem;
-  border-top: 1px solid #333;
-  color: #888;
-  font-size: 0.9em;
-}
 
 @media (prefers-color-scheme: light) {
   :root {

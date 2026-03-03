@@ -14,7 +14,7 @@ import {
 } from './privacy'
 import { ProtectedRoute } from './auth'
 import { PremiumRoute } from './auth/PremiumRoute'
-import { Header } from './components/layout'
+import { Header, AppFooter } from './components/layout'
 import { ProfilePage } from './features/profile/ProfilePage'
 import { PricingPage } from './features/pricing/PricingPage'
 import { SubscriptionManagementPage } from './features/billing/SubscriptionManagementPage'
@@ -26,6 +26,7 @@ import { DashboardPage } from './features/dashboard/components/DashboardPage'
 import { useUpdatePrivacySettings } from '@boostedbudget/api-client/endpoints/privacy/privacy'
 import type { PrivacySettings as PrivacySettingsType } from './features/profile/types'
 import { PrivacyPolicy } from './legal/PrivacyPolicy'
+import { TermsOfService } from './legal/TermsOfService'
 import { CancelDeletionPage } from './features/deletion/components/CancelDeletionPage'
 import { AutoCategorizationPageWrapper } from './features/auto-categorization/components/AutoCategorizationPageWrapper'
 import { BudgetsPage, BudgetDetailPage } from './features/budgets'
@@ -269,6 +270,7 @@ function App() {
             />
             <Route path="/legal/privacy-policy" element={<PrivacyPolicy />} />
             <Route path="/privacy" element={<PrivacyPolicy />} />
+            <Route path="/legal/terms" element={<TermsOfService />} />
             <Route path="/pricing" element={<PricingPage />} />
             <Route
               path="/billing/manage"
@@ -308,11 +310,7 @@ function App() {
         </main>
       )}
 
-      {!isLandingPage && (
-        <footer className="app-footer">
-          <p>BoostedBudget © 2025 | GDPR Compliant | Single Region MVP (us-east-1)</p>
-        </footer>
-      )}
+      {!isLandingPage && <AppFooter />}
 
       <CookieConsent onConsentChange={handleConsentChange} />
       <Toaster position="bottom-right" richColors />
