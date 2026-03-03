@@ -299,6 +299,7 @@ buck-out/
 # End of https://www.toptal.com/developers/gitignore/api/go,react,reactnative,redis
 .env
 .env.staging
+.env.qa
 
 # Paddle staging documentation with credentials - DO NOT COMMIT
 PADDLE_STAGING_CREDENTIALS_SUMMARY.md
