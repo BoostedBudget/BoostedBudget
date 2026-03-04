@@ -31,13 +31,6 @@ function calculateSavingsPercent(tierData: SubscriptionTier): number {
   return Math.round(((monthlyTotal - yearlyTotal) / monthlyTotal) * 100)
 }
 
-/**
- * Get equivalent monthly price for yearly billing
- */
-function getEquivalentMonthly(yearlyPrice: number): string {
-  if (yearlyPrice === 0) return 'Free'
-  return `$${(yearlyPrice / 12).toFixed(2)}`
-}
 
 /**
  * Build feature list with included/excluded status
@@ -45,66 +38,34 @@ function getEquivalentMonthly(yearlyPrice: number): string {
 function buildFeatureList(
   tierData: SubscriptionTier
 ): Array<{ feature: string; included: boolean }> {
-  const features: Array<{ feature: string; included: boolean }> = []
-  const { limits, features: featureFlags } = tierData
+  const { features: featureFlags, pricing } = tierData
 
-  // Account limit
-  if (limits.accounts === -1) {
-    features.push({ feature: 'Unlimited bank accounts', included: true })
-  } else {
-    features.push({
-      feature: `${limits.accounts} bank accounts`,
-      included: true,
-    })
-  }
+  const usersLabel = pricing.users_included === 1
+    ? 'For 1 person'
+    : `For ${pricing.users_included} household members`
 
-  // Rules are unlimited for all tiers
-  features.push({ feature: 'Unlimited automation rules', included: true })
+  return [
+    { feature: usersLabel, included: true },
+    { feature: 'Unlimited bank accounts', included: true },
+    { feature: 'Unlimited automation rules', included: true },
+    { feature: 'Ad-free experience', included: !featureFlags.ads_enabled },
+    { feature: 'AI-powered insights', included: featureFlags.ai_insights || false },
+    { feature: 'Priority support', included: featureFlags.priority_support || false },
+    { feature: 'Advanced reports', included: featureFlags.advanced_reports || false },
+    { feature: 'API access', included: featureFlags.api_access || false },
+  ]
+}
 
-  // Execution frequency
-  const execsPerDay = limits.executions_per_day
-  let frequencyLabel: string
-  if (execsPerDay >= 144) {
-    frequencyLabel = 'Rules run every 10 minutes'
-  } else if (execsPerDay === 1) {
-    frequencyLabel = 'Rules run once daily'
-  } else {
-    const hours = 24 / execsPerDay
-    if (hours < 1) {
-      const minutes = Math.round(60 * hours)
-      frequencyLabel = `Rules run every ${minutes} minutes`
-    } else if (hours === 1) {
-      frequencyLabel = 'Rules run every hour'
-    } else {
-      const roundedHours = Math.round(hours)
-      frequencyLabel = `Rules run every ${roundedHours} hour${roundedHours === 1 ? '' : 's'}`
-    }
-  }
-  features.push({ feature: frequencyLabel, included: true })
-
-  // Feature flags
-  features.push({
-    feature: 'Ad-free experience',
-    included: !featureFlags.ads_enabled,
-  })
-  features.push({
-    feature: 'AI-powered insights',
-    included: featureFlags.ai_insights || false,
-  })
-  features.push({
-    feature: 'Priority support',
-    included: featureFlags.priority_support || false,
-  })
-  features.push({
-    feature: 'Advanced reports',
-    included: featureFlags.advanced_reports || false,
-  })
-  features.push({
-    feature: 'API access',
-    included: featureFlags.api_access || false,
-  })
-
-  return features
+function TrialBanner({ daysRemaining }: { daysRemaining: number }) {
+  return (
+    <div className="trial-banner" role="status">
+      <div className="trial-banner__content">
+        <p className="trial-banner__message">
+          You're on a free trial &mdash; <strong>{daysRemaining} day{daysRemaining === 1 ? '' : 's'} remaining</strong>
+        </p>
+      </div>
+    </div>
+  )
 }
 
 function FrozenAccountBanner() {
@@ -132,12 +93,12 @@ interface TierCardProps {
 function TierCard({ tierKey, tierData, isCurrentTier, billingPeriod }: TierCardProps) {
   const features = buildFeatureList(tierData)
   const isHousehold5 = tierKey === 'household_5'
-  const isPaidTier = tierData.pricing.price_monthly > 0
 
   // Get the appropriate price based on billing period
   const currentPrice = billingPeriod === 'monthly'
     ? tierData.pricing.price_monthly
     : tierData.pricing.price_yearly
+  const savingsPercent = calculateSavingsPercent(tierData)
 
   const TierIcon = isHousehold5 ? Gem : Award
 
@@ -157,23 +118,23 @@ function TierCard({ tierKey, tierData, isCurrentTier, billingPeriod }: TierCardP
       </div>
 
       <div className="pricing-card-price">
-        {billingPeriod === 'yearly' && isPaidTier && (
-          <span className="savings-badge">Save {calculateSavingsPercent(tierData)}%</span>
+        {billingPeriod === 'yearly' && currentPrice > 0 && (
+          <span className="savings-badge">Save {savingsPercent}%</span>
         )}
         <span className="price-amount">{formatPrice(currentPrice)}</span>
         {currentPrice > 0 && (
           <span className="price-period">/{billingPeriod === 'monthly' ? 'month' : 'year'}</span>
         )}
-        {billingPeriod === 'yearly' && isPaidTier && (
+        {billingPeriod === 'yearly' && currentPrice > 0 && (
           <span className="price-equivalent">
-            {getEquivalentMonthly(tierData.pricing.price_yearly)}/mo, billed annually
+            ${(tierData.pricing.price_yearly / 12).toFixed(2)}/mo, billed annually
           </span>
         )}
       </div>
 
       <ul className="pricing-features">
-        {features.map((item, index) => (
-          <li key={index} className={item.included ? 'included' : 'excluded'}>
+        {features.map((item) => (
+          <li key={item.feature} className={item.included ? 'included' : 'excluded'}>
             {item.included ? (
               <Check className="feature-icon included" aria-hidden="true" />
             ) : (
@@ -247,6 +208,9 @@ export function PricingPage() {
   return (
     <div className="pricing-page">
       {isFrozen && <FrozenAccountBanner />}
+      {isTrialUser && currentSubscription?.trial_days_remaining !== undefined && (
+        <TrialBanner daysRemaining={currentSubscription.trial_days_remaining} />
+      )}
 
       <div className="pricing-header">
         <h1>Choose Your Plan</h1>
@@ -268,7 +232,9 @@ export function PricingPage() {
           aria-checked={billingPeriod === 'yearly'}
           role="radio"
         >
-          Yearly
+          {tiers?.tiers.premium
+            ? `Yearly (Save ${calculateSavingsPercent(tiers.tiers.premium)}%)`
+            : 'Yearly'}
         </button>
         <div className={`billing-toggle__slider ${billingPeriod}`} aria-hidden="true" />
       </div>

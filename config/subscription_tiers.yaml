@@ -33,9 +33,9 @@ tiers:
     paddle_price_id_yearly: "pri_01jmwgcyc80s12t63w4nt2c4jy"
     users_included: 1
     limits:
-      accounts: 30
+      accounts: -1
       transaction_history_days: 730
-      executions_per_day: 6
+      executions_per_day: -1
     features: *default_features
 
   household_2:
@@ -48,9 +48,9 @@ tiers:
     paddle_price_id_yearly: "pri_01jmwgeeemscr1nv0dh6mkhvdg"
     users_included: 2
     limits:
-      accounts: 60
+      accounts: -1
       transaction_history_days: 730
-      executions_per_day: 12
+      executions_per_day: -1
     features: *default_features
 
   household_3:
@@ -63,9 +63,9 @@ tiers:
     paddle_price_id_yearly: "pri_01jmwgerr3vmwsktmvt7m8jcbm"
     users_included: 3
     limits:
-      accounts: 90
+      accounts: -1
       transaction_history_days: 730
-      executions_per_day: 18
+      executions_per_day: -1
     features: *default_features
 
   household_4:
@@ -78,9 +78,9 @@ tiers:
     paddle_price_id_yearly: "pri_01jmwgf2tkx2hfz6jrs9m3jr1q"
     users_included: 4
     limits:
-      accounts: 120
+      accounts: -1
       transaction_history_days: 730
-      executions_per_day: 24
+      executions_per_day: -1
     features: *default_features
 
   household_5:
@@ -93,9 +93,9 @@ tiers:
     paddle_price_id_yearly: "pri_01jmwgfbpdpmjpxpkv7q39e3xs"
     users_included: 5
     limits:
-      accounts: 150
+      accounts: -1
       transaction_history_days: 730
-      executions_per_day: 30
+      executions_per_day: -1
     features: *default_features
 
 # Default tier for new users (no free tier - premium with trial status)

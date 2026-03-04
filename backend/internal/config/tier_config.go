@@ -173,7 +173,7 @@ func (tc *TierConfig) validate() error {
 		if tier.Limits.TransactionHistoryDays < 0 {
 			return fmt.Errorf("tier '%s' has invalid transaction_history_days: %d", name, tier.Limits.TransactionHistoryDays)
 		}
-		if tier.Limits.ExecutionsPerDay < 0 {
+		if tier.Limits.ExecutionsPerDay < -1 {
 			return fmt.Errorf("tier '%s' has invalid executions_per_day: %d", name, tier.Limits.ExecutionsPerDay)
 		}
 	}

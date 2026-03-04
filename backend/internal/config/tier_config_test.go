@@ -99,7 +99,7 @@ func TestTierConfig_Validation(t *testing.T) {
 			assert.NotEmpty(t, tier.DisplayName)
 			assert.GreaterOrEqual(t, tier.Limits.Accounts, -1)
 			assert.GreaterOrEqual(t, tier.Limits.TransactionHistoryDays, -1)
-			assert.GreaterOrEqual(t, tier.Limits.ExecutionsPerDay, 0)
+			assert.GreaterOrEqual(t, tier.Limits.ExecutionsPerDay, -1)
 		})
 	}
 }
