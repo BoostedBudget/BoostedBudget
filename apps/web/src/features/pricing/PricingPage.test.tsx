@@ -157,15 +157,17 @@ describe('PricingPage', () => {
     it('should show features for each tier', () => {
       renderWithProviders(<PricingPage />)
 
-      // Premium tier features
-      expect(screen.getByText('30 bank accounts')).toBeInTheDocument()
-
-      // Household 5 features
-      expect(screen.getByText('150 bank accounts')).toBeInTheDocument()
+      // All tiers show unlimited bank accounts
+      const unlimitedAccountsElements = screen.getAllByText('Unlimited bank accounts')
+      expect(unlimitedAccountsElements.length).toBe(5) // One per tier
 
       // All tiers should have unlimited automation rules
       const unlimitedRulesElements = screen.getAllByText('Unlimited automation rules')
       expect(unlimitedRulesElements.length).toBe(5) // One per tier
+
+      // Users included differentiator
+      expect(screen.getByText('For 1 person')).toBeInTheDocument()
+      expect(screen.getAllByText(/For \d+ household members/).length).toBeGreaterThan(0)
     })
 
     it('should show tier descriptions', () => {
@@ -303,20 +305,11 @@ describe('PricingPage', () => {
       expect(screen.getAllByText('AI-powered insights').length).toBeGreaterThan(0)
     })
 
-    it('should show correct grammar for rule execution frequency', () => {
+    it('should not show execution frequency (all tiers have unlimited executions)', () => {
       renderWithProviders(<PricingPage />)
 
-      // Premium tier (6 execs/day = every 4 hours)
-      expect(screen.getByText('Rules run every 4 hours')).toBeInTheDocument()
-
-      // Household 2 tier (12 execs/day = every 2 hours)
-      expect(screen.getByText('Rules run every 2 hours')).toBeInTheDocument()
-
-      // Household 4 tier (24 execs/day = every 1 hour, should use singular "hour")
-      expect(screen.getByText('Rules run every hour')).toBeInTheDocument()
-
-      // Household 5 tier (30 execs/day = every 48 minutes)
-      expect(screen.getByText('Rules run every 48 minutes')).toBeInTheDocument()
+      // Execution frequency labels should not appear (unlimited for all tiers)
+      expect(screen.queryByText(/rules run every/i)).not.toBeInTheDocument()
     })
   })
 
@@ -326,6 +319,14 @@ describe('PricingPage', () => {
 
       expect(screen.getByRole('radio', { name: /monthly/i })).toBeInTheDocument()
       expect(screen.getByRole('radio', { name: /yearly/i })).toBeInTheDocument()
+    })
+
+    it('should show savings percentage in yearly toggle label', () => {
+      renderWithProviders(<PricingPage />)
+
+      // Yearly button should show savings percent (premium: $8.99*12=$107.88, yearly=$79, savings=~27%)
+      const yearlyButton = screen.getByRole('radio', { name: /yearly/i })
+      expect(yearlyButton.textContent).toMatch(/yearly \(save \d+%\)/i)
     })
 
     it('should default to Monthly view', () => {
@@ -483,6 +484,30 @@ describe('PricingPage', () => {
       // All tiers should have Subscribe buttons (5 tiers)
       const subscribeButtons = screen.getAllByRole('button', { name: /subscribe/i })
       expect(subscribeButtons.length).toBe(5)
+    })
+
+    it('should show trial days remaining banner for trial users', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        data: {
+          subscription_id: 'sub_123',
+          status: 'trial',
+          tier: 'premium',
+          billing_interval: 'month',
+          amount: '0.00',
+          currency: 'USD',
+          current_period_end: '2026-04-08T00:00:00Z',
+          trial_ends_at: '2026-04-08T00:00:00Z',
+          trial_days_remaining: 45,
+        },
+        isLoading: false,
+        error: null,
+        refetch: mock(() => Promise.resolve()),
+      })
+
+      renderWithProviders(<PricingPage />)
+
+      expect(screen.getByText(/45 days remaining/i)).toBeInTheDocument()
+      expect(screen.getByText(/you're on a free trial/i)).toBeInTheDocument()
     })
 
     it('should show "Current Plan" badge for paid users (not trial)', () => {

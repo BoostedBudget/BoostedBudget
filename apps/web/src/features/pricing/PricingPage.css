@@ -74,8 +74,8 @@
 }
 
 .pricing-card.current {
-  border-color: #4caf50;
-  background: linear-gradient(to bottom, #ffffff, #e8f5e9);
+  border-color: #2563eb;
+  background: linear-gradient(to bottom, #ffffff, #eff6ff);
 }
 
 .pricing-card.featured {
@@ -104,7 +104,7 @@
 }
 
 .current-badge {
-  background: #4caf50;
+  background: #2563eb;
   color: white;
 }
 
@@ -131,7 +131,7 @@
 }
 
 .pricing-card.current .pricing-tier-icon {
-  color: #4caf50;
+  color: #2563eb;
 }
 
 .pricing-tier-name {
@@ -211,9 +211,7 @@
   margin-top: auto;
 }
 
-.btn-select,
-.btn-current,
-.btn-downgrade {
+.pricing-card-action button {
   width: 100%;
   padding: 0.875rem;
   border: none;
@@ -224,41 +222,30 @@
   transition: all 0.2s;
 }
 
-.btn-select {
+.pricing-card-action :not(.btn-current) {
   background: #2196f3;
   color: white;
 }
 
-.btn-select:hover {
+.pricing-card-action :not(.btn-current):hover {
   background: #1976d2;
   transform: translateY(-1px);
   box-shadow: 0 2px 8px rgba(33, 150, 243, 0.3);
 }
 
-.pricing-card.featured .btn-select {
+.pricing-card.featured .pricing-card-action :not(.btn-current) {
   background: #ff9800;
 }
 
-.pricing-card.featured .btn-select:hover {
+.pricing-card.featured .pricing-card-action :not(.btn-current):hover {
   background: #f57c00;
   box-shadow: 0 2px 8px rgba(255, 152, 0, 0.3);
 }
 
 .btn-current {
-  background: #e8f5e9;
-  color: #2e7d32;
+  background: #eff6ff;
+  color: #2563eb;
   cursor: default;
-}
-
-.btn-downgrade {
-  background: #f5f5f5;
-  color: #616161;
-  border: 1px solid #e0e0e0;
-}
-
-.btn-downgrade:hover {
-  background: #eeeeee;
-  border-color: #bdbdbd;
 }
 
 /* FAQ Section */
@@ -384,6 +371,29 @@
   font-size: 0.875rem;
   color: #757575;
   margin-top: 0.25rem;
+}
+
+/* Trial Banner */
+.trial-banner {
+  display: flex;
+  align-items: center;
+  background: #eff6ff;
+  border: 1px solid #3b82f6;
+  border-left: 4px solid #2563eb;
+  border-radius: 8px;
+  padding: 1rem 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.trial-banner__content {
+  flex: 1;
+}
+
+.trial-banner__message {
+  font-size: 0.9375rem;
+  color: #1e40af;
+  margin: 0;
+  line-height: 1.5;
 }
 
 /* Frozen Account Banner - Issue #679, #680 */

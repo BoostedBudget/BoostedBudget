@@ -14,9 +14,9 @@ import type {
 } from '@boostedbudget/api-client/models'
 
 /**
- * Complete mock subscription tiers response matching the generated types
- * Simplified tier structure: premium + household tiers (2-5 members)
- * All tiers have unlimited rules
+ * Complete mock subscription tiers response matching the generated types.
+ * All tiers have unlimited accounts and executions_per_day (-1).
+ * The only differentiator between tiers is users_included.
  */
 export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
   tiers: {
@@ -27,19 +27,12 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
       pricing: {
         price_monthly: 8.99,
         price_yearly: 79.00,
-        stripe_price_id_monthly: undefined,
-        stripe_price_id_yearly: undefined,
+        mobile_price_yearly: 89.99,
+        users_included: 1,
       },
       limits: {
-        accounts: 30,
-        rules: -1,
-        executions_per_day: 6,
-        min_execution_interval_minutes: 240,
-        accounts_synced_per_month: 1000,
-        api_calls_per_month: 500,
-        custom_categories_max: 50,
-        custom_tags_max: 100,
-        data_export_requests_per_month: 10,
+        accounts: -1,
+        executions_per_day: -1,
         transaction_history_days: 730,
       },
       features: {
@@ -59,20 +52,13 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
       pricing: {
         price_monthly: 12.99,
         price_yearly: 119.00,
-        stripe_price_id_monthly: undefined,
-        stripe_price_id_yearly: undefined,
+        mobile_price_yearly: 134.99,
+        users_included: 2,
       },
       limits: {
-        accounts: 60,
-        rules: -1,
-        executions_per_day: 12,
-        min_execution_interval_minutes: 120,
-        accounts_synced_per_month: 2000,
-        api_calls_per_month: 1000,
-        custom_categories_max: 100,
-        custom_tags_max: 200,
-        data_export_requests_per_month: 20,
-        transaction_history_days: 1095,
+        accounts: -1,
+        executions_per_day: -1,
+        transaction_history_days: 730,
       },
       features: {
         ads_enabled: false,
@@ -91,20 +77,13 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
       pricing: {
         price_monthly: 14.99,
         price_yearly: 139.00,
-        stripe_price_id_monthly: undefined,
-        stripe_price_id_yearly: undefined,
+        mobile_price_yearly: 154.99,
+        users_included: 3,
       },
       limits: {
-        accounts: 90,
-        rules: -1,
-        executions_per_day: 18,
-        min_execution_interval_minutes: 60,
-        accounts_synced_per_month: 3000,
-        api_calls_per_month: 1500,
-        custom_categories_max: 150,
-        custom_tags_max: 300,
-        data_export_requests_per_month: 30,
-        transaction_history_days: 1460,
+        accounts: -1,
+        executions_per_day: -1,
+        transaction_history_days: 730,
       },
       features: {
         ads_enabled: false,
@@ -123,20 +102,13 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
       pricing: {
         price_monthly: 16.99,
         price_yearly: 159.00,
-        stripe_price_id_monthly: undefined,
-        stripe_price_id_yearly: undefined,
+        mobile_price_yearly: 179.99,
+        users_included: 4,
       },
       limits: {
-        accounts: 120,
-        rules: -1,
-        executions_per_day: 24,
-        min_execution_interval_minutes: 30,
-        accounts_synced_per_month: 4000,
-        api_calls_per_month: 2000,
-        custom_categories_max: 200,
-        custom_tags_max: 400,
-        data_export_requests_per_month: 40,
-        transaction_history_days: 1825,
+        accounts: -1,
+        executions_per_day: -1,
+        transaction_history_days: 730,
       },
       features: {
         ads_enabled: false,
@@ -155,20 +127,13 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
       pricing: {
         price_monthly: 18.99,
         price_yearly: 179.00,
-        stripe_price_id_monthly: undefined,
-        stripe_price_id_yearly: undefined,
+        mobile_price_yearly: 199.99,
+        users_included: 5,
       },
       limits: {
-        accounts: 150,
-        rules: -1,
-        executions_per_day: 30,
-        min_execution_interval_minutes: 10,
-        accounts_synced_per_month: -1,
-        api_calls_per_month: -1,
-        custom_categories_max: -1,
-        custom_tags_max: -1,
-        data_export_requests_per_month: -1,
-        transaction_history_days: -1,
+        accounts: -1,
+        executions_per_day: -1,
+        transaction_history_days: 730,
       },
       features: {
         ads_enabled: false,
@@ -205,15 +170,8 @@ export function createMockTier(overrides: Partial<SubscriptionTier> = {}): Subsc
  */
 export function createMockLimits(overrides: Partial<SubscriptionLimits> = {}): SubscriptionLimits {
   return {
-    accounts: 10,
-    rules: -1,
-    executions_per_day: 6,
-    min_execution_interval_minutes: 240,
-    accounts_synced_per_month: 1000,
-    api_calls_per_month: 500,
-    custom_categories_max: 50,
-    custom_tags_max: 100,
-    data_export_requests_per_month: 10,
+    accounts: -1,
+    executions_per_day: -1,
     transaction_history_days: 730,
     ...overrides,
   }
@@ -242,8 +200,8 @@ export function createMockPricing(overrides: Partial<SubscriptionPricing> = {}):
   return {
     price_monthly: 0,
     price_yearly: 0,
-    stripe_price_id_monthly: undefined,
-    stripe_price_id_yearly: undefined,
+    mobile_price_yearly: 0,
+    users_included: 1,
     ...overrides,
   }
 }
