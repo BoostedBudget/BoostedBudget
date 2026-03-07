@@ -1,5 +1,8 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { Search } from 'lucide-react'
+import { EmptyState } from '@/components/ui/empty-state'
+import { Button } from '@/components/ui/button'
 import { useTransactions } from './hooks/useTransactions'
 import { useTransactionFilters } from './hooks/useTransactionFilters'
 import { TransactionTable, type TransactionSortColumn, type SortDirection } from './components/TransactionTable'
@@ -320,21 +323,25 @@ export function TransactionsPage() {
       />
 
       {isEmpty ? (
-        <div className="empty-state">
-          <p className="empty-state__message">
-            No transactions found.
-            {hasActiveFilters && ' Try adjusting your filters.'}
-            {filters.search && !hasActiveFilters && ' Try adjusting your search.'}
-          </p>
-          {hasActiveFilters && (
-            <button
-              onClick={clearAllFilters}
-              className="btn-clear-filters"
-            >
-              Clear all filters
-            </button>
-          )}
-        </div>
+        <EmptyState
+          icon={<Search />}
+          title="No transactions found"
+          description={
+            hasActiveFilters
+              ? 'Try adjusting your filters.'
+              : filters.search
+                ? 'Try adjusting your search.'
+                : undefined
+          }
+          action={
+            hasActiveFilters ? (
+              <Button variant="outline" size="sm" onClick={clearAllFilters}>
+                Clear all filters
+              </Button>
+            ) : undefined
+          }
+          className="mt-8"
+        />
       ) : (
         <>
           <div className="transactions-info">

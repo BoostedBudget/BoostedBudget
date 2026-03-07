@@ -85,19 +85,6 @@
   margin-bottom: 2rem;
 }
 
-.empty-state {
-  text-align: center;
-  padding: 3rem 1rem;
-  background: #f8f9fa;
-  border-radius: 8px;
-  margin-top: 2rem;
-}
-
-.empty-state__message {
-  font-size: 1.125rem;
-  color: #666;
-  margin: 0;
-}
 
 .loading,
 .error-state {
@@ -178,13 +165,6 @@
     color: #93c5fd;
   }
 
-  .empty-state {
-    background: #1f2937;
-  }
-
-  .empty-state__message {
-    color: #9ca3af;
-  }
 
   .error-message {
     color: #f87171;
