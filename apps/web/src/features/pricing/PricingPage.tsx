@@ -236,7 +236,6 @@ export function PricingPage() {
             ? `Yearly (Save ${calculateSavingsPercent(tiers.tiers.premium)}%)`
             : 'Yearly'}
         </button>
-        <div className={`billing-toggle__slider ${billingPeriod}`} aria-hidden="true" />
       </div>
 
       <div className="pricing-grid">
