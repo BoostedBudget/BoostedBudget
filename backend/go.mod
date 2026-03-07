@@ -1,6 +1,6 @@
 module github.com/maxnussbaum/BoostedBudget
 
-go 1.25.7
+go 1.26.1
 
 require (
 	github.com/PaddleHQ/paddle-go-sdk/v4 v4.2.0
@@ -14,7 +14,6 @@ require (
 	github.com/labstack/echo/v4 v4.15.0
 	github.com/lib/pq v1.11.1
 	github.com/pashagolub/pgxmock/v4 v4.9.0
-	github.com/plaid/plaid-go/v13 v13.0.0
 	github.com/plaid/plaid-go/v23 v23.0.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/common v0.67.5
