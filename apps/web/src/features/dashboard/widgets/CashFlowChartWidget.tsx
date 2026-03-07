@@ -8,9 +8,11 @@
  * with a net cash flow trend line overlay.
  */
 
-import { useMemo, useContext } from 'react';
-import { format, parseISO } from 'date-fns';
-import type { Data, Layout } from 'plotly.js';
+import { useContext, useMemo } from 'react'
+import { format, parseISO } from 'date-fns'
+import { BarChart3 } from 'lucide-react'
+import { EmptyState } from '@/components/ui/empty-state'
+import type { Data, Layout } from 'plotly.js'
 import {
   Plot,
   useDarkMode,
@@ -19,40 +21,37 @@ import {
   DEFAULT_CONFIG,
   CASH_FLOW_COLORS,
   formatCurrencyFull,
-} from '@/shared/charts';
-import { useCashFlowHistory } from '../hooks/useCashFlowData';
-import { DashboardContext } from '../context/DashboardContext';
-import { registerWidget } from './registry';
-import type { WidgetProps, CashFlowPeriodData } from '../types';
+} from '@/shared/charts'
+import { useCashFlowHistory } from '../hooks/useCashFlowData'
+import { DashboardContext } from '../context/DashboardContext'
+import { registerWidget } from './registry'
+import type { WidgetProps, CashFlowPeriodData } from '../types'
 
 interface ChartDataPoint {
-  label: string;
-  income: number;
-  expenses: number;
-  net: number;
+  label: string
+  income: number
+  expenses: number
+  net: number
 }
 
-function formatPeriodLabel(
-  period: CashFlowPeriodData,
-  grouping: string
-): string {
-  const date = parseISO(period.period_start);
+function formatPeriodLabel(period: CashFlowPeriodData, grouping: string): string {
+  const date = parseISO(period.period_start)
 
   switch (grouping) {
     case 'daily':
-      return format(date, 'MMM d');
+      return format(date, 'MMM d')
     case 'weekly':
-      return `Week of ${format(date, 'MMM d')}`;
+      return `Week of ${format(date, 'MMM d')}`
     case 'monthly':
-      return format(date, 'MMM yyyy');
+      return format(date, 'MMM yyyy')
     default:
-      return format(date, 'MMM d');
+      return format(date, 'MMM d')
   }
 }
 
 function CashFlowChartWidget(_props: WidgetProps) {
-  const context = useContext(DashboardContext);
-  const isDark = useDarkMode();
+  const context = useContext(DashboardContext)
+  const isDark = useDarkMode()
 
   const filters = useMemo(
     () => ({
@@ -62,9 +61,8 @@ function CashFlowChartWidget(_props: WidgetProps) {
       includeTransfers: false,
     }),
     [context?.filters]
-  );
+  )
 
-  // Issue #525: Generate filter key for uirevision to reset zoom on filter changes
   const filterKey = useMemo(
     () =>
       JSON.stringify({
@@ -73,30 +71,28 @@ function CashFlowChartWidget(_props: WidgetProps) {
         accountTypes: filters.accountTypes,
       }),
     [filters.startDate, filters.endDate, filters.accountTypes]
-  );
+  )
 
   const { data, loading, error } = useCashFlowHistory({
     filters,
     enabled: Boolean(filters.startDate && filters.endDate),
-  });
+  })
 
   const chartData = useMemo<ChartDataPoint[]>(() => {
-    if (!data?.periods) return [];
+    if (!data?.periods) return []
 
     return data.periods.map((period) => ({
       label: formatPeriodLabel(period, data.grouping),
       income: period.income,
       expenses: period.expenses,
       net: period.net_cash_flow,
-    }));
-  }, [data]);
+    }))
+  }, [data])
 
-  // Build Plotly traces
   const traces = useMemo((): Data[] => {
-    if (chartData.length === 0) return [];
+    if (chartData.length === 0) return []
 
     return [
-      // Income bar
       {
         x: chartData.map((d) => d.label),
         y: chartData.map((d) => d.income),
@@ -107,7 +103,6 @@ function CashFlowChartWidget(_props: WidgetProps) {
           (d) => `<b>Income</b>: ${formatCurrencyFull(d.income)}<extra></extra>`
         ),
       },
-      // Expenses bar
       {
         x: chartData.map((d) => d.label),
         y: chartData.map((d) => d.expenses),
@@ -119,7 +114,6 @@ function CashFlowChartWidget(_props: WidgetProps) {
             `<b>Expenses</b>: ${formatCurrencyFull(d.expenses)}<extra></extra>`
         ),
       },
-      // Net cash flow line
       {
         x: chartData.map((d) => d.label),
         y: chartData.map((d) => d.net),
@@ -132,35 +126,33 @@ function CashFlowChartWidget(_props: WidgetProps) {
         },
         marker: { size: 6 },
         hovertemplate: chartData.map((d) => {
-          const color = d.net >= 0 ? 'green' : 'red';
-          return `<b style="color:${color}">Net</b>: ${formatCurrencyFull(d.net)}<extra></extra>`;
+          const color = d.net >= 0 ? 'green' : 'red'
+          return `<b style="color:${color}">Net</b>: ${formatCurrencyFull(d.net)}<extra></extra>`
         }),
       },
-    ];
-  }, [chartData]);
+    ]
+  }, [chartData])
 
-  // Build layout with theme support
-  // Issue #525: Added uirevision to reset zoom on filter changes
   const layout = useMemo((): Partial<Layout> => {
-    const base = getBarChartLayout(isDark);
+    const base = getBarChartLayout(isDark)
     return {
       ...base,
       margin: { t: 10, r: 10, b: 40, l: 60 },
-      uirevision: filterKey, // Issue #525: Resets user zoom when filters change
+      uirevision: filterKey,
       yaxis: {
         ...base.yaxis,
-        tickformat: '$.2s', // Compact format like $1.2k
+        tickformat: '$.2s',
       },
       shapes: createHorizontalReferenceLine(0, isDark),
-    };
-  }, [isDark, filterKey]);
+    }
+  }, [isDark, filterKey])
 
   if (!context?.filters.startDate || !context?.filters.endDate) {
     return (
       <div className="flex items-center justify-center h-full text-gray-400">
         Select a date range to view cash flow chart
       </div>
-    );
+    )
   }
 
   if (loading) {
@@ -168,7 +160,7 @@ function CashFlowChartWidget(_props: WidgetProps) {
       <div className="flex items-center justify-center h-full">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
       </div>
-    );
+    )
   }
 
   if (error) {
@@ -176,15 +168,11 @@ function CashFlowChartWidget(_props: WidgetProps) {
       <div className="flex items-center justify-center h-full text-red-500">
         {error}
       </div>
-    );
+    )
   }
 
   if (!data || chartData.length === 0) {
-    return (
-      <div className="flex items-center justify-center h-full text-gray-400">
-        No cash flow data available for this period
-      </div>
-    );
+    return <EmptyState size="compact" icon={<BarChart3 />} title="No cash flow data available for this period" className="h-full" />
   }
 
   return (
@@ -199,12 +187,9 @@ function CashFlowChartWidget(_props: WidgetProps) {
         />
       </div>
     </div>
-  );
+  )
 }
 
-// Register the widget
-// Issue #468: Increased minSize.h from 3 to 4 for proper chart rendering
-// cellHeight=80px, so h=4 gives 320px total, ~244px for chart content
 registerWidget({
   type: 'cash-flow-chart',
   title: 'Cash Flow Chart',
@@ -214,6 +199,6 @@ registerWidget({
   defaultSize: { w: 6, h: 4 },
   minSize: { w: 4, h: 4 },
   Component: CashFlowChartWidget,
-});
+})
 
-export { CashFlowChartWidget };
+export { CashFlowChartWidget }

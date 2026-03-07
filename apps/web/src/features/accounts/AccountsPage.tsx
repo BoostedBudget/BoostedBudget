@@ -1,6 +1,7 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Eye, EyeOff } from 'lucide-react'
+import { Eye, EyeOff, Landmark } from 'lucide-react'
+import { EmptyState } from '@/components/ui/empty-state'
 import { PlaidLinkButton } from './PlaidLinkButton'
 import { AccountCard } from './AccountCard'
 import { AccountTable, type SortColumn as AccountSortColumn, type SortDirection } from './components/AccountTable'
@@ -356,11 +357,12 @@ export function AccountsPage() {
       </div>
 
       {accounts.length === 0 ? (
-        <div className="empty-state">
-          <p className="empty-state__message">
-            No accounts connected yet. Click "Connect Bank Account" above to get started.
-          </p>
-        </div>
+        <EmptyState
+          icon={<Landmark />}
+          title="No accounts connected yet"
+          description='Click "Connect Bank Account" above to get started.'
+          className="mt-8"
+        />
       ) : (
         <div className="accounts-list">
           <p className="accounts-count">

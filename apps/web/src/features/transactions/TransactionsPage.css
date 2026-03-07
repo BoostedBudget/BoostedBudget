@@ -67,19 +67,6 @@
   background-color: #9ca3af;
 }
 
-.empty-state {
-  text-align: center;
-  padding: 3rem 1rem;
-  background: #f8f9fa;
-  border-radius: 8px;
-  margin-top: 2rem;
-}
-
-.empty-state__message {
-  font-size: 1.125rem;
-  color: #666;
-  margin: 0;
-}
 
 .loading,
 .error-state {
@@ -115,22 +102,6 @@
   cursor: not-allowed;
 }
 
-.btn-clear-filters {
-  margin-top: 1rem;
-  padding: 0.5rem 1rem;
-  font-size: 0.875rem;
-  background-color: transparent;
-  color: #3b82f6;
-  border: 1px solid #3b82f6;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: background-color 0.2s, color 0.2s;
-}
-
-.btn-clear-filters:hover {
-  background-color: #3b82f6;
-  color: white;
-}
 
 .pagination-controls {
   display: flex;
