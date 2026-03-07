@@ -483,9 +483,9 @@ describe('DashboardPage', () => {
       const user = userEvent.setup()
       render(<DashboardPage />)
 
-      // Click on "Checking & Savings" checkbox in real AccountTypeFilter
-      const checkbox = screen.getByRole('checkbox', { name: /Checking & Savings/i })
-      await user.click(checkbox)
+      // Open AccountTypeFilter dropdown, then click a type
+      await user.click(screen.getByRole('button', { name: /account types/i }))
+      await user.click(screen.getByRole('menuitemcheckbox', { name: /Checking & Savings/i }))
 
       await waitFor(() => {
         expect(mockSetFilters).toHaveBeenCalled()
@@ -496,8 +496,8 @@ describe('DashboardPage', () => {
       const user = userEvent.setup()
       render(<DashboardPage />)
 
-      // Click on "7 Days" button in real TimeframeSelector
-      const timeframeButton = screen.getByRole('button', { name: '7 Days' })
+      // Click on "7 Days" toggle in real TimeframeSelector
+      const timeframeButton = screen.getByRole('radio', { name: '7 Days' })
       await user.click(timeframeButton)
 
       await waitFor(() => {
@@ -558,10 +558,12 @@ describe('DashboardPage', () => {
       })
     })
 
-    it('should pass accountTypes to AccountTypeFilter', () => {
+    it('should pass accountTypes to AccountTypeFilter', async () => {
+      const user = userEvent.setup()
       render(<DashboardPage />)
 
-      // Real AccountTypeFilter shows the account type labels
+      // Open AccountTypeFilter dropdown to see account type labels
+      await user.click(screen.getByRole('button', { name: /All Account Types/i }))
       expect(screen.getByText('Checking & Savings')).toBeInTheDocument()
       expect(screen.getByText('Credit Cards')).toBeInTheDocument()
     })
@@ -569,9 +571,8 @@ describe('DashboardPage', () => {
     it('should pass selected account types to filter', () => {
       render(<DashboardPage />)
 
-      // Real AccountTypeFilter shows "All Types" checkbox that is checked when no filter selected
-      const allTypesCheckbox = screen.getByRole('checkbox', { name: 'All Types' })
-      expect(allTypesCheckbox).toBeChecked()
+      // Real AccountTypeFilter shows "All Account Types" trigger when no filter selected
+      expect(screen.getByRole('button', { name: /All Account Types/i })).toBeInTheDocument()
     })
 
     it('should pass onRangeChange callback to TimeframeSelector', async () => {
@@ -579,7 +580,7 @@ describe('DashboardPage', () => {
       render(<DashboardPage />)
 
       // Click "7 Days" in real TimeframeSelector
-      const button = screen.getByRole('button', { name: '7 Days' })
+      const button = screen.getByRole('radio', { name: '7 Days' })
       await user.click(button)
 
       await waitFor(() => {
@@ -691,13 +692,13 @@ describe('DashboardPage', () => {
 
       render(<DashboardPage />)
 
-      const dismissButton = screen.getByLabelText('Dismiss tip')
+      const dismissButton = screen.getByLabelText('Dismiss')
       await user.click(dismissButton)
 
       expect(mockDismissHint).toHaveBeenCalledTimes(1)
     })
 
-    it('should render hint with proper styling', () => {
+    it('should render hint with role="alert"', () => {
       mockUseDashboardOnboarding.mockReturnValue({
         showHint: true,
         dismissHint: mockDismissHint,
@@ -705,8 +706,7 @@ describe('DashboardPage', () => {
 
       render(<DashboardPage />)
 
-      const hint = screen.getByText(/Click "Edit" to customize your dashboard/i)
-      expect(hint).toBeInTheDocument()
+      expect(screen.getByRole('alert')).toBeInTheDocument()
     })
   })
 })
