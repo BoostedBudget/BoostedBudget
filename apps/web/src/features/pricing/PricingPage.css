@@ -314,7 +314,7 @@
   color: #616161;
   cursor: pointer;
   border-radius: 20px;
-  transition: color 0.3s ease;
+  transition: color 0.3s ease, background 0.3s ease, box-shadow 0.3s ease;
 }
 
 .billing-toggle__option:hover {
@@ -323,22 +323,8 @@
 
 .billing-toggle__option.active {
   color: #212121;
-}
-
-.billing-toggle__slider {
-  position: absolute;
-  top: 4px;
-  left: 4px;
-  width: calc(50% - 4px);
-  height: calc(100% - 8px);
   background: white;
-  border-radius: 20px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-  transition: transform 0.3s ease;
-}
-
-.billing-toggle__slider.yearly {
-  transform: translateX(100%);
 }
 
 /* Savings Badge */
