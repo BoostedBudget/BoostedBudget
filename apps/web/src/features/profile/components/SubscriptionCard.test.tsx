@@ -53,7 +53,8 @@ describe('SubscriptionCard', () => {
       expect(screen.getByText(/premium/i)).toBeInTheDocument()
       expect(screen.getByText(/\$8\.99/i)).toBeInTheDocument()
       expect(screen.getByText(/unlimited automation rules/i)).toBeInTheDocument()
-      expect(screen.getByText(/30 bank accounts/i)).toBeInTheDocument()
+      expect(screen.getByText(/unlimited bank accounts/i)).toBeInTheDocument()
+      expect(screen.getByText(/for 1 person/i)).toBeInTheDocument()
       expect(screen.getByText(/no ads/i)).toBeInTheDocument()
       expect(screen.getByRole('link', { name: /manage subscription/i })).toBeInTheDocument()
     })
@@ -64,7 +65,7 @@ describe('SubscriptionCard', () => {
       expect(screen.getByText(/household \(2 members\)/i)).toBeInTheDocument()
       expect(screen.getByText(/\$12\.99/i)).toBeInTheDocument()
       expect(screen.getByText(/unlimited automation rules/i)).toBeInTheDocument()
-      expect(screen.getByText(/60 bank accounts/i)).toBeInTheDocument()
+      expect(screen.getByText(/for 2 household members/i)).toBeInTheDocument()
       expect(screen.getByRole('link', { name: /manage subscription/i })).toBeInTheDocument()
     })
 
@@ -73,8 +74,9 @@ describe('SubscriptionCard', () => {
 
       expect(screen.getByText(/household \(5 members\)/i)).toBeInTheDocument()
       expect(screen.getByText(/\$18\.99/i)).toBeInTheDocument()
-      expect(screen.getByText(/150 bank accounts/i)).toBeInTheDocument()
+      expect(screen.getByText(/unlimited bank accounts/i)).toBeInTheDocument()
       expect(screen.getByText(/unlimited automation rules/i)).toBeInTheDocument()
+      expect(screen.getByText(/for 5 household members/i)).toBeInTheDocument()
       expect(screen.getByText(/ai-powered insights/i)).toBeInTheDocument()
       expect(screen.getByRole('link', { name: /manage subscription/i })).toBeInTheDocument()
     })
@@ -103,6 +105,24 @@ describe('SubscriptionCard', () => {
         </QueryClientProvider>
       )
       expect(screen.getByText(/cancelled/i)).toBeInTheDocument()
+    })
+
+    it('should show trial days remaining in badge when status is trial', () => {
+      renderWithRouter(<SubscriptionCard tier="premium" status="trial" trialDaysRemaining={42} />)
+
+      expect(screen.getByText(/trial — 42 days remaining/i)).toBeInTheDocument()
+    })
+
+    it('should show just "trial" when status is trial but no days remaining provided', () => {
+      renderWithRouter(<SubscriptionCard tier="premium" status="trial" />)
+
+      expect(screen.getByText('trial')).toBeInTheDocument()
+    })
+
+    it('should use singular "day" when 1 day remaining', () => {
+      renderWithRouter(<SubscriptionCard tier="premium" status="trial" trialDaysRemaining={1} />)
+
+      expect(screen.getByText(/trial — 1 day remaining/i)).toBeInTheDocument()
     })
   })
 
@@ -227,13 +247,18 @@ describe('SubscriptionCard', () => {
       expect(screen.getByText(/ai-powered insights/i)).toBeInTheDocument()
     })
 
-    it('should show correct account limits per tier', () => {
-      const queryClient = createQueryClient()
-      // Premium: 30 accounts
-      const { rerender } = renderWithRouter(<SubscriptionCard tier="premium" status="active" />, queryClient)
-      expect(screen.getByText(/30 bank accounts/i)).toBeInTheDocument()
+    it('should show unlimited bank accounts for all tiers', () => {
+      renderWithRouter(<SubscriptionCard tier="premium" status="active" />)
+      expect(screen.getByText(/unlimited bank accounts/i)).toBeInTheDocument()
+    })
 
-      // Household 2: 60 accounts
+    it('should show users_included as differentiator per tier', () => {
+      const queryClient = createQueryClient()
+      // Premium: 1 person
+      const { rerender } = renderWithRouter(<SubscriptionCard tier="premium" status="active" />, queryClient)
+      expect(screen.getByText(/for 1 person/i)).toBeInTheDocument()
+
+      // Household 2: 2 household members
       rerender(
         <QueryClientProvider client={queryClient}>
           <MemoryRouter>
@@ -241,9 +266,9 @@ describe('SubscriptionCard', () => {
           </MemoryRouter>
         </QueryClientProvider>
       )
-      expect(screen.getByText(/60 bank accounts/i)).toBeInTheDocument()
+      expect(screen.getByText(/for 2 household members/i)).toBeInTheDocument()
 
-      // Household 5: 150 accounts
+      // Household 5: 5 household members
       rerender(
         <QueryClientProvider client={queryClient}>
           <MemoryRouter>
@@ -251,7 +276,7 @@ describe('SubscriptionCard', () => {
           </MemoryRouter>
         </QueryClientProvider>
       )
-      expect(screen.getByText(/150 bank accounts/i)).toBeInTheDocument()
+      expect(screen.getByText(/for 5 household members/i)).toBeInTheDocument()
     })
 
     it('should show "no ads" for all paid tiers', () => {

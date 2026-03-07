@@ -40,7 +40,7 @@ describe('useAdminSubscriptionDetail', () => {
             base_tier: 'premium',
             effective_tier: 'premium',
             subscription_status: 'active',
-            limits: { accounts: 30, transaction_history_days: 730, executions_per_day: 6 },
+            limits: { accounts: -1, transaction_history_days: 730, executions_per_day: -1 },
             features: { ai_insights: true },
             manual_tier_override: null,
             manual_tier_ends_at: null,

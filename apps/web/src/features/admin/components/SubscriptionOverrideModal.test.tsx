@@ -41,9 +41,9 @@ const SUB_DETAIL = {
     effective_tier: 'premium',
     subscription_status: 'active',
     limits: {
-        accounts: 30,
+        accounts: -1,
         transaction_history_days: 730,
-        executions_per_day: 6,
+        executions_per_day: -1,
     },
     features: { ai_insights: true },
     manual_tier_override: null,
@@ -91,7 +91,7 @@ describe('SubscriptionOverrideModal', () => {
         expect(await screen.findByText(/test@example\.com/i)).toBeInTheDocument()
         expect(screen.getAllByText(/Premium/i)).not.toHaveLength(0)
         expect(screen.getByText(/Status: active/i)).toBeInTheDocument()
-        expect(screen.getByText('30')).toBeInTheDocument()
+        expect(screen.getByText('730d')).toBeInTheDocument()
     })
 
     it('submits override when form is valid', async () => {

@@ -144,7 +144,11 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
 
           <section className="profile-section">
             <h2>Subscription</h2>
-            <SubscriptionCard tier={user.effective_tier ?? user.subscription_tier} status={user.subscription_status} />
+            <SubscriptionCard
+              tier={user.effective_tier ?? user.subscription_tier}
+              status={user.subscription_status}
+              trialDaysRemaining={user.trial_days_remaining}
+            />
           </section>
 
           <ProfileForm user={user} onProfileUpdate={handleProfileUpdate} />

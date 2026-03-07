@@ -197,9 +197,9 @@ func TestSyncLimitService_GetSyncStats(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, stats)
 	assert.Equal(t, 10, stats.AccountsSynced)
-	assert.Equal(t, 30, stats.AccountsLimit) // Premium tier limit
+	assert.Equal(t, -1, stats.AccountsLimit) // Premium tier limit (unlimited)
 	assert.Equal(t, 450, stats.TotalTransactions)
-	assert.True(t, stats.CanSyncMore) // 10 < 30
+	assert.True(t, stats.CanSyncMore) // unlimited accounts, always can sync more
 
 	mockSyncAuditRepo.AssertExpectations(t)
 	mockProfileRepo.AssertExpectations(t)
