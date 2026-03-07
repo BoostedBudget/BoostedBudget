@@ -1,5 +1,5 @@
 # Development Dockerfile for Backend
-FROM golang:1.26.0-alpine
+FROM golang:1.26.1-alpine
 
 # Install dependencies for hot reload and health checks
 RUN echo "📦 Installing build dependencies..." && \
