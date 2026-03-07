@@ -1,87 +1,49 @@
 import { Link } from 'react-router-dom'
 import { Award, Check } from 'lucide-react'
 import { useSubscriptionTiers } from '../../subscription/hooks/useSubscriptionTiers'
-import type { SubscriptionTier, TierName } from '../../subscription/types'
+import type { SubscriptionTier } from '../../subscription/types'
 import './SubscriptionCard.css'
 
 interface SubscriptionCardProps {
   tier: string // User's subscription_tier from API
   status: string // User's subscription_status from API
+  trialDaysRemaining?: number
 }
 
-/**
- * Render the icon for a tier (all tiers use Award now)
- */
-function renderTierIcon(_tier: TierName) {
-  const iconProps = { className: 'tier-icon', 'aria-hidden': true as const }
-  return <Award {...iconProps} />
-}
 
 /**
  * Format price for display
  */
 function formatPrice(price: number | undefined): string {
-  if (price === undefined || price === null) {
-    return '$0'
-  }
-  return price === 0 ? '$0' : `$${price.toFixed(2)}`
+  return !price ? '$0' : `$${price.toFixed(2)}`
 }
 
 /**
  * Build human-readable feature list from tier config
  */
 function buildFeatureList(tierData: SubscriptionTier): string[] {
-  const features: string[] = []
-  const { limits, features: featureFlags } = tierData
+  const { features: featureFlags, pricing } = tierData
 
-  // Add account limit
-  if (limits.accounts === -1) {
-    features.push('Unlimited bank accounts')
-  } else {
-    features.push(`${limits.accounts} bank accounts`)
-  }
+  const usersLabel = pricing.users_included === 1
+    ? 'For 1 person'
+    : `For ${pricing.users_included} household members`
 
-  // Rules are unlimited for all tiers
-  features.push('Unlimited automation rules')
+  const features = [
+    usersLabel,
+    'Unlimited bank accounts',
+    'Unlimited automation rules',
+    featureFlags.ads_enabled ? 'Ad-supported' : 'No ads',
+  ]
 
-  // Add execution frequency
-  const execsPerDay = limits.executions_per_day
-  if (execsPerDay === 1) {
-    features.push('Rules run 1x per day')
-  } else if (execsPerDay >= 144) {
-    features.push('Rules run every 10 minutes')
-  } else {
-    const hours = Math.round(24 / execsPerDay)
-    features.push(`Rules run every ${hours} hours`)
-  }
-
-  // Add feature flags
-  if (featureFlags.ads_enabled) {
-    features.push('Ad-supported')
-  } else {
-    features.push('No ads')
-  }
-
-  if (featureFlags.ai_insights) {
-    features.push('AI-powered insights')
-  }
-
-  if (featureFlags.priority_support) {
-    features.push('Priority support')
-  }
-
-  if (featureFlags.advanced_reports) {
-    features.push('Advanced reports')
-  }
-
-  if (featureFlags.api_access) {
-    features.push('API access')
-  }
+  if (featureFlags.ai_insights) features.push('AI-powered insights')
+  if (featureFlags.priority_support) features.push('Priority support')
+  if (featureFlags.advanced_reports) features.push('Advanced reports')
+  if (featureFlags.api_access) features.push('API access')
 
   return features
 }
 
-export function SubscriptionCard({ tier, status }: SubscriptionCardProps) {
+export function SubscriptionCard({ tier, status, trialDaysRemaining }: SubscriptionCardProps) {
   const { tiers, loading, error } = useSubscriptionTiers()
 
   // Handle loading state
@@ -114,21 +76,15 @@ export function SubscriptionCard({ tier, status }: SubscriptionCardProps) {
     )
   }
 
-  const isPaidTier = true // All tiers are now paid
-
-  // Generate CSS class name for tier (tier names use underscores: premium_plus)
-  const tierClassName = tier
-
-  // Format data for display
   const displayName = tierInfo.display_name
   const displayPrice = formatPrice(tierInfo.pricing.price_monthly)
   const features = buildFeatureList(tierInfo)
 
   return (
-    <div className={`subscription-card tier-${tierClassName}`}>
+    <div className={`subscription-card tier-${tier}`}>
       <div className="subscription-header">
         <div className="tier-info">
-          {renderTierIcon(tier as TierName)}
+          <Award className="tier-icon" aria-hidden="true" />
           <h3 className="tier-name">{displayName}</h3>
         </div>
         <div className="tier-pricing">
@@ -137,7 +93,11 @@ export function SubscriptionCard({ tier, status }: SubscriptionCardProps) {
             <span className="price-period">/month</span>
           )}
         </div>
-        <span className={`status-badge status-${status}`}>{status}</span>
+        <span className={`status-badge status-${status}`}>
+          {status === 'trial' && trialDaysRemaining !== undefined
+            ? `Trial — ${trialDaysRemaining} day${trialDaysRemaining === 1 ? '' : 's'} remaining`
+            : status}
+        </span>
       </div>
 
       <div className="subscription-features">
@@ -152,15 +112,9 @@ export function SubscriptionCard({ tier, status }: SubscriptionCardProps) {
       </div>
 
       <div className="subscription-actions">
-        {isPaidTier ? (
-          <Link to="/billing/manage" className="btn-manage">
-            Manage Subscription
-          </Link>
-        ) : (
-          <Link to="/pricing" className="btn-upgrade">
-            Upgrade to Premium
-          </Link>
-        )}
+        <Link to="/billing/manage" className="btn-manage">
+          Manage Subscription
+        </Link>
         <Link to="/pricing" className="compare-plans-link">
           Compare Plans →
         </Link>

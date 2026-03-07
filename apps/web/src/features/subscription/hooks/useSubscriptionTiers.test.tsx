@@ -91,9 +91,9 @@ describe('useSubscriptionTiers', () => {
 
       const premiumTier = result.current.tiers?.tiers.premium
       expect(premiumTier?.display_name).toBe('Premium')
-      expect(premiumTier?.limits.accounts).toBe(30)
-      // All tiers have unlimited rules
-      expect(premiumTier?.limits.rules).toBe(-1)
+      // All tiers now have unlimited accounts
+      expect(premiumTier?.limits.accounts).toBe(-1)
+      expect(premiumTier?.limits.executions_per_day).toBe(-1)
     })
 
     it('should return premium tier as ad-free', () => {
@@ -107,14 +107,14 @@ describe('useSubscriptionTiers', () => {
       expect(premiumTier?.pricing.price_monthly).toBe(8.99)
     })
 
-    it('should return household_5 tier with high limits', () => {
+    it('should return household_5 tier with unlimited limits', () => {
       const { result } = renderHook(() => useSubscriptionTiers(), {
         wrapper: createWrapper(),
       })
 
       const household5 = result.current.tiers?.tiers.household_5
-      expect(household5?.limits.accounts).toBe(150)
-      expect(household5?.limits.rules).toBe(-1)
+      expect(household5?.limits.accounts).toBe(-1)
+      expect(household5?.limits.executions_per_day).toBe(-1)
       expect(household5?.features.ai_insights).toBe(true)
     })
   })

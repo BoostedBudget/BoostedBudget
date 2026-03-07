@@ -81,6 +81,17 @@ else
   WARNINGS="${WARNINGS}\n  • golangci-lint not installed — install: brew install golangci-lint"
 fi
 
+
+# govulncheck (CI job: security-scan → govulncheck ./...)
+if command -v govulncheck &>/dev/null; then
+  run_check "govulncheck ./...   (vulnerabilities)" \
+    "$PROJECT_ROOT/backend" \
+    "govulncheck ./..."
+else
+  printf '  %-45s⚠️  (not installed)\n' "govulncheck ./...   (vulnerabilities)"
+  WARNINGS="${WARNINGS}\n  • govulncheck not installed — install: go install golang.org/x/vuln/cmd/govulncheck@latest"
+fi
+
 printf '\n'
 
 # =========================================================================
