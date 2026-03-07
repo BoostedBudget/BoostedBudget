@@ -1,9 +1,13 @@
 import { useState } from 'react'
 import { format, subDays, subYears, startOfDay } from 'date-fns'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { Button } from '@/components/ui/button'
 
 interface TimeframeSelectorProps {
   onRangeChange: (startDate: string, endDate: string) => void
 }
+
+const dateInputClass = "w-full px-3 py-2 rounded-md border border-input bg-background text-foreground focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
 
 type PresetPeriod = '7d' | '30d' | '90d' | '1y' | 'all' | 'custom'
 
@@ -16,6 +20,7 @@ type PresetPeriod = '7d' | '30d' | '90d' | '1y' | 'all' | 'custom'
  * - ISO date format for API compatibility
  *
  * Issue #353: Balance Tracking Dashboard
+ * Issue #832: Design system migration (ToggleGroup)
  */
 export function TimeframeSelector({ onRangeChange }: TimeframeSelectorProps) {
   const [selectedPeriod, setSelectedPeriod] = useState<PresetPeriod>('30d')
@@ -24,13 +29,15 @@ export function TimeframeSelector({ onRangeChange }: TimeframeSelectorProps) {
 
   const today = startOfDay(new Date())
 
-  const handlePresetChange = (period: PresetPeriod) => {
-    setSelectedPeriod(period)
+  const handlePresetChange = (period: string) => {
+    // When clicking already-selected item, Radix fires '' (deselect) — use current period
+    const effectivePeriod = (period || selectedPeriod) as PresetPeriod
+    setSelectedPeriod(effectivePeriod)
 
     const endDate = format(today, 'yyyy-MM-dd')
     let startDate: string
 
-    switch (period) {
+    switch (effectivePeriod) {
       case '7d':
         startDate = format(subDays(today, 7), 'yyyy-MM-dd')
         break
@@ -44,7 +51,6 @@ export function TimeframeSelector({ onRangeChange }: TimeframeSelectorProps) {
         startDate = format(subYears(today, 1), 'yyyy-MM-dd')
         break
       case 'all':
-        // Use a very old date to get all history
         startDate = format(subYears(today, 10), 'yyyy-MM-dd')
         break
       case 'custom':
@@ -72,31 +78,23 @@ export function TimeframeSelector({ onRangeChange }: TimeframeSelectorProps) {
   ]
 
   return (
-    <div className="bg-white rounded-lg shadow p-6" data-testid="timeframe-selector">
-      <h3 className="text-lg font-semibold text-gray-900 mb-4">Timeframe</h3>
-
-      {/* Preset buttons */}
-      <div className="grid grid-cols-2 gap-2 mb-4">
+    <div data-testid="timeframe-selector">
+      <ToggleGroup
+        type="single"
+        value={selectedPeriod}
+        onValueChange={handlePresetChange}
+      >
         {presetButtons.map((button) => (
-          <button
-            key={button.value}
-            onClick={() => handlePresetChange(button.value)}
-            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
-              selectedPeriod === button.value
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
-          >
+          <ToggleGroupItem key={button.value} value={button.value}>
             {button.label}
-          </button>
+          </ToggleGroupItem>
         ))}
-      </div>
+      </ToggleGroup>
 
-      {/* Custom date range inputs */}
       {selectedPeriod === 'custom' && (
-        <div className="space-y-3 pt-3 border-t border-gray-200">
+        <div className="mt-3 space-y-3 rounded-lg border border-input bg-background p-3">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-foreground mb-1">
               Start Date
             </label>
             <input
@@ -104,11 +102,11 @@ export function TimeframeSelector({ onRangeChange }: TimeframeSelectorProps) {
               value={customStartDate}
               onChange={(e) => setCustomStartDate(e.target.value)}
               max={customEndDate || format(today, 'yyyy-MM-dd')}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              className={dateInputClass}
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-foreground mb-1">
               End Date
             </label>
             <input
@@ -117,16 +115,16 @@ export function TimeframeSelector({ onRangeChange }: TimeframeSelectorProps) {
               onChange={(e) => setCustomEndDate(e.target.value)}
               min={customStartDate}
               max={format(today, 'yyyy-MM-dd')}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              className={dateInputClass}
             />
           </div>
-          <button
+          <Button
             onClick={handleCustomApply}
             disabled={!customStartDate || !customEndDate}
-            className="w-full px-4 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+            className="w-full"
           >
             Apply Custom Range
-          </button>
+          </Button>
         </div>
       )}
     </div>
