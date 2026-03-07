@@ -6,7 +6,10 @@
  * Issue #584: Unified Card/Table View System
  */
 
-import { useState, useCallback, useMemo } from 'react'
+import { useCallback, useMemo, useState } from 'react'
+import { Tags } from 'lucide-react'
+import { EmptyState } from '@/components/ui/empty-state'
+import { Button } from '@/components/ui/button'
 import { useAutoCategorizationRules } from '../hooks/useAutoCategorizationRules'
 import { useRuleFilters } from '../hooks/useRuleFilters'
 import { AutoCategorizationRuleCard } from './AutoCategorizationRuleCard'
@@ -279,19 +282,16 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
   if (rules.length === 0) {
     return (
       <div className="auto-categorization-page">
-        <div className="auto-categorization-page__empty">
-          <h2 className="auto-categorization-page__empty-title">No rules yet</h2>
-          <p className="auto-categorization-page__empty-text">
-            Create auto-categorization rules to automatically organize your transactions.
-          </p>
-          <button
-            type="button"
-            className="auto-categorization-page__btn auto-categorization-page__btn--primary"
-            onClick={handleCreateClick}
-          >
-            Create Your First Rule
-          </button>
-        </div>
+        <EmptyState
+          icon={<Tags />}
+          title="No rules yet"
+          description="Create auto-categorization rules to automatically organize your transactions."
+          action={
+            <Button onClick={handleCreateClick}>
+              Create Your First Rule
+            </Button>
+          }
+        />
       </div>
     )
   }

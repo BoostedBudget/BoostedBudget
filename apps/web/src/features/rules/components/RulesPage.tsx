@@ -6,10 +6,12 @@
  * Supports card and table views with tier limit display.
  */
 
-import { useState, useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { Plus, AlertCircle, Loader2 } from 'lucide-react'
+import { AlertCircle, Loader2, Plus, Zap } from 'lucide-react'
+import { EmptyState } from '@/components/ui/empty-state'
+import { Button } from '@/components/ui/button'
 import {
   useGetAutomationRules,
   useToggleAutomationRule,
@@ -203,22 +205,17 @@ export function RulesPage() {
         <header className="rules-page__header">
           <h1 className="rules-page__title">Automation Rules</h1>
         </header>
-        <div className="rules-page__empty">
-          <h2>No automation rules yet</h2>
-          <p>
-            Create your first automation rule to automatically manage your
-            budgets, transfers, and savings.
-          </p>
-          <button
-            type="button"
-            onClick={handleCreateRule}
-            className="rules-page__create-btn"
-            aria-label="Create your first rule"
-          >
-            <Plus aria-hidden="true" />
-            Create Your First Rule
-          </button>
-        </div>
+        <EmptyState
+          icon={<Zap />}
+          title="No automation rules yet"
+          description="Create your first automation rule to automatically manage your budgets, transfers, and savings."
+          action={
+            <Button onClick={handleCreateRule}>
+              <Plus />
+              Create Your First Rule
+            </Button>
+          }
+        />
       </div>
     )
   }

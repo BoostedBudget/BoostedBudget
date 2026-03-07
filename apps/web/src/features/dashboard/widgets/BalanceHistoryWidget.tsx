@@ -7,18 +7,19 @@
  * Handles data fetching, loading/error/empty states, and breakdown toggle.
  */
 
-import { useState, useMemo } from 'react';
-import { BalanceHistoryChart } from '../components/BalanceHistoryChart';
-import { useDashboardContext } from '../context/DashboardContext';
-import { useDashboardData } from '../hooks/useDashboardData';
-import { registerWidget } from './registry';
-import type { WidgetProps } from '../types';
+import { useMemo, useState } from 'react'
+import { TrendingUp } from 'lucide-react'
+import { EmptyState } from '@/components/ui/empty-state'
+import { BalanceHistoryChart } from '../components/BalanceHistoryChart'
+import { useDashboardContext } from '../context/DashboardContext'
+import { useDashboardData } from '../hooks/useDashboardData'
+import { registerWidget } from './registry'
+import type { WidgetProps } from '../types'
 
 function BalanceHistoryWidget(_props: WidgetProps) {
-  const { filters } = useDashboardContext();
-  const [showTypeBreakdown, setShowTypeBreakdown] = useState(false);
+  const { filters } = useDashboardContext()
+  const [showTypeBreakdown, setShowTypeBreakdown] = useState(false)
 
-  // Memoize filters to prevent infinite re-renders
   const dashboardFilters = useMemo(
     () => ({
       startDate: filters.startDate,
@@ -26,41 +27,33 @@ function BalanceHistoryWidget(_props: WidgetProps) {
       accountTypes: filters.accountTypes,
     }),
     [filters.startDate, filters.endDate, filters.accountTypes]
-  );
+  )
 
-  // Issue #525: Generate filter key for uirevision to reset zoom on filter changes
   const filterKey = useMemo(
     () => JSON.stringify(dashboardFilters),
     [dashboardFilters]
-  );
+  )
 
-  const { history, loading, error } = useDashboardData(dashboardFilters);
+  const { history, loading, error } = useDashboardData(dashboardFilters)
 
-  // Loading state
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
       </div>
-    );
+    )
   }
 
-  // Error state
   if (error) {
     return (
       <div className="flex items-center justify-center h-full text-red-500 text-sm">
         {error.message}
       </div>
-    );
+    )
   }
 
-  // Empty state
   if (!history) {
-    return (
-      <div className="flex items-center justify-center h-full text-gray-400 text-sm">
-        No history data available
-      </div>
-    );
+    return <EmptyState size="compact" icon={<TrendingUp />} title="No history data available" className="h-full" />
   }
 
   return (
@@ -79,12 +72,9 @@ function BalanceHistoryWidget(_props: WidgetProps) {
         </button>
       </div>
     </div>
-  );
+  )
 }
 
-// Register the widget
-// Issue #468: Increased minSize.h from 3 to 4 for proper chart rendering
-// cellHeight=80px, so h=4 gives 320px total, ~244px for chart content
 registerWidget({
   type: 'balance-history',
   title: 'Balance History',
@@ -95,6 +85,6 @@ registerWidget({
   minSize: { w: 4, h: 4 },
   maxSize: { w: 12, h: 8 },
   Component: BalanceHistoryWidget,
-});
+})
 
-export { BalanceHistoryWidget };
+export { BalanceHistoryWidget }
