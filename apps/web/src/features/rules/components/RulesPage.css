@@ -267,44 +267,6 @@
   background-color: var(--color-blue-800);
 }
 
-/* Empty State */
-.rules-page__empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 4rem 1.5rem;
-  text-align: center;
-  background-color: var(--color-gray-50);
-  border: 2px dashed var(--color-gray-300);
-  border-radius: 0.75rem;
-}
-
-.dark .rules-page__empty {
-  background-color: var(--color-gray-800);
-  border-color: var(--color-gray-600);
-}
-
-.rules-page__empty h2 {
-  margin: 0 0 0.5rem;
-  font-size: 1.25rem;
-  font-weight: 600;
-  color: var(--color-gray-900);
-}
-
-.dark .rules-page__empty h2 {
-  color: var(--color-gray-100);
-}
-
-.rules-page__empty p {
-  margin: 0 0 1.5rem;
-  max-width: 400px;
-  color: var(--color-gray-600);
-}
-
-.dark .rules-page__empty p {
-  color: var(--color-gray-400);
-}
 
 /* Delete Dialog */
 .rules-page__dialog-overlay {

@@ -8,85 +8,74 @@
  * Main page for viewing and managing budgets and savings goals.
  */
 
-import { useState, useCallback, useMemo } from 'react';
-import { toast } from 'sonner';
-import { PlusIcon } from '@heroicons/react/24/outline';
-import { useBudgets } from '../hooks/useBudgets';
-import { useSavingsGoals } from '../hooks/useSavingsGoals';
-import { useBudgetFilters } from '../hooks/useBudgetFilters';
-import { BudgetCard } from './BudgetCard';
-import { BudgetTable, type SortColumn as BudgetSortColumn, type SortDirection } from './BudgetTable';
-import { SavingsGoalCard } from './SavingsGoalCard';
-import { CreateBudgetDialog } from './CreateBudgetDialog';
-import { CreateSavingsGoalDialog } from './CreateSavingsGoalDialog';
-import { DeleteBudgetDialog } from './DeleteBudgetDialog';
-import { DeleteSavingsGoalDialog } from './DeleteSavingsGoalDialog';
-import { ListViewToggle } from '@/shared/components/ListViewToggle';
-import type { ListView } from '@/shared/components/ListViewToggle';
-import type { FilterOption } from '@/shared/components/ColumnFilterDropdown';
-import { STORAGE_KEY_LIST_VIEW } from '../constants';
-import { computeBudgetMetrics, type Budget, type BudgetWithMetrics, type SavingsGoal } from '../types';
-import './BudgetsPage.css';
+import { useCallback, useMemo, useState } from 'react'
+import { toast } from 'sonner'
+import { PlusIcon } from '@heroicons/react/24/outline'
+import { PieChart, Target } from 'lucide-react'
+import { EmptyState } from '@/components/ui/empty-state'
+import { Button } from '@/components/ui/button'
+import { useBudgets } from '../hooks/useBudgets'
+import { useSavingsGoals } from '../hooks/useSavingsGoals'
+import { useBudgetFilters } from '../hooks/useBudgetFilters'
+import { BudgetCard } from './BudgetCard'
+import { BudgetTable, type SortColumn as BudgetSortColumn, type SortDirection } from './BudgetTable'
+import { SavingsGoalCard } from './SavingsGoalCard'
+import { CreateBudgetDialog } from './CreateBudgetDialog'
+import { CreateSavingsGoalDialog } from './CreateSavingsGoalDialog'
+import { DeleteBudgetDialog } from './DeleteBudgetDialog'
+import { DeleteSavingsGoalDialog } from './DeleteSavingsGoalDialog'
+import { ListViewToggle } from '@/shared/components/ListViewToggle'
+import type { ListView } from '@/shared/components/ListViewToggle'
+import type { FilterOption } from '@/shared/components/ColumnFilterDropdown'
+import { STORAGE_KEY_LIST_VIEW } from '../constants'
+import { computeBudgetMetrics, type Budget, type BudgetWithMetrics, type SavingsGoal } from '../types'
+import './BudgetsPage.css'
 
 // Issue #462, #521: Use single state for mutual exclusion - only one dialog can be open at a time
-type ActiveDialog = 'budget' | 'goal' | 'delete-budget' | 'delete-goal' | null;
+type ActiveDialog = 'budget' | 'goal' | 'delete-budget' | 'delete-goal' | null
 
 // Issue #584: Get initial view from localStorage
 function getInitialView(): ListView {
   try {
-    const stored = localStorage.getItem(STORAGE_KEY_LIST_VIEW);
-    if (stored === 'cards' || stored === 'table') return stored;
+    const stored = localStorage.getItem(STORAGE_KEY_LIST_VIEW)
+    if (stored === 'cards' || stored === 'table') return stored
   } catch {
     /* ignore localStorage errors */
   }
-  return 'cards'; // Default to cards
+  return 'cards'
 }
 
 export function BudgetsPage() {
-  const { budgets, loading: budgetsLoading, error: budgetsError, refetch: refetchBudgets, deleteBudget } = useBudgets();
-  const { goals, loading: goalsLoading, error: goalsError, refetch: refetchGoals, deleteGoal } = useSavingsGoals();
+  const { budgets, loading: budgetsLoading, error: budgetsError, refetch: refetchBudgets, deleteBudget } = useBudgets()
+  const { goals, loading: goalsLoading, error: goalsError, refetch: refetchGoals, deleteGoal } = useSavingsGoals()
 
-  // Dialog state - single state ensures only one dialog open at a time
-  const [activeDialog, setActiveDialog] = useState<ActiveDialog>(null);
+  const [activeDialog, setActiveDialog] = useState<ActiveDialog>(null)
+  const [view, setView] = useState<ListView>(getInitialView)
+  const [deletingBudget, setDeletingBudget] = useState<Budget | null>(null)
+  const [deletingGoal, setDeletingGoal] = useState<SavingsGoal | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
+  const [sortColumn, setSortColumn] = useState<BudgetSortColumn | undefined>(undefined)
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
 
-  // Issue #584: View toggle state (cards/table)
-  const [view, setView] = useState<ListView>(getInitialView);
+  const { periodFilter, progressRange, setPeriodFilter, setProgressRange } = useBudgetFilters()
 
-  // Issue #521: Delete state
-  const [deletingBudget, setDeletingBudget] = useState<Budget | null>(null);
-  const [deletingGoal, setDeletingGoal] = useState<SavingsGoal | null>(null);
-  const [isDeleting, setIsDeleting] = useState(false);
-
-  // Issue #590: Sorting state
-  const [sortColumn, setSortColumn] = useState<BudgetSortColumn | undefined>(undefined);
-  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
-
-  // Issue #590: Inline filter state (URL-synced)
-  const {
-    periodFilter,
-    progressRange,
-    setPeriodFilter,
-    setProgressRange,
-  } = useBudgetFilters();
-
-  // Dialog handlers
-  const openBudgetDialog = useCallback(() => setActiveDialog('budget'), []);
-  const openGoalDialog = useCallback(() => setActiveDialog('goal'), []);
+  const openBudgetDialog = useCallback(() => setActiveDialog('budget'), [])
+  const openGoalDialog = useCallback(() => setActiveDialog('goal'), [])
   const closeDialog = useCallback(() => {
-    setActiveDialog(null);
-    setDeletingBudget(null);
-    setDeletingGoal(null);
-  }, []);
+    setActiveDialog(null)
+    setDeletingBudget(null)
+    setDeletingGoal(null)
+  }, [])
 
   const handleBudgetCreated = useCallback((_budget: Budget) => {
-    closeDialog();
-    refetchBudgets();
-  }, [closeDialog, refetchBudgets]);
+    closeDialog()
+    refetchBudgets()
+  }, [closeDialog, refetchBudgets])
 
   const handleGoalCreated = useCallback((_goal: SavingsGoal) => {
-    closeDialog();
-    refetchGoals();
-  }, [closeDialog, refetchGoals]);
+    closeDialog()
+    refetchGoals()
+  }, [closeDialog, refetchGoals])
 
   // Issue #521: Delete budget handlers
   const handleDeleteBudgetClick = useCallback((budgetId: string) => {
@@ -237,8 +226,8 @@ export function BudgetsPage() {
     });
   }, [sortColumn, sortDirection, periodFilter, progressRange]);
 
-  const loading = budgetsLoading || goalsLoading;
-  const error = budgetsError || goalsError;
+  const loading = budgetsLoading || goalsLoading
+  const error = budgetsError || goalsError
 
   if (loading) {
     return (
@@ -248,7 +237,7 @@ export function BudgetsPage() {
           <p>Loading budgets...</p>
         </div>
       </div>
-    );
+    )
   }
 
   if (error) {
@@ -259,24 +248,18 @@ export function BudgetsPage() {
           <span>Error loading budgets: {error.message}</span>
         </div>
       </div>
-    );
+    )
   }
 
-  const activeBudgets = budgets.filter((b) => b.is_active);
-  const inactiveBudgets = budgets.filter((b) => !b.is_active);
-  const activeGoals = goals.filter((g) => !g.is_completed);
-  const completedGoals = goals.filter((g) => g.is_completed);
+  const activeBudgets = budgets.filter((b) => b.is_active)
+  const inactiveBudgets = budgets.filter((b) => !b.is_active)
+  const activeGoals = goals.filter((g) => !g.is_completed)
+  const completedGoals = goals.filter((g) => g.is_completed)
 
   return (
     <div className="budgets-page">
       <header className="budgets-page__header">
-        <div>
-          <h1>Budgets</h1>
-          <p className="budgets-page__subtitle">
-            Track your spending and savings goals
-          </p>
-        </div>
-        {/* Issue #584: View toggle */}
+        <h1>Budgets</h1>
         <ListViewToggle
           view={view}
           onChange={setView}
@@ -300,17 +283,17 @@ export function BudgetsPage() {
           )}
         </div>
         {activeBudgets.length === 0 ? (
-          <div className="budgets-page__empty">
-            <p>No active budgets. Create one to start tracking your spending.</p>
-            <button
-              type="button"
-              onClick={openBudgetDialog}
-              className="budgets-page__empty-button"
-            >
-              <PlusIcon className="h-5 w-5" />
-              Create your first budget
-            </button>
-          </div>
+          <EmptyState
+            icon={<PieChart />}
+            title="No active budgets"
+            description="Create one to start tracking your spending."
+            action={
+              <Button onClick={openBudgetDialog}>
+                <PlusIcon className="h-5 w-5" />
+                Create your first budget
+              </Button>
+            }
+          />
         ) : view === 'table' ? (
           <BudgetTable
             budgets={filterAndSortBudgets(activeBudgets)}
@@ -379,17 +362,17 @@ export function BudgetsPage() {
           )}
         </div>
         {activeGoals.length === 0 && completedGoals.length === 0 ? (
-          <div className="budgets-page__empty">
-            <p>No savings goals yet. Create one to track your progress.</p>
-            <button
-              type="button"
-              onClick={openGoalDialog}
-              className="budgets-page__empty-button"
-            >
-              <PlusIcon className="h-5 w-5" />
-              Create your first goal
-            </button>
-          </div>
+          <EmptyState
+            icon={<Target />}
+            title="No savings goals yet"
+            description="Create one to track your progress."
+            action={
+              <Button onClick={openGoalDialog}>
+                <PlusIcon className="h-5 w-5" />
+                Create your first goal
+              </Button>
+            }
+          />
         ) : (
           <>
             {activeGoals.length > 0 && (
