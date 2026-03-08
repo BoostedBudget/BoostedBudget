@@ -11,7 +11,6 @@
 import { useContext, useMemo } from 'react'
 import { format, parseISO } from 'date-fns'
 import { BarChart3 } from 'lucide-react'
-import { EmptyState } from '@/components/ui/empty-state'
 import type { Data, Layout } from 'plotly.js'
 import {
   Plot,
@@ -25,6 +24,7 @@ import {
 import { useCashFlowHistory } from '../hooks/useCashFlowData'
 import { DashboardContext } from '../context/DashboardContext'
 import { registerWidget } from './registry'
+import { WidgetEmptyState } from './WidgetEmptyState'
 import type { WidgetProps, CashFlowPeriodData } from '../types'
 
 interface ChartDataPoint {
@@ -165,14 +165,16 @@ function CashFlowChartWidget(_props: WidgetProps) {
 
   if (error) {
     return (
-      <div className="flex items-center justify-center h-full text-red-500">
+      <div className="flex items-center justify-center h-full text-red-500 text-sm">
         {error}
       </div>
     )
   }
 
-  if (!data || chartData.length === 0) {
-    return <EmptyState size="compact" icon={<BarChart3 />} title="No cash flow data available for this period" className="h-full" />
+  const isAllZero = chartData.every(d => d.income === 0 && d.expenses === 0 && d.net === 0)
+
+  if (!data || chartData.length === 0 || isAllZero) {
+    return <WidgetEmptyState widgetType="cash-flow-chart" />
   }
 
   return (
@@ -199,6 +201,12 @@ registerWidget({
   defaultSize: { w: 6, h: 4 },
   minSize: { w: 4, h: 4 },
   Component: CashFlowChartWidget,
+  emptyState: {
+    icon: <BarChart3 />,
+    title: 'No cash flow data yet',
+    noAccountsDescription: 'Connect a bank account to see your income and expenses',
+    noDataDescription: 'No transactions found for this time period',
+  },
 })
 
 export { CashFlowChartWidget }

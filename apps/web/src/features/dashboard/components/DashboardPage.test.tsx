@@ -4,6 +4,7 @@
  */
 
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
+import { MemoryRouter } from 'react-router'
 import type {
   BalanceSummary,
   BalanceHistory,
@@ -127,7 +128,7 @@ describe('DashboardPage', () => {
     ],
   }
 
-  // Default context value
+  // Default context value (hasAccounts: true so banner doesn't appear in most tests)
   const defaultContextValue = {
     filters: {
       startDate: '2025-01-01',
@@ -140,6 +141,8 @@ describe('DashboardPage', () => {
     setTimeframe: mockSetTimeframe,
     isEditing: false,
     setIsEditing: mockSetIsEditing,
+    hasAccounts: true,
+    accountsLoading: false,
   }
 
   // Store original window.location for restoration
@@ -586,6 +589,86 @@ describe('DashboardPage', () => {
       await waitFor(() => {
         expect(mockSetFilters).toHaveBeenCalled()
       })
+    })
+  })
+
+  describe('Welcome Banner', () => {
+    const noBankAccountContext = {
+      ...defaultContextValue,
+      hasAccounts: false,
+      accountsLoading: false,
+    }
+
+    it('should show welcome banner when hasAccounts is false', () => {
+      mockUseDashboardContext.mockReturnValue(noBankAccountContext)
+
+      render(
+        <MemoryRouter>
+          <DashboardPage />
+        </MemoryRouter>
+      )
+
+      expect(screen.getByText('Welcome to BoostedBudget!')).toBeInTheDocument()
+    })
+
+    it('should show connect account description in banner', () => {
+      mockUseDashboardContext.mockReturnValue(noBankAccountContext)
+
+      render(
+        <MemoryRouter>
+          <DashboardPage />
+        </MemoryRouter>
+      )
+
+      expect(
+        screen.getByText('Connect your first bank account to start tracking your finances')
+      ).toBeInTheDocument()
+    })
+
+    it('should show CTA link to /accounts in banner', () => {
+      mockUseDashboardContext.mockReturnValue(noBankAccountContext)
+
+      render(
+        <MemoryRouter>
+          <DashboardPage />
+        </MemoryRouter>
+      )
+
+      const link = screen.getByRole('link', { name: /connect bank account/i })
+      expect(link).toBeInTheDocument()
+      expect(link).toHaveAttribute('href', '/accounts')
+    })
+
+    it('should hide welcome banner when hasAccounts is true', () => {
+      mockUseDashboardContext.mockReturnValue({ ...defaultContextValue, hasAccounts: true })
+
+      render(<DashboardPage />)
+
+      expect(screen.queryByText('Welcome to BoostedBudget!')).not.toBeInTheDocument()
+    })
+
+    it('should hide welcome banner while accounts are loading', () => {
+      mockUseDashboardContext.mockReturnValue({
+        ...defaultContextValue,
+        hasAccounts: false,
+        accountsLoading: true,
+      })
+
+      render(<DashboardPage />)
+
+      expect(screen.queryByText('Welcome to BoostedBudget!')).not.toBeInTheDocument()
+    })
+
+    it('should still show dashboard grid below banner', () => {
+      mockUseDashboardContext.mockReturnValue(noBankAccountContext)
+
+      render(
+        <MemoryRouter>
+          <DashboardPage />
+        </MemoryRouter>
+      )
+
+      expect(screen.getByTestId('dashboard-grid')).toBeInTheDocument()
     })
   })
 

@@ -8,6 +8,7 @@
 
 import React, { createContext, useContext, useMemo, useState, useCallback } from 'react';
 import { format, subDays, startOfMonth, endOfMonth } from 'date-fns';
+import { useGetAccounts } from '@boostedbudget/api-client/endpoints/accounts/accounts';
 
 export interface DashboardContextValue {
   filters: {
@@ -21,6 +22,8 @@ export interface DashboardContextValue {
   setTimeframe: (timeframe: DashboardContextValue['timeframe']) => void;
   isEditing: boolean;
   setIsEditing: (editing: boolean) => void;
+  hasAccounts: boolean;
+  accountsLoading: boolean;
 }
 
 // eslint-disable-next-line react-refresh/only-export-components
@@ -62,6 +65,9 @@ export function DashboardProvider({ children }: DashboardProviderProps) {
   const [customFilters, setCustomFilters] = useState<Partial<DashboardContextValue['filters']>>({});
   const [isEditing, setIsEditing] = useState(false);
 
+  const { data: accountsData, isLoading: accountsLoading } = useGetAccounts();
+  const hasAccounts = (accountsData?.accounts?.length ?? 0) > 0;
+
   const baseFilters = useMemo(() => {
     const dateRange = getDateRangeForTimeframe(timeframe);
     return {
@@ -96,7 +102,9 @@ export function DashboardProvider({ children }: DashboardProviderProps) {
     setTimeframe,
     isEditing,
     setIsEditing,
-  }), [filters, setFilters, timeframe, setTimeframe, isEditing]);
+    hasAccounts,
+    accountsLoading,
+  }), [filters, setFilters, timeframe, setTimeframe, isEditing, hasAccounts, accountsLoading]);
 
   return (
     <DashboardContext.Provider value={value}>

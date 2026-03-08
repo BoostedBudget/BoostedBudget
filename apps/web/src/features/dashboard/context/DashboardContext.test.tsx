@@ -11,11 +11,23 @@
  * not the centralized mock. Run with: scripts/test-real-implementations.sh
  */
 
-import { describe, it, expect, beforeEach, afterEach, spyOn, setSystemTime } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach, spyOn, setSystemTime, mock } from 'bun:test'
 import { render, screen, renderHook, act } from '@testing-library/react'
 import { format, subDays, startOfMonth, endOfMonth } from 'date-fns'
-import { DashboardProvider, useDashboardContext, DashboardContext } from './DashboardContext'
 import type { ReactNode } from 'react'
+
+// Must be hoisted before DashboardProvider import (bun:test hoists mock.module calls)
+const mockUseGetAccounts = mock(() => ({
+  data: undefined,
+  isLoading: false,
+  error: null,
+}))
+
+mock.module('@boostedbudget/api-client/endpoints/accounts/accounts', () => ({
+  useGetAccounts: mockUseGetAccounts,
+}))
+
+import { DashboardProvider, useDashboardContext, DashboardContext } from './DashboardContext'
 
 const wrapper = ({ children }: { children: ReactNode }) => (
   <DashboardProvider>{children}</DashboardProvider>
@@ -355,6 +367,62 @@ describe('DashboardContext', () => {
 
     it('should have null default value when accessed without provider', () => {
       expect(DashboardContext).toBeDefined()
+    })
+  })
+
+  describe('hasAccounts', () => {
+    beforeEach(() => {
+      mockUseGetAccounts.mockClear()
+    })
+
+    it('should provide hasAccounts: false when no accounts', () => {
+      mockUseGetAccounts.mockReturnValue({
+        data: { accounts: [] },
+        isLoading: false,
+        error: null,
+      })
+      const { result } = renderHook(() => useDashboardContext(), { wrapper })
+      expect(result.current.hasAccounts).toBe(false)
+    })
+
+    it('should provide hasAccounts: true when accounts exist', () => {
+      mockUseGetAccounts.mockReturnValue({
+        data: { accounts: [{ id: '1', name: 'Checking' }] },
+        isLoading: false,
+        error: null,
+      })
+      const { result } = renderHook(() => useDashboardContext(), { wrapper })
+      expect(result.current.hasAccounts).toBe(true)
+    })
+
+    it('should provide hasAccounts: false when data is undefined', () => {
+      mockUseGetAccounts.mockReturnValue({
+        data: undefined,
+        isLoading: false,
+        error: null,
+      })
+      const { result } = renderHook(() => useDashboardContext(), { wrapper })
+      expect(result.current.hasAccounts).toBe(false)
+    })
+
+    it('should provide accountsLoading: true while fetching', () => {
+      mockUseGetAccounts.mockReturnValue({
+        data: undefined,
+        isLoading: true,
+        error: null,
+      })
+      const { result } = renderHook(() => useDashboardContext(), { wrapper })
+      expect(result.current.accountsLoading).toBe(true)
+    })
+
+    it('should provide accountsLoading: false when not loading', () => {
+      mockUseGetAccounts.mockReturnValue({
+        data: { accounts: [] },
+        isLoading: false,
+        error: null,
+      })
+      const { result } = renderHook(() => useDashboardContext(), { wrapper })
+      expect(result.current.accountsLoading).toBe(false)
     })
   })
 })
