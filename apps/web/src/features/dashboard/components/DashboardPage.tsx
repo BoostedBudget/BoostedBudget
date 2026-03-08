@@ -1,6 +1,9 @@
 import { useState, useCallback, useMemo } from 'react'
 import { useAuth } from '@clerk/react-router'
-import { PlusIcon, PencilIcon, ArrowPathIcon, XMarkIcon } from '@heroicons/react/24/outline'
+import { PlusIcon, PencilIcon, ArrowPathIcon } from '@heroicons/react/24/outline'
+import { LightbulbIcon } from 'lucide-react'
+import { Alert } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
 import { DashboardProvider, useDashboardContext } from '../context/DashboardContext'
 import { useDashboardLayout } from '../hooks/useDashboardLayout'
 import { useDashboardOnboarding } from '../hooks/useDashboardOnboarding'
@@ -8,7 +11,6 @@ import { DashboardGrid, WidgetCatalog } from '../widgets'
 import { AccountTypeFilter } from './AccountTypeFilter'
 import { TimeframeSelector } from './TimeframeSelector'
 import { useDashboardData } from '../hooks/useDashboardData'
-import type { WidgetType } from '../types'
 
 // Import widgets to register them
 import '../widgets'
@@ -62,14 +64,6 @@ function DashboardContent() {
     setFilters({ startDate, endDate })
   }, [setFilters])
 
-  const handleAddWidget = useCallback((type: WidgetType) => {
-    addWidget(type)
-  }, [addWidget])
-
-  const handleRemoveWidget = useCallback((widgetId: string) => {
-    removeWidget(widgetId)
-  }, [removeWidget])
-
   const handleResetLayout = useCallback(async () => {
     await resetToDefault()
     setIsEditing(false)
@@ -107,12 +101,11 @@ function DashboardContent() {
             Failed to Load Dashboard
           </h2>
           <p className="text-gray-600 dark:text-gray-400 mb-6">{error}</p>
-          <button
+          <Button
             onClick={() => window.location.reload()}
-            className="px-6 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors"
           >
             Try Again
-          </button>
+          </Button>
         </div>
       </div>
     )
@@ -130,16 +123,15 @@ function DashboardContent() {
             </p>
             {/* Onboarding hint for first-time users - Issue #412 */}
             {showHint && !isEditing && (
-              <div className="mt-2 flex items-center gap-2 text-sm text-blue-600 dark:text-blue-400">
+              <Alert
+                variant="info"
+                dismissible
+                onDismiss={dismissHint}
+                className="mt-2 py-2"
+              >
+                <LightbulbIcon className="h-4 w-4" />
                 <span>Tip: Click "Edit" to customize your dashboard layout</span>
-                <button
-                  onClick={dismissHint}
-                  className="p-0.5 hover:bg-blue-100 dark:hover:bg-blue-900/30 rounded"
-                  aria-label="Dismiss tip"
-                >
-                  <XMarkIcon className="h-4 w-4" />
-                </button>
-              </div>
+              </Alert>
             )}
           </div>
 
@@ -153,35 +145,33 @@ function DashboardContent() {
 
             {isEditing && (
               <>
-                <button
+                <Button
                   onClick={() => setCatalogOpen(true)}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors"
+                  className="gap-1.5"
                 >
                   <PlusIcon className="h-4 w-4" />
                   Add Widget
-                </button>
-                <button
+                </Button>
+                <Button
                   onClick={handleResetLayout}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 font-medium rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
+                  variant="outline"
+                  className="gap-1.5"
                 >
                   <ArrowPathIcon className="h-4 w-4" />
                   Reset
-                </button>
+                </Button>
               </>
             )}
 
             {/* Issue #470: Use handleExitEditMode to save on Done click */}
-            <button
+            <Button
               onClick={() => isEditing ? handleExitEditMode() : setIsEditing(true)}
-              className={`inline-flex items-center gap-1.5 px-4 py-2 font-medium rounded-lg transition-colors ${
-                isEditing
-                  ? 'bg-green-600 text-white hover:bg-green-700'
-                  : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600'
-              }`}
+              variant={isEditing ? 'default' : 'outline'}
+              className="gap-1.5"
             >
               <PencilIcon className="h-4 w-4" />
               {isEditing ? 'Done' : 'Edit'}
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -202,7 +192,7 @@ function DashboardContent() {
           layout={layout}
           isEditing={isEditing}
           onLayoutChange={updateLayout}
-          onRemoveWidget={handleRemoveWidget}
+          onRemoveWidget={removeWidget}
         />
       </div>
 
@@ -210,7 +200,7 @@ function DashboardContent() {
       <WidgetCatalog
         isOpen={catalogOpen}
         onClose={() => setCatalogOpen(false)}
-        onAddWidget={handleAddWidget}
+        onAddWidget={addWidget}
         existingWidgetTypes={existingWidgetTypes}
       />
     </div>

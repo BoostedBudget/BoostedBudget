@@ -1,3 +1,14 @@
+import { ChevronDownIcon } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { formatCurrency } from '@/lib/utils'
 import type { AccountTypesResponse } from '../types'
 
 interface AccountTypeFilterProps {
@@ -10,21 +21,26 @@ interface AccountTypeFilterProps {
  * AccountTypeFilter component for filtering dashboard by account type
  *
  * Features:
+ * - Compact dropdown trigger with selection summary
  * - Multi-select checkboxes for each account type
  * - Shows account count and total balance for each type
  * - "All" option to select/deselect all types
  *
  * Issue #353: Balance Tracking Dashboard
+ * Issue #832: Design system migration (DropdownMenu)
  */
 export function AccountTypeFilter({
   accountTypes,
   selectedTypes,
   onChange,
 }: AccountTypeFilterProps) {
-  // Handle null/undefined types (no accounts case)
   const types = accountTypes.types ?? []
   const allTypes = types.map((t) => t.key)
   const allSelected = selectedTypes.length === 0 || selectedTypes.length === allTypes.length
+
+  const triggerLabel = allSelected
+    ? 'All Account Types'
+    : `${selectedTypes.length} of ${types.length} types`
 
   const handleToggleAll = () => {
     if (allSelected) {
@@ -42,68 +58,49 @@ export function AccountTypeFilter({
     }
   }
 
-  const formatCurrency = (value: number) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(value)
-  }
+  const isTypeSelected = (typeKey: string) =>
+    selectedTypes.length === 0 || selectedTypes.includes(typeKey)
 
   return (
-    <div className="bg-white rounded-lg shadow p-6" data-testid="account-type-filter">
-      <h3 className="text-lg font-semibold text-gray-900 mb-4">
-        Account Types
-      </h3>
-
-      <div className="space-y-3">
-        {/* All option */}
-        <label className="flex items-center space-x-3 cursor-pointer">
-          <input
-            type="checkbox"
+    <div data-testid="account-type-filter">
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="outline" className="gap-2">
+            {triggerLabel}
+            <ChevronDownIcon className="size-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-64">
+          <DropdownMenuLabel>Account Types</DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuCheckboxItem
             checked={allSelected}
-            onChange={handleToggleAll}
-            className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-          />
-          <span className="text-sm font-medium text-gray-900">All Types</span>
-        </label>
-
-        <div className="border-t border-gray-200 pt-3"></div>
-
-        {/* Individual account types */}
-        {types.map((type) => {
-          const isSelected =
-            selectedTypes.length === 0 || selectedTypes.includes(type.key)
-
-          return (
-            <label
+            onCheckedChange={handleToggleAll}
+          >
+            All Types
+          </DropdownMenuCheckboxItem>
+          <DropdownMenuSeparator />
+          {types.map((type) => (
+            <DropdownMenuCheckboxItem
               key={type.key}
-              className="flex items-center justify-between cursor-pointer hover:bg-gray-50 -mx-2 px-2 py-1 rounded"
+              checked={isTypeSelected(type.key)}
+              onCheckedChange={() => handleToggleType(type.key)}
             >
-              <div className="flex items-center space-x-3">
-                <input
-                  type="checkbox"
-                  checked={isSelected}
-                  onChange={() => handleToggleType(type.key)}
-                  className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                />
+              <div className="flex w-full items-center justify-between gap-2">
                 <div>
-                  <p className="text-sm font-medium text-gray-900">
-                    {type.label}
-                  </p>
-                  <p className="text-xs text-gray-500">
+                  <p className="font-medium">{type.label}</p>
+                  <p className="text-xs text-muted-foreground">
                     {type.count} account{type.count !== 1 ? 's' : ''}
                   </p>
                 </div>
+                <span className="text-sm font-semibold">
+                  {formatCurrency(type.total_balance)}
+                </span>
               </div>
-              <span className="text-sm font-semibold text-gray-700">
-                {formatCurrency(type.total_balance)}
-              </span>
-            </label>
-          )
-        })}
-      </div>
+            </DropdownMenuCheckboxItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   )
 }

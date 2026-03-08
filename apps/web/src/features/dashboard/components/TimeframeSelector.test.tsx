@@ -1,6 +1,6 @@
 /**
  * TimeframeSelector Component Tests
- * Issue #564: Frontend Test Coverage Improvement
+ * Issue #832: Updated for ToggleGroup design system integration
  */
 
 import { describe, it, expect, mock, beforeEach, afterEach, setSystemTime } from 'bun:test'
@@ -21,12 +21,6 @@ describe('TimeframeSelector', () => {
   })
 
   describe('Rendering', () => {
-    it('should render the component with title', () => {
-      render(<TimeframeSelector onRangeChange={mockOnRangeChange} />)
-
-      expect(screen.getByText('Timeframe')).toBeInTheDocument()
-    })
-
     it('should render all preset buttons', () => {
       render(<TimeframeSelector onRangeChange={mockOnRangeChange} />)
 
@@ -38,11 +32,16 @@ describe('TimeframeSelector', () => {
       expect(screen.getByText('Custom')).toBeInTheDocument()
     })
 
-    it('should have 30 Days selected by default', () => {
+    it('should render with role="group"', () => {
+      render(<TimeframeSelector onRangeChange={mockOnRangeChange} />)
+      expect(screen.getByRole('group')).toBeInTheDocument()
+    })
+
+    it('should have 30 Days selected by default (data-state="on")', () => {
       render(<TimeframeSelector onRangeChange={mockOnRangeChange} />)
 
-      const button30d = screen.getByText('30 Days')
-      expect(button30d.className).toContain('bg-blue-600')
+      const button30d = screen.getByText('30 Days').closest('button')
+      expect(button30d).toHaveAttribute('data-state', 'on')
     })
 
     it('should not show custom date inputs by default', () => {
@@ -80,29 +79,29 @@ describe('TimeframeSelector', () => {
   })
 
   describe('Button Selection State', () => {
-    it('should update selected button styling when clicked', () => {
+    it('should update selected button to data-state="on" when clicked', () => {
       render(<TimeframeSelector onRangeChange={mockOnRangeChange} />)
 
-      const button7d = screen.getByText('7 Days')
-      const button30d = screen.getByText('30 Days')
+      const button7d = screen.getByText('7 Days').closest('button')
+      const button30d = screen.getByText('30 Days').closest('button')
 
       // Initially 30d is selected
-      expect(button30d.className).toContain('bg-blue-600')
-      expect(button7d.className).not.toContain('bg-blue-600')
+      expect(button30d).toHaveAttribute('data-state', 'on')
+      expect(button7d).toHaveAttribute('data-state', 'off')
 
       // Click 7d
-      fireEvent.click(button7d)
+      fireEvent.click(button7d!)
 
       // Now 7d should be selected
-      expect(button7d.className).toContain('bg-blue-600')
-      expect(button30d.className).not.toContain('bg-blue-600')
+      expect(button7d).toHaveAttribute('data-state', 'on')
+      expect(button30d).toHaveAttribute('data-state', 'off')
     })
 
-    it('should show unselected button with gray styling', () => {
+    it('should show unselected button with data-state="off"', () => {
       render(<TimeframeSelector onRangeChange={mockOnRangeChange} />)
 
-      const button7d = screen.getByText('7 Days')
-      expect(button7d.className).toContain('bg-gray-100')
+      const button7d = screen.getByText('7 Days').closest('button')
+      expect(button7d).toHaveAttribute('data-state', 'off')
     })
   })
 
@@ -131,7 +130,6 @@ describe('TimeframeSelector', () => {
 
       fireEvent.click(screen.getByText('Custom'))
 
-      // Get date inputs by their type attribute
       const dateInputs = Array.from(container.querySelectorAll('input[type="date"]')) as HTMLInputElement[]
       fireEvent.change(dateInputs[0], { target: { value: '2025-01-01' } })
 
