@@ -9,6 +9,7 @@ import { NetWorthDisplay } from '../components/NetWorthDisplay';
 import { useDashboardContext } from '../context/DashboardContext';
 import { useNetWorthData } from '../hooks/useNetWorthData';
 import { registerWidget } from './registry';
+import { WidgetEmptyState } from './WidgetEmptyState';
 
 function NetWorthWidget() {
   const { filters } = useDashboardContext();
@@ -46,11 +47,7 @@ function NetWorthWidget() {
 
   // Empty state
   if (!summary) {
-    return (
-      <div className="flex items-center justify-center h-full text-gray-400 text-sm">
-        No data available
-      </div>
-    );
+    return <WidgetEmptyState widgetType="net-worth" />;
   }
 
   return (
@@ -88,6 +85,12 @@ registerWidget({
   minSize: { w: 3, h: 3 },
   maxSize: { w: 6, h: 6 },
   Component: NetWorthWidget,
+  emptyState: {
+    icon: <TrendingUp />,
+    title: 'No net worth data yet',
+    noAccountsDescription: 'Connect a bank account to track your net worth',
+    noDataDescription: 'No net worth data available',
+  },
 });
 
 export { NetWorthWidget };

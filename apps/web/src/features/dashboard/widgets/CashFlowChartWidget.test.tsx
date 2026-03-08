@@ -52,6 +52,8 @@ describe('CashFlowChartWidget', () => {
     setTimeframe: mock(() => {}),
     isEditing: false,
     setIsEditing: mock(() => {}),
+    hasAccounts: false,
+    accountsLoading: false,
   }
 
   const mockHistoryData = {
@@ -150,7 +152,7 @@ describe('CashFlowChartWidget', () => {
       expect(screen.getByText('Failed to load chart data')).toBeInTheDocument()
     })
 
-    it('should show no data message when data is null', () => {
+    it('should show empty state when data is null', () => {
       mockUseCashFlowHistory.mockReturnValue({
         data: null,
         loading: false,
@@ -164,12 +166,10 @@ describe('CashFlowChartWidget', () => {
         </TestWrapper>
       )
 
-      expect(
-        screen.getByText('No cash flow data available for this period')
-      ).toBeInTheDocument()
+      expect(screen.getByRole('status')).toBeInTheDocument()
     })
 
-    it('should show no data message when periods array is empty', () => {
+    it('should show empty state when periods array is empty', () => {
       mockUseCashFlowHistory.mockReturnValue({
         data: { ...mockHistoryData, periods: [] },
         loading: false,
@@ -183,9 +183,7 @@ describe('CashFlowChartWidget', () => {
         </TestWrapper>
       )
 
-      expect(
-        screen.getByText('No cash flow data available for this period')
-      ).toBeInTheDocument()
+      expect(screen.getByRole('status')).toBeInTheDocument()
     })
   })
 

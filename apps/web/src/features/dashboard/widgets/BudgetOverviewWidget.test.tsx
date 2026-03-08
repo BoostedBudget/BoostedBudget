@@ -1,6 +1,7 @@
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { MemoryRouter } from 'react-router'
 import type { ReactNode } from 'react'
 import type { Budget } from '../../budgets/types'
 import {
@@ -9,13 +10,17 @@ import {
 } from '@/test/mocks/budgets-api'
 import { BudgetOverviewWidget } from './BudgetOverviewWidget'
 
-// Create QueryClient wrapper for tests
+// Create QueryClient + Router wrapper for tests
 function createWrapper() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
   return function Wrapper({ children }: { children: ReactNode }) {
-    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    return (
+      <MemoryRouter>
+        <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      </MemoryRouter>
+    )
   }
 }
 

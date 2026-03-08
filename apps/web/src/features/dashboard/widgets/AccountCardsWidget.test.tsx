@@ -135,12 +135,12 @@ describe('AccountCardsWidget', () => {
   })
 
   describe('Empty State', () => {
-    it('should show no data message when summary is null', () => {
+    it('should show empty state when summary is null', () => {
       setMockDataState({})
 
       render(<AccountCardsWidget {...defaultProps} />)
 
-      expect(screen.getByText('No account data available')).toBeInTheDocument()
+      expect(screen.getByRole('status')).toBeInTheDocument()
     })
   })
 

@@ -6,10 +6,12 @@
  */
 
 import { useMemo } from 'react';
+import { CreditCard } from 'lucide-react';
 import { AccountBalanceCards } from '../components/AccountBalanceCards';
 import { useDashboardContext } from '../context/DashboardContext';
 import { useDashboardData } from '../hooks/useDashboardData';
 import { registerWidget } from './registry';
+import { WidgetEmptyState } from './WidgetEmptyState';
 import type { WidgetProps } from '../types';
 
 function AccountCardsWidget(_props: WidgetProps) {
@@ -41,11 +43,7 @@ function AccountCardsWidget(_props: WidgetProps) {
   }
 
   if (!summary) {
-    return (
-      <div className="flex items-center justify-center h-full text-gray-400 text-sm">
-        No account data available
-      </div>
-    );
+    return <WidgetEmptyState widgetType="account-cards" />;
   }
 
   return (
@@ -66,6 +64,12 @@ registerWidget({
   defaultSize: { w: 12, h: 3 },
   minSize: { w: 6, h: 3 },
   Component: AccountCardsWidget,
+  emptyState: {
+    icon: <CreditCard />,
+    title: 'No accounts yet',
+    noAccountsDescription: 'Connect a bank account to see your accounts here',
+    noDataDescription: 'No account data available',
+  },
 });
 
 export { AccountCardsWidget };

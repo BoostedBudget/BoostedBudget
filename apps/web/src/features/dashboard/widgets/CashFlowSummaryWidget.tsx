@@ -12,10 +12,15 @@ import {
   ArrowDownIcon,
   ArrowsRightLeftIcon,
 } from '@heroicons/react/24/solid';
+import { BarChart3 } from 'lucide-react';
 import { useCashFlowSummary } from '../hooks/useCashFlowData';
 import { DashboardContext } from '../context/DashboardContext';
 import { registerWidget } from './registry';
+import { WidgetEmptyState } from './WidgetEmptyState';
 import type { WidgetProps } from '../types';
+
+const formatCurrency = (value: number) =>
+  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value);
 
 interface SummaryCardProps {
   title: string;
@@ -41,15 +46,6 @@ function SummaryCard({
     orange: 'text-orange-600 bg-orange-100 dark:text-orange-400 dark:bg-orange-900/30',
     green: 'text-green-600 bg-green-100 dark:text-green-400 dark:bg-green-900/30',
     red: 'text-red-600 bg-red-100 dark:text-red-400 dark:bg-red-900/30',
-  };
-
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(amount);
   };
 
   const formatPercent = (percent: number) => {
@@ -149,11 +145,7 @@ function CashFlowSummaryWidget(_props: WidgetProps) {
   }
 
   if (!data) {
-    return (
-      <div className="flex items-center justify-center h-full text-gray-400">
-        No cash flow data available
-      </div>
-    );
+    return <WidgetEmptyState widgetType="cash-flow-summary" />;
   }
 
   const netIsPositive = data.net_cash_flow >= 0;
@@ -202,6 +194,12 @@ registerWidget({
   defaultSize: { w: 8, h: 3 },
   minSize: { w: 6, h: 3 },
   Component: CashFlowSummaryWidget,
+  emptyState: {
+    icon: <BarChart3 />,
+    title: 'No cash flow data yet',
+    noAccountsDescription: 'Connect a bank account to see income and expense summaries',
+    noDataDescription: 'No transactions found for this time period',
+  },
 });
 
 export { CashFlowSummaryWidget };
