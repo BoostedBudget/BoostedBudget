@@ -5,21 +5,21 @@ go 1.26.1
 require (
 	github.com/PaddleHQ/paddle-go-sdk/v4 v4.2.0
 	github.com/clerk/clerk-sdk-go/v2 v2.5.1
-	github.com/danielgtaylor/huma/v2 v2.35.0
+	github.com/danielgtaylor/huma/v2 v2.37.2
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/go-playground/validator/v10 v10.30.1
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.8.0
-	github.com/labstack/echo/v4 v4.15.0
-	github.com/lib/pq v1.11.1
+	github.com/labstack/echo/v4 v4.15.1
+	github.com/lib/pq v1.11.2
 	github.com/pashagolub/pgxmock/v4 v4.9.0
 	github.com/plaid/plaid-go/v23 v23.0.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/common v0.67.5
-	github.com/riverqueue/river v0.30.2
-	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.30.2
-	github.com/riverqueue/river/rivertype v0.30.2
+	github.com/riverqueue/river v0.31.0
+	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.31.0
+	github.com/riverqueue/river/rivertype v0.31.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/sendgrid/sendgrid-go v3.16.1+incompatible
 	github.com/stretchr/testify v1.11.1
@@ -30,7 +30,7 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/gabriel-vasile/mimetype v1.4.12 // indirect
+	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
 	github.com/ggicci/httpin v0.20.1 // indirect
 	github.com/ggicci/owl v0.8.2 // indirect
 	github.com/go-jose/go-jose/v3 v3.0.4 // indirect
@@ -48,8 +48,8 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/procfs v0.19.2 // indirect
-	github.com/riverqueue/river/riverdriver v0.30.2 // indirect
-	github.com/riverqueue/river/rivershared v0.30.2 // indirect
+	github.com/riverqueue/river/riverdriver v0.31.0 // indirect
+	github.com/riverqueue/river/rivershared v0.31.0 // indirect
 	github.com/sendgrid/rest v2.6.9+incompatible // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
@@ -60,12 +60,12 @@ require (
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	go.uber.org/goleak v1.3.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
-	golang.org/x/crypto v0.46.0 // indirect
-	golang.org/x/net v0.48.0 // indirect
+	golang.org/x/crypto v0.48.0 // indirect
+	golang.org/x/net v0.50.0 // indirect
 	golang.org/x/oauth2 v0.34.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/sys v0.39.0 // indirect
-	golang.org/x/text v0.33.0 // indirect
+	golang.org/x/sys v0.41.0 // indirect
+	golang.org/x/text v0.34.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
