@@ -341,4 +341,18 @@ describe('WidgetCatalog', () => {
       expect(mockGetAllWidgets).toHaveBeenCalled()
     })
   })
+
+  describe('Accessibility', () => {
+    it('should have an accessible dialog description', () => {
+      render(
+        <WidgetCatalog
+          isOpen={true}
+          onClose={mockOnClose}
+          onAddWidget={mockOnAddWidget}
+        />
+      )
+
+      expect(screen.getByText('Browse and add widgets to your dashboard')).toBeInTheDocument()
+    })
+  })
 })

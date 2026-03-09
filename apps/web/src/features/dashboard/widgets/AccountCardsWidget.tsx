@@ -42,7 +42,7 @@ function AccountCardsWidget(_props: WidgetProps) {
     );
   }
 
-  if (!summary) {
+  if (!summary || Object.keys(summary.by_type).length === 0) {
     return <WidgetEmptyState widgetType="account-cards" />;
   }
 

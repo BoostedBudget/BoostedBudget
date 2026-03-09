@@ -46,7 +46,7 @@ function NetWorthWidget() {
   }
 
   // Empty state
-  if (!summary) {
+  if (!summary || (summary.total_assets === 0 && summary.total_liabilities === 0 && Object.keys(summary.by_category).length === 0)) {
     return <WidgetEmptyState widgetType="net-worth" />;
   }
 

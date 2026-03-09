@@ -144,7 +144,7 @@ function CashFlowSummaryWidget(_props: WidgetProps) {
     );
   }
 
-  if (!data) {
+  if (!data || (data.income === 0 && data.expenses === 0 && data.income_count === 0 && data.expense_count === 0)) {
     return <WidgetEmptyState widgetType="cash-flow-summary" />;
   }
 

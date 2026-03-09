@@ -42,7 +42,7 @@ function BalanceOverviewWidget(_props: WidgetProps) {
     );
   }
 
-  if (!summary) {
+  if (!summary || (summary.total_balance === 0 && Object.keys(summary.by_type).length === 0)) {
     return <WidgetEmptyState widgetType="balance-overview" />;
   }
 
