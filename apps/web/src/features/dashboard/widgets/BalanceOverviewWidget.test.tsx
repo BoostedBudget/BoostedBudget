@@ -133,6 +133,20 @@ describe('BalanceOverviewWidget', () => {
 
       expect(screen.getByText('No data available')).toBeInTheDocument()
     })
+
+    it('should show empty state when balance data is all zero with no accounts', () => {
+      const emptyBalanceSummary: BalanceSummary = {
+        as_of_date: '2024-01-31',
+        total_balance: 0,
+        by_type: {},
+      }
+      setMockDataState({ summary: emptyBalanceSummary })
+
+      render(<BalanceOverviewWidget {...defaultProps} />)
+
+      expect(screen.getByRole('status')).toBeInTheDocument()
+      expect(screen.queryByTestId('balance-overview')).not.toBeInTheDocument()
+    })
   })
 
   describe('Success State', () => {

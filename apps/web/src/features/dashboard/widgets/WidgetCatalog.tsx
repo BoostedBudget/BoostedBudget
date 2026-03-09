@@ -20,6 +20,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
@@ -167,6 +168,9 @@ export function WidgetCatalog({
         className="w-full max-w-2xl p-6 bg-white dark:bg-gray-900 rounded-2xl"
         showCloseButton={false}
       >
+        <DialogDescription className="sr-only">
+          Browse and add widgets to your dashboard
+        </DialogDescription>
         <DialogHeader className="flex flex-row items-center justify-between mb-6">
           <DialogTitle className="text-lg font-semibold text-gray-900 dark:text-white">
             Add Widget
