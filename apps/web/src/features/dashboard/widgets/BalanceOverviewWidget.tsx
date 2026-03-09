@@ -6,10 +6,12 @@
  */
 
 import { useMemo } from 'react';
+import { Wallet } from 'lucide-react';
 import { BalanceOverview } from '../components/BalanceOverview';
 import { useDashboardContext } from '../context/DashboardContext';
 import { useDashboardData } from '../hooks/useDashboardData';
 import { registerWidget } from './registry';
+import { WidgetEmptyState } from './WidgetEmptyState';
 import type { WidgetProps } from '../types';
 
 function BalanceOverviewWidget(_props: WidgetProps) {
@@ -40,12 +42,8 @@ function BalanceOverviewWidget(_props: WidgetProps) {
     );
   }
 
-  if (!summary) {
-    return (
-      <div className="flex items-center justify-center h-full text-gray-400 text-sm">
-        No data available
-      </div>
-    );
+  if (!summary || (summary.total_balance === 0 && Object.keys(summary.by_type).length === 0)) {
+    return <WidgetEmptyState widgetType="balance-overview" />;
   }
 
   return (
@@ -66,6 +64,12 @@ registerWidget({
   defaultSize: { w: 4, h: 3 },
   minSize: { w: 3, h: 3 },
   Component: BalanceOverviewWidget,
+  emptyState: {
+    icon: <Wallet />,
+    title: 'No balance data yet',
+    noAccountsDescription: 'Connect a bank account to see your balance overview',
+    noDataDescription: 'No balance data available',
+  },
 });
 
 export { BalanceOverviewWidget };

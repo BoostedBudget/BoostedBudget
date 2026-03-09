@@ -9,11 +9,11 @@
 
 import { useMemo, useState } from 'react'
 import { TrendingUp } from 'lucide-react'
-import { EmptyState } from '@/components/ui/empty-state'
 import { BalanceHistoryChart } from '../components/BalanceHistoryChart'
 import { useDashboardContext } from '../context/DashboardContext'
 import { useDashboardData } from '../hooks/useDashboardData'
 import { registerWidget } from './registry'
+import { WidgetEmptyState } from './WidgetEmptyState'
 import type { WidgetProps } from '../types'
 
 function BalanceHistoryWidget(_props: WidgetProps) {
@@ -52,8 +52,8 @@ function BalanceHistoryWidget(_props: WidgetProps) {
     )
   }
 
-  if (!history) {
-    return <EmptyState size="compact" icon={<TrendingUp />} title="No history data available" className="h-full" />
+  if (!history || history.snapshots.length === 0) {
+    return <WidgetEmptyState widgetType="balance-history" />
   }
 
   return (
@@ -85,6 +85,12 @@ registerWidget({
   minSize: { w: 4, h: 4 },
   maxSize: { w: 12, h: 8 },
   Component: BalanceHistoryWidget,
+  emptyState: {
+    icon: <TrendingUp />,
+    title: 'No balance history yet',
+    noAccountsDescription: 'Connect a bank account to track your balances over time',
+    noDataDescription: 'No balance data for this time period',
+  },
 })
 
 export { BalanceHistoryWidget }

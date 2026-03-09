@@ -41,6 +41,8 @@ describe('CashFlowSummaryWidget', () => {
     setTimeframe: mock(() => {}),
     isEditing: false,
     setIsEditing: mock(() => {}),
+    hasAccounts: false,
+    accountsLoading: false,
   }
 
   const mockSummaryData = {
@@ -133,7 +135,7 @@ describe('CashFlowSummaryWidget', () => {
   })
 
   describe('Empty State', () => {
-    it('should show no data message when data is null', () => {
+    it('should show empty state when data is null', () => {
       setMockCashFlowState({})
 
       render(
@@ -142,7 +144,29 @@ describe('CashFlowSummaryWidget', () => {
         </TestWrapper>
       )
 
-      expect(screen.getByText('No cash flow data available')).toBeInTheDocument()
+      expect(screen.getByRole('status')).toBeInTheDocument()
+    })
+
+    it('should show empty state when all cash flow data is zero', () => {
+      setMockCashFlowState({
+        data: {
+          start_date: '2024-01-01',
+          end_date: '2024-01-31',
+          income: 0,
+          expenses: 0,
+          net_cash_flow: 0,
+          income_count: 0,
+          expense_count: 0,
+        },
+      })
+
+      render(
+        <TestWrapper contextValue={mockContextValue}>
+          <CashFlowSummaryWidget {...defaultProps} />
+        </TestWrapper>
+      )
+
+      expect(screen.getByRole('status')).toBeInTheDocument()
     })
   })
 
