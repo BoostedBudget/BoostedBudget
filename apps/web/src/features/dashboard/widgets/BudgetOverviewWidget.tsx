@@ -5,8 +5,12 @@
  * Shows current budget progress in the dashboard widget system.
  */
 
+import { Link } from 'react-router';
+import { PieChart } from 'lucide-react';
 import { useCurrentBudget } from '../../budgets/hooks/useCurrentBudget';
 import { BudgetProgressBar } from '../../budgets/components/BudgetProgressBar';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Button } from '@/components/ui/button';
 import { registerWidget } from './registry';
 import type { WidgetProps } from '../types';
 import './BudgetOverviewWidget.css';
@@ -49,16 +53,18 @@ function BudgetOverviewWidget(_props: WidgetProps) {
 
   if (hasNoBudget || !budget) {
     return (
-      <div className="budget-overview-widget__empty">
-        <div className="budget-overview-widget__empty-icon">📊</div>
-        <h3 className="budget-overview-widget__empty-title">No Active Budget</h3>
-        <p className="budget-overview-widget__empty-text">
-          Create a budget to track your spending
-        </p>
-        <a href="/budgets" className="budget-overview-widget__create-btn">
-          Create Budget
-        </a>
-      </div>
+      <EmptyState
+        size="compact"
+        icon={<PieChart />}
+        title="No active budget"
+        description="Create a budget to track your spending"
+        action={
+          <Button size="sm" asChild>
+            <Link to="/budgets">Create Budget</Link>
+          </Button>
+        }
+        className="h-full"
+      />
     );
   }
 
@@ -112,6 +118,17 @@ registerWidget({
   defaultSize: { w: 4, h: 3 },
   minSize: { w: 3, h: 3 },
   Component: BudgetOverviewWidget,
+  emptyState: {
+    icon: <PieChart />,
+    title: 'No active budget',
+    noAccountsDescription: 'Create a budget to track your spending',
+    noDataDescription: 'Create a budget to track your spending',
+    noAccountsAction: (
+      <Button size="sm" asChild>
+        <Link to="/budgets">Create Budget</Link>
+      </Button>
+    ),
+  },
 });
 
 export { BudgetOverviewWidget };

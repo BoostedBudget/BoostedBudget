@@ -135,12 +135,26 @@ describe('AccountCardsWidget', () => {
   })
 
   describe('Empty State', () => {
-    it('should show no data message when summary is null', () => {
+    it('should show empty state when summary is null', () => {
       setMockDataState({})
 
       render(<AccountCardsWidget {...defaultProps} />)
 
-      expect(screen.getByText('No account data available')).toBeInTheDocument()
+      expect(screen.getByRole('status')).toBeInTheDocument()
+    })
+
+    it('should show empty state when summary has no accounts', () => {
+      const emptySummary: BalanceSummary = {
+        as_of_date: '2024-01-31',
+        total_balance: 0,
+        by_type: {},
+      }
+      setMockDataState({ summary: emptySummary })
+
+      render(<AccountCardsWidget {...defaultProps} />)
+
+      expect(screen.getByRole('status')).toBeInTheDocument()
+      expect(screen.queryByTestId('account-balance-cards')).not.toBeInTheDocument()
     })
   })
 

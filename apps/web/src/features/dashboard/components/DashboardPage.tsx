@@ -1,9 +1,11 @@
 import { useState, useCallback, useMemo } from 'react'
+import { Link } from 'react-router'
 import { useAuth } from '@clerk/react-router'
 import { PlusIcon, PencilIcon, ArrowPathIcon } from '@heroicons/react/24/outline'
-import { LightbulbIcon } from 'lucide-react'
+import { LightbulbIcon, Landmark, Plus } from 'lucide-react'
 import { Alert } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { EmptyState } from '@/components/ui/empty-state'
 import { DashboardProvider, useDashboardContext } from '../context/DashboardContext'
 import { useDashboardLayout } from '../hooks/useDashboardLayout'
 import { useDashboardOnboarding } from '../hooks/useDashboardOnboarding'
@@ -32,7 +34,7 @@ import '../widgets'
 
 function DashboardContent() {
   const { getToken } = useAuth()
-  const { filters, setFilters, isEditing, setIsEditing } = useDashboardContext()
+  const { filters, setFilters, isEditing, setIsEditing, hasAccounts, accountsLoading } = useDashboardContext()
 
   // Issue #470: Pass getAccessToken for authenticated save on beforeunload
   const { layout, loading, error, saving, updateLayout, addWidget, removeWidget, resetToDefault, saveNow } = useDashboardLayout({
@@ -174,6 +176,25 @@ function DashboardContent() {
             </Button>
           </div>
         </div>
+
+        {/* Welcome banner for new users with no accounts - Issue #834 */}
+        {!hasAccounts && !accountsLoading && (
+          <div className="mb-6">
+            <EmptyState
+              icon={<Landmark />}
+              title="Welcome to BoostedBudget!"
+              description="Connect your first bank account to start tracking your finances"
+              action={
+                <Button asChild>
+                  <Link to="/accounts">
+                    <Plus className="h-4 w-4" />
+                    Connect Bank Account
+                  </Link>
+                </Button>
+              }
+            />
+          </div>
+        )}
 
         {/* Filters Row - Issue #414: Moved from sidebar to header */}
         <div className="mb-6 flex flex-wrap items-start gap-4">

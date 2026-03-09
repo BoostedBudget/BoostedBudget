@@ -112,10 +112,10 @@ describe('BalanceHistoryWidget', () => {
   })
 
   describe('Empty State', () => {
-    it('should show no data message when history is null', () => {
+    it('should show empty state when history is null', () => {
       setMockDataState({})
       render(<BalanceHistoryWidget widgetId="test-1" onRemove={mock(() => {})} />)
-      expect(screen.getByText('No history data available')).toBeInTheDocument()
+      expect(screen.getByRole('status')).toBeInTheDocument()
     })
   })
 

@@ -103,11 +103,9 @@ describe('BalanceHistoryChart', () => {
       expect(screen.queryByRole('heading')).not.toBeInTheDocument();
     });
 
-    it('should show empty state when no data available', () => {
+    it('should render chart even with empty snapshots (parent handles empty state)', () => {
       render(<BalanceHistoryChart history={mockEmptyHistory} />);
-      expect(
-        screen.getByText('No balance history available')
-      ).toBeInTheDocument();
+      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
     });
   });
 
@@ -250,16 +248,10 @@ describe('BalanceHistoryChart', () => {
     });
   });
 
-  describe('Empty State', () => {
-    it('should display centered empty message and no chart', () => {
-      const { container } = render(
-        <BalanceHistoryChart history={mockEmptyHistory} />
-      );
-      expect(screen.getByText('No balance history available')).toBeInTheDocument();
-      expect(screen.queryByTestId('plotly-chart')).not.toBeInTheDocument();
-      expect(
-        container.querySelector('.flex.items-center.justify-center')
-      ).toBeInTheDocument();
+  describe('Empty Snapshots', () => {
+    it('should render chart with empty data (parent BalanceHistoryWidget handles empty state)', () => {
+      render(<BalanceHistoryChart history={mockEmptyHistory} />);
+      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
     });
   });
 });

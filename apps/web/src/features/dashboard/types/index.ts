@@ -181,6 +181,15 @@ export interface WidgetProps {
   onRemove: () => void;
 }
 
+// Empty state configuration for widgets
+export interface WidgetEmptyStateConfig {
+  icon: React.ReactNode;
+  title: string;
+  noAccountsDescription: string;
+  noDataDescription: string;
+  noAccountsAction?: React.ReactNode;
+}
+
 // Widget Definition for registry
 export interface WidgetDefinition {
   type: WidgetType;
@@ -192,4 +201,5 @@ export interface WidgetDefinition {
   minSize: { w: number; h: number };
   maxSize?: { w: number; h: number };
   Component: React.ComponentType<WidgetProps>;
+  emptyState?: WidgetEmptyStateConfig;
 }

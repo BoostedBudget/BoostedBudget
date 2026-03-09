@@ -137,6 +137,21 @@ describe('NetWorthWidget', () => {
 
       expect(screen.getByText('No data available')).toBeInTheDocument()
     })
+
+    it('should show empty state when net worth data is all zero with no accounts', () => {
+      const zeroSummary: NetWorthSummary = {
+        as_of_date: '2024-01-31',
+        net_worth: 0,
+        total_assets: 0,
+        total_liabilities: 0,
+        by_category: {},
+      }
+      setMockDataState({ summary: zeroSummary })
+
+      render(<NetWorthWidget />)
+
+      expect(screen.getByRole('status')).toBeInTheDocument()
+    })
   })
 
   describe('Success State', () => {

@@ -21,6 +21,8 @@ export const mockUseDashboardContext = mock(() => ({
   setTimeframe: mockSetTimeframe,
   isEditing: false,
   setIsEditing: mockSetIsEditing,
+  hasAccounts: false,
+  accountsLoading: false,
 }))
 
 // Single mock.module() calls - called once at preload time
