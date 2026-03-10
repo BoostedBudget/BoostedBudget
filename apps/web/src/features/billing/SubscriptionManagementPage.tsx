@@ -1,13 +1,17 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { CreditCard } from 'lucide-react'
 import { useSubscriptionManagement } from './hooks/useSubscriptionManagement'
 import { useSubscriptionTiers } from '../subscription/hooks/useSubscriptionTiers'
 import { BillingDetails } from './components/BillingDetails'
 import { CurrentSubscriptionDisplay } from './components/CurrentSubscriptionDisplay'
 import { PlanChangeModal } from './components/PlanChangeModal'
 import { CancelConfirmationModal } from './components/CancelConfirmationModal'
+import { SubscriptionManagementSkeleton } from './components/SubscriptionManagementSkeleton'
+import { SubscriptionErrorState } from './components/SubscriptionErrorState'
+import { EmptyState } from '@/components/ui/empty-state'
+import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
-import './SubscriptionManagementPage.css'
 
 /**
  * SubscriptionManagementPage - Complete subscription management interface
@@ -19,6 +23,7 @@ export function SubscriptionManagementPage() {
     subscription,
     isLoadingSubscription,
     subscriptionError,
+    hasNoSubscription,
     billingPortalUrl,
     updateSubscription,
     isUpdating,
@@ -42,37 +47,27 @@ export function SubscriptionManagementPage() {
   }, [updateError, cancelError])
 
   if (isLoadingSubscription || tiersLoading) {
-    return (
-      <div className="subscription-management-page">
-        <div className="loading-state">Loading subscription details...</div>
-      </div>
-    )
+    return <SubscriptionManagementSkeleton />
   }
 
   if (subscriptionError) {
     return (
-      <div className="subscription-management-page">
-        <div className="error-state">
-          <h2>Failed to load subscription</h2>
-          <p>{subscriptionError.message}</p>
-          <button onClick={() => refetchSubscription()} className="btn-retry">
-            Try Again
-          </button>
-        </div>
-      </div>
+      <SubscriptionErrorState
+        message={subscriptionError.message}
+        onRetry={() => refetchSubscription()}
+      />
     )
   }
 
-  if (!subscription) {
+  if (hasNoSubscription || !subscription) {
     return (
-      <div className="subscription-management-page">
-        <div className="no-subscription-state">
-          <h2>No Active Subscription</h2>
-          <p>You don't have an active subscription yet.</p>
-          <button onClick={() => navigate('/pricing')} className="btn-primary">
-            View Plans
-          </button>
-        </div>
+      <div className="max-w-[800px] mx-auto p-8">
+        <EmptyState
+          icon={<CreditCard />}
+          title="No Active Subscription"
+          description="You don't have an active subscription yet. Choose a plan to get started."
+          action={<Button onClick={() => navigate('/pricing')}>View Plans</Button>}
+        />
       </div>
     )
   }
@@ -161,10 +156,10 @@ export function SubscriptionManagementPage() {
   // Render based on subscription status
   if (subscription.status === 'trial') {
     return (
-      <div className="subscription-management-page">
-        <div className="trial-banner">
-          <h2>Free Trial Active</h2>
-          <p>
+      <div className="max-w-[800px] mx-auto p-8 space-y-8">
+        <div className="rounded-lg bg-amber-50 dark:bg-amber-900/20 px-4 py-3 text-center">
+          <h2 className="font-semibold text-amber-900 dark:text-amber-200">Free Trial Active</h2>
+          <p className="text-sm text-amber-800 dark:text-amber-300">
             You have {subscription.trial_days_remaining} days remaining in your trial.
             Subscribe to continue using BoostedBudget after your trial ends.
           </p>
@@ -182,10 +177,10 @@ export function SubscriptionManagementPage() {
           />
         )}
 
-        <div className="trial-actions">
-          <button onClick={() => navigate('/pricing')} className="btn-primary">
+        <div>
+          <Button onClick={() => navigate('/pricing')} className="w-full">
             Choose a Plan
-          </button>
+          </Button>
         </div>
       </div>
     )
@@ -201,10 +196,10 @@ export function SubscriptionManagementPage() {
     const billingPeriod = subscription.billing_interval === 'year' ? 'year' : 'month'
 
     return (
-      <div className="subscription-management-page">
-        <div className="trial-banner success">
-          <h2>You're Subscribed!</h2>
-          <p>
+      <div className="max-w-[800px] mx-auto p-8 space-y-8">
+        <div className="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 px-4 py-3 text-center">
+          <h2 className="font-semibold text-emerald-900 dark:text-emerald-200">You're Subscribed!</h2>
+          <p className="text-sm text-emerald-800 dark:text-emerald-300">
             Your {currentTierData?.display_name || subscription.tier} subscription will start when your trial ends.
             You have {subscription.trial_days_remaining} days remaining in your trial.
           </p>
@@ -222,32 +217,40 @@ export function SubscriptionManagementPage() {
           />
         )}
 
-        <div className="subscription-info">
-          <p>Your plan will automatically activate after your trial ends.</p>
-          <p>You'll be charged {subscription.currency} {actualAmount}/{billingPeriod} starting on {trialEndDate}.</p>
+        <div className="rounded-lg bg-white dark:bg-gray-800 p-6 shadow-sm space-y-2">
+          <p className="text-sm text-gray-600 dark:text-gray-400">Your plan will automatically activate after your trial ends.</p>
+          <p className="text-sm text-gray-600 dark:text-gray-400">You'll be charged {subscription.currency} {actualAmount}/{billingPeriod} starting on {trialEndDate}.</p>
         </div>
 
-        <div className="subscription-actions">
-          <button
+        <div className="space-y-3">
+          <Button
             onClick={() => setShowPlanChangeModal(true)}
-            className="btn-secondary"
             disabled={isUpdating}
+            variant="outline"
+            className="w-full"
           >
             Change Plan
-          </button>
+          </Button>
 
-          <button
+          <Button
             onClick={() => setShowCancelModal(true)}
-            className="btn-danger"
             disabled={isCanceling}
+            variant="destructive"
+            className="w-full"
           >
             Cancel Subscription
-          </button>
+          </Button>
 
           {billingPortalUrl && (
-            <a href={billingPortalUrl} className="btn-secondary" target="_blank" rel="noopener noreferrer">
-              Manage Billing
-            </a>
+            <Button
+              asChild
+              variant="outline"
+              className="w-full"
+            >
+              <a href={billingPortalUrl} target="_blank" rel="noopener noreferrer">
+                Manage Billing
+              </a>
+            </Button>
           )}
         </div>
 
@@ -279,10 +282,10 @@ export function SubscriptionManagementPage() {
 
   if (subscription.status === 'cancelled') {
     return (
-      <div className="subscription-management-page">
-        <div className="cancelled-banner">
-          <h2>Subscription Cancelled</h2>
-          <p>
+      <div className="max-w-[800px] mx-auto p-8 space-y-8">
+        <div className="rounded-lg bg-red-50 dark:bg-red-900/20 px-4 py-3 text-center">
+          <h2 className="font-semibold text-red-900 dark:text-red-200">Subscription Cancelled</h2>
+          <p className="text-sm text-red-800 dark:text-red-300">
             Your subscription has been cancelled.
             {subscription.current_period_end && (
               <> You retain access until <strong>{subscription.current_period_end}</strong>.</>
@@ -290,29 +293,30 @@ export function SubscriptionManagementPage() {
           </p>
         </div>
 
-        <div className="cancelled-actions">
-          <button onClick={() => navigate('/pricing')} className="btn-primary">
-            Resubscribe
-          </button>
-        </div>
+        <Button onClick={() => navigate('/pricing')} className="w-full">
+          Resubscribe
+        </Button>
       </div>
     )
   }
 
   if (subscription.status === 'past_due') {
     return (
-      <div className="subscription-management-page">
-        <div className="past-due-banner">
-          <h2>Payment Past Due</h2>
-          <p>Your payment is past due. Please update your payment method to continue using BoostedBudget.</p>
+      <div className="max-w-[800px] mx-auto p-8 space-y-8">
+        <div className="rounded-lg bg-red-50 dark:bg-red-900/20 px-4 py-3 text-center">
+          <h2 className="font-semibold text-red-900 dark:text-red-200">Payment Past Due</h2>
+          <p className="text-sm text-red-800 dark:text-red-300">Your payment is past due. Please update your payment method to continue using BoostedBudget.</p>
         </div>
 
         {billingPortalUrl && (
-          <div className="past-due-actions">
-            <a href={billingPortalUrl} className="btn-primary" target="_blank" rel="noopener noreferrer">
+          <Button
+            asChild
+            className="w-full"
+          >
+            <a href={billingPortalUrl} target="_blank" rel="noopener noreferrer">
               Update Payment Method
             </a>
-          </div>
+          </Button>
         )}
       </div>
     )
@@ -320,8 +324,8 @@ export function SubscriptionManagementPage() {
 
   // Active subscription
   return (
-    <div className="subscription-management-page">
-      <h1>Manage Subscription</h1>
+    <div className="max-w-[800px] mx-auto p-8 space-y-8">
+      <h1 className="text-3xl font-semibold">Manage Subscription</h1>
 
       {currentTierData && (
         <CurrentSubscriptionDisplay
@@ -343,22 +347,24 @@ export function SubscriptionManagementPage() {
         portalUrl={billingPortalUrl}
       />
 
-      <div className="subscription-actions">
-        <button
+      <div className="space-y-3">
+        <Button
           onClick={() => setShowPlanChangeModal(true)}
-          className="btn-secondary"
           disabled={isUpdating}
+          variant="outline"
+          className="w-full"
         >
           Change Plan
-        </button>
+        </Button>
 
-        <button
+        <Button
           onClick={() => setShowCancelModal(true)}
-          className="btn-danger"
           disabled={isCanceling}
+          variant="destructive"
+          className="w-full"
         >
           Cancel Subscription
-        </button>
+        </Button>
       </div>
 
       {/* Plan Change Modal */}

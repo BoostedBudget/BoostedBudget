@@ -19,6 +19,8 @@ import { ProfilePage } from './features/profile/ProfilePage'
 import { PricingPage } from './features/pricing/PricingPage'
 import { SubscriptionManagementPage } from './features/billing/SubscriptionManagementPage'
 import { CheckoutSuccessPage } from './features/billing/CheckoutSuccessPage'
+import { SubscriptionManagementSkeleton } from './features/billing/components/SubscriptionManagementSkeleton'
+import { SubscriptionErrorState } from './features/billing/components/SubscriptionErrorState'
 import { AccountsPage } from './features/accounts/AccountsPage'
 import { PlaidOAuthCallback } from './features/accounts/PlaidOAuthCallback'
 import { TransactionsPage } from './features/transactions/TransactionsPage'
@@ -35,7 +37,8 @@ import { LandingPage } from './features/landing'
 import { AdminRoute, AdminLayout, AdminDashboardPage, UsersPage, HealthDashboardPage } from './features/admin'
 import { NotFoundPage } from './features/not-found/NotFoundPage'
 import { Toaster } from 'sonner'
-import { useEffect } from 'react'
+import { ErrorBoundary } from './components/ErrorBoundary'
+import { useEffect, Suspense } from 'react'
 import './App.css'
 
 function ComingSoon({ title }: { title: string }) {
@@ -276,7 +279,18 @@ function App() {
               path="/billing/manage"
               element={
                 <ProtectedRoute>
-                  <SubscriptionManagementPage />
+                  <ErrorBoundary
+                    fallback={
+                      <SubscriptionErrorState
+                        message="Something went wrong. Please try refreshing the page."
+                        onRetry={() => window.location.reload()}
+                      />
+                    }
+                  >
+                    <Suspense fallback={<SubscriptionManagementSkeleton />}>
+                      <SubscriptionManagementPage />
+                    </Suspense>
+                  </ErrorBoundary>
                 </ProtectedRoute>
               }
             />
