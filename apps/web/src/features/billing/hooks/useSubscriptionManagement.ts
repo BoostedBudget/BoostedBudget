@@ -20,9 +20,27 @@ interface SubscriptionError {
   message: string
 }
 
+function getErrorStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== 'object') return undefined
+
+  const err = error as { response?: { status?: number }; status?: number }
+  return err.status ?? err.response?.status
+}
+
+function is404Error(error: unknown): boolean {
+  return getErrorStatus(error) === 404
+}
+
 export function useSubscriptionManagement() {
   // Query hooks
-  const subscriptionQuery = useGetCurrentSubscription()
+  const subscriptionQuery = useGetCurrentSubscription({
+    query: {
+      retry: (failureCount: number, error: unknown) => {
+        if (is404Error(error)) return false
+        return failureCount < 1
+      },
+    },
+  })
   const billingPortalQuery = useGetBillingPortalUrl({
     query: {
       enabled:
@@ -51,14 +69,15 @@ export function useSubscriptionManagement() {
   const normalizeError = (error: unknown): SubscriptionError | null => {
     if (!error) return null
 
-    const err = error as { status?: number; response?: { status?: number }; message?: string }
-    const status = err.status || err.response?.status
-    const message = err.message?.toLowerCase() || ''
+    const err = error as { message?: string }
+    const status = getErrorStatus(error)
+    const message = (err.message?.toLowerCase() ?? '').trim()
 
     const errorMessages: Record<number, string> = {
       401: 'Please sign in to manage your subscription',
       403: 'You do not have permission to perform this action',
       400: 'Invalid subscription update request',
+      404: 'No active subscription found',
       500: 'Subscription service error. Please try again later.',
       503: 'Subscription service temporarily unavailable',
     }
@@ -68,17 +87,20 @@ export function useSubscriptionManagement() {
     }
 
     if (message.includes('network') || message.includes('fetch')) {
-      return { status: 0, message: 'Network error. Please check your connection.' }
+      return { message: 'Network error. Please check your connection.' }
     }
 
     return { status, message: err.message || 'Failed to update subscription. Please try again.' }
   }
 
+  const noSubscription = is404Error(subscriptionQuery.error)
+
   return {
     // Current subscription data
     subscription: subscriptionQuery.data as GetCurrentSubscriptionOutputBody | undefined,
     isLoadingSubscription: subscriptionQuery.isLoading,
-    subscriptionError: normalizeError(subscriptionQuery.error),
+    subscriptionError: noSubscription ? null : normalizeError(subscriptionQuery.error),
+    hasNoSubscription: noSubscription,
     refetchSubscription: subscriptionQuery.refetch,
 
     // Billing portal URL
