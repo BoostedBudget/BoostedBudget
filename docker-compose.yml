@@ -97,7 +97,6 @@ services:
     environment:
       VITE_API_URL: "http://localhost:8080"
       VITE_CLERK_PUBLISHABLE_KEY: "${CLERK_PUBLISHABLE_KEY}"
-      VITE_GOOGLE_ADSENSE_CLIENT: "${GOOGLE_ADSENSE_CLIENT}"
     depends_on:
       backend:
         condition: service_healthy

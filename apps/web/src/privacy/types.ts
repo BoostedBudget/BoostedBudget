@@ -5,7 +5,7 @@
 export interface CookieConsentSettings {
   necessary: boolean;      // Always true (required for app functionality)
   analytics: boolean;      // Google Analytics consent
-  advertising: boolean;    // AdSense consent for free tier users
+  advertising: boolean;    // Advertising consent
 }
 
 export interface CookieConsentData {
