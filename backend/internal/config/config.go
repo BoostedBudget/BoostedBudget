@@ -27,7 +27,8 @@ type Config struct {
 	RateLimitAuth int // per-IP requests per minute for sensitive endpoints
 
 	// Database
-	DatabaseURL string
+	DatabaseURL      string
+	DatabaseMaxConns int32
 
 	// Redis
 	RedisURL string
@@ -94,7 +95,8 @@ func Load() (*Config, error) {
 		RateLimitAuth: getEnvAsInt("RATE_LIMIT_AUTH", 10),
 
 		// Database
-		DatabaseURL: getEnv("DATABASE_URL", ""),
+		DatabaseURL:      getEnv("DATABASE_URL", ""),
+		DatabaseMaxConns: int32(getEnvAsInt("DATABASE_MAX_CONNS", 25)),
 
 		// Redis
 		RedisURL: getEnv("REDIS_URL", "redis://localhost:6379"),
