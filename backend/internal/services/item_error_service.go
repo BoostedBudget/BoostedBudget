@@ -102,27 +102,47 @@ type ItemErrorService interface {
 
 // itemErrorService implements ItemErrorService
 type itemErrorService struct {
-	linkedItemRepo   repository.LinkedItemRepository
-	notificationRepo repository.NotificationRepository
-	plaidService     PlaidService
+	linkedItemRepo    repository.LinkedItemRepository
+	notificationRepo  repository.NotificationRepository
+	userRepo          UserRepository
+	plaidService      PlaidService
 	encryptionService EncryptionService
-	emailService     EmailService
+	emailService      EmailService
 }
 
 // NewItemErrorService creates a new ItemErrorService instance
 func NewItemErrorService(
 	linkedItemRepo repository.LinkedItemRepository,
 	notificationRepo repository.NotificationRepository,
+	userRepo UserRepository,
 	plaidService PlaidService,
 	encryptionService EncryptionService,
 	emailService EmailService,
 ) ItemErrorService {
 	return &itemErrorService{
-		linkedItemRepo:   linkedItemRepo,
-		notificationRepo: notificationRepo,
-		plaidService:     plaidService,
+		linkedItemRepo:    linkedItemRepo,
+		notificationRepo:  notificationRepo,
+		userRepo:          userRepo,
+		plaidService:      plaidService,
 		encryptionService: encryptionService,
-		emailService:     emailService,
+		emailService:      emailService,
+	}
+}
+
+// sendNotificationEmail sends an email notification with the user's email address.
+// Non-blocking: errors are logged but don't fail the operation.
+func (s *itemErrorService) sendNotificationEmail(ctx context.Context, userID string, notification *domain.Notification, itemID string) {
+	user, err := s.userRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		log.Printf("Warning: Failed to fetch user email for item %s notification: %v", itemID, err)
+		return
+	}
+	if user.Email == "" {
+		log.Printf("Warning: User %s has no email address, skipping email for item %s", userID, itemID)
+		return
+	}
+	if err := s.emailService.SendNotificationEmail(ctx, user.Email, notification); err != nil {
+		log.Printf("Warning: Failed to send email notification for item %s: %v", itemID, err)
 	}
 }
 
@@ -176,19 +196,11 @@ func (s *itemErrorService) HandleLoginRequired(
 	if err != nil {
 		// Non-blocking: log error but don't return (graceful degradation)
 		log.Printf("Warning: Failed to create notification for item %s: %v", linkedItem.ItemID, err)
-		// Don't send email if notification creation failed
 		return nil
 	}
 
-	// 5. Send email notification (non-blocking - log error but continue)
-	// TODO: Fetch user email from user repository/profile
-	// For now, using placeholder - will be implemented when user repository is available
-	userEmail := "user@example.com" // TODO: Fetch from user repository
-	err = s.emailService.SendNotificationEmail(ctx, userEmail, notification)
-	if err != nil {
-		// Non-blocking: log error but don't return (graceful degradation)
-		log.Printf("Warning: Failed to send email notification for item %s: %v", linkedItem.ItemID, err)
-	}
+	// 5. Send email notification (non-blocking)
+	s.sendNotificationEmail(ctx, linkedItem.UserID, notification, linkedItem.ItemID)
 
 	return nil
 }
@@ -227,19 +239,11 @@ func (s *itemErrorService) HandleError(
 	if err != nil {
 		// Non-blocking: log error but don't return (graceful degradation)
 		log.Printf("Warning: Failed to create notification for item %s: %v", linkedItem.ItemID, err)
-		// Don't send email if notification creation failed
 		return nil
 	}
 
-	// 3. Send email notification (non-blocking - log error but continue)
-	// TODO: Fetch user email from user repository/profile
-	// For now, using placeholder - will be implemented when user repository is available
-	userEmail := "user@example.com" // TODO: Fetch from user repository
-	err = s.emailService.SendNotificationEmail(ctx, userEmail, notification)
-	if err != nil {
-		// Non-blocking: log error but don't return (graceful degradation)
-		log.Printf("Warning: Failed to send email notification for item %s: %v", linkedItem.ItemID, err)
-	}
+	// 3. Send email notification (non-blocking)
+	s.sendNotificationEmail(ctx, linkedItem.UserID, notification, linkedItem.ItemID)
 
 	return nil
 }
@@ -294,18 +298,11 @@ func (s *itemErrorService) HandlePendingExpiration(
 	if err != nil {
 		// Non-blocking: log error but don't return (graceful degradation)
 		log.Printf("Warning: Failed to create notification for item %s: %v", linkedItem.ItemID, err)
-		// Don't send email if notification creation failed
 		return nil
 	}
 
 	// 5. Send email notification (non-blocking)
-	// TODO: Fetch user email from user repository/profile
-	userEmail := "user@example.com" // TODO: Fetch from user repository
-	err = s.emailService.SendNotificationEmail(ctx, userEmail, notification)
-	if err != nil {
-		// Non-blocking: log error but don't return (graceful degradation)
-		log.Printf("Warning: Failed to send email notification for item %s: %v", linkedItem.ItemID, err)
-	}
+	s.sendNotificationEmail(ctx, linkedItem.UserID, notification, linkedItem.ItemID)
 
 	return nil
 }
@@ -360,18 +357,11 @@ func (s *itemErrorService) HandlePermissionRevoked(
 	if err != nil {
 		// Non-blocking: log error but don't return (graceful degradation)
 		log.Printf("Warning: Failed to create notification for item %s: %v", linkedItem.ItemID, err)
-		// Don't send email if notification creation failed
 		return nil
 	}
 
 	// 5. Send email notification (non-blocking)
-	// TODO: Fetch user email from user repository/profile
-	userEmail := "user@example.com" // TODO: Fetch from user repository
-	err = s.emailService.SendNotificationEmail(ctx, userEmail, notification)
-	if err != nil {
-		// Non-blocking: log error but don't return (graceful degradation)
-		log.Printf("Warning: Failed to send email notification for item %s: %v", linkedItem.ItemID, err)
-	}
+	s.sendNotificationEmail(ctx, linkedItem.UserID, notification, linkedItem.ItemID)
 
 	return nil
 }

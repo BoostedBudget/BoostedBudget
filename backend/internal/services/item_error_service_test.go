@@ -23,10 +23,12 @@ func TestHandleLoginRequired_Success(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -73,8 +75,12 @@ func TestHandleLoginRequired_Success(t *testing.T) {
 			n.ActionLabel != nil
 	})).Return(nil)
 
-	// Mock: Send email notification (stub, non-blocking)
-	mockEmailService.On("SendNotificationEmail", ctx, mock.Anything, mock.Anything).
+	// Mock: Fetch user email
+	mockUserRepo.On("GetUserByID", ctx, "user-456").
+		Return(&domain.User{ID: "user-456", Email: "real@user.com"}, nil)
+
+	// Mock: Send email notification with real user email
+	mockEmailService.On("SendNotificationEmail", ctx, "real@user.com", mock.Anything).
 		Return(nil)
 
 	// When: HandleLoginRequired is called
@@ -86,6 +92,7 @@ func TestHandleLoginRequired_Success(t *testing.T) {
 	mockPlaidService.AssertExpectations(t)
 	mockLinkedItemRepo.AssertExpectations(t)
 	mockNotificationRepo.AssertExpectations(t)
+	mockUserRepo.AssertExpectations(t)
 	mockEmailService.AssertExpectations(t)
 }
 
@@ -97,10 +104,12 @@ func TestHandleLoginRequired_DecryptionFailure(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -138,10 +147,12 @@ func TestHandleLoginRequired_LinkTokenCreationFailure(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -184,10 +195,12 @@ func TestHandleLoginRequired_DatabaseUpdateFailure(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -239,10 +252,12 @@ func TestHandleLoginRequired_NotificationFailureNonBlocking(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -299,10 +314,12 @@ func TestHandleLoginRequired_EmailFailureNonBlocking(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -334,6 +351,10 @@ func TestHandleLoginRequired_EmailFailureNonBlocking(t *testing.T) {
 
 	// Mock: Notification creation succeeds
 	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
+
+	// Mock: Fetch user email
+	mockUserRepo.On("GetUserByID", ctx, "user-456").
+		Return(&domain.User{ID: "user-456", Email: "real@user.com"}, nil)
 
 	// Mock: Email sending FAILS (graceful degradation)
 	mockEmailService.On("SendNotificationEmail", ctx, mock.Anything, mock.Anything).
@@ -405,10 +426,12 @@ func TestHandleError_Success(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -443,8 +466,12 @@ func TestHandleError_Success(t *testing.T) {
 			n.ActionLabel == nil
 	})).Return(nil)
 
-	// Mock: Send email notification (stub, non-blocking)
-	mockEmailService.On("SendNotificationEmail", ctx, mock.Anything, mock.Anything).
+	// Mock: Fetch user email
+	mockUserRepo.On("GetUserByID", ctx, "user-456").
+		Return(&domain.User{ID: "user-456", Email: "real@user.com"}, nil)
+
+	// Mock: Send email notification with real user email
+	mockEmailService.On("SendNotificationEmail", ctx, "real@user.com", mock.Anything).
 		Return(nil)
 
 	// When: HandleError is called
@@ -454,6 +481,7 @@ func TestHandleError_Success(t *testing.T) {
 	require.NoError(t, err)
 	mockLinkedItemRepo.AssertExpectations(t)
 	mockNotificationRepo.AssertExpectations(t)
+	mockUserRepo.AssertExpectations(t)
 	mockEmailService.AssertExpectations(t)
 	// PlaidService and EncryptionService should NOT be called (no link token needed)
 	mockPlaidService.AssertNotCalled(t, "CreateUpdateModeLinkToken")
@@ -468,10 +496,12 @@ func TestHandleError_DatabaseUpdateFailure(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -508,10 +538,12 @@ func TestHandleError_NotificationFailureNonBlocking(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -549,10 +581,12 @@ func TestHandleError_EmailFailureNonBlocking(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -571,6 +605,10 @@ func TestHandleError_EmailFailureNonBlocking(t *testing.T) {
 
 	// Mock: Notification creation succeeds
 	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
+
+	// Mock: Fetch user email
+	mockUserRepo.On("GetUserByID", ctx, "user-456").
+		Return(&domain.User{ID: "user-456", Email: "real@user.com"}, nil)
 
 	// Mock: Email sending FAILS (graceful degradation)
 	mockEmailService.On("SendNotificationEmail", ctx, mock.Anything, mock.Anything).
@@ -599,10 +637,12 @@ func TestHandlePendingExpiration_Success(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -650,8 +690,12 @@ func TestHandlePendingExpiration_Success(t *testing.T) {
 			n.ActionLabel != nil
 	})).Return(nil)
 
-	// Mock: Send email notification (stub, non-blocking)
-	mockEmailService.On("SendNotificationEmail", ctx, mock.Anything, mock.Anything).
+	// Mock: Fetch user email
+	mockUserRepo.On("GetUserByID", ctx, "user-456").
+		Return(&domain.User{ID: "user-456", Email: "real@user.com"}, nil)
+
+	// Mock: Send email notification with real user email
+	mockEmailService.On("SendNotificationEmail", ctx, "real@user.com", mock.Anything).
 		Return(nil)
 
 	// When: HandlePendingExpiration is called
@@ -663,6 +707,7 @@ func TestHandlePendingExpiration_Success(t *testing.T) {
 	mockPlaidService.AssertExpectations(t)
 	mockLinkedItemRepo.AssertExpectations(t)
 	mockNotificationRepo.AssertExpectations(t)
+	mockUserRepo.AssertExpectations(t)
 	mockEmailService.AssertExpectations(t)
 }
 
@@ -674,10 +719,12 @@ func TestHandlePendingExpiration_DecryptionFailure(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -715,10 +762,12 @@ func TestHandlePendingExpiration_LinkTokenCreationFailure(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -761,10 +810,12 @@ func TestHandlePendingExpiration_DatabaseUpdateFailure(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -816,10 +867,12 @@ func TestHandlePendingExpiration_NotificationFailureNonBlocking(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -872,10 +925,12 @@ func TestHandlePendingExpiration_EmailFailureNonBlocking(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -908,6 +963,10 @@ func TestHandlePendingExpiration_EmailFailureNonBlocking(t *testing.T) {
 	// Mock: Notification creation succeeds
 	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
 
+	// Mock: Fetch user email
+	mockUserRepo.On("GetUserByID", ctx, "user-456").
+		Return(&domain.User{ID: "user-456", Email: "real@user.com"}, nil)
+
 	// Mock: Email sending FAILS (graceful degradation)
 	mockEmailService.On("SendNotificationEmail", ctx, mock.Anything, mock.Anything).
 		Return(errors.New("email service error"))
@@ -937,10 +996,12 @@ func TestHandlePermissionRevoked_Success(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -988,8 +1049,12 @@ func TestHandlePermissionRevoked_Success(t *testing.T) {
 			n.ActionLabel != nil
 	})).Return(nil)
 
-	// Mock: Send email notification (stub, non-blocking)
-	mockEmailService.On("SendNotificationEmail", ctx, mock.Anything, mock.Anything).
+	// Mock: Fetch user email
+	mockUserRepo.On("GetUserByID", ctx, "user-456").
+		Return(&domain.User{ID: "user-456", Email: "real@user.com"}, nil)
+
+	// Mock: Send email notification with real user email
+	mockEmailService.On("SendNotificationEmail", ctx, "real@user.com", mock.Anything).
 		Return(nil)
 
 	// When: HandlePermissionRevoked is called
@@ -1001,6 +1066,7 @@ func TestHandlePermissionRevoked_Success(t *testing.T) {
 	mockPlaidService.AssertExpectations(t)
 	mockLinkedItemRepo.AssertExpectations(t)
 	mockNotificationRepo.AssertExpectations(t)
+	mockUserRepo.AssertExpectations(t)
 	mockEmailService.AssertExpectations(t)
 }
 
@@ -1012,10 +1078,12 @@ func TestHandlePermissionRevoked_DecryptionFailure(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -1053,10 +1121,12 @@ func TestHandlePermissionRevoked_LinkTokenCreationFailure(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -1099,10 +1169,12 @@ func TestHandlePermissionRevoked_DatabaseUpdateFailure(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -1154,10 +1226,12 @@ func TestHandlePermissionRevoked_NotificationFailureNonBlocking(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -1210,10 +1284,12 @@ func TestHandlePermissionRevoked_EmailFailureNonBlocking(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -1246,6 +1322,10 @@ func TestHandlePermissionRevoked_EmailFailureNonBlocking(t *testing.T) {
 	// Mock: Notification creation succeeds
 	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
 
+	// Mock: Fetch user email
+	mockUserRepo.On("GetUserByID", ctx, "user-456").
+		Return(&domain.User{ID: "user-456", Email: "real@user.com"}, nil)
+
 	// Mock: Email sending FAILS (graceful degradation)
 	mockEmailService.On("SendNotificationEmail", ctx, mock.Anything, mock.Anything).
 		Return(errors.New("email service error"))
@@ -1274,10 +1354,12 @@ func TestProcessWebhook_LoginRequired(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -1305,6 +1387,8 @@ func TestProcessWebhook_LoginRequired(t *testing.T) {
 	mockPlaidService.On("CreateUpdateModeLinkToken", ctx, "user-456", "decrypted-access-token").Return(linkTokenResponse, nil)
 	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
 	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
+	mockUserRepo.On("GetUserByID", ctx, "user-456").
+		Return(&domain.User{ID: "user-456", Email: "real@user.com"}, nil)
 	mockEmailService.On("SendNotificationEmail", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	// When: ProcessWebhook is called with ITEM_LOGIN_REQUIRED
@@ -1327,10 +1411,12 @@ func TestProcessWebhook_Error(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -1349,6 +1435,8 @@ func TestProcessWebhook_Error(t *testing.T) {
 	// Mock: All operations for HandleError (no decryption/link token)
 	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
 	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
+	mockUserRepo.On("GetUserByID", ctx, "user-456").
+		Return(&domain.User{ID: "user-456", Email: "real@user.com"}, nil)
 	mockEmailService.On("SendNotificationEmail", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	// When: ProcessWebhook is called with ERROR
@@ -1372,10 +1460,12 @@ func TestProcessWebhook_PendingExpiration(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -1403,6 +1493,8 @@ func TestProcessWebhook_PendingExpiration(t *testing.T) {
 	mockPlaidService.On("CreateUpdateModeLinkToken", ctx, "user-456", "decrypted-access-token").Return(linkTokenResponse, nil)
 	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
 	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
+	mockUserRepo.On("GetUserByID", ctx, "user-456").
+		Return(&domain.User{ID: "user-456", Email: "real@user.com"}, nil)
 	mockEmailService.On("SendNotificationEmail", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	// When: ProcessWebhook is called with PENDING_EXPIRATION
@@ -1425,10 +1517,12 @@ func TestProcessWebhook_PermissionRevoked(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -1456,6 +1550,8 @@ func TestProcessWebhook_PermissionRevoked(t *testing.T) {
 	mockPlaidService.On("CreateUpdateModeLinkToken", ctx, "user-456", "decrypted-access-token").Return(linkTokenResponse, nil)
 	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
 	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
+	mockUserRepo.On("GetUserByID", ctx, "user-456").
+		Return(&domain.User{ID: "user-456", Email: "real@user.com"}, nil)
 	mockEmailService.On("SendNotificationEmail", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	// When: ProcessWebhook is called with USER_PERMISSION_REVOKED
@@ -1478,10 +1574,12 @@ func TestProcessWebhook_ItemError_LinkedItemNotFound(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -1513,10 +1611,12 @@ func TestProcessWebhook_ItemError_UnknownErrorType(t *testing.T) {
 	mockPlaidService := new(MockPlaidService)
 	mockEncryptionService := new(MockEncryptionService)
 	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
 
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
+		mockUserRepo,
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
@@ -1542,5 +1642,190 @@ func TestProcessWebhook_ItemError_UnknownErrorType(t *testing.T) {
 	mockEncryptionService.AssertNotCalled(t, "Decrypt")
 	mockPlaidService.AssertNotCalled(t, "CreateUpdateModeLinkToken")
 	mockNotificationRepo.AssertNotCalled(t, "Create")
+	mockEmailService.AssertNotCalled(t, "SendNotificationEmail")
+}
+
+// ============================================================================
+// User Lookup Failure Tests (Graceful Degradation)
+// ============================================================================
+
+// TestHandleLoginRequired_UserLookupFailureNonBlocking tests graceful degradation when user lookup fails
+func TestHandleLoginRequired_UserLookupFailureNonBlocking(t *testing.T) {
+	ctx := context.Background()
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
+	mockPlaidService := new(MockPlaidService)
+	mockEncryptionService := new(MockEncryptionService)
+	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
+
+	service := NewItemErrorService(
+		mockLinkedItemRepo,
+		mockNotificationRepo,
+		mockUserRepo,
+		mockPlaidService,
+		mockEncryptionService,
+		mockEmailService,
+	)
+
+	linkedItem := &domain.LinkedItem{
+		ID:                   "linked-item-123",
+		UserID:               "user-456",
+		ItemID:               "plaid-item-789",
+		AccessTokenEncrypted: "encrypted-access-token",
+		InstitutionName:      "Test Bank",
+		Status:               "active",
+	}
+
+	mockEncryptionService.On("Decrypt", "encrypted-access-token").Return("decrypted-access-token", nil)
+	linkTokenResponse := &domain.LinkTokenResponse{LinkToken: "link-token-123", Expiration: time.Now().Add(30 * time.Minute), RequestID: "req-123"}
+	mockPlaidService.On("CreateUpdateModeLinkToken", ctx, "user-456", "decrypted-access-token").Return(linkTokenResponse, nil)
+	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
+	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
+
+	// Mock: User lookup FAILS (graceful degradation - email skipped)
+	mockUserRepo.On("GetUserByID", ctx, "user-456").Return(nil, errors.New("user not found"))
+
+	err := service.HandleLoginRequired(ctx, linkedItem, "ITEM_LOGIN_REQUIRED", "Test error")
+
+	// Then: Should succeed despite user lookup failure (in-app notification was created)
+	require.NoError(t, err, "User lookup failure should not block webhook processing")
+	mockNotificationRepo.AssertExpectations(t)
+	mockUserRepo.AssertExpectations(t)
+	// Email should NOT be sent if user lookup fails
+	mockEmailService.AssertNotCalled(t, "SendNotificationEmail")
+}
+
+// TestHandleError_UserLookupFailureNonBlocking tests graceful degradation when user lookup fails
+func TestHandleError_UserLookupFailureNonBlocking(t *testing.T) {
+	ctx := context.Background()
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
+	mockPlaidService := new(MockPlaidService)
+	mockEncryptionService := new(MockEncryptionService)
+	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
+
+	service := NewItemErrorService(
+		mockLinkedItemRepo,
+		mockNotificationRepo,
+		mockUserRepo,
+		mockPlaidService,
+		mockEncryptionService,
+		mockEmailService,
+	)
+
+	linkedItem := &domain.LinkedItem{
+		ID:              "linked-item-123",
+		UserID:          "user-456",
+		ItemID:          "plaid-item-789",
+		InstitutionName: "Test Bank",
+		Status:          "active",
+	}
+
+	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
+	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
+
+	// Mock: User lookup FAILS (graceful degradation - email skipped)
+	mockUserRepo.On("GetUserByID", ctx, "user-456").Return(nil, errors.New("user not found"))
+
+	err := service.HandleError(ctx, linkedItem, "ITEM_ERROR", "Test error")
+
+	// Then: Should succeed despite user lookup failure (in-app notification was created)
+	require.NoError(t, err, "User lookup failure should not block webhook processing")
+	mockNotificationRepo.AssertExpectations(t)
+	mockUserRepo.AssertExpectations(t)
+	mockEmailService.AssertNotCalled(t, "SendNotificationEmail")
+}
+
+// TestHandlePendingExpiration_UserLookupFailureNonBlocking tests graceful degradation when user lookup fails
+func TestHandlePendingExpiration_UserLookupFailureNonBlocking(t *testing.T) {
+	ctx := context.Background()
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
+	mockPlaidService := new(MockPlaidService)
+	mockEncryptionService := new(MockEncryptionService)
+	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
+
+	service := NewItemErrorService(
+		mockLinkedItemRepo,
+		mockNotificationRepo,
+		mockUserRepo,
+		mockPlaidService,
+		mockEncryptionService,
+		mockEmailService,
+	)
+
+	linkedItem := &domain.LinkedItem{
+		ID:                   "linked-item-123",
+		UserID:               "user-456",
+		ItemID:               "plaid-item-789",
+		AccessTokenEncrypted: "encrypted-access-token",
+		InstitutionName:      "Test Bank",
+		Status:               "active",
+	}
+
+	mockEncryptionService.On("Decrypt", "encrypted-access-token").Return("decrypted-access-token", nil)
+	linkTokenResponse := &domain.LinkTokenResponse{LinkToken: "link-token-456", Expiration: time.Now().Add(30 * time.Minute), RequestID: "req-456"}
+	mockPlaidService.On("CreateUpdateModeLinkToken", ctx, "user-456", "decrypted-access-token").Return(linkTokenResponse, nil)
+	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
+	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
+
+	// Mock: User lookup FAILS (graceful degradation - email skipped)
+	mockUserRepo.On("GetUserByID", ctx, "user-456").Return(nil, errors.New("user not found"))
+
+	err := service.HandlePendingExpiration(ctx, linkedItem, "ITEM_PENDING_EXPIRATION", "Test error")
+
+	// Then: Should succeed despite user lookup failure (in-app notification was created)
+	require.NoError(t, err, "User lookup failure should not block webhook processing")
+	mockNotificationRepo.AssertExpectations(t)
+	mockUserRepo.AssertExpectations(t)
+	mockEmailService.AssertNotCalled(t, "SendNotificationEmail")
+}
+
+// TestHandlePermissionRevoked_UserLookupFailureNonBlocking tests graceful degradation when user lookup fails
+func TestHandlePermissionRevoked_UserLookupFailureNonBlocking(t *testing.T) {
+	ctx := context.Background()
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
+	mockPlaidService := new(MockPlaidService)
+	mockEncryptionService := new(MockEncryptionService)
+	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
+
+	service := NewItemErrorService(
+		mockLinkedItemRepo,
+		mockNotificationRepo,
+		mockUserRepo,
+		mockPlaidService,
+		mockEncryptionService,
+		mockEmailService,
+	)
+
+	linkedItem := &domain.LinkedItem{
+		ID:                   "linked-item-123",
+		UserID:               "user-456",
+		ItemID:               "plaid-item-789",
+		AccessTokenEncrypted: "encrypted-access-token",
+		InstitutionName:      "Test Bank",
+		Status:               "active",
+	}
+
+	mockEncryptionService.On("Decrypt", "encrypted-access-token").Return("decrypted-access-token", nil)
+	linkTokenResponse := &domain.LinkTokenResponse{LinkToken: "link-token-789", Expiration: time.Now().Add(30 * time.Minute), RequestID: "req-789"}
+	mockPlaidService.On("CreateUpdateModeLinkToken", ctx, "user-456", "decrypted-access-token").Return(linkTokenResponse, nil)
+	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
+	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
+
+	// Mock: User lookup FAILS (graceful degradation - email skipped)
+	mockUserRepo.On("GetUserByID", ctx, "user-456").Return(nil, errors.New("user not found"))
+
+	err := service.HandlePermissionRevoked(ctx, linkedItem, "ITEM_PERMISSION_REVOKED", "Test error")
+
+	// Then: Should succeed despite user lookup failure (in-app notification was created)
+	require.NoError(t, err, "User lookup failure should not block webhook processing")
+	mockNotificationRepo.AssertExpectations(t)
+	mockUserRepo.AssertExpectations(t)
 	mockEmailService.AssertNotCalled(t, "SendNotificationEmail")
 }
