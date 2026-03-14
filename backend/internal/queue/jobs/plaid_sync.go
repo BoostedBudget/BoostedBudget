@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
@@ -111,6 +112,9 @@ func (w *PlaidSyncWorker) Work(ctx context.Context, job *river.Job[PlaidSyncArgs
 	)
 
 	startTime := time.Now()
+	defer func() {
+		observability.PlaidSyncDuration.Observe(time.Since(startTime).Seconds())
+	}()
 
 	// Acquire row-level lock via transaction
 	// This prevents concurrent sync operations on the same linked item
@@ -183,6 +187,9 @@ func (w *PlaidSyncWorker) Work(ctx context.Context, job *river.Job[PlaidSyncArgs
 	}
 
 	totalChanges := len(result.Added) + len(result.Modified) + len(result.Removed)
+	observability.PlaidSyncTxns.WithLabelValues("added").Add(float64(len(result.Added)))
+	observability.PlaidSyncTxns.WithLabelValues("modified").Add(float64(len(result.Modified)))
+	observability.PlaidSyncTxns.WithLabelValues("removed").Add(float64(len(result.Removed)))
 	w.logger.Info("sync completed successfully",
 		"job_id", job.ID,
 		"item_id", args.ItemID,

@@ -72,7 +72,7 @@ func (h *NotificationHandler) GetNotifications(ctx context.Context, input *GetNo
 
 	notifications, err := h.repo.GetByUserID(ctx, input.UserID, limit)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	// Return empty array instead of null if no notifications
@@ -88,7 +88,7 @@ func (h *NotificationHandler) GetNotifications(ctx context.Context, input *GetNo
 func (h *NotificationHandler) MarkNotificationRead(ctx context.Context, input *MarkNotificationReadInput) (*MarkNotificationReadOutput, error) {
 	err := h.repo.MarkAsRead(ctx, input.ID, input.UserID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	output := &MarkNotificationReadOutput{}
@@ -101,7 +101,7 @@ func (h *NotificationHandler) MarkNotificationRead(ctx context.Context, input *M
 func (h *NotificationHandler) GetUnreadCount(ctx context.Context, input *GetUnreadCountInput) (*GetUnreadCountOutput, error) {
 	count, err := h.repo.GetUnreadCount(ctx, input.UserID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	output := &GetUnreadCountOutput{}

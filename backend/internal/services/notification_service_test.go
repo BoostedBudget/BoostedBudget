@@ -142,7 +142,7 @@ func TestNotificationService_SendBudgetAlert_InAppOnly(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	emailSvc := new(mockEmailSvc)
 
-	svc := NewBudgetAlertNotificationService(notifRepo, userRepo, emailSvc)
+	svc := NewBudgetAlertNotificationService(notifRepo, userRepo, emailSvc, nil)
 
 	userID := "user-123"
 	alert := createTestAlertAction()
@@ -174,7 +174,7 @@ func TestNotificationService_SendBudgetAlert_WithEmail(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	emailSvc := new(mockEmailSvc)
 
-	svc := NewBudgetAlertNotificationService(notifRepo, userRepo, emailSvc)
+	svc := NewBudgetAlertNotificationService(notifRepo, userRepo, emailSvc, nil)
 
 	userID := "user-123"
 	alert := createTestAlertAction()
@@ -209,7 +209,7 @@ func TestNotificationService_SendBudgetAlert_InAppCreationFails(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	emailSvc := new(mockEmailSvc)
 
-	svc := NewBudgetAlertNotificationService(notifRepo, userRepo, emailSvc)
+	svc := NewBudgetAlertNotificationService(notifRepo, userRepo, emailSvc, nil)
 
 	userID := "user-123"
 	alert := createTestAlertAction()
@@ -233,7 +233,7 @@ func TestNotificationService_SendBudgetAlert_EmailFailureNonBlocking(t *testing.
 	userRepo := new(mockUserRepo)
 	emailSvc := new(mockEmailSvc)
 
-	svc := NewBudgetAlertNotificationService(notifRepo, userRepo, emailSvc)
+	svc := NewBudgetAlertNotificationService(notifRepo, userRepo, emailSvc, nil)
 
 	userID := "user-123"
 	alert := createTestAlertAction()
@@ -270,7 +270,7 @@ func TestNotificationService_SendBudgetAlert_UserNotFoundForEmail(t *testing.T) 
 	userRepo := new(mockUserRepo)
 	emailSvc := new(mockEmailSvc)
 
-	svc := NewBudgetAlertNotificationService(notifRepo, userRepo, emailSvc)
+	svc := NewBudgetAlertNotificationService(notifRepo, userRepo, emailSvc, nil)
 
 	userID := "user-123"
 	alert := createTestAlertAction()
@@ -366,7 +366,7 @@ func TestNotificationService_SendBudgetAlert_DefaultTemplates(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	emailSvc := new(mockEmailSvc)
 
-	svc := NewBudgetAlertNotificationService(notifRepo, userRepo, emailSvc)
+	svc := NewBudgetAlertNotificationService(notifRepo, userRepo, emailSvc, nil)
 
 	userID := "user-123"
 	alert := &domain.AlertAction{
@@ -408,7 +408,7 @@ func TestNotificationService_SendBudgetAlert_EmailOnlyChannel(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	emailSvc := new(mockEmailSvc)
 
-	svc := NewBudgetAlertNotificationService(notifRepo, userRepo, emailSvc)
+	svc := NewBudgetAlertNotificationService(notifRepo, userRepo, emailSvc, nil)
 
 	userID := "user-123"
 	alert := createTestAlertAction()

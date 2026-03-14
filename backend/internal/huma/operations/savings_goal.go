@@ -91,7 +91,7 @@ type DeleteSavingsGoalInput struct {
 func (h *SavingsGoalHandler) CreateGoal(ctx context.Context, input *CreateSavingsGoalInput) (*CreateSavingsGoalOutput, error) {
 	goal, err := h.service.CreateGoal(ctx, input.UserID, &input.Body)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &CreateSavingsGoalOutput{Body: goal}, nil
@@ -102,7 +102,7 @@ func (h *SavingsGoalHandler) CreateGoal(ctx context.Context, input *CreateSaving
 func (h *SavingsGoalHandler) GetGoals(ctx context.Context, input *GetSavingsGoalsInput) (*GetSavingsGoalsOutput, error) {
 	goals, err := h.service.GetGoals(ctx, input.UserID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	// Return empty array instead of null
@@ -118,7 +118,7 @@ func (h *SavingsGoalHandler) GetGoals(ctx context.Context, input *GetSavingsGoal
 func (h *SavingsGoalHandler) GetActiveGoals(ctx context.Context, input *GetActiveSavingsGoalsInput) (*GetActiveSavingsGoalsOutput, error) {
 	goals, err := h.service.GetActiveGoals(ctx, input.UserID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	// Return empty array instead of null
@@ -134,7 +134,7 @@ func (h *SavingsGoalHandler) GetActiveGoals(ctx context.Context, input *GetActiv
 func (h *SavingsGoalHandler) GetGoal(ctx context.Context, input *GetSavingsGoalInput) (*GetSavingsGoalOutput, error) {
 	goal, err := h.service.GetGoal(ctx, input.UserID, input.ID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &GetSavingsGoalOutput{Body: goal}, nil
@@ -145,7 +145,7 @@ func (h *SavingsGoalHandler) GetGoal(ctx context.Context, input *GetSavingsGoalI
 func (h *SavingsGoalHandler) UpdateGoal(ctx context.Context, input *UpdateSavingsGoalInput) (*UpdateSavingsGoalOutput, error) {
 	goal, err := h.service.UpdateGoal(ctx, input.UserID, input.ID, &input.Body)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &UpdateSavingsGoalOutput{Body: goal}, nil
@@ -156,7 +156,7 @@ func (h *SavingsGoalHandler) UpdateGoal(ctx context.Context, input *UpdateSaving
 func (h *SavingsGoalHandler) DeleteGoal(ctx context.Context, input *DeleteSavingsGoalInput) (*struct{}, error) {
 	err := h.service.DeleteGoal(ctx, input.UserID, input.ID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return nil, nil

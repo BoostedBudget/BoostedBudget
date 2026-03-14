@@ -5,7 +5,7 @@ package services
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -102,6 +102,7 @@ type ItemErrorService interface {
 
 // itemErrorService implements ItemErrorService
 type itemErrorService struct {
+	logger            *slog.Logger
 	linkedItemRepo    repository.LinkedItemRepository
 	notificationRepo  repository.NotificationRepository
 	userRepo          UserRepository
@@ -118,8 +119,13 @@ func NewItemErrorService(
 	plaidService PlaidService,
 	encryptionService EncryptionService,
 	emailService EmailService,
+	logger *slog.Logger,
 ) ItemErrorService {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &itemErrorService{
+		logger:            logger,
 		linkedItemRepo:    linkedItemRepo,
 		notificationRepo:  notificationRepo,
 		userRepo:          userRepo,
@@ -134,15 +140,15 @@ func NewItemErrorService(
 func (s *itemErrorService) sendNotificationEmail(ctx context.Context, userID string, notification *domain.Notification, itemID string) {
 	user, err := s.userRepo.GetUserByID(ctx, userID)
 	if err != nil {
-		log.Printf("Warning: Failed to fetch user email for item %s notification: %v", itemID, err)
+		s.logger.Warn("failed to fetch user email for notification", "item_id", itemID, "error", err)
 		return
 	}
 	if user.Email == "" {
-		log.Printf("Warning: User %s has no email address, skipping email for item %s", userID, itemID)
+		s.logger.Warn("user has no email address, skipping notification email", "user_id", userID, "item_id", itemID)
 		return
 	}
 	if err := s.emailService.SendNotificationEmail(ctx, user.Email, notification); err != nil {
-		log.Printf("Warning: Failed to send email notification for item %s: %v", itemID, err)
+		s.logger.Warn("failed to send email notification", "item_id", itemID, "error", err)
 	}
 }
 
@@ -195,7 +201,7 @@ func (s *itemErrorService) HandleLoginRequired(
 	err = s.notificationRepo.Create(ctx, notification)
 	if err != nil {
 		// Non-blocking: log error but don't return (graceful degradation)
-		log.Printf("Warning: Failed to create notification for item %s: %v", linkedItem.ItemID, err)
+		s.logger.Warn("failed to create notification", "item_id", linkedItem.ItemID, "error", err)
 		return nil
 	}
 
@@ -238,7 +244,7 @@ func (s *itemErrorService) HandleError(
 	err = s.notificationRepo.Create(ctx, notification)
 	if err != nil {
 		// Non-blocking: log error but don't return (graceful degradation)
-		log.Printf("Warning: Failed to create notification for item %s: %v", linkedItem.ItemID, err)
+		s.logger.Warn("failed to create notification", "item_id", linkedItem.ItemID, "error", err)
 		return nil
 	}
 
@@ -297,7 +303,7 @@ func (s *itemErrorService) HandlePendingExpiration(
 	err = s.notificationRepo.Create(ctx, notification)
 	if err != nil {
 		// Non-blocking: log error but don't return (graceful degradation)
-		log.Printf("Warning: Failed to create notification for item %s: %v", linkedItem.ItemID, err)
+		s.logger.Warn("failed to create notification", "item_id", linkedItem.ItemID, "error", err)
 		return nil
 	}
 
@@ -356,7 +362,7 @@ func (s *itemErrorService) HandlePermissionRevoked(
 	err = s.notificationRepo.Create(ctx, notification)
 	if err != nil {
 		// Non-blocking: log error but don't return (graceful degradation)
-		log.Printf("Warning: Failed to create notification for item %s: %v", linkedItem.ItemID, err)
+		s.logger.Warn("failed to create notification", "item_id", linkedItem.ItemID, "error", err)
 		return nil
 	}
 

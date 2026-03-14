@@ -3,8 +3,9 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -12,8 +13,10 @@ import (
 	"github.com/clerk/clerk-sdk-go/v2"
 	"github.com/clerk/clerk-sdk-go/v2/jwt"
 	"github.com/danielgtaylor/huma/v2"
+	josejwt "github.com/go-jose/go-jose/v3/jwt"
 	"github.com/maxnussbaum/BoostedBudget/internal/auth"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
@@ -45,7 +48,11 @@ func NewClerkMiddleware(
 	secretKey string,
 	identityRepo repository.UserIdentityRepository,
 	registrationService services.RegistrationService,
+	logger *slog.Logger,
 ) func(ctx huma.Context, next func(huma.Context)) {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	// Initialize Clerk SDK with secret key
 	clerk.SetKey(secretKey)
 
@@ -85,7 +92,12 @@ func NewClerkMiddleware(
 		})
 
 		if err != nil {
-			log.Printf("[ClerkMiddleware] JWT verify failed: %v", err)
+			logger.Warn("JWT verify failed", "error", err)
+			if errors.Is(err, josejwt.ErrExpired) {
+				observability.AuthAttempts.WithLabelValues("expired").Inc()
+			} else {
+				observability.AuthAttempts.WithLabelValues("invalid").Inc()
+			}
 			writeClerkJSONError(ctx, http.StatusUnauthorized, "Invalid or expired token")
 			return
 		}
@@ -110,7 +122,7 @@ func NewClerkMiddleware(
 					var fetchErr error
 					email, fetchErr = auth.FetchEmailFromClerkAPI(ctx.Context(), clerkUserID)
 					if fetchErr != nil {
-						log.Printf("[ClerkMiddleware] Failed to fetch email from Clerk API: %v", fetchErr)
+						logger.Error("failed to fetch email from Clerk API", "clerk_user_id", clerkUserID, "error", fetchErr)
 						writeClerkJSONError(ctx, http.StatusInternalServerError, "Failed to retrieve user email")
 						return
 					}
@@ -120,19 +132,20 @@ func NewClerkMiddleware(
 
 				_, err = registrationService.RegisterUser(ctx.Context(), clerkUserID, email, emailVerified)
 				if err != nil {
-					log.Printf("[ClerkMiddleware] Failed to register user: %v", err)
+					logger.Error("failed to register user", "clerk_user_id", clerkUserID, "error", err)
 					writeClerkJSONError(ctx, http.StatusInternalServerError, "Failed to create user account")
 					return
 				}
+				observability.AuthRegistrations.Inc()
 
 				identity, err = identityRepo.GetByClerkID(ctx.Context(), clerkUserID)
 				if err != nil {
-					log.Printf("[ClerkMiddleware] Failed to get identity after registration: %v", err)
+					logger.Error("failed to get identity after registration", "clerk_user_id", clerkUserID, "error", err)
 					writeClerkJSONError(ctx, http.StatusInternalServerError, "Failed to complete registration")
 					return
 				}
 			} else {
-				log.Printf("[ClerkMiddleware] Identity lookup error: %v", err)
+				logger.Error("identity lookup error", "clerk_user_id", clerkUserID, "error", err)
 				writeClerkJSONError(ctx, http.StatusInternalServerError, "Failed to authenticate user")
 				return
 			}
@@ -150,6 +163,7 @@ func NewClerkMiddleware(
 			identityRepo.UpdateLastUsed(updateCtx, clerkUserID)
 		}()
 
+		observability.AuthAttempts.WithLabelValues("success").Inc()
 		next(huma.WithContext(ctx, newCtx))
 	}
 }

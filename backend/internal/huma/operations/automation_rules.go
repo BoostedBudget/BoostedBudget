@@ -166,7 +166,7 @@ type GetRuleExecutionsOutput struct {
 func (h *AutomationRuleHandler) GetAutomationRules(ctx context.Context, input *GetAutomationRulesInput) (*GetAutomationRulesOutput, error) {
 	rules, err := h.service.GetUserRules(ctx, input.UserID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	// Return empty array instead of null if no rules
@@ -182,7 +182,7 @@ func (h *AutomationRuleHandler) GetAutomationRules(ctx context.Context, input *G
 func (h *AutomationRuleHandler) GetAutomationRuleByID(ctx context.Context, input *GetAutomationRuleByIDInput) (*GetAutomationRuleByIDOutput, error) {
 	rule, err := h.service.GetRuleByID(ctx, input.UserID, input.ID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &GetAutomationRuleByIDOutput{Body: rule}, nil
@@ -193,7 +193,7 @@ func (h *AutomationRuleHandler) GetAutomationRuleByID(ctx context.Context, input
 func (h *AutomationRuleHandler) CreateAutomationRule(ctx context.Context, input *CreateAutomationRuleInput) (*CreateAutomationRuleOutput, error) {
 	rule, err := h.service.CreateRule(ctx, input.UserID, &input.Body)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &CreateAutomationRuleOutput{Body: rule}, nil
@@ -204,7 +204,7 @@ func (h *AutomationRuleHandler) CreateAutomationRule(ctx context.Context, input 
 func (h *AutomationRuleHandler) UpdateAutomationRule(ctx context.Context, input *UpdateAutomationRuleInput) (*UpdateAutomationRuleOutput, error) {
 	rule, err := h.service.UpdateRule(ctx, input.UserID, input.ID, &input.Body)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &UpdateAutomationRuleOutput{Body: rule}, nil
@@ -215,7 +215,7 @@ func (h *AutomationRuleHandler) UpdateAutomationRule(ctx context.Context, input 
 func (h *AutomationRuleHandler) DeleteAutomationRule(ctx context.Context, input *DeleteAutomationRuleInput) (*struct{}, error) {
 	err := h.service.DeleteRule(ctx, input.UserID, input.ID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return nil, nil
@@ -226,7 +226,7 @@ func (h *AutomationRuleHandler) DeleteAutomationRule(ctx context.Context, input 
 func (h *AutomationRuleHandler) ToggleAutomationRule(ctx context.Context, input *ToggleAutomationRuleInput) (*ToggleAutomationRuleOutput, error) {
 	rule, err := h.service.ToggleRule(ctx, input.UserID, input.ID, input.Body.Enabled)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &ToggleAutomationRuleOutput{Body: rule}, nil
@@ -239,7 +239,7 @@ func (h *AutomationRuleHandler) TriggerAutomationRule(ctx context.Context, input
 	// Verify user owns the rule first
 	_, err := h.service.GetRuleByID(ctx, input.UserID, input.ID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	// Check if scheduler manager is available
@@ -266,7 +266,7 @@ func (h *AutomationRuleHandler) TriggerAutomationRule(ctx context.Context, input
 		case workers.ErrExecutionLimitExceeded:
 			return nil, huma.Error429TooManyRequests("Daily execution limit exceeded")
 		default:
-			return nil, humaerrors.MapError(err)
+			return nil, humaerrors.LoggingMapError(ctx, err)
 		}
 	}
 
@@ -280,7 +280,7 @@ func (h *AutomationRuleHandler) TestAutomationRule(ctx context.Context, input *T
 	// Verify user owns the rule
 	rule, err := h.service.GetRuleByID(ctx, input.UserID, input.ID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	// Check if execution service is available
@@ -291,7 +291,7 @@ func (h *AutomationRuleHandler) TestAutomationRule(ctx context.Context, input *T
 	// Perform dry-run test
 	result, err := h.executionService.TestRule(ctx, rule, input.Body.TriggerData)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &TestAutomationRuleOutput{Body: result}, nil
@@ -303,7 +303,7 @@ func (h *AutomationRuleHandler) TestAutomationRule(ctx context.Context, input *T
 func (h *AutomationRuleHandler) EnableAutomationRule(ctx context.Context, input *EnableAutomationRuleInput) (*ToggleAutomationRuleOutput, error) {
 	rule, err := h.service.ToggleRule(ctx, input.UserID, input.ID, true)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &ToggleAutomationRuleOutput{Body: rule}, nil
@@ -315,7 +315,7 @@ func (h *AutomationRuleHandler) EnableAutomationRule(ctx context.Context, input 
 func (h *AutomationRuleHandler) DisableAutomationRule(ctx context.Context, input *DisableAutomationRuleInput) (*ToggleAutomationRuleOutput, error) {
 	rule, err := h.service.ToggleRule(ctx, input.UserID, input.ID, false)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &ToggleAutomationRuleOutput{Body: rule}, nil
@@ -328,7 +328,7 @@ func (h *AutomationRuleHandler) GetRuleExecutions(ctx context.Context, input *Ge
 	// Verify user owns the rule
 	_, err := h.service.GetRuleByID(ctx, input.UserID, input.ID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	// Check if execution service is available
@@ -346,7 +346,7 @@ func (h *AutomationRuleHandler) GetRuleExecutions(ctx context.Context, input *Ge
 	// Get execution history with filter
 	executions, total, err := h.executionService.GetExecutionHistoryWithFilter(ctx, input.ID, statusFilter, input.Limit, input.Offset)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &GetRuleExecutionsOutput{

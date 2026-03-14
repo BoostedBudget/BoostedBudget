@@ -133,7 +133,7 @@ func TestWebhookProcessor_ProcessPendingWebhooks_Success(t *testing.T) {
 	mockItemErrorService := new(MockItemErrorServiceForWorker)
 	mockWebhookRepo := new(MockWebhookRepoForWorker)
 
-	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10)
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10, nil)
 
 	// Create test webhooks
 	itemID1 := "item-1"
@@ -184,7 +184,7 @@ func TestWebhookProcessor_ProcessPendingWebhooks_NoWebhooks(t *testing.T) {
 	mockItemErrorService := new(MockItemErrorServiceForWorker)
 	mockWebhookRepo := new(MockWebhookRepoForWorker)
 
-	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10)
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10, nil)
 
 	// Mock: GetUnprocessedByType returns empty slice for both types
 	mockWebhookRepo.On("GetUnprocessedByType", ctx, "TRANSACTIONS", 10).Return([]domain.WebhookEvent{}, nil)
@@ -207,7 +207,7 @@ func TestWebhookProcessor_ProcessPendingWebhooks_PartialFailure(t *testing.T) {
 	mockItemErrorService := new(MockItemErrorServiceForWorker)
 	mockWebhookRepo := new(MockWebhookRepoForWorker)
 
-	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10)
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10, nil)
 
 	// Create 3 test webhooks
 	itemID1 := "item-1"
@@ -269,7 +269,7 @@ func TestWebhookProcessor_Start_GracefulShutdown(t *testing.T) {
 	mockItemErrorService := new(MockItemErrorServiceForWorker)
 	mockWebhookRepo := new(MockWebhookRepoForWorker)
 
-	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10)
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10, nil)
 
 	// Create a context that's already cancelled
 	ctx, cancel := context.WithCancel(context.Background())
@@ -304,7 +304,7 @@ func TestWebhookProcessor_Start_ProcessesOnStartup(t *testing.T) {
 	mockItemErrorService := new(MockItemErrorServiceForWorker)
 	mockWebhookRepo := new(MockWebhookRepoForWorker)
 
-	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 1*time.Hour, 10)
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 1*time.Hour, 10, nil)
 
 	// Create context with timeout (1s to allow processing to complete)
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
@@ -353,7 +353,7 @@ func TestWebhookProcessor_ProcessPendingWebhooks_ItemWebhook_Success(t *testing.
 	mockItemErrorService := new(MockItemErrorServiceForWorker)
 	mockWebhookRepo := new(MockWebhookRepoForWorker)
 
-	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10)
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10, nil)
 
 	// Create ITEM webhook with error details in payload
 	itemID1 := "item-1"
@@ -391,7 +391,7 @@ func TestWebhookProcessor_ProcessPendingWebhooks_ItemWebhook_PartialFailure(t *t
 	mockItemErrorService := new(MockItemErrorServiceForWorker)
 	mockWebhookRepo := new(MockWebhookRepoForWorker)
 
-	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10)
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10, nil)
 
 	// Create 2 ITEM webhooks - first fails, second succeeds
 	itemID1 := "item-1"
@@ -445,7 +445,7 @@ func TestWebhookProcessor_ProcessPendingWebhooks_MixedWebhooks(t *testing.T) {
 	mockItemErrorService := new(MockItemErrorServiceForWorker)
 	mockWebhookRepo := new(MockWebhookRepoForWorker)
 
-	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10)
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10, nil)
 
 	// Create TRANSACTIONS webhook
 	itemID1 := "item-1"
@@ -499,7 +499,7 @@ func TestWebhookProcessor_ProcessPendingWebhooks_ItemWebhook_InvalidPayload(t *t
 	mockItemErrorService := new(MockItemErrorServiceForWorker)
 	mockWebhookRepo := new(MockWebhookRepoForWorker)
 
-	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10)
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10, nil)
 
 	// Create ITEM webhook with invalid JSON payload
 	itemID := "item-1"
@@ -539,7 +539,7 @@ func TestWebhookProcessor_TransactionWebhooks_RepoError(t *testing.T) {
 	mockItemErrorService := new(MockItemErrorServiceForWorker)
 	mockWebhookRepo := new(MockWebhookRepoForWorker)
 
-	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10)
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10, nil)
 
 	// Mock: TRANSACTIONS repo returns error
 	mockWebhookRepo.On("GetUnprocessedByType", ctx, "TRANSACTIONS", 10).
@@ -565,7 +565,7 @@ func TestWebhookProcessor_ItemWebhooks_RepoError(t *testing.T) {
 	mockItemErrorService := new(MockItemErrorServiceForWorker)
 	mockWebhookRepo := new(MockWebhookRepoForWorker)
 
-	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10)
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10, nil)
 
 	// Mock: TRANSACTIONS succeeds with empty
 	mockWebhookRepo.On("GetUnprocessedByType", ctx, "TRANSACTIONS", 10).
@@ -589,7 +589,7 @@ func TestWebhookProcessor_ItemWebhook_NilItemID(t *testing.T) {
 	mockItemErrorService := new(MockItemErrorServiceForWorker)
 	mockWebhookRepo := new(MockWebhookRepoForWorker)
 
-	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10)
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10, nil)
 
 	// Create ITEM webhook with nil ItemID
 	webhook := domain.WebhookEvent{
@@ -624,7 +624,7 @@ func TestWebhookProcessor_ItemWebhook_MissingErrorType(t *testing.T) {
 	mockItemErrorService := new(MockItemErrorServiceForWorker)
 	mockWebhookRepo := new(MockWebhookRepoForWorker)
 
-	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10)
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10, nil)
 
 	// Create ITEM webhook with empty error fields
 	itemID := "item-1"
@@ -660,7 +660,7 @@ func TestWebhookProcessor_BothReposFail(t *testing.T) {
 	mockItemErrorService := new(MockItemErrorServiceForWorker)
 	mockWebhookRepo := new(MockWebhookRepoForWorker)
 
-	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10)
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10, nil)
 
 	// Mock: Both repos fail
 	mockWebhookRepo.On("GetUnprocessedByType", ctx, "TRANSACTIONS", 10).

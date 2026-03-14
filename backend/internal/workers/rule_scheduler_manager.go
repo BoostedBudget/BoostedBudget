@@ -6,7 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"sort"
 	"sync"
 
@@ -23,14 +23,19 @@ var (
 // It manages the lifecycle of all providers and routes manual trigger requests
 // to the appropriate provider.
 type RuleSchedulerManager struct {
+	logger    *slog.Logger
 	providers map[string]RuleTriggerProvider
 	mu        sync.RWMutex
 	started   bool
 }
 
 // NewRuleSchedulerManager creates a new RuleSchedulerManager instance.
-func NewRuleSchedulerManager() *RuleSchedulerManager {
+func NewRuleSchedulerManager(logger *slog.Logger) *RuleSchedulerManager {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &RuleSchedulerManager{
+		logger:    logger,
 		providers: make(map[string]RuleTriggerProvider),
 	}
 }
@@ -43,12 +48,12 @@ func (m *RuleSchedulerManager) RegisterProvider(provider RuleTriggerProvider) {
 
 	name := provider.Name()
 	if existing, ok := m.providers[name]; ok {
-		log.Printf("[RuleSchedulerManager] Replacing existing provider: %s", name)
+		m.logger.Warn("replacing existing provider", "name", name)
 		_ = existing // Could call Stop() if needed, but we don't track started state per provider
 	}
 
 	m.providers[name] = provider
-	log.Printf("[RuleSchedulerManager] Registered provider: %s (supports manual: %v)", name, provider.SupportsManualTrigger())
+	m.logger.Info("registered provider", "name", name, "supports_manual", provider.SupportsManualTrigger())
 }
 
 // Start starts all registered providers.
@@ -61,17 +66,17 @@ func (m *RuleSchedulerManager) Start(ctx context.Context) error {
 		return nil
 	}
 
-	log.Printf("[RuleSchedulerManager] Starting %d providers...", len(m.providers))
+	m.logger.Info("starting providers", "count", len(m.providers))
 
 	for name, provider := range m.providers {
-		log.Printf("[RuleSchedulerManager] Starting provider: %s", name)
+		m.logger.Info("starting provider", "name", name)
 		if err := provider.Start(ctx); err != nil {
 			return fmt.Errorf("failed to start provider %s: %w", name, err)
 		}
 	}
 
 	m.started = true
-	log.Printf("[RuleSchedulerManager] All providers started successfully")
+	m.logger.Info("all providers started successfully")
 	return nil
 }
 
@@ -85,13 +90,13 @@ func (m *RuleSchedulerManager) Stop(ctx context.Context) error {
 		return nil
 	}
 
-	log.Printf("[RuleSchedulerManager] Stopping %d providers...", len(m.providers))
+	m.logger.Info("stopping providers", "count", len(m.providers))
 
 	var firstErr error
 	for name, provider := range m.providers {
-		log.Printf("[RuleSchedulerManager] Stopping provider: %s", name)
+		m.logger.Info("stopping provider", "name", name)
 		if err := provider.Stop(ctx); err != nil {
-			log.Printf("[RuleSchedulerManager] Error stopping provider %s: %v", name, err)
+			m.logger.Error("error stopping provider", "name", name, "error", err)
 			if firstErr == nil {
 				firstErr = fmt.Errorf("failed to stop provider %s: %w", name, err)
 			}
@@ -99,7 +104,7 @@ func (m *RuleSchedulerManager) Stop(ctx context.Context) error {
 	}
 
 	m.started = false
-	log.Printf("[RuleSchedulerManager] All providers stopped")
+	m.logger.Info("all providers stopped")
 	return firstErr
 }
 

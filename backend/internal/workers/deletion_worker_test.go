@@ -113,7 +113,7 @@ func TestWorker_FindsScheduledUsers(t *testing.T) {
 	mockService := new(MockDeletionServiceForWorker)
 	mockRepo := new(MockProfileRepoForWorker)
 
-	worker := NewDeletionWorker(mockService, mockRepo, 1*time.Hour)
+	worker := NewDeletionWorker(mockService, mockRepo, 1*time.Hour, nil)
 
 	scheduledUsers := []*domain.User{
 		{
@@ -148,7 +148,7 @@ func TestWorker_ProcessesUsers(t *testing.T) {
 	mockService := new(MockDeletionServiceForWorker)
 	mockRepo := new(MockProfileRepoForWorker)
 
-	worker := NewDeletionWorker(mockService, mockRepo, 1*time.Hour)
+	worker := NewDeletionWorker(mockService, mockRepo, 1*time.Hour, nil)
 
 	user := &domain.User{
 		ID:                  "user-123",
@@ -172,7 +172,7 @@ func TestWorker_HandlesErrors(t *testing.T) {
 	mockService := new(MockDeletionServiceForWorker)
 	mockRepo := new(MockProfileRepoForWorker)
 
-	worker := NewDeletionWorker(mockService, mockRepo, 1*time.Hour)
+	worker := NewDeletionWorker(mockService, mockRepo, 1*time.Hour, nil)
 
 	users := []*domain.User{
 		{
@@ -210,7 +210,7 @@ func TestWorker_RespectsContext(t *testing.T) {
 	mockService := new(MockDeletionServiceForWorker)
 	mockRepo := new(MockProfileRepoForWorker)
 
-	worker := NewDeletionWorker(mockService, mockRepo, 100*time.Millisecond)
+	worker := NewDeletionWorker(mockService, mockRepo, 100*time.Millisecond, nil)
 	cancel() // Cancel immediately
 
 	// Start worker (should respect cancellation)
@@ -239,7 +239,7 @@ func TestWorker_GracefulShutdown(t *testing.T) {
 	mockService := new(MockDeletionServiceForWorker)
 	mockRepo := new(MockProfileRepoForWorker)
 
-	worker := NewDeletionWorker(mockService, mockRepo, 100*time.Millisecond)
+	worker := NewDeletionWorker(mockService, mockRepo, 100*time.Millisecond, nil)
 
 	// Mock to avoid actual calls during shutdown test
 	mockRepo.On("GetUsersScheduledForDeletion", mock.Anything).Return([]*domain.User{}, nil).Maybe()

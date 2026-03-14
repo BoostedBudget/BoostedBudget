@@ -2,10 +2,14 @@
 package errors
 
 import (
+	"context"
 	"errors"
+	"fmt"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/getsentry/sentry-go"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
@@ -32,6 +36,10 @@ func MapError(err error) error {
 	// ================================
 
 	// Domain errors
+	case errors.Is(err, domain.ErrRolloverHistoryNotFound):
+		return huma.Error404NotFound("Rollover history not found")
+	case errors.Is(err, domain.ErrRuleExecutionNotFound):
+		return huma.Error404NotFound("Rule execution not found")
 	case errors.Is(err, domain.ErrBudgetNotFound):
 		return huma.Error404NotFound("Budget not found")
 	case errors.Is(err, domain.ErrBudgetCategoryNotFound):
@@ -64,6 +72,24 @@ func MapError(err error) error {
 		return huma.Error404NotFound("Privacy settings not found")
 	case errors.Is(err, repository.ErrIdentityNotFound):
 		return huma.Error404NotFound("User identity not found")
+	case errors.Is(err, repository.ErrSnapshotNotFound):
+		return huma.Error404NotFound("Balance snapshot not found")
+	case errors.Is(err, repository.ErrUserAccountNotFound):
+		return huma.Error404NotFound("User account not found")
+	case errors.Is(err, repository.ErrDashboardPreferencesNotFound):
+		return huma.Error404NotFound("Dashboard preferences not found")
+	case errors.Is(err, repository.ErrWebhookNotFound):
+		return huma.Error404NotFound("Webhook not found")
+	case errors.Is(err, repository.ErrPaddleWebhookNotFound):
+		return huma.Error404NotFound("Paddle webhook not found")
+
+	// Service errors
+	case errors.Is(err, services.ErrCustomerNotFound):
+		return huma.Error404NotFound("Paddle customer not found")
+	case errors.Is(err, services.ErrSubscriptionNotFound):
+		return huma.Error404NotFound("Paddle subscription not found")
+	case errors.Is(err, services.ErrClerkUserNotFound):
+		return huma.Error404NotFound("Clerk user not found")
 
 	// ================================
 	// 409 Conflict - Resource already exists
@@ -89,6 +115,10 @@ func MapError(err error) error {
 		return huma.Error409Conflict("Transaction already exists")
 	case errors.Is(err, repository.ErrDuplicateIdentity):
 		return huma.Error409Conflict("User identity already exists")
+	case errors.Is(err, repository.ErrDuplicateUserAccount):
+		return huma.Error409Conflict("User account already exists")
+	case errors.Is(err, repository.ErrPaddleWebhookDuplicate):
+		return huma.Error409Conflict("Paddle webhook event already processed")
 
 	// ================================
 	// 403 Forbidden - Tier limits exceeded
@@ -117,6 +147,8 @@ func MapError(err error) error {
 
 	case errors.Is(err, domain.ErrExecutionLimitExceeded):
 		return huma.NewError(429, "Daily rule execution limit exceeded for your subscription tier. Try again tomorrow or upgrade.")
+	case errors.Is(err, domain.ErrExecutionIntervalNotMet):
+		return huma.NewError(429, "Minimum execution interval not met for your subscription tier.")
 
 	// ================================
 	// 400 Bad Request - Validation errors
@@ -142,6 +174,12 @@ func MapError(err error) error {
 		return huma.Error400BadRequest("Invalid or expired public token from Plaid Link")
 	case errors.Is(err, services.ErrInvalidPlaidEnv):
 		return huma.Error400BadRequest("Invalid Plaid environment configuration")
+	case errors.Is(err, services.ErrNoAccountsAvailable):
+		return huma.Error400BadRequest("No accounts available from institution")
+	case errors.Is(err, services.ErrInvalidSignatureFormat):
+		return huma.Error400BadRequest("Invalid webhook signature format")
+	case errors.Is(err, services.ErrInvalidPageSizeNumber):
+		return huma.Error400BadRequest("page_size must be between 1 and 100")
 
 	// ================================
 	// 503 Service Unavailable - External service failures
@@ -151,12 +189,58 @@ func MapError(err error) error {
 		return huma.Error503ServiceUnavailable("Bank connection service temporarily unavailable. Please try again later.")
 	case errors.Is(err, services.ErrPlaidNotConfigured):
 		return huma.Error503ServiceUnavailable("Bank connection service not configured")
+	case errors.Is(err, services.ErrPaddleNotConfigured):
+		return huma.Error503ServiceUnavailable("Payment service not configured")
+	case errors.Is(err, services.ErrWebhookSecretNotConfigured):
+		return huma.Error503ServiceUnavailable("Webhook secret not configured")
+
+	// ================================
+	// 401 Unauthorized - Authentication failures
+	// ================================
+
+	case errors.Is(err, services.ErrSignatureVerificationFailed):
+		return huma.Error401Unauthorized("Webhook signature verification failed")
 
 	// ================================
 	// 500 Internal Server Error - Default
 	// ================================
 
+	case errors.Is(err, services.ErrInvalidPaddleEnv):
+		return huma.Error500InternalServerError("Invalid payment environment configuration")
+	case errors.Is(err, services.ErrEncryptionKeyRequired):
+		return huma.Error500InternalServerError("Encryption key not configured")
+	case errors.Is(err, services.ErrInvalidKeySize):
+		return huma.Error500InternalServerError("Invalid encryption key configuration")
+
 	default:
 		return huma.Error500InternalServerError("Internal server error")
 	}
+}
+
+// LoggingMapError converts a domain error to HTTP error, logging and capturing 5xx errors.
+// For 5xx errors: logs the original error and sends to Sentry if configured.
+func LoggingMapError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+
+	mapped := MapError(err)
+	if mapped == nil {
+		return nil
+	}
+
+	if statusErr, ok := mapped.(huma.StatusError); ok && statusErr.GetStatus() >= 500 {
+		logger := observability.LoggerFromContext(ctx)
+		logger.ErrorContext(ctx, "internal server error",
+			"error", err,
+			"mapped_status", statusErr.GetStatus(),
+		)
+		sentry.CaptureException(err)
+		observability.AppErrorsTotal.WithLabelValues(
+			fmt.Sprintf("%T", err),
+			fmt.Sprintf("%d", statusErr.GetStatus()),
+		).Inc()
+	}
+
+	return mapped
 }

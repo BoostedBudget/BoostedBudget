@@ -66,7 +66,7 @@ type UpdateUserAccountOutput struct {
 func (h *UserAccountHandler) GetUserAccounts(ctx context.Context, input *GetUserAccountsInput) (*GetUserAccountsOutput, error) {
 	accounts, err := h.service.GetByUserID(ctx, input.UserID, input.IncludeHidden)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	// Return empty array instead of null if no accounts
@@ -82,7 +82,7 @@ func (h *UserAccountHandler) GetUserAccounts(ctx context.Context, input *GetUser
 func (h *UserAccountHandler) GetUserAccountByID(ctx context.Context, input *GetUserAccountByIDInput) (*GetUserAccountByIDOutput, error) {
 	account, err := h.service.GetByID(ctx, input.ID, input.UserID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &GetUserAccountByIDOutput{Body: account}, nil
@@ -93,7 +93,7 @@ func (h *UserAccountHandler) GetUserAccountByID(ctx context.Context, input *GetU
 func (h *UserAccountHandler) UpdateUserAccount(ctx context.Context, input *UpdateUserAccountInput) (*UpdateUserAccountOutput, error) {
 	account, err := h.service.UpdateCustomization(ctx, input.ID, input.UserID, &input.Body)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &UpdateUserAccountOutput{Body: account}, nil

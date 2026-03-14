@@ -2,7 +2,7 @@ package operations
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -145,7 +145,7 @@ func (c *CheckRoleInput) Resolve(ctx huma.Context) []error {
 		if fetchErr != nil {
 			// Log but don't fail - email is optional for admin check
 			// The hardcoded admin check just won't work, but Clerk metadata check still will
-			log.Printf("[CheckRoleInput] Failed to fetch email from Clerk API: %v", fetchErr)
+			slog.Default().Warn("failed to fetch email from Clerk API for role check", "clerk_user_id", c.ClerkUserID, "error", fetchErr)
 		}
 	}
 

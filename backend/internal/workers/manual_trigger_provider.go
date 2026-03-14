@@ -5,7 +5,7 @@ package workers
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -20,6 +20,7 @@ var (
 // ManualTriggerProvider implements RuleTriggerProvider for on-demand rule execution.
 // It allows rules to be triggered manually via API with optional user-provided data.
 type ManualTriggerProvider struct {
+	logger          *slog.Logger
 	repo            RuleRepositoryInterface
 	executor        RuleExecutorInterface
 	subscriptionSvc SubscriptionLimitChecker
@@ -30,8 +31,13 @@ func NewManualTriggerProvider(
 	repo RuleRepositoryInterface,
 	executor RuleExecutorInterface,
 	subscriptionSvc SubscriptionLimitChecker,
+	logger *slog.Logger,
 ) *ManualTriggerProvider {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &ManualTriggerProvider{
+		logger:          logger,
 		repo:            repo,
 		executor:        executor,
 		subscriptionSvc: subscriptionSvc,
@@ -50,13 +56,13 @@ func (p *ManualTriggerProvider) SupportsManualTrigger() bool {
 
 // Start is a no-op for manual provider (no background work needed).
 func (p *ManualTriggerProvider) Start(ctx context.Context) error {
-	log.Printf("[ManualTriggerProvider] Started")
+	p.logger.Info("manual trigger provider started")
 	return nil
 }
 
 // Stop is a no-op for manual provider (nothing to stop).
 func (p *ManualTriggerProvider) Stop(ctx context.Context) error {
-	log.Printf("[ManualTriggerProvider] Stopped")
+	p.logger.Info("manual trigger provider stopped")
 	return nil
 }
 
@@ -84,20 +90,20 @@ func (p *ManualTriggerProvider) TriggerRule(ctx context.Context, ruleID string, 
 	// Check daily execution limit
 	allowed, remaining, err := p.subscriptionSvc.CheckDailyExecutionLimit(ctx, rule.UserID)
 	if err != nil {
-		log.Printf("[ManualTriggerProvider] Error checking execution limit for user %s: %v", rule.UserID, err)
+		p.logger.Error("error checking execution limit", "user_id", rule.UserID, "error", err)
 		return nil, err
 	}
 
 	if !allowed {
-		log.Printf("[ManualTriggerProvider] User %s has exceeded daily execution limit", rule.UserID)
+		p.logger.Warn("user exceeded daily execution limit", "user_id", rule.UserID)
 		return nil, ErrExecutionLimitExceeded
 	}
 
-	log.Printf("[ManualTriggerProvider] Triggering rule %s for user %s (remaining: %d)", ruleID, rule.UserID, remaining)
+	p.logger.Info("triggering rule", "rule_id", ruleID, "user_id", rule.UserID, "remaining", remaining)
 
 	// Increment daily executions
 	if err := p.subscriptionSvc.IncrementDailyExecutions(ctx, rule.UserID); err != nil {
-		log.Printf("[ManualTriggerProvider] Error incrementing daily executions for user %s: %v", rule.UserID, err)
+		p.logger.Error("error incrementing daily executions", "user_id", rule.UserID, "error", err)
 		// Continue with execution anyway
 	}
 
@@ -107,7 +113,7 @@ func (p *ManualTriggerProvider) TriggerRule(ctx context.Context, ruleID string, 
 	// Execute the rule
 	execution, err := p.executor.ExecuteRule(ctx, rule, mergedTriggerData)
 	if err != nil {
-		log.Printf("[ManualTriggerProvider] Error executing rule %s: %v", ruleID, err)
+		p.logger.Error("error executing rule", "rule_id", ruleID, "error", err)
 		// Update execution count even on failure
 		_ = p.repo.IncrementExecutionCount(ctx, ruleID)
 		return nil, err
@@ -115,16 +121,16 @@ func (p *ManualTriggerProvider) TriggerRule(ctx context.Context, ruleID string, 
 
 	// Update execution statistics
 	if err := p.repo.IncrementExecutionCount(ctx, ruleID); err != nil {
-		log.Printf("[ManualTriggerProvider] Error updating execution count for rule %s: %v", ruleID, err)
+		p.logger.Error("error updating execution count", "rule_id", ruleID, "error", err)
 	}
 
 	if execution.Status == domain.ExecutionStatusCompleted {
 		if err := p.repo.UpdateLastSuccessful(ctx, ruleID); err != nil {
-			log.Printf("[ManualTriggerProvider] Error updating last successful for rule %s: %v", ruleID, err)
+			p.logger.Error("error updating last successful", "rule_id", ruleID, "error", err)
 		}
 	}
 
-	log.Printf("[ManualTriggerProvider] Rule %s execution completed with status: %s", ruleID, execution.Status)
+	p.logger.Info("rule execution completed", "rule_id", ruleID, "status", execution.Status)
 	return execution, nil
 }
 
