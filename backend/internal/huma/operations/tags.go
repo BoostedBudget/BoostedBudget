@@ -80,7 +80,7 @@ type DeleteTagInput struct {
 func (h *TagHandler) GetUserTags(ctx context.Context, input *GetUserTagsInput) (*GetUserTagsOutput, error) {
 	tags, err := h.service.GetUserTags(ctx, input.UserID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	// Return empty array instead of null if no tags
@@ -96,7 +96,7 @@ func (h *TagHandler) GetUserTags(ctx context.Context, input *GetUserTagsInput) (
 func (h *TagHandler) GetTagByID(ctx context.Context, input *GetTagByIDInput) (*GetTagByIDOutput, error) {
 	tag, err := h.service.GetTagByID(ctx, input.ID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	// Verify ownership
@@ -112,7 +112,7 @@ func (h *TagHandler) GetTagByID(ctx context.Context, input *GetTagByIDInput) (*G
 func (h *TagHandler) CreateTag(ctx context.Context, input *CreateTagInput) (*CreateTagOutput, error) {
 	tag, err := h.service.CreateTag(ctx, input.UserID, &input.Body)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &CreateTagOutput{Body: tag}, nil
@@ -123,7 +123,7 @@ func (h *TagHandler) CreateTag(ctx context.Context, input *CreateTagInput) (*Cre
 func (h *TagHandler) UpdateTag(ctx context.Context, input *UpdateTagInput) (*UpdateTagOutput, error) {
 	tag, err := h.service.UpdateTag(ctx, input.UserID, input.ID, &input.Body)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &UpdateTagOutput{Body: tag}, nil
@@ -134,7 +134,7 @@ func (h *TagHandler) UpdateTag(ctx context.Context, input *UpdateTagInput) (*Upd
 func (h *TagHandler) DeleteTag(ctx context.Context, input *DeleteTagInput) (*struct{}, error) {
 	err := h.service.DeleteTag(ctx, input.UserID, input.ID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return nil, nil

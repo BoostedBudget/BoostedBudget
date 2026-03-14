@@ -2,7 +2,8 @@ package operations
 
 import (
 	"context"
-	"log"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/auth"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
@@ -145,7 +147,7 @@ func (c *CheckRoleInput) Resolve(ctx huma.Context) []error {
 		if fetchErr != nil {
 			// Log but don't fail - email is optional for admin check
 			// The hardcoded admin check just won't work, but Clerk metadata check still will
-			log.Printf("[CheckRoleInput] Failed to fetch email from Clerk API: %v", fetchErr)
+			slog.Default().Warn("failed to fetch email from Clerk API for role check", "clerk_user_id", c.ClerkUserID, "error", fetchErr)
 		}
 	}
 
@@ -220,19 +222,19 @@ func (h *AdminHandler) FireWebhook(ctx context.Context, input *FireWebhookInput)
 		if err == repository.ErrLinkedItemNotFound {
 			return nil, huma.Error404NotFound("Item not found")
 		}
-		return nil, huma.Error500InternalServerError("Failed to fetch linked item")
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to fetch linked item: %w", err))
 	}
 
 	// 2. Decrypt access token
 	accessToken, err := h.encryptionService.Decrypt(linkedItem.AccessTokenEncrypted)
 	if err != nil {
-		return nil, huma.Error500InternalServerError("Failed to decrypt access token")
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to decrypt access token: %w", err))
 	}
 
 	// 3. Fire webhook via Plaid service
 	response, err := h.plaidService.FireWebhook(ctx, accessToken, input.Body.WebhookCode)
 	if err != nil {
-		return nil, huma.Error500InternalServerError("Failed to fire webhook")
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to fire webhook: %w", err))
 	}
 
 	// 4. Build and return success response
@@ -275,7 +277,7 @@ func (h *AdminHandler) GrantTrial(ctx context.Context, input *GrantTrialInput) (
 				},
 			}, nil
 		}
-		return nil, huma.Error500InternalServerError("Failed to grant trial: " + err.Error())
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to grant trial: %w", err))
 	}
 
 	return &GrantTrialOutput{
@@ -316,7 +318,7 @@ func (h *AdminHandler) CheckRole(ctx context.Context, input *CheckRoleInput) (*C
 	// 2. Check admin role via Clerk privateMetadata
 	hasAdminRole, err := h.adminService.HasRole(ctx, input.ClerkUserID, domain.RoleAdmin)
 	if err != nil {
-		return nil, huma.Error500InternalServerError("Failed to check admin role")
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to check admin role: %w", err))
 	}
 
 	return &CheckRoleOutput{
@@ -353,7 +355,7 @@ func (h *AdminHandler) ListUsers(ctx context.Context, input *ListUsersInput) (*L
 	// Get users from service
 	response, err := h.adminUserService.ListUsers(ctx, filters, input.Page, input.PageSize)
 	if err != nil {
-		return nil, huma.Error500InternalServerError("Failed to list users: " + err.Error())
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to list users: %w", err))
 	}
 
 	return &ListUsersOutput{Body: response}, nil
@@ -382,7 +384,7 @@ func (h *AdminHandler) GetUserDetail(ctx context.Context, input *GetUserDetailIn
 		if err == services.ErrAdminUserNotFound {
 			return nil, huma.Error404NotFound("User not found")
 		}
-		return nil, huma.Error500InternalServerError("Failed to get user detail: " + err.Error())
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to get user detail: %w", err))
 	}
 
 	return &GetUserDetailOutput{Body: detail}, nil
@@ -407,7 +409,7 @@ func (h *AdminHandler) GetSystemHealth(ctx context.Context, input *GetSystemHeal
 	// Get system health from service
 	health, err := h.systemHealthService.GetSystemHealth(ctx)
 	if err != nil {
-		return nil, huma.Error500InternalServerError("Failed to get system health: " + err.Error())
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to get system health: %w", err))
 	}
 
 	return &GetSystemHealthOutput{Body: health}, nil

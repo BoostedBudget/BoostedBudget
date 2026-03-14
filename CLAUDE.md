@@ -158,6 +158,7 @@ Out-of-sync causes infinite dashboard reset loops. Increment when adding/removin
 | `queueing` | River job args/workers, queue config, retry/uniqueness, dead letters |
 | `plaid-sync` | Transaction sync flow, webhook types, cursor pagination, sync frequency |
 | `plaid-staging-testing` | Staging Plaid validation, MockPlaidService, connectivity/webhook tests |
+| `observability` | Logging (slog), Sentry, OTEL, Prometheus metrics, error handling, frontend error boundaries |
 | `system-health-updater` | Adding new queues/services to `/admin/health` dashboard |
 | `qa-scenario-creator` | Creating YAML QA data scenarios for test populator |
 | `qa-login` | Authenticate into QA/Staging via bypass endpoint + agent-browser; optionally dogfood |

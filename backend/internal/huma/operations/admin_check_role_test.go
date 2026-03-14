@@ -126,7 +126,7 @@ func TestCheckRole_ReturnsError_WhenAdminServiceFails(t *testing.T) {
 
 	assert.Nil(t, output)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Failed to check admin role")
+	assert.Contains(t, err.Error(), "Internal server error")
 }
 
 // TestCheckRole_ChecksHardcodedAdminFirst tests that hardcoded admin check runs before Clerk API.

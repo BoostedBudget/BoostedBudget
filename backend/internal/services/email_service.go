@@ -3,7 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"regexp"
 	"time"
 
@@ -35,6 +35,7 @@ type EmailService interface {
 
 // emailService implements EmailService using SendGrid
 type emailService struct {
+	logger      *slog.Logger
 	apiKey      string
 	fromEmail   string
 	fromName    string
@@ -46,6 +47,7 @@ type emailService struct {
 // NewEmailService creates a new EmailService instance
 func NewEmailService(apiKey, fromEmail, frontendURL string) EmailService {
 	return &emailService{
+		logger:      slog.Default(),
 		apiKey:      apiKey,
 		fromEmail:   fromEmail,
 		fromName:    "BoostedBudget",
@@ -58,6 +60,7 @@ func NewEmailService(apiKey, fromEmail, frontendURL string) EmailService {
 // NewEmailServiceMock creates a new EmailService instance in mock mode for testing
 func NewEmailServiceMock(apiKey, fromEmail, frontendURL string) EmailService {
 	return &emailService{
+		logger:      slog.Default(),
 		apiKey:      apiKey,
 		fromEmail:   fromEmail,
 		fromName:    "BoostedBudget",
@@ -129,19 +132,17 @@ func (s *emailService) SendDeletionConfirmation(ctx context.Context, toEmail, ca
 //
 // Returns: Always nil in MVP (stub always succeeds). Real implementation will return errors.
 func (s *emailService) SendNotificationEmail(ctx context.Context, toEmail string, notification *domain.Notification) error {
-	// MVP STUB: Log email details to console (no actual sending)
-	log.Printf("[EMAIL STUB] Would send notification email:")
-	log.Printf("  To: %s", toEmail)
-	log.Printf("  User ID: %s", notification.UserID)
-	log.Printf("  Type: %s", notification.Type)
-	log.Printf("  Title: %s", notification.Title)
-	log.Printf("  Message: %s", notification.Message)
+	// MVP STUB: Log email details (no actual sending)
+	args := []any{
+		"to", toEmail,
+		"user_id", notification.UserID,
+		"type", notification.Type,
+		"title", notification.Title,
+	}
 	if notification.ActionURL != nil {
-		log.Printf("  Action URL: %s", *notification.ActionURL)
+		args = append(args, "action_url", *notification.ActionURL)
 	}
-	if notification.ActionLabel != nil {
-		log.Printf("  Action Label: %s", *notification.ActionLabel)
-	}
+	s.logger.Info("email stub: would send notification email", args...)
 
 	// MVP: Always succeeds (no real sending)
 	// Phase 3+: Will return actual sending errors

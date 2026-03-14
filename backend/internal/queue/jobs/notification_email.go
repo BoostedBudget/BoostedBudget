@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/riverqueue/river"
 )
@@ -70,7 +71,7 @@ func NewNotificationEmailWorker(deps NotificationEmailWorkerDeps) *NotificationE
 //
 // Transient failures (network, provider errors) will be retried.
 // Permanent failures (invalid email, notification not found) won't be retried.
-func (w *NotificationEmailWorker) Work(ctx context.Context, job *river.Job[NotificationEmailArgs]) error {
+func (w *NotificationEmailWorker) Work(ctx context.Context, job *river.Job[NotificationEmailArgs]) (err error) {
 	args := job.Args
 
 	w.logger.Info("starting notification email job",
@@ -81,9 +82,19 @@ func (w *NotificationEmailWorker) Work(ctx context.Context, job *river.Job[Notif
 		"attempt", job.Attempt,
 	)
 
+	start := time.Now()
+	defer func() {
+		status := "success"
+		if err != nil {
+			status = "failed"
+		}
+		observability.JobsCompleted.WithLabelValues(job.Kind, job.Queue, status).Inc()
+		observability.JobDuration.WithLabelValues(job.Kind).Observe(time.Since(start).Seconds())
+	}()
+
 	startTime := time.Now()
 
-	err := w.emailService.SendNotificationEmail(ctx, args.NotificationID, args.UserID)
+	err = w.emailService.SendNotificationEmail(ctx, args.NotificationID, args.UserID)
 	if err != nil {
 		w.logger.Error("notification email failed",
 			"job_id", job.ID,

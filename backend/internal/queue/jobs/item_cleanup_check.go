@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/riverqueue/river"
 )
@@ -130,7 +131,7 @@ func (w *ItemCleanupCheckWorker) SetJobQueue(jq queue.JobQueue) {
 //  4. Enqueues an ItemCleanup job for each item, scheduled for after the grace period
 //
 // Errors in individual item processing don't fail the entire job.
-func (w *ItemCleanupCheckWorker) Work(ctx context.Context, job *river.Job[ItemCleanupCheckArgs]) error {
+func (w *ItemCleanupCheckWorker) Work(ctx context.Context, job *river.Job[ItemCleanupCheckArgs]) (err error) {
 	args := job.Args
 
 	w.logger.Info("starting item cleanup check",
@@ -141,6 +142,16 @@ func (w *ItemCleanupCheckWorker) Work(ctx context.Context, job *river.Job[ItemCl
 		"stale_days_threshold", w.staleDaysThreshold,
 		"grace_period_days", w.gracePeriodDays,
 	)
+
+	start := time.Now()
+	defer func() {
+		status := "success"
+		if err != nil {
+			status = "failed"
+		}
+		observability.JobsCompleted.WithLabelValues(job.Kind, job.Queue, status).Inc()
+		observability.JobDuration.WithLabelValues(job.Kind).Observe(time.Since(start).Seconds())
+	}()
 
 	startTime := time.Now()
 
@@ -196,11 +207,11 @@ func (w *ItemCleanupCheckWorker) Work(ctx context.Context, job *river.Job[ItemCl
 		}
 
 		// Mark item for cleanup
-		if err := w.linkedItemRepo.MarkForCleanup(ctx, item.ID, cleanupAt); err != nil {
+		if markErr := w.linkedItemRepo.MarkForCleanup(ctx, item.ID, cleanupAt); markErr != nil {
 			w.logger.Error("failed to mark item for cleanup",
 				"job_id", job.ID,
 				"item_id", item.ID,
-				"error", err,
+				"error", markErr,
 			)
 			errorCount++
 			continue
@@ -214,12 +225,12 @@ func (w *ItemCleanupCheckWorker) Work(ctx context.Context, job *river.Job[ItemCl
 		}
 
 		uniqueOpts := ItemCleanupUniqueOpts()
-		result, err := w.jobQueue.Enqueue(ctx, cleanupArgs, queue.WithUnique(*uniqueOpts), queue.WithScheduledAt(cleanupAt))
-		if err != nil {
+		result, enqueueErr := w.jobQueue.Enqueue(ctx, cleanupArgs, queue.WithUnique(*uniqueOpts), queue.WithScheduledAt(cleanupAt))
+		if enqueueErr != nil {
 			w.logger.Error("failed to enqueue item cleanup job",
 				"job_id", job.ID,
 				"item_id", item.ID,
-				"error", err,
+				"error", enqueueErr,
 			)
 			errorCount++
 			continue

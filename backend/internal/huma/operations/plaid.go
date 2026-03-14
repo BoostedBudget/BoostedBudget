@@ -142,7 +142,7 @@ func (h *PlaidHandler) ExchangePublicToken(ctx context.Context, input *ExchangeP
 		case services.ErrPlaidAPIFailure:
 			return nil, huma.Error503ServiceUnavailable("Bank service temporarily unavailable")
 		default:
-			return nil, humaerrors.MapError(err)
+			return nil, humaerrors.LoggingMapError(ctx, err)
 		}
 	}
 
@@ -161,7 +161,7 @@ func (h *PlaidHandler) GetAccounts(ctx context.Context, input *GetAccountsInput)
 
 	accounts, err := h.accountService.GetAccountsFiltered(ctx, input.UserID, includeHidden)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	output := &GetAccountsOutput{}
@@ -176,7 +176,7 @@ func (h *PlaidHandler) GetAccounts(ctx context.Context, input *GetAccountsInput)
 func (h *PlaidHandler) DeleteAccount(ctx context.Context, input *DeleteAccountInput) (*struct{}, error) {
 	err := h.accountService.DeleteAccount(ctx, input.ID, input.UserID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return nil, nil
@@ -187,7 +187,7 @@ func (h *PlaidHandler) DeleteAccount(ctx context.Context, input *DeleteAccountIn
 func (h *PlaidHandler) DisconnectInstitution(ctx context.Context, input *DisconnectInstitutionInput) (*struct{}, error) {
 	err := h.accountService.DisconnectInstitution(ctx, input.ID, input.UserID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return nil, nil
@@ -198,7 +198,7 @@ func (h *PlaidHandler) DisconnectInstitution(ctx context.Context, input *Disconn
 func (h *PlaidHandler) UpdateAccount(ctx context.Context, input *UpdateAccountInput) (*UpdateAccountOutput, error) {
 	account, err := h.accountService.UpdateAccount(ctx, input.ID, input.UserID, &input.Body)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	output := &UpdateAccountOutput{}
@@ -212,7 +212,7 @@ func (h *PlaidHandler) UpdateAccount(ctx context.Context, input *UpdateAccountIn
 func (h *PlaidHandler) ReorderAccounts(ctx context.Context, input *ReorderAccountsInput) (*ReorderAccountsOutput, error) {
 	err := h.accountService.ReorderAccounts(ctx, input.UserID, &input.Body)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	output := &ReorderAccountsOutput{}

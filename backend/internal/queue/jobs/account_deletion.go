@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/riverqueue/river"
@@ -63,7 +64,7 @@ func NewAccountDeletionWorker(deps AccountDeletionWorkerDeps) *AccountDeletionWo
 //
 // This is a critical operation - failures will be retried with exponential backoff.
 // After max attempts, the job moves to dead letter queue for manual review.
-func (w *AccountDeletionWorker) Work(ctx context.Context, job *river.Job[AccountDeletionArgs]) error {
+func (w *AccountDeletionWorker) Work(ctx context.Context, job *river.Job[AccountDeletionArgs]) (err error) {
 	args := job.Args
 
 	w.logger.Info("starting account deletion job",
@@ -73,11 +74,21 @@ func (w *AccountDeletionWorker) Work(ctx context.Context, job *river.Job[Account
 		"attempt", job.Attempt,
 	)
 
+	start := time.Now()
+	defer func() {
+		status := "success"
+		if err != nil {
+			status = "failed"
+		}
+		observability.JobsCompleted.WithLabelValues(job.Kind, job.Queue, status).Inc()
+		observability.JobDuration.WithLabelValues(job.Kind).Observe(time.Since(start).Seconds())
+	}()
+
 	startTime := time.Now()
 
 	// Execute the deletion through the service layer
 	// This handles all cascading deletions and audit logging
-	err := w.deletionService.ExecuteDeletion(ctx, args.UserID)
+	err = w.deletionService.ExecuteDeletion(ctx, args.UserID)
 	if err != nil {
 		w.logger.Error("account deletion failed",
 			"job_id", job.ID,

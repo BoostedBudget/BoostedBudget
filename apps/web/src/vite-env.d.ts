@@ -18,6 +18,7 @@ interface RuntimeEnv {
   API_URL?: string
   CLERK_PUBLISHABLE_KEY?: string
   ENVIRONMENT?: string
+  SENTRY_DSN?: string
 }
 
 interface Window {

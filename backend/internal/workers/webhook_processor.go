@@ -3,7 +3,7 @@ package workers
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -22,6 +22,7 @@ import (
 // - Continues processing even if individual webhooks fail (errors logged)
 // - Supports graceful shutdown via context cancellation
 type WebhookProcessor struct {
+	logger           *slog.Logger
 	syncService      services.TransactionSyncService
 	itemErrorService services.ItemErrorService
 	webhookRepo      repository.WebhookRepository
@@ -57,8 +58,13 @@ func NewWebhookProcessor(
 	webhookRepo repository.WebhookRepository,
 	interval time.Duration,
 	batchSize int,
+	logger *slog.Logger,
 ) *WebhookProcessor {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &WebhookProcessor{
+		logger:           logger,
 		syncService:      syncService,
 		itemErrorService: itemErrorService,
 		webhookRepo:      webhookRepo,
@@ -83,13 +89,13 @@ func (w *WebhookProcessor) ProcessPendingWebhooks(ctx context.Context) error {
 	// Process TRANSACTIONS webhooks
 	if err := w.processTransactionWebhooks(ctx); err != nil {
 		// Log but don't return - continue to process ITEM webhooks
-		log.Printf("Error processing TRANSACTIONS webhooks: %v", err)
+		w.logger.Error("error processing TRANSACTIONS webhooks", "error", err)
 	}
 
 	// Process ITEM webhooks
 	if err := w.processItemWebhooks(ctx); err != nil {
 		// Log but don't return - graceful degradation
-		log.Printf("Error processing ITEM webhooks: %v", err)
+		w.logger.Error("error processing ITEM webhooks", "error", err)
 	}
 
 	return nil
@@ -100,7 +106,7 @@ func (w *WebhookProcessor) processTransactionWebhooks(ctx context.Context) error
 	// Get unprocessed TRANSACTIONS webhooks (respects retry schedule via next_retry_at)
 	webhooks, err := w.webhookRepo.GetUnprocessedByType(ctx, "TRANSACTIONS", w.batchSize)
 	if err != nil {
-		log.Printf("Error fetching unprocessed TRANSACTIONS webhooks: %v", err)
+		w.logger.Error("error fetching unprocessed TRANSACTIONS webhooks", "error", err)
 		return err
 	}
 
@@ -109,7 +115,7 @@ func (w *WebhookProcessor) processTransactionWebhooks(ctx context.Context) error
 		return nil
 	}
 
-	log.Printf("Processing %d unprocessed TRANSACTIONS webhooks", len(webhooks))
+	w.logger.Info("processing unprocessed TRANSACTIONS webhooks", "count", len(webhooks))
 
 	// Process each webhook
 	for i := range webhooks {
@@ -118,7 +124,7 @@ func (w *WebhookProcessor) processTransactionWebhooks(ctx context.Context) error
 		// Check context cancellation
 		select {
 		case <-ctx.Done():
-			log.Printf("Context cancelled, stopping TRANSACTIONS webhook processing")
+			w.logger.Info("context cancelled, stopping TRANSACTIONS webhook processing")
 			return nil
 		default:
 			// Continue processing
@@ -128,14 +134,19 @@ func (w *WebhookProcessor) processTransactionWebhooks(ctx context.Context) error
 		if err := w.syncService.ProcessWebhook(ctx, webhook); err != nil {
 			// Log error but continue processing other webhooks
 			// The webhook will be retried later based on retry_count and next_retry_at
-			log.Printf("Error processing TRANSACTIONS webhook %s (item_id: %v): %v",
-				webhook.ID, webhook.ItemID, err)
+			w.logger.Error("error processing TRANSACTIONS webhook",
+				"webhook_id", webhook.ID,
+				"item_id", webhook.ItemID,
+				"error", err,
+			)
 			// Don't return error - we want to continue processing
 			continue
 		}
 
-		log.Printf("Successfully processed TRANSACTIONS webhook %s (item_id: %v)",
-			webhook.ID, webhook.ItemID)
+		w.logger.Info("successfully processed TRANSACTIONS webhook",
+			"webhook_id", webhook.ID,
+			"item_id", webhook.ItemID,
+		)
 	}
 
 	return nil
@@ -146,7 +157,7 @@ func (w *WebhookProcessor) processItemWebhooks(ctx context.Context) error {
 	// Get unprocessed ITEM webhooks (respects retry schedule via next_retry_at)
 	webhooks, err := w.webhookRepo.GetUnprocessedByType(ctx, "ITEM", w.batchSize)
 	if err != nil {
-		log.Printf("Error fetching unprocessed ITEM webhooks: %v", err)
+		w.logger.Error("error fetching unprocessed ITEM webhooks", "error", err)
 		return err
 	}
 
@@ -155,7 +166,7 @@ func (w *WebhookProcessor) processItemWebhooks(ctx context.Context) error {
 		return nil
 	}
 
-	log.Printf("Processing %d unprocessed ITEM webhooks", len(webhooks))
+	w.logger.Info("processing unprocessed ITEM webhooks", "count", len(webhooks))
 
 	// Process each webhook
 	for i := range webhooks {
@@ -164,7 +175,7 @@ func (w *WebhookProcessor) processItemWebhooks(ctx context.Context) error {
 		// Check context cancellation
 		select {
 		case <-ctx.Done():
-			log.Printf("Context cancelled, stopping ITEM webhook processing")
+			w.logger.Info("context cancelled, stopping ITEM webhook processing")
 			return nil
 		default:
 			// Continue processing
@@ -172,7 +183,7 @@ func (w *WebhookProcessor) processItemWebhooks(ctx context.Context) error {
 
 		// Extract itemID (required for processing)
 		if webhook.ItemID == nil {
-			log.Printf("Warning: ITEM webhook %s has no item_id, skipping", webhook.ID)
+			w.logger.Warn("ITEM webhook has no item_id, skipping", "webhook_id", webhook.ID)
 			continue
 		}
 		itemID := *webhook.ItemID
@@ -180,14 +191,14 @@ func (w *WebhookProcessor) processItemWebhooks(ctx context.Context) error {
 		// Parse error details from payload
 		var payload ItemWebhookPayload
 		if err := json.Unmarshal(webhook.Payload, &payload); err != nil {
-			log.Printf("Error parsing ITEM webhook payload for %s: %v", webhook.ID, err)
+			w.logger.Error("error parsing ITEM webhook payload", "webhook_id", webhook.ID, "error", err)
 			// Continue to next webhook (invalid payload can't be processed)
 			continue
 		}
 
 		// Validate required error fields
 		if payload.Error.ErrorType == "" || payload.Error.ErrorCode == "" {
-			log.Printf("Warning: ITEM webhook %s missing error details in payload, skipping", webhook.ID)
+			w.logger.Warn("ITEM webhook missing error details in payload, skipping", "webhook_id", webhook.ID)
 			continue
 		}
 
@@ -200,14 +211,20 @@ func (w *WebhookProcessor) processItemWebhooks(ctx context.Context) error {
 			payload.Error.ErrorMessage,
 		); err != nil {
 			// Log error but continue processing other webhooks
-			log.Printf("Error processing ITEM webhook %s (item_id: %s): %v",
-				webhook.ID, itemID, err)
+			w.logger.Error("error processing ITEM webhook",
+				"webhook_id", webhook.ID,
+				"item_id", itemID,
+				"error", err,
+			)
 			// Don't return error - we want to continue processing
 			continue
 		}
 
-		log.Printf("Successfully processed ITEM webhook %s (item_id: %s, error_type: %s)",
-			webhook.ID, itemID, payload.Error.ErrorType)
+		w.logger.Info("successfully processed ITEM webhook",
+			"webhook_id", webhook.ID,
+			"item_id", itemID,
+			"error_type", payload.Error.ErrorType,
+		)
 	}
 
 	return nil
@@ -228,7 +245,7 @@ func (w *WebhookProcessor) processItemWebhooks(ctx context.Context) error {
 //	// ... later ...
 //	cancel() // Triggers graceful shutdown
 func (w *WebhookProcessor) Start(ctx context.Context) {
-	log.Printf("Webhook processor starting with interval: %s, batch size: %d", w.interval, w.batchSize)
+	w.logger.Info("webhook processor starting", "interval", w.interval, "batch_size", w.batchSize)
 
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
@@ -236,12 +253,12 @@ func (w *WebhookProcessor) Start(ctx context.Context) {
 	// Check if context is already cancelled before first run
 	select {
 	case <-ctx.Done():
-		log.Printf("Webhook processor shutting down gracefully (context cancelled before start)")
+		w.logger.Info("webhook processor shutting down gracefully (context cancelled before start)")
 		return
 	default:
 		// Run once immediately on startup
 		if err := w.ProcessPendingWebhooks(ctx); err != nil {
-			log.Printf("Error processing pending webhooks on startup: %v", err)
+			w.logger.Error("error processing pending webhooks on startup", "error", err)
 		}
 	}
 
@@ -249,11 +266,11 @@ func (w *WebhookProcessor) Start(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("Webhook processor shutting down gracefully")
+			w.logger.Info("webhook processor shutting down gracefully")
 			return
 		case <-ticker.C:
 			if err := w.ProcessPendingWebhooks(ctx); err != nil {
-				log.Printf("Error processing pending webhooks: %v", err)
+				w.logger.Error("error processing pending webhooks", "error", err)
 			}
 		}
 	}

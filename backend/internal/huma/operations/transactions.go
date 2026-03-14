@@ -196,7 +196,7 @@ func (h *TransactionHandler) GetTransactions(ctx context.Context, input *GetTran
 	// Call service layer
 	result, err := h.service.ListTransactions(ctx, input.UserID, filters, input.Limit, input.Offset)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &GetTransactionsOutput{Body: result}, nil
@@ -207,7 +207,7 @@ func (h *TransactionHandler) GetTransactions(ctx context.Context, input *GetTran
 func (h *TransactionHandler) GetTransactionByID(ctx context.Context, input *GetTransactionByIDInput) (*GetTransactionByIDOutput, error) {
 	tx, err := h.service.GetTransactionByID(ctx, input.UserID, input.ID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &GetTransactionByIDOutput{Body: tx}, nil
@@ -224,7 +224,7 @@ func (h *TransactionHandler) UpdateTransactionTags(ctx context.Context, input *U
 
 	tx, err := h.service.UpdateTransactionTags(ctx, input.UserID, input.ID, tags)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &UpdateTransactionTagsOutput{Body: tx}, nil
@@ -241,7 +241,7 @@ func (h *TransactionHandler) UpdateTransactionCategory(ctx context.Context, inpu
 
 	tx, err := h.service.UpdateTransactionCategory(ctx, input.UserID, input.ID, category)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &UpdateTransactionCategoryOutput{Body: tx}, nil
@@ -252,7 +252,7 @@ func (h *TransactionHandler) UpdateTransactionCategory(ctx context.Context, inpu
 func (h *TransactionHandler) GetPlaidCategories(ctx context.Context, input *GetPlaidCategoriesInput) (*GetPlaidCategoriesOutput, error) {
 	categories, err := h.service.GetDistinctPlaidCategories(ctx, input.UserID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	// Return empty array instead of null

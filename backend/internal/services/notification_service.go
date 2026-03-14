@@ -5,7 +5,7 @@ package services
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -31,6 +31,7 @@ type UserRepository interface {
 
 // budgetAlertNotificationService implements BudgetAlertNotificationService.
 type budgetAlertNotificationService struct {
+	logger           *slog.Logger
 	notificationRepo repository.NotificationRepository
 	userRepo         UserRepository
 	emailService     EmailService
@@ -41,8 +42,13 @@ func NewBudgetAlertNotificationService(
 	notificationRepo repository.NotificationRepository,
 	userRepo UserRepository,
 	emailService EmailService,
+	logger *slog.Logger,
 ) BudgetAlertNotificationService {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &budgetAlertNotificationService{
+		logger:           logger,
 		notificationRepo: notificationRepo,
 		userRepo:         userRepo,
 		emailService:     emailService,
@@ -120,22 +126,22 @@ func (s *budgetAlertNotificationService) sendEmailAsync(
 	// Look up user email
 	user, err := s.userRepo.GetUserByID(ctx, userID)
 	if err != nil {
-		log.Printf("[BudgetAlert] Failed to get user email for userID=%s: %v", userID, err)
+		s.logger.Error("failed to get user email for budget alert", "user_id", userID, "error", err)
 		return
 	}
 
 	if user.Email == "" {
-		log.Printf("[BudgetAlert] User %s has no email address", userID)
+		s.logger.Warn("user has no email address for budget alert", "user_id", userID)
 		return
 	}
 
 	// Send the email
 	if err := s.emailService.SendNotificationEmail(ctx, user.Email, notification); err != nil {
-		log.Printf("[BudgetAlert] Failed to send email to %s: %v", user.Email, err)
+		s.logger.Error("failed to send budget alert email", "email", user.Email, "error", err)
 		return
 	}
 
-	log.Printf("[BudgetAlert] Email sent to %s for notification %s", user.Email, notification.ID)
+	s.logger.Info("budget alert email sent", "email", user.Email, "notification_id", notification.ID)
 }
 
 // interpolateTemplate replaces {{key}} placeholders with values from data.

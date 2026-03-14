@@ -64,7 +64,7 @@ type ResetDashboardPreferencesOutput struct {
 func (h *DashboardPreferencesHandler) GetPreferences(ctx context.Context, input *GetDashboardPreferencesInput) (*GetDashboardPreferencesOutput, error) {
 	response, err := h.service.GetPreferences(ctx, input.UserID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &GetDashboardPreferencesOutput{Body: response}, nil
@@ -75,7 +75,7 @@ func (h *DashboardPreferencesHandler) GetPreferences(ctx context.Context, input 
 func (h *DashboardPreferencesHandler) SavePreferences(ctx context.Context, input *SaveDashboardPreferencesInput) (*SaveDashboardPreferencesOutput, error) {
 	response, err := h.service.SavePreferences(ctx, input.UserID, input.Body.Layout)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &SaveDashboardPreferencesOutput{Body: response}, nil
@@ -86,7 +86,7 @@ func (h *DashboardPreferencesHandler) SavePreferences(ctx context.Context, input
 func (h *DashboardPreferencesHandler) ResetPreferences(ctx context.Context, input *ResetDashboardPreferencesInput) (*ResetDashboardPreferencesOutput, error) {
 	response, err := h.service.ResetToDefault(ctx, input.UserID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &ResetDashboardPreferencesOutput{Body: response}, nil

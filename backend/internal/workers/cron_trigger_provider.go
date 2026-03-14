@@ -6,7 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -49,6 +49,7 @@ type scheduledRule struct {
 // CronTriggerProvider implements RuleTriggerProvider using robfig/cron/v3.
 // It schedules automation rules to run at specified cron intervals.
 type CronTriggerProvider struct {
+	logger          *slog.Logger
 	repo            RuleRepositoryInterface
 	executor        RuleExecutorInterface
 	subscriptionSvc SubscriptionLimitChecker
@@ -68,8 +69,13 @@ func NewCronTriggerProvider(
 	executor RuleExecutorInterface,
 	subscriptionSvc SubscriptionLimitChecker,
 	refreshInterval time.Duration,
+	logger *slog.Logger,
 ) *CronTriggerProvider {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &CronTriggerProvider{
+		logger:          logger,
 		repo:            repo,
 		executor:        executor,
 		subscriptionSvc: subscriptionSvc,
@@ -87,8 +93,9 @@ func NewCronTriggerProviderWithSeconds(
 	executor RuleExecutorInterface,
 	subscriptionSvc SubscriptionLimitChecker,
 	refreshInterval time.Duration,
+	logger *slog.Logger,
 ) *CronTriggerProvider {
-	p := NewCronTriggerProvider(repo, executor, subscriptionSvc, refreshInterval)
+	p := NewCronTriggerProvider(repo, executor, subscriptionSvc, refreshInterval, logger)
 	p.useSeconds = true
 	return p
 }
@@ -144,7 +151,7 @@ func (p *CronTriggerProvider) Start(ctx context.Context) error {
 	// Start refresh goroutine
 	go p.refreshLoop(ctx)
 
-	log.Printf("[CronTriggerProvider] Started with %d scheduled rules", len(p.scheduledRules))
+	p.logger.Info("cron trigger provider started", "scheduled_rules", len(p.scheduledRules))
 	return nil
 }
 
@@ -172,13 +179,13 @@ func (p *CronTriggerProvider) Stop(ctx context.Context) error {
 		// All jobs finished
 	case <-ctx.Done():
 		// Context timeout
-		log.Printf("[CronTriggerProvider] Stop timed out waiting for jobs")
+		p.logger.Warn("stop timed out waiting for jobs")
 	}
 
 	p.started = false
 	p.scheduledRules = make(map[string]*scheduledRule)
 
-	log.Printf("[CronTriggerProvider] Stopped")
+	p.logger.Info("cron trigger provider stopped")
 	return nil
 }
 
@@ -248,7 +255,7 @@ func (p *CronTriggerProvider) loadRulesLocked(ctx context.Context) error {
 		if !newRuleIDs[ruleID] {
 			p.cron.Remove(sr.entryID)
 			delete(p.scheduledRules, ruleID)
-			log.Printf("[CronTriggerProvider] Removed rule %s from schedule", ruleID)
+			p.logger.Info("removed rule from schedule", "rule_id", ruleID)
 		}
 	}
 
@@ -258,7 +265,7 @@ func (p *CronTriggerProvider) loadRulesLocked(ctx context.Context) error {
 
 		// Validate cron expression (use appropriate parser based on mode)
 		if err := p.validateCronExpression(cronExpr); err != nil {
-			log.Printf("[CronTriggerProvider] Skipping rule %s: invalid cron expression: %v", rule.ID, err)
+			p.logger.Warn("skipping rule with invalid cron expression", "rule_id", rule.ID, "error", err)
 			continue
 		}
 
@@ -281,7 +288,7 @@ func (p *CronTriggerProvider) loadRulesLocked(ctx context.Context) error {
 		// Schedule the rule
 		entryID, err := p.cron.AddFunc(fullCronExpr, p.createJobFunc(rule.ID, rule.UserID))
 		if err != nil {
-			log.Printf("[CronTriggerProvider] Failed to schedule rule %s: %v", rule.ID, err)
+			p.logger.Error("failed to schedule rule", "rule_id", rule.ID, "error", err)
 			continue
 		}
 
@@ -292,7 +299,7 @@ func (p *CronTriggerProvider) loadRulesLocked(ctx context.Context) error {
 			entryID: entryID,
 		}
 
-		log.Printf("[CronTriggerProvider] Scheduled rule %s with cron '%s'", rule.ID, fullCronExpr)
+		p.logger.Info("scheduled rule", "rule_id", rule.ID, "cron", fullCronExpr)
 	}
 
 	return nil
@@ -312,36 +319,36 @@ func (p *CronTriggerProvider) executeRule(ctx context.Context, ruleID, userID st
 	rule, err := p.repo.GetByID(ctx, ruleID)
 	if err != nil {
 		if errors.Is(err, domain.ErrAutomationRuleNotFound) {
-			log.Printf("[CronTriggerProvider] Rule %s not found, skipping execution", ruleID)
+			p.logger.Info("rule not found, skipping execution", "rule_id", ruleID)
 			return
 		}
-		log.Printf("[CronTriggerProvider] Error fetching rule %s: %v", ruleID, err)
+		p.logger.Error("error fetching rule", "rule_id", ruleID, "error", err)
 		return
 	}
 
 	// Check if rule is still enabled
 	if !rule.Enabled {
-		log.Printf("[CronTriggerProvider] Rule %s is disabled, skipping execution", ruleID)
+		p.logger.Info("rule is disabled, skipping execution", "rule_id", ruleID)
 		return
 	}
 
 	// Check daily execution limit
 	allowed, remaining, err := p.subscriptionSvc.CheckDailyExecutionLimit(ctx, userID)
 	if err != nil {
-		log.Printf("[CronTriggerProvider] Error checking execution limit for user %s: %v", userID, err)
+		p.logger.Error("error checking execution limit", "user_id", userID, "error", err)
 		return
 	}
 
 	if !allowed {
-		log.Printf("[CronTriggerProvider] User %s has exceeded daily execution limit, skipping rule %s", userID, ruleID)
+		p.logger.Warn("user exceeded daily execution limit, skipping rule", "user_id", userID, "rule_id", ruleID)
 		return
 	}
 
-	log.Printf("[CronTriggerProvider] Executing rule %s for user %s (remaining: %d)", ruleID, userID, remaining)
+	p.logger.Info("executing rule", "rule_id", ruleID, "user_id", userID, "remaining", remaining)
 
 	// Increment daily executions
 	if err := p.subscriptionSvc.IncrementDailyExecutions(ctx, userID); err != nil {
-		log.Printf("[CronTriggerProvider] Error incrementing daily executions for user %s: %v", userID, err)
+		p.logger.Error("error incrementing daily executions", "user_id", userID, "error", err)
 		// Continue with execution anyway
 	}
 
@@ -353,7 +360,7 @@ func (p *CronTriggerProvider) executeRule(ctx context.Context, ruleID, userID st
 
 	execution, err := p.executor.ExecuteRule(ctx, rule, triggerData)
 	if err != nil {
-		log.Printf("[CronTriggerProvider] Error executing rule %s: %v", ruleID, err)
+		p.logger.Error("error executing rule", "rule_id", ruleID, "error", err)
 		// Update execution count even on failure
 		_ = p.repo.IncrementExecutionCount(ctx, ruleID)
 		return
@@ -361,16 +368,16 @@ func (p *CronTriggerProvider) executeRule(ctx context.Context, ruleID, userID st
 
 	// Update execution statistics
 	if err := p.repo.IncrementExecutionCount(ctx, ruleID); err != nil {
-		log.Printf("[CronTriggerProvider] Error updating execution count for rule %s: %v", ruleID, err)
+		p.logger.Error("error updating execution count", "rule_id", ruleID, "error", err)
 	}
 
 	if execution.Status == domain.ExecutionStatusCompleted {
 		if err := p.repo.UpdateLastSuccessful(ctx, ruleID); err != nil {
-			log.Printf("[CronTriggerProvider] Error updating last successful for rule %s: %v", ruleID, err)
+			p.logger.Error("error updating last successful", "rule_id", ruleID, "error", err)
 		}
 	}
 
-	log.Printf("[CronTriggerProvider] Rule %s execution completed with status: %s", ruleID, execution.Status)
+	p.logger.Info("rule execution completed", "rule_id", ruleID, "status", execution.Status)
 }
 
 // refreshLoop periodically refreshes the scheduled rules from the database.
@@ -382,7 +389,7 @@ func (p *CronTriggerProvider) refreshLoop(ctx context.Context) {
 		select {
 		case <-ticker.C:
 			if err := p.Refresh(ctx); err != nil {
-				log.Printf("[CronTriggerProvider] Error refreshing rules: %v", err)
+				p.logger.Error("error refreshing rules", "error", err)
 			}
 		case <-p.stopCh:
 			return

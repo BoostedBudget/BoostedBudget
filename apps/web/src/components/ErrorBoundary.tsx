@@ -1,14 +1,17 @@
 import { Component, ErrorInfo, ReactNode } from 'react'
+import { Sentry } from '../shared/lib/sentry'
 
 interface Props {
   children: ReactNode
   fallback?: ReactNode
+  onError?: (error: Error, errorInfo: ErrorInfo) => void
 }
 
 interface State {
   hasError: boolean
   error: Error | null
   errorInfo: ErrorInfo | null
+  errorId: string | null
 }
 
 export class ErrorBoundary extends Component<Props, State> {
@@ -17,7 +20,8 @@ export class ErrorBoundary extends Component<Props, State> {
     this.state = {
       hasError: false,
       error: null,
-      errorInfo: null
+      errorInfo: null,
+      errorId: null,
     }
   }
 
@@ -26,16 +30,20 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    this.setState({ errorInfo })
-
-    // Log to console in development/qa
+    const errorId = Math.random().toString(36).slice(2, 9)
     const isDev = window.ENV?.ENVIRONMENT !== 'production'
+    this.setState({ errorInfo, errorId })
+
     if (isDev) {
       console.error('ErrorBoundary caught error:', error)
       console.error('Error info:', errorInfo)
     }
 
-    // TODO: Send to error tracking service (Sentry, DataDog, etc.)
+    Sentry.captureException(error, {
+      extra: { componentStack: errorInfo.componentStack ?? '' },
+    })
+
+    this.props.onError?.(error, errorInfo)
   }
 
   handleReload = () => {
@@ -43,7 +51,7 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   handleReset = () => {
-    this.setState({ hasError: false, error: null, errorInfo: null })
+    this.setState({ hasError: false, error: null, errorInfo: null, errorId: null })
   }
 
   render() {
@@ -55,78 +63,40 @@ export class ErrorBoundary extends Component<Props, State> {
 
       // Default error UI
       const isDev = window.ENV?.ENVIRONMENT !== 'production'
-
       return (
-        <div style={{
-          padding: '40px',
-          maxWidth: '800px',
-          margin: '0 auto',
-          fontFamily: 'system-ui, -apple-system, sans-serif'
-        }}>
-          <h1 style={{ color: '#dc2626', marginBottom: '16px' }}>
-            ⚠️ Something went wrong
+        <div className="p-10 max-w-3xl mx-auto font-sans">
+          <h1 className="text-red-600 mb-4 text-2xl font-semibold">
+            Something went wrong
           </h1>
-          <p style={{ fontSize: '18px', color: '#6b7280', marginBottom: '24px' }}>
+          <p className="text-lg text-gray-500 dark:text-gray-400 mb-6">
             We encountered an unexpected error. Please try refreshing the page.
           </p>
 
-          <div style={{ display: 'flex', gap: '12px', marginBottom: '32px' }}>
+          {this.state.errorId && (
+            <p className="text-sm text-gray-500 mb-6">Error ID: {this.state.errorId}</p>
+          )}
+
+          <div className="flex gap-3 mb-8">
             <button
               onClick={this.handleReload}
-              style={{
-                padding: '12px 24px',
-                backgroundColor: '#2563eb',
-                color: 'white',
-                border: 'none',
-                borderRadius: '6px',
-                fontSize: '16px',
-                cursor: 'pointer',
-                fontWeight: '500'
-              }}
+              className="px-6 py-3 bg-blue-600 text-white border-none rounded-lg text-base cursor-pointer font-medium hover:bg-blue-700 transition-colors"
             >
               Reload Page
             </button>
             <button
               onClick={this.handleReset}
-              style={{
-                padding: '12px 24px',
-                backgroundColor: '#6b7280',
-                color: 'white',
-                border: 'none',
-                borderRadius: '6px',
-                fontSize: '16px',
-                cursor: 'pointer',
-                fontWeight: '500'
-              }}
+              className="px-6 py-3 bg-gray-500 text-white border-none rounded-lg text-base cursor-pointer font-medium hover:bg-gray-600 transition-colors"
             >
               Try Again
             </button>
           </div>
 
           {isDev && this.state.error && (
-            <details style={{
-              padding: '16px',
-              backgroundColor: '#fef2f2',
-              border: '1px solid #fecaca',
-              borderRadius: '6px'
-            }}>
-              <summary style={{
-                cursor: 'pointer',
-                fontWeight: 'bold',
-                color: '#dc2626',
-                marginBottom: '12px'
-              }}>
+            <details className="p-4 bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded-lg">
+              <summary className="cursor-pointer font-bold text-red-600 dark:text-red-400 mb-3">
                 Error Details (Development/QA Only)
               </summary>
-              <pre style={{
-                padding: '12px',
-                backgroundColor: '#fff',
-                border: '1px solid #e5e7eb',
-                borderRadius: '4px',
-                overflow: 'auto',
-                fontSize: '12px',
-                lineHeight: '1.5'
-              }}>
+              <pre className="p-3 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded overflow-auto text-xs leading-relaxed">
                 <code>
                   {this.state.error.toString()}
                   {'\n\n'}

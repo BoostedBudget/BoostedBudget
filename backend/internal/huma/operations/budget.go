@@ -165,7 +165,7 @@ type GetCategoryTransactionsOutput struct {
 func (h *BudgetHandler) CreateBudget(ctx context.Context, input *CreateBudgetInput) (*CreateBudgetOutput, error) {
 	budget, err := h.service.CreateBudget(ctx, input.UserID, &input.Body)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &CreateBudgetOutput{Body: budget}, nil
@@ -176,7 +176,7 @@ func (h *BudgetHandler) CreateBudget(ctx context.Context, input *CreateBudgetInp
 func (h *BudgetHandler) GetBudgets(ctx context.Context, input *GetBudgetsInput) (*GetBudgetsOutput, error) {
 	budgets, err := h.service.GetBudgets(ctx, input.UserID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	// Return empty array instead of null
@@ -192,7 +192,7 @@ func (h *BudgetHandler) GetBudgets(ctx context.Context, input *GetBudgetsInput) 
 func (h *BudgetHandler) GetBudget(ctx context.Context, input *GetBudgetInput) (*GetBudgetOutput, error) {
 	budget, err := h.service.GetBudget(ctx, input.UserID, input.ID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &GetBudgetOutput{Body: budget}, nil
@@ -203,7 +203,7 @@ func (h *BudgetHandler) GetBudget(ctx context.Context, input *GetBudgetInput) (*
 func (h *BudgetHandler) GetCurrentBudget(ctx context.Context, input *GetCurrentBudgetInput) (*GetCurrentBudgetOutput, error) {
 	budget, err := h.service.GetCurrentBudget(ctx, input.UserID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &GetCurrentBudgetOutput{Body: budget}, nil
@@ -214,7 +214,7 @@ func (h *BudgetHandler) GetCurrentBudget(ctx context.Context, input *GetCurrentB
 func (h *BudgetHandler) UpdateBudget(ctx context.Context, input *UpdateBudgetInput) (*UpdateBudgetOutput, error) {
 	budget, err := h.service.UpdateBudget(ctx, input.UserID, input.ID, &input.Body)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &UpdateBudgetOutput{Body: budget}, nil
@@ -225,7 +225,7 @@ func (h *BudgetHandler) UpdateBudget(ctx context.Context, input *UpdateBudgetInp
 func (h *BudgetHandler) DeleteBudget(ctx context.Context, input *DeleteBudgetInput) (*struct{}, error) {
 	err := h.service.DeleteBudget(ctx, input.UserID, input.ID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return nil, nil
@@ -236,7 +236,7 @@ func (h *BudgetHandler) DeleteBudget(ctx context.Context, input *DeleteBudgetInp
 func (h *BudgetHandler) AddCategory(ctx context.Context, input *AddCategoryInput) (*AddCategoryOutput, error) {
 	category, err := h.service.AddCategory(ctx, input.UserID, input.ID, &input.Body)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &AddCategoryOutput{Body: category}, nil
@@ -247,7 +247,7 @@ func (h *BudgetHandler) AddCategory(ctx context.Context, input *AddCategoryInput
 func (h *BudgetHandler) UpdateCategory(ctx context.Context, input *UpdateBudgetCategoryInput) (*UpdateBudgetCategoryOutput, error) {
 	category, err := h.service.UpdateCategory(ctx, input.UserID, input.ID, input.CategoryID, &input.Body)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &UpdateBudgetCategoryOutput{Body: category}, nil
@@ -258,7 +258,7 @@ func (h *BudgetHandler) UpdateCategory(ctx context.Context, input *UpdateBudgetC
 func (h *BudgetHandler) DeleteCategory(ctx context.Context, input *DeleteBudgetCategoryInput) (*struct{}, error) {
 	err := h.service.DeleteCategory(ctx, input.UserID, input.ID, input.CategoryID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return nil, nil
@@ -269,7 +269,7 @@ func (h *BudgetHandler) DeleteCategory(ctx context.Context, input *DeleteBudgetC
 func (h *BudgetHandler) GetAvailableCategories(ctx context.Context, input *GetAvailableCategoriesInput) (*GetAvailableCategoriesOutput, error) {
 	categories, err := h.service.GetAvailableCategories(ctx, input.UserID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	// Return empty array instead of null
@@ -286,7 +286,7 @@ func (h *BudgetHandler) SyncBudget(ctx context.Context, input *SyncBudgetInput) 
 	// Get the budget to verify ownership and pass to sync service
 	budget, err := h.service.GetBudget(ctx, input.UserID, input.ID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	// Recalculate budget amounts
@@ -297,7 +297,7 @@ func (h *BudgetHandler) SyncBudget(ctx context.Context, input *SyncBudgetInput) 
 	// Re-fetch to get updated amounts
 	budget, err = h.service.GetBudget(ctx, input.UserID, input.ID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &SyncBudgetOutput{Body: budget}, nil
@@ -309,7 +309,7 @@ func (h *BudgetHandler) GetCategoryTransactions(ctx context.Context, input *GetC
 	// Get the budget to verify ownership and get the date range
 	budget, err := h.service.GetBudget(ctx, input.UserID, input.ID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	// Find the category
