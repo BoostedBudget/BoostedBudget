@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -140,7 +141,7 @@ func Load() (*Config, error) {
 	}
 
 	// Validate required fields for production
-	if cfg.Environment == "production" {
+	if cfg.Environment == "production" || cfg.Environment == "staging" {
 		if err := cfg.validate(); err != nil {
 			return nil, err
 		}
@@ -149,21 +150,41 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-// validate checks that required configuration is present for the production environment
+// validate checks that required configuration is present for the production and staging environments
 func (c *Config) validate() error {
+	var errs []error
+
+	// Core infrastructure (always required)
 	if c.DatabaseURL == "" {
-		return fmt.Errorf("DATABASE_URL is required")
+		errs = append(errs, fmt.Errorf("DATABASE_URL is required"))
 	}
 	if c.ClerkSecretKey == "" {
-		return fmt.Errorf("CLERK_SECRET_KEY is required")
+		errs = append(errs, fmt.Errorf("CLERK_SECRET_KEY is required"))
 	}
+
+	// Encryption (required + length check for AES-256)
 	if c.EncryptionKey == "" {
-		return fmt.Errorf("ENCRYPTION_KEY is required in production")
+		errs = append(errs, fmt.Errorf("ENCRYPTION_KEY is required"))
+	} else if len([]byte(c.EncryptionKey)) != 32 {
+		errs = append(errs, fmt.Errorf("ENCRYPTION_KEY must be exactly 32 bytes for AES-256 (got %d)", len([]byte(c.EncryptionKey))))
 	}
+
+	// CORS (no wildcard in prod/staging)
 	if c.CORSAllowedOrigins == "" || c.CORSAllowedOrigins == "*" {
-		return fmt.Errorf("CORS_ALLOWED_ORIGINS must be explicitly set in production (not '*' or empty)")
+		errs = append(errs, fmt.Errorf("CORS_ALLOWED_ORIGINS must be explicitly set (not '*' or empty)"))
 	}
-	return nil
+
+	// Plaid (both required together)
+	if c.PlaidClientID == "" || c.PlaidSecret == "" {
+		errs = append(errs, fmt.Errorf("PLAID_CLIENT_ID and PLAID_SECRET are both required"))
+	}
+
+	// Paddle (both required together)
+	if c.PaddleAPIKey == "" || c.PaddleWebhookSecret == "" {
+		errs = append(errs, fmt.Errorf("PADDLE_API_KEY and PADDLE_WEBHOOK_SECRET are both required"))
+	}
+
+	return errors.Join(errs...)
 }
 
 // getEnv retrieves an environment variable or returns a default value
