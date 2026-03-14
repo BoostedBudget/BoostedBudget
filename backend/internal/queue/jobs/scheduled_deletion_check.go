@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/riverqueue/river"
 )
@@ -77,7 +78,7 @@ func (w *ScheduledDeletionCheckWorker) SetJobQueue(jq queue.JobQueue) {
 //  3. Uses unique constraints to prevent duplicate deletion jobs
 //
 // Errors in individual deletion enqueueing don't fail the entire job.
-func (w *ScheduledDeletionCheckWorker) Work(ctx context.Context, job *river.Job[ScheduledDeletionCheckArgs]) error {
+func (w *ScheduledDeletionCheckWorker) Work(ctx context.Context, job *river.Job[ScheduledDeletionCheckArgs]) (err error) {
 	args := job.Args
 
 	w.logger.Info("starting scheduled deletion check",
@@ -85,6 +86,16 @@ func (w *ScheduledDeletionCheckWorker) Work(ctx context.Context, job *river.Job[
 		"trigger_source", args.TriggerSource,
 		"attempt", job.Attempt,
 	)
+
+	start := time.Now()
+	defer func() {
+		status := "success"
+		if err != nil {
+			status = "failed"
+		}
+		observability.JobsCompleted.WithLabelValues(job.Kind, job.Queue, status).Inc()
+		observability.JobDuration.WithLabelValues(job.Kind).Observe(time.Since(start).Seconds())
+	}()
 
 	startTime := time.Now()
 

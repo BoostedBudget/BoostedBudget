@@ -286,7 +286,7 @@ func TestFireWebhook_DecryptionError(t *testing.T) {
 
 	assert.Nil(t, output)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "decrypt access token")
+	assert.Contains(t, err.Error(), "Internal server error")
 }
 
 // TestFireWebhook_PlaidAPIError tests 500 when Plaid API fails.
@@ -318,7 +318,7 @@ func TestFireWebhook_PlaidAPIError(t *testing.T) {
 
 	assert.Nil(t, output)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "fire webhook")
+	assert.Contains(t, err.Error(), "Internal server error")
 }
 
 // TestAdminRouteRegistration tests that routes are properly registered.
@@ -420,7 +420,7 @@ func TestGrantTrial_ServiceError(t *testing.T) {
 
 	assert.Nil(t, output)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Failed to grant trial")
+	assert.Contains(t, err.Error(), "Internal server error")
 }
 
 // --- System Health Tests (Issue #640) ---
@@ -534,5 +534,5 @@ func TestGetSystemHealth_ServiceError(t *testing.T) {
 
 	assert.Nil(t, output)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Failed to get system health")
+	assert.Contains(t, err.Error(), "Internal server error")
 }

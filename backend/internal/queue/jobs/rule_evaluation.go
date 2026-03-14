@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/riverqueue/river"
@@ -67,7 +68,7 @@ func NewRuleEvaluationWorker(deps RuleEvaluationWorkerDeps) *RuleEvaluationWorke
 //
 // Rule execution failures for individual rules don't fail the entire job.
 // Each rule execution is logged and tracked independently.
-func (w *RuleEvaluationWorker) Work(ctx context.Context, job *river.Job[RuleEvaluationArgs]) error {
+func (w *RuleEvaluationWorker) Work(ctx context.Context, job *river.Job[RuleEvaluationArgs]) (err error) {
 	args := job.Args
 
 	w.logger.Info("starting rule evaluation job",
@@ -77,10 +78,20 @@ func (w *RuleEvaluationWorker) Work(ctx context.Context, job *river.Job[RuleEval
 		"attempt", job.Attempt,
 	)
 
+	start := time.Now()
+	defer func() {
+		status := "success"
+		if err != nil {
+			status = "failed"
+		}
+		observability.JobsCompleted.WithLabelValues(job.Kind, job.Queue, status).Inc()
+		observability.JobDuration.WithLabelValues(job.Kind).Observe(time.Since(start).Seconds())
+	}()
+
 	startTime := time.Now()
 
 	// Process the event trigger - this evaluates all matching rules
-	err := w.ruleExecutionService.ProcessEventTrigger(ctx, args.UserID, args.EventType, args.EventData)
+	err = w.ruleExecutionService.ProcessEventTrigger(ctx, args.UserID, args.EventType, args.EventData)
 	if err != nil {
 		w.logger.Error("rule evaluation failed",
 			"job_id", job.ID,

@@ -3,11 +3,13 @@ package operations
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	humamiddleware "github.com/maxnussbaum/BoostedBudget/internal/huma/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
@@ -74,7 +76,7 @@ func (h *AdminHandler) UpdateUserTier(ctx context.Context, input *AdminSubscript
 		if errors.Is(err, services.ErrAdminUserNotFound) {
 			return nil, huma.Error404NotFound("user not found")
 		}
-		return nil, huma.Error500InternalServerError("failed to update user tier", err)
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to update user tier: %w", err))
 	}
 
 	resp := &AdminSubscriptionTierOutput{}
@@ -92,7 +94,7 @@ func (h *AdminHandler) GetUserSubscription(ctx context.Context, input *AdminSubs
 		if errors.Is(err, services.ErrAdminUserNotFound) {
 			return nil, huma.Error404NotFound("user not found")
 		}
-		return nil, huma.Error500InternalServerError("failed to fetch user", err)
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to fetch user: %w", err))
 	}
 
 	// 2. We need a domain.User to get the effective subscription limits and features
@@ -109,7 +111,7 @@ func (h *AdminHandler) GetUserSubscription(ctx context.Context, input *AdminSubs
 	if h.subService != nil {
 		effectiveSub, err = h.subService.GetEffectiveSubscription(ctx, userObj)
 		if err != nil {
-			return nil, huma.Error500InternalServerError("failed to calculate effective limits", err)
+			return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to calculate effective limits: %w", err))
 		}
 	} else {
 		effectiveSub = &domain.EffectiveSubscription{
@@ -177,7 +179,7 @@ func (h *AdminHandler) CreateSubscriptionOverride(ctx context.Context, input *Ad
 		input.Body.Reason,
 	)
 	if err != nil {
-		return nil, huma.Error500InternalServerError("failed to create override", err)
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to create override: %w", err))
 	}
 
 	resp := &AdminCreateOverrideOutput{}

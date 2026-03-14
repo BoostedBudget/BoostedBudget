@@ -11,6 +11,7 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/riverqueue/river"
@@ -161,7 +162,7 @@ func (w *SubscriptionWebhookWorker) resolveTierFromItems(data map[string]interfa
 }
 
 // Work processes a subscription webhook processing job.
-func (w *SubscriptionWebhookWorker) Work(ctx context.Context, job *river.Job[SubscriptionWebhookArgs]) error {
+func (w *SubscriptionWebhookWorker) Work(ctx context.Context, job *river.Job[SubscriptionWebhookArgs]) (err error) {
 	args := job.Args
 
 	w.logger.Info("starting subscription webhook processing job",
@@ -172,18 +173,28 @@ func (w *SubscriptionWebhookWorker) Work(ctx context.Context, job *river.Job[Sub
 		"attempt", job.Attempt,
 	)
 
+	start := time.Now()
+	defer func() {
+		status := "success"
+		if err != nil {
+			status = "failed"
+		}
+		observability.JobsCompleted.WithLabelValues(job.Kind, job.Queue, status).Inc()
+		observability.JobDuration.WithLabelValues(job.Kind).Observe(time.Since(start).Seconds())
+	}()
+
 	startTime := time.Now()
 
-	webhook, err := w.paddleWebhookRepo.GetByID(ctx, args.WebhookID)
-	if err != nil {
+	webhook, fetchErr := w.paddleWebhookRepo.GetByID(ctx, args.WebhookID)
+	if fetchErr != nil {
 		w.logger.Error("failed to fetch Paddle webhook",
 			"webhook_id", args.WebhookID,
-			"error", err,
+			"error", fetchErr,
 		)
-		if errors.Is(err, repository.ErrPaddleWebhookNotFound) {
+		if errors.Is(fetchErr, repository.ErrPaddleWebhookNotFound) {
 			return nil
 		}
-		return fmt.Errorf("failed to fetch Paddle webhook: %w", err)
+		return fmt.Errorf("failed to fetch Paddle webhook: %w", fetchErr)
 	}
 
 	if webhook.Processed {
@@ -228,10 +239,10 @@ func (w *SubscriptionWebhookWorker) Work(ctx context.Context, job *river.Job[Sub
 		return fmt.Errorf("webhook processing failed: %w", processErr)
 	}
 
-	if err := w.paddleWebhookRepo.MarkProcessed(ctx, args.WebhookID); err != nil {
+	if markErr := w.paddleWebhookRepo.MarkProcessed(ctx, args.WebhookID); markErr != nil {
 		w.logger.Error("failed to mark webhook as processed",
 			"webhook_id", args.WebhookID,
-			"error", err,
+			"error", markErr,
 		)
 	}
 

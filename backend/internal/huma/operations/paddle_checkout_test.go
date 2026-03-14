@@ -380,7 +380,7 @@ func TestHandleCreateCheckoutSession_PaddleAPIError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Nil(t, output)
-	assert.Contains(t, err.Error(), "Failed to create checkout session")
+	assert.Contains(t, err.Error(), "Internal server error")
 
 	mockRepo.AssertExpectations(t)
 	mockService.AssertExpectations(t)
@@ -403,7 +403,7 @@ func TestHandleCreateCheckoutSession_UserNotFound(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Nil(t, output)
-	assert.Contains(t, err.Error(), "Failed to get user details")
+	assert.Contains(t, err.Error(), "Internal server error")
 
 	mockRepo.AssertExpectations(t)
 }
@@ -432,7 +432,7 @@ func TestHandleCreateCheckoutSession_CreateCustomerFails(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Nil(t, output)
-	assert.Contains(t, err.Error(), "Failed to create customer")
+	assert.Contains(t, err.Error(), "Internal server error")
 
 	mockRepo.AssertExpectations(t)
 	mockService.AssertExpectations(t)
@@ -1082,7 +1082,7 @@ func TestHandleCreateCheckoutSession_CustomerCreationErrorDetail(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, output)
 	// Should return structured error with detail
-	assert.Contains(t, err.Error(), "Failed to create customer")
+	assert.Contains(t, err.Error(), "Internal server error")
 
 	mockRepo.AssertExpectations(t)
 	mockService.AssertExpectations(t)
@@ -1114,7 +1114,7 @@ func TestHandleCreateCheckoutSession_CheckoutSessionErrorDetail(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, output)
 	// Should return structured error with detail
-	assert.Contains(t, err.Error(), "Failed to create checkout session")
+	assert.Contains(t, err.Error(), "Internal server error")
 
 	mockRepo.AssertExpectations(t)
 	mockService.AssertExpectations(t)

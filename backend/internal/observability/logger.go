@@ -28,6 +28,7 @@ func NewLogger(cfg LogConfig) *slog.Logger {
 	level := parseLogLevel(cfg.Level)
 
 	var handler slog.Handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})
+	handler = NewTracingHandler(handler)
 
 	// Tee to Sentry for error+ if DSN configured
 	if cfg.SentryDSN != "" {
