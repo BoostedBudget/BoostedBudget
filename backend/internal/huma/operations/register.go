@@ -32,7 +32,6 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	dashboardHandler := &DashboardHandler{}
 	analyticsHandler := &AnalyticsHandler{}
 	dashboardPreferencesHandler := &DashboardPreferencesHandler{}
-	syncStatsHandler := &SyncStatsHandler{}
 	budgetHandler := &BudgetHandler{}
 	savingsGoalHandler := &SavingsGoalHandler{}
 	plaidHandler := &PlaidHandler{}
@@ -68,7 +67,6 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	RegisterDashboardRoutes(api, dashboardHandler)
 	RegisterAnalyticsRoutes(api, analyticsHandler)
 	RegisterDashboardPreferencesRoutes(api, dashboardPreferencesHandler)
-	RegisterSyncStatsRoutes(api, syncStatsHandler)
 	RegisterBudgetRoutes(api, budgetHandler)
 	RegisterSavingsGoalRoutes(api, savingsGoalHandler)
 	RegisterPlaidRoutes(api, plaidHandler)
