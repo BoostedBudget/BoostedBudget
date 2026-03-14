@@ -2,7 +2,7 @@ package middleware
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -21,7 +21,7 @@ func ValidateCORSConfig(allowedOrigins, environment string) error {
 		case "production":
 			return fmt.Errorf("CORS_ALLOWED_ORIGINS cannot be '*' or empty in production: set explicit allowed origins")
 		case "staging":
-			log.Println("[WARNING] CORS_ALLOWED_ORIGINS is '*' in staging — consider setting explicit origins")
+			slog.Warn("CORS_ALLOWED_ORIGINS is '*' in staging — consider setting explicit origins")
 		}
 		return nil
 	}

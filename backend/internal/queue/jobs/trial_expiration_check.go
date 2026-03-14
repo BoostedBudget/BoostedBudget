@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/riverqueue/river"
 )
@@ -81,7 +82,7 @@ func NewTrialExpirationCheckWorker(deps TrialExpirationCheckWorkerDeps) *TrialEx
 //  2. Calls ExpireTrial for each user (sets status to inactive and disconnects Plaid items)
 //
 // Errors in individual expirations don't fail the entire job.
-func (w *TrialExpirationCheckWorker) Work(ctx context.Context, job *river.Job[TrialExpirationCheckArgs]) error {
+func (w *TrialExpirationCheckWorker) Work(ctx context.Context, job *river.Job[TrialExpirationCheckArgs]) (err error) {
 	args := job.Args
 
 	w.logger.Info("starting trial expiration check",
@@ -89,6 +90,16 @@ func (w *TrialExpirationCheckWorker) Work(ctx context.Context, job *river.Job[Tr
 		"trigger_source", args.TriggerSource,
 		"attempt", job.Attempt,
 	)
+
+	start := time.Now()
+	defer func() {
+		status := "success"
+		if err != nil {
+			status = "failed"
+		}
+		observability.JobsCompleted.WithLabelValues(job.Kind, job.Queue, status).Inc()
+		observability.JobDuration.WithLabelValues(job.Kind).Observe(time.Since(start).Seconds())
+	}()
 
 	startTime := time.Now()
 
@@ -118,12 +129,12 @@ func (w *TrialExpirationCheckWorker) Work(ctx context.Context, job *river.Job[Tr
 	// Expire trial for each user
 	var expiredCount, errorCount int
 	for _, user := range users {
-		err := w.trialService.ExpireTrial(ctx, user.ID)
-		if err != nil {
+		expireErr := w.trialService.ExpireTrial(ctx, user.ID)
+		if expireErr != nil {
 			w.logger.Error("failed to expire trial for user",
 				"job_id", job.ID,
 				"user_id", user.ID,
-				"error", err,
+				"error", expireErr,
 			)
 			errorCount++
 			continue

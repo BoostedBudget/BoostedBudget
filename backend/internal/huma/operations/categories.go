@@ -80,7 +80,7 @@ type DeleteCategoryInput struct {
 func (h *CategoryHandler) GetUserCategories(ctx context.Context, input *GetUserCategoriesInput) (*GetUserCategoriesOutput, error) {
 	categories, err := h.service.GetUserCategories(ctx, input.UserID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	// Return empty array instead of null if no categories
@@ -96,7 +96,7 @@ func (h *CategoryHandler) GetUserCategories(ctx context.Context, input *GetUserC
 func (h *CategoryHandler) GetCategoryByID(ctx context.Context, input *GetCategoryByIDInput) (*GetCategoryByIDOutput, error) {
 	category, err := h.service.GetCategoryByID(ctx, input.ID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	// Verify ownership
@@ -112,7 +112,7 @@ func (h *CategoryHandler) GetCategoryByID(ctx context.Context, input *GetCategor
 func (h *CategoryHandler) CreateCategory(ctx context.Context, input *CreateCategoryInput) (*CreateCategoryOutput, error) {
 	category, err := h.service.CreateCategory(ctx, input.UserID, &input.Body)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &CreateCategoryOutput{Body: category}, nil
@@ -123,7 +123,7 @@ func (h *CategoryHandler) CreateCategory(ctx context.Context, input *CreateCateg
 func (h *CategoryHandler) UpdateCategory(ctx context.Context, input *UpdateCategoryInput) (*UpdateCategoryOutput, error) {
 	category, err := h.service.UpdateCategory(ctx, input.UserID, input.ID, &input.Body)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &UpdateCategoryOutput{Body: category}, nil
@@ -134,7 +134,7 @@ func (h *CategoryHandler) UpdateCategory(ctx context.Context, input *UpdateCateg
 func (h *CategoryHandler) DeleteCategory(ctx context.Context, input *DeleteCategoryInput) (*struct{}, error) {
 	err := h.service.DeleteCategory(ctx, input.UserID, input.ID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return nil, nil

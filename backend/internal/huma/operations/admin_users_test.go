@@ -226,7 +226,7 @@ func TestListUsers_ServiceError(t *testing.T) {
 
 	assert.Nil(t, output)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "database error")
+	assert.Contains(t, err.Error(), "Internal server error")
 	mockService.AssertExpectations(t)
 }
 

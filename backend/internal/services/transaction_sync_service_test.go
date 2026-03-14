@@ -111,6 +111,7 @@ func TestProcessWebhook_Success(t *testing.T) {
 		nil, // ruleApplicationService - not needed for these tests
 		nil, // budgetSyncService - not needed for these tests
 		nil, // transactionMonitorService - not needed for these tests
+		nil, // logger
 	)
 
 	ctx := context.Background()
@@ -211,6 +212,7 @@ func TestProcessWebhook_WebhookNotFound(t *testing.T) {
 		nil, // ruleApplicationService - not needed for these tests
 		nil, // budgetSyncService - not needed for these tests
 		nil, // transactionMonitorService - not needed for these tests
+		nil, // logger
 	)
 
 	ctx := context.Background()
@@ -245,6 +247,7 @@ func TestProcessWebhook_ItemIDMissing(t *testing.T) {
 		nil, // ruleApplicationService - not needed for these tests
 		nil, // budgetSyncService - not needed for these tests
 		nil, // transactionMonitorService - not needed for these tests
+		nil, // logger
 	)
 
 	ctx := context.Background()
@@ -295,6 +298,7 @@ func TestProcessWebhook_LinkedItemNotFound(t *testing.T) {
 		nil, // ruleApplicationService - not needed for these tests
 		nil, // budgetSyncService - not needed for these tests
 		nil, // transactionMonitorService - not needed for these tests
+		nil, // logger
 	)
 
 	ctx := context.Background()
@@ -359,6 +363,7 @@ func TestSyncTransactions_SuccessSinglePage(t *testing.T) {
 		nil, // ruleApplicationService - not needed for these tests
 		nil, // budgetSyncService - not needed for these tests
 		nil, // transactionMonitorService - not needed for these tests
+		nil, // logger
 	)
 
 	ctx := context.Background()
@@ -427,6 +432,7 @@ func TestSyncTransactions_SuccessMultiplePages(t *testing.T) {
 		nil, // ruleApplicationService - not needed for these tests
 		nil, // budgetSyncService - not needed for these tests
 		nil, // transactionMonitorService - not needed for these tests
+		nil, // logger
 	)
 
 	ctx := context.Background()
@@ -498,6 +504,7 @@ func TestSyncTransactions_DecryptionError(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // logger
 	)
 
 	ctx := context.Background()
@@ -541,6 +548,7 @@ func TestSyncTransactions_PlaidErrorFirstPage(t *testing.T) {
 		nil, // ruleApplicationService - not needed for these tests
 		nil, // budgetSyncService - not needed for these tests
 		nil, // transactionMonitorService - not needed for these tests
+		nil, // logger
 	)
 
 	ctx := context.Background()
@@ -590,6 +598,7 @@ func TestSyncTransactions_PlaidErrorSubsequentPage(t *testing.T) {
 		nil, // ruleApplicationService - not needed for these tests
 		nil, // budgetSyncService - not needed for these tests
 		nil, // transactionMonitorService - not needed for these tests
+		nil, // logger
 	)
 
 	ctx := context.Background()
@@ -647,6 +656,7 @@ func TestSyncTransactions_CursorUpdateError(t *testing.T) {
 		nil, // ruleApplicationService - not needed for these tests
 		nil, // budgetSyncService - not needed for these tests
 		nil, // transactionMonitorService - not needed for these tests
+		nil, // logger
 	)
 
 	ctx := context.Background()
@@ -705,6 +715,7 @@ func TestSyncTransactions_EmptyCursor(t *testing.T) {
 		nil, // ruleApplicationService - not needed for these tests
 		nil, // budgetSyncService - not needed for these tests
 		nil, // transactionMonitorService - not needed for these tests
+		nil, // logger
 	)
 
 	ctx := context.Background()
@@ -765,6 +776,7 @@ func TestBuildAccountMap_Success(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // logger
 	).(*transactionSyncService) // Type assert to access private method
 
 	ctx := context.Background()
@@ -822,6 +834,7 @@ func TestBuildAccountMap_EmptyAccounts(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // logger
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -859,6 +872,7 @@ func TestBuildAccountMap_RepositoryError(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // logger
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -901,6 +915,7 @@ func TestProcessAddedTransactions_Success(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // logger
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -977,6 +992,7 @@ func TestProcessAddedTransactions_Deduplication(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // logger
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1042,6 +1058,7 @@ func TestProcessAddedTransactions_PartialFailure(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // logger
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1116,6 +1133,7 @@ func TestProcessAddedTransactions_EmptySlice(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // logger
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1162,6 +1180,7 @@ func TestProcessModifiedTransactions_Success(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // logger
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1261,6 +1280,7 @@ func TestProcessModifiedTransactions_NewTransactionNoUserNotes(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // logger
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1331,6 +1351,7 @@ func TestProcessModifiedTransactions_TransactionNotFound(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // logger
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1387,6 +1408,7 @@ func TestProcessModifiedTransactions_EmptySlice(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // logger
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1431,6 +1453,7 @@ func TestProcessRemovedTransactions_Success(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // logger
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1480,6 +1503,7 @@ func TestProcessRemovedTransactions_IdempotentNotFound(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // logger
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1526,6 +1550,7 @@ func TestProcessRemovedTransactions_EmptySlice(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // logger
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1564,6 +1589,7 @@ func TestProcessRemovedTransactions_NilTransactionID(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // logger
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1617,6 +1643,7 @@ func TestProcessModifiedTransactions_PendingToPosted(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // logger
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1768,6 +1795,7 @@ func TestProcessAddedTransactions_SetsOriginalCategory(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // logger
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -1969,6 +1997,7 @@ func TestSyncTransactions_CursorPersistsAfterTxnStorageFailure(t *testing.T) {
 		nil, // ruleApplicationService - not needed for these tests
 		nil, // budgetSyncService - not needed for these tests
 		nil, // transactionMonitorService - not needed for these tests
+		nil, // logger
 	)
 
 	// LinkedItem with existing cursor (simulating mid-sync resume)
@@ -2049,6 +2078,7 @@ func TestSyncTransactions_CursorResumeFromLastSuccessfulPage(t *testing.T) {
 		nil, // ruleApplicationService - not needed for these tests
 		nil, // budgetSyncService - not needed for these tests
 		nil, // transactionMonitorService - not needed for these tests
+		nil, // logger
 	)
 
 	// LinkedItem with cursor from previous partial sync
@@ -2134,7 +2164,7 @@ func TestSyncTransactions_NilVsEmptyCursor(t *testing.T) {
 			service := NewTransactionSyncService(
 				nil, mockLinkedItemRepo, mockTransactionRepo, mockAccountRepo, mockProfileRepo,
 				nil, mockPlaidService, mockEncryptionService, subscriptionService,
-				nil, nil, nil,
+				nil, nil, nil, nil,
 			)
 
 			linkedItem := &domain.LinkedItem{
@@ -2216,6 +2246,7 @@ func TestSyncTransactions_FinalPageCursorUpdate(t *testing.T) {
 		nil, // ruleApplicationService - not needed for these tests
 		nil, // budgetSyncService - not needed for these tests
 		nil, // transactionMonitorService - not needed for these tests
+		nil, // logger
 	)
 
 	// LinkedItem with existing cursor
@@ -2294,6 +2325,7 @@ func TestSyncTransactions_InvalidCursorAutoReset(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // logger
 	)
 
 	// LinkedItem with corrupted cursor
@@ -2344,7 +2376,7 @@ func TestSyncTransactions_InvalidCursorResetFailure(t *testing.T) {
 
 	service := NewTransactionSyncService(
 		nil, mockLinkedItemRepo, nil, nil, nil, nil,
-		mockPlaidService, mockEncryptionService, nil, nil, nil, nil,
+		mockPlaidService, mockEncryptionService, nil, nil, nil, nil, nil,
 	)
 
 	// LinkedItem with corrupted cursor
@@ -2429,6 +2461,7 @@ func TestTransactionSyncService_SyncTransactions_SetsUserAccountID(t *testing.T)
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // logger
 	)
 
 	ctx := context.Background()
@@ -2529,7 +2562,7 @@ func TestTransactionSyncService_SyncTransactions_LooksUpUserAccountFromAccount(t
 		nil, nil,
 		mockPlaidService,
 		mockEncryptionService,
-		nil, nil, nil, nil,
+		nil, nil, nil, nil, nil,
 	)
 
 	ctx := context.Background()
@@ -2621,7 +2654,7 @@ func TestTransactionSyncService_ProcessAddedTransactions_SetsUserAccountID(t *te
 	service := NewTransactionSyncService(
 		nil, nil,
 		mockTransactionRepo,
-		nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -2688,7 +2721,7 @@ func TestTransactionSyncService_ProcessAddedTransactions_NullUserAccountID_Handl
 	service := NewTransactionSyncService(
 		nil, nil,
 		mockTransactionRepo,
-		nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -2751,7 +2784,7 @@ func TestTransactionSyncService_Relink_PreservesEnrichments(t *testing.T) {
 	service := NewTransactionSyncService(
 		nil, nil,
 		mockTransactionRepo,
-		nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -2820,7 +2853,7 @@ func TestTransactionSyncService_ModifiedTransactions_SetsUserAccountID(t *testin
 	service := NewTransactionSyncService(
 		nil, nil,
 		mockTransactionRepo,
-		nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
 	).(*transactionSyncService)
 
 	ctx := context.Background()

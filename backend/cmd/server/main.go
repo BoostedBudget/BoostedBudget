@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2/adapters/humaecho"
+	sentryecho "github.com/getsentry/sentry-go/echo"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
 	echomiddleware "github.com/labstack/echo/v4/middleware"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/database"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -20,6 +22,7 @@ import (
 	humamiddleware "github.com/maxnussbaum/BoostedBudget/internal/huma/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/operations"
 	"github.com/maxnussbaum/BoostedBudget/internal/middleware"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue/jobs"
 	riverqueue "github.com/maxnussbaum/BoostedBudget/internal/queue/river"
@@ -36,15 +39,54 @@ func main() {
 		log.Fatal("Failed to load config:", err)
 	}
 
+	// Init Sentry (graceful no-op if DSN empty)
+	if err := observability.InitSentry(observability.SentryConfig{
+		DSN:         cfg.SentryDSN,
+		Environment: cfg.Environment,
+		Release:     cfg.Version,
+		SampleRate:  cfg.SentrySampleRate,
+	}); err != nil {
+		log.Printf("⚠️  Sentry init failed: %v", err)
+	}
+	defer observability.FlushSentry(2 * time.Second)
+
+	// Init OTEL tracer (graceful no-op if endpoint empty)
+	shutdownTracer, err := observability.InitTracer(observability.OTELConfig{
+		Endpoint:    cfg.OTELEndpoint,
+		ServiceName: "boostedbudget-api",
+		Version:     cfg.Version,
+		Environment: cfg.Environment,
+		SampleRate:  cfg.OTELSampleRate,
+	})
+	if err != nil {
+		log.Printf("⚠️  OTEL init failed: %v", err)
+		shutdownTracer = func(ctx context.Context) error { return nil }
+	}
+	defer shutdownTracer(context.Background())
+
+	// Create unified logger
+	appLogger := observability.NewLogger(observability.LogConfig{
+		Level:        cfg.LogLevel,
+		Environment:  cfg.Environment,
+		ServiceName:  "boostedbudget-api",
+		Version:      cfg.Version,
+		SentryDSN:    cfg.SentryDSN,
+		OTELEndpoint: cfg.OTELEndpoint,
+	})
+	slog.SetDefault(appLogger)
+
 	// Log startup configuration summary
-	log.Printf("📋 Startup config summary (env=%s):", cfg.Environment)
-	log.Printf("   Database:   %s (max_conns=%d)", boolStatus(cfg.DatabaseURL != ""), cfg.DatabaseMaxConns)
-	log.Printf("   Clerk:      %s", boolStatus(cfg.ClerkSecretKey != ""))
-	log.Printf("   Encryption: %s", boolStatus(cfg.EncryptionKey != ""))
-	log.Printf("   Plaid:      %s", boolStatus(cfg.PlaidClientID != "" && cfg.PlaidSecret != ""))
-	log.Printf("   Paddle:     %s", boolStatus(cfg.PaddleAPIKey != "" && cfg.PaddleWebhookSecret != ""))
-	log.Printf("   SendGrid:   %s", boolStatus(cfg.SendGridAPIKey != ""))
-	log.Printf("   Deletion:   %s", boolStatus(cfg.DeletionTokenSecret != ""))
+	appLogger.Info("Startup config summary",
+		"env", cfg.Environment,
+		"database", boolStatus(cfg.DatabaseURL != ""),
+		"database_max_conns", cfg.DatabaseMaxConns,
+		"clerk", boolStatus(cfg.ClerkSecretKey != ""),
+		"encryption", boolStatus(cfg.EncryptionKey != ""),
+		"plaid", boolStatus(cfg.PlaidClientID != "" && cfg.PlaidSecret != ""),
+		"paddle", boolStatus(cfg.PaddleAPIKey != "" && cfg.PaddleWebhookSecret != ""),
+		"sendgrid", boolStatus(cfg.SendGridAPIKey != ""),
+		"deletion", boolStatus(cfg.DeletionTokenSecret != ""),
+	)
 
 	// Initialize database connection pool (optional for local dev)
 	var db *pgxpool.Pool
@@ -53,18 +95,22 @@ func main() {
 		dbConfig.MaxConns = cfg.DatabaseMaxConns
 		db, err = database.NewPool(context.Background(), dbConfig)
 		if err != nil {
-			log.Fatal("Failed to connect to database:", err)
+			appLogger.Error("Failed to connect to database", "error", err)
+			os.Exit(1)
 		}
 		defer db.Close()
 
-		log.Println("✅ Database connection pool established (pgx v5)")
+		appLogger.Info("Database connection pool established (pgx v5)")
+		// Start DB pool metrics collection (runs until process exits)
+		observability.StartDBMetricsCollector(context.Background(), db)
 	} else {
-		log.Println("⚠️  Running without database (set DATABASE_URL to enable)")
+		appLogger.Warn("Running without database (set DATABASE_URL to enable)")
 	}
 
 	// Validate CORS configuration before starting (fail-fast for production misconfiguration)
 	if err := middleware.ValidateCORSConfig(cfg.CORSAllowedOrigins, cfg.Environment); err != nil {
-		log.Fatal("CORS configuration error:", err)
+		appLogger.Error("CORS configuration error", "error", err)
+		os.Exit(1)
 	}
 
 	// Create Echo instance
@@ -87,16 +133,18 @@ func main() {
 		AuthEndpointLimit: cfg.RateLimitAuth,
 		WindowDuration:    time.Minute,
 	}))
-	e.Use(middleware.StructuredLogging(os.Stdout))                                         // 4. Structured JSON logging
-	e.Use(middleware.MetricsMiddleware())                                                  // 5. Prometheus metrics
-	e.Use(echomiddleware.Recover())                                                        // 6. Panic recovery
-	e.Use(echomiddleware.BodyLimit(cfg.MaxBodySize))                                       // 7. Request body size limit
-	e.Use(echomiddleware.CORSWithConfig(middleware.GetCORSConfig(cfg.CORSAllowedOrigins))) // 8. CORS handling with configured origins
+	e.Use(middleware.PanicRecovery(appLogger, cfg.Environment))                            // 4. Panic recovery (formats RFC 9457 response)
+	e.Use(sentryecho.New(sentryecho.Options{Repanic: true}))                               // 5. Sentry panic reporting
+	e.Use(otelecho.Middleware("boostedbudget-api"))                                        // 6. OTEL tracing
+	e.Use(middleware.StructuredLogging(appLogger))                                         // 7. slog-based HTTP logging
+	e.Use(middleware.MetricsMiddleware())                                                  // 8. Prometheus metrics
+	e.Use(echomiddleware.BodyLimit(cfg.MaxBodySize))                                       // 9. Request body size limit
+	e.Use(echomiddleware.CORSWithConfig(middleware.GetCORSConfig(cfg.CORSAllowedOrigins))) // 10. CORS handling with configured origins
 
 	// Initialize Huma API wrapping Echo for OpenAPI generation
 	// Huma provides automatic OpenAPI 3.1 spec generation from Go code
 	humaAPI := humaecho.New(e, humaconfig.NewAPIConfig(cfg.Version, cfg.Environment))
-	log.Println("✅ Huma API initialized - OpenAPI at /openapi.json, Docs at /docs")
+	appLogger.Info("Huma API initialized - OpenAPI at /openapi.json, Docs at /docs")
 
 	// Health check handler (no auth required) - Huma operation
 	healthHandler := operations.NewHealthHandler(
@@ -110,15 +158,16 @@ func main() {
 	// Metrics endpoint (Prometheus format) - Huma operation
 	humaMetricsHandler := operations.NewMetricsHandler()
 	operations.RegisterMetricsRoutes(humaAPI, humaMetricsHandler)
-	log.Println("✅ Huma metrics route registered")
+	appLogger.Info("Huma metrics route registered")
 
 	// Load tier configuration (used by both public and authenticated endpoints)
 	tierConfig, err := config.LoadTierConfig()
 	if err != nil {
-		log.Printf("⚠️  Failed to load tier config: %v", err)
-		log.Fatal("Tier configuration is required")
+		appLogger.Error("Failed to load tier config", "error", err)
+		appLogger.Error("Tier configuration is required")
+		os.Exit(1)
 	}
-	log.Println("✅ Tier configuration loaded")
+	appLogger.Info("Tier configuration loaded")
 
 	// Subscription tiers endpoint (public - needed for pricing page) - Huma operation
 	subscriptionTiersHandler := operations.NewSubscriptionTiersHandler(tierConfig)
@@ -211,11 +260,12 @@ func main() {
 		// This ensures reset-to-default uses YAML config version, not hardcoded version 2
 		dashboardLayoutConfig, err := config.LoadDashboardLayoutConfig()
 		if err != nil {
-			log.Fatal("Failed to load dashboard layout config:", err)
+			appLogger.Error("Failed to load dashboard layout config", "error", err)
+			os.Exit(1)
 		}
 		dashboardPrefsService := services.NewDashboardPreferencesService(dashboardPrefsRepo, dashboardLayoutConfig)
 		// Issue #28: Budget and savings goal services
-		budgetLogger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+		budgetLogger := appLogger
 		budgetService := services.NewBudgetService(budgetRepo, customCategoryRepo, transactionRepo, budgetLogger)
 		savingsGoalService := services.NewSavingsGoalService(savingsGoalRepo, accountRepo, budgetLogger)
 
@@ -232,15 +282,15 @@ func main() {
 
 		// Issue #37: Automation Rule Service and Rule Scheduler
 		automationRuleService := services.NewAutomationRuleService(automationRuleRepo)
-		log.Println("✅ Automation rule service initialized")
+		appLogger.Info("Automation rule service initialized")
 
 		// Issue #37: Rule Execution Service
 		ruleExecutionRepo := repository.NewRuleExecutionRepository(db)
 		ruleExecutionService := services.NewRuleExecutionService(ruleExecutionRepo, transferSuggestionRepo, automationRuleRepo, nil)
-		log.Println("✅ Rule execution service initialized")
+		appLogger.Info("Rule execution service initialized")
 
 		// Issue #37: Rule Scheduler Manager with providers
-		ruleSchedulerManager = workers.NewRuleSchedulerManager()
+		ruleSchedulerManager = workers.NewRuleSchedulerManager(appLogger)
 		subscriptionLimitAdapter := workers.NewSubscriptionLimitAdapter()
 
 		// Create and register CronTriggerProvider
@@ -249,6 +299,7 @@ func main() {
 			ruleExecutionService,
 			subscriptionLimitAdapter,
 			15*time.Minute, // Refresh interval for picking up new/updated rules
+			appLogger,
 		)
 		ruleSchedulerManager.RegisterProvider(cronProvider)
 
@@ -257,26 +308,27 @@ func main() {
 			automationRuleRepo,
 			ruleExecutionService,
 			subscriptionLimitAdapter,
+			appLogger,
 		)
 		ruleSchedulerManager.RegisterProvider(manualProvider)
-		log.Println("✅ Rule scheduler manager initialized with cron and manual providers")
+		appLogger.Info("Rule scheduler manager initialized with cron and manual providers")
 
 		// Initialize Email service (needed by deletion service and item error service)
 		// Optional - uses no-op mock if not configured
 		var emailService services.EmailService
 		if cfg.SendGridAPIKey != "" && cfg.SendGridFromEmail != "" {
 			emailService = services.NewEmailService(cfg.SendGridAPIKey, cfg.SendGridFromEmail, cfg.FrontendURL)
-			log.Println("✅ Email service (SendGrid) initialized")
+			appLogger.Info("Email service (SendGrid) initialized")
 		} else {
 			emailService = services.NewEmailServiceMock("", "", cfg.FrontendURL)
-			log.Println("⚠️  Email service disabled - cancellation links shown in UI instead (see GitHub issue for SendGrid integration)")
+			appLogger.Warn("Email service disabled - cancellation links shown in UI instead (see GitHub issue for SendGrid integration)")
 		}
 
 		// Create deletion services (if token secret configured)
 		if cfg.DeletionTokenSecret != "" {
 			// Initialize Clerk Backend API service
 			clerkService := services.NewClerkService(cfg.ClerkSecretKey)
-			log.Println("✅ Clerk Backend API service initialized")
+			appLogger.Info("Clerk Backend API service initialized")
 
 			// Initialize Deletion service (reuses auditLogger and emailService created earlier)
 			// Issue #668: plaidCleanupSvc is nil here - will be wired later after plaidService is created
@@ -290,31 +342,31 @@ func main() {
 				cfg.DeletionGracePeriodDays,
 				cfg.DeletionTokenSecret,
 			)
-			log.Println("✅ Deletion service initialized (30-day grace period)")
+			appLogger.Info("Deletion service initialized (30-day grace period)")
 
 			// Register Huma deletion routes (Issue #559: Huma migration)
 			humaDeletionHandler := operations.NewDeletionHandler(deletionService)
 			operations.RegisterDeletionRoutes(humaAPI, humaDeletionHandler)
-			log.Println("✅ Huma deletion routes registered")
+			appLogger.Info("Huma deletion routes registered")
 
 			// Issue #629: Create River-based deletion workers
 			// These will be registered with River after jobQueue is created
 			accountDeletionWorker = jobs.NewAccountDeletionWorker(jobs.AccountDeletionWorkerDeps{
 				DeletionService: deletionService,
-				Logger:          slog.New(slog.NewJSONHandler(os.Stdout, nil)),
+				Logger:          appLogger,
 			})
-			log.Println("✅ Account deletion worker created (River)")
+			appLogger.Info("Account deletion worker created (River)")
 
 			// Issue #629: Create scheduled deletion check worker
 			// Note: JobQueue is nil initially - set later via SetJobQueue() to handle circular dependency
 			scheduledDeletionCheckWorker = jobs.NewScheduledDeletionCheckWorker(jobs.ScheduledDeletionCheckWorkerDeps{
 				ProfileRepo: profileRepo,
 				JobQueue:    nil, // Set later after River client is created
-				Logger:      slog.New(slog.NewJSONHandler(os.Stdout, nil)),
+				Logger:      appLogger,
 			})
-			log.Println("✅ Scheduled deletion check worker created (River)")
+			appLogger.Info("Scheduled deletion check worker created (River)")
 		} else {
-			log.Println("⚠️  Deletion services disabled (requires DELETION_TOKEN_SECRET)")
+			appLogger.Warn("Deletion services disabled (requires DELETION_TOKEN_SECRET)")
 		}
 
 		// Create encryption service (if configured)
@@ -322,34 +374,36 @@ func main() {
 		if cfg.EncryptionKey != "" {
 			encryptionService, err = services.NewEncryptionService(cfg)
 			if err != nil {
-				log.Printf("⚠️  Failed to initialize encryption service: %v", err)
-				log.Fatal("Encryption service is required for account linking")
+				appLogger.Error("Failed to initialize encryption service", "error", err)
+				appLogger.Error("Encryption service is required for account linking")
+				os.Exit(1)
 			}
-			log.Println("✅ Encryption service initialized")
+			appLogger.Info("Encryption service initialized")
 		} else {
-			log.Fatal("ENCRYPTION_KEY environment variable is required")
+			appLogger.Error("ENCRYPTION_KEY environment variable is required")
+			os.Exit(1)
 		}
 
 		// Create Paddle services (if configured) - Issue #45, #46: Paddle Payment Integration
 		if cfg.PaddleAPIKey != "" {
-			logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+			logger := appLogger
 			var err error
 
 			// Initialize PaddleService for API operations
 			paddleService, err = services.NewPaddleService(cfg, logger)
 			if err != nil {
-				log.Printf("⚠️  Failed to initialize Paddle service: %v", err)
+				appLogger.Error("Failed to initialize Paddle service", "error", err)
 			} else {
-				log.Println("✅ Paddle service initialized")
+				appLogger.Info("Paddle service initialized")
 			}
 
 			// Initialize PaddleWebhookService for signature verification
 			if cfg.PaddleWebhookSecret != "" {
 				paddleWebhookService, err = services.NewPaddleWebhookService(cfg, logger)
 				if err != nil {
-					log.Printf("⚠️  Failed to initialize Paddle webhook service: %v", err)
+					appLogger.Error("Failed to initialize Paddle webhook service", "error", err)
 				} else {
-					log.Println("✅ Paddle webhook service initialized (HMAC-SHA256)")
+					appLogger.Info("Paddle webhook service initialized (HMAC-SHA256)")
 				}
 			}
 
@@ -362,7 +416,7 @@ func main() {
 					TierConfig:    tierConfig,
 					Logger:        logger,
 				})
-				log.Println("✅ Paddle checkout handler created")
+				appLogger.Info("Paddle checkout handler created")
 			}
 
 			// Create subscription webhook worker
@@ -375,10 +429,10 @@ func main() {
 					TierConfig:        tierConfig,
 					Logger:            logger,
 				})
-				log.Println("✅ Subscription webhook worker created (River)")
+				appLogger.Info("Subscription webhook worker created (River)")
 			}
 		} else {
-			log.Println("⚠️  Paddle services disabled (PADDLE_API_KEY not configured)")
+			appLogger.Warn("Paddle services disabled (PADDLE_API_KEY not configured)")
 		}
 
 		// Create Plaid service and account linking (if configured)
@@ -388,7 +442,7 @@ func main() {
 			var err error
 			plaidService, err = services.NewPlaidService(cfg)
 			if err != nil {
-				log.Printf("⚠️  Failed to initialize Plaid service: %v", err)
+				appLogger.Error("Failed to initialize Plaid service", "error", err)
 			} else {
 				// Create account service with all dependencies
 				accountService = services.NewAccountService(
@@ -404,8 +458,8 @@ func main() {
 				// plaidHandler migrated to Huma - Issue #559
 				_ = plaidService   // Silence unused variable (used by Huma handler)
 				_ = accountService // Silence unused variable (used by Huma handler)
-				log.Println("✅ Plaid service initialized")
-				log.Println("✅ Account linking service initialized")
+				appLogger.Info("Plaid service initialized")
+				appLogger.Info("Account linking service initialized")
 
 				// Issue #668: Create PlaidItemCleanupService for Plaid item lifecycle management
 				// This service handles calling Plaid /item/remove to stop billing
@@ -414,30 +468,30 @@ func main() {
 					plaidService,
 					encryptionService,
 				)
-				log.Println("✅ Plaid item cleanup service initialized")
+				appLogger.Info("Plaid item cleanup service initialized")
 
 				// Issue #668: Wire cleanup service to deletion service (resolves nil dependency from earlier)
 				// DeletionService was created before Plaid was available, now we can inject via setter
 				if deletionService != nil {
 					deletionService.SetPlaidCleanupService(plaidCleanupService)
-					log.Println("✅ Plaid cleanup service wired to deletion service")
+					appLogger.Info("Plaid cleanup service wired to deletion service")
 				}
 
 				// Issue #679, #680: Create TrialService for trial management
 				trialService = services.NewTrialService(tierConfig, profileRepo, plaidCleanupService)
-				log.Println("✅ Trial service initialized")
+				appLogger.Info("Trial service initialized")
 
 				// Issue #679: Wire trial service to registration service for auto-grant on signup
 				registrationService.SetTrialGranter(trialService)
-				log.Println("✅ Trial service wired to registration service")
+				appLogger.Info("Trial service wired to registration service")
 
 				// Issue #679, #680: Create trial expiration check worker
 				trialExpirationCheckWorker = jobs.NewTrialExpirationCheckWorker(jobs.TrialExpirationCheckWorkerDeps{
 					ProfileRepo:  profileRepo,
 					TrialService: trialService,
-					Logger:       slog.New(slog.NewJSONHandler(os.Stdout, nil)),
+					Logger:       appLogger,
 				})
-				log.Println("✅ Trial expiration check worker created (River)")
+				appLogger.Info("Trial expiration check worker created (River)")
 
 				// Issue #36: Transaction Monitor Service for auto-detecting completed transfers
 				transactionMonitorService := services.NewTransactionMonitorService(transferSuggestionRepo)
@@ -461,6 +515,7 @@ func main() {
 					ruleApplicationService,
 					budgetSyncService,
 					transactionMonitorService,
+					appLogger,
 				)
 
 				// Initialize Item Error Service for ITEM webhook processing
@@ -472,6 +527,7 @@ func main() {
 					plaidService,
 					encryptionService,
 					emailService,
+					appLogger,
 				)
 
 				// Issue #573/629: Initialize River queue for async job processing
@@ -484,7 +540,7 @@ func main() {
 					Logger: logger,
 				})
 				riverConfig.ErrorHandler = deadLetterHandler.ErrorHandlerFunc()
-				log.Println("✅ Dead letter handler configured for failed jobs")
+				appLogger.Info("Dead letter handler configured for failed jobs")
 
 				// Issue #629: Configure periodic jobs
 				var periodicJobs []*river.PeriodicJob
@@ -502,7 +558,7 @@ func main() {
 						},
 						&river.PeriodicJobOpts{RunOnStart: true}, // Run immediately on startup to catch any pending deletions
 					))
-					log.Println("✅ Scheduled deletion check periodic job configured (hourly)")
+					appLogger.Info("Scheduled deletion check periodic job configured (hourly)")
 				}
 
 				// Issue #668: Item cleanup check (daily at 3 AM) - checks for orphaned Plaid items
@@ -518,7 +574,7 @@ func main() {
 					},
 					&river.PeriodicJobOpts{RunOnStart: false}, // Don't run on startup - wait for daily schedule
 				))
-				log.Println("✅ Item cleanup check periodic job configured (daily)")
+				appLogger.Info("Item cleanup check periodic job configured (daily)")
 
 				// Issue #679, #680: Trial expiration check (daily) - finds expired trials and freezes accounts
 				// Expires trial: sets subscription_status='inactive', disconnects all Plaid items
@@ -534,7 +590,7 @@ func main() {
 						},
 						&river.PeriodicJobOpts{RunOnStart: true}, // Run on startup to catch any expired trials
 					))
-					log.Println("✅ Trial expiration check periodic job configured (daily)")
+					appLogger.Info("Trial expiration check periodic job configured (daily)")
 				}
 
 				if len(periodicJobs) > 0 {
@@ -558,7 +614,7 @@ func main() {
 					Logger:         logger,
 					DB:             db, // For row-level locking via FOR UPDATE
 				})
-				log.Println("✅ Plaid sync worker created")
+				appLogger.Info("Plaid sync worker created")
 
 				// Issue #668: Create ItemCleanupCheckWorker for periodic orphaned item detection
 				// Checks for items in error state, revoked, stale, or with zero accounts
@@ -571,7 +627,7 @@ func main() {
 					ErrorDaysThreshold: 30, // Days in error state before cleanup candidate
 					StaleDaysThreshold: 60, // Days since last sync before cleanup candidate
 				})
-				log.Println("✅ Item cleanup check worker created")
+				appLogger.Info("Item cleanup check worker created")
 
 				// Issue #668: Create ItemCleanupWorker for executing individual item cleanup
 				// Calls Plaid /item/remove to stop billing for orphaned items
@@ -580,7 +636,7 @@ func main() {
 					LinkedItemRepo:  linkedItemRepo,
 					Logger:          logger,
 				})
-				log.Println("✅ Item cleanup worker created")
+				appLogger.Info("Item cleanup worker created")
 
 				// Create River workers and register all workers
 				riverWorkers := river.NewWorkers()
@@ -588,70 +644,70 @@ func main() {
 
 				// Issue #666: Register PlaidSyncWorker with River
 				river.AddWorker(riverWorkers, plaidSyncWorker)
-				log.Println("✅ Plaid sync worker registered with River")
+				appLogger.Info("Plaid sync worker registered with River")
 
 				// Issue #629: Register deletion workers if available
 				if accountDeletionWorker != nil {
 					river.AddWorker(riverWorkers, accountDeletionWorker)
-					log.Println("✅ Account deletion worker registered with River")
+					appLogger.Info("Account deletion worker registered with River")
 				}
 				if scheduledDeletionCheckWorker != nil {
 					river.AddWorker(riverWorkers, scheduledDeletionCheckWorker)
-					log.Println("✅ Scheduled deletion check worker registered with River")
+					appLogger.Info("Scheduled deletion check worker registered with River")
 				}
 
 				// Issue #668: Register cleanup workers
 				if itemCleanupCheckWorker != nil {
 					river.AddWorker(riverWorkers, itemCleanupCheckWorker)
-					log.Println("✅ Item cleanup check worker registered with River")
+					appLogger.Info("Item cleanup check worker registered with River")
 				}
 				if itemCleanupWorker != nil {
 					river.AddWorker(riverWorkers, itemCleanupWorker)
-					log.Println("✅ Item cleanup worker registered with River")
+					appLogger.Info("Item cleanup worker registered with River")
 				}
 
 				// Issue #679, #680: Register trial expiration check worker
 				if trialExpirationCheckWorker != nil {
 					river.AddWorker(riverWorkers, trialExpirationCheckWorker)
-					log.Println("✅ Trial expiration check worker registered with River")
+					appLogger.Info("Trial expiration check worker registered with River")
 				}
 
 				// Issue #45, #46: Register Paddle subscription webhook worker
 				if subscriptionWebhookWorker != nil {
 					river.AddWorker(riverWorkers, subscriptionWebhookWorker)
-					log.Println("✅ Paddle subscription webhook worker registered with River")
+					appLogger.Info("Paddle subscription webhook worker registered with River")
 				}
 
 				// Create River client
 				riverClient, err := riverqueue.NewClient(db, riverWorkers, riverConfig)
 				if err != nil {
-					log.Printf("⚠️  Failed to initialize River queue: %v", err)
+					appLogger.Warn("Failed to initialize River queue", "error", err)
 				} else {
 					jobQueue = riverClient
 					riverRunner = riverClient
-					log.Println("✅ River queue initialized")
+					appLogger.Info("River queue initialized")
 
 					// Wire up job queue to workers (resolves circular dependency)
 					if scheduledDeletionCheckWorker != nil {
 						scheduledDeletionCheckWorker.SetJobQueue(jobQueue)
-						log.Println("✅ Scheduled deletion check worker connected to job queue")
+						appLogger.Info("Scheduled deletion check worker connected to job queue")
 					}
 					if accountService != nil {
 						accountService.SetJobQueue(jobQueue)
-						log.Println("✅ Account service connected to job queue for auto-sync")
+						appLogger.Info("Account service connected to job queue for auto-sync")
 					}
 					plaidSyncWorker.SetJobQueue(jobQueue)
-					log.Println("✅ Plaid sync worker connected to job queue for follow-up jobs")
+					appLogger.Info("Plaid sync worker connected to job queue for follow-up jobs")
 
 					// Issue #668: Wire up job queue to cleanup check worker
 					if itemCleanupCheckWorker != nil {
 						itemCleanupCheckWorker.SetJobQueue(jobQueue)
-						log.Println("✅ Item cleanup check worker connected to job queue")
+						appLogger.Info("Item cleanup check worker connected to job queue")
 					}
 				}
 
-				log.Println("✅ Transaction sync service initialized")
-				log.Println("✅ Item error service initialized")
+				appLogger.Info("Transaction sync service initialized")
+				appLogger.Info("Item error service initialized")
 			}
 		}
 
@@ -692,18 +748,19 @@ func main() {
 			cfg.ClerkSecretKey,
 			identityRepo,
 			registrationService,
+			appLogger,
 		)
 		humaAPI.UseMiddleware(humaClerkMiddleware)
-		log.Println("✅ Huma Clerk middleware applied")
+		appLogger.Info("Huma Clerk middleware applied")
 
 		// Load admin email config and create AdminService (Issue #309)
 		adminEmailConfig, err := config.LoadAdminEmailConfig()
 		if err != nil {
-			log.Printf("⚠️  Failed to load admin email config: %v (using empty list)", err)
+			appLogger.Warn("Failed to load admin email config (using empty list)", "error", err)
 			adminEmailConfig = &domain.AdminEmailConfig{AdminEmails: []string{}}
 		}
 		adminService := services.NewAdminService(cfg.ClerkSecretKey, adminEmailConfig.AdminEmails)
-		log.Printf("✅ Admin service initialized with %d hardcoded admin emails", len(adminEmailConfig.AdminEmails))
+		appLogger.Info("Admin service initialized", "hardcoded_admin_emails", len(adminEmailConfig.AdminEmails))
 
 		// Issue #639: Admin user management - needs adminService for admin status checks
 		adminUserService := services.NewAdminUserService(adminUserRepo, adminService)
@@ -719,85 +776,85 @@ func main() {
 		// Apply Huma Admin middleware for admin routes (Issue #309)
 		humaAdminMiddleware := humamiddleware.NewAdminMiddleware(cfg, adminService)
 		humaAPI.UseMiddleware(humaAdminMiddleware)
-		log.Println("✅ Huma Admin middleware applied")
+		appLogger.Info("Huma Admin middleware applied")
 
 		// Register Huma tag routes (Issue #345: User tag management)
 		humaTagHandler := operations.NewTagHandler(userTagService)
 		operations.RegisterTagRoutes(humaAPI, humaTagHandler)
-		log.Println("✅ Huma tag routes registered")
+		appLogger.Info("Huma tag routes registered")
 
 		// Register Huma transaction routes (Issue #559: Huma migration)
 		humaTransactionHandler := operations.NewTransactionHandler(transactionService)
 		operations.RegisterTransactionRoutes(humaAPI, humaTransactionHandler)
-		log.Println("✅ Huma transaction routes registered")
+		appLogger.Info("Huma transaction routes registered")
 
 		// Register Huma category routes (Issue #559: Huma migration)
 		humaCategoryHandler := operations.NewCategoryHandler(customCategoryService)
 		operations.RegisterCategoryRoutes(humaAPI, humaCategoryHandler)
-		log.Println("✅ Huma category routes registered")
+		appLogger.Info("Huma category routes registered")
 
 		// Register Huma categorization rule routes (Issue #559: Huma migration)
 		humaRuleHandler := operations.NewCategorizationRuleHandler(categorizationRuleService)
 		operations.RegisterCategorizationRuleRoutes(humaAPI, humaRuleHandler)
-		log.Println("✅ Huma categorization rule routes registered")
+		appLogger.Info("Huma categorization rule routes registered")
 
 		// Register Huma notification routes (Issue #559: Huma migration)
 		humaNotificationHandler := operations.NewNotificationHandler(notificationRepo)
 		operations.RegisterNotificationRoutes(humaAPI, humaNotificationHandler)
-		log.Println("✅ Huma notification routes registered")
+		appLogger.Info("Huma notification routes registered")
 
 		// Register Huma dashboard routes (Issue #559: Huma migration)
 		humaDashboardHandler := operations.NewDashboardHandler(dashboardService)
 		operations.RegisterDashboardRoutes(humaAPI, humaDashboardHandler)
-		log.Println("✅ Huma dashboard routes registered")
+		appLogger.Info("Huma dashboard routes registered")
 
 		// Register Huma analytics routes (Issue #559: Huma migration)
 		humaAnalyticsHandler := operations.NewAnalyticsHandler(analyticsService)
 		operations.RegisterAnalyticsRoutes(humaAPI, humaAnalyticsHandler)
-		log.Println("✅ Huma analytics routes registered")
+		appLogger.Info("Huma analytics routes registered")
 
 		// Register Huma dashboard preferences routes (Issue #559: Huma migration)
 		humaDashboardPrefsHandler := operations.NewDashboardPreferencesHandler(dashboardPrefsService)
 		operations.RegisterDashboardPreferencesRoutes(humaAPI, humaDashboardPrefsHandler)
-		log.Println("✅ Huma dashboard preferences routes registered")
+		appLogger.Info("Huma dashboard preferences routes registered")
 
 		// Register Huma budget routes (Issue #559: Huma migration)
 		humaBudgetHandler := operations.NewBudgetHandler(budgetService, budgetSyncService, transactionRepo)
 		operations.RegisterBudgetRoutes(humaAPI, humaBudgetHandler)
-		log.Println("✅ Huma budget routes registered")
+		appLogger.Info("Huma budget routes registered")
 
 		// Register Huma savings goal routes (Issue #559: Huma migration)
 		humaSavingsGoalHandler := operations.NewSavingsGoalHandler(savingsGoalService)
 		operations.RegisterSavingsGoalRoutes(humaAPI, humaSavingsGoalHandler)
-		log.Println("✅ Huma savings goal routes registered")
+		appLogger.Info("Huma savings goal routes registered")
 
 		// Register Huma automation rule routes (Issue #37: Rule Scheduler)
 		humaAutomationRuleHandler := operations.NewAutomationRuleHandler(automationRuleService, ruleSchedulerManager)
 		humaAutomationRuleHandler.SetExecutionService(ruleExecutionService) // Issue #579: Wire execution service for test endpoint
 		operations.RegisterAutomationRuleRoutes(humaAPI, humaAutomationRuleHandler)
-		log.Println("✅ Huma automation rule routes registered")
+		appLogger.Info("Huma automation rule routes registered")
 
 		// Register Huma plaid routes (Issue #559: Huma migration)
 		if plaidService != nil && accountService != nil {
 			humaPlaidHandler := operations.NewPlaidHandler(plaidService, accountService)
 			operations.RegisterPlaidRoutes(humaAPI, humaPlaidHandler)
-			log.Println("✅ Huma plaid routes registered")
+			appLogger.Info("Huma plaid routes registered")
 		}
 
 		// Register Huma profile routes (Issue #559: Huma migration)
 		humaProfileHandler := operations.NewProfileHandler(profileService)
 		operations.RegisterProfileRoutes(humaAPI, humaProfileHandler)
-		log.Println("✅ Huma profile routes registered")
+		appLogger.Info("Huma profile routes registered")
 
 		// Register Huma privacy routes (Issue #559: Huma migration)
 		humaPrivacyHandler := operations.NewPrivacyHandler(privacyService)
 		operations.RegisterPrivacyRoutes(humaAPI, humaPrivacyHandler)
-		log.Println("✅ Huma privacy routes registered")
+		appLogger.Info("Huma privacy routes registered")
 
 		// Register Huma category preview routes (Issue #559: Huma migration)
 		humaCategoryPreviewHandler := operations.NewCategoryPreviewHandler(categoryPreviewService)
 		operations.RegisterCategoryPreviewRoutes(humaAPI, humaCategoryPreviewHandler)
-		log.Println("✅ Huma category preview routes registered")
+		appLogger.Info("Huma category preview routes registered")
 
 		// Register Huma admin routes (Issue #559: Huma migration)
 		// Security: AdminMiddleware handles environment check (404 in non-qa) and role validation (Issue #309)
@@ -808,7 +865,7 @@ func main() {
 		if plaidService != nil && encryptionService != nil {
 			humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, encryptionService, trialService, adminService, adminUserService, systemHealthService, subscriptionService, cfg)
 			operations.RegisterAdminRoutes(humaAPI, humaAdminHandler)
-			log.Println("✅ Huma admin routes registered (protected by AdminMiddleware)")
+			appLogger.Info("Huma admin routes registered (protected by AdminMiddleware)")
 		}
 
 		// Issue #821: QA auth bypass endpoint (QA/Staging only).
@@ -818,7 +875,7 @@ func main() {
 			qaBypassService := services.NewQAAuthBypassService(cfg.QAAdminClerkUserID, cfg.QAPremiumClerkUserID, nil)
 			qaBypassHandler := operations.NewQAAuthBypassHandler(qaBypassService, cfg.QABypassSecret, cfg.Environment)
 			operations.RegisterQAAuthBypassRoutes(humaAPI, qaBypassHandler)
-			log.Println("✅ QA auth bypass route registered")
+			appLogger.Info("QA auth bypass route registered")
 		}
 
 		// API v1 routes (Echo - to be migrated to Huma incrementally)
@@ -867,7 +924,7 @@ func main() {
 		// if adminHandler != nil && cfg.Environment == "qa" {
 		// 	admin := api.Group("/admin", middleware.AdminMiddleware(cfg))
 		// 	admin.POST("/plaid/fire-webhook", adminHandler.FireWebhook)
-		// 	log.Println("✅ Admin endpoints enabled (qa only)")
+		// 	appLogger.Info("Admin endpoints enabled (qa only)")
 		// }
 
 		// Deletion routes migrated to Huma (see humaDeletionHandler below) - Issue #559
@@ -877,7 +934,7 @@ func main() {
 		// 	api.GET("/user/delete/cancel/:token", deletionHandler.CancelDeletion)
 		// }
 
-		log.Println("✅ Authenticated routes enabled (Clerk + Database)")
+		appLogger.Info("Authenticated routes enabled (Clerk + Database)")
 	}
 
 	// Plaid webhook endpoint (public - no auth required) - Migrated to Huma (Issue #559)
@@ -902,11 +959,11 @@ func main() {
 		})
 		operations.RegisterPlaidWebhookRoutes(humaAPI, humaPlaidWebhookHandler)
 
-		log.Println("✅ Huma Plaid webhook route registered at POST /webhooks/plaid")
-		log.Println("✅ Webhook signature verification enabled (ES256 JWT)")
-		log.Println("✅ Webhook audit trail enabled (database storage)")
+		appLogger.Info("Huma Plaid webhook route registered at POST /webhooks/plaid")
+		appLogger.Info("Webhook signature verification enabled (ES256 JWT)")
+		appLogger.Info("Webhook audit trail enabled (database storage)")
 		if jobQueue != nil {
-			log.Println("✅ Webhook async processing enabled (River queue)")
+			appLogger.Info("Webhook async processing enabled (River queue)")
 		}
 	} else if db != nil {
 		// Fallback: Basic webhook handler without signature verification
@@ -917,10 +974,10 @@ func main() {
 			Logger:      slog.Default(),
 		})
 		operations.RegisterPlaidWebhookRoutes(humaAPI, humaPlaidWebhookHandler)
-		log.Println("✅ Huma Plaid webhook route registered at POST /webhooks/plaid (verification disabled)")
-		log.Println("⚠️  Webhook signature verification disabled (Plaid credentials not configured)")
+		appLogger.Info("Huma Plaid webhook route registered at POST /webhooks/plaid (verification disabled)")
+		appLogger.Warn("Webhook signature verification disabled (Plaid credentials not configured)")
 	} else {
-		log.Println("⚠️  Webhook endpoint disabled (requires DATABASE_URL)")
+		appLogger.Warn("Webhook endpoint disabled (requires DATABASE_URL)")
 	}
 
 	// Paddle webhook endpoint (public - no auth required) - Issue #46: Paddle Webhook Handler
@@ -936,11 +993,11 @@ func main() {
 		})
 		operations.RegisterPaddleWebhookRoutes(humaAPI, humaPaddleWebhookHandler)
 
-		log.Println("✅ Huma Paddle webhook route registered at POST /webhooks/paddle")
-		log.Println("✅ Paddle webhook signature verification enabled (HMAC-SHA256)")
-		log.Println("✅ Paddle webhook audit trail enabled (database storage)")
+		appLogger.Info("Huma Paddle webhook route registered at POST /webhooks/paddle")
+		appLogger.Info("Paddle webhook signature verification enabled (HMAC-SHA256)")
+		appLogger.Info("Paddle webhook audit trail enabled (database storage)")
 		if jobQueue != nil {
-			log.Println("✅ Paddle webhook async processing enabled (River queue)")
+			appLogger.Info("Paddle webhook async processing enabled (River queue)")
 		}
 	} else if db != nil && paddleWebhookRepo != nil {
 		// Fallback: Basic webhook handler without signature verification
@@ -951,19 +1008,19 @@ func main() {
 			Logger:      slog.Default(),
 		})
 		operations.RegisterPaddleWebhookRoutes(humaAPI, humaPaddleWebhookHandler)
-		log.Println("✅ Huma Paddle webhook route registered at POST /webhooks/paddle (verification disabled)")
-		log.Println("⚠️  Paddle webhook signature verification disabled (webhook secret not configured)")
+		appLogger.Info("Huma Paddle webhook route registered at POST /webhooks/paddle (verification disabled)")
+		appLogger.Warn("Paddle webhook signature verification disabled (webhook secret not configured)")
 	} else {
-		log.Println("⚠️  Paddle webhook endpoint disabled (requires DATABASE_URL)")
+		appLogger.Warn("Paddle webhook endpoint disabled (requires DATABASE_URL)")
 	}
 
 	// Paddle checkout routes (authenticated) - Issue #45: Paddle Payment Service
 	// These routes require JWT authentication via Clerk middleware
 	if paddleCheckoutHandler != nil {
 		operations.RegisterPaddleCheckoutRoutes(humaAPI, paddleCheckoutHandler)
-		log.Println("✅ Huma Paddle checkout routes registered")
-		log.Println("   - POST /api/v1/subscription/checkout")
-		log.Println("   - POST /api/v1/subscription/preview-update")
+		appLogger.Info("Huma Paddle checkout routes registered")
+		appLogger.Info("   - POST /api/v1/subscription/checkout")
+		appLogger.Info("   - POST /api/v1/subscription/preview-update")
 	}
 
 	// Start background workers (if enabled)
@@ -977,10 +1034,10 @@ func main() {
 		}
 		go func() {
 			if err := riverRunner.Start(workerCtx); err != nil {
-				log.Printf("⚠️  River queue runner error: %v", err)
+				appLogger.Warn("River queue runner error", "error", err)
 			}
 		}()
-		log.Println("✅ River queue runner started")
+		appLogger.Info("River queue runner started")
 	}
 
 	// Issue #37: Start rule scheduler manager
@@ -990,21 +1047,21 @@ func main() {
 		}
 		go func() {
 			if err := ruleSchedulerManager.Start(workerCtx); err != nil {
-				log.Printf("⚠️  Failed to start rule scheduler: %v", err)
+				appLogger.Warn("Failed to start rule scheduler", "error", err)
 			}
 		}()
-		log.Println("✅ Rule scheduler manager started")
+		appLogger.Info("Rule scheduler manager started")
 	}
 
 	// Start server
 	// Bind to 0.0.0.0 to be accessible from outside the container (required for Fly.io)
 	address := fmt.Sprintf("0.0.0.0:%s", cfg.Port)
-	log.Printf("🚀 Starting BoostedBudget API on %s (region: %s)", address, cfg.PrimaryRegion)
+	appLogger.Info("Starting BoostedBudget API", "address", address, "region", cfg.PrimaryRegion)
 
 	// Graceful shutdown
 	go func() {
 		if err := e.Start(address); err != nil {
-			log.Printf("Server stopped: %v", err)
+			appLogger.Error("Server stopped", "error", err)
 		}
 	}()
 
@@ -1013,37 +1070,37 @@ func main() {
 	signal.Notify(quit, os.Interrupt)
 	<-quit
 
-	log.Println("Shutting down server...")
+	appLogger.Info("Shutting down server...")
 
 	// Issue #37: Stop rule scheduler manager first (graceful shutdown)
 	if ruleSchedulerManager != nil {
-		log.Println("Stopping rule scheduler manager...")
+		appLogger.Info("Stopping rule scheduler manager...")
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		if err := ruleSchedulerManager.Stop(stopCtx); err != nil {
-			log.Printf("⚠️  Error stopping rule scheduler: %v", err)
+			appLogger.Warn("Error stopping rule scheduler", "error", err)
 		}
 		stopCancel()
-		log.Println("Rule scheduler manager stopped")
+		appLogger.Info("Rule scheduler manager stopped")
 	}
 
 	// Issue #573: Stop River queue runner gracefully
 	if riverRunner != nil {
-		log.Println("Stopping River queue runner...")
+		appLogger.Info("Stopping River queue runner...")
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		if err := riverRunner.Stop(stopCtx); err != nil {
-			log.Printf("⚠️  Error stopping River queue: %v", err)
+			appLogger.Warn("Error stopping River queue", "error", err)
 			// Try force stop if graceful stop fails
 			if err := riverRunner.StopAndCancel(stopCtx); err != nil {
-				log.Printf("⚠️  Error force stopping River queue: %v", err)
+				appLogger.Warn("Error force stopping River queue", "error", err)
 			}
 		}
 		stopCancel()
-		log.Println("River queue runner stopped")
+		appLogger.Info("River queue runner stopped")
 	}
 
 	// Stop background workers (if running)
 	if workerCancel != nil {
-		log.Println("Stopping background workers...")
+		appLogger.Info("Stopping background workers...")
 		workerCancel()
 	}
 
@@ -1052,10 +1109,11 @@ func main() {
 	defer cancel()
 
 	if err := e.Shutdown(ctx); err != nil {
-		log.Fatal("Server forced to shutdown:", err)
+		appLogger.Error("Server forced to shutdown", "error", err)
+		os.Exit(1)
 	}
 
-	log.Println("Server stopped gracefully")
+	appLogger.Info("Server stopped gracefully")
 }
 
 // mockAuditLogger is a placeholder audit logger for deletion operations
@@ -1063,7 +1121,7 @@ func main() {
 type mockAuditLogger struct{}
 
 func (m *mockAuditLogger) Log(ctx context.Context, action, resourceType, resourceID string) error {
-	log.Printf("AUDIT: %s - %s - %s", action, resourceType, resourceID)
+	slog.Info("AUDIT", "action", action, "resource_type", resourceType, "resource_id", resourceID)
 	return nil
 }
 

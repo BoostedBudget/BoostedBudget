@@ -178,7 +178,7 @@ func (h *DashboardHandler) GetBalanceSummary(ctx context.Context, input *GetBala
 
 	response, err := h.service.GetBalanceSummary(ctx, input.UserID, filters)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &GetBalanceSummaryOutput{Body: response}, nil
@@ -194,7 +194,7 @@ func (h *DashboardHandler) GetBalanceHistory(ctx context.Context, input *GetBala
 
 	response, err := h.service.GetBalanceHistory(ctx, input.UserID, filters)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &GetBalanceHistoryOutput{Body: response}, nil
@@ -205,7 +205,7 @@ func (h *DashboardHandler) GetBalanceHistory(ctx context.Context, input *GetBala
 func (h *DashboardHandler) GetAccountTypes(ctx context.Context, input *GetAccountTypesInput) (*GetAccountTypesOutput, error) {
 	response, err := h.service.GetAccountTypes(ctx, input.UserID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &GetAccountTypesOutput{Body: response}, nil
@@ -249,7 +249,7 @@ func (h *DashboardHandler) GetNetWorth(ctx context.Context, input *GetNetWorthIn
 
 	response, err := h.service.GetNetWorth(ctx, input.UserID, filters)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &GetNetWorthOutput{Body: response}, nil
@@ -265,7 +265,7 @@ func (h *DashboardHandler) GetNetWorthHistory(ctx context.Context, input *GetNet
 
 	response, err := h.service.GetNetWorthHistory(ctx, input.UserID, filters)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &GetNetWorthHistoryOutput{Body: response}, nil

@@ -132,7 +132,7 @@ func (h *AnalyticsHandler) GetCashFlowSummary(ctx context.Context, input *GetCas
 
 	response, err := h.service.GetCashFlowSummary(ctx, input.UserID, *filters)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &GetCashFlowSummaryOutput{Body: response}, nil
@@ -148,7 +148,7 @@ func (h *AnalyticsHandler) GetCashFlowHistory(ctx context.Context, input *GetCas
 
 	response, err := h.service.GetCashFlowHistory(ctx, input.UserID, *filters)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &GetCashFlowHistoryOutput{Body: response}, nil

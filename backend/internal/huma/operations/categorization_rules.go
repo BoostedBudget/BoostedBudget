@@ -92,7 +92,7 @@ type ToggleRuleOutput struct {
 func (h *CategorizationRuleHandler) GetUserRules(ctx context.Context, input *GetUserRulesInput) (*GetUserRulesOutput, error) {
 	rules, err := h.service.GetUserRules(ctx, input.UserID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	// Return empty array instead of null if no rules
@@ -108,7 +108,7 @@ func (h *CategorizationRuleHandler) GetUserRules(ctx context.Context, input *Get
 func (h *CategorizationRuleHandler) GetRuleByID(ctx context.Context, input *GetRuleByIDInput) (*GetRuleByIDOutput, error) {
 	rule, err := h.service.GetRuleByID(ctx, input.UserID, input.ID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &GetRuleByIDOutput{Body: rule}, nil
@@ -126,7 +126,7 @@ func (h *CategorizationRuleHandler) CreateRule(ctx context.Context, input *Creat
 			errMsg == "rule must have at least one action (category or tags)" {
 			return nil, huma.Error400BadRequest(errMsg)
 		}
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &CreateRuleOutput{Body: rule}, nil
@@ -137,7 +137,7 @@ func (h *CategorizationRuleHandler) CreateRule(ctx context.Context, input *Creat
 func (h *CategorizationRuleHandler) UpdateRule(ctx context.Context, input *UpdateRuleInput) (*UpdateRuleOutput, error) {
 	rule, err := h.service.UpdateRule(ctx, input.UserID, input.ID, &input.Body)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &UpdateRuleOutput{Body: rule}, nil
@@ -148,7 +148,7 @@ func (h *CategorizationRuleHandler) UpdateRule(ctx context.Context, input *Updat
 func (h *CategorizationRuleHandler) DeleteRule(ctx context.Context, input *DeleteRuleInput) (*struct{}, error) {
 	err := h.service.DeleteRule(ctx, input.UserID, input.ID)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return nil, nil
@@ -159,7 +159,7 @@ func (h *CategorizationRuleHandler) DeleteRule(ctx context.Context, input *Delet
 func (h *CategorizationRuleHandler) ToggleRule(ctx context.Context, input *ToggleRuleInput) (*ToggleRuleOutput, error) {
 	rule, err := h.service.ToggleRule(ctx, input.UserID, input.ID, input.Body.Enabled)
 	if err != nil {
-		return nil, humaerrors.MapError(err)
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &ToggleRuleOutput{Body: rule}, nil

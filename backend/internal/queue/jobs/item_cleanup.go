@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/riverqueue/river"
@@ -69,7 +70,7 @@ func NewItemCleanupWorker(deps ItemCleanupWorkerDeps) *ItemCleanupWorker {
 //  3. Logs the cleanup for audit
 //
 // If the user has reconnected the item during the grace period, the cleanup is skipped.
-func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanupArgs]) error {
+func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanupArgs]) (err error) {
 	args := job.Args
 
 	w.logger.Info("starting item cleanup",
@@ -80,13 +81,24 @@ func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanup
 		"attempt", job.Attempt,
 	)
 
+	start := time.Now()
+	defer func() {
+		status := "success"
+		if err != nil {
+			status = "failed"
+		}
+		observability.JobsCompleted.WithLabelValues(job.Kind, job.Queue, status).Inc()
+		observability.JobDuration.WithLabelValues(job.Kind).Observe(time.Since(start).Seconds())
+	}()
+
 	startTime := time.Now()
 
 	// Call cleanup service to remove the item from Plaid
-	if err := w.plaidCleanupSvc.RemoveItem(ctx, args.LinkedItemID); err != nil {
+	removeErr := w.plaidCleanupSvc.RemoveItem(ctx, args.LinkedItemID)
+	if removeErr != nil {
 		// Check if item not found - this means it was already cleaned up or removed
 		// In this case, we consider it successful
-		if services.IsItemNotFoundError(err) {
+		if services.IsItemNotFoundError(removeErr) {
 			w.logger.Info("item already removed, marking job as complete",
 				"job_id", job.ID,
 				"linked_item_id", args.LinkedItemID,
@@ -99,17 +111,17 @@ func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanup
 			"linked_item_id", args.LinkedItemID,
 			"user_id", args.UserID,
 			"reason", args.Reason,
-			"error", err,
+			"error", removeErr,
 			"duration_ms", time.Since(startTime).Milliseconds(),
 		)
-		return fmt.Errorf("failed to cleanup item: %w", err)
+		return fmt.Errorf("failed to cleanup item: %w", removeErr)
 	}
 
 	// Clear the cleanup schedule since cleanup is complete (best-effort)
-	if err := w.linkedItemRepo.ClearCleanupSchedule(ctx, args.LinkedItemID); err != nil {
+	if clearErr := w.linkedItemRepo.ClearCleanupSchedule(ctx, args.LinkedItemID); clearErr != nil {
 		w.logger.Warn("failed to clear cleanup schedule",
 			"linked_item_id", args.LinkedItemID,
-			"error", err,
+			"error", clearErr,
 		)
 	}
 

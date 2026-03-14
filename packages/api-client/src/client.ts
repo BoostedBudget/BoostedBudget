@@ -35,6 +35,34 @@ export const AXIOS_INSTANCE = Axios.create({
   },
 })
 
+// Response error interceptor
+AXIOS_INSTANCE.interceptors.response.use(
+  (response) => response,
+  (error: AxiosError) => {
+    // Extract request ID for tracing
+    const requestId = error.response?.headers?.['x-request-id'] as string | undefined
+
+    // Log structured error in development
+    if (import.meta.env.DEV) {
+      console.error('[API Error]', {
+        url: error.config?.url,
+        status: error.response?.status,
+        requestId,
+      })
+    }
+
+    // Handle 401 — redirect to sign-in
+    if (error.response?.status === 401) {
+      window.location.href = '/sign-in'
+    }
+
+    // Handle 503 — could set maintenance state (future: dispatch to store)
+    // if (error.response?.status === 503) { ... }
+
+    return Promise.reject(error)
+  }
+)
+
 // Token provider function - set via setAuthTokenProvider
 let getAccessToken: GetTokenFunction | null = null
 

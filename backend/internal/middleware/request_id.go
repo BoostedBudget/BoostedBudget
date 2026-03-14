@@ -3,6 +3,7 @@ package middleware
 import (
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
 // RequestID is a middleware that generates a unique request ID for each request
@@ -11,8 +12,8 @@ import (
 // If the request already has an X-Request-ID header, it will use that value instead.
 // This allows for request tracing across multiple services.
 //
-// The request ID is stored in the context as "request_id" and can be retrieved
-// using the GetRequestID helper function.
+// The request ID is stored in the Echo context as "request_id" and in context.Context
+// via observability.WithRequestID for propagation to services/workers.
 //
 // Usage:
 //
@@ -29,11 +30,15 @@ func RequestID() echo.MiddlewareFunc {
 				requestID = uuid.New().String()
 			}
 
-			// Store in context for use by handlers and other middleware
+			// Store in Echo context for use by handlers and other middleware
 			c.Set("request_id", requestID)
 
 			// Add to response header for client tracking
 			c.Response().Header().Set("X-Request-ID", requestID)
+
+			// Also store in context.Context for propagation to services/workers
+			ctx := observability.WithRequestID(c.Request().Context(), requestID)
+			c.SetRequest(c.Request().WithContext(ctx))
 
 			return next(c)
 		}
@@ -43,15 +48,8 @@ func RequestID() echo.MiddlewareFunc {
 // GetRequestID extracts the request ID from the Echo context
 // Returns empty string if request ID is not set
 func GetRequestID(c echo.Context) string {
-	requestID := c.Get("request_id")
-	if requestID == nil {
-		return ""
+	if id, ok := c.Get("request_id").(string); ok {
+		return id
 	}
-
-	requestIDStr, ok := requestID.(string)
-	if !ok {
-		return ""
-	}
-
-	return requestIDStr
+	return ""
 }

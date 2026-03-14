@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -72,6 +73,14 @@ type Config struct {
 
 	// Frontend URL (for cancellation links)
 	FrontendURL string
+
+	// Observability
+	LogLevel         string  // from LOG_LEVEL — "debug"/"info"/"warn"/"error", default "info"
+	EnableMetrics    bool    // from ENABLE_METRICS, default true
+	SentryDSN        string  // from SENTRY_DSN — empty = disabled
+	OTELEndpoint     string  // from OTEL_EXPORTER_OTLP_ENDPOINT — empty = disabled
+	SentrySampleRate float64 // from SENTRY_SAMPLE_RATE — default 1.0
+	OTELSampleRate   float64 // from OTEL_SAMPLE_RATE — default 1.0
 }
 
 // Load loads configuration from environment variables
@@ -140,6 +149,14 @@ func Load() (*Config, error) {
 
 		// Frontend URL
 		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
+
+		// Observability
+		LogLevel:         getEnv("LOG_LEVEL", "info"),
+		EnableMetrics:    getEnvBool("ENABLE_METRICS", true),
+		SentryDSN:        getEnv("SENTRY_DSN", ""),
+		OTELEndpoint:     getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+		SentrySampleRate: getEnvFloat64("SENTRY_SAMPLE_RATE", 1.0),
+		OTELSampleRate:   getEnvFloat64("OTEL_SAMPLE_RATE", 1.0),
 	}
 
 	// Validate required fields for production
@@ -216,6 +233,29 @@ func getEnvAsDuration(key string, defaultValue time.Duration) time.Duration {
 		d, err := time.ParseDuration(value)
 		if err == nil {
 			return d
+		}
+	}
+	return defaultValue
+}
+
+// getEnvBool retrieves an environment variable as a bool or returns a default value.
+// Accepts "true"/"1"/"yes" (case-insensitive) as truthy, anything else as false.
+func getEnvBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		b, err := strconv.ParseBool(value)
+		if err == nil {
+			return b
+		}
+	}
+	return defaultValue
+}
+
+// getEnvFloat64 retrieves an environment variable as a float64 or returns a default value.
+func getEnvFloat64(key string, defaultValue float64) float64 {
+	if value := os.Getenv(key); value != "" {
+		f, err := strconv.ParseFloat(value, 64)
+		if err == nil {
+			return f
 		}
 	}
 	return defaultValue
