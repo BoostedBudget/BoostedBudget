@@ -66,6 +66,7 @@ func (m *mockPaddleWebhookRepository) GetRecentWebhooks(ctx context.Context, lim
 // mockJobQueue is a mock implementation of queue.JobQueue
 type mockJobQueue struct {
 	enqueuedJobs []jobs.SubscriptionWebhookArgs
+	enqueueCount int
 	enqueueErr   error
 }
 
@@ -73,6 +74,8 @@ func (m *mockJobQueue) Enqueue(ctx context.Context, job queue.Job, opts ...queue
 	if m.enqueueErr != nil {
 		return nil, m.enqueueErr
 	}
+
+	m.enqueueCount++
 
 	if subscriptionArgs, ok := job.(jobs.SubscriptionWebhookArgs); ok {
 		m.enqueuedJobs = append(m.enqueuedJobs, subscriptionArgs)
