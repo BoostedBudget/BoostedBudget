@@ -135,15 +135,15 @@ func (h *PlaidWebhookHandler) HandlePlaidWebhook(ctx context.Context, input *Pla
 			}
 		}
 
-		// Store webhook and enqueue processing job
+		// Store webhook for audit trail (always, even for unverified signatures)
 		if err := h.webhookRepo.Create(ctx, webhookEvent); err != nil {
 			h.logger.Error("failed to store webhook",
 				"webhook_type", payload.WebhookType,
 				"error", err,
 			)
 			// Don't fail - return OK to prevent Plaid retry storms
-		} else if h.jobQueue != nil {
-			// Enqueue async processing job (Issue #573: River Queue)
+		} else if signatureValid && h.jobQueue != nil {
+			// Only enqueue processing for verified webhooks (matches Paddle webhook pattern)
 			jobArgs := jobs.WebhookProcessingArgs{
 				WebhookID:   webhookEvent.ID,
 				WebhookType: payload.WebhookType,
@@ -165,6 +165,11 @@ func (h *PlaidWebhookHandler) HandlePlaidWebhook(ctx context.Context, input *Pla
 					"item_id", payload.ItemID,
 				)
 			}
+		} else if !signatureValid {
+			h.logger.Warn("webhook stored but not enqueued — invalid or missing signature",
+				"webhook_id", webhookEvent.ID,
+				"webhook_type", payload.WebhookType,
+			)
 		}
 	}
 
@@ -222,19 +227,19 @@ func (h *PlaidWebhookHandler) handleItemWebhook(payload *PlaidWebhookPayload) st
 	}
 }
 
-// Helper functions for pointer conversion
+// Helper functions for pointer conversion (return nil for zero values)
 func stringPtr(s string) *string {
-	if s == "" {
-		return nil
+	if s != "" {
+		return &s
 	}
-	return &s
+	return nil
 }
 
 func intPtr(i int) *int {
-	if i == 0 {
-		return nil
+	if i != 0 {
+		return &i
 	}
-	return &i
+	return nil
 }
 
 // RegisterPlaidWebhookRoutes registers Plaid webhook routes with the Huma API.

@@ -363,3 +363,107 @@ func TestHandlePlaidWebhook_MissingSignatureStoresWithFalse(t *testing.T) {
 	assert.Len(t, mockRepo.events, 1)
 	assert.False(t, mockRepo.events[0].SignatureValid) // Should be false
 }
+
+// TestHandlePlaidWebhook_InvalidSignatureDoesNotEnqueue tests that an invalid
+// Plaid signature causes the webhook to be stored (for audit) but NOT enqueued
+// for processing. This matches the Paddle webhook pattern.
+func TestHandlePlaidWebhook_InvalidSignatureDoesNotEnqueue(t *testing.T) {
+	mockService := &mockWebhookService{verifyResult: false}
+	mockRepo := &mockWebhookRepository{}
+	mockQueue := &mockJobQueue{}
+
+	handler := NewPlaidWebhookHandler(PlaidWebhookHandlerDeps{
+		WebhookService: mockService,
+		WebhookRepo:    mockRepo,
+		JobQueue:       mockQueue,
+	})
+
+	payload := PlaidWebhookPayload{
+		WebhookType: "TRANSACTIONS",
+		WebhookCode: "DEFAULT_UPDATE",
+		ItemID:      "item-999",
+	}
+	rawBody, _ := json.Marshal(payload)
+
+	output, err := handler.HandlePlaidWebhook(context.Background(), &PlaidWebhookInput{
+		PlaidVerification: "invalid-signature",
+		RawBody:           rawBody,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "ok", output.Body.Status, "should always return 200 to prevent retry storms")
+
+	// Stored for audit trail
+	assert.Len(t, mockRepo.events, 1, "webhook must be stored even with invalid signature")
+	assert.False(t, mockRepo.events[0].SignatureValid)
+
+	// NOT enqueued for processing
+	assert.Equal(t, 0, mockQueue.enqueueCount, "must NOT enqueue processing for unverified webhook")
+}
+
+// TestHandlePlaidWebhook_ValidSignatureEnqueues tests that a valid Plaid signature
+// causes the webhook to be stored AND enqueued for processing.
+func TestHandlePlaidWebhook_ValidSignatureEnqueues(t *testing.T) {
+	mockService := &mockWebhookService{verifyResult: true}
+	mockRepo := &mockWebhookRepository{}
+	mockQueue := &mockJobQueue{}
+
+	handler := NewPlaidWebhookHandler(PlaidWebhookHandlerDeps{
+		WebhookService: mockService,
+		WebhookRepo:    mockRepo,
+		JobQueue:       mockQueue,
+	})
+
+	payload := PlaidWebhookPayload{
+		WebhookType: "TRANSACTIONS",
+		WebhookCode: "DEFAULT_UPDATE",
+		ItemID:      "item-888",
+	}
+	rawBody, _ := json.Marshal(payload)
+
+	output, err := handler.HandlePlaidWebhook(context.Background(), &PlaidWebhookInput{
+		PlaidVerification: "valid-signature",
+		RawBody:           rawBody,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "ok", output.Body.Status)
+
+	// Stored and enqueued
+	assert.Len(t, mockRepo.events, 1, "webhook must be stored")
+	assert.True(t, mockRepo.events[0].SignatureValid)
+	assert.Equal(t, 1, mockQueue.enqueueCount, "must enqueue processing for verified webhook")
+}
+
+// TestHandlePlaidWebhook_MissingSignatureDoesNotEnqueue tests that a missing
+// Plaid-Verification header causes the webhook to be stored but NOT enqueued.
+func TestHandlePlaidWebhook_MissingSignatureDoesNotEnqueue(t *testing.T) {
+	mockService := &mockWebhookService{verifyResult: true}
+	mockRepo := &mockWebhookRepository{}
+	mockQueue := &mockJobQueue{}
+
+	handler := NewPlaidWebhookHandler(PlaidWebhookHandlerDeps{
+		WebhookService: mockService,
+		WebhookRepo:    mockRepo,
+		JobQueue:       mockQueue,
+	})
+
+	payload := PlaidWebhookPayload{
+		WebhookType: "ITEM",
+		WebhookCode: "LOGIN_REQUIRED",
+		ItemID:      "item-777",
+	}
+	rawBody, _ := json.Marshal(payload)
+
+	output, err := handler.HandlePlaidWebhook(context.Background(), &PlaidWebhookInput{
+		PlaidVerification: "", // No signature header
+		RawBody:           rawBody,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "ok", output.Body.Status)
+
+	assert.Len(t, mockRepo.events, 1)
+	assert.False(t, mockRepo.events[0].SignatureValid)
+	assert.Equal(t, 0, mockQueue.enqueueCount, "must NOT enqueue when signature is missing")
+}

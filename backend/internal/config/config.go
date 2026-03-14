@@ -3,16 +3,27 @@ package config
 import (
 	"fmt"
 	"os"
+	"time"
 )
 
 // Config holds application configuration
 type Config struct {
 	// Server
-	Port              string
-	Environment       string
-	Version           string
-	PrimaryRegion     string
+	Port               string
+	Environment        string
+	Version            string
+	PrimaryRegion      string
 	CORSAllowedOrigins string
+
+	// HTTP server timeouts and limits
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
+	IdleTimeout  time.Duration
+	MaxBodySize  string
+
+	// Rate limiting
+	RateLimitIP   int // per-IP requests per minute
+	RateLimitAuth int // per-IP requests per minute for sensitive endpoints
 
 	// Database
 	DatabaseURL string
@@ -65,11 +76,21 @@ type Config struct {
 func Load() (*Config, error) {
 	cfg := &Config{
 		// Server defaults
-		Port:              getEnv("PORT", "8080"),
-		Environment:       getEnv("ENVIRONMENT", "development"),
-		Version:           getEnv("VERSION", "0.1.0"),
-		PrimaryRegion:     getEnv("PRIMARY_REGION", "iad"),
+		Port:               getEnv("PORT", "8080"),
+		Environment:        getEnv("ENVIRONMENT", "development"),
+		Version:            getEnv("VERSION", "0.1.0"),
+		PrimaryRegion:      getEnv("PRIMARY_REGION", "iad"),
 		CORSAllowedOrigins: getEnv("CORS_ALLOWED_ORIGINS", "*"),
+
+		// HTTP server timeouts and limits
+		ReadTimeout:  getEnvAsDuration("SERVER_READ_TIMEOUT", 30*time.Second),
+		WriteTimeout: getEnvAsDuration("SERVER_WRITE_TIMEOUT", 30*time.Second),
+		IdleTimeout:  getEnvAsDuration("SERVER_IDLE_TIMEOUT", 120*time.Second),
+		MaxBodySize:  getEnv("MAX_BODY_SIZE", "1M"),
+
+		// Rate limiting
+		RateLimitIP:   getEnvAsInt("RATE_LIMIT_IP", 100),
+		RateLimitAuth: getEnvAsInt("RATE_LIMIT_AUTH", 10),
 
 		// Database
 		DatabaseURL: getEnv("DATABASE_URL", ""),
@@ -128,13 +149,19 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-// validate checks that required configuration is present
+// validate checks that required configuration is present for the production environment
 func (c *Config) validate() error {
 	if c.DatabaseURL == "" {
 		return fmt.Errorf("DATABASE_URL is required")
 	}
 	if c.ClerkSecretKey == "" {
 		return fmt.Errorf("CLERK_SECRET_KEY is required")
+	}
+	if c.EncryptionKey == "" {
+		return fmt.Errorf("ENCRYPTION_KEY is required in production")
+	}
+	if c.CORSAllowedOrigins == "" || c.CORSAllowedOrigins == "*" {
+		return fmt.Errorf("CORS_ALLOWED_ORIGINS must be explicitly set in production (not '*' or empty)")
 	}
 	return nil
 }
@@ -154,6 +181,18 @@ func getEnvAsInt(key string, defaultValue int) int {
 		_, err := fmt.Sscanf(value, "%d", &intValue)
 		if err == nil {
 			return intValue
+		}
+	}
+	return defaultValue
+}
+
+// getEnvAsDuration retrieves an environment variable as a time.Duration or returns a default value.
+// Accepts standard Go duration strings (e.g. "30s", "1m", "2h").
+func getEnvAsDuration(key string, defaultValue time.Duration) time.Duration {
+	if value := os.Getenv(key); value != "" {
+		d, err := time.ParseDuration(value)
+		if err == nil {
+			return d
 		}
 	}
 	return defaultValue
