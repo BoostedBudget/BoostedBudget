@@ -4,100 +4,20 @@
  *
  * Tests the improved empty state (direct CTA button, benefit-focused copy)
  * and verifies the Monthly Sync Limits card is fully removed.
+ *
+ * NOTE: This file uses local component stubs that could pollute AccountTable
+ * and AccountCard tests if run in the same process. It is intentionally
+ * isolated via scripts/test-isolated.sh (#839).
  */
 
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 // ============================================================================
-// Mocks — must be declared before importing the component
+// Local component stubs — only affect modules within this feature folder
 // ============================================================================
-
-const mockRefetchAccounts = mock(() => {})
-const mockRefetchProfile = mock(() => {})
-
-const mockUseGetAccounts = mock(() => ({
-  data: { accounts: [] },
-  isLoading: false,
-  error: null,
-  refetch: mockRefetchAccounts,
-}))
-
-const mockUseDeleteAccount = mock(() => ({
-  mutateAsync: mock(async () => {}),
-}))
-
-const mockUseCreateLinkToken = mock(() => ({
-  mutateAsync: mock(async () => ({ link_token: 'test-token' })),
-}))
-
-const mockUseExchangePublicToken = mock(() => ({
-  mutateAsync: mock(async () => ({})),
-  isPending: false,
-}))
-
-const mockUseProfile = mock(() => ({
-  user: { id: 'user-1', subscription_tier: 'premium', effective_tier: null },
-  loading: false,
-  refetch: mockRefetchProfile,
-}))
-
-const mockUseSubscriptionTiers = mock(() => ({
-  tiers: {
-    tiers: {
-      premium: { limits: { accounts: -1 } },
-    },
-  },
-  loading: false,
-}))
-
-const mockUseTierLimits = mock(() => ({
-  isAtLimit: false,
-  shouldShowUpgradeBanner: false,
-  accountCountDisplay: '0 accounts',
-  isUnlimited: true,
-}))
-
-mock.module('@boostedbudget/api-client/endpoints/accounts/accounts', () => ({
-  useGetAccounts: (...args: unknown[]) => mockUseGetAccounts(...args),
-  useDeleteAccount: (...args: unknown[]) => mockUseDeleteAccount(...args),
-  getGetAccountsQueryKey: () => ['accounts'],
-}))
-
-mock.module('@boostedbudget/api-client/endpoints/plaid/plaid', () => ({
-  useCreateLinkToken: (...args: unknown[]) => mockUseCreateLinkToken(...args),
-  useExchangePublicToken: (...args: unknown[]) => mockUseExchangePublicToken(...args),
-}))
-
-mock.module('../profile/hooks/useProfile', () => ({
-  useProfile: (...args: unknown[]) => mockUseProfile(...args),
-}))
-
-mock.module('../subscription/hooks/useSubscriptionTiers', () => ({
-  useSubscriptionTiers: (...args: unknown[]) => mockUseSubscriptionTiers(...args),
-}))
-
-mock.module('../subscription/hooks/useTierLimits', () => ({
-  useTierLimits: (...args: unknown[]) => mockUseTierLimits(...args),
-}))
-
-// Mock react-plaid-link to avoid browser environment requirements
-mock.module('react-plaid-link', () => ({
-  usePlaidLink: () => ({ open: mock(() => {}), ready: true }),
-}))
-
-// Mock react-router-dom navigate
-mock.module('react-router-dom', () => ({
-  useNavigate: () => mock(() => {}),
-  useSearchParams: () => [new URLSearchParams(), mock(() => {})],
-  Link: ({ children, to }: { children: React.ReactNode; to: string }) => (
-    <a href={to}>{children}</a>
-  ),
-}))
-
-// Mock react-query client
-mock.module('@tanstack/react-query', () => ({
-  useQueryClient: () => ({ setQueryData: mock(() => {}) }),
-}))
 
 // Simplify AccountCustomizationModal to avoid complex dependencies
 mock.module('./components/AccountCustomizationModal', () => ({
@@ -133,15 +53,111 @@ mock.module('./hooks/useAccountFilters', () => ({
   }),
 }))
 
-import { render, screen } from '@testing-library/react'
+// ============================================================================
+// Imports — after mock declarations
+// ============================================================================
+
 import { AccountsPage } from './AccountsPage'
+import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
+
+// Import centralized mocks for configuration
+import {
+  mockUseGetAccounts,
+  mockRefetchAccounts,
+  mockUseDeleteAccount,
+} from '@/test/mocks/accounts-api'
+import {
+  mockUseGetUserProfile,
+  mockRefetchUserProfile,
+} from '@/test/mocks/profile-api'
+import {
+  mockUseGetSubscriptionTiers,
+  mockRefetchSubscriptionTiers,
+} from '@/test/mocks/subscription-api'
+import {
+  mockUseCreateLinkToken,
+  mockCreateLinkTokenMutateAsync,
+  mockUseExchangePublicToken,
+  mockExchangePublicTokenMutateAsync,
+} from '@/test/mocks/plaid-api'
+
+// ============================================================================
+// Test helper
+// ============================================================================
+
+function renderAccountsPage() {
+  return render(
+    <QueryClientProvider
+      client={
+        new QueryClient({
+          defaultOptions: {
+            queries: { retry: false, gcTime: 0 },
+            mutations: { retry: false },
+          },
+        })
+      }
+    >
+      <MemoryRouter>
+        <AccountsPage />
+      </MemoryRouter>
+    </QueryClientProvider>
+  )
+}
+
+const mockUser = {
+  id: 'user-1',
+  clerk_user_id: 'user_123',
+  email: 'test@example.com',
+  email_verified: true,
+  subscription_tier: 'premium',
+  subscription_status: 'active',
+  primary_region: 'iad',
+  is_active: true,
+  is_deleted: false,
+  created_at: '2025-01-01T00:00:00Z',
+  updated_at: '2025-01-01T00:00:00Z',
+}
 
 describe('AccountsPage', () => {
   beforeEach(() => {
+    // Clear all mock call history
     mockUseGetAccounts.mockClear()
-    mockUseProfile.mockClear()
-    mockUseSubscriptionTiers.mockClear()
-    mockUseTierLimits.mockClear()
+    mockUseDeleteAccount.mockClear()
+    mockUseGetUserProfile.mockClear()
+    mockUseGetSubscriptionTiers.mockClear()
+    mockUseCreateLinkToken.mockClear()
+    mockCreateLinkTokenMutateAsync.mockClear()
+    mockUseExchangePublicToken.mockClear()
+    mockExchangePublicTokenMutateAsync.mockClear()
+
+    // Configure default: loaded state with premium user, unlimited accounts
+    mockUseGetUserProfile.mockReturnValue({
+      data: mockUser,
+      isLoading: false,
+      error: null,
+      refetch: mockRefetchUserProfile,
+    })
+
+    mockUseGetSubscriptionTiers.mockReturnValue({
+      data: mockSubscriptionTiersResponse,
+      isLoading: false,
+      error: null,
+      refetch: mockRefetchSubscriptionTiers,
+    })
+
+    mockUseCreateLinkToken.mockReturnValue({
+      mutateAsync: mockCreateLinkTokenMutateAsync,
+      isPending: false,
+      isError: false,
+      error: null,
+    })
+
+    mockUseExchangePublicToken.mockReturnValue({
+      mutateAsync: mockExchangePublicTokenMutateAsync,
+      isPending: false,
+      isError: false,
+      error: null,
+    })
   })
 
   describe('empty state (0 accounts)', () => {
@@ -155,31 +171,31 @@ describe('AccountsPage', () => {
     })
 
     it('shows the improved empty state title', () => {
-      render(<AccountsPage />)
+      renderAccountsPage()
       expect(screen.getByText('Connect your first bank account')).toBeInTheDocument()
     })
 
     it('shows the benefit-focused description', () => {
-      render(<AccountsPage />)
+      renderAccountsPage()
       expect(
         screen.getByText(/automatically track balances, transactions, and spending/i)
       ).toBeInTheDocument()
     })
 
     it('shows a Connect Bank Account CTA button inside the empty state', async () => {
-      render(<AccountsPage />)
+      renderAccountsPage()
       // PlaidLinkButton async loads and then renders a "Connect Bank Account" button
       const ctaButtons = await screen.findAllByRole('button', { name: /connect bank account/i })
       expect(ctaButtons.length).toBeGreaterThan(0)
     })
 
     it('does not show Monthly Sync Limits card', () => {
-      render(<AccountsPage />)
+      renderAccountsPage()
       expect(screen.queryByText('Monthly Sync Limits')).not.toBeInTheDocument()
     })
 
     it('does not show account list or count', () => {
-      render(<AccountsPage />)
+      renderAccountsPage()
       expect(screen.queryByTestId('account-card')).not.toBeInTheDocument()
       expect(screen.queryByTestId('account-table')).not.toBeInTheDocument()
     })
@@ -210,17 +226,17 @@ describe('AccountsPage', () => {
     })
 
     it('does not show the empty state', () => {
-      render(<AccountsPage />)
+      renderAccountsPage()
       expect(screen.queryByText('Connect your first bank account')).not.toBeInTheDocument()
     })
 
     it('shows account cards', () => {
-      render(<AccountsPage />)
+      renderAccountsPage()
       expect(screen.getByTestId('account-card')).toBeInTheDocument()
     })
 
     it('does not show Monthly Sync Limits card', () => {
-      render(<AccountsPage />)
+      renderAccountsPage()
       expect(screen.queryByText('Monthly Sync Limits')).not.toBeInTheDocument()
     })
   })
