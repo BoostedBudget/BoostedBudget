@@ -20,7 +20,7 @@ kill_timeout = 10
   # NOTE: Sensitive environment variables set via `fly secrets set`:
   # - CLERK_PUBLISHABLE_KEY (Clerk frontend publishable key)
   # - PLAID_PUBLIC_KEY
-  # - GOOGLE_ADSENSE_CLIENT (for free tier ads)
+  # - SENTRY_CSP_REPORT_URI (Sentry CSP violation reporting endpoint)
 
 [experimental]
   auto_rollback = true

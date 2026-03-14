@@ -3,13 +3,11 @@ import { useAuth } from '@clerk/react-router'
 import { useCookieState } from './shared/hooks/useCookieState'
 import {
   CookieConsent,
-  initializeAdSense,
   type CookieConsentSettings,
   cookieToPrivacySettings,
   privacySettingsToCookie,
   COOKIE_CONSENT_NAME,
   COOKIE_CONSENT_VERSION,
-  COOKIE_CONSENT_EXPIRES_DAYS,
   type CookieConsentData
 } from './privacy'
 import { ProtectedRoute } from './auth'
@@ -97,14 +95,14 @@ function App() {
   }, [])
 
   const updateConsentCookie = (consents: CookieConsentSettings) => {
+    const expires = new Date()
+    expires.setDate(expires.getDate() + 365) // 1 year
+
     const consentData: CookieConsentData = {
       consents,
       timestamp: new Date().toISOString(),
       version: COOKIE_CONSENT_VERSION,
     }
-
-    const expires = new Date()
-    expires.setDate(expires.getDate() + COOKIE_CONSENT_EXPIRES_DAYS)
 
     setConsentCookie(consentData, {
       path: '/',
@@ -124,18 +122,6 @@ function App() {
         console.log('Cookie consent synced to backend')
       } catch (error) {
         console.error('Failed to sync cookie consent to backend:', error)
-      }
-    }
-
-    if (consents.advertising) {
-      const adsenseClientId = import.meta.env.VITE_ADSENSE_CLIENT_ID
-      if (adsenseClientId) {
-        initializeAdSense({
-          clientId: adsenseClientId,
-          testMode: import.meta.env.DEV,
-        })
-      } else {
-        console.warn('AdSense client ID not configured')
       }
     }
   }
