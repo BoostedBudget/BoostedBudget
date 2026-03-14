@@ -42,6 +42,8 @@ EXCLUDE_PATTERNS=(
     "src/features/dashboard/widgets/DashboardGrid.test.tsx"
     "src/features/dashboard/widgets/WidgetCatalog.test.tsx"
     "src/features/rules/components/RulesPage.test.tsx"
+    # AccountsPage uses local component mocks that can pollute AccountTable etc. (#839)
+    "src/features/accounts/AccountsPage.test.tsx"
 )
 
 echo "Running regular tests (excluding real-implementation tests)..."

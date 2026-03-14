@@ -39,7 +39,6 @@ function createMockTiers(): SubscriptionTiersResponse {
   const createLimits = (accounts: number, rules: number) => ({
     accounts,
     rules,
-    accounts_synced_per_month: 100,
     api_calls_per_month: 1000,
     custom_categories_max: 10,
     custom_tags_max: 20,

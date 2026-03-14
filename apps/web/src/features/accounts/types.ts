@@ -53,13 +53,3 @@ export interface AccountOrder {
   display_order: number
 }
 
-// Monthly sync statistics (matches backend response)
-export interface SyncStats {
-  user_id: string
-  month: string
-  accounts_synced: number
-  accounts_limit: number
-  total_transactions: number
-  can_sync_more: boolean
-  reset_date: string
-}

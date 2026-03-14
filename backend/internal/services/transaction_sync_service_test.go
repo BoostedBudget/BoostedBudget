@@ -8,10 +8,12 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/plaid/plaid-go/v23/plaid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // ============================================================================
@@ -1827,34 +1829,6 @@ func strPtrHelper(s string) *string {
 // stringPtr is an alias for strPtrHelper for backwards compatibility
 var stringPtr = strPtrHelper
 
-// mockSyncLimitServiceForCursorTests is a minimal mock for SyncLimitService used in cursor tests
-type mockSyncLimitServiceForCursorTests struct {
-	mock.Mock
-}
-
-func (m *mockSyncLimitServiceForCursorTests) CheckSyncLimit(ctx context.Context, userID, plaidAccountID string) (bool, string, error) {
-	args := m.Called(ctx, userID, plaidAccountID)
-	return args.Bool(0), args.String(1), args.Error(2)
-}
-
-func (m *mockSyncLimitServiceForCursorTests) RecordSync(ctx context.Context, userID, accountID, plaidAccountID string, tier domain.TierName, daysHistorical, transactionCount int) error {
-	args := m.Called(ctx, userID, accountID, plaidAccountID, tier, daysHistorical, transactionCount)
-	return args.Error(0)
-}
-
-func (m *mockSyncLimitServiceForCursorTests) GetSyncStats(ctx context.Context, userID string) (*domain.SyncStats, error) {
-	args := m.Called(ctx, userID)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*domain.SyncStats), args.Error(1)
-}
-
-func (m *mockSyncLimitServiceForCursorTests) GetHistoricalDepthLimit(ctx context.Context, userID string) (int, error) {
-	args := m.Called(ctx, userID)
-	return args.Int(0), args.Error(1)
-}
-
 // mockProfileRepoForCursorTests is a minimal mock for ProfileRepository used in cursor tests
 type mockProfileRepoForCursorTests struct {
 	mock.Mock
@@ -2140,6 +2114,11 @@ func TestSyncTransactions_NilVsEmptyCursor(t *testing.T) {
 		{"empty string", strPtrHelper("")},
 	}
 
+	// Load real subscription service for historical depth (all tiers return 730 days)
+	tierConfig, err := config.LoadTierConfig()
+	require.NoError(t, err)
+	subscriptionService := NewSubscriptionService(tierConfig, nil)
+
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -2151,11 +2130,10 @@ func TestSyncTransactions_NilVsEmptyCursor(t *testing.T) {
 			mockAccountRepo := new(MockAccountRepository)
 			mockProfileRepo := new(mockProfileRepoForCursorTests)
 			mockEncryptionService := new(MockEncryptionService)
-			mockSyncLimitService := new(mockSyncLimitServiceForCursorTests)
 
 			service := NewTransactionSyncService(
 				nil, mockLinkedItemRepo, mockTransactionRepo, mockAccountRepo, mockProfileRepo,
-				nil, mockPlaidService, mockEncryptionService, mockSyncLimitService,
+				nil, mockPlaidService, mockEncryptionService, subscriptionService,
 				nil, nil, nil,
 			)
 
@@ -2170,18 +2148,12 @@ func TestSyncTransactions_NilVsEmptyCursor(t *testing.T) {
 			// Mock: Decrypt access token
 			mockEncryptionService.On("Decrypt", "encrypted-token").Return("access-token", nil)
 
-			// Mock: Get historical depth limit (first sync uses this)
-			mockSyncLimitService.On("GetHistoricalDepthLimit", ctx, "user-123").Return(90, nil)
-
-			// Mock: Get user for audit recording (first sync)
+			// Mock: Get user for historical depth lookup (first sync)
 			testUser := &domain.User{
 				ID:               "user-123",
-				SubscriptionTier: "free",
+				SubscriptionTier: string(domain.TierPremium),
 			}
 			mockProfileRepo.On("GetUserByID", ctx, "user-123").Return(testUser, nil)
-
-			// Mock: Record sync audit (first sync)
-			mockSyncLimitService.On("RecordSync", ctx, "user-123", "acc-uuid-1", "plaid-acc-1", domain.TierName("free"), 90, 0).Return(nil)
 
 			// Mock: Get accounts
 			accounts := []domain.Account{
@@ -2189,7 +2161,7 @@ func TestSyncTransactions_NilVsEmptyCursor(t *testing.T) {
 			}
 			mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-first-sync").Return(accounts, nil)
 
-			// Mock: Plaid API - expect empty string cursor for first sync
+			// Mock: Plaid API - expect empty string cursor for first sync; premium tier = 730 days
 			firstCursor := "cursor-first"
 			plaidResponse := &plaid.TransactionsSyncResponse{
 				Added:    []plaid.Transaction{},
@@ -2199,8 +2171,8 @@ func TestSyncTransactions_NilVsEmptyCursor(t *testing.T) {
 			plaidResponse.SetNextCursor(firstCursor)
 			plaidResponse.SetHasMore(false)
 
-			// CRITICAL: Both nil and "" should result in empty string being passed
-			mockPlaidService.On("TransactionsSync", ctx, "access-token", "", 90).Return(plaidResponse, nil)
+			// CRITICAL: Both nil and "" should result in empty string being passed; 730 days for premium
+			mockPlaidService.On("TransactionsSync", ctx, "access-token", "", 730).Return(plaidResponse, nil)
 
 			// Mock: Cursor update
 			mockLinkedItemRepo.On("UpdateCursor", ctx, "linked-item-first-sync", firstCursor).Return(nil)
@@ -2213,8 +2185,8 @@ func TestSyncTransactions_NilVsEmptyCursor(t *testing.T) {
 			assert.NotNil(t, result)
 			assert.Equal(t, firstCursor, result.NewCursor)
 
-			// Assert: TransactionsSync was called with empty cursor
-			mockPlaidService.AssertCalled(t, "TransactionsSync", ctx, "access-token", "", 90)
+			// Assert: TransactionsSync was called with empty cursor and 730 days historical
+			mockPlaidService.AssertCalled(t, "TransactionsSync", ctx, "access-token", "", 730)
 		})
 	}
 }
