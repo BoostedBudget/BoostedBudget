@@ -15,6 +15,7 @@ assume_in_transaction = true
 excluded_paths = [
   "*.down.sql",
   "*000030_add_river_queue*.sql",
+  "*000047_drop_sync_audit*.sql",  # Intentional schema cleanup — drops dead sync audit table/columns
 ]
 
 # Rules to exclude from linting
