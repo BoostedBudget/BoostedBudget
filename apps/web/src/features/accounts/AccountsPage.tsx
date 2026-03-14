@@ -7,7 +7,6 @@ import { AccountCard } from './AccountCard'
 import { AccountTable, type SortColumn as AccountSortColumn, type SortDirection } from './components/AccountTable'
 import type { FilterOption } from '@/shared/components/ColumnFilterDropdown'
 import { UpgradeBanner } from './UpgradeBanner'
-import { SyncStatsCard } from './SyncStatsCard'
 import { AccountCustomizationModal } from './components/AccountCustomizationModal'
 import { ListViewToggle } from '@/shared/components/ListViewToggle'
 import type { ListView } from '@/shared/components/ListViewToggle'
@@ -351,16 +350,17 @@ export function AccountsPage() {
 
       {shouldShowUpgradeBanner && <UpgradeBanner />}
 
-      {/* Issue #242: Monthly sync limits - show sync statistics */}
-      <div className="sync-stats-section">
-        <SyncStatsCard />
-      </div>
-
       {accounts.length === 0 ? (
         <EmptyState
           icon={<Landmark />}
-          title="No accounts connected yet"
-          description='Click "Connect Bank Account" above to get started.'
+          title="Connect your first bank account"
+          description="Link your bank to automatically track balances, transactions, and spending — all in one place."
+          action={
+            <PlaidLinkButton
+              onSuccess={handleAccountsLinked}
+              disabled={isAtLimit}
+            />
+          }
           className="mt-8"
         />
       ) : (

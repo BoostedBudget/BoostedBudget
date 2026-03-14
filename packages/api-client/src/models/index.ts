@@ -149,7 +149,6 @@ export * from "./subscriptionPricing";
 export * from "./subscriptionTier";
 export * from "./subscriptionTiersResponse";
 export * from "./subscriptionTiersResponseTiers";
-export * from "./syncStats";
 export * from "./syncStatusMetrics";
 export * from "./systemHealthResponse";
 export * from "./systemHealthResponseJobQueues";

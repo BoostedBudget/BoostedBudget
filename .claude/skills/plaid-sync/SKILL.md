@@ -66,14 +66,12 @@ s.jobQueue.Enqueue(ctx, syncJob,
 | Premium | 730 days | 2 years - Plaid maximum |
 | Premium+ | 730 days | 2 years - Plaid maximum |
 
-Historical depth is determined by `GetHistoricalDepthLimit()` in `sync_limit_service.go`.
+Historical depth is determined by `GetHistoricalDepthLimit()` in `subscription_service.go`.
 
 ## Sync Frequency by Tier
 
 | Tier | Min Interval | Max Syncs/Day |
 |------|-------------|---------------|
-| Free | 24h | 1 |
-| Premium Lite | 12h | 2 |
 | Premium | 4h | 6 |
 | Premium+ | 10min | 144 |
 
@@ -91,7 +89,7 @@ Configured in `config/subscription_tiers.yaml` as `min_execution_interval_minute
 - `backend/internal/queue/jobs/webhook_processing.go` - Async webhook processing
 
 ### Supporting Services
-- `backend/internal/services/sync_limit_service.go` - Historical depth limits
+- `backend/internal/services/subscription_service.go` - Historical depth limits (via `GetHistoricalDepthLimit`)
 - `backend/internal/services/plaid_service.go` - Plaid API client wrapper
 
 ## Plaid APIs Used

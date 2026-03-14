@@ -142,7 +142,6 @@ func main() {
 		paddleWebhookRepo = repository.NewPaddleWebhookRepository(db)            // Issue #45, #46: Paddle webhooks
 		identityRepo := repository.NewUserIdentityRepository(db)                 // Maps Clerk IDs to user UUIDs
 		notificationRepo := repository.NewNotificationRepository(db)             // Issue #257: Notification storage
-		syncAuditRepo := repository.NewSyncAuditRepository(db)                   // Issue #242: Monthly sync limits
 		balanceSnapshotRepo := repository.NewBalanceSnapshotRepository(db)       // Issue #353: Balance tracking
 		userTagRepo := repository.NewUserTagRepository(db)                       // Issue #345: User tags
 		customCategoryRepo := repository.NewCustomCategoryRepository(db)         // Issue #345: Custom categories
@@ -167,8 +166,6 @@ func main() {
 		registrationService := services.NewRegistrationService(profileRepo, identityRepo, privacyRepo, auditLogger, db)
 		subscriptionOverrideRepo := repository.NewSubscriptionOverrideRepository(db)
 		subscriptionService := services.NewSubscriptionService(tierConfig, subscriptionOverrideRepo)
-		// Issue #242: Monthly sync limits service
-		syncLimitService := services.NewSyncLimitService(syncAuditRepo, profileRepo, subscriptionService)
 		// Issue #353: Dashboard service for balance tracking
 		dashboardService := services.NewDashboardService(balanceSnapshotRepo, accountRepo)
 		// Issue #345: Tag and category services
@@ -430,7 +427,7 @@ func main() {
 					balanceSnapshotRepo,
 					plaidService,
 					encryptionService,
-					syncLimitService,
+					subscriptionService,
 					ruleApplicationService,
 					budgetSyncService,
 					transactionMonitorService,
@@ -634,8 +631,6 @@ func main() {
 		_ = privacyService // Used by Huma handler below
 		// transactionHandler migrated to Huma (see humaTransactionHandler below)
 		// notificationHandler migrated to Huma (see humaNotificationHandler below) - Issue #559
-		// syncStatsHandler migrated to Huma (see humaSyncStatsHandler below) - Issue #559
-		_ = syncLimitService // Used by Huma handler below
 		// dashboardHandler migrated to Huma (see humaDashboardHandler below) - Issue #559
 		// tagHandler migrated to Huma (see humaTagHandler below)
 		// categoryHandler migrated to Huma (see humaCategoryHandler below)
@@ -735,11 +730,6 @@ func main() {
 		operations.RegisterDashboardPreferencesRoutes(humaAPI, humaDashboardPrefsHandler)
 		log.Println("✅ Huma dashboard preferences routes registered")
 
-		// Register Huma sync stats routes (Issue #559: Huma migration)
-		humaSyncStatsHandler := operations.NewSyncStatsHandler(syncLimitService)
-		operations.RegisterSyncStatsRoutes(humaAPI, humaSyncStatsHandler)
-		log.Println("✅ Huma sync stats routes registered")
-
 		// Register Huma budget routes (Issue #559: Huma migration)
 		humaBudgetHandler := operations.NewBudgetHandler(budgetService, budgetSyncService, transactionRepo)
 		operations.RegisterBudgetRoutes(humaAPI, humaBudgetHandler)
@@ -816,7 +806,6 @@ func main() {
 
 		// Notification routes migrated to Huma (see humaNotificationHandler above)
 
-		// Sync statistics route migrated to Huma (see humaSyncStatsHandler above) - Issue #559
 
 		// Dashboard routes migrated to Huma (see humaDashboardHandler above)
 

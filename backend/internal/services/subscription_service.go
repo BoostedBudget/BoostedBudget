@@ -209,6 +209,17 @@ func (s *SubscriptionService) ValidateUpgrade(
 	return nil
 }
 
+// GetHistoricalDepthLimit returns the number of days of historical transactions
+// the user is allowed to sync based on their subscription tier.
+// Replaces SyncLimitService.GetHistoricalDepthLimit (Issue #839: sync limits removal).
+func (s *SubscriptionService) GetHistoricalDepthLimit(ctx context.Context, user *domain.User) (int, error) {
+	subscription, err := s.GetEffectiveSubscription(ctx, user)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get subscription: %w", err)
+	}
+	return subscription.Limits.TransactionHistoryDays, nil
+}
+
 // CanUserAccessFeature checks if a user's tier includes a specific feature
 func (s *SubscriptionService) CanUserAccessFeature(
 	ctx context.Context,

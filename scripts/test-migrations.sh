@@ -513,7 +513,6 @@ test_schema_constraints() {
         "transactions"
         "webhook_events"
         "notifications"
-        "account_sync_audit"
     )
 
     log_info "Checking for expected tables..."
