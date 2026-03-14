@@ -155,6 +155,7 @@ func NewClerkMiddleware(
 		newCtx := context.WithValue(ctx.Context(), inputs.UserIDKey, identity.UserID)
 		newCtx = context.WithValue(newCtx, inputs.ClerkUserIDKey, clerkUserID)
 		newCtx = context.WithValue(newCtx, inputs.ClerkClaimsKey, sessionClaims)
+		newCtx = observability.WithUserID(newCtx, identity.UserID)
 
 		// Update last_used_at asynchronously
 		go func() {

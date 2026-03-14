@@ -8,6 +8,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
@@ -192,11 +193,7 @@ func (h *PaddleCheckoutHandler) HandleCreateCheckoutSession(
 	// Get user from database
 	user, err := h.profileRepo.GetUserByID(ctx, input.UserID)
 	if err != nil {
-		h.logger.Error("failed to get user",
-			"user_id", input.UserID,
-			"error", err,
-		)
-		return nil, huma.Error500InternalServerError("Failed to get user details")
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to get user %s: %w", input.UserID, err))
 	}
 
 	// Prevent duplicate subscriptions
@@ -229,14 +226,7 @@ func (h *PaddleCheckoutHandler) HandleCreateCheckoutSession(
 	if customerID == nil || *customerID == "" {
 		newCustomerID, err := h.paddleService.CreateCustomer(ctx, user.ID, user.Email)
 		if err != nil {
-			h.logger.Error("failed to create Paddle customer",
-				"user_id", user.ID,
-				"user_email", user.Email,
-				"paddle_environment", h.config.PaddleEnvironment,
-				"error", err,
-				"error_type", fmt.Sprintf("%T", err),
-			)
-			return nil, huma.Error500InternalServerError(fmt.Sprintf("Failed to create customer: %v", err))
+			return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to create Paddle customer for user %s: %w", user.ID, err))
 		}
 
 		// Update user with Paddle customer ID (non-critical if fails)
@@ -253,12 +243,7 @@ func (h *PaddleCheckoutHandler) HandleCreateCheckoutSession(
 	// Get Paddle price ID for tier and billing interval from config
 	priceID, err := h.getPaddlePriceIDFromConfig(input.Body.Tier, input.Body.BillingInterval)
 	if err != nil {
-		h.logger.Error("failed to get Paddle price ID",
-			"tier", input.Body.Tier,
-			"billing_interval", input.Body.BillingInterval,
-			"error", err,
-		)
-		return nil, huma.Error500InternalServerError("Price ID not configured for this tier")
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to get Paddle price ID for tier %s/%s: %w", input.Body.Tier, input.Body.BillingInterval, err))
 	}
 
 	// Build success URL
@@ -274,16 +259,7 @@ func (h *PaddleCheckoutHandler) HandleCreateCheckoutSession(
 		user.ID, // Pass userID for custom_data in Paddle transaction
 	)
 	if err != nil {
-		h.logger.Error("failed to create checkout session",
-			"user_id", user.ID,
-			"customer_id", *customerID,
-			"price_id", priceID,
-			"success_url", successURL,
-			"paddle_environment", h.config.PaddleEnvironment,
-			"error", err,
-			"error_type", fmt.Sprintf("%T", err),
-		)
-		return nil, huma.Error500InternalServerError(fmt.Sprintf("Failed to create checkout session: %v", err))
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to create checkout session for user %s: %w", user.ID, err))
 	}
 
 	h.logger.Info("checkout session created successfully",
@@ -311,11 +287,7 @@ func (h *PaddleCheckoutHandler) HandlePreviewSubscriptionUpdate(
 	// Get user from database
 	user, err := h.profileRepo.GetUserByID(ctx, input.UserID)
 	if err != nil {
-		h.logger.Error("failed to get user",
-			"user_id", input.UserID,
-			"error", err,
-		)
-		return nil, huma.Error500InternalServerError("Failed to get user details")
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to get user %s: %w", input.UserID, err))
 	}
 
 	h.logger.Info("previewing subscription update",
@@ -345,24 +317,13 @@ func (h *PaddleCheckoutHandler) HandlePreviewSubscriptionUpdate(
 	// Get price ID for new tier and interval
 	priceID, err := h.getPaddlePriceIDFromConfig(input.Body.NewTier, input.Body.BillingInterval)
 	if err != nil {
-		h.logger.Error("failed to get Paddle price ID",
-			"tier", input.Body.NewTier,
-			"interval", input.Body.BillingInterval,
-			"error", err,
-		)
-		return nil, huma.Error500InternalServerError("Price ID not configured for this tier")
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to get Paddle price ID for tier %s/%s: %w", input.Body.NewTier, input.Body.BillingInterval, err))
 	}
 
 	// Call Paddle service to preview update
 	prorationAmount, currency, nextChargeDate, err := h.paddleService.PreviewUpdate(ctx, subscriptionID, priceID)
 	if err != nil {
-		h.logger.Error("failed to preview subscription update",
-			"user_id", user.ID,
-			"subscription_id", subscriptionID,
-			"new_tier", input.Body.NewTier,
-			"error", err,
-		)
-		return nil, huma.Error500InternalServerError("Failed to preview subscription update")
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to preview subscription update for user %s subscription %s: %w", user.ID, subscriptionID, err))
 	}
 
 	out := &PreviewUpdateOutput{}
@@ -435,11 +396,7 @@ func (h *PaddleCheckoutHandler) HandleUpdateSubscription(
 	// Get user from database
 	user, err := h.profileRepo.GetUserByID(ctx, input.UserID)
 	if err != nil {
-		h.logger.Error("failed to get user",
-			"user_id", input.UserID,
-			"error", err,
-		)
-		return nil, huma.Error500InternalServerError("Failed to get user details")
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to get user %s: %w", input.UserID, err))
 	}
 
 	h.logger.Info("updating subscription",
@@ -457,8 +414,7 @@ func (h *PaddleCheckoutHandler) HandleUpdateSubscription(
 
 	priceID, err := h.getPaddlePriceIDFromConfig(input.Body.NewTier, input.Body.BillingInterval)
 	if err != nil {
-		h.logger.Error("failed to get price ID", "user_id", user.ID, "tier", input.Body.NewTier, "error", err)
-		return nil, huma.Error500InternalServerError("Price ID not configured")
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to get Paddle price ID for tier %s/%s: %w", input.Body.NewTier, input.Body.BillingInterval, err))
 	}
 
 	prorationMode := input.Body.ProrationBillingMode
@@ -474,8 +430,7 @@ func (h *PaddleCheckoutHandler) HandleUpdateSubscription(
 
 	updatedSub, err := h.paddleService.UpdateSubscription(ctx, subscriptionID, priceID, prorationMode)
 	if err != nil {
-		h.logger.Error("failed to update subscription", "user_id", user.ID, "error", err)
-		return nil, huma.Error500InternalServerError("Failed to update subscription")
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to update subscription %s for user %s: %w", subscriptionID, user.ID, err))
 	}
 
 	h.logger.Info("subscription updated successfully", "subscription_id", updatedSub.ID)
@@ -500,11 +455,7 @@ func (h *PaddleCheckoutHandler) HandleCancelSubscription(
 	// Get user from database
 	user, err := h.profileRepo.GetUserByID(ctx, input.UserID)
 	if err != nil {
-		h.logger.Error("failed to get user",
-			"user_id", input.UserID,
-			"error", err,
-		)
-		return nil, huma.Error500InternalServerError("Failed to get user details")
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to get user %s: %w", input.UserID, err))
 	}
 
 	h.logger.Info("canceling subscription", "user_id", user.ID)
@@ -520,8 +471,7 @@ func (h *PaddleCheckoutHandler) HandleCancelSubscription(
 	}
 
 	if err := h.paddleService.CancelSubscription(ctx, subscriptionID); err != nil {
-		h.logger.Error("failed to cancel subscription", "user_id", user.ID, "error", err)
-		return nil, huma.Error500InternalServerError("Failed to cancel subscription")
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to cancel subscription %s for user %s: %w", subscriptionID, user.ID, err))
 	}
 
 	h.logger.Info("subscription cancelled successfully", "user_id", user.ID, "subscription_id", subscriptionID)
@@ -552,11 +502,7 @@ func (h *PaddleCheckoutHandler) HandleGetBillingPortalURL(
 	// Get user from database
 	user, err := h.profileRepo.GetUserByID(ctx, input.UserID)
 	if err != nil {
-		h.logger.Error("failed to get user",
-			"user_id", input.UserID,
-			"error", err,
-		)
-		return nil, huma.Error500InternalServerError("Failed to get user details")
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to get user %s: %w", input.UserID, err))
 	}
 
 	h.logger.Info("getting billing portal URL", "user_id", user.ID)
@@ -567,8 +513,7 @@ func (h *PaddleCheckoutHandler) HandleGetBillingPortalURL(
 
 	portalURL, err := h.paddleService.GetBillingPortalURL(ctx, *user.PaddleCustomerID)
 	if err != nil {
-		h.logger.Error("failed to get billing portal URL", "user_id", user.ID, "error", err)
-		return nil, huma.Error500InternalServerError("Failed to get billing portal URL")
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to get billing portal URL for user %s: %w", user.ID, err))
 	}
 
 	h.logger.Info("billing portal URL generated", "user_id", user.ID)
@@ -591,11 +536,7 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 	// Get user from database
 	user, err := h.profileRepo.GetUserByID(ctx, input.UserID)
 	if err != nil {
-		h.logger.Error("failed to get user",
-			"user_id", input.UserID,
-			"error", err,
-		)
-		return nil, huma.Error500InternalServerError("Failed to get user details")
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to get user %s: %w", input.UserID, err))
 	}
 
 	h.logger.Info("getting current subscription", "user_id", user.ID, "status", user.SubscriptionStatus)
@@ -645,8 +586,7 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 
 	subscription, err := h.paddleService.GetSubscription(ctx, subscriptionID)
 	if err != nil {
-		h.logger.Error("failed to get subscription", "user_id", user.ID, "error", err)
-		return nil, huma.Error500InternalServerError("Failed to get subscription")
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to get subscription %s for user %s: %w", subscriptionID, user.ID, err))
 	}
 
 	h.logger.Info("subscription retrieved", "user_id", user.ID, "subscription_id", subscription.ID)

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/riverqueue/river"
@@ -86,7 +87,7 @@ func NewWebhookProcessingWorker(deps WebhookProcessingWorkerDeps) *WebhookProces
 //  1. Fetches the webhook from the database
 //  2. Routes to the appropriate processor based on webhook type
 //  3. Returns errors for retry (temporary) or cancellation (permanent)
-func (w *WebhookProcessingWorker) Work(ctx context.Context, job *river.Job[WebhookProcessingArgs]) error {
+func (w *WebhookProcessingWorker) Work(ctx context.Context, job *river.Job[WebhookProcessingArgs]) (err error) {
 	args := job.Args
 
 	w.logger.Info("starting webhook processing job",
@@ -96,6 +97,16 @@ func (w *WebhookProcessingWorker) Work(ctx context.Context, job *river.Job[Webho
 		"item_id", args.ItemID,
 		"attempt", job.Attempt,
 	)
+
+	start := time.Now()
+	defer func() {
+		status := "success"
+		if err != nil {
+			status = "failed"
+		}
+		observability.JobsCompleted.WithLabelValues(job.Kind, job.Queue, status).Inc()
+		observability.JobDuration.WithLabelValues(job.Kind).Observe(time.Since(start).Seconds())
+	}()
 
 	startTime := time.Now()
 

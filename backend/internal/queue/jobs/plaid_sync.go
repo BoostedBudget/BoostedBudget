@@ -100,7 +100,7 @@ func (w *PlaidSyncWorker) SetJobQueue(jq queue.JobQueue) {
 //
 // Errors are returned to River for retry with exponential backoff.
 // Jobs are automatically retried up to MaxAttempts (default 5).
-func (w *PlaidSyncWorker) Work(ctx context.Context, job *river.Job[PlaidSyncArgs]) error {
+func (w *PlaidSyncWorker) Work(ctx context.Context, job *river.Job[PlaidSyncArgs]) (err error) {
 	args := job.Args
 
 	w.logger.Info("starting plaid sync job",
@@ -114,13 +114,19 @@ func (w *PlaidSyncWorker) Work(ctx context.Context, job *river.Job[PlaidSyncArgs
 	startTime := time.Now()
 	defer func() {
 		observability.PlaidSyncDuration.Observe(time.Since(startTime).Seconds())
+		status := "success"
+		if err != nil {
+			status = "failed"
+		}
+		observability.JobsCompleted.WithLabelValues(job.Kind, job.Queue, status).Inc()
+		observability.JobDuration.WithLabelValues(job.Kind).Observe(time.Since(startTime).Seconds())
 	}()
 
 	// Acquire row-level lock via transaction
 	// This prevents concurrent sync operations on the same linked item
-	linkedItem, tx, err := w.acquireLockAndGetItem(ctx, args.ItemID, args.UserID)
-	if err != nil {
-		if errors.Is(err, repository.ErrLinkedItemNotFound) {
+	linkedItem, tx, lockErr := w.acquireLockAndGetItem(ctx, args.ItemID, args.UserID)
+	if lockErr != nil {
+		if errors.Is(lockErr, repository.ErrLinkedItemNotFound) {
 			w.logger.Warn("linked item not found, skipping job",
 				"item_id", args.ItemID,
 				"user_id", args.UserID,
@@ -128,7 +134,7 @@ func (w *PlaidSyncWorker) Work(ctx context.Context, job *river.Job[PlaidSyncArgs
 			// Don't retry if item doesn't exist - it was likely deleted
 			return nil
 		}
-		if errors.Is(err, errOwnershipMismatch) {
+		if errors.Is(lockErr, errOwnershipMismatch) {
 			w.logger.Warn("linked item ownership mismatch, skipping job",
 				"item_id", args.ItemID,
 				"user_id", args.UserID,
@@ -136,7 +142,7 @@ func (w *PlaidSyncWorker) Work(ctx context.Context, job *river.Job[PlaidSyncArgs
 			// Don't retry if user doesn't own the item
 			return nil
 		}
-		return fmt.Errorf("failed to acquire lock on linked item: %w", err)
+		return fmt.Errorf("failed to acquire lock on linked item: %w", lockErr)
 	}
 	// Ensure transaction is always cleaned up (commit on success, rollback on error)
 	defer func() {
@@ -162,6 +168,12 @@ func (w *PlaidSyncWorker) Work(ctx context.Context, job *river.Job[PlaidSyncArgs
 			// Classify the raw error
 			plaidErr = domain.ClassifyPlaidError(err)
 		}
+
+		errorCode := plaidErr.ErrorCode
+		if errorCode == "" {
+			errorCode = "unknown"
+		}
+		observability.PlaidAPIErrors.WithLabelValues(plaidErrorTypeLabel(plaidErr.ErrorType), errorCode).Inc()
 
 		w.logger.Error("sync failed",
 			"job_id", job.ID,
@@ -252,6 +264,20 @@ func PlaidSyncUniqueOpts() *queue.UniqueOpts {
 
 // errOwnershipMismatch is returned when the linked item's user ID doesn't match the job's user ID.
 var errOwnershipMismatch = errors.New("linked item ownership mismatch")
+
+// plaidErrorTypeLabel converts a domain.PlaidErrorType to a Prometheus-friendly label string.
+func plaidErrorTypeLabel(t domain.PlaidErrorType) string {
+	switch t {
+	case domain.PlaidErrorPermanent:
+		return "permanent"
+	case domain.PlaidErrorRateLimit:
+		return "rate_limit"
+	case domain.PlaidErrorInvalidCursor:
+		return "invalid_cursor"
+	default:
+		return "temporary"
+	}
+}
 
 // acquireLockAndGetItem starts a transaction, acquires an exclusive row-level lock
 // on the linked item, and validates ownership.
