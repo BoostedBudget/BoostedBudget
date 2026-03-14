@@ -36,6 +36,16 @@ func main() {
 		log.Fatal("Failed to load config:", err)
 	}
 
+	// Log startup configuration summary
+	log.Printf("📋 Startup config summary (env=%s):", cfg.Environment)
+	log.Printf("   Database:   %s", boolStatus(cfg.DatabaseURL != ""))
+	log.Printf("   Clerk:      %s", boolStatus(cfg.ClerkSecretKey != ""))
+	log.Printf("   Encryption: %s", boolStatus(cfg.EncryptionKey != ""))
+	log.Printf("   Plaid:      %s", boolStatus(cfg.PlaidClientID != "" && cfg.PlaidSecret != ""))
+	log.Printf("   Paddle:     %s", boolStatus(cfg.PaddleAPIKey != "" && cfg.PaddleWebhookSecret != ""))
+	log.Printf("   SendGrid:   %s", boolStatus(cfg.SendGridAPIKey != ""))
+	log.Printf("   Deletion:   %s", boolStatus(cfg.DeletionTokenSecret != ""))
+
 	// Initialize database connection pool (optional for local dev)
 	var db *pgxpool.Pool
 	if cfg.DatabaseURL != "" {
@@ -1100,4 +1110,11 @@ func createClerkCheck() func() error {
 		// Will be replaced with actual Clerk endpoint check when we add Clerk
 		return nil
 	}
+}
+
+func boolStatus(configured bool) string {
+	if configured {
+		return "configured"
+	}
+	return "not configured"
 }
