@@ -34,6 +34,8 @@ TEST_FILES=(
     "src/features/dashboard/widgets/WidgetCatalog.test.tsx"
     # RulesPage polluted by RuleBuilder (sets empty rules array)
     "src/features/rules/components/RulesPage.test.tsx"
+    # AccountsPage uses local component mocks that can pollute AccountTable etc. (#839)
+    "src/features/accounts/AccountsPage.test.tsx"
 )
 
 # Build test command
