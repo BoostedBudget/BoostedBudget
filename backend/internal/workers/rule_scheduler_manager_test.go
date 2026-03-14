@@ -85,7 +85,7 @@ func (m *MockTriggerProvider) WasStopCalled() bool {
 // ============================================================================
 
 func TestManager_RegisterProvider(t *testing.T) {
-	manager := NewRuleSchedulerManager()
+	manager := NewRuleSchedulerManager(nil)
 
 	cronProvider := NewMockTriggerProvider("cron", false)
 	manualProvider := NewMockTriggerProvider("manual", true)
@@ -100,7 +100,7 @@ func TestManager_RegisterProvider(t *testing.T) {
 }
 
 func TestManager_RegisterProvider_OverwritesDuplicate(t *testing.T) {
-	manager := NewRuleSchedulerManager()
+	manager := NewRuleSchedulerManager(nil)
 
 	provider1 := NewMockTriggerProvider("cron", false)
 	provider2 := NewMockTriggerProvider("cron", true) // Same name, different
@@ -113,7 +113,7 @@ func TestManager_RegisterProvider_OverwritesDuplicate(t *testing.T) {
 }
 
 func TestManager_Start_StartsAllProviders(t *testing.T) {
-	manager := NewRuleSchedulerManager()
+	manager := NewRuleSchedulerManager(nil)
 
 	cronProvider := NewMockTriggerProvider("cron", false)
 	manualProvider := NewMockTriggerProvider("manual", true)
@@ -133,7 +133,7 @@ func TestManager_Start_StartsAllProviders(t *testing.T) {
 }
 
 func TestManager_Start_ReturnsFirstError(t *testing.T) {
-	manager := NewRuleSchedulerManager()
+	manager := NewRuleSchedulerManager(nil)
 
 	cronProvider := NewMockTriggerProvider("cron", false)
 	cronProvider.On("Start", mock.Anything).Return(errors.New("cron start failed"))
@@ -148,7 +148,7 @@ func TestManager_Start_ReturnsFirstError(t *testing.T) {
 }
 
 func TestManager_Start_Idempotent(t *testing.T) {
-	manager := NewRuleSchedulerManager()
+	manager := NewRuleSchedulerManager(nil)
 
 	cronProvider := NewMockTriggerProvider("cron", false)
 	cronProvider.On("Start", mock.Anything).Return(nil).Once()
@@ -170,7 +170,7 @@ func TestManager_Start_Idempotent(t *testing.T) {
 }
 
 func TestManager_Stop_StopsAllProviders(t *testing.T) {
-	manager := NewRuleSchedulerManager()
+	manager := NewRuleSchedulerManager(nil)
 
 	cronProvider := NewMockTriggerProvider("cron", false)
 	manualProvider := NewMockTriggerProvider("manual", true)
@@ -194,7 +194,7 @@ func TestManager_Stop_StopsAllProviders(t *testing.T) {
 }
 
 func TestManager_Stop_Idempotent(t *testing.T) {
-	manager := NewRuleSchedulerManager()
+	manager := NewRuleSchedulerManager(nil)
 
 	cronProvider := NewMockTriggerProvider("cron", false)
 	cronProvider.On("Start", mock.Anything).Return(nil)
@@ -218,7 +218,7 @@ func TestManager_Stop_Idempotent(t *testing.T) {
 }
 
 func TestManager_Stop_WithoutStart(t *testing.T) {
-	manager := NewRuleSchedulerManager()
+	manager := NewRuleSchedulerManager(nil)
 
 	cronProvider := NewMockTriggerProvider("cron", false)
 	manager.RegisterProvider(cronProvider)
@@ -234,7 +234,7 @@ func TestManager_Stop_WithoutStart(t *testing.T) {
 }
 
 func TestManager_TriggerRule_RoutesToManualProvider(t *testing.T) {
-	manager := NewRuleSchedulerManager()
+	manager := NewRuleSchedulerManager(nil)
 
 	cronProvider := NewMockTriggerProvider("cron", false)
 	manualProvider := NewMockTriggerProvider("manual", true)
@@ -267,7 +267,7 @@ func TestManager_TriggerRule_RoutesToManualProvider(t *testing.T) {
 }
 
 func TestManager_TriggerRule_NoManualProvider(t *testing.T) {
-	manager := NewRuleSchedulerManager()
+	manager := NewRuleSchedulerManager(nil)
 
 	// Only cron provider, which doesn't support manual triggers
 	cronProvider := NewMockTriggerProvider("cron", false)
@@ -286,7 +286,7 @@ func TestManager_TriggerRule_NoManualProvider(t *testing.T) {
 }
 
 func TestManager_TriggerRule_NotStarted(t *testing.T) {
-	manager := NewRuleSchedulerManager()
+	manager := NewRuleSchedulerManager(nil)
 
 	manualProvider := NewMockTriggerProvider("manual", true)
 	manager.RegisterProvider(manualProvider)
@@ -302,7 +302,7 @@ func TestManager_TriggerRule_NotStarted(t *testing.T) {
 }
 
 func TestManager_GetProvider(t *testing.T) {
-	manager := NewRuleSchedulerManager()
+	manager := NewRuleSchedulerManager(nil)
 
 	cronProvider := NewMockTriggerProvider("cron", false)
 	manager.RegisterProvider(cronProvider)
@@ -316,7 +316,7 @@ func TestManager_GetProvider(t *testing.T) {
 }
 
 func TestManager_ListProviders(t *testing.T) {
-	manager := NewRuleSchedulerManager()
+	manager := NewRuleSchedulerManager(nil)
 
 	cronProvider := NewMockTriggerProvider("cron", false)
 	manualProvider := NewMockTriggerProvider("manual", true)
@@ -335,7 +335,7 @@ func TestManager_ListProviders(t *testing.T) {
 }
 
 func TestManager_ConcurrentAccess(t *testing.T) {
-	manager := NewRuleSchedulerManager()
+	manager := NewRuleSchedulerManager(nil)
 
 	cronProvider := NewMockTriggerProvider("cron", false)
 	manualProvider := NewMockTriggerProvider("manual", true)
@@ -368,7 +368,7 @@ func TestManager_ConcurrentAccess(t *testing.T) {
 }
 
 func TestManager_StartWithTimeout(t *testing.T) {
-	manager := NewRuleSchedulerManager()
+	manager := NewRuleSchedulerManager(nil)
 
 	slowProvider := NewMockTriggerProvider("slow", false)
 	slowProvider.On("Start", mock.Anything).Run(func(args mock.Arguments) {

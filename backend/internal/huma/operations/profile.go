@@ -68,7 +68,7 @@ func (h *ProfileHandler) UpdateProfile(ctx context.Context, input *UpdateProfile
 		case services.ErrInvalidRegion:
 			return nil, huma.Error400BadRequest("Invalid primary region")
 		default:
-			return nil, humaerrors.MapError(err)
+			return nil, humaerrors.LoggingMapError(ctx, err)
 		}
 	}
 

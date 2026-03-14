@@ -4,7 +4,7 @@ package workers
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -15,6 +15,7 @@ import (
 //
 // TODO: Replace with persistent storage (Redis or database) for production.
 type SubscriptionLimitAdapter struct {
+	logger *slog.Logger
 	// dailyExecutions tracks user_id -> count for today
 	dailyExecutions map[string]int
 	// dailyLimits tracks tier -> limit
@@ -38,6 +39,7 @@ func DefaultDailyLimits() map[string]int {
 // NewSubscriptionLimitAdapter creates a new adapter with default limits.
 func NewSubscriptionLimitAdapter() *SubscriptionLimitAdapter {
 	return &SubscriptionLimitAdapter{
+		logger:          slog.Default(),
 		dailyExecutions: make(map[string]int),
 		dailyLimits:     DefaultDailyLimits(),
 		lastReset:       time.Now().UTC(),
@@ -85,7 +87,7 @@ func (a *SubscriptionLimitAdapter) IncrementDailyExecutions(ctx context.Context,
 	a.resetIfNewDay()
 
 	a.dailyExecutions[userID]++
-	log.Printf("[SubscriptionLimitAdapter] User %s execution count: %d", userID, a.dailyExecutions[userID])
+	a.logger.Debug("incremented user execution count", "user_id", userID, "count", a.dailyExecutions[userID])
 	return nil
 }
 
@@ -94,7 +96,7 @@ func (a *SubscriptionLimitAdapter) IncrementDailyExecutions(ctx context.Context,
 func (a *SubscriptionLimitAdapter) resetIfNewDay() {
 	now := time.Now().UTC()
 	if now.Day() != a.lastReset.Day() || now.Month() != a.lastReset.Month() || now.Year() != a.lastReset.Year() {
-		log.Printf("[SubscriptionLimitAdapter] Resetting daily execution counts for new day")
+		a.logger.Info("resetting daily execution counts for new day")
 		a.dailyExecutions = make(map[string]int)
 		a.lastReset = now
 	}
@@ -113,5 +115,5 @@ func (a *SubscriptionLimitAdapter) SetUserLimit(userID string, limit int) {
 	defer a.mu.Unlock()
 	// This would be used for per-user overrides
 	// For now, it's a no-op since we use tier-based limits
-	log.Printf("[SubscriptionLimitAdapter] Setting custom limit for user %s: %d", userID, limit)
+	a.logger.Debug("setting custom limit for user", "user_id", userID, "limit", limit)
 }

@@ -251,7 +251,7 @@ func TestAutomationRuleHandler_TriggerAutomationRule_Success(t *testing.T) {
 	mockService.On("GetRuleByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
 
 	// Create a manager with a mock manual provider
-	manager := workers.NewRuleSchedulerManager()
+	manager := workers.NewRuleSchedulerManager(nil)
 	mockProvider := &mockManualProvider{
 		execution: &domain.RuleExecution{
 			ID:     "exec-1",
@@ -283,7 +283,7 @@ func TestAutomationRuleHandler_TriggerAutomationRule_WithTriggerData(t *testing.
 	rule := createMockRule("rule-1", "user-1")
 	mockService.On("GetRuleByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
 
-	manager := workers.NewRuleSchedulerManager()
+	manager := workers.NewRuleSchedulerManager(nil)
 	mockProvider := &mockManualProvider{
 		execution: &domain.RuleExecution{
 			ID:     "exec-1",
@@ -319,7 +319,7 @@ func TestAutomationRuleHandler_TriggerAutomationRule_RuleNotFound(t *testing.T) 
 
 	mockService.On("GetRuleByID", mock.Anything, "user-1", "rule-unknown").Return(nil, domain.ErrAutomationRuleNotFound)
 
-	manager := workers.NewRuleSchedulerManager()
+	manager := workers.NewRuleSchedulerManager(nil)
 	handler := NewAutomationRuleHandler(mockService, manager)
 
 	input := &TriggerAutomationRuleInput{
@@ -339,7 +339,7 @@ func TestAutomationRuleHandler_TriggerAutomationRule_ManagerNotStarted(t *testin
 	mockService.On("GetRuleByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
 
 	// Manager not started
-	manager := workers.NewRuleSchedulerManager()
+	manager := workers.NewRuleSchedulerManager(nil)
 	handler := NewAutomationRuleHandler(mockService, manager)
 
 	input := &TriggerAutomationRuleInput{

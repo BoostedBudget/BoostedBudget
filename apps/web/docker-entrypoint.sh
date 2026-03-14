@@ -13,7 +13,8 @@ cat > /usr/share/nginx/html/config.js <<EOF
 window.ENV = {
   API_URL: '${API_URL:-}',
   CLERK_PUBLISHABLE_KEY: '${CLERK_PUBLISHABLE_KEY:-${VITE_CLERK_PUBLISHABLE_KEY:-}}',
-  ENVIRONMENT: '${ENVIRONMENT:-production}'
+  ENVIRONMENT: '${ENVIRONMENT:-production}',
+  SENTRY_DSN: '${SENTRY_DSN:-}'
 };
 EOF
 

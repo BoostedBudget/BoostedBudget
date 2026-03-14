@@ -8,7 +8,10 @@ import App from './App'
 import { store } from './store/store'
 import { setAuthTokenProvider } from '@boostedbudget/api-client/client'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { initSentry } from './shared/lib/sentry'
 import './index.css'
+
+initSentry()
 
 // Create React Query client with sensible defaults
 const queryClient = new QueryClient({

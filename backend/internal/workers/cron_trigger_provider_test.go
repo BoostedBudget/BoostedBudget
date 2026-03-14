@@ -176,20 +176,20 @@ func createTestRuleWithTimezone(id, userID, cron, timezone string) *domain.Autom
 // ============================================================================
 
 func TestCronProvider_Name(t *testing.T) {
-	provider := NewCronTriggerProvider(nil, nil, nil, time.Minute)
+	provider := NewCronTriggerProvider(nil, nil, nil, time.Minute, nil)
 
 	assert.Equal(t, "cron", provider.Name())
 }
 
 func TestCronProvider_SupportsManualTrigger(t *testing.T) {
-	provider := NewCronTriggerProvider(nil, nil, nil, time.Minute)
+	provider := NewCronTriggerProvider(nil, nil, nil, time.Minute, nil)
 
 	// Cron provider does NOT support manual triggering
 	assert.False(t, provider.SupportsManualTrigger())
 }
 
 func TestCronProvider_TriggerRule_NotSupported(t *testing.T) {
-	provider := NewCronTriggerProvider(nil, nil, nil, time.Minute)
+	provider := NewCronTriggerProvider(nil, nil, nil, time.Minute, nil)
 
 	execution, err := provider.TriggerRule(context.Background(), "rule-123", nil)
 
@@ -211,7 +211,7 @@ func TestCronProvider_Start_LoadsScheduledRules(t *testing.T) {
 
 	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return(rules, nil)
 
-	provider := NewCronTriggerProvider(mockRepo, mockExecutor, mockSub, time.Minute)
+	provider := NewCronTriggerProvider(mockRepo, mockExecutor, mockSub, time.Minute, nil)
 
 	// Start provider
 	ctx, cancel := context.WithCancel(context.Background())
@@ -243,7 +243,7 @@ func TestCronProvider_Start_SkipsDisabledRules(t *testing.T) {
 
 	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return([]*domain.AutomationRule{enabledRule}, nil)
 
-	provider := NewCronTriggerProvider(mockRepo, mockExecutor, mockSub, time.Minute)
+	provider := NewCronTriggerProvider(mockRepo, mockExecutor, mockSub, time.Minute, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -274,7 +274,7 @@ func TestCronProvider_Start_SkipsInvalidCronExpressions(t *testing.T) {
 
 	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return(rules, nil)
 
-	provider := NewCronTriggerProvider(mockRepo, mockExecutor, mockSub, time.Minute)
+	provider := NewCronTriggerProvider(mockRepo, mockExecutor, mockSub, time.Minute, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -297,7 +297,7 @@ func TestCronProvider_Start_HandlesEmptyRulesList(t *testing.T) {
 
 	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return([]*domain.AutomationRule{}, nil)
 
-	provider := NewCronTriggerProvider(mockRepo, mockExecutor, mockSub, time.Minute)
+	provider := NewCronTriggerProvider(mockRepo, mockExecutor, mockSub, time.Minute, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -319,7 +319,7 @@ func TestCronProvider_Start_HandlesRepositoryError(t *testing.T) {
 
 	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return(nil, assert.AnError)
 
-	provider := NewCronTriggerProvider(mockRepo, mockExecutor, mockSub, time.Minute)
+	provider := NewCronTriggerProvider(mockRepo, mockExecutor, mockSub, time.Minute, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -337,7 +337,7 @@ func TestCronProvider_GracefulShutdown(t *testing.T) {
 
 	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return([]*domain.AutomationRule{}, nil)
 
-	provider := NewCronTriggerProvider(mockRepo, mockExecutor, mockSub, time.Minute)
+	provider := NewCronTriggerProvider(mockRepo, mockExecutor, mockSub, time.Minute, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -376,7 +376,7 @@ func TestCronProvider_Refresh_PicksUpNewRules(t *testing.T) {
 	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return(initialRules, nil).Once()
 	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return(updatedRules, nil).Once()
 
-	provider := NewCronTriggerProvider(mockRepo, mockExecutor, mockSub, time.Minute)
+	provider := NewCronTriggerProvider(mockRepo, mockExecutor, mockSub, time.Minute, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -416,7 +416,7 @@ func TestCronProvider_Refresh_RemovesDeletedRules(t *testing.T) {
 	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return(initialRules, nil).Once()
 	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return(updatedRules, nil).Once()
 
-	provider := NewCronTriggerProvider(mockRepo, mockExecutor, mockSub, time.Minute)
+	provider := NewCronTriggerProvider(mockRepo, mockExecutor, mockSub, time.Minute, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -455,7 +455,7 @@ func TestCronProvider_Refresh_UpdatesModifiedCron(t *testing.T) {
 	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return(initialRules, nil).Once()
 	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return(updatedRules, nil).Once()
 
-	provider := NewCronTriggerProvider(mockRepo, mockExecutor, mockSub, time.Minute)
+	provider := NewCronTriggerProvider(mockRepo, mockExecutor, mockSub, time.Minute, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -504,7 +504,7 @@ func TestCronProvider_ExecutesRuleOnSchedule(t *testing.T) {
 	mockExecutor.On("ExecuteRule", mock.Anything, rule, mock.Anything).Return(execution, nil)
 
 	// Use seconds-based cron for faster test
-	provider := NewCronTriggerProviderWithSeconds(mockRepo, mockExecutor, mockSub, time.Minute)
+	provider := NewCronTriggerProviderWithSeconds(mockRepo, mockExecutor, mockSub, time.Minute, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -538,7 +538,7 @@ func TestCronProvider_EnforcesExecutionLimit(t *testing.T) {
 	// User has exceeded daily limit
 	mockSub.On("CheckDailyExecutionLimit", mock.Anything, "user-1").Return(false, 0, nil)
 
-	provider := NewCronTriggerProviderWithSeconds(mockRepo, mockExecutor, mockSub, time.Minute)
+	provider := NewCronTriggerProviderWithSeconds(mockRepo, mockExecutor, mockSub, time.Minute, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -570,7 +570,7 @@ func TestCronProvider_RespectsTimezone(t *testing.T) {
 
 	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return([]*domain.AutomationRule{rule}, nil)
 
-	provider := NewCronTriggerProvider(mockRepo, mockExecutor, mockSub, time.Minute)
+	provider := NewCronTriggerProvider(mockRepo, mockExecutor, mockSub, time.Minute, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -597,7 +597,7 @@ func TestCronProvider_HandlesRuleNotFoundOnExecution(t *testing.T) {
 	// Rule deleted between scheduling and execution
 	mockRepo.On("GetByID", mock.Anything, "rule-1").Return(nil, domain.ErrAutomationRuleNotFound)
 
-	provider := NewCronTriggerProviderWithSeconds(mockRepo, mockExecutor, mockSub, time.Minute)
+	provider := NewCronTriggerProviderWithSeconds(mockRepo, mockExecutor, mockSub, time.Minute, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -630,7 +630,7 @@ func TestCronProvider_HandlesDisabledRuleOnExecution(t *testing.T) {
 	disabledRule.Enabled = false
 	mockRepo.On("GetByID", mock.Anything, "rule-1").Return(disabledRule, nil)
 
-	provider := NewCronTriggerProviderWithSeconds(mockRepo, mockExecutor, mockSub, time.Minute)
+	provider := NewCronTriggerProviderWithSeconds(mockRepo, mockExecutor, mockSub, time.Minute, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -667,7 +667,7 @@ func TestCronProvider_RecoversPanicInJob(t *testing.T) {
 		panic("simulated panic in executor")
 	})
 
-	provider := NewCronTriggerProviderWithSeconds(mockRepo, mockExecutor, mockSub, time.Minute)
+	provider := NewCronTriggerProviderWithSeconds(mockRepo, mockExecutor, mockSub, time.Minute, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -696,7 +696,7 @@ func TestCronProvider_ConcurrentRefresh(t *testing.T) {
 
 	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return(rules, nil)
 
-	provider := NewCronTriggerProvider(mockRepo, mockExecutor, mockSub, time.Minute)
+	provider := NewCronTriggerProvider(mockRepo, mockExecutor, mockSub, time.Minute, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

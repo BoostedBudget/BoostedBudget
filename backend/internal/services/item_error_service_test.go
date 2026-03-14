@@ -32,6 +32,7 @@ func TestHandleLoginRequired_Success(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	// Existing LinkedItem that needs re-authentication
@@ -113,6 +114,7 @@ func TestHandleLoginRequired_DecryptionFailure(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	linkedItem := &domain.LinkedItem{
@@ -156,6 +158,7 @@ func TestHandleLoginRequired_LinkTokenCreationFailure(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	linkedItem := &domain.LinkedItem{
@@ -204,6 +207,7 @@ func TestHandleLoginRequired_DatabaseUpdateFailure(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	linkedItem := &domain.LinkedItem{
@@ -261,6 +265,7 @@ func TestHandleLoginRequired_NotificationFailureNonBlocking(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	linkedItem := &domain.LinkedItem{
@@ -323,6 +328,7 @@ func TestHandleLoginRequired_EmailFailureNonBlocking(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	linkedItem := &domain.LinkedItem{
@@ -435,6 +441,7 @@ func TestHandleError_Success(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	// Existing LinkedItem with a general error
@@ -505,6 +512,7 @@ func TestHandleError_DatabaseUpdateFailure(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	linkedItem := &domain.LinkedItem{
@@ -547,6 +555,7 @@ func TestHandleError_NotificationFailureNonBlocking(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	linkedItem := &domain.LinkedItem{
@@ -590,6 +599,7 @@ func TestHandleError_EmailFailureNonBlocking(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	linkedItem := &domain.LinkedItem{
@@ -646,6 +656,7 @@ func TestHandlePendingExpiration_Success(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	// Existing LinkedItem that is expiring soon
@@ -728,6 +739,7 @@ func TestHandlePendingExpiration_DecryptionFailure(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	linkedItem := &domain.LinkedItem{
@@ -771,6 +783,7 @@ func TestHandlePendingExpiration_LinkTokenCreationFailure(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	linkedItem := &domain.LinkedItem{
@@ -819,6 +832,7 @@ func TestHandlePendingExpiration_DatabaseUpdateFailure(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	linkedItem := &domain.LinkedItem{
@@ -876,6 +890,7 @@ func TestHandlePendingExpiration_NotificationFailureNonBlocking(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	linkedItem := &domain.LinkedItem{
@@ -934,6 +949,7 @@ func TestHandlePendingExpiration_EmailFailureNonBlocking(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	linkedItem := &domain.LinkedItem{
@@ -1005,6 +1021,7 @@ func TestHandlePermissionRevoked_Success(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	// Existing LinkedItem that has been revoked by the user
@@ -1087,6 +1104,7 @@ func TestHandlePermissionRevoked_DecryptionFailure(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	linkedItem := &domain.LinkedItem{
@@ -1130,6 +1148,7 @@ func TestHandlePermissionRevoked_LinkTokenCreationFailure(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	linkedItem := &domain.LinkedItem{
@@ -1178,6 +1197,7 @@ func TestHandlePermissionRevoked_DatabaseUpdateFailure(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	linkedItem := &domain.LinkedItem{
@@ -1235,6 +1255,7 @@ func TestHandlePermissionRevoked_NotificationFailureNonBlocking(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	linkedItem := &domain.LinkedItem{
@@ -1293,6 +1314,7 @@ func TestHandlePermissionRevoked_EmailFailureNonBlocking(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	linkedItem := &domain.LinkedItem{
@@ -1363,6 +1385,7 @@ func TestProcessWebhook_LoginRequired(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	// Mock: Lookup LinkedItem by itemID
@@ -1420,6 +1443,7 @@ func TestProcessWebhook_Error(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	// Mock: Lookup LinkedItem by itemID
@@ -1469,6 +1493,7 @@ func TestProcessWebhook_PendingExpiration(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	// Mock: Lookup LinkedItem by itemID
@@ -1526,6 +1551,7 @@ func TestProcessWebhook_PermissionRevoked(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	// Mock: Lookup LinkedItem by itemID
@@ -1583,6 +1609,7 @@ func TestProcessWebhook_ItemError_LinkedItemNotFound(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	// Mock: LinkedItem not found
@@ -1620,6 +1647,7 @@ func TestProcessWebhook_ItemError_UnknownErrorType(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	// Mock: Lookup LinkedItem by itemID
@@ -1666,6 +1694,7 @@ func TestHandleLoginRequired_UserLookupFailureNonBlocking(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	linkedItem := &domain.LinkedItem{
@@ -1713,6 +1742,7 @@ func TestHandleError_UserLookupFailureNonBlocking(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	linkedItem := &domain.LinkedItem{
@@ -1755,6 +1785,7 @@ func TestHandlePendingExpiration_UserLookupFailureNonBlocking(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	linkedItem := &domain.LinkedItem{
@@ -1801,6 +1832,7 @@ func TestHandlePermissionRevoked_UserLookupFailureNonBlocking(t *testing.T) {
 		mockPlaidService,
 		mockEncryptionService,
 		mockEmailService,
+		nil,
 	)
 
 	linkedItem := &domain.LinkedItem{

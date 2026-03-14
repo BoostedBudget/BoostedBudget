@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -57,6 +57,7 @@ type TransactionSyncService interface {
 
 // transactionSyncService implements TransactionSyncService
 type transactionSyncService struct {
+	logger                    *slog.Logger
 	webhookRepo               repository.WebhookRepository
 	linkedItemRepo            repository.LinkedItemRepository
 	transactionRepo           repository.TransactionRepository
@@ -85,8 +86,13 @@ func NewTransactionSyncService(
 	ruleApplicationService RuleApplicationService,
 	budgetSyncService BudgetSyncService,               // Issue #494: Sync budget amounts
 	transactionMonitorService TransactionMonitorService, // Issue #36: Auto-detect completed transfers
+	logger *slog.Logger,
 ) TransactionSyncService {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &transactionSyncService{
+		logger:                    logger,
 		webhookRepo:               webhookRepo,
 		linkedItemRepo:            linkedItemRepo,
 		transactionRepo:           transactionRepo,
@@ -158,8 +164,12 @@ func (s *transactionSyncService) ProcessWebhook(ctx context.Context, webhook *do
 
 	// Log transaction counts for observability
 	// Note: Storage handled in SyncTransactions (issue #261)
-	log.Printf("Webhook %s processed and stored: %d added, %d modified, %d removed transactions",
-		webhook.ID, len(result.Added), len(result.Modified), len(result.Removed))
+	s.logger.Info("webhook processed and stored",
+		"webhook_id", webhook.ID,
+		"added", len(result.Added),
+		"modified", len(result.Modified),
+		"removed", len(result.Removed),
+	)
 
 	// Mark webhook as processed successfully
 	completedAt := time.Now()
@@ -198,11 +208,11 @@ func (s *transactionSyncService) SyncTransactions(
 			return nil, fmt.Errorf("failed to get historical depth limit: %w", err)
 		}
 		daysRequested = daysHistorical
-		log.Printf("First sync for item %s: requesting %d days of historical transactions", linkedItem.ID, daysRequested)
+		s.logger.Info("first sync, requesting historical transactions", "item_id", linkedItem.ID, "days_requested", daysRequested)
 	} else {
 		// Re-sync (cursor-based) - no historical depth needed
 		daysRequested = 0
-		log.Printf("Re-sync for item %s using cursor", linkedItem.ID)
+		s.logger.Info("re-sync using cursor", "item_id", linkedItem.ID)
 	}
 
 	// Step 3: Decrypt access token
@@ -238,7 +248,7 @@ func (s *transactionSyncService) SyncTransactions(
 			}
 			if plaidErr.ErrorType == domain.PlaidErrorInvalidCursor {
 				// Reset cursor to empty string for full re-sync
-				log.Printf("Invalid cursor detected for item %s, resetting for full re-sync", linkedItem.ID)
+				s.logger.Warn("invalid cursor detected, resetting for full re-sync", "item_id", linkedItem.ID)
 				if resetErr := s.linkedItemRepo.UpdateCursor(ctx, linkedItem.ID, ""); resetErr != nil {
 					return result, fmt.Errorf("failed to reset cursor after INVALID_CURSOR: %w", resetErr)
 				}
@@ -268,14 +278,25 @@ func (s *transactionSyncService) SyncTransactions(
 		// Check if more pages exist
 		hasMore = resp.GetHasMore()
 
-		log.Printf("Synced page %d for item %s: %d added, %d modified, %d removed (hasMore=%v)",
-			pageCount, linkedItem.ID, len(resp.Added), len(resp.Modified), len(resp.Removed), hasMore)
+		s.logger.Info("synced page",
+			"page", pageCount,
+			"item_id", linkedItem.ID,
+			"added", len(resp.Added),
+			"modified", len(resp.Modified),
+			"removed", len(resp.Removed),
+			"has_more", hasMore,
+		)
 	}
 
 	// All pages fetched successfully
 	result.NewCursor = cursor
-	log.Printf("Sync complete for item %s: total %d added, %d modified, %d removed across %d pages",
-		linkedItem.ID, len(result.Added), len(result.Modified), len(result.Removed), pageCount)
+	s.logger.Info("sync complete",
+		"item_id", linkedItem.ID,
+		"total_added", len(result.Added),
+		"total_modified", len(result.Modified),
+		"total_removed", len(result.Removed),
+		"pages", pageCount,
+	)
 
 	// ========================================================================
 	// Issue #261: Transaction Storage Logic
@@ -288,7 +309,7 @@ func (s *transactionSyncService) SyncTransactions(
 	if err != nil {
 		// Return successful sync result but log storage error
 		// Webhook can retry storage on next sync
-		log.Printf("ERROR: Failed to build account maps for item %s: %v", linkedItem.ID, err)
+		s.logger.Error("failed to build account maps", "item_id", linkedItem.ID, "error", err)
 		return result, fmt.Errorf("failed to build account maps: %w", err)
 	}
 
@@ -296,7 +317,7 @@ func (s *transactionSyncService) SyncTransactions(
 	// Issue #171: Pass userAccountMap for stable UserAccountID propagation
 	if len(result.Added) > 0 {
 		if err := s.processAddedTransactions(ctx, result.Added, linkedItem, accountMap, userAccountMap); err != nil {
-			log.Printf("ERROR: Failed to process added transactions for item %s: %v", linkedItem.ID, err)
+			s.logger.Error("failed to process added transactions", "item_id", linkedItem.ID, "error", err)
 			return result, fmt.Errorf("failed to process added transactions: %w", err)
 		}
 	}
@@ -305,7 +326,7 @@ func (s *transactionSyncService) SyncTransactions(
 	// Issue #171: Pass userAccountMap for stable UserAccountID propagation
 	if len(result.Modified) > 0 {
 		if err := s.processModifiedTransactions(ctx, result.Modified, linkedItem, accountMap, userAccountMap); err != nil {
-			log.Printf("ERROR: Failed to process modified transactions for item %s: %v", linkedItem.ID, err)
+			s.logger.Error("failed to process modified transactions", "item_id", linkedItem.ID, "error", err)
 			return result, fmt.Errorf("failed to process modified transactions: %w", err)
 		}
 	}
@@ -313,12 +334,12 @@ func (s *transactionSyncService) SyncTransactions(
 	// Step 8: Process Removed transactions (hard delete)
 	if len(result.Removed) > 0 {
 		if err := s.processRemovedTransactions(ctx, result.Removed, linkedItem); err != nil {
-			log.Printf("ERROR: Failed to process removed transactions for item %s: %v", linkedItem.ID, err)
+			s.logger.Error("failed to process removed transactions", "item_id", linkedItem.ID, "error", err)
 			return result, fmt.Errorf("failed to process removed transactions: %w", err)
 		}
 	}
 
-	log.Printf("Transaction storage complete for item %s", linkedItem.ID)
+	s.logger.Info("transaction storage complete", "item_id", linkedItem.ID)
 
 	// ========================================================================
 	// Issue #353: Create Balance Snapshots
@@ -327,14 +348,14 @@ func (s *transactionSyncService) SyncTransactions(
 
 	// Create balance snapshots for all accounts (non-blocking)
 	if err := s.createBalanceSnapshots(ctx, linkedItem, accessToken); err != nil {
-		log.Printf("Warning: Failed to create balance snapshots for item %s: %v", linkedItem.ID, err)
+		s.logger.Warn("failed to create balance snapshots", "item_id", linkedItem.ID, "error", err)
 		// Don't fail the entire sync - snapshots are non-critical
 	}
 
 	// Issue #494: Sync budget amounts (non-blocking)
 	if s.budgetSyncService != nil {
 		if err := s.budgetSyncService.RecalculateBudgetAmounts(ctx, linkedItem.UserID); err != nil {
-			log.Printf("Warning: Failed to sync budget amounts for user %s: %v", linkedItem.UserID, err)
+			s.logger.Warn("failed to sync budget amounts", "user_id", linkedItem.UserID, "error", err)
 		}
 	}
 
@@ -531,7 +552,7 @@ func (s *transactionSyncService) processAddedTransactions(
 	for _, plaidTxn := range added {
 		domainTxn, err := s.mapPlaidTransaction(ctx, plaidTxn, linkedItem.ID, linkedItem.UserID, accountMap, userAccountMap)
 		if err != nil {
-			log.Printf("Warning: Skipping transaction %s: %v", plaidTxn.TransactionId, err)
+			s.logger.Warn("skipping transaction", "transaction_id", plaidTxn.TransactionId, "error", err)
 			continue
 		}
 		transactions = append(transactions, *domainTxn)
@@ -539,7 +560,7 @@ func (s *transactionSyncService) processAddedTransactions(
 
 	// Skip DB call if all transactions were skipped
 	if len(transactions) == 0 {
-		log.Printf("Warning: All %d added transactions skipped due to mapping errors", len(added))
+		s.logger.Warn("all added transactions skipped due to mapping errors", "count", len(added))
 		return nil
 	}
 
@@ -549,7 +570,7 @@ func (s *transactionSyncService) processAddedTransactions(
 	if s.ruleApplicationService != nil {
 		if err := s.ruleApplicationService.ApplyRulesToBatch(ctx, transactions, linkedItem.UserID); err != nil {
 			// Log but don't fail - rule application is non-critical
-			log.Printf("Warning: Failed to apply categorization rules: %v", err)
+			s.logger.Warn("failed to apply categorization rules", "error", err)
 		}
 	}
 
@@ -558,7 +579,7 @@ func (s *transactionSyncService) processAddedTransactions(
 		return fmt.Errorf("failed to create batch of %d transactions: %w", len(transactions), err)
 	}
 
-	log.Printf("Successfully stored %d added transactions (skipped %d)", len(transactions), len(added)-len(transactions))
+	s.logger.Info("stored added transactions", "stored", len(transactions), "skipped", len(added)-len(transactions))
 
 	// Issue #36: Monitor for transfer suggestion matches (non-blocking)
 	// Auto-accept pending suggestions that match newly synced transactions.
@@ -570,7 +591,7 @@ func (s *transactionSyncService) processAddedTransactions(
 		}
 		if err := s.transactionMonitorService.MonitorForMatches(ctx, linkedItem.UserID, txnPtrs); err != nil {
 			// Log but don't fail - transaction monitoring is non-critical
-			log.Printf("Warning: Failed to monitor for transfer suggestion matches: %v", err)
+			s.logger.Warn("failed to monitor for transfer suggestion matches", "error", err)
 		}
 	}
 
@@ -609,7 +630,7 @@ func (s *transactionSyncService) processModifiedTransactions(
 		// Map Plaid transaction to domain.Transaction (new data from Plaid)
 		newTxn, err := s.mapPlaidTransaction(ctx, plaidTxn, linkedItem.ID, linkedItem.UserID, accountMap, userAccountMap)
 		if err != nil {
-			log.Printf("Warning: Skipping modified transaction %s: %v", plaidTxn.TransactionId, err)
+			s.logger.Warn("skipping modified transaction", "transaction_id", plaidTxn.TransactionId, "error", err)
 			skippedCount++
 			continue
 		}
@@ -617,7 +638,7 @@ func (s *transactionSyncService) processModifiedTransactions(
 		// Fetch existing transaction to preserve user_notes
 		existingTxn, err := s.transactionRepo.GetByExternalID(ctx, domain.SourcePlaid, plaidTxn.TransactionId, linkedItem.UserID)
 		if err != nil {
-			log.Printf("Warning: Modified transaction %s not found in database (may not be synced yet): %v", plaidTxn.TransactionId, err)
+			s.logger.Warn("modified transaction not found in database", "transaction_id", plaidTxn.TransactionId, "error", err)
 			skippedCount++
 			continue
 		}
@@ -636,7 +657,7 @@ func (s *transactionSyncService) processModifiedTransactions(
 		successCount++
 	}
 
-	log.Printf("Successfully updated %d modified transactions (skipped %d)", successCount, skippedCount)
+	s.logger.Info("updated modified transactions", "updated", successCount, "skipped", skippedCount)
 	return nil
 }
 
@@ -665,7 +686,7 @@ func (s *transactionSyncService) processRemovedTransactions(
 	for _, removedTxn := range removed {
 		// Skip transactions with nil ID
 		if removedTxn.TransactionId == nil {
-			log.Printf("Warning: Removed transaction has nil transaction_id, skipping")
+			s.logger.Warn("removed transaction has nil transaction_id, skipping")
 			skippedCount++
 			continue
 		}
@@ -674,7 +695,7 @@ func (s *transactionSyncService) processRemovedTransactions(
 		err := s.transactionRepo.DeleteByExternalID(ctx, domain.SourcePlaid, *removedTxn.TransactionId, linkedItem.UserID)
 		if err != nil {
 			// Log warning but continue (idempotent - may already be deleted)
-			log.Printf("Warning: Failed to delete transaction %s (may already be deleted): %v", *removedTxn.TransactionId, err)
+			s.logger.Warn("failed to delete transaction (may already be deleted)", "transaction_id", *removedTxn.TransactionId, "error", err)
 			// Count as skipped rather than failure for idempotency
 			skippedCount++
 			continue
@@ -683,7 +704,7 @@ func (s *transactionSyncService) processRemovedTransactions(
 		successCount++
 	}
 
-	log.Printf("Successfully deleted %d removed transactions (skipped %d)", successCount, skippedCount)
+	s.logger.Info("deleted removed transactions", "deleted", successCount, "skipped", skippedCount)
 	return nil
 }
 
@@ -719,7 +740,7 @@ func (s *transactionSyncService) createBalanceSnapshots(
 
 	plaidAccounts := accountsResp.GetAccounts()
 	if len(plaidAccounts) == 0 {
-		log.Printf("No accounts returned from Plaid for item %s, skipping balance snapshots", linkedItem.ID)
+		s.logger.Info("no accounts returned from Plaid, skipping balance snapshots", "item_id", linkedItem.ID)
 		return nil
 	}
 
@@ -746,7 +767,7 @@ func (s *transactionSyncService) createBalanceSnapshots(
 		// Find matching internal account
 		internalAccount, exists := accountMap[plaidAccountID]
 		if !exists {
-			log.Printf("Warning: Plaid account %s not found in internal accounts, skipping snapshot", plaidAccountID)
+			s.logger.Warn("Plaid account not found in internal accounts, skipping snapshot", "plaid_account_id", plaidAccountID)
 			skippedCount++
 			continue
 		}
@@ -754,10 +775,12 @@ func (s *transactionSyncService) createBalanceSnapshots(
 		// Check for recent snapshot (5-minute deduplication window)
 		latestSnapshot, err := s.balanceSnapshotRepo.GetLatestByAccountID(ctx, internalAccount.ID)
 		if err != nil {
-			log.Printf("Warning: Failed to check latest snapshot for account %s: %v", plaidAccountID, err)
+			s.logger.Warn("failed to check latest snapshot for account", "plaid_account_id", plaidAccountID, "error", err)
 		} else if latestSnapshot != nil && now.Sub(latestSnapshot.SnapshotAt) < deduplicationWindow {
-			log.Printf("Skipping snapshot for account %s: recent snapshot exists (%v ago)",
-				plaidAccountID, now.Sub(latestSnapshot.SnapshotAt).Round(time.Second))
+			s.logger.Debug("skipping snapshot, recent snapshot exists",
+				"plaid_account_id", plaidAccountID,
+				"age", now.Sub(latestSnapshot.SnapshotAt).Round(time.Second),
+			)
 			dedupedCount++
 			continue
 		}
@@ -765,7 +788,7 @@ func (s *transactionSyncService) createBalanceSnapshots(
 		// Extract balance from Plaid response
 		balances, hasBalances := plaidAccount.GetBalancesOk()
 		if !hasBalances || balances == nil {
-			log.Printf("Warning: No balance data for account %s, skipping snapshot", plaidAccountID)
+			s.logger.Warn("no balance data for account, skipping snapshot", "plaid_account_id", plaidAccountID)
 			skippedCount++
 			continue
 		}
@@ -779,7 +802,7 @@ func (s *transactionSyncService) createBalanceSnapshots(
 
 		// Store snapshot
 		if err := s.balanceSnapshotRepo.Create(ctx, snapshot); err != nil {
-			log.Printf("Warning: Failed to create balance snapshot for account %s: %v", plaidAccountID, err)
+			s.logger.Warn("failed to create balance snapshot", "plaid_account_id", plaidAccountID, "error", err)
 			skippedCount++
 			continue
 		}
@@ -787,8 +810,12 @@ func (s *transactionSyncService) createBalanceSnapshots(
 		successCount++
 	}
 
-	log.Printf("Created %d balance snapshots for item %s (skipped %d, deduped %d)",
-		successCount, linkedItem.ID, skippedCount, dedupedCount)
+	s.logger.Info("created balance snapshots",
+		"item_id", linkedItem.ID,
+		"created", successCount,
+		"skipped", skippedCount,
+		"deduped", dedupedCount,
+	)
 	return nil
 }
 
@@ -829,7 +856,7 @@ func (s *transactionSyncService) createBalanceSnapshot(
 
 	// Validate snapshot has at least one balance
 	if snapshot.CurrentBalance == nil && snapshot.AvailableBalance == nil {
-		log.Printf("Warning: Account %s has neither current nor available balance, skipping snapshot", plaidAccountID)
+		s.logger.Warn("account has neither current nor available balance, skipping snapshot", "plaid_account_id", plaidAccountID)
 		return nil
 	}
 
