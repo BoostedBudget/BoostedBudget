@@ -296,6 +296,64 @@ func TestGetEffectiveSubscription_NilOverrideUsesBaseTier(t *testing.T) {
 	assert.Equal(t, domain.TierPremium, effective.Tier, "Nil override should use base tier")
 }
 
+// TestGetHistoricalDepthLimit_Premium tests that premium tier returns 730 days of history
+func TestGetHistoricalDepthLimit_Premium(t *testing.T) {
+	tierConfig, err := config.LoadTierConfig()
+	require.NoError(t, err)
+
+	service := NewSubscriptionService(tierConfig, nil)
+	ctx := context.Background()
+
+	user := &domain.User{
+		ID:               "user-123",
+		SubscriptionTier: string(domain.TierPremium),
+	}
+
+	days, err := service.GetHistoricalDepthLimit(ctx, user)
+	require.NoError(t, err)
+	assert.Equal(t, 730, days, "Premium tier should return 730 days of history")
+}
+
+// TestGetHistoricalDepthLimit_Household5 tests that household tiers also return 730 days
+func TestGetHistoricalDepthLimit_Household5(t *testing.T) {
+	tierConfig, err := config.LoadTierConfig()
+	require.NoError(t, err)
+
+	service := NewSubscriptionService(tierConfig, nil)
+	ctx := context.Background()
+
+	user := &domain.User{
+		ID:               "user-household",
+		SubscriptionTier: string(domain.TierHousehold5),
+	}
+
+	days, err := service.GetHistoricalDepthLimit(ctx, user)
+	require.NoError(t, err)
+	assert.Equal(t, 730, days, "Household5 tier should return 730 days of history")
+}
+
+// TestGetHistoricalDepthLimit_ManualOverride tests that manual tier override is respected
+func TestGetHistoricalDepthLimit_ManualOverride(t *testing.T) {
+	tierConfig, err := config.LoadTierConfig()
+	require.NoError(t, err)
+
+	service := NewSubscriptionService(tierConfig, nil)
+	ctx := context.Background()
+
+	overrideTier := string(domain.TierHousehold5)
+	futureExpiry := time.Now().Add(30 * 24 * time.Hour)
+	user := &domain.User{
+		ID:                 "user-123",
+		SubscriptionTier:   string(domain.TierPremium),
+		ManualTierOverride: &overrideTier,
+		ManualTierEndsAt:   &futureExpiry,
+	}
+
+	days, err := service.GetHistoricalDepthLimit(ctx, user)
+	require.NoError(t, err)
+	assert.Equal(t, 730, days, "Manual override to household_5 should still return 730 days")
+}
+
 // TestGetEffectiveSubscription_PermanentOverride tests that a nil ManualTierEndsAt means
 // the override never expires (permanent override).
 func TestGetEffectiveSubscription_PermanentOverride(t *testing.T) {

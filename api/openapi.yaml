@@ -2749,43 +2749,6 @@ components:
         - tiers
         - default_tier
       type: object
-    SyncStats:
-      additionalProperties: false
-      properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          examples:
-            - https://api.boostedbudget.com/schemas/SyncStats.json
-          format: uri
-          readOnly: true
-          type: string
-        accounts_limit:
-          format: int64
-          type: integer
-        accounts_synced:
-          format: int64
-          type: integer
-        can_sync_more:
-          type: boolean
-        month:
-          type: string
-        reset_date:
-          format: date-time
-          type: string
-        total_transactions:
-          format: int64
-          type: integer
-        user_id:
-          type: string
-      required:
-        - user_id
-        - month
-        - accounts_synced
-        - accounts_limit
-        - total_transactions
-        - can_sync_more
-        - reset_date
-      type: object
     SyncStatusMetrics:
       additionalProperties: false
       properties:
@@ -6324,28 +6287,6 @@ paths:
       tags:
         - Subscription
         - Paddle
-  /api/v1/sync-stats:
-    get:
-      description: Returns monthly sync usage statistics for the authenticated user.
-      operationId: getSyncStats
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SyncStats"
-          description: OK
-        default:
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/ErrorModel"
-          description: Error
-      security:
-        - clerk: []
-      summary: Get sync statistics
-      tags:
-        - Sync
   /api/v1/tags:
     get:
       description: Retrieves all tags for the authenticated user.

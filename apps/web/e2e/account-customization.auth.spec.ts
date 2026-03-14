@@ -253,19 +253,6 @@ async function mockAccountsAPIs(page: Page) {
     });
   });
 
-  // Mock sync stats endpoint (Issue #582 - required by SyncStatsCard)
-  await page.route('**/api/v1/sync/stats*', (route) => {
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        syncs_this_month: 5,
-        syncs_limit: 30,
-        last_sync: '2025-01-01T00:00:00Z',
-        next_sync_available: '2025-01-02T00:00:00Z',
-      }),
-    });
-  });
 }
 
 // Helper to navigate to accounts page

@@ -61,11 +61,11 @@ type transactionSyncService struct {
 	linkedItemRepo            repository.LinkedItemRepository
 	transactionRepo           repository.TransactionRepository
 	accountRepo               repository.AccountRepository          // Issue #261: For account mapping (Plaid account_id -> internal UUID)
-	profileRepo               repository.ProfileRepository          // Issue #242: For fetching user tier during sync audit
+	profileRepo               repository.ProfileRepository          // For fetching user subscription tier (historical depth)
 	balanceSnapshotRepo       repository.BalanceSnapshotRepository  // Issue #353: For storing balance snapshots
 	plaidService              PlaidService
 	encryptionService         EncryptionService
-	syncLimitService          SyncLimitService              // Issue #242: Monthly sync limits and tier-based historical depth
+	subscriptionService       *SubscriptionService          // For tier-based historical depth limit
 	ruleApplicationService    RuleApplicationService        // Issue #346: Apply categorization rules to new transactions
 	budgetSyncService         BudgetSyncService             // Issue #494: Sync budget amounts after transaction sync
 	transactionMonitorService TransactionMonitorService     // Issue #36: Auto-detect completed transfer suggestions
@@ -81,7 +81,7 @@ func NewTransactionSyncService(
 	balanceSnapshotRepo repository.BalanceSnapshotRepository,
 	plaidService PlaidService,
 	encryptionService EncryptionService,
-	syncLimitService SyncLimitService,
+	subscriptionService *SubscriptionService,
 	ruleApplicationService RuleApplicationService,
 	budgetSyncService BudgetSyncService,               // Issue #494: Sync budget amounts
 	transactionMonitorService TransactionMonitorService, // Issue #36: Auto-detect completed transfers
@@ -95,7 +95,7 @@ func NewTransactionSyncService(
 		balanceSnapshotRepo:       balanceSnapshotRepo,
 		plaidService:              plaidService,
 		encryptionService:         encryptionService,
-		syncLimitService:          syncLimitService,
+		subscriptionService:       subscriptionService,
 		ruleApplicationService:    ruleApplicationService,
 		budgetSyncService:         budgetSyncService,
 		transactionMonitorService: transactionMonitorService,
@@ -174,7 +174,6 @@ func (s *transactionSyncService) ProcessWebhook(ctx context.Context, webhook *do
 
 // SyncTransactions fetches all transaction pages from Plaid using cursor-based pagination.
 // Issue #260: Plaid TransactionsSync API Integration - core pagination logic
-// Issue #242: Monthly sync limits and tier-based historical depth
 func (s *transactionSyncService) SyncTransactions(
 	ctx context.Context,
 	linkedItem *domain.LinkedItem,
@@ -185,22 +184,20 @@ func (s *transactionSyncService) SyncTransactions(
 		cursor = *linkedItem.Cursor
 	}
 
-	// Step 2: Check sync limits (Issue #242: monthly account sync limits)
-	// Only check limits on FIRST sync (empty cursor). Re-syncs are always allowed.
+	// Step 2: Determine historical depth for first sync
+	// Only applies on FIRST sync (empty cursor). Re-syncs use cursor-based incremental sync.
 	var daysRequested int
 	if cursor == "" {
-		// Check if user is allowed to sync this account this month
-		// Note: We need to get the plaid_account_id from one of the accounts linked to this item
-		// For now, we check at the item level (any account in this item counts)
-		// TODO: Future enhancement - check per-account if needed
-
-		// Get historical depth limit based on user's subscription tier
-		daysHistorical, err := s.syncLimitService.GetHistoricalDepthLimit(ctx, linkedItem.UserID)
+		// Look up user to determine their tier-based historical depth limit
+		user, err := s.profileRepo.GetUserByID(ctx, linkedItem.UserID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get user for historical depth: %w", err)
+		}
+		daysHistorical, err := s.subscriptionService.GetHistoricalDepthLimit(ctx, user)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get historical depth limit: %w", err)
 		}
 		daysRequested = daysHistorical
-
 		log.Printf("First sync for item %s: requesting %d days of historical transactions", linkedItem.ID, daysRequested)
 	} else {
 		// Re-sync (cursor-based) - no historical depth needed
@@ -338,53 +335,6 @@ func (s *transactionSyncService) SyncTransactions(
 	if s.budgetSyncService != nil {
 		if err := s.budgetSyncService.RecalculateBudgetAmounts(ctx, linkedItem.UserID); err != nil {
 			log.Printf("Warning: Failed to sync budget amounts for user %s: %v", linkedItem.UserID, err)
-		}
-	}
-
-	// ========================================================================
-	// Issue #242: Record Sync Audit for Monthly Limits
-	// Record sync for audit trail (tracks monthly account sync limits)
-	// ========================================================================
-
-	// Only record audit for first-sync (empty initial cursor)
-	// Re-syncs don't count against monthly limits (UPSERT pattern)
-	if linkedItem.Cursor == nil || *linkedItem.Cursor == "" {
-		// Get accounts for this linked item to record sync audit
-		accounts, err := s.accountRepo.GetByLinkedItemID(ctx, linkedItem.ID)
-		if err != nil {
-			log.Printf("Warning: Failed to get accounts for sync audit recording: %v", err)
-			// Don't fail the entire sync - audit recording is non-critical for MVP
-		} else if len(accounts) > 0 {
-			// Record sync for first account as representative (MVP approach)
-			// Future enhancement: record for all accounts if needed
-			account := accounts[0]
-
-			// Get user to determine tier at sync time
-			user, err := s.profileRepo.GetUserByID(ctx, linkedItem.UserID)
-			if err != nil {
-				log.Printf("Warning: Failed to get user for sync audit recording: %v", err)
-				// Don't fail the entire sync - audit recording is non-critical
-			} else {
-				// Parse user's subscription tier
-				tier := domain.TierName(user.SubscriptionTier)
-
-				transactionCount := len(result.Added) + len(result.Modified)
-				err = s.syncLimitService.RecordSync(
-					ctx,
-					linkedItem.UserID,
-					account.ID,
-					account.PlaidAccountID,
-					tier,
-					daysRequested,
-					transactionCount,
-				)
-				if err != nil {
-					log.Printf("Warning: Failed to record sync audit for account %s: %v", account.ID, err)
-					// Don't fail the entire sync - audit recording is non-critical
-				} else {
-					log.Printf("Recorded sync audit for account %s: %d transactions, %d days (tier=%s)", account.ID, transactionCount, daysRequested, tier)
-				}
-			}
 		}
 	}
 
