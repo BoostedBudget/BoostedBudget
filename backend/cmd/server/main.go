@@ -50,18 +50,36 @@ func main() {
 		log.Println("⚠️  Running without database (set DATABASE_URL to enable)")
 	}
 
+	// Validate CORS configuration before starting (fail-fast for production misconfiguration)
+	if err := middleware.ValidateCORSConfig(cfg.CORSAllowedOrigins, cfg.Environment); err != nil {
+		log.Fatal("CORS configuration error:", err)
+	}
+
 	// Create Echo instance
 	e := echo.New()
+
+	// HTTP server hardening: timeouts and max header size
+	e.Server.ReadTimeout = cfg.ReadTimeout
+	e.Server.WriteTimeout = cfg.WriteTimeout
+	e.Server.IdleTimeout = cfg.IdleTimeout
+	e.Server.MaxHeaderBytes = 8 << 10 // 8KB
 
 	// Register request validator (required for c.Validate() in handlers)
 	e.Validator = middleware.NewValidator()
 
 	// Middleware (order matters!)
 	e.Use(middleware.RequestID())                                                          // 1. Generate request IDs first
-	e.Use(middleware.StructuredLogging(os.Stdout))                                         // 2. Structured JSON logging
-	e.Use(middleware.MetricsMiddleware())                                                  // 3. Prometheus metrics
-	e.Use(echomiddleware.Recover())                                                        // 4. Panic recovery
-	e.Use(echomiddleware.CORSWithConfig(middleware.GetCORSConfig(cfg.CORSAllowedOrigins))) // 5. CORS handling with configured origins
+	e.Use(middleware.SecurityHeaders(cfg.Environment))                                    // 2. Security hardening headers
+	e.Use(middleware.IPRateLimiter(middleware.RateLimitConfig{                            // 3. Per-IP rate limiting
+		IPLimit:           cfg.RateLimitIP,
+		AuthEndpointLimit: cfg.RateLimitAuth,
+		WindowDuration:    time.Minute,
+	}))
+	e.Use(middleware.StructuredLogging(os.Stdout))                                         // 4. Structured JSON logging
+	e.Use(middleware.MetricsMiddleware())                                                  // 5. Prometheus metrics
+	e.Use(echomiddleware.Recover())                                                        // 6. Panic recovery
+	e.Use(echomiddleware.BodyLimit(cfg.MaxBodySize))                                       // 7. Request body size limit
+	e.Use(echomiddleware.CORSWithConfig(middleware.GetCORSConfig(cfg.CORSAllowedOrigins))) // 8. CORS handling with configured origins
 
 	// Initialize Huma API wrapping Echo for OpenAPI generation
 	// Huma provides automatic OpenAPI 3.1 spec generation from Go code

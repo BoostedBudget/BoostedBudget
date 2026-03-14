@@ -10,6 +10,47 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+// sensitiveQueryParams lists URL query parameter names whose values must be redacted from logs.
+var sensitiveQueryParams = map[string]struct{}{
+	"token":         {},
+	"password":      {},
+	"key":           {},
+	"secret":        {},
+	"authorization": {},
+	"access_token":  {},
+	"refresh_token": {},
+	"api_key":       {},
+	"apikey":        {},
+}
+
+// redactQueryParams replaces values of sensitive query parameters with [REDACTED].
+// The comparison is case-insensitive. Non-sensitive parameters are returned unchanged.
+// Builds the result string manually to avoid URL-encoding the [REDACTED] marker.
+func redactQueryParams(rawQuery string) string {
+	if rawQuery == "" {
+		return rawQuery
+	}
+
+	pairs := strings.Split(rawQuery, "&")
+	hasRedaction := false
+
+	for i, pair := range pairs {
+		k, _, found := strings.Cut(pair, "=")
+		if !found {
+			continue
+		}
+		if _, sensitive := sensitiveQueryParams[strings.ToLower(k)]; sensitive {
+			pairs[i] = k + "=[REDACTED]"
+			hasRedaction = true
+		}
+	}
+
+	if !hasRedaction {
+		return rawQuery
+	}
+	return strings.Join(pairs, "&")
+}
+
 // StructuredLogger provides structured logging with JSON format
 type StructuredLogger struct {
 	writer io.Writer
@@ -141,9 +182,9 @@ func StructuredLogging(writer io.Writer) echo.MiddlewareFunc {
 				fields["user_agent"] = userAgent
 			}
 
-			// Add query parameters if present
+			// Add query parameters if present (sensitive values redacted)
 			if query := req.URL.RawQuery; query != "" {
-				fields["query"] = query
+				fields["query"] = redactQueryParams(query)
 			}
 
 			// Determine log level and add error if present
