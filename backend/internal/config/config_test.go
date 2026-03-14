@@ -184,3 +184,19 @@ func TestLoad_DevelopmentSkipsValidation(t *testing.T) {
 	_, err := Load()
 	assert.NoError(t, err)
 }
+
+func TestLoad_DatabaseMaxConnsDefault(t *testing.T) {
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, int32(25), cfg.DatabaseMaxConns, "DatabaseMaxConns should default to 25")
+}
+
+func TestLoad_DatabaseMaxConnsConfigurable(t *testing.T) {
+	t.Setenv("DATABASE_MAX_CONNS", "50")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, int32(50), cfg.DatabaseMaxConns)
+}
