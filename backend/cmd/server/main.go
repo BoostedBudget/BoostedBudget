@@ -456,6 +456,7 @@ func main() {
 				itemErrorService := services.NewItemErrorService(
 					linkedItemRepo,
 					notificationRepo,
+					profileRepo,
 					plaidService,
 					encryptionService,
 					emailService,
