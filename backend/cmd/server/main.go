@@ -38,7 +38,7 @@ func main() {
 
 	// Log startup configuration summary
 	log.Printf("📋 Startup config summary (env=%s):", cfg.Environment)
-	log.Printf("   Database:   %s", boolStatus(cfg.DatabaseURL != ""))
+	log.Printf("   Database:   %s (max_conns=%d)", boolStatus(cfg.DatabaseURL != ""), cfg.DatabaseMaxConns)
 	log.Printf("   Clerk:      %s", boolStatus(cfg.ClerkSecretKey != ""))
 	log.Printf("   Encryption: %s", boolStatus(cfg.EncryptionKey != ""))
 	log.Printf("   Plaid:      %s", boolStatus(cfg.PlaidClientID != "" && cfg.PlaidSecret != ""))
@@ -49,7 +49,9 @@ func main() {
 	// Initialize database connection pool (optional for local dev)
 	var db *pgxpool.Pool
 	if cfg.DatabaseURL != "" {
-		db, err = database.NewPoolFromURL(context.Background(), cfg.DatabaseURL)
+		dbConfig := database.DefaultConfig(cfg.DatabaseURL)
+		dbConfig.MaxConns = cfg.DatabaseMaxConns
+		db, err = database.NewPool(context.Background(), dbConfig)
 		if err != nil {
 			log.Fatal("Failed to connect to database:", err)
 		}
