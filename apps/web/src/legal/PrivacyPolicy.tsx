@@ -85,8 +85,7 @@ export function PrivacyPolicy() {
             <li><strong>Clerk:</strong> Authentication and user management</li>
             <li><strong>Plaid:</strong> Secure bank account connectivity and transaction data</li>
             <li><strong>Stripe:</strong> Payment processing for subscriptions</li>
-            <li><strong>Google AdSense:</strong> Advertising for free-tier users (with consent)</li>
-            <li><strong>Cloud Infrastructure:</strong> AWS (data hosting), Fly.io (application hosting)</li>
+<li><strong>Cloud Infrastructure:</strong> AWS (data hosting), Fly.io (application hosting)</li>
           </ul>
           <p>
             These providers may have access to your information only to perform specific tasks on our behalf

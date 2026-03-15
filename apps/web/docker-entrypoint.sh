@@ -23,7 +23,14 @@ EOF
 # Staging: 3443, Production: 443 (default)
 sed -i "s/HTTPS_PORT_PLACEHOLDER/$HTTPS_PORT/g" /etc/nginx/nginx.conf
 
-echo "Runtime configuration injected (HTTPS_PORT=$HTTPS_PORT)"
+# Replace CSP report-uri placeholder with Sentry CSP endpoint URL.
+# Format: https://sentry.io/api/<PROJECT_ID>/security/?sentry_key=<PUBLIC_KEY>
+# If SENTRY_CSP_REPORT_URI is not set, the directive becomes report-uri (empty), which is a no-op.
+# Uses | as delimiter because Sentry URLs contain /.
+SENTRY_CSP_REPORT_URI="${SENTRY_CSP_REPORT_URI:-}"
+sed -i "s|CSP_REPORT_URI_PLACEHOLDER|$SENTRY_CSP_REPORT_URI|g" /etc/nginx/nginx.conf
+
+echo "Runtime configuration injected (HTTPS_PORT=$HTTPS_PORT, SENTRY_CSP_REPORT_URI=${SENTRY_CSP_REPORT_URI:-<not set>})"
 
 # Execute the CMD
 exec "$@"

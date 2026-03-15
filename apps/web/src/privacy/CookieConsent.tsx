@@ -13,15 +13,23 @@ interface CookieConsentProps {
   onConsentChange?: (consents: CookieConsentSettings) => void;
 }
 
+const DEFAULT_CONSENTS: CookieConsentSettings = {
+  necessary: true,
+  analytics: false,
+  advertising: false,
+};
+
+const calculateExpiryDate = (): Date => {
+  const expires = new Date();
+  expires.setDate(expires.getDate() + COOKIE_CONSENT_EXPIRES_DAYS);
+  return expires;
+};
+
 export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange }) => {
   const [consentData, setConsentData] = useCookieState<CookieConsentData>(COOKIE_CONSENT_NAME);
   const [showBanner, setShowBanner] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
-  const [customConsents, setCustomConsents] = useState<CookieConsentSettings>({
-    necessary: true,
-    analytics: false,
-    advertising: false,
-  });
+  const [customConsents, setCustomConsents] = useState<CookieConsentSettings>(DEFAULT_CONSENTS);
 
   useEffect(() => {
     // Check if user has already provided consent
@@ -42,13 +50,9 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
       version: COOKIE_CONSENT_VERSION,
     };
 
-    // Set cookie to expire in 1 year
-    const expires = new Date();
-    expires.setDate(expires.getDate() + COOKIE_CONSENT_EXPIRES_DAYS);
-
     setConsentData(newConsentData, {
       path: '/',
-      expires,
+      expires: calculateExpiryDate(),
       sameSite: 'strict',
       secure: window.location.protocol === 'https:',
     });
@@ -183,8 +187,7 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
                   />
                 </div>
                 <p className="cookie-option-description">
-                  Used to display personalized ads for free tier users via Google AdSense.
-                  Premium users see no ads regardless of this setting.
+                  Used for advertising and marketing purposes.
                 </p>
               </div>
             </div>
