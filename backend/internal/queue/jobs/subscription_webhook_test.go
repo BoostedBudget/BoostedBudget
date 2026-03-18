@@ -76,6 +76,26 @@ func (m *mockClerkService) UpdateUserMetadata(ctx context.Context, clerkUserID s
 	return args.Error(0)
 }
 
+// mockNotificationRepository is a mock for SubscriptionNotificationRepository
+type mockNotificationRepository struct {
+	mock.Mock
+}
+
+func (m *mockNotificationRepository) Create(ctx context.Context, notification *domain.Notification) error {
+	args := m.Called(ctx, notification)
+	return args.Error(0)
+}
+
+// mockPaddleTransactionRepository is a mock for SubscriptionPaddleTransactionRepository
+type mockPaddleTransactionRepository struct {
+	mock.Mock
+}
+
+func (m *mockPaddleTransactionRepository) Create(ctx context.Context, txn *domain.PaddleTransaction) error {
+	args := m.Called(ctx, txn)
+	return args.Error(0)
+}
+
 // loadWebhookFixture loads a webhook fixture from testdata
 func loadWebhookFixture(t *testing.T, filename string) *domain.PaddleWebhookEvent {
 	t.Helper()
@@ -102,12 +122,21 @@ func loadWebhookFixture(t *testing.T, filename string) *domain.PaddleWebhookEven
 }
 
 // setupWorkerTest creates a worker with mock dependencies
-func setupWorkerTest(t *testing.T) (*SubscriptionWebhookWorker, *mockPaddleWebhookRepository, *mockSubscriptionProfileRepository, *mockClerkService) {
+func setupWorkerTest(t *testing.T) (
+	*SubscriptionWebhookWorker,
+	*mockPaddleWebhookRepository,
+	*mockSubscriptionProfileRepository,
+	*mockClerkService,
+	*mockNotificationRepository,
+	*mockPaddleTransactionRepository,
+) {
 	t.Helper()
 
 	mockWebhookRepo := new(mockPaddleWebhookRepository)
 	mockProfileRepo := new(mockSubscriptionProfileRepository)
 	mockClerk := new(mockClerkService)
+	mockNotifRepo := new(mockNotificationRepository)
+	mockTxnRepo := new(mockPaddleTransactionRepository)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelError,
@@ -118,14 +147,16 @@ func setupWorkerTest(t *testing.T) (*SubscriptionWebhookWorker, *mockPaddleWebho
 	require.NoError(t, err)
 
 	worker := NewSubscriptionWebhookWorker(SubscriptionWebhookWorkerDeps{
-		PaddleWebhookRepo: mockWebhookRepo,
-		ProfileRepo:       mockProfileRepo,
-		ClerkService:      mockClerk,
-		TierConfig:        tierConfig,
-		Logger:            logger,
+		PaddleWebhookRepo:     mockWebhookRepo,
+		ProfileRepo:           mockProfileRepo,
+		ClerkService:          mockClerk,
+		NotificationRepo:      mockNotifRepo,
+		PaddleTransactionRepo: mockTxnRepo,
+		TierConfig:            tierConfig,
+		Logger:                logger,
 	})
 
-	return worker, mockWebhookRepo, mockProfileRepo, mockClerk
+	return worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockNotifRepo, mockTxnRepo
 }
 
 // createRiverJob creates a mock River job for testing
@@ -146,7 +177,7 @@ func createRiverJob(args SubscriptionWebhookArgs) *river.Job[SubscriptionWebhook
 
 // TestWorker_SubscriptionCreated_Success tests successful subscription.created processing
 func TestWorker_SubscriptionCreated_Success(t *testing.T) {
-	worker, mockWebhookRepo, mockProfileRepo, mockClerk := setupWorkerTest(t)
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
 	ctx := context.Background()
 
 	webhook := loadWebhookFixture(t, "subscription_created.json")
@@ -185,7 +216,7 @@ func TestWorker_SubscriptionCreated_Success(t *testing.T) {
 
 // TestWorker_SubscriptionCreated_UpdatesClerkMetadata tests Clerk metadata sync
 func TestWorker_SubscriptionCreated_UpdatesClerkMetadata(t *testing.T) {
-	worker, mockWebhookRepo, mockProfileRepo, mockClerk := setupWorkerTest(t)
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
 	ctx := context.Background()
 
 	webhook := loadWebhookFixture(t, "subscription_created.json")
@@ -225,7 +256,7 @@ func TestWorker_SubscriptionCreated_UpdatesClerkMetadata(t *testing.T) {
 
 // TestWorker_SubscriptionActivated_Success tests subscription.activated event
 func TestWorker_SubscriptionActivated_Success(t *testing.T) {
-	worker, mockWebhookRepo, mockProfileRepo, mockClerk := setupWorkerTest(t)
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockNotifRepo, _ := setupWorkerTest(t)
 	ctx := context.Background()
 
 	webhook := loadWebhookFixture(t, "subscription_activated.json")
@@ -243,9 +274,9 @@ func TestWorker_SubscriptionActivated_Success(t *testing.T) {
 	}
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
-	mockProfileRepo.On("UpdatePaddleCustomerID", ctx, mock.Anything, mock.Anything).Return(nil)
-	// Issue #48: Updated signature to include subscriptionID parameter
+	// Dedicated handler: no UpdatePaddleCustomerID call (unlike created)
 	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockNotifRepo.On("Create", ctx, mock.Anything).Return(nil)
 	mockProfileRepo.On("GetUserByID", ctx, mock.Anything).Return(user, nil)
 	mockClerk.On("UpdateUserMetadata", ctx, mock.Anything, mock.Anything).Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
@@ -257,7 +288,7 @@ func TestWorker_SubscriptionActivated_Success(t *testing.T) {
 
 // TestWorker_SubscriptionUpdated_Success tests subscription.updated event
 func TestWorker_SubscriptionUpdated_Success(t *testing.T) {
-	worker, mockWebhookRepo, mockProfileRepo, _ := setupWorkerTest(t)
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
 	ctx := context.Background()
 
 	webhook := loadWebhookFixture(t, "subscription_updated.json")
@@ -269,9 +300,17 @@ func TestWorker_SubscriptionUpdated_Success(t *testing.T) {
 	}
 	job := createRiverJob(args)
 
+	user := &domain.User{
+		ID:          "user_2abc123def456",
+		ClerkUserID: "clerk_user_123",
+	}
+
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
 	// Issue #48: Updated signature to include subscriptionID parameter
 	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", mock.Anything, "active", (*time.Time)(nil), mock.AnythingOfType("*time.Time"), mock.Anything).Return(nil)
+	// Issues #747 #748: syncClerkMetadata is called after update
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
 	err := worker.Work(ctx, job)
@@ -283,7 +322,7 @@ func TestWorker_SubscriptionUpdated_Success(t *testing.T) {
 
 // TestWorker_SubscriptionCanceled_Success tests subscription.canceled event
 func TestWorker_SubscriptionCanceled_Success(t *testing.T) {
-	worker, mockWebhookRepo, mockProfileRepo, _ := setupWorkerTest(t)
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
 	ctx := context.Background()
 
 	webhook := loadWebhookFixture(t, "subscription_canceled.json")
@@ -295,13 +334,19 @@ func TestWorker_SubscriptionCanceled_Success(t *testing.T) {
 	}
 	job := createRiverJob(args)
 
-	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
-	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(&domain.User{
+	canceledUser := &domain.User{
 		ID:               "user_2abc123def456",
+		ClerkUserID:      "clerk_user_123",
 		SubscriptionTier: "premium",
-	}, nil)
+	}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	// GetUserByID called twice: once in handler, once in syncClerkMetadata
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(canceledUser, nil)
 	// Issue #48: Updated signature to include subscriptionID parameter (nil for cancel events)
 	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	// Issues #747 #748: syncClerkMetadata called after cancel (no notification — user-initiated)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
 	err := worker.Work(ctx, job)
@@ -311,7 +356,7 @@ func TestWorker_SubscriptionCanceled_Success(t *testing.T) {
 
 // TestWorker_TransactionCompleted_Success tests transaction.completed event
 func TestWorker_TransactionCompleted_Success(t *testing.T) {
-	worker, mockWebhookRepo, _, _ := setupWorkerTest(t)
+	worker, mockWebhookRepo, _, _, _, mockTxnRepo := setupWorkerTest(t)
 	ctx := context.Background()
 
 	webhook := loadWebhookFixture(t, "transaction_completed.json")
@@ -324,6 +369,10 @@ func TestWorker_TransactionCompleted_Success(t *testing.T) {
 	job := createRiverJob(args)
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	// Issues #747 #748: Records the completed transaction
+	mockTxnRepo.On("Create", ctx, mock.MatchedBy(func(txn *domain.PaddleTransaction) bool {
+		return txn.Status == "completed" && txn.UserID == "user_2abc123def456"
+	})).Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
 	err := worker.Work(ctx, job)
@@ -333,7 +382,7 @@ func TestWorker_TransactionCompleted_Success(t *testing.T) {
 
 // TestWorker_TransactionPaymentFailed_Success tests transaction.payment_failed event
 func TestWorker_TransactionPaymentFailed_Success(t *testing.T) {
-	worker, mockWebhookRepo, _, _ := setupWorkerTest(t)
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockNotifRepo, mockTxnRepo := setupWorkerTest(t)
 	ctx := context.Background()
 
 	webhook := loadWebhookFixture(t, "transaction_payment_failed.json")
@@ -345,7 +394,25 @@ func TestWorker_TransactionPaymentFailed_Success(t *testing.T) {
 	}
 	job := createRiverJob(args)
 
+	user := &domain.User{
+		ID:                 "user_2abc123def456",
+		ClerkUserID:        "clerk_user_123",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "past_due",
+	}
+
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	// Issues #747 #748: Records the failed transaction
+	mockTxnRepo.On("Create", ctx, mock.MatchedBy(func(txn *domain.PaddleTransaction) bool {
+		return txn.Status == "failed" && txn.UserID == "user_2abc123def456"
+	})).Return(nil)
+	// Creates payment_failed notification
+	mockNotifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
+		return n.Type == "payment_failed" && n.UserID == "user_2abc123def456"
+	})).Return(nil)
+	// Syncs Clerk metadata
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
 	err := worker.Work(ctx, job)
@@ -355,7 +422,7 @@ func TestWorker_TransactionPaymentFailed_Success(t *testing.T) {
 
 // TestWorker_WebhookNotFound_CancelsJob tests missing webhook handling
 func TestWorker_WebhookNotFound_CancelsJob(t *testing.T) {
-	worker, mockWebhookRepo, _, _ := setupWorkerTest(t)
+	worker, mockWebhookRepo, _, _, _, _ := setupWorkerTest(t)
 	ctx := context.Background()
 
 	args := SubscriptionWebhookArgs{
@@ -377,7 +444,7 @@ func TestWorker_WebhookNotFound_CancelsJob(t *testing.T) {
 
 // TestWorker_AlreadyProcessed_Idempotent tests idempotency
 func TestWorker_AlreadyProcessed_Idempotent(t *testing.T) {
-	worker, mockWebhookRepo, mockProfileRepo, _ := setupWorkerTest(t)
+	worker, mockWebhookRepo, mockProfileRepo, _, _, _ := setupWorkerTest(t)
 	ctx := context.Background()
 
 	webhook := loadWebhookFixture(t, "subscription_created.json")
@@ -404,7 +471,7 @@ func TestWorker_AlreadyProcessed_Idempotent(t *testing.T) {
 
 // TestWorker_UnknownEventType_SkipsProcessing tests unknown event handling
 func TestWorker_UnknownEventType_SkipsProcessing(t *testing.T) {
-	worker, mockWebhookRepo, _, _ := setupWorkerTest(t)
+	worker, mockWebhookRepo, _, _, _, _ := setupWorkerTest(t)
 	ctx := context.Background()
 
 	webhook := &domain.PaddleWebhookEvent{
@@ -435,7 +502,7 @@ func TestWorker_UnknownEventType_SkipsProcessing(t *testing.T) {
 
 // TestWorker_ProcessingError_MarksAsFailed tests error handling
 func TestWorker_ProcessingError_MarksAsFailed(t *testing.T) {
-	worker, mockWebhookRepo, mockProfileRepo, _ := setupWorkerTest(t)
+	worker, mockWebhookRepo, mockProfileRepo, _, _, _ := setupWorkerTest(t)
 	ctx := context.Background()
 
 	webhook := loadWebhookFixture(t, "subscription_created.json")
@@ -465,7 +532,7 @@ func TestWorker_ProcessingError_MarksAsFailed(t *testing.T) {
 
 // TestWorker_DatabaseError_ReturnsError tests temporary error handling
 func TestWorker_DatabaseError_ReturnsError(t *testing.T) {
-	worker, mockWebhookRepo, _, _ := setupWorkerTest(t)
+	worker, mockWebhookRepo, _, _, _, _ := setupWorkerTest(t)
 	ctx := context.Background()
 
 	args := SubscriptionWebhookArgs{
@@ -487,7 +554,7 @@ func TestWorker_DatabaseError_ReturnsError(t *testing.T) {
 
 // TestWorker_MalformedPayload_ReturnsError tests invalid JSON handling
 func TestWorker_MalformedPayload_ReturnsError(t *testing.T) {
-	worker, mockWebhookRepo, _, _ := setupWorkerTest(t)
+	worker, mockWebhookRepo, _, _, _, _ := setupWorkerTest(t)
 	ctx := context.Background()
 
 	webhook := &domain.PaddleWebhookEvent{
@@ -517,7 +584,7 @@ func TestWorker_MalformedPayload_ReturnsError(t *testing.T) {
 
 // TestWorker_MissingUserID_ReturnsError tests validation
 func TestWorker_MissingUserID_ReturnsError(t *testing.T) {
-	worker, mockWebhookRepo, _, _ := setupWorkerTest(t)
+	worker, mockWebhookRepo, _, _, _, _ := setupWorkerTest(t)
 	ctx := context.Background()
 
 	// Create webhook without user_id in custom_data
@@ -590,7 +657,7 @@ func TestSubscriptionWebhookArgs_Kind(t *testing.T) {
 func TestWorker_ResolveTierFromItems(t *testing.T) {
 	// Import config package for TierConfig
 	// Need to add this to worker setup
-	worker, _, _, _ := setupWorkerTest(t)
+	worker, _, _, _, _, _ := setupWorkerTest(t)
 
 	t.Run("resolves premium tier from monthly price ID", func(t *testing.T) {
 		// Load a webhook fixture to get the real structure
@@ -648,4 +715,176 @@ func TestWorker_ResolveTierFromItems(t *testing.T) {
 		tier := worker.resolveTierFromItems(data)
 		assert.Equal(t, domain.TierPremium, tier)
 	})
+}
+
+// TestWorker_SubscriptionPaused_Success tests subscription.paused event uses "paused" status.
+func TestWorker_SubscriptionPaused_Success(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockNotifRepo, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	webhook := loadWebhookFixture(t, "subscription_paused.json")
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.paused",
+	}
+	job := createRiverJob(args)
+
+	user := &domain.User{
+		ID:               "user_2abc123def456",
+		ClerkUserID:      "clerk_user_123",
+		SubscriptionTier: "premium",
+	}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "paused", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	mockNotifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
+		return n.Type == "subscription_paused" && n.UserID == "user_2abc123def456"
+	})).Return(nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockWebhookRepo.AssertExpectations(t)
+	mockProfileRepo.AssertExpectations(t)
+	mockNotifRepo.AssertExpectations(t)
+	mockClerk.AssertExpectations(t)
+}
+
+// TestWorker_SubscriptionPastDue_Success tests subscription.past_due event sends notification.
+func TestWorker_SubscriptionPastDue_Success(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockNotifRepo, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	webhook := loadWebhookFixture(t, "subscription_past_due.json")
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.past_due",
+	}
+	job := createRiverJob(args)
+
+	user := &domain.User{
+		ID:               "user_2abc123def456",
+		ClerkUserID:      "clerk_user_123",
+		SubscriptionTier: "premium",
+	}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "past_due", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	mockNotifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
+		return n.Type == "subscription_past_due" && n.UserID == "user_2abc123def456"
+	})).Return(nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockWebhookRepo.AssertExpectations(t)
+	mockProfileRepo.AssertExpectations(t)
+	mockNotifRepo.AssertExpectations(t)
+	mockClerk.AssertExpectations(t)
+}
+
+// TestWorker_SubscriptionResumed_Success tests subscription.resumed event.
+func TestWorker_SubscriptionResumed_Success(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockNotifRepo, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	webhook := loadWebhookFixture(t, "subscription_resumed.json")
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.resumed",
+	}
+	job := createRiverJob(args)
+
+	user := &domain.User{
+		ID:          "user_2abc123def456",
+		ClerkUserID: "clerk_user_123",
+	}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "active", (*time.Time)(nil), (*time.Time)(nil), mock.Anything).Return(nil)
+	mockNotifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
+		return n.Type == "subscription_resumed" && n.UserID == "user_2abc123def456"
+	})).Return(nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockWebhookRepo.AssertExpectations(t)
+	mockNotifRepo.AssertExpectations(t)
+}
+
+// TestWorker_SubscriptionTrialing_Success tests subscription.trialing event.
+func TestWorker_SubscriptionTrialing_Success(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockNotifRepo, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	webhook := loadWebhookFixture(t, "subscription_trialing.json")
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.trialing",
+	}
+	job := createRiverJob(args)
+
+	user := &domain.User{
+		ID:          "user_2abc123def456",
+		ClerkUserID: "clerk_user_123",
+	}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "trialing", (*time.Time)(nil), (*time.Time)(nil), mock.Anything).Return(nil)
+	mockNotifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
+		return n.Type == "subscription_trialing" && n.UserID == "user_2abc123def456"
+	})).Return(nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockWebhookRepo.AssertExpectations(t)
+	mockNotifRepo.AssertExpectations(t)
+}
+
+// TestWorker_TransactionCanceled_Success tests transaction.canceled event.
+func TestWorker_TransactionCanceled_Success(t *testing.T) {
+	worker, mockWebhookRepo, _, _, mockNotifRepo, mockTxnRepo := setupWorkerTest(t)
+	ctx := context.Background()
+
+	webhook := loadWebhookFixture(t, "transaction_canceled.json")
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "transaction.canceled",
+	}
+	job := createRiverJob(args)
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockTxnRepo.On("Create", ctx, mock.MatchedBy(func(txn *domain.PaddleTransaction) bool {
+		return txn.Status == "canceled" && txn.UserID == "user_2abc123def456"
+	})).Return(nil)
+	mockNotifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
+		return n.Type == "payment_failed" && n.UserID == "user_2abc123def456"
+	})).Return(nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockWebhookRepo.AssertExpectations(t)
+	mockTxnRepo.AssertExpectations(t)
+	mockNotifRepo.AssertExpectations(t)
 }

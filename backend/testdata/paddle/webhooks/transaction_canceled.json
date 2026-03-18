@@ -1,0 +1,66 @@
+{
+  "event_id": "evt_01h1234567890txncanceled",
+  "event_type": "transaction.canceled",
+  "occurred_at": "2026-03-01T14:00:00Z",
+  "data": {
+    "id": "txn_01h1234567890canceled",
+    "status": "canceled",
+    "customer_id": "ctm_01h1234567890abcdef",
+    "address_id": "add_01h1234567890abcdef",
+    "business_id": null,
+    "custom_data": {
+      "user_id": "user_2abc123def456"
+    },
+    "currency_code": "USD",
+    "origin": "subscription_recurring",
+    "subscription_id": "sub_01h1234567890abcdef",
+    "invoice_id": null,
+    "invoice_number": null,
+    "collection_mode": "automatic",
+    "discount_id": null,
+    "billing_details": null,
+    "billing_period": {
+      "starts_at": "2026-03-01T10:35:00Z",
+      "ends_at": "2026-04-01T10:35:00Z"
+    },
+    "items": [
+      {
+        "price": {
+          "id": "pri_01h1234567890premium",
+          "product_id": "pro_01h1234567890premium",
+          "description": "Premium Monthly",
+          "billing_cycle": {
+            "interval": "month",
+            "frequency": 1
+          },
+          "unit_price": {
+            "amount": "899",
+            "currency_code": "USD"
+          }
+        },
+        "price_id": "pri_01h1234567890premium",
+        "quantity": 1,
+        "proration": null
+      }
+    ],
+    "details": {
+      "totals": {
+        "subtotal": "899",
+        "discount": "0",
+        "tax": "63",
+        "total": "962",
+        "credit": "0",
+        "balance": "962",
+        "grand_total": "962",
+        "fee": null,
+        "earnings": null,
+        "currency_code": "USD"
+      }
+    },
+    "payments": [],
+    "checkout": null,
+    "created_at": "2026-03-01T13:00:00Z",
+    "updated_at": "2026-03-01T14:00:00Z",
+    "billed_at": null
+  }
+}
