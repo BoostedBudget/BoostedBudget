@@ -147,6 +147,11 @@ func (m *MockClerkService) DeleteUser(ctx context.Context, clerkUserID string) e
 	return args.Error(0)
 }
 
+func (m *MockClerkService) UpdateUserMetadata(ctx context.Context, clerkUserID string, metadata map[string]interface{}) error {
+	args := m.Called(ctx, clerkUserID, metadata)
+	return args.Error(0)
+}
+
 // MockAuditLogger for testing
 type MockAuditLogger struct {
 	mock.Mock
