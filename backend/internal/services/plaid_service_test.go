@@ -239,7 +239,8 @@ func TestCreateLinkToken_IncludesCorrectUserID(t *testing.T) {
 	// Note: We can't directly verify userID is in token (it's opaque), but successful creation validates it
 }
 
-// TestCreateLinkToken_IncludesRequiredProducts tests that link token is configured with required Plaid products
+// TestCreateLinkToken_IncludesRequiredProducts tests that link token includes Phase 2 products
+// (#241): TRANSACTIONS + LIABILITIES + INVESTMENTS
 func TestCreateLinkToken_IncludesRequiredProducts(t *testing.T) {
 	clientID := getTestEnv("PLAID_CLIENT_ID")
 	secret := getTestEnv("PLAID_SECRET")
@@ -249,9 +250,9 @@ func TestCreateLinkToken_IncludesRequiredProducts(t *testing.T) {
 
 	// Given: Valid PlaidService
 	cfg := &config.Config{
-		PlaidClientID:   clientID,
-		PlaidSecret:     secret,
-		PlaidEnv:        "sandbox",
+		PlaidClientID:    clientID,
+		PlaidSecret:      secret,
+		PlaidEnv:         "sandbox",
 		PlaidWebhookURL:  "https://api.boostedbudget.com/webhooks/plaid",
 		PlaidRedirectURI: "https://boostedbudget.com/oauth-callback",
 	}
@@ -263,11 +264,43 @@ func TestCreateLinkToken_IncludesRequiredProducts(t *testing.T) {
 	ctx := context.Background()
 	response, err := service.CreateLinkToken(ctx, "user_test-user-123")
 
-	// Then: Link token is created successfully
-	// (Products are configured internally: TRANSACTIONS, AUTH, BALANCE)
-	require.NoError(t, err, "Expected no error - products should be configured correctly")
+	// Then: Link token is created successfully with all 3 Phase 2 products configured:
+	// TRANSACTIONS + LIABILITIES + INVESTMENTS
+	require.NoError(t, err, "Expected no error - all 3 products should be accepted by Plaid sandbox")
 	require.NotNil(t, response, "Expected response")
 	assert.NotEmpty(t, response.LinkToken, "Expected valid link token with products configured")
+}
+
+// TestCreateLinkToken_IncludesAllProducts verifies Phase 2 product configuration
+// (#241: TRANSACTIONS + LIABILITIES + INVESTMENTS)
+func TestCreateLinkToken_IncludesAllProducts(t *testing.T) {
+	clientID := getTestEnv("PLAID_CLIENT_ID")
+	secret := getTestEnv("PLAID_SECRET")
+	if clientID == "" || secret == "" {
+		t.Skip("Skipping integration test: PLAID_CLIENT_ID and PLAID_SECRET required")
+	}
+
+	// Given: Valid PlaidService
+	cfg := &config.Config{
+		PlaidClientID:    clientID,
+		PlaidSecret:      secret,
+		PlaidEnv:         "sandbox",
+		PlaidWebhookURL:  "https://api.boostedbudget.com/webhooks/plaid",
+		PlaidRedirectURI: "https://boostedbudget.com/oauth-callback",
+	}
+
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err, "Setup failed")
+
+	// When: Creating link token
+	ctx := context.Background()
+	response, err := service.CreateLinkToken(ctx, "user_test-user-123")
+
+	// Then: Plaid sandbox accepts all 3 Phase 2 products without error
+	require.NoError(t, err, "Expected no error with Phase 2 products")
+	require.NotNil(t, response, "Expected response")
+	assert.NotEmpty(t, response.LinkToken, "Expected valid link token")
+	assert.NotEmpty(t, response.RequestID, "Expected request ID")
 }
 
 // TestCreateLinkToken_IncludesWebhookURL tests that webhook URL is included in link token configuration
@@ -326,12 +359,12 @@ func TestCreateLinkToken_ReturnsExpirationTime(t *testing.T) {
 	response, err := service.CreateLinkToken(ctx, "user_test-user-123")
 	after := time.Now().Add(31 * time.Minute) // Plaid tokens typically expire in 30 minutes
 
-	// Then: Response includes expiration time
+	// Then: Response includes expiration time (30 minutes from now)
 	require.NoError(t, err, "Expected no error")
 	require.NotNil(t, response, "Expected response")
 	assert.False(t, response.Expiration.IsZero(), "Expected expiration time to be set")
 	assert.True(t, response.Expiration.After(before), "Expiration should be in the future")
-	assert.True(t, response.Expiration.Before(after), "Expiration should be within 31 minutes")
+	assert.True(t, response.Expiration.Before(after), "Expiration should be within ~30 minutes")
 }
 
 // TestCreateLinkToken_PlaidAPIError tests handling of Plaid API errors
@@ -459,24 +492,15 @@ func TestCreateLinkTokenMinimal(t *testing.T) {
 	t.Logf("✅ Minimal link token created successfully: %s (RequestID: %s)", response.LinkToken, response.RequestID)
 }
 
-// TestCreateLinkTokenWithTransactions tests link token creation with AUTH + TRANSACTIONS products.
-// This is Phase 1 of issue #201 - incrementally adding TRANSACTIONS product to identify
-// if it causes the 400 error that was resolved in issue #200.
-//
-// TRANSACTIONS product provides access to:
-// - Historical transaction data (up to 24 months)
-// - Transaction categories and merchant information
-// - Pending and posted transactions
-//
-// Hypothesis: TRANSACTIONS product will NOT cause 400 error when added to AUTH product.
-// Note: Updated in Phase 3 to include redirect_uri (now required).
+// TestCreateLinkTokenWithTransactions tests link token creation with Phase 2 products (#241)
+// TRANSACTIONS + LIABILITIES + INVESTMENTS
 func TestCreateLinkTokenWithTransactions(t *testing.T) {
 	// Skip if Plaid credentials not available in environment
 	if getTestEnv("PLAID_CLIENT_ID") == "" || getTestEnv("PLAID_SECRET") == "" {
 		t.Skip("Plaid credentials not configured - set PLAID_CLIENT_ID and PLAID_SECRET")
 	}
 
-	// Given: Config with credentials and redirect_uri (now required in Phase 3)
+	// Given: Config with credentials and redirect_uri
 	cfg := &config.Config{
 		PlaidClientID:    getTestEnv("PLAID_CLIENT_ID"),
 		PlaidSecret:      getTestEnv("PLAID_SECRET"),
@@ -487,19 +511,19 @@ func TestCreateLinkTokenWithTransactions(t *testing.T) {
 	service, err := NewPlaidService(cfg)
 	require.NoError(t, err, "should create plaid service successfully")
 
-	// When: Creating link token (implementation uses AUTH + TRANSACTIONS + redirect_uri)
+	// When: Creating link token with Phase 2 products
 	ctx := context.Background()
 	userID := time.Now().String()
 
 	response, err := service.CreateLinkToken(ctx, userID)
 
-	// Then: Should succeed - TRANSACTIONS product should not cause 400 error
-	require.NoError(t, err, "TRANSACTIONS product should not cause 400 error")
+	// Then: Should succeed with all 3 Phase 2 products
+	require.NoError(t, err, "TRANSACTIONS+LIABILITIES+INVESTMENTS should not cause 400 error")
 	assert.NotEmpty(t, response.LinkToken, "link token should not be empty")
 	assert.NotEmpty(t, response.Expiration, "expiration should not be empty")
 	assert.NotEmpty(t, response.RequestID, "request ID should not be empty")
 
-	t.Logf("✅ Link token with TRANSACTIONS product: %s (RequestID: %s)", response.LinkToken, response.RequestID)
+	t.Logf("✅ Link token with Phase 2 products: %s (RequestID: %s)", response.LinkToken, response.RequestID)
 }
 
 // TestCreateLinkTokenWithBalance tests link token creation with TRANSACTIONS product only.
@@ -577,14 +601,14 @@ func TestCreateLinkTokenWithRedirectURI(t *testing.T) {
 	service, err := NewPlaidService(cfg)
 	require.NoError(t, err, "should create plaid service successfully")
 
-	// When: Creating link token with full configuration (AUTH + TRANSACTIONS + BALANCE + redirect_uri)
+	// When: Creating link token with redirect_uri configured
 	ctx := context.Background()
 	userID := time.Now().String()
 
 	response, err := service.CreateLinkToken(ctx, userID)
 
-	// Then: Should succeed - full configuration should work
-	require.NoError(t, err, "redirect_uri should not cause 400 error")
+	// Then: Should succeed
+	require.NoError(t, err, "Expected no error with redirect_uri configured")
 	assert.NotEmpty(t, response.LinkToken, "link token should not be empty")
 	assert.NotEmpty(t, response.Expiration, "expiration should not be empty")
 	assert.NotEmpty(t, response.RequestID, "request ID should not be empty")
@@ -682,9 +706,10 @@ func TestRemoveItem_EmptyAccessToken(t *testing.T) {
 	assert.Error(t, err, "Expected error with empty access token")
 }
 
-// TestCreateUpdateModeLinkToken_Success tests successful creation of update mode link token
+// TestCreateUpdateModeLinkToken_Success tests successful creation of update mode link token.
 // Update mode is used for user re-authentication when Plaid returns LOGIN_REQUIRED error.
 // Issue #257: Item Error Handler - Process ITEM Webhooks and User Notifications
+// Phase 2 (#241): Update mode uses same products as initial link: TRANSACTIONS + LIABILITIES + INVESTMENTS.
 //
 // This integration test requires real Plaid sandbox credentials and validates that:
 // 1. Link token is created in "update" mode (SetAccessToken is called)

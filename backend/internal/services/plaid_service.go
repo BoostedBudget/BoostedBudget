@@ -237,16 +237,14 @@ func (s *plaidService) CreateLinkToken(ctx context.Context, userID string) (*dom
 		*plaid.NewLinkTokenCreateRequestUser(userID), // User identifier (dereferenced from pointer)
 	)
 
-	// Set products: TRANSACTIONS only
-	// Issue #237 - Removed AUTH to fix NO_AUTH_ACCOUNTS error for credit cards and CDs
-	// TRANSACTIONS product supports:
-	//   - All depository accounts: checking, savings, CDs, money market
-	//   - Credit cards: balances, transactions, credit limit
-	//   - Student loans: balances and transaction history
+	// Set products: Phase 2 (#241) - TRANSACTIONS + LIABILITIES + INVESTMENTS
+	// Issue #237: AUTH removed (only supports checking/savings, caused NO_AUTH_ACCOUNTS for credit cards/CDs)
+	// Issue #241: LIABILITIES and INVESTMENTS added (full processing deferred to follow-up issues)
 	// Balance data is automatically included in /accounts/get response (FREE)
-	// NOTE: BALANCE is NOT a valid Link initialization product (per Plaid docs)
 	request.SetProducts([]plaid.Products{
 		plaid.PRODUCTS_TRANSACTIONS,
+		plaid.PRODUCTS_LIABILITIES,
+		plaid.PRODUCTS_INVESTMENTS,
 	})
 
 	// Set redirect URI for OAuth institution support (Chase, Capital One, Wells Fargo, etc.)
@@ -332,11 +330,11 @@ func (s *plaidService) CreateUpdateModeLinkToken(ctx context.Context, userID str
 	// Common mistake: Using item_id instead of access_token (SetAccessToken needs access_token!)
 	request.SetAccessToken(accessToken)
 
-	// Set products (same as CreateLinkToken - TRANSACTIONS only)
-	// Issue #232: BALANCE removed (not valid Link initialization product)
-	// Issue #237: AUTH removed (only supports checking/savings, caused NO_AUTH_ACCOUNTS)
+	// Set products: same 3 as CreateLinkToken (TRANSACTIONS + LIABILITIES + INVESTMENTS, Phase 2 #241)
 	request.SetProducts([]plaid.Products{
 		plaid.PRODUCTS_TRANSACTIONS,
+		plaid.PRODUCTS_LIABILITIES,
+		plaid.PRODUCTS_INVESTMENTS,
 	})
 
 	// Set redirect URI for OAuth institution support

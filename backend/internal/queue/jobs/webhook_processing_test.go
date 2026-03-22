@@ -379,6 +379,92 @@ func TestWebhookProcessingWorker_Work_UnknownWebhookType(t *testing.T) {
 	mockItemErrorSvc.AssertNotCalled(t, "ProcessWebhook")
 }
 
+// TestWebhookProcessingWorker_Work_LiabilitiesWebhook_LoggedAndAcknowledged verifies
+// LIABILITIES webhook is logged and acknowledged (Phase 2 #241, processing deferred)
+func TestWebhookProcessingWorker_Work_LiabilitiesWebhook_LoggedAndAcknowledged(t *testing.T) {
+	ctx := context.Background()
+	webhookID := uuid.New().String()
+	itemID := "plaid-item-liabilities-123"
+
+	webhook := &domain.WebhookEvent{
+		ID:          webhookID,
+		WebhookType: "LIABILITIES",
+		WebhookCode: stringPtr("DEFAULT_UPDATE"),
+		ItemID:      &itemID,
+		Processed:   false,
+	}
+
+	mockRepo := new(MockWebhookRepository)
+	mockSyncSvc := new(MockWebhookTransactionSyncService)
+	mockItemErrorSvc := new(MockItemErrorService)
+
+	mockRepo.On("GetByID", ctx, webhookID).Return(webhook, nil)
+
+	worker := NewWebhookProcessingWorker(WebhookProcessingWorkerDeps{
+		WebhookRepo:        mockRepo,
+		TransactionSyncSvc: mockSyncSvc,
+		ItemErrorSvc:       mockItemErrorSvc,
+		Logger:             newTestWebhookLogger(),
+	})
+
+	job := newTestWebhookProcessingJob(WebhookProcessingArgs{
+		WebhookID:   webhookID,
+		WebhookType: "LIABILITIES",
+		ItemID:      itemID,
+	})
+
+	err := worker.Work(ctx, job)
+
+	// Should succeed without error (logged, processing deferred)
+	require.NoError(t, err)
+	mockRepo.AssertExpectations(t)
+	mockSyncSvc.AssertNotCalled(t, "ProcessWebhook")
+	mockItemErrorSvc.AssertNotCalled(t, "ProcessWebhook")
+}
+
+// TestWebhookProcessingWorker_Work_HoldingsWebhook_LoggedAndAcknowledged verifies
+// HOLDINGS webhook is logged and acknowledged (Phase 2 #241, deferred to #659)
+func TestWebhookProcessingWorker_Work_HoldingsWebhook_LoggedAndAcknowledged(t *testing.T) {
+	ctx := context.Background()
+	webhookID := uuid.New().String()
+	itemID := "plaid-item-holdings-456"
+
+	webhook := &domain.WebhookEvent{
+		ID:          webhookID,
+		WebhookType: "HOLDINGS",
+		WebhookCode: stringPtr("DEFAULT_UPDATE"),
+		ItemID:      &itemID,
+		Processed:   false,
+	}
+
+	mockRepo := new(MockWebhookRepository)
+	mockSyncSvc := new(MockWebhookTransactionSyncService)
+	mockItemErrorSvc := new(MockItemErrorService)
+
+	mockRepo.On("GetByID", ctx, webhookID).Return(webhook, nil)
+
+	worker := NewWebhookProcessingWorker(WebhookProcessingWorkerDeps{
+		WebhookRepo:        mockRepo,
+		TransactionSyncSvc: mockSyncSvc,
+		ItemErrorSvc:       mockItemErrorSvc,
+		Logger:             newTestWebhookLogger(),
+	})
+
+	job := newTestWebhookProcessingJob(WebhookProcessingArgs{
+		WebhookID:   webhookID,
+		WebhookType: "HOLDINGS",
+		ItemID:      itemID,
+	})
+
+	err := worker.Work(ctx, job)
+
+	// Should succeed without error (logged, deferred to #659)
+	require.NoError(t, err)
+	mockRepo.AssertExpectations(t)
+	mockSyncSvc.AssertNotCalled(t, "ProcessWebhook")
+	mockItemErrorSvc.AssertNotCalled(t, "ProcessWebhook")
+}
+
 func TestWebhookProcessingUniqueOpts(t *testing.T) {
 	opts := WebhookProcessingUniqueOpts()
 

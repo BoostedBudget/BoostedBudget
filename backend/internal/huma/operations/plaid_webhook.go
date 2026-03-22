@@ -180,6 +180,12 @@ func (h *PlaidWebhookHandler) HandlePlaidWebhook(ctx context.Context, input *Pla
 		message = h.handleTransactionsWebhook(&payload)
 	case "ITEM":
 		message = h.handleItemWebhook(&payload)
+	case "LIABILITIES":
+		// Phase 2 (#241): LIABILITIES product added. Full sync deferred to follow-up issue.
+		message = "Liabilities webhook received"
+	case "HOLDINGS":
+		// Phase 2 (#241): INVESTMENTS product added. Full sync tracked in issue #659.
+		message = "Holdings webhook received"
 	default:
 		message = "Webhook received"
 	}
