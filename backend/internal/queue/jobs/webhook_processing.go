@@ -140,6 +140,20 @@ func (w *WebhookProcessingWorker) Work(ctx context.Context, job *river.Job[Webho
 		err = w.processTransactionsWebhook(ctx, webhook)
 	case "ITEM":
 		err = w.processItemWebhook(ctx, webhook)
+	case "LIABILITIES":
+		// Phase 2 (#241): Deferred to follow-up issue. Logged and acknowledged.
+		w.logger.Info("liabilities webhook received, processing deferred",
+			"job_id", job.ID,
+			"webhook_id", args.WebhookID,
+		)
+		return nil
+	case "HOLDINGS":
+		// Phase 2 (#241): Deferred to issue #659. Logged and acknowledged.
+		w.logger.Info("holdings webhook received, processing deferred",
+			"job_id", job.ID,
+			"webhook_id", args.WebhookID,
+		)
+		return nil
 	default:
 		w.logger.Warn("unknown webhook type, skipping",
 			"job_id", job.ID,
