@@ -27,15 +27,16 @@ type TrialGranter interface {
 // AdminHandler handles admin-only endpoints for testing and troubleshooting.
 // Routes are protected by AdminMiddleware with role validation and environment checks.
 type AdminHandler struct {
-	plaidService        services.PlaidService
-	linkedItemRepo      repository.LinkedItemRepository
-	encryptionService   services.EncryptionService
-	trialService        TrialGranter
-	adminService        services.AdminService
-	adminUserService    services.AdminUserService
-	systemHealthService services.SystemHealthService
-	subService          *services.SubscriptionService
-	config              *config.Config
+	plaidService          services.PlaidService
+	linkedItemRepo        repository.LinkedItemRepository
+	encryptionService     services.EncryptionService
+	trialService          TrialGranter
+	adminService          services.AdminService
+	adminUserService      services.AdminUserService
+	systemHealthService   services.SystemHealthService
+	subService            *services.SubscriptionService
+	paddleTransactionRepo repository.PaddleTransactionRepository
+	config                *config.Config
 }
 
 // NewAdminHandler creates a new AdminHandler with required dependencies.
@@ -62,6 +63,13 @@ func NewAdminHandler(
 		subService:          subService,
 		config:              cfg,
 	}
+}
+
+// WithPaddleTransactionRepo sets the PaddleTransactionRepository on the handler (builder pattern).
+// Used to avoid changing the constructor signature and breaking existing tests.
+func (h *AdminHandler) WithPaddleTransactionRepo(repo repository.PaddleTransactionRepository) *AdminHandler {
+	h.paddleTransactionRepo = repo
+	return h
 }
 
 // --- Input/Output Types ---
@@ -490,4 +498,7 @@ func RegisterAdminRoutes(api huma.API, handler *AdminHandler) {
 
 	// --- Admin Subscription Management Routes (Issue #641) ---
 	RegisterAdminSubscriptionsOperations(api, handler)
+
+	// --- Admin Payment Failures Route (Issues #747 gap) ---
+	RegisterAdminPaymentFailuresOperations(api, handler)
 }

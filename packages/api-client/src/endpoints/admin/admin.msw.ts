@@ -36,6 +36,7 @@ import type {
   AdminUserListResponse,
   CheckRoleResponseBody,
   FireWebhookResponseBody,
+  GetPaymentFailuresOutputBody,
   GrantTrialResponseBody,
   SystemHealthResponse,
 } from "../../models";
@@ -45,6 +46,53 @@ export const getCheckRoleResponseMock = (
 ): CheckRoleResponseBody => ({
   $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
   is_admin: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
+export const getGetAdminPaymentFailuresResponseMock = (
+  overrideResponse: Partial<Extract<GetPaymentFailuresOutputBody, object>> = {},
+): GetPaymentFailuresOutputBody => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  limit: faker.number.int(),
+  offset: faker.number.int(),
+  total: faker.number.int(),
+  transactions: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      amount: faker.number.float({ fractionDigits: 2 }),
+      billing_period_end: faker.helpers.arrayElement([
+        faker.date.past().toISOString().slice(0, 19) + "Z",
+        undefined,
+      ]),
+      billing_period_start: faker.helpers.arrayElement([
+        faker.date.past().toISOString().slice(0, 19) + "Z",
+        undefined,
+      ]),
+      created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      currency: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      customer_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      payload: {},
+      payment_method_type: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      status: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      subscription_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      transaction_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    })),
+    null,
+  ]),
   ...overrideResponse,
 });
 
@@ -216,6 +264,34 @@ export const getCheckRoleMockHandler = (
   );
 };
 
+export const getGetAdminPaymentFailuresMockHandler = (
+  overrideResponse?:
+    | GetPaymentFailuresOutputBody
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) =>
+        | Promise<GetPaymentFailuresOutputBody>
+        | GetPaymentFailuresOutputBody),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/admin/payments/failures",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAdminPaymentFailuresResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getFireWebhookMockHandler = (
   overrideResponse?:
     | FireWebhookResponseBody
@@ -347,6 +423,7 @@ export const getGetAdminUserDetailMockHandler = (
 };
 export const getAdminMock = () => [
   getCheckRoleMockHandler(),
+  getGetAdminPaymentFailuresMockHandler(),
   getFireWebhookMockHandler(),
   getGrantTrialMockHandler(),
   getGetSystemHealthMockHandler(),

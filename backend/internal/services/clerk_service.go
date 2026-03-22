@@ -3,6 +3,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/clerk/clerk-sdk-go/v2"
@@ -15,6 +16,11 @@ type ClerkService interface {
 	// DeleteUser deletes a user from Clerk via Backend API.
 	// Returns nil if user is successfully deleted or already doesn't exist.
 	DeleteUser(ctx context.Context, clerkUserID string) error
+
+	// UpdateUserMetadata updates the public metadata for a Clerk user.
+	// Merges the provided metadata with existing public metadata.
+	// Returns nil if update succeeds or user doesn't exist.
+	UpdateUserMetadata(ctx context.Context, clerkUserID string, metadata map[string]interface{}) error
 }
 
 // clerkService implements ClerkService using the official Clerk Go SDK.
@@ -58,6 +64,26 @@ func (s *clerkService) DeleteUser(ctx context.Context, clerkUserID string) error
 		return fmt.Errorf("failed to delete user from Clerk: %w", err)
 	}
 
+	return nil
+}
+
+// UpdateUserMetadata updates the public metadata for a Clerk user.
+// Uses UpdateMetadata which merges with existing metadata rather than replacing.
+func (s *clerkService) UpdateUserMetadata(ctx context.Context, clerkUserID string, metadata map[string]interface{}) error {
+	metadataJSON, err := json.Marshal(metadata)
+	if err != nil {
+		return fmt.Errorf("failed to marshal Clerk metadata: %w", err)
+	}
+	rawMetadata := json.RawMessage(metadataJSON)
+	_, err = user.UpdateMetadata(ctx, clerkUserID, &user.UpdateMetadataParams{
+		PublicMetadata: &rawMetadata,
+	})
+	if err != nil {
+		if isClerkNotFoundError(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to update Clerk user metadata: %w", err)
+	}
 	return nil
 }
 

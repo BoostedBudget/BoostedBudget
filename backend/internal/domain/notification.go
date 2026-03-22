@@ -38,17 +38,23 @@ func (n *Notification) Validate() error {
 		return errors.New("message is required")
 	}
 
-	// Validate type is one of allowed values
 	validTypes := map[string]bool{
-		"item_error":           true,
-		"login_required":       true,
-		"pending_expiration":   true,
-		"permission_revoked":   true,
-		"transaction_sync":     true,
-		"budget_alert":         true, // Issue #36: Rule Executors - budget alerts
+		"item_error":              true,
+		"login_required":          true,
+		"pending_expiration":      true,
+		"permission_revoked":      true,
+		"transaction_sync":        true,
+		"budget_alert":            true,
+		"payment_failed":          true,
+		"subscription_past_due":   true,
+		"subscription_paused":     true,
+		"subscription_resumed":    true,
+		"subscription_activated":  true,
+		"subscription_trialing":   true,
+		"transaction_past_due":    true,
 	}
 	if !validTypes[n.Type] {
-		return errors.New("type must be one of: item_error, login_required, pending_expiration, permission_revoked, transaction_sync, budget_alert")
+		return errors.New("invalid notification type")
 	}
 
 	return nil
