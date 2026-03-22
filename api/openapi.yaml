@@ -1781,6 +1781,37 @@ components:
         - amount
         - currency
       type: object
+    GetPaymentFailuresOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/GetPaymentFailuresOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        limit:
+          format: int64
+          type: integer
+        offset:
+          format: int64
+          type: integer
+        total:
+          format: int64
+          type: integer
+        transactions:
+          items:
+            $ref: "#/components/schemas/PaddleTransaction"
+          type:
+            - array
+            - "null"
+      required:
+        - transactions
+        - total
+        - limit
+        - offset
+      type: object
     GetUnreadCountOutputBody:
       additionalProperties: false
       properties:
@@ -2082,6 +2113,52 @@ components:
         - message
         - read
         - sent_email
+        - created_at
+        - updated_at
+      type: object
+    PaddleTransaction:
+      additionalProperties: false
+      properties:
+        amount:
+          format: double
+          type: number
+        billing_period_end:
+          format: date-time
+          type: string
+        billing_period_start:
+          format: date-time
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        currency:
+          type: string
+        customer_id:
+          type: string
+        id:
+          type: string
+        payload: {}
+        payment_method_type:
+          type: string
+        status:
+          type: string
+        subscription_id:
+          type: string
+        transaction_id:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+        user_id:
+          type: string
+      required:
+        - id
+        - user_id
+        - transaction_id
+        - amount
+        - currency
+        - status
+        - payload
         - created_at
         - updated_at
       type: object
@@ -3925,6 +4002,50 @@ paths:
       security:
         - clerk: []
       summary: Check if current user is admin
+      tags:
+        - Admin
+  /api/v1/admin/payments/failures:
+    get:
+      description: Returns failed, past_due, and canceled Paddle transactions for admin review. Requires admin role.
+      operationId: getAdminPaymentFailures
+      parameters:
+        - description: Number of transactions to return
+          explode: false
+          in: query
+          name: limit
+          schema:
+            default: 20
+            description: Number of transactions to return
+            format: int64
+            maximum: 100
+            minimum: 1
+            type: integer
+        - description: Number of transactions to skip
+          explode: false
+          in: query
+          name: offset
+          schema:
+            default: 0
+            description: Number of transactions to skip
+            format: int64
+            minimum: 0
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetPaymentFailuresOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: List failed payment transactions (admin)
       tags:
         - Admin
   /api/v1/admin/plaid/fire-webhook:

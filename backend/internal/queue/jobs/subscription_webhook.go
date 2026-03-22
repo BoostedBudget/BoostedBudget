@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
@@ -46,24 +47,38 @@ type ClerkService interface {
 	UpdateUserMetadata(ctx context.Context, clerkUserID string, metadata map[string]interface{}) error
 }
 
+// SubscriptionNotificationRepository defines the methods needed to create in-app notifications.
+type SubscriptionNotificationRepository interface {
+	Create(ctx context.Context, notification *domain.Notification) error
+}
+
+// SubscriptionPaddleTransactionRepository defines the methods needed to record Paddle transactions.
+type SubscriptionPaddleTransactionRepository interface {
+	Create(ctx context.Context, txn *domain.PaddleTransaction) error
+}
+
 // SubscriptionWebhookWorker processes Paddle subscription webhook events from the queue.
 type SubscriptionWebhookWorker struct {
 	river.WorkerDefaults[SubscriptionWebhookArgs]
 
-	paddleWebhookRepo PaddleWebhookRepository
-	profileRepo       SubscriptionProfileRepository
-	clerkService      ClerkService
-	tierConfig        *config.TierConfig
-	logger            *slog.Logger
+	paddleWebhookRepo   PaddleWebhookRepository
+	profileRepo         SubscriptionProfileRepository
+	clerkService        ClerkService
+	notificationRepo    SubscriptionNotificationRepository
+	paddleTransactionRepo SubscriptionPaddleTransactionRepository
+	tierConfig          *config.TierConfig
+	logger              *slog.Logger
 }
 
 // SubscriptionWebhookWorkerDeps contains the dependencies for SubscriptionWebhookWorker.
 type SubscriptionWebhookWorkerDeps struct {
-	PaddleWebhookRepo PaddleWebhookRepository
-	ProfileRepo       SubscriptionProfileRepository
-	ClerkService      ClerkService
-	TierConfig        *config.TierConfig
-	Logger            *slog.Logger
+	PaddleWebhookRepo     PaddleWebhookRepository
+	ProfileRepo           SubscriptionProfileRepository
+	ClerkService          ClerkService
+	NotificationRepo      SubscriptionNotificationRepository
+	PaddleTransactionRepo SubscriptionPaddleTransactionRepository
+	TierConfig            *config.TierConfig
+	Logger                *slog.Logger
 }
 
 // NewSubscriptionWebhookWorker creates a new subscription webhook processing worker.
@@ -73,11 +88,53 @@ func NewSubscriptionWebhookWorker(deps SubscriptionWebhookWorkerDeps) *Subscript
 		logger = slog.Default()
 	}
 	return &SubscriptionWebhookWorker{
-		paddleWebhookRepo: deps.PaddleWebhookRepo,
-		profileRepo:       deps.ProfileRepo,
-		clerkService:      deps.ClerkService,
-		tierConfig:        deps.TierConfig,
-		logger:            logger,
+		paddleWebhookRepo:     deps.PaddleWebhookRepo,
+		profileRepo:           deps.ProfileRepo,
+		clerkService:          deps.ClerkService,
+		notificationRepo:      deps.NotificationRepo,
+		paddleTransactionRepo: deps.PaddleTransactionRepo,
+		tierConfig:            deps.TierConfig,
+		logger:                logger,
+	}
+}
+
+// createNotification creates an in-app notification for a user.
+// Logs and swallows errors so notification failures don't abort webhook processing.
+func (w *SubscriptionWebhookWorker) createNotification(ctx context.Context, userID, notifType, title, message string) {
+	if w.notificationRepo == nil {
+		return
+	}
+	if err := w.notificationRepo.Create(ctx, &domain.Notification{
+		ID:      uuid.New().String(),
+		UserID:  userID,
+		Type:    notifType,
+		Title:   title,
+		Message: message,
+	}); err != nil {
+		w.logger.Error("failed to create notification",
+			"user_id", userID,
+			"type", notifType,
+			"error", err,
+		)
+	}
+}
+
+// syncClerkMetadata updates a user's Clerk public metadata with their current tier and status.
+// Logs and swallows errors so Clerk failures don't abort webhook processing.
+func (w *SubscriptionWebhookWorker) syncClerkMetadata(ctx context.Context, userID, tier, status string) {
+	if w.clerkService == nil {
+		return
+	}
+	user, err := w.profileRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		w.logger.Error("failed to get user for Clerk sync", "user_id", userID, "error", err)
+		return
+	}
+	if err := w.clerkService.UpdateUserMetadata(ctx, user.ClerkUserID, map[string]interface{}{
+		"subscription_tier":   tier,
+		"subscription_status": status,
+	}); err != nil {
+		w.logger.Error("failed to update Clerk metadata", "user_id", userID, "error", err)
 	}
 }
 
@@ -107,58 +164,64 @@ func getMapFromMap(m map[string]interface{}, key string) map[string]interface{} 
 	return val
 }
 
+// extractDateRange extracts start and end dates from a nested map with "starts_at" and "ends_at" fields.
+// Returns (nil, nil) if fields are missing or malformed.
+func extractDateRange(m map[string]interface{}) (*time.Time, *time.Time) {
+	var startedAt, endsAt *time.Time
+	if s, ok := m["starts_at"].(string); ok {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			startedAt = &t
+		}
+	}
+	if e, ok := m["ends_at"].(string); ok {
+		if t, err := time.Parse(time.RFC3339, e); err == nil {
+			endsAt = &t
+		}
+	}
+	return startedAt, endsAt
+}
+
 // resolveTierFromItems extracts the price_id from webhook items and resolves it to a tier name.
-// Falls back to premium tier if price_id is not found or unknown.
-// Issue #772: Webhook tier resolution (GAP 3)
+// Falls back to premium tier if price_id is not found or unknown. Issue #772: GAP 3
 func (w *SubscriptionWebhookWorker) resolveTierFromItems(data map[string]interface{}) domain.TierName {
-	// Extract items array from webhook data
 	items, ok := data["items"].([]interface{})
 	if !ok || len(items) == 0 {
 		w.logger.Warn("webhook data missing items array, falling back to premium tier")
 		return domain.TierPremium
 	}
 
-	// Get first item (subscriptions should only have one item)
 	firstItem, ok := items[0].(map[string]interface{})
 	if !ok {
 		w.logger.Warn("webhook items[0] is not a map, falling back to premium tier")
 		return domain.TierPremium
 	}
 
-	// Extract price object
 	price, ok := firstItem["price"].(map[string]interface{})
 	if !ok {
 		w.logger.Warn("webhook items[0].price is not a map, falling back to premium tier")
 		return domain.TierPremium
 	}
 
-	// Extract price ID
 	priceID, ok := price["id"].(string)
 	if !ok || priceID == "" {
 		w.logger.Warn("webhook items[0].price.id is missing or empty, falling back to premium tier")
 		return domain.TierPremium
 	}
 
-	// Resolve tier from price ID using TierConfig
-	if w.tierConfig != nil {
-		tier, err := w.tierConfig.GetTierByPriceID(priceID)
-		if err != nil {
-			w.logger.Warn("failed to resolve tier from price_id, falling back to premium tier",
-				"price_id", priceID,
-				"error", err,
-			)
-			return domain.TierPremium
-		}
-		w.logger.Info("resolved tier from price_id",
-			"price_id", priceID,
-			"tier", tier,
-		)
-		return tier
+	if w.tierConfig == nil {
+		w.logger.Warn("TierConfig not available, falling back to premium tier")
+		return domain.TierPremium
 	}
 
-	// TierConfig not available, fall back to premium
-	w.logger.Warn("TierConfig not available, falling back to premium tier")
-	return domain.TierPremium
+	tier, err := w.tierConfig.GetTierByPriceID(priceID)
+	if err != nil {
+		w.logger.Warn("failed to resolve tier from price_id, falling back to premium tier",
+			"price_id", priceID, "error", err)
+		return domain.TierPremium
+	}
+
+	w.logger.Info("resolved tier from price_id", "price_id", priceID, "tier", tier)
+	return tier
 }
 
 // Work processes a subscription webhook processing job.
@@ -182,8 +245,6 @@ func (w *SubscriptionWebhookWorker) Work(ctx context.Context, job *river.Job[Sub
 		observability.JobsCompleted.WithLabelValues(job.Kind, job.Queue, status).Inc()
 		observability.JobDuration.WithLabelValues(job.Kind).Observe(time.Since(start).Seconds())
 	}()
-
-	startTime := time.Now()
 
 	webhook, fetchErr := w.paddleWebhookRepo.GetByID(ctx, args.WebhookID)
 	if fetchErr != nil {
@@ -218,10 +279,18 @@ func (w *SubscriptionWebhookWorker) Work(ctx context.Context, job *river.Job[Sub
 		processErr = w.processSubscriptionPaused(ctx, webhook)
 	case "subscription.past_due":
 		processErr = w.processSubscriptionPastDue(ctx, webhook)
+	case "subscription.resumed":
+		processErr = w.processSubscriptionResumed(ctx, webhook)
+	case "subscription.trialing":
+		processErr = w.processSubscriptionTrialing(ctx, webhook)
 	case "transaction.completed":
 		processErr = w.processTransactionCompleted(ctx, webhook)
 	case "transaction.payment_failed":
 		processErr = w.processTransactionPaymentFailed(ctx, webhook)
+	case "transaction.past_due":
+		processErr = w.processTransactionPastDue(ctx, webhook)
+	case "transaction.canceled":
+		processErr = w.processTransactionCanceled(ctx, webhook)
 	default:
 		w.logger.Warn("unknown Paddle event type", "event_type", webhook.EventType)
 		_ = w.paddleWebhookRepo.MarkProcessed(ctx, args.WebhookID)
@@ -233,7 +302,7 @@ func (w *SubscriptionWebhookWorker) Work(ctx context.Context, job *river.Job[Sub
 			"webhook_id", args.WebhookID,
 			"event_type", webhook.EventType,
 			"error", processErr,
-			"duration_ms", time.Since(startTime).Milliseconds(),
+			"duration_ms", time.Since(start).Milliseconds(),
 		)
 		_ = w.paddleWebhookRepo.MarkFailed(ctx, args.WebhookID, processErr.Error())
 		return fmt.Errorf("webhook processing failed: %w", processErr)
@@ -251,7 +320,7 @@ func (w *SubscriptionWebhookWorker) Work(ctx context.Context, job *river.Job[Sub
 		"webhook_id", args.WebhookID,
 		"event_id", args.EventID,
 		"event_type", webhook.EventType,
-		"duration_ms", time.Since(startTime).Milliseconds(),
+		"duration_ms", time.Since(start).Milliseconds(),
 	)
 
 	return nil
@@ -287,21 +356,12 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCreated(ctx context.Conte
 		return fmt.Errorf("failed to update paddle_customer_id: %w", err)
 	}
 
-	var endsAt, startedAt *time.Time
 	// Issue #772: Resolve tier from Paddle price_id instead of hardcoding "premium"
 	tier := w.resolveTierFromItems(data)
 
+	var startedAt, endsAt *time.Time
 	if billingCycle, ok := data["billing_cycle"].(map[string]interface{}); ok {
-		if startsAtStr, ok := billingCycle["starts_at"].(string); ok {
-			if t, err := time.Parse(time.RFC3339, startsAtStr); err == nil {
-				startedAt = &t
-			}
-		}
-		if endsAtStr, ok := billingCycle["ends_at"].(string); ok {
-			if t, err := time.Parse(time.RFC3339, endsAtStr); err == nil {
-				endsAt = &t
-			}
-		}
+		startedAt, endsAt = extractDateRange(billingCycle)
 	}
 
 	// Extract status from webhook data (e.g., "active", "trialing")
@@ -315,28 +375,47 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCreated(ctx context.Conte
 		return fmt.Errorf("failed to update subscription: %w", err)
 	}
 
-	if w.clerkService != nil {
-		user, err := w.profileRepo.GetUserByID(ctx, userID)
-		if err != nil {
-			return fmt.Errorf("failed to get user for Clerk update: %w", err)
-		}
-
-		metadata := map[string]interface{}{
-			"subscription_tier":   string(tier),
-			"subscription_status": status,
-		}
-
-		if err := w.clerkService.UpdateUserMetadata(ctx, user.ClerkUserID, metadata); err != nil {
-			w.logger.Error("failed to update Clerk metadata", "user_id", userID, "error", err)
-		}
-	}
+	w.syncClerkMetadata(ctx, userID, string(tier), status)
 
 	return nil
 }
 
 // processSubscriptionActivated handles subscription.activated events.
+// Dedicated handler (not delegating to created): updates subscription, notifies user, syncs Clerk.
 func (w *SubscriptionWebhookWorker) processSubscriptionActivated(ctx context.Context, webhook *domain.PaddleWebhookEvent) error {
-	return w.processSubscriptionCreated(ctx, webhook)
+	data, err := w.parseWebhookPayload(webhook)
+	if err != nil {
+		return err
+	}
+
+	customData := getMapFromMap(data, "custom_data")
+	userID := getStringFromMap(customData, "user_id")
+	subscriptionID := getStringFromMap(data, "id")
+
+	if userID == "" {
+		return errors.New("webhook payload missing user_id")
+	}
+	if subscriptionID == "" {
+		return errors.New("webhook payload missing subscription id")
+	}
+
+	tier := w.resolveTierFromItems(data)
+	status := getStringFromMap(data, "status")
+	if status == "" {
+		status = "active"
+	}
+
+	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, string(tier), status, nil, nil, &subscriptionID); err != nil {
+		return fmt.Errorf("failed to update subscription: %w", err)
+	}
+
+	w.createNotification(ctx, userID, "subscription_activated",
+		"Subscription Activated",
+		"Your BoostedBudget subscription is now active. Welcome aboard!",
+	)
+	w.syncClerkMetadata(ctx, userID, string(tier), status)
+
+	return nil
 }
 
 // processSubscriptionUpdated handles subscription.updated events.
@@ -361,11 +440,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionUpdated(ctx context.Conte
 
 	var endsAt *time.Time
 	if billingCycle, ok := data["billing_cycle"].(map[string]interface{}); ok {
-		if endsAtStr, ok := billingCycle["ends_at"].(string); ok {
-			if t, err := time.Parse(time.RFC3339, endsAtStr); err == nil {
-				endsAt = &t
-			}
-		}
+		_, endsAt = extractDateRange(billingCycle)
 	}
 
 	// Issue #48: Pass subscription ID to repository (may be empty string if not present)
@@ -376,6 +451,9 @@ func (w *SubscriptionWebhookWorker) processSubscriptionUpdated(ctx context.Conte
 	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, string(tier), status, nil, endsAt, subIDPtr); err != nil {
 		return fmt.Errorf("failed to update subscription: %w", err)
 	}
+
+	// Issues #747 #748: Sync Clerk metadata on subscription updates
+	w.syncClerkMetadata(ctx, userID, string(tier), status)
 
 	return nil
 }
@@ -404,21 +482,15 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 		return fmt.Errorf("failed to update subscription status: %w", err)
 	}
 
+	// Issues #747 #748: Sync Clerk metadata (no notification — user-initiated)
+	w.syncClerkMetadata(ctx, userID, user.SubscriptionTier, "cancelled")
+
 	return nil
 }
 
 // processSubscriptionPaused handles subscription.paused events.
+// Issues #747 #748: Uses "paused" status (not "inactive") and notifies the user.
 func (w *SubscriptionWebhookWorker) processSubscriptionPaused(ctx context.Context, webhook *domain.PaddleWebhookEvent) error {
-	return w.processSubscriptionStatusChange(ctx, webhook, "inactive")
-}
-
-// processSubscriptionPastDue handles subscription.past_due events.
-func (w *SubscriptionWebhookWorker) processSubscriptionPastDue(ctx context.Context, webhook *domain.PaddleWebhookEvent) error {
-	return w.processSubscriptionStatusChange(ctx, webhook, "past_due")
-}
-
-// processSubscriptionStatusChange is a helper for status-only updates (no subscription ID changes)
-func (w *SubscriptionWebhookWorker) processSubscriptionStatusChange(ctx context.Context, webhook *domain.PaddleWebhookEvent, status string) error {
 	data, err := w.parseWebhookPayload(webhook)
 	if err != nil {
 		return err
@@ -436,22 +508,315 @@ func (w *SubscriptionWebhookWorker) processSubscriptionStatusChange(ctx context.
 		return fmt.Errorf("failed to get user: %w", err)
 	}
 
-	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, user.SubscriptionTier, status, nil, nil, nil); err != nil {
+	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, user.SubscriptionTier, string(domain.SubscriptionStatusPaused), nil, nil, nil); err != nil {
 		return fmt.Errorf("failed to update subscription status: %w", err)
 	}
+
+	w.createNotification(ctx, userID, "subscription_paused",
+		"Subscription Paused",
+		"Your BoostedBudget subscription has been paused. Resume anytime to regain full access.",
+	)
+	w.syncClerkMetadata(ctx, userID, user.SubscriptionTier, string(domain.SubscriptionStatusPaused))
+
+	return nil
+}
+
+// processSubscriptionPastDue handles subscription.past_due events.
+// Issues #747 #748: Notifies user of overdue payment and syncs Clerk.
+func (w *SubscriptionWebhookWorker) processSubscriptionPastDue(ctx context.Context, webhook *domain.PaddleWebhookEvent) error {
+	data, err := w.parseWebhookPayload(webhook)
+	if err != nil {
+		return err
+	}
+
+	customData := getMapFromMap(data, "custom_data")
+	userID := getStringFromMap(customData, "user_id")
+
+	if userID == "" {
+		return errors.New("webhook payload missing user_id")
+	}
+
+	user, err := w.profileRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("failed to get user: %w", err)
+	}
+
+	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, user.SubscriptionTier, string(domain.SubscriptionStatusPastDue), nil, nil, nil); err != nil {
+		return fmt.Errorf("failed to update subscription status: %w", err)
+	}
+
+	w.createNotification(ctx, userID, "subscription_past_due",
+		"Payment Overdue",
+		"Your subscription payment is overdue. Please update your payment method to maintain access.",
+	)
+	w.syncClerkMetadata(ctx, userID, user.SubscriptionTier, string(domain.SubscriptionStatusPastDue))
+
+	return nil
+}
+
+// processSubscriptionResumed handles subscription.resumed events.
+// Issues #747 #748: New handler — updates status to active, notifies user, syncs Clerk.
+func (w *SubscriptionWebhookWorker) processSubscriptionResumed(ctx context.Context, webhook *domain.PaddleWebhookEvent) error {
+	data, err := w.parseWebhookPayload(webhook)
+	if err != nil {
+		return err
+	}
+
+	customData := getMapFromMap(data, "custom_data")
+	userID := getStringFromMap(customData, "user_id")
+	subscriptionID := getStringFromMap(data, "id")
+
+	if userID == "" {
+		return errors.New("webhook payload missing user_id")
+	}
+
+	tier := w.resolveTierFromItems(data)
+
+	var subIDPtr *string
+	if subscriptionID != "" {
+		subIDPtr = &subscriptionID
+	}
+
+	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, string(tier), string(domain.SubscriptionStatusActive), nil, nil, subIDPtr); err != nil {
+		return fmt.Errorf("failed to update subscription status: %w", err)
+	}
+
+	w.createNotification(ctx, userID, "subscription_resumed",
+		"Subscription Resumed",
+		"Your BoostedBudget subscription has been resumed. Welcome back!",
+	)
+	w.syncClerkMetadata(ctx, userID, string(tier), string(domain.SubscriptionStatusActive))
+
+	return nil
+}
+
+// processSubscriptionTrialing handles subscription.trialing events.
+// Issues #747 #748: New handler — updates status to trialing, notifies user, syncs Clerk.
+func (w *SubscriptionWebhookWorker) processSubscriptionTrialing(ctx context.Context, webhook *domain.PaddleWebhookEvent) error {
+	data, err := w.parseWebhookPayload(webhook)
+	if err != nil {
+		return err
+	}
+
+	customData := getMapFromMap(data, "custom_data")
+	userID := getStringFromMap(customData, "user_id")
+	subscriptionID := getStringFromMap(data, "id")
+
+	if userID == "" {
+		return errors.New("webhook payload missing user_id")
+	}
+
+	tier := w.resolveTierFromItems(data)
+
+	// Issue #748 gap: Extract trial period dates from current_billing_period
+	var startedAt, endsAt *time.Time
+	if cbp, ok := data["current_billing_period"].(map[string]interface{}); ok {
+		startedAt, endsAt = extractDateRange(cbp)
+	}
+
+	var subIDPtr *string
+	if subscriptionID != "" {
+		subIDPtr = &subscriptionID
+	}
+	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, string(tier), string(domain.SubscriptionStatusTrialing), startedAt, endsAt, subIDPtr); err != nil {
+		return fmt.Errorf("failed to update subscription status: %w", err)
+	}
+
+	w.createNotification(ctx, userID, "subscription_trialing", "Trial Started",
+		"Your BoostedBudget trial is now active. Enjoy full access during your trial period!")
+	w.syncClerkMetadata(ctx, userID, string(tier), string(domain.SubscriptionStatusTrialing))
+
 	return nil
 }
 
 // processTransactionCompleted handles transaction.completed events.
+// Issues #747 #748: Records the completed transaction in the audit log.
 func (w *SubscriptionWebhookWorker) processTransactionCompleted(ctx context.Context, webhook *domain.PaddleWebhookEvent) error {
-	w.logger.Info("transaction completed", "event_id", webhook.EventID)
+	data, err := w.parseWebhookPayload(webhook)
+	if err != nil {
+		return err
+	}
+
+	txn := w.buildPaddleTransaction(data, webhook.Payload, "completed")
+	if txn == nil {
+		w.logger.Warn("transaction.completed missing transaction_id or user_id, skipping record", "event_id", webhook.EventID)
+		return nil
+	}
+
+	if w.paddleTransactionRepo != nil {
+		if err := w.paddleTransactionRepo.Create(ctx, txn); err != nil && !errors.Is(err, repository.ErrPaddleTransactionDuplicate) {
+			return fmt.Errorf("failed to record completed transaction: %w", err)
+		}
+	}
+
 	return nil
 }
 
 // processTransactionPaymentFailed handles transaction.payment_failed events.
+// Issues #747 #748: Records the failed transaction and notifies the user.
 func (w *SubscriptionWebhookWorker) processTransactionPaymentFailed(ctx context.Context, webhook *domain.PaddleWebhookEvent) error {
-	w.logger.Info("transaction payment failed", "event_id", webhook.EventID)
+	data, err := w.parseWebhookPayload(webhook)
+	if err != nil {
+		return err
+	}
+
+	txn := w.buildPaddleTransaction(data, webhook.Payload, "failed")
+	if txn == nil {
+		w.logger.Warn("transaction.payment_failed missing transaction_id or user_id, skipping record", "event_id", webhook.EventID)
+		return nil
+	}
+
+	if w.paddleTransactionRepo != nil {
+		if err := w.paddleTransactionRepo.Create(ctx, txn); err != nil && !errors.Is(err, repository.ErrPaddleTransactionDuplicate) {
+			return fmt.Errorf("failed to record failed transaction: %w", err)
+		}
+	}
+
+	w.createNotification(ctx, txn.UserID, "payment_failed",
+		"Payment Failed",
+		"We couldn't process your payment. Please update your payment method to keep your subscription active.",
+	)
+
+	user, err := w.profileRepo.GetUserByID(ctx, txn.UserID)
+	if err == nil {
+		w.syncClerkMetadata(ctx, txn.UserID, user.SubscriptionTier, user.SubscriptionStatus)
+	}
+
 	return nil
+}
+
+// processTransactionPastDue handles transaction.past_due events.
+// Issues #747 gap: Records the past-due transaction and notifies the user.
+func (w *SubscriptionWebhookWorker) processTransactionPastDue(ctx context.Context, webhook *domain.PaddleWebhookEvent) error {
+	data, err := w.parseWebhookPayload(webhook)
+	if err != nil {
+		return err
+	}
+
+	txn := w.buildPaddleTransaction(data, webhook.Payload, "past_due")
+	if txn == nil {
+		w.logger.Warn("transaction.past_due missing transaction_id or user_id, skipping record", "event_id", webhook.EventID)
+		return nil
+	}
+
+	if w.paddleTransactionRepo != nil {
+		if err := w.paddleTransactionRepo.Create(ctx, txn); err != nil && !errors.Is(err, repository.ErrPaddleTransactionDuplicate) {
+			return fmt.Errorf("failed to record past-due transaction: %w", err)
+		}
+	}
+
+	w.createNotification(ctx, txn.UserID, "transaction_past_due",
+		"Payment Past Due",
+		"Your subscription payment is past due. Please update your payment method to avoid service interruption.",
+	)
+
+	return nil
+}
+
+// processTransactionCanceled handles transaction.canceled events.
+// Issues #747 #748: Records the canceled transaction and notifies the user.
+func (w *SubscriptionWebhookWorker) processTransactionCanceled(ctx context.Context, webhook *domain.PaddleWebhookEvent) error {
+	data, err := w.parseWebhookPayload(webhook)
+	if err != nil {
+		return err
+	}
+
+	txn := w.buildPaddleTransaction(data, webhook.Payload, "canceled")
+	if txn == nil {
+		w.logger.Warn("transaction.canceled missing transaction_id or user_id, skipping record", "event_id", webhook.EventID)
+		return nil
+	}
+
+	if w.paddleTransactionRepo != nil {
+		if err := w.paddleTransactionRepo.Create(ctx, txn); err != nil && !errors.Is(err, repository.ErrPaddleTransactionDuplicate) {
+			return fmt.Errorf("failed to record canceled transaction: %w", err)
+		}
+	}
+
+	w.createNotification(ctx, txn.UserID, "payment_failed",
+		"Transaction Canceled",
+		"Your transaction was canceled. Contact support if you have any questions.",
+	)
+
+	return nil
+}
+
+// buildPaddleTransaction extracts transaction fields from webhook data and builds a PaddleTransaction.
+// Returns nil if essential fields (user_id, transaction_id) are missing.
+func (w *SubscriptionWebhookWorker) buildPaddleTransaction(data map[string]interface{}, rawPayload json.RawMessage, status string) *domain.PaddleTransaction {
+	customData := getMapFromMap(data, "custom_data")
+	userID := getStringFromMap(customData, "user_id")
+	transactionID := getStringFromMap(data, "id")
+
+	if userID == "" || transactionID == "" {
+		return nil
+	}
+
+	subscriptionID := getStringFromMap(data, "subscription_id")
+	customerID := getStringFromMap(data, "customer_id")
+	currency := getStringFromMap(data, "currency_code")
+	if currency == "" {
+		currency = "USD"
+	}
+
+	// Extract amount from details.totals.grand_total (in cents as string)
+	var amount float64
+	if details, ok := data["details"].(map[string]interface{}); ok {
+		if totals, ok := details["totals"].(map[string]interface{}); ok {
+			if grandTotal, ok := totals["grand_total"].(string); ok {
+				fmt.Sscanf(grandTotal, "%f", &amount) //nolint:errcheck
+				amount = amount / 100.0               // cents to dollars
+			}
+		}
+	}
+
+	// Extract payment method type
+	var paymentMethodType *string
+	if payments, ok := data["payments"].([]interface{}); ok && len(payments) > 0 {
+		if payment, ok := payments[0].(map[string]interface{}); ok {
+			if methodDetails, ok := payment["method_details"].(map[string]interface{}); ok {
+				if pmt := getStringFromMap(methodDetails, "type"); pmt != "" {
+					paymentMethodType = &pmt
+				}
+			}
+		}
+	}
+
+	// Extract billing period
+	var billingStart, billingEnd *time.Time
+	if bp, ok := data["billing_period"].(map[string]interface{}); ok {
+		if s, ok := bp["starts_at"].(string); ok {
+			if t, err := time.Parse(time.RFC3339, s); err == nil {
+				billingStart = &t
+			}
+		}
+		if e, ok := bp["ends_at"].(string); ok {
+			if t, err := time.Parse(time.RFC3339, e); err == nil {
+				billingEnd = &t
+			}
+		}
+	}
+
+	txn := &domain.PaddleTransaction{
+		UserID:             userID,
+		TransactionID:      transactionID,
+		Amount:             amount,
+		Currency:           currency,
+		Status:             status,
+		PaymentMethodType:  paymentMethodType,
+		BillingPeriodStart: billingStart,
+		BillingPeriodEnd:   billingEnd,
+		Payload:            rawPayload,
+	}
+
+	if subscriptionID != "" {
+		txn.SubscriptionID = &subscriptionID
+	}
+	if customerID != "" {
+		txn.CustomerID = &customerID
+	}
+
+	return txn
 }
 
 // SubscriptionWebhookUniqueOpts returns the recommended uniqueness options.

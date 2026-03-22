@@ -209,6 +209,7 @@ func main() {
 	var paddleCheckoutHandler *operations.PaddleCheckoutHandler
 	var subscriptionWebhookWorker *jobs.SubscriptionWebhookWorker
 	var paddleWebhookRepo repository.PaddleWebhookRepository
+	var paddleTransactionRepo repository.PaddleTransactionRepository // Issues #747 #748
 
 	if db != nil && cfg.ClerkSecretKey != "" {
 		// Create repositories
@@ -219,6 +220,7 @@ func main() {
 		transactionRepo := repository.NewTransactionRepository(db)
 		webhookRepo := repository.NewWebhookRepository(db)
 		paddleWebhookRepo = repository.NewPaddleWebhookRepository(db)            // Issue #45, #46: Paddle webhooks
+		paddleTransactionRepo = repository.NewPaddleTransactionRepository(db)   // Issues #747 #748: Paddle transaction audit log
 		identityRepo := repository.NewUserIdentityRepository(db)                 // Maps Clerk IDs to user UUIDs
 		notificationRepo := repository.NewNotificationRepository(db)             // Issue #257: Notification storage
 		balanceSnapshotRepo := repository.NewBalanceSnapshotRepository(db)       // Issue #353: Balance tracking
@@ -420,14 +422,17 @@ func main() {
 			}
 
 			// Create subscription webhook worker
-			// TODO(#46): Add Clerk service for updating user metadata when Paddle SDK is complete
+			// Issues #747 #748: Wire ClerkService, NotificationRepo, and PaddleTransactionRepo
 			if paddleWebhookService != nil {
+				webhookClerkService := services.NewClerkService(cfg.ClerkSecretKey)
 				subscriptionWebhookWorker = jobs.NewSubscriptionWebhookWorker(jobs.SubscriptionWebhookWorkerDeps{
-					PaddleWebhookRepo: paddleWebhookRepo,
-					ProfileRepo:       profileRepo,
-					ClerkService:      nil, // TODO: Add when ClerkService.UpdateUserMetadata is implemented
-					TierConfig:        tierConfig,
-					Logger:            logger,
+					PaddleWebhookRepo:     paddleWebhookRepo,
+					ProfileRepo:           profileRepo,
+					ClerkService:          webhookClerkService,
+					NotificationRepo:      notificationRepo,
+					PaddleTransactionRepo: paddleTransactionRepo,
+					TierConfig:            tierConfig,
+					Logger:                logger,
 				})
 				appLogger.Info("Subscription webhook worker created (River)")
 			}
@@ -863,7 +868,8 @@ func main() {
 		// Issue #639: Pass adminUserService for user management endpoints
 		// Issue #640: Pass systemHealthService for system health monitoring
 		if plaidService != nil && encryptionService != nil {
-			humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, encryptionService, trialService, adminService, adminUserService, systemHealthService, subscriptionService, cfg)
+			humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, encryptionService, trialService, adminService, adminUserService, systemHealthService, subscriptionService, cfg).
+				WithPaddleTransactionRepo(paddleTransactionRepo)
 			operations.RegisterAdminRoutes(humaAPI, humaAdminHandler)
 			appLogger.Info("Huma admin routes registered (protected by AdminMiddleware)")
 		}
