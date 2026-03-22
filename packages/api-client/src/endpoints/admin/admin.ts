@@ -49,6 +49,8 @@ import type {
   ErrorModel,
   FireWebhookRequestBody,
   FireWebhookResponseBody,
+  GetAdminPaymentFailuresParams,
+  GetPaymentFailuresOutputBody,
   GrantTrialResponseBody,
   ListAdminUsersParams,
   SystemHealthResponse,
@@ -211,6 +213,173 @@ export function useCheckRole<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getCheckRoleQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Returns failed, past_due, and canceled Paddle transactions for admin review. Requires admin role.
+ * @summary List failed payment transactions (admin)
+ */
+export const getAdminPaymentFailures = (
+  params?: GetAdminPaymentFailuresParams,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<GetPaymentFailuresOutputBody>(
+    { url: `/api/v1/admin/payments/failures`, method: "GET", params, signal },
+    options,
+  );
+};
+
+export const getGetAdminPaymentFailuresQueryKey = (
+  params?: GetAdminPaymentFailuresParams,
+) => {
+  return [
+    `/api/v1/admin/payments/failures`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetAdminPaymentFailuresQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAdminPaymentFailures>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: GetAdminPaymentFailuresParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminPaymentFailures>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetAdminPaymentFailuresQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAdminPaymentFailures>>
+  > = ({ signal }) => getAdminPaymentFailures(params, requestOptions, signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAdminPaymentFailures>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAdminPaymentFailuresQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAdminPaymentFailures>>
+>;
+export type GetAdminPaymentFailuresQueryError = ErrorType<ErrorModel>;
+
+export function useGetAdminPaymentFailures<
+  TData = Awaited<ReturnType<typeof getAdminPaymentFailures>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: undefined | GetAdminPaymentFailuresParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminPaymentFailures>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAdminPaymentFailures>>,
+          TError,
+          Awaited<ReturnType<typeof getAdminPaymentFailures>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAdminPaymentFailures<
+  TData = Awaited<ReturnType<typeof getAdminPaymentFailures>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: GetAdminPaymentFailuresParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminPaymentFailures>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAdminPaymentFailures>>,
+          TError,
+          Awaited<ReturnType<typeof getAdminPaymentFailures>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAdminPaymentFailures<
+  TData = Awaited<ReturnType<typeof getAdminPaymentFailures>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: GetAdminPaymentFailuresParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminPaymentFailures>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List failed payment transactions (admin)
+ */
+
+export function useGetAdminPaymentFailures<
+  TData = Awaited<ReturnType<typeof getAdminPaymentFailures>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: GetAdminPaymentFailuresParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminPaymentFailures>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetAdminPaymentFailuresQueryOptions(params, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,
