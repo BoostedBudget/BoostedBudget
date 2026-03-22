@@ -231,3 +231,72 @@ func TestPaddleTransactionGetByUserID_Empty(t *testing.T) {
 	assert.Empty(t, results)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestGetFailedTransactions_Success tests retrieving failed/past_due/canceled transactions.
+func TestGetFailedTransactions_Success(t *testing.T) {
+	mock, repo := setupPaddleTransactionMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	now := time.Now()
+	txn := newTestPaddleTransaction()
+	txn.ID = uuid.New().String()
+	txn.Status = "failed"
+
+	dataRows := pgxmock.NewRows([]string{
+		"id", "user_id", "transaction_id", "subscription_id", "customer_id",
+		"amount", "currency", "status", "payment_method_type",
+		"billing_period_start", "billing_period_end", "payload",
+		"created_at", "updated_at",
+	}).AddRow(
+		txn.ID, txn.UserID, txn.TransactionID, txn.SubscriptionID, txn.CustomerID,
+		txn.Amount, txn.Currency, txn.Status, txn.PaymentMethodType,
+		txn.BillingPeriodStart, txn.BillingPeriodEnd, txn.Payload,
+		now, now,
+	)
+
+	countRows := pgxmock.NewRows([]string{"count"}).AddRow(1)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT count(*) FROM paddle_transactions`)).
+		WillReturnRows(countRows)
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, transaction_id`)).
+		WithArgs(10, 0).
+		WillReturnRows(dataRows)
+
+	results, total, err := repo.GetFailedTransactions(ctx, 10, 0)
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, 1, total)
+	assert.Equal(t, "failed", results[0].Status)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetFailedTransactions_Empty tests empty result when no failed transactions exist.
+func TestGetFailedTransactions_Empty(t *testing.T) {
+	mock, repo := setupPaddleTransactionMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+
+	countRows := pgxmock.NewRows([]string{"count"}).AddRow(0)
+	dataRows := pgxmock.NewRows([]string{
+		"id", "user_id", "transaction_id", "subscription_id", "customer_id",
+		"amount", "currency", "status", "payment_method_type",
+		"billing_period_start", "billing_period_end", "payload",
+		"created_at", "updated_at",
+	})
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT count(*) FROM paddle_transactions`)).
+		WillReturnRows(countRows)
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, transaction_id`)).
+		WithArgs(10, 0).
+		WillReturnRows(dataRows)
+
+	results, total, err := repo.GetFailedTransactions(ctx, 10, 0)
+
+	require.NoError(t, err)
+	assert.Empty(t, results)
+	assert.Equal(t, 0, total)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
