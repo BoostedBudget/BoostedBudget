@@ -32,6 +32,10 @@ type PaddleTransactionRepository interface {
 
 	// GetByUserID retrieves all transactions for a user, ordered by created_at DESC.
 	GetByUserID(ctx context.Context, userID string) ([]domain.PaddleTransaction, error)
+
+	// GetFailedTransactions retrieves failed/past_due/canceled transactions (admin view), ordered by created_at DESC.
+	// Returns the transactions and total count for pagination.
+	GetFailedTransactions(ctx context.Context, limit, offset int) ([]domain.PaddleTransaction, int, error)
 }
 
 // paddleTransactionRepository implements PaddleTransactionRepository using PostgreSQL.
@@ -50,6 +54,18 @@ const paddleTransactionSelectFields = `
 	billing_period_start, billing_period_end, payload,
 	created_at, updated_at
 `
+
+// scanPaddleTransaction scans a row into a PaddleTransaction struct.
+func scanPaddleTransaction(row interface {
+	Scan(...interface{}) error
+}, txn *domain.PaddleTransaction) error {
+	return row.Scan(
+		&txn.ID, &txn.UserID, &txn.TransactionID, &txn.SubscriptionID, &txn.CustomerID,
+		&txn.Amount, &txn.Currency, &txn.Status, &txn.PaymentMethodType,
+		&txn.BillingPeriodStart, &txn.BillingPeriodEnd, &txn.Payload,
+		&txn.CreatedAt, &txn.UpdatedAt,
+	)
+}
 
 // Create stores a new Paddle transaction in the database.
 func (r *paddleTransactionRepository) Create(ctx context.Context, txn *domain.PaddleTransaction) error {
@@ -96,13 +112,7 @@ func (r *paddleTransactionRepository) GetByTransactionID(ctx context.Context, tr
 	query := `SELECT ` + paddleTransactionSelectFields + ` FROM paddle_transactions WHERE transaction_id = $1`
 
 	var txn domain.PaddleTransaction
-	err := r.db.QueryRow(ctx, query, transactionID).Scan(
-		&txn.ID, &txn.UserID, &txn.TransactionID, &txn.SubscriptionID, &txn.CustomerID,
-		&txn.Amount, &txn.Currency, &txn.Status, &txn.PaymentMethodType,
-		&txn.BillingPeriodStart, &txn.BillingPeriodEnd, &txn.Payload,
-		&txn.CreatedAt, &txn.UpdatedAt,
-	)
-
+	err := scanPaddleTransaction(r.db.QueryRow(ctx, query, transactionID), &txn)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrPaddleTransactionNotFound
@@ -126,12 +136,7 @@ func (r *paddleTransactionRepository) GetByUserID(ctx context.Context, userID st
 	var txns []domain.PaddleTransaction
 	for rows.Next() {
 		var txn domain.PaddleTransaction
-		if err := rows.Scan(
-			&txn.ID, &txn.UserID, &txn.TransactionID, &txn.SubscriptionID, &txn.CustomerID,
-			&txn.Amount, &txn.Currency, &txn.Status, &txn.PaymentMethodType,
-			&txn.BillingPeriodStart, &txn.BillingPeriodEnd, &txn.Payload,
-			&txn.CreatedAt, &txn.UpdatedAt,
-		); err != nil {
+		if err := scanPaddleTransaction(rows, &txn); err != nil {
 			return nil, fmt.Errorf("failed to scan paddle transaction: %w", err)
 		}
 		txns = append(txns, txn)
@@ -142,4 +147,35 @@ func (r *paddleTransactionRepository) GetByUserID(ctx context.Context, userID st
 	}
 
 	return txns, nil
+}
+
+// GetFailedTransactions retrieves failed/past_due/canceled transactions for admin view.
+func (r *paddleTransactionRepository) GetFailedTransactions(ctx context.Context, limit, offset int) ([]domain.PaddleTransaction, int, error) {
+	const failedStatuses = `('failed', 'past_due', 'canceled')`
+
+	var total int
+	if err := r.db.QueryRow(ctx, `SELECT count(*) FROM paddle_transactions WHERE status IN `+failedStatuses).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("failed to count failed transactions: %w", err)
+	}
+
+	rows, err := r.db.Query(ctx, `SELECT `+paddleTransactionSelectFields+` FROM paddle_transactions WHERE status IN `+failedStatuses+` ORDER BY created_at DESC LIMIT $1 OFFSET $2`, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to get failed transactions: %w", err)
+	}
+	defer rows.Close()
+
+	var txns []domain.PaddleTransaction
+	for rows.Next() {
+		var txn domain.PaddleTransaction
+		if err := scanPaddleTransaction(rows, &txn); err != nil {
+			return nil, 0, fmt.Errorf("failed to scan failed transaction: %w", err)
+		}
+		txns = append(txns, txn)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("error iterating failed transactions: %w", err)
+	}
+
+	return txns, total, nil
 }

@@ -844,7 +844,10 @@ func TestWorker_SubscriptionTrialing_Success(t *testing.T) {
 	}
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
-	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "trialing", (*time.Time)(nil), (*time.Time)(nil), mock.Anything).Return(nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "trialing",
+		mock.MatchedBy(func(t *time.Time) bool { return t != nil }),
+		mock.MatchedBy(func(t *time.Time) bool { return t != nil }),
+		mock.Anything).Return(nil)
 	mockNotifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
 		return n.Type == "subscription_trialing" && n.UserID == "user_2abc123def456"
 	})).Return(nil)
@@ -856,6 +859,36 @@ func TestWorker_SubscriptionTrialing_Success(t *testing.T) {
 
 	require.NoError(t, err)
 	mockWebhookRepo.AssertExpectations(t)
+	mockNotifRepo.AssertExpectations(t)
+}
+
+// TestWorker_TransactionPastDue_Success tests transaction.past_due event.
+func TestWorker_TransactionPastDue_Success(t *testing.T) {
+	worker, mockWebhookRepo, _, _, mockNotifRepo, mockTxnRepo := setupWorkerTest(t)
+	ctx := context.Background()
+
+	webhook := loadWebhookFixture(t, "transaction_past_due.json")
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "transaction.past_due",
+	}
+	job := createRiverJob(args)
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockTxnRepo.On("Create", ctx, mock.MatchedBy(func(txn *domain.PaddleTransaction) bool {
+		return txn.Status == "past_due" && txn.UserID == "user_2abc123def456"
+	})).Return(nil)
+	mockNotifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
+		return n.Type == "transaction_past_due" && n.UserID == "user_2abc123def456"
+	})).Return(nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockWebhookRepo.AssertExpectations(t)
+	mockTxnRepo.AssertExpectations(t)
 	mockNotifRepo.AssertExpectations(t)
 }
 

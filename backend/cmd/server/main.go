@@ -868,7 +868,8 @@ func main() {
 		// Issue #639: Pass adminUserService for user management endpoints
 		// Issue #640: Pass systemHealthService for system health monitoring
 		if plaidService != nil && encryptionService != nil {
-			humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, encryptionService, trialService, adminService, adminUserService, systemHealthService, subscriptionService, cfg)
+			humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, encryptionService, trialService, adminService, adminUserService, systemHealthService, subscriptionService, cfg).
+				WithPaddleTransactionRepo(paddleTransactionRepo)
 			operations.RegisterAdminRoutes(humaAPI, humaAdminHandler)
 			appLogger.Info("Huma admin routes registered (protected by AdminMiddleware)")
 		}

@@ -164,6 +164,23 @@ func getMapFromMap(m map[string]interface{}, key string) map[string]interface{} 
 	return val
 }
 
+// extractDateRange extracts start and end dates from a nested map with "starts_at" and "ends_at" fields.
+// Returns (nil, nil) if fields are missing or malformed.
+func extractDateRange(m map[string]interface{}) (*time.Time, *time.Time) {
+	var startedAt, endsAt *time.Time
+	if s, ok := m["starts_at"].(string); ok {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			startedAt = &t
+		}
+	}
+	if e, ok := m["ends_at"].(string); ok {
+		if t, err := time.Parse(time.RFC3339, e); err == nil {
+			endsAt = &t
+		}
+	}
+	return startedAt, endsAt
+}
+
 // resolveTierFromItems extracts the price_id from webhook items and resolves it to a tier name.
 // Falls back to premium tier if price_id is not found or unknown. Issue #772: GAP 3
 func (w *SubscriptionWebhookWorker) resolveTierFromItems(data map[string]interface{}) domain.TierName {
@@ -229,8 +246,6 @@ func (w *SubscriptionWebhookWorker) Work(ctx context.Context, job *river.Job[Sub
 		observability.JobDuration.WithLabelValues(job.Kind).Observe(time.Since(start).Seconds())
 	}()
 
-	startTime := time.Now()
-
 	webhook, fetchErr := w.paddleWebhookRepo.GetByID(ctx, args.WebhookID)
 	if fetchErr != nil {
 		w.logger.Error("failed to fetch Paddle webhook",
@@ -272,6 +287,8 @@ func (w *SubscriptionWebhookWorker) Work(ctx context.Context, job *river.Job[Sub
 		processErr = w.processTransactionCompleted(ctx, webhook)
 	case "transaction.payment_failed":
 		processErr = w.processTransactionPaymentFailed(ctx, webhook)
+	case "transaction.past_due":
+		processErr = w.processTransactionPastDue(ctx, webhook)
 	case "transaction.canceled":
 		processErr = w.processTransactionCanceled(ctx, webhook)
 	default:
@@ -285,7 +302,7 @@ func (w *SubscriptionWebhookWorker) Work(ctx context.Context, job *river.Job[Sub
 			"webhook_id", args.WebhookID,
 			"event_type", webhook.EventType,
 			"error", processErr,
-			"duration_ms", time.Since(startTime).Milliseconds(),
+			"duration_ms", time.Since(start).Milliseconds(),
 		)
 		_ = w.paddleWebhookRepo.MarkFailed(ctx, args.WebhookID, processErr.Error())
 		return fmt.Errorf("webhook processing failed: %w", processErr)
@@ -303,7 +320,7 @@ func (w *SubscriptionWebhookWorker) Work(ctx context.Context, job *river.Job[Sub
 		"webhook_id", args.WebhookID,
 		"event_id", args.EventID,
 		"event_type", webhook.EventType,
-		"duration_ms", time.Since(startTime).Milliseconds(),
+		"duration_ms", time.Since(start).Milliseconds(),
 	)
 
 	return nil
@@ -339,21 +356,12 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCreated(ctx context.Conte
 		return fmt.Errorf("failed to update paddle_customer_id: %w", err)
 	}
 
-	var endsAt, startedAt *time.Time
 	// Issue #772: Resolve tier from Paddle price_id instead of hardcoding "premium"
 	tier := w.resolveTierFromItems(data)
 
+	var startedAt, endsAt *time.Time
 	if billingCycle, ok := data["billing_cycle"].(map[string]interface{}); ok {
-		if startsAtStr, ok := billingCycle["starts_at"].(string); ok {
-			if t, err := time.Parse(time.RFC3339, startsAtStr); err == nil {
-				startedAt = &t
-			}
-		}
-		if endsAtStr, ok := billingCycle["ends_at"].(string); ok {
-			if t, err := time.Parse(time.RFC3339, endsAtStr); err == nil {
-				endsAt = &t
-			}
-		}
+		startedAt, endsAt = extractDateRange(billingCycle)
 	}
 
 	// Extract status from webhook data (e.g., "active", "trialing")
@@ -432,11 +440,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionUpdated(ctx context.Conte
 
 	var endsAt *time.Time
 	if billingCycle, ok := data["billing_cycle"].(map[string]interface{}); ok {
-		if endsAtStr, ok := billingCycle["ends_at"].(string); ok {
-			if t, err := time.Parse(time.RFC3339, endsAtStr); err == nil {
-				endsAt = &t
-			}
-		}
+		_, endsAt = extractDateRange(billingCycle)
 	}
 
 	// Issue #48: Pass subscription ID to repository (may be empty string if not present)
@@ -572,6 +576,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionResumed(ctx context.Conte
 	if subscriptionID != "" {
 		subIDPtr = &subscriptionID
 	}
+
 	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, string(tier), string(domain.SubscriptionStatusActive), nil, nil, subIDPtr); err != nil {
 		return fmt.Errorf("failed to update subscription status: %w", err)
 	}
@@ -603,11 +608,17 @@ func (w *SubscriptionWebhookWorker) processSubscriptionTrialing(ctx context.Cont
 
 	tier := w.resolveTierFromItems(data)
 
+	// Issue #748 gap: Extract trial period dates from current_billing_period
+	var startedAt, endsAt *time.Time
+	if cbp, ok := data["current_billing_period"].(map[string]interface{}); ok {
+		startedAt, endsAt = extractDateRange(cbp)
+	}
+
 	var subIDPtr *string
 	if subscriptionID != "" {
 		subIDPtr = &subscriptionID
 	}
-	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, string(tier), string(domain.SubscriptionStatusTrialing), nil, nil, subIDPtr); err != nil {
+	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, string(tier), string(domain.SubscriptionStatusTrialing), startedAt, endsAt, subIDPtr); err != nil {
 		return fmt.Errorf("failed to update subscription status: %w", err)
 	}
 
@@ -670,6 +681,34 @@ func (w *SubscriptionWebhookWorker) processTransactionPaymentFailed(ctx context.
 	if err == nil {
 		w.syncClerkMetadata(ctx, txn.UserID, user.SubscriptionTier, user.SubscriptionStatus)
 	}
+
+	return nil
+}
+
+// processTransactionPastDue handles transaction.past_due events.
+// Issues #747 gap: Records the past-due transaction and notifies the user.
+func (w *SubscriptionWebhookWorker) processTransactionPastDue(ctx context.Context, webhook *domain.PaddleWebhookEvent) error {
+	data, err := w.parseWebhookPayload(webhook)
+	if err != nil {
+		return err
+	}
+
+	txn := w.buildPaddleTransaction(data, webhook.Payload, "past_due")
+	if txn == nil {
+		w.logger.Warn("transaction.past_due missing transaction_id or user_id, skipping record", "event_id", webhook.EventID)
+		return nil
+	}
+
+	if w.paddleTransactionRepo != nil {
+		if err := w.paddleTransactionRepo.Create(ctx, txn); err != nil && !errors.Is(err, repository.ErrPaddleTransactionDuplicate) {
+			return fmt.Errorf("failed to record past-due transaction: %w", err)
+		}
+	}
+
+	w.createNotification(ctx, txn.UserID, "transaction_past_due",
+		"Payment Past Due",
+		"Your subscription payment is past due. Please update your payment method to avoid service interruption.",
+	)
 
 	return nil
 }

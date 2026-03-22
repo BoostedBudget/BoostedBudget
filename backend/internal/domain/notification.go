@@ -51,6 +51,7 @@ func (n *Notification) Validate() error {
 		"subscription_resumed":    true,
 		"subscription_activated":  true,
 		"subscription_trialing":   true,
+		"transaction_past_due":    true,
 	}
 	if !validTypes[n.Type] {
 		return errors.New("invalid notification type")
