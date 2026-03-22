@@ -369,3 +369,6 @@ migration-performance.json
 
 # Dogfood session output
 dogfood-output/
+
+# Git worktrees
+.worktrees/
