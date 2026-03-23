@@ -578,3 +578,160 @@ func TestUpdateSubscriptionFromPaddle_WithNullSubscriptionID(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// userSelectQueryForTest is the expected SELECT query used in tests for profile lookups
+const userSelectQueryForTest = `SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at FROM users`
+
+// makeUserRow creates a pgxmock row for a user with the given parameters
+func makeUserRow(t *testing.T, userID, clerkID, email string, paddleSubID *string) *pgxmock.Rows {
+	t.Helper()
+	now := time.Now()
+	rows := pgxmock.NewRows([]string{
+		"id", "clerk_user_id", "email", "email_verified",
+		"subscription_tier", "subscription_status", "subscription_started_at", "subscription_ends_at",
+		"trial_started_at", "trial_ends_at", "had_trial",
+		"paddle_customer_id", "paddle_subscription_id", "primary_region", "is_active", "is_deleted",
+		"deletion_requested_at", "deletion_scheduled_at",
+		"created_at", "updated_at", "last_login_at",
+		"manual_tier_override", "manual_tier_ends_at",
+	}).AddRow(
+		userID, clerkID, email, true,
+		"premium", "active", &now, nil,
+		nil, nil, false,
+		stringPtr("cus_123"), paddleSubID, "iad", true, false,
+		nil, nil,
+		now, now, &now,
+		nil, nil,
+	)
+	return rows
+}
+
+// TestGetUsersWithActivePaddleSubscriptions_WithResults tests returning users with active subscriptions
+func TestGetUsersWithActivePaddleSubscriptions_WithResults(t *testing.T) {
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID1 := uuid.New().String()
+	userID2 := uuid.New().String()
+	subID1 := "sub_01h111"
+	subID2 := "sub_01h222"
+
+	now := time.Now()
+	rows := pgxmock.NewRows([]string{
+		"id", "clerk_user_id", "email", "email_verified",
+		"subscription_tier", "subscription_status", "subscription_started_at", "subscription_ends_at",
+		"trial_started_at", "trial_ends_at", "had_trial",
+		"paddle_customer_id", "paddle_subscription_id", "primary_region", "is_active", "is_deleted",
+		"deletion_requested_at", "deletion_scheduled_at",
+		"created_at", "updated_at", "last_login_at",
+		"manual_tier_override", "manual_tier_ends_at",
+	}).AddRow(
+		userID1, "clerk_1", "user1@example.com", true,
+		"premium", "active", &now, nil,
+		nil, nil, false,
+		stringPtr("cus_1"), &subID1, "iad", true, false,
+		nil, nil, now, now, &now, nil, nil,
+	).AddRow(
+		userID2, "clerk_2", "user2@example.com", true,
+		"premium", "active", &now, nil,
+		nil, nil, false,
+		stringPtr("cus_2"), &subID2, "iad", true, false,
+		nil, nil, now, now, &now, nil, nil,
+	)
+
+	mock.ExpectQuery(regexp.QuoteMeta(userSelectQueryForTest+` WHERE paddle_subscription_id IS NOT NULL AND subscription_status NOT IN ('inactive', 'cancelled') AND is_deleted = FALSE`)).
+		WillReturnRows(rows)
+
+	users, err := repo.GetUsersWithActivePaddleSubscriptions(ctx)
+
+	require.NoError(t, err)
+	assert.Len(t, users, 2)
+	assert.Equal(t, userID1, users[0].ID)
+	assert.Equal(t, userID2, users[1].ID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetUsersWithActivePaddleSubscriptions_Empty tests that empty slice (not nil) is returned when no users
+func TestGetUsersWithActivePaddleSubscriptions_Empty(t *testing.T) {
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+
+	rows := pgxmock.NewRows([]string{
+		"id", "clerk_user_id", "email", "email_verified",
+		"subscription_tier", "subscription_status", "subscription_started_at", "subscription_ends_at",
+		"trial_started_at", "trial_ends_at", "had_trial",
+		"paddle_customer_id", "paddle_subscription_id", "primary_region", "is_active", "is_deleted",
+		"deletion_requested_at", "deletion_scheduled_at",
+		"created_at", "updated_at", "last_login_at",
+		"manual_tier_override", "manual_tier_ends_at",
+	})
+
+	mock.ExpectQuery(regexp.QuoteMeta(userSelectQueryForTest+` WHERE paddle_subscription_id IS NOT NULL AND subscription_status NOT IN ('inactive', 'cancelled') AND is_deleted = FALSE`)).
+		WillReturnRows(rows)
+
+	users, err := repo.GetUsersWithActivePaddleSubscriptions(ctx)
+
+	require.NoError(t, err)
+	assert.NotNil(t, users)
+	assert.Empty(t, users)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetUsersWithActivePaddleSubscriptions_ExcludesDeleted verifies is_deleted = FALSE filter works
+func TestGetUsersWithActivePaddleSubscriptions_ExcludesDeleted(t *testing.T) {
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+
+	// Query filters out deleted users via is_deleted = FALSE; mock returns empty result
+	rows := pgxmock.NewRows([]string{
+		"id", "clerk_user_id", "email", "email_verified",
+		"subscription_tier", "subscription_status", "subscription_started_at", "subscription_ends_at",
+		"trial_started_at", "trial_ends_at", "had_trial",
+		"paddle_customer_id", "paddle_subscription_id", "primary_region", "is_active", "is_deleted",
+		"deletion_requested_at", "deletion_scheduled_at",
+		"created_at", "updated_at", "last_login_at",
+		"manual_tier_override", "manual_tier_ends_at",
+	})
+
+	mock.ExpectQuery(regexp.QuoteMeta(userSelectQueryForTest+` WHERE paddle_subscription_id IS NOT NULL AND subscription_status NOT IN ('inactive', 'cancelled') AND is_deleted = FALSE`)).
+		WillReturnRows(rows)
+
+	users, err := repo.GetUsersWithActivePaddleSubscriptions(ctx)
+
+	require.NoError(t, err)
+	assert.Empty(t, users)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetUsersWithActivePaddleSubscriptions_ExcludesInactive verifies inactive status filter works
+func TestGetUsersWithActivePaddleSubscriptions_ExcludesInactive(t *testing.T) {
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+
+	// Query filters out inactive/cancelled users; mock returns empty result
+	rows := pgxmock.NewRows([]string{
+		"id", "clerk_user_id", "email", "email_verified",
+		"subscription_tier", "subscription_status", "subscription_started_at", "subscription_ends_at",
+		"trial_started_at", "trial_ends_at", "had_trial",
+		"paddle_customer_id", "paddle_subscription_id", "primary_region", "is_active", "is_deleted",
+		"deletion_requested_at", "deletion_scheduled_at",
+		"created_at", "updated_at", "last_login_at",
+		"manual_tier_override", "manual_tier_ends_at",
+	})
+
+	mock.ExpectQuery(regexp.QuoteMeta(userSelectQueryForTest+` WHERE paddle_subscription_id IS NOT NULL AND subscription_status NOT IN ('inactive', 'cancelled') AND is_deleted = FALSE`)).
+		WillReturnRows(rows)
+
+	users, err := repo.GetUsersWithActivePaddleSubscriptions(ctx)
+
+	require.NoError(t, err)
+	assert.Empty(t, users)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

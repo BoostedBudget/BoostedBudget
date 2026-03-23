@@ -81,6 +81,10 @@ type Config struct {
 	OTELEndpoint     string  // from OTEL_EXPORTER_OTLP_ENDPOINT — empty = disabled
 	SentrySampleRate float64 // from SENTRY_SAMPLE_RATE — default 1.0
 	OTELSampleRate   float64 // from OTEL_SAMPLE_RATE — default 1.0
+
+	// Paddle Reconciliation
+	PaddleReconciliationEnabled bool // from PADDLE_RECONCILIATION_ENABLED, default true
+	PaddleReconciliationAutoFix bool // from PADDLE_RECONCILIATION_AUTO_FIX, default false
 }
 
 // Load loads configuration from environment variables
@@ -157,6 +161,10 @@ func Load() (*Config, error) {
 		OTELEndpoint:     getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
 		SentrySampleRate: getEnvFloat64("SENTRY_SAMPLE_RATE", 1.0),
 		OTELSampleRate:   getEnvFloat64("OTEL_SAMPLE_RATE", 1.0),
+
+		// Paddle Reconciliation
+		PaddleReconciliationEnabled: getEnvBool("PADDLE_RECONCILIATION_ENABLED", true),
+		PaddleReconciliationAutoFix: getEnvBool("PADDLE_RECONCILIATION_AUTO_FIX", false),
 	}
 
 	// Validate required fields for production

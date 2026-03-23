@@ -122,6 +122,14 @@ func (m *MockProfileRepositoryForDeletion) UpdateSubscriptionFromPaddle(ctx cont
 	return args.Error(0)
 }
 
+func (m *MockProfileRepositoryForDeletion) GetUsersWithActivePaddleSubscriptions(ctx context.Context) ([]*domain.User, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
+}
+
 // MockEmailService for testing
 type MockEmailService struct {
 	mock.Mock

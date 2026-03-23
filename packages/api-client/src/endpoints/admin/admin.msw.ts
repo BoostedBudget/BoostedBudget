@@ -38,7 +38,11 @@ import type {
   FireWebhookResponseBody,
   GetPaymentFailuresOutputBody,
   GrantTrialResponseBody,
+  PaddleWebhookEvent,
   SystemHealthResponse,
+  WebhookEventListResponse,
+  WebhookReplayResponse,
+  WebhookStatsResponse,
 } from "../../models";
 
 export const getCheckRoleResponseMock = (
@@ -131,6 +135,20 @@ export const getGetSystemHealthResponseMock = (
       pending: faker.number.int(),
       running: faker.number.int(),
     },
+  },
+  paddle_status: {
+    active_subscriptions: faker.number.int(),
+    failed_webhooks_24h: faker.number.int(),
+    last_reconciliation_at: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        faker.date.past().toISOString().slice(0, 19) + "Z",
+        null,
+      ]),
+      null,
+    ]),
+    reconciliation_discrepancies: faker.number.int(),
+    total_webhooks24h: faker.number.int(),
+    webhook_success_rate_24h: faker.number.float({ fractionDigits: 2 }),
   },
   services: {
     clerk: {
@@ -235,6 +253,114 @@ export const getGetAdminUserDetailResponseMock = (
   subscription_status: faker.string.alpha({ length: { min: 10, max: 20 } }),
   subscription_tier: faker.string.alpha({ length: { min: 10, max: 20 } }),
   transactions_count: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getListAdminPaddleWebhooksResponseMock = (
+  overrideResponse: Partial<Extract<WebhookEventListResponse, object>> = {},
+): WebhookEventListResponse => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  Events: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+      created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      event_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      event_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      payload: {},
+      processed: faker.datatype.boolean(),
+      processed_at: faker.helpers.arrayElement([
+        faker.date.past().toISOString().slice(0, 19) + "Z",
+        undefined,
+      ]),
+      processing_attempts: faker.number.int(),
+      processing_error: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      signature: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      signature_valid: faker.datatype.boolean(),
+      updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    })),
+    null,
+  ]),
+  HasMore: faker.datatype.boolean(),
+  Page: faker.number.int(),
+  PageSize: faker.number.int(),
+  Total: faker.number.int(),
+  TotalPages: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getGetAdminPaddleWebhookStatsResponseMock = (
+  overrideResponse: Partial<Extract<WebhookStatsResponse, object>> = {},
+): WebhookStatsResponse => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  AvgProcessingTimeMs: faker.number.int(),
+  EventTypeBreakdown: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      Count: faker.number.int(),
+      EventType: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      SuccessRate: faker.number.float({ fractionDigits: 2 }),
+    })),
+    null,
+  ]),
+  Failed: faker.number.int(),
+  Processed: faker.number.int(),
+  TimeRangeHours: faker.number.int(),
+  Total: faker.number.int(),
+  Unprocessed: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getGetAdminPaddleWebhookDetailResponseMock = (
+  overrideResponse: Partial<Extract<PaddleWebhookEvent, object>> = {},
+): PaddleWebhookEvent => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  event_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  event_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  payload: {},
+  processed: faker.datatype.boolean(),
+  processed_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  processing_attempts: faker.number.int(),
+  processing_error: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  signature: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  signature_valid: faker.datatype.boolean(),
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getReplayAdminPaddleWebhookResponseMock = (
+  overrideResponse: Partial<Extract<WebhookReplayResponse, object>> = {},
+): WebhookReplayResponse => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  JobID: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([faker.number.int(), null]),
+    null,
+  ]),
+  Message: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  Success: faker.datatype.boolean(),
+  WebhookID: faker.string.alpha({ length: { min: 10, max: 20 } }),
   ...overrideResponse,
 });
 
@@ -421,6 +547,110 @@ export const getGetAdminUserDetailMockHandler = (
     options,
   );
 };
+
+export const getListAdminPaddleWebhooksMockHandler = (
+  overrideResponse?:
+    | WebhookEventListResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<WebhookEventListResponse> | WebhookEventListResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/admin/webhooks/paddle",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListAdminPaddleWebhooksResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetAdminPaddleWebhookStatsMockHandler = (
+  overrideResponse?:
+    | WebhookStatsResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<WebhookStatsResponse> | WebhookStatsResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/admin/webhooks/paddle/stats",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAdminPaddleWebhookStatsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetAdminPaddleWebhookDetailMockHandler = (
+  overrideResponse?:
+    | PaddleWebhookEvent
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<PaddleWebhookEvent> | PaddleWebhookEvent),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/admin/webhooks/paddle/:id",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAdminPaddleWebhookDetailResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getReplayAdminPaddleWebhookMockHandler = (
+  overrideResponse?:
+    | WebhookReplayResponse
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<WebhookReplayResponse> | WebhookReplayResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/api/v1/admin/webhooks/paddle/:id/replay",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getReplayAdminPaddleWebhookResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
 export const getAdminMock = () => [
   getCheckRoleMockHandler(),
   getGetAdminPaymentFailuresMockHandler(),
@@ -429,4 +659,8 @@ export const getAdminMock = () => [
   getGetSystemHealthMockHandler(),
   getListAdminUsersMockHandler(),
   getGetAdminUserDetailMockHandler(),
+  getListAdminPaddleWebhooksMockHandler(),
+  getGetAdminPaddleWebhookStatsMockHandler(),
+  getGetAdminPaddleWebhookDetailMockHandler(),
+  getReplayAdminPaddleWebhookMockHandler(),
 ];

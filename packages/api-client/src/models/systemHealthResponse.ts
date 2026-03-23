@@ -27,6 +27,7 @@ All data is stored in the us-east-1 (iad) region. Multi-region support planned f
  * OpenAPI spec version: 1.0.0
  */
 import type { DeadLetterMetrics } from "./deadLetterMetrics";
+import type { PaddleStatusMetrics } from "./paddleStatusMetrics";
 import type { ServiceHealthStatuses } from "./serviceHealthStatuses";
 import type { SyncStatusMetrics } from "./syncStatusMetrics";
 import type { SystemHealthResponseJobQueues } from "./systemHealthResponseJobQueues";
@@ -36,6 +37,7 @@ export interface SystemHealthResponse {
   readonly $schema?: string;
   dead_letter_queue: DeadLetterMetrics;
   job_queues: SystemHealthResponseJobQueues;
+  paddle_status: PaddleStatusMetrics;
   services: ServiceHealthStatuses;
   status: string;
   sync_status: SyncStatusMetrics;
