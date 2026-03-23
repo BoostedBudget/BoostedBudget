@@ -1,0 +1,310 @@
+/**
+ * WebhooksPage Styles
+ * Issue #747: Paddle Webhook Admin UI
+ */
+
+/* Page layout */
+.webhooks-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  padding: 1.5rem;
+  min-height: 100%;
+}
+
+/* Header */
+.webhooks-page__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+  border-bottom: 1px solid var(--border-primary);
+  padding-bottom: 1rem;
+}
+
+.webhooks-page__title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  margin: 0;
+}
+
+.webhooks-page__count {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 9999px;
+  padding: 0.125rem 0.625rem;
+}
+
+.webhooks-page__subtitle {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  margin: 0.375rem 0 0;
+}
+
+/* Controls */
+.webhooks-page__controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.webhooks-page__button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.4rem 0.875rem;
+  border: 1px solid var(--border-primary);
+  border-radius: 0.375rem;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background-color 0.15s, opacity 0.15s;
+}
+
+.webhooks-page__button:hover {
+  background: var(--bg-secondary);
+}
+
+/* Stats grid */
+.webhooks-page__stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem;
+}
+
+/* Filters row */
+.webhooks-page__filters {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.webhooks-page__select {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-primary);
+  border-radius: 0.375rem;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.webhooks-page__select:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+
+/* Loading / Error / Empty states */
+.webhooks-page__loading,
+.webhooks-page__error,
+.webhooks-page__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 4rem;
+  color: var(--text-secondary);
+  font-size: 0.9375rem;
+}
+
+.webhooks-page__error {
+  color: var(--color-error, hsl(0 72% 51%));
+  flex-direction: row;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spinning {
+  animation: spin 1.2s linear infinite;
+}
+
+/* Table wrapper */
+.webhooks-page__table-wrapper {
+  overflow-x: auto;
+  border: 1px solid var(--border-primary);
+  border-radius: 0.625rem;
+  background: var(--bg-primary);
+}
+
+/* Table */
+.webhooks-page__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.webhooks-page__table thead tr {
+  border-bottom: 1px solid var(--border-primary);
+  background: var(--bg-secondary);
+}
+
+.webhooks-page__table th {
+  padding: 0.75rem 1rem;
+  text-align: left;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.webhooks-page__table tbody tr {
+  border-bottom: 1px solid var(--border-primary);
+  transition: background-color 0.1s;
+}
+
+.webhooks-page__table tbody tr:last-child {
+  border-bottom: none;
+}
+
+.webhooks-page__table tbody tr:hover {
+  background-color: var(--bg-secondary);
+}
+
+.webhooks-page__table td {
+  padding: 0.75rem 1rem;
+  color: var(--text-primary);
+  vertical-align: middle;
+}
+
+/* Row clickable */
+.webhooks-page__row--clickable {
+  cursor: pointer;
+}
+
+/* Event type cell */
+.webhooks-page__event-type {
+  font-family: monospace;
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+/* Event ID cell */
+.webhooks-page__event-id {
+  font-family: monospace;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Error preview cell */
+.webhooks-page__error-preview {
+  font-size: 0.8125rem;
+  color: var(--color-error, hsl(0 72% 51%));
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Status badge */
+.webhooks-page__status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.webhooks-page__status-badge--processed {
+  background: hsl(142 71% 94%);
+  color: hsl(142 71% 28%);
+}
+
+.webhooks-page__status-badge--failed {
+  background: hsl(0 72% 95%);
+  color: hsl(0 72% 40%);
+}
+
+.webhooks-page__status-badge--pending {
+  background: hsl(45 100% 94%);
+  color: hsl(45 80% 30%);
+}
+
+/* Replay button */
+.webhooks-page__replay-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--border-primary);
+  border-radius: 0.375rem;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+.webhooks-page__replay-btn:hover:not(:disabled) {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: white;
+}
+
+.webhooks-page__replay-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Pagination */
+.webhooks-page__pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.webhooks-page__pagination button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.4rem 0.875rem;
+  border: 1px solid var(--border-primary);
+  border-radius: 0.375rem;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background-color 0.15s, opacity 0.15s;
+}
+
+.webhooks-page__pagination button:hover:not(:disabled) {
+  background: var(--bg-secondary);
+}
+
+.webhooks-page__pagination button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

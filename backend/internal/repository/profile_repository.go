@@ -61,6 +61,10 @@ type ProfileRepository interface {
 	// GetUsersWithExpiringTrials returns users whose trial ends within N days
 	GetUsersWithExpiringTrials(ctx context.Context, withinDays int) ([]*domain.User, error)
 
+	// GetUsersWithActivePaddleSubscriptions returns users with a non-null paddle_subscription_id
+	// and subscription_status not in ('inactive', 'cancelled')
+	GetUsersWithActivePaddleSubscriptions(ctx context.Context) ([]*domain.User, error)
+
 	// Deletion-related methods
 
 	// MarkForDeletion marks a user for deletion with a scheduled date
@@ -627,4 +631,18 @@ func (r *profileRepository) GetUsersWithExpiringTrials(ctx context.Context, with
 		ORDER BY trial_ends_at ASC
 	`
 	return r.queryUsers(ctx, query, now, threshold)
+}
+
+// GetUsersWithActivePaddleSubscriptions returns users with active Paddle subscriptions
+// Issue #762: Paddle admin tools reconciliation
+func (r *profileRepository) GetUsersWithActivePaddleSubscriptions(ctx context.Context) ([]*domain.User, error) {
+	query := userSelectQuery + ` WHERE paddle_subscription_id IS NOT NULL AND subscription_status NOT IN ('inactive', 'cancelled') AND is_deleted = FALSE`
+	users, err := r.queryUsers(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	if users == nil {
+		users = []*domain.User{}
+	}
+	return users, nil
 }

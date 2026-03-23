@@ -123,6 +123,14 @@ func (m *MockProfileRepository) UpdateSubscriptionFromPaddle(ctx context.Context
 	return args.Error(0)
 }
 
+func (m *MockProfileRepository) GetUsersWithActivePaddleSubscriptions(ctx context.Context) ([]*domain.User, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
+}
+
 // TestGetProfile_ExistingUser tests retrieving an existing user
 // NOTE: After PR #197, GetProfile now receives internal user UUID, not Clerk ID
 func TestGetProfile_ExistingUser(t *testing.T) {

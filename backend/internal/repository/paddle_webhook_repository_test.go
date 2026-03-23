@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"testing"
 	"time"
@@ -658,5 +659,315 @@ func TestGetRecentWebhooks_Success(t *testing.T) {
 	assert.Len(t, events, 2)
 	assert.Equal(t, "evt_newest", events[0].EventID)
 	assert.Equal(t, "evt_older", events[1].EventID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// webhookEventColumns is a helper slice of column names for paddle_webhook_events SELECT queries
+var webhookEventColumns = []string{
+	"id", "event_id", "event_type", "payload",
+	"signature", "signature_valid", "processed", "processed_at",
+	"processing_error", "processing_attempts",
+	"created_at", "updated_at",
+}
+
+// addWebhookEventRow adds a standard webhook event row to mock rows
+func addWebhookEventRow(rows *pgxmock.Rows, eventID, eventType string, processed bool, now time.Time) *pgxmock.Rows {
+	sig := "ts=1614280549;h1=abc123"
+	return rows.AddRow(
+		uuid.New().String(), eventID, eventType,
+		json.RawMessage(`{}`), &sig, true, processed, nil, nil, 0, now, now,
+	)
+}
+
+// TestListWebhookEvents_NoFilters tests listing events without any filters
+func TestListWebhookEvents_NoFilters(t *testing.T) {
+	mock, repo := setupPaddleWebhookMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	now := time.Now()
+
+	countRows := pgxmock.NewRows([]string{"count"}).AddRow(int64(2))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM paddle_webhook_events`)).
+		WillReturnRows(countRows)
+
+	listRows := pgxmock.NewRows(webhookEventColumns)
+	addWebhookEventRow(listRows, "evt_01", "subscription.created", true, now)
+	addWebhookEventRow(listRows, "evt_02", "subscription.updated", false, now)
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, event_id, event_type, payload`)).
+		WithArgs(10, 0).
+		WillReturnRows(listRows)
+
+	events, total, err := repo.ListWebhookEvents(ctx, domain.WebhookEventFilters{}, 10, 0)
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, total)
+	assert.Len(t, events, 2)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestListWebhookEvents_WithEventTypeFilter tests filtering by event type
+func TestListWebhookEvents_WithEventTypeFilter(t *testing.T) {
+	mock, repo := setupPaddleWebhookMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	now := time.Now()
+	eventType := "subscription.created"
+
+	countRows := pgxmock.NewRows([]string{"count"}).AddRow(int64(1))
+	mock.ExpectQuery(regexp.QuoteMeta(fmt.Sprintf(`SELECT COUNT(*) FROM paddle_webhook_events WHERE event_type = $1`))).
+		WithArgs(eventType).
+		WillReturnRows(countRows)
+
+	listRows := pgxmock.NewRows(webhookEventColumns)
+	addWebhookEventRow(listRows, "evt_01", eventType, true, now)
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, event_id, event_type, payload`)).
+		WithArgs(eventType, 10, 0).
+		WillReturnRows(listRows)
+
+	filters := domain.WebhookEventFilters{EventType: &eventType}
+	events, total, err := repo.ListWebhookEvents(ctx, filters, 10, 0)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, total)
+	assert.Len(t, events, 1)
+	assert.Equal(t, eventType, events[0].EventType)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestListWebhookEvents_WithProcessedFilter tests filtering by processed status
+func TestListWebhookEvents_WithProcessedFilter(t *testing.T) {
+	mock, repo := setupPaddleWebhookMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	now := time.Now()
+	processed := false
+
+	countRows := pgxmock.NewRows([]string{"count"}).AddRow(int64(3))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM paddle_webhook_events WHERE processed = $1`)).
+		WithArgs(processed).
+		WillReturnRows(countRows)
+
+	listRows := pgxmock.NewRows(webhookEventColumns)
+	addWebhookEventRow(listRows, "evt_01", "subscription.created", false, now)
+	addWebhookEventRow(listRows, "evt_02", "subscription.updated", false, now)
+	addWebhookEventRow(listRows, "evt_03", "transaction.completed", false, now)
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, event_id, event_type, payload`)).
+		WithArgs(processed, 10, 0).
+		WillReturnRows(listRows)
+
+	filters := domain.WebhookEventFilters{Processed: &processed}
+	events, total, err := repo.ListWebhookEvents(ctx, filters, 10, 0)
+
+	require.NoError(t, err)
+	assert.Equal(t, 3, total)
+	assert.Len(t, events, 3)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestListWebhookEvents_WithDateRange tests filtering by date range
+func TestListWebhookEvents_WithDateRange(t *testing.T) {
+	mock, repo := setupPaddleWebhookMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	now := time.Now()
+	start := now.Add(-24 * time.Hour)
+	end := now
+
+	countRows := pgxmock.NewRows([]string{"count"}).AddRow(int64(1))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM paddle_webhook_events WHERE created_at >= $1 AND created_at <= $2`)).
+		WithArgs(start, end).
+		WillReturnRows(countRows)
+
+	listRows := pgxmock.NewRows(webhookEventColumns)
+	addWebhookEventRow(listRows, "evt_01", "subscription.created", true, now)
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, event_id, event_type, payload`)).
+		WithArgs(start, end, 10, 0).
+		WillReturnRows(listRows)
+
+	filters := domain.WebhookEventFilters{StartDate: &start, EndDate: &end}
+	events, total, err := repo.ListWebhookEvents(ctx, filters, 10, 0)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, total)
+	assert.Len(t, events, 1)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestListWebhookEvents_EmptyResult tests listing when no events match
+func TestListWebhookEvents_EmptyResult(t *testing.T) {
+	mock, repo := setupPaddleWebhookMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+
+	countRows := pgxmock.NewRows([]string{"count"}).AddRow(int64(0))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM paddle_webhook_events`)).
+		WillReturnRows(countRows)
+
+	listRows := pgxmock.NewRows(webhookEventColumns)
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, event_id, event_type, payload`)).
+		WithArgs(10, 0).
+		WillReturnRows(listRows)
+
+	events, total, err := repo.ListWebhookEvents(ctx, domain.WebhookEventFilters{}, 10, 0)
+
+	require.NoError(t, err)
+	assert.Equal(t, 0, total)
+	assert.Empty(t, events)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestListWebhookEvents_Pagination tests that limit and offset are applied correctly
+func TestListWebhookEvents_Pagination(t *testing.T) {
+	mock, repo := setupPaddleWebhookMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	now := time.Now()
+
+	countRows := pgxmock.NewRows([]string{"count"}).AddRow(int64(100))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM paddle_webhook_events`)).
+		WillReturnRows(countRows)
+
+	listRows := pgxmock.NewRows(webhookEventColumns)
+	addWebhookEventRow(listRows, "evt_21", "subscription.created", true, now)
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, event_id, event_type, payload`)).
+		WithArgs(10, 20).
+		WillReturnRows(listRows)
+
+	events, total, err := repo.ListWebhookEvents(ctx, domain.WebhookEventFilters{}, 10, 20)
+
+	require.NoError(t, err)
+	assert.Equal(t, 100, total)
+	assert.Len(t, events, 1)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetWebhookStats_24h tests stats retrieval for 24-hour window
+func TestGetWebhookStats_24h(t *testing.T) {
+	mock, repo := setupPaddleWebhookMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+
+	statsRows := pgxmock.NewRows([]string{"total", "processed", "failed", "unprocessed", "avg_processing_time_ms"}).
+		AddRow(int64(10), int64(8), int64(1), int64(2), int64(150))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
+		WillReturnRows(statsRows)
+
+	breakdownRows := pgxmock.NewRows([]string{"event_type", "count", "success_rate"}).
+		AddRow("subscription.created", int64(6), float64(100.0)).
+		AddRow("subscription.updated", int64(4), float64(75.0))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
+		WillReturnRows(breakdownRows)
+
+	stats, err := repo.GetWebhookStats(ctx, 24)
+
+	require.NoError(t, err)
+	require.NotNil(t, stats)
+	assert.Equal(t, int64(10), stats.Total)
+	assert.Equal(t, int64(8), stats.Processed)
+	assert.Equal(t, int64(1), stats.Failed)
+	assert.Equal(t, int64(2), stats.Unprocessed)
+	assert.Equal(t, int64(150), stats.AvgProcessingTimeMs)
+	assert.Equal(t, 24, stats.TimeRangeHours)
+	assert.Len(t, stats.EventTypeBreakdown, 2)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetWebhookStats_AllTime tests stats retrieval for all time (timeRangeHours=0)
+func TestGetWebhookStats_AllTime(t *testing.T) {
+	mock, repo := setupPaddleWebhookMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+
+	statsRows := pgxmock.NewRows([]string{"total", "processed", "failed", "unprocessed", "avg_processing_time_ms"}).
+		AddRow(int64(50), int64(45), int64(3), int64(5), int64(200))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
+		WillReturnRows(statsRows)
+
+	breakdownRows := pgxmock.NewRows([]string{"event_type", "count", "success_rate"})
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
+		WillReturnRows(breakdownRows)
+
+	stats, err := repo.GetWebhookStats(ctx, 0)
+
+	require.NoError(t, err)
+	require.NotNil(t, stats)
+	assert.Equal(t, int64(50), stats.Total)
+	assert.Equal(t, 0, stats.TimeRangeHours)
+	assert.Empty(t, stats.EventTypeBreakdown)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetWebhookStats_WithBreakdown tests that event type breakdown is populated
+func TestGetWebhookStats_WithBreakdown(t *testing.T) {
+	mock, repo := setupPaddleWebhookMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+
+	statsRows := pgxmock.NewRows([]string{"total", "processed", "failed", "unprocessed", "avg_processing_time_ms"}).
+		AddRow(int64(15), int64(12), int64(2), int64(3), int64(100))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
+		WillReturnRows(statsRows)
+
+	breakdownRows := pgxmock.NewRows([]string{"event_type", "count", "success_rate"}).
+		AddRow("subscription.created", int64(8), float64(87.5)).
+		AddRow("transaction.completed", int64(5), float64(100.0)).
+		AddRow("subscription.cancelled", int64(2), float64(50.0))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
+		WillReturnRows(breakdownRows)
+
+	stats, err := repo.GetWebhookStats(ctx, 48)
+
+	require.NoError(t, err)
+	require.NotNil(t, stats)
+	assert.Len(t, stats.EventTypeBreakdown, 3)
+	assert.Equal(t, "subscription.created", stats.EventTypeBreakdown[0].EventType)
+	assert.Equal(t, int64(8), stats.EventTypeBreakdown[0].Count)
+	assert.InDelta(t, 87.5, stats.EventTypeBreakdown[0].SuccessRate, 0.001)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestResetProcessingStatus_Success tests resetting a webhook's processing status
+func TestResetProcessingStatus_Success(t *testing.T) {
+	mock, repo := setupPaddleWebhookMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	id := uuid.New().String()
+
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE paddle_webhook_events`)).
+		WithArgs(id).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	err := repo.ResetProcessingStatus(ctx, id)
+
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestResetProcessingStatus_NotFound tests resetting a non-existent webhook
+func TestResetProcessingStatus_NotFound(t *testing.T) {
+	mock, repo := setupPaddleWebhookMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	id := uuid.New().String()
+
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE paddle_webhook_events`)).
+		WithArgs(id).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	err := repo.ResetProcessingStatus(ctx, id)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrPaddleWebhookNotFound)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

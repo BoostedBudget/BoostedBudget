@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -43,6 +44,24 @@ func (m *MockSystemHealthRepository) GetFailedSyncsLastHour(ctx context.Context)
 func (m *MockSystemHealthRepository) GetAverageSyncDuration(ctx context.Context) (int64, error) {
 	args := m.Called(ctx)
 	return args.Get(0).(int64), args.Error(1)
+}
+
+func (m *MockSystemHealthRepository) GetActiveSubscriptionCount(ctx context.Context) (int64, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(int64), args.Error(1)
+}
+
+func (m *MockSystemHealthRepository) GetPaddleWebhookStats24h(ctx context.Context) (int64, int64, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(int64), args.Get(1).(int64), args.Error(2)
+}
+
+func (m *MockSystemHealthRepository) GetLastReconciliationRun(ctx context.Context) (*time.Time, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*time.Time), args.Error(1)
 }
 
 type MockDeadLetterJobRepository struct {
@@ -117,6 +136,11 @@ func TestSystemHealthService_GetSystemHealth_Success(t *testing.T) {
 	}, nil)
 	mockDeadLetterRepo.On("GetOldestJobAge", mock.Anything).Return(int64(5), nil)
 
+	// Mock Paddle metrics
+	mockHealthRepo.On("GetActiveSubscriptionCount", mock.Anything).Return(int64(50), nil)
+	mockHealthRepo.On("GetPaddleWebhookStats24h", mock.Anything).Return(int64(100), int64(2), nil)
+	mockHealthRepo.On("GetLastReconciliationRun", mock.Anything).Return((*time.Time)(nil), nil)
+
 	// Create service (note: we'll need to update the constructor to accept interfaces)
 	service := &systemHealthService{
 		healthRepo:     mockHealthRepo,
@@ -165,6 +189,11 @@ func TestSystemHealthService_GetSystemHealth_DatabaseDown(t *testing.T) {
 
 	mockDeadLetterRepo.On("GetStats", mock.Anything).Return(&repository.DeadLetterStats{}, nil)
 	mockDeadLetterRepo.On("GetOldestJobAge", mock.Anything).Return(int64(0), nil)
+
+	// Mock Paddle metrics
+	mockHealthRepo.On("GetActiveSubscriptionCount", mock.Anything).Return(int64(0), nil)
+	mockHealthRepo.On("GetPaddleWebhookStats24h", mock.Anything).Return(int64(0), int64(0), nil)
+	mockHealthRepo.On("GetLastReconciliationRun", mock.Anything).Return((*time.Time)(nil), nil)
 
 	service := &systemHealthService{
 		healthRepo:     mockHealthRepo,
@@ -224,6 +253,11 @@ func TestSystemHealthService_GetSystemHealth_DegradedHighPendingJobs(t *testing.
 
 	mockDeadLetterRepo.On("GetStats", mock.Anything).Return(&repository.DeadLetterStats{Total: 2}, nil)
 	mockDeadLetterRepo.On("GetOldestJobAge", mock.Anything).Return(int64(5), nil)
+
+	// Mock Paddle metrics (healthy)
+	mockHealthRepo.On("GetActiveSubscriptionCount", mock.Anything).Return(int64(50), nil)
+	mockHealthRepo.On("GetPaddleWebhookStats24h", mock.Anything).Return(int64(100), int64(2), nil)
+	mockHealthRepo.On("GetLastReconciliationRun", mock.Anything).Return((*time.Time)(nil), nil)
 
 	service := &systemHealthService{
 		healthRepo:     mockHealthRepo,
@@ -329,6 +363,36 @@ func TestSystemHealthService_CalculateOverallStatus(t *testing.T) {
 			},
 			expected: "degraded",
 		},
+		{
+			name: "degraded - low paddle webhook success rate with volume",
+			response: &domain.SystemHealthResponse{
+				Services: domain.ServiceHealthStatuses{
+					Database: domain.DatabaseHealth{Status: "up"},
+				},
+				JobQueues:       map[string]domain.QueueMetrics{},
+				DeadLetterQueue: domain.DeadLetterMetrics{Count: 0},
+				PaddleStatus: domain.PaddleStatusMetrics{
+					TotalWebhooks24h:      50,
+					WebhookSuccessRate24h: 70.0, // below 80%
+				},
+			},
+			expected: "degraded",
+		},
+		{
+			name: "healthy - low webhook success rate but low volume",
+			response: &domain.SystemHealthResponse{
+				Services: domain.ServiceHealthStatuses{
+					Database: domain.DatabaseHealth{Status: "up"},
+				},
+				JobQueues:       map[string]domain.QueueMetrics{},
+				DeadLetterQueue: domain.DeadLetterMetrics{Count: 0},
+				PaddleStatus: domain.PaddleStatusMetrics{
+					TotalWebhooks24h:      5, // under 10 threshold
+					WebhookSuccessRate24h: 60.0,
+				},
+			},
+			expected: "healthy",
+		},
 	}
 
 	for _, tt := range tests {
@@ -337,4 +401,115 @@ func TestSystemHealthService_CalculateOverallStatus(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func setupFullHealthMocks(
+	mockHealthRepo *MockSystemHealthRepository,
+	mockDeadLetterRepo *MockDeadLetterJobRepository,
+	mockPool *MockPool,
+	activeSubscriptions int64,
+	webhookTotal int64,
+	webhookFailed int64,
+) {
+	mockPool.On("Ping", mock.Anything).Return(nil)
+	mockPool.On("GetStats").Return(PoolStats{MaxConns: 100})
+
+	queues := []string{"critical", "default", "notifications", "low"}
+	for _, q := range queues {
+		mockHealthRepo.On("GetRiverJobStats", mock.Anything, q).Return(&domain.QueueMetrics{}, nil)
+		mockHealthRepo.On("GetRiverJobsCompletedLastHour", mock.Anything, q).Return(int64(0), nil)
+	}
+	mockHealthRepo.On("GetActiveSyncCount", mock.Anything).Return(int64(0), nil)
+	mockHealthRepo.On("GetFailedSyncsLastHour", mock.Anything).Return(int64(0), nil)
+	mockHealthRepo.On("GetAverageSyncDuration", mock.Anything).Return(int64(0), nil)
+	mockDeadLetterRepo.On("GetStats", mock.Anything).Return(&repository.DeadLetterStats{}, nil)
+	mockDeadLetterRepo.On("GetOldestJobAge", mock.Anything).Return(int64(0), nil)
+	mockHealthRepo.On("GetActiveSubscriptionCount", mock.Anything).Return(activeSubscriptions, nil)
+	mockHealthRepo.On("GetPaddleWebhookStats24h", mock.Anything).Return(webhookTotal, webhookFailed, nil)
+	mockHealthRepo.On("GetLastReconciliationRun", mock.Anything).Return((*time.Time)(nil), nil)
+}
+
+func TestGetSystemHealth_PaddleMetricsPopulated(t *testing.T) {
+	mockHealthRepo := new(MockSystemHealthRepository)
+	mockDeadLetterRepo := new(MockDeadLetterJobRepository)
+	mockPool := new(MockPool)
+
+	setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 42, 100, 5)
+
+	service := &systemHealthService{
+		healthRepo:     mockHealthRepo,
+		deadLetterRepo: mockDeadLetterRepo,
+		pool:           mockPool,
+	}
+
+	result, err := service.GetSystemHealth(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(42), result.PaddleStatus.ActiveSubscriptions)
+	assert.Equal(t, int64(100), result.PaddleStatus.TotalWebhooks24h)
+	assert.Equal(t, int64(5), result.PaddleStatus.FailedWebhooks24h)
+	assert.InDelta(t, 95.0, result.PaddleStatus.WebhookSuccessRate24h, 0.01)
+
+	mockHealthRepo.AssertExpectations(t)
+}
+
+func TestGetSystemHealth_PaddleDegraded_LowWebhookRate(t *testing.T) {
+	mockHealthRepo := new(MockSystemHealthRepository)
+	mockDeadLetterRepo := new(MockDeadLetterJobRepository)
+	mockPool := new(MockPool)
+
+	// 50 total, 30 failed = 40% success rate
+	setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 10, 50, 30)
+
+	service := &systemHealthService{
+		healthRepo:     mockHealthRepo,
+		deadLetterRepo: mockDeadLetterRepo,
+		pool:           mockPool,
+	}
+
+	result, err := service.GetSystemHealth(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, "degraded", result.Status)
+
+	mockHealthRepo.AssertExpectations(t)
+}
+
+func TestGetSystemHealth_PaddleMetricsError_UsesZeroValues(t *testing.T) {
+	mockHealthRepo := new(MockSystemHealthRepository)
+	mockDeadLetterRepo := new(MockDeadLetterJobRepository)
+	mockPool := new(MockPool)
+
+	mockPool.On("Ping", mock.Anything).Return(nil)
+	mockPool.On("GetStats").Return(PoolStats{MaxConns: 100})
+
+	queues := []string{"critical", "default", "notifications", "low"}
+	for _, q := range queues {
+		mockHealthRepo.On("GetRiverJobStats", mock.Anything, q).Return(&domain.QueueMetrics{}, nil)
+		mockHealthRepo.On("GetRiverJobsCompletedLastHour", mock.Anything, q).Return(int64(0), nil)
+	}
+	mockHealthRepo.On("GetActiveSyncCount", mock.Anything).Return(int64(0), nil)
+	mockHealthRepo.On("GetFailedSyncsLastHour", mock.Anything).Return(int64(0), nil)
+	mockHealthRepo.On("GetAverageSyncDuration", mock.Anything).Return(int64(0), nil)
+	mockDeadLetterRepo.On("GetStats", mock.Anything).Return(&repository.DeadLetterStats{}, nil)
+	mockDeadLetterRepo.On("GetOldestJobAge", mock.Anything).Return(int64(0), nil)
+
+	// Simulate error in Paddle metrics
+	mockHealthRepo.On("GetActiveSubscriptionCount", mock.Anything).Return(int64(0), errors.New("db error"))
+
+	service := &systemHealthService{
+		healthRepo:     mockHealthRepo,
+		deadLetterRepo: mockDeadLetterRepo,
+		pool:           mockPool,
+	}
+
+	result, err := service.GetSystemHealth(context.Background())
+
+	// Should not fail - paddle error uses zero values
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, int64(0), result.PaddleStatus.ActiveSubscriptions)
+	assert.Equal(t, int64(0), result.PaddleStatus.TotalWebhooks24h)
+
+	mockHealthRepo.AssertExpectations(t)
 }

@@ -1967,6 +1967,14 @@ func (m *mockProfileRepoForCursorTests) UpdateSubscriptionFromPaddle(ctx context
 	return args.Error(0)
 }
 
+func (m *mockProfileRepoForCursorTests) GetUsersWithActivePaddleSubscriptions(ctx context.Context) ([]*domain.User, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
+}
+
 // ============================================================================
 // CURSOR PERSISTENCE TESTS (Critical)
 // Plaid Staging Validation - Cursor handling edge cases

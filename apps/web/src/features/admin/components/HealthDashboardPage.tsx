@@ -1,11 +1,14 @@
 import { useState } from 'react';
 import { useGetSystemHealth } from '@boostedbudget/api-client/endpoints/admin/admin';
 import { SummaryCard } from '@/features/admin';
-import { AlertTriangle, Database, Shield, Landmark, RefreshCw, Clock } from 'lucide-react';
+import { AlertTriangle, Database, Shield, Landmark, RefreshCw, Clock, CreditCard, CheckCircle } from 'lucide-react';
 import './HealthDashboardPage.css';
 
-const statusToVariant = (status: string): 'success' | 'warning' | 'error' =>
-  status === 'up' || status === 'healthy' ? 'success' : status === 'degraded' ? 'warning' : 'error';
+const statusToVariant = (status: string): 'success' | 'warning' | 'error' => {
+  if (status === 'up' || status === 'healthy') return 'success';
+  if (status === 'degraded') return 'warning';
+  return 'error';
+};
 
 export function HealthDashboardPage() {
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -120,6 +123,41 @@ export function HealthDashboardPage() {
             value={`${Math.round(data.sync_status.average_duration_ms / 1000)}s`}
             icon={<Clock size={24} />}
             status="neutral"
+          />
+        </div>
+      </section>
+
+      {/* Paddle Status Section */}
+      <section className="health-dashboard__section">
+        <h2>Paddle Status</h2>
+        <div className="health-dashboard__grid">
+          <SummaryCard
+            title="Active Subscriptions"
+            value={data.paddle_status.active_subscriptions.toString()}
+            icon={<CreditCard size={24} />}
+            status="neutral"
+          />
+          <SummaryCard
+            title="Webhook Success (24h)"
+            value={`${data.paddle_status.webhook_success_rate_24h.toFixed(1)}%`}
+            icon={<CheckCircle size={24} />}
+            status={data.paddle_status.webhook_success_rate_24h < 90 ? 'warning' : 'success'}
+          />
+          <SummaryCard
+            title="Failed Webhooks (24h)"
+            value={data.paddle_status.failed_webhooks_24h.toString()}
+            icon={<AlertTriangle size={24} />}
+            status={data.paddle_status.failed_webhooks_24h > 5 ? 'warning' : 'success'}
+          />
+          <SummaryCard
+            title="Last Reconciliation"
+            value={
+              data.paddle_status.last_reconciliation_at
+                ? new Date(data.paddle_status.last_reconciliation_at).toLocaleString()
+                : 'Never'
+            }
+            icon={<RefreshCw size={24} />}
+            status={data.paddle_status.last_reconciliation_at ? 'success' : 'warning'}
           />
         </div>
       </section>
