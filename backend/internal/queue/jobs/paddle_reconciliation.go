@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	paddle "github.com/PaddleHQ/paddle-go-sdk/v4"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
@@ -28,12 +29,12 @@ func (PaddleReconciliationArgs) Kind() string { return "paddle_reconciliation" }
 // ReconciliationProfileRepository is the narrow interface needed for reconciliation.
 type ReconciliationProfileRepository interface {
 	GetUsersWithActivePaddleSubscriptions(ctx context.Context) ([]*domain.User, error)
+	UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time, subscriptionID *string) error
 }
 
 // ReconciliationPaddleService is the narrow interface needed for reconciliation.
-// Implementations should provide a method to look up a subscription from Paddle.
 type ReconciliationPaddleService interface {
-	// Placeholder — extend when concrete Paddle API method is available
+	GetSubscription(ctx context.Context, subscriptionID string) (*paddle.Subscription, error)
 }
 
 // PaddleReconciliationWorker processes Paddle reconciliation jobs.
@@ -71,6 +72,38 @@ func NewPaddleReconciliationWorker(deps PaddleReconciliationWorkerDeps) *PaddleR
 		logger:      logger,
 		autoFix:     deps.AutoFix,
 	}
+}
+
+// normalizePaddleStatus maps Paddle's "canceled" (single-l) to the domain's "cancelled" (double-l).
+// All other statuses pass through unchanged.
+func normalizePaddleStatus(paddleStatus paddle.SubscriptionStatus) string {
+	if paddleStatus == paddle.SubscriptionStatusCanceled {
+		return string(domain.SubscriptionStatusCancelled)
+	}
+	return string(paddleStatus)
+}
+
+// resolveTierFromSubscription returns the tier name corresponding to the first
+// price item in the Paddle subscription. Returns "" if the tier cannot be determined.
+func (w *PaddleReconciliationWorker) resolveTierFromSubscription(sub *paddle.Subscription) string {
+	if w.tierConfig == nil {
+		return ""
+	}
+	if len(sub.Items) == 0 {
+		return ""
+	}
+	priceID := sub.Items[0].Price.ID
+	if priceID == "" {
+		return ""
+	}
+	tier, err := w.tierConfig.GetTierByPriceID(priceID)
+	if err != nil {
+		w.logger.Warn("price ID not found in tier config, skipping tier check",
+			"price_id", priceID,
+		)
+		return ""
+	}
+	return string(tier)
 }
 
 // Work processes a Paddle reconciliation job.
@@ -114,7 +147,12 @@ func (w *PaddleReconciliationWorker) Work(ctx context.Context, job *river.Job[Pa
 			continue
 		}
 		total++
-		time.Sleep(100 * time.Millisecond) // throttle to avoid API rate limits
+		// throttle to avoid API rate limits; respect context cancellation
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
 
 		if w.paddleSvc == nil {
 			w.logger.Warn("paddle service not configured, skipping remote check",
@@ -124,13 +162,63 @@ func (w *PaddleReconciliationWorker) Work(ctx context.Context, job *river.Job[Pa
 			continue
 		}
 
-		// TODO: call w.paddleSvc.GetSubscription(ctx, *user.PaddleSubscriptionID)
-		// and compare status/tier when the method is available on ReconciliationPaddleService.
-		w.logger.Debug("would check subscription",
-			"user_id", user.ID,
-			"subscription_id", *user.PaddleSubscriptionID,
-		)
-		matched++
+		sub, err := w.paddleSvc.GetSubscription(ctx, *user.PaddleSubscriptionID)
+		if err != nil {
+			w.logger.Error("failed to get subscription from Paddle",
+				"user_id", user.ID,
+				"subscription_id", *user.PaddleSubscriptionID,
+				"error", err,
+			)
+			errs++
+			continue
+		}
+
+		remoteStatus := normalizePaddleStatus(sub.Status)
+		remoteTier := w.resolveTierFromSubscription(sub)
+
+		statusMatch := remoteStatus == user.SubscriptionStatus
+		tierMatch := remoteTier == "" || remoteTier == user.SubscriptionTier
+
+		if statusMatch && tierMatch {
+			matched++
+			continue
+		}
+
+		if !statusMatch {
+			statusMismatches++
+			w.logger.Warn("subscription status mismatch",
+				"user_id", user.ID,
+				"local_status", user.SubscriptionStatus,
+				"remote_status", remoteStatus,
+			)
+		}
+		if !tierMatch {
+			tierMismatches++
+			w.logger.Warn("subscription tier mismatch",
+				"user_id", user.ID,
+				"local_tier", user.SubscriptionTier,
+				"remote_tier", remoteTier,
+			)
+		}
+
+		if w.autoFix {
+			fixStatus := user.SubscriptionStatus
+			if !statusMatch {
+				fixStatus = remoteStatus
+			}
+			fixTier := user.SubscriptionTier
+			if !tierMatch {
+				fixTier = remoteTier
+			}
+			subID := *user.PaddleSubscriptionID
+			if updateErr := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, user.ID, fixTier, fixStatus, nil, nil, &subID); updateErr != nil {
+				w.logger.Error("failed to auto-fix subscription from Paddle",
+					"user_id", user.ID,
+					"error", updateErr,
+				)
+				errs++
+			}
+		}
 	}
 
 	w.logger.Info("paddle reconciliation completed",

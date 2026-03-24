@@ -502,10 +502,10 @@ func main() {
 				appLogger.Info("Trial expiration check worker created (River)")
 
 				// Issue #762: Create Paddle reconciliation worker
-				if cfg.PaddleReconciliationEnabled {
+				if cfg.PaddleReconciliationEnabled && paddleService != nil {
 					paddleReconciliationWorker = jobs.NewPaddleReconciliationWorker(jobs.PaddleReconciliationWorkerDeps{
 						ProfileRepo: profileRepo,
-						PaddleSvc:   nil, // paddleService satisfies ReconciliationPaddleService if interface matches
+						PaddleSvc:   paddleService,
 						TierConfig:  tierConfig,
 						Logger:      appLogger,
 						AutoFix:     cfg.PaddleReconciliationAutoFix,

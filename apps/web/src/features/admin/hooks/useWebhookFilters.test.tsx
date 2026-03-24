@@ -91,6 +91,36 @@ describe('useWebhookFilters', () => {
     expect(result.current.hasActiveFilters).toBe(true)
   })
 
+  it('setStartDate resets page to 1', () => {
+    const { result } = renderHook(() => useWebhookFilters())
+
+    act(() => {
+      result.current.setPage(3)
+    })
+    expect(result.current.filters.page).toBe(3)
+
+    act(() => {
+      result.current.setStartDate('2026-01-01')
+    })
+    expect(result.current.filters.startDate).toBe('2026-01-01')
+    expect(result.current.filters.page).toBe(1)
+  })
+
+  it('setEndDate resets page to 1', () => {
+    const { result } = renderHook(() => useWebhookFilters())
+
+    act(() => {
+      result.current.setPage(2)
+    })
+    expect(result.current.filters.page).toBe(2)
+
+    act(() => {
+      result.current.setEndDate('2026-03-22')
+    })
+    expect(result.current.filters.endDate).toBe('2026-03-22')
+    expect(result.current.filters.page).toBe(1)
+  })
+
   it('resetFilters clears all and resets page', () => {
     const { result } = renderHook(() => useWebhookFilters())
 
