@@ -37,7 +37,7 @@ export function WebhooksPage() {
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [selectedWebhookId, setSelectedWebhookId] = useState<string | null>(null)
 
-  const { filters, setEventType, setProcessed, setPage, hasActiveFilters } = useWebhookFilters()
+  const { filters, setEventType, setProcessed, setStartDate, setEndDate, setPage, hasActiveFilters, resetFilters } = useWebhookFilters()
 
   // Build API params
   const listParams = {
@@ -45,6 +45,8 @@ export function WebhooksPage() {
     offset: (filters.page - 1) * PAGE_SIZE,
     ...(filters.eventType && { event_type: filters.eventType }),
     ...(filters.processed !== '' && { processed: filters.processed }),
+    ...(filters.startDate && { start_date: filters.startDate }),
+    ...(filters.endDate && { end_date: filters.endDate }),
   }
 
   const { data, isLoading, error } = useListAdminPaddleWebhooks(listParams, {
@@ -145,6 +147,35 @@ export function WebhooksPage() {
           <option value="true">Processed</option>
           <option value="false">Pending / Failed</option>
         </select>
+
+        <label className="webhooks-page__date-label">
+          Filter by start date
+          <input
+            type="date"
+            className="webhooks-page__date-input"
+            value={filters.startDate}
+            onChange={(e) => setStartDate(e.target.value)}
+          />
+        </label>
+        <label className="webhooks-page__date-label">
+          Filter by end date
+          <input
+            type="date"
+            className="webhooks-page__date-input"
+            value={filters.endDate}
+            onChange={(e) => setEndDate(e.target.value)}
+          />
+        </label>
+        {hasActiveFilters && (
+          <button
+            type="button"
+            className="webhooks-page__button"
+            onClick={resetFilters}
+            aria-label="Reset filters"
+          >
+            Reset Filters
+          </button>
+        )}
       </div>
 
       {/* Content */}

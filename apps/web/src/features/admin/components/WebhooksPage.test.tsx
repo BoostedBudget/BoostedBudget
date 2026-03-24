@@ -309,4 +309,49 @@ describe('WebhooksPage', () => {
 
     expect(screen.getByText(/2 events/i)).toBeInTheDocument()
   })
+
+  it('renders date filter inputs', () => {
+    mockUseListAdminPaddleWebhooks.mockReturnValue({
+      data: mockListResponse,
+      isLoading: false,
+      error: null,
+    })
+    mockUseGetAdminPaddleWebhookStats.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: null,
+    })
+    mockUseReplayAdminPaddleWebhook.mockReturnValue({
+      mutate: () => {},
+      isPending: false,
+    })
+
+    render(<WebhooksPage />, { wrapper: createWrapper() })
+
+    expect(screen.getByLabelText(/filter by start date/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/filter by end date/i)).toBeInTheDocument()
+  })
+
+  it('shows reset button when filters active', () => {
+    mockUseListAdminPaddleWebhooks.mockReturnValue({
+      data: mockListResponse,
+      isLoading: false,
+      error: null,
+    })
+    mockUseGetAdminPaddleWebhookStats.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: null,
+    })
+    mockUseReplayAdminPaddleWebhook.mockReturnValue({
+      mutate: () => {},
+      isPending: false,
+    })
+
+    render(<WebhooksPage />, { wrapper: createWrapper() })
+
+    fireEvent.change(screen.getByLabelText(/filter by start date/i), { target: { value: '2026-01-01' } })
+
+    expect(screen.getByRole('button', { name: /reset filters/i })).toBeInTheDocument()
+  })
 })

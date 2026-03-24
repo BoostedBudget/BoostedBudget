@@ -109,6 +109,32 @@
   border-color: var(--color-primary);
 }
 
+.webhooks-page__date-input {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-primary);
+  border-radius: 0.375rem;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.webhooks-page__date-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+
+.webhooks-page__date-label {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
 /* Loading / Error / Empty states */
 .webhooks-page__loading,
 .webhooks-page__error,
