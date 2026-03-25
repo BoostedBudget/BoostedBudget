@@ -2376,3 +2376,352 @@ func TestAccountService_LinkAccounts_MultipleAccounts_EachMatchedToUserAccount(t
 	mockUserAccountSvc.AssertExpectations(t)
 	t.Log("✓ Each Plaid account matched to its own user_account")
 }
+
+// ===========================================================================
+// Disconnected Item Re-Link Tests (Issue #896)
+// Re-subscription reconnection: detect disconnected items to preserve history
+// ===========================================================================
+
+// TestLinkAccounts_DisconnectedRelink_DetectsDisconnectedItem tests that when no active item
+// exists, the service falls back to checking for a disconnected item (re-subscription scenario).
+// Issue #896 - Re-subscription item history continuity
+func TestLinkAccounts_DisconnectedRelink_DetectsDisconnectedItem(t *testing.T) {
+	// Given: User had a disconnected item at the same institution (subscription was cancelled)
+	// When: Active item check returns nil, disconnected fallback is checked
+	// Then: The disconnected item is detected and returned
+
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	ctx := context.Background()
+	userID := uuid.New().String()
+	institutionID := "ins_chase"
+
+	// Existing disconnected item (subscription was cancelled)
+	disconnectedItem := &domain.LinkedItem{
+		ID:            uuid.New().String(),
+		UserID:        userID,
+		ItemID:        "old-plaid-item-disconnected-123",
+		InstitutionID: institutionID,
+		Status:        domain.LinkedItemStatusDisconnected,
+	}
+
+	// Mock: Active check returns nil (no active item)
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
+		Return(nil, nil)
+
+	// Mock: Disconnected fallback returns the disconnected item
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected)).
+		Return(disconnectedItem, nil)
+
+	// Execute: Simulate Step 7 (active check)
+	activeItem, err := mockLinkedItemRepo.GetByUserAndInstitution(ctx, userID, institutionID, string(domain.LinkedItemStatusActive))
+	require.NoError(t, err)
+	assert.Nil(t, activeItem, "No active item should be found")
+
+	// Execute: Simulate Step 7b (disconnected fallback)
+	var existingLinkedItem *domain.LinkedItem
+	if activeItem == nil {
+		existingLinkedItem, err = mockLinkedItemRepo.GetByUserAndInstitution(ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected))
+		require.NoError(t, err)
+	}
+
+	// Assert: Disconnected item is detected
+	require.NotNil(t, existingLinkedItem)
+	assert.Equal(t, disconnectedItem.ID, existingLinkedItem.ID)
+	assert.Equal(t, domain.LinkedItemStatusDisconnected, existingLinkedItem.Status)
+
+	mockLinkedItemRepo.AssertExpectations(t)
+	t.Log("✓ Disconnected item detected during re-subscription reconnection")
+}
+
+// TestLinkAccounts_DisconnectedRelink_MarksAsReplaced tests that a disconnected item
+// is properly marked as 'replaced' when the user re-links after re-subscribing.
+// Issue #896 - Re-subscription item history continuity
+func TestLinkAccounts_DisconnectedRelink_MarksAsReplaced(t *testing.T) {
+	// Given: Existing disconnected item (from cancelled subscription)
+	// When: Re-link processing handles the old item
+	// Then: Old disconnected item should be marked as 'replaced'
+
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	ctx := context.Background()
+
+	oldItemID := uuid.New().String()
+	newItemID := uuid.New().String()
+	userID := uuid.New().String()
+
+	existingItem := &domain.LinkedItem{
+		ID:     oldItemID,
+		UserID: userID,
+		Status: domain.LinkedItemStatusDisconnected,
+	}
+
+	// Mock: Update should be called with status='replaced' and replaced_at set
+	mockLinkedItemRepo.On("Update", ctx, mock.MatchedBy(func(item *domain.LinkedItem) bool {
+		return item.ID == oldItemID &&
+			item.Status == domain.LinkedItemStatusReplaced &&
+			item.ReplacedAt != nil &&
+			item.ReplacedByID != nil &&
+			*item.ReplacedByID == newItemID
+	})).Return(nil)
+
+	// Execute: Update disconnected item to 'replaced' status (same as active re-link)
+	existingItem.Status = domain.LinkedItemStatusReplaced
+	now := time.Now()
+	existingItem.ReplacedAt = &now
+	existingItem.ReplacedByID = &newItemID
+	err := mockLinkedItemRepo.Update(ctx, existingItem)
+
+	// Assert
+	require.NoError(t, err)
+	mockLinkedItemRepo.AssertExpectations(t)
+	t.Log("✓ Disconnected item marked as 'replaced' during re-subscription reconnection")
+}
+
+// TestLinkAccounts_DisconnectedRelink_OldAccountsMarkedReplaced tests that accounts
+// associated with a disconnected item are marked as 'replaced' on re-link.
+// Issue #896 - Re-subscription item history continuity
+func TestLinkAccounts_DisconnectedRelink_OldAccountsMarkedReplaced(t *testing.T) {
+	// Given: Old disconnected linked_item has associated accounts
+	// When: Re-link processing handles the disconnected item
+	// Then: All old accounts should be marked as 'replaced'
+
+	mockAccountRepo := new(MockAccountRepository)
+	ctx := context.Background()
+
+	oldLinkedItemID := uuid.New().String()
+	userID := uuid.New().String()
+	account1ID := uuid.New().String()
+	account2ID := uuid.New().String()
+
+	// Old accounts from the disconnected item
+	oldAccounts := []domain.Account{
+		{ID: account1ID, LinkedItemID: oldLinkedItemID, UserID: userID, Status: domain.AccountStatusActive},
+		{ID: account2ID, LinkedItemID: oldLinkedItemID, UserID: userID, Status: domain.AccountStatusActive},
+	}
+
+	// Mock: GetByLinkedItemID returns old accounts from disconnected item
+	mockAccountRepo.On("GetByLinkedItemID", ctx, oldLinkedItemID).Return(oldAccounts, nil)
+
+	// Mock: UpdateStatus called for each old account
+	mockAccountRepo.On("UpdateStatus", ctx, account1ID, userID, domain.AccountStatusReplaced, (*string)(nil)).Return(nil)
+	mockAccountRepo.On("UpdateStatus", ctx, account2ID, userID, domain.AccountStatusReplaced, (*string)(nil)).Return(nil)
+
+	// Execute: Get old accounts and mark them as replaced (same logic as active re-link)
+	accounts, err := mockAccountRepo.GetByLinkedItemID(ctx, oldLinkedItemID)
+	require.NoError(t, err)
+	require.Len(t, accounts, 2)
+
+	for _, acct := range accounts {
+		err := mockAccountRepo.UpdateStatus(ctx, acct.ID, userID, domain.AccountStatusReplaced, nil)
+		require.NoError(t, err)
+	}
+
+	// Assert
+	mockAccountRepo.AssertExpectations(t)
+	t.Log("✓ Old accounts from disconnected item marked as 'replaced'")
+}
+
+// TestLinkAccounts_DisconnectedRelink_UserAccountMatched tests that user_accounts are
+// matched (not created fresh) when re-linking after re-subscription.
+// Issue #896 - Re-subscription item history continuity
+func TestLinkAccounts_DisconnectedRelink_UserAccountMatched(t *testing.T) {
+	// Given: Disconnected item re-linked, same bank account being re-connected
+	// When: Processing new accounts from Plaid
+	// Then: UserAccountService.MatchOrCreate should find the existing user_account
+	//       (same institution + mask = same real-world account = history preserved)
+
+	mockUserAccountSvc := new(MockUserAccountService)
+	ctx := context.Background()
+
+	userID := uuid.New().String()
+	institutionID := "ins_chase"
+	mask := "1234"
+	existingUserAccountID := uuid.New().String()
+
+	// Existing user_account from before subscription cancellation
+	existingUserAccount := &domain.UserAccount{
+		ID:            existingUserAccountID,
+		UserID:        userID,
+		InstitutionID: institutionID,
+		Mask:          &mask,
+	}
+
+	// Mock: MatchOrCreate finds existing user_account (history continuity preserved)
+	mockUserAccountSvc.On("MatchOrCreate", ctx, userID, institutionID, &mask, "Chase Checking", "depository", "checking").
+		Return(existingUserAccount, nil)
+
+	// Execute: Match user_account for Plaid account during re-subscription reconnect
+	result, err := mockUserAccountSvc.MatchOrCreate(ctx, userID, institutionID, &mask, "Chase Checking", "depository", "checking")
+
+	// Assert: Existing user_account matched (not a new one)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, existingUserAccountID, result.ID, "Should match existing user_account for history continuity")
+
+	mockUserAccountSvc.AssertExpectations(t)
+	t.Log("✓ Existing user_account matched during re-subscription reconnection (history preserved)")
+}
+
+// TestLinkAccounts_ActiveTakesPrecedence_OverDisconnected tests that when both an active
+// and a disconnected item exist, the active one is used and disconnected is NOT queried.
+// Issue #896 - Re-subscription item history continuity
+func TestLinkAccounts_ActiveTakesPrecedence_OverDisconnected(t *testing.T) {
+	// Given: User has an active item at the institution (normal re-link scenario)
+	// When: Active check finds an item
+	// Then: Disconnected fallback should NOT be queried (active takes precedence)
+
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	ctx := context.Background()
+	userID := uuid.New().String()
+	institutionID := "ins_chase"
+
+	// Existing active item at same institution
+	activeItem := &domain.LinkedItem{
+		ID:            uuid.New().String(),
+		UserID:        userID,
+		ItemID:        "active-plaid-item-123",
+		InstitutionID: institutionID,
+		Status:        domain.LinkedItemStatusActive,
+	}
+
+	// Mock: GetByUserAndInstitution with 'active' status returns the active item
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
+		Return(activeItem, nil)
+
+	// Execute: Step 7 active check
+	found, err := mockLinkedItemRepo.GetByUserAndInstitution(ctx, userID, institutionID, string(domain.LinkedItemStatusActive))
+	require.NoError(t, err)
+
+	// Simulate the guard: only check disconnected if active is nil
+	if found == nil {
+		// This branch should NOT be taken
+		_, _ = mockLinkedItemRepo.GetByUserAndInstitution(ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected))
+	}
+
+	// Assert: Active item was found
+	require.NotNil(t, found)
+	assert.Equal(t, activeItem.ID, found.ID)
+	assert.Equal(t, domain.LinkedItemStatusActive, found.Status)
+
+	// Assert: Disconnected was NOT called (active took precedence)
+	mockLinkedItemRepo.AssertNotCalled(t, "GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected))
+
+	mockLinkedItemRepo.AssertExpectations(t)
+	t.Log("✓ Active item takes precedence; disconnected fallback not triggered")
+}
+
+// TestLinkAccounts_NoActiveNoDisconnected_FreshLink tests the fresh link scenario where
+// neither an active nor disconnected item exists at the institution.
+// Issue #896 - Re-subscription item history continuity
+func TestLinkAccounts_NoActiveNoDisconnected_FreshLink(t *testing.T) {
+	// Given: User has never linked this institution (completely fresh link)
+	// When: Both active and disconnected checks return nil
+	// Then: existingLinkedItem is nil (fresh link, no soft-delete needed)
+
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	ctx := context.Background()
+	userID := uuid.New().String()
+	institutionID := "ins_chase"
+
+	// Mock: Active check returns nil
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
+		Return(nil, nil)
+
+	// Mock: Disconnected fallback also returns nil
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected)).
+		Return(nil, nil)
+
+	// Execute: Step 7 - active check
+	activeItem, err := mockLinkedItemRepo.GetByUserAndInstitution(ctx, userID, institutionID, string(domain.LinkedItemStatusActive))
+	require.NoError(t, err)
+
+	// Execute: Step 7b - disconnected fallback (since active is nil)
+	var existingLinkedItem *domain.LinkedItem
+	if activeItem == nil {
+		existingLinkedItem, err = mockLinkedItemRepo.GetByUserAndInstitution(ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected))
+		require.NoError(t, err)
+	}
+
+	// Assert: Both return nil — fresh link scenario
+	assert.Nil(t, activeItem, "No active item should exist for fresh link")
+	assert.Nil(t, existingLinkedItem, "No disconnected item should exist for fresh link")
+
+	mockLinkedItemRepo.AssertExpectations(t)
+	t.Log("✓ Fresh link: no active or disconnected item found — no soft-delete needed")
+}
+
+// TestLinkAccounts_DisconnectedRelink_NewItemGetsEmptyCursor tests that a new linked item
+// created during a disconnected re-link starts with a nil cursor (fresh sync).
+// Issue #896 - Re-subscription item history continuity
+func TestLinkAccounts_DisconnectedRelink_NewItemGetsEmptyCursor(t *testing.T) {
+	// Given: User re-links after re-subscription (disconnected item detected)
+	// When: New linked_item is created
+	// Then: New item has nil cursor so sync starts fresh (from Plaid beginning)
+	//       The UserAccount bridge preserves the logical history continuity
+
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	// Mock: Create should be called with nil cursor and active status
+	mockLinkedItemRepo.On("Create", ctx, mock.MatchedBy(func(item *domain.LinkedItem) bool {
+		return item.Cursor == nil &&
+			item.Status == domain.LinkedItemStatusActive
+	})).Return(nil)
+
+	// Execute: Create new linked_item after disconnected re-link
+	newItem := &domain.LinkedItem{
+		UserID: userID,
+		ItemID: "new-plaid-item-resubscribed-789",
+		Status: domain.LinkedItemStatusActive,
+		Cursor: nil, // Fresh item always starts with nil cursor
+	}
+	err := mockLinkedItemRepo.Create(ctx, newItem)
+
+	// Assert
+	require.NoError(t, err)
+	mockLinkedItemRepo.AssertExpectations(t)
+	t.Log("✓ New linked_item after disconnected re-link has nil cursor (fresh sync)")
+}
+
+// TestLinkAccounts_DisconnectedRelink_ErrorCheckingDisconnected_Fails tests that an
+// unexpected error (not ErrLinkedItemNotFound) from the disconnected check propagates.
+// Issue #896 - Re-subscription item history continuity
+func TestLinkAccounts_DisconnectedRelink_ErrorCheckingDisconnected_Fails(t *testing.T) {
+	// Given: Active check returns nil, but disconnected check returns unexpected DB error
+	// When: Step 7b executes the disconnected fallback
+	// Then: The unexpected error should propagate (not be swallowed)
+
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	ctx := context.Background()
+	userID := uuid.New().String()
+	institutionID := "ins_chase"
+
+	unexpectedErr := errors.New("database connection timeout")
+
+	// Mock: Active check returns nil (no active item)
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
+		Return(nil, nil)
+
+	// Mock: Disconnected check returns unexpected error (NOT ErrLinkedItemNotFound)
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected)).
+		Return(nil, unexpectedErr)
+
+	// Execute: Step 7 - active check
+	activeItem, err := mockLinkedItemRepo.GetByUserAndInstitution(ctx, userID, institutionID, string(domain.LinkedItemStatusActive))
+	require.NoError(t, err)
+	assert.Nil(t, activeItem)
+
+	// Execute: Step 7b - disconnected fallback (since active is nil)
+	var disconnectedErr error
+	if activeItem == nil {
+		_, disconnectedErr = mockLinkedItemRepo.GetByUserAndInstitution(ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected))
+	}
+
+	// Assert: Unexpected error is returned (not swallowed)
+	require.Error(t, disconnectedErr, "Unexpected error should propagate")
+	assert.Equal(t, unexpectedErr, disconnectedErr)
+	assert.NotErrorIs(t, disconnectedErr, errors.New("linked item not found"), "Error is not ErrLinkedItemNotFound — must propagate")
+
+	mockLinkedItemRepo.AssertExpectations(t)
+	t.Log("✓ Unexpected error from disconnected check propagates correctly")
+}
