@@ -14,6 +14,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
@@ -36,6 +37,8 @@ type AdminHandler struct {
 	systemHealthService   services.SystemHealthService
 	subService            *services.SubscriptionService
 	paddleTransactionRepo repository.PaddleTransactionRepository
+	paddleWebhookRepo     repository.PaddleWebhookRepository
+	jobQueue              queue.JobQueue
 	config                *config.Config
 }
 
@@ -69,6 +72,18 @@ func NewAdminHandler(
 // Used to avoid changing the constructor signature and breaking existing tests.
 func (h *AdminHandler) WithPaddleTransactionRepo(repo repository.PaddleTransactionRepository) *AdminHandler {
 	h.paddleTransactionRepo = repo
+	return h
+}
+
+// WithPaddleWebhookRepo sets the PaddleWebhookRepository on the handler (builder pattern).
+func (h *AdminHandler) WithPaddleWebhookRepo(repo repository.PaddleWebhookRepository) *AdminHandler {
+	h.paddleWebhookRepo = repo
+	return h
+}
+
+// WithJobQueue sets the JobQueue on the handler (builder pattern).
+func (h *AdminHandler) WithJobQueue(q queue.JobQueue) *AdminHandler {
+	h.jobQueue = q
 	return h
 }
 
@@ -501,4 +516,7 @@ func RegisterAdminRoutes(api huma.API, handler *AdminHandler) {
 
 	// --- Admin Payment Failures Route (Issues #747 gap) ---
 	RegisterAdminPaymentFailuresOperations(api, handler)
+
+	// --- Admin Paddle Webhooks Routes (Issue #762) ---
+	RegisterAdminPaddleWebhooksOperations(api, handler)
 }

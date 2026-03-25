@@ -2116,6 +2116,37 @@ components:
         - created_at
         - updated_at
       type: object
+    PaddleStatusMetrics:
+      additionalProperties: false
+      properties:
+        active_subscriptions:
+          format: int64
+          type: integer
+        failed_webhooks_24h:
+          format: int64
+          type: integer
+        last_reconciliation_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        reconciliation_discrepancies:
+          format: int64
+          type: integer
+        total_webhooks24h:
+          format: int64
+          type: integer
+        webhook_success_rate_24h:
+          format: double
+          type: number
+      required:
+        - active_subscriptions
+        - webhook_success_rate_24h
+        - failed_webhooks_24h
+        - total_webhooks24h
+        - last_reconciliation_at
+        - reconciliation_discrepancies
+      type: object
     PaddleTransaction:
       additionalProperties: false
       properties:
@@ -2159,6 +2190,54 @@ components:
         - currency
         - status
         - payload
+        - created_at
+        - updated_at
+      type: object
+    PaddleWebhookEvent:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/PaddleWebhookEvent.json
+          format: uri
+          readOnly: true
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        event_id:
+          type: string
+        event_type:
+          type: string
+        id:
+          type: string
+        payload: {}
+        processed:
+          type: boolean
+        processed_at:
+          format: date-time
+          type: string
+        processing_attempts:
+          format: int64
+          type: integer
+        processing_error:
+          type: string
+        signature:
+          type: string
+        signature_valid:
+          type: boolean
+        updated_at:
+          format: date-time
+          type: string
+      required:
+        - id
+        - event_id
+        - event_type
+        - payload
+        - signature_valid
+        - processed
+        - processing_attempts
         - created_at
         - updated_at
       type: object
@@ -2859,6 +2938,8 @@ components:
           additionalProperties:
             $ref: "#/components/schemas/QueueMetrics"
           type: object
+        paddle_status:
+          $ref: "#/components/schemas/PaddleStatusMetrics"
         services:
           $ref: "#/components/schemas/ServiceHealthStatuses"
         status:
@@ -2875,6 +2956,7 @@ components:
         - job_queues
         - sync_status
         - dead_letter_queue
+        - paddle_status
       type: object
     TagSource:
       additionalProperties: false
@@ -3726,6 +3808,130 @@ components:
         - created_at
         - updated_at
       type: object
+    WebhookEventListResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/WebhookEventListResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        Events:
+          items:
+            $ref: "#/components/schemas/PaddleWebhookEvent"
+          type:
+            - array
+            - "null"
+        HasMore:
+          type: boolean
+        Page:
+          format: int64
+          type: integer
+        PageSize:
+          format: int64
+          type: integer
+        Total:
+          format: int64
+          type: integer
+        TotalPages:
+          format: int64
+          type: integer
+      required:
+        - Events
+        - Total
+        - Page
+        - PageSize
+        - TotalPages
+        - HasMore
+      type: object
+    WebhookEventTypeStats:
+      additionalProperties: false
+      properties:
+        Count:
+          format: int64
+          type: integer
+        EventType:
+          type: string
+        SuccessRate:
+          format: double
+          type: number
+      required:
+        - EventType
+        - Count
+        - SuccessRate
+      type: object
+    WebhookReplayResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/WebhookReplayResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        JobID:
+          format: int64
+          type:
+            - integer
+            - "null"
+        Message:
+          type: string
+        Success:
+          type: boolean
+        WebhookID:
+          type: string
+      required:
+        - Success
+        - Message
+        - WebhookID
+        - JobID
+      type: object
+    WebhookStatsResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/WebhookStatsResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        AvgProcessingTimeMs:
+          format: int64
+          type: integer
+        EventTypeBreakdown:
+          items:
+            $ref: "#/components/schemas/WebhookEventTypeStats"
+          type:
+            - array
+            - "null"
+        Failed:
+          format: int64
+          type: integer
+        Processed:
+          format: int64
+          type: integer
+        TimeRangeHours:
+          format: int64
+          type: integer
+        Total:
+          format: int64
+          type: integer
+        Unprocessed:
+          format: int64
+          type: integer
+      required:
+        - Total
+        - Processed
+        - Failed
+        - Unprocessed
+        - AvgProcessingTimeMs
+        - EventTypeBreakdown
+        - TimeRangeHours
+      type: object
     WidgetConfig:
       additionalProperties: false
       properties:
@@ -4310,6 +4516,160 @@ paths:
       summary: Update user subscription tier
       tags:
         - Admin Subscriptions
+  /api/v1/admin/webhooks/paddle:
+    get:
+      operationId: listAdminPaddleWebhooks
+      parameters:
+        - explode: false
+          in: query
+          name: limit
+          schema:
+            default: 20
+            format: int64
+            maximum: 100
+            minimum: 1
+            type: integer
+        - explode: false
+          in: query
+          name: offset
+          schema:
+            default: 0
+            format: int64
+            minimum: 0
+            type: integer
+        - description: Filter by event type (empty = all)
+          explode: false
+          in: query
+          name: event_type
+          schema:
+            description: Filter by event type (empty = all)
+            type: string
+        - description: "Filter by processed status: 'true', 'false', or empty for all"
+          explode: false
+          in: query
+          name: processed
+          schema:
+            description: "Filter by processed status: 'true', 'false', or empty for all"
+            type: string
+        - description: ISO 8601 date string
+          explode: false
+          in: query
+          name: start_date
+          schema:
+            description: ISO 8601 date string
+            type: string
+        - description: ISO 8601 date string
+          explode: false
+          in: query
+          name: end_date
+          schema:
+            description: ISO 8601 date string
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookEventListResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: List Paddle webhook events (admin)
+      tags:
+        - Admin
+  /api/v1/admin/webhooks/paddle/stats:
+    get:
+      operationId: getAdminPaddleWebhookStats
+      parameters:
+        - explode: false
+          in: query
+          name: time_range
+          schema:
+            default: 24h
+            enum:
+              - 24h
+              - 7d
+              - 30d
+              - all
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookStatsResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get Paddle webhook statistics (admin)
+      tags:
+        - Admin
+  /api/v1/admin/webhooks/paddle/{id}:
+    get:
+      operationId: getAdminPaddleWebhookDetail
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaddleWebhookEvent"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get Paddle webhook detail (admin)
+      tags:
+        - Admin
+  /api/v1/admin/webhooks/paddle/{id}/replay:
+    post:
+      operationId: replayAdminPaddleWebhook
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookReplayResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Replay a Paddle webhook (admin)
+      tags:
+        - Admin
   /api/v1/analytics/cash-flow-history:
     get:
       description: Returns time series cash flow data grouped by period for charts.

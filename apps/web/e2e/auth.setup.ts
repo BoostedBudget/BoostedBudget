@@ -80,8 +80,10 @@ setup('authenticate', async ({ page }) => {
 
   // Wait for the session to be established
   // Clerk needs time to set up cookies and session state
+  // Note: networkidle can cause infinite loops if 401 responses trigger redirects
+  // before Clerk's session is fully hydrated. Use a brief timeout instead.
   console.log('   Waiting for session to establish...');
-  await page.waitForLoadState('networkidle');
+  await page.waitForTimeout(2000);
 
   // Wait for Clerk user button to appear (indicates logged in state)
   // This ensures the session is properly established before proceeding
@@ -101,8 +103,32 @@ setup('authenticate', async ({ page }) => {
   // Use E2E_BACKEND_PORT which is set by run-e2e-with-ports.sh for dynamic port allocation
   const backendPort = process.env.E2E_BACKEND_PORT || '8080';
   const apiUrl = `http://localhost:${backendPort}`;
+
+  // Extract Clerk JWT from browser session for direct API calls
+  // page.request.post() bypasses Axios/Clerk cookies, so we must attach the token manually
+  let authToken: string | null = null;
   try {
-    const trialResponse = await page.request.post(`${apiUrl}/api/v1/admin/subscription/grant-trial`);
+    authToken = await page.evaluate(async () => {
+      const clerk = (window as unknown as { Clerk?: { session?: { getToken: () => Promise<string | null> } } }).Clerk;
+      if (clerk?.session) {
+        return await clerk.session.getToken();
+      }
+      return null;
+    });
+    if (authToken) {
+      console.log('   ✓ Extracted Clerk JWT for API calls');
+    }
+  } catch (error) {
+    console.log(`   [Warning] Could not extract Clerk token: ${error}`);
+  }
+
+  try {
+    const trialResponse = await page.request.post(
+      `${apiUrl}/api/v1/admin/subscription/grant-trial`,
+      {
+        headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+      }
+    );
     if (trialResponse.ok()) {
       const body = await trialResponse.json();
       console.log(`   ✓ Trial grant: ${body.message}`);
@@ -122,7 +148,7 @@ setup('authenticate', async ({ page }) => {
   await page.goto('/dashboard');
 
   // Wait for page to stabilize
-  await page.waitForLoadState('networkidle');
+  await page.waitForLoadState('domcontentloaded');
 
   // Handle cookie consent again if it reappears after navigation
   try {

@@ -38,6 +38,8 @@ export { UsersPage } from './components/UsersPage'
 export { UserDetailModal } from './components/UserDetailModal'
 export { HealthDashboardPage } from './components/HealthDashboardPage'
 export { SubscriptionOverrideModal } from './components/SubscriptionOverrideModal'
+export { WebhooksPage } from './components/WebhooksPage'
+export { WebhookDetailModal } from './components/WebhookDetailModal'
 
 // Hooks for user management (Issue #644)
 export { useUserFilters } from './hooks/useUserFilters'
@@ -46,3 +48,7 @@ export type { UseUserFiltersResult, UserFilters } from './hooks/useUserFilters'
 // Hooks for subscription management (Issue #646)
 export { useAdminSubscriptionDetail, useUpdateUserTier, useCreateOverride } from './hooks/useAdminSubscription'
 export type { AdminSubscriptionDetailOutputBody } from './hooks/useAdminSubscription'
+
+// Hooks for webhook management (Issue #747)
+export { useWebhookFilters } from './hooks/useWebhookFilters'
+export type { UseWebhookFiltersResult, WebhookFilters } from './hooks/useWebhookFilters'

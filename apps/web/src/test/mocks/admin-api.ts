@@ -27,10 +27,53 @@ export const mockUseGetAdminUserDetail = mock(() => ({
   error: null,
 }))
 
+// === useGetSystemHealth ===
+export const mockRefetchGetSystemHealth = mock(() => Promise.resolve())
+export const mockUseGetSystemHealth = mock(() => ({
+  data: undefined,
+  isLoading: true,
+  error: null,
+  refetch: mockRefetchGetSystemHealth,
+}))
+
+// === useListAdminPaddleWebhooks (Issue #747) ===
+export const mockUseListAdminPaddleWebhooks = mock(() => ({
+  data: undefined,
+  isLoading: true,
+  error: null,
+}))
+
+// === useGetAdminPaddleWebhookStats (Issue #747) ===
+export const mockUseGetAdminPaddleWebhookStats = mock(() => ({
+  data: undefined,
+  isLoading: false,
+  error: null,
+}))
+
+// === useGetAdminPaddleWebhookDetail (Issue #747) ===
+export const mockUseGetAdminPaddleWebhookDetail = mock(() => ({
+  data: undefined,
+  isLoading: true,
+  error: null,
+}))
+
+// === useReplayAdminPaddleWebhook (Issue #747) ===
+export const mockUseReplayAdminPaddleWebhook = mock(() => ({
+  mutate: mock(() => {}),
+  isPending: false,
+  isSuccess: false,
+  isError: false,
+}))
+
 // Single mock.module() call - called once at preload time
 mock.module('@boostedbudget/api-client/endpoints/admin/admin', () => ({
   ...RealAdminModule,
   useCheckRole: mockUseCheckRole,
   useListAdminUsers: mockUseListAdminUsers,
   useGetAdminUserDetail: mockUseGetAdminUserDetail,
+  useGetSystemHealth: mockUseGetSystemHealth,
+  useListAdminPaddleWebhooks: mockUseListAdminPaddleWebhooks,
+  useGetAdminPaddleWebhookStats: mockUseGetAdminPaddleWebhookStats,
+  useGetAdminPaddleWebhookDetail: mockUseGetAdminPaddleWebhookDetail,
+  useReplayAdminPaddleWebhook: mockUseReplayAdminPaddleWebhook,
 }))

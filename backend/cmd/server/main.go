@@ -200,6 +200,9 @@ func main() {
 	var trialService *services.TrialService
 	var trialExpirationCheckWorker *jobs.TrialExpirationCheckWorker
 
+	// Issue #762: Declare Paddle reconciliation worker
+	var paddleReconciliationWorker *jobs.PaddleReconciliationWorker
+
 	// Issue #37: Declare rule scheduler manager at package scope for graceful shutdown
 	var ruleSchedulerManager *workers.RuleSchedulerManager
 
@@ -498,6 +501,18 @@ func main() {
 				})
 				appLogger.Info("Trial expiration check worker created (River)")
 
+				// Issue #762: Create Paddle reconciliation worker
+				if cfg.PaddleReconciliationEnabled && paddleService != nil {
+					paddleReconciliationWorker = jobs.NewPaddleReconciliationWorker(jobs.PaddleReconciliationWorkerDeps{
+						ProfileRepo: profileRepo,
+						PaddleSvc:   paddleService,
+						TierConfig:  tierConfig,
+						Logger:      appLogger,
+						AutoFix:     cfg.PaddleReconciliationAutoFix,
+					})
+					appLogger.Info("Paddle reconciliation worker created (River)")
+				}
+
 				// Issue #36: Transaction Monitor Service for auto-detecting completed transfers
 				transactionMonitorService := services.NewTransactionMonitorService(transferSuggestionRepo)
 
@@ -598,6 +613,22 @@ func main() {
 					appLogger.Info("Trial expiration check periodic job configured (daily)")
 				}
 
+				// Issue #762: Paddle reconciliation check (daily) - detects status/tier discrepancies
+				if paddleReconciliationWorker != nil {
+					periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+						river.PeriodicInterval(24*time.Hour),
+						func() (river.JobArgs, *river.InsertOpts) {
+							return jobs.PaddleReconciliationArgs{
+								TriggerSource: "periodic",
+							}, &river.InsertOpts{
+								Queue: "low",
+							}
+						},
+						&river.PeriodicJobOpts{RunOnStart: false},
+					))
+					appLogger.Info("Paddle reconciliation periodic job configured (daily)")
+				}
+
 				if len(periodicJobs) > 0 {
 					riverConfig.PeriodicJobs = periodicJobs
 				}
@@ -675,6 +706,12 @@ func main() {
 				if trialExpirationCheckWorker != nil {
 					river.AddWorker(riverWorkers, trialExpirationCheckWorker)
 					appLogger.Info("Trial expiration check worker registered with River")
+				}
+
+				// Issue #762: Register Paddle reconciliation worker
+				if paddleReconciliationWorker != nil {
+					river.AddWorker(riverWorkers, paddleReconciliationWorker)
+					appLogger.Info("Paddle reconciliation worker registered with River")
 				}
 
 				// Issue #45, #46: Register Paddle subscription webhook worker
@@ -869,7 +906,9 @@ func main() {
 		// Issue #640: Pass systemHealthService for system health monitoring
 		if plaidService != nil && encryptionService != nil {
 			humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, encryptionService, trialService, adminService, adminUserService, systemHealthService, subscriptionService, cfg).
-				WithPaddleTransactionRepo(paddleTransactionRepo)
+				WithPaddleTransactionRepo(paddleTransactionRepo).
+				WithPaddleWebhookRepo(paddleWebhookRepo).
+				WithJobQueue(jobQueue)
 			operations.RegisterAdminRoutes(humaAPI, humaAdminHandler)
 			appLogger.Info("Huma admin routes registered (protected by AdminMiddleware)")
 		}

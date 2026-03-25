@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -113,4 +114,47 @@ func (r *SystemHealthRepository) GetAverageSyncDuration(ctx context.Context) (in
 	}
 
 	return avgMs, nil
+}
+
+// GetActiveSubscriptionCount returns count of users with active Paddle subscriptions
+func (r *SystemHealthRepository) GetActiveSubscriptionCount(ctx context.Context) (int64, error) {
+	query := `
+        SELECT COUNT(*)
+        FROM users
+        WHERE paddle_subscription_id IS NOT NULL
+          AND subscription_status NOT IN ('inactive', 'cancelled')
+          AND is_deleted = FALSE
+    `
+	var count int64
+	err := r.db.QueryRow(ctx, query).Scan(&count)
+	return count, err
+}
+
+// GetPaddleWebhookStats24h returns total and failed webhook counts in the last 24 hours
+func (r *SystemHealthRepository) GetPaddleWebhookStats24h(ctx context.Context) (total int64, failed int64, err error) {
+	query := `
+        SELECT
+            COUNT(*) as total,
+            COUNT(*) FILTER (WHERE processing_error IS NOT NULL) as failed
+        FROM paddle_webhook_events
+        WHERE created_at > NOW() - INTERVAL '24 hours'
+    `
+	err = r.db.QueryRow(ctx, query).Scan(&total, &failed)
+	return total, failed, err
+}
+
+// GetLastReconciliationRun returns the time of the last completed reconciliation job
+func (r *SystemHealthRepository) GetLastReconciliationRun(ctx context.Context) (*time.Time, error) {
+	query := `
+        SELECT MAX(finalized_at)
+        FROM river_job
+        WHERE kind = 'paddle_reconciliation'
+          AND state = 'completed'
+    `
+	var lastRun *time.Time
+	err := r.db.QueryRow(ctx, query).Scan(&lastRun)
+	if err != nil {
+		return nil, err
+	}
+	return lastRun, nil
 }

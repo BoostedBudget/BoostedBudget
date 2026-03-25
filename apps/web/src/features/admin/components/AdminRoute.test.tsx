@@ -8,6 +8,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { mockUseCheckRole } from '@/test/mocks/admin-api'
+import { mockUseAuth, createMockClerkAuth } from '@/test/mocks/clerk'
 import { ADMIN_MODE_STORAGE_KEY } from '../constants'
 import { AdminRoute } from './AdminRoute'
 
@@ -39,6 +40,7 @@ describe('AdminRoute', () => {
   beforeEach(() => {
     mockUseCheckRole.mockClear()
     localStorage.clear()
+    mockUseAuth.mockReturnValue(createMockClerkAuth({ isSignedIn: true }))
   })
 
   it('should show loading skeleton while checking admin status', () => {

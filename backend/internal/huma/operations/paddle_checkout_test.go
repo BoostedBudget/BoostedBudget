@@ -118,6 +118,7 @@ func (m *mockProfileRepo) DeleteUserCascade(ctx context.Context, userID string) 
 func (m *mockProfileRepo) GetUsersScheduledForDeletion(ctx context.Context) ([]*domain.User, error)                                                  { return nil, nil }
 func (m *mockProfileRepo) MarkForDeletion(ctx context.Context, userID string, scheduledAt time.Time) error                                           { return nil }
 func (m *mockProfileRepo) UpdateUser(ctx context.Context, user *domain.User) error                                                                   { return nil }
+func (m *mockProfileRepo) GetUsersWithActivePaddleSubscriptions(ctx context.Context) ([]*domain.User, error)                                         { return nil, nil }
 
 // setupTestCheckoutHandler creates a handler with mock dependencies
 func setupTestCheckoutHandler(t *testing.T) (*PaddleCheckoutHandler, *mockPaddleCheckoutService, *mockProfileRepo) {
