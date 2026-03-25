@@ -57,17 +57,24 @@ type SubscriptionPaddleTransactionRepository interface {
 	Create(ctx context.Context, txn *domain.PaddleTransaction) error
 }
 
+// PlaidItemCleanupForWebhook defines the Plaid cleanup operation needed by subscription webhooks.
+// Issue #896: Used to disconnect items on subscription cancellation/pause.
+type PlaidItemCleanupForWebhook interface {
+	DisconnectAllUserItems(ctx context.Context, userID string) error
+}
+
 // SubscriptionWebhookWorker processes Paddle subscription webhook events from the queue.
 type SubscriptionWebhookWorker struct {
 	river.WorkerDefaults[SubscriptionWebhookArgs]
 
-	paddleWebhookRepo   PaddleWebhookRepository
-	profileRepo         SubscriptionProfileRepository
-	clerkService        ClerkService
-	notificationRepo    SubscriptionNotificationRepository
+	paddleWebhookRepo     PaddleWebhookRepository
+	profileRepo           SubscriptionProfileRepository
+	clerkService          ClerkService
+	notificationRepo      SubscriptionNotificationRepository
 	paddleTransactionRepo SubscriptionPaddleTransactionRepository
-	tierConfig          *config.TierConfig
-	logger              *slog.Logger
+	plaidCleanupSvc       PlaidItemCleanupForWebhook
+	tierConfig            *config.TierConfig
+	logger                *slog.Logger
 }
 
 // SubscriptionWebhookWorkerDeps contains the dependencies for SubscriptionWebhookWorker.
@@ -96,6 +103,12 @@ func NewSubscriptionWebhookWorker(deps SubscriptionWebhookWorkerDeps) *Subscript
 		tierConfig:            deps.TierConfig,
 		logger:                logger,
 	}
+}
+
+// SetPlaidCleanupService injects the Plaid cleanup service after construction.
+// Issue #896: Follows the same setter pattern as DeletionService.
+func (w *SubscriptionWebhookWorker) SetPlaidCleanupService(svc PlaidItemCleanupForWebhook) {
+	w.plaidCleanupSvc = svc
 }
 
 // createNotification creates an in-app notification for a user.
@@ -480,6 +493,14 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 	// Issue #48: Don't update subscription ID on cancel (keep existing ID)
 	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, user.SubscriptionTier, "cancelled", nil, nil, nil); err != nil {
 		return fmt.Errorf("failed to update subscription status: %w", err)
+	}
+
+	// Issue #896: Disconnect Plaid items to stop billing on cancellation
+	if w.plaidCleanupSvc != nil {
+		if err := w.plaidCleanupSvc.DisconnectAllUserItems(ctx, userID); err != nil {
+			w.logger.Warn("failed to disconnect Plaid items on cancellation",
+				"user_id", userID, "error", err)
+		}
 	}
 
 	// Issues #747 #748: Sync Clerk metadata (no notification — user-initiated)
