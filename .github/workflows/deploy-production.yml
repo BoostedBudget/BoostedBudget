@@ -54,7 +54,7 @@ jobs:
           path: ${{ env.UNIQUE_WORKSPACE }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Configure Docker to avoid keychain conflicts
         run: |
@@ -133,7 +133,7 @@ jobs:
 
       - name: Build and push ${{ matrix.component }} image
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ${{ env.UNIQUE_WORKSPACE }}
           file: ${{ env.UNIQUE_WORKSPACE }}/${{ matrix.component }}/Dockerfile
