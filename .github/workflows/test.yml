@@ -33,7 +33,7 @@ jobs:
       # NOTE: Workspace cleanup (used across all jobs):
       # Each job cleans before checkout to prevent permission issues on self-hosted runners.
       # This is critical for macOS runners where sudo access is required for cleanup.
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
@@ -762,7 +762,7 @@ jobs:
           clean: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Set Dockerfile path
         id: dockerfile
@@ -774,7 +774,7 @@ jobs:
           fi
 
       - name: Build Docker image (local only)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ${{ env.UNIQUE_WORKSPACE }}
           file: ${{ env.UNIQUE_WORKSPACE }}/${{ steps.dockerfile.outputs.path }}
