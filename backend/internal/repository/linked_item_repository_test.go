@@ -611,6 +611,118 @@ func TestLinkedItemRepository_Update_WithSoftDeleteFields(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// ============================================================================
+// Issue #896: Resubscription Item History Continuity Tests
+// ============================================================================
+
+// TestLinkedItemRepository_GetByUserAndInstitution_MultipleDisconnected_ReturnsMostRecent
+// verifies that when multiple disconnected items exist at the same institution,
+// the query uses ORDER BY created_at DESC to return the most recent one.
+func TestLinkedItemRepository_GetByUserAndInstitution_MultipleDisconnected_ReturnsMostRecent(t *testing.T) {
+	mock, repo := setupLinkedItemMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	institutionID := "ins_chase"
+	mostRecentItemID := uuid.New().String()
+	now := time.Now()
+
+	rows := pgxmock.NewRows([]string{
+		"id", "user_id", "item_id", "access_token_encrypted",
+		"institution_id", "institution_name", "provider", "cursor", "last_synced_at",
+		"status", "error_code", "error_message", "last_error_at", "retry_count", "next_retry_at",
+		"replaced_at", "replaced_by_id",
+		"created_at", "updated_at",
+	}).AddRow(
+		mostRecentItemID, userID, "item-recent", "encrypted-token",
+		institutionID, "Chase", "plaid", nil, nil,
+		"disconnected", nil, nil, nil, 0, nil,
+		nil, nil,
+		now, now,
+	)
+
+	// The regex must include ORDER BY created_at DESC to verify the fix is in place.
+	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id.*AND status.*ORDER BY created_at DESC").
+		WithArgs(userID, institutionID, "disconnected").
+		WillReturnRows(rows)
+
+	item, err := repo.GetByUserAndInstitution(ctx, userID, institutionID, "disconnected")
+
+	assert.NoError(t, err)
+	assert.NotNil(t, item)
+	assert.Equal(t, mostRecentItemID, item.ID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestLinkedItemRepository_GetByUserAndInstitution_SingleDisconnected_ReturnsIt tests that
+// a single disconnected item at an institution is returned successfully.
+func TestLinkedItemRepository_GetByUserAndInstitution_SingleDisconnected_ReturnsIt(t *testing.T) {
+	mock, repo := setupLinkedItemMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	institutionID := "ins_bofa"
+	itemID := uuid.New().String()
+	now := time.Now()
+
+	rows := pgxmock.NewRows([]string{
+		"id", "user_id", "item_id", "access_token_encrypted",
+		"institution_id", "institution_name", "provider", "cursor", "last_synced_at",
+		"status", "error_code", "error_message", "last_error_at", "retry_count", "next_retry_at",
+		"replaced_at", "replaced_by_id",
+		"created_at", "updated_at",
+	}).AddRow(
+		itemID, userID, "item-disconnected", "encrypted-token",
+		institutionID, "Bank of America", "plaid", nil, nil,
+		"disconnected", nil, nil, nil, 0, nil,
+		nil, nil,
+		now, now,
+	)
+
+	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id.*AND status").
+		WithArgs(userID, institutionID, "disconnected").
+		WillReturnRows(rows)
+
+	item, err := repo.GetByUserAndInstitution(ctx, userID, institutionID, "disconnected")
+
+	assert.NoError(t, err)
+	assert.NotNil(t, item)
+	assert.Equal(t, itemID, item.ID)
+	assert.Equal(t, domain.LinkedItemStatusDisconnected, item.Status)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestLinkedItemRepository_GetByUserAndInstitution_NoMatch_ReturnsNotFound tests that
+// when no item matches, the method returns nil, nil (not an error).
+func TestLinkedItemRepository_GetByUserAndInstitution_NoMatch_ReturnsNotFound(t *testing.T) {
+	mock, repo := setupLinkedItemMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	institutionID := "ins_nonexistent"
+
+	rows := pgxmock.NewRows([]string{
+		"id", "user_id", "item_id", "access_token_encrypted",
+		"institution_id", "institution_name", "provider", "cursor", "last_synced_at",
+		"status", "error_code", "error_message", "last_error_at", "retry_count", "next_retry_at",
+		"replaced_at", "replaced_by_id",
+		"created_at", "updated_at",
+	})
+
+	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id.*AND status").
+		WithArgs(userID, institutionID, "disconnected").
+		WillReturnRows(rows)
+
+	item, err := repo.GetByUserAndInstitution(ctx, userID, institutionID, "disconnected")
+
+	assert.Nil(t, item)
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // TestLinkedItemRepository_GetByUserID_ExcludesReplacedByDefault tests that GetByUserID
 // should only return active items (not replaced ones) for normal use cases
 // Note: This behavior may need adjustment based on business requirements

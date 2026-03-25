@@ -568,6 +568,7 @@ func (r *linkedItemRepository) GetByUserAndInstitution(ctx context.Context, user
 		       created_at, updated_at
 		FROM linked_items
 		WHERE user_id = $1 AND institution_id = $2 AND status = $3
+		ORDER BY created_at DESC LIMIT 1
 	`
 
 	var item domain.LinkedItem
