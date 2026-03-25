@@ -1047,3 +1047,91 @@ func TestWorker_SubscriptionCanceled_PlaidCleanupError_StillSucceeds(t *testing.
 	mockProfileRepo.AssertExpectations(t)
 	mockClerk.AssertExpectations(t)
 }
+
+// TestWorker_SubscriptionPaused_DisconnectsPlaidItems tests that Plaid items are disconnected on pause.
+// Issue #896: Step 3 — disconnect on pause.
+func TestWorker_SubscriptionPaused_DisconnectsPlaidItems(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockNotifRepo, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	mockPlaid := new(mockPlaidItemCleanupService)
+	worker.SetPlaidCleanupService(mockPlaid)
+
+	webhook := loadWebhookFixture(t, "subscription_paused.json")
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.paused",
+	}
+	job := createRiverJob(args)
+
+	user := &domain.User{
+		ID:               "user_2abc123def456",
+		ClerkUserID:      "clerk_user_123",
+		SubscriptionTier: "premium",
+	}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "paused", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").Return(nil)
+	mockNotifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
+		return n.Type == "subscription_paused" && n.UserID == "user_2abc123def456"
+	})).Return(nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockPlaid.AssertExpectations(t)
+	mockWebhookRepo.AssertExpectations(t)
+	mockProfileRepo.AssertExpectations(t)
+	mockNotifRepo.AssertExpectations(t)
+	mockClerk.AssertExpectations(t)
+}
+
+// TestWorker_SubscriptionPaused_PlaidCleanupError_StillSucceeds tests that a Plaid disconnect error
+// is logged and swallowed on pause — webhook processing still succeeds.
+// Issue #896: Errors from DisconnectAllUserItems must not fail webhook processing.
+func TestWorker_SubscriptionPaused_PlaidCleanupError_StillSucceeds(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockNotifRepo, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	mockPlaid := new(mockPlaidItemCleanupService)
+	worker.SetPlaidCleanupService(mockPlaid)
+
+	webhook := loadWebhookFixture(t, "subscription_paused.json")
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.paused",
+	}
+	job := createRiverJob(args)
+
+	user := &domain.User{
+		ID:               "user_2abc123def456",
+		ClerkUserID:      "clerk_user_123",
+		SubscriptionTier: "premium",
+	}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "paused", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").Return(errors.New("plaid disconnect failed"))
+	mockNotifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
+		return n.Type == "subscription_paused" && n.UserID == "user_2abc123def456"
+	})).Return(nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	// Error from Plaid cleanup must be swallowed — webhook still succeeds
+	require.NoError(t, err)
+	mockPlaid.AssertExpectations(t)
+	mockWebhookRepo.AssertExpectations(t)
+	mockProfileRepo.AssertExpectations(t)
+	mockNotifRepo.AssertExpectations(t)
+	mockClerk.AssertExpectations(t)
+}
