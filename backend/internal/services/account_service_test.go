@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/plaid/plaid-go/v23/plaid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -2720,7 +2721,7 @@ func TestLinkAccounts_DisconnectedRelink_ErrorCheckingDisconnected_Fails(t *test
 	// Assert: Unexpected error is returned (not swallowed)
 	require.Error(t, disconnectedErr, "Unexpected error should propagate")
 	assert.Equal(t, unexpectedErr, disconnectedErr)
-	assert.NotErrorIs(t, disconnectedErr, errors.New("linked item not found"), "Error is not ErrLinkedItemNotFound — must propagate")
+	assert.NotErrorIs(t, disconnectedErr, repository.ErrLinkedItemNotFound, "unexpected DB errors must propagate, not be swallowed as ErrLinkedItemNotFound")
 
 	mockLinkedItemRepo.AssertExpectations(t)
 	t.Log("✓ Unexpected error from disconnected check propagates correctly")
