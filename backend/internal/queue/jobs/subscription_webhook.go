@@ -533,6 +533,14 @@ func (w *SubscriptionWebhookWorker) processSubscriptionPaused(ctx context.Contex
 		return fmt.Errorf("failed to update subscription status: %w", err)
 	}
 
+	// Issue #896: Disconnect Plaid items to stop billing on pause
+	if w.plaidCleanupSvc != nil {
+		if err := w.plaidCleanupSvc.DisconnectAllUserItems(ctx, userID); err != nil {
+			w.logger.Warn("failed to disconnect Plaid items on pause",
+				"user_id", userID, "error", err)
+		}
+	}
+
 	w.createNotification(ctx, userID, "subscription_paused",
 		"Subscription Paused",
 		"Your BoostedBudget subscription has been paused. Resume anytime to regain full access.",
