@@ -309,6 +309,22 @@ func (s *accountService) LinkAccounts(
 		return nil, fmt.Errorf("failed to check for existing linked item: %w", err)
 	}
 
+	// Step 7b: Issue #896 - Fallback: check for disconnected item (re-subscription reconnection)
+	if existingLinkedItem == nil {
+		existingLinkedItem, err = s.linkedItemRepo.GetByUserAndInstitution(
+			ctx, user.ID, institutionID, string(domain.LinkedItemStatusDisconnected),
+		)
+		if err != nil && !errors.Is(err, repository.ErrLinkedItemNotFound) {
+			return nil, fmt.Errorf("failed to check for disconnected linked item: %w", err)
+		}
+		if existingLinkedItem != nil {
+			s.logger.Info("re-subscription reconnection detected",
+				"disconnected_item_id", existingLinkedItem.ID,
+				"institution_id", institutionID,
+			)
+		}
+	}
+
 	// Step 8: Create new linked item
 	linkedItem := &domain.LinkedItem{
 		UserID:               user.ID,
