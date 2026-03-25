@@ -106,6 +106,13 @@ func (m *MockProfileRepoForWorker) UpdateTrialStatus(ctx context.Context, userID
 // Issue #44, #45, #46: Paddle integration support
 func (m *MockProfileRepoForWorker) UpdatePaddleCustomerID(ctx context.Context, userID, paddleCustomerID string) error { return m.Called(ctx, userID, paddleCustomerID).Error(0) }
 func (m *MockProfileRepoForWorker) UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time, subscriptionID *string) error { return m.Called(ctx, userID, tier, status, startedAt, endsAt, subscriptionID).Error(0) }
+func (m *MockProfileRepoForWorker) GetUsersWithActivePaddleSubscriptions(ctx context.Context) ([]*domain.User, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
+}
 
 // TestWorker_FindsScheduledUsers tests that worker finds users scheduled for deletion
 func TestWorker_FindsScheduledUsers(t *testing.T) {

@@ -32,21 +32,13 @@ import { AutoCategorizationPageWrapper } from './features/auto-categorization/co
 import { BudgetsPage, BudgetDetailPage } from './features/budgets'
 import { RulesPage, RuleBuilder } from './features/rules'
 import { LandingPage } from './features/landing'
-import { AdminRoute, AdminLayout, AdminDashboardPage, UsersPage, HealthDashboardPage } from './features/admin'
+import { AdminRoute, AdminLayout, AdminDashboardPage, UsersPage, HealthDashboardPage, WebhooksPage } from './features/admin'
 import { NotFoundPage } from './features/not-found/NotFoundPage'
 import { Toaster } from 'sonner'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { useEffect, Suspense } from 'react'
 import './App.css'
 
-function ComingSoon({ title }: { title: string }) {
-  return (
-    <div className="flex flex-col items-center justify-center p-8 text-center">
-      <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">{title}</h1>
-      <p className="text-gray-600 dark:text-gray-400">This feature is coming soon.</p>
-    </div>
-  )
-}
 
 function App() {
   const { isSignedIn: isAuthenticated } = useAuth()
@@ -303,7 +295,7 @@ function App() {
               <Route index element={<AdminDashboardPage />} />
               <Route path="users" element={<UsersPage />} />
               <Route path="health" element={<HealthDashboardPage />} />
-              <Route path="webhooks" element={<ComingSoon title="Webhooks" />} />
+              <Route path="webhooks" element={<WebhooksPage />} />
             </Route>
             <Route path="*" element={<NotFoundPage />} />
           </Routes>

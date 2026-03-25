@@ -2,14 +2,25 @@ package domain
 
 import "time"
 
+// PaddleStatusMetrics represents Paddle payment system health metrics
+type PaddleStatusMetrics struct {
+	ActiveSubscriptions         int64      `json:"active_subscriptions"`
+	WebhookSuccessRate24h       float64    `json:"webhook_success_rate_24h"`
+	FailedWebhooks24h           int64      `json:"failed_webhooks_24h"`
+	TotalWebhooks24h            int64      `json:"total_webhooks24h"`
+	LastReconciliationAt        *time.Time `json:"last_reconciliation_at"`
+	ReconciliationDiscrepancies int64      `json:"reconciliation_discrepancies"`
+}
+
 // SystemHealthResponse represents the overall system health status
 type SystemHealthResponse struct {
-	Status          string                    `json:"status"`           // "healthy", "degraded", "unhealthy"
-	Timestamp       time.Time                 `json:"timestamp"`
-	Services        ServiceHealthStatuses     `json:"services"`
-	JobQueues       map[string]QueueMetrics   `json:"job_queues"`
-	SyncStatus      SyncStatusMetrics         `json:"sync_status"`
-	DeadLetterQueue DeadLetterMetrics         `json:"dead_letter_queue"`
+	Status          string                  `json:"status"`           // "healthy", "degraded", "unhealthy"
+	Timestamp       time.Time               `json:"timestamp"`
+	Services        ServiceHealthStatuses   `json:"services"`
+	JobQueues       map[string]QueueMetrics `json:"job_queues"`
+	SyncStatus      SyncStatusMetrics       `json:"sync_status"`
+	DeadLetterQueue DeadLetterMetrics       `json:"dead_letter_queue"`
+	PaddleStatus    PaddleStatusMetrics     `json:"paddle_status"`
 }
 
 // ServiceHealthStatuses contains health status for all services

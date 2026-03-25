@@ -8,6 +8,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
+
 // SystemHealthRepository defines methods for retrieving system health metrics
 type SystemHealthRepository interface {
 	GetRiverJobStats(ctx context.Context, queue string) (*domain.QueueMetrics, error)
@@ -15,6 +16,9 @@ type SystemHealthRepository interface {
 	GetActiveSyncCount(ctx context.Context) (int64, error)
 	GetFailedSyncsLastHour(ctx context.Context) (int64, error)
 	GetAverageSyncDuration(ctx context.Context) (int64, error)
+	GetActiveSubscriptionCount(ctx context.Context) (int64, error)
+	GetPaddleWebhookStats24h(ctx context.Context) (int64, int64, error)
+	GetLastReconciliationRun(ctx context.Context) (*time.Time, error)
 }
 
 // DeadLetterJobRepository defines methods for dead letter job operations
@@ -94,7 +98,6 @@ func (s *systemHealthService) GetSystemHealth(ctx context.Context) (*domain.Syst
 	// Get sync status
 	syncMetrics, err := s.getSyncMetrics(ctx)
 	if err != nil {
-		// Use zero values on error
 		response.SyncStatus = domain.SyncStatusMetrics{}
 	} else {
 		response.SyncStatus = *syncMetrics
@@ -103,10 +106,17 @@ func (s *systemHealthService) GetSystemHealth(ctx context.Context) (*domain.Syst
 	// Get dead letter metrics
 	deadLetterMetrics, err := s.getDeadLetterMetrics(ctx)
 	if err != nil {
-		// Use zero values on error
 		response.DeadLetterQueue = domain.DeadLetterMetrics{}
 	} else {
 		response.DeadLetterQueue = *deadLetterMetrics
+	}
+
+	// Get Paddle metrics
+	paddleMetrics, err := s.getPaddleMetrics(ctx)
+	if err != nil {
+		response.PaddleStatus = domain.PaddleStatusMetrics{}
+	} else {
+		response.PaddleStatus = *paddleMetrics
 	}
 
 	// Calculate overall status
@@ -214,6 +224,37 @@ func (s *systemHealthService) getDeadLetterMetrics(ctx context.Context) (*domain
 	}, nil
 }
 
+// getPaddleMetrics retrieves Paddle subscription and webhook health metrics.
+func (s *systemHealthService) getPaddleMetrics(ctx context.Context) (*domain.PaddleStatusMetrics, error) {
+	activeCount, err := s.healthRepo.GetActiveSubscriptionCount(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	total, failed, err := s.healthRepo.GetPaddleWebhookStats24h(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var successRate float64
+	if total > 0 {
+		successRate = float64(total-failed) / float64(total) * 100
+	}
+
+	lastRun, err := s.healthRepo.GetLastReconciliationRun(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return &domain.PaddleStatusMetrics{
+		ActiveSubscriptions:   activeCount,
+		WebhookSuccessRate24h: successRate,
+		FailedWebhooks24h:     failed,
+		TotalWebhooks24h:      total,
+		LastReconciliationAt:  lastRun,
+	}, nil
+}
+
 // calculateOverallStatus determines the overall system health status
 func (s *systemHealthService) calculateOverallStatus(response *domain.SystemHealthResponse) string {
 	// Unhealthy: Database down
@@ -229,6 +270,11 @@ func (s *systemHealthService) calculateOverallStatus(response *domain.SystemHeal
 	}
 
 	if response.DeadLetterQueue.Count > 10 {
+		return "degraded"
+	}
+
+	// Degraded: Low Paddle webhook success rate (with sufficient volume)
+	if response.PaddleStatus.TotalWebhooks24h > 10 && response.PaddleStatus.WebhookSuccessRate24h < 80 {
 		return "degraded"
 	}
 

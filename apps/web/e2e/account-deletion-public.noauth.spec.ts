@@ -34,13 +34,19 @@ test.describe('Account Deletion - Public Endpoints', () => {
     // Mock token for testing UI (backend will handle validation)
     const mockToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0In0.test'
 
-    await page.goto(`/cancel-deletion/${mockToken}`)
+    // Mock the cancel-deletion API to delay response (keep component in processing state)
+    // Must mock before navigation to prevent the 401 interceptor from redirecting to /sign-in
+    await page.route('**/api/v1/user/delete/cancel/**', async route => {
+      await new Promise(resolve => setTimeout(resolve, 5000))
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ message: 'Account deletion canceled successfully' }),
+      })
+    })
 
-    // Page should show processing state initially
-    // (Will eventually show error since token is invalid, but we test the loading state)
-    // Either processing is visible, or it transitions to error quickly
-    // We just verify the page loaded and has expected structure
-    await page.waitForLoadState('networkidle')
+    await page.goto(`/cancel-deletion/${mockToken}`)
+    await page.waitForLoadState('domcontentloaded')
     expect(page.url()).toContain('/cancel-deletion/')
   })
 

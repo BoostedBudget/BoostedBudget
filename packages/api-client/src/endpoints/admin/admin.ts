@@ -49,11 +49,17 @@ import type {
   ErrorModel,
   FireWebhookRequestBody,
   FireWebhookResponseBody,
+  GetAdminPaddleWebhookStatsParams,
   GetAdminPaymentFailuresParams,
   GetPaymentFailuresOutputBody,
   GrantTrialResponseBody,
+  ListAdminPaddleWebhooksParams,
   ListAdminUsersParams,
+  PaddleWebhookEvent,
   SystemHealthResponse,
+  WebhookEventListResponse,
+  WebhookReplayResponse,
+  WebhookStatsResponse,
 } from "../../models";
 
 import { customInstance } from "../../client";
@@ -1018,3 +1024,601 @@ export function useGetAdminUserDetail<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary List Paddle webhook events (admin)
+ */
+export const listAdminPaddleWebhooks = (
+  params?: ListAdminPaddleWebhooksParams,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<WebhookEventListResponse>(
+    { url: `/api/v1/admin/webhooks/paddle`, method: "GET", params, signal },
+    options,
+  );
+};
+
+export const getListAdminPaddleWebhooksQueryKey = (
+  params?: ListAdminPaddleWebhooksParams,
+) => {
+  return [
+    `/api/v1/admin/webhooks/paddle`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListAdminPaddleWebhooksQueryOptions = <
+  TData = Awaited<ReturnType<typeof listAdminPaddleWebhooks>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: ListAdminPaddleWebhooksParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdminPaddleWebhooks>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListAdminPaddleWebhooksQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listAdminPaddleWebhooks>>
+  > = ({ signal }) => listAdminPaddleWebhooks(params, requestOptions, signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listAdminPaddleWebhooks>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListAdminPaddleWebhooksQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listAdminPaddleWebhooks>>
+>;
+export type ListAdminPaddleWebhooksQueryError = ErrorType<ErrorModel>;
+
+export function useListAdminPaddleWebhooks<
+  TData = Awaited<ReturnType<typeof listAdminPaddleWebhooks>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: undefined | ListAdminPaddleWebhooksParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdminPaddleWebhooks>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAdminPaddleWebhooks>>,
+          TError,
+          Awaited<ReturnType<typeof listAdminPaddleWebhooks>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAdminPaddleWebhooks<
+  TData = Awaited<ReturnType<typeof listAdminPaddleWebhooks>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: ListAdminPaddleWebhooksParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdminPaddleWebhooks>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAdminPaddleWebhooks>>,
+          TError,
+          Awaited<ReturnType<typeof listAdminPaddleWebhooks>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAdminPaddleWebhooks<
+  TData = Awaited<ReturnType<typeof listAdminPaddleWebhooks>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: ListAdminPaddleWebhooksParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdminPaddleWebhooks>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List Paddle webhook events (admin)
+ */
+
+export function useListAdminPaddleWebhooks<
+  TData = Awaited<ReturnType<typeof listAdminPaddleWebhooks>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: ListAdminPaddleWebhooksParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdminPaddleWebhooks>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListAdminPaddleWebhooksQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Get Paddle webhook statistics (admin)
+ */
+export const getAdminPaddleWebhookStats = (
+  params?: GetAdminPaddleWebhookStatsParams,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<WebhookStatsResponse>(
+    {
+      url: `/api/v1/admin/webhooks/paddle/stats`,
+      method: "GET",
+      params,
+      signal,
+    },
+    options,
+  );
+};
+
+export const getGetAdminPaddleWebhookStatsQueryKey = (
+  params?: GetAdminPaddleWebhookStatsParams,
+) => {
+  return [
+    `/api/v1/admin/webhooks/paddle/stats`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetAdminPaddleWebhookStatsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAdminPaddleWebhookStats>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: GetAdminPaddleWebhookStatsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminPaddleWebhookStats>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetAdminPaddleWebhookStatsQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAdminPaddleWebhookStats>>
+  > = ({ signal }) =>
+    getAdminPaddleWebhookStats(params, requestOptions, signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAdminPaddleWebhookStats>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAdminPaddleWebhookStatsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAdminPaddleWebhookStats>>
+>;
+export type GetAdminPaddleWebhookStatsQueryError = ErrorType<ErrorModel>;
+
+export function useGetAdminPaddleWebhookStats<
+  TData = Awaited<ReturnType<typeof getAdminPaddleWebhookStats>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: undefined | GetAdminPaddleWebhookStatsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminPaddleWebhookStats>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAdminPaddleWebhookStats>>,
+          TError,
+          Awaited<ReturnType<typeof getAdminPaddleWebhookStats>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAdminPaddleWebhookStats<
+  TData = Awaited<ReturnType<typeof getAdminPaddleWebhookStats>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: GetAdminPaddleWebhookStatsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminPaddleWebhookStats>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAdminPaddleWebhookStats>>,
+          TError,
+          Awaited<ReturnType<typeof getAdminPaddleWebhookStats>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAdminPaddleWebhookStats<
+  TData = Awaited<ReturnType<typeof getAdminPaddleWebhookStats>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: GetAdminPaddleWebhookStatsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminPaddleWebhookStats>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Get Paddle webhook statistics (admin)
+ */
+
+export function useGetAdminPaddleWebhookStats<
+  TData = Awaited<ReturnType<typeof getAdminPaddleWebhookStats>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: GetAdminPaddleWebhookStatsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminPaddleWebhookStats>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetAdminPaddleWebhookStatsQueryOptions(
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Get Paddle webhook detail (admin)
+ */
+export const getAdminPaddleWebhookDetail = (
+  id: string,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<PaddleWebhookEvent>(
+    { url: `/api/v1/admin/webhooks/paddle/${id}`, method: "GET", signal },
+    options,
+  );
+};
+
+export const getGetAdminPaddleWebhookDetailQueryKey = (id: string) => {
+  return [`/api/v1/admin/webhooks/paddle/${id}`] as const;
+};
+
+export const getGetAdminPaddleWebhookDetailQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAdminPaddleWebhookDetail>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminPaddleWebhookDetail>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetAdminPaddleWebhookDetailQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAdminPaddleWebhookDetail>>
+  > = ({ signal }) => getAdminPaddleWebhookDetail(id, requestOptions, signal);
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAdminPaddleWebhookDetail>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAdminPaddleWebhookDetailQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAdminPaddleWebhookDetail>>
+>;
+export type GetAdminPaddleWebhookDetailQueryError = ErrorType<ErrorModel>;
+
+export function useGetAdminPaddleWebhookDetail<
+  TData = Awaited<ReturnType<typeof getAdminPaddleWebhookDetail>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  id: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminPaddleWebhookDetail>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAdminPaddleWebhookDetail>>,
+          TError,
+          Awaited<ReturnType<typeof getAdminPaddleWebhookDetail>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAdminPaddleWebhookDetail<
+  TData = Awaited<ReturnType<typeof getAdminPaddleWebhookDetail>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminPaddleWebhookDetail>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAdminPaddleWebhookDetail>>,
+          TError,
+          Awaited<ReturnType<typeof getAdminPaddleWebhookDetail>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAdminPaddleWebhookDetail<
+  TData = Awaited<ReturnType<typeof getAdminPaddleWebhookDetail>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminPaddleWebhookDetail>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Get Paddle webhook detail (admin)
+ */
+
+export function useGetAdminPaddleWebhookDetail<
+  TData = Awaited<ReturnType<typeof getAdminPaddleWebhookDetail>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminPaddleWebhookDetail>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetAdminPaddleWebhookDetailQueryOptions(id, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Replay a Paddle webhook (admin)
+ */
+export const replayAdminPaddleWebhook = (
+  id: string,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<WebhookReplayResponse>(
+    {
+      url: `/api/v1/admin/webhooks/paddle/${id}/replay`,
+      method: "POST",
+      signal,
+    },
+    options,
+  );
+};
+
+export const getReplayAdminPaddleWebhookMutationOptions = <
+  TError = ErrorType<ErrorModel>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof replayAdminPaddleWebhook>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customInstance>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof replayAdminPaddleWebhook>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["replayAdminPaddleWebhook"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof replayAdminPaddleWebhook>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return replayAdminPaddleWebhook(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ReplayAdminPaddleWebhookMutationResult = NonNullable<
+  Awaited<ReturnType<typeof replayAdminPaddleWebhook>>
+>;
+
+export type ReplayAdminPaddleWebhookMutationError = ErrorType<ErrorModel>;
+
+/**
+ * @summary Replay a Paddle webhook (admin)
+ */
+export const useReplayAdminPaddleWebhook = <
+  TError = ErrorType<ErrorModel>,
+  TContext = unknown,
+>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof replayAdminPaddleWebhook>>,
+      TError,
+      { id: string },
+      TContext
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof replayAdminPaddleWebhook>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(
+    getReplayAdminPaddleWebhookMutationOptions(options),
+    queryClient,
+  );
+};

@@ -62,6 +62,9 @@ func (m *mockPaddleWebhookRepository) GetUnprocessed(ctx context.Context, limit 
 func (m *mockPaddleWebhookRepository) GetUnprocessedByType(ctx context.Context, eventType string, limit int) ([]domain.PaddleWebhookEvent, error) { return nil, nil }
 func (m *mockPaddleWebhookRepository) Update(ctx context.Context, event *domain.PaddleWebhookEvent) error { return nil }
 func (m *mockPaddleWebhookRepository) GetRecentWebhooks(ctx context.Context, limit int) ([]domain.PaddleWebhookEvent, error) { return nil, nil }
+func (m *mockPaddleWebhookRepository) ListWebhookEvents(ctx context.Context, filters domain.WebhookEventFilters, limit, offset int) ([]domain.PaddleWebhookEvent, int, error) { return nil, 0, nil }
+func (m *mockPaddleWebhookRepository) GetWebhookStats(ctx context.Context, timeRangeHours int) (*domain.WebhookStatsResponse, error) { return nil, nil }
+func (m *mockPaddleWebhookRepository) ResetProcessingStatus(ctx context.Context, id string) error { return nil }
 
 // mockJobQueue is a mock implementation of queue.JobQueue
 type mockJobQueue struct {
