@@ -681,7 +681,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_SingleDisconnected_Returns
 		now, now,
 	)
 
-	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id.*AND status").
+	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id.*AND status.*ORDER BY created_at DESC").
 		WithArgs(userID, institutionID, "disconnected").
 		WillReturnRows(rows)
 
@@ -712,7 +712,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_NoMatch_ReturnsNotFound(t 
 		"created_at", "updated_at",
 	})
 
-	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id.*AND status").
+	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id.*AND status.*ORDER BY created_at DESC").
 		WithArgs(userID, institutionID, "disconnected").
 		WillReturnRows(rows)
 
