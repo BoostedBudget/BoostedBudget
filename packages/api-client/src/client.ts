@@ -35,6 +35,14 @@ export const AXIOS_INSTANCE = Axios.create({
   },
 })
 
+// Track whether the user has ever successfully authenticated (had a valid token).
+// Only redirect on 401 after at least one successful auth, to avoid redirect
+// loops during session hydration or on public pages.
+let hasEverAuthenticated = false
+
+// Public API paths that should never trigger a sign-in redirect on 401
+const PUBLIC_API_PATHS = ['/api/v1/user/delete/cancel/']
+
 // Response error interceptor
 AXIOS_INSTANCE.interceptors.response.use(
   (response) => response,
@@ -51,9 +59,16 @@ AXIOS_INSTANCE.interceptors.response.use(
       })
     }
 
-    // Handle 401 — redirect to sign-in
+    // Handle 401 — only redirect to sign-in if:
+    // 1. The user was previously authenticated (token was used successfully), AND
+    // 2. The request is not to a known public path
+    // This prevents redirect loops during Clerk session hydration and on public pages.
     if (error.response?.status === 401) {
-      window.location.href = '/sign-in'
+      const requestUrl = error.config?.url || ''
+      const isPublicPath = PUBLIC_API_PATHS.some(path => requestUrl.includes(path))
+      if (!isPublicPath && hasEverAuthenticated) {
+        window.location.href = '/sign-in'
+      }
     }
 
     // Handle 503 — could set maintenance state (future: dispatch to store)
@@ -94,6 +109,7 @@ export const customInstance = async <T>(
     try {
       const token = await getAccessToken()
       if (token) {
+        hasEverAuthenticated = true
         mergedConfig.headers = {
           ...mergedConfig.headers,
           Authorization: `Bearer ${token}`,

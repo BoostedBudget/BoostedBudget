@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach } from 'bun:test'
 import { renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { mockUseCheckRole, mockRefetchCheckRole } from '@/test/mocks/admin-api'
+import { mockUseAuth, createMockClerkAuth } from '@/test/mocks/clerk'
 import { useIsAdmin } from './useIsAdmin'
 
 function createWrapper() {
@@ -24,6 +25,7 @@ describe('useIsAdmin', () => {
   beforeEach(() => {
     mockUseCheckRole.mockClear()
     mockRefetchCheckRole.mockClear()
+    mockUseAuth.mockReturnValue(createMockClerkAuth({ isSignedIn: true }))
   })
 
   it('should return loading state initially', () => {
