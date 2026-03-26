@@ -169,7 +169,7 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
                 </div>
                 <p className="cookie-option-description">
                   Help us understand how visitors interact with our website by collecting
-                  and reporting information anonymously via Google Analytics.
+                  and reporting information anonymously via PostHog.
                 </p>
               </div>
 
