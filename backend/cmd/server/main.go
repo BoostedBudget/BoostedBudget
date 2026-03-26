@@ -268,6 +268,7 @@ func main() {
 		// Issue #346: Categorization rules services
 		categorizationRuleService := services.NewCategorizationRuleService(categorizationRuleRepo)
 		ruleApplicationService := services.NewRuleApplicationService(categorizationRuleRepo)
+		ruleApplicationService.SetAnalytics(phClient)
 		// Issue #354: Cash flow analytics and dashboard preferences services
 		analyticsService := services.NewAnalyticsService(analyticsRepo)
 		// Issue #639: adminUserService is created later after adminService is initialized
@@ -302,6 +303,7 @@ func main() {
 		// Issue #37: Rule Execution Service
 		ruleExecutionRepo := repository.NewRuleExecutionRepository(db)
 		ruleExecutionService := services.NewRuleExecutionService(ruleExecutionRepo, transferSuggestionRepo, automationRuleRepo, nil)
+		ruleExecutionService.SetAnalytics(phClient)
 		appLogger.Info("Rule execution service initialized")
 
 		// Issue #37: Rule Scheduler Manager with providers
@@ -577,6 +579,7 @@ func main() {
 					DB:     db,
 					Logger: logger,
 				})
+				deadLetterHandler.SetAnalytics(phClient)
 				riverConfig.ErrorHandler = deadLetterHandler.ErrorHandlerFunc()
 				appLogger.Info("Dead letter handler configured for failed jobs")
 
