@@ -78,7 +78,7 @@ describe('usePostHogIdentify', () => {
       mockUser = makeUser({ createdAt: new Date(Date.now() - 120_000) })
       rerender()
 
-      const capturedEvents = mockCapture.mock.calls.map((c) => c[0])
+      const capturedEvents = mockCapture.mock.calls.map((c: unknown[]) => c[0])
       expect(capturedEvents).not.toContain(ANALYTICS_EVENTS.SIGN_UP_COMPLETED)
     })
 
@@ -89,7 +89,7 @@ describe('usePostHogIdentify', () => {
       mockUser = makeUser({ createdAt: new Date(Date.now() - 5_000) })
       rerender()
 
-      const capturedEvents = mockCapture.mock.calls.map((c) => c[0])
+      const capturedEvents = mockCapture.mock.calls.map((c: unknown[]) => c[0])
       expect(capturedEvents).toContain(ANALYTICS_EVENTS.SIGN_IN_COMPLETED)
       expect(capturedEvents).toContain(ANALYTICS_EVENTS.SIGN_UP_COMPLETED)
     })
@@ -101,7 +101,7 @@ describe('usePostHogIdentify', () => {
       mockUser = makeUser()
       rerender()
 
-      const capturedEvents = mockCapture.mock.calls.map((c) => c[0])
+      const capturedEvents = mockCapture.mock.calls.map((c: unknown[]) => c[0])
       expect(capturedEvents).not.toContain(ANALYTICS_EVENTS.SIGN_OUT_COMPLETED)
       expect(mockReset).not.toHaveBeenCalled()
     })
@@ -189,7 +189,7 @@ describe('usePostHogIdentify', () => {
       } as unknown as ReturnType<typeof makeUser>
       rerender()
 
-      const capturedEvents = mockCapture.mock.calls.map((c) => c[0])
+      const capturedEvents = mockCapture.mock.calls.map((c: unknown[]) => c[0])
       expect(capturedEvents).not.toContain(ANALYTICS_EVENTS.SIGN_UP_COMPLETED)
     })
   })
