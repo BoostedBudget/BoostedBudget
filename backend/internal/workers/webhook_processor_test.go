@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -674,4 +675,193 @@ func TestWebhookProcessor_BothReposFail(t *testing.T) {
 	// Assert - should not return error (errors are logged)
 	assert.NoError(t, err)
 	mockWebhookRepo.AssertExpectations(t)
+}
+
+// ============================================================================
+// PHASE 7 ANALYTICS: WebhookProcessor Analytics Tests
+// Issue #924: PostHog Analytics Instrumentation
+// ============================================================================
+
+// TestWebhookProcessor_ProcessPendingWebhooks_TransactionWebhook_Analytics tests analytics capture for TRANSACTIONS webhooks
+func TestWebhookProcessor_ProcessPendingWebhooks_TransactionWebhook_Analytics(t *testing.T) {
+	ctx := context.Background()
+	mockSyncService := new(MockTransactionSyncServiceForWorker)
+	mockItemErrorService := new(MockItemErrorServiceForWorker)
+	mockWebhookRepo := new(MockWebhookRepoForWorker)
+	mockAnalytics := new(MockAnalytics)
+
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10, nil)
+	processor.SetAnalytics(mockAnalytics)
+
+	// Create test webhook
+	itemID := "item-1"
+	webhookCode := "SYNC_UPDATES_AVAILABLE"
+	webhook := domain.WebhookEvent{
+		ID:          "webhook-1",
+		WebhookType: "TRANSACTIONS",
+		ItemID:      &itemID,
+		WebhookCode: &webhookCode,
+		Payload:     json.RawMessage(`{}`),
+		Processed:   false,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+
+	// Mock: GetUnprocessedByType returns webhook
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "TRANSACTIONS", 10).Return([]domain.WebhookEvent{webhook}, nil)
+	// Mock: No ITEM webhooks
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "ITEM", 10).Return([]domain.WebhookEvent{}, nil)
+
+	// Mock: ProcessWebhook succeeds
+	mockSyncService.On("ProcessWebhook", ctx, &webhook).Return(nil)
+
+	// Mock: Analytics.Capture called with correct parameters
+	mockAnalytics.On("Capture", "item-1", posthog.EventWebhookReceived, mock.MatchedBy(func(props map[string]interface{}) bool {
+		return props["webhook_type"] == "TRANSACTIONS" &&
+			props["webhook_code"] == "SYNC_UPDATES_AVAILABLE"
+	})).Return()
+
+	// Execute
+	err := processor.ProcessPendingWebhooks(ctx)
+
+	// Assert
+	assert.NoError(t, err)
+	mockWebhookRepo.AssertExpectations(t)
+	mockSyncService.AssertExpectations(t)
+	mockAnalytics.AssertExpectations(t)
+}
+
+// TestWebhookProcessor_ProcessPendingWebhooks_ItemWebhook_Analytics tests analytics capture for ITEM webhooks
+func TestWebhookProcessor_ProcessPendingWebhooks_ItemWebhook_Analytics(t *testing.T) {
+	ctx := context.Background()
+	mockSyncService := new(MockTransactionSyncServiceForWorker)
+	mockItemErrorService := new(MockItemErrorServiceForWorker)
+	mockWebhookRepo := new(MockWebhookRepoForWorker)
+	mockAnalytics := new(MockAnalytics)
+
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10, nil)
+	processor.SetAnalytics(mockAnalytics)
+
+	// Create test ITEM webhook
+	itemID := "item-1"
+	webhook := domain.WebhookEvent{
+		ID:          "webhook-item-1",
+		WebhookType: "ITEM",
+		ItemID:      &itemID,
+		WebhookCode: nil, // No webhook code for ITEM webhooks
+		Payload:     json.RawMessage(`{"error":{"error_type":"ITEM_LOGIN_REQUIRED","error_code":"ITEM_LOGIN_REQUIRED","error_message":"User credentials changed"}}`),
+		Processed:   false,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+
+	// Mock: No TRANSACTIONS webhooks
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "TRANSACTIONS", 10).Return([]domain.WebhookEvent{}, nil)
+	// Mock: GetUnprocessedByType for ITEM webhooks
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "ITEM", 10).Return([]domain.WebhookEvent{webhook}, nil)
+
+	// Mock: ItemErrorService.ProcessWebhook succeeds
+	mockItemErrorService.On("ProcessWebhook", ctx, "item-1", "ITEM_LOGIN_REQUIRED", "ITEM_LOGIN_REQUIRED", "User credentials changed").Return(nil)
+
+	// Mock: Analytics.Capture called with correct parameters for ITEM webhook
+	mockAnalytics.On("Capture", "item-1", posthog.EventWebhookReceived, mock.MatchedBy(func(props map[string]interface{}) bool {
+		return props["webhook_type"] == "ITEM" &&
+			props["webhook_code"] == "" // Empty string since no WebhookCode
+	})).Return()
+
+	// Execute
+	err := processor.ProcessPendingWebhooks(ctx)
+
+	// Assert
+	assert.NoError(t, err)
+	mockWebhookRepo.AssertExpectations(t)
+	mockItemErrorService.AssertExpectations(t)
+	mockAnalytics.AssertExpectations(t)
+}
+
+// TestWebhookProcessor_ProcessPendingWebhooks_AnalyticsWithNilItemID tests analytics fallback to "system" when ItemID is nil (TRANSACTIONS only)
+func TestWebhookProcessor_ProcessPendingWebhooks_AnalyticsWithNilItemID(t *testing.T) {
+	ctx := context.Background()
+	mockSyncService := new(MockTransactionSyncServiceForWorker)
+	mockItemErrorService := new(MockItemErrorServiceForWorker)
+	mockWebhookRepo := new(MockWebhookRepoForWorker)
+	mockAnalytics := new(MockAnalytics)
+
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10, nil)
+	processor.SetAnalytics(mockAnalytics)
+
+	// Create test webhook with nil ItemID
+	webhook := domain.WebhookEvent{
+		ID:          "webhook-1",
+		WebhookType: "TRANSACTIONS",
+		ItemID:      nil, // No ItemID - should fallback to "system"
+		WebhookCode: nil,
+		Payload:     json.RawMessage(`{}`),
+		Processed:   false,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+
+	// Mock: GetUnprocessedByType returns webhook
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "TRANSACTIONS", 10).Return([]domain.WebhookEvent{webhook}, nil)
+	// Mock: No ITEM webhooks
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "ITEM", 10).Return([]domain.WebhookEvent{}, nil)
+
+	// Mock: ProcessWebhook succeeds
+	mockSyncService.On("ProcessWebhook", ctx, &webhook).Return(nil)
+
+	// Mock: Analytics.Capture called with "system" as distinctID
+	mockAnalytics.On("Capture", "system", posthog.EventWebhookReceived, mock.MatchedBy(func(props map[string]interface{}) bool {
+		return props["webhook_type"] == "TRANSACTIONS" &&
+			props["webhook_code"] == ""
+	})).Return()
+
+	// Execute
+	err := processor.ProcessPendingWebhooks(ctx)
+
+	// Assert
+	assert.NoError(t, err)
+	mockWebhookRepo.AssertExpectations(t)
+	mockSyncService.AssertExpectations(t)
+	mockAnalytics.AssertExpectations(t)
+}
+
+// TestWebhookProcessor_ProcessPendingWebhooks_AnalyticsNilClient tests graceful handling when analytics client is nil
+func TestWebhookProcessor_ProcessPendingWebhooks_AnalyticsNilClient(t *testing.T) {
+	ctx := context.Background()
+	mockSyncService := new(MockTransactionSyncServiceForWorker)
+	mockItemErrorService := new(MockItemErrorServiceForWorker)
+	mockWebhookRepo := new(MockWebhookRepoForWorker)
+
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10, nil)
+	// Don't set analytics - it should be nil
+
+	// Create test webhook
+	itemID := "item-1"
+	webhook := domain.WebhookEvent{
+		ID:          "webhook-1",
+		WebhookType: "TRANSACTIONS",
+		ItemID:      &itemID,
+		WebhookCode: nil,
+		Payload:     json.RawMessage(`{}`),
+		Processed:   false,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+
+	// Mock: GetUnprocessedByType returns webhook
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "TRANSACTIONS", 10).Return([]domain.WebhookEvent{webhook}, nil)
+	// Mock: No ITEM webhooks
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "ITEM", 10).Return([]domain.WebhookEvent{}, nil)
+
+	// Mock: ProcessWebhook succeeds
+	mockSyncService.On("ProcessWebhook", ctx, &webhook).Return(nil)
+
+	// Execute - should not crash even with nil analytics
+	err := processor.ProcessPendingWebhooks(ctx)
+
+	// Assert
+	assert.NoError(t, err)
+	mockWebhookRepo.AssertExpectations(t)
+	mockSyncService.AssertExpectations(t)
 }
