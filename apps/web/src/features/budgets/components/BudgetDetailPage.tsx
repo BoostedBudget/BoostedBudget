@@ -224,14 +224,14 @@ export function BudgetDetailPage() {
           </div>
           <div className="budget-detail-page__meta-item">
             <span className="budget-detail-page__meta-label">Budget Amount</span>
-            <span className="budget-detail-page__meta-value">
+            <span className="budget-detail-page__meta-value" data-ph-mask>
               {formatCurrency(budget.amount, budget.currency_code)}
             </span>
           </div>
           {budget.income_amount > 0 && (
             <div className="budget-detail-page__meta-item">
               <span className="budget-detail-page__meta-label">Income</span>
-              <span className="budget-detail-page__meta-value">
+              <span className="budget-detail-page__meta-value" data-ph-mask>
                 {formatCurrency(budget.income_amount, budget.currency_code)}
               </span>
             </div>
