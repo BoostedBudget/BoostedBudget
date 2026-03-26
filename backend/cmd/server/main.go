@@ -21,6 +21,7 @@ import (
 	humaconfig "github.com/maxnussbaum/BoostedBudget/internal/huma"
 	humamiddleware "github.com/maxnussbaum/BoostedBudget/internal/huma/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/operations"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
@@ -75,6 +76,13 @@ func main() {
 	})
 	slog.SetDefault(appLogger)
 
+	// Init PostHog (graceful no-op if API key empty)
+	phClient := phclient.NewClient(cfg.PostHogAPIKey, cfg.PostHogHost, appLogger)
+	if phClient != nil {
+		defer phClient.Close()
+		appLogger.Info("PostHog analytics initialized")
+	}
+
 	// Log startup configuration summary
 	appLogger.Info("Startup config summary",
 		"env", cfg.Environment,
@@ -86,6 +94,7 @@ func main() {
 		"paddle", boolStatus(cfg.PaddleAPIKey != "" && cfg.PaddleWebhookSecret != ""),
 		"sendgrid", boolStatus(cfg.SendGridAPIKey != ""),
 		"deletion", boolStatus(cfg.DeletionTokenSecret != ""),
+		"posthog", boolStatus(cfg.PostHogAPIKey != ""),
 	)
 
 	// Initialize database connection pool (optional for local dev)
@@ -240,6 +249,10 @@ func main() {
 		systemHealthRepo := repository.NewSystemHealthRepository(db)             // Issue #640: System health monitoring
 		deadLetterJobRepo := repository.NewDeadLetterJobRepository(db)           // Issue #640: Dead letter queue metrics
 
+		// Wire PostHog GDPR-aware analytics (consent-gated via privacy repo)
+		consentChecker := phclient.NewPrivacyConsentAdapter(privacyRepo)
+		_ = phclient.NewGDPRClient(phClient, consentChecker, appLogger) // GDPR-gated analytics for consent-required services (Phase 5 future use)
+
 		// Create mock audit logger (will be replaced with real implementation later)
 		auditLogger := &mockAuditLogger{}
 
@@ -248,6 +261,7 @@ func main() {
 		privacyService := services.NewPrivacyService(privacyRepo)
 		transactionService := services.NewTransactionService(transactionRepo)
 		registrationService := services.NewRegistrationService(profileRepo, identityRepo, privacyRepo, auditLogger, db)
+		registrationService.SetAnalytics(phClient)
 		subscriptionOverrideRepo := repository.NewSubscriptionOverrideRepository(db)
 		subscriptionService := services.NewSubscriptionService(tierConfig, subscriptionOverrideRepo)
 		// Issue #353: Dashboard service for balance tracking
@@ -347,6 +361,7 @@ func main() {
 				cfg.DeletionGracePeriodDays,
 				cfg.DeletionTokenSecret,
 			)
+			deletionService.SetAnalytics(phClient)
 			appLogger.Info("Deletion service initialized (30-day grace period)")
 
 			// Register Huma deletion routes (Issue #559: Huma migration)
@@ -437,6 +452,7 @@ func main() {
 					TierConfig:            tierConfig,
 					Logger:                logger,
 				})
+				subscriptionWebhookWorker.SetAnalytics(phClient)
 				appLogger.Info("Subscription webhook worker created (River)")
 			}
 		} else {
