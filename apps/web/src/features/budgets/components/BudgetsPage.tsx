@@ -72,12 +72,12 @@ export function BudgetsPage() {
 
   const handleBudgetCreated = useCallback((_budget: Budget) => {
     trackEvent(ANALYTICS_EVENTS.BUDGET_CREATED)
-    if (budgets.length === 0) {
+    if (!budgetsLoading && budgets.length === 0) {
       trackEvent(ANALYTICS_EVENTS.FIRST_BUDGET_CREATED)
     }
     closeDialog()
     refetchBudgets()
-  }, [trackEvent, closeDialog, refetchBudgets, budgets])
+  }, [trackEvent, closeDialog, refetchBudgets, budgets, budgetsLoading])
 
   const handleGoalCreated = useCallback((_goal: SavingsGoal) => {
     closeDialog()

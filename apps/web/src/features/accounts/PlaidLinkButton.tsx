@@ -5,7 +5,8 @@ import {
   useCreateLinkToken,
   useExchangePublicToken,
 } from '@boostedbudget/api-client/endpoints/plaid/plaid'
-import { useGetAccounts } from '@boostedbudget/api-client/endpoints/accounts/accounts'
+import { useQueryClient } from '@tanstack/react-query'
+import { getGetAccountsQueryKey } from '@boostedbudget/api-client/endpoints/accounts/accounts'
 import type { ExchangePublicTokenResponse } from './types'
 import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
@@ -66,14 +67,17 @@ export function PlaidLinkButton({ onSuccess, onExit, className, disabled = false
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const trackEvent = useTrackEvent()
+  const queryClient = useQueryClient()
 
   // Use generated mutation hooks
   const createLinkTokenMutation = useCreateLinkToken()
   const exchangePublicTokenMutation = useExchangePublicToken()
 
-  // Fetch accounts to check if this is the first account
-  const { data: accountsData } = useGetAccounts({ include_hidden: 'true' })
-  const accounts = accountsData?.accounts ?? []
+  // Read accounts from cache to check if this is the first account (no extra network request)
+  const cachedAccountsData = queryClient.getQueryData<{ accounts: unknown[] }>(
+    getGetAccountsQueryKey({ include_hidden: 'true' })
+  )
+  const accounts = cachedAccountsData?.accounts ?? []
 
   // Derive exchanging state from mutation
   const exchanging = exchangePublicTokenMutation.isPending
