@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/rules"
 )
 
@@ -31,14 +32,20 @@ type RuleApplicationService interface {
 type ruleApplicationService struct {
 	ruleRepo   RuleApplicationRepository
 	ruleEngine *rules.RuleEngine
+	analytics  phclient.Analytics
 }
 
 // NewRuleApplicationService creates a new RuleApplicationService instance.
-func NewRuleApplicationService(ruleRepo RuleApplicationRepository) RuleApplicationService {
+func NewRuleApplicationService(ruleRepo RuleApplicationRepository) *ruleApplicationService {
 	return &ruleApplicationService{
 		ruleRepo:   ruleRepo,
 		ruleEngine: rules.NewRuleEngine(),
 	}
+}
+
+// SetAnalytics sets the analytics client for event capture.
+func (s *ruleApplicationService) SetAnalytics(analytics phclient.Analytics) {
+	s.analytics = analytics
 }
 
 // ApplyRulesToTransaction applies all enabled rules to a single transaction.
@@ -81,6 +88,13 @@ func (s *ruleApplicationService) ApplyRulesToTransaction(ctx context.Context, tx
 		categoryStr := string(categoryJSON)
 		tx.CategoryOverride = &categoryStr
 		tx.CategorySourceField = domain.CategorySourceRule
+
+		if s.analytics != nil && len(result.MatchedRuleIDs) > 0 {
+			s.analytics.Capture(tx.UserID, phclient.EventAutoCategorizationExecuted, map[string]interface{}{
+				"transaction_id": tx.ID,
+				"rule_id":        result.MatchedRuleIDs[0],
+			})
+		}
 	}
 
 	// Apply tags (all-match)
@@ -195,6 +209,13 @@ func (s *ruleApplicationService) ApplyRulesToBatch(ctx context.Context, txns []d
 			categoryStr := string(categoryJSON)
 			tx.CategoryOverride = &categoryStr
 			tx.CategorySourceField = domain.CategorySourceRule
+
+			if s.analytics != nil && len(result.MatchedRuleIDs) > 0 {
+				s.analytics.Capture(userID, phclient.EventAutoCategorizationExecuted, map[string]interface{}{
+					"transaction_id": tx.ID,
+					"rule_id":        result.MatchedRuleIDs[0],
+				})
+			}
 		}
 
 		// Apply tags
