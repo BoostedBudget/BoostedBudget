@@ -340,7 +340,7 @@ export function AccountTable({
                 </div>
               </td>
               <td className="account-table__td">{typeLabel}</td>
-              <td className="account-table__td account-table__td--mask">
+              <td className="account-table__td account-table__td--mask" data-ph-mask>
                 {account.mask ? `••••${account.mask}` : '—'}
               </td>
               <td className="account-table__td account-table__td--balance">
@@ -350,6 +350,7 @@ export function AccountTable({
                       ? 'account-table__balance--negative'
                       : 'account-table__balance--positive'
                   }`}
+                  data-ph-mask
                 >
                   {balanceFormatted}
                 </span>
