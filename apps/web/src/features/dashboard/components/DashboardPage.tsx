@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 import { Link } from 'react-router'
 import { useAuth } from '@clerk/react-router'
 import { PlusIcon, PencilIcon, ArrowPathIcon } from '@heroicons/react/24/outline'
@@ -13,6 +13,9 @@ import { DashboardGrid, WidgetCatalog } from '../widgets'
 import { AccountTypeFilter } from './AccountTypeFilter'
 import { TimeframeSelector } from './TimeframeSelector'
 import { useDashboardData } from '../hooks/useDashboardData'
+import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '../../../shared/analytics'
+import type { WidgetType } from '../types'
 
 // Import widgets to register them
 import '../widgets'
@@ -35,6 +38,11 @@ import '../widgets'
 function DashboardContent() {
   const { getToken } = useAuth()
   const { filters, setFilters, isEditing, setIsEditing, hasAccounts, accountsLoading } = useDashboardContext()
+  const trackEvent = useTrackEvent()
+
+  useEffect(() => {
+    trackEvent(ANALYTICS_EVENTS.DASHBOARD_VIEWED)
+  }, [trackEvent])
 
   // Issue #470: Pass getAccessToken for authenticated save on beforeunload
   const { layout, loading, error, saving, updateLayout, addWidget, removeWidget, resetToDefault, saveNow } = useDashboardLayout({
@@ -64,7 +72,8 @@ function DashboardContent() {
 
   const handleTimeframeChange = useCallback((startDate: string, endDate: string) => {
     setFilters({ startDate, endDate })
-  }, [setFilters])
+    trackEvent(ANALYTICS_EVENTS.TIMEFRAME_CHANGED, { startDate, endDate })
+  }, [setFilters, trackEvent])
 
   const handleResetLayout = useCallback(async () => {
     await resetToDefault()
@@ -77,6 +86,16 @@ function DashboardContent() {
     await saveNow()
     setIsEditing(false)
   }, [saveNow, setIsEditing])
+
+  const handleAddWidget = useCallback((type: WidgetType) => {
+    addWidget(type)
+    trackEvent(ANALYTICS_EVENTS.WIDGET_ADDED, { widget_type: type })
+  }, [addWidget, trackEvent])
+
+  const handleRemoveWidget = useCallback((widgetId: string) => {
+    removeWidget(widgetId)
+    trackEvent(ANALYTICS_EVENTS.WIDGET_REMOVED, { widget_id: widgetId })
+  }, [removeWidget, trackEvent])
 
   // Get existing widget types for catalog
   const existingWidgetTypes = layout.widgets.map(w => w.type)
@@ -213,7 +232,7 @@ function DashboardContent() {
           layout={layout}
           isEditing={isEditing}
           onLayoutChange={updateLayout}
-          onRemoveWidget={removeWidget}
+          onRemoveWidget={handleRemoveWidget}
         />
       </div>
 
@@ -221,7 +240,7 @@ function DashboardContent() {
       <WidgetCatalog
         isOpen={catalogOpen}
         onClose={() => setCatalogOpen(false)}
-        onAddWidget={addWidget}
+        onAddWidget={handleAddWidget}
         existingWidgetTypes={existingWidgetTypes}
       />
     </div>

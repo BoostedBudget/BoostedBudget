@@ -3,6 +3,8 @@ import {
   useGetPrivacySettings,
   useUpdatePrivacySettings,
 } from '@boostedbudget/api-client/endpoints/privacy/privacy'
+import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '../../shared/analytics'
 import type { PrivacySettings as PrivacySettingsType, UpdatePrivacySettingsRequest } from './types'
 import { DeleteAccountSection } from '../deletion/components/DeleteAccountSection'
 import './PrivacySettings.css'
@@ -14,6 +16,7 @@ interface PrivacySettingsProps {
 export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const trackEvent = useTrackEvent()
 
   // Use generated query hook for loading settings
   const {
@@ -91,6 +94,9 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
       // Clear modifications since they're now saved
       setModifications({})
       setSuccessMessage('Settings saved successfully!')
+
+      // Track privacy settings change
+      trackEvent(ANALYTICS_EVENTS.PRIVACY_SETTINGS_CHANGED)
 
       // Notify parent component
       onSettingsChange?.(updatedSettings as PrivacySettingsType)

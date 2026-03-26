@@ -1,6 +1,8 @@
 import { useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { CheckCircle } from 'lucide-react'
+import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '../../shared/analytics'
 import './CheckoutSuccessPage.css'
 
 /**
@@ -12,11 +14,13 @@ export function CheckoutSuccessPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const tierName = searchParams.get('tier') || 'Premium'
+  const trackEvent = useTrackEvent()
 
   useEffect(() => {
     // Scroll to top on mount
     window.scrollTo(0, 0)
-  }, [])
+    trackEvent(ANALYTICS_EVENTS.CHECKOUT_COMPLETED)
+  }, [trackEvent])
 
   const handleViewSubscription = () => {
     navigate('/billing/manage')

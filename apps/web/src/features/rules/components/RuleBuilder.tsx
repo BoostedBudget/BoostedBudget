@@ -7,6 +7,8 @@
 
 import { useState, useCallback, useEffect } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 import { ArrowLeft, Save } from 'lucide-react'
 import {
   useCreateAutomationRule,
@@ -86,6 +88,7 @@ const DEFAULT_SAVINGS_ACTION: SavingsGoalAction = {
  * RuleBuilder - main form for creating/editing automation rules.
  */
 export function RuleBuilder() {
+  const trackEvent = useTrackEvent()
   const navigate = useNavigate()
   const { id } = useParams<{ id: string }>()
   const [searchParams] = useSearchParams()
@@ -288,6 +291,7 @@ export function RuleBuilder() {
             actions: action as unknown,
           },
         })
+        trackEvent(ANALYTICS_EVENTS.RULE_EDITED)
       } else {
         // Create payload (no enabled field)
         await createMutation.mutateAsync({
@@ -302,6 +306,7 @@ export function RuleBuilder() {
             actions: action as unknown,
           },
         })
+        trackEvent(ANALYTICS_EVENTS.RULE_CREATED)
       }
       navigate('/rules')
     } catch {
@@ -322,6 +327,7 @@ export function RuleBuilder() {
     id,
     updateMutation,
     createMutation,
+    trackEvent,
     navigate,
   ])
 
