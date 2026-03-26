@@ -103,7 +103,7 @@ export function BudgetCard({ budget, onEdit, onDelete }: BudgetCardProps) {
         </span>
       </div>
 
-      <div className="budget-card__amount">
+      <div className="budget-card__amount" data-ph-mask>
         {formatCurrency(budget.amount, budget.currency_code)}
       </div>
 
@@ -115,7 +115,7 @@ export function BudgetCard({ budget, onEdit, onDelete }: BudgetCardProps) {
       />
 
       <div className="budget-card__footer">
-        <span className="budget-card__remaining">
+        <span className="budget-card__remaining" data-ph-mask>
           {formatCurrency(metrics.remaining_amount, budget.currency_code)} remaining
         </span>
         <span className="budget-card__categories">
