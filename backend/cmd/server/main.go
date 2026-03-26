@@ -485,6 +485,12 @@ func main() {
 					appLogger.Info("Plaid cleanup service wired to deletion service")
 				}
 
+				// Issue #896: Wire cleanup service to subscription webhook worker for disconnect on cancel/pause
+				if subscriptionWebhookWorker != nil {
+					subscriptionWebhookWorker.SetPlaidCleanupService(plaidCleanupService)
+					appLogger.Info("Plaid cleanup service wired to subscription webhook worker")
+				}
+
 				// Issue #679, #680: Create TrialService for trial management
 				trialService = services.NewTrialService(tierConfig, profileRepo, plaidCleanupService)
 				appLogger.Info("Trial service initialized")
