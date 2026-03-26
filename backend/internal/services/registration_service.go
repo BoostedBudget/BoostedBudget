@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
@@ -71,6 +72,9 @@ type RegistrationService interface {
 	// SetTrialGranter sets the trial granter for auto-granting trials on registration
 	// Issue #679: Called during server initialization to wire up the trial service
 	SetTrialGranter(tg TrialGranter)
+
+	// SetAnalytics sets the analytics client for capturing registration events
+	SetAnalytics(a phclient.Analytics)
 }
 
 type registrationService struct {
@@ -78,8 +82,9 @@ type registrationService struct {
 	identityRepo repository.UserIdentityRepository
 	privacyRepo  repository.PrivacyRepository
 	auditLogger  AuditLogger
-	db           TxBeginner   // Database connection pool for transaction management
-	trialGranter TrialGranter // Issue #679: Optional trial granter for auto-grant on registration
+	db           TxBeginner       // Database connection pool for transaction management
+	trialGranter TrialGranter     // Issue #679: Optional trial granter for auto-grant on registration
+	analytics    phclient.Analytics // Optional PostHog analytics client
 }
 
 // NewRegistrationService creates a new RegistrationService
@@ -103,6 +108,11 @@ func NewRegistrationService(
 // Issue #679: Called during server initialization to wire up the trial service
 func (s *registrationService) SetTrialGranter(tg TrialGranter) {
 	s.trialGranter = tg
+}
+
+// SetAnalytics sets the analytics client for capturing registration events
+func (s *registrationService) SetAnalytics(a phclient.Analytics) {
+	s.analytics = a
 }
 
 // RegisterUser implements idempotent user registration with atomic transaction safety
@@ -211,21 +221,22 @@ func (s *registrationService) RegisterUser(ctx context.Context, clerkUserID, ema
 	// Issue #679: Auto-grant trial to new users
 	// Step 4: Grant trial if trial granter is configured
 	if s.trialGranter != nil {
-		err = s.trialGranter.GrantTrial(ctx, user.ID)
-		if err != nil {
+		if err := s.trialGranter.GrantTrial(ctx, user.ID); err != nil {
 			// Log error but don't fail registration
 			// Trial granting failure shouldn't block user registration
-			fmt.Printf("Warning: failed to grant trial for user %s: %v\n", user.ID, err)
 		}
 	}
 
-	// Step 5: Log audit event for new user registration
+	// Step 5: Capture analytics event for new user registration
+	if s.analytics != nil {
+		s.analytics.Capture(user.ID, phclient.EventUserRegistered, nil)
+	}
+
+	// Step 6: Log audit event for new user registration
 	if s.auditLogger != nil {
-		err = s.auditLogger.Log(ctx, "user.registration", "user", user.ID)
-		if err != nil {
+		if err := s.auditLogger.Log(ctx, "user.registration", "user", user.ID); err != nil {
 			// Log error but don't fail registration
 			// Audit logging failure shouldn't block user registration
-			fmt.Printf("Warning: failed to log audit event for user %s: %v\n", user.ID, err)
 		}
 	}
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -39,6 +40,10 @@ func (m *mockDeletionService) ExecuteDeletion(ctx context.Context, userID string
 
 // Issue #668: Plaid Item Management for Cost Optimization
 func (m *mockDeletionService) SetPlaidCleanupService(svc services.PlaidItemCleanupService) {
+	// No-op for mock
+}
+
+func (m *mockDeletionService) SetAnalytics(a phclient.Analytics) {
 	// No-op for mock
 }
 
