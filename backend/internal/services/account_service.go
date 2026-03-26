@@ -284,8 +284,9 @@ func (s *accountService) LinkAccounts(
 	}
 
 	// Step 5: Verify combined count doesn't exceed limit
+	// Skip this check for unlimited tiers (limit=-1)
 	newTotalCount := currentAccountCount + len(plaidAccounts)
-	if newTotalCount > limitCheck.Limit {
+	if !limitCheck.IsUnlimited && newTotalCount > limitCheck.Limit {
 		return nil, fmt.Errorf("%w: linking %d accounts would exceed limit (current=%d, limit=%d)",
 			ErrAccountLimitExceeded,
 			len(plaidAccounts),
@@ -309,7 +310,23 @@ func (s *accountService) LinkAccounts(
 		return nil, fmt.Errorf("failed to check for existing linked item: %w", err)
 	}
 
-	// Step 8: Create new linked item
+	// Step 7b: Issue #896 - Fallback: check for disconnected item (re-subscription reconnection)
+	if existingLinkedItem == nil {
+		existingLinkedItem, err = s.linkedItemRepo.GetByUserAndInstitution(
+			ctx, user.ID, institutionID, string(domain.LinkedItemStatusDisconnected),
+		)
+		if err != nil && !errors.Is(err, repository.ErrLinkedItemNotFound) {
+			return nil, fmt.Errorf("failed to check for disconnected linked item: %w", err)
+		}
+		if existingLinkedItem != nil {
+			s.logger.Info("re-subscription reconnection detected",
+				"disconnected_item_id", existingLinkedItem.ID,
+				"institution_id", institutionID,
+			)
+		}
+	}
+
+	// Step 8: Create new linked item (stores access token and links accounts)
 	linkedItem := &domain.LinkedItem{
 		UserID:               user.ID,
 		ItemID:               itemID,
@@ -325,7 +342,7 @@ func (s *accountService) LinkAccounts(
 		return nil, fmt.Errorf("failed to create linked item: %w", err)
 	}
 
-	// Step 9: Issue #171 - If this is a re-link, soft-delete the old linked_item and accounts
+	// Step 9: Issue #171 and #896 - If this is a re-link, soft-delete the old linked_item and accounts
 	if existingLinkedItem != nil {
 		s.logger.Info("re-link detected, soft-deleting old linked item",
 			"old_item_id", existingLinkedItem.ID,
@@ -365,7 +382,7 @@ func (s *accountService) LinkAccounts(
 		}
 	}
 
-	// Step 10: Convert Plaid accounts to domain accounts with user_account_id
+	// Step 9b: Convert Plaid accounts to domain accounts with user_account_id
 	accounts := make([]domain.Account, len(plaidAccounts))
 	for i, plaidAccount := range plaidAccounts {
 		account := convertPlaidAccount(plaidAccount, linkedItem.ID, user.ID)
@@ -401,14 +418,14 @@ func (s *accountService) LinkAccounts(
 		accounts[i] = account
 	}
 
-	// Step 11: Create accounts in batch
+	// Step 10: Create accounts in batch
 	if err := s.accountRepo.CreateBatch(ctx, accounts); err != nil {
 		// TODO: Consider rollback mechanism if account creation fails
 		// For now, the linked_item → accounts CASCADE DELETE will clean up on item deletion
 		return nil, fmt.Errorf("failed to create accounts: %w", err)
 	}
 
-	// Issue #658: Enqueue initial sync job to fetch transactions
+	// Step 11: Issue #658 - Enqueue initial sync job to fetch transactions
 	// This is non-blocking - if it fails, account linking still succeeds
 	s.enqueueInitialSync(ctx, linkedItem.ID, user.ID)
 
