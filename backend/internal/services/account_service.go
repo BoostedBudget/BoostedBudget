@@ -284,8 +284,9 @@ func (s *accountService) LinkAccounts(
 	}
 
 	// Step 5: Verify combined count doesn't exceed limit
+	// Skip this check for unlimited tiers (limit=-1)
 	newTotalCount := currentAccountCount + len(plaidAccounts)
-	if newTotalCount > limitCheck.Limit {
+	if !limitCheck.IsUnlimited && newTotalCount > limitCheck.Limit {
 		return nil, fmt.Errorf("%w: linking %d accounts would exceed limit (current=%d, limit=%d)",
 			ErrAccountLimitExceeded,
 			len(plaidAccounts),
