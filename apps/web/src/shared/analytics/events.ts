@@ -36,8 +36,6 @@ export const ANALYTICS_EVENTS = {
 
   // Auto-categorization
   AUTO_CATEGORIZATION_VIEWED: 'auto_categorization_viewed',
-  CATEGORY_APPROVED: 'category_approved',
-  CATEGORY_REJECTED: 'category_rejected',
 
   // Dashboard
   DASHBOARD_VIEWED: 'dashboard_viewed',
