@@ -18,14 +18,21 @@ export function usePostHogIdentify(): void {
 
     if (!prevUser && user) {
       // Transition: signed out → signed in
+      const email = user.primaryEmailAddress?.emailAddress
       posthog.identify(user.id, {
-        email: user.primaryEmailAddress?.emailAddress,
+        ...(email ? { email } : {}),
         name: user.fullName,
         subscription_tier: user.publicMetadata?.subscription_tier,
         primary_region: user.publicMetadata?.primary_region,
       })
       posthog.capture(ANALYTICS_EVENTS.SIGN_IN_COMPLETED)
 
+      // 60-second heuristic for sign-up detection: Clerk's user.createdAt timestamp
+      // is compared against the current time to determine if this sign-in is part of
+      // a new account activation. Chosen because most real sign-ups complete within
+      // this window. Limitations: multi-step Clerk flows (email verification, MFA)
+      // may take longer; client-server clock skew can cause false negatives.
+      // This is an intentional trade-off (analytics, not billing) — silent misfire is acceptable.
       if (user.createdAt && Date.now() - user.createdAt.getTime() < 60_000) {
         posthog.capture(ANALYTICS_EVENTS.SIGN_UP_COMPLETED)
       }

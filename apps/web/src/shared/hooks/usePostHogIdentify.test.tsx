@@ -156,7 +156,7 @@ describe('usePostHogIdentify', () => {
   })
 
   describe('User with missing optional fields', () => {
-    it('should handle user with no email address', () => {
+    it('should omit email when primaryEmailAddress is null', () => {
       mockUser = null
       const { rerender } = renderHook(() => usePostHogIdentify())
 
@@ -170,11 +170,13 @@ describe('usePostHogIdentify', () => {
       rerender()
 
       expect(mockIdentify).toHaveBeenCalledWith('user_456', {
-        email: undefined,
         name: null,
         subscription_tier: undefined,
         primary_region: undefined,
       })
+      // email should NOT be in the properties object
+      const callArgs = mockIdentify.mock.calls[0][1]
+      expect('email' in callArgs).toBe(false)
     })
 
     it('should handle user with null createdAt (no sign_up_completed)', () => {
