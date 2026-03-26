@@ -8,6 +8,8 @@
 import { useClerk } from '@clerk/react-router'
 import { Button } from '@/components/ui/button'
 import { Rocket, Shield, CreditCard } from 'lucide-react'
+import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 
 interface HeroSectionProps {
   onScrollToHowItWorks?: () => void
@@ -15,12 +17,12 @@ interface HeroSectionProps {
 
 export function HeroSection({ onScrollToHowItWorks }: HeroSectionProps) {
   const { openSignUp } = useClerk()
+  const trackEvent = useTrackEvent()
 
   const handleScrollToHowItWorks = () => {
     if (onScrollToHowItWorks) {
       onScrollToHowItWorks()
     } else {
-      // Fallback: scroll to how-it-works section
       const element = document.getElementById('how-it-works')
       if (element) {
         element.scrollIntoView({ behavior: 'smooth' })
@@ -80,7 +82,7 @@ export function HeroSection({ onScrollToHowItWorks }: HeroSectionProps) {
           <div className="mt-12 flex flex-col items-center justify-center gap-4 sm:flex-row">
             <Button
               size="lg"
-              onClick={() => openSignUp()}
+              onClick={() => { trackEvent(ANALYTICS_EVENTS.LANDING_CTA_CLICKED); openSignUp() }}
               className="w-full bg-blue-600 px-10 py-6 text-lg font-semibold shadow-lg shadow-blue-500/25 hover:bg-blue-500 hover:shadow-blue-500/30 sm:w-auto"
             >
               Start Free Today

@@ -6,8 +6,10 @@
  * Page component for viewing and managing a single budget's details and categories.
  */
 
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 import { ArrowLeftIcon, BellAlertIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
 import { useBudgetDetail } from '../hooks/useBudgetDetail';
 import { useAvailableCategories } from '../hooks/useAvailableCategories';
@@ -56,11 +58,16 @@ function capitalize(str: string): string {
 }
 
 export function BudgetDetailPage() {
+  const trackEvent = useTrackEvent()
   const { budgetId } = useParams<{ budgetId: string }>();
   const navigate = useNavigate();
   const { budget, loading, error, refetch } = useBudgetDetail(budgetId || '');
   const { categories: availableCategories } = useAvailableCategories();
   const { tags: availableTags } = useTags();
+
+  useEffect(() => {
+    trackEvent(ANALYTICS_EVENTS.BUDGET_DETAIL_VIEWED)
+  }, [trackEvent])
 
   // Use generated mutation hooks for budget category operations
   const addCategoryMutation = useAddBudgetCategory();
@@ -117,10 +124,11 @@ export function BudgetDetailPage() {
         categoryId,
         data: req,
       });
+      trackEvent(ANALYTICS_EVENTS.BUDGET_EDITED)
       await refetch();
       return result as BudgetCategory;
     },
-    [budgetId, refetch, updateCategoryMutation]
+    [budgetId, refetch, trackEvent, updateCategoryMutation]
   );
 
   // Handler for deleting a category

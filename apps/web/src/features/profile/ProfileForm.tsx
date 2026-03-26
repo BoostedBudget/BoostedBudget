@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { useUpdateUserProfile } from '@boostedbudget/api-client/endpoints/profile/profile'
+import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '../../shared/analytics'
 import { REGIONS, getRegionWithFlag } from '../../config/regions'
 import {
   Dialog,
@@ -21,6 +23,7 @@ interface ProfileFormProps {
 export function ProfileForm({ user, onProfileUpdate }: ProfileFormProps) {
   const [validationError, setValidationError] = useState<string | null>(null)
   const [showRegionConfirm, setShowRegionConfirm] = useState(false)
+  const trackEvent = useTrackEvent()
 
   // Use the generated mutation hook
   const updateProfileMutation = useUpdateUserProfile()
@@ -78,6 +81,9 @@ export function ProfileForm({ user, onProfileUpdate }: ProfileFormProps) {
 
           // Show success toast
           toast.success('Profile updated successfully!')
+
+          // Track profile update
+          trackEvent(ANALYTICS_EVENTS.PROFILE_UPDATED)
 
           // Notify parent component
           onProfileUpdate?.(updatedUser)

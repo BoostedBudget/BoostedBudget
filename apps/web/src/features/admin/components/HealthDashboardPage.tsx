@@ -1,5 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useGetSystemHealth } from '@boostedbudget/api-client/endpoints/admin/admin';
+import { useTrackEvent } from '../../../shared/hooks/useTrackEvent';
+import { ANALYTICS_EVENTS } from '../../../shared/analytics';
 import { SummaryCard } from '@/features/admin';
 import { AlertTriangle, Database, Shield, Landmark, RefreshCw, Clock, CreditCard, CheckCircle } from 'lucide-react';
 import './HealthDashboardPage.css';
@@ -12,6 +14,11 @@ const statusToVariant = (status: string): 'success' | 'warning' | 'error' => {
 
 export function HealthDashboardPage() {
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const trackEvent = useTrackEvent();
+
+  useEffect(() => {
+    trackEvent(ANALYTICS_EVENTS.ADMIN_PAGE_VIEWED, { page: 'health' });
+  }, [trackEvent]);
 
   const { data, isLoading, error, refetch } = useGetSystemHealth({
     query: {

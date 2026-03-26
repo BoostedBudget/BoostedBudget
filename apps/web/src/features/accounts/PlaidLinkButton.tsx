@@ -6,6 +6,8 @@ import {
   useExchangePublicToken,
 } from '@boostedbudget/api-client/endpoints/plaid/plaid'
 import type { ExchangePublicTokenResponse } from './types'
+import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '../../shared/analytics'
 import './PlaidLinkButton.css'
 
 interface PlaidLinkButtonProps {
@@ -62,6 +64,7 @@ export function PlaidLinkButton({ onSuccess, onExit, className, disabled = false
   const [linkToken, setLinkToken] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const trackEvent = useTrackEvent()
 
   // Use generated mutation hooks
   const createLinkTokenMutation = useCreateLinkToken()
@@ -103,6 +106,8 @@ export function PlaidLinkButton({ onSuccess, onExit, className, disabled = false
         },
       })
 
+      trackEvent(ANALYTICS_EVENTS.PLAID_LINK_SUCCEEDED)
+
       // Notify parent component if callback provided
       onSuccess?.(response as ExchangePublicTokenResponse)
 
@@ -110,6 +115,7 @@ export function PlaidLinkButton({ onSuccess, onExit, className, disabled = false
       navigate('/accounts')
     } catch (err) {
       console.error('Failed to exchange public token:', err)
+      trackEvent(ANALYTICS_EVENTS.PLAID_LINK_FAILED)
       setError(mapErrorToMessage(err))
     }
   }
@@ -161,7 +167,7 @@ export function PlaidLinkButton({ onSuccess, onExit, className, disabled = false
     <div className={`plaid-link-button ${className || ''}`}>
       {error && <p className="plaid-link-button__error">{error}</p>}
       <button
-        onClick={() => open()}
+        onClick={() => { trackEvent(ANALYTICS_EVENTS.PLAID_LINK_STARTED); open() }}
         disabled={disabled || !ready || exchanging}
         className="plaid-link-button__submit"
       >

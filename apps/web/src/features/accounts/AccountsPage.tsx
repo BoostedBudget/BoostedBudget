@@ -1,4 +1,6 @@
 import { useCallback, useMemo, useState } from 'react'
+import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '../../shared/analytics'
 import { useQueryClient } from '@tanstack/react-query'
 import { Eye, EyeOff, Landmark } from 'lucide-react'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -63,6 +65,8 @@ export function AccountsPage() {
     setBalanceRange,
   } = useAccountFilters()
 
+  const trackEvent = useTrackEvent()
+
   // Use generated query hook for fetching accounts (always include hidden for toggle/counts)
   const {
     data: accountsData,
@@ -108,6 +112,7 @@ export function AccountsPage() {
   async function handleDeleteAccount(accountId: string) {
     try {
       await deleteAccountMutation.mutateAsync({ id: accountId })
+      trackEvent(ANALYTICS_EVENTS.ACCOUNT_REMOVED)
       // Refetch accounts after successful deletion
       await refetchAccounts()
     } catch (err) {
