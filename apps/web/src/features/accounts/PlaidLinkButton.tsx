@@ -5,6 +5,7 @@ import {
   useCreateLinkToken,
   useExchangePublicToken,
 } from '@boostedbudget/api-client/endpoints/plaid/plaid'
+import { useGetAccounts } from '@boostedbudget/api-client/endpoints/accounts/accounts'
 import type { ExchangePublicTokenResponse } from './types'
 import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
@@ -70,6 +71,10 @@ export function PlaidLinkButton({ onSuccess, onExit, className, disabled = false
   const createLinkTokenMutation = useCreateLinkToken()
   const exchangePublicTokenMutation = useExchangePublicToken()
 
+  // Fetch accounts to check if this is the first account
+  const { data: accountsData } = useGetAccounts({ include_hidden: 'true' })
+  const accounts = accountsData?.accounts ?? []
+
   // Derive exchanging state from mutation
   const exchanging = exchangePublicTokenMutation.isPending
 
@@ -107,6 +112,11 @@ export function PlaidLinkButton({ onSuccess, onExit, className, disabled = false
       })
 
       trackEvent(ANALYTICS_EVENTS.PLAID_LINK_SUCCEEDED)
+
+      // Track first account linked event
+      if (accounts.length === 0) {
+        trackEvent(ANALYTICS_EVENTS.FIRST_ACCOUNT_LINKED)
+      }
 
       // Notify parent component if callback provided
       onSuccess?.(response as ExchangePublicTokenResponse)
