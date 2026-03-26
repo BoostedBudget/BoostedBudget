@@ -256,15 +256,14 @@ func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) (
 		return nil, err
 	}
 
-	if items != nil {
-		return items, nil
+	if len(items) == 0 {
+		return []domain.LinkedItem{}, nil
 	}
-	return []domain.LinkedItem{}, nil
+	return items, nil
 }
 
 // GetByItemID retrieves a linked item by its Plaid item ID
 func (r *linkedItemRepository) GetByItemID(ctx context.Context, itemID string) (*domain.LinkedItem, error) {
-	// Updated to 19 columns for Issue #171 - Plaid Re-Link Handling
 	query := `
 		SELECT id, user_id, item_id, access_token_encrypted,
 		       institution_id, institution_name, provider, cursor, last_synced_at,
@@ -568,6 +567,7 @@ func (r *linkedItemRepository) GetByUserAndInstitution(ctx context.Context, user
 		       created_at, updated_at
 		FROM linked_items
 		WHERE user_id = $1 AND institution_id = $2 AND status = $3
+		ORDER BY created_at DESC LIMIT 1
 	`
 
 	var item domain.LinkedItem
@@ -687,10 +687,10 @@ func (r *linkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays
 		return nil, err
 	}
 
-	if items != nil {
-		return items, nil
+	if len(items) == 0 {
+		return []domain.LinkedItem{}, nil
 	}
-	return []domain.LinkedItem{}, nil
+	return items, nil
 }
 
 // GetItemsPendingCleanup retrieves items where cleanup is scheduled and past due.
@@ -751,10 +751,10 @@ func (r *linkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]do
 		return nil, err
 	}
 
-	if items != nil {
-		return items, nil
+	if len(items) == 0 {
+		return []domain.LinkedItem{}, nil
 	}
-	return []domain.LinkedItem{}, nil
+	return items, nil
 }
 
 // MarkForCleanup marks an item for cleanup with notification and scheduled cleanup timestamp.
@@ -873,8 +873,8 @@ func (r *linkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userI
 		return nil, err
 	}
 
-	if items != nil {
-		return items, nil
+	if len(items) == 0 {
+		return []domain.LinkedItem{}, nil
 	}
-	return []domain.LinkedItem{}, nil
+	return items, nil
 }
