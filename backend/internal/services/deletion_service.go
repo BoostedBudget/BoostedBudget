@@ -104,7 +104,7 @@ func (s *deletionService) RequestDeletion(ctx context.Context, userID, email str
 
 	// Capture analytics event for deletion request
 	if s.analytics != nil {
-		s.analytics.Capture(userID, phclient.EventUserDeleted, nil)
+		s.analytics.Capture(userID, phclient.EventDeletionRequested, nil)
 	}
 
 	return cancellationToken, scheduledAt, nil

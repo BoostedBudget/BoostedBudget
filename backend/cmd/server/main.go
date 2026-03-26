@@ -249,10 +249,6 @@ func main() {
 		systemHealthRepo := repository.NewSystemHealthRepository(db)             // Issue #640: System health monitoring
 		deadLetterJobRepo := repository.NewDeadLetterJobRepository(db)           // Issue #640: Dead letter queue metrics
 
-		// Wire PostHog GDPR-aware analytics (consent-gated via privacy repo)
-		consentChecker := phclient.NewPrivacyConsentAdapter(privacyRepo)
-		_ = phclient.NewGDPRClient(phClient, consentChecker, appLogger) // GDPR-gated analytics for consent-required services (Phase 5 future use)
-
 		// Create mock audit logger (will be replaced with real implementation later)
 		auditLogger := &mockAuditLogger{}
 

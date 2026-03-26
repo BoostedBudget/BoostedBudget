@@ -15,16 +15,15 @@ const (
 	EventPaymentFailed          = "payment_failed"
 
 	// User lifecycle events
-	EventUserRegistered    = "user_registered"
-	EventUserDeleted       = "user_deleted"
-	EventDeletionCancelled = "deletion_cancelled"
+	EventUserRegistered     = "user_registered"
+	EventUserDeleted        = "user_deleted"
+	EventDeletionRequested  = "deletion_requested"
+	EventDeletionCancelled  = "deletion_cancelled"
 
 	// Rule and automation events
 	EventRuleTriggered              = "rule_triggered"
 	EventAutoCategorizationExecuted = "auto_categorization_executed"
 
 	// Job events
-	EventJobCompleted      = "job_completed"
-	EventJobFailed         = "job_failed"
 	EventDeadLetterCreated = "dead_letter_created"
 )
