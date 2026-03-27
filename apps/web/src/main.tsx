@@ -27,32 +27,26 @@ const queryClient = new QueryClient({
   },
 })
 
-// Get Clerk configuration from runtime config (injected by docker-entrypoint.sh)
-// Falls back to build-time env vars for local development
+// Get Clerk configuration from build-time env vars (VITE_CLERK_PUBLISHABLE_KEY)
 // In test/development environment without credentials, use placeholders
 const isTestEnv = import.meta.env.MODE === 'test' || (typeof window !== 'undefined' && (window as { __VITEST__?: boolean }).__VITEST__)
 const isDevelopment = import.meta.env.MODE === 'development'
+const publishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
 
 let clerkPublishableKey: string
 
 if (isTestEnv) {
   // Unit tests (Vitest): always use placeholders
   clerkPublishableKey = 'pk_test_placeholder'
+} else if (publishableKey) {
+  clerkPublishableKey = publishableKey
+} else if (isDevelopment) {
+  // In development (E2E tests, local dev without .env), use placeholders
+  console.warn('[Clerk] No credentials found - using placeholders (development mode)')
+  clerkPublishableKey = 'pk_test_dev_placeholder'
 } else {
-  const publishableKey = (window as { ENV?: { CLERK_PUBLISHABLE_KEY?: string } }).ENV?.CLERK_PUBLISHABLE_KEY || import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
-
-  if (!publishableKey) {
-    // In development (E2E tests, local dev without .env), use placeholders
-    // In production/qa, fail fast
-    if (isDevelopment) {
-      console.warn('[Clerk] No credentials found - using placeholders (development mode)')
-      clerkPublishableKey = 'pk_test_dev_placeholder'
-    } else {
-      throw new Error('FATAL: Clerk configuration not loaded. window.ENV is undefined or empty. Check that config.js is loading properly.')
-    }
-  } else {
-    clerkPublishableKey = publishableKey
-  }
+  // In production/qa, fail fast
+  throw new Error('FATAL: Clerk configuration not loaded. VITE_CLERK_PUBLISHABLE_KEY is not set.')
 }
 
 /**

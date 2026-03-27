@@ -1,14 +1,14 @@
 import posthog from 'posthog-js'
 
 /**
- * Initialize PostHog from runtime config.
- * No-op if POSTHOG_KEY is not configured.
+ * Initialize PostHog from build-time env vars.
+ * No-op if VITE_POSTHOG_KEY is not configured.
  */
 export function initPostHog(): void {
-  const key = window.ENV?.POSTHOG_KEY || import.meta.env.VITE_POSTHOG_KEY
+  const key = import.meta.env.VITE_POSTHOG_KEY
   if (!key) return
 
-  const host = window.ENV?.POSTHOG_HOST || import.meta.env.VITE_POSTHOG_HOST || 'https://us.i.posthog.com'
+  const host = import.meta.env.VITE_POSTHOG_HOST || 'https://us.i.posthog.com'
 
   posthog.init(key, {
     api_host: host,

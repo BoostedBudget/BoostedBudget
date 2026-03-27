@@ -298,7 +298,7 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: ${{ env.UNIQUE_WORKSPACE }}
           packageManager: bun
-          command: pages deploy apps/web/dist --project-name=boostedbudget
+          command: pages deploy apps/web/dist --project-name=boostedbudget --branch=staging
 
       - name: Deployment summary
         run: |
