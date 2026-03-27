@@ -1,5 +1,8 @@
+import { useEffect } from 'react'
 import { Users, CreditCard, Activity, AlertTriangle, Search, Wrench } from 'lucide-react'
 import { useEnvironment } from '../hooks/useEnvironment'
+import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 import { SummaryCard } from './SummaryCard'
 import { QuickActionLink } from './QuickActionLink'
 import { EnvironmentBadge } from './EnvironmentBadge'
@@ -8,6 +11,11 @@ import './AdminDashboardPage.css'
 
 export function AdminDashboardPage() {
   const { environment } = useEnvironment()
+  const trackEvent = useTrackEvent()
+
+  useEffect(() => {
+    trackEvent(ANALYTICS_EVENTS.ADMIN_PAGE_VIEWED, { page: 'dashboard' })
+  }, [trackEvent])
 
   return (
     <div className="admin-dashboard">

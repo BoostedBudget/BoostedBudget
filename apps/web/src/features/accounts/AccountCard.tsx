@@ -142,7 +142,7 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
             </span>
           )}
           {mask && (
-            <div className="account-card__mask">
+            <div className="account-card__mask" data-ph-mask>
               ****{mask}
             </div>
           )}
@@ -178,12 +178,12 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
         <div className="account-card__balances">
           <div className="balance-item">
             <span className="balance-label">Current Balance</span>
-            <span className="balance-amount">{currentBalanceFormatted}</span>
+            <span className="balance-amount" data-ph-mask>{currentBalanceFormatted}</span>
           </div>
           {available_balance !== undefined && available_balance !== current_balance && (
             <div className="balance-item">
               <span className="balance-label">Available Balance</span>
-              <span className="balance-amount">{availableBalanceFormatted}</span>
+              <span className="balance-amount" data-ph-mask>{availableBalanceFormatted}</span>
             </div>
           )}
         </div>

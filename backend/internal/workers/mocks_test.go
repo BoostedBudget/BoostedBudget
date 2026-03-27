@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/events"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/plaid/plaid-go/v23/plaid"
 	"github.com/stretchr/testify/mock"
@@ -18,7 +19,25 @@ var (
 	_ repository.TransactionRepository   = (*MockTransactionRepository)(nil)
 	_ PlaidClient                       = (*MockPlaidClient)(nil)
 	_ events.EventEmitter               = (*MockEventEmitter)(nil)
+	_ phclient.Analytics                = (*MockAnalytics)(nil)
 )
+
+// MockAnalytics is a mock for the Analytics interface
+type MockAnalytics struct {
+	mock.Mock
+}
+
+func (m *MockAnalytics) Capture(distinctID, event string, properties map[string]interface{}) {
+	m.Called(distinctID, event, properties)
+}
+
+func (m *MockAnalytics) Identify(distinctID string, properties map[string]interface{}) {
+	m.Called(distinctID, properties)
+}
+
+func (m *MockAnalytics) Close() {
+	m.Called()
+}
 
 // MockLinkedItemRepository is a mock for LinkedItemRepository
 type MockLinkedItemRepository struct {

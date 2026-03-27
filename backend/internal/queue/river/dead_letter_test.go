@@ -8,6 +8,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
 
 func TestBuildErrorHistory(t *testing.T) {
@@ -59,4 +60,28 @@ type testError struct {
 
 func (e *testError) Error() string {
 	return e.msg
+}
+
+type mockAnalytics struct {
+	mock.Mock
+}
+
+func (m *mockAnalytics) Capture(distinctID string, eventName string, properties map[string]interface{}) {
+	m.Called(distinctID, eventName, properties)
+}
+
+func (m *mockAnalytics) Identify(distinctID string, properties map[string]interface{}) {
+	m.Called(distinctID, properties)
+}
+
+func (m *mockAnalytics) Close() {
+	m.Called()
+}
+
+func TestSetAnalytics(t *testing.T) {
+	handler := &DeadLetterHandler{}
+	mockA := &mockAnalytics{}
+
+	handler.SetAnalytics(mockA)
+	assert.Equal(t, mockA, handler.analytics)
 }

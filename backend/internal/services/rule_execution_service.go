@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
@@ -63,6 +64,7 @@ type ruleExecutionService struct {
 	notificationService NotificationService
 	userGetter          UserGetter
 	subscriptionChecker SubscriptionChecker
+	analytics           phclient.Analytics
 }
 
 // NotificationService defines the interface for sending notifications.
@@ -93,6 +95,11 @@ func (s *ruleExecutionService) SetUserGetter(getter UserGetter) {
 // SetSubscriptionChecker sets the subscription checker for limit enforcement.
 func (s *ruleExecutionService) SetSubscriptionChecker(checker SubscriptionChecker) {
 	s.subscriptionChecker = checker
+}
+
+// SetAnalytics sets the analytics client for event capture.
+func (s *ruleExecutionService) SetAnalytics(analytics phclient.Analytics) {
+	s.analytics = analytics
 }
 
 // SetSavingsGoalRepo sets the savings goal repository for savings goal executor.
@@ -182,6 +189,13 @@ func (s *ruleExecutionService) ExecuteRule(ctx context.Context, rule *domain.Aut
 	// Update rule execution stats
 	_ = s.ruleRepo.IncrementExecutionCount(ctx, rule.ID)
 	_ = s.ruleRepo.UpdateLastSuccessful(ctx, rule.ID)
+
+	if s.analytics != nil {
+		s.analytics.Capture(rule.UserID, phclient.EventRuleTriggered, map[string]interface{}{
+			"rule_id":   rule.ID,
+			"rule_type": string(rule.RuleType),
+		})
+	}
 
 	return execution, nil
 }

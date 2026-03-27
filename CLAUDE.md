@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **BoostedBudget**: GDPR-compliant budgeting platform with automation rules. Single-region (us-east-1) MVP, multi-region Phase 7+.
 
-**Stack**: Go 1.25+/Huma | React 19/TS5/Vite 7/Bun | PostgreSQL 17/Redis 7 | golang-migrate+Squawk | Clerk/Plaid/Paddle | Docker→GHCR→Fly.io
+**Stack**: Go 1.25+/Huma | React 19/TS5/Vite 7/Bun | PostgreSQL 17/Redis 7 | golang-migrate+Squawk | Clerk/Plaid/Paddle/PostHog | Docker→GHCR→Fly.io
 
 **Tiers** (`config/subscription_tiers.yaml`): Premium $8.99 + household tiers ($12.99-$18.99), no free tier, 60-day trial
 
@@ -100,6 +100,13 @@ config/
 - **Commits**: `#N: message` (e.g., `#42: Add user endpoint`)
 - **PR titles**: `#N: title`
 - **PR body**: **MUST include `Closes #N`** (auto-closes issue on merge)
+
+### Analytics Instrumentation (PostHog)
+When implementing new features or modifying user-facing flows:
+- **Frontend**: Fire analytics events for meaningful user actions using `useTrackEvent()` hook and constants from `ANALYTICS_EVENTS` (`apps/web/src/shared/analytics/events.ts`). Add new event constants when adding new trackable actions.
+- **Backend**: Fire analytics events for significant system/service actions using the `phclient.Analytics` interface and constants from `backend/internal/integration/posthog/events.go`. Services receive analytics via `SetAnalytics()` setter injection.
+- **PII masking**: Add `data-ph-mask` attribute to any element displaying financial amounts, account numbers, or other sensitive data (for PostHog session replay).
+- **No-op safe**: All analytics code is nil/no-op safe when PostHog is not configured (local dev, QA).
 
 ### Standard Workflow (MANDATORY for all tasks)
 Every implementation task MUST end with these steps in order:
@@ -238,6 +245,7 @@ Out-of-sync causes infinite dashboard reset loops. Increment when adding/removin
 - **Clerk**: JWT validation middleware, tier in metadata, GDPR consent
 - **Plaid**: Sandbox mode, Link tokens, encrypted access tokens, webhooks
 - **Paddle**: Payment webhooks, subscription management (replaces Stripe)
+- **PostHog**: Product analytics (Cloud US, project 357017). Opt-out by default (GDPR). Frontend: `posthog-js` via `useTrackEvent()` + `usePostHogIdentify()`. Backend: `posthog-go` via `phclient.Analytics` interface, nil-safe no-op when key is empty. Session replay with `data-ph-mask` for PII fields. Events: `apps/web/src/shared/analytics/events.ts` (frontend) + `backend/internal/integration/posthog/events.go` (backend).
 
 ## Dependabot
 

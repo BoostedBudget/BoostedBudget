@@ -4,7 +4,7 @@
 
 export interface CookieConsentSettings {
   necessary: boolean;      // Always true (required for app functionality)
-  analytics: boolean;      // Google Analytics consent
+  analytics: boolean;      // PostHog analytics consent
   advertising: boolean;    // Advertising consent
 }
 

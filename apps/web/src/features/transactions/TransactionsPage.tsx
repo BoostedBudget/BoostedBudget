@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Search } from 'lucide-react'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -16,6 +16,8 @@ import type { Transaction } from './types'
 import type { Account } from '../accounts/types'
 import type { UserTag } from '../tags/types'
 import type { CustomCategory } from '../categories/types'
+import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '../../shared/analytics'
 import './TransactionsPage.css'
 
 /**
@@ -53,6 +55,12 @@ export function TransactionsPage() {
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null)
   const [isEditorOpen, setIsEditorOpen] = useState(false)
   const queryClient = useQueryClient()
+  const trackEvent = useTrackEvent()
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    trackEvent(ANALYTICS_EVENTS.TRANSACTIONS_VIEWED)
+  }, [trackEvent])
 
   // Issue #590: Sorting state
   const [sortColumn, setSortColumn] = useState<TransactionSortColumn | undefined>(undefined)
@@ -216,6 +224,13 @@ export function TransactionsPage() {
   function handleSearchChange(event: React.ChangeEvent<HTMLInputElement>) {
     const searchValue = event.target.value
     setFilter('search', searchValue || undefined) // Remove if empty
+
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
+    if (searchValue) {
+      searchDebounceRef.current = setTimeout(() => {
+        trackEvent(ANALYTICS_EVENTS.TRANSACTION_SEARCHED, { query: searchValue })
+      }, 500)
+    }
   }
 
   // Calculate pending count from transactions data

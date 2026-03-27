@@ -284,7 +284,7 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
           )}
         </div>
         <div className="transaction-card__amount-container">
-          <div className={amountClass}>
+          <div className={amountClass} data-ph-mask>
             {/* Issue #531: Income/Expense arrows */}
             {amount > 0 ? (
               <ArrowUpRight className="transaction-card__amount-arrow" data-testid="income-arrow" />
