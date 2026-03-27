@@ -21,6 +21,7 @@ import (
 	humaconfig "github.com/maxnussbaum/BoostedBudget/internal/huma"
 	humamiddleware "github.com/maxnussbaum/BoostedBudget/internal/huma/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/operations"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
@@ -75,6 +76,13 @@ func main() {
 	})
 	slog.SetDefault(appLogger)
 
+	// Init PostHog (graceful no-op if API key empty)
+	phClient := phclient.NewClient(cfg.PostHogAPIKey, cfg.PostHogHost, appLogger)
+	if phClient != nil {
+		defer phClient.Close()
+		appLogger.Info("PostHog analytics initialized")
+	}
+
 	// Log startup configuration summary
 	appLogger.Info("Startup config summary",
 		"env", cfg.Environment,
@@ -86,6 +94,7 @@ func main() {
 		"paddle", boolStatus(cfg.PaddleAPIKey != "" && cfg.PaddleWebhookSecret != ""),
 		"sendgrid", boolStatus(cfg.SendGridAPIKey != ""),
 		"deletion", boolStatus(cfg.DeletionTokenSecret != ""),
+		"posthog", boolStatus(cfg.PostHogAPIKey != ""),
 	)
 
 	// Initialize database connection pool (optional for local dev)
@@ -248,6 +257,7 @@ func main() {
 		privacyService := services.NewPrivacyService(privacyRepo)
 		transactionService := services.NewTransactionService(transactionRepo)
 		registrationService := services.NewRegistrationService(profileRepo, identityRepo, privacyRepo, auditLogger, db)
+		registrationService.SetAnalytics(phClient)
 		subscriptionOverrideRepo := repository.NewSubscriptionOverrideRepository(db)
 		subscriptionService := services.NewSubscriptionService(tierConfig, subscriptionOverrideRepo)
 		// Issue #353: Dashboard service for balance tracking
@@ -258,6 +268,7 @@ func main() {
 		// Issue #346: Categorization rules services
 		categorizationRuleService := services.NewCategorizationRuleService(categorizationRuleRepo)
 		ruleApplicationService := services.NewRuleApplicationService(categorizationRuleRepo)
+		ruleApplicationService.SetAnalytics(phClient)
 		// Issue #354: Cash flow analytics and dashboard preferences services
 		analyticsService := services.NewAnalyticsService(analyticsRepo)
 		// Issue #639: adminUserService is created later after adminService is initialized
@@ -292,6 +303,7 @@ func main() {
 		// Issue #37: Rule Execution Service
 		ruleExecutionRepo := repository.NewRuleExecutionRepository(db)
 		ruleExecutionService := services.NewRuleExecutionService(ruleExecutionRepo, transferSuggestionRepo, automationRuleRepo, nil)
+		ruleExecutionService.SetAnalytics(phClient)
 		appLogger.Info("Rule execution service initialized")
 
 		// Issue #37: Rule Scheduler Manager with providers
@@ -347,6 +359,7 @@ func main() {
 				cfg.DeletionGracePeriodDays,
 				cfg.DeletionTokenSecret,
 			)
+			deletionService.SetAnalytics(phClient)
 			appLogger.Info("Deletion service initialized (30-day grace period)")
 
 			// Register Huma deletion routes (Issue #559: Huma migration)
@@ -437,6 +450,7 @@ func main() {
 					TierConfig:            tierConfig,
 					Logger:                logger,
 				})
+				subscriptionWebhookWorker.SetAnalytics(phClient)
 				appLogger.Info("Subscription webhook worker created (River)")
 			}
 		} else {
@@ -565,6 +579,7 @@ func main() {
 					DB:     db,
 					Logger: logger,
 				})
+				deadLetterHandler.SetAnalytics(phClient)
 				riverConfig.ErrorHandler = deadLetterHandler.ErrorHandlerFunc()
 				appLogger.Info("Dead letter handler configured for failed jobs")
 

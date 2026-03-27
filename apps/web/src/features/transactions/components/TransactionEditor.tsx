@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 import type { Transaction } from '../types'
 import type { UserTag } from '../../tags/types'
 import type { CustomCategory } from '../../categories/types'
@@ -76,6 +78,7 @@ export function TransactionEditor({
   )
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const trackEvent = useTrackEvent()
 
   // Use generated mutation hooks
   const updateTagsMutation = useUpdateTransactionTags()
@@ -112,6 +115,7 @@ export function TransactionEditor({
           id: transaction.id,
           data: { category },
         })) as Transaction
+        trackEvent(ANALYTICS_EVENTS.TRANSACTION_CATEGORIZED, { category: category[0] ?? null })
       }
 
       // Pass the updated transaction to parent for immediate state update

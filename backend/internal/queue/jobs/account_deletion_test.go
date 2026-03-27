@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/riverqueue/river"
@@ -39,6 +40,10 @@ func (m *MockDeletionService) ExecuteDeletion(ctx context.Context, userID string
 
 func (m *MockDeletionService) SetPlaidCleanupService(svc services.PlaidItemCleanupService) {
 	m.Called(svc)
+}
+
+func (m *MockDeletionService) SetAnalytics(a phclient.Analytics) {
+	m.Called(a)
 }
 
 func newTestAccountDeletionJob(args AccountDeletionArgs) *river.Job[AccountDeletionArgs] {

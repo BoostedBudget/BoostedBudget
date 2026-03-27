@@ -81,6 +81,8 @@ type Config struct {
 	OTELEndpoint     string  // from OTEL_EXPORTER_OTLP_ENDPOINT — empty = disabled
 	SentrySampleRate float64 // from SENTRY_SAMPLE_RATE — default 1.0
 	OTELSampleRate   float64 // from OTEL_SAMPLE_RATE — default 1.0
+	PostHogAPIKey    string  // from POSTHOG_API_KEY — empty = disabled
+	PostHogHost      string  // from POSTHOG_HOST — default us.i.posthog.com
 
 	// Paddle Reconciliation
 	PaddleReconciliationEnabled bool // from PADDLE_RECONCILIATION_ENABLED, default true
@@ -161,6 +163,8 @@ func Load() (*Config, error) {
 		OTELEndpoint:     getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
 		SentrySampleRate: getEnvFloat64("SENTRY_SAMPLE_RATE", 1.0),
 		OTELSampleRate:   getEnvFloat64("OTEL_SAMPLE_RATE", 1.0),
+		PostHogAPIKey:    getEnv("POSTHOG_API_KEY", ""),
+		PostHogHost:      getEnv("POSTHOG_HOST", "https://us.i.posthog.com"),
 
 		// Paddle Reconciliation
 		PaddleReconciliationEnabled: getEnvBool("PADDLE_RECONCILIATION_ENABLED", true),

@@ -8,6 +8,7 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/events"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/plaid/plaid-go/v23/plaid"
 )
@@ -24,6 +25,7 @@ type plaidSyncProvider struct {
 	txnRepo        repository.TransactionRepository
 	plaidClient    PlaidClient
 	eventEmitter   events.EventEmitter
+	analytics      phclient.Analytics
 }
 
 // NewPlaidSyncProvider creates a new Plaid transaction sync provider
@@ -39,6 +41,11 @@ func NewPlaidSyncProvider(
 		plaidClient:    plaidClient,
 		eventEmitter:   eventEmitter,
 	}
+}
+
+// SetAnalytics sets the analytics client for capturing sync events.
+func (p *plaidSyncProvider) SetAnalytics(analytics phclient.Analytics) {
+	p.analytics = analytics
 }
 
 // GetProviderName returns the source identifier for Plaid
@@ -64,15 +71,29 @@ func (p *plaidSyncProvider) SupportsIncrementalSync() bool {
 //  8. Handle pagination if has_more = true
 //
 // Returns the total number of transactions processed (added + modified + removed).
-func (p *plaidSyncProvider) SyncForLinkedItem(ctx context.Context, linkedItemID string) (int, error) {
+func (p *plaidSyncProvider) SyncForLinkedItem(ctx context.Context, linkedItemID string) (n int, err error) {
 	// Fetch linked item
-	linkedItem, err := p.linkedItemRepo.GetByID(ctx, linkedItemID)
-	if err != nil {
-		return 0, fmt.Errorf("failed to fetch linked item: %w", err)
+	linkedItem, fetchErr := p.linkedItemRepo.GetByID(ctx, linkedItemID)
+	if fetchErr != nil {
+		return 0, fmt.Errorf("failed to fetch linked item: %w", fetchErr)
 	}
 
-	// Track total transactions processed
-	totalCount := 0
+	defer func() {
+		if p.analytics == nil {
+			return
+		}
+		if err != nil {
+			p.analytics.Capture(linkedItem.UserID, phclient.EventSyncFailed, nil)
+		} else {
+			p.analytics.Capture(linkedItem.UserID, phclient.EventSyncCompleted, map[string]interface{}{
+				"linked_item_id":    linkedItemID,
+				"transaction_count": n,
+			})
+			p.analytics.Capture(linkedItem.UserID, phclient.EventAccountSynced, map[string]interface{}{
+				"account_id": linkedItemID,
+			})
+		}
+	}()
 
 	// Start sync with existing cursor (nil for initial sync)
 	cursor := linkedItem.Cursor
@@ -80,36 +101,36 @@ func (p *plaidSyncProvider) SyncForLinkedItem(ctx context.Context, linkedItemID 
 	// Loop to handle pagination
 	for {
 		// Call Plaid TransactionsSync API
-		syncResp, err := p.plaidClient.TransactionsSync(ctx, linkedItem.AccessTokenEncrypted, cursor)
-		if err != nil {
-			return totalCount, fmt.Errorf("plaid transactions sync failed: %w", err)
+		syncResp, syncErr := p.plaidClient.TransactionsSync(ctx, linkedItem.AccessTokenEncrypted, cursor)
+		if syncErr != nil {
+			return n, fmt.Errorf("plaid transactions sync failed: %w", syncErr)
 		}
 
 		// Process added transactions
 		if len(syncResp.Added) > 0 {
-			added, err := p.processAdded(ctx, linkedItem, syncResp.Added)
-			if err != nil {
-				return totalCount, fmt.Errorf("failed to process added transactions: %w", err)
+			added, addErr := p.processAdded(ctx, linkedItem, syncResp.Added)
+			if addErr != nil {
+				return n, fmt.Errorf("failed to process added transactions: %w", addErr)
 			}
-			totalCount += added
+			n += added
 		}
 
 		// Process modified transactions
 		if len(syncResp.Modified) > 0 {
-			modified, err := p.processModified(ctx, linkedItem, syncResp.Modified)
-			if err != nil {
-				return totalCount, fmt.Errorf("failed to process modified transactions: %w", err)
+			modified, modErr := p.processModified(ctx, linkedItem, syncResp.Modified)
+			if modErr != nil {
+				return n, fmt.Errorf("failed to process modified transactions: %w", modErr)
 			}
-			totalCount += modified
+			n += modified
 		}
 
 		// Process removed transactions
 		if len(syncResp.Removed) > 0 {
-			removed, err := p.processRemoved(ctx, linkedItem, syncResp.Removed)
-			if err != nil {
-				return totalCount, fmt.Errorf("failed to process removed transactions: %w", err)
+			removed, remErr := p.processRemoved(ctx, linkedItem, syncResp.Removed)
+			if remErr != nil {
+				return n, fmt.Errorf("failed to process removed transactions: %w", remErr)
 			}
-			totalCount += removed
+			n += removed
 		}
 
 		// Update cursor for next page/sync
@@ -124,12 +145,12 @@ func (p *plaidSyncProvider) SyncForLinkedItem(ctx context.Context, linkedItemID 
 
 	// Update cursor in database for next incremental sync
 	if cursor != nil {
-		if err := p.linkedItemRepo.UpdateCursor(ctx, linkedItemID, *cursor); err != nil {
-			return totalCount, fmt.Errorf("failed to update cursor: %w", err)
+		if cursorErr := p.linkedItemRepo.UpdateCursor(ctx, linkedItemID, *cursor); cursorErr != nil {
+			return n, fmt.Errorf("failed to update cursor: %w", cursorErr)
 		}
 	}
 
-	return totalCount, nil
+	return n, nil
 }
 
 // processAdded handles added transactions from Plaid

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useUser } from '@clerk/react-router'
 import { Award, Gem, Check, X, AlertTriangle } from 'lucide-react'
@@ -8,6 +8,8 @@ import { PaddleCheckoutButton } from '../billing/components/PaddleCheckoutButton
 import { usePaddleEvents } from '../billing/hooks/usePaddleEvents'
 import { useGetCurrentSubscription } from '@boostedbudget/api-client/endpoints/subscription/subscription'
 import './PricingPage.css'
+import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '../../shared/analytics'
 
 type BillingPeriod = 'monthly' | 'yearly'
 
@@ -167,9 +169,14 @@ export function PricingPage() {
   const { tiers, loading, error, refetch } = useSubscriptionTiers()
   const { data: currentSubscription } = useGetCurrentSubscription()
   const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>('monthly')
+  const trackEvent = useTrackEvent()
 
   // Listen for Paddle checkout events (completion/cancellation)
   usePaddleEvents()
+
+  useEffect(() => {
+    trackEvent(ANALYTICS_EVENTS.PRICING_VIEWED)
+  }, [trackEvent])
 
   const isFrozen = (location.state as { frozen?: boolean } | null)?.frozen === true
 

@@ -8,6 +8,8 @@
 
 import { useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 import { useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, Loader2, Plus, Zap } from 'lucide-react'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -37,6 +39,7 @@ interface DeleteConfirmState {
  * RulesPage displays the list of automation rules with card/table toggle.
  */
 export function RulesPage() {
+  const trackEvent = useTrackEvent()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
@@ -142,13 +145,14 @@ export function RulesPage() {
         { id: deleteConfirm.rule.id },
         {
           onSuccess: () => {
+            trackEvent(ANALYTICS_EVENTS.RULE_DELETED)
             setDeleteConfirm({ isOpen: false, rule: null })
             refetch()
           },
         }
       )
     }
-  }, [deleteConfirm.rule, deleteMutation, refetch])
+  }, [deleteConfirm.rule, deleteMutation, trackEvent, refetch])
 
   const handleDeleteCancel = useCallback(() => {
     setDeleteConfirm({ isOpen: false, rule: null })

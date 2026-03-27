@@ -346,6 +346,7 @@ export function TransactionTable({
                           ? 'transaction-table__amount--debit'
                           : ''
                     }`}
+                    data-ph-mask
                   >
                     {amountFormatted}
                   </span>

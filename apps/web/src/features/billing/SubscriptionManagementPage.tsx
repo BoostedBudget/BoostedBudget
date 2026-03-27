@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '../../shared/analytics'
 import { CreditCard } from 'lucide-react'
 import { useSubscriptionManagement } from './hooks/useSubscriptionManagement'
 import { useSubscriptionTiers } from '../subscription/hooks/useSubscriptionTiers'
@@ -19,6 +21,7 @@ import { toast } from 'sonner'
  */
 export function SubscriptionManagementPage() {
   const navigate = useNavigate()
+  const trackEvent = useTrackEvent()
   const {
     subscription,
     isLoadingSubscription,
@@ -35,6 +38,11 @@ export function SubscriptionManagementPage() {
   } = useSubscriptionManagement()
 
   const { tiers, loading: tiersLoading } = useSubscriptionTiers()
+
+  // Track page view on mount
+  useEffect(() => {
+    trackEvent(ANALYTICS_EVENTS.SUBSCRIPTION_MANAGED)
+  }, [trackEvent])
 
   // Modal state
   const [showPlanChangeModal, setShowPlanChangeModal] = useState(false)
@@ -142,6 +150,11 @@ export function SubscriptionManagementPage() {
     }
   }
 
+  const handleOpenPlanChangeModal = () => {
+    trackEvent(ANALYTICS_EVENTS.CHECKOUT_STARTED)
+    setShowPlanChangeModal(true)
+  }
+
   // Helper to build subscription data for modals
   const getModalSubscriptionData = () => ({
     tier: subscription.tier,
@@ -224,7 +237,7 @@ export function SubscriptionManagementPage() {
 
         <div className="space-y-3">
           <Button
-            onClick={() => setShowPlanChangeModal(true)}
+            onClick={handleOpenPlanChangeModal}
             disabled={isUpdating}
             variant="outline"
             className="w-full"
@@ -349,7 +362,7 @@ export function SubscriptionManagementPage() {
 
       <div className="space-y-3">
         <Button
-          onClick={() => setShowPlanChangeModal(true)}
+          onClick={handleOpenPlanChangeModal}
           disabled={isUpdating}
           variant="outline"
           className="w-full"
