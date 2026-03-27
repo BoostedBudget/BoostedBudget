@@ -142,6 +142,16 @@ type PlaidService interface {
 	//
 	// Plaid Staging Validation - AccountsGet abstraction for testability
 	AccountsGet(ctx context.Context, accessToken string) (*plaid.AccountsGetResponse, error)
+
+	// InvestmentsHoldingsGet fetches current investment holdings and securities.
+	// Returns a full snapshot (no cursor/delta) — callers should replace, not merge.
+	// Issue #659: Plaid Investments
+	InvestmentsHoldingsGet(ctx context.Context, accessToken string) (*plaid.InvestmentsHoldingsGetResponse, error)
+
+	// InvestmentsTransactionsGet fetches investment transactions within a date range.
+	// Uses offset/count pagination (not cursor-based). Caller handles the pagination loop.
+	// Issue #659: Plaid Investments
+	InvestmentsTransactionsGet(ctx context.Context, accessToken, startDate, endDate string, offset, count int32) (*plaid.InvestmentsTransactionsGetResponse, error)
 }
 
 // plaidService implements PlaidService with a configured Plaid API client
@@ -542,6 +552,60 @@ func (s *plaidService) AccountsGet(ctx context.Context, accessToken string) (*pl
 		return nil, fmt.Errorf("plaid AccountsGet failed: %w", err)
 	}
 
+	return &resp, nil
+}
+
+// InvestmentsHoldingsGet calls Plaid /investments/holdings/get.
+// Returns all current holdings and associated securities for the item.
+// Issue #659: Plaid Investments
+func (s *plaidService) InvestmentsHoldingsGet(ctx context.Context, accessToken string) (*plaid.InvestmentsHoldingsGetResponse, error) {
+	if accessToken == "" {
+		return nil, fmt.Errorf("access token cannot be empty")
+	}
+
+	request := plaid.NewInvestmentsHoldingsGetRequest(accessToken)
+	resp, _, err := s.client.PlaidApi.InvestmentsHoldingsGet(ctx).
+		InvestmentsHoldingsGetRequest(*request).
+		Execute()
+	if err != nil {
+		return nil, fmt.Errorf("plaid InvestmentsHoldingsGet failed: %w", err)
+	}
+	return &resp, nil
+}
+
+// InvestmentsTransactionsGet calls Plaid /investments/transactions/get.
+// Fetches investment transactions within a date range using offset/count pagination.
+// Issue #659: Plaid Investments
+func (s *plaidService) InvestmentsTransactionsGet(ctx context.Context, accessToken, startDate, endDate string, offset, count int32) (*plaid.InvestmentsTransactionsGetResponse, error) {
+	if accessToken == "" {
+		return nil, fmt.Errorf("access token cannot be empty")
+	}
+	if startDate == "" {
+		return nil, fmt.Errorf("start_date is required")
+	}
+	if endDate == "" {
+		return nil, fmt.Errorf("end_date is required")
+	}
+
+	request := plaid.NewInvestmentsTransactionsGetRequest(accessToken, startDate, endDate)
+
+	if offset > 0 || count > 0 {
+		options := plaid.NewInvestmentsTransactionsGetRequestOptions()
+		if offset > 0 {
+			options.SetOffset(offset)
+		}
+		if count > 0 {
+			options.SetCount(count)
+		}
+		request.SetOptions(*options)
+	}
+
+	resp, _, err := s.client.PlaidApi.InvestmentsTransactionsGet(ctx).
+		InvestmentsTransactionsGetRequest(*request).
+		Execute()
+	if err != nil {
+		return nil, fmt.Errorf("plaid InvestmentsTransactionsGet failed: %w", err)
+	}
 	return &resp, nil
 }
 

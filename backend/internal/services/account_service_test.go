@@ -77,6 +77,22 @@ func (m *MockPlaidService) AccountsGet(ctx context.Context, accessToken string) 
 	return args.Get(0).(*plaid.AccountsGetResponse), args.Error(1)
 }
 
+func (m *MockPlaidService) InvestmentsHoldingsGet(ctx context.Context, accessToken string) (*plaid.InvestmentsHoldingsGetResponse, error) {
+	args := m.Called(ctx, accessToken)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*plaid.InvestmentsHoldingsGetResponse), args.Error(1)
+}
+
+func (m *MockPlaidService) InvestmentsTransactionsGet(ctx context.Context, accessToken, startDate, endDate string, offset, count int32) (*plaid.InvestmentsTransactionsGetResponse, error) {
+	args := m.Called(ctx, accessToken, startDate, endDate, offset, count)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*plaid.InvestmentsTransactionsGetResponse), args.Error(1)
+}
+
 type MockEncryptionService struct {
 	mock.Mock
 }
@@ -208,6 +224,11 @@ func (m *MockLinkedItemRepository) GetActiveItemsByUserID(ctx context.Context, u
 
 func (m *MockLinkedItemRepository) MarkAllUserItemsDisconnected(ctx context.Context, userID string) error {
 	args := m.Called(ctx, userID)
+	return args.Error(0)
+}
+
+func (m *MockLinkedItemRepository) UpdateInvestmentsLastSyncedDate(ctx context.Context, id string, date time.Time) error {
+	args := m.Called(ctx, id, date)
 	return args.Error(0)
 }
 

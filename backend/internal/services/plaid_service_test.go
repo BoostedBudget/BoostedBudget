@@ -947,3 +947,60 @@ func TestFireWebhook_ProductionEnvironment_ReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "sandbox", "Error should indicate sandbox-only operation")
 	assert.Nil(t, response, "Expected nil response on error")
 }
+
+// TestPlaidService_InvestmentsHoldingsGet_EmptyAccessToken verifies that
+// InvestmentsHoldingsGet returns an error for empty access token.
+func TestPlaidService_InvestmentsHoldingsGet_EmptyAccessToken(t *testing.T) {
+	cfg := &config.Config{
+		PlaidClientID: "test_client_id",
+		PlaidSecret:   "test_secret",
+		PlaidEnv:      "sandbox",
+	}
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	resp, err := service.InvestmentsHoldingsGet(ctx, "")
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "access token cannot be empty")
+	assert.Nil(t, resp)
+}
+
+// TestPlaidService_InvestmentsTransactionsGet_EmptyAccessToken verifies that
+// InvestmentsTransactionsGet returns an error for empty access token.
+func TestPlaidService_InvestmentsTransactionsGet_EmptyAccessToken(t *testing.T) {
+	cfg := &config.Config{
+		PlaidClientID: "test_client_id",
+		PlaidSecret:   "test_secret",
+		PlaidEnv:      "sandbox",
+	}
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	resp, err := service.InvestmentsTransactionsGet(ctx, "", "2024-01-01", "2024-12-31", 0, 500)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "access token cannot be empty")
+	assert.Nil(t, resp)
+}
+
+// TestPlaidService_InvestmentsTransactionsGet_ValidatesDateRange verifies that
+// InvestmentsTransactionsGet validates required date parameters.
+func TestPlaidService_InvestmentsTransactionsGet_ValidatesDateRange(t *testing.T) {
+	cfg := &config.Config{
+		PlaidClientID: "test_client_id",
+		PlaidSecret:   "test_secret",
+		PlaidEnv:      "sandbox",
+	}
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	resp, err := service.InvestmentsTransactionsGet(ctx, "access-token-123", "", "2024-12-31", 0, 500)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "start_date")
+	assert.Nil(t, resp)
+}

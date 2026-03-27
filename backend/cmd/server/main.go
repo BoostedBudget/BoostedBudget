@@ -248,6 +248,9 @@ func main() {
 		adminUserRepo := repository.NewAdminUserRepository(db)                   // Issue #639: Admin user management
 		systemHealthRepo := repository.NewSystemHealthRepository(db)             // Issue #640: System health monitoring
 		deadLetterJobRepo := repository.NewDeadLetterJobRepository(db)           // Issue #640: Dead letter queue metrics
+		securityRepo := repository.NewSecurityRepository(db)                      // Issue #659: Plaid Investments
+		holdingRepo := repository.NewHoldingRepository(db)                        // Issue #659: Plaid Investments
+		investmentTxnRepo := repository.NewInvestmentTransactionRepository(db)   // Issue #659: Plaid Investments
 
 		// Create mock audit logger (will be replaced with real implementation later)
 		auditLogger := &mockAuditLogger{}
@@ -570,6 +573,20 @@ func main() {
 					appLogger,
 				)
 
+				// Issue #659: Initialize InvestmentSyncService for holdings and investment transactions
+				investmentSyncService := services.NewInvestmentSyncService(
+					webhookRepo,
+					linkedItemRepo,
+					accountRepo,
+					securityRepo,
+					holdingRepo,
+					investmentTxnRepo,
+					plaidService,
+					encryptionService,
+					appLogger,
+				)
+				appLogger.Info("Investment sync service initialized")
+
 				// Issue #573/629: Initialize River queue for async job processing
 				logger := slog.Default()
 				riverConfig := riverqueue.DefaultConfig()
@@ -655,9 +672,11 @@ func main() {
 				}
 
 				// Create WebhookProcessingWorker with all dependencies
+				// Issue #659: InvestmentSyncSvc added for HOLDINGS and INVESTMENTS_TRANSACTIONS routing
 				webhookProcessingWorker := jobs.NewWebhookProcessingWorker(jobs.WebhookProcessingWorkerDeps{
 					WebhookRepo:        webhookRepo,
 					TransactionSyncSvc: transactionSyncService,
+					InvestmentSyncSvc:  investmentSyncService,
 					ItemErrorSvc:       itemErrorService,
 					Logger:             logger,
 				})
@@ -672,6 +691,24 @@ func main() {
 					DB:             db, // For row-level locking via FOR UPDATE
 				})
 				appLogger.Info("Plaid sync worker created")
+
+				// Issue #659: Create InvestmentHoldingsSyncWorker
+				investmentHoldingsSyncWorker := jobs.NewInvestmentHoldingsSyncWorker(jobs.InvestmentHoldingsSyncWorkerDeps{
+					InvestmentSyncSvc: investmentSyncService,
+					LinkedItemRepo:    linkedItemRepo,
+					Logger:            logger,
+					DB:                db,
+				})
+				appLogger.Info("Investment holdings sync worker created")
+
+				// Issue #659: Create InvestmentTransactionsSyncWorker
+				investmentTransactionsSyncWorker := jobs.NewInvestmentTransactionsSyncWorker(jobs.InvestmentTransactionsSyncWorkerDeps{
+					InvestmentSyncSvc: investmentSyncService,
+					LinkedItemRepo:    linkedItemRepo,
+					Logger:            logger,
+					DB:                db,
+				})
+				appLogger.Info("Investment transactions sync worker created")
 
 				// Issue #668: Create ItemCleanupCheckWorker for periodic orphaned item detection
 				// Checks for items in error state, revoked, stale, or with zero accounts
@@ -740,6 +777,12 @@ func main() {
 					river.AddWorker(riverWorkers, subscriptionWebhookWorker)
 					appLogger.Info("Paddle subscription webhook worker registered with River")
 				}
+
+				// Issue #659: Register investment sync workers
+				river.AddWorker(riverWorkers, investmentHoldingsSyncWorker)
+				appLogger.Info("Investment holdings sync worker registered with River")
+				river.AddWorker(riverWorkers, investmentTransactionsSyncWorker)
+				appLogger.Info("Investment transactions sync worker registered with River")
 
 				// Create River client
 				riverClient, err := riverqueue.NewClient(db, riverWorkers, riverConfig)
