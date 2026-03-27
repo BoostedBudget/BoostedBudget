@@ -99,6 +99,11 @@ type LinkedItemRepository interface {
 
 	// GetActiveItemsByUserID retrieves all active (non-replaced, non-disconnected) linked items for a user
 	GetActiveItemsByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error)
+
+	// UpdateInvestmentsLastSyncedDate updates the date through which investment transactions
+	// have been synced. Called after a successful investment transactions sync.
+	// Issue #659: Plaid Investments
+	UpdateInvestmentsLastSyncedDate(ctx context.Context, id string, date time.Time) error
 }
 
 // linkedItemRepository implements LinkedItemRepository using PostgreSQL
@@ -877,4 +882,18 @@ func (r *linkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userI
 		return []domain.LinkedItem{}, nil
 	}
 	return items, nil
+}
+
+// UpdateInvestmentsLastSyncedDate updates the date through which investment transactions
+// have been synced. Called after a successful investment transactions sync (Issue #659).
+func (r *linkedItemRepository) UpdateInvestmentsLastSyncedDate(ctx context.Context, id string, date time.Time) error {
+	query := `UPDATE linked_items SET investments_last_synced_date = $1 WHERE id = $2`
+	ct, err := r.db.Exec(ctx, query, date, id)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrLinkedItemNotFound
+	}
+	return nil
 }
