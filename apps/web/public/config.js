@@ -5,5 +5,7 @@
 window.ENV = {
   API_URL: undefined, // Let axiosConfig.ts use Vite proxy via import.meta.env
   CLERK_PUBLISHABLE_KEY: undefined, // Let main.tsx use import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
-  ENVIRONMENT: 'development'
+  ENVIRONMENT: 'development',
+  POSTHOG_KEY: undefined,
+  POSTHOG_HOST: undefined,
 };

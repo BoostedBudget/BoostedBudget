@@ -5,7 +5,9 @@
  * Admin page for monitoring and replaying Paddle webhook events.
  */
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 import { RefreshCw, AlertCircle, Webhook, ChevronLeft, ChevronRight } from 'lucide-react'
 import {
   useListAdminPaddleWebhooks,
@@ -36,6 +38,11 @@ const PAGE_SIZE = 20
 export function WebhooksPage() {
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [selectedWebhookId, setSelectedWebhookId] = useState<string | null>(null)
+  const trackEvent = useTrackEvent()
+
+  useEffect(() => {
+    trackEvent(ANALYTICS_EVENTS.ADMIN_PAGE_VIEWED, { page: 'webhooks' })
+  }, [trackEvent])
 
   const { filters, setEventType, setProcessed, setStartDate, setEndDate, setPage, hasActiveFilters, resetFilters } = useWebhookFilters()
 

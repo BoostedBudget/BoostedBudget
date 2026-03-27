@@ -29,6 +29,7 @@ kill_timeout = 30
   # - PADDLE_API_KEY
   # - PADDLE_WEBHOOK_SECRET
   # - ENCRYPTION_KEY
+  # - POSTHOG_API_KEY (PostHog Cloud US - project 357017)
 
 [experimental]
   auto_rollback = true

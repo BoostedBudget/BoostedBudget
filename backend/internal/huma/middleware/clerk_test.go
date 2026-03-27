@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	humamiddleware "github.com/maxnussbaum/BoostedBudget/internal/huma/middleware"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
@@ -74,6 +75,10 @@ func (m *mockRegistrationService) RegisterUser(ctx context.Context, clerkUserID,
 
 // Issue #679: SetTrialGranter for auto-granting trials on registration
 func (m *mockRegistrationService) SetTrialGranter(_ services.TrialGranter) {
+	// No-op for tests
+}
+
+func (m *mockRegistrationService) SetAnalytics(_ phclient.Analytics) {
 	// No-op for tests
 }
 

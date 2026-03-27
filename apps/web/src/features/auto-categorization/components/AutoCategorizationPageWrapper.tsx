@@ -15,8 +15,10 @@
  * Issue #399: Add tags autocomplete for target tags
  */
 
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { AutoCategorizationPage } from './AutoCategorizationPage'
+import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 import { useGetUserCategories, useGetPlaidCategories } from '@boostedbudget/api-client/endpoints/categories/categories'
 import { useGetAccounts } from '@boostedbudget/api-client/endpoints/accounts/accounts'
 import { useGetUserTags } from '@boostedbudget/api-client/endpoints/tags/tags'
@@ -25,7 +27,12 @@ import type { CustomCategory } from '../../categories/types'
 import type { UserTag } from '../../tags/types'
 
 export function AutoCategorizationPageWrapper() {
+  const trackEvent = useTrackEvent()
   const { user } = useProfile()
+
+  useEffect(() => {
+    trackEvent(ANALYTICS_EVENTS.AUTO_CATEGORIZATION_VIEWED)
+  }, [trackEvent])
 
   // Fetch data using generated hooks
   const { data: customCategoriesData } = useGetUserCategories()

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
@@ -25,17 +26,21 @@ type DeletionService interface {
 	// is created, since Plaid services may be initialized after DeletionService.
 	// Issue #668: Plaid Item Management for Cost Optimization
 	SetPlaidCleanupService(svc PlaidItemCleanupService)
+
+	// SetAnalytics sets the analytics client for capturing deletion lifecycle events
+	SetAnalytics(a phclient.Analytics)
 }
 
 // deletionService implements DeletionService
 type deletionService struct {
-	profileRepo      repository.ProfileRepository
-	emailService     EmailService
-	clerkService     ClerkService
-	auditLogger      AuditLogger
-	plaidCleanupSvc  PlaidItemCleanupService // Issue #668: Remove Plaid items before DB deletion
-	gracePeriodDays  int
-	tokenSecret      string
+	profileRepo     repository.ProfileRepository
+	emailService    EmailService
+	clerkService    ClerkService
+	auditLogger     AuditLogger
+	plaidCleanupSvc PlaidItemCleanupService // Issue #668: Remove Plaid items before DB deletion
+	analytics       phclient.Analytics      // Optional PostHog analytics client
+	gracePeriodDays int
+	tokenSecret     string
 }
 
 // AuditLogger defines the interface for audit logging
@@ -97,6 +102,11 @@ func (s *deletionService) RequestDeletion(ctx context.Context, userID, email str
 	// Audit log failure is not critical - don't fail the request
 	_ = s.auditLogger.Log(ctx, "user.deletion_requested", "user", userID)
 
+	// Capture analytics event for deletion request
+	if s.analytics != nil {
+		s.analytics.Capture(userID, phclient.EventDeletionRequested, nil)
+	}
+
 	return cancellationToken, scheduledAt, nil
 }
 
@@ -132,6 +142,11 @@ func (s *deletionService) CancelDeletion(ctx context.Context, tokenString string
 
 	// Create audit log (non-critical, errors ignored)
 	_ = s.auditLogger.Log(ctx, "user.deletion_cancelled", "user", claims.UserID)
+
+	// Capture analytics event for deletion cancellation
+	if s.analytics != nil {
+		s.analytics.Capture(claims.UserID, phclient.EventDeletionCancelled, nil)
+	}
 
 	return nil
 }
@@ -170,6 +185,11 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string) er
 	// Create audit log (non-critical)
 	_ = s.auditLogger.Log(ctx, "user.deleted", "user", userID)
 
+	// Capture analytics event for account deletion
+	if s.analytics != nil {
+		s.analytics.Capture(userID, phclient.EventUserDeleted, nil)
+	}
+
 	return nil
 }
 
@@ -202,4 +222,9 @@ func (s *deletionService) generateCancellationToken(userID, email string, expire
 // Issue #668: Plaid Item Management for Cost Optimization
 func (s *deletionService) SetPlaidCleanupService(svc PlaidItemCleanupService) {
 	s.plaidCleanupSvc = svc
+}
+
+// SetAnalytics sets the analytics client for capturing deletion lifecycle events
+func (s *deletionService) SetAnalytics(a phclient.Analytics) {
+	s.analytics = a
 }

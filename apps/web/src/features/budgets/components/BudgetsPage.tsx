@@ -10,6 +10,8 @@
 
 import { useCallback, useMemo, useState } from 'react'
 import { toast } from 'sonner'
+import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 import { PlusIcon } from '@heroicons/react/24/outline'
 import { PieChart, Target } from 'lucide-react'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -46,6 +48,7 @@ function getInitialView(): ListView {
 }
 
 export function BudgetsPage() {
+  const trackEvent = useTrackEvent()
   const { budgets, loading: budgetsLoading, error: budgetsError, refetch: refetchBudgets, deleteBudget } = useBudgets()
   const { goals, loading: goalsLoading, error: goalsError, refetch: refetchGoals, deleteGoal } = useSavingsGoals()
 
@@ -68,9 +71,13 @@ export function BudgetsPage() {
   }, [])
 
   const handleBudgetCreated = useCallback((_budget: Budget) => {
+    trackEvent(ANALYTICS_EVENTS.BUDGET_CREATED)
+    if (!budgetsLoading && budgets.length === 0) {
+      trackEvent(ANALYTICS_EVENTS.FIRST_BUDGET_CREATED)
+    }
     closeDialog()
     refetchBudgets()
-  }, [closeDialog, refetchBudgets])
+  }, [trackEvent, closeDialog, refetchBudgets, budgets, budgetsLoading])
 
   const handleGoalCreated = useCallback((_goal: SavingsGoal) => {
     closeDialog()
@@ -92,6 +99,7 @@ export function BudgetsPage() {
     setIsDeleting(true);
     try {
       await deleteBudget(deletingBudget.id);
+      trackEvent(ANALYTICS_EVENTS.BUDGET_DELETED)
       toast.success(`Budget "${deletingBudget.name}" deleted successfully`);
       closeDialog();
     } catch (error) {
@@ -107,7 +115,7 @@ export function BudgetsPage() {
     } finally {
       setIsDeleting(false);
     }
-  }, [deletingBudget, deleteBudget, closeDialog, refetchBudgets]);
+  }, [deletingBudget, deleteBudget, trackEvent, closeDialog, refetchBudgets]);
 
   // Issue #521: Delete goal handlers
   const handleDeleteGoalClick = useCallback((goalId: string) => {
