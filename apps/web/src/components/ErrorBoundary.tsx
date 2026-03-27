@@ -15,8 +15,6 @@ interface State {
 }
 
 export class ErrorBoundary extends Component<Props, State> {
-  private isDev = import.meta.env.VITE_ENVIRONMENT !== 'production'
-
   constructor(props: Props) {
     super(props)
     this.state = {
@@ -33,9 +31,10 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     const errorId = Math.random().toString(36).slice(2, 9)
+    const isDev = (window.ENV?.ENVIRONMENT || import.meta.env.VITE_ENVIRONMENT) !== 'production'
     this.setState({ errorInfo, errorId })
 
-    if (this.isDev) {
+    if (isDev) {
       console.error('ErrorBoundary caught error:', error)
       console.error('Error info:', errorInfo)
     }
@@ -63,6 +62,7 @@ export class ErrorBoundary extends Component<Props, State> {
       }
 
       // Default error UI
+      const isDev = (window.ENV?.ENVIRONMENT || import.meta.env.VITE_ENVIRONMENT) !== 'production'
       return (
         <div className="p-10 max-w-3xl mx-auto font-sans">
           <h1 className="text-red-600 mb-4 text-2xl font-semibold">
@@ -91,7 +91,7 @@ export class ErrorBoundary extends Component<Props, State> {
             </button>
           </div>
 
-          {this.isDev && this.state.error && (
+          {isDev && this.state.error && (
             <details className="p-4 bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded-lg">
               <summary className="cursor-pointer font-bold text-red-600 dark:text-red-400 mb-3">
                 Error Details (Development/QA Only)
