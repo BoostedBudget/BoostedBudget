@@ -37,6 +37,8 @@ import { NotFoundPage } from './features/not-found/NotFoundPage'
 import { Toaster } from 'sonner'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { useEffect, Suspense } from 'react'
+import { posthog } from './shared/lib/posthog'
+import { usePostHogIdentify } from './shared/hooks/usePostHogIdentify'
 import './App.css'
 
 
@@ -44,6 +46,12 @@ function App() {
   const { isSignedIn: isAuthenticated } = useAuth()
   const location = useLocation()
   const [, setConsentCookie] = useCookieState<CookieConsentData>(COOKIE_CONSENT_NAME)
+
+  usePostHogIdentify()
+
+  useEffect(() => {
+    posthog.capture('$pageview')
+  }, [location.pathname])
 
   // Use generated mutation hook for privacy settings
   const updatePrivacyMutation = useUpdatePrivacySettings()
@@ -106,6 +114,12 @@ function App() {
 
   const handleConsentChange = async (consents: CookieConsentSettings) => {
     console.log('Cookie consents updated:', consents)
+
+    if (consents.analytics) {
+      posthog.opt_in_capturing()
+    } else {
+      posthog.opt_out_capturing()
+    }
 
     if (isAuthenticated) {
       try {

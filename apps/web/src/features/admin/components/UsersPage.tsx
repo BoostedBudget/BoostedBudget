@@ -6,7 +6,9 @@
  * manual tier overrides. Merged from SubscriptionsPage.
  */
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 import { useListAdminUsers, useGetAdminUserDetail } from '@boostedbudget/api-client/endpoints/admin/admin'
 import {
   Search,
@@ -92,6 +94,11 @@ export function UsersPage() {
   const { filters, setSearch, setTier, setPage, apiParams, hasActiveFilters } = useUserFilters()
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null)
   const [overrideUser, setOverrideUser] = useState<SelectedUser | null>(null)
+  const trackEvent = useTrackEvent()
+
+  useEffect(() => {
+    trackEvent(ANALYTICS_EVENTS.ADMIN_PAGE_VIEWED, { page: 'users' })
+  }, [trackEvent])
 
   const { data, isLoading, error } = useListAdminUsers(apiParams)
 

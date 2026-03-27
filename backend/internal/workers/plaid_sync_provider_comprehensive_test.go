@@ -625,3 +625,135 @@ func TestPlaidSyncProvider_SyncForLinkedItem_TenPagePagination(t *testing.T) {
 	assert.True(t, txnRepo.AssertNumberOfCalls(t, "CreateBatch", numPages), "Should have created %d batches", numPages)
 	assert.True(t, emitter.AssertNumberOfCalls(t, "Emit", expectedCount), "Should have emitted %d events (one per transaction)", expectedCount)
 }
+
+// TestPlaidSyncProvider_Analytics_CapturesOnSuccess verifies analytics events are emitted on successful sync.
+func TestPlaidSyncProvider_Analytics_CapturesOnSuccess(t *testing.T) {
+	linkedItemRepo := new(MockLinkedItemRepository)
+	txnRepo := new(MockTransactionRepository)
+	plaidClient := new(MockPlaidClient)
+	emitter := new(MockEventEmitter)
+	analytics := new(MockAnalytics)
+
+	provider := NewPlaidSyncProvider(linkedItemRepo, txnRepo, plaidClient, emitter)
+	provider.(*plaidSyncProvider).SetAnalytics(analytics)
+	ctx := context.Background()
+
+	linkedItemID := "test-linked-item"
+	cursor := "test-cursor"
+	linkedItem := &domain.LinkedItem{
+		ID:                   linkedItemID,
+		UserID:               "user-123",
+		AccessTokenEncrypted: "encrypted-token",
+		Cursor:               &cursor,
+	}
+
+	txnID := "plaid-txn-1"
+	nextCursor := "new-cursor"
+	syncResp := &plaid.TransactionsSyncResponse{
+		Added: []plaid.Transaction{{
+			Amount:        10.0,
+			TransactionId: txnID,
+			AccountId:     "acc-123",
+			Date:          "2024-01-15",
+			Name:          "Test",
+			Pending:       false,
+		}},
+		Modified:   []plaid.Transaction{},
+		Removed:    []plaid.RemovedTransaction{},
+		NextCursor: nextCursor,
+		HasMore:    false,
+	}
+
+	linkedItemRepo.On("GetByID", ctx, linkedItemID).Return(linkedItem, nil)
+	plaidClient.On("TransactionsSync", ctx, "encrypted-token", &cursor).Return(syncResp, nil)
+	txnRepo.On("CreateBatch", ctx, mock.Anything).Return(nil)
+	emitter.On("Emit", ctx, mock.Anything).Return(nil)
+	linkedItemRepo.On("UpdateCursor", ctx, linkedItemID, nextCursor).Return(nil)
+
+	// Expect sync_completed and account_synced analytics events
+	analytics.On("Capture", "user-123", "sync_completed", mock.MatchedBy(func(props map[string]interface{}) bool {
+		return props["linked_item_id"] == linkedItemID && props["transaction_count"] == 1
+	})).Once()
+	analytics.On("Capture", "user-123", "account_synced", mock.MatchedBy(func(props map[string]interface{}) bool {
+		return props["account_id"] == linkedItemID
+	})).Once()
+
+	count, err := provider.SyncForLinkedItem(ctx, linkedItemID)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 1, count)
+	analytics.AssertExpectations(t)
+}
+
+// TestPlaidSyncProvider_Analytics_CapturesOnFailure verifies sync_failed event is emitted on error.
+func TestPlaidSyncProvider_Analytics_CapturesOnFailure(t *testing.T) {
+	linkedItemRepo := new(MockLinkedItemRepository)
+	txnRepo := new(MockTransactionRepository)
+	plaidClient := new(MockPlaidClient)
+	emitter := new(MockEventEmitter)
+	analytics := new(MockAnalytics)
+
+	provider := NewPlaidSyncProvider(linkedItemRepo, txnRepo, plaidClient, emitter)
+	provider.(*plaidSyncProvider).SetAnalytics(analytics)
+	ctx := context.Background()
+
+	linkedItemID := "test-linked-item"
+	linkedItem := &domain.LinkedItem{
+		ID:                   linkedItemID,
+		UserID:               "user-123",
+		AccessTokenEncrypted: "encrypted-token",
+		Cursor:               nil,
+	}
+
+	linkedItemRepo.On("GetByID", ctx, linkedItemID).Return(linkedItem, nil)
+	plaidClient.On("TransactionsSync", ctx, "encrypted-token", (*string)(nil)).
+		Return(nil, errors.New("plaid API error"))
+
+	// Expect sync_failed analytics event
+	analytics.On("Capture", "user-123", "sync_failed", (map[string]interface{})(nil)).Once()
+
+	count, err := provider.SyncForLinkedItem(ctx, linkedItemID)
+
+	assert.Error(t, err)
+	assert.Equal(t, 0, count)
+	analytics.AssertExpectations(t)
+}
+
+// TestPlaidSyncProvider_Analytics_NoCapture_WhenNil verifies no panic when analytics is nil.
+func TestPlaidSyncProvider_Analytics_NoCapture_WhenNil(t *testing.T) {
+	linkedItemRepo := new(MockLinkedItemRepository)
+	txnRepo := new(MockTransactionRepository)
+	plaidClient := new(MockPlaidClient)
+	emitter := new(MockEventEmitter)
+
+	// No analytics set
+	provider := NewPlaidSyncProvider(linkedItemRepo, txnRepo, plaidClient, emitter)
+	ctx := context.Background()
+
+	linkedItemID := "test-linked-item"
+	linkedItem := &domain.LinkedItem{
+		ID:                   linkedItemID,
+		UserID:               "user-123",
+		AccessTokenEncrypted: "encrypted-token",
+		Cursor:               nil,
+	}
+
+	nextCursor := "new-cursor"
+	syncResp := &plaid.TransactionsSyncResponse{
+		Added:      []plaid.Transaction{},
+		Modified:   []plaid.Transaction{},
+		Removed:    []plaid.RemovedTransaction{},
+		NextCursor: nextCursor,
+		HasMore:    false,
+	}
+
+	linkedItemRepo.On("GetByID", ctx, linkedItemID).Return(linkedItem, nil)
+	plaidClient.On("TransactionsSync", ctx, "encrypted-token", (*string)(nil)).Return(syncResp, nil)
+	linkedItemRepo.On("UpdateCursor", ctx, linkedItemID, nextCursor).Return(nil)
+
+	// Should not panic
+	count, err := provider.SyncForLinkedItem(ctx, linkedItemID)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count)
+}

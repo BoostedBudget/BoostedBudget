@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -73,6 +74,7 @@ type SubscriptionWebhookWorker struct {
 	notificationRepo      SubscriptionNotificationRepository
 	paddleTransactionRepo SubscriptionPaddleTransactionRepository
 	plaidCleanupSvc       PlaidItemCleanupForWebhook
+	analytics             phclient.Analytics // Optional PostHog analytics client
 	tierConfig            *config.TierConfig
 	logger                *slog.Logger
 }
@@ -109,6 +111,11 @@ func NewSubscriptionWebhookWorker(deps SubscriptionWebhookWorkerDeps) *Subscript
 // Issue #896: Follows the same setter pattern as DeletionService.
 func (w *SubscriptionWebhookWorker) SetPlaidCleanupService(svc PlaidItemCleanupForWebhook) {
 	w.plaidCleanupSvc = svc
+}
+
+// SetAnalytics injects the analytics client for capturing subscription events.
+func (w *SubscriptionWebhookWorker) SetAnalytics(a phclient.Analytics) {
+	w.analytics = a
 }
 
 // createNotification creates an in-app notification for a user.
@@ -390,6 +397,14 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCreated(ctx context.Conte
 
 	w.syncClerkMetadata(ctx, userID, string(tier), status)
 
+	if w.analytics != nil {
+		w.analytics.Capture(userID, phclient.EventSubscriptionCreated, map[string]interface{}{
+			"tier":            string(tier),
+			"status":          status,
+			"subscription_id": subscriptionID,
+		})
+	}
+
 	return nil
 }
 
@@ -505,6 +520,10 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 
 	// Issues #747 #748: Sync Clerk metadata (no notification — user-initiated)
 	w.syncClerkMetadata(ctx, userID, user.SubscriptionTier, "cancelled")
+
+	if w.analytics != nil {
+		w.analytics.Capture(userID, phclient.EventSubscriptionCancelled, nil)
+	}
 
 	return nil
 }
@@ -678,6 +697,14 @@ func (w *SubscriptionWebhookWorker) processTransactionCompleted(ctx context.Cont
 		}
 	}
 
+	if w.analytics != nil {
+		w.analytics.Capture(txn.UserID, phclient.EventPaymentSucceeded, map[string]interface{}{
+			"amount":         txn.Amount,
+			"currency":       txn.Currency,
+			"transaction_id": txn.TransactionID,
+		})
+	}
+
 	return nil
 }
 
@@ -709,6 +736,12 @@ func (w *SubscriptionWebhookWorker) processTransactionPaymentFailed(ctx context.
 	user, err := w.profileRepo.GetUserByID(ctx, txn.UserID)
 	if err == nil {
 		w.syncClerkMetadata(ctx, txn.UserID, user.SubscriptionTier, user.SubscriptionStatus)
+	}
+
+	if w.analytics != nil {
+		w.analytics.Capture(txn.UserID, phclient.EventPaymentFailed, map[string]interface{}{
+			"transaction_id": txn.TransactionID,
+		})
 	}
 
 	return nil

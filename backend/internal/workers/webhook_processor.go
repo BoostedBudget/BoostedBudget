@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
@@ -28,6 +29,7 @@ type WebhookProcessor struct {
 	webhookRepo      repository.WebhookRepository
 	interval         time.Duration
 	batchSize        int
+	analytics        posthog.Analytics
 }
 
 // ItemWebhookPayload represents the structure of ITEM webhook payload from Plaid
@@ -71,6 +73,11 @@ func NewWebhookProcessor(
 		interval:         interval,
 		batchSize:        batchSize,
 	}
+}
+
+// SetAnalytics sets the analytics client for event capture
+func (w *WebhookProcessor) SetAnalytics(analytics posthog.Analytics) {
+	w.analytics = analytics
 }
 
 // ProcessPendingWebhooks processes batches of unprocessed webhooks for both types
@@ -130,6 +137,22 @@ func (w *WebhookProcessor) processTransactionWebhooks(ctx context.Context) error
 			// Continue processing
 		}
 
+		// Capture webhook_received event
+		distinctID := "system"
+		if webhook.ItemID != nil {
+			distinctID = *webhook.ItemID
+		}
+		p := map[string]interface{}{
+			"webhook_type": webhook.WebhookType,
+			"webhook_code": "",
+		}
+		if webhook.WebhookCode != nil {
+			p["webhook_code"] = *webhook.WebhookCode
+		}
+		if w.analytics != nil {
+			w.analytics.Capture(distinctID, posthog.EventWebhookReceived, p)
+		}
+
 		// Process this webhook via TransactionSyncService
 		if err := w.syncService.ProcessWebhook(ctx, webhook); err != nil {
 			// Log error but continue processing other webhooks
@@ -187,6 +210,18 @@ func (w *WebhookProcessor) processItemWebhooks(ctx context.Context) error {
 			continue
 		}
 		itemID := *webhook.ItemID
+
+		// Capture webhook_received event
+		p := map[string]interface{}{
+			"webhook_type": webhook.WebhookType,
+			"webhook_code": "",
+		}
+		if webhook.WebhookCode != nil {
+			p["webhook_code"] = *webhook.WebhookCode
+		}
+		if w.analytics != nil {
+			w.analytics.Capture(itemID, posthog.EventWebhookReceived, p)
+		}
 
 		// Parse error details from payload
 		var payload ItemWebhookPayload

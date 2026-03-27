@@ -9,9 +9,12 @@ import { store } from './store/store'
 import { setAuthTokenProvider } from '@boostedbudget/api-client/client'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { initSentry } from './shared/lib/sentry'
+import { initPostHog, posthog } from './shared/lib/posthog'
+import { PostHogProvider } from 'posthog-js/react'
 import './index.css'
 
 initSentry()
+initPostHog()
 
 // Create React Query client with sensible defaults
 const queryClient = new QueryClient({
@@ -96,15 +99,17 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
       <ClerkProvider publishableKey={clerkPublishableKey}>
-        <ErrorBoundary>
-          <Provider store={store}>
-            <AuthReadyGate>
-              <QueryClientProvider client={queryClient}>
-                <App />
-              </QueryClientProvider>
-            </AuthReadyGate>
-          </Provider>
-        </ErrorBoundary>
+        <PostHogProvider client={posthog}>
+          <ErrorBoundary>
+            <Provider store={store}>
+              <AuthReadyGate>
+                <QueryClientProvider client={queryClient}>
+                  <App />
+                </QueryClientProvider>
+              </AuthReadyGate>
+            </Provider>
+          </ErrorBoundary>
+        </PostHogProvider>
       </ClerkProvider>
     </BrowserRouter>
   </StrictMode>,
