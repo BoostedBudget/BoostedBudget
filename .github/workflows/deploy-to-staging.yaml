@@ -288,6 +288,7 @@ jobs:
           VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
           VITE_ENVIRONMENT: staging
           VITE_PADDLE_CLIENT_TOKEN: ${{ secrets.VITE_PADDLE_CLIENT_TOKEN }}
+          VITE_POSTHOG_KEY: ${{ secrets.POSTHOG_API_KEY }}
         run: bun run build
 
       - name: Deploy to Cloudflare Pages
