@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/plaid/plaid-go/v23/plaid"
 )
@@ -37,10 +38,14 @@ type InvestmentSyncService interface {
 	// Uses investments_last_synced_date - 1 day as the incremental start date.
 	// Updates investments_last_synced_date only on full success.
 	SyncInvestmentTransactions(ctx context.Context, linkedItem *domain.LinkedItem) (*domain.InvestmentTransactionSyncResult, error)
+
+	// SetAnalytics sets the PostHog analytics client (setter injection to avoid circular dependencies).
+	SetAnalytics(a phclient.Analytics)
 }
 
 type investmentSyncService struct {
 	logger            *slog.Logger
+	analytics         phclient.Analytics
 	webhookRepo       repository.WebhookRepository
 	linkedItemRepo    repository.LinkedItemRepository
 	accountRepo       repository.AccountRepository
@@ -49,6 +54,11 @@ type investmentSyncService struct {
 	investmentTxnRepo repository.InvestmentTransactionRepository
 	plaidService      PlaidService
 	encryptionService EncryptionService
+}
+
+// SetAnalytics sets the PostHog analytics client.
+func (s *investmentSyncService) SetAnalytics(a phclient.Analytics) {
+	s.analytics = a
 }
 
 // NewInvestmentSyncService creates a new InvestmentSyncService.
@@ -124,6 +134,12 @@ func (s *investmentSyncService) ProcessWebhook(ctx context.Context, webhook *dom
 			webhook.RetryCount++
 		}
 		_ = s.webhookRepo.Update(ctx, webhook)
+		if s.analytics != nil {
+			s.analytics.Capture(linkedItem.UserID, phclient.EventInvestmentSyncFailed, map[string]interface{}{
+				"error_type":   fmt.Sprintf("%d", plaidErr.ErrorType),
+				"webhook_type": webhook.WebhookType,
+			})
+		}
 		return fmt.Errorf("investment sync failed: %w", err)
 	}
 
@@ -227,6 +243,14 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 		"holdings_replaced", result.HoldingsReplaced,
 		"accounts_processed", result.AccountsProcessed,
 	)
+
+	if s.analytics != nil {
+		s.analytics.Capture(linkedItem.UserID, phclient.EventInvestmentHoldingsSynced, map[string]interface{}{
+			"securities_upserted": result.SecuritiesUpserted,
+			"holdings_replaced":   result.HoldingsReplaced,
+			"accounts_processed":  result.AccountsProcessed,
+		})
+	}
 
 	return result, nil
 }
@@ -339,6 +363,14 @@ func (s *investmentSyncService) SyncInvestmentTransactions(ctx context.Context, 
 		"skipped", result.TransactionsSkipped,
 		"securities_upserted", result.SecuritiesUpserted,
 	)
+
+	if s.analytics != nil {
+		s.analytics.Capture(linkedItem.UserID, phclient.EventInvestmentTransactionsSynced, map[string]interface{}{
+			"pages_processed":       result.PagesProcessed,
+			"transactions_inserted": result.TransactionsInserted,
+			"transactions_skipped":  result.TransactionsSkipped,
+		})
+	}
 
 	return result, nil
 }

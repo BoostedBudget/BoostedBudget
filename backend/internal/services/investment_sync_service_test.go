@@ -1015,6 +1015,34 @@ func TestInvestmentSyncService_ProcessWebhook_RoutesInvestmentTransactions(t *te
 	assert.True(t, webhook.Processed)
 }
 
+// TestInvestmentSyncService_ProcessWebhook_UnsupportedType verifies that unknown webhook
+// types return an error without calling any sync functions.
+func TestInvestmentSyncService_ProcessWebhook_UnsupportedType(t *testing.T) {
+	svc, deps := setupInvestmentSyncService(t)
+	ctx := context.Background()
+
+	itemID := "item-001"
+	userID := uuid.New().String()
+	linkedItem := makeLinkedItem(itemID, userID)
+
+	webhook := &domain.WebhookEvent{
+		ID:          "wh-unknown",
+		WebhookType: "TRANSACTIONS", // not an investment webhook type
+		ItemID:      &itemID,
+	}
+
+	// ProcessWebhook marks start then fails on unsupported type
+	deps.webhookRepo.On("Update", ctx, mock.Anything).Return(nil)
+	deps.linkedItemRepo.On("GetByItemID", ctx, itemID).Return(linkedItem, nil)
+
+	err := svc.ProcessWebhook(ctx, webhook)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported investment webhook type")
+	// Webhook should NOT be marked as processed
+	assert.False(t, webhook.Processed)
+}
+
 // TestInvestmentSyncService_ProcessWebhook_NilWebhook verifies that nil input returns an error.
 func TestInvestmentSyncService_ProcessWebhook_NilWebhook(t *testing.T) {
 	svc, _ := setupInvestmentSyncService(t)
