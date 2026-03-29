@@ -31,7 +31,7 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     const errorId = Math.random().toString(36).slice(2, 9)
-    const isDev = window.ENV?.ENVIRONMENT !== 'production'
+    const isDev = (window.ENV?.ENVIRONMENT || import.meta.env.VITE_ENVIRONMENT) !== 'production'
     this.setState({ errorInfo, errorId })
 
     if (isDev) {
@@ -62,7 +62,7 @@ export class ErrorBoundary extends Component<Props, State> {
       }
 
       // Default error UI
-      const isDev = window.ENV?.ENVIRONMENT !== 'production'
+      const isDev = (window.ENV?.ENVIRONMENT || import.meta.env.VITE_ENVIRONMENT) !== 'production'
       return (
         <div className="p-10 max-w-3xl mx-auto font-sans">
           <h1 className="text-red-600 mb-4 text-2xl font-semibold">
