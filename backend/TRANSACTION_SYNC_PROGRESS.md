@@ -35,8 +35,7 @@
 - `backend/migrations/000010_create_transactions_table.sql` ✅
 
 **Validation**:
-- `atlas migrate hash` ✅
-- `atlas migrate lint` ✅ (1 warning about column padding - acceptable)
+- Migration linted ✅ (1 warning about column padding - acceptable)
 
 **Schema Details**:
 - `linked_items.provider` VARCHAR(50) with CHECK constraint (plaid/teller/finicity/yodlee/manual)
@@ -404,7 +403,7 @@ ok  	internal/workers     0.005s    # 8 tests
 
 ## Notes & Gotchas
 
-1. **Atlas Migration Warning**: Column padding optimization suggested but not critical
+1. **Migration Linting Warning**: Column padding optimization suggested but not critical
 2. **Testing Pattern**: Follow existing AccountRepository test structure with testify/mock
 3. **Provider Field**: Must be populated in account linking (update AccountService later)
 4. **Cursor Management**: Plaid docs warn about pagination failures - always restart from original cursor

@@ -42,40 +42,67 @@ func LoadTierConfig() (*TierConfig, error) {
 	return globalTierConfig, configLoadError
 }
 
+// findConfigFile searches for a config file in multiple locations (current dir, parent dirs)
+// Returns the first existing path found, or the original path if none exist
+func findConfigFile(filename string) string {
+	wd, _ := os.Getwd()
+	testPaths := []string{filepath.Join(wd, filename), filename}
+
+	// Try going up to 5 directory levels
+	dir := wd
+	for i := 0; i < 5; i++ {
+		testPaths = append(testPaths, filepath.Join(dir, filename))
+		dir = filepath.Dir(dir)
+	}
+
+	for _, path := range testPaths {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return filename // Return original if not found
+}
+
+// getConfigPath determines which config file to load based on environment
+// Supports environment-specific configs for sandbox vs production Paddle IDs
+//
+// Priority:
+// 1. SUBSCRIPTION_TIERS_CONFIG env var (explicit override)
+// 2. config/subscription_tiers.{PADDLE_ENVIRONMENT}.yaml (e.g., sandbox, production)
+// 3. config/subscription_tiers.yaml (default/template)
+func getConfigPath() string {
+	// Check for explicit config path override
+	if explicitPath := getEnv("SUBSCRIPTION_TIERS_CONFIG", ""); explicitPath != "" {
+		return explicitPath
+	}
+
+	// Check for environment-specific config based on PADDLE_ENVIRONMENT
+	if paddleEnv := getEnv("PADDLE_ENVIRONMENT", ""); paddleEnv != "" {
+		envSpecificPath := fmt.Sprintf("config/subscription_tiers.%s.yaml", paddleEnv)
+		found := findConfigFile(envSpecificPath)
+		if found != envSpecificPath {
+			fmt.Printf("Loading environment-specific config: %s\n", found)
+			return found
+		}
+		fmt.Printf("Warning: PADDLE_ENVIRONMENT=%s but %s not found, using default config\n",
+			paddleEnv, envSpecificPath)
+	}
+
+	// Fall back to default config
+	return "config/subscription_tiers.yaml"
+}
+
 // loadTierConfigFromFile reads and parses the subscription tiers YAML file
+// Automatically selects environment-specific config based on PADDLE_ENVIRONMENT
 func loadTierConfigFromFile() (*TierConfig, error) {
-	// Get config file path from environment or use default
-	configPath := getEnv("SUBSCRIPTION_TIERS_CONFIG", "config/subscription_tiers.yaml")
+	configPath := getConfigPath()
 
 	// Make path absolute if it's relative
 	if !filepath.IsAbs(configPath) {
-		// Try multiple paths to find the config file
-		// 1. Relative to current working directory
-		// 2. Relative to project root (go up to find it)
-		wd, err := os.Getwd()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get working directory: %w", err)
-		}
-
-		// Try current directory first
-		if _, err := os.Stat(filepath.Join(wd, configPath)); err == nil {
-			configPath = filepath.Join(wd, configPath)
-		} else {
-			// Try going up directories to find project root
-			dir := wd
-			found := false
-			for i := 0; i < 5; i++ { // Try up to 5 levels up
-				testPath := filepath.Join(dir, configPath)
-				if _, err := os.Stat(testPath); err == nil {
-					configPath = testPath
-					found = true
-					break
-				}
-				dir = filepath.Dir(dir)
-			}
-			if !found {
-				return nil, fmt.Errorf("config file not found at %s (searched from %s)", configPath, wd)
-			}
+		configPath = findConfigFile(configPath)
+		wd, _ := os.Getwd()
+		if _, err := os.Stat(configPath); err != nil {
+			return nil, fmt.Errorf("config file not found at %s (searched from %s)", configPath, wd)
 		}
 	}
 
@@ -122,6 +149,11 @@ func (tc *TierConfig) validate() error {
 		return fmt.Errorf("no tiers defined in configuration")
 	}
 
+	// Expect 5 tiers: premium, household_2, household_3, household_4, household_5
+	if len(tc.Tiers) != 5 {
+		return fmt.Errorf("expected 5 tiers (premium + 4 household tiers), got %d", len(tc.Tiers))
+	}
+
 	// Check that default tier exists
 	if _, exists := tc.Tiers[tc.DefaultTier]; !exists {
 		return fmt.Errorf("default tier '%s' not found in tier definitions", tc.DefaultTier)
@@ -133,18 +165,16 @@ func (tc *TierConfig) validate() error {
 			return fmt.Errorf("tier '%s' missing display name", name)
 		}
 
-		// Validate limits are non-negative (except unlimited = -1)
+		// Validate the 3 configurable limits are non-negative (except unlimited = -1)
+		// After simplification, only accounts, transaction_history_days, and executions_per_day are configurable
 		if tier.Limits.Accounts < -1 {
 			return fmt.Errorf("tier '%s' has invalid accounts limit: %d", name, tier.Limits.Accounts)
 		}
-		if tier.Limits.Rules < -1 {
-			return fmt.Errorf("tier '%s' has invalid rules limit: %d", name, tier.Limits.Rules)
+		if tier.Limits.TransactionHistoryDays < 0 {
+			return fmt.Errorf("tier '%s' has invalid transaction_history_days: %d", name, tier.Limits.TransactionHistoryDays)
 		}
-		if tier.Limits.ExecutionsPerDay < 0 {
+		if tier.Limits.ExecutionsPerDay < -1 {
 			return fmt.Errorf("tier '%s' has invalid executions_per_day: %d", name, tier.Limits.ExecutionsPerDay)
-		}
-		if tier.Limits.MinExecutionIntervalMinutes < 0 {
-			return fmt.Errorf("tier '%s' has invalid min_execution_interval_minutes: %d", name, tier.Limits.MinExecutionIntervalMinutes)
 		}
 	}
 
@@ -214,4 +244,43 @@ func (tc *TierConfig) Reload() error {
 	tc.Trial = newConfig.Trial
 
 	return nil
+}
+
+// GetTrialConfig returns the trial configuration
+// Issue #679: Trial service and auto-grant logic
+func (tc *TierConfig) GetTrialConfig() TrialConfig {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return tc.Trial
+}
+
+// GetTierByPriceID returns the tier name for a given Paddle price ID
+// Searches both monthly and yearly price IDs across all tiers
+// Thread-safe with read lock
+// Issue #772: Webhook tier resolution (GAP 3)
+func (tc *TierConfig) GetTierByPriceID(priceID string) (domain.TierName, error) {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+
+	for name, tier := range tc.Tiers {
+		// Check monthly price ID
+		if tier.Pricing.PaddlePriceIDMonthly != nil && *tier.Pricing.PaddlePriceIDMonthly == priceID {
+			return name, nil
+		}
+		// Check yearly price ID
+		if tier.Pricing.PaddlePriceIDYearly != nil && *tier.Pricing.PaddlePriceIDYearly == priceID {
+			return name, nil
+		}
+	}
+
+	return "", fmt.Errorf("no tier found for price_id: %s", priceID)
+}
+
+// NewTierConfig creates a new TierConfig instance
+// If configPath is empty, uses default path
+func NewTierConfig(configPath string) (*TierConfig, error) {
+	if configPath != "" {
+		os.Setenv("SUBSCRIPTION_TIERS_CONFIG", configPath)
+	}
+	return LoadTierConfig()
 }

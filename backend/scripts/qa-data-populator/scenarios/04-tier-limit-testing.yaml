@@ -1,0 +1,45 @@
+version: "2.0"
+
+metadata:
+  name: "Tier Limit Testing - Free Tier Maximum"
+  description: "Test free tier with exactly 3 accounts (maximum allowed)"
+  tags: ["tier-limits", "free-tier", "testing"]
+
+setup:
+  user:
+    email: "test-tier-limit-free@example.com"
+    tier: "free"
+
+  linked_items:
+    - institution: "Chase"
+
+  accounts:
+    - item_index: 0
+      type: "checking"
+      name: "Primary Checking"
+      balance: 1250.00
+
+    - item_index: 0
+      type: "savings"
+      name: "Savings Account"
+      balance: 3500.00
+
+    - item_index: 0
+      type: "credit_card"
+      name: "Credit Card"
+      balance: -450.00
+
+  transactions:
+    count_per_account: 10
+
+assertions:
+  - type: "account_count"
+    operator: "="
+    value: 3
+
+  - type: "transaction_count"
+    operator: ">="
+    value: 30
+
+  - type: "user_tier"
+    expected: "free"

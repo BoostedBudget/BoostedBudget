@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
@@ -19,16 +20,27 @@ type DeletionService interface {
 
 	// ExecuteDeletion executes the full deletion process for a user
 	ExecuteDeletion(ctx context.Context, userID string) error
+
+	// SetPlaidCleanupService sets the Plaid cleanup service for removing Plaid items
+	// before user deletion. This setter allows wiring the service after DeletionService
+	// is created, since Plaid services may be initialized after DeletionService.
+	// Issue #668: Plaid Item Management for Cost Optimization
+	SetPlaidCleanupService(svc PlaidItemCleanupService)
+
+	// SetAnalytics sets the analytics client for capturing deletion lifecycle events
+	SetAnalytics(a phclient.Analytics)
 }
 
 // deletionService implements DeletionService
 type deletionService struct {
-	profileRepo      repository.ProfileRepository
-	emailService     EmailService
-	auth0Service     Auth0Service
-	auditLogger      AuditLogger
-	gracePeriodDays  int
-	tokenSecret      string
+	profileRepo     repository.ProfileRepository
+	emailService    EmailService
+	clerkService    ClerkService
+	auditLogger     AuditLogger
+	plaidCleanupSvc PlaidItemCleanupService // Issue #668: Remove Plaid items before DB deletion
+	analytics       phclient.Analytics      // Optional PostHog analytics client
+	gracePeriodDays int
+	tokenSecret     string
 }
 
 // AuditLogger defines the interface for audit logging
@@ -37,19 +49,23 @@ type AuditLogger interface {
 }
 
 // NewDeletionService creates a new DeletionService instance
+// plaidCleanupSvc can be nil for backwards compatibility, but should be provided
+// to properly remove Plaid items and stop billing before user deletion.
 func NewDeletionService(
 	profileRepo repository.ProfileRepository,
 	emailService EmailService,
-	auth0Service Auth0Service,
+	clerkService ClerkService,
 	auditLogger AuditLogger,
+	plaidCleanupSvc PlaidItemCleanupService, // Issue #668: Remove Plaid items before DB deletion
 	gracePeriodDays int,
 	tokenSecret string,
 ) DeletionService {
 	return &deletionService{
 		profileRepo:     profileRepo,
 		emailService:    emailService,
-		auth0Service:    auth0Service,
+		clerkService:    clerkService,
 		auditLogger:     auditLogger,
+		plaidCleanupSvc: plaidCleanupSvc,
 		gracePeriodDays: gracePeriodDays,
 		tokenSecret:     tokenSecret,
 	}
@@ -79,17 +95,16 @@ func (s *deletionService) RequestDeletion(ctx context.Context, userID, email str
 	}
 
 	// Send confirmation email with cancellation link
-	if err := s.emailService.SendDeletionConfirmation(ctx, email, cancellationToken, scheduledAt); err != nil {
-		// Email failure is not critical - user is still marked for deletion
-		// Log the error but don't fail the request
-		// In production, this would be logged to monitoring system
-		// For now, we just silently continue since deletion is already scheduled
-	}
+	// Email failure is not critical - user is still marked for deletion
+	_ = s.emailService.SendDeletionConfirmation(ctx, email, cancellationToken, scheduledAt)
 
 	// Create audit log
-	if err := s.auditLogger.Log(ctx, "user.deletion_requested", "user", userID); err != nil {
-		// Audit log failure is not critical - don't fail the request
-		// In production, this would be logged to monitoring system
+	// Audit log failure is not critical - don't fail the request
+	_ = s.auditLogger.Log(ctx, "user.deletion_requested", "user", userID)
+
+	// Capture analytics event for deletion request
+	if s.analytics != nil {
+		s.analytics.Capture(userID, phclient.EventDeletionRequested, nil)
 	}
 
 	return cancellationToken, scheduledAt, nil
@@ -125,9 +140,12 @@ func (s *deletionService) CancelDeletion(ctx context.Context, tokenString string
 		return fmt.Errorf("failed to cancel deletion: %w", err)
 	}
 
-	// Create audit log
-	if err := s.auditLogger.Log(ctx, "user.deletion_cancelled", "user", claims.UserID); err != nil {
-		// Audit log failure is not critical
+	// Create audit log (non-critical, errors ignored)
+	_ = s.auditLogger.Log(ctx, "user.deletion_cancelled", "user", claims.UserID)
+
+	// Capture analytics event for deletion cancellation
+	if s.analytics != nil {
+		s.analytics.Capture(claims.UserID, phclient.EventDeletionCancelled, nil)
 	}
 
 	return nil
@@ -147,22 +165,29 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string) er
 		return nil
 	}
 
+	// Issue #668: Remove Plaid items BEFORE database deletion to stop billing
+	// This is critical for cost control - Plaid charges monthly per Item
+	// Errors are logged but don't stop deletion (graceful degradation)
+	if s.plaidCleanupSvc != nil {
+		_ = s.plaidCleanupSvc.RemoveAllUserItems(ctx, userID)
+	}
+
 	// Execute cascade deletion in database
 	if err := s.profileRepo.DeleteUserCascade(ctx, userID); err != nil {
 		return fmt.Errorf("failed to cascade delete user data: %w", err)
 	}
 
-	// Delete user from Auth0 (non-critical - log but don't fail)
-	if err := s.auth0Service.DeleteUser(ctx, user.Auth0UserID); err != nil {
-		// Auth0 deletion failure is logged but not critical
-		// User data is already deleted from our system
-		// Manual cleanup can be done later if needed
-		// In production, this would be logged to monitoring system
-	}
+	// Delete user from Clerk (non-critical)
+	// Note: user.ClerkUserID stores the Clerk user ID (user_xxx format)
+	// The database column name is legacy and will be renamed in a future migration
+	_ = s.clerkService.DeleteUser(ctx, user.ClerkUserID)
 
-	// Create audit log
-	if err := s.auditLogger.Log(ctx, "user.deleted", "user", userID); err != nil {
-		// Audit log failure is not critical
+	// Create audit log (non-critical)
+	_ = s.auditLogger.Log(ctx, "user.deleted", "user", userID)
+
+	// Capture analytics event for account deletion
+	if s.analytics != nil {
+		s.analytics.Capture(userID, phclient.EventUserDeleted, nil)
 	}
 
 	return nil
@@ -189,4 +214,17 @@ func (s *deletionService) generateCancellationToken(userID, email string, expire
 	}
 
 	return tokenString, nil
+}
+
+// SetPlaidCleanupService sets the Plaid cleanup service for removing Plaid items
+// before user deletion. This setter allows wiring the service after DeletionService
+// is created, since Plaid services may be initialized after DeletionService.
+// Issue #668: Plaid Item Management for Cost Optimization
+func (s *deletionService) SetPlaidCleanupService(svc PlaidItemCleanupService) {
+	s.plaidCleanupSvc = svc
+}
+
+// SetAnalytics sets the analytics client for capturing deletion lifecycle events
+func (s *deletionService) SetAnalytics(a phclient.Analytics) {
+	s.analytics = a
 }

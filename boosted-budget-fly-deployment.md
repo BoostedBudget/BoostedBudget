@@ -6,6 +6,118 @@ Build once, deploy anywhere. Both frontend and backend are compiled into Docker 
 **Initial Deployment**: USA-only (us-east-1/iad region) for MVP
 **Future Expansion**: Multi-region deployment path documented in "Future: Multi-Region Migration Plan" section
 
+---
+
+## Database Configuration
+
+BoostedBudget uses different database providers based on the environment:
+
+| Environment | Backend | Frontend | Database | Connection Pooling |
+|-------------|---------|----------|----------|-------------------|
+| **Local Dev** | Docker Compose | Docker Compose | Docker PostgreSQL | None (direct) |
+| **QA (Mac Mini)** | Docker Compose | Docker Compose | Docker PostgreSQL | None (direct) |
+| **Staging** | Fly.io | Cloudflare Pages (#610) | Neon | Neon built-in pooler |
+| **Production** | Fly.io | Cloudflare Pages (#611) | Neon | Neon built-in pooler |
+
+### Local Development (Docker PostgreSQL)
+
+Local development uses Docker Compose with a local PostgreSQL container:
+
+```bash
+# Start local environment
+docker-compose up -d
+
+# Database URL format (no SSL, direct connection)
+DATABASE_URL=postgresql://devuser:devpass@localhost:5432/boostedbudget?sslmode=disable
+```
+
+No connection pooling is needed locally - connect directly to PostgreSQL.
+
+### QA Environment (Mac Mini Docker PostgreSQL)
+
+The QA environment on Mac Mini uses Docker Compose with local PostgreSQL, similar to local development:
+
+```bash
+# Deploy to QA (via workflow_dispatch or manual)
+# See .github/workflows/deploy-qa.yml
+
+# Database URL format (same as local dev)
+DATABASE_URL=postgresql://qauser:qapass@postgres:5432/boostedbudget?sslmode=disable
+```
+
+QA uses direct connections without pooling, matching local development for test fidelity.
+
+### Staging/Production (Neon Serverless PostgreSQL)
+
+Staging and production use [Neon](https://neon.tech), a serverless PostgreSQL provider with built-in connection pooling.
+
+#### Neon Connection String Formats
+
+Neon provides two endpoints per database:
+
+| Type | URL Pattern | Use Case |
+|------|-------------|----------|
+| **Pooled** | `ep-xxx-pooler.region.aws.neon.tech` | Application connections (handles connection limits) |
+| **Direct** | `ep-xxx.region.aws.neon.tech` | Migrations (golang-migrate requires direct access) |
+
+```bash
+# Pooled connection (for application - use this as DATABASE_URL)
+postgresql://user:pass@ep-xxx-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require
+
+# Direct connection (for migrations - optional MIGRATION_DATABASE_URL)
+postgresql://user:pass@ep-xxx.us-east-1.aws.neon.tech/neondb?sslmode=require
+```
+
+**Important**: Database migrations are incompatible with connection poolers (they set session-level parameters). The `docker-entrypoint.sh` script automatically transforms pooler URLs to direct endpoints for migrations.
+
+#### Setting Up Fly.io Secrets for Neon
+
+```bash
+# Staging backend
+fly secrets set DATABASE_URL="postgresql://user:pass@ep-xxx-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require" -a boostedbudget-staging-api
+
+# Optional: Explicit direct URL (auto-transformed if not set)
+fly secrets set MIGRATION_DATABASE_URL="postgresql://user:pass@ep-xxx.us-east-1.aws.neon.tech/neondb?sslmode=require" -a boostedbudget-staging-api
+
+# Production backend
+fly secrets set DATABASE_URL="postgresql://user:pass@ep-xxx-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require" -a boostedbudget-api
+```
+
+#### Neon Serverless Considerations
+
+| Feature | Value | Notes |
+|---------|-------|-------|
+| **Autosuspend** | 5 min idle | Compute suspends after inactivity (configurable) |
+| **Cold Start** | 300ms-2s | Wake-up time when compute resumes |
+| **SSL Required** | Yes | All connections must use `sslmode=require` |
+| **Query Timeout** | 600s | Default for pooled connections |
+
+The `docker-entrypoint.sh` handles Neon cold starts with:
+- Warm-up step before migrations
+- `connect_timeout=15` for serverless endpoints
+- Enhanced retry logic (longer first retry)
+
+#### Neon Backup Strategy (PITR + Branching)
+
+Neon provides automatic Point-in-Time Recovery (PITR):
+
+| Feature | Free Tier | Paid Tiers |
+|---------|-----------|------------|
+| **PITR Retention** | 7 days | 7-30 days |
+| **Branches** | 10 | Unlimited |
+| **Storage** | 0.5 GiB | Variable |
+
+**Backup approach**:
+1. **Automatic**: Neon PITR provides continuous backup (no configuration needed)
+2. **Manual snapshots**: Create branches for point-in-time snapshots
+   ```bash
+   # In Neon Console: Create branch from specific point in time
+   # Branch naming: backup-YYYYMMDD-description
+   ```
+3. **Pre-deployment**: Create branch before major deployments for instant rollback
+
+---
+
 ## Docker Build Strategy
 
 ### Backend Multi-Stage Dockerfile
@@ -70,7 +182,7 @@ ENTRYPOINT ["/app/boostedbudget-api"]
 ### Frontend Multi-Stage Dockerfile
 
 ```dockerfile
-# frontend/Dockerfile
+# apps/web/Dockerfile
 # Stage 1: Build the React application
 FROM node:18-alpine AS builder
 
@@ -78,22 +190,22 @@ WORKDIR /build
 
 # Copy package files
 COPY package*.json ./
-RUN npm ci --only=production && \
-    npm cache clean --force
+RUN npm install -g pnpm@10 && \
+    pnpm install --frozen-lockfile
 
 # Copy all source files
 COPY . .
 
 # Build arguments for compile-time environment variables
 ARG VITE_API_URL=https://api.boostedbudget.com/v1
-ARG VITE_AUTH0_DOMAIN
-ARG VITE_AUTH0_CLIENT_ID
-ARG VITE_AUTH0_AUDIENCE
+ARG VITE_CLERK_DOMAIN
+ARG VITE_CLERK_CLIENT_ID
+ARG VITE_CLERK_AUDIENCE
 ARG VITE_GOOGLE_ADSENSE_CLIENT
 ARG VITE_PLAID_PUBLIC_KEY
 
 # Build the application
-RUN npm run build
+RUN pnpm run build
 
 # Verify build output
 RUN ls -la dist/
@@ -128,15 +240,15 @@ CMD ["nginx", "-g", "daemon off;"]
 
 ```bash
 #!/bin/sh
-# frontend/docker-entrypoint.sh
+# apps/web/docker-entrypoint.sh
 # This script allows runtime environment variable injection
 
 # Create runtime config
 cat > /usr/share/nginx/html/config.js << EOF
 window.__RUNTIME_CONFIG__ = {
   API_URL: "${API_URL:-https://api.boostedbudget.com/v1}",
-  AUTH0_DOMAIN: "${AUTH0_DOMAIN}",
-  AUTH0_CLIENT_ID: "${AUTH0_CLIENT_ID}",
+  CLERK_DOMAIN: "${CLERK_DOMAIN}",
+  CLERK_CLIENT_ID: "${CLERK_CLIENT_ID}",
   ENVIRONMENT: "${ENVIRONMENT:-production}"
 };
 EOF
@@ -193,16 +305,21 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: '18'
-        cache: 'npm'
-        cache-dependency-path: frontend/package-lock.json
+        cache: 'pnpm'
+        cache-dependency-path: apps/web/pnpm-lock.yaml
+
+    - name: Install pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: 10
 
     - name: Run frontend tests
       working-directory: ./frontend
       run: |
-        npm ci
-        npm run lint
-        npm run test:ci
-        npm run test:e2e
+        pnpm install --frozen-lockfile
+        pnpm run lint
+        pnpm run test:ci
+        pnpm run test:e2e
 
     - name: SonarCloud Scan
       uses: SonarSource/sonarcloud-github-action@master
@@ -265,7 +382,7 @@ jobs:
       uses: docker/build-push-action@v5
       with:
         context: ./frontend
-        file: ./frontend/Dockerfile
+        file: ./apps/web/Dockerfile
         push: true
         tags: ${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ github.sha }}
         labels: ${{ steps.meta.outputs.labels }}
@@ -273,9 +390,9 @@ jobs:
         cache-to: type=gha,mode=max
         platforms: linux/amd64,linux/arm64
         build-args: |
-          VITE_AUTH0_DOMAIN=${{ secrets.AUTH0_DOMAIN }}
-          VITE_AUTH0_CLIENT_ID=${{ secrets.AUTH0_CLIENT_ID }}
-          VITE_AUTH0_AUDIENCE=${{ secrets.AUTH0_AUDIENCE }}
+          VITE_CLERK_DOMAIN=${{ secrets.CLERK_DOMAIN }}
+          VITE_CLERK_CLIENT_ID=${{ secrets.CLERK_CLIENT_ID }}
+          VITE_CLERK_AUDIENCE=${{ secrets.CLERK_AUDIENCE }}
           VITE_GOOGLE_ADSENSE_CLIENT=${{ secrets.GOOGLE_ADSENSE_CLIENT }}
           VITE_PLAID_PUBLIC_KEY=${{ secrets.PLAID_PUBLIC_KEY }}
 
@@ -332,12 +449,12 @@ jobs:
         flyctl deploy \
           --app boostedbudget-staging-web \
           --image ${{ needs.build-images.outputs.frontend-image }} \
-          --config ./frontend/fly.staging.toml \
+          --config ./apps/web/fly.staging.toml \
           --strategy immediate
 
     - name: Run smoke tests
       run: |
-        npm run test:smoke -- --env=staging
+        pnpm run test:smoke -- --env=staging
 
   # Step 5: Deploy to production (manual approval required)
   deploy-production:
@@ -359,18 +476,13 @@ jobs:
         FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       run: |
         # Deploy with blue-green strategy
+        # Note: Migrations run automatically via docker-entrypoint.sh
+        # The entrypoint handles Neon pooler URL transformation for migrations
         flyctl deploy \
           --app boostedbudget-api \
           --image ${{ needs.build-images.outputs.backend-image }} \
           --config ./fly.toml \
           --strategy bluegreen
-
-    - name: Run database migrations
-      env:
-        FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-      run: |
-        flyctl ssh console -a boostedbudget-api -C \
-          "migrate -path /app/migrations -database \$DATABASE_URL up"
 
     - name: Deploy frontend to production
       env:
@@ -379,7 +491,7 @@ jobs:
         flyctl deploy \
           --app boostedbudget-web \
           --image ${{ needs.build-images.outputs.frontend-image }} \
-          --config ./frontend/fly.toml \
+          --config ./apps/web/fly.toml \
           --strategy bluegreen
 
     - name: Verify deployment
@@ -416,8 +528,8 @@ kill_timeout = 30
 [env]
   PORT = "8080"
   PRIMARY_REGION = "iad"
-  AUTH0_DOMAIN = "boostedbudget.auth0.com"
-  AUTH0_AUDIENCE = "https://api.boostedbudget.com"
+  CLERK_DOMAIN = "boostedbudget.clerk.com"
+  CLERK_AUDIENCE = "https://api.boostedbudget.com"
   PLAID_ENV = "production"
   ENVIRONMENT = "production"
   LOG_LEVEL = "info"
@@ -472,8 +584,9 @@ kill_timeout = 30
     headers = {}
 
 [deploy]
-  # Run migrations before starting the app
-  release_command = "migrate -path /app/migrations -database $DATABASE_URL up"
+  # Migrations run automatically via docker-entrypoint.sh (not release_command)
+  # The entrypoint uses golang-migrate with Neon pooler URL transformation
+  strategy = "bluegreen"
 
 [[vm]]
   cpu_kind = "shared"
@@ -488,7 +601,7 @@ kill_timeout = 30
 ### Frontend Fly Configuration
 
 ```toml
-# frontend/fly.toml
+# apps/web/fly.toml
 app = "boostedbudget-web"
 primary_region = "iad"
 
@@ -499,7 +612,7 @@ primary_region = "iad"
 [env]
   PORT = "80"
   API_URL = "https://api.boostedbudget.com/v1"
-  AUTH0_DOMAIN = "boostedbudget.auth0.com"
+  CLERK_DOMAIN = "boostedbudget.clerk.com"
   ENVIRONMENT = "production"
 
 [[services]]
@@ -561,10 +674,10 @@ services:
       DATABASE_URL: postgres://devuser:devpass@postgres:5432/boostedbudget?sslmode=disable
       REDIS_URL: redis://redis:6379
       PRIMARY_REGION: us-east-1
-      AUTH0_DOMAIN: ${AUTH0_DOMAIN}
-      AUTH0_AUDIENCE: ${AUTH0_AUDIENCE}
-      AUTH0_CLIENT_ID: ${AUTH0_CLIENT_ID}
-      AUTH0_CLIENT_SECRET: ${AUTH0_CLIENT_SECRET}
+      CLERK_DOMAIN: ${CLERK_DOMAIN}
+      CLERK_AUDIENCE: ${CLERK_AUDIENCE}
+      CLERK_CLIENT_ID: ${CLERK_CLIENT_ID}
+      CLERK_CLIENT_SECRET: ${CLERK_CLIENT_SECRET}
       ENVIRONMENT: development
       LOG_LEVEL: debug
     volumes:
@@ -583,11 +696,11 @@ services:
       - "3000:3000"
     environment:
       VITE_API_URL: http://localhost:8080/api/v1
-      VITE_AUTH0_DOMAIN: ${AUTH0_DOMAIN}
-      VITE_AUTH0_CLIENT_ID: ${AUTH0_CLIENT_ID}
+      VITE_CLERK_DOMAIN: ${CLERK_DOMAIN}
+      VITE_CLERK_CLIENT_ID: ${CLERK_CLIENT_ID}
     volumes:
       - ./frontend:/build
-    command: npm run dev
+    command: pnpm run dev
 
   postgres:
     image: postgres:15-alpine
@@ -652,10 +765,10 @@ echo -e "${GREEN}Building frontend image...${NC}"
 docker build \
   -t ${REGISTRY}/${NAMESPACE}/boostedbudget-frontend:${VERSION} \
   -t ${REGISTRY}/${NAMESPACE}/boostedbudget-frontend:latest \
-  --build-arg VITE_AUTH0_DOMAIN=${AUTH0_DOMAIN} \
-  --build-arg VITE_AUTH0_CLIENT_ID=${AUTH0_CLIENT_ID} \
-  -f frontend/Dockerfile \
-  frontend/
+  --build-arg VITE_CLERK_DOMAIN=${CLERK_DOMAIN} \
+  --build-arg VITE_CLERK_CLIENT_ID=${CLERK_CLIENT_ID} \
+  -f apps/web/Dockerfile \
+  apps/web/
 
 # Push images
 if [ "$1" == "--push" ]; then
@@ -711,6 +824,8 @@ else
 fi
 
 # Deploy backend
+# Note: Migrations run automatically via docker-entrypoint.sh on container startup
+# The entrypoint handles Neon pooler URL transformation for database migrations
 echo "Deploying backend..."
 flyctl deploy \
   --app ${BACKEND_APP} \
@@ -718,17 +833,12 @@ flyctl deploy \
   --config ${FLY_CONFIG} \
   --strategy bluegreen
 
-# Run migrations
-echo "Running database migrations..."
-flyctl ssh console -a ${BACKEND_APP} -C \
-  "migrate -path /app/migrations -database \$DATABASE_URL up"
-
 # Deploy frontend
 echo "Deploying frontend..."
 flyctl deploy \
   --app ${FRONTEND_APP} \
   --image ${REGISTRY}/${NAMESPACE}/boostedbudget-frontend:${VERSION} \
-  --config frontend/${FLY_CONFIG} \
+  --config apps/web/${FLY_CONFIG} \
   --strategy bluegreen
 
 # Verify deployment
@@ -747,21 +857,38 @@ echo "Deployment complete!"
 FLY_API_TOKEN                # Fly.io API token for production
 FLY_API_TOKEN_STAGING        # Fly.io API token for staging
 GITHUB_TOKEN                 # Auto-generated for packages
-AUTH0_DOMAIN                 # Auth0 domain
-AUTH0_CLIENT_ID             # Auth0 client ID
-AUTH0_CLIENT_SECRET         # Auth0 client secret
-AUTH0_AUDIENCE              # Auth0 API audience
+
+# Authentication (Clerk)
+CLERK_DOMAIN                 # Clerk domain
+CLERK_CLIENT_ID             # Clerk client ID
+CLERK_CLIENT_SECRET         # Clerk client secret (backend validation)
+CLERK_AUDIENCE              # Clerk API audience
+
+# Bank Connections (Plaid)
 PLAID_CLIENT_ID             # Plaid client ID
 PLAID_SECRET                # Plaid secret (sandbox/production)
 PLAID_PUBLIC_KEY            # Plaid public key
-STRIPE_SECRET_KEY           # Stripe secret key
-STRIPE_WEBHOOK_SECRET       # Stripe webhook secret
-GOOGLE_ADSENSE_CLIENT       # AdSense client ID
+
+# Payments (Paddle)
+PADDLE_API_KEY              # Paddle API key
+PADDLE_WEBHOOK_SECRET       # Paddle webhook secret (pdl_ntfset_...)
+PADDLE_CLIENT_TOKEN         # Paddle client-side token (frontend)
+
+# Security
+ENCRYPTION_KEY              # 32-byte encryption key for sensitive data
+
+# Monetization
+GOOGLE_ADSENSE_CLIENT       # AdSense client ID (free tier ads)
+
+# Notifications & Monitoring
 SLACK_WEBHOOK              # Slack notifications
 SONAR_TOKEN                # SonarCloud token
+
+# CDN/DNS (Cloudflare)
 CF_ZONE_ID                 # CloudFlare zone ID
 CF_API_TOKEN               # CloudFlare API token
 
+# Note: DATABASE_URL set via Fly secrets (see "Database Configuration")
 # Note: No EU_DATABASE_URL needed for single-region MVP
 # Multi-region secrets documented in "Future: Multi-Region Migration Plan"
 ```
@@ -769,17 +896,26 @@ CF_API_TOKEN               # CloudFlare API token
 ### Fly.io Secrets Management
 
 ```bash
-# Set secrets in Fly.io (Single Region)
+# Set secrets in Fly.io (Staging - Neon database)
 fly secrets set \
-  DATABASE_URL="postgres://..." \
-  REDIS_URL="redis://..." \
-  AUTH0_DOMAIN="boostedbudget.auth0.com" \
-  AUTH0_CLIENT_ID="..." \
-  AUTH0_CLIENT_SECRET="..." \
+  DATABASE_URL="postgresql://user:pass@ep-xxx-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require" \
+  CLERK_SECRET_KEY="sk_test_..." \
   PLAID_CLIENT_ID="..." \
   PLAID_SECRET="..." \
-  STRIPE_SECRET_KEY="..." \
-  STRIPE_WEBHOOK_SECRET="..." \
+  PADDLE_API_KEY="..." \
+  PADDLE_WEBHOOK_SECRET="pdl_ntfset_..." \
+  ENCRYPTION_KEY="your_32_byte_key_here" \
+  --app boostedbudget-staging-api
+
+# Set secrets in Fly.io (Production - Neon database)
+fly secrets set \
+  DATABASE_URL="postgresql://user:pass@ep-xxx-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require" \
+  CLERK_SECRET_KEY="sk_live_..." \
+  PLAID_CLIENT_ID="..." \
+  PLAID_SECRET="..." \
+  PADDLE_API_KEY="..." \
+  PADDLE_WEBHOOK_SECRET="pdl_ntfset_..." \
+  ENCRYPTION_KEY="your_32_byte_key_here" \
   --app boostedbudget-api
 
 # List secrets
@@ -788,8 +924,9 @@ fly secrets list --app boostedbudget-api
 # Remove a secret
 fly secrets unset KEY_NAME --app boostedbudget-api
 
-# Note: Only single DATABASE_URL needed for MVP
-# Multi-region database secrets added in Phase 7+
+# Note: DATABASE_URL uses Neon pooled endpoint
+# MIGRATION_DATABASE_URL optional (auto-transformed from pooler URL)
+# See "Database Configuration" section for Neon details
 ```
 
 ## Monitoring and Observability
@@ -824,11 +961,11 @@ func (h *HealthHandler) GetHealth(c echo.Context) error {
         checks["redis"] = "healthy"
     }
     
-    // Check Auth0
-    if err := h.checkAuth0(); err != nil {
-        checks["auth0"] = "unhealthy"
+    // Check Clerk
+    if err := h.checkClerk(); err != nil {
+        checks["clerk"] = "unhealthy"
     } else {
-        checks["auth0"] = "healthy"
+        checks["clerk"] = "healthy"
     }
     
     status := "healthy"
@@ -891,7 +1028,7 @@ for i in $(seq 1 $MAX_RETRIES); do
 done
 
 # Run smoke tests
-npm run test:smoke -- --env=$ENVIRONMENT
+pnpm run test:smoke -- --env=$ENVIRONMENT
 
 echo "Deployment verification complete!"
 ```
@@ -1125,7 +1262,7 @@ This is the complete multi-region implementation as documented in `boosted-budge
    - Implement `RegionRouter` pattern
    - Activate existing `*InRegion` repository methods
    - Add region selection UI
-   - Update Auth0 rules for geo-suggestion
+   - Update Clerk rules for geo-suggestion
 
 3. **Data Migration** (Week 5-6)
    - User-initiated region migration tool
@@ -1258,9 +1395,9 @@ func (r *RegionRouter) Close() error {
 #### Frontend Region Selection
 
 ```typescript
-// frontend/src/features/onboarding/RegionSelector.tsx
+// apps/web/src/features/onboarding/RegionSelector.tsx
 import { useState } from 'react';
-import { useAuth0 } from '@auth0/auth0-react';
+import { useClerk } from '@clerk/clerk-react';
 
 interface Region {
   code: string;
@@ -1292,7 +1429,7 @@ const regions: Region[] = [
 
 export const RegionSelector: React.FC = () => {
   const [selectedRegion, setSelectedRegion] = useState<string>('');
-  const { user } = useAuth0();
+  const { user } = useClerk();
 
   const handleSelectRegion = async (regionCode: string) => {
     setSelectedRegion(regionCode);

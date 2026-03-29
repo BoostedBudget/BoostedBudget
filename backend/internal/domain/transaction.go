@@ -26,18 +26,47 @@ const (
 	SourceYodlee TransactionSource = "yodlee"
 )
 
+// CategorySource represents where the current category came from
+type CategorySource string
+
+const (
+	// CategorySourcePlaid is the original category from Plaid API
+	CategorySourcePlaid CategorySource = "plaid"
+
+	// CategorySourceRule is a category applied by an automation rule
+	CategorySourceRule CategorySource = "rule"
+
+	// CategorySourceManual is a category manually set by the user
+	CategorySourceManual CategorySource = "manual"
+)
+
+// TagSource tracks the origin of a tag on a transaction
+type TagSource struct {
+	Tag    string  `json:"tag"`
+	Source string  `json:"source"` // "manual" or "rule"
+	RuleID *string `json:"rule_id,omitempty"`
+}
+
 // Transaction represents a financial transaction from any provider (Plaid, manual, or future providers).
 // This is a provider-agnostic model that standardizes transaction data across all sources.
 //
 // Design: The struct uses generic field names (source, external_transaction_id) instead of
 // provider-specific names (plaid_transaction_id) to support multiple providers and manual
 // transactions without schema changes.
+//
+// Issue #171: Added UserAccountID for stable queries across re-links.
+// The UserAccountID links to a user_accounts record that survives when a user
+// re-links a bank (which assigns new item_id and account_id values).
 type Transaction struct {
 	// Core identifiers
 	ID           string `json:"id" db:"id"`
 	UserID       string `json:"user_id" db:"user_id"`
 	AccountID    string `json:"account_id" db:"account_id"`
 	LinkedItemID string `json:"linked_item_id" db:"linked_item_id"`
+
+	// Stable reference for re-link handling (Issue #171)
+	// Links to user_accounts table which survives Plaid Item re-links
+	UserAccountID *string `json:"user_account_id,omitempty" db:"user_account_id"`
 
 	// Provider abstraction
 	// Source identifies where this transaction came from (plaid, manual, teller, etc.)
@@ -73,9 +102,23 @@ type Transaction struct {
 	// User customization
 	UserNotes *string `json:"user_notes,omitempty" db:"user_notes"` // User-added notes or annotations
 
+	// Category override (Issue #345: Manual Transaction Category & Tag Editing)
+	CategoryOverride     *string        `json:"category_override,omitempty" db:"category_override"`         // User's chosen category override (JSON array)
+	CategorySourceField  CategorySource `json:"category_source" db:"category_source"`                       // 'plaid', 'rule', or 'manual'
+	CategoryOverrideDate *time.Time     `json:"category_override_date,omitempty" db:"category_override_date"` // When category was last edited
+	OriginalCategory     *string        `json:"original_category,omitempty" db:"original_category"`         // Preserved Plaid category (JSON array)
+
+	// Tags (Issue #345: Manual Transaction Category & Tag Editing)
+	Tags       []string    `json:"tags" db:"tags"`               // Array of tag names
+	TagsSource []TagSource `json:"tags_source" db:"tags_source"` // Source tracking for each tag
+
 	// Timestamps
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
+
+	// Associated data (populated on demand, not stored in DB)
+	// Used by rule engine to evaluate account_type conditions
+	Account *Account `json:"account,omitempty" db:"-"`
 }
 
 // Validate checks that the Transaction has all required fields and valid values.
@@ -126,8 +169,12 @@ func (t *Transaction) Validate() error {
 // All fields are optional pointers - nil means no filter applied for that field.
 // Used by repository layer to build dynamic WHERE clauses.
 type TransactionFilters struct {
-	// AccountID filters transactions by specific account
+	// AccountID filters transactions by specific account (deprecated: use AccountIDs)
 	AccountID *string
+
+	// AccountIDs filters transactions by multiple accounts (OR logic within)
+	// Issue #529: Multi-account filter support
+	AccountIDs []string
 
 	// StartDate filters transactions on or after this date (inclusive)
 	StartDate *time.Time
@@ -135,9 +182,14 @@ type TransactionFilters struct {
 	// EndDate filters transactions on or before this date (inclusive)
 	EndDate *time.Time
 
-	// Category filters transactions containing this category string
+	// Category filters transactions containing this category string (deprecated: use Categories)
 	// Uses ILIKE for case-insensitive partial matching against JSONB category field
 	Category *string
+
+	// Categories filters transactions matching any of these categories (OR logic within)
+	// Matches against both category_override and original category fields
+	// Issue #529: Multi-category filter support
+	Categories []string
 
 	// Search filters transactions by merchant name or transaction name
 	// Uses ILIKE for case-insensitive partial matching
@@ -146,4 +198,16 @@ type TransactionFilters struct {
 	// Pending filters transactions by pending status
 	// True = only pending, False = only settled, nil = both
 	Pending *bool
+
+	// MinAmount filters transactions with absolute amount >= this value
+	// Issue #529: Amount range filter support
+	MinAmount *float64
+
+	// MaxAmount filters transactions with absolute amount <= this value
+	// Issue #529: Amount range filter support
+	MaxAmount *float64
+
+	// AmountType filters transactions by direction: "income" (positive), "expense" (negative), or nil for both
+	// Issue #529: Transaction type filter support
+	AmountType *string
 }

@@ -43,7 +43,7 @@
 
 **Backend Patterns** (from AccountsPage/PlaidHandler):
 - Handler → Service → Repository layers
-- Auth0 middleware for user authentication
+- Clerk middleware for user authentication
 - `middleware.GetUserID(c)` for extracting user from context
 - Error handling: Specific error types, appropriate HTTP status codes
 - Pagination: `limit` and `offset` query parameters
@@ -196,7 +196,7 @@ type TransactionService interface {
 
 #### Directory Structure
 ```
-frontend/src/features/transactions/
+apps/web/src/features/transactions/
 ├── TransactionsList.tsx          # Main page component
 ├── TransactionsList.test.tsx
 ├── TransactionsList.css
@@ -422,14 +422,14 @@ frontend/src/features/transactions/
 ### Phase 5: Frontend - GREEN (Implement Minimal Code)
 
 #### 5.1 Types (`types.ts`)
-- [ ] Create `frontend/src/features/transactions/types.ts`
+- [ ] Create `apps/web/src/features/transactions/types.ts`
 - [ ] Define `Transaction` interface (match backend schema)
 - [ ] Define `TransactionFilters` interface
 - [ ] Define `TransactionsResponse` interface
 - [ ] Export all types
 
 #### 5.2 API Layer (`api/transactionsApi.ts`)
-- [ ] Create `frontend/src/features/transactions/api/transactionsApi.ts`
+- [ ] Create `apps/web/src/features/transactions/api/transactionsApi.ts`
 - [ ] Implement `fetchTransactions(filters, limit, offset)` function
   - [ ] Build query string from filters
   - [ ] Include auth token from localStorage/context
@@ -439,7 +439,7 @@ frontend/src/features/transactions/
 - [ ] Verify all API tests pass
 
 #### 5.3 Custom Hook (`hooks/useTransactions.ts`)
-- [ ] Create `frontend/src/features/transactions/hooks/useTransactions.ts`
+- [ ] Create `apps/web/src/features/transactions/hooks/useTransactions.ts`
 - [ ] Implement `useTransactions(initialFilters)` hook
   - [ ] State: `transactions`, `loading`, `error`, `hasMore`, `totalCount`
   - [ ] State: `filters`, `limit`, `offset`
@@ -615,7 +615,7 @@ frontend/src/features/transactions/
 ✅ **Handler Layer** (11 tests passing):
   - Created TransactionHandler with GetTransactions method
   - Query parameter parsing: limit, offset, dates (YYYY-MM-DD), all filters
-  - Auth0 authentication via middleware.GetUserID()
+  - Clerk authentication via middleware.GetUserID()
   - Error mapping: ErrInvalidLimit/Offset/DateRange → 400, service errors → 500
   - JSON response with pagination metadata
   - Commits: 18cefea (RED), 1f968aa (GREEN)
@@ -623,7 +623,7 @@ frontend/src/features/transactions/
 ✅ **Route Wiring**:
   - Registered GET /api/v1/transactions endpoint in main.go
   - Created TransactionRepository, TransactionService, TransactionHandler instances
-  - Route protected by Auth0 middleware
+  - Route protected by Clerk middleware
   - Server compiles successfully
 
 **Test Results**: All 37 backend tests passing (100% pass rate)
@@ -844,8 +844,8 @@ frontend/src/features/transactions/
 - `backend/internal/repository/transaction_repository.go` - Repository interface
 - `backend/migrations/000010_create_transactions_table.sql` - Database schema
 - `backend/internal/handlers/plaid_handler.go` - Handler pattern example
-- `frontend/src/features/accounts/AccountsPage.tsx` - Frontend pattern example
-- `frontend/src/features/accounts/types.ts` - Types pattern example
+- `apps/web/src/features/accounts/AccountsPage.tsx` - Frontend pattern example
+- `apps/web/src/features/accounts/types.ts` - Types pattern example
 - `api/openapi.yaml` - API specification
 
 ### Documentation
@@ -882,7 +882,7 @@ frontend/src/features/transactions/
 - ✅ **Handler Layer**: 11 tests passing
   - GET /api/v1/transactions endpoint
   - Query param parsing (limit, offset, all filters)
-  - Auth0 middleware integration
+  - Clerk middleware integration
   - OpenAPI spec updated
 
 ### Frontend Implementation (100% Complete)
@@ -921,17 +921,17 @@ frontend/src/features/transactions/
 - `api/openapi.yaml` (modified - GET /api/v1/transactions spec)
 
 **Frontend**:
-- `frontend/src/features/transactions/types.ts` (created)
-- `frontend/src/features/transactions/api/transactionsApi.ts` (created)
-- `frontend/src/features/transactions/api/transactionsApi.test.ts` (created)
-- `frontend/src/features/transactions/hooks/useTransactions.ts` (created)
-- `frontend/src/features/transactions/hooks/useTransactions.test.tsx` (created)
-- `frontend/src/features/transactions/components/TransactionCard.tsx` (created)
-- `frontend/src/features/transactions/components/TransactionCard.css` (created)
-- `frontend/src/features/transactions/components/TransactionCard.test.tsx` (created)
-- `frontend/src/features/transactions/TransactionsPage.tsx` (created)
-- `frontend/src/features/transactions/TransactionsPage.css` (created)
-- `frontend/src/features/transactions/TransactionsPage.test.tsx` (created)
+- `apps/web/src/features/transactions/types.ts` (created)
+- `apps/web/src/features/transactions/api/transactionsApi.ts` (created)
+- `apps/web/src/features/transactions/api/transactionsApi.test.ts` (created)
+- `apps/web/src/features/transactions/hooks/useTransactions.ts` (created)
+- `apps/web/src/features/transactions/hooks/useTransactions.test.tsx` (created)
+- `apps/web/src/features/transactions/components/TransactionCard.tsx` (created)
+- `apps/web/src/features/transactions/components/TransactionCard.css` (created)
+- `apps/web/src/features/transactions/components/TransactionCard.test.tsx` (created)
+- `apps/web/src/features/transactions/TransactionsPage.tsx` (created)
+- `apps/web/src/features/transactions/TransactionsPage.css` (created)
+- `apps/web/src/features/transactions/TransactionsPage.test.tsx` (created)
 
 ### Key Decisions
 1. **Simplified MVP**: Implemented search-only filtering (no advanced filters UI)

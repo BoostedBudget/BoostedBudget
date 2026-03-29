@@ -196,7 +196,7 @@ func TestCreateLinkToken_Success(t *testing.T) {
 
 	// When: Creating link token for a user
 	ctx := context.Background()
-	userID := "auth0|test-user-123"
+	userID := "user_test-user-123"
 
 	response, err := service.CreateLinkToken(ctx, userID)
 
@@ -229,7 +229,7 @@ func TestCreateLinkToken_IncludesCorrectUserID(t *testing.T) {
 
 	// When: Creating link token with specific user ID
 	ctx := context.Background()
-	userID := "auth0|specific-user-456"
+	userID := "user_specific-user-456"
 
 	response, err := service.CreateLinkToken(ctx, userID)
 
@@ -239,7 +239,8 @@ func TestCreateLinkToken_IncludesCorrectUserID(t *testing.T) {
 	// Note: We can't directly verify userID is in token (it's opaque), but successful creation validates it
 }
 
-// TestCreateLinkToken_IncludesRequiredProducts tests that link token is configured with required Plaid products
+// TestCreateLinkToken_IncludesRequiredProducts tests that link token includes Phase 2 products
+// (#241): TRANSACTIONS + LIABILITIES + INVESTMENTS
 func TestCreateLinkToken_IncludesRequiredProducts(t *testing.T) {
 	clientID := getTestEnv("PLAID_CLIENT_ID")
 	secret := getTestEnv("PLAID_SECRET")
@@ -249,9 +250,9 @@ func TestCreateLinkToken_IncludesRequiredProducts(t *testing.T) {
 
 	// Given: Valid PlaidService
 	cfg := &config.Config{
-		PlaidClientID:   clientID,
-		PlaidSecret:     secret,
-		PlaidEnv:        "sandbox",
+		PlaidClientID:    clientID,
+		PlaidSecret:      secret,
+		PlaidEnv:         "sandbox",
 		PlaidWebhookURL:  "https://api.boostedbudget.com/webhooks/plaid",
 		PlaidRedirectURI: "https://boostedbudget.com/oauth-callback",
 	}
@@ -261,13 +262,45 @@ func TestCreateLinkToken_IncludesRequiredProducts(t *testing.T) {
 
 	// When: Creating link token
 	ctx := context.Background()
-	response, err := service.CreateLinkToken(ctx, "auth0|test-user-123")
+	response, err := service.CreateLinkToken(ctx, "user_test-user-123")
 
-	// Then: Link token is created successfully
-	// (Products are configured internally: TRANSACTIONS, AUTH, BALANCE)
-	require.NoError(t, err, "Expected no error - products should be configured correctly")
+	// Then: Link token is created successfully with all 3 Phase 2 products configured:
+	// TRANSACTIONS + LIABILITIES + INVESTMENTS
+	require.NoError(t, err, "Expected no error - all 3 products should be accepted by Plaid sandbox")
 	require.NotNil(t, response, "Expected response")
 	assert.NotEmpty(t, response.LinkToken, "Expected valid link token with products configured")
+}
+
+// TestCreateLinkToken_IncludesAllProducts verifies Phase 2 product configuration
+// (#241: TRANSACTIONS + LIABILITIES + INVESTMENTS)
+func TestCreateLinkToken_IncludesAllProducts(t *testing.T) {
+	clientID := getTestEnv("PLAID_CLIENT_ID")
+	secret := getTestEnv("PLAID_SECRET")
+	if clientID == "" || secret == "" {
+		t.Skip("Skipping integration test: PLAID_CLIENT_ID and PLAID_SECRET required")
+	}
+
+	// Given: Valid PlaidService
+	cfg := &config.Config{
+		PlaidClientID:    clientID,
+		PlaidSecret:      secret,
+		PlaidEnv:         "sandbox",
+		PlaidWebhookURL:  "https://api.boostedbudget.com/webhooks/plaid",
+		PlaidRedirectURI: "https://boostedbudget.com/oauth-callback",
+	}
+
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err, "Setup failed")
+
+	// When: Creating link token
+	ctx := context.Background()
+	response, err := service.CreateLinkToken(ctx, "user_test-user-123")
+
+	// Then: Plaid sandbox accepts all 3 Phase 2 products without error
+	require.NoError(t, err, "Expected no error with Phase 2 products")
+	require.NotNil(t, response, "Expected response")
+	assert.NotEmpty(t, response.LinkToken, "Expected valid link token")
+	assert.NotEmpty(t, response.RequestID, "Expected request ID")
 }
 
 // TestCreateLinkToken_IncludesWebhookURL tests that webhook URL is included in link token configuration
@@ -292,7 +325,7 @@ func TestCreateLinkToken_IncludesWebhookURL(t *testing.T) {
 
 	// When: Creating link token
 	ctx := context.Background()
-	response, err := service.CreateLinkToken(ctx, "auth0|test-user-123")
+	response, err := service.CreateLinkToken(ctx, "user_test-user-123")
 
 	// Then: Link token is created successfully with webhook configured
 	require.NoError(t, err, "Expected no error - webhook URL should be accepted")
@@ -323,15 +356,15 @@ func TestCreateLinkToken_ReturnsExpirationTime(t *testing.T) {
 	// When: Creating link token
 	ctx := context.Background()
 	before := time.Now()
-	response, err := service.CreateLinkToken(ctx, "auth0|test-user-123")
+	response, err := service.CreateLinkToken(ctx, "user_test-user-123")
 	after := time.Now().Add(31 * time.Minute) // Plaid tokens typically expire in 30 minutes
 
-	// Then: Response includes expiration time
+	// Then: Response includes expiration time (30 minutes from now)
 	require.NoError(t, err, "Expected no error")
 	require.NotNil(t, response, "Expected response")
 	assert.False(t, response.Expiration.IsZero(), "Expected expiration time to be set")
 	assert.True(t, response.Expiration.After(before), "Expiration should be in the future")
-	assert.True(t, response.Expiration.Before(after), "Expiration should be within 31 minutes")
+	assert.True(t, response.Expiration.Before(after), "Expiration should be within ~30 minutes")
 }
 
 // TestCreateLinkToken_PlaidAPIError tests handling of Plaid API errors
@@ -350,7 +383,7 @@ func TestCreateLinkToken_PlaidAPIError(t *testing.T) {
 
 	// When: Attempting to create link token (will fail at API call)
 	ctx := context.Background()
-	response, err := service.CreateLinkToken(ctx, "auth0|test-user-123")
+	response, err := service.CreateLinkToken(ctx, "user_test-user-123")
 
 	// Then: Returns error from Plaid API
 	assert.Error(t, err, "Expected error with invalid credentials")
@@ -380,7 +413,7 @@ func TestCreateLinkToken_MissingWebhookURL(t *testing.T) {
 
 	// When: Attempting to create link token
 	ctx := context.Background()
-	response, err := service.CreateLinkToken(ctx, "auth0|test-user-123")
+	response, err := service.CreateLinkToken(ctx, "user_test-user-123")
 
 	// Then: Returns error about missing webhook URL
 	assert.Error(t, err, "Expected error when webhook URL is missing")
@@ -408,7 +441,7 @@ func TestCreateLinkToken_MissingRedirectURI(t *testing.T) {
 
 	// When: Attempting to create link token
 	ctx := context.Background()
-	response, err := service.CreateLinkToken(ctx, "auth0|test-user-123")
+	response, err := service.CreateLinkToken(ctx, "user_test-user-123")
 
 	// Then: Returns error about missing redirect URI
 	assert.Error(t, err, "Expected error when redirect URI is missing")
@@ -459,24 +492,15 @@ func TestCreateLinkTokenMinimal(t *testing.T) {
 	t.Logf("✅ Minimal link token created successfully: %s (RequestID: %s)", response.LinkToken, response.RequestID)
 }
 
-// TestCreateLinkTokenWithTransactions tests link token creation with AUTH + TRANSACTIONS products.
-// This is Phase 1 of issue #201 - incrementally adding TRANSACTIONS product to identify
-// if it causes the 400 error that was resolved in issue #200.
-//
-// TRANSACTIONS product provides access to:
-// - Historical transaction data (up to 24 months)
-// - Transaction categories and merchant information
-// - Pending and posted transactions
-//
-// Hypothesis: TRANSACTIONS product will NOT cause 400 error when added to AUTH product.
-// Note: Updated in Phase 3 to include redirect_uri (now required).
+// TestCreateLinkTokenWithTransactions tests link token creation with Phase 2 products (#241)
+// TRANSACTIONS + LIABILITIES + INVESTMENTS
 func TestCreateLinkTokenWithTransactions(t *testing.T) {
 	// Skip if Plaid credentials not available in environment
 	if getTestEnv("PLAID_CLIENT_ID") == "" || getTestEnv("PLAID_SECRET") == "" {
 		t.Skip("Plaid credentials not configured - set PLAID_CLIENT_ID and PLAID_SECRET")
 	}
 
-	// Given: Config with credentials and redirect_uri (now required in Phase 3)
+	// Given: Config with credentials and redirect_uri
 	cfg := &config.Config{
 		PlaidClientID:    getTestEnv("PLAID_CLIENT_ID"),
 		PlaidSecret:      getTestEnv("PLAID_SECRET"),
@@ -487,19 +511,19 @@ func TestCreateLinkTokenWithTransactions(t *testing.T) {
 	service, err := NewPlaidService(cfg)
 	require.NoError(t, err, "should create plaid service successfully")
 
-	// When: Creating link token (implementation uses AUTH + TRANSACTIONS + redirect_uri)
+	// When: Creating link token with Phase 2 products
 	ctx := context.Background()
 	userID := time.Now().String()
 
 	response, err := service.CreateLinkToken(ctx, userID)
 
-	// Then: Should succeed - TRANSACTIONS product should not cause 400 error
-	require.NoError(t, err, "TRANSACTIONS product should not cause 400 error")
+	// Then: Should succeed with all 3 Phase 2 products
+	require.NoError(t, err, "TRANSACTIONS+LIABILITIES+INVESTMENTS should not cause 400 error")
 	assert.NotEmpty(t, response.LinkToken, "link token should not be empty")
 	assert.NotEmpty(t, response.Expiration, "expiration should not be empty")
 	assert.NotEmpty(t, response.RequestID, "request ID should not be empty")
 
-	t.Logf("✅ Link token with TRANSACTIONS product: %s (RequestID: %s)", response.LinkToken, response.RequestID)
+	t.Logf("✅ Link token with Phase 2 products: %s (RequestID: %s)", response.LinkToken, response.RequestID)
 }
 
 // TestCreateLinkTokenWithBalance tests link token creation with TRANSACTIONS product only.
@@ -577,14 +601,14 @@ func TestCreateLinkTokenWithRedirectURI(t *testing.T) {
 	service, err := NewPlaidService(cfg)
 	require.NoError(t, err, "should create plaid service successfully")
 
-	// When: Creating link token with full configuration (AUTH + TRANSACTIONS + BALANCE + redirect_uri)
+	// When: Creating link token with redirect_uri configured
 	ctx := context.Background()
 	userID := time.Now().String()
 
 	response, err := service.CreateLinkToken(ctx, userID)
 
-	// Then: Should succeed - full configuration should work
-	require.NoError(t, err, "redirect_uri should not cause 400 error")
+	// Then: Should succeed
+	require.NoError(t, err, "Expected no error with redirect_uri configured")
 	assert.NotEmpty(t, response.LinkToken, "link token should not be empty")
 	assert.NotEmpty(t, response.Expiration, "expiration should not be empty")
 	assert.NotEmpty(t, response.RequestID, "request ID should not be empty")
@@ -680,4 +704,246 @@ func TestRemoveItem_EmptyAccessToken(t *testing.T) {
 
 	// Then: Should return error
 	assert.Error(t, err, "Expected error with empty access token")
+}
+
+// TestCreateUpdateModeLinkToken_Success tests successful creation of update mode link token.
+// Update mode is used for user re-authentication when Plaid returns LOGIN_REQUIRED error.
+// Issue #257: Item Error Handler - Process ITEM Webhooks and User Notifications
+// Phase 2 (#241): Update mode uses same products as initial link: TRANSACTIONS + LIABILITIES + INVESTMENTS.
+//
+// This integration test requires real Plaid sandbox credentials and validates that:
+// 1. Link token is created in "update" mode (SetAccessToken is called)
+// 2. User can re-authenticate their connection using the returned link token
+// 3. The link token includes the correct access token (not item_id)
+func TestCreateUpdateModeLinkToken_Success(t *testing.T) {
+	// Skip if Plaid credentials not available
+	clientID := getTestEnv("PLAID_CLIENT_ID")
+	secret := getTestEnv("PLAID_SECRET")
+	if clientID == "" || secret == "" {
+		t.Skip("Skipping integration test: PLAID_CLIENT_ID and PLAID_SECRET required")
+	}
+
+	// Given: Valid PlaidService with real sandbox credentials
+	cfg := &config.Config{
+		PlaidClientID:    clientID,
+		PlaidSecret:      secret,
+		PlaidEnv:         "sandbox",
+		PlaidWebhookURL:  "https://api.boostedbudget.com/webhooks/plaid",
+		PlaidRedirectURI: "https://boostedbudget.com/oauth-callback",
+	}
+
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err, "Setup failed: could not create service")
+
+	// When: Creating update mode link token with valid access token
+	// NOTE: In real test, this would be a valid sandbox access token from a previously created item
+	ctx := context.Background()
+	userID := "user_test-user-123"
+	accessToken := "access-sandbox-test-token" // Sandbox test token (would be real in integration)
+
+	response, err := service.CreateUpdateModeLinkToken(ctx, userID, accessToken)
+
+	// Then: Returns link token successfully
+	// In sandbox with invalid token, Plaid may return error - that's expected
+	// In real integration test, we'd first create an item and use its access token
+	if err != nil {
+		t.Logf("CreateUpdateModeLinkToken returned error (expected for test token): %v", err)
+		// Validate error is from Plaid API (not our validation)
+		assert.Contains(t, err.Error(), "failed to create update mode link token",
+			"Error should be from Plaid API call, not our validation")
+	} else {
+		require.NotNil(t, response, "Expected non-nil response")
+		assert.NotEmpty(t, response.LinkToken, "Expected link token to be populated")
+		assert.NotEmpty(t, response.RequestID, "Expected request ID to be populated")
+		assert.False(t, response.Expiration.IsZero(), "Expected expiration to be set")
+		t.Logf("✅ Update mode link token created successfully: %s", response.LinkToken)
+	}
+}
+
+// TestCreateUpdateModeLinkToken_EmptyAccessToken tests error handling with empty access token
+func TestCreateUpdateModeLinkToken_EmptyAccessToken(t *testing.T) {
+	// Given: Valid PlaidService
+	cfg := &config.Config{
+		PlaidClientID:    "test_client_id",
+		PlaidSecret:      "test_secret",
+		PlaidEnv:         "sandbox",
+		PlaidWebhookURL:  "https://api.boostedbudget.com/webhooks/plaid",
+		PlaidRedirectURI: "https://boostedbudget.com/oauth-callback",
+	}
+
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err, "Setup failed: could not create service")
+
+	// When: Creating update mode link token with empty access token
+	ctx := context.Background()
+	userID := "user_test-user-123"
+	response, err := service.CreateUpdateModeLinkToken(ctx, userID, "")
+
+	// Then: Should return validation error
+	assert.Error(t, err, "Expected error with empty access token")
+	assert.Contains(t, err.Error(), "access token", "Error should mention access token")
+	assert.Nil(t, response, "Expected nil response on error")
+}
+
+// TestCreateUpdateModeLinkToken_EmptyUserID tests error handling with empty user ID
+func TestCreateUpdateModeLinkToken_EmptyUserID(t *testing.T) {
+	// Given: Valid PlaidService
+	cfg := &config.Config{
+		PlaidClientID:    "test_client_id",
+		PlaidSecret:      "test_secret",
+		PlaidEnv:         "sandbox",
+		PlaidWebhookURL:  "https://api.boostedbudget.com/webhooks/plaid",
+		PlaidRedirectURI: "https://boostedbudget.com/oauth-callback",
+	}
+
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err, "Setup failed: could not create service")
+
+	// When: Creating update mode link token with empty user ID
+	ctx := context.Background()
+	accessToken := "access-sandbox-test-token"
+	response, err := service.CreateUpdateModeLinkToken(ctx, "", accessToken)
+
+	// Then: Should return validation error
+	assert.Error(t, err, "Expected error with empty user ID")
+	assert.Contains(t, err.Error(), "user", "Error should mention user ID")
+	assert.Nil(t, response, "Expected nil response on error")
+}
+
+// TestCreateUpdateModeLinkToken_PlaidAPIError tests handling of Plaid API errors
+func TestCreateUpdateModeLinkToken_PlaidAPIError(t *testing.T) {
+	// Given: PlaidService with invalid credentials (will cause API error)
+	cfg := &config.Config{
+		PlaidClientID:    "invalid_client_id",
+		PlaidSecret:      "invalid_secret",
+		PlaidEnv:         "sandbox",
+		PlaidWebhookURL:  "https://api.boostedbudget.com/webhooks/plaid",
+		PlaidRedirectURI: "https://boostedbudget.com/oauth-callback",
+	}
+
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err, "Service creation should succeed even with invalid creds")
+
+	// When: Attempting to create update mode link token (will fail at API call)
+	ctx := context.Background()
+	userID := "user_test-user-123"
+	accessToken := "access-sandbox-test-token"
+	response, err := service.CreateUpdateModeLinkToken(ctx, userID, accessToken)
+
+	// Then: Returns error from Plaid API
+	assert.Error(t, err, "Expected error with invalid credentials")
+	assert.Contains(t, err.Error(), "failed to create update mode link token",
+		"Error should indicate link token creation failure")
+	assert.Nil(t, response, "Expected nil response on error")
+}
+
+// TestFireWebhook_ValidParams_Success tests successful webhook firing via Plaid SandboxItemFireWebhook API.
+// This test will fail initially (RED phase) since FireWebhook method doesn't exist yet.
+func TestFireWebhook_ValidParams_Success(t *testing.T) {
+	// Skip if not running integration tests (requires real Plaid API credentials)
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	// Given: Valid PlaidService with sandbox credentials
+	cfg := &config.Config{
+		PlaidClientID:    getTestEnv("PLAID_CLIENT_ID"),
+		PlaidSecret:      getTestEnv("PLAID_SECRET"),
+		PlaidEnv:         "sandbox",
+		PlaidWebhookURL:  "https://api.boostedbudget.com/webhooks/plaid",
+		PlaidRedirectURI: "https://boostedbudget.com/oauth-callback",
+	}
+
+	// Skip if credentials not available
+	if cfg.PlaidClientID == "" || cfg.PlaidSecret == "" {
+		t.Skip("Skipping test: PLAID_CLIENT_ID and PLAID_SECRET not set")
+	}
+
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err, "Service creation should succeed")
+
+	// When: Calling FireWebhook with valid access token and webhook code
+	ctx := context.Background()
+	accessToken := "access-sandbox-test-access-token" // Sandbox test token
+	webhookCode := "DEFAULT_UPDATE"
+
+	response, err := service.FireWebhook(ctx, accessToken, webhookCode)
+
+	// Then: Returns success response with webhook_fired = true
+	// Note: This may fail with real API if token is invalid, but method should exist
+	if err != nil {
+		// Expected error with fake token, but method should exist
+		assert.Contains(t, err.Error(), "plaid", "Error should be from Plaid API")
+	} else {
+		assert.NotNil(t, response, "Expected non-nil response on success")
+		assert.True(t, response.WebhookFired, "Expected webhook_fired to be true")
+		assert.NotEmpty(t, response.RequestId, "Expected request_id field")
+	}
+}
+
+// TestFireWebhook_EmptyAccessToken_ReturnsError tests validation of empty access token.
+func TestFireWebhook_EmptyAccessToken_ReturnsError(t *testing.T) {
+	// Given: Valid PlaidService
+	cfg := &config.Config{
+		PlaidClientID: "test_client_id",
+		PlaidSecret:   "test_secret",
+		PlaidEnv:      "sandbox",
+	}
+
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err, "Service creation should succeed")
+
+	// When: Calling FireWebhook with empty access token
+	ctx := context.Background()
+	response, err := service.FireWebhook(ctx, "", "DEFAULT_UPDATE")
+
+	// Then: Returns validation error
+	assert.Error(t, err, "Expected error with empty access token")
+	assert.Contains(t, err.Error(), "access token", "Error should mention access token")
+	assert.Nil(t, response, "Expected nil response on error")
+}
+
+// TestFireWebhook_EmptyWebhookCode_ReturnsError tests validation of empty webhook code.
+func TestFireWebhook_EmptyWebhookCode_ReturnsError(t *testing.T) {
+	// Given: Valid PlaidService
+	cfg := &config.Config{
+		PlaidClientID: "test_client_id",
+		PlaidSecret:   "test_secret",
+		PlaidEnv:      "sandbox",
+	}
+
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err, "Service creation should succeed")
+
+	// When: Calling FireWebhook with empty webhook code
+	ctx := context.Background()
+	response, err := service.FireWebhook(ctx, "access-token", "")
+
+	// Then: Returns validation error
+	assert.Error(t, err, "Expected error with empty webhook code")
+	assert.Contains(t, err.Error(), "webhook code", "Error should mention webhook code")
+	assert.Nil(t, response, "Expected nil response on error")
+}
+
+// TestFireWebhook_ProductionEnvironment_ReturnsError tests that FireWebhook
+// returns an error when PlaidEnv is "production" (sandbox-only method).
+func TestFireWebhook_ProductionEnvironment_ReturnsError(t *testing.T) {
+	// Given: PlaidService configured for production environment
+	cfg := &config.Config{
+		PlaidClientID: "test_client_id",
+		PlaidSecret:   "test_secret",
+		PlaidEnv:      "production", // Production environment!
+	}
+
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err, "Service creation should succeed")
+
+	// When: Attempting to fire webhook in production
+	ctx := context.Background()
+	response, err := service.FireWebhook(ctx, "access-token", "DEFAULT_UPDATE")
+
+	// Then: Returns error indicating sandbox-only operation
+	assert.Error(t, err, "Expected error when calling FireWebhook in production")
+	assert.Contains(t, err.Error(), "sandbox", "Error should indicate sandbox-only operation")
+	assert.Nil(t, response, "Expected nil response on error")
 }

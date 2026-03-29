@@ -1,0 +1,652 @@
+name: Deploy to QA
+
+# Manual-only workflow for deploying PRs or branches to QA environment (Mac Mini)
+# NOTE: This workflow requires manual triggering - there is no automatic deployment
+# Supports two deployment modes:
+#   - PR mode: Deploy from an open PR (for testing PRs before merge)
+#   - Branch mode: Deploy from a branch directly (e.g., staging after PR merge)
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_mode:
+        description: 'Deployment mode'
+        required: true
+        type: choice
+        options:
+          - 'pr'        # Deploy from a PR
+          - 'branch'    # Deploy from a branch directly
+      pr_number:
+        description: 'PR number to deploy (required if mode=pr)'
+        required: false
+        type: string
+      branch_name:
+        description: 'Branch name to deploy (required if mode=branch)'
+        required: false
+        type: string
+        default: 'staging'
+# Only allow one QA deployment at a time
+concurrency:
+  group: deploy-qa
+  cancel-in-progress: false
+
+env:
+  GO_VERSION: '1.26.1'
+  NODE_VERSION: '20'
+  REGISTRY: ghcr.io
+  BACKEND_IMAGE_NAME: boostedbudget/boostedbudget-backend
+  FRONTEND_IMAGE_NAME: boostedbudget/boostedbudget-frontend
+
+jobs:
+  # =============================================================================
+  # Fetch Deployment Metadata (PR or Branch)
+  # =============================================================================
+  deployment-metadata:
+    name: Fetch Deployment Metadata
+    runs-on: [self-hosted, macOS, mac-mini]
+    outputs:
+      head_sha: ${{ steps.deploy-info.outputs.head_sha }}
+      head_ref: ${{ steps.deploy-info.outputs.head_ref }}
+      deploy_title: ${{ steps.deploy-info.outputs.deploy_title }}
+      deploy_author: ${{ steps.deploy-info.outputs.deploy_author }}
+      tag_prefix: ${{ steps.deploy-info.outputs.tag_prefix }}
+      deployment_mode: ${{ github.event.inputs.deployment_mode }}
+
+    steps:
+      - name: Validate inputs
+        run: |
+          MODE="${{ github.event.inputs.deployment_mode }}"
+          PR_NUMBER="${{ github.event.inputs.pr_number }}"
+          BRANCH_NAME="${{ github.event.inputs.branch_name }}"
+
+          if [ "$MODE" = "pr" ]; then
+            if [ -z "$PR_NUMBER" ]; then
+              echo "::error::PR number is required when deployment_mode=pr"
+              exit 1
+            fi
+            echo "::notice::Deployment mode: PR #${PR_NUMBER}"
+          elif [ "$MODE" = "branch" ]; then
+            if [ -z "$BRANCH_NAME" ]; then
+              echo "::error::Branch name is required when deployment_mode=branch"
+              exit 1
+            fi
+            echo "::notice::Deployment mode: Branch '${BRANCH_NAME}'"
+          else
+            echo "::error::Invalid deployment mode: $MODE"
+            exit 1
+          fi
+
+      - name: Fetch deployment information
+        id: deploy-info
+        run: |
+          MODE="${{ github.event.inputs.deployment_mode }}"
+
+          if [ "$MODE" = "pr" ]; then
+            echo "Fetching metadata for PR #${{ github.event.inputs.pr_number }}..."
+
+            # Use curl + GitHub API instead of gh CLI (gh not available on self-hosted runners)
+            PR_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.inputs.pr_number }}")
+
+            # Check for API errors
+            if echo "$PR_DATA" | jq -e '.message' > /dev/null 2>&1; then
+              echo "::error::Failed to fetch PR: $(echo "$PR_DATA" | jq -r '.message')"
+              exit 1
+            fi
+
+            # GitHub API returns state as lowercase: "open", "closed"
+            # and merged as boolean
+            PR_STATE=$(echo "$PR_DATA" | jq -r '.state')
+            PR_MERGED=$(echo "$PR_DATA" | jq -r '.merged')
+            if [ "$PR_MERGED" = "true" ]; then
+              echo "::error::PR #${{ github.event.inputs.pr_number }} is merged. Can only deploy open PRs in PR mode."
+              echo "::notice::Tip: Use 'branch' deployment mode to deploy the merged branch instead."
+              exit 1
+            fi
+            if [ "$PR_STATE" = "closed" ]; then
+              echo "::error::PR #${{ github.event.inputs.pr_number }} is closed. Can only deploy open PRs in PR mode."
+              exit 1
+            fi
+
+            # GitHub API field names differ from gh CLI:
+            # .head.sha (not .headRefOid), .head.ref (not .headRefName), .user.login (not .author.login)
+            HEAD_SHA=$(echo "$PR_DATA" | jq -r '.head.sha')
+            HEAD_REF=$(echo "$PR_DATA" | jq -r '.head.ref')
+            DEPLOY_TITLE=$(echo "$PR_DATA" | jq -r '.title')
+            DEPLOY_AUTHOR=$(echo "$PR_DATA" | jq -r '.user.login')
+            TAG_PREFIX="pr-${{ github.event.inputs.pr_number }}"
+
+            echo "::notice::PR #${{ github.event.inputs.pr_number }}: ${DEPLOY_TITLE}"
+            echo "::notice::Branch: ${HEAD_REF} (${HEAD_SHA})"
+            echo "::notice::Author: @${DEPLOY_AUTHOR}"
+
+          else
+            # Branch mode
+            BRANCH_NAME="${{ github.event.inputs.branch_name }}"
+            echo "Fetching metadata for branch '${BRANCH_NAME}'..."
+
+            # Fetch branch info from GitHub API
+            BRANCH_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/${{ github.repository }}/branches/${BRANCH_NAME}")
+
+            # Check for API errors
+            if echo "$BRANCH_DATA" | jq -e '.message' > /dev/null 2>&1; then
+              echo "::error::Failed to fetch branch: $(echo "$BRANCH_DATA" | jq -r '.message')"
+              exit 1
+            fi
+
+            HEAD_SHA=$(echo "$BRANCH_DATA" | jq -r '.commit.sha')
+            HEAD_REF="${BRANCH_NAME}"
+            DEPLOY_TITLE="Branch deployment: ${BRANCH_NAME}"
+            DEPLOY_AUTHOR="${{ github.actor }}"
+            # Sanitize branch name for tag (replace / with -)
+            SANITIZED_BRANCH=$(echo "$BRANCH_NAME" | sed 's/\//-/g')
+            TAG_PREFIX="branch-${SANITIZED_BRANCH}"
+
+            echo "::notice::Branch: ${HEAD_REF} (${HEAD_SHA})"
+            echo "::notice::Triggered by: @${DEPLOY_AUTHOR}"
+          fi
+
+          echo "head_sha=${HEAD_SHA}" >> $GITHUB_OUTPUT
+          echo "head_ref=${HEAD_REF}" >> $GITHUB_OUTPUT
+          echo "deploy_title=${DEPLOY_TITLE}" >> $GITHUB_OUTPUT
+          echo "deploy_author=${DEPLOY_AUTHOR}" >> $GITHUB_OUTPUT
+          echo "tag_prefix=${TAG_PREFIX}" >> $GITHUB_OUTPUT
+
+      - name: Deployment metadata summary
+        run: |
+          MODE="${{ github.event.inputs.deployment_mode }}"
+
+          if [ "$MODE" = "pr" ]; then
+            echo "### 📋 PR Deployment Metadata" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Mode:** PR Deployment" >> $GITHUB_STEP_SUMMARY
+            echo "**PR:** #${{ github.event.inputs.pr_number }} - ${{ steps.deploy-info.outputs.deploy_title }}" >> $GITHUB_STEP_SUMMARY
+            echo "**Author:** @${{ steps.deploy-info.outputs.deploy_author }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### 📋 Branch Deployment Metadata" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Mode:** Branch Deployment" >> $GITHUB_STEP_SUMMARY
+            echo "**Branch:** \`${{ github.event.inputs.branch_name }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "**Triggered by:** @${{ steps.deploy-info.outputs.deploy_author }}" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "**Ref:** \`${{ steps.deploy-info.outputs.head_ref }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${{ steps.deploy-info.outputs.head_sha }}\`" >> $GITHUB_STEP_SUMMARY
+
+  # =============================================================================
+  # Build and Push Images to GHCR (Parallelized via Matrix)
+  # =============================================================================
+  build-images:
+    name: Build ${{ matrix.component }} Image
+    needs: [deployment-metadata]
+    if: ${{ needs.deployment-metadata.result == 'success' }}
+    runs-on: [self-hosted, macOS, mac-mini]
+    strategy:
+      matrix:
+        component: [backend, frontend]
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      # Pass through the build target info to downstream jobs
+      tag_prefix: ${{ steps.build-target.outputs.tag_prefix }}
+      sha: ${{ steps.build-target.outputs.sha }}
+      ref: ${{ steps.build-target.outputs.ref }}
+    env:
+      UNIQUE_WORKSPACE: workspace-build-images-${{ matrix.component }}-${{ github.run_id }}
+
+    steps:
+      - name: Clean up Docker-created files (sudo)
+        run: |
+          # Remove any root-owned files created by Docker volumes
+          # This prevents "permission denied" errors during checkout cleanup
+          sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+      - name: Determine build target
+        id: build-target
+        run: |
+          echo "ref=${{ needs.deployment-metadata.outputs.head_ref }}" >> $GITHUB_OUTPUT
+          echo "sha=${{ needs.deployment-metadata.outputs.head_sha }}" >> $GITHUB_OUTPUT
+          echo "tag_prefix=${{ needs.deployment-metadata.outputs.tag_prefix }}" >> $GITHUB_OUTPUT
+          if [ "${{ github.event.inputs.deployment_mode }}" = "pr" ]; then
+            echo "::notice::Building PR #${{ github.event.inputs.pr_number }} branch: ${{ needs.deployment-metadata.outputs.head_ref }}"
+          else
+            echo "::notice::Building branch: ${{ needs.deployment-metadata.outputs.head_ref }}"
+          fi
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          ref: ${{ steps.build-target.outputs.ref }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Configure Docker to avoid keychain conflicts
+        run: |
+          LOCKDIR=~/.docker/config.lock
+          TIMEOUT=30
+          ELAPSED=0
+
+          while ! mkdir "$LOCKDIR" 2>/dev/null; do
+            echo "[${{ matrix.component }}] Waiting for config.json lock..."
+            sleep 1
+            ELAPSED=$((ELAPSED + 1))
+            if [ $ELAPSED -ge $TIMEOUT ]; then
+              echo "❌ Timeout waiting for lock"
+              exit 1
+            fi
+          done
+
+          trap "rmdir '$LOCKDIR' 2>/dev/null || true" EXIT
+
+          mkdir -p ~/.docker
+          if [ -f ~/.docker/config.json ]; then
+            if command -v jq &> /dev/null; then
+              TEMP_FILE=~/.docker/config.json.tmp.${{ matrix.component }}
+              if jq 'del(.credsStore)' ~/.docker/config.json > "$TEMP_FILE" 2>/dev/null; then
+                mv "$TEMP_FILE" ~/.docker/config.json
+              else
+                rm -f "$TEMP_FILE"
+              fi
+            fi
+          else
+            echo "{}" > ~/.docker/config.json
+          fi
+
+      - name: Log in to GitHub Container Registry
+        run: |
+          LOCKDIR=~/.docker/login.lock
+          TIMEOUT=30
+          ELAPSED=0
+
+          while ! mkdir "$LOCKDIR" 2>/dev/null; do
+            echo "[${{ matrix.component }}] Waiting for docker login lock..."
+            sleep 1
+            ELAPSED=$((ELAPSED + 1))
+            if [ $ELAPSED -ge $TIMEOUT ]; then
+              echo "❌ Timeout waiting for lock"
+              exit 1
+            fi
+          done
+
+          trap "rmdir '$LOCKDIR' 2>/dev/null || true" EXIT
+
+          MAX_ATTEMPTS=3
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            if echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin; then
+              echo "✅ Login successful"
+              exit 0
+            else
+              if [ $i -lt $MAX_ATTEMPTS ]; then
+                sleep 10
+              else
+                exit 1
+              fi
+            fi
+          done
+
+      - name: Set image name for ${{ matrix.component }}
+        id: image-name
+        run: |
+          if [ "${{ matrix.component }}" = "backend" ]; then
+            IMAGE_NAME="${{ env.BACKEND_IMAGE_NAME }}"
+          else
+            IMAGE_NAME="${{ env.FRONTEND_IMAGE_NAME }}"
+          fi
+          echo "image-name=${IMAGE_NAME}" >> $GITHUB_OUTPUT
+          echo "Building: ${{ env.REGISTRY }}/${IMAGE_NAME}:${{ steps.build-target.outputs.tag_prefix }}-${{ steps.build-target.outputs.sha }}"
+
+      - name: Set Dockerfile path
+        id: dockerfile
+        run: |
+          if [ "${{ matrix.component }}" = "frontend" ]; then
+            echo "path=apps/web/Dockerfile" >> $GITHUB_OUTPUT
+          else
+            echo "path=${{ matrix.component }}/Dockerfile" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build and push ${{ matrix.component }} image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ env.UNIQUE_WORKSPACE }}
+          file: ${{ env.UNIQUE_WORKSPACE }}/${{ steps.dockerfile.outputs.path }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          pull: true
+          no-cache: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ steps.build-target.outputs.tag_prefix }}-${{ steps.build-target.outputs.sha }}
+            ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ steps.build-target.outputs.tag_prefix }}-latest
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache-go${{ env.GO_VERSION }}
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache-go${{ env.GO_VERSION }},mode=max
+          build-args: |
+            GO_VERSION=${{ env.GO_VERSION }}
+            VERSION=${{ steps.build-target.outputs.tag_prefix }}-${{ steps.build-target.outputs.sha }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+          provenance: false
+
+      - name: Image build summary
+        run: |
+          echo "### 🐳 ${{ matrix.component }} Image Built" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ steps.build-target.outputs.tag_prefix }}-${{ steps.build-target.outputs.sha }}\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+  # =============================================================================
+  # Deploy to Mac Mini QA
+  # =============================================================================
+  deploy-to-mac-mini:
+    name: Deploy to Mac Mini QA
+    needs: [deployment-metadata, build-images]
+    if: ${{ needs.build-images.result == 'success' }}
+    runs-on: [self-hosted, macOS, mac-mini]
+    environment:
+      name: qa
+      url: https://localhost:3000
+    env:
+      UNIQUE_WORKSPACE: workspace-deploy-mac-mini-${{ github.run_id }}
+
+    steps:
+      - name: Clean up Docker-created files (sudo)
+        run: |
+          sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          ref: ${{ needs.build-images.outputs.ref }}
+
+      - name: Restore SSL certificates from secrets
+        run: |
+          mkdir -p ${{ env.UNIQUE_WORKSPACE }}/apps/web
+          echo "${{ secrets.QA_SSL_CERT }}" | base64 -d > ${{ env.UNIQUE_WORKSPACE }}/apps/web/cert.pem
+          echo "${{ secrets.QA_SSL_KEY }}" | base64 -d > ${{ env.UNIQUE_WORKSPACE }}/apps/web/key.pem
+          chmod 600 ${{ env.UNIQUE_WORKSPACE }}/apps/web/*.pem
+          echo "✓ SSL certificates restored for HTTPS QA access"
+
+      - name: Create .env.qa from secrets
+        run: |
+          # Use outputs from build-images job for image tags
+          TAG_PREFIX="${{ needs.build-images.outputs.tag_prefix }}"
+          SHA="${{ needs.build-images.outputs.sha }}"
+
+          cat > ${{ env.UNIQUE_WORKSPACE }}/.env.qa << EOF
+          # Application Settings
+          COMPOSE_PROJECT_NAME=boostedbudget-qa
+          NODE_ENV=qa
+          GO_ENV=qa
+          ENVIRONMENT=qa
+          VERSION=${TAG_PREFIX}-${SHA}
+          PRIMARY_REGION=iad
+
+          # CORS Configuration
+          CORS_ALLOWED_ORIGINS=${{ secrets.CORS_ALLOWED_ORIGINS_QA || 'https://yingyues-mac-mini.tailce219d.ts.net:3443,https://localhost:3443' }}
+
+          # Docker Image Configuration (pull from GHCR)
+          PULL_FROM_GHCR=true
+          BACKEND_IMAGE=${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${TAG_PREFIX}-${SHA}
+          FRONTEND_IMAGE=${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${TAG_PREFIX}-${SHA}
+
+          # URLs
+          BACKEND_URL=http://localhost:8080
+          FRONTEND_URL=http://localhost:3000
+
+          # Database (QA)
+          POSTGRES_USER=qauser
+          POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD_QA || 'qapass' }}
+          DATABASE_URL=postgresql://qauser:${{ secrets.POSTGRES_PASSWORD_QA || 'qapass' }}@localhost:5433/boostedbudget_qa?sslmode=disable
+
+          # Redis (QA)
+          REDIS_URL=redis://localhost:6380/0
+
+          # RabbitMQ (QA)
+          RABBITMQ_URL=amqp://guest:guest@localhost:5673/
+
+          # Clerk Authentication
+          CLERK_SECRET_KEY=${{ secrets.CLERK_SECRET_KEY }}
+          CLERK_PUBLISHABLE_KEY=${{ secrets.CLERK_PUBLISHABLE_KEY }}
+
+          # Plaid (Sandbox)
+          PLAID_ENV=sandbox
+          PLAID_CLIENT_ID=${{ secrets.PLAID_CLIENT_ID_QA || 'changeme' }}
+          PLAID_SECRET=${{ secrets.PLAID_SECRET_QA || 'changeme' }}
+          PLAID_PRODUCTS=auth,transactions,balance
+          PLAID_COUNTRY_CODES=US,CA,GB
+          PLAID_REDIRECT_URI=${{ secrets.PLAID_REDIRECT_URI_QA || 'https://localhost:3443/oauth-callback' }}
+          PLAID_WEBHOOK_URL=${{ secrets.PLAID_WEBHOOK_URL_QA || 'http://localhost:8080/webhooks/plaid' }}
+
+          # Stripe (Test Mode)
+          STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY_TEST || 'sk_test_changeme' }}
+
+          # Security
+          ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY_QA || '12345678901234567890123456789012' }}
+
+          # QA Auth Bypass (Issue #821)
+          QA_BYPASS_SECRET=${{ secrets.QA_BYPASS_SECRET }}
+          QA_ADMIN_CLERK_USER_ID=${{ secrets.QA_ADMIN_CLERK_USER_ID }}
+          QA_PREMIUM_CLERK_USER_ID=${{ secrets.QA_PREMIUM_CLERK_USER_ID }}
+
+          # Logging
+          LOG_LEVEL=debug
+          LOG_FORMAT=json
+
+          # Feature Flags
+          FEATURE_RULES_ENGINE=true
+          FEATURE_AI_INSIGHTS=false
+          FEATURE_MULTI_REGION=false
+          EOF
+
+      - name: Log in to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+
+      - name: Deploy to QA (pull from GHCR)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: |
+          chmod +x ./scripts/deploy-qa.sh
+          # Environment variables are set in .env.qa
+          # Script will read PULL_FROM_GHCR, BACKEND_IMAGE, FRONTEND_IMAGE from there
+          ./scripts/deploy-qa.sh
+
+      - name: Show container status
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        if: always()
+        run: |
+          docker-compose -f docker-compose.qa.yml --env-file .env.qa ps
+
+      - name: Show logs on failure
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        if: failure()
+        run: |
+          echo "::group::Backend Logs"
+          docker-compose -f docker-compose.qa.yml --env-file .env.qa logs --tail=50 backend
+          echo "::endgroup::"
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+  # =============================================================================
+  # Smoke Tests
+  # =============================================================================
+  smoke-tests:
+    name: QA Smoke Tests
+    needs: [deployment-metadata, build-images, deploy-to-mac-mini]
+    if: ${{ needs.deploy-to-mac-mini.result == 'success' }}
+    runs-on: [self-hosted, macOS, mac-mini]
+    env:
+      UNIQUE_WORKSPACE: workspace-smoke-tests-${{ github.run_id }}
+
+    steps:
+      - name: Clean up Docker-created files (sudo)
+        run: |
+          sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
+
+      - name: Run smoke tests
+        timeout-minutes: 5
+        run: |
+          echo "Running smoke tests against QA..."
+
+          # Backend health check
+          if curl -f http://localhost:8080/health; then
+            echo "✅ Backend health check passed"
+          else
+            echo "::error::Backend health check failed"
+            exit 1
+          fi
+
+          # Frontend accessibility
+          if curl -f http://localhost:3000; then
+            echo "✅ Frontend is accessible"
+          else
+            echo "::error::Frontend is not accessible"
+            exit 1
+          fi
+
+          # Database connectivity (via backend)
+          echo "Database connectivity verified via backend health check"
+
+          echo "::notice::✅ All smoke tests passed"
+
+      - name: Smoke tests summary
+        if: success()
+        run: |
+          echo "### ✅ QA Smoke Tests Passed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Backend health check" >> $GITHUB_STEP_SUMMARY
+          echo "- Frontend accessibility" >> $GITHUB_STEP_SUMMARY
+          echo "- Database connectivity" >> $GITHUB_STEP_SUMMARY
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+  # =============================================================================
+  # Deployment Summary
+  # =============================================================================
+  deployment-summary:
+    name: Deployment Summary
+    needs: [deployment-metadata, build-images, deploy-to-mac-mini, smoke-tests]
+    runs-on: [self-hosted, macOS, mac-mini]
+    if: ${{ always() && needs.smoke-tests.result == 'success' }}
+
+    steps:
+      - name: Create deployment summary
+        run: |
+          TAG_PREFIX="${{ needs.build-images.outputs.tag_prefix }}"
+          SHA="${{ needs.build-images.outputs.sha }}"
+          MODE="${{ github.event.inputs.deployment_mode }}"
+
+          if [ "$MODE" = "pr" ]; then
+            echo "### 🚀 PR #${{ github.event.inputs.pr_number }} Deployed to QA" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Mode:** PR Deployment" >> $GITHUB_STEP_SUMMARY
+            echo "**PR:** #${{ github.event.inputs.pr_number }} - ${{ needs.deployment-metadata.outputs.deploy_title }}" >> $GITHUB_STEP_SUMMARY
+            echo "**Author:** @${{ needs.deployment-metadata.outputs.deploy_author }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### 🚀 Branch '${{ github.event.inputs.branch_name }}' Deployed to QA" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Mode:** Branch Deployment" >> $GITHUB_STEP_SUMMARY
+            echo "**Branch:** \`${{ github.event.inputs.branch_name }}\`" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "**Ref:** \`${{ needs.deployment-metadata.outputs.head_ref }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered by:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** QA (Mac Mini)" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** \`${TAG_PREFIX}-${SHA}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${SHA}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Images:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Backend: \`${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${TAG_PREFIX}-${SHA}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Frontend: \`${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${TAG_PREFIX}-${SHA}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Access (Local Network):**" >> $GITHUB_STEP_SUMMARY
+          echo "- Frontend: https://localhost:3000" >> $GITHUB_STEP_SUMMARY
+          echo "- Backend API: http://localhost:8080" >> $GITHUB_STEP_SUMMARY
+          echo "- RabbitMQ UI: http://localhost:15673" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Access (Tailscale VPN):**" >> $GITHUB_STEP_SUMMARY
+          echo "- Update with your Tailscale hostname after setup" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Auto-Restart:** ✅ All containers configured with \`restart: unless-stopped\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Tests:** ✅ Smoke tests passed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployed at:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+
+  # =============================================================================
+  # Notify PR
+  # =============================================================================
+  notify-pr:
+    name: Comment on PR
+    needs: [deployment-metadata, build-images, smoke-tests]
+    # Only run when deployment_mode=pr AND smoke tests pass
+    # Branch deployments don't need PR comments
+    if: ${{ needs.smoke-tests.result == 'success' && github.event.inputs.deployment_mode == 'pr' }}
+    runs-on: [self-hosted, macOS, mac-mini]
+
+    steps:
+      - name: Comment on PR
+        run: |
+          TAG_PREFIX="${{ needs.build-images.outputs.tag_prefix }}"
+          SHA="${{ needs.build-images.outputs.sha }}"
+
+          # Use curl + GitHub API instead of gh CLI (gh not available on self-hosted runners)
+          # GitHub API uses /issues/{number}/comments endpoint for PR comments (PRs are a type of issue)
+          COMMENT_BODY=$(cat << 'EOF'
+          ## 🚀 QA Deployment Successful
+
+          This PR has been deployed to the QA environment for testing.
+
+          | Field | Value |
+          |-------|-------|
+          | **Version** | `TAG_PREFIX_PLACEHOLDER-SHA_PLACEHOLDER` |
+          | **Branch** | `${{ needs.deployment-metadata.outputs.head_ref }}` |
+          | **Commit** | `SHA_PLACEHOLDER` |
+          | **Triggered by** | @${{ github.actor }} |
+
+          ### Access URLs
+          - **Frontend:** https://localhost:3000 (or via Tailscale)
+          - **Backend API:** http://localhost:8080
+
+          ### Workflow Run
+          [View deployment logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+          ---
+          *This is an automated comment from the QA deployment workflow.*
+          EOF
+          )
+
+          # Replace placeholders with actual values
+          COMMENT_BODY="${COMMENT_BODY//TAG_PREFIX_PLACEHOLDER/$TAG_PREFIX}"
+          COMMENT_BODY="${COMMENT_BODY//SHA_PLACEHOLDER/$SHA}"
+
+          # Post comment via GitHub API
+          HTTP_STATUS=$(curl -s -o /tmp/comment_response.json -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.inputs.pr_number }}/comments" \
+            -d "$(jq -n --arg body "$COMMENT_BODY" '{body: $body}')")
+
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
+            echo "::notice::✅ Comment added to PR #${{ github.event.inputs.pr_number }}"
+          else
+            echo "::error::Failed to post comment. HTTP status: $HTTP_STATUS"
+            cat /tmp/comment_response.json
+            exit 1
+          fi

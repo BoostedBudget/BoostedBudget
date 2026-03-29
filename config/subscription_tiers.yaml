@@ -1,125 +1,109 @@
 # BoostedBudget Subscription Tiers Configuration
-# Last updated: 2025-10-19
+# Last updated: 2026-01-13
 #
-# This file defines the subscription tiers and their limits.
-# Changing values here will affect tier behavior without code deployment.
+# Subscription System Simplification (Issues #674-#678):
+# - Removed free tier entirely (users get 60-day premium trial with ads instead)
+# - Switched from Stripe to Paddle for payment processing
+# - Rules, categories, tags, API calls are now UNLIMITED for all tiers
+# - Only 3 configurable limits remain: accounts, transaction_history_days, executions_per_day
 #
-# Resource Types:
-#   - accounts: Number of linked bank accounts
-#   - rules: Number of automation rules
-#   - executions_per_day: Maximum rule executions per day
-#   - min_execution_interval_minutes: Minimum time between rule executions
+# Tiers: premium, household_2, household_3, household_4, household_5
 #
 # Special Values:
-#   - Use -1 or 999999 for "unlimited" resources
-#
-# Future Extensibility:
-#   - Add new tiers by creating new top-level entries
-#   - Add new limit types under the "limits" section
-#   - Per-user overrides are stored in database (user_subscription_overrides table)
+#   - Use -1 for "unlimited" resources
+
+# Default features for all paid tiers (can be overridden per-tier if needed)
+default_features: &default_features
+  ads_enabled: false
+  ai_insights: true
+  api_access: true
+  priority_support: true
+  custom_categories: true
+  custom_tags: true
+  advanced_reports: true
 
 tiers:
-  free:
-    display_name: "Free"
-    description: "Full budgeting with basic automation"
-    price_monthly: 0.00
-    price_yearly: 0.00
-    stripe_price_id_monthly: null
-    stripe_price_id_yearly: null
-
-    limits:
-      accounts: 3  # One checking, one savings, one investment
-      rules: 1
-      executions_per_day: 1
-      min_execution_interval_minutes: 1440  # 24 hours
-      api_calls_per_month: 0
-      data_export_requests_per_month: 1
-
-    features:
-      ads_enabled: true
-      ai_insights: false
-      api_access: false
-      priority_support: false
-      custom_categories: false
-      advanced_reports: false
-
-  premium_lite:
-    display_name: "Premium Lite"
-    description: "Perfect for couples and light automation"
-    price_monthly: 4.99
-    price_yearly: 49.99  # ~2 months free
-    stripe_price_id_monthly: null  # Set when Stripe configured
-    stripe_price_id_yearly: null
-
-    limits:
-      accounts: 15
-      rules: 5
-      executions_per_day: 2
-      min_execution_interval_minutes: 720  # 12 hours
-      api_calls_per_month: 0
-      data_export_requests_per_month: 5
-
-    features:
-      ads_enabled: false
-      ai_insights: false
-      api_access: false
-      priority_support: false
-      custom_categories: true
-      advanced_reports: false
-
   premium:
     display_name: "Premium"
-    description: "Power users with complex finances"
-    price_monthly: 9.99
-    price_yearly: 99.99  # ~2 months free
-    stripe_price_id_monthly: null  # Set when Stripe configured
-    stripe_price_id_yearly: null
-
+    description: "Full features for power users"
+    price_monthly: 8.99
+    price_yearly: 79.00
+    mobile_price_yearly: 89.99
+    paddle_price_id_monthly: "pri_01jmwgcb66fqp57epz7abzcpym"
+    paddle_price_id_yearly: "pri_01jmwgcyc80s12t63w4nt2c4jy"
+    users_included: 1
     limits:
-      accounts: 30
-      rules: 15
-      executions_per_day: 6
-      min_execution_interval_minutes: 240  # 4 hours
-      api_calls_per_month: 0
-      data_export_requests_per_month: 10
+      accounts: -1
+      transaction_history_days: 730
+      executions_per_day: -1
+    features: *default_features
 
-    features:
-      ads_enabled: false
-      ai_insights: false
-      api_access: false
-      priority_support: true
-      custom_categories: true
-      advanced_reports: true
-
-  premium_plus:
-    display_name: "Premium+"
-    description: "Unlimited everything with AI and API access"
-    price_monthly: 19.99
-    price_yearly: 199.99  # ~2 months free
-    stripe_price_id_monthly: null  # Set when Stripe configured
-    stripe_price_id_yearly: null
-
+  household_2:
+    display_name: "Household (2)"
+    description: "Premium features for 2 family members"
+    price_monthly: 12.99
+    price_yearly: 119.00
+    mobile_price_yearly: 134.99
+    paddle_price_id_monthly: "pri_01jmwge4e7hhp52tz1fnt85hj8"
+    paddle_price_id_yearly: "pri_01jmwgeeemscr1nv0dh6mkhvdg"
+    users_included: 2
     limits:
-      accounts: -1  # Unlimited (represented as -1)
-      rules: -1     # Unlimited
-      executions_per_day: 144  # Every 10 minutes
-      min_execution_interval_minutes: 10
-      api_calls_per_month: 100000
-      data_export_requests_per_month: -1  # Unlimited
+      accounts: -1
+      transaction_history_days: 730
+      executions_per_day: -1
+    features: *default_features
 
-    features:
-      ads_enabled: false
-      ai_insights: true
-      api_access: true
-      priority_support: true
-      custom_categories: true
-      advanced_reports: true
+  household_3:
+    display_name: "Household (3)"
+    description: "Premium features for 3 family members"
+    price_monthly: 14.99
+    price_yearly: 139.00
+    mobile_price_yearly: 154.99
+    paddle_price_id_monthly: "pri_01jmwgej5rqnmwevg4wmn8vgj0"
+    paddle_price_id_yearly: "pri_01jmwgerr3vmwsktmvt7m8jcbm"
+    users_included: 3
+    limits:
+      accounts: -1
+      transaction_history_days: 730
+      executions_per_day: -1
+    features: *default_features
 
-# Default tier for new users
-default_tier: "free"
+  household_4:
+    display_name: "Household (4)"
+    description: "Premium features for 4 family members"
+    price_monthly: 16.99
+    price_yearly: 159.00
+    mobile_price_yearly: 179.99
+    paddle_price_id_monthly: "pri_01jmwgewjqtzy3kc05wvswk87r"
+    paddle_price_id_yearly: "pri_01jmwgf2tkx2hfz6jrs9m3jr1q"
+    users_included: 4
+    limits:
+      accounts: -1
+      transaction_history_days: 730
+      executions_per_day: -1
+    features: *default_features
 
-# Trial configuration (optional - for future use)
+  household_5:
+    display_name: "Household (5+)"
+    description: "Premium features for 5+ family members"
+    price_monthly: 18.99
+    price_yearly: 179.00
+    mobile_price_yearly: 199.99
+    paddle_price_id_monthly: "pri_01jmwgf798kbh5mkny2j7g08m4"
+    paddle_price_id_yearly: "pri_01jmwgfbpdpmjpxpkv7q39e3xs"
+    users_included: 5
+    limits:
+      accounts: -1
+      transaction_history_days: 730
+      executions_per_day: -1
+    features: *default_features
+
+# Default tier for new users (no free tier - premium with trial status)
+default_tier: "premium"
+
+# Trial configuration
 trial:
-  enabled: false
-  duration_days: 14
-  tier: "premium"  # Which tier trial users get
+  enabled: true
+  duration_days: 60
+  tier: "premium"
+  ads_enabled: true  # Trial users see ads

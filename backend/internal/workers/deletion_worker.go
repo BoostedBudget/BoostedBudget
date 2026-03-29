@@ -3,7 +3,7 @@ package workers
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -12,6 +12,7 @@ import (
 
 // DeletionWorker handles periodic processing of scheduled account deletions
 type DeletionWorker struct {
+	logger          *slog.Logger
 	deletionService services.DeletionService
 	profileRepo     repository.ProfileRepository
 	interval        time.Duration
@@ -22,8 +23,13 @@ func NewDeletionWorker(
 	deletionService services.DeletionService,
 	profileRepo repository.ProfileRepository,
 	interval time.Duration,
+	logger *slog.Logger,
 ) *DeletionWorker {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &DeletionWorker{
+		logger:          logger,
 		deletionService: deletionService,
 		profileRepo:     profileRepo,
 		interval:        interval,
@@ -36,7 +42,7 @@ func (w *DeletionWorker) ProcessScheduledDeletions(ctx context.Context) error {
 	// Get users scheduled for deletion
 	users, err := w.profileRepo.GetUsersScheduledForDeletion(ctx)
 	if err != nil {
-		log.Printf("Error fetching users scheduled for deletion: %v", err)
+		w.logger.Error("error fetching users scheduled for deletion", "error", err)
 		return fmt.Errorf("failed to fetch users scheduled for deletion: %w", err)
 	}
 
@@ -45,14 +51,14 @@ func (w *DeletionWorker) ProcessScheduledDeletions(ctx context.Context) error {
 		return nil
 	}
 
-	log.Printf("Found %d users scheduled for deletion", len(users))
+	w.logger.Info("found users scheduled for deletion", "count", len(users))
 
 	// Process each user
 	for _, user := range users {
 		// Check context cancellation
 		select {
 		case <-ctx.Done():
-			log.Printf("Context cancelled, stopping deletion processing")
+			w.logger.Info("context cancelled, stopping deletion processing")
 			return nil
 		default:
 			// Continue processing
@@ -61,12 +67,12 @@ func (w *DeletionWorker) ProcessScheduledDeletions(ctx context.Context) error {
 		// Execute deletion for this user
 		if err := w.deletionService.ExecuteDeletion(ctx, user.ID); err != nil {
 			// Log error but continue processing other users
-			log.Printf("Error deleting user %s: %v", user.ID, err)
+			w.logger.Error("error deleting user", "user_id", user.ID, "error", err)
 			// Don't return error - we want to continue processing
 			continue
 		}
 
-		log.Printf("Successfully deleted user %s", user.ID)
+		w.logger.Info("successfully deleted user", "user_id", user.ID)
 	}
 
 	return nil
@@ -75,7 +81,7 @@ func (w *DeletionWorker) ProcessScheduledDeletions(ctx context.Context) error {
 // Start begins the worker's periodic deletion processing
 // Runs until context is cancelled
 func (w *DeletionWorker) Start(ctx context.Context) {
-	log.Printf("Deletion worker starting with interval: %s", w.interval)
+	w.logger.Info("deletion worker starting", "interval", w.interval)
 
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
@@ -83,12 +89,12 @@ func (w *DeletionWorker) Start(ctx context.Context) {
 	// Check if context is already cancelled before first run
 	select {
 	case <-ctx.Done():
-		log.Printf("Deletion worker shutting down gracefully (context cancelled before start)")
+		w.logger.Info("deletion worker shutting down gracefully (context cancelled before start)")
 		return
 	default:
 		// Run once immediately on startup
 		if err := w.ProcessScheduledDeletions(ctx); err != nil {
-			log.Printf("Error processing scheduled deletions on startup: %v", err)
+			w.logger.Error("error processing scheduled deletions on startup", "error", err)
 		}
 	}
 
@@ -96,11 +102,11 @@ func (w *DeletionWorker) Start(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("Deletion worker shutting down gracefully")
+			w.logger.Info("deletion worker shutting down gracefully")
 			return
 		case <-ticker.C:
 			if err := w.ProcessScheduledDeletions(ctx); err != nil {
-				log.Printf("Error processing scheduled deletions: %v", err)
+				w.logger.Error("error processing scheduled deletions", "error", err)
 			}
 		}
 	}

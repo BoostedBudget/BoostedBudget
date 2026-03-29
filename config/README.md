@@ -20,7 +20,7 @@ All configuration in this directory is:
 
 **Used by**:
 - **Backend** (`backend/internal/config/tier_config.go`): Loaded at runtime, validated, cached as singleton, served via API
-- **Frontend** (`frontend/src/features/subscription/hooks/useSubscriptionTiers.ts`): Fetched from `GET /api/v1/subscription/tiers` with 24hr caching
+- **Frontend** (`apps/web/src/features/subscription/hooks/useSubscriptionTiers.ts`): Fetched from `GET /api/v1/subscription/tiers` with 24hr caching
 
 **Editing**:
 ```bash
@@ -74,6 +74,46 @@ trial:
 - Invalid configs prevent server startup
 - Frontend receives validated data via API
 
+### `default_dashboard_layout.yaml`
+
+**Primary configuration** for the default dashboard layout (widget arrangement).
+
+**CRITICAL: Version Sync Requirement**
+
+This config's `layout_version` MUST be kept in sync with:
+- `apps/web/src/features/dashboard/widgets/registry.ts` - `DEFAULT_LAYOUT.version`
+- `backend/internal/domain/dashboard_preferences.go` - `DefaultDashboardLayout().Version`
+
+**If versions are out of sync, users experience infinite dashboard reset loops!**
+
+**Used by**:
+- **Backend** (`backend/internal/config/dashboard_layout_config.go`): Loaded at runtime, served via `GET /api/v1/dashboard/default-layout`
+- **Backend** (`backend/internal/services/dashboard_preferences_service.go`): Used for new users and reset-to-default
+- **Frontend** (`apps/web/src/features/dashboard/hooks/useDefaultDashboardLayout.ts`): Fetched from API with 1hr caching
+
+**Structure**:
+```yaml
+layout_version: 4  # INCREMENT when changing default widgets
+
+widgets:
+  - id: "cash-flow-chart-1"
+    type: "cash-flow-chart"
+    x: 0
+    y: 0
+    w: 12
+    h: 5
+    minW: 4
+    minH: 4
+```
+
+**Editing**:
+1. Update `layout_version` (increment by 1)
+2. Modify widgets array as needed
+3. Update matching version in:
+   - `apps/web/src/features/dashboard/widgets/registry.ts`
+   - `backend/internal/domain/dashboard_preferences.go`
+4. Deploy and verify with: `curl /api/v1/dashboard/default-layout | jq .version`
+
 ## Design Decisions
 
 ### Why YAML?
@@ -87,7 +127,7 @@ trial:
 
 **Before** (duplicated):
 - `backend/config/subscription_tiers.yaml` (3 accounts)
-- `frontend/src/features/profile/types.ts` SUBSCRIPTION_TIERS constant (1 rule - BUG!)
+- `apps/web/src/features/profile/types.ts` SUBSCRIPTION_TIERS constant (1 rule - BUG!)
 - `CLAUDE.md` documentation (third copy)
 
 **After** (single source):
@@ -167,9 +207,9 @@ go test ./internal/config/... -v
 
 **Frontend API integration**:
 ```bash
-cd frontend
-npm test -- src/features/subscription/api/subscriptionApi.test.ts --run
-npm test -- src/features/subscription/hooks/useSubscriptionTiers.test.tsx --run
+cd apps/web
+bun run test -- src/features/subscription/api/subscriptionApi.test.ts --run
+bun run test -- src/features/subscription/hooks/useSubscriptionTiers.test.tsx --run
 ```
 
 **Integration** (ensure API returns valid data):

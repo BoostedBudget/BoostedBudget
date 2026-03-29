@@ -1,77 +1,56 @@
 package middleware
 
 import (
-	"encoding/json"
-	"io"
-	"os"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
-// StructuredLogger provides structured logging with JSON format
-type StructuredLogger struct {
-	writer io.Writer
+// sensitiveQueryParams lists URL query parameter names whose values must be redacted from logs.
+var sensitiveQueryParams = map[string]struct{}{
+	"token":         {},
+	"password":      {},
+	"key":           {},
+	"secret":        {},
+	"authorization": {},
+	"access_token":  {},
+	"refresh_token": {},
+	"api_key":       {},
+	"apikey":        {},
 }
 
-// NewStructuredLogger creates a new structured logger that writes to the specified writer
-// If writer is nil, it defaults to os.Stdout
-func NewStructuredLogger(writer io.Writer) *StructuredLogger {
-	if writer == nil {
-		writer = os.Stdout
+// redactQueryParams replaces values of sensitive query parameters with [REDACTED].
+// The comparison is case-insensitive. Non-sensitive parameters are returned unchanged.
+// Builds the result string manually to avoid URL-encoding the [REDACTED] marker.
+func redactQueryParams(rawQuery string) string {
+	if rawQuery == "" {
+		return rawQuery
 	}
-	return &StructuredLogger{writer: writer}
-}
 
-// Info logs an informational message with optional fields
-func (l *StructuredLogger) Info(message string, fields map[string]interface{}) {
-	l.log("info", message, fields)
-}
+	pairs := strings.Split(rawQuery, "&")
+	hasRedaction := false
 
-// Error logs an error message with optional fields
-func (l *StructuredLogger) Error(message string, fields map[string]interface{}) {
-	l.log("error", message, fields)
-}
-
-// Warn logs a warning message with optional fields
-func (l *StructuredLogger) Warn(message string, fields map[string]interface{}) {
-	l.log("warn", message, fields)
-}
-
-// Debug logs a debug message with optional fields
-func (l *StructuredLogger) Debug(message string, fields map[string]interface{}) {
-	l.log("debug", message, fields)
-}
-
-// log writes a structured log entry in JSON format
-func (l *StructuredLogger) log(level, message string, fields map[string]interface{}) {
-	entry := make(map[string]interface{})
-	entry["level"] = level
-	entry["message"] = message
-	entry["timestamp"] = time.Now().UTC().Format(time.RFC3339)
-
-	// Add custom fields
-	if fields != nil {
-		for k, v := range fields {
-			entry[k] = v
+	for i, pair := range pairs {
+		k, _, found := strings.Cut(pair, "=")
+		if !found {
+			continue
+		}
+		if _, sensitive := sensitiveQueryParams[strings.ToLower(k)]; sensitive {
+			pairs[i] = k + "=[REDACTED]"
+			hasRedaction = true
 		}
 	}
 
-	// Marshal to JSON
-	jsonData, err := json.Marshal(entry)
-	if err != nil {
-		// Fallback to standard logging if JSON marshal fails
-		os.Stderr.WriteString("Failed to marshal log entry: " + err.Error() + "\n")
-		return
+	if !hasRedaction {
+		return rawQuery
 	}
-
-	// Write to output
-	l.writer.Write(jsonData)
-	l.writer.Write([]byte("\n"))
+	return strings.Join(pairs, "&")
 }
 
-// StructuredLogging creates an Echo middleware that logs HTTP requests in structured JSON format
+// StructuredLogging creates an Echo middleware that logs HTTP requests using slog.
 //
 // The middleware logs the following fields:
 // - type: "http_request"
@@ -79,82 +58,73 @@ func (l *StructuredLogger) log(level, message string, fields map[string]interfac
 // - path: Request path
 // - status: HTTP status code
 // - duration_ms: Request duration in milliseconds
-// - request_id: Unique request identifier (if set by RequestID middleware)
-// - user_id: Authenticated user ID (if set by Auth0 middleware)
+// - request_id: Unique request identifier (from context, set by RequestID middleware)
+// - user_id: Authenticated user ID (from context, set by Clerk middleware)
 // - remote_ip: Client IP address
 // - user_agent: Client user agent
-// - query: Query parameters (if present)
+// - query: Query parameters (if present, sensitive values redacted)
 // - error: Error message (if request failed)
-// - level: Log level (info or error)
-// - timestamp: ISO 8601 timestamp
 //
 // Usage:
 //
 //	e := echo.New()
 //	e.Use(RequestID())  // Should be first to generate request IDs
-//	e.Use(StructuredLogging(os.Stdout))
-func StructuredLogging(writer io.Writer) echo.MiddlewareFunc {
-	logger := NewStructuredLogger(writer)
-
+//	e.Use(StructuredLogging(logger))
+func StructuredLogging(logger *slog.Logger) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			start := time.Now()
 			req := c.Request()
+			ctx := req.Context()
 
-			// Execute the handler
 			err := next(c)
 
-			// Calculate duration
 			duration := time.Since(start)
-
-			// Build log entry
-			fields := map[string]interface{}{
-				"type":        "http_request",
-				"method":      req.Method,
-				"path":        req.URL.Path,
-				"status":      c.Response().Status,
-				"duration_ms": duration.Milliseconds(),
-			}
-
-			// Add request ID if available
-			if requestID := c.Get("request_id"); requestID != nil {
-				fields["request_id"] = requestID
-			}
-
-			// Add user ID if available (from auth middleware)
-			if userID := c.Get("user_id"); userID != nil {
-				fields["user_id"] = userID
-			}
-
-			// Add remote IP (extract from RemoteAddr)
-			if remoteAddr := req.RemoteAddr; remoteAddr != "" {
-				// RemoteAddr is in format "IP:port", extract just IP
-				if idx := strings.LastIndex(remoteAddr, ":"); idx != -1 {
-					fields["remote_ip"] = remoteAddr[:idx]
-				} else {
-					fields["remote_ip"] = remoteAddr
+			status := c.Response().Status
+			level := slog.LevelInfo
+			if status >= 500 {
+				level = slog.LevelError
+			} else if status >= 400 {
+				level = slog.LevelWarn
+			} else if err != nil {
+				// Error returned but status not yet written (e.g. Echo error handler not run)
+				if httpErr, ok := err.(*echo.HTTPError); ok && httpErr.Code >= 500 {
+					level = slog.LevelError
+				} else if err != nil {
+					level = slog.LevelWarn
 				}
 			}
 
-			// Add user agent
-			if userAgent := req.UserAgent(); userAgent != "" {
-				fields["user_agent"] = userAgent
+			attrs := []slog.Attr{
+				slog.String("type", "http_request"),
+				slog.String("method", req.Method),
+				slog.String("path", req.URL.Path),
+				slog.Int("status", status),
+				slog.Int64("duration_ms", duration.Milliseconds()),
 			}
 
-			// Add query parameters if present
-			if query := req.URL.RawQuery; query != "" {
-				fields["query"] = query
+			if requestID := observability.RequestIDFromContext(ctx); requestID != "" {
+				attrs = append(attrs, slog.String("request_id", requestID))
 			}
-
-			// Determine log level and add error if present
-			level := "info"
+			if userID := observability.UserIDFromContext(ctx); userID != "" {
+				attrs = append(attrs, slog.String("user_id", userID))
+			}
+			if remoteAddr := req.RemoteAddr; remoteAddr != "" {
+				if idx := strings.LastIndex(remoteAddr, ":"); idx != -1 {
+					attrs = append(attrs, slog.String("remote_ip", remoteAddr[:idx]))
+				}
+			}
+			if ua := req.UserAgent(); ua != "" {
+				attrs = append(attrs, slog.String("user_agent", ua))
+			}
+			if q := req.URL.RawQuery; q != "" {
+				attrs = append(attrs, slog.String("query", redactQueryParams(q)))
+			}
 			if err != nil {
-				level = "error"
-				fields["error"] = err.Error()
+				attrs = append(attrs, slog.String("error", err.Error()))
 			}
 
-			// Log the request
-			logger.log(level, "HTTP request processed", fields)
+			logger.LogAttrs(ctx, level, "HTTP request processed", attrs...)
 
 			return err
 		}

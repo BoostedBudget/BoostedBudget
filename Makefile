@@ -32,9 +32,14 @@ help:
 	@echo "  make migrate-status   - Check current database schema"
 	@echo ""
 	@echo "Tools:"
-	@echo "  make generate         - Generate code from OpenAPI spec"
-	@echo "  make lint             - Run linters"
-	@echo "  make clean            - Clean build artifacts"
+	@echo "  make generate-openapi     - Generate api/openapi.yaml from Huma routes"
+	@echo "  make validate-openapi     - Verify spec is up to date (for CI)"
+	@echo "  make generate-api-client  - Generate TypeScript client from OpenAPI (uses npm+orval)"
+	@echo "  make validate-api-client  - Verify TypeScript client is up to date"
+	@echo "  make generate-all         - Generate OpenAPI spec + TypeScript client"
+	@echo "  make validate-all         - Verify all generated code is up to date"
+	@echo "  make lint                 - Run linters"
+	@echo "  make clean                - Clean build artifacts"
 
 # Development
 dev: docker-up
@@ -52,9 +57,7 @@ docker-rebuild:
 
 # Backend
 backend-test:
-	@cd backend && go test ./... -v -race -coverprofile=coverage.out -covermode=atomic -json > test-output.json 2>&1 || true
-	@cd backend && cat test-output.json | jq -s '[.[] | select(.Action == "pass" or .Action == "fail")] | {passed: ([.[] | select(.Action == "pass")] | length), failed: ([.[] | select(.Action == "fail")] | length), total: length}' > test-results.json 2>/dev/null || echo '{"passed":0,"failed":0,"total":0}' > test-results.json
-	@cd backend && cat test-output.json | grep -v "^{" || true
+	@cd backend && go test ./... -v -race -coverprofile=coverage.out -covermode=atomic ./...
 
 backend-build: backend-test
 	cd backend && go build -o bin/server ./cmd/server
@@ -68,7 +71,7 @@ test-ci:
 	cd backend && go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
 	@echo "Checking backend coverage threshold..."
 	./scripts/check-coverage.sh backend/coverage.out 60
-	cd frontend && npm run test:ci
+	cd apps/web && bun run test:ci
 	@echo "All CI tests passed!"
 
 # Fast Tests (No E2E) - For rapid iteration during development
@@ -82,24 +85,16 @@ test-fast:
 	@echo "⚠️  E2E tests skipped for speed. Run 'make test-all' before creating PRs."
 	@echo ""
 	@echo "1️⃣  Linting Migrations..."
-	@# Try using docker-compose postgres first (no ephemeral containers), fallback to skip
-	@# See: Memory leak investigation Oct 2025 - prevents dangling Docker image accumulation
-	@if docker compose ps postgres 2>/dev/null | grep -q "running"; then \
-		cd backend && atlas migrate lint \
-			--dir file://migrations \
-			--dev-url "postgres://devuser:devpass@localhost:5432/boostedbudget?sslmode=disable" \
-			--latest 1; \
+	@if command -v squawk &> /dev/null; then \
+		echo "Running Squawk migration linter..."; \
+		squawk backend/migrations/*.up.sql || true; \
 	else \
-		echo "⚠️  Migration lint skipped (docker-compose not running)"; \
-		echo "   Run 'make docker-up' or 'docker compose up -d postgres' to enable migration linting"; \
+		echo "⚠️  Migration lint skipped (squawk not installed)"; \
+		echo "   Install: npm install -g squawk-cli"; \
 	fi
 	@echo ""
 	@echo "2️⃣  Backend Tests..."
-	@# Limit parallelism to prevent memory exhaustion: -p=2 (max 2 packages), -parallel=4 (max 4 tests/pkg)
-	@# See: Memory leak investigation Oct 2025 - saves 1.2GB vs unlimited (was 8 packages on 8-core system)
-	@cd backend && go test ./... -v -race -p=2 -parallel=4 -coverprofile=coverage.out -covermode=atomic -json > test-output.json 2>&1 || true
-	@cd backend && cat test-output.json | jq -s '[.[] | select(.Action == "pass" or .Action == "fail")] | {passed: ([.[] | select(.Action == "pass")] | length), failed: ([.[] | select(.Action == "fail")] | length), total: length}' > test-results.json 2>/dev/null || echo '{"passed":0,"failed":0,"total":0}' > test-results.json
-	@cd backend && cat test-output.json | grep -v "^{" || true
+	@cd backend && go test ./... -v -race -p=2 -parallel=4 -coverprofile=coverage.out -covermode=atomic ./...
 	@echo ""
 	@echo "📊 Checking backend coverage threshold (≥60%)..."
 	@cd backend && COVERAGE=$$(go tool cover -func=coverage.out | grep total | awk '{print $$3}' | sed 's/%//'); \
@@ -116,12 +111,12 @@ test-fast:
 	@cd backend && go tool cover -html=coverage.out -o coverage.html
 	@echo "✅ Backend coverage: backend/coverage.html"
 	@echo ""
-	@echo "3️⃣  Frontend Tests..."
-	@cd frontend && npm run test:ci
-	@echo "✅ Frontend coverage: frontend/coverage/index.html"
+	@echo "3️⃣  Frontend Tests (bun:test + vitest combined coverage)..."
+	@cd apps/web && bun run test:ci
+	@echo "✅ Frontend coverage: apps/web/coverage/combined.lcov"
 	@echo ""
 	@echo "4️⃣  Linting..."
-	@cd frontend && npm run lint
+	@cd apps/web && bun run lint
 	@echo "✅ Linting passed"
 	@echo ""
 	@echo "========================================"
@@ -130,7 +125,8 @@ test-fast:
 	@echo ""
 	@echo "📄 Coverage Reports:"
 	@echo "  Backend:  backend/coverage.html (open in browser)"
-	@echo "  Frontend: frontend/coverage/index.html (open in browser)"
+	@echo "  Frontend: apps/web/coverage/combined.lcov (bun:test + vitest combined)"
+	@echo "            apps/web/coverage/html/index.html (if lcov/genhtml installed)"
 	@echo ""
 	@echo "⚠️  Remember: Run 'make test-all' to include E2E tests before creating PRs!"
 
@@ -142,24 +138,17 @@ test-all:
 	@echo "========================================"
 	@echo ""
 	@echo "1️⃣  Linting Migrations..."
-	@# Try using docker-compose postgres first (no ephemeral containers), fallback to skip
-	@# See: Memory leak investigation Oct 2025 - prevents dangling Docker image accumulation
-	@if docker compose ps postgres 2>/dev/null | grep -q "running"; then \
-		cd backend && atlas migrate lint \
-			--dir file://migrations \
-			--dev-url "postgres://devuser:devpass@localhost:5432/boostedbudget?sslmode=disable" \
-			--latest 1; \
+	@# Run Squawk migration linter (no database connection needed)
+	@if command -v squawk &> /dev/null; then \
+		echo "Running Squawk migration linter..."; \
+		squawk backend/migrations/*.up.sql || true; \
 	else \
-		echo "⚠️  Migration lint skipped (docker-compose not running)"; \
-		echo "   Run 'make docker-up' or 'docker compose up -d postgres' to enable migration linting"; \
+		echo "⚠️  Migration lint skipped (squawk not installed)"; \
+		echo "   Install: npm install -g squawk-cli"; \
 	fi
 	@echo ""
 	@echo "2️⃣  Backend Tests..."
-	@# Limit parallelism to prevent memory exhaustion: -p=2 (max 2 packages), -parallel=4 (max 4 tests/pkg)
-	@# See: Memory leak investigation Oct 2025 - saves 1.2GB vs unlimited (was 8 packages on 8-core system)
-	@cd backend && go test ./... -v -race -p=2 -parallel=4 -coverprofile=coverage.out -covermode=atomic -json > test-output.json 2>&1 || true
-	@cd backend && cat test-output.json | jq -s '[.[] | select(.Action == "pass" or .Action == "fail")] | {passed: ([.[] | select(.Action == "pass")] | length), failed: ([.[] | select(.Action == "fail")] | length), total: length}' > test-results.json 2>/dev/null || echo '{"passed":0,"failed":0,"total":0}' > test-results.json
-	@cd backend && cat test-output.json | grep -v "^{" || true
+	@cd backend && go test ./... -v -race -p=2 -parallel=4 -coverprofile=coverage.out -covermode=atomic ./...
 	@echo ""
 	@echo "📊 Checking backend coverage threshold (≥60%)..."
 	@cd backend && COVERAGE=$$(go tool cover -func=coverage.out | grep total | awk '{print $$3}' | sed 's/%//'); \
@@ -176,16 +165,16 @@ test-all:
 	@cd backend && go tool cover -html=coverage.out -o coverage.html
 	@echo "✅ Backend coverage: backend/coverage.html"
 	@echo ""
-	@echo "3️⃣  Frontend Tests..."
-	@cd frontend && npm run test:ci
-	@echo "✅ Frontend coverage: frontend/coverage/index.html"
+	@echo "3️⃣  Frontend Tests (bun:test + vitest combined coverage)..."
+	@cd apps/web && bun run test:ci
+	@echo "✅ Frontend coverage: apps/web/coverage/combined.lcov"
 	@echo ""
 	@echo "4️⃣  Building Backend Binary for E2E Tests..."
 	@cd backend && go build -o bin/server ./cmd/server
 	@echo "✅ Backend binary: backend/bin/server"
 	@echo ""
 	@echo "5️⃣  E2E Tests..."
-	@cd frontend && npm run test:e2e -- --reporter=line
+	@cd apps/web && bun run test:e2e -- --reporter=line
 	@echo ""
 	@echo "========================================"
 	@echo "✅ All tests complete!"
@@ -193,24 +182,21 @@ test-all:
 	@echo ""
 	@echo "📄 Coverage Reports:"
 	@echo "  Backend:  backend/coverage.html (open in browser)"
-	@echo "  Frontend: frontend/coverage/index.html (open in browser)"
-	@echo ""
-	@echo "📊 Test Results:"
-	@echo "  Backend:  backend/test-results.json"
-	@echo "  Frontend: frontend/test-results.json"
+	@echo "  Frontend: apps/web/coverage/combined.lcov (bun:test + vitest combined)"
+	@echo "            apps/web/coverage/html/index.html (if lcov/genhtml installed)"
 
 # Frontend
 frontend-install:
-	cd frontend && npm install
+	bun install
 
 frontend-dev:
-	cd frontend && npm run dev
+	cd apps/web && bun run dev
 
 frontend-build: frontend-test
-	cd frontend && npm run build
+	cd apps/web && bun run build
 
 frontend-test:
-	cd frontend && npm run test:ci
+	cd apps/web && bun run test:ci
 
 # Database migrations
 migrate-up:
@@ -235,20 +221,73 @@ migrate-status:
 	@echo "Checking database schema..."
 	@docker-compose exec -T postgres psql -U devuser -d boostedbudget -c "\dt" 2>/dev/null || echo "No tables found"
 
-# Code generation
+# OpenAPI spec generation from Huma
+.PHONY: generate-openapi validate-openapi
+generate-openapi:
+	@echo "Generating OpenAPI spec from Huma..."
+	@cd backend && go run scripts/generate-openapi/main.go
+	@echo "✅ Generated api/openapi.yaml"
+
+validate-openapi: generate-openapi
+	@echo "Checking if OpenAPI spec is up to date..."
+	@if git diff --exit-code api/openapi.yaml > /dev/null 2>&1; then \
+		echo "✅ OpenAPI spec is up to date"; \
+	else \
+		echo "❌ ERROR: OpenAPI spec is outdated!"; \
+		echo "The generated spec differs from the committed version."; \
+		echo "Run 'make generate-openapi' and commit the changes."; \
+		git diff api/openapi.yaml | head -50; \
+		exit 1; \
+	fi
+
+# TypeScript API client generation from OpenAPI spec
+# Uses bun install + npx orval (Node.js runtime needed for orval compatibility)
+.PHONY: generate-api-client validate-api-client generate-all validate-all
+generate-api-client:
+	@echo "Generating TypeScript API client from OpenAPI spec..."
+	@echo "📦 Installing dependencies with bun..."
+	@bun install
+	@echo "🔄 Running orval (via npx for Node.js runtime)..."
+	@cd packages/api-client && npx orval
+	@echo "✅ Generated packages/api-client/src/"
+
+validate-api-client: generate-api-client
+	@echo "Checking if TypeScript client is up to date..."
+	@if git diff --exit-code packages/api-client/src > /dev/null 2>&1; then \
+		echo "✅ TypeScript API client is up to date"; \
+	else \
+		echo "❌ ERROR: TypeScript API client is outdated!"; \
+		echo "The generated client differs from the committed version."; \
+		echo "Run 'make generate-api-client' and commit the changes."; \
+		git diff packages/api-client/src | head -50; \
+		exit 1; \
+	fi
+
+# Generate all (OpenAPI spec + TypeScript client)
+generate-all: generate-openapi generate-api-client
+	@echo "✅ All code generation complete!"
+
+# Validate all generated code
+validate-all: validate-openapi validate-api-client
+	@echo "✅ All generated code is up to date!"
+
+# Code generation (deprecated - use generate-openapi)
 generate:
-	@echo "Generating code from OpenAPI spec..."
-	@echo "TODO: Implement oapi-codegen for backend"
-	@echo "TODO: Implement openapi-typescript-codegen for frontend"
+	@echo "Generating OpenAPI spec from Huma..."
+	@cd backend && go run scripts/generate-openapi/main.go
+	@echo "✅ Generated api/openapi.yaml"
+	@echo ""
+	@echo "Note: For TypeScript client generation, use 'make generate-api-client'"
 
 # Linting
 lint:
 	cd backend && golangci-lint run
-	cd frontend && npm run lint
+	cd apps/web && bun run lint
 
 # Cleanup
 clean:
 	rm -rf backend/bin
-	rm -rf frontend/dist
+	rm -rf apps/web/dist
 	rm -rf backend/tmp
+	rm -rf .turbo
 	docker-compose down -v

@@ -2,29 +2,29 @@ package repository
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
 var (
 	// ErrIdentityNotFound is returned when an identity is not found in the database
 	ErrIdentityNotFound = errors.New("identity not found")
-	// ErrDuplicateIdentity is returned when attempting to create an identity with a duplicate auth0_user_id
-	ErrDuplicateIdentity = errors.New("identity already exists for this auth0_user_id")
+	// ErrDuplicateIdentity is returned when attempting to create an identity with a duplicate clerk_user_id
+	ErrDuplicateIdentity = errors.New("identity already exists for this clerk_user_id")
 )
 
 // UserIdentityRepository defines the interface for user identity data access
-// Manages the mapping between Auth0 identities and internal user UUIDs
+// Manages the mapping between Clerk identities and internal user UUIDs
 // Implements Issue #148 Phase 2 - Multi-Provider Authentication Support
 type UserIdentityRepository interface {
-	// GetByAuth0ID retrieves an identity by Auth0 user ID
+	// GetByClerkID retrieves an identity by Clerk user ID
 	// Returns ErrIdentityNotFound if the identity doesn't exist
-	GetByAuth0ID(ctx context.Context, auth0UserID string) (*domain.UserIdentity, error)
+	GetByClerkID(ctx context.Context, clerkUserID string) (*domain.UserIdentity, error)
 
 	// GetByUserID retrieves all identities for a user, ordered by primary first, then creation date
 	// Returns empty slice if no identities found (not an error)
@@ -32,40 +32,45 @@ type UserIdentityRepository interface {
 
 	// Create creates a new identity in the database
 	// Generates UUID if not set, sets timestamps
-	// Returns ErrDuplicateIdentity if auth0_user_id already exists
+	// Returns ErrDuplicateIdentity if clerk_user_id already exists
 	Create(ctx context.Context, identity *domain.UserIdentity) error
+
+	// CreateTx creates a new identity in the database within a transaction
+	// Generates UUID if not set, sets timestamps
+	// Returns ErrDuplicateIdentity if clerk_user_id already exists
+	CreateTx(ctx context.Context, tx pgx.Tx, identity *domain.UserIdentity) error
 
 	// UpdateLastUsed updates the last_used_at and updated_at timestamps for an identity
 	// Called during login to track when each identity was last used
 	// Returns ErrIdentityNotFound if the identity doesn't exist
-	UpdateLastUsed(ctx context.Context, auth0UserID string) error
+	UpdateLastUsed(ctx context.Context, clerkUserID string) error
 }
 
 // userIdentityRepository implements UserIdentityRepository using PostgreSQL
 type userIdentityRepository struct {
-	db *sql.DB
+	db DB
 }
 
 // NewUserIdentityRepository creates a new UserIdentityRepository instance
-func NewUserIdentityRepository(db *sql.DB) UserIdentityRepository {
+func NewUserIdentityRepository(db DB) UserIdentityRepository {
 	return &userIdentityRepository{db: db}
 }
 
-// GetByAuth0ID retrieves an identity by Auth0 user ID
-func (r *userIdentityRepository) GetByAuth0ID(ctx context.Context, auth0UserID string) (*domain.UserIdentity, error) {
+// GetByClerkID retrieves an identity by Clerk user ID
+func (r *userIdentityRepository) GetByClerkID(ctx context.Context, clerkUserID string) (*domain.UserIdentity, error) {
 	query := `
-		SELECT id, user_id, auth0_user_id, provider, provider_user_id,
+		SELECT id, user_id, clerk_user_id, provider, provider_user_id,
 		       email, email_verified, is_primary,
 		       created_at, updated_at, last_used_at
 		FROM user_identities
-		WHERE auth0_user_id = $1
+		WHERE clerk_user_id = $1
 	`
 
 	var identity domain.UserIdentity
-	err := r.db.QueryRowContext(ctx, query, auth0UserID).Scan(
+	err := r.db.QueryRow(ctx, query, clerkUserID).Scan(
 		&identity.ID,
 		&identity.UserID,
-		&identity.Auth0UserID,
+		&identity.ClerkUserID,
 		&identity.Provider,
 		&identity.ProviderUserID,
 		&identity.Email,
@@ -76,7 +81,7 @@ func (r *userIdentityRepository) GetByAuth0ID(ctx context.Context, auth0UserID s
 		&identity.LastUsedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrIdentityNotFound
 	}
 	if err != nil {
@@ -90,7 +95,7 @@ func (r *userIdentityRepository) GetByAuth0ID(ctx context.Context, auth0UserID s
 // Returns identities ordered by is_primary DESC (primary first), then created_at ASC (oldest first)
 func (r *userIdentityRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.UserIdentity, error) {
 	query := `
-		SELECT id, user_id, auth0_user_id, provider, provider_user_id,
+		SELECT id, user_id, clerk_user_id, provider, provider_user_id,
 		       email, email_verified, is_primary,
 		       created_at, updated_at, last_used_at
 		FROM user_identities
@@ -98,7 +103,7 @@ func (r *userIdentityRepository) GetByUserID(ctx context.Context, userID string)
 		ORDER BY is_primary DESC, created_at ASC
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, userID)
+	rows, err := r.db.Query(ctx, query, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +116,7 @@ func (r *userIdentityRepository) GetByUserID(ctx context.Context, userID string)
 		err := rows.Scan(
 			&identity.ID,
 			&identity.UserID,
-			&identity.Auth0UserID,
+			&identity.ClerkUserID,
 			&identity.Provider,
 			&identity.ProviderUserID,
 			&identity.Email,
@@ -148,7 +153,7 @@ func (r *userIdentityRepository) Create(ctx context.Context, identity *domain.Us
 
 	query := `
 		INSERT INTO user_identities (
-			id, user_id, auth0_user_id, provider, provider_user_id,
+			id, user_id, clerk_user_id, provider, provider_user_id,
 			email, email_verified, is_primary,
 			created_at, updated_at, last_used_at
 		) VALUES (
@@ -158,10 +163,10 @@ func (r *userIdentityRepository) Create(ctx context.Context, identity *domain.Us
 		)
 	`
 
-	_, err := r.db.ExecContext(ctx, query,
+	_, err := r.db.Exec(ctx, query,
 		identity.ID,
 		identity.UserID,
-		identity.Auth0UserID,
+		identity.ClerkUserID,
 		identity.Provider,
 		identity.ProviderUserID,
 		identity.Email,
@@ -175,7 +180,58 @@ func (r *userIdentityRepository) Create(ctx context.Context, identity *domain.Us
 	if err != nil {
 		// Check for unique constraint violations
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
-			if strings.Contains(err.Error(), "auth0_user_id") {
+			if strings.Contains(err.Error(), "clerk_user_id") {
+				return ErrDuplicateIdentity
+			}
+		}
+		return err
+	}
+
+	return nil
+}
+
+// CreateTx creates a new identity in the database within a transaction
+func (r *userIdentityRepository) CreateTx(ctx context.Context, tx pgx.Tx, identity *domain.UserIdentity) error {
+	// Generate UUID if not already set
+	if identity.ID == "" {
+		identity.ID = uuid.New().String()
+	}
+
+	// Set timestamps
+	now := time.Now()
+	identity.CreatedAt = now
+	identity.UpdatedAt = now
+
+	query := `
+		INSERT INTO user_identities (
+			id, user_id, clerk_user_id, provider, provider_user_id,
+			email, email_verified, is_primary,
+			created_at, updated_at, last_used_at
+		) VALUES (
+			$1, $2, $3, $4, $5,
+			$6, $7, $8,
+			$9, $10, $11
+		)
+	`
+
+	_, err := tx.Exec(ctx, query,
+		identity.ID,
+		identity.UserID,
+		identity.ClerkUserID,
+		identity.Provider,
+		identity.ProviderUserID,
+		identity.Email,
+		identity.EmailVerified,
+		identity.IsPrimary,
+		identity.CreatedAt,
+		identity.UpdatedAt,
+		identity.LastUsedAt,
+	)
+
+	if err != nil {
+		// Check for unique constraint violations
+		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
+			if strings.Contains(err.Error(), "clerk_user_id") {
 				return ErrDuplicateIdentity
 			}
 		}
@@ -186,28 +242,23 @@ func (r *userIdentityRepository) Create(ctx context.Context, identity *domain.Us
 }
 
 // UpdateLastUsed updates the last_used_at and updated_at timestamps for an identity
-func (r *userIdentityRepository) UpdateLastUsed(ctx context.Context, auth0UserID string) error {
+func (r *userIdentityRepository) UpdateLastUsed(ctx context.Context, clerkUserID string) error {
 	now := time.Now()
 
 	query := `
 		UPDATE user_identities
 		SET last_used_at = $1,
 		    updated_at = $2
-		WHERE auth0_user_id = $3
+		WHERE clerk_user_id = $3
 	`
 
-	result, err := r.db.ExecContext(ctx, query, now, now, auth0UserID)
+	ct, err := r.db.Exec(ctx, query, now, now, clerkUserID)
 	if err != nil {
 		return err
 	}
 
 	// Check if any rows were affected
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return ErrIdentityNotFound
 	}
 

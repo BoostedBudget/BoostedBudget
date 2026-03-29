@@ -158,3 +158,215 @@ func TestAccount_Validate(t *testing.T) {
 func float64Ptr(f float64) *float64 {
 	return &f
 }
+
+// Helper function to create int pointers for tests
+func intPtr(i int) *int {
+	return &i
+}
+
+// boolPtr is defined in privacy_test.go in the same package
+
+// TestUpdateAccountRequest_Validate tests validation of account customization requests
+func TestUpdateAccountRequest_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		req     UpdateAccountRequest
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name:    "valid empty request (all nil)",
+			req:     UpdateAccountRequest{},
+			wantErr: false,
+		},
+		{
+			name: "valid nickname",
+			req: UpdateAccountRequest{
+				Nickname: strPtr("My Checking"),
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid nickname with spaces (will be trimmed)",
+			req: UpdateAccountRequest{
+				Nickname: strPtr("  My Savings  "),
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid empty string nickname (clear)",
+			req: UpdateAccountRequest{
+				Nickname: strPtr(""),
+			},
+			wantErr: false,
+		},
+		{
+			name: "nickname too long (over 255 chars)",
+			req: UpdateAccountRequest{
+				Nickname: strPtr(string(make([]byte, 256))),
+			},
+			wantErr: true,
+			errMsg:  "nickname",
+		},
+		{
+			name: "valid hex color lowercase",
+			req: UpdateAccountRequest{
+				CustomColor: strPtr("#3b82f6"),
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid hex color uppercase",
+			req: UpdateAccountRequest{
+				CustomColor: strPtr("#3B82F6"),
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid empty color (clear)",
+			req: UpdateAccountRequest{
+				CustomColor: strPtr(""),
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid hex color - no hash",
+			req: UpdateAccountRequest{
+				CustomColor: strPtr("3B82F6"),
+			},
+			wantErr: true,
+			errMsg:  "custom_color",
+		},
+		{
+			name: "invalid hex color - wrong length",
+			req: UpdateAccountRequest{
+				CustomColor: strPtr("#FFF"),
+			},
+			wantErr: true,
+			errMsg:  "custom_color",
+		},
+		{
+			name: "invalid hex color - invalid chars",
+			req: UpdateAccountRequest{
+				CustomColor: strPtr("#GGGGGG"),
+			},
+			wantErr: true,
+			errMsg:  "custom_color",
+		},
+		{
+			name: "valid icon - wallet",
+			req: UpdateAccountRequest{
+				CustomIcon: strPtr("wallet"),
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid icon - piggy-bank",
+			req: UpdateAccountRequest{
+				CustomIcon: strPtr("piggy-bank"),
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid empty icon (clear)",
+			req: UpdateAccountRequest{
+				CustomIcon: strPtr(""),
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid icon - not in allowed set",
+			req: UpdateAccountRequest{
+				CustomIcon: strPtr("invalid-icon"),
+			},
+			wantErr: true,
+			errMsg:  "custom_icon",
+		},
+		{
+			name: "valid emoji",
+			req: UpdateAccountRequest{
+				CustomEmoji: strPtr("💰"),
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid empty emoji (clear)",
+			req: UpdateAccountRequest{
+				CustomEmoji: strPtr(""),
+			},
+			wantErr: false,
+		},
+		{
+			name: "emoji too long (over 10 chars)",
+			req: UpdateAccountRequest{
+				CustomEmoji: strPtr("💰💰💰💰💰"),
+			},
+			wantErr: true,
+			errMsg:  "custom_emoji",
+		},
+		{
+			name: "valid is_hidden true",
+			req: UpdateAccountRequest{
+				IsHidden: boolPtr(true),
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid is_hidden false",
+			req: UpdateAccountRequest{
+				IsHidden: boolPtr(false),
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid combined update",
+			req: UpdateAccountRequest{
+				Nickname:    strPtr("Emergency Fund"),
+				CustomColor: strPtr("#10B981"),
+				CustomIcon:  strPtr("piggy-bank"),
+				CustomEmoji: strPtr("🐷"),
+				IsHidden:    boolPtr(false),
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.req.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr && tt.errMsg != "" {
+				if err == nil || !contains(err.Error(), tt.errMsg) {
+					t.Errorf("Error should contain '%s', got: %v", tt.errMsg, err)
+				}
+			}
+		})
+	}
+}
+
+// TestValidAccountIcons tests the valid account icons map
+func TestValidAccountIcons(t *testing.T) {
+	expectedIcons := []string{
+		"wallet", "piggy-bank", "credit-card", "bank", "building",
+		"briefcase", "dollar", "euro", "pound", "yen",
+		"chart", "trending-up", "trending-down", "lock", "unlock",
+		"star", "heart", "home", "car", "plane",
+		"shopping-cart", "gift", "coffee", "utensils", "graduation-cap",
+	}
+
+	for _, icon := range expectedIcons {
+		if !ValidAccountIcons[icon] {
+			t.Errorf("Expected icon '%s' to be valid", icon)
+		}
+	}
+
+	// Test that invalid icons return false
+	invalidIcons := []string{"invalid", "random", "test"}
+	for _, icon := range invalidIcons {
+		if ValidAccountIcons[icon] {
+			t.Errorf("Expected icon '%s' to be invalid", icon)
+		}
+	}
+}

@@ -1,5 +1,5 @@
 # Dependabot configuration for BoostedBudget
-# Monitors dependencies and creates automated PRs for updates
+# Monitors dependencies across all workspaces and creates automated PRs for updates
 # https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
 
 version: 2
@@ -20,10 +20,14 @@ updates:
       - "go"
     reviewers:
       - "maxnussbaum"
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 5
+    # Protect major Go version updates
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     # Group minor and patch updates together
     groups:
-      go-dependencies:
+      go-minor-patch:
         patterns:
           - "*"
         update-types:
@@ -31,10 +35,13 @@ updates:
           - "patch"
 
   # =============================================================================
-  # Frontend - npm
+  # Bun Workspace Monorepo - All frontend dependencies
   # =============================================================================
-  - package-ecosystem: "npm"
-    directory: "/frontend"
+  # Monitors ALL workspaces (apps/*, packages/*) from the root directory.
+  # Bun workspaces use a SINGLE root bun.lock file, so Dependabot must run
+  # from the root to correctly update the shared lockfile.
+  - package-ecosystem: "bun"
+    directory: "/"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -47,35 +54,72 @@ updates:
     reviewers:
       - "maxnussbaum"
     open-pull-requests-limit: 10
-    # Ignore major version updates for React (manual review needed)
+    # Protect major version updates for critical frameworks
     ignore:
       - dependency-name: "react"
         update-types: ["version-update:semver-major"]
       - dependency-name: "react-dom"
         update-types: ["version-update:semver-major"]
-    # Group dependencies by type
+      - dependency-name: "react-router"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-router-dom"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "vite"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@tanstack/react-query"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "orval"
+        update-types: ["version-update:semver-major"]
+    # Group dependencies by type across ALL workspaces
     groups:
-      # Production dependencies (minor + patch only)
-      production-dependencies:
+      frontend-framework:
         patterns:
-          - "*"
-        exclude-patterns:
-          - "@types/*"
-          - "@testing-library/*"
-          - "vitest"
-          - "eslint*"
-          - "@typescript-eslint/*"
+          - "react"
+          - "react-dom"
+          - "react-router*"
+          - "vite"
+          - "@vitejs/*"
         update-types:
           - "minor"
           - "patch"
-      # Dev dependencies (minor + patch only)
-      dev-dependencies:
+      frontend-ui-libraries:
+        patterns:
+          - "@radix-ui/*"
+          - "tailwindcss"
+          - "@tailwindcss/*"
+          - "@heroicons/*"
+          - "clsx"
+          - "class-variance-authority"
+        update-types:
+          - "minor"
+          - "patch"
+      frontend-state:
+        patterns:
+          - "@tanstack/*"
+          - "@reduxjs/*"
+          - "axios"
+          - "swr"
+        update-types:
+          - "minor"
+          - "patch"
+      frontend-dev-dependencies:
         patterns:
           - "@types/*"
-          - "@testing-library/*"
-          - "vitest"
+          - "typescript"
           - "eslint*"
           - "@typescript-eslint/*"
+          - "@playwright/*"
+          - "playwright"
+          - "@testing-library/*"
+          - "vitest"
+          - "@vitest/*"
+        update-types:
+          - "minor"
+          - "patch"
+      build-tools:
+        patterns:
+          - "turbo"
+          - "orval"
         update-types:
           - "minor"
           - "patch"
@@ -119,13 +163,21 @@ updates:
       - "backend"
     reviewers:
       - "maxnussbaum"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
+    # Protect major Go version updates
+    ignore:
+      - dependency-name: "golang"
+        update-types: ["version-update:semver-major"]
+    groups:
+      docker-backend:
+        patterns:
+          - "*"
 
   # =============================================================================
   # Docker - Frontend
   # =============================================================================
   - package-ecosystem: "docker"
-    directory: "/frontend"
+    directory: "/apps/web"
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -137,4 +189,44 @@ updates:
       - "frontend"
     reviewers:
       - "maxnussbaum"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
+    # Protect major Node version updates
+    ignore:
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "nginx"
+        update-types: ["version-update:semver-major"]
+    groups:
+      docker-frontend:
+        patterns:
+          - "*"
+
+  # =============================================================================
+  # Docker Compose - Infrastructure Services
+  # =============================================================================
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "09:00"
+      timezone: "America/New_York"
+    labels:
+      - "dependencies"
+      - "docker"
+      - "infrastructure"
+    reviewers:
+      - "maxnussbaum"
+    open-pull-requests-limit: 3
+    # Protect major database/service version updates
+    ignore:
+      - dependency-name: "postgres"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "redis"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "rabbitmq"
+        update-types: ["version-update:semver-major"]
+    groups:
+      docker-services:
+        patterns:
+          - "*"

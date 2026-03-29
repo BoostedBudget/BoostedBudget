@@ -3,9 +3,11 @@ package services
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"time"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/sendgrid/sendgrid-go"
 	"github.com/sendgrid/sendgrid-go/helpers/mail"
 )
@@ -14,10 +16,26 @@ import (
 type EmailService interface {
 	// SendDeletionConfirmation sends account deletion confirmation email
 	SendDeletionConfirmation(ctx context.Context, toEmail, cancellationToken string, scheduledDate time.Time) error
+
+	// SendNotificationEmail sends an email notification to a user.
+	// Issue #257: Item Error Handler - User Notifications
+	//
+	// MVP Implementation: Stub that logs to console (no real email sending).
+	// Phase 3+: Implement real email sending via SendGrid.
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation and timeout control
+	//   - toEmail: User's email address
+	//   - notification: The notification containing email content
+	//
+	// Returns error if email sending fails.
+	// Note: Callers should handle errors gracefully (non-blocking).
+	SendNotificationEmail(ctx context.Context, toEmail string, notification *domain.Notification) error
 }
 
 // emailService implements EmailService using SendGrid
 type emailService struct {
+	logger      *slog.Logger
 	apiKey      string
 	fromEmail   string
 	fromName    string
@@ -29,6 +47,7 @@ type emailService struct {
 // NewEmailService creates a new EmailService instance
 func NewEmailService(apiKey, fromEmail, frontendURL string) EmailService {
 	return &emailService{
+		logger:      slog.Default(),
 		apiKey:      apiKey,
 		fromEmail:   fromEmail,
 		fromName:    "BoostedBudget",
@@ -41,6 +60,7 @@ func NewEmailService(apiKey, fromEmail, frontendURL string) EmailService {
 // NewEmailServiceMock creates a new EmailService instance in mock mode for testing
 func NewEmailServiceMock(apiKey, fromEmail, frontendURL string) EmailService {
 	return &emailService{
+		logger:      slog.Default(),
 		apiKey:      apiKey,
 		fromEmail:   fromEmail,
 		fromName:    "BoostedBudget",
@@ -90,6 +110,42 @@ func (s *emailService) SendDeletionConfirmation(ctx context.Context, toEmail, ca
 		return fmt.Errorf("SendGrid API error (status %d): %s", response.StatusCode, response.Body)
 	}
 
+	return nil
+}
+
+// SendNotificationEmail sends a notification email (MVP: stub implementation).
+// Issue #257: Item Error Handler - User Notifications
+//
+// MVP Implementation: Logs email details to console without actually sending.
+// This allows the notification system to work without requiring email infrastructure.
+//
+// Future (Phase 3+): Replace with real SendGrid email sending:
+//   - Create HTML/plain text templates for each notification type
+//   - Send via SendGrid API
+//   - Track delivery status
+//   - Handle bounce/failure notifications
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout
+//   - toEmail: User's email address
+//   - notification: Notification containing email content
+//
+// Returns: Always nil in MVP (stub always succeeds). Real implementation will return errors.
+func (s *emailService) SendNotificationEmail(ctx context.Context, toEmail string, notification *domain.Notification) error {
+	// MVP STUB: Log email details (no actual sending)
+	args := []any{
+		"to", toEmail,
+		"user_id", notification.UserID,
+		"type", notification.Type,
+		"title", notification.Title,
+	}
+	if notification.ActionURL != nil {
+		args = append(args, "action_url", *notification.ActionURL)
+	}
+	s.logger.Info("email stub: would send notification email", args...)
+
+	// MVP: Always succeeds (no real sending)
+	// Phase 3+: Will return actual sending errors
 	return nil
 }
 

@@ -1,0 +1,171 @@
+/**
+ * UserDetailModal Styles
+ * Issue #644: Admin User Management UI
+ */
+
+.user-detail-modal {
+  max-width: 600px;
+}
+
+/* Loading state */
+.user-detail-modal__loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem;
+  color: var(--text-secondary);
+}
+
+.user-detail-modal__spinner {
+  width: 2rem;
+  height: 2rem;
+  margin-bottom: 1rem;
+  animation: spin 1s linear infinite;
+}
+
+/* Title */
+.user-detail-modal__title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.user-detail-modal__title-icon {
+  width: 1.25rem;
+  height: 1.25rem;
+  color: var(--color-primary);
+}
+
+/* Content */
+.user-detail-modal__content {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  margin: 1rem 0;
+}
+
+/* Section */
+.user-detail-modal__section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.user-detail-modal__section-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+/* Grid layout for profile fields */
+.user-detail-modal__grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1rem;
+}
+
+@media (max-width: 480px) {
+  .user-detail-modal__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Field */
+.user-detail-modal__field {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.user-detail-modal__field-icon {
+  color: var(--text-tertiary);
+  margin-top: 0.125rem;
+  flex-shrink: 0;
+}
+
+.user-detail-modal__field-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.user-detail-modal__field-label {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+}
+
+.user-detail-modal__field-value {
+  font-size: 0.875rem;
+  color: var(--text-primary);
+}
+
+/* Stats grid */
+.user-detail-modal__stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1rem;
+}
+
+@media (min-width: 480px) {
+  .user-detail-modal__stats {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+/* Stat card */
+.user-detail-modal__stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1rem;
+  background-color: var(--bg-secondary);
+  border-radius: 0.5rem;
+  text-align: center;
+}
+
+.user-detail-modal__stat-icon {
+  color: var(--color-primary);
+  margin-bottom: 0.5rem;
+}
+
+.user-detail-modal__stat-value {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.user-detail-modal__stat-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-top: 0.25rem;
+}
+
+/* Empty state */
+.user-detail-modal__empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem;
+  color: var(--text-secondary);
+}
+
+/* Admin badge */
+.user-detail-modal__admin-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: 0.5rem;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  background-color: var(--color-amber-100);
+  color: var(--color-amber-700);
+  border-radius: 9999px;
+}

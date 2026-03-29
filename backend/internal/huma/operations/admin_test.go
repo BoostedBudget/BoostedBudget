@@ -1,0 +1,538 @@
+package operations
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"testing"
+	"time"
+
+	"github.com/danielgtaylor/huma/v2/humatest"
+	"github.com/jackc/pgx/v5"
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	plaid "github.com/plaid/plaid-go/v23/plaid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// mockPlaidServiceForAdmin is a mock implementation of services.PlaidService for admin tests
+type mockPlaidServiceForAdmin struct {
+	fireWebhookResp *plaid.SandboxItemFireWebhookResponse
+	fireWebhookErr  error
+}
+
+func (m *mockPlaidServiceForAdmin) GetClient() *plaid.APIClient {
+	return nil
+}
+
+func (m *mockPlaidServiceForAdmin) CreateLinkToken(ctx context.Context, userID string) (*domain.LinkTokenResponse, error) {
+	return nil, nil
+}
+
+func (m *mockPlaidServiceForAdmin) CreateUpdateModeLinkToken(ctx context.Context, userID, accessToken string) (*domain.LinkTokenResponse, error) {
+	return nil, nil
+}
+
+func (m *mockPlaidServiceForAdmin) ExchangePublicToken(ctx context.Context, publicToken string) (*plaid.ItemPublicTokenExchangeResponse, error) {
+	return nil, nil
+}
+
+func (m *mockPlaidServiceForAdmin) GetAccounts(ctx context.Context, accessToken string) ([]plaid.AccountBase, error) {
+	return nil, nil
+}
+
+func (m *mockPlaidServiceForAdmin) GetInstitution(ctx context.Context, institutionID string) (*plaid.Institution, error) {
+	return nil, nil
+}
+
+func (m *mockPlaidServiceForAdmin) RemoveItem(ctx context.Context, accessToken string) error {
+	return nil
+}
+
+func (m *mockPlaidServiceForAdmin) TransactionsSync(ctx context.Context, accessToken string, cursor string, daysRequested int) (*plaid.TransactionsSyncResponse, error) {
+	return nil, nil
+}
+
+func (m *mockPlaidServiceForAdmin) FireWebhook(ctx context.Context, accessToken string, webhookCode string) (*plaid.SandboxItemFireWebhookResponse, error) {
+	if m.fireWebhookErr != nil {
+		return nil, m.fireWebhookErr
+	}
+	return m.fireWebhookResp, nil
+}
+
+func (m *mockPlaidServiceForAdmin) AccountsGet(ctx context.Context, accessToken string) (*plaid.AccountsGetResponse, error) {
+	return nil, nil
+}
+
+// mockLinkedItemRepo is a mock implementation of repository.LinkedItemRepository
+type mockLinkedItemRepo struct {
+	item    *domain.LinkedItem
+	getErr  error
+	byItems map[string]*domain.LinkedItem
+}
+
+func (m *mockLinkedItemRepo) Create(ctx context.Context, item *domain.LinkedItem) error {
+	return nil
+}
+
+func (m *mockLinkedItemRepo) GetByID(ctx context.Context, id string) (*domain.LinkedItem, error) {
+	return m.item, m.getErr
+}
+
+func (m *mockLinkedItemRepo) GetByIDAndUser(ctx context.Context, id, userID string) (*domain.LinkedItem, error) {
+	return m.item, m.getErr
+}
+
+func (m *mockLinkedItemRepo) GetByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error) {
+	return nil, nil
+}
+
+func (m *mockLinkedItemRepo) GetByItemID(ctx context.Context, itemID string) (*domain.LinkedItem, error) {
+	if m.getErr != nil {
+		return nil, m.getErr
+	}
+	if m.byItems != nil {
+		if item, ok := m.byItems[itemID]; ok {
+			return item, nil
+		}
+		return nil, repository.ErrLinkedItemNotFound
+	}
+	return m.item, nil
+}
+
+func (m *mockLinkedItemRepo) UpdateCursor(ctx context.Context, id, cursor string) error {
+	return nil
+}
+
+func (m *mockLinkedItemRepo) Update(ctx context.Context, item *domain.LinkedItem) error {
+	return nil
+}
+
+func (m *mockLinkedItemRepo) Delete(ctx context.Context, id string) error {
+	return nil
+}
+
+func (m *mockLinkedItemRepo) DeleteByUser(ctx context.Context, id, userID string) error {
+	return nil
+}
+
+func (m *mockLinkedItemRepo) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, id string) (*domain.LinkedItem, error) {
+	return m.item, m.getErr
+}
+
+// GetByUserAndInstitution retrieves a linked item by user ID, institution ID, and status.
+// Issue #171 - Plaid Re-Link Handling
+func (m *mockLinkedItemRepo) GetByUserAndInstitution(ctx context.Context, userID, institutionID, status string) (*domain.LinkedItem, error) {
+	return nil, repository.ErrLinkedItemNotFound
+}
+
+// Issue #668: Plaid Item Management for Cost Optimization - Cleanup tracking methods
+func (m *mockLinkedItemRepo) GetItemsForCleanup(ctx context.Context, errorDays, staleDays int) ([]domain.LinkedItem, error) {
+	return nil, nil
+}
+
+func (m *mockLinkedItemRepo) GetItemsPendingCleanup(ctx context.Context) ([]domain.LinkedItem, error) {
+	return nil, nil
+}
+
+func (m *mockLinkedItemRepo) MarkForCleanup(ctx context.Context, itemID string, cleanupAt time.Time) error {
+	return nil
+}
+
+func (m *mockLinkedItemRepo) ClearCleanupSchedule(ctx context.Context, itemID string) error {
+	return nil
+}
+
+// Issue #679, #680: Trial expiration - methods for disconnecting items
+func (m *mockLinkedItemRepo) GetActiveItemsByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error) {
+	return nil, nil
+}
+
+func (m *mockLinkedItemRepo) MarkAllUserItemsDisconnected(ctx context.Context, userID string) error {
+	return nil
+}
+
+// mockEncryptionService is a mock implementation of services.EncryptionService
+type mockEncryptionService struct {
+	decryptedToken string
+	decryptErr     error
+}
+
+func (m *mockEncryptionService) Encrypt(plaintext string) (string, error) {
+	return plaintext, nil
+}
+
+func (m *mockEncryptionService) Decrypt(ciphertext string) (string, error) {
+	if m.decryptErr != nil {
+		return "", m.decryptErr
+	}
+	return m.decryptedToken, nil
+}
+
+// mockTrialService is a mock implementation of TrialGranter for admin tests
+// Issue #698: Used to test trial grant endpoint
+type mockTrialService struct {
+	grantTrialErr error
+}
+
+func (m *mockTrialService) GrantTrial(ctx context.Context, userID string) error {
+	return m.grantTrialErr
+}
+
+// Helper function to create test linked item
+func createTestLinkedItem() *domain.LinkedItem {
+	return &domain.LinkedItem{
+		ID:                   "linked-item-123",
+		UserID:               "user-123",
+		ItemID:               "plaid-item-123",
+		AccessTokenEncrypted: "encrypted-token",
+		InstitutionID:        "ins_123",
+		InstitutionName:      "Test Bank",
+	}
+}
+
+// TestFireWebhook_Success tests successful webhook firing.
+func TestFireWebhook_Success(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForAdmin{
+		fireWebhookResp: &plaid.SandboxItemFireWebhookResponse{
+			WebhookFired: true,
+			RequestId:    "req-123",
+		},
+	}
+	mockRepo := &mockLinkedItemRepo{
+		item: createTestLinkedItem(),
+	}
+	mockEncrypt := &mockEncryptionService{
+		decryptedToken: "decrypted-access-token",
+	}
+
+	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil, nil, nil, nil)
+
+	input := &FireWebhookInput{
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			ClerkUserID:        "clerk_user_123",
+		},
+	}
+	input.Body = FireWebhookRequestBody{
+		ItemID:      "plaid-item-123",
+		WebhookCode: "DEFAULT_UPDATE",
+	}
+
+	output, err := handler.FireWebhook(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.True(t, output.Body.WebhookFired)
+	assert.Equal(t, "req-123", output.Body.RequestID)
+	assert.Equal(t, "plaid-item-123", output.Body.ItemID)
+	assert.Equal(t, "DEFAULT_UPDATE", output.Body.WebhookCode)
+}
+
+// TestFireWebhook_ItemNotFound tests 404 when linked item not found.
+func TestFireWebhook_ItemNotFound(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForAdmin{}
+	mockRepo := &mockLinkedItemRepo{
+		getErr: repository.ErrLinkedItemNotFound,
+	}
+	mockEncrypt := &mockEncryptionService{}
+
+	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil, nil, nil, nil)
+
+	input := &FireWebhookInput{
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			ClerkUserID:        "clerk_user_123",
+		},
+	}
+	input.Body = FireWebhookRequestBody{
+		ItemID:      "nonexistent-item",
+		WebhookCode: "DEFAULT_UPDATE",
+	}
+
+	output, err := handler.FireWebhook(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Item not found")
+}
+
+// TestFireWebhook_DecryptionError tests 500 when decryption fails.
+func TestFireWebhook_DecryptionError(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForAdmin{}
+	mockRepo := &mockLinkedItemRepo{
+		item: createTestLinkedItem(),
+	}
+	mockEncrypt := &mockEncryptionService{
+		decryptErr: errors.New("decryption failed"),
+	}
+
+	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil, nil, nil, nil)
+
+	input := &FireWebhookInput{
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			ClerkUserID:        "clerk_user_123",
+		},
+	}
+	input.Body = FireWebhookRequestBody{
+		ItemID:      "plaid-item-123",
+		WebhookCode: "DEFAULT_UPDATE",
+	}
+
+	output, err := handler.FireWebhook(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Internal server error")
+}
+
+// TestFireWebhook_PlaidAPIError tests 500 when Plaid API fails.
+func TestFireWebhook_PlaidAPIError(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForAdmin{
+		fireWebhookErr: errors.New("plaid api error"),
+	}
+	mockRepo := &mockLinkedItemRepo{
+		item: createTestLinkedItem(),
+	}
+	mockEncrypt := &mockEncryptionService{
+		decryptedToken: "decrypted-access-token",
+	}
+
+	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil, nil, nil, nil)
+
+	input := &FireWebhookInput{
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			ClerkUserID:        "clerk_user_123",
+		},
+	}
+	input.Body = FireWebhookRequestBody{
+		ItemID:      "plaid-item-123",
+		WebhookCode: "DEFAULT_UPDATE",
+	}
+
+	output, err := handler.FireWebhook(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Internal server error")
+}
+
+// TestAdminRouteRegistration tests that routes are properly registered.
+func TestAdminRouteRegistration(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForAdmin{}
+	mockRepo := &mockLinkedItemRepo{}
+	mockEncrypt := &mockEncryptionService{}
+
+	_, api := humatest.New(t)
+	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil, nil, nil, nil)
+	RegisterAdminRoutes(api, handler)
+
+	// Test POST /api/v1/admin/plaid/fire-webhook (without auth, should fail with 401)
+	resp := api.Post("/api/v1/admin/plaid/fire-webhook", "application/json", map[string]string{
+		"item_id":      "test-item-id",
+		"webhook_code": "DEFAULT_UPDATE",
+	})
+	assert.Equal(t, http.StatusUnauthorized, resp.Code)
+}
+
+// --- GrantTrial Tests (Issue #698) ---
+
+// TestGrantTrial_Success tests successful trial grant.
+func TestGrantTrial_Success(t *testing.T) {
+	mockTrial := &mockTrialService{}
+	handler := NewAdminHandler(nil, nil, nil, mockTrial, nil, nil, nil, nil, nil)
+
+	input := &GrantTrialInput{
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			ClerkUserID:        "clerk_user_123",
+		},
+	}
+
+	output, err := handler.GrantTrial(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.True(t, output.Body.Success)
+	assert.Equal(t, "Trial granted successfully", output.Body.Message)
+}
+
+// TestGrantTrial_UserAlreadyHadTrial tests graceful handling when user already had trial.
+func TestGrantTrial_UserAlreadyHadTrial(t *testing.T) {
+	mockTrial := &mockTrialService{
+		grantTrialErr: errors.New("user has already had a trial"),
+	}
+	handler := NewAdminHandler(nil, nil, nil, mockTrial, nil, nil, nil, nil, nil)
+
+	input := &GrantTrialInput{
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			ClerkUserID:        "clerk_user_123",
+		},
+	}
+
+	output, err := handler.GrantTrial(context.Background(), input)
+
+	// Should return success (not error) for E2E test purposes
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.True(t, output.Body.Success)
+	assert.Contains(t, output.Body.Message, "already has or had a trial")
+}
+
+// TestGrantTrial_ServiceNotConfigured tests 503 when trial service is nil.
+func TestGrantTrial_ServiceNotConfigured(t *testing.T) {
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	input := &GrantTrialInput{
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			ClerkUserID:        "clerk_user_123",
+		},
+	}
+
+	output, err := handler.GrantTrial(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Trial service not configured")
+}
+
+// TestGrantTrial_ServiceError tests 500 when trial service returns unexpected error.
+func TestGrantTrial_ServiceError(t *testing.T) {
+	mockTrial := &mockTrialService{
+		grantTrialErr: errors.New("database connection error"),
+	}
+	handler := NewAdminHandler(nil, nil, nil, mockTrial, nil, nil, nil, nil, nil)
+
+	input := &GrantTrialInput{
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			ClerkUserID:        "clerk_user_123",
+		},
+	}
+
+	output, err := handler.GrantTrial(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Internal server error")
+}
+
+// --- System Health Tests (Issue #640) ---
+
+// mockSystemHealthService is a mock implementation of services.SystemHealthService
+type mockSystemHealthService struct {
+	healthResp *domain.SystemHealthResponse
+	healthErr  error
+}
+
+func (m *mockSystemHealthService) GetSystemHealth(ctx context.Context) (*domain.SystemHealthResponse, error) {
+	if m.healthErr != nil {
+		return nil, m.healthErr
+	}
+	return m.healthResp, nil
+}
+
+// TestGetSystemHealth_Success tests successful system health retrieval.
+func TestGetSystemHealth_Success(t *testing.T) {
+	now := time.Now()
+	mockHealth := &mockSystemHealthService{
+		healthResp: &domain.SystemHealthResponse{
+			Status:    "healthy",
+			Timestamp: now,
+			Services: domain.ServiceHealthStatuses{
+				Database: domain.DatabaseHealth{
+					Status: "up",
+					Connections: domain.ConnectionPoolStats{
+						Active: 10,
+						Idle:   5,
+						Max:    100,
+					},
+					LatencyMs: 5,
+				},
+				Clerk: domain.ServiceHealth{Status: "up", LatencyMs: 100},
+				Plaid: domain.PlaidHealth{Status: "up", Environment: "sandbox"},
+			},
+			JobQueues: map[string]domain.QueueMetrics{
+				"default": {Pending: 5, Running: 2, Failed: 0, CompletedLastHour: 100},
+			},
+			SyncStatus: domain.SyncStatusMetrics{
+				ActiveSyncs:       3,
+				FailedLastHour:    1,
+				AverageDurationMs: 3500,
+			},
+			DeadLetterQueue: domain.DeadLetterMetrics{
+				Count:             2,
+				OldestJobAgeHours: 5,
+			},
+		},
+	}
+
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, mockHealth, nil, nil)
+
+	input := &GetSystemHealthInput{
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "admin-123"},
+			ClerkUserID:        "clerk_admin_123",
+		},
+	}
+
+	output, err := handler.GetSystemHealth(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.NotNil(t, output.Body)
+	assert.Equal(t, "healthy", output.Body.Status)
+	assert.Equal(t, "up", output.Body.Services.Database.Status)
+	assert.Equal(t, "up", output.Body.Services.Clerk.Status)
+	assert.Equal(t, "up", output.Body.Services.Plaid.Status)
+	assert.Equal(t, "sandbox", output.Body.Services.Plaid.Environment)
+	assert.Equal(t, int64(3), output.Body.SyncStatus.ActiveSyncs)
+	assert.Equal(t, int64(2), output.Body.DeadLetterQueue.Count)
+	assert.Len(t, output.Body.JobQueues, 1)
+}
+
+// TestGetSystemHealth_ServiceNotConfigured tests 503 when service is nil.
+func TestGetSystemHealth_ServiceNotConfigured(t *testing.T) {
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	input := &GetSystemHealthInput{
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "admin-123"},
+			ClerkUserID:        "clerk_admin_123",
+		},
+	}
+
+	output, err := handler.GetSystemHealth(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "System health service not configured")
+}
+
+// TestGetSystemHealth_ServiceError tests 500 when service returns error.
+func TestGetSystemHealth_ServiceError(t *testing.T) {
+	mockHealth := &mockSystemHealthService{
+		healthErr: errors.New("database connection error"),
+	}
+
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, mockHealth, nil, nil)
+
+	input := &GetSystemHealthInput{
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "admin-123"},
+			ClerkUserID:        "clerk_admin_123",
+		},
+	}
+
+	output, err := handler.GetSystemHealth(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Internal server error")
+}

@@ -2,12 +2,18 @@ package repository
 
 import (
 	"context"
-	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+)
+
+var (
+	// ErrWebhookNotFound is returned when a webhook event is not found in the database
+	ErrWebhookNotFound = errors.New("webhook not found")
 )
 
 // WebhookRepository defines the interface for webhook event data access.
@@ -15,9 +21,15 @@ import (
 //
 // Issue #202: Plaid Webhook Integration
 // Issue #256: Transaction Sync Service - Added Update and GetUnprocessedByType
+// Issue #573: River Queue - Added GetByID for async job processing
 type WebhookRepository interface {
 	// Create stores a new webhook event in the database
 	Create(ctx context.Context, event *domain.WebhookEvent) error
+
+	// GetByID retrieves a webhook event by its ID (Issue #573)
+	// Used by River workers to fetch webhook details for async processing
+	// Returns domain.ErrNotFound if webhook doesn't exist
+	GetByID(ctx context.Context, id string) (*domain.WebhookEvent, error)
 
 	// MarkProcessed marks a webhook event as processed
 	// Used after successful processing to prevent double-processing
@@ -50,11 +62,11 @@ type WebhookRepository interface {
 
 // webhookRepository implements WebhookRepository using PostgreSQL
 type webhookRepository struct {
-	db *sql.DB
+	db DB
 }
 
 // NewWebhookRepository creates a new WebhookRepository instance
-func NewWebhookRepository(db *sql.DB) WebhookRepository {
+func NewWebhookRepository(db DB) WebhookRepository {
 	return &webhookRepository{db: db}
 }
 
@@ -74,7 +86,7 @@ func (r *webhookRepository) Create(ctx context.Context, event *domain.WebhookEve
 		RETURNING id, created_at, updated_at
 	`
 
-	err := r.db.QueryRowContext(ctx, query,
+	err := r.db.QueryRow(ctx, query,
 		event.WebhookType,
 		event.WebhookCode,
 		event.ItemID,
@@ -94,6 +106,53 @@ func (r *webhookRepository) Create(ctx context.Context, event *domain.WebhookEve
 	return nil
 }
 
+// GetByID retrieves a webhook event by its ID
+// Used by River workers to fetch webhook details for async processing
+func (r *webhookRepository) GetByID(ctx context.Context, id string) (*domain.WebhookEvent, error) {
+	query := `
+		SELECT id, webhook_type, webhook_code, item_id, error_code,
+		       new_transactions, removed_transactions, payload,
+		       signature, signature_valid, processed, processed_at,
+		       processing_started_at, processing_completed_at, processing_error,
+		       retry_count, next_retry_at,
+		       created_at, updated_at
+		FROM webhook_events
+		WHERE id = $1
+	`
+
+	var event domain.WebhookEvent
+	err := r.db.QueryRow(ctx, query, id).Scan(
+		&event.ID,
+		&event.WebhookType,
+		&event.WebhookCode,
+		&event.ItemID,
+		&event.ErrorCode,
+		&event.NewTransactions,
+		&event.RemovedTransactions,
+		&event.Payload,
+		&event.Signature,
+		&event.SignatureValid,
+		&event.Processed,
+		&event.ProcessedAt,
+		&event.ProcessingStartedAt,
+		&event.ProcessingCompletedAt,
+		&event.ProcessingError,
+		&event.RetryCount,
+		&event.NextRetryAt,
+		&event.CreatedAt,
+		&event.UpdatedAt,
+	)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrWebhookNotFound
+		}
+		return nil, fmt.Errorf("failed to get webhook event by id: %w", err)
+	}
+
+	return &event, nil
+}
+
 // MarkProcessed marks a webhook event as processed
 func (r *webhookRepository) MarkProcessed(ctx context.Context, id string) error {
 	query := `
@@ -103,7 +162,7 @@ func (r *webhookRepository) MarkProcessed(ctx context.Context, id string) error 
 	`
 
 	now := time.Now()
-	_, err := r.db.ExecContext(ctx, query, now, id)
+	_, err := r.db.Exec(ctx, query, now, id)
 	if err != nil {
 		return fmt.Errorf("failed to mark webhook as processed: %w", err)
 	}
@@ -123,7 +182,7 @@ func (r *webhookRepository) GetUnprocessed(ctx context.Context) ([]domain.Webhoo
 		ORDER BY created_at ASC
 	`
 
-	rows, err := r.db.QueryContext(ctx, query)
+	rows, err := r.db.Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get unprocessed webhooks: %w", err)
 	}
@@ -174,7 +233,7 @@ func (r *webhookRepository) GetByItemID(ctx context.Context, itemID string, limi
 		LIMIT $2
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, itemID, limit)
+	rows, err := r.db.Query(ctx, query, itemID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get webhooks by item_id: %w", err)
 	}
@@ -231,7 +290,7 @@ func (r *webhookRepository) Update(ctx context.Context, event *domain.WebhookEve
 		WHERE id = $7
 	`
 
-	_, err := r.db.ExecContext(ctx, query,
+	_, err := r.db.Exec(ctx, query,
 		event.Processed,
 		event.ProcessingStartedAt,
 		event.ProcessingCompletedAt,
@@ -272,7 +331,7 @@ func (r *webhookRepository) GetUnprocessedByType(ctx context.Context, webhookTyp
 		LIMIT $2
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, webhookType, limit)
+	rows, err := r.db.Query(ctx, query, webhookType, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get unprocessed webhooks by type: %w", err)
 	}

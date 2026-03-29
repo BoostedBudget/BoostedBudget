@@ -760,7 +760,7 @@ api.POST("/accounts/swap", plaidHandler.SwapAccounts)
 
 ### Updated API Client: `plaidApi.ts`
 
-**Location**: `frontend/src/features/accounts/api/plaidApi.ts`
+**Location**: `apps/web/src/features/accounts/api/plaidApi.ts`
 
 ```typescript
 export interface AccountActivationResult {
@@ -804,7 +804,7 @@ export async function swapAccounts(
 
 ### New Component: `AccountLinkSuccessModal.tsx`
 
-**Location**: `frontend/src/features/accounts/components/AccountLinkSuccessModal.tsx`
+**Location**: `apps/web/src/features/accounts/components/AccountLinkSuccessModal.tsx`
 
 ```typescript
 import { useState } from 'react'
@@ -881,7 +881,7 @@ export function AccountLinkSuccessModal({ result, onClose }: AccountLinkSuccessM
 
 ### New Component: `AccountSwapInterface.tsx`
 
-**Location**: `frontend/src/features/accounts/components/AccountSwapInterface.tsx`
+**Location**: `apps/web/src/features/accounts/components/AccountSwapInterface.tsx`
 
 ```typescript
 import { useState } from 'react'
@@ -1006,7 +1006,7 @@ export function AccountSwapInterface({
 
 ### Modified: `PlaidLinkButton.tsx`
 
-**Location**: `frontend/src/features/accounts/PlaidLinkButton.tsx`
+**Location**: `apps/web/src/features/accounts/PlaidLinkButton.tsx`
 
 **Changes to `handleOnSuccess`**:
 

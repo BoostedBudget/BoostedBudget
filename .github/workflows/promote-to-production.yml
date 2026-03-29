@@ -35,26 +35,48 @@ jobs:
     permissions:
       contents: write
       actions: read
+    env:
+      UNIQUE_WORKSPACE: workspace-promote-${{ github.run_id }}
 
     steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
           ref: staging
           fetch-depth: 0  # Full history needed for validation and merge
 
       - name: Configure git
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Validate staging branch state
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         id: validate
         run: |
           echo "🔍 Validating staging branch..."
 
-          # Fetch latest refs
-          git fetch origin main staging
+          # Fetch latest refs with retry
+          echo "📥 Fetching latest refs..."
+          for i in 1 2 3; do
+            git fetch origin main staging && {
+              echo "✅ Fetch successful"
+              break
+            } || {
+              if [ $i -eq 3 ]; then
+                echo "::error::Failed to fetch after 3 attempts"
+                exit 1
+              else
+                echo "⚠️ Fetch attempt $i/3 failed, retrying..."
+                sleep 5
+              fi
+            }
+          done
 
           # Check if staging is ahead of main
           COMMITS_AHEAD=$(git rev-list --count origin/main..origin/staging)
@@ -82,14 +104,30 @@ jobs:
           fi
 
       - name: Check staging test status
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         id: test-status
         continue-on-error: true
         run: |
           echo "🧪 Checking recent test status for staging..."
 
-          # Get the most recent test workflow run for staging
-          WORKFLOW_ID=$(gh api repos/${{ github.repository }}/actions/workflows \
-            --jq '.workflows[] | select(.name == "Test Suite") | .id')
+          # Get the most recent test workflow run for staging with retry
+          echo "📡 Fetching workflow ID..."
+          for i in 1 2 3; do
+            WORKFLOW_ID=$(gh api repos/${{ github.repository }}/actions/workflows \
+              --jq '.workflows[] | select(.name == "Test Suite") | .id') && {
+              echo "✅ Workflow ID retrieved"
+              break
+            } || {
+              if [ $i -eq 3 ]; then
+                echo "::warning::Failed to fetch workflow ID after 3 attempts"
+                echo "test-found=false" >> $GITHUB_OUTPUT
+                exit 0
+              else
+                echo "⚠️ API call attempt $i/3 failed, retrying..."
+                sleep 5
+              fi
+            }
+          done
 
           if [ -z "$WORKFLOW_ID" ]; then
             echo "::warning::Could not find Test Suite workflow"
@@ -97,9 +135,24 @@ jobs:
             exit 0
           fi
 
-          # Get the most recent run for staging branch
-          RUN_DATA=$(gh api "repos/${{ github.repository }}/actions/workflows/${WORKFLOW_ID}/runs?branch=staging&per_page=1" \
-            --jq '.workflow_runs[0] | {conclusion: .conclusion, created_at: .created_at, html_url: .html_url}')
+          # Get the most recent run for staging branch with retry
+          echo "📡 Fetching workflow runs..."
+          for i in 1 2 3; do
+            RUN_DATA=$(gh api "repos/${{ github.repository }}/actions/workflows/${WORKFLOW_ID}/runs?branch=staging&per_page=1" \
+              --jq '.workflow_runs[0] | {conclusion: .conclusion, created_at: .created_at, html_url: .html_url}') && {
+              echo "✅ Workflow run data retrieved"
+              break
+            } || {
+              if [ $i -eq 3 ]; then
+                echo "::warning::Failed to fetch workflow runs after 3 attempts"
+                echo "test-found=false" >> $GITHUB_OUTPUT
+                exit 0
+              else
+                echo "⚠️ API call attempt $i/3 failed, retrying..."
+                sleep 5
+              fi
+            }
+          done
 
           if [ -z "$RUN_DATA" ] || [ "$RUN_DATA" = "null" ]; then
             echo "::warning::No recent test runs found for staging"
@@ -132,6 +185,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
       - name: Validate test results
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         if: steps.test-status.outputs.test-found == 'true'
         run: |
           CONCLUSION="${{ steps.test-status.outputs.test-conclusion }}"
@@ -154,6 +208,7 @@ jobs:
           echo "✅ Staging tests passed"
 
       - name: Run lightweight smoke tests
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         if: inputs.skip_smoke_tests != 'true'
         run: |
           echo "🧪 Running pre-promotion smoke tests..."
@@ -169,12 +224,29 @@ jobs:
           echo "::endgroup::"
 
       - name: Merge staging into main
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: |
           echo "🔀 Merging staging into main..."
 
           # Checkout main
           git checkout main
-          git pull origin main
+
+          # Pull latest main with retry
+          echo "📥 Pulling latest main..."
+          for i in 1 2 3; do
+            git pull origin main && {
+              echo "✅ Pull successful"
+              break
+            } || {
+              if [ $i -eq 3 ]; then
+                echo "::error::Failed to pull main after 3 attempts"
+                exit 1
+              else
+                echo "⚠️ Pull attempt $i/3 failed, retrying..."
+                sleep 5
+              fi
+            }
+          done
 
           # Merge staging with no-ff to preserve history
           git merge origin/staging --no-ff -m "chore: Promote staging to production
@@ -188,10 +260,23 @@ jobs:
           echo "✅ Merge successful"
 
       - name: Push to main
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: |
           echo "📤 Pushing to main..."
-          git push origin main
-          echo "✅ Main updated - production deployment will trigger automatically"
+          for i in 1 2 3; do
+            git push origin main && {
+              echo "✅ Main updated - production deployment will trigger automatically"
+              break
+            } || {
+              if [ $i -eq 3 ]; then
+                echo "::error::Failed to push to main after 3 attempts"
+                exit 1
+              else
+                echo "⚠️ Push attempt $i/3 failed, retrying..."
+                sleep 5
+              fi
+            }
+          done
 
       - name: Wait for production deployment
         run: |
@@ -237,3 +322,7 @@ jobs:
           echo "git merge origin/staging --no-ff" >> $GITHUB_STEP_SUMMARY
           echo "git push origin main" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
