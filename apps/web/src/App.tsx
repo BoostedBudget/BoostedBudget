@@ -27,6 +27,7 @@ import { useUpdatePrivacySettings } from '@boostedbudget/api-client/endpoints/pr
 import type { PrivacySettings as PrivacySettingsType } from './features/profile/types'
 import { PrivacyPolicy } from './legal/PrivacyPolicy'
 import { TermsOfService } from './legal/TermsOfService'
+import { CookiePolicy } from './legal/CookiePolicy'
 import { CancelDeletionPage } from './features/deletion/components/CancelDeletionPage'
 import { AutoCategorizationPageWrapper } from './features/auto-categorization/components/AutoCategorizationPageWrapper'
 import { BudgetsPage, BudgetDetailPage } from './features/budgets'
@@ -266,6 +267,7 @@ function App() {
             <Route path="/legal/privacy-policy" element={<PrivacyPolicy />} />
             <Route path="/privacy" element={<PrivacyPolicy />} />
             <Route path="/legal/terms" element={<TermsOfService />} />
+            <Route path="/legal/cookie-policy" element={<CookiePolicy />} />
             <Route path="/pricing" element={<PricingPage />} />
             <Route
               path="/billing/manage"
