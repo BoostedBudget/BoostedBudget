@@ -137,6 +137,88 @@ func TestInvestmentTransactionRepository_UpsertBatch_Empty(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestInvestmentTransactionRepository_GetByUserID verifies paginated retrieval by user.
+func TestInvestmentTransactionRepository_GetByUserID(t *testing.T) {
+	mock, repo := setupInvTxnMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	accountID := uuid.New().String()
+	secID := uuid.New().String()
+	txnDate := time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC)
+	qty := 10.0
+	price := 150.00
+	subtype := "buy"
+
+	rows := pgxmock.NewRows([]string{
+		"id", "user_id", "account_id", "security_id",
+		"plaid_investment_transaction_id",
+		"type", "subtype", "name",
+		"quantity", "amount", "price", "fees", "date",
+		"created_at",
+	}).AddRow(
+		uuid.New().String(), userID, accountID, &secID,
+		"plaid-inv-txn-001",
+		"buy", &subtype, "Apple Inc.",
+		&qty, 1500.00, &price, (*float64)(nil), txnDate,
+		txnDate,
+	)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
+		WithArgs(userID, 10, 0).
+		WillReturnRows(rows)
+
+	txns, err := repo.GetByUserID(ctx, userID, 10, 0)
+
+	require.NoError(t, err)
+	require.Len(t, txns, 1)
+	assert.Equal(t, userID, txns[0].UserID)
+	assert.Equal(t, "buy", txns[0].Type)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestInvestmentTransactionRepository_GetByAccountID verifies retrieval by account.
+func TestInvestmentTransactionRepository_GetByAccountID(t *testing.T) {
+	mock, repo := setupInvTxnMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	accountID := uuid.New().String()
+	secID := uuid.New().String()
+	txnDate := time.Date(2024, 2, 10, 0, 0, 0, 0, time.UTC)
+	qty := 5.0
+	price := 200.00
+	subtype := "sell"
+
+	rows := pgxmock.NewRows([]string{
+		"id", "user_id", "account_id", "security_id",
+		"plaid_investment_transaction_id",
+		"type", "subtype", "name",
+		"quantity", "amount", "price", "fees", "date",
+		"created_at",
+	}).AddRow(
+		uuid.New().String(), userID, accountID, &secID,
+		"plaid-inv-txn-002",
+		"sell", &subtype, "Tesla Inc.",
+		&qty, 1000.00, &price, (*float64)(nil), txnDate,
+		txnDate,
+	)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
+		WithArgs(accountID).
+		WillReturnRows(rows)
+
+	txns, err := repo.GetByAccountID(ctx, accountID)
+
+	require.NoError(t, err)
+	require.Len(t, txns, 1)
+	assert.Equal(t, accountID, txns[0].AccountID)
+	assert.Equal(t, "sell", txns[0].Type)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // TestInvestmentTransactionRepository_UpsertBatch_NullSecurityID verifies that
 // cash transactions with nil security_id are stored correctly.
 func TestInvestmentTransactionRepository_UpsertBatch_NullSecurityID(t *testing.T) {

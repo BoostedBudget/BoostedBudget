@@ -586,6 +586,9 @@ func main() {
 					appLogger,
 				)
 				appLogger.Info("Investment sync service initialized")
+				if phClient != nil {
+					investmentSyncService.SetAnalytics(phClient)
+				}
 
 				// Issue #573/629: Initialize River queue for async job processing
 				logger := slog.Default()

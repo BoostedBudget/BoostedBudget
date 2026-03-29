@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/riverqueue/river"
@@ -42,6 +43,8 @@ func (m *MockInvestmentSyncService) SyncInvestmentTransactions(ctx context.Conte
 	}
 	return args.Get(0).(*domain.InvestmentTransactionSyncResult), args.Error(1)
 }
+
+func (m *MockInvestmentSyncService) SetAnalytics(_ phclient.Analytics) {}
 
 // ─── Holdings Worker Tests ────────────────────────────────────────────────────
 

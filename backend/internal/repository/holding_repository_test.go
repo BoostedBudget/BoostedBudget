@@ -147,3 +147,40 @@ func TestHoldingRepository_GetByUserID(t *testing.T) {
 	assert.Equal(t, 10.0, holdings[0].Quantity)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestHoldingRepository_GetByAccountID(t *testing.T) {
+	mock, repo := setupHoldingMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	accountID := uuid.New().String()
+	secID := uuid.New().String()
+	now := time.Now()
+
+	costBasis := 500.00
+	instValue := 600.00
+	instPrice := 60.00
+
+	rows := pgxmock.NewRows([]string{
+		"id", "user_id", "account_id", "security_id",
+		"quantity", "cost_basis", "institution_value", "institution_price",
+		"created_at", "updated_at",
+	}).AddRow(
+		uuid.New().String(), userID, accountID, secID,
+		5.0, &costBasis, &instValue, &instPrice,
+		now, now,
+	)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
+		WithArgs(accountID).
+		WillReturnRows(rows)
+
+	holdings, err := repo.GetByAccountID(ctx, accountID)
+
+	require.NoError(t, err)
+	require.Len(t, holdings, 1)
+	assert.Equal(t, accountID, holdings[0].AccountID)
+	assert.Equal(t, 5.0, holdings[0].Quantity)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
