@@ -1,11 +1,12 @@
 import './PrivacyPolicy.css'
+import { Link } from 'react-router-dom'
 
 export function PrivacyPolicy() {
   return (
     <div className="privacy-policy">
       <div className="privacy-policy-container">
         <h1>Privacy Policy</h1>
-        <p className="last-updated">Last Updated: January 20, 2025</p>
+        <p className="last-updated">Last Updated: March 29, 2026</p>
 
         <section>
           <h2>1. Introduction</h2>
@@ -84,8 +85,9 @@ export function PrivacyPolicy() {
           <ul>
             <li><strong>Clerk:</strong> Authentication and user management</li>
             <li><strong>Plaid:</strong> Secure bank account connectivity and transaction data</li>
-            <li><strong>Stripe:</strong> Payment processing for subscriptions</li>
-<li><strong>Cloud Infrastructure:</strong> AWS (data hosting), Fly.io (application hosting)</li>
+            <li><strong>Paddle:</strong> Payment processing and subscription management</li>
+            <li><strong>PostHog:</strong> Product analytics and usage insights (analytics cookies only, with your consent)</li>
+            <li><strong>Cloud Infrastructure:</strong> AWS (data hosting), Fly.io (application hosting)</li>
           </ul>
           <p>
             These providers may have access to your information only to perform specific tasks on our behalf
@@ -102,12 +104,8 @@ export function PrivacyPolicy() {
               and security. Cannot be disabled.
             </li>
             <li>
-              <strong>Analytics Cookies (Optional):</strong> Help us understand how users interact with our platform
-              to improve features and user experience. Requires your consent.
-            </li>
-            <li>
-              <strong>Advertising Cookies (Optional):</strong> Enable personalized ads for free-tier users.
-              Supports the free version of our platform. Requires your consent.
+              <strong>Analytics Cookies (Optional):</strong> Help us understand how users interact with our
+              platform to improve features and user experience. We use PostHog for analytics. Requires your consent.
             </li>
           </ul>
           <p>
@@ -168,7 +166,7 @@ export function PrivacyPolicy() {
           <p>We do not sell your personal information. We may share your data in the following circumstances:</p>
           <ul>
             <li><strong>With Your Consent:</strong> When you explicitly authorize data sharing</li>
-            <li><strong>Service Providers:</strong> Third-party partners performing services on our behalf (Clerk, Plaid, Stripe)</li>
+            <li><strong>Service Providers:</strong> Third-party partners performing services on our behalf (Clerk, Plaid, Paddle, PostHog)</li>
             <li><strong>Legal Compliance:</strong> When required by law, court order, or government request</li>
             <li><strong>Business Transfers:</strong> In the event of a merger, acquisition, or sale of assets</li>
             <li><strong>Fraud Prevention:</strong> To protect against fraud, security threats, or illegal activity</li>
@@ -230,16 +228,26 @@ export function PrivacyPolicy() {
         </section>
 
         <section>
-          <h2>14. Subscription Tiers and Data Usage</h2>
-          <p>Different subscription tiers have varying features and data processing needs:</p>
+          <h2>14. Subscription Plans and Data Usage</h2>
+          <p>
+            BoostedBudget offers a <strong>60-day free trial</strong> (no credit card required, no ads) followed
+            by paid subscription plans. All paid plans include the same features; household plans differ only in
+            the number of users:
+          </p>
           <ul>
-            <li><strong>Free Tier:</strong> Basic budgeting, 3 accounts, 1 automation rule, ads enabled (with consent)</li>
-            <li><strong>Premium Lite ($4.99/mo):</strong> Enhanced limits, no ads</li>
-            <li><strong>Premium ($9.99/mo):</strong> Advanced features, priority support</li>
-            <li><strong>Premium+ ($19.99/mo):</strong> Unlimited automation, AI insights (future), API access (future)</li>
+            <li><strong>Premium ($8.99/mo):</strong> Full access for 1 user</li>
+            <li><strong>Household (2) ($12.99/mo):</strong> Full access for 2 users</li>
+            <li><strong>Household (3) ($14.99/mo):</strong> Full access for 3 users</li>
+            <li><strong>Household (4) ($16.99/mo):</strong> Full access for 4 users</li>
+            <li><strong>Household (5+) ($18.99/mo):</strong> Full access for 5 users</li>
           </ul>
           <p>
-            Your subscription tier does not affect your privacy rights or our data protection commitments.
+            After trial expiry or subscription cancellation, accounts enter read-only mode — data is
+            preserved and accessible but no new syncing or premium features are available. See our{' '}
+            <Link to="/legal/terms">Terms of Service</Link> for full details.
+          </p>
+          <p>
+            Your subscription plan does not affect your privacy rights or our data protection commitments.
           </p>
         </section>
 
