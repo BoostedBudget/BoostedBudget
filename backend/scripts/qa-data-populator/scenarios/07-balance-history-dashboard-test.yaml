@@ -1,0 +1,64 @@
+version: "2.0"
+
+metadata:
+  name: "Dashboard Balance History Test"
+  description: "Test scenario for populating dashboard with balance snapshot data"
+  tags: ["balance", "dashboard", "frontend", "e2e"]
+
+setup:
+  user:
+    email: "test-dashboard-ui@example.com"
+    tier: "premium"
+
+  linked_items:
+    - institution: "Chase"
+
+  accounts:
+    - item_index: 0
+      type: "checking"
+      name: "Primary Checking"
+      balance: 3500.00
+
+    - item_index: 0
+      type: "savings"
+      name: "Emergency Fund"
+      balance: 12000.00
+
+    - item_index: 0
+      type: "credit_card"
+      name: "Rewards Card"
+      balance: -850.00
+
+    - item_index: 0
+      type: "investment"
+      name: "Brokerage"
+      balance: 25000.00
+
+  transactions:
+    count_per_account: 25  # More transactions for richer history
+
+# Fire webhook to create today's balance snapshots
+webhooks:
+  fire_after_setup: true
+  webhook_code: "DEFAULT_UPDATE"
+  wait_for_processing: true
+  timeout_seconds: 45  # Longer timeout for more accounts
+
+assertions:
+  - type: "account_count"
+    operator: "="
+    value: 4
+
+  - type: "transaction_count"
+    operator: ">="
+    value: 100  # 25 × 4 accounts
+
+  # Verify snapshots created for all accounts
+  - type: "balance_snapshot_count"
+    operator: "="
+    value: 4  # One per account for today
+
+  # Verify total balance (checking + savings - credit + investment)
+  - type: "balance_sum"
+    operator: "="
+    value: 39650.00  # 3500 + 12000 - 850 + 25000

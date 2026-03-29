@@ -2,12 +2,13 @@ package repository
 
 import (
 	"context"
-	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -35,6 +36,10 @@ type LinkedItemRepository interface {
 	// UpdateCursor updates the transaction sync cursor for a linked item
 	UpdateCursor(ctx context.Context, id, cursor string) error
 
+	// Update updates a linked item's fields (e.g., status, error details)
+	// Issue #257: Item Error Handler - updates error tracking fields
+	Update(ctx context.Context, item *domain.LinkedItem) error
+
 	// Delete removes a linked item from the database
 	Delete(ctx context.Context, id string) error
 
@@ -50,15 +55,59 @@ type LinkedItemRepository interface {
 	//   - The item doesn't exist
 	//   - The item exists but belongs to a different user (ownership check fails)
 	DeleteByUser(ctx context.Context, id, userID string) error
+
+	// GetByIDForUpdate retrieves a linked item by ID with a row-level exclusive lock.
+	// Use this in sync workers to prevent concurrent syncs for the same item.
+	// The lock is held until the transaction commits or rolls back.
+	//
+	// IMPORTANT: This must be called within a transaction. The lock is released
+	// when the transaction ends (commit or rollback).
+	//
+	// Returns ErrLinkedItemNotFound if the item doesn't exist.
+	GetByIDForUpdate(ctx context.Context, tx pgx.Tx, id string) (*domain.LinkedItem, error)
+
+	// GetByUserAndInstitution retrieves a linked item by user ID, institution ID, and status.
+	// This is used for re-link detection to find existing active items at the same institution.
+	// Issue #171: Plaid Re-Link Handling
+	//
+	// Returns nil, nil if no matching item found (not an error).
+	GetByUserAndInstitution(ctx context.Context, userID, institutionID, status string) (*domain.LinkedItem, error)
+
+	// Issue #668: Plaid Item Management for Cost Optimization - Cleanup tracking methods
+
+	// GetItemsForCleanup retrieves items that are candidates for cleanup.
+	// Criteria: items in error/login_required state > errorDays, OR revoked status, OR not synced > staleDays.
+	// Only returns items that haven't been notified yet (cleanup_scheduled_at IS NULL).
+	GetItemsForCleanup(ctx context.Context, errorDays, staleDays int) ([]domain.LinkedItem, error)
+
+	// GetItemsPendingCleanup retrieves items where cleanup is scheduled and past due.
+	// Returns items where cleanup_scheduled_at < NOW().
+	GetItemsPendingCleanup(ctx context.Context) ([]domain.LinkedItem, error)
+
+	// MarkForCleanup marks an item for cleanup with notification and scheduled cleanup timestamp.
+	MarkForCleanup(ctx context.Context, itemID string, cleanupAt time.Time) error
+
+	// ClearCleanupSchedule clears the cleanup schedule for an item (e.g., if user reconnected).
+	ClearCleanupSchedule(ctx context.Context, itemID string) error
+
+	// Issue #679, #680: Trial expiration - mark items as disconnected to preserve history
+
+	// MarkAllUserItemsDisconnected marks all linked items for a user as 'disconnected'.
+	// This is used when a subscription expires to preserve transaction history while
+	// stopping Plaid syncing. Unlike Delete, this does NOT cascade delete accounts/transactions.
+	MarkAllUserItemsDisconnected(ctx context.Context, userID string) error
+
+	// GetActiveItemsByUserID retrieves all active (non-replaced, non-disconnected) linked items for a user
+	GetActiveItemsByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error)
 }
 
 // linkedItemRepository implements LinkedItemRepository using PostgreSQL
 type linkedItemRepository struct {
-	db *sql.DB
+	db DB
 }
 
 // NewLinkedItemRepository creates a new LinkedItemRepository instance
-func NewLinkedItemRepository(db *sql.DB) LinkedItemRepository {
+func NewLinkedItemRepository(db DB) LinkedItemRepository {
 	return &linkedItemRepository{db: db}
 }
 
@@ -80,7 +129,7 @@ func (r *linkedItemRepository) Create(ctx context.Context, item *domain.LinkedIt
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`
 
-	_, err := r.db.ExecContext(ctx, query,
+	_, err := r.db.Exec(ctx, query,
 		item.ID,
 		item.UserID,
 		item.ItemID,
@@ -106,18 +155,20 @@ func (r *linkedItemRepository) Create(ctx context.Context, item *domain.LinkedIt
 }
 
 // GetByID retrieves a linked item by its UUID
+// Issue #171: Updated to include status, error tracking, and soft-delete fields
 func (r *linkedItemRepository) GetByID(ctx context.Context, id string) (*domain.LinkedItem, error) {
 	query := `
 		SELECT id, user_id, item_id, access_token_encrypted,
-		       institution_id, institution_name, provider,
-		       cursor, last_synced_at,
+		       institution_id, institution_name, provider, cursor, last_synced_at,
+		       status, error_code, error_message, last_error_at, retry_count, next_retry_at,
+		       replaced_at, replaced_by_id,
 		       created_at, updated_at
 		FROM linked_items
 		WHERE id = $1
 	`
 
 	var item domain.LinkedItem
-	err := r.db.QueryRowContext(ctx, query, id).Scan(
+	err := r.db.QueryRow(ctx, query, id).Scan(
 		&item.ID,
 		&item.UserID,
 		&item.ItemID,
@@ -127,11 +178,19 @@ func (r *linkedItemRepository) GetByID(ctx context.Context, id string) (*domain.
 		&item.Provider,
 		&item.Cursor,
 		&item.LastSyncedAt,
+		&item.Status,
+		&item.ErrorCode,
+		&item.ErrorMessage,
+		&item.LastErrorAt,
+		&item.RetryCount,
+		&item.NextRetryAt,
+		&item.ReplacedAt,
+		&item.ReplacedByID,
 		&item.CreatedAt,
 		&item.UpdatedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrLinkedItemNotFound
 	}
 	if err != nil {
@@ -142,18 +201,22 @@ func (r *linkedItemRepository) GetByID(ctx context.Context, id string) (*domain.
 }
 
 // GetByUserID retrieves all linked items for a specific user
+// Issue #171: Updated to include status, error tracking, and soft-delete fields
 func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error) {
 	query := `
 		SELECT id, user_id, item_id, access_token_encrypted,
 		       institution_id, institution_name, provider,
 		       cursor, last_synced_at,
+		       status, error_code, error_message, last_error_at,
+		       retry_count, next_retry_at,
+		       replaced_at, replaced_by_id,
 		       created_at, updated_at
 		FROM linked_items
 		WHERE user_id = $1
 		ORDER BY created_at DESC
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, userID)
+	rows, err := r.db.Query(ctx, query, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -172,6 +235,14 @@ func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) (
 			&item.Provider,
 			&item.Cursor,
 			&item.LastSyncedAt,
+			&item.Status,
+			&item.ErrorCode,
+			&item.ErrorMessage,
+			&item.LastErrorAt,
+			&item.RetryCount,
+			&item.NextRetryAt,
+			&item.ReplacedAt,
+			&item.ReplacedByID,
 			&item.CreatedAt,
 			&item.UpdatedAt,
 		)
@@ -185,11 +256,9 @@ func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) (
 		return nil, err
 	}
 
-	// Return empty slice instead of nil if no items found
-	if items == nil {
-		items = []domain.LinkedItem{}
+	if len(items) == 0 {
+		return []domain.LinkedItem{}, nil
 	}
-
 	return items, nil
 }
 
@@ -197,15 +266,16 @@ func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) (
 func (r *linkedItemRepository) GetByItemID(ctx context.Context, itemID string) (*domain.LinkedItem, error) {
 	query := `
 		SELECT id, user_id, item_id, access_token_encrypted,
-		       institution_id, institution_name, provider,
-		       cursor, last_synced_at,
+		       institution_id, institution_name, provider, cursor, last_synced_at,
+		       status, error_code, error_message, last_error_at, retry_count, next_retry_at,
+		       replaced_at, replaced_by_id,
 		       created_at, updated_at
 		FROM linked_items
 		WHERE item_id = $1
 	`
 
 	var item domain.LinkedItem
-	err := r.db.QueryRowContext(ctx, query, itemID).Scan(
+	err := r.db.QueryRow(ctx, query, itemID).Scan(
 		&item.ID,
 		&item.UserID,
 		&item.ItemID,
@@ -215,11 +285,19 @@ func (r *linkedItemRepository) GetByItemID(ctx context.Context, itemID string) (
 		&item.Provider,
 		&item.Cursor,
 		&item.LastSyncedAt,
+		&item.Status,
+		&item.ErrorCode,
+		&item.ErrorMessage,
+		&item.LastErrorAt,
+		&item.RetryCount,
+		&item.NextRetryAt,
+		&item.ReplacedAt,
+		&item.ReplacedByID,
 		&item.CreatedAt,
 		&item.UpdatedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrLinkedItemNotFound
 	}
 	if err != nil {
@@ -241,18 +319,68 @@ func (r *linkedItemRepository) UpdateCursor(ctx context.Context, id, cursor stri
 		WHERE id = $4
 	`
 
-	result, err := r.db.ExecContext(ctx, query, cursor, now, now, id)
+	ct, err := r.db.Exec(ctx, query, cursor, now, now, id)
 	if err != nil {
 		return err
 	}
 
 	// Check if any rows were affected
-	rowsAffected, err := result.RowsAffected()
+	if ct.RowsAffected() == 0 {
+		return ErrLinkedItemNotFound
+	}
+
+	return nil
+}
+
+// Update updates a linked item's fields (e.g., status, error details)
+// Issue #257: Item Error Handler - updates error tracking fields
+// Issue #171: Added replaced_at and replaced_by_id for soft-delete support
+func (r *linkedItemRepository) Update(ctx context.Context, item *domain.LinkedItem) error {
+	now := time.Now()
+	item.UpdatedAt = now
+
+	query := `
+		UPDATE linked_items
+		SET institution_id = $2,
+		    institution_name = $3,
+		    provider = $4,
+		    cursor = $5,
+		    last_synced_at = $6,
+		    status = $7,
+		    error_code = $8,
+		    error_message = $9,
+		    last_error_at = $10,
+		    retry_count = $11,
+		    next_retry_at = $12,
+		    replaced_at = $13,
+		    replaced_by_id = $14,
+		    updated_at = $15
+		WHERE id = $1
+	`
+
+	ct, err := r.db.Exec(ctx, query,
+		item.ID,
+		item.InstitutionID,
+		item.InstitutionName,
+		item.Provider,
+		item.Cursor,
+		item.LastSyncedAt,
+		item.Status,
+		item.ErrorCode,
+		item.ErrorMessage,
+		item.LastErrorAt,
+		item.RetryCount,
+		item.NextRetryAt,
+		item.ReplacedAt,
+		item.ReplacedByID,
+		item.UpdatedAt,
+	)
 	if err != nil {
 		return err
 	}
 
-	if rowsAffected == 0 {
+	// Check if any rows were affected
+	if ct.RowsAffected() == 0 {
 		return ErrLinkedItemNotFound
 	}
 
@@ -266,18 +394,13 @@ func (r *linkedItemRepository) Delete(ctx context.Context, id string) error {
 		WHERE id = $1
 	`
 
-	result, err := r.db.ExecContext(ctx, query, id)
+	ct, err := r.db.Exec(ctx, query, id)
 	if err != nil {
 		return err
 	}
 
 	// Check if any rows were affected
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		return ErrLinkedItemNotFound
 	}
 
@@ -291,18 +414,20 @@ func (r *linkedItemRepository) Delete(ctx context.Context, id string) error {
 // a different user, sql.ErrNoRows is returned and mapped to ErrLinkedItemNotFound.
 //
 // This is used by handlers to ensure users can only access their own linked items.
+// Issue #171: Updated to include status, error tracking, and soft-delete fields
 func (r *linkedItemRepository) GetByIDAndUser(ctx context.Context, id, userID string) (*domain.LinkedItem, error) {
 	query := `
 		SELECT id, user_id, item_id, access_token_encrypted,
-		       institution_id, institution_name, provider,
-		       cursor, last_synced_at,
+		       institution_id, institution_name, provider, cursor, last_synced_at,
+		       status, error_code, error_message, last_error_at, retry_count, next_retry_at,
+		       replaced_at, replaced_by_id,
 		       created_at, updated_at
 		FROM linked_items
 		WHERE id = $1 AND user_id = $2
 	`
 
 	var item domain.LinkedItem
-	err := r.db.QueryRowContext(ctx, query, id, userID).Scan(
+	err := r.db.QueryRow(ctx, query, id, userID).Scan(
 		&item.ID,
 		&item.UserID,
 		&item.ItemID,
@@ -312,11 +437,19 @@ func (r *linkedItemRepository) GetByIDAndUser(ctx context.Context, id, userID st
 		&item.Provider,
 		&item.Cursor,
 		&item.LastSyncedAt,
+		&item.Status,
+		&item.ErrorCode,
+		&item.ErrorMessage,
+		&item.LastErrorAt,
+		&item.RetryCount,
+		&item.NextRetryAt,
+		&item.ReplacedAt,
+		&item.ReplacedByID,
 		&item.CreatedAt,
 		&item.UpdatedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrLinkedItemNotFound
 	}
 	if err != nil {
@@ -340,21 +473,408 @@ func (r *linkedItemRepository) DeleteByUser(ctx context.Context, id, userID stri
 		WHERE id = $1 AND user_id = $2
 	`
 
-	result, err := r.db.ExecContext(ctx, query, id, userID)
+	ct, err := r.db.Exec(ctx, query, id, userID)
 	if err != nil {
 		return err
 	}
 
 	// Check if any rows were affected (validates ownership and existence)
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if rowsAffected == 0 {
+	if ct.RowsAffected() == 0 {
 		// Item not found OR user doesn't own it (both cases return same error for security)
 		return ErrLinkedItemNotFound
 	}
 
 	return nil
+}
+
+// GetByIDForUpdate retrieves a linked item by ID with a row-level exclusive lock.
+// This prevents concurrent sync operations on the same linked item.
+//
+// The FOR UPDATE clause acquires an exclusive row-level lock that:
+//   - Blocks other transactions attempting to SELECT FOR UPDATE on the same row
+//   - Blocks other transactions attempting to UPDATE or DELETE the row
+//   - Is held until the transaction commits or rolls back
+//
+// Usage pattern:
+//
+//	tx, _ := db.Begin(ctx)
+//	defer tx.Rollback(ctx)
+//	item, err := repo.GetByIDForUpdate(ctx, tx, linkedItemID)
+//	// ... perform sync operations ...
+//	tx.Commit(ctx)
+//
+// Returns ErrLinkedItemNotFound if the item doesn't exist.
+func (r *linkedItemRepository) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, id string) (*domain.LinkedItem, error) {
+	query := `
+		SELECT id, user_id, item_id, access_token_encrypted,
+		       institution_id, institution_name, provider,
+		       cursor, last_synced_at,
+		       status, error_code, error_message, last_error_at,
+		       retry_count, next_retry_at,
+		       replaced_at, replaced_by_id,
+		       created_at, updated_at
+		FROM linked_items
+		WHERE id = $1
+		FOR UPDATE
+	`
+
+	var item domain.LinkedItem
+	err := tx.QueryRow(ctx, query, id).Scan(
+		&item.ID,
+		&item.UserID,
+		&item.ItemID,
+		&item.AccessTokenEncrypted,
+		&item.InstitutionID,
+		&item.InstitutionName,
+		&item.Provider,
+		&item.Cursor,
+		&item.LastSyncedAt,
+		&item.Status,
+		&item.ErrorCode,
+		&item.ErrorMessage,
+		&item.LastErrorAt,
+		&item.RetryCount,
+		&item.NextRetryAt,
+		&item.ReplacedAt,
+		&item.ReplacedByID,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrLinkedItemNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return &item, nil
+}
+
+// GetByUserAndInstitution retrieves a linked item by user ID, institution ID, and status.
+// This is used for re-link detection to find existing active items at the same institution.
+// Issue #171: Plaid Re-Link Handling
+//
+// Returns nil, nil if no matching item found (not an error).
+func (r *linkedItemRepository) GetByUserAndInstitution(ctx context.Context, userID, institutionID, status string) (*domain.LinkedItem, error) {
+	query := `
+		SELECT id, user_id, item_id, access_token_encrypted,
+		       institution_id, institution_name, provider,
+		       cursor, last_synced_at,
+		       status, error_code, error_message, last_error_at,
+		       retry_count, next_retry_at,
+		       replaced_at, replaced_by_id,
+		       created_at, updated_at
+		FROM linked_items
+		WHERE user_id = $1 AND institution_id = $2 AND status = $3
+		ORDER BY created_at DESC LIMIT 1
+	`
+
+	var item domain.LinkedItem
+	err := r.db.QueryRow(ctx, query, userID, institutionID, status).Scan(
+		&item.ID,
+		&item.UserID,
+		&item.ItemID,
+		&item.AccessTokenEncrypted,
+		&item.InstitutionID,
+		&item.InstitutionName,
+		&item.Provider,
+		&item.Cursor,
+		&item.LastSyncedAt,
+		&item.Status,
+		&item.ErrorCode,
+		&item.ErrorMessage,
+		&item.LastErrorAt,
+		&item.RetryCount,
+		&item.NextRetryAt,
+		&item.ReplacedAt,
+		&item.ReplacedByID,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		// No match found - this is not an error, just no existing item
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return &item, nil
+}
+
+// Issue #668: Plaid Item Management for Cost Optimization - Cleanup tracking methods
+
+// GetItemsForCleanup retrieves items that are candidates for cleanup.
+// Criteria:
+//   - Items in error/login_required state > errorDays
+//   - Items with revoked status (immediate cleanup candidate)
+//   - Items not synced > staleDays
+//   - Items with zero active accounts (no connected accounts remaining)
+//
+// Only returns items that haven't been scheduled yet (cleanup_scheduled_at IS NULL).
+// Issue #668: Plaid Item Management for Cost Optimization
+func (r *linkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays, staleDays int) ([]domain.LinkedItem, error) {
+	query := `
+		SELECT li.id, li.user_id, li.item_id, li.access_token_encrypted,
+		       li.institution_id, li.institution_name, li.provider, li.cursor, li.last_synced_at,
+		       li.status, li.error_code, li.error_message, li.last_error_at, li.retry_count, li.next_retry_at,
+		       li.replaced_at, li.replaced_by_id,
+		       li.cleanup_notified_at, li.cleanup_scheduled_at,
+		       li.created_at, li.updated_at
+		FROM linked_items li
+		WHERE li.cleanup_scheduled_at IS NULL
+		  AND li.status NOT IN ('replaced', 'disconnected')
+		  AND (
+		      -- Items in error state for > errorDays
+		      (li.status IN ('error', 'login_required') AND li.last_error_at < NOW() - $1::interval)
+		      -- OR items with revoked status (immediate cleanup candidate)
+		      OR li.status = 'revoked'
+		      -- OR items not synced for > staleDays
+		      OR (li.last_synced_at IS NOT NULL AND li.last_synced_at < NOW() - $2::interval)
+		      -- OR items with zero active accounts (immediate cleanup candidate)
+		      OR NOT EXISTS (
+		          SELECT 1 FROM accounts a
+		          WHERE a.linked_item_id = li.id AND a.status = 'active'
+		      )
+		  )
+		ORDER BY li.last_error_at ASC NULLS LAST, li.last_synced_at ASC NULLS LAST
+	`
+
+	rows, err := r.db.Query(ctx, query,
+		strings.TrimSpace(fmt.Sprintf("%d days", errorDays)),
+		strings.TrimSpace(fmt.Sprintf("%d days", staleDays)),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []domain.LinkedItem
+	for rows.Next() {
+		var item domain.LinkedItem
+		err := rows.Scan(
+			&item.ID,
+			&item.UserID,
+			&item.ItemID,
+			&item.AccessTokenEncrypted,
+			&item.InstitutionID,
+			&item.InstitutionName,
+			&item.Provider,
+			&item.Cursor,
+			&item.LastSyncedAt,
+			&item.Status,
+			&item.ErrorCode,
+			&item.ErrorMessage,
+			&item.LastErrorAt,
+			&item.RetryCount,
+			&item.NextRetryAt,
+			&item.ReplacedAt,
+			&item.ReplacedByID,
+			&item.CleanupNotifiedAt,
+			&item.CleanupScheduledAt,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if len(items) == 0 {
+		return []domain.LinkedItem{}, nil
+	}
+	return items, nil
+}
+
+// GetItemsPendingCleanup retrieves items where cleanup is scheduled and past due.
+func (r *linkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]domain.LinkedItem, error) {
+	query := `
+		SELECT id, user_id, item_id, access_token_encrypted,
+		       institution_id, institution_name, provider, cursor, last_synced_at,
+		       status, error_code, error_message, last_error_at, retry_count, next_retry_at,
+		       replaced_at, replaced_by_id,
+		       cleanup_notified_at, cleanup_scheduled_at,
+		       created_at, updated_at
+		FROM linked_items
+		WHERE cleanup_scheduled_at IS NOT NULL
+		  AND cleanup_scheduled_at < NOW()
+		  AND status NOT IN ('replaced', 'disconnected')
+		ORDER BY cleanup_scheduled_at ASC
+	`
+
+	rows, err := r.db.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []domain.LinkedItem
+	for rows.Next() {
+		var item domain.LinkedItem
+		err := rows.Scan(
+			&item.ID,
+			&item.UserID,
+			&item.ItemID,
+			&item.AccessTokenEncrypted,
+			&item.InstitutionID,
+			&item.InstitutionName,
+			&item.Provider,
+			&item.Cursor,
+			&item.LastSyncedAt,
+			&item.Status,
+			&item.ErrorCode,
+			&item.ErrorMessage,
+			&item.LastErrorAt,
+			&item.RetryCount,
+			&item.NextRetryAt,
+			&item.ReplacedAt,
+			&item.ReplacedByID,
+			&item.CleanupNotifiedAt,
+			&item.CleanupScheduledAt,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if len(items) == 0 {
+		return []domain.LinkedItem{}, nil
+	}
+	return items, nil
+}
+
+// MarkForCleanup marks an item for cleanup with notification and scheduled cleanup timestamp.
+func (r *linkedItemRepository) MarkForCleanup(ctx context.Context, itemID string, cleanupAt time.Time) error {
+	now := time.Now()
+
+	query := `
+		UPDATE linked_items
+		SET cleanup_notified_at = $1,
+		    cleanup_scheduled_at = $2,
+		    updated_at = $3
+		WHERE id = $4
+		  AND cleanup_scheduled_at IS NULL
+	`
+
+	ct, err := r.db.Exec(ctx, query, now, cleanupAt, now, itemID)
+	if err != nil {
+		return err
+	}
+
+	if ct.RowsAffected() == 0 {
+		// Item not found or already scheduled for cleanup
+		return ErrLinkedItemNotFound
+	}
+
+	return nil
+}
+
+// ClearCleanupSchedule clears the cleanup schedule for an item (e.g., if user reconnected).
+func (r *linkedItemRepository) ClearCleanupSchedule(ctx context.Context, itemID string) error {
+	now := time.Now()
+
+	query := `
+		UPDATE linked_items
+		SET cleanup_notified_at = NULL,
+		    cleanup_scheduled_at = NULL,
+		    updated_at = $1
+		WHERE id = $2
+	`
+
+	_, err := r.db.Exec(ctx, query, now, itemID)
+	return err
+}
+
+// MarkAllUserItemsDisconnected marks all linked items for a user as 'disconnected'.
+// This preserves transaction history while indicating the Plaid connection is no longer active.
+// Issue #679, #680: Trial expiration
+func (r *linkedItemRepository) MarkAllUserItemsDisconnected(ctx context.Context, userID string) error {
+	now := time.Now()
+
+	query := `
+		UPDATE linked_items
+		SET status = 'disconnected',
+		    updated_at = $1
+		WHERE user_id = $2
+		  AND status NOT IN ('disconnected', 'replaced')
+	`
+
+	_, err := r.db.Exec(ctx, query, now, userID)
+	return err
+}
+
+// GetActiveItemsByUserID retrieves all active (non-replaced, non-disconnected) linked items for a user
+func (r *linkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error) {
+	query := `
+		SELECT id, user_id, item_id, access_token_encrypted,
+		       institution_id, institution_name, provider,
+		       cursor, last_synced_at,
+		       status, error_code, error_message, last_error_at,
+		       retry_count, next_retry_at,
+		       replaced_at, replaced_by_id,
+		       created_at, updated_at
+		FROM linked_items
+		WHERE user_id = $1
+		  AND status NOT IN ('disconnected', 'replaced')
+		ORDER BY created_at DESC
+	`
+
+	rows, err := r.db.Query(ctx, query, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []domain.LinkedItem
+	for rows.Next() {
+		var item domain.LinkedItem
+		err := rows.Scan(
+			&item.ID,
+			&item.UserID,
+			&item.ItemID,
+			&item.AccessTokenEncrypted,
+			&item.InstitutionID,
+			&item.InstitutionName,
+			&item.Provider,
+			&item.Cursor,
+			&item.LastSyncedAt,
+			&item.Status,
+			&item.ErrorCode,
+			&item.ErrorMessage,
+			&item.LastErrorAt,
+			&item.RetryCount,
+			&item.NextRetryAt,
+			&item.ReplacedAt,
+			&item.ReplacedByID,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if len(items) == 0 {
+		return []domain.LinkedItem{}, nil
+	}
+	return items, nil
 }

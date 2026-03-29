@@ -21,23 +21,36 @@ jobs:
     runs-on: [self-hosted, macOS, mac-mini]
     permissions:
       contents: write
+    env:
+      UNIQUE_WORKSPACE: workspace-sync-staging-${{ github.run_id }}
 
     steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
           ref: main
           fetch-depth: 0  # Full history needed for merge
 
       - name: Configure git
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Fetch and merge main into staging
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: |
           echo "📥 Fetching latest staging..."
-          git fetch origin staging
+          for i in 1 2 3; do
+            git fetch origin staging && break || {
+              echo "⚠️ Fetch attempt $i/3 failed"
+              [ $i -lt 3 ] && sleep 5
+            }
+          done
 
           echo "🔄 Checking out staging..."
           git checkout staging
@@ -46,9 +59,15 @@ jobs:
           git merge origin/main --no-edit -m "chore: Sync staging with main after production deployment"
 
           echo "📤 Pushing to staging..."
-          git push origin staging
+          for i in 1 2 3; do
+            git push origin staging && break || {
+              echo "⚠️ Push attempt $i/3 failed"
+              [ $i -lt 3 ] && sleep 5
+            }
+          done
 
       - name: Verify sync
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: |
           DIVERGENCE=$(git rev-list --left-right --count staging...origin/main)
           echo "Branch divergence: $DIVERGENCE"
@@ -80,3 +99,7 @@ jobs:
           echo "git merge origin/main --no-edit" >> $GITHUB_STEP_SUMMARY
           echo "git push origin staging" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true

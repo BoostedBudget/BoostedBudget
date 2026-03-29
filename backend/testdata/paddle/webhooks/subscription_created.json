@@ -1,0 +1,75 @@
+{
+  "event_id": "evt_01h1234567890subscreated",
+  "event_type": "subscription.created",
+  "occurred_at": "2026-01-29T10:30:00Z",
+  "data": {
+    "id": "sub_01h1234567890abcdef",
+    "status": "active",
+    "customer_id": "ctm_01h1234567890abcdef",
+    "address_id": "add_01h1234567890abcdef",
+    "business_id": null,
+    "currency_code": "USD",
+    "created_at": "2026-01-29T10:30:00Z",
+    "updated_at": "2026-01-29T10:30:00Z",
+    "started_at": "2026-01-29T10:30:00Z",
+    "first_billed_at": "2026-01-29T10:30:00Z",
+    "next_billed_at": "2026-02-28T10:30:00Z",
+    "paused_at": null,
+    "canceled_at": null,
+    "discount": null,
+    "collection_mode": "automatic",
+    "billing_details": null,
+    "current_billing_period": {
+      "starts_at": "2026-01-29T10:30:00Z",
+      "ends_at": "2026-02-28T10:30:00Z"
+    },
+    "billing_cycle": {
+      "interval": "month",
+      "frequency": 1
+    },
+    "scheduled_change": null,
+    "items": [
+      {
+        "price": {
+          "id": "pri_01h1234567890premium",
+          "product_id": "pro_01h1234567890premium",
+          "description": "Premium Monthly",
+          "type": "standard",
+          "billing_cycle": {
+            "interval": "month",
+            "frequency": 1
+          },
+          "trial_period": null,
+          "tax_mode": "account_setting",
+          "unit_price": {
+            "amount": "999",
+            "currency_code": "USD"
+          },
+          "unit_price_overrides": [],
+          "quantity": {
+            "minimum": 1,
+            "maximum": 1
+          },
+          "status": "active",
+          "custom_data": null
+        },
+        "status": "active",
+        "quantity": 1,
+        "recurring": true,
+        "created_at": "2026-01-29T10:30:00Z",
+        "updated_at": "2026-01-29T10:30:00Z",
+        "previously_billed_at": null,
+        "next_billed_at": "2026-02-28T10:30:00Z",
+        "trial_dates": null
+      }
+    ],
+    "custom_data": {
+      "user_id": "user_2abc123def456"
+    },
+    "import_meta": null,
+    "management_urls": {
+      "update_payment_method": "https://subscription-management.paddle.com/update-payment-method/sub_01h1234567890abcdef",
+      "cancel": "https://subscription-management.paddle.com/cancel/sub_01h1234567890abcdef"
+    }
+  }
+}

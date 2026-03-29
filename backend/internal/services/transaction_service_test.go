@@ -83,6 +83,72 @@ func (m *MockTransactionRepository) GetByExternalID(ctx context.Context, source 
 	return args.Get(0).(*domain.Transaction), args.Error(1)
 }
 
+func (m *MockTransactionRepository) GetByID(ctx context.Context, id string) (*domain.Transaction, error) {
+	args := m.Called(ctx, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.Transaction), args.Error(1)
+}
+
+func (m *MockTransactionRepository) UpdateTags(ctx context.Context, id string, userID string, tags []string, tagsSource []domain.TagSource) error {
+	args := m.Called(ctx, id, userID, tags, tagsSource)
+	return args.Error(0)
+}
+
+func (m *MockTransactionRepository) UpdateCategory(ctx context.Context, id string, userID string, categoryOverride []string, categorySource domain.CategorySource) error {
+	args := m.Called(ctx, id, userID, categoryOverride, categorySource)
+	return args.Error(0)
+}
+
+func (m *MockTransactionRepository) GetDistinctPlaidCategories(ctx context.Context, userID string) ([]string, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]string), args.Error(1)
+}
+
+// Issue #492: Income Source Matching Service methods
+func (m *MockTransactionRepository) GetIncomeSumByCategory(ctx context.Context, userID string, category string, startDate, endDate time.Time) (float64, error) {
+	args := m.Called(ctx, userID, category, startDate, endDate)
+	return args.Get(0).(float64), args.Error(1)
+}
+
+func (m *MockTransactionRepository) GetIncomeSumByTag(ctx context.Context, userID string, tag string, startDate, endDate time.Time) (float64, error) {
+	args := m.Called(ctx, userID, tag, startDate, endDate)
+	return args.Get(0).(float64), args.Error(1)
+}
+
+func (m *MockTransactionRepository) GetSpentSumForBudgetCategory(ctx context.Context, userID string, category []string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (float64, error) {
+	args := m.Called(ctx, userID, category, tags, matchLogic, startDate, endDate)
+	return args.Get(0).(float64), args.Error(1)
+}
+
+func (m *MockTransactionRepository) GetMatchingTransactionStats(ctx context.Context, userID string, categories [][]string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (int, float64, error) {
+	args := m.Called(ctx, userID, categories, tags, matchLogic, startDate, endDate)
+	return args.Int(0), args.Get(1).(float64), args.Error(2)
+}
+
+// Issue #499: Transaction-Budget Linking UI
+func (m *MockTransactionRepository) GetTransactionsForBudgetCategory(ctx context.Context, userID string, category []string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time, limit, offset int) ([]domain.Transaction, int, float64, error) {
+	args := m.Called(ctx, userID, category, tags, matchLogic, startDate, endDate, limit, offset)
+	if args.Get(0) == nil {
+		return nil, args.Int(1), args.Get(2).(float64), args.Error(3)
+	}
+	return args.Get(0).([]domain.Transaction), args.Int(1), args.Get(2).(float64), args.Error(3)
+}
+
+// GetByUserAccountID retrieves all transactions for a user_account.
+// Issue #171 - Plaid Re-Link Handling
+func (m *MockTransactionRepository) GetByUserAccountID(ctx context.Context, userID string, userAccountID string) ([]domain.Transaction, error) {
+	args := m.Called(ctx, userID, userAccountID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.Transaction), args.Error(1)
+}
+
 // TestTransactionService_ListTransactions_EnforcesMaxLimit tests that the service enforces a maximum limit of 100
 func TestTransactionService_ListTransactions_EnforcesMaxLimit(t *testing.T) {
 	mockRepo := new(MockTransactionRepository)
@@ -378,4 +444,60 @@ func containsSQLInjection(s string) bool {
 		}
 	}
 	return false
+}
+
+// TestTransactionService_GetDistinctPlaidCategories_Success tests successful retrieval of Plaid categories
+func TestTransactionService_GetDistinctPlaidCategories_Success(t *testing.T) {
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo)
+	ctx := context.Background()
+
+	userID := "user-123"
+	expectedCategories := []string{"Coffee Shop", "Groceries", "Restaurants"}
+
+	mockRepo.On("GetDistinctPlaidCategories", ctx, userID).Return(expectedCategories, nil)
+
+	categories, err := service.GetDistinctPlaidCategories(ctx, userID)
+
+	assert.NoError(t, err)
+	assert.Equal(t, expectedCategories, categories)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestTransactionService_GetDistinctPlaidCategories_Empty tests empty result
+func TestTransactionService_GetDistinctPlaidCategories_Empty(t *testing.T) {
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo)
+	ctx := context.Background()
+
+	userID := "user-no-transactions"
+
+	// Return nil from repo (no transactions)
+	mockRepo.On("GetDistinctPlaidCategories", ctx, userID).Return(nil, nil)
+
+	categories, err := service.GetDistinctPlaidCategories(ctx, userID)
+
+	assert.NoError(t, err)
+	// Should return empty slice, not nil, for consistent JSON serialization
+	assert.NotNil(t, categories)
+	assert.Empty(t, categories)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestTransactionService_GetDistinctPlaidCategories_Error tests error handling
+func TestTransactionService_GetDistinctPlaidCategories_Error(t *testing.T) {
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo)
+	ctx := context.Background()
+
+	userID := "user-123"
+
+	mockRepo.On("GetDistinctPlaidCategories", ctx, userID).Return(nil, errors.New("database error"))
+
+	categories, err := service.GetDistinctPlaidCategories(ctx, userID)
+
+	assert.Error(t, err)
+	assert.Nil(t, categories)
+	assert.Contains(t, err.Error(), "failed to get distinct plaid categories")
+	mockRepo.AssertExpectations(t)
 }

@@ -17,6 +17,9 @@ var (
 	ErrInvalidOffset = errors.New("offset must be non-negative")
 	// ErrInvalidDateRange is returned when start date is after end date
 	ErrInvalidDateRange = errors.New("start date must be before or equal to end date")
+	// ErrInvalidAmountRange is returned when min_amount is greater than max_amount
+	// Issue #529: Amount range filter validation
+	ErrInvalidAmountRange = errors.New("min_amount must be less than or equal to max_amount")
 )
 
 const (
@@ -38,6 +41,23 @@ type TransactionService interface {
 		limit int,
 		offset int,
 	) (*TransactionListResponse, error)
+
+	// GetTransactionByID retrieves a transaction by its ID
+	// Returns error if transaction doesn't exist or user doesn't own it
+	GetTransactionByID(ctx context.Context, userID, transactionID string) (*domain.Transaction, error)
+
+	// UpdateTransactionTags updates the tags on a transaction
+	// Returns the updated transaction
+	UpdateTransactionTags(ctx context.Context, userID, transactionID string, tags []string) (*domain.Transaction, error)
+
+	// UpdateTransactionCategory updates the category override on a transaction
+	// Returns the updated transaction
+	UpdateTransactionCategory(ctx context.Context, userID, transactionID string, category []string) (*domain.Transaction, error)
+
+	// GetDistinctPlaidCategories returns distinct Plaid category names from user's transactions
+	// Uses primary category level (e.g., "Food and Drink") for consistency across the application
+	// Used by rule editor to populate "existing_category" dropdown
+	GetDistinctPlaidCategories(ctx context.Context, userID string) ([]string, error)
 }
 
 // TransactionListResponse contains paginated transaction results with metadata
@@ -97,6 +117,13 @@ func (s *transactionService) ListTransactions(
 	if filters.StartDate != nil && filters.EndDate != nil {
 		if filters.StartDate.After(*filters.EndDate) {
 			return nil, ErrInvalidDateRange
+		}
+	}
+
+	// Validate amount range (Issue #529)
+	if filters.MinAmount != nil && filters.MaxAmount != nil {
+		if *filters.MinAmount > *filters.MaxAmount {
+			return nil, ErrInvalidAmountRange
 		}
 	}
 
@@ -178,4 +205,85 @@ func sanitizeSearchInput(input string) string {
 	sanitized = strings.TrimSpace(sanitized)
 
 	return sanitized
+}
+
+// GetTransactionByID retrieves a transaction by its ID
+func (s *transactionService) GetTransactionByID(ctx context.Context, userID, transactionID string) (*domain.Transaction, error) {
+	tx, err := s.repo.GetByID(ctx, transactionID)
+	if err != nil {
+		if err == repository.ErrTransactionNotFound {
+			return nil, repository.ErrTransactionNotFound
+		}
+		return nil, fmt.Errorf("failed to get transaction: %w", err)
+	}
+
+	// Verify ownership
+	if tx.UserID != userID {
+		return nil, repository.ErrTransactionNotFound
+	}
+
+	return tx, nil
+}
+
+// UpdateTransactionTags updates the tags on a transaction
+func (s *transactionService) UpdateTransactionTags(ctx context.Context, userID, transactionID string, tags []string) (*domain.Transaction, error) {
+	// Get existing transaction to verify ownership
+	tx, err := s.GetTransactionByID(ctx, userID, transactionID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build tags source - all manual for now
+	tagsSource := make([]domain.TagSource, len(tags))
+	for i, tag := range tags {
+		tagsSource[i] = domain.TagSource{
+			Tag:    tag,
+			Source: "manual",
+		}
+	}
+
+	// Update tags in database
+	if err := s.repo.UpdateTags(ctx, transactionID, userID, tags, tagsSource); err != nil {
+		return nil, fmt.Errorf("failed to update transaction tags: %w", err)
+	}
+
+	// Update the transaction object
+	tx.Tags = tags
+	tx.TagsSource = tagsSource
+
+	return tx, nil
+}
+
+// UpdateTransactionCategory updates the category override on a transaction
+func (s *transactionService) UpdateTransactionCategory(ctx context.Context, userID, transactionID string, category []string) (*domain.Transaction, error) {
+	// Verify ownership before update
+	if _, err := s.GetTransactionByID(ctx, userID, transactionID); err != nil {
+		return nil, err
+	}
+
+	// Update category in database
+	// Note: The repo UPDATE sets original_category = COALESCE(original_category, category)
+	// to preserve the original Plaid category on first manual edit
+	if err := s.repo.UpdateCategory(ctx, transactionID, userID, category, domain.CategorySourceManual); err != nil {
+		return nil, fmt.Errorf("failed to update transaction category: %w", err)
+	}
+
+	// Re-fetch the transaction to get all updated fields including original_category
+	// This ensures the API response includes the original_category set by the DB update
+	return s.GetTransactionByID(ctx, userID, transactionID)
+}
+
+// GetDistinctPlaidCategories returns distinct Plaid categories from user's transactions
+func (s *transactionService) GetDistinctPlaidCategories(ctx context.Context, userID string) ([]string, error) {
+	categories, err := s.repo.GetDistinctPlaidCategories(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get distinct plaid categories: %w", err)
+	}
+
+	// Return empty slice instead of nil for consistent JSON serialization
+	if categories == nil {
+		return []string{}, nil
+	}
+
+	return categories, nil
 }

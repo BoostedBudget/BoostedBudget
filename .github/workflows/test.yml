@@ -11,35 +11,228 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: '1.25'
+  GO_VERSION: '1.26.1'
   NODE_VERSION: '20'
 
 jobs:
   # =============================================================================
-  # Backend Tests (runs in parallel with frontend)
+  # Detect Changes (determines which jobs to run based on file changes)
   # =============================================================================
-  backend-test:
-    name: Backend Tests
+  detect-changes:
+    name: Detect Changes
     runs-on: [self-hosted, macOS, mac-mini]
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      api: ${{ steps.filter.outputs.api }}
+      migrations: ${{ steps.filter.outputs.migrations }}
+      workflow: ${{ steps.filter.outputs.workflow }}
+    steps:
+      - uses: actions/checkout@v6
+
+      # NOTE: Workspace cleanup (used across all jobs):
+      # Each job cleans before checkout to prevent permission issues on self-hosted runners.
+      # This is critical for macOS runners where sudo access is required for cleanup.
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - 'go.mod'
+              - 'go.sum'
+            frontend:
+              - 'apps/web/**'
+              - 'packages/**'
+              - 'package.json'
+              - 'bun.lock'
+            api:
+              - 'api/**'
+              - 'api/openapi.yaml'
+            migrations:
+              - 'backend/migrations/**'
+            workflow:
+              - '.github/workflows/**'
+
+  # =============================================================================
+  # OpenAPI Spec Validation (ensures spec is committed when backend changes)
+  # =============================================================================
+  openapi-validate:
+    name: OpenAPI Spec Validation
+    needs: detect-changes
+    if: needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.workflow == 'true'
+    runs-on: [self-hosted, macOS, mac-mini]
+    env:
+      UNIQUE_WORKSPACE: workspace-openapi-validate-${{ github.run_id }}
 
     steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          clean: false
 
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Run Go tests with coverage
-        working-directory: ./backend
+      - name: Restore Go modules cache
+        id: cache-go-modules
+        uses: actions/cache/restore@v5
+        with:
+          path: ~/go/pkg/mod
+          # Key: go-modules-<os>-go<version>-<sum-hash>
+          key: go-modules-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-modules-${{ runner.os }}-
+
+      - name: Download Go dependencies
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        run: go mod download
+
+      - name: Generate OpenAPI spec
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        run: go run scripts/generate-openapi/main.go
+
+      - name: Check if spec is up to date
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: |
-          echo "::group::Running Go tests with race detection and coverage"
-          go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
-          echo "::endgroup::"
+          if git diff --exit-code api/openapi.yaml; then
+            echo "::notice::OpenAPI spec is up to date"
+          else
+            echo "::error::OpenAPI spec is outdated!"
+            echo "The generated spec differs from the committed version."
+            echo "Run 'make generate-openapi' locally and commit the changes."
+            echo ""
+            echo "Diff (first 100 lines):"
+            git diff api/openapi.yaml | head -100
+            exit 1
+          fi
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+  # =============================================================================
+  # TypeScript Client Validation (ensures generated client is committed)
+  # =============================================================================
+  typescript-client-validate:
+    name: TypeScript Client Validation
+    needs: [detect-changes, openapi-validate]
+    if: |
+      always() &&
+      (needs.detect-changes.outputs.api == 'true' ||
+       needs.detect-changes.outputs.frontend == 'true' ||
+       needs.detect-changes.outputs.workflow == 'true')
+    runs-on: [self-hosted, macOS, mac-mini]
+    env:
+      UNIQUE_WORKSPACE: workspace-ts-client-validate-${{ github.run_id }}
+
+    steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          clean: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Node.js (for npx orval)
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Install workspace dependencies
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        # Bun handles workspace:* protocol, npm doesn't
+        run: bun install
+
+      - name: Generate TypeScript client
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/packages/api-client
+        # Use npx orval (not bunx) - Bun's AJV version has compatibility issues
+        run: npx orval
+
+      - name: Check if generated client is up to date
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: |
+          if git diff --exit-code packages/api-client/src; then
+            echo "::notice::Generated TypeScript client is up to date"
+          else
+            echo "::error::Generated TypeScript client is outdated!"
+            echo "The generated client differs from the committed version."
+            echo "Run 'make generate-api-client' locally and commit the changes."
+            echo ""
+            echo "Diff (first 100 lines):"
+            git diff packages/api-client/src | head -100
+            exit 1
+          fi
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+  # =============================================================================
+  # Backend Tests (runs in parallel with frontend)
+  # =============================================================================
+  backend-test:
+    name: Backend Tests
+    needs: detect-changes
+    if: needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.api == 'true' || needs.detect-changes.outputs.workflow == 'true'
+    runs-on: [self-hosted, macOS, mac-mini]
+    env:
+      UNIQUE_WORKSPACE: workspace-backend-test-${{ github.run_id }}
+
+    steps:
+      - name: Clean workspace (fix permission issues)
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          clean: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # Critical: Clean Go toolchain cache before tests to prevent corruption
+      # on macOS self-hosted runners. Go 1.25 can cache stale toolchain data.
+      # See: https://github.com/golang/go/issues
+      - name: Clean Go toolchain cache
+        if: runner.os == 'macOS'
+        run: go clean -cache
+
+      - name: Restore Go modules cache
+        id: cache-go-modules
+        uses: actions/cache/restore@v5
+        with:
+          path: ~/go/pkg/mod
+          key: go-modules-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-modules-${{ runner.os }}-
+
+      - name: Download Go dependencies
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        run: go mod download
+
+      - name: Run Go tests with coverage
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Check Go coverage threshold (≥60%)
-        working-directory: ./backend
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
         run: |
           echo "::group::Checking coverage threshold"
           COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
@@ -56,167 +249,357 @@ jobs:
           echo "::endgroup::"
 
       - name: Generate Go coverage HTML report
-        working-directory: ./backend
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
         run: go tool cover -html=coverage.out -o coverage.html
 
+      - name: Restore backend binary cache
+        id: cache-backend-binary
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
+          key: backend-binary-${{ runner.os }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', 'backend/go.sum') }}
+
       - name: Build backend binary (for E2E tests)
-        working-directory: ./backend
+        if: steps.cache-backend-binary.outputs.cache-hit != 'true'
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
         run: |
           echo "::group::Building backend binary"
+          mkdir -p bin
           go build -o bin/server ./cmd/server
           echo "::endgroup::"
 
-      - name: Upload backend binary artifact
-        uses: actions/upload-artifact@v5
-        with:
-          name: backend-binary
-          path: backend/bin/server
-          retention-days: 1
-
       - name: Upload backend coverage report
-        uses: actions/upload-artifact@v5
+        id: upload-backend-coverage
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
         with:
-          name: backend-coverage
+          name: backend-coverage-${{ github.run_id }}
           path: |
-            backend/coverage.out
-            backend/coverage.html
-          retention-days: 30
+            ${{ env.UNIQUE_WORKSPACE }}/backend/coverage.out
+            ${{ env.UNIQUE_WORKSPACE }}/backend/coverage.html
+          retention-days: 1
+          if-no-files-found: warn
+
+      - name: Report if backend coverage upload failed
+        if: steps.upload-backend-coverage.outcome == 'failure'
+        run: echo "::warning::Backend coverage upload failed (storage quota/network). Test results valid."
+
+      - name: Save Go modules cache
+        if: always() && steps.cache-go-modules.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ~/go/pkg/mod
+          key: go-modules-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
+
+      - name: Save backend binary cache
+        if: always() && steps.cache-backend-binary.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
+          key: backend-binary-${{ runner.os }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', 'backend/go.sum') }}
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
-  # Frontend Tests (runs in parallel with backend)
+  # Frontend Tests (Single job - no sharding)
   # =============================================================================
   frontend-test:
     name: Frontend Tests
+    needs: detect-changes
+    if: needs.detect-changes.outputs.frontend == 'true' || needs.detect-changes.outputs.api == 'true' || needs.detect-changes.outputs.workflow == 'true'
     runs-on: [self-hosted, macOS, mac-mini]
+    env:
+      UNIQUE_WORKSPACE: workspace-frontend-test-${{ github.run_id }}
 
     steps:
+      - name: Clean workspace (fix permission issues)
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
-          clean: true
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          clean: false
           fetch-depth: 1
 
-      - name: Set up Node
-        uses: actions/setup-node@v6
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          bun-version: latest
 
-      - name: Install frontend dependencies
-        working-directory: ./frontend
-        run: npm ci
+      - name: Install workspace dependencies
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bun install --frozen-lockfile
 
-      - name: Run ESLint (fail on warnings)
-        working-directory: ./frontend
+      - name: Lint frontend
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
+        run: bun run lint
+
+      - name: Run bun:test tests with coverage
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: |
-          echo "::group::Running ESLint"
-          npm run lint
+          echo "::group::Running bun:test tests with coverage"
+          bun run test:coverage
           echo "::endgroup::"
 
-      - name: Run frontend unit tests with coverage
-        working-directory: ./frontend
+      - name: Run real implementation tests with coverage
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: |
-          echo "::group::Running Unit Tests"
-          npm run test:ci
+          echo "::group::Running real-implementation tests with coverage"
+          bun run test:real:coverage
           echo "::endgroup::"
 
-      - name: Upload frontend coverage report
-        uses: actions/upload-artifact@v5
+      - name: Run isolated tests with coverage
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
+        run: |
+          echo "::group::Running isolated tests with coverage"
+          bun run test:isolated:coverage
+          echo "::endgroup::"
+
+      - name: Combine coverage reports
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
+        run: |
+          echo "::group::Combining coverage reports"
+          bun run test:coverage:combine
+          echo "::endgroup::"
+
+      - name: Upload combined coverage report
+        id: upload-frontend-coverage
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
         with:
-          name: frontend-coverage
+          name: frontend-coverage-${{ github.run_id }}
           path: |
-            frontend/coverage/
-          retention-days: 30
+            ${{ env.UNIQUE_WORKSPACE }}/apps/web/coverage/combined.lcov
+            ${{ env.UNIQUE_WORKSPACE }}/apps/web/coverage/html/
+          retention-days: 1
+          if-no-files-found: warn
+
+      - name: Report if frontend coverage upload failed
+        if: steps.upload-frontend-coverage.outcome == 'failure'
+        run: echo "::warning::Frontend coverage upload failed (storage quota/network). Test results valid."
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
-  # E2E Tests (depends on backend-test for binary)
+  # E2E Tests (runs in parallel with backend/frontend tests)
   # =============================================================================
   e2e-test:
     name: E2E Tests
-    needs: backend-test
+    needs: [detect-changes]
+    if: always() && !cancelled()
     runs-on: [self-hosted, macOS, mac-mini]
+    environment: e2e  # Access Clerk secrets from e2e environment
+    env:
+      UNIQUE_WORKSPACE: workspace-e2e-test-${{ github.run_id }}
 
     steps:
+      - name: Clean workspace (fix permission issues)
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
       - name: Checkout code
-        uses: actions/checkout@v5
-
-      - name: Set up Node
-        uses: actions/setup-node@v6
+        uses: actions/checkout@v6
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          clean: false
 
-      - name: Install frontend dependencies
-        working-directory: ./frontend
-        run: npm ci
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install workspace dependencies
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bun install --frozen-lockfile
 
       - name: Install Playwright browsers
-        working-directory: ./frontend
-        run: npx playwright install --with-deps chromium
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
+        run: bunx playwright install --with-deps chromium
 
-      - name: Download backend binary
-        uses: actions/download-artifact@v6
+      - name: Restore backend binary from cache
+        id: cache-backend-binary
+        uses: actions/cache/restore@v5
         with:
-          name: backend-binary
-          path: backend/bin
+          path: ${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
+          key: backend-binary-${{ runner.os }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', 'backend/go.sum') }}
+          restore-keys: |
+            backend-binary-${{ runner.os }}-
+
+      - name: Set up Go (for building backend if needed)
+        if: steps.cache-backend-binary.outputs.cache-hit != 'true'
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build backend binary (cache miss fallback)
+        if: steps.cache-backend-binary.outputs.cache-hit != 'true'
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        run: |
+          mkdir -p bin
+          go build -o bin/server ./cmd/server
+
+      - name: Verify backend binary exists
+        run: |
+          if [ ! -f "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}/backend/bin/server" ]; then
+            echo "::error::Backend binary not found. Run backend tests first to populate cache."
+            exit 1
+          fi
 
       - name: Make backend binary executable
-        run: chmod +x backend/bin/server
+        run: chmod +x $GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
+
+      - name: Install golang-migrate
+        run: |
+          # Install golang-migrate to user bin (no sudo needed on self-hosted runners)
+          mkdir -p $HOME/bin
+          curl -sSfL https://github.com/golang-migrate/migrate/releases/latest/download/migrate.darwin-arm64.tar.gz | tar -xz
+          mv migrate $HOME/bin/
+          echo "$HOME/bin" >> $GITHUB_PATH
+          $HOME/bin/migrate --version
 
       - name: Run E2E tests
-        working-directory: ./frontend
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         env:
           CI: true
-        run: |
-          echo "::group::Running Playwright E2E tests"
-          npm run test:e2e
-          echo "::endgroup::"
+          CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
+          TEST_CLERK_EMAIL: ${{ secrets.TEST_CLERK_EMAIL }}
+          TEST_CLERK_PASSWORD: ${{ secrets.TEST_CLERK_PASSWORD }}
+        run: bun run test:e2e
 
       - name: Upload E2E test results
+        id: upload-playwright-report
         if: success() || failure()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
         with:
-          name: playwright-report
-          path: frontend/playwright-report/
-          retention-days: 30
+          name: playwright-report-${{ github.run_id }}
+          path: ${{ env.UNIQUE_WORKSPACE }}/apps/web/playwright-report/
+          retention-days: 1
+          if-no-files-found: warn
+
+      - name: Report if E2E report upload failed
+        if: steps.upload-playwright-report.outcome == 'failure'
+        run: echo "::warning::E2E test report upload failed (storage quota/network). Test results valid."
 
       - name: Upload E2E test videos (on failure)
+        id: upload-playwright-videos
         if: failure()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
         with:
-          name: playwright-videos
-          path: frontend/test-results/
-          retention-days: 7
+          name: playwright-videos-${{ github.run_id }}
+          path: ${{ env.UNIQUE_WORKSPACE }}/apps/web/test-results/
+          retention-days: 1
+          if-no-files-found: warn
+
+      - name: Report if E2E videos upload failed
+        if: steps.upload-playwright-videos.outcome == 'failure'
+        run: echo "::warning::E2E videos upload failed (storage quota/network). Test results valid."
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
   # Migration Integration Tests
   # =============================================================================
   migration-tests:
     name: Migration Tests
+    needs: detect-changes
+    if: needs.detect-changes.outputs.migrations == 'true' || needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.workflow == 'true'
     runs-on: [self-hosted, macOS, mac-mini]
+    env:
+      UNIQUE_WORKSPACE: workspace-migration-tests-${{ github.run_id }}
 
     steps:
+      - name: Clean workspace (fix permission issues)
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          clean: false
+
+      - name: Configure PostgreSQL client tools
+        run: |
+          echo "::group::Configuring PostgreSQL client"
+
+          # Fast path: check if tools already available
+          if command -v psql &> /dev/null && command -v pg_dump &> /dev/null; then
+            echo "✅ PostgreSQL client already in PATH ($(psql --version | cut -d' ' -f3))"
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          # Locate PostgreSQL installation (Homebrew: try v17, fall back to v15)
+          POSTGRES_BIN=""
+          for path in \
+            "/opt/homebrew/opt/postgresql@17/bin" \
+            "/usr/local/opt/postgresql@17/bin" \
+            "/opt/homebrew/opt/postgresql@15/bin" \
+            "/usr/local/opt/postgresql@15/bin"
+          do
+            if [ -d "$path" ] && [ -f "$path/psql" ] && [ -f "$path/pg_dump" ]; then
+              POSTGRES_BIN="$path"
+              break
+            fi
+          done
+
+          if [ -z "$POSTGRES_BIN" ]; then
+            echo "::error::PostgreSQL client not found"
+            echo "::error::Install: brew install postgresql@17"
+            exit 1
+          fi
+
+          echo "$POSTGRES_BIN" >> $GITHUB_PATH
+          echo "::notice::PostgreSQL ($("$POSTGRES_BIN/psql" --version | cut -d' ' -f3)) at $POSTGRES_BIN"
+          echo "::endgroup::"
 
       - name: Start PostgreSQL container
         run: |
-          docker stop test-postgres 2>/dev/null || true
-          docker rm test-postgres 2>/dev/null || true
+          docker stop test-postgres-${{ github.run_id }} 2>/dev/null || true
+          docker rm test-postgres-${{ github.run_id }} 2>/dev/null || true
+
+          echo "Pulling PostgreSQL image..."
+          for i in 1 2 3; do
+            docker pull postgres:17 && break || {
+              echo "Pull attempt $i/3 failed"
+              [ $i -lt 3 ] && sleep 10
+            }
+          done
 
           docker run -d \
-            --name test-postgres \
+            --name test-postgres-${{ github.run_id }} \
             -e POSTGRES_USER=test \
             -e POSTGRES_PASSWORD=test \
             -e POSTGRES_DB=test \
-            -p 5432:5432 \
+            -p 5432 \
             --health-cmd pg_isready \
             --health-interval 10s \
             --health-timeout 5s \
             --health-retries 5 \
-            postgres:15
+            postgres:17
+
+          # Get the dynamically assigned port
+          sleep 2
+          POSTGRES_PORT=$(docker port test-postgres-${{ github.run_id }} 5432 | cut -d: -f2)
+          echo "PostgreSQL running on dynamically assigned port: $POSTGRES_PORT"
+
+          # Export for use in subsequent steps
+          echo "POSTGRES_PORT=$POSTGRES_PORT" >> $GITHUB_ENV
+          echo "DATABASE_URL=postgres://test:test@localhost:$POSTGRES_PORT/test?sslmode=disable" >> $GITHUB_ENV
 
           echo "Waiting for PostgreSQL to be ready..."
           for i in {1..30}; do
-            if docker exec test-postgres pg_isready -U test > /dev/null 2>&1; then
+            if docker exec test-postgres-${{ github.run_id }} pg_isready -U test > /dev/null 2>&1; then
               echo "PostgreSQL is ready!"
               break
             fi
@@ -227,110 +610,203 @@ jobs:
             sleep 1
           done
 
-      - name: Lint migrations (Atlas validation)
-        env:
-          DATABASE_URL: postgres://test:test@localhost:5432/test?sslmode=disable
+      - name: Install migration tools
         run: |
-          echo "::group::Linting migrations"
-          cd backend
-          atlas migrate lint \
-            --dir file://migrations \
-            --dev-url "docker://postgres/15/test" \
-            --latest 1
-          echo "::notice::✅ Migration lint passed"
-          echo "::endgroup::"
+          mkdir -p $HOME/bin
+          curl -sSfL https://github.com/golang-migrate/migrate/releases/latest/download/migrate.darwin-arm64.tar.gz | tar -xz
+          mv migrate $HOME/bin/
+          echo "$HOME/bin" >> $GITHUB_PATH
+          npm install -g squawk-cli
+          $HOME/bin/migrate --version && squawk --version
 
-      - name: Run migrations up
+      - name: Lint migrations with Squawk
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        run: squawk migrations/*.sql --pg-version=17
+
+      - name: Run comprehensive migration tests
         env:
-          DATABASE_URL: postgres://test:test@localhost:5432/test?sslmode=disable
+          DATABASE_URL: ${{ env.DATABASE_URL }}
         run: |
-          echo "::group::Running migrations"
-          atlas migrate apply \
-            --dir file://backend/migrations \
-            --url "$DATABASE_URL"
-          echo "::endgroup::"
+          cd ${{ env.UNIQUE_WORKSPACE }}
+          chmod +x scripts/test-migrations.sh
+          ./scripts/test-migrations.sh
 
-      - name: Validate schema
-        env:
-          DATABASE_URL: postgres://test:test@localhost:5432/test?sslmode=disable
-        run: |
-          echo "::group::Validating database schema"
+      - name: Upload performance benchmarks
+        id: upload-migration-perf
+        if: failure()
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
+        with:
+          name: migration-performance-${{ github.run_id }}
+          path: ${{ env.UNIQUE_WORKSPACE }}/migration-performance.json
+          retention-days: 1
+          if-no-files-found: warn
 
-          echo "Checking tables..."
-          docker exec test-postgres psql -U test -d test -c "\dt" | grep users || { echo "::error::users table missing"; exit 1; }
-          docker exec test-postgres psql -U test -d test -c "\dt" | grep privacy_settings || { echo "::error::privacy_settings table missing"; exit 1; }
-
-          echo "::notice::✅ Schema validation passed"
-          echo "::endgroup::"
+      - name: Report if migration performance upload failed
+        if: steps.upload-migration-perf.outcome == 'failure'
+        run: echo "::warning::Migration performance upload failed (storage quota/network). Test results valid."
 
       - name: Cleanup PostgreSQL container
         if: always()
         run: |
-          docker stop test-postgres 2>/dev/null || true
-          docker rm test-postgres 2>/dev/null || true
+          docker stop test-postgres-${{ github.run_id }} 2>/dev/null || true
+          docker rm test-postgres-${{ github.run_id }} 2>/dev/null || true
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
-  # Security Scan - Dependencies & Dockerfiles (Parallelized)
+  # Security Scan - Native Tools (govulncheck, npm audit, Hadolint)
   # =============================================================================
+  # Replaces Trivy with official/native tools to avoid SSL download issues
+  # - Backend: govulncheck (official Go vulnerability scanner with reachability analysis)
+  # - Frontend: npm audit (security audit via Bun)
+  # - Dockerfiles: Hadolint (Dockerfile best practices linter)
   security-scan:
     name: Security Scan (${{ matrix.component }})
     runs-on: [self-hosted, macOS, mac-mini]
     strategy:
       matrix:
         component: [backend, frontend]
-    permissions:
-      actions: read
-      contents: read
-      security-events: write
+    env:
+      UNIQUE_WORKSPACE: workspace-security-scan-${{ matrix.component }}-${{ github.run_id }}
 
     steps:
+      - name: Clean workspace (fix permission issues)
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
       - name: Checkout code
-        uses: actions/checkout@v5
-
-      - name: Setup Trivy
-        uses: aquasecurity/setup-trivy@v0.2.4
+        uses: actions/checkout@v6
         with:
-          version: v0.65.0
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          clean: false
 
-      - name: Fix Trivy permissions on macOS
-        run: chmod +x $(which trivy) || true
-
-      - name: Scan ${{ matrix.component }} dependencies
-        uses: aquasecurity/trivy-action@master
+      # =========================================================================
+      # Backend Security: govulncheck (Go official vulnerability scanner)
+      # =========================================================================
+      - name: Setup Go
+        if: matrix.component == 'backend'
+        uses: actions/setup-go@v6
         with:
-          scan-type: 'fs'
-          scan-ref: './${{ matrix.component }}'
-          scanners: 'vuln'
-          format: 'sarif'
-          output: 'trivy-${{ matrix.component }}-deps.sarif'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '1'
-          ignore-unfixed: true
-          cache: false
+          go-version-file: ${{ env.UNIQUE_WORKSPACE }}/backend/go.mod
+          cache-dependency-path: ${{ env.UNIQUE_WORKSPACE }}/backend/go.sum
 
-      - name: Upload ${{ matrix.component }} dependency scan results
-        uses: github/codeql-action/upload-sarif@v4
-        if: success() || failure()
-        continue-on-error: true
-        with:
-          sarif_file: 'trivy-${{ matrix.component }}-deps.sarif'
-          category: 'trivy-${{ matrix.component }}-dependencies'
+      - name: Run govulncheck (Go vulnerabilities)
+        if: matrix.component == 'backend'
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
 
-      - name: Scan ${{ matrix.component }} Dockerfile
-        uses: aquasecurity/trivy-action@master
+      # =========================================================================
+      # Frontend Security: npm audit (Bun uses npm-compatible packages)
+      # =========================================================================
+      - name: Setup Bun
+        if: matrix.component == 'frontend'
+        uses: oven-sh/setup-bun@v2
         with:
-          scan-type: 'config'
-          scan-ref: './${{ matrix.component }}/Dockerfile'
-          format: 'sarif'
-          output: 'trivy-${{ matrix.component }}-dockerfile.sarif'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '0'
-          cache: false
+          bun-version: latest
 
-      - name: Upload ${{ matrix.component }} Dockerfile scan results
-        uses: github/codeql-action/upload-sarif@v4
-        if: success() || failure()
-        continue-on-error: true
+      - name: Run bun audit (JS vulnerabilities)
+        if: matrix.component == 'frontend'
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: |
+          bun install --frozen-lockfile
+          bun audit --audit-level=high
+
+      # =========================================================================
+      # Dockerfile Linting: Hadolint (pre-installed on Mac Mini runner)
+      # =========================================================================
+      - name: Lint Dockerfile (Hadolint) - Backend
+        if: matrix.component == 'backend'
+        run: /opt/homebrew/bin/hadolint "${{ env.UNIQUE_WORKSPACE }}/backend/Dockerfile" \
+          --failure-threshold warning || echo "::warning::Dockerfile linting issues found"
+
+      - name: Lint Dockerfile (Hadolint) - Frontend
+        if: matrix.component == 'frontend'
+        run: /opt/homebrew/bin/hadolint "${{ env.UNIQUE_WORKSPACE }}/apps/web/Dockerfile" \
+          --failure-threshold warning || echo "::warning::Dockerfile linting issues found"
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+  # =============================================================================
+  # Docker Image Security Scan (Grype)
+  # =============================================================================
+  # Builds Docker images and scans for vulnerabilities in the compiled artifacts
+  # This catches issues that govulncheck misses (e.g., stdlib CVEs in binary)
+  docker-image-scan:
+    name: Docker Image Scan (${{ matrix.component }})
+    needs: detect-changes
+    if: |
+      needs.detect-changes.outputs.backend == 'true' ||
+      needs.detect-changes.outputs.frontend == 'true' ||
+      needs.detect-changes.outputs.workflow == 'true'
+    runs-on: [self-hosted, macOS, mac-mini]
+    strategy:
+      matrix:
+        component: [backend, frontend]
+    env:
+      UNIQUE_WORKSPACE: workspace-docker-scan-${{ matrix.component }}-${{ github.run_id }}
+
+    steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+      - name: Checkout code
+        uses: actions/checkout@v6
         with:
-          sarif_file: 'trivy-${{ matrix.component }}-dockerfile.sarif'
-          category: 'trivy-${{ matrix.component }}-dockerfile'
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          clean: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Set Dockerfile path
+        id: dockerfile
+        run: |
+          if [ "${{ matrix.component }}" = "frontend" ]; then
+            echo "path=apps/web/Dockerfile" >> $GITHUB_OUTPUT
+          else
+            echo "path=${{ matrix.component }}/Dockerfile" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build Docker image (local only)
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ env.UNIQUE_WORKSPACE }}
+          file: ${{ env.UNIQUE_WORKSPACE }}/${{ steps.dockerfile.outputs.path }}
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: test-${{ matrix.component }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            GO_VERSION=${{ env.GO_VERSION }}
+
+      - name: Ensure Grype is installed
+        run: |
+          if ! command -v grype &> /dev/null; then
+            echo "Installing Grype via Homebrew..."
+            brew install grype
+          fi
+          grype version
+
+      - name: Scan Docker image with Grype
+        run: |
+          grype test-${{ matrix.component }}:${{ github.sha }} \
+            --config ${{ env.UNIQUE_WORKSPACE }}/.grype.yaml \
+            --fail-on high \
+            --only-fixed \
+            --output table
+
+      - name: Cleanup Docker image
+        if: always()
+        run: docker rmi test-${{ matrix.component }}:${{ github.sha }} 2>/dev/null || true
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true

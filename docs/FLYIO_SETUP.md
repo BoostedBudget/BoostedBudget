@@ -8,7 +8,7 @@ This guide covers deploying BoostedBudget to Fly.io with custom domain configura
 - [Fly CLI installed](https://fly.io/docs/hands-on/install-flyctl/)
 - Porkbun account with boostedbudget.com domain
 - Docker installed locally (for building images)
-- Auth0, Plaid, and Stripe accounts configured
+- Clerk, Plaid, and Stripe accounts configured
 
 ## Step 1: Install and Authenticate Fly CLI
 
@@ -69,9 +69,9 @@ flyctl postgres attach boostedbudget-db --app boostedbudget-api
 ```bash
 cd backend
 
-# Auth0 secrets
+# Clerk secrets
 flyctl secrets set \
-  AUTH0_CLIENT_SECRET="your_auth0_client_secret" \
+  CLERK_SECRET_KEY="sk_live_your_clerk_secret_key" \
   --app boostedbudget-api
 
 # Plaid secrets
@@ -92,9 +92,9 @@ flyctl secrets set \
 ```bash
 cd ../frontend
 
-# Auth0 public client ID (safe to commit, but we set via secrets for flexibility)
+# Clerk publishable key (safe to commit, but we set via secrets for flexibility)
 flyctl secrets set \
-  VITE_AUTH0_CLIENT_ID="your_auth0_client_id" \
+  VITE_CLERK_PUBLISHABLE_KEY="pk_live_your_clerk_publishable_key" \
   --app boostedbudget-web
 
 # Plaid Link public key
@@ -238,32 +238,18 @@ flyctl secrets set \
   --app boostedbudget-web
 
 # Redeploy to pick up new URL
-cd frontend
+cd apps/web
 flyctl deploy
 ```
 
-### Update Auth0 Configuration
+### Update Clerk Configuration
 
-1. Log into Auth0 Dashboard
-2. Navigate to your application
-3. Update **Allowed Callback URLs**:
-   ```
-   https://boostedbudget.com/callback,
-   https://www.boostedbudget.com/callback,
-   http://localhost:5173/callback
-   ```
-4. Update **Allowed Logout URLs**:
-   ```
-   https://boostedbudget.com,
-   https://www.boostedbudget.com,
-   http://localhost:5173
-   ```
-5. Update **Allowed Web Origins**:
-   ```
-   https://boostedbudget.com,
-   https://www.boostedbudget.com,
-   http://localhost:5173
-   ```
+1. Log into Clerk Dashboard (https://dashboard.clerk.com/)
+2. Navigate to your application → **Configure** → **Paths**
+3. Update allowed origins to include:
+   - `https://boostedbudget.com`
+   - `https://www.boostedbudget.com`
+   - `http://localhost:5173`
 
 ## Step 8: Verify Deployment
 
@@ -289,7 +275,7 @@ open https://boostedbudget.com
 # Verify:
 # 1. Page loads correctly
 # 2. HTTPS certificate is valid
-# 3. Auth0 login works
+# 3. Clerk login works
 # 4. Cookie consent banner appears
 # 5. API calls work (check browser console)
 ```
@@ -421,7 +407,7 @@ psql $DATABASE_URL
 - [ ] Auto-rollback enabled
 - [ ] Non-root user in Docker images
 - [ ] PostgreSQL not publicly accessible
-- [ ] Auth0 callbacks restricted to production domain
+- [ ] Clerk allowed origins restricted to production domain
 - [ ] CORS configured properly in backend
 
 ## Next Steps

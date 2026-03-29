@@ -21,9 +21,9 @@ Runs comprehensive test suite with coverage enforcement.
 
 **Steps:**
 - Backend tests (Go) with race detection
-- Coverage threshold enforcement (≥80%)
-- Frontend unit tests (Vitest) with coverage
-- ESLint checks (fail on warnings)
+- Coverage threshold enforcement (≥60%)
+- Frontend unit tests (Bun) with coverage
+- Linting (ESLint)
 - E2E tests (Playwright)
 - Upload coverage artifacts
 
@@ -31,9 +31,9 @@ Runs comprehensive test suite with coverage enforcement.
 
 **Quality Gates:**
 - ✅ All tests must pass
-- ✅ Backend coverage ≥80%
-- ✅ Frontend coverage ≥80%
-- ✅ No ESLint warnings
+- ✅ Backend coverage ≥60%
+- ✅ Frontend coverage enforced
+- ✅ Linting passes
 - ✅ No race conditions detected
 
 #### 2. Build Images (`build-images`)
@@ -105,9 +105,8 @@ Deploys to production Fly.io environment.
 ## Environment Variables
 
 ```yaml
-GO_VERSION: '1.25'          # Go version for backend tests
-NODE_VERSION: '20'          # Node version for frontend tests
-REGISTRY: 'ghcr.io'         # Container registry
+GO_VERSION: '1.25.5'    # Go version for backend tests
+REGISTRY: 'ghcr.io'     # Container registry
 ```
 
 ## Secrets Required
@@ -147,13 +146,12 @@ make test-ci
 
 # Backend only
 cd backend && go test -v -race -coverprofile=coverage.out ./...
-./scripts/check-coverage.sh backend/coverage.out 80
 
 # Frontend only
-cd frontend && npm run test:ci
+cd apps/web && bun run test:ci
 
 # E2E only
-cd frontend && npm run test:e2e
+cd apps/web && bun run test:e2e
 ```
 
 ### Build Docker images locally
@@ -170,8 +168,8 @@ cd frontend && npm run test:e2e
 # Against production
 ./scripts/smoke-test.sh production
 
-# Against staging (when available)
-./scripts/smoke-test.sh staging
+# Against QA (Mac Mini)
+./scripts/smoke-test.sh qa
 ```
 
 ## Coverage Reports

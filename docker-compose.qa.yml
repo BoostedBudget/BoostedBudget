@@ -1,0 +1,130 @@
+version: '3.9'
+
+services:
+  # PostgreSQL Database (QA)
+  postgres:
+    image: postgres:15-alpine
+    pull_policy: always  # Always pull latest patches
+    restart: unless-stopped  # Auto-restart on Mac Mini boot
+    environment:
+      POSTGRES_DB: boostedbudget_qa
+      POSTGRES_USER: ${POSTGRES_USER:-qauser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-qapass}
+    ports:
+      - "5433:5432"  # Different port to avoid conflict with dev
+    volumes:
+      - postgres_qa_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-qauser} -d boostedbudget_qa"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache (QA)
+  redis:
+    image: redis:7-alpine
+    pull_policy: always  # Always pull latest patches
+    restart: unless-stopped  # Auto-restart on Mac Mini boot
+    ports:
+      - "6380:6379"  # Different port to avoid conflict with dev
+    volumes:
+      - redis_qa_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # RabbitMQ Message Queue (QA)
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    pull_policy: always  # Always pull latest patches
+    restart: unless-stopped  # Auto-restart on Mac Mini boot
+    ports:
+      - "5673:5672"   # AMQP - different port
+      - "15673:15672" # Management UI - different port
+    volumes:
+      - rabbitmq_qa_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Backend API (QA)
+  # Uses pre-built image from GHCR (GitHub Container Registry)
+  # Image is built in CI/CD and pulled by deploy script
+  backend:
+    image: ${BACKEND_IMAGE:-ghcr.io/boostedbudget/boostedbudget-backend:qa-latest}
+    pull_policy: always  # Always pull latest image to ensure we have newest version
+    restart: unless-stopped  # Auto-restart on Mac Mini boot
+    ports:
+      - "8080:8080"  # QA backend port
+    environment:
+      PORT: "8080"
+      ENVIRONMENT: "qa"
+      VERSION: "${VERSION:-qa-dev}"
+      PRIMARY_REGION: "${PRIMARY_REGION:-iad}"
+      DATABASE_URL: "postgres://${POSTGRES_USER:-qauser}:${POSTGRES_PASSWORD:-qapass}@postgres:5432/boostedbudget_qa?sslmode=disable"
+      REDIS_URL: "redis://redis:6379"
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+      CLERK_SECRET_KEY: "${CLERK_SECRET_KEY}"
+      PLAID_CLIENT_ID: "${PLAID_CLIENT_ID}"
+      PLAID_SECRET: "${PLAID_SECRET}"
+      PLAID_ENV: "sandbox"
+      PLAID_REDIRECT_URI: "${PLAID_REDIRECT_URI}"
+      PLAID_WEBHOOK_URL: "${PLAID_WEBHOOK_URL}"
+      ENCRYPTION_KEY: "${ENCRYPTION_KEY}"
+      QA_BYPASS_SECRET: "${QA_BYPASS_SECRET}"
+      QA_ADMIN_CLERK_USER_ID: "${QA_ADMIN_CLERK_USER_ID}"
+      QA_PREMIUM_CLERK_USER_ID: "${QA_PREMIUM_CLERK_USER_ID}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    # Issue #472: Config is baked into Docker image - no volume mount needed
+    # The previous mount shadowed the baked-in config after CI workspace cleanup
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s  # Grace period for migrations and service initialization
+
+  # Frontend (QA)
+  # Uses pre-built image from GHCR (GitHub Container Registry)
+  # Image is built in CI/CD and pulled by deploy script
+  frontend:
+    image: ${FRONTEND_IMAGE:-ghcr.io/boostedbudget/boostedbudget-frontend:qa-latest}
+    pull_policy: always  # Always pull latest image to ensure we have newest version
+    restart: unless-stopped  # Auto-restart on Mac Mini boot
+    ports:
+      - "3000:80"   # HTTP (redirects to HTTPS)
+      - "3443:443"  # HTTPS
+    environment:
+      DOCKER_ENV: "true"  # Tells Vite to use Docker service names for proxy
+      ENVIRONMENT: "${ENVIRONMENT:-qa}"  # Critical: Enables non-fatal Clerk errors in QA
+      HTTPS_PORT: "3443"  # HTTPS redirect port for QA (production uses default 443)
+      API_URL: ""  # Empty = use nginx proxy with relative /api/* URLs (fixes CORS for Tailscale access)
+      VITE_API_URL: ""  # Empty = use nginx proxy with relative /api/* URLs
+      VITE_CLERK_PUBLISHABLE_KEY: "${CLERK_PUBLISHABLE_KEY}"
+    volumes:
+      - ./apps/web/cert.pem:/etc/nginx/ssl/cert.pem:ro  # SSL cert (CI/CD restores from GitHub secrets)
+      - ./apps/web/key.pem:/etc/nginx/ssl/key.pem:ro    # SSL key (CI/CD restores from GitHub secrets)
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]  # Health check uses HTTP
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s  # Grace period for Nginx startup
+
+volumes:
+  postgres_qa_data:
+  redis_qa_data:
+  rabbitmq_qa_data:

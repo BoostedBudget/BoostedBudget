@@ -1,0 +1,6 @@
+# Grype vulnerability scanner configuration
+# Updated to Go 1.25.7 to fix GO-2026-4337 (crypto/tls vulnerability)
+# Previous CVE ignores for Go 1.25.4 Docker Hub image mismatch have been removed
+# All Go stdlib vulnerabilities should now be resolved
+
+ignore: []

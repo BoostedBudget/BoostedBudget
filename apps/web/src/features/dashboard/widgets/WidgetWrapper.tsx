@@ -1,0 +1,87 @@
+/**
+ * Widget Wrapper Component
+ * Issue #354: Customizable Dashboard Widget System
+ * Issue #441: Migrated to GridStack.js
+ *
+ * Wraps widget content with a consistent header and remove button.
+ * Used by DashboardGrid to render all widgets uniformly.
+ *
+ * Height handling:
+ * - Uses h-full because GridStack's .grid-stack-item-content parent
+ *   provides explicit height via position: absolute; inset: 0
+ * - This solves the height chain issue that plagued react-grid-layout
+ */
+
+import React, { useState } from 'react';
+import { XMarkIcon } from '@heroicons/react/24/outline';
+import { getWidget } from './registry';
+import { RemoveWidgetDialog } from './RemoveWidgetDialog';
+import type { WidgetType } from '../types';
+
+interface WidgetWrapperProps {
+  widgetId: string;
+  widgetType: WidgetType;
+  isEditing: boolean;
+  onRemove: () => void;
+  children: React.ReactNode;
+}
+
+export function WidgetWrapper({
+  widgetType,
+  isEditing,
+  onRemove,
+  children,
+}: WidgetWrapperProps) {
+  const definition = getWidget(widgetType);
+  const [showRemoveDialog, setShowRemoveDialog] = useState(false);
+
+  const handleRemoveClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setShowRemoveDialog(true);
+  };
+
+  const handleConfirmRemove = () => {
+    setShowRemoveDialog(false);
+    onRemove();
+  };
+
+  const handleCancelRemove = () => {
+    setShowRemoveDialog(false);
+  };
+
+  return (
+    <div
+      className={`h-full bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 overflow-hidden flex flex-col ${isEditing ? 'outline outline-2 outline-blue-400 -outline-offset-2' : ''}`}
+    >
+      {/* Header with title and actions */}
+      <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 flex-shrink-0">
+        <div className="flex items-center gap-2">
+          <span className="font-medium text-gray-700 dark:text-gray-200 text-sm">
+            {definition?.title || widgetType}
+          </span>
+        </div>
+        {isEditing && (
+          <button
+            onClick={handleRemoveClick}
+            className="text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors p-1 rounded hover:bg-red-50 dark:hover:bg-red-900/20"
+            aria-label="Remove widget"
+            title="Remove widget"
+          >
+            <XMarkIcon className="h-5 w-5" />
+          </button>
+        )}
+      </div>
+
+      {/* Widget content - min-h-0 enables flex shrinking below content size (Issue #410) */}
+      <div className="flex-1 min-h-0 overflow-auto p-4">{children}</div>
+
+      {/* Remove confirmation dialog - Issue #412 */}
+      <RemoveWidgetDialog
+        isOpen={showRemoveDialog}
+        widgetTitle={definition?.title || widgetType}
+        onConfirm={handleConfirmRemove}
+        onCancel={handleCancelRemove}
+      />
+    </div>
+  );
+}

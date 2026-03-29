@@ -1,0 +1,70 @@
+# BoostedBudget Default Dashboard Layout Configuration
+# Last updated: 2025-12-09
+#
+# This file defines the default dashboard layout for new users and
+# existing users who need a layout reset (when their saved version < this version).
+#
+# SINGLE SOURCE OF TRUTH: Both backend and frontend consume this configuration.
+# Backend loads this YAML and serves via GET /api/v1/dashboard/default-layout.
+# Frontend fetches from API with fallback to hardcoded default if API fails.
+#
+# Issue #449: Centralize default dashboard layout configuration
+# Related: #418 (BalanceHistoryWidget), #354 (Widget System)
+#
+# IMPORTANT: When adding/removing/reordering widgets:
+#   1. Update the widgets list below
+#   2. INCREMENT the layout_version number
+#   3. Existing users with saved version < new version will auto-reset to this layout
+#
+# Widget Types (must match registered widget types):
+#   - balance-overview: Account balance summary cards
+#   - balance-history: Historical balance trend chart
+#   - cash-flow-chart: Income vs expenses bar chart
+#   - cash-flow-summary: Monthly cash flow summary
+#   - account-cards: Individual account balance cards
+#
+# Grid System:
+#   - 12-column layout (w: 1-12)
+#   - Positions start at (0,0) top-left
+#   - y values stack vertically (each h unit is one row)
+
+# Layout version - INCREMENT when widgets change to trigger user resets
+# Existing users with saved layouts < this version will auto-reset
+# Issue #468: Version 4 - Increased minH values for proper chart/content rendering
+layout_version: 4
+
+# Widget configurations
+# Each widget needs: id, type, position (x,y), size (w,h), and constraints (minW, minH)
+widgets:
+  - id: "cash-flow-chart-1"
+    type: "cash-flow-chart"
+    x: 0
+    y: 0
+    w: 12
+    h: 5
+    minW: 4
+    minH: 4  # Issue #468: Increased from 3 for proper chart rendering
+
+  - id: "balance-history-1"
+    type: "balance-history"
+    x: 0
+    y: 5
+    w: 12
+    h: 4
+    minW: 4
+    minH: 4  # Issue #468: Increased from 3 for proper chart rendering
+
+# Future widgets can be added here when their issues are resolved:
+# - #419: CashFlowSummaryWidget
+# - #425: BalanceOverviewWidget
+# - #426: AccountCardsWidget
+#
+# Example of adding a new widget:
+#   - id: "balance-overview-1"
+#     type: "balance-overview"
+#     x: 0
+#     y: 9
+#     w: 6
+#     h: 3
+#     minW: 3
+#     minH: 2

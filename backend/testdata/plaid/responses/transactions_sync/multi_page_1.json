@@ -1,0 +1,45 @@
+{
+  "added": [
+    {
+      "transaction_id": "txn_page1_001",
+      "account_id": "acc_test_001",
+      "amount": 45.00,
+      "iso_currency_code": "USD",
+      "date": "2024-01-20",
+      "authorized_date": "2024-01-19",
+      "name": "Target",
+      "merchant_name": "Target",
+      "category": ["Shops", "Supermarkets and Groceries"],
+      "personal_finance_category": {
+        "primary": "GENERAL_MERCHANDISE",
+        "detailed": "GENERAL_MERCHANDISE_SUPERSTORES"
+      },
+      "payment_channel": "in_store",
+      "pending": false,
+      "pending_transaction_id": null
+    },
+    {
+      "transaction_id": "txn_page1_002",
+      "account_id": "acc_test_001",
+      "amount": 12.99,
+      "iso_currency_code": "USD",
+      "date": "2024-01-19",
+      "authorized_date": "2024-01-19",
+      "name": "Netflix",
+      "merchant_name": "Netflix",
+      "category": ["Service", "Subscription"],
+      "personal_finance_category": {
+        "primary": "ENTERTAINMENT",
+        "detailed": "ENTERTAINMENT_TV_AND_MOVIES"
+      },
+      "payment_channel": "online",
+      "pending": false,
+      "pending_transaction_id": null
+    }
+  ],
+  "modified": [],
+  "removed": [],
+  "next_cursor": "cursor_page_1",
+  "has_more": true,
+  "request_id": "req_test_multi_page_1"
+}

@@ -233,6 +233,7 @@ web_modules/
 .env.test.local
 .env.production.local
 .env.local
+.env.e2e
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
@@ -298,6 +299,14 @@ buck-out/
 # End of https://www.toptal.com/developers/gitignore/api/go,react,reactnative,redis
 .env
 .env.staging
+.env.qa
+
+# Paddle staging documentation with credentials - DO NOT COMMIT
+PADDLE_STAGING_CREDENTIALS_SUMMARY.md
+PADDLE_STAGING_SETUP_INSTRUCTIONS.md
+ISSUE_746_DOCUMENTATION.md
+PADDLE_WEBHOOK_EVENTS_SUMMARY.md
+
 .mcp.json
 
 # BoostedBudget specific
@@ -305,22 +314,62 @@ backend/bin/
 backend/server
 backend/cmd/server/server
 backend/tmp/
-frontend/dist/
+apps/web/dist/
+
+# Package manager lockfiles - Bun only
+package-lock.json
+# Bun workspace lockfiles (only root bun.lock should exist)
+apps/*/bun.lock
+packages/*/bun.lock
+
+# Turborepo
+.turbo
 in-memoria.db
-.claude/
+# Claude Code - ignore local settings but track skills, commands, agents, hooks, shared settings
+.claude/*
+!.claude/commands/
+!.claude/commands/**
+!.claude/agents/
+!.claude/agents/**
+!.claude/skills/
+!.claude/skills/**
+!.claude/hooks/
+!.claude/hooks/**
+!.claude/settings.json
+
+# Agent configurations - ignore settings but track skills and workflows
+.agent/settings.json
+.agent/settings/*
+!.agent/skills/
+!.agent/skills/**
+.agents/settings.json
+.agents/settings/*
+!.agents/workflows/
+!.agents/workflows/**
+
 .serena
 
 # Test artifacts and coverage reports
 backend/test-output.json
 backend/test-results.json
 backend/coverage.html
-frontend/test-results.json
+apps/web/test-results.json
 
 # Playwright E2E Tests
-frontend/playwright-report/
-frontend/test-results/
-frontend/e2e/.env.test
+apps/web/playwright-report/
+apps/web/test-results/
+apps/web/e2e/.env.test
+.playwright-mcp/
 
 # Fly.io
 .fly/
-fly.toml.bak
+fly.toml.bakmigration-performance.json
+migration-performance.json
+.gemini/settings.json
+
+# Dogfood session output
+dogfood-output/
+
+# Git worktrees
+.worktrees/
+.worktrees/

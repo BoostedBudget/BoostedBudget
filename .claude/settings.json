@@ -1,0 +1,21 @@
+{
+  "env": {
+    "ENABLE_LSP_TOOL": "1"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/pre-commit-checks.sh"
+          }
+        ]
+      }
+    ]
+  },
+  "enabledPlugins": {
+    "impeccable@impeccable": true
+  }
+}

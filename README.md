@@ -13,7 +13,7 @@ BoostedBudget is a global budgeting platform that helps users optimize their fin
 - ✅ OpenAPI specification
 - ✅ Frontend skeleton (React + TypeScript + Vite)
 - ✅ Docker development environment
-- ⏳ Auth0 integration (Issue #3, #5, #6)
+- ✅ Clerk authentication (Issue #593)
 - ⏳ Database & migrations (Issue #7)
 - ⏳ GDPR components (Issue #8)
 
@@ -32,7 +32,7 @@ BoostedBudget is a global budgeting platform that helps users optimize their fin
 - React 19 + TypeScript 5
 - Vite 7 build tool
 - Redux Toolkit for state management
-- Auth0 React SDK
+- Clerk React SDK
 
 **Infrastructure:**
 - Docker + Docker Compose (development)
@@ -70,7 +70,7 @@ cp .env.example .env
 ```
 
 **Required Configuration**:
-- **Auth0**: Authentication (domain, client IDs, secrets) - See [docs/AUTH0_SETUP.md](./docs/AUTH0_SETUP.md)
+- **Clerk**: Authentication (publishable key, secret key) - See [Clerk Dashboard](https://dashboard.clerk.com/)
 - **Database**: PostgreSQL connection string (auto-configured with Docker Compose)
 - **Redis**: Cache connection (auto-configured with Docker Compose)
 - **Plaid**: Financial account linking (client ID, secret) - [Get keys](https://dashboard.plaid.com/)
@@ -172,7 +172,7 @@ cd backend && go test ./internal/handlers/... -v
 cd backend && go test ./... -cover
 
 # Frontend tests
-cd frontend && npm test
+cd apps/web && bun run test
 ```
 
 ### API Testing
@@ -194,7 +194,6 @@ curl -H "Authorization: Bearer mock-token" http://localhost:4010/user/profile
 - **[Complete Plan](./boosted-budget-complete-plan.md)** - Full project roadmap (Phases 0-7+)
 - **[Deployment Guide](./boosted-budget-fly-deployment.md)** - Fly.io deployment instructions
 - **[CLAUDE.md](./CLAUDE.md)** - Development guidelines and patterns
-- **[Auth0 Setup Guide](./docs/AUTH0_SETUP.md)** - Complete Auth0 configuration walkthrough
 - **[GitHub Secrets Setup](./docs/GITHUB_SECRETS_SETUP.md)** - CI/CD secrets configuration
 - **[OpenAPI Spec](./api/openapi.yaml)** - API documentation
 
@@ -209,17 +208,20 @@ boostedbudget/
 │   │   ├── handlers/    # HTTP handlers
 │   │   ├── services/    # Business services
 │   │   ├── repository/  # Data access
-│   │   ├── middleware/  # Auth0, logging, etc.
+│   │   ├── middleware/  # Clerk auth, logging, etc.
 │   │   └── config/      # Configuration
 │   ├── migrations/       # Database migrations
 │   └── tests/           # Integration tests
-├── frontend/             # React frontend
-│   ├── src/
-│   │   ├── features/    # Feature modules
-│   │   ├── auth/        # Auth0 integration
-│   │   ├── shared/      # Shared components
-│   │   └── privacy/     # GDPR components
-│   └── public/          # Static assets
+├── apps/
+│   └── web/              # React frontend
+│       ├── src/
+│       │   ├── features/ # Feature modules
+│       │   ├── auth/     # Clerk integration
+│       │   └── shared/   # Shared components
+│       └── public/       # Static assets
+├── packages/
+│   ├── api-client/       # Orval-generated API hooks
+│   └── shared-types/     # Shared TypeScript types
 ├── infrastructure/       # K8s, Terraform, Docker configs
 ├── scripts/             # Build and deployment scripts
 ├── legal/               # Privacy policy, ToS, GDPR docs
@@ -229,7 +231,7 @@ boostedbudget/
 ## 🔐 Security & Compliance
 
 - **GDPR Compliant:** From day one for all users worldwide
-- **Auth0:** Enterprise-grade authentication
+- **Clerk:** Enterprise-grade authentication
 - **Data Encryption:** At rest and in transit
 - **Single Region MVP:** us-east-1 (USA), multi-region expansion in Phase 7+
 - **Privacy by Design:** Default opt-out, granular consent management

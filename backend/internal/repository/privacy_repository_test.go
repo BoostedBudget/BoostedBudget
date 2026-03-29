@@ -2,12 +2,13 @@ package repository
 
 import (
 	"context"
-	"database/sql"
+	
 	"regexp"
 	"testing"
 	"time"
 
-	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/jackc/pgx/v5"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
@@ -15,18 +16,18 @@ import (
 )
 
 // setupPrivacyMockDB creates a mock database and sqlmock instance for privacy repository testing
-func setupPrivacyMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock, PrivacyRepository) {
-	db, mock, err := sqlmock.New()
+func setupPrivacyMockDB(t *testing.T) (pgxmock.PgxPoolIface, PrivacyRepository) {
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 
-	repo := NewPrivacyRepository(db)
-	return db, mock, repo
+	repo := NewPrivacyRepository(mock)
+	return mock, repo
 }
 
 // TestGetPrivacySettingsByUserID_Success tests successful retrieval of privacy settings
 func TestGetPrivacySettingsByUserID_Success(t *testing.T) {
-	db, mock, repo := setupPrivacyMockDB(t)
-	defer db.Close()
+	mock, repo := setupPrivacyMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -34,7 +35,7 @@ func TestGetPrivacySettingsByUserID_Success(t *testing.T) {
 	now := time.Now()
 
 	// Expected privacy settings data
-	rows := sqlmock.NewRows([]string{
+	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "gdpr_necessary_consent", "gdpr_analytics_consent",
 		"gdpr_advertising_consent", "gdpr_consent_timestamp",
 		"marketing_emails_enabled", "product_updates_enabled",
@@ -78,8 +79,8 @@ func TestGetPrivacySettingsByUserID_Success(t *testing.T) {
 
 // TestGetPrivacySettingsByUserID_NotFound tests when privacy settings are not found
 func TestGetPrivacySettingsByUserID_NotFound(t *testing.T) {
-	db, mock, repo := setupPrivacyMockDB(t)
-	defer db.Close()
+	mock, repo := setupPrivacyMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -92,7 +93,7 @@ func TestGetPrivacySettingsByUserID_NotFound(t *testing.T) {
 		       created_at, updated_at
 		FROM privacy_settings
 		WHERE user_id = $1
-	`)).WithArgs(userID).WillReturnError(sql.ErrNoRows)
+	`)).WithArgs(userID).WillReturnError(pgx.ErrNoRows)
 
 	// Execute
 	settings, err := repo.GetByUserID(ctx, userID)
@@ -106,8 +107,8 @@ func TestGetPrivacySettingsByUserID_NotFound(t *testing.T) {
 
 // TestCreatePrivacySettings_Success tests successful creation of privacy settings
 func TestCreatePrivacySettings_Success(t *testing.T) {
-	db, mock, repo := setupPrivacyMockDB(t)
-	defer db.Close()
+	mock, repo := setupPrivacyMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -128,19 +129,19 @@ func TestCreatePrivacySettings_Success(t *testing.T) {
 			$11, $12
 		)
 	`)).WithArgs(
-		sqlmock.AnyArg(), // ID (generated UUID)
+		pgxmock.AnyArg(), // ID (generated UUID)
 		userID,
 		true,  // necessary consent
 		false, // analytics consent
 		false, // advertising consent
-		sqlmock.AnyArg(), // consent timestamp
+		pgxmock.AnyArg(), // consent timestamp
 		false, // marketing emails
 		true,  // product updates
 		true,  // security alerts
 		false, // data sharing
-		sqlmock.AnyArg(), // created_at
-		sqlmock.AnyArg(), // updated_at
-	).WillReturnResult(sqlmock.NewResult(1, 1))
+		pgxmock.AnyArg(), // created_at
+		pgxmock.AnyArg(), // updated_at
+	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	// Execute
 	err := repo.Create(ctx, settings)
@@ -153,8 +154,8 @@ func TestCreatePrivacySettings_Success(t *testing.T) {
 
 // TestUpdatePrivacySettings_Success tests successful update of privacy settings
 func TestUpdatePrivacySettings_Success(t *testing.T) {
-	db, mock, repo := setupPrivacyMockDB(t)
-	defer db.Close()
+	mock, repo := setupPrivacyMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -192,14 +193,14 @@ func TestUpdatePrivacySettings_Success(t *testing.T) {
 		true,  // necessary
 		true,  // analytics
 		true,  // advertising
-		sqlmock.AnyArg(), // consent timestamp
+		pgxmock.AnyArg(), // consent timestamp
 		true,  // marketing
 		true,  // product updates
 		true,  // security
 		false, // data sharing
-		sqlmock.AnyArg(), // updated_at
+		pgxmock.AnyArg(), // updated_at
 		userID,
-	).WillReturnResult(sqlmock.NewResult(1, 1))
+	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	// Execute
 	err := repo.Update(ctx, settings)
@@ -211,8 +212,8 @@ func TestUpdatePrivacySettings_Success(t *testing.T) {
 
 // TestUpdatePrivacySettings_NotFound tests update when privacy settings don't exist
 func TestUpdatePrivacySettings_NotFound(t *testing.T) {
-	db, mock, repo := setupPrivacyMockDB(t)
-	defer db.Close()
+	mock, repo := setupPrivacyMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -231,17 +232,17 @@ func TestUpdatePrivacySettings_NotFound(t *testing.T) {
 		    updated_at = $9
 		WHERE user_id = $10
 	`)).WithArgs(
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
 		userID,
-	).WillReturnResult(sqlmock.NewResult(0, 0)) // 0 rows affected
+	).WillReturnResult(pgxmock.NewResult("UPDATE", 0)) // 0 rows affected
 
 	// Execute
 	err := repo.Update(ctx, settings)
@@ -254,8 +255,8 @@ func TestUpdatePrivacySettings_NotFound(t *testing.T) {
 
 // TestUpdatePrivacySettings_UpdatesTimestamp tests that update modifies gdpr_consent_timestamp
 func TestUpdatePrivacySettings_UpdatesTimestamp(t *testing.T) {
-	db, mock, repo := setupPrivacyMockDB(t)
-	defer db.Close()
+	mock, repo := setupPrivacyMockDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -267,18 +268,18 @@ func TestUpdatePrivacySettings_UpdatesTimestamp(t *testing.T) {
 
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE privacy_settings`)).
 		WithArgs(
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
 			userID,
 		).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	// Execute
 	err := repo.Update(ctx, settings)

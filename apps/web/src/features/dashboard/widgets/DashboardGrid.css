@@ -1,0 +1,20 @@
+/**
+ * Dashboard Grid Styles
+ * Issue #441: Migrated to GridStack.js
+ *
+ * GridStack.js provides its own height chain handling via .grid-stack-item-content
+ * with position: absolute; inset: 0, so we only need minimal customizations.
+ *
+ * The previous react-grid-layout workarounds have been removed.
+ */
+
+/* Custom resize handle styling (optional - GridStack has defaults) */
+.grid-stack-item > .ui-resizable-handle {
+  z-index: 10;
+}
+
+/* Dark mode support for resize handle indicator */
+.dark .grid-stack-item > .ui-resizable-se::after {
+  border-right-color: rgba(255, 255, 255, 0.4);
+  border-bottom-color: rgba(255, 255, 255, 0.4);
+}

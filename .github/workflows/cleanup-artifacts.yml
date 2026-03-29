@@ -1,0 +1,85 @@
+name: Cleanup Artifacts
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # Daily at 2 AM UTC
+  workflow_dispatch:
+    inputs:
+      retention_days:
+        description: "Days to keep artifacts (delete older than X days)"
+        required: true
+        default: "1"
+        type: string
+
+jobs:
+  delete-artifacts:
+    runs-on: [self-hosted, macOS, mac-mini]
+    permissions:
+      actions: write
+
+    steps:
+      - name: Determine retention days
+        id: retention
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "days=1" >> $GITHUB_OUTPUT
+          else
+            echo "days=${{ github.event.inputs.retention_days }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Delete old artifacts
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const retentionDays = parseInt('${{ steps.retention.outputs.days }}');
+            const cutoffDate = new Date();
+            cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
+
+            console.log(`Deleting artifacts older than ${retentionDays} days (before ${cutoffDate.toISOString()})`);
+
+            let deletedCount = 0;
+            let page = 1;
+            let hasMore = true;
+
+            const perPage = 100;
+
+            // Paginate through all artifacts
+            while (hasMore) {
+              const response = await github.rest.actions.listArtifactsForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: perPage,
+                page: page
+              });
+
+              const artifacts = response.data.artifacts;
+
+              if (artifacts.length === 0) {
+                hasMore = false;
+              }
+
+              for (const artifact of artifacts) {
+                const createdAt = new Date(artifact.created_at);
+                if (createdAt < cutoffDate) {
+                  try {
+                    await github.rest.actions.deleteArtifact({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      artifact_id: artifact.id
+                    });
+                    deletedCount++;
+                    console.log(`✓ Deleted: ${artifact.name} (created: ${artifact.created_at})`);
+                  } catch (error) {
+                    console.error(`✗ Failed to delete ${artifact.name}: ${error.message}`);
+                  }
+                } else {
+                  console.log(`○ Keeping: ${artifact.name} (created: ${artifact.created_at})`);
+                }
+              }
+
+              // Check if there are more pages
+              hasMore = artifacts.length === perPage;
+              page++;
+            }
+
+            console.log(`\nSummary: Deleted ${deletedCount} artifact(s);`);

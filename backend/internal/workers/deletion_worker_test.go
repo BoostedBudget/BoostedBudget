@@ -6,7 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -31,6 +34,15 @@ func (m *MockDeletionServiceForWorker) ExecuteDeletion(ctx context.Context, user
 	return args.Error(0)
 }
 
+// Issue #668: Plaid Item Management for Cost Optimization
+func (m *MockDeletionServiceForWorker) SetPlaidCleanupService(svc services.PlaidItemCleanupService) {
+	m.Called(svc)
+}
+
+func (m *MockDeletionServiceForWorker) SetAnalytics(a phclient.Analytics) {
+	m.Called(a)
+}
+
 // MockProfileRepoForWorker for testing
 type MockProfileRepoForWorker struct {
 	mock.Mock
@@ -52,42 +64,59 @@ func (m *MockProfileRepoForWorker) GetUserByID(ctx context.Context, userID strin
 	return args.Get(0).(*domain.User), args.Error(1)
 }
 
-func (m *MockProfileRepoForWorker) GetUserByAuth0ID(ctx context.Context, auth0UserID string) (*domain.User, error) {
-	args := m.Called(ctx, auth0UserID)
+func (m *MockProfileRepoForWorker) GetUserByClerkID(ctx context.Context, clerkUserID string) (*domain.User, error) {
+	args := m.Called(ctx, clerkUserID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*domain.User), args.Error(1)
 }
 
-func (m *MockProfileRepoForWorker) CreateUser(ctx context.Context, user *domain.User) error {
-	args := m.Called(ctx, user)
-	return args.Error(0)
+func (m *MockProfileRepoForWorker) GetUserByPaddleSubscriptionID(ctx context.Context, subscriptionID string) (*domain.User, error) {
+	args := m.Called(ctx, subscriptionID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.User), args.Error(1)
 }
 
-func (m *MockProfileRepoForWorker) UpdateUser(ctx context.Context, user *domain.User) error {
-	args := m.Called(ctx, user)
-	return args.Error(0)
+func (m *MockProfileRepoForWorker) CreateUser(ctx context.Context, user *domain.User) error          { return m.Called(ctx, user).Error(0) }
+func (m *MockProfileRepoForWorker) CreateUserTx(ctx context.Context, tx pgx.Tx, user *domain.User) error { return m.Called(ctx, tx, user).Error(0) }
+func (m *MockProfileRepoForWorker) UpdateUser(ctx context.Context, user *domain.User) error               { return m.Called(ctx, user).Error(0) }
+func (m *MockProfileRepoForWorker) UpdateLastLogin(ctx context.Context, clerkUserID string) error         { return m.Called(ctx, clerkUserID).Error(0) }
+func (m *MockProfileRepoForWorker) MarkForDeletion(ctx context.Context, userID string, scheduledAt time.Time) error { return m.Called(ctx, userID, scheduledAt).Error(0) }
+func (m *MockProfileRepoForWorker) CancelDeletion(ctx context.Context, userID string) error               { return m.Called(ctx, userID).Error(0) }
+func (m *MockProfileRepoForWorker) DeleteUserCascade(ctx context.Context, userID string) error            { return m.Called(ctx, userID).Error(0) }
+
+// Issue #679, #680: Trial expiration methods
+func (m *MockProfileRepoForWorker) GetUsersWithExpiredTrials(ctx context.Context) ([]*domain.User, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
-func (m *MockProfileRepoForWorker) UpdateLastLogin(ctx context.Context, auth0UserID string) error {
-	args := m.Called(ctx, auth0UserID)
-	return args.Error(0)
+func (m *MockProfileRepoForWorker) GetUsersWithExpiringTrials(ctx context.Context, withinDays int) ([]*domain.User, error) {
+	args := m.Called(ctx, withinDays)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
-func (m *MockProfileRepoForWorker) MarkForDeletion(ctx context.Context, userID string, scheduledAt time.Time) error {
-	args := m.Called(ctx, userID, scheduledAt)
-	return args.Error(0)
-}
+func (m *MockProfileRepoForWorker) UpdateSubscriptionStatus(ctx context.Context, userID string, status string) error { return m.Called(ctx, userID, status).Error(0) }
+func (m *MockProfileRepoForWorker) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error { return m.Called(ctx, userID, status, trialStartedAt, trialEndsAt, hadTrial).Error(0) }
 
-func (m *MockProfileRepoForWorker) CancelDeletion(ctx context.Context, userID string) error {
-	args := m.Called(ctx, userID)
-	return args.Error(0)
-}
-
-func (m *MockProfileRepoForWorker) DeleteUserCascade(ctx context.Context, userID string) error {
-	args := m.Called(ctx, userID)
-	return args.Error(0)
+// Issue #44, #45, #46: Paddle integration support
+func (m *MockProfileRepoForWorker) UpdatePaddleCustomerID(ctx context.Context, userID, paddleCustomerID string) error { return m.Called(ctx, userID, paddleCustomerID).Error(0) }
+func (m *MockProfileRepoForWorker) UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time, subscriptionID *string) error { return m.Called(ctx, userID, tier, status, startedAt, endsAt, subscriptionID).Error(0) }
+func (m *MockProfileRepoForWorker) GetUsersWithActivePaddleSubscriptions(ctx context.Context) ([]*domain.User, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
 // TestWorker_FindsScheduledUsers tests that worker finds users scheduled for deletion
@@ -96,7 +125,7 @@ func TestWorker_FindsScheduledUsers(t *testing.T) {
 	mockService := new(MockDeletionServiceForWorker)
 	mockRepo := new(MockProfileRepoForWorker)
 
-	worker := NewDeletionWorker(mockService, mockRepo, 1*time.Hour)
+	worker := NewDeletionWorker(mockService, mockRepo, 1*time.Hour, nil)
 
 	scheduledUsers := []*domain.User{
 		{
@@ -131,7 +160,7 @@ func TestWorker_ProcessesUsers(t *testing.T) {
 	mockService := new(MockDeletionServiceForWorker)
 	mockRepo := new(MockProfileRepoForWorker)
 
-	worker := NewDeletionWorker(mockService, mockRepo, 1*time.Hour)
+	worker := NewDeletionWorker(mockService, mockRepo, 1*time.Hour, nil)
 
 	user := &domain.User{
 		ID:                  "user-123",
@@ -155,7 +184,7 @@ func TestWorker_HandlesErrors(t *testing.T) {
 	mockService := new(MockDeletionServiceForWorker)
 	mockRepo := new(MockProfileRepoForWorker)
 
-	worker := NewDeletionWorker(mockService, mockRepo, 1*time.Hour)
+	worker := NewDeletionWorker(mockService, mockRepo, 1*time.Hour, nil)
 
 	users := []*domain.User{
 		{
@@ -188,13 +217,13 @@ func TestWorker_HandlesErrors(t *testing.T) {
 // TestWorker_RespectsContext tests context cancellation
 func TestWorker_RespectsContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	mockService := new(MockDeletionServiceForWorker)
 	mockRepo := new(MockProfileRepoForWorker)
 
-	worker := NewDeletionWorker(mockService, mockRepo, 100*time.Millisecond)
-
-	// Cancel context immediately
-	cancel()
+	worker := NewDeletionWorker(mockService, mockRepo, 100*time.Millisecond, nil)
+	cancel() // Cancel immediately
 
 	// Start worker (should respect cancellation)
 	done := make(chan bool)
@@ -215,13 +244,14 @@ func TestWorker_RespectsContext(t *testing.T) {
 
 // TestWorker_GracefulShutdown tests graceful worker shutdown
 func TestWorker_GracefulShutdown(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	// Use longer timeouts to account for race detection overhead in CI
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	mockService := new(MockDeletionServiceForWorker)
 	mockRepo := new(MockProfileRepoForWorker)
 
-	worker := NewDeletionWorker(mockService, mockRepo, 100*time.Millisecond)
+	worker := NewDeletionWorker(mockService, mockRepo, 100*time.Millisecond, nil)
 
 	// Mock to avoid actual calls during shutdown test
 	mockRepo.On("GetUsersScheduledForDeletion", mock.Anything).Return([]*domain.User{}, nil).Maybe()
@@ -234,11 +264,12 @@ func TestWorker_GracefulShutdown(t *testing.T) {
 	}()
 
 	// Wait for context timeout (worker should shut down)
+	// Use longer timeout to account for race detection overhead in CI
 	select {
 	case <-done:
 		// Worker shut down gracefully
 		assert.True(t, true)
-	case <-time.After(1 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("Worker did not shut down gracefully")
 	}
 }

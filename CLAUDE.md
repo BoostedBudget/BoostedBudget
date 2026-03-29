@@ -1,431 +1,324 @@
-# CLAUDE.md - BoostedBudget Guide
+# CLAUDE.md
 
-## Primary Docs
-- `boosted-budget-complete-plan.md`: Architecture, phases 0-6, APIs, schemas, Auth0/Plaid/Stripe/AdSense, GDPR, business logic
-- `boosted-budget-fly-deployment.md`: Docker, CI/CD, Fly.io, multi-region, secrets, deployment scripts
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project Context
-**BoostedBudget**: Global budgeting platform, automation rules, GDPR-compliant, USA-based (iad/us-east-1)
+## Project Overview
 
-**Tiers**: Free (1 rule, 3 accounts, 1x/day, ads) | Premium Lite $4.99 (5 rules, 15 accounts, 2x/day) | Premium $9.99 (15 rules, 30 accounts, 6x/day) | Premium+ $19.99 (unlimited, every 10min, AI + API)
+**BoostedBudget**: GDPR-compliant budgeting platform with automation rules. Single-region (us-east-1) MVP, multi-region Phase 7+.
 
-**Stack**: React 19 + TS5 + Vite 7 | Go 1.25+ Echo/Gin | PostgreSQL 15 + Redis 7 | Atlas (migrations) | Auth0 + Plaid + Stripe + AdSense | Docker → GHCR → Fly.io
+**Stack**: Go 1.25+/Huma | React 19/TS5/Vite 7/Bun | PostgreSQL 17/Redis 7 | golang-migrate+Squawk | Clerk/Plaid/Paddle/PostHog | Docker→GHCR→Fly.io
 
-**Database Migrations**: Atlas (versioned migrations) with schema linting, drift detection, and validation in CI/CD. See `backend/docs/atlas-migration-guide.md`
+**Tiers** (`config/subscription_tiers.yaml`): Premium $8.99 + household tiers ($12.99-$18.99), no free tier, 60-day trial
 
-**Architecture**: Single region (iad) MVP, multi-region Phase 7+, no money movement (suggestions only), future-ready `*InRegion` abstractions
+## Commands
 
-**Directory**:
+```bash
+# Development
+make dev                    # Docker-compose up
+make test-fast              # Backend+frontend tests, NO e2e (~2min)
+make test-all               # ALL tests including e2e (~4min)
+
+# Backend (from /backend)
+go test ./... -v            # All tests
+go test ./internal/huma/operations/... -v  # Single package
+go test -coverprofile=coverage.out ./...  # With coverage
+make -C backend lint        # golangci-lint
+
+# Frontend (from /apps/web)
+bun run test                # Unit tests (bun:test)
+bun run lint                # ESLint
+bun run test:e2e            # Playwright E2E
+bun run test:e2e:headed     # E2E with browser
+
+# Code Generation
+make generate-openapi       # Go Huma → api/openapi.yaml
+make generate-api-client    # OpenAPI → frontend TypeScript (uses npm+orval, restores bun)
+make generate-all           # Both
+
+# Migrations (requires DATABASE_URL)
+make migrate-up/down/status
+make -C backend migrate-create NAME=add_table
+./scripts/test-migrations.sh  # 5 test suites (idempotency, perf, data, schema, rollback)
 ```
-.github/workflows/  # CI/CD
-api/                # OpenAPI specs
+
+## Architecture
+
+```
 backend/
-  cmd/server/       # Entry
-  internal/         # auth, handlers, services, repository, rules, middleware
-  migrations/       # DB migrations
-  Dockerfile
-frontend/
-  src/              # features, auth, api, shared
-  Dockerfile
-scripts/            # Build/deploy
-infrastructure/     # Configs
+  cmd/server/           # Entry point
+  internal/
+    huma/               # API layer (operations, errors, inputs, middleware)
+    services/           # Business logic
+    repository/         # Data access layer
+    auth/               # Authentication (Clerk JWT)
+    config/             # Configuration loading
+    database/           # Database connection, migrations
+    domain/             # Domain models
+    events/             # Event definitions
+    integration/        # External service clients (Clerk, Plaid, Paddle)
+    matching/           # Transaction matching logic
+    queue/              # River job queue setup
+    rules/              # Automation rule engine
+    workers/            # Background job workers
+  migrations/           # .up.sql/.down.sql pairs
+apps/web/
+  src/
+    features/           # Feature modules (domain-based)
+    shared/             # Shared components/hooks
+packages/
+  api-client/           # Orval-generated React Query hooks
+  shared-types/         # Shared TypeScript types
+api/openapi.yaml        # Source of truth for API
+config/
+  subscription_tiers.yaml     # Tier limits/features
+  default_dashboard_layout.yaml  # Dashboard config
 ```
 
-## CRITICAL RULES
+**Key Patterns**:
+- OpenAPI spec generated FROM Huma routes (not hand-written)
+- Frontend hooks auto-generated via Orval (**use `make generate-api-client`**)
+  - Uses `npx orval` (Node.js runtime) instead of `bunx` due to Bun runtime compatibility issues
+  - Single lock file: `bun.lock` at root only (workspaces share one lockfile)
+  - Workspace lockfiles (`apps/*/bun.lock`) should NOT exist
+- Migrations MUST be idempotent (`IF NOT EXISTS`, `DO $$` blocks)
+- All auth via Clerk (JWT middleware), never custom auth
+- `*InRegion` method signatures for future multi-region
+- No money movement—suggestions only
 
-### 1. TDD (MANDATORY)
-**ALWAYS Red-Green-Refactor**:
-1. RED: Write failing test first
-2. GREEN: Implement minimal code to pass
-3. REFACTOR: Clean up while tests pass
+## Critical Rules
 
-**TDD required for**: Business logic, API endpoints, repositories, services, auth, GDPR, payments, user data
-**TDD optional**: UI components, static content, configs, docs
-**Target**: >80% coverage
+### TDD (MANDATORY - No Exceptions)
+**ALWAYS follow Red-Green-Refactor for ANY code change:**
+1. **RED**: Write failing test FIRST (before any implementation)
+2. **GREEN**: Write minimal code to make test pass
+3. **REFACTOR**: Clean up while keeping tests green
+- Target: >60% backend, >80% overall
+- **Never skip TDD** for business logic, handlers, services, repositories
 
-### 2. Issue-Driven Development (MANDATORY)
-**Every logical change needs Issue → Branch → PR**
+### Issue-Driven Development
+- **Branch**: `feature|bugfix|refactor|docs/<issue#>-<desc>`
+- **Commits**: `#N: message` (e.g., `#42: Add user endpoint`)
+- **PR titles**: `#N: title`
+- **PR body**: **MUST include `Closes #N`** (auto-closes issue on merge)
 
-**Workflow**:
-1. Search existing issues (avoid duplicates)
-2. Create issue: title, description, acceptance criteria, phase, labels
-3. Create branch: `feature|bugfix|refactor|docs/<issue#>-<desc>`
-4. Update issue during work (progress, blockers, decisions)
-5. Create PR: title with "(#N)", summary, testing, "Closes #N"
-6. Verify auto-close after merge
+### Analytics Instrumentation (PostHog)
+When implementing new features or modifying user-facing flows:
+- **Frontend**: Fire analytics events for meaningful user actions using `useTrackEvent()` hook and constants from `ANALYTICS_EVENTS` (`apps/web/src/shared/analytics/events.ts`). Add new event constants when adding new trackable actions.
+- **Backend**: Fire analytics events for significant system/service actions using the `phclient.Analytics` interface and constants from `backend/internal/integration/posthog/events.go`. Services receive analytics via `SetAnalytics()` setter injection.
+- **PII masking**: Add `data-ph-mask` attribute to any element displaying financial amounts, account numbers, or other sensitive data (for PostHog session replay).
+- **No-op safe**: All analytics code is nil/no-op safe when PostHog is not configured (local dev, QA).
 
-**CRITICAL - Commit & PR Format**:
-- **ALL commits** MUST start with Issue ID: `#N: Your commit message`
-- **ALL PR titles** MUST start with Issue ID: `#N: Your PR title`
-- **ALL PRs** MUST include `Closes #N` in description (auto-close on merge)
-- Examples:
-  - `#3: Implement Auth0 JWT validation middleware`
-  - `#7: Add database migration for users table`
-- This ensures proper tracking and linking in GitHub
+### Standard Workflow (MANDATORY for all tasks)
+Every implementation task MUST end with these steps in order:
 
-**Labels**: `feature|bug|enhancement|refactor|docs|devops`, `P0|P1|P2|P3`, `phase-N`, `backend|frontend|api|database|deployment`, `blocked|in-progress|needs-review`, `small|medium|large`
-
-**Skip issues for**: Trivial typos, formatting-only, local experiments
-
-### 3. MCP Usage (MANDATORY)
-
-**Code Search (ALWAYS use MCP first)**:
-1. **Serena** - REQUIRED for any code search/nav (NOT Grep/Glob)
-2. **in-memoria** - REQUIRED for semantic queries, architecture questions
-3. Grep/Glob - ONLY when Serena fails or exact regex needed
-4. GitHub MCP - ONLY external repos, NEVER local code
-
-**MUST use Serena when**:
-- "Find where X is implemented"
-- "How does Y work?"
-- "What files handle Z?"
-- "Show me examples of..."
-- ANY code exploration/understanding
-
-**MUST use Sequential Thinking when**:
-- Architecture decisions (>3 options)
-- Complex debugging (>2 systems)
-- Trade-off analysis
-- Phase 7+ planning
-- Design patterns selection
-
-**MUST use in-memoria when**:
-- "Why did we decide X?"
-- GDPR implementation questions
-- Complex multi-file logic flows
-- Recurring patterns/conventions
-- Historical context needed
-- **DURING implementation**: Track architectural decisions, pattern choices, trade-offs considered
-- **CONTINUOUS**: Document reasoning for why specific approaches were chosen over alternatives
-
-**MUST use Server Memory when**:
-- Store config values (API keys format, env vars)
-- Cache decisions (auth flow, data model)
-- Persist credentials/secrets patterns
-- Remember user preferences
-- **DURING implementation**: Log all key decisions, design choices, and reasoning AS YOU MAKE THEM
-- **CONTINUOUS**: Track why certain patterns/libraries/approaches were selected
-- **AFTER each major step**: Update with lessons learned, gotchas discovered, patterns established
-
-**Feature workflow**:
-1. Serena: Find relevant code
-2. in-memoria: Check past decisions/patterns
-3. Sequential Thinking: Plan approach
-4. **Server Memory: Store initial decisions** (approach chosen, alternatives considered, reasoning)
-5. **TDD RED**: Write failing tests → **Server Memory: Track test design decisions**
-6. **TDD GREEN**: Implement → **Server Memory: Document implementation choices as you code**
-7. **TDD REFACTOR**: Clean → **Server Memory: Note refactoring patterns applied**
-8. **RUN ALL TESTS** (MANDATORY - NO PR without):
-   - `cd backend && go test ./... -v` (MUST pass)
-   - `npm test -- --run && npm run lint` (MUST pass)
-   - `npm run test:e2e -- --reporter=line 2>&1` (MUST pass)
-9. **Server Memory: Final update** (learnings, gotchas, future considerations)
-10. PR ONLY after all tests pass
-
-### 4. Decision Tracking (MANDATORY)
-**CONTINUOUSLY track ALL decisions and reasoning using in-memoria and server-memory**
-
-**Track DURING implementation, NOT just at the end**:
-- **Why** a specific approach was chosen over alternatives
-- **What** trade-offs were considered and accepted
-- **How** the implementation satisfies requirements
-- **Where** patterns were established or deviated from
-- **When** assumptions were made and validated
-
-**Memory types**:
-- **in-memoria**: Semantic understanding, architectural context, complex logic flows
-- **server-memory**: Explicit decisions, configuration choices, lessons learned, gotchas
-
-**Examples of what to track**:
 ```
-GOOD ✓
-"Chose JWT middleware over session-based auth because:
- 1. Stateless design aligns with multi-region Phase 7+ goals
- 2. Auth0 provides built-in JWT support
- 3. Avoids Redis dependency for auth state
- Trade-off: Slightly larger request size, but acceptable for our use case"
-
-"Implemented subscription limits check in middleware instead of service layer:
- 1. Centralized enforcement point
- 2. Fails fast before hitting business logic
- 3. Easier to audit and test
- Considered: Service layer check, but would require duplicating across all endpoints"
-
-BAD ✗
-"Added JWT middleware"
-"Implemented subscription check"
+1. Complete implementation (following TDD)
+2. Run `code-simplifier` subagent to clean up code
+3. Run ALL tests to validate:
+   cd backend && go test ./... -v
+   cd apps/web && bun run test && bun run lint
+   cd apps/web && bun run test:e2e -- --reporter=line
+4. Run `/commit-push-pr` to commit, push, and create PR with "Closes #N"
 ```
 
-**Frequency**: After EVERY significant decision, not in batches at the end
+**DO NOT create a PR until:**
+- [ ] TDD was followed (tests written first)
+- [ ] `code-simplifier` has run
+- [ ] ALL tests pass (backend + frontend + e2e + lint)
+- [ ] PR body includes `Closes #N` to auto-close the issue
 
-## Branching Strategy
+### Task Tracking (MANDATORY)
+**When formulating a plan, ALWAYS use TaskCreate to track TODOs:**
+- Create explicit tasks for each step in the plan
+- Update status: `pending` → `in_progress` (when starting) → `completed` (when done)
+- Enables progress visibility and ensures nothing is missed
 
-**Branches:**
-- `staging` - Integration branch, all feature PRs merge here first → deploys to Mac Mini staging
-- `main` - Production branch, only updated via staging→main PRs → deploys to Fly.io production
-- `feature/<issue#>-<desc>` - Feature branches, created from staging, merge to staging
+### Dashboard Layout Version Sync (CRITICAL)
+These THREE locations MUST match version numbers:
+| Source of Truth | `config/default_dashboard_layout.yaml` → `layout_version` |
+| Frontend fallback | `apps/web/src/features/dashboard/widgets/registry.ts` → `DEFAULT_LAYOUT.version` |
+| Backend fallback | `backend/internal/domain/dashboard_preferences.go` → `DefaultDashboardLayout().Version` |
 
-**Workflow:**
-1. Create feature branch from `staging`: `git checkout staging && git pull && git checkout -b feature/123-description`
-2. Develop and commit changes with issue ID: `git commit -m "#123: Your commit message"`
-3. Push and create PR to `staging`: All feature PRs target staging by default
-4. After merge to staging, staging auto-deploys to Mac Mini for QA/testing
-5. Once validated in staging, create PR from `staging` → `main`
-6. After merge to main, main deploys to Fly.io production
-7. **Auto-sync:** After production deployment completes, GitHub Action automatically syncs staging with main
+Out-of-sync causes infinite dashboard reset loops. Increment when adding/removing/reordering default widgets.
 
-**Auto-Sync Behavior:**
-- After `staging→main` merge and successful production deployment, the "Sync Staging with Main" workflow runs automatically
-- Workflow merges `main→staging` to eliminate merge commit divergence
-- Both `staging` and `main` remain in sync, preventing perpetual "out of sync" status
-- If auto-sync fails, manual sync instructions provided in workflow summary
-- **Manual sync** (if needed):
-  ```bash
-  git checkout staging
-  git pull origin staging
-  git merge origin/main --no-edit
-  git push origin staging
-  ```
+## Tooling
 
-**Branch Protection:**
-- For private repos: Manual reviews and approvals
-- For public repos: Configure protection rules for main and staging
+### Commands (`/command`)
+| Command | Trigger | What it does |
+|---------|---------|-------------|
+| `/smart-plan` | Starting a GitHub issue | Brainstorm → explore code → reason → plan |
+| `/plan-next-task` | Deciding what to work on | Fetch open issues, prioritize P0-P3, recommend next |
+| `/new-endpoint` | Adding REST API endpoint | Scaffold handler+service+repo+tests+Orval types |
+| `/new-component` | Adding frontend feature/page | Scaffold types+hook+page+card+tests+route |
+| `/db-migrate` | Schema change needed | Create idempotent .up/.down pair, Squawk lint, test |
+| `/commit-push-pr` | Done implementing, tests pass | Stage, commit `#N:`, push, PR with `Closes #N` |
+| `/check-integrations` | Verifying external services | Health-check Clerk/Plaid/Paddle/DB |
 
-## Dev Workflow Checklist
+### Skills (auto-invoked as context)
+| Skill | When referenced |
+|-------|----------------|
+| `git-workflow` | Branch naming, commit format, PR workflow, staging→main sync |
+| `go-patterns` | Huma operations, service/repo layers, error mapping, testify mocks |
+| `typescript-patterns` | Feature modules, custom hooks, CVA variants, `vi.hoisted` test setup |
+| `db-migration-guide` | Idempotency patterns, rollback, migration test suites, dirty state |
+| `integration-guides` | Clerk JWT, Plaid webhooks/encryption, Paddle subscription events |
+| `queueing` | River job args/workers, queue config, retry/uniqueness, dead letters |
+| `plaid-sync` | Transaction sync flow, webhook types, cursor pagination, sync frequency |
+| `plaid-staging-testing` | Staging Plaid validation, MockPlaidService, connectivity/webhook tests |
+| `observability` | Logging (slog), Sentry, OTEL, Prometheus metrics, error handling, frontend error boundaries |
+| `system-health-updater` | Adding new queues/services to `/admin/health` dashboard |
+| `qa-scenario-creator` | Creating YAML QA data scenarios for test populator |
+| `qa-login` | Authenticate into QA/Staging via bypass endpoint + agent-browser; optionally dogfood |
+| `run-e2e-tests` | Running Playwright E2E locally, SSL certs, Clerk test mode |
 
-1. **MCPs FIRST**: Serena search → in-memoria context → Sequential plan → **Server Memory: Log planning decisions**
-2. GitHub issue FIRST
-3. Branch `feature/<issue#>-<desc>`
-4. **TDD**: Red-Green-Refactor (mandatory) → **Server Memory: Track decisions at EACH step (RED/GREEN/REFACTOR)**
-5. OpenAPI spec for new APIs → **Server Memory: Document API design choices**
-6. Check subscription limits (free vs premium) → **Server Memory: Note tier-specific logic added**
-7. GDPR implications check → **Server Memory: Log GDPR considerations and compliance approach**
-8. Migrations for schema changes → **Server Memory: Document migration reasoning and rollback strategy**
-9. Auth0 integration verification → **Server Memory: Note auth flow decisions**
-10. `*InRegion` abstractions, `primary_region`='us-east-1' → **Server Memory: Track region-related decisions**
-11. **RUN ALL TESTS** (MANDATORY before PR):
-    - Backend: `cd backend && go test ./... -v`
-    - Frontend: `npm test -- --run && npm run lint`
-    - E2E: `npm run test:e2e -- --reporter=line 2>&1`
-    - **NO PR until ALL pass**
-12. PR with "Closes #N"
-13. **Server Memory: FINAL update** - consolidate all decisions, learnings, patterns, gotchas for future reference
+### Subagents (Task tool)
+| Agent | Model | When to use |
+|-------|-------|------------|
+| **`code-simplifier`** | haiku | **MANDATORY** after every implementation, before tests |
+| `verify-app` | sonnet | Full test suite (backend+frontend+lint+e2e) |
+| `api-designer` | haiku | Review Go endpoint patterns (read-only) |
+| `db-migrator` | sonnet | Create/lint/test migrations |
+| `frontend-reviewer` | haiku | Review React/TS conventions (read-only) |
+| `integration-tester` | sonnet | Test Clerk/Plaid/Paddle flows across environments |
 
-## Critical Implementation Notes
+### Generic Agents (always available)
+| Agent | When to use |
+|-------|------------|
+| `Explore` | Codebase exploration, find patterns, trace code paths |
+| `Plan` | Design implementation approaches before coding |
+| `code-simplifier` | Post-implementation cleanup (REQUIRED) |
+| `code-reviewer` | Review against plans and coding standards |
 
-**ALWAYS**:
-- **MCPs FIRST**: Serena→in-memoria→Sequential before any code work
-- **TRACK CONTINUOUSLY**: in-memoria + server-memory for ALL decisions and reasoning AS YOU IMPLEMENT
-- TDD Red-Green-Refactor (no exceptions for business logic)
-- **ALL TESTS PASS BEFORE PR** (backend+frontend+e2e+lint) - NO EXCEPTIONS
-- Issue → Branch → PR for all logical work
-- Serena for ALL code search (NEVER Grep first)
-- in-memoria for "why/how" questions AND to document architectural decisions during implementation
-- Sequential Thinking for complex decisions
-- Server Memory to persist learnings, decisions, trade-offs, patterns (CONTINUOUSLY, not just at end)
-- No money movement (suggestions only, no MTL)
-- GDPR compliance (all users get rights)
-- Tier limits in `config/subscription_tiers.yaml` (free: 1 rule, 3 accounts, 1x/day, ads)
-- Single region us-east-1 (multi-region Phase 7+)
-- Auth0 for all auth (never custom auth)
-- Build Docker images (don't build on Fly)
-- OpenAPI as source of truth
-- >80% test coverage via TDD
-- Audit all data access/modifications
-- Graceful degradation for external services
-- `*InRegion` method signatures (future-ready)
-- `primary_region` = 'us-east-1' (prepared for Phase 7+)
+### Superpowers Skills
+| Skill | Trigger |
+|-------|---------|
+| `superpowers:brainstorming` | FIRST — before any creative/feature work |
+| `superpowers:writing-plans` | Multi-step implementation planning |
+| `superpowers:executing-plans` | Implementing written plans with checkpoints |
+| `superpowers:test-driven-development` | TDD workflow for any feature/bugfix |
+| `superpowers:systematic-debugging` | Any bug, test failure, unexpected behavior |
+| `superpowers:verification-before-completion` | Before claiming work complete |
+| `superpowers:dispatching-parallel-agents` | 2+ independent concurrent tasks |
+| `superpowers:requesting-code-review` | After completing major features |
+| `superpowers:finishing-a-development-branch` | Deciding merge/PR/cleanup |
 
-## Setup & Commands
-
-**Initial setup**:
-```bash
-git clone <repo> && cd boostedbudget
-cd backend && go mod download
-cd ../frontend && npm install
-cp .env.example .env  # Edit with Auth0/Plaid/Stripe creds
-docker-compose up
+### Workflow: Feature Implementation
+```
+1. /plan-next-task                         → pick issue
+2. superpowers:brainstorming               → explore intent/requirements
+3. /smart-plan                             → deep planning (code search + reasoning)
+4. superpowers:test-driven-development     → TDD: red→green→refactor
+5. /new-endpoint or /new-component         → scaffold if needed
+6. /db-migrate                             → if schema changes needed
+7. code-simplifier agent                   → clean up (MANDATORY)
+8. superpowers:verification-before-completion → verify all tests pass
+9. superpowers:requesting-code-review      → review against plan
+10. /commit-push-pr                        → commit, push, PR
 ```
 
-**Dev**:
-```bash
-docker-compose up           # Local env
-make test                   # All tests
-make generate               # OpenAPI codegen
-make migrate-up/down        # Migrations
+### Workflow: Code Review
+```
+1. api-designer agent       → review Go patterns
+2. frontend-reviewer agent  → review React/TS patterns
+3. code-reviewer agent      → review against plan/standards
+4. verify-app agent         → validate tests pass
 ```
 
-**Deploy (iad region)**:
-```bash
-./scripts/build-and-push.sh [--push]
-./scripts/deploy-to-fly.sh staging|production [version]
-fly status|logs|metrics
-fly postgres connect -a boostedbudget-db
+### Workflow: Integration Work
+```
+1. /check-integrations      → verify service health
+2. integration-tester agent → test auth/sync/payment flows
+3. plaid-staging-testing    → Plaid-specific validation
 ```
 
-**Tests**:
-```bash
-# Backend
-go test ./...
-go test -tags=integration ./...
-go test -coverprofile=coverage.out ./...
-
-# Frontend
-npm test
-npm run test:e2e
-npm run test:components
-
-# API
-npx prism mock api/openapi.yaml
-npm run test:api
+### Workflow: Debugging
 ```
-
-## Common Tasks
-
-**New API endpoint**:
-1. Update `api/openapi.yaml`
-2. `make generate-backend && make generate-frontend`
-3. Implement handler (`backend/internal/handlers/`)
-4. Service logic (`backend/internal/services/`)
-5. Tests (TDD!)
-
-**New migration**:
-```bash
-# Manual approach (create SQL files)
-cd backend/migrations
-touch 000006_<name>.up.sql 000006_<name>.down.sql
-# Write SQL, then:
-cd .. && atlas migrate hash
-
-# ALWAYS lint before committing:
-atlas migrate lint --dir file://migrations --dev-url "docker://postgres/15/test" --latest 1
-
-# Test locally:
-atlas migrate apply --dir file://migrations --url "$DATABASE_URL"
-
-# See backend/docs/atlas-migration-guide.md for details
+1. superpowers:systematic-debugging        → investigate root cause
+2. Explore agent                           → trace execution paths
+3. superpowers:test-driven-development     → write regression test
+4. code-simplifier agent                   → clean up fix
+5. superpowers:verification-before-completion → confirm fix
 ```
-
-**New rule type**:
-1. Schema in `backend/internal/rules/types.go`
-2. Executor in `backend/internal/rules/executors/`
-3. Validator in `backend/internal/rules/validators/`
-4. Frontend template in `frontend/src/features/rules/templates/`
-5. Test free tier limits (max 3)
-
-## GDPR Compliance
-- [ ] `primary_region` field (default 'us-east-1')
-- [ ] Privacy settings endpoint
-- [ ] Data export
-- [ ] 30-day account deletion grace
-- [ ] Audit logs all access
-- [ ] Cookie consent banner
-- [ ] Privacy policy (USA storage)
-- [ ] EU user GDPR rights
-
-## Security Patterns
-
-**Auth0**: JWT validation middleware, Auth0Provider wraps app, metadata includes tier, GDPR consent tracking, no geo-routing (Phase 7+)
-
-**Sensitive data**:
-```go
-encryptedToken := s.encryption.Encrypt(plainTextToken)
-userID := auth.GetUserID(ctx)
-err := s.userRepo.CreateInRegion(ctx, user, "us-east-1") // Future-ready
-s.auditLog.Log(ctx, action, resourceID)
-```
-
-**Free tier check**:
-```typescript
-const canCreateRule = subscription.tier === 'free' ? currentRules.length < 2 : true;
-if (!canCreateRule) return <UpgradePrompt />;
-```
-
-**Ad display**:
-```typescript
-if (subscription?.tier === 'free' && hasAdConsent) return <AdBanner slot={adSlotId} />;
-```
-
-## Subscription Tiers
-
-**Single Source of Truth**: `config/subscription_tiers.yaml` (backend)
-
-**Tiers**: Free (1 rule, 3 accounts) | Premium Lite (5 rules, 15 accounts) | Premium (15 rules, 30 accounts) | Premium+ (unlimited)
-
-For detailed tier structure, limits, pricing, and features, see:
-- **Config file**: `config/subscription_tiers.yaml` (edit here to change tiers)
-- **Documentation**: `config/README.md` (explains centralized config approach)
-
-**Architecture**:
-- **Backend**: Loads YAML at runtime, serves via `GET /api/v1/subscription/tiers` (public endpoint)
-- **Frontend**: Fetches from API via `useSubscriptionTiers()` hook with 24hr caching
-- **Database overrides**: Per-user custom limits (`subscription_overrides` table)
-- **Service**: `internal/services/subscription_service.go`
-- **Domain models**: `internal/domain/subscription.go`
-
-**Frontend Usage**:
-```typescript
-import { useSubscriptionTiers } from '@/features/subscription/hooks/useSubscriptionTiers'
-
-function MyComponent() {
-  const { tiers, loading, error, refetch } = useSubscriptionTiers()
-
-  if (loading) return <LoadingSpinner />
-  if (error) return <ErrorMessage onRetry={refetch} />
-
-  const tierInfo = tiers.tiers['premium']
-  return <TierCard data={tierInfo} />
-}
-```
-
-**Backend Usage**:
-```go
-// Check tier limits
-result, err := subscriptionService.CheckLimit(ctx, user, domain.ResourceRules, currentRuleCount)
-if !result.Allowed {
-    return errors.New("rule limit reached, upgrade required")
-}
-```
-
-**Editing tiers**:
-1. Edit `config/subscription_tiers.yaml`
-2. Backend auto-reloads on next request (singleton cache)
-3. Frontend refreshes after 24hr cache expiry or manual refetch
 
 ## External Services
 
-**Plaid**: Sandbox mode, Link token, webhooks, encrypted access tokens
-**Stripe**: Test mode, webhook handler, 14-day trial, graceful downgrades
-**Auth0**: Separate tenants (dev/staging/prod), custom claims, GDPR consent rules, M2M backend
+- **Clerk**: JWT validation middleware, tier in metadata, GDPR consent
+- **Plaid**: Sandbox mode, Link tokens, encrypted access tokens, webhooks
+- **Paddle**: Payment webhooks, subscription management (replaces Stripe)
+- **PostHog**: Product analytics (Cloud US, project 357017). Opt-out by default (GDPR). Frontend: `posthog-js` via `useTrackEvent()` + `usePostHogIdentify()`. Backend: `posthog-go` via `phclient.Analytics` interface, nil-safe no-op when key is empty. Session replay with `data-ph-mask` for PII fields. Events: `apps/web/src/shared/analytics/events.ts` (frontend) + `backend/internal/integration/posthog/events.go` (backend).
 
-## Multi-Region (Phase 7+)
+## Dependabot
 
-**Current**: Single region us-east-1, global access, all GDPR rights, future-ready code
-**Expand when**: >10K users, >20% intl traffic, data residency requests, latency complaints
-**Quick wins**: Fly edge proxy (1-2 days), read replicas (1-2 weeks, $50/mo)
-**Full multi-region**: See complete plan Phase 7+ (6-10 weeks, $100-200/mo)
+- **Frontend (bun)**: Monorepo mode monitors ALL workspaces (apps/*, packages/*), updates root `bun.lock` automatically
+- **Backend (gomod)**: Monitors `/backend/go.mod` for Go dependencies
+- **Docker**: Monitors Dockerfiles in `/backend`, `/apps/web`, `/infra`
+- **GitHub Actions**: Monitors `.github/workflows/*.yml`
+- Runs weekly Monday 9:00 AM EST
+- Configuration: `.github/dependabot.yml`
 
-## Performance
+**Important:** Bun workspaces use a SINGLE root `bun.lock` file. Do NOT commit lockfiles in workspace subdirectories (`apps/web/bun.lock`, `packages/*/bun.lock`). Dependabot must run from the root directory to correctly update the shared lockfile.
 
-**Caching**: Redis 5min TTL for frequent data
-**DB**: Index `user_id`, `created_at`, pagination, read replicas
-**Frontend**: Lazy load, virtual scrolling, React.memo, RTK Query cache
+## System Health Dashboard Maintenance
 
-## Troubleshooting
+**Location**: `/admin/health` (admin-only)
 
-**Auth0**: `jwt decode $TOKEN`, `fly logs | grep auth0`
-**DB**: `fly ssh console`, `echo $DATABASE_URL`, `fly postgres connect`
-**Deploy**: `fly logs`, `fly releases`, `fly deploy --image <prev>`
+**Endpoint**: `/api/v1/admin/system/health` aggregates:
+- Database connection pool stats (pgxpool)
+- River job queue metrics (pending/running/failed per queue)
+- Plaid sync status (active syncs, failures, avg duration)
+- Dead letter queue (failed job count, oldest job age)
+- Service health checks (Database, Clerk, Plaid)
 
-## Document Sync
+**IMPORTANT**: When adding new systems, services, or job queues:
+1. **Use `/system-health-updater` skill** for guided updates
+2. Update `SystemHealthService.GetSystemHealth()` to include new metrics
+3. Update `SystemHealthRepository` with new queries if needed
+4. Update frontend `HealthDashboardPage` to display new metrics
+5. Add tests for new metrics (domain, service, repository, component)
+6. Run `make generate-openapi` and `make generate-api-client`
 
-Keep synchronized:
-- `boosted-budget-complete-plan.md`: Features, business logic (single-region MVP, Phase 7+ multi-region)
-- `boosted-budget-fly-deployment.md`: Deploy, infrastructure (single region iad)
-- `CLAUDE.md` (this): Patterns, workflows, rules (current single-region, future multi-region notes)
+**Example**: Adding new `email` queue - Add to queues list in service, frontend auto-renders from API response.
 
-**Current state**: Single region (us-east-1/iad), future-ready abstractions for Phase 7+ multi-region
+## Key Files
 
----
+- `boosted-budget-complete-plan.md`: Full roadmap (Phases 0-7+)
+- `boosted-budget-fly-deployment.md`: Fly.io deployment
+- `config/subscription_tiers.yaml`: Tier limits (single source of truth)
+- `api/openapi.yaml`: API spec (generated from Huma)
 
-*Last updated: **MCPs MANDATORY** (Serena→in-memoria→Sequential FIRST always), **TRACK ALL DECISIONS CONTINUOUSLY** (in-memoria + server-memory AS YOU IMPLEMENT), Issue ID in ALL commits/PRs (#N:), TDD Red-Green-Refactor non-negotiable*
+## GDPR Compliance
+
+All users (not just EU) get: `primary_region` field, data export, 30-day deletion grace, audit logs, privacy settings endpoint.
+
+## Design Context
+
+### Users
+BoostedBudget serves a broad spectrum: from financially anxious individuals seeking calm reassurance, to budget-conscious families managing shared finances, to finance enthusiasts who want rich data, to busy professionals wanting quick clarity. The common thread is that users come to the app during moments of financial decision-making — they need to feel **in control, not overwhelmed**. The interface must adapt gracefully from "quick glance" to "deep analysis" without mode-switching friction.
+
+### Brand Personality
+**Confident, Modern, Smart** — BoostedBudget is a premium fintech tool that respects its users' intelligence. It communicates with clarity rather than decoration. It feels forward-thinking and polished without being cold or unapproachable. Think "financial copilot" — competent, calm under pressure, always ready with the right information.
+
+### Aesthetic Direction
+- **Visual tone**: Clean, spacious, and data-forward. Generous whitespace with purposeful density where data demands it. Premium but not pretentious.
+- **References**: Stripe (typography hierarchy, whitespace, subtle polish), Notion (content-forward, clear information architecture), Copilot Money / Monarch (warm data visualization, approachable finance UI)
+- **Anti-references**: No dense enterprise dashboards (Bloomberg), no brutalist minimalism (Craigslist), no heavy skeuomorphic decoration. Gamified elements (confetti, streaks, badges) are acceptable only when truly earned.
+- **Theme**: Both light and dark modes are first-class citizens — always design and validate both. Neither is secondary.
+- **Color direction**: Primary blue (`blue-600`) conveys trust and professionalism. Emerald accent for positive states (growth, savings, success). The neutral base keeps the UI calm and lets data and actions stand out. Open to evolving the palette if a stronger brand identity emerges.
+- **Typography**: Inter as the primary typeface — clean, legible, modern. Consider adding a proper font import (currently relies on system availability).
+- **Radius & shape**: Rounded but not bubbly — `rounded-lg` to `rounded-2xl` for cards, `rounded-full` for avatars and badges. Avoid sharp corners (too cold) and overly rounded (too playful).
+- **Motion**: Subtle, purposeful transitions that communicate state changes. No gratuitous animation. Always respect `prefers-reduced-motion`.
+
+### Accessibility
+- **Target**: WCAG 2.1 AA compliance
+- **Color contrast**: Minimum 4.5:1 for normal text, 3:1 for large text and UI components
+- **Keyboard navigation**: All interactive elements must be keyboard accessible with visible focus indicators
+- **Screen readers**: Semantic HTML, proper ARIA labels, meaningful alt text
+- **Motion**: All animations respect `prefers-reduced-motion` (already implemented)
+- **Color independence**: Information never conveyed by color alone (colorblind-safe chart palette already in place)
+
+### Design Principles
+1. **Clarity over cleverness** — Every element earns its place. If it doesn't help the user understand their finances or take action, remove it.
+2. **Calm confidence** — Financial data can be stressful. Use whitespace, clear hierarchy, and steady visual rhythm to create a sense of control, even when showing bad news.
+3. **Progressive disclosure** — Show the essential at a glance, reveal detail on demand. The dashboard should be scannable in 3 seconds, deep-diveable in 30.
+4. **Consistent, not uniform** — Use the design system tokens and patterns consistently, but allow feature-specific expression where it serves the user (e.g., richer visualization in charts, simpler forms for quick entry).
+5. **Accessible by default** — WCAG AA is the floor, not the ceiling. Accessibility decisions are design decisions, not afterthoughts.

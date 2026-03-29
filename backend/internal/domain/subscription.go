@@ -8,11 +8,37 @@ import (
 type TierName string
 
 const (
-	TierFree         TierName = "free"
-	TierPremiumLite  TierName = "premium_lite"
-	TierPremium      TierName = "premium"
-	TierPremiumPlus  TierName = "premium_plus"
+	TierPremium    TierName = "premium"
+	TierHousehold2 TierName = "household_2"
+	TierHousehold3 TierName = "household_3"
+	TierHousehold4 TierName = "household_4"
+	TierHousehold5 TierName = "household_5"
 )
+
+// SubscriptionStatus represents the status of a user's subscription
+type SubscriptionStatus string
+
+const (
+	// SubscriptionStatusActive indicates an active paid subscription
+	SubscriptionStatusActive SubscriptionStatus = "active"
+	// SubscriptionStatusInactive indicates a frozen account (expired subscription)
+	SubscriptionStatusInactive SubscriptionStatus = "inactive"
+	// SubscriptionStatusTrial indicates an active trial period
+	SubscriptionStatusTrial SubscriptionStatus = "trial"
+	// SubscriptionStatusTrialing indicates a paid subscription during trial period (Paddle status)
+	SubscriptionStatusTrialing SubscriptionStatus = "trialing"
+	// SubscriptionStatusCancelled indicates a cancelled subscription
+	SubscriptionStatusCancelled SubscriptionStatus = "cancelled"
+	// SubscriptionStatusPastDue indicates payment is overdue
+	SubscriptionStatusPastDue SubscriptionStatus = "past_due"
+	// SubscriptionStatusPaused indicates a temporarily paused subscription
+	SubscriptionStatusPaused SubscriptionStatus = "paused"
+)
+
+// IsActiveSubscription returns true if the status allows access to the app
+func (s SubscriptionStatus) IsActiveSubscription() bool {
+	return s == SubscriptionStatusActive || s == SubscriptionStatusTrial || s == SubscriptionStatusTrialing
+}
 
 // Unlimited represents unlimited resources (stored as -1 in config)
 const Unlimited = -1
@@ -30,12 +56,9 @@ type SubscriptionTier struct {
 
 // SubscriptionLimits defines resource limits for a tier
 type SubscriptionLimits struct {
-	Accounts                      int `yaml:"accounts" json:"accounts"`
-	Rules                         int `yaml:"rules" json:"rules"`
-	ExecutionsPerDay              int `yaml:"executions_per_day" json:"executions_per_day"`
-	MinExecutionIntervalMinutes   int `yaml:"min_execution_interval_minutes" json:"min_execution_interval_minutes"`
-	APICallsPerMonth              int `yaml:"api_calls_per_month" json:"api_calls_per_month"`
-	DataExportRequestsPerMonth    int `yaml:"data_export_requests_per_month" json:"data_export_requests_per_month"`
+	Accounts               int `yaml:"accounts" json:"accounts"`
+	TransactionHistoryDays int `yaml:"transaction_history_days" json:"transaction_history_days"`
+	ExecutionsPerDay       int `yaml:"executions_per_day" json:"executions_per_day"`
 }
 
 // SubscriptionFeatures defines feature flags for a tier
@@ -45,15 +68,18 @@ type SubscriptionFeatures struct {
 	APIAccess         bool `yaml:"api_access" json:"api_access"`
 	PrioritySupport   bool `yaml:"priority_support" json:"priority_support"`
 	CustomCategories  bool `yaml:"custom_categories" json:"custom_categories"`
+	CustomTags        bool `yaml:"custom_tags" json:"custom_tags"`              // Issue #345: Tag editing enabled
 	AdvancedReports   bool `yaml:"advanced_reports" json:"advanced_reports"`
 }
 
 // SubscriptionPricing defines pricing information for a tier
 type SubscriptionPricing struct {
-	PriceMonthly          float64 `yaml:"price_monthly" json:"price_monthly"`
-	PriceYearly           float64 `yaml:"price_yearly" json:"price_yearly"`
-	StripePriceIDMonthly  *string `yaml:"stripe_price_id_monthly" json:"stripe_price_id_monthly,omitempty"`
-	StripePriceIDYearly   *string `yaml:"stripe_price_id_yearly" json:"stripe_price_id_yearly,omitempty"`
+	PriceMonthly         float64 `yaml:"price_monthly" json:"price_monthly"`
+	PriceYearly          float64 `yaml:"price_yearly" json:"price_yearly"`
+	MobilePriceYearly    float64 `yaml:"mobile_price_yearly" json:"mobile_price_yearly"`
+	UsersIncluded        int     `yaml:"users_included" json:"users_included"`
+	PaddlePriceIDMonthly *string `yaml:"paddle_price_id_monthly" json:"paddle_price_id_monthly,omitempty"`
+	PaddlePriceIDYearly  *string `yaml:"paddle_price_id_yearly" json:"paddle_price_id_yearly,omitempty"`
 }
 
 // IsUnlimited checks if a limit value represents unlimited resources
@@ -91,11 +117,9 @@ type EffectiveSubscription struct {
 type ResourceType string
 
 const (
-	ResourceAccounts              ResourceType = "accounts"
-	ResourceRules                 ResourceType = "rules"
-	ResourceExecutionsPerDay      ResourceType = "executions_per_day"
-	ResourceAPICallsPerMonth      ResourceType = "api_calls_per_month"
-	ResourceDataExportPerMonth    ResourceType = "data_export_requests_per_month"
+	ResourceAccounts               ResourceType = "accounts"
+	ResourceTransactionHistoryDays ResourceType = "transaction_history_days"
+	ResourceExecutionsPerDay       ResourceType = "executions_per_day"
 )
 
 // GetLimit returns the limit value for a specific resource type
@@ -103,14 +127,10 @@ func (l *SubscriptionLimits) GetLimit(resourceType ResourceType) int {
 	switch resourceType {
 	case ResourceAccounts:
 		return l.Accounts
-	case ResourceRules:
-		return l.Rules
+	case ResourceTransactionHistoryDays:
+		return l.TransactionHistoryDays
 	case ResourceExecutionsPerDay:
 		return l.ExecutionsPerDay
-	case ResourceAPICallsPerMonth:
-		return l.APICallsPerMonth
-	case ResourceDataExportPerMonth:
-		return l.DataExportRequestsPerMonth
 	default:
 		return 0
 	}
@@ -121,14 +141,10 @@ func (l *SubscriptionLimits) SetLimit(resourceType ResourceType, value int) {
 	switch resourceType {
 	case ResourceAccounts:
 		l.Accounts = value
-	case ResourceRules:
-		l.Rules = value
+	case ResourceTransactionHistoryDays:
+		l.TransactionHistoryDays = value
 	case ResourceExecutionsPerDay:
 		l.ExecutionsPerDay = value
-	case ResourceAPICallsPerMonth:
-		l.APICallsPerMonth = value
-	case ResourceDataExportPerMonth:
-		l.DataExportRequestsPerMonth = value
 	}
 }
 
@@ -141,7 +157,7 @@ type AddOn struct {
 	ResourceType     string     `json:"resource_type" db:"resource_type"` // Which resource this affects
 	QuantityModifier int        `json:"quantity_modifier" db:"quantity_modifier"` // How much to add/modify
 	PriceMonthly     float64    `json:"price_monthly" db:"price_monthly"`
-	StripePriceID    *string    `json:"stripe_price_id,omitempty" db:"stripe_price_id"`
+	PaddlePriceID    *string    `json:"paddle_price_id,omitempty" db:"paddle_price_id"`
 	IsActive         bool       `json:"is_active" db:"is_active"`
 	CreatedAt        time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt        time.Time  `json:"updated_at" db:"updated_at"`

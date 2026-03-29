@@ -5,7 +5,7 @@
 #
 # Examples:
 #   ./scripts/smoke-test.sh production
-#   ./scripts/smoke-test.sh staging
+#   ./scripts/smoke-test.sh qa
 
 set -euo pipefail
 
@@ -27,10 +27,15 @@ if [ "$ENVIRONMENT" == "production" ]; then
   WEB_URL="https://boostedbudget.com"
 elif [ "$ENVIRONMENT" == "staging" ]; then
   API_URL="https://staging-api.boostedbudget.com"
-  WEB_URL="https://staging.boostedbudget.com"
+  # Skip frontend checks - Cloudflare Zero Trust blocks automated requests
+  WEB_URL=""
+elif [ "$ENVIRONMENT" == "qa" ]; then
+  # QA runs on Mac Mini - use localhost or Tailscale URL
+  API_URL="${QA_API_URL:-http://localhost:8080}"
+  WEB_URL="${QA_WEB_URL:-http://localhost:3000}"
 else
   echo -e "${RED}❌ Unknown environment: $ENVIRONMENT${NC}"
-  echo "Usage: $0 [production|staging]"
+  echo "Usage: $0 [production|staging|qa]"
   exit 1
 fi
 
@@ -134,35 +139,43 @@ else
 fi
 
 # =============================================================================
-# Frontend Checks
+# Frontend Checks (skip if WEB_URL is empty)
 # =============================================================================
-echo ""
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${BLUE}  Frontend Checks${NC}"
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+if [ -n "$WEB_URL" ]; then
+  echo ""
+  echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${BLUE}  Frontend Checks${NC}"
+  echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
-# Test 4: Frontend Homepage
-if check_endpoint "$WEB_URL" "200"; then
-  print_test "pass" "Frontend homepage is accessible"
-else
-  print_test "fail" "Frontend homepage not responding"
-  exit 1
-fi
+  # Test 4: Frontend Homepage
+  if check_endpoint "$WEB_URL" "200"; then
+    print_test "pass" "Frontend homepage is accessible"
+  else
+    print_test "fail" "Frontend homepage not responding"
+    exit 1
+  fi
 
-# Test 5: Frontend serves HTML
-response=$(curl -s "$WEB_URL" --max-time 10 || echo "")
-if echo "$response" | grep -iFq "<!doctype html"; then
-  print_test "pass" "Frontend serves valid HTML"
-else
-  print_test "fail" "Frontend does not serve valid HTML"
-  exit 1
-fi
+  # Test 5: Frontend serves HTML
+  response=$(curl -s "$WEB_URL" --max-time 10 || echo "")
+  if echo "$response" | grep -iFq "<!doctype html"; then
+    print_test "pass" "Frontend serves valid HTML"
+  else
+    print_test "fail" "Frontend does not serve valid HTML"
+    exit 1
+  fi
 
-# Test 6: Check for static assets (optional)
-if check_endpoint "$WEB_URL/assets" "200" 3 2 || check_endpoint "$WEB_URL/static" "200" 3 2; then
-  print_test "pass" "Frontend static assets are accessible"
+  # Test 6: Check for static assets (optional)
+  if check_endpoint "$WEB_URL/assets" "200" 3 2 || check_endpoint "$WEB_URL/static" "200" 3 2; then
+    print_test "pass" "Frontend static assets are accessible"
+  else
+    print_test "warn" "Frontend static assets check inconclusive (non-critical)"
+  fi
 else
-  print_test "warn" "Frontend static assets check inconclusive (non-critical)"
+  echo ""
+  echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${YELLOW}  Frontend Checks (SKIPPED - not configured for $ENVIRONMENT)${NC}"
+  echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  print_test "warn" "Frontend URL not configured - skipping frontend checks"
 fi
 
 # =============================================================================
@@ -184,13 +197,17 @@ if [ "$ENVIRONMENT" == "production" ]; then
   fi
 fi
 
-# Test 8: CORS Headers (check if API allows frontend origin)
-cors_response=$(curl -s -I -H "Origin: $WEB_URL" "$API_URL/health" --max-time 10 | grep -i "access-control" || echo "")
+# Test 8: CORS Headers (check if API allows frontend origin) - skip if no frontend
+if [ -n "$WEB_URL" ]; then
+  cors_response=$(curl -s -I -H "Origin: $WEB_URL" "$API_URL/health" --max-time 10 | grep -i "access-control" || echo "")
 
-if [ -n "$cors_response" ]; then
-  print_test "pass" "API CORS headers are present"
+  if [ -n "$cors_response" ]; then
+    print_test "pass" "API CORS headers are present"
+  else
+    print_test "warn" "API CORS headers not detected (may not be needed)"
+  fi
 else
-  print_test "warn" "API CORS headers not detected (may not be needed)"
+  print_test "warn" "CORS check skipped - no frontend URL configured"
 fi
 
 # =============================================================================
@@ -214,17 +231,22 @@ else
   exit 1
 fi
 
-# Test 10: Frontend Response Time
-web_time=$(curl -s -o /dev/null -w "%{time_total}" "$WEB_URL" --max-time 10 || echo "10")
-web_time_ms=$(awk "BEGIN {printf \"%.0f\", $web_time * 1000}")
+# Test 10: Frontend Response Time (skip if no frontend)
+if [ -n "$WEB_URL" ]; then
+  web_time=$(curl -s -o /dev/null -w "%{time_total}" "$WEB_URL" --max-time 10 || echo "10")
+  web_time_ms=$(awk "BEGIN {printf \"%.0f\", $web_time * 1000}")
 
-if awk "BEGIN {exit !($web_time < 3.0)}"; then
-  print_test "pass" "Frontend response time: ${web_time_ms}ms (< 3000ms)"
-elif awk "BEGIN {exit !($web_time < 5.0)}"; then
-  print_test "warn" "Frontend response time: ${web_time_ms}ms (acceptable but slow)"
+  if awk "BEGIN {exit !($web_time < 3.0)}"; then
+    print_test "pass" "Frontend response time: ${web_time_ms}ms (< 3000ms)"
+  elif awk "BEGIN {exit !($web_time < 5.0)}"; then
+    print_test "warn" "Frontend response time: ${web_time_ms}ms (acceptable but slow)"
+  else
+    print_test "fail" "Frontend response time: ${web_time_ms}ms (too slow)"
+    exit 1
+  fi
 else
-  print_test "fail" "Frontend response time: ${web_time_ms}ms (too slow)"
-  exit 1
+  web_time_ms="N/A"
+  print_test "warn" "Frontend response time check skipped - no frontend URL configured"
 fi
 
 # =============================================================================
@@ -237,7 +259,11 @@ echo -e "${GREEN}╚════════════════════
 echo ""
 echo -e "${BLUE}Environment:${NC} $ENVIRONMENT"
 echo -e "${BLUE}API:${NC} $API_URL (${api_time_ms}ms)"
-echo -e "${BLUE}Frontend:${NC} $WEB_URL (${web_time_ms}ms)"
+if [ -n "$WEB_URL" ]; then
+  echo -e "${BLUE}Frontend:${NC} $WEB_URL (${web_time_ms}ms)"
+else
+  echo -e "${BLUE}Frontend:${NC} Not configured"
+fi
 echo -e "${BLUE}Timestamp:${NC} $(date -u)"
 echo ""
 

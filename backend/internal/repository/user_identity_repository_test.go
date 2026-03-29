@@ -2,13 +2,14 @@ package repository
 
 import (
 	"context"
-	"database/sql"
+	
 	"errors"
 	"regexp"
 	"testing"
 	"time"
 
-	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/jackc/pgx/v5"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
@@ -16,49 +17,49 @@ import (
 )
 
 // setupMockIdentityDB creates a mock database and sqlmock instance for testing user identities
-func setupMockIdentityDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock, UserIdentityRepository) {
-	db, mock, err := sqlmock.New()
+func setupMockIdentityDB(t *testing.T) (pgxmock.PgxPoolIface, UserIdentityRepository) {
+	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 
-	repo := NewUserIdentityRepository(db)
-	return db, mock, repo
+	repo := NewUserIdentityRepository(mock)
+	return mock, repo
 }
 
-// TestGetByAuth0ID_Success tests successful retrieval of identity by Auth0 ID
-func TestGetByAuth0ID_Success(t *testing.T) {
-	db, mock, repo := setupMockIdentityDB(t)
-	defer db.Close()
+// TestGetByClerkID_Success tests successful retrieval of identity by Clerk ID
+func TestGetByClerkID_Success(t *testing.T) {
+	mock, repo := setupMockIdentityDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
-	auth0UserID := "google-oauth2|123456789"
+	clerkUserID := "google-oauth2|123456789"
 	identityID := uuid.New().String()
 	userID := uuid.New().String()
 	now := time.Now()
 
 	// Expected identity data
-	rows := sqlmock.NewRows([]string{
-		"id", "user_id", "auth0_user_id", "provider", "provider_user_id",
+	rows := pgxmock.NewRows([]string{
+		"id", "user_id", "clerk_user_id", "provider", "provider_user_id",
 		"email", "email_verified", "is_primary",
 		"created_at", "updated_at", "last_used_at",
 	}).AddRow(
-		identityID, userID, auth0UserID, "google-oauth2", "123456789",
+		identityID, userID, clerkUserID, "google-oauth2", "123456789",
 		"test@example.com", true, true,
 		now, now, &now,
 	)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, auth0_user_id, provider, provider_user_id, email, email_verified, is_primary, created_at, updated_at, last_used_at FROM user_identities WHERE auth0_user_id = $1`)).
-		WithArgs(auth0UserID).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, clerk_user_id, provider, provider_user_id, email, email_verified, is_primary, created_at, updated_at, last_used_at FROM user_identities WHERE clerk_user_id = $1`)).
+		WithArgs(clerkUserID).
 		WillReturnRows(rows)
 
 	// Execute
-	identity, err := repo.GetByAuth0ID(ctx, auth0UserID)
+	identity, err := repo.GetByClerkID(ctx, clerkUserID)
 
 	// Assert
 	assert.NoError(t, err)
 	assert.NotNil(t, identity)
 	assert.Equal(t, identityID, identity.ID)
 	assert.Equal(t, userID, identity.UserID)
-	assert.Equal(t, auth0UserID, identity.Auth0UserID)
+	assert.Equal(t, clerkUserID, identity.ClerkUserID)
 	assert.Equal(t, "google-oauth2", identity.Provider)
 	assert.Equal(t, "123456789", identity.ProviderUserID)
 	assert.Equal(t, "test@example.com", identity.Email)
@@ -67,20 +68,20 @@ func TestGetByAuth0ID_Success(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestGetByAuth0ID_NotFound tests when identity is not found
-func TestGetByAuth0ID_NotFound(t *testing.T) {
-	db, mock, repo := setupMockIdentityDB(t)
-	defer db.Close()
+// TestGetByClerkID_NotFound tests when identity is not found
+func TestGetByClerkID_NotFound(t *testing.T) {
+	mock, repo := setupMockIdentityDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
-	auth0UserID := "google-oauth2|nonexistent"
+	clerkUserID := "google-oauth2|nonexistent"
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, auth0_user_id, provider, provider_user_id, email, email_verified, is_primary, created_at, updated_at, last_used_at FROM user_identities WHERE auth0_user_id = $1`)).
-		WithArgs(auth0UserID).
-		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, clerk_user_id, provider, provider_user_id, email, email_verified, is_primary, created_at, updated_at, last_used_at FROM user_identities WHERE clerk_user_id = $1`)).
+		WithArgs(clerkUserID).
+		WillReturnError(pgx.ErrNoRows)
 
 	// Execute
-	identity, err := repo.GetByAuth0ID(ctx, auth0UserID)
+	identity, err := repo.GetByClerkID(ctx, clerkUserID)
 
 	// Assert
 	assert.Error(t, err)
@@ -91,16 +92,16 @@ func TestGetByAuth0ID_NotFound(t *testing.T) {
 
 // TestGetByUserID_Success tests successful retrieval of all identities for a user
 func TestGetByUserID_Success(t *testing.T) {
-	db, mock, repo := setupMockIdentityDB(t)
-	defer db.Close()
+	mock, repo := setupMockIdentityDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
 	now := time.Now()
 
 	// Expected multiple identities (Google + Microsoft)
-	rows := sqlmock.NewRows([]string{
-		"id", "user_id", "auth0_user_id", "provider", "provider_user_id",
+	rows := pgxmock.NewRows([]string{
+		"id", "user_id", "clerk_user_id", "provider", "provider_user_id",
 		"email", "email_verified", "is_primary",
 		"created_at", "updated_at", "last_used_at",
 	}).
@@ -115,7 +116,7 @@ func TestGetByUserID_Success(t *testing.T) {
 			now, now, nil,
 		)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, auth0_user_id, provider, provider_user_id, email, email_verified, is_primary, created_at, updated_at, last_used_at FROM user_identities WHERE user_id = $1 ORDER BY is_primary DESC, created_at ASC`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, clerk_user_id, provider, provider_user_id, email, email_verified, is_primary, created_at, updated_at, last_used_at FROM user_identities WHERE user_id = $1 ORDER BY is_primary DESC, created_at ASC`)).
 		WithArgs(userID).
 		WillReturnRows(rows)
 
@@ -135,20 +136,20 @@ func TestGetByUserID_Success(t *testing.T) {
 
 // TestGetByUserID_NotFound tests when no identities exist for user
 func TestGetByUserID_NotFound(t *testing.T) {
-	db, mock, repo := setupMockIdentityDB(t)
-	defer db.Close()
+	mock, repo := setupMockIdentityDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
 
 	// Return empty result set
-	rows := sqlmock.NewRows([]string{
-		"id", "user_id", "auth0_user_id", "provider", "provider_user_id",
+	rows := pgxmock.NewRows([]string{
+		"id", "user_id", "clerk_user_id", "provider", "provider_user_id",
 		"email", "email_verified", "is_primary",
 		"created_at", "updated_at", "last_used_at",
 	})
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, auth0_user_id, provider, provider_user_id, email, email_verified, is_primary, created_at, updated_at, last_used_at FROM user_identities WHERE user_id = $1 ORDER BY is_primary DESC, created_at ASC`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, clerk_user_id, provider, provider_user_id, email, email_verified, is_primary, created_at, updated_at, last_used_at FROM user_identities WHERE user_id = $1 ORDER BY is_primary DESC, created_at ASC`)).
 		WithArgs(userID).
 		WillReturnRows(rows)
 
@@ -164,29 +165,29 @@ func TestGetByUserID_NotFound(t *testing.T) {
 
 // TestCreate_Success tests successful identity creation
 func TestCreate_Success(t *testing.T) {
-	db, mock, repo := setupMockIdentityDB(t)
-	defer db.Close()
+	mock, repo := setupMockIdentityDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
 	identity := domain.NewUserIdentity(userID, "google-oauth2|123456", "test@gmail.com", true, true)
 
 	// Expect INSERT query
-	mock.ExpectExec(`INSERT INTO user_identities \( id, user_id, auth0_user_id, provider, provider_user_id, email, email_verified, is_primary, created_at, updated_at, last_used_at \) VALUES`).
+	mock.ExpectExec(`INSERT INTO user_identities \( id, user_id, clerk_user_id, provider, provider_user_id, email, email_verified, is_primary, created_at, updated_at, last_used_at \) VALUES`).
 		WithArgs(
-			sqlmock.AnyArg(), // id (generated UUID)
+			pgxmock.AnyArg(), // id (generated UUID)
 			identity.UserID,
-			identity.Auth0UserID,
+			identity.ClerkUserID,
 			identity.Provider,
 			identity.ProviderUserID,
 			identity.Email,
 			identity.EmailVerified,
 			identity.IsPrimary,
-			sqlmock.AnyArg(), // created_at
-			sqlmock.AnyArg(), // updated_at
+			pgxmock.AnyArg(), // created_at
+			pgxmock.AnyArg(), // updated_at
 			identity.LastUsedAt,
 		).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	// Execute
 	err := repo.Create(ctx, identity)
@@ -197,31 +198,31 @@ func TestCreate_Success(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestCreate_DuplicateAuth0UserID tests handling of duplicate auth0_user_id constraint
-func TestCreate_DuplicateAuth0UserID(t *testing.T) {
-	db, mock, repo := setupMockIdentityDB(t)
-	defer db.Close()
+// TestCreate_DuplicateClerkUserID tests handling of duplicate clerk_user_id constraint
+func TestCreate_DuplicateClerkUserID(t *testing.T) {
+	mock, repo := setupMockIdentityDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
 	identity := domain.NewUserIdentity(userID, "google-oauth2|123456", "test@gmail.com", true, true)
 
-	// Simulate unique constraint violation on auth0_user_id
+	// Simulate unique constraint violation on clerk_user_id
 	mock.ExpectExec(`INSERT INTO user_identities`).
 		WithArgs(
-			sqlmock.AnyArg(),
+			pgxmock.AnyArg(),
 			identity.UserID,
-			identity.Auth0UserID,
+			identity.ClerkUserID,
 			identity.Provider,
 			identity.ProviderUserID,
 			identity.Email,
 			identity.EmailVerified,
 			identity.IsPrimary,
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
 			identity.LastUsedAt,
 		).
-		WillReturnError(errors.New("pq: duplicate key value violates unique constraint \"user_identities_auth0_user_id_key\""))
+		WillReturnError(errors.New("pq: duplicate key value violates unique constraint \"user_identities_clerk_user_id_key\""))
 
 	// Execute
 	err := repo.Create(ctx, identity)
@@ -234,23 +235,23 @@ func TestCreate_DuplicateAuth0UserID(t *testing.T) {
 
 // TestUpdateLastUsed_Success tests successful last_used_at update
 func TestUpdateLastUsed_Success(t *testing.T) {
-	db, mock, repo := setupMockIdentityDB(t)
-	defer db.Close()
+	mock, repo := setupMockIdentityDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
-	auth0UserID := "google-oauth2|123456"
+	clerkUserID := "google-oauth2|123456"
 
 	// Expect UPDATE query
-	mock.ExpectExec(`UPDATE user_identities SET last_used_at = \$1, updated_at = \$2 WHERE auth0_user_id = \$3`).
+	mock.ExpectExec(`UPDATE user_identities SET last_used_at = \$1, updated_at = \$2 WHERE clerk_user_id = \$3`).
 		WithArgs(
-			sqlmock.AnyArg(), // last_used_at (current time)
-			sqlmock.AnyArg(), // updated_at (current time)
-			auth0UserID,
+			pgxmock.AnyArg(), // last_used_at (current time)
+			pgxmock.AnyArg(), // updated_at (current time)
+			clerkUserID,
 		).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	// Execute
-	err := repo.UpdateLastUsed(ctx, auth0UserID)
+	err := repo.UpdateLastUsed(ctx, clerkUserID)
 
 	// Assert
 	assert.NoError(t, err)
@@ -259,23 +260,23 @@ func TestUpdateLastUsed_Success(t *testing.T) {
 
 // TestUpdateLastUsed_NotFound tests updating last_used_at for non-existent identity
 func TestUpdateLastUsed_NotFound(t *testing.T) {
-	db, mock, repo := setupMockIdentityDB(t)
-	defer db.Close()
+	mock, repo := setupMockIdentityDB(t)
+	defer mock.Close()
 
 	ctx := context.Background()
-	auth0UserID := "google-oauth2|nonexistent"
+	clerkUserID := "google-oauth2|nonexistent"
 
 	// Expect UPDATE query that affects 0 rows
-	mock.ExpectExec(`UPDATE user_identities SET last_used_at = \$1, updated_at = \$2 WHERE auth0_user_id = \$3`).
+	mock.ExpectExec(`UPDATE user_identities SET last_used_at = \$1, updated_at = \$2 WHERE clerk_user_id = \$3`).
 		WithArgs(
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			auth0UserID,
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			clerkUserID,
 		).
-		WillReturnResult(sqlmock.NewResult(0, 0))
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	// Execute
-	err := repo.UpdateLastUsed(ctx, auth0UserID)
+	err := repo.UpdateLastUsed(ctx, clerkUserID)
 
 	// Assert
 	assert.Error(t, err)

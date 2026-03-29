@@ -7,14 +7,6 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      skip_security_scan:
-        description: 'Skip security scan (emergencies only - not recommended)'
-        required: false
-        default: 'false'
-        type: choice
-        options:
-          - 'false'
-          - 'true'
       force_deploy:
         description: 'Force deployment even if tests are failing (use with extreme caution)'
         required: false
@@ -30,32 +22,37 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  GO_VERSION: '1.25'
-  NODE_VERSION: '20'
+  GO_VERSION: '1.26.1'
   REGISTRY: ghcr.io
   BACKEND_IMAGE_NAME: boostedbudget/boostedbudget-backend
-  FRONTEND_IMAGE_NAME: boostedbudget/boostedbudget-frontend
 
 jobs:
   # =============================================================================
-  # Build and Push Images to GHCR (Parallelized via Matrix)
+  # Build and Push Backend Image to GHCR
   # =============================================================================
   build-images:
-    name: Build ${{ matrix.component }} Image
+    name: Build backend Image
     runs-on: [self-hosted, macOS, mac-mini]
     strategy:
       matrix:
-        component: [backend, frontend]
+        component: [backend]
     permissions:
       contents: read
       packages: write
+    env:
+      UNIQUE_WORKSPACE: workspace-build-images-${{ matrix.component }}-${{ github.run_id }}
 
     steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
       - name: Checkout main branch
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Configure Docker to avoid keychain conflicts
         run: |
@@ -121,137 +118,45 @@ jobs:
             fi
           done
 
-      - name: Set image name for ${{ matrix.component }}
-        id: image-name
-        run: |
-          if [ "${{ matrix.component }}" = "backend" ]; then
-            IMAGE_NAME="${{ env.BACKEND_IMAGE_NAME }}"
-          else
-            IMAGE_NAME="${{ env.FRONTEND_IMAGE_NAME }}"
-          fi
-          echo "image-name=${IMAGE_NAME}" >> $GITHUB_OUTPUT
-          echo "Building: ${{ env.REGISTRY }}/${IMAGE_NAME}:${{ github.sha }}"
-
-      - name: Build and push ${{ matrix.component }} image
-        run: |
-          docker buildx build \
-            --file ./${{ matrix.component }}/Dockerfile \
-            --push \
-            --tag ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ github.sha }} \
-            --tag ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:latest \
-            --cache-from type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache \
-            --cache-to type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:buildcache,mode=max \
-            --platform linux/amd64 \
-            --build-arg VERSION=${{ github.sha }} \
-            --build-arg BUILD_DATE=${{ github.event.head_commit.timestamp }} \
-            --provenance=false \
-            .
+      - name: Build and push backend image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ env.UNIQUE_WORKSPACE }}
+          file: ${{ env.UNIQUE_WORKSPACE }}/backend/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          pull: true
+          no-cache: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:latest
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:buildcache-go${{ env.GO_VERSION }}
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:buildcache-go${{ env.GO_VERSION }},mode=max
+          build-args: |
+            GO_VERSION=${{ env.GO_VERSION }}
+            VERSION=${{ github.sha }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+          provenance: false
 
       - name: Image build summary
         run: |
-          echo "### 🐳 ${{ matrix.component }} Image Built" >> $GITHUB_STEP_SUMMARY
+          echo "### 🐳 backend Image Built" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Image:** \`${{ env.REGISTRY }}/${{ steps.image-name.outputs.image-name }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
-  # Security Scan - Docker Images (Parallelized)
-  # =============================================================================
-  image-security-scan:
-    name: Security Scan (${{ matrix.component }} Image)
-    needs: build-images
-    runs-on: [self-hosted, macOS, mac-mini]
-    # Allow skipping security scan for emergency deployments (manual trigger only)
-    if: ${{ github.event.inputs.skip_security_scan != 'true' }}
-    strategy:
-      matrix:
-        component: [backend, frontend]
-    permissions:
-      actions: read
-      contents: read
-      packages: read
-      security-events: write
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-
-      - name: Configure Docker
-        run: |
-          LOCKDIR=~/.docker/config.lock
-          TIMEOUT=30
-          ELAPSED=0
-
-          while ! mkdir "$LOCKDIR" 2>/dev/null; do
-            sleep 1
-            ELAPSED=$((ELAPSED + 1))
-            [ $ELAPSED -ge $TIMEOUT ] && exit 1
-          done
-
-          trap "rmdir '$LOCKDIR' 2>/dev/null || true" EXIT
-
-          mkdir -p ~/.docker
-          if [ -f ~/.docker/config.json ] && command -v jq &> /dev/null; then
-            TEMP_FILE=~/.docker/config.json.tmp.${{ matrix.component }}
-            if jq 'del(.credsStore)' ~/.docker/config.json > "$TEMP_FILE" 2>/dev/null; then
-              mv "$TEMP_FILE" ~/.docker/config.json
-            else
-              rm -f "$TEMP_FILE"
-            fi
-          else
-            echo "{}" > ~/.docker/config.json
-          fi
-
-      - name: Log in to GHCR
-        run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
-
-      - name: Calculate image reference
-        id: image-ref
-        run: |
-          if [ "${{ matrix.component }}" = "backend" ]; then
-            IMAGE_NAME="${{ env.BACKEND_IMAGE_NAME }}"
-          else
-            IMAGE_NAME="${{ env.FRONTEND_IMAGE_NAME }}"
-          fi
-          IMAGE_REF="${{ env.REGISTRY }}/${IMAGE_NAME}:${{ github.sha }}"
-          echo "image-ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
-
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ steps.image-ref.outputs.image-ref }}
-          format: 'sarif'
-          output: 'trivy-${{ matrix.component }}-production.sarif'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '0'
-          ignore-unfixed: true
-          cache: false
-
-      - name: Upload scan results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v4
-        if: success() || failure()
-        continue-on-error: true
-        with:
-          sarif_file: 'trivy-${{ matrix.component }}-production.sarif'
-          category: 'trivy-production-${{ matrix.component }}'
-
-  # =============================================================================
-  # Push Images to Fly.io Registry (Parallelized)
+  # Push Backend Image to Fly.io Registry
   # =============================================================================
   push-to-fly-registry:
-    name: Push ${{ matrix.component }} to Fly.io
-    needs: [build-images, image-security-scan]
-    # Run if build succeeded and either security scan passed OR was skipped
-    if: ${{ always() && needs.build-images.result == 'success' && (needs.image-security-scan.result == 'success' || needs.image-security-scan.result == 'skipped') }}
+    name: Push backend to Fly.io
+    needs: build-images
+    if: ${{ needs.build-images.result == 'success' }}
     runs-on: [self-hosted, macOS, mac-mini]
-    strategy:
-      matrix:
-        component: [backend, frontend]
-        include:
-          - component: backend
-            fly-app: boostedbudget-api
-          - component: frontend
-            fly-app: boostedbudget-web
 
     steps:
       - name: Cleanup Docker storage
@@ -302,20 +207,39 @@ jobs:
 
       - name: Pull and push to Fly.io registry
         run: |
-          if [ "${{ matrix.component }}" = "backend" ]; then
-            IMAGE_NAME="${{ env.BACKEND_IMAGE_NAME }}"
-          else
-            IMAGE_NAME="${{ env.FRONTEND_IMAGE_NAME }}"
-          fi
+          GHCR_IMAGE="${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ github.sha }}"
 
-          GHCR_IMAGE="${{ env.REGISTRY }}/${IMAGE_NAME}:${{ github.sha }}"
-          docker pull --platform linux/amd64 ${GHCR_IMAGE}
+          echo "🐳 Pulling from GHCR..."
+          for i in 1 2 3; do
+            docker pull --platform linux/amd64 ${GHCR_IMAGE} && {
+              echo "✅ Pull successful"
+              break
+            } || {
+              [ $i -lt 3 ] && echo "⚠️ Pull attempt $i/3 failed, retrying..." && sleep 15
+            }
+          done
 
-          docker tag ${GHCR_IMAGE} registry.fly.io/${{ matrix.fly-app }}:${{ github.sha }}
-          docker tag ${GHCR_IMAGE} registry.fly.io/${{ matrix.fly-app }}:latest
+          docker tag ${GHCR_IMAGE} registry.fly.io/boostedbudget-api:${{ github.sha }}
+          docker tag ${GHCR_IMAGE} registry.fly.io/boostedbudget-api:latest
 
-          docker push registry.fly.io/${{ matrix.fly-app }}:${{ github.sha }}
-          docker push registry.fly.io/${{ matrix.fly-app }}:latest
+          echo "📤 Pushing to Fly.io registry..."
+          for i in 1 2 3; do
+            docker push registry.fly.io/boostedbudget-api:${{ github.sha }} && {
+              echo "✅ SHA push successful"
+              break
+            } || {
+              [ $i -lt 3 ] && echo "⚠️ SHA push attempt $i/3 failed, retrying..." && sleep 15
+            }
+          done
+
+          for i in 1 2 3; do
+            docker push registry.fly.io/boostedbudget-api:latest && {
+              echo "✅ Latest push successful"
+              break
+            } || {
+              [ $i -lt 3 ] && echo "⚠️ Latest push attempt $i/3 failed, retrying..." && sleep 15
+            }
+          done
 
       - name: Cleanup images
         if: always()
@@ -323,83 +247,164 @@ jobs:
           docker image prune -f --filter "label=org.opencontainers.image.source=https://github.com/${{ github.repository }}"
 
   # =============================================================================
-  # Deploy to Fly.io Production (Parallelized)
+  # Deploy Backend to Fly.io Production
   # =============================================================================
   deploy-to-fly:
-    name: Deploy ${{ matrix.component }} to Fly.io
+    name: Deploy backend to Fly.io
     needs: [build-images, push-to-fly-registry]
     runs-on: [self-hosted, macOS, mac-mini]
-    strategy:
-      matrix:
-        component: [backend, frontend]
-        include:
-          - component: backend
-            fly-app: boostedbudget-api
-            fly-config: ./backend/fly.toml
-            deploy-strategy: ""
-          - component: frontend
-            fly-app: boostedbudget-web
-            fly-config: ./frontend/fly.toml
-            deploy-strategy: "--strategy rolling"
     environment:
       name: production
-      url: https://boostedbudget.com
+      url: https://api.boostedbudget.com
+    env:
+      UNIQUE_WORKSPACE: workspace-deploy-fly-backend-${{ github.run_id }}
 
     steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
 
       - name: Setup Fly.io CLI
         uses: superfly/flyctl-actions/setup-flyctl@master
 
       - name: Deploy to Fly.io
+        id: deploy
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          echo "Deploying ${{ matrix.component }}: registry.fly.io/${{ matrix.fly-app }}:${{ github.sha }}"
-          if [ "${{ matrix.component }}" = "backend" ]; then
-            echo "Note: Database migrations run via release_command"
-          fi
-          flyctl deploy \
-            --app ${{ matrix.fly-app }} \
-            --image registry.fly.io/${{ matrix.fly-app }}:${{ github.sha }} \
-            --config ${{ matrix.fly-config }} \
-            ${{ matrix.deploy-strategy }}
+          echo "🚀 Deploying backend: registry.fly.io/boostedbudget-api:${{ github.sha }}"
+          echo "Note: Database migrations run via release_command"
+
+          for attempt in 1 2 3; do
+            flyctl deploy \
+              --app boostedbudget-api \
+              --image registry.fly.io/boostedbudget-api:${{ github.sha }} \
+              --config backend/fly.toml && {
+              echo "✅ Deployment successful on attempt $attempt"
+              echo "deploy-attempts=$attempt" >> $GITHUB_OUTPUT
+              break
+            } || {
+              if [ $attempt -eq 3 ]; then
+                echo "❌ Deployment failed after 3 attempts"
+                exit 1
+              else
+                echo "⚠️ Deploy attempt $attempt/3 failed, retrying in 30s..."
+                sleep 30
+              fi
+            }
+          done
 
       - name: Verify deployment
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          flyctl status --app ${{ matrix.fly-app }}
-          flyctl logs -a ${{ matrix.fly-app }} -n 2>&1 | head -20 || true
+          flyctl status --app boostedbudget-api
+          flyctl logs -a boostedbudget-api -n 2>&1 | head -20 || true
 
       - name: Deployment summary
         run: |
-          echo "### 🚀 ${{ matrix.component }} Production Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "### 🚀 Backend Production Deployment" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Version:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ matrix.component }}" = "backend" ]; then
-            echo "**URL:** https://api.boostedbudget.com" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "**URL:** https://boostedbudget.com" >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "**URL:** https://api.boostedbudget.com" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Deployed at:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+  # =============================================================================
+  # Deploy Frontend to Cloudflare Pages
+  # =============================================================================
+  deploy-frontend:
+    name: Deploy Frontend to Cloudflare Pages
+    runs-on: [self-hosted, macOS, mac-mini]
+    environment:
+      name: production
+      url: https://boostedbudget.com
+    env:
+      UNIQUE_WORKSPACE: workspace-deploy-frontend-${{ github.run_id }}
+
+    steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+      - name: Checkout main branch
+        uses: actions/checkout@v6
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        # Install at root level - Bun handles workspace:* protocol
+        run: bun install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
+        env:
+          VITE_API_URL: https://api.boostedbudget.com
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
+          VITE_ENVIRONMENT: production
+          VITE_PADDLE_CLIENT_TOKEN: ${{ secrets.VITE_PADDLE_CLIENT_TOKEN }}
+          VITE_POSTHOG_KEY: ${{ secrets.POSTHOG_API_KEY }}
+        run: bun run build
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: ${{ env.UNIQUE_WORKSPACE }}
+          packageManager: bun
+          command: pages deploy apps/web/dist --project-name=boostedbudget --branch=main
+
+      - name: Deployment summary
+        run: |
+          echo "### 🚀 Frontend Production Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**URL:** https://boostedbudget.com" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployed at:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
   # Production Smoke Tests
   # =============================================================================
   smoke-tests:
     name: Production Smoke Tests
-    needs: deploy-to-fly
+    needs: [deploy-to-fly, deploy-frontend]
     runs-on: [self-hosted, macOS, mac-mini]
+    env:
+      UNIQUE_WORKSPACE: workspace-smoke-tests-${{ github.run_id }}
 
     steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
 
       - name: Run smoke tests
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         timeout-minutes: 5
         run: |
           if [ -f ./scripts/smoke-test.sh ]; then
@@ -423,8 +428,11 @@ jobs:
           # Document manual trigger details if applicable
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "**Deployment Trigger:** Manual workflow_dispatch" >> $GITHUB_STEP_SUMMARY
-            echo "**Skip Security Scan:** ${{ github.event.inputs.skip_security_scan || 'false' }}" >> $GITHUB_STEP_SUMMARY
             echo "**Force Deploy:** ${{ github.event.inputs.force_deploy || 'false' }}" >> $GITHUB_STEP_SUMMARY
           else
             echo "**Deployment Trigger:** Automatic (push to main)" >> $GITHUB_STEP_SUMMARY
           fi
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
