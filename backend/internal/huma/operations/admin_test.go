@@ -66,6 +66,14 @@ func (m *mockPlaidServiceForAdmin) AccountsGet(ctx context.Context, accessToken 
 	return nil, nil
 }
 
+func (m *mockPlaidServiceForAdmin) InvestmentsHoldingsGet(ctx context.Context, accessToken string) (*plaid.InvestmentsHoldingsGetResponse, error) {
+	return nil, nil
+}
+
+func (m *mockPlaidServiceForAdmin) InvestmentsTransactionsGet(ctx context.Context, accessToken, startDate, endDate string, offset, count int32) (*plaid.InvestmentsTransactionsGetResponse, error) {
+	return nil, nil
+}
+
 // mockLinkedItemRepo is a mock implementation of repository.LinkedItemRepository
 type mockLinkedItemRepo struct {
 	item    *domain.LinkedItem
@@ -115,6 +123,10 @@ func (m *mockLinkedItemRepo) Delete(ctx context.Context, id string) error {
 }
 
 func (m *mockLinkedItemRepo) DeleteByUser(ctx context.Context, id, userID string) error {
+	return nil
+}
+
+func (m *mockLinkedItemRepo) UpdateInvestmentsLastSyncedDate(ctx context.Context, id string, date time.Time) error {
 	return nil
 }
 
