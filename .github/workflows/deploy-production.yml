@@ -157,6 +157,8 @@ jobs:
     needs: build-images
     if: ${{ needs.build-images.result == 'success' }}
     runs-on: [self-hosted, macOS, mac-mini]
+    environment:
+      name: production
 
     steps:
       - name: Cleanup Docker storage
