@@ -35,7 +35,7 @@ export function PrivacyPolicy() {
 
           <h3>2.2 Automatically Collected Information</h3>
           <ul>
-            <li><strong>Cookies:</strong> Necessary, analytics, and advertising cookies (with your consent)</li>
+            <li><strong>Cookies:</strong> Necessary cookies (required) and analytics cookies (with your consent)</li>
             <li><strong>Device Information:</strong> Browser type, IP address, device identifiers</li>
             <li><strong>Log Data:</strong> Access times, pages viewed, actions performed</li>
           </ul>
@@ -97,7 +97,7 @@ export function PrivacyPolicy() {
 
         <section>
           <h2>6. Cookie Policy</h2>
-          <p>We use three types of cookies, in compliance with GDPR requirements:</p>
+          <p>We use two types of cookies, in compliance with GDPR requirements:</p>
           <ul>
             <li>
               <strong>Necessary Cookies (Required):</strong> Essential for app functionality, authentication,
@@ -110,6 +110,7 @@ export function PrivacyPolicy() {
           </ul>
           <p>
             You can manage your cookie preferences through our Cookie Consent banner or in your Privacy Settings.
+            For full details on the cookies we use, see our <Link to="/legal/cookie-policy">Cookie Policy</Link>.
           </p>
         </section>
 
@@ -125,7 +126,7 @@ export function PrivacyPolicy() {
             <li><strong>Right to Data Portability:</strong> Export your data in a machine-readable format</li>
             <li><strong>Right to Restrict Processing:</strong> Limit how we use your data</li>
             <li><strong>Right to Object:</strong> Object to certain data processing activities</li>
-            <li><strong>Right to Withdraw Consent:</strong> Withdraw consent for analytics and advertising cookies</li>
+            <li><strong>Right to Withdraw Consent:</strong> Withdraw consent for optional data processing, including analytics cookies and marketing communications</li>
           </ul>
           <p>
             To exercise any of these rights, please contact us at <strong>privacy@boostedbudget.com</strong>.

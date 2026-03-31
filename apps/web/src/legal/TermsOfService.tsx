@@ -28,7 +28,8 @@ export function TermsOfService() {
           </p>
           <p>
             These Terms constitute a legally binding agreement between you and BoostedBudget. We may
-            update these Terms from time to time as described in Section 19.
+            update these Terms from time to time as described in Section 19. General legal provisions
+            (severability, waiver, indemnification, etc.) are in Section 20.
           </p>
         </section>
 
@@ -45,6 +46,24 @@ export function TermsOfService() {
             suggestions that you review and execute manually. Nothing in this Service constitutes
             financial, investment, legal, or tax advice.
           </p>
+
+          <h3>2.1 Financial Disclaimers</h3>
+          <ul>
+            <li>BoostedBudget is <strong>not a bank</strong>, credit union, trust company, or
+              licensed financial institution. We do not hold, transfer, or custody funds.</li>
+            <li>BoostedBudget is <strong>not regulated</strong> as a financial institution, investment
+              advisor, broker-dealer, or money services business.</li>
+            <li>No <strong>fiduciary, advisory, or agency relationship</strong> is created between
+              you and BoostedBudget by your use of the Service.</li>
+            <li>Financial data displayed in the Service (including balances, transactions, and
+              categorizations) is sourced from third-party providers (primarily Plaid) and{' '}
+              <strong>may be delayed, incomplete, or inaccurate</strong>. Do not rely on this data
+              for real-time financial decisions.</li>
+            <li>Your deposits and funds are <strong>not FDIC-insured or SIPC-protected</strong>{' '}
+              through BoostedBudget.</li>
+            <li>BoostedBudget is <strong>not responsible</strong> for outages, connectivity failures,
+              missing transactions, or data errors caused by your financial institution or by Plaid.</li>
+          </ul>
         </section>
 
         <section>
@@ -86,10 +105,15 @@ export function TermsOfService() {
           <h2>5. Subscription Plans and Billing</h2>
           <h3>5.1 Payment Processing</h3>
           <p>
-            Payments are processed by <strong>Paddle</strong>, our authorized reseller and payment
-            processor. When you purchase a subscription, you are purchasing from Paddle, who then
-            licenses the Service to you. Paddle's terms of service and privacy policy apply to
-            your payment transaction.
+            Payments are processed by <strong>Paddle</strong>, our Merchant of Record. When you
+            subscribe, you are transacting with Paddle, who handles payment collection, billing,
+            sales tax and VAT calculation and remittance, and buyer protection on our behalf.
+            Paddle's{' '}
+            <a href="https://www.paddle.com/legal/terms" target="_blank" rel="noopener noreferrer">Terms of Service</a>{' '}
+            and{' '}
+            <a href="https://www.paddle.com/legal/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>{' '}
+            apply to your payment transaction, and Paddle may have independent rights with respect
+            to your purchase.
           </p>
 
           <h3>5.2 Current Subscription Plans</h3>
@@ -240,10 +264,13 @@ export function TermsOfService() {
             <li><strong>Plaid:</strong> Secure bank account connectivity and transaction data — subject to
               Plaid's <a href="https://plaid.com/legal/" target="_blank" rel="noopener noreferrer">Terms of Service</a> and
               End User Privacy Policy</li>
-            <li><strong>Paddle:</strong> Payment processing and subscription management — subject to
-              Paddle's <a href="https://www.paddle.com/legal/terms" target="_blank" rel="noopener noreferrer">Terms of Service</a></li>
+            <li><strong>Paddle:</strong> Payment processing and subscription management (Merchant of Record) — subject to
+              Paddle's <a href="https://www.paddle.com/legal/terms" target="_blank" rel="noopener noreferrer">Terms of Service</a> and{' '}
+              <a href="https://www.paddle.com/legal/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a></li>
             <li><strong>Clerk:</strong> Authentication and user management — subject to
               Clerk's <a href="https://clerk.com/terms" target="_blank" rel="noopener noreferrer">Terms of Service</a></li>
+            <li><strong>PostHog:</strong> Product analytics (with your consent) — subject to
+              PostHog's <a href="https://posthog.com/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a></li>
           </ul>
           <p>
             We are not responsible for the practices or content of these third-party services. Your
@@ -363,8 +390,10 @@ export function TermsOfService() {
           <p>
             Your privacy is important to us. Our{' '}
             <Link to="/legal/privacy-policy">Privacy Policy</Link> explains how we collect, use,
-            and protect your personal and financial data. By using the Service, you agree to our
-            Privacy Policy, which is incorporated into these Terms by reference.
+            and protect your personal and financial data. Our{' '}
+            <Link to="/legal/cookie-policy">Cookie Policy</Link> explains the cookies and tracking
+            technologies we use. By using the Service, you agree to both policies, which are
+            incorporated into these Terms by reference.
           </p>
         </section>
 
@@ -387,7 +416,75 @@ export function TermsOfService() {
         </section>
 
         <section>
-          <h2>20. Contact Us</h2>
+          <h2>20. General Provisions</h2>
+
+          <h3>20.1 Indemnification</h3>
+          <p>
+            You agree to indemnify, defend, and hold harmless BoostedBudget and its officers,
+            directors, employees, and agents from any claims, damages, losses, or expenses
+            (including reasonable attorneys' fees) arising out of or related to your use of the
+            Service, your violation of these Terms, or your infringement of any third-party rights.
+          </p>
+
+          <h3>20.2 Force Majeure</h3>
+          <p>
+            BoostedBudget shall not be liable for any failure or delay in performance of its
+            obligations where such failure or delay results from causes beyond its reasonable
+            control, including natural disasters, internet or telecommunications outages,
+            third-party service failures (including Plaid or Paddle), pandemics, or governmental
+            actions.
+          </p>
+
+          <h3>20.3 Severability</h3>
+          <p>
+            If any provision of these Terms is found to be invalid, illegal, or unenforceable by
+            a court of competent jurisdiction, that provision shall be modified to the minimum
+            extent necessary to make it enforceable, and the remaining provisions shall continue
+            in full force and effect.
+          </p>
+
+          <h3>20.4 Entire Agreement</h3>
+          <p>
+            These Terms, together with our{' '}
+            <Link to="/legal/privacy-policy">Privacy Policy</Link> and{' '}
+            <Link to="/legal/cookie-policy">Cookie Policy</Link>, constitute the entire agreement
+            between you and BoostedBudget with respect to the Service and supersede all prior
+            agreements, representations, and understandings.
+          </p>
+
+          <h3>20.5 Waiver</h3>
+          <p>
+            No failure or delay by BoostedBudget in exercising any right under these Terms will
+            constitute a waiver of that right. A waiver of any particular breach does not waive
+            any subsequent breach.
+          </p>
+
+          <h3>20.6 Assignment</h3>
+          <p>
+            You may not assign or transfer your rights or obligations under these Terms without
+            our prior written consent. BoostedBudget may assign these Terms in connection with a
+            merger, acquisition, reorganization, or sale of all or substantially all of its
+            assets, without your consent.
+          </p>
+
+          <h3>20.7 Electronic Communications</h3>
+          <p>
+            By using the Service and providing your email address, you consent to receiving
+            legal notices, updates, and other communications from us electronically. Electronic
+            communications satisfy any legal requirement that such communications be in writing.
+          </p>
+
+          <h3>20.8 Notices</h3>
+          <p>
+            Notices to you will be sent to the email address associated with your account.
+            Notices to BoostedBudget must be sent to{' '}
+            <strong>support@boostedbudget.com</strong>. Notices are effective when sent (for email)
+            or when posted on the Service.
+          </p>
+        </section>
+
+        <section>
+          <h2>21. Contact Us</h2>
           <p>
             If you have questions about these Terms or need support, please contact us:
           </p>
@@ -409,8 +506,9 @@ export function TermsOfService() {
             <li><strong>After trial:</strong> Read-only access — your data is always preserved</li>
             <li><strong>Refunds:</strong> No refunds for any billing period; access continues until period ends</li>
             <li><strong>Price changes:</strong> 30 days' email notice before any price increase</li>
-            <li><strong>No money movement:</strong> We never move money on your behalf</li>
+            <li><strong>No money movement:</strong> We never move money on your behalf; not a bank or financial institution</li>
             <li><strong>Disputes:</strong> Resolved by individual binding arbitration under Delaware law</li>
+            <li><strong>Contact:</strong> support@boostedbudget.com (Section 21)</li>
           </ul>
           <p className="contact-cta">
             <strong>Questions?</strong> Contact us at support@boostedbudget.com

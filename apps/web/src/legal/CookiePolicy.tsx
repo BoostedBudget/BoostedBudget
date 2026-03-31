@@ -155,7 +155,9 @@ export function CookiePolicy() {
           </ul>
           <p className="contact-cta">
             For full details on how we handle your personal data, see our{' '}
-            <Link to="/legal/privacy-policy">Privacy Policy</Link>.
+            <Link to="/legal/privacy-policy">Privacy Policy</Link>. For the complete terms
+            governing your use of BoostedBudget, see our{' '}
+            <Link to="/legal/terms">Terms of Service</Link>.
           </p>
         </div>
       </div>

@@ -68,7 +68,7 @@ describe('TermsOfService', () => {
     renderWithRouter(<TermsOfService />)
     const privacyLinks = screen.getAllByRole('link', { name: /privacy policy/i })
     expect(privacyLinks.length).toBeGreaterThan(0)
-    expect(privacyLinks[0]).toHaveAttribute('href', '/legal/privacy-policy')
+    expect(privacyLinks.some((link) => link.getAttribute('href') === '/legal/privacy-policy')).toBe(true)
   })
 
   it('does not contain placeholder coming soon text', () => {
@@ -80,5 +80,40 @@ describe('TermsOfService', () => {
     renderWithRouter(<TermsOfService />)
     const emails = screen.getAllByText(/support@boostedbudget\.com/i)
     expect(emails.length).toBeGreaterThan(0)
+  })
+
+  it('renders fintech disclaimers', () => {
+    renderWithRouter(<TermsOfService />)
+    const bankTexts = screen.getAllByText(/not a bank/i)
+    expect(bankTexts.length).toBeGreaterThan(0)
+    expect(screen.getByText(/not fdic-insured or sipc-protected/i)).toBeInTheDocument()
+  })
+
+  it('renders Paddle as Merchant of Record', () => {
+    renderWithRouter(<TermsOfService />)
+    const morTexts = screen.getAllByText(/merchant of record/i)
+    expect(morTexts.length).toBeGreaterThan(0)
+  })
+
+  it('renders PostHog in third-party services', () => {
+    renderWithRouter(<TermsOfService />)
+    const posthogTexts = screen.getAllByText(/posthog/i)
+    expect(posthogTexts.length).toBeGreaterThan(0)
+  })
+
+  it('renders General Provisions section', () => {
+    renderWithRouter(<TermsOfService />)
+    expect(screen.getByText(/general provisions/i)).toBeInTheDocument()
+    expect(screen.getAllByText(/indemnification/i).length).toBeGreaterThan(0)
+    expect(screen.getByText(/force majeure/i)).toBeInTheDocument()
+    expect(screen.getAllByText(/severability/i).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/entire agreement/i).length).toBeGreaterThan(0)
+  })
+
+  it('renders link to Cookie Policy', () => {
+    renderWithRouter(<TermsOfService />)
+    const cookieLinks = screen.getAllByRole('link', { name: /cookie policy/i })
+    expect(cookieLinks.length).toBeGreaterThan(0)
+    expect(cookieLinks.some((link) => link.getAttribute('href') === '/legal/cookie-policy')).toBe(true)
   })
 })
