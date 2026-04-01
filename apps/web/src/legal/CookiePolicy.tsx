@@ -117,6 +117,11 @@ export function CookiePolicy() {
               <strong>PostHog</strong> (analytics only, with consent) — usage analytics.
               See <a href="https://posthog.com/privacy" target="_blank" rel="noopener noreferrer">PostHog's Privacy Policy</a>.
             </li>
+            <li>
+              <strong>Sentry</strong> — error tracking. Sentry may use local storage to capture
+              error context and session information for debugging purposes.
+              See <a href="https://sentry.io/privacy/" target="_blank" rel="noopener noreferrer">Sentry's Privacy Policy</a>.
+            </li>
           </ul>
           <p>
             We do not permit advertising cookies or third-party tracking for advertising purposes.
