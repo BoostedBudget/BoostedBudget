@@ -11,6 +11,7 @@ import { Link } from 'react-router-dom'
 const footerLinks = [
   { label: 'Privacy Policy', href: '/legal/privacy-policy' },
   { label: 'Terms of Service', href: '/legal/terms' },
+  { label: 'Cookie Policy', href: '/legal/cookie-policy' },
   { label: 'Contact', href: 'mailto:support@boostedbudget.com' },
 ]
 
