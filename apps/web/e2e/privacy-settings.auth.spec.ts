@@ -152,21 +152,6 @@ test.describe.skip('Privacy Settings - Authenticated', () => {
     expect(newState).toBe(!initialState)
   })
 
-  test('should toggle advertising cookie consent', async ({ page }) => {
-    await page.goto('/profile')
-    await page.click('button:has-text("Privacy Settings")')
-
-    // Get advertising checkbox initial state
-    const advertisingCheckbox = page.getByLabel('Advertising cookies')
-    const initialState = await advertisingCheckbox.isChecked()
-
-    // Toggle advertising checkbox
-    await advertisingCheckbox.click()
-
-    // Verify state changed
-    const newState = await advertisingCheckbox.isChecked()
-    expect(newState).toBe(!initialState)
-  })
 
   test('should toggle email preference settings', async ({ page }) => {
     await page.goto('/profile')

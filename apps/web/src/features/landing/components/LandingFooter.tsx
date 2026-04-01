@@ -9,7 +9,9 @@ import { Link } from 'react-router-dom'
 import { Rocket } from 'lucide-react'
 
 const footerLinks = [
-  { label: 'Privacy Policy', href: '/privacy' },
+  { label: 'Terms of Service', href: '/legal/terms' },
+  { label: 'Privacy Policy', href: '/legal/privacy-policy' },
+  { label: 'Cookie Policy', href: '/legal/cookie-policy' },
   { label: 'Pricing', href: '/pricing' },
 ]
 

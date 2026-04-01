@@ -118,13 +118,22 @@ Every implementation task MUST end with these steps in order:
    cd backend && go test ./... -v
    cd apps/web && bun run test && bun run lint
    cd apps/web && bun run test:e2e -- --reporter=line
-4. Run `/commit-push-pr` to commit, push, and create PR with "Closes #N"
+4. Run Codex adversarial review on changes for a second opinion (see below)
+5. Run `/commit-push-pr` to commit, push, and create PR with "Closes #N"
 ```
+
+### Codex Review (MANDATORY after implementation rounds)
+After completing a round of code edits, testing, and implementation, ALWAYS run a Codex
+adversarial review (`codex:codex-rescue` agent) to get a second opinion on the changes.
+This catches issues that the primary implementation pass may miss — logic errors, edge
+cases, missing test coverage, convention violations, or architectural concerns. Do not
+skip this step even when changes seem straightforward.
 
 **DO NOT create a PR until:**
 - [ ] TDD was followed (tests written first)
 - [ ] `code-simplifier` has run
 - [ ] ALL tests pass (backend + frontend + e2e + lint)
+- [ ] Codex review completed (second opinion on changes)
 - [ ] PR body includes `Closes #N` to auto-close the issue
 
 ### Task Tracking (MANDATORY)

@@ -63,9 +63,6 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
     if (formState.gdpr_analytics_consent !== undefined && formState.gdpr_analytics_consent !== settings.gdpr_analytics_consent) {
       updates.gdpr_analytics_consent = formState.gdpr_analytics_consent
     }
-    if (formState.gdpr_advertising_consent !== undefined && formState.gdpr_advertising_consent !== settings.gdpr_advertising_consent) {
-      updates.gdpr_advertising_consent = formState.gdpr_advertising_consent
-    }
     if (formState.marketing_emails_enabled !== undefined && formState.marketing_emails_enabled !== settings.marketing_emails_enabled) {
       updates.marketing_emails_enabled = formState.marketing_emails_enabled
     }
@@ -171,20 +168,6 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
           </p>
         </div>
 
-        <div className="privacy-option">
-          <label>
-            <input
-              type="checkbox"
-              checked={formState.gdpr_advertising_consent ?? false}
-              onChange={() => handleToggle('gdpr_advertising_consent')}
-              aria-label="Advertising cookies"
-            />
-            <span className="option-label">Advertising</span>
-          </label>
-          <p className="option-description">
-            Show personalized ads (free tier only). Supports free version of the app.
-          </p>
-        </div>
       </section>
 
       {/* Email Preferences Section */}
