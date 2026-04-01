@@ -162,7 +162,16 @@ export function TermsOfService() {
             <li>Your data is preserved and you may resubscribe at any time to restore full access</li>
           </ul>
 
-          <h3>6.3 Exceptions</h3>
+          <h3>6.3 EU/UK Consumer Rights</h3>
+          <p>
+            If you are a consumer in the EEA or UK, you may have a statutory 14-day right to
+            withdraw from your initial purchase. By subscribing and requesting immediate access
+            to the Service, you expressly consent to immediate performance and acknowledge that
+            you lose your withdrawal right once the Service is fully provided during that period.
+            This no-refund policy does not limit any non-waivable statutory consumer rights.
+          </p>
+
+          <h3>6.4 Exceptions</h3>
           <p>
             We may issue refunds at our sole discretion in cases of documented technical failures
             or billing errors caused by BoostedBudget. To request a refund under these circumstances,
@@ -184,8 +193,12 @@ export function TermsOfService() {
             <li>Premium features (AI insights, advanced reports, API access) are unavailable</li>
           </ul>
           <p>
-            Your data is <strong>preserved indefinitely</strong> in read-only mode. You can subscribe
-            or resubscribe at any time to immediately restore full access to all features.
+            Your data is preserved in read-only mode. If you do not request deletion, we may retain
+            your account data for up to <strong>24 months</strong> after cancellation to allow
+            reactivation. After that period, we will delete or anonymize it unless a longer retention
+            period is legally required. You may request deletion at any time (see our{' '}
+            <Link to="/legal/privacy-policy">Privacy Policy</Link>). You can subscribe or resubscribe
+            at any time during the retention period to immediately restore full access to all features.
           </p>
         </section>
 
@@ -299,6 +312,12 @@ export function TermsOfService() {
             shall not exceed the greater of (a) the amounts you paid to us in the 12 months prior
             to the claim, or (b) $100 USD.
           </p>
+          <p>
+            Nothing in these Terms excludes or limits liability for fraud, fraudulent
+            misrepresentation, gross negligence, willful misconduct, death or personal injury
+            caused by negligence, or any liability that cannot be excluded or limited under
+            applicable law.
+          </p>
         </section>
 
         <section>
@@ -345,7 +364,16 @@ export function TermsOfService() {
             of general jurisdiction.
           </p>
 
-          <h3>15.4 Opt-Out</h3>
+          <h3>15.4 Consumer Protection Carveout</h3>
+          <p>
+            If you are a consumer residing in the EEA, UK, or another jurisdiction with mandatory
+            local consumer protections, nothing in this Section deprives you of the right to bring
+            claims in your local courts or rely on mandatory provisions of your local law. The
+            arbitration and class-action waiver provisions do not apply where prohibited by
+            applicable consumer protection law.
+          </p>
+
+          <h3>15.5 Opt-Out</h3>
           <p>
             You may opt out of binding arbitration by sending written notice to{' '}
             <strong>support@boostedbudget.com</strong> within 30 days of first accepting these Terms.
@@ -436,7 +464,8 @@ export function TermsOfService() {
             obligations where such failure or delay results from causes beyond its reasonable
             control, including natural disasters, internet or telecommunications outages,
             third-party service failures (including Plaid or Paddle), pandemics, or governmental
-            actions.
+            actions. A force majeure event does not excuse payment obligations, privacy and
+            security obligations, or refund obligations to the extent those remain performable.
           </p>
 
           <h3>20.3 Severability</h3>
@@ -507,7 +536,7 @@ export function TermsOfService() {
           <h2>Key Points Summary</h2>
           <ul>
             <li><strong>Free trial:</strong> 60 days, no credit card required, no ads</li>
-            <li><strong>After trial:</strong> Read-only access — your data is always preserved</li>
+            <li><strong>After trial:</strong> Read-only access — data retained for up to 24 months (or until you request deletion)</li>
             <li><strong>Refunds:</strong> No refunds for any billing period; access continues until period ends</li>
             <li><strong>Price changes:</strong> 30 days' email notice before any price increase</li>
             <li><strong>No money movement:</strong> We never move money on your behalf; not a bank or financial institution</li>

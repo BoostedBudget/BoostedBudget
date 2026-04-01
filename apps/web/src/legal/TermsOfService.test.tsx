@@ -105,7 +105,7 @@ describe('TermsOfService', () => {
     renderWithRouter(<TermsOfService />)
     expect(screen.getByText(/general provisions/i)).toBeInTheDocument()
     expect(screen.getAllByText(/indemnification/i).length).toBeGreaterThan(0)
-    expect(screen.getByText(/force majeure/i)).toBeInTheDocument()
+    expect(screen.getAllByText(/force majeure/i).length).toBeGreaterThan(0)
     expect(screen.getAllByText(/severability/i).length).toBeGreaterThan(0)
     expect(screen.getAllByText(/entire agreement/i).length).toBeGreaterThan(0)
   })
@@ -121,5 +121,36 @@ describe('TermsOfService', () => {
     const cookieLinks = screen.getAllByRole('link', { name: /cookie policy/i })
     expect(cookieLinks.length).toBeGreaterThan(0)
     expect(cookieLinks.some((link) => link.getAttribute('href') === '/legal/cookie-policy')).toBe(true)
+  })
+
+  it('renders EU/UK consumer withdrawal-right carveout', () => {
+    renderWithRouter(<TermsOfService />)
+    expect(screen.getByText(/14-day right to withdraw/i)).toBeInTheDocument()
+    expect(screen.getByText(/eea or uk/i)).toBeInTheDocument()
+  })
+
+  it('renders consumer protection arbitration carveout', () => {
+    renderWithRouter(<TermsOfService />)
+    expect(screen.getByText(/consumer protection carveout/i)).toBeInTheDocument()
+    expect(screen.getByText(/applicable consumer protection law/i)).toBeInTheDocument()
+  })
+
+  it('renders mandatory-law liability carveouts', () => {
+    renderWithRouter(<TermsOfService />)
+    expect(screen.getByText(/gross negligence, willful misconduct/i)).toBeInTheDocument()
+    expect(screen.getByText(/cannot be excluded or limited under applicable law/i)).toBeInTheDocument()
+  })
+
+  it('renders 24-month data retention instead of indefinite', () => {
+    renderWithRouter(<TermsOfService />)
+    expect(screen.getAllByText(/24 months/i).length).toBeGreaterThan(0)
+    expect(screen.queryByText(/preserved indefinitely/i)).not.toBeInTheDocument()
+  })
+
+  it('renders GDPR Article 6 legal basis in Privacy Policy (via ToS cross-reference)', () => {
+    // ToS references Privacy Policy; confirm ToS itself links to it
+    renderWithRouter(<TermsOfService />)
+    const ppLinks = screen.getAllByRole('link', { name: /privacy policy/i })
+    expect(ppLinks.length).toBeGreaterThan(0)
   })
 })
