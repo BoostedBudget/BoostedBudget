@@ -60,7 +60,13 @@ export function CookiePolicy() {
             <li>General device and browser information</li>
             <li>Session duration and interaction patterns</li>
             <li>Error and performance data</li>
+            <li>Session recordings on error (all form inputs are masked; financial amounts and
+              sensitive data are redacted)</li>
           </ul>
+          <p>
+            PostHog uses both cookies and browser <strong>localStorage</strong> for persistence.
+            Both are covered under this consent category.
+          </p>
           <p className="important-note">
             <strong>Privacy note:</strong> PostHog analytics are configured to respect GDPR requirements.
             Financial amounts, account numbers, and other sensitive data displayed in the app are masked
