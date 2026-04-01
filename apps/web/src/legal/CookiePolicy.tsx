@@ -54,6 +54,10 @@ export function CookiePolicy() {
             interact with BoostedBudget. This helps us identify usability issues, understand which
             features are most valuable, and improve the platform.
           </p>
+          <p>
+            Analytics cookies and localStorage are <strong>not set until you opt in</strong> via
+            our consent banner. You can withdraw consent as easily as you gave it.
+          </p>
           <p>PostHog analytics cookies collect:</p>
           <ul>
             <li>Pages visited and features used (anonymized)</li>

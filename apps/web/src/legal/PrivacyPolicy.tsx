@@ -47,7 +47,7 @@ export function PrivacyPolicy() {
           <ul>
             <li><strong>Service Delivery:</strong> Provide budgeting tools, financial insights, and automation rules</li>
             <li><strong>Account Management:</strong> Create and maintain your account, process subscriptions</li>
-            <li><strong>Financial Operations:</strong> Connect to financial institutions, sync transactions, execute automation rules</li>
+            <li><strong>Financial Operations:</strong> Connect to financial institutions, sync transactions, and generate rule-based suggestions for your review</li>
             <li><strong>Communication:</strong> Send service updates, security alerts, marketing emails (with consent)</li>
             <li><strong>Improvement:</strong> Analyze usage patterns to improve our platform</li>
             <li><strong>Security:</strong> Detect fraud, prevent abuse, ensure platform security</li>
@@ -57,6 +57,18 @@ export function PrivacyPolicy() {
             <strong>Important:</strong> BoostedBudget provides financial suggestions and automation only.
             We do not move money on your behalf. All automation rules create suggestions that you review and execute manually.
           </p>
+
+          <h3>3.1 Legal Basis for Processing (GDPR)</h3>
+          <p>Where GDPR applies, we rely on the following lawful bases:</p>
+          <ul>
+            <li><strong>Contract performance (Art. 6(1)(b)):</strong> Account management, service
+              delivery, financial operations, subscription processing</li>
+            <li><strong>Legitimate interests (Art. 6(1)(f)):</strong> Security and fraud prevention,
+              service improvement, error tracking and performance monitoring</li>
+            <li><strong>Consent (Art. 6(1)(a)):</strong> Analytics cookies (PostHog), marketing emails</li>
+            <li><strong>Legal obligation (Art. 6(1)(c)):</strong> Tax records, regulatory compliance,
+              responding to lawful requests</li>
+          </ul>
         </section>
 
         <section>
@@ -84,7 +96,13 @@ export function PrivacyPolicy() {
           <p>We work with the following trusted third-party service providers:</p>
           <ul>
             <li><strong>Clerk:</strong> Authentication and user management</li>
-            <li><strong>Plaid:</strong> Secure bank account connectivity and transaction data</li>
+            <li><strong>Plaid:</strong> Secure bank account connectivity and transaction data. When
+              you connect a financial account, you direct us and Plaid to access account and
+              transaction data from your financial institution. Data shared with Plaid may include
+              account identifiers, balances, transactions, investment holdings, liabilities, and
+              access credentials necessary to maintain the connection. Plaid processes this data
+              under its own End User Privacy Policy. You can disconnect Plaid-linked accounts at
+              any time in your account settings.</li>
             <li><strong>Paddle:</strong> Payment processing and subscription management</li>
             <li><strong>PostHog:</strong> Product analytics and usage insights (analytics cookies only, with your consent)</li>
             <li><strong>Cloud Infrastructure:</strong> AWS (data hosting), Fly.io (application hosting)</li>
@@ -134,6 +152,23 @@ export function PrivacyPolicy() {
             To exercise any of these rights, please contact us at <strong>privacy@boostedbudget.com</strong>.
             We will respond to your request within 30 days.
           </p>
+          <p>
+            If you are in the EEA or UK, you also have the right to lodge a complaint with your
+            local data protection supervisory authority.
+          </p>
+
+          <h3>7.1 Additional California Rights (CCPA)</h3>
+          <p>If you are a California resident, you have the right to:</p>
+          <ul>
+            <li>Know what personal information we collect, use, and disclose</li>
+            <li>Request deletion of your personal information</li>
+            <li>Correct inaccurate personal information</li>
+            <li>Not be discriminated against for exercising your privacy rights</li>
+          </ul>
+          <p>
+            We do not sell or share personal information for cross-context behavioral advertising.
+            To exercise your California privacy rights, contact us at privacy@boostedbudget.com.
+          </p>
         </section>
 
         <section>
@@ -169,13 +204,15 @@ export function PrivacyPolicy() {
           <p>We do not sell your personal information. We may share your data in the following circumstances:</p>
           <ul>
             <li><strong>With Your Consent:</strong> When you explicitly authorize data sharing</li>
-            <li><strong>Service Providers:</strong> Third-party partners performing services on our behalf (Clerk, Plaid, Paddle, PostHog)</li>
+            <li><strong>Service Providers:</strong> Third-party partners performing services on our behalf (as listed in Section 5)</li>
             <li><strong>Legal Compliance:</strong> When required by law, court order, or government request</li>
             <li><strong>Business Transfers:</strong> In the event of a merger, acquisition, or sale of assets</li>
             <li><strong>Fraud Prevention:</strong> To protect against fraud, security threats, or illegal activity</li>
           </ul>
           <p>
-            You can control data sharing preferences in your Privacy Settings under "Third-Party Data Sharing."
+            You may control optional data processing (analytics and marketing) in your Privacy
+            Settings. Essential service-provider processing required to operate the Service cannot
+            be disabled while your account is active.
           </p>
         </section>
 
@@ -192,8 +229,10 @@ export function PrivacyPolicy() {
           <h2>11. International Data Transfers</h2>
           <p>
             As our data is currently stored in the United States (us-east-1 region), international users should
-            be aware that their data may be transferred to and processed in the United States. We implement
-            appropriate safeguards to protect your data in accordance with applicable data protection laws.
+            be aware that their data may be transferred to and processed in the United States. Where required,
+            we rely on the European Commission's Standard Contractual Clauses (SCCs) and equivalent UK transfer
+            mechanisms. You may request a copy of the relevant transfer safeguards by contacting
+            privacy@boostedbudget.com.
           </p>
           <p>
             <strong>Future Multi-Region Support:</strong> We are planning to expand to additional regions
@@ -214,6 +253,8 @@ export function PrivacyPolicy() {
           </ul>
           <p>
             Your continued use of BoostedBudget after changes are posted constitutes acceptance of the updated policy.
+            Where required by law, we will obtain your affirmative consent before processing your data under
+            materially changed purposes.
           </p>
         </section>
 
