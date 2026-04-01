@@ -28,7 +28,7 @@ export function PrivacyPolicy() {
           <ul>
             <li><strong>Account Information:</strong> Email address, name, Clerk user ID</li>
             <li><strong>Profile Data:</strong> User preferences, subscription tier, primary data region selection</li>
-            <li><strong>Financial Data:</strong> Bank account information, transaction data, balances (via Plaid integration)</li>
+            <li><strong>Financial Data:</strong> Bank account information, transaction data, balances, investment holdings, and liability/loan details (via Plaid integration)</li>
             <li><strong>Authentication Tokens:</strong> Encrypted access tokens for third-party financial institutions</li>
             <li><strong>Usage Data:</strong> Application usage statistics, feature interactions, error logs</li>
           </ul>
@@ -88,6 +88,8 @@ export function PrivacyPolicy() {
             <li><strong>Paddle:</strong> Payment processing and subscription management</li>
             <li><strong>PostHog:</strong> Product analytics and usage insights (analytics cookies only, with your consent)</li>
             <li><strong>Cloud Infrastructure:</strong> AWS (data hosting), Fly.io (application hosting)</li>
+            <li><strong>Sentry:</strong> Error tracking and performance monitoring</li>
+            <li><strong>SendGrid:</strong> Transactional email delivery</li>
           </ul>
           <p>
             These providers may have access to your information only to perform specific tasks on our behalf
@@ -221,7 +223,6 @@ export function PrivacyPolicy() {
           <ul>
             <li><strong>Email:</strong> privacy@boostedbudget.com</li>
             <li><strong>Data Protection Inquiries:</strong> dpo@boostedbudget.com</li>
-            <li><strong>Mail:</strong> BoostedBudget Privacy Team, [Address], United States</li>
           </ul>
           <p>
             We are committed to resolving privacy concerns promptly and transparently.
@@ -236,11 +237,11 @@ export function PrivacyPolicy() {
             the number of users:
           </p>
           <ul>
-            <li><strong>Premium ($8.99/mo):</strong> Full access for 1 user</li>
-            <li><strong>Household (2) ($12.99/mo):</strong> Full access for 2 users</li>
-            <li><strong>Household (3) ($14.99/mo):</strong> Full access for 3 users</li>
-            <li><strong>Household (4) ($16.99/mo):</strong> Full access for 4 users</li>
-            <li><strong>Household (5+) ($18.99/mo):</strong> Full access for 5 users</li>
+            <li><strong>Premium ($8.99/mo or $79/year):</strong> Full access for 1 user</li>
+            <li><strong>Household (2) ($12.99/mo or $119/year):</strong> Full access for 2 users</li>
+            <li><strong>Household (3) ($14.99/mo or $139/year):</strong> Full access for 3 users</li>
+            <li><strong>Household (4) ($16.99/mo or $159/year):</strong> Full access for 4 users</li>
+            <li><strong>Household (5+) ($18.99/mo or $179/year):</strong> Full access for 5 users</li>
           </ul>
           <p>
             After trial expiry or subscription cancellation, accounts enter read-only mode — data is

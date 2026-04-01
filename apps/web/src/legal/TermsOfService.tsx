@@ -271,6 +271,10 @@ export function TermsOfService() {
               Clerk's <a href="https://clerk.com/terms" target="_blank" rel="noopener noreferrer">Terms of Service</a></li>
             <li><strong>PostHog:</strong> Product analytics (with your consent) — subject to
               PostHog's <a href="https://posthog.com/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a></li>
+            <li><strong>Sentry:</strong> Error tracking and application performance monitoring — subject to
+              Sentry's <a href="https://sentry.io/privacy/" target="_blank" rel="noopener noreferrer">Privacy Policy</a></li>
+            <li><strong>SendGrid:</strong> Transactional email delivery — subject to
+              Twilio's <a href="https://www.twilio.com/en-us/legal/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a></li>
           </ul>
           <p>
             We are not responsible for the practices or content of these third-party services. Your

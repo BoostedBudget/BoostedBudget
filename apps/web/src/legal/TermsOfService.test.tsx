@@ -110,6 +110,12 @@ describe('TermsOfService', () => {
     expect(screen.getAllByText(/entire agreement/i).length).toBeGreaterThan(0)
   })
 
+  it('renders Sentry and SendGrid in third-party services', () => {
+    renderWithRouter(<TermsOfService />)
+    expect(screen.getAllByText(/sentry/i).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/sendgrid/i).length).toBeGreaterThan(0)
+  })
+
   it('renders link to Cookie Policy', () => {
     renderWithRouter(<TermsOfService />)
     const cookieLinks = screen.getAllByRole('link', { name: /cookie policy/i })

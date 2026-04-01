@@ -65,7 +65,7 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
     saveConsent({
       necessary: true,
       analytics: true,
-      advertising: true,
+      advertising: false,
     });
   };
 
@@ -100,8 +100,8 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
         <div className="cookie-consent-header">
           <h2>🍪 Cookie Preferences</h2>
           <p className="cookie-consent-description">
-            We use cookies to enhance your experience, analyze site usage, and display
-            personalized ads for free tier users. You can customize your preferences below.
+            We use cookies to enhance your experience and analyze site usage.
+            You can customize your preferences below.
           </p>
         </div>
 
@@ -173,23 +173,6 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
                 </p>
               </div>
 
-              <div className="cookie-option">
-                <div className="cookie-option-header">
-                  <label htmlFor="consent-advertising">
-                    <strong>Advertising Cookies</strong>
-                  </label>
-                  <input
-                    type="checkbox"
-                    id="consent-advertising"
-                    checked={customConsents.advertising}
-                    onChange={() => handleToggleConsent('advertising')}
-                    aria-label="Advertising cookies"
-                  />
-                </div>
-                <p className="cookie-option-description">
-                  Used for advertising and marketing purposes.
-                </p>
-              </div>
             </div>
 
             <div className="cookie-consent-actions">
