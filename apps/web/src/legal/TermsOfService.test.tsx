@@ -153,4 +153,10 @@ describe('TermsOfService', () => {
     const ppLinks = screen.getAllByRole('link', { name: /privacy policy/i })
     expect(ppLinks.length).toBeGreaterThan(0)
   })
+
+  it('specifies AAA Consumer Arbitration Rules (not generic AAA rules)', () => {
+    renderWithRouter(<TermsOfService />)
+    expect(screen.getByText(/consumer arbitration rules of the american arbitration association/i)).toBeInTheDocument()
+    expect(screen.getByText(/filing fees are governed by the aaa consumer arbitration rules fee schedule/i)).toBeInTheDocument()
+  })
 })

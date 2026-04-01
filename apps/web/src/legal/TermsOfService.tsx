@@ -348,10 +348,11 @@ export function TermsOfService() {
           <p>
             If informal resolution fails, any dispute arising from or relating to these Terms or the
             Service shall be resolved by <strong>binding individual arbitration</strong> under the
-            rules of the American Arbitration Association (AAA), rather than in court.
+            Consumer Arbitration Rules of the American Arbitration Association (AAA), rather than in court.
           </p>
           <ul>
             <li>Arbitration will be conducted in English</li>
+            <li>Filing fees are governed by the AAA Consumer Arbitration Rules fee schedule</li>
             <li>You may bring claims only in your individual capacity, not as a plaintiff or class member
               in any purported class or representative action</li>
             <li><strong>Class actions and class arbitrations are not permitted</strong></li>

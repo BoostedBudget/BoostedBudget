@@ -106,7 +106,9 @@ export function PrivacyPolicy() {
             <li><strong>Paddle:</strong> Payment processing and subscription management</li>
             <li><strong>PostHog:</strong> Product analytics and usage insights (analytics cookies only, with your consent)</li>
             <li><strong>Cloud Infrastructure:</strong> AWS (data hosting), Fly.io (application hosting)</li>
-            <li><strong>Sentry:</strong> Error tracking and performance monitoring</li>
+            <li><strong>Sentry:</strong> Error tracking and performance monitoring. Sentry may receive
+              error context, device and browser information, IP address, and application state at the
+              time of an error.</li>
             <li><strong>SendGrid:</strong> Transactional email delivery</li>
           </ul>
           <p>
@@ -164,10 +166,25 @@ export function PrivacyPolicy() {
             <li>Request deletion of your personal information</li>
             <li>Correct inaccurate personal information</li>
             <li>Not be discriminated against for exercising your privacy rights</li>
+            <li>Limit the use of your sensitive personal information (including financial account data)
+              to purposes necessary to provide the Service</li>
           </ul>
           <p>
             We do not sell or share personal information for cross-context behavioral advertising.
             To exercise your California privacy rights, contact us at privacy@boostedbudget.com.
+          </p>
+          <p>
+            We use sensitive personal information (such as financial account numbers, balances, and
+            transaction data) only as necessary to provide and improve the Service. We do not use or
+            share sensitive personal information for purposes beyond what is necessary to perform the
+            Service.
+          </p>
+
+          <h3>7.2 Do Not Track Signals</h3>
+          <p>
+            Some browsers transmit "Do Not Track" (DNT) signals. Because there is no industry
+            consensus on how to respond to DNT signals, we do not currently respond to them.
+            However, you can control analytics tracking through our cookie consent controls.
           </p>
         </section>
 
@@ -196,6 +213,22 @@ export function PrivacyPolicy() {
           <h3>8.3 Backup Retention</h3>
           <p>
             Deleted data may persist in encrypted backups for up to 90 days before being permanently purged.
+          </p>
+
+          <h3>8.4 Cancelled Accounts (No Deletion Request)</h3>
+          <p>
+            If you cancel your subscription but do not request account deletion, we may retain your
+            account data in read-only mode for up to <strong>24 months</strong> to allow reactivation.
+            After that period, we will delete or anonymize your data unless a longer retention period
+            is legally required. You may request deletion at any time per Section 8.2.
+          </p>
+
+          <h3>8.5 Removed Household Members</h3>
+          <p>
+            When a household member is removed from a shared plan, their data is preserved for
+            30 days before permanent deletion (see our{' '}
+            <Link to="/legal/terms">Terms of Service</Link>, Section 9.2). The backup retention
+            period in Section 8.3 applies after permanent deletion.
           </p>
         </section>
 
@@ -256,6 +289,14 @@ export function PrivacyPolicy() {
             Where required by law, we will obtain your affirmative consent before processing your data under
             materially changed purposes.
           </p>
+
+          <h3>12.1 Data Breach Notification</h3>
+          <p>
+            In the event of a personal data breach that is likely to result in a risk to your rights,
+            we will notify affected users without unreasonable delay, and in any case within the
+            timeframe required by applicable law. We will also notify relevant supervisory authorities
+            where required by GDPR or other applicable data protection laws.
+          </p>
         </section>
 
         <section>
@@ -273,17 +314,10 @@ export function PrivacyPolicy() {
         <section>
           <h2>14. Subscription Plans and Data Usage</h2>
           <p>
-            BoostedBudget offers a <strong>60-day free trial</strong> (no credit card required, no ads) followed
-            by paid subscription plans. All paid plans include the same features; household plans differ only in
-            the number of users:
+            BoostedBudget offers a <strong>60-day free trial</strong> (no credit card required, no ads)
+            followed by paid subscription plans. For current plan details and pricing, visit our{' '}
+            <Link to="/pricing">Pricing page</Link>.
           </p>
-          <ul>
-            <li><strong>Premium ($8.99/mo or $79/year):</strong> Full access for 1 user</li>
-            <li><strong>Household (2) ($12.99/mo or $119/year):</strong> Full access for 2 users</li>
-            <li><strong>Household (3) ($14.99/mo or $139/year):</strong> Full access for 3 users</li>
-            <li><strong>Household (4) ($16.99/mo or $159/year):</strong> Full access for 4 users</li>
-            <li><strong>Household (5+) ($18.99/mo or $179/year):</strong> Full access for 5 users</li>
-          </ul>
           <p>
             After trial expiry or subscription cancellation, accounts enter read-only mode — data is
             preserved and accessible but no new syncing or premium features are available. See our{' '}
