@@ -102,7 +102,7 @@ test.describe('Cookie Consent Banner', () => {
     await expect(necessaryCheckbox).toBeDisabled();
   });
 
-  test('should allow toggling analytics and advertising cookies', async ({ page }) => {
+  test('should allow toggling analytics cookies', async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
 
@@ -122,17 +122,8 @@ test.describe('Cookie Consent Banner', () => {
     const newAnalyticsState = await analyticsCheckbox.isChecked();
     expect(newAnalyticsState).toBe(!initialAnalyticsState);
 
-    // Get advertising checkbox
-    const advertisingCheckbox = page.locator('#consent-advertising');
-    const initialAdvertisingState = await advertisingCheckbox.isChecked();
-
-    // Toggle advertising checkbox
-    await advertisingCheckbox.click();
-    await page.waitForTimeout(100);
-
-    // Verify state changed
-    const newAdvertisingState = await advertisingCheckbox.isChecked();
-    expect(newAdvertisingState).toBe(!initialAdvertisingState);
+    // Verify no advertising checkbox exists
+    await expect(page.locator('#consent-advertising')).not.toBeVisible();
   });
 
   test('should save custom preferences and hide banner', async ({ page }) => {
