@@ -660,7 +660,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       await expect(page.getByRole('button', { name: '90 days' })).toBeVisible()
       await expect(page.getByRole('button', { name: '1 year' })).toBeVisible()
       await expect(page.getByRole('button', { name: 'All time' })).toBeVisible()
-      await expect(page.getByRole('button', { name: 'Custom' })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Custom', exact: true })).toBeVisible()
     })
 
     test('should apply date preset and update URL', async ({ page }) => {
