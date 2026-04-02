@@ -318,7 +318,7 @@ function App() {
         </main>
       )}
 
-      {!isLandingPage && <AppFooter />}
+      <AppFooter />
 
       <CookieConsent onConsentChange={handleConsentChange} />
       <Toaster position="bottom-right" richColors />
