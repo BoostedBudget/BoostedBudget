@@ -117,6 +117,8 @@ jobs:
     needs: build-backend
     if: ${{ needs.build-backend.result == 'success' }}
     runs-on: [self-hosted, macOS, mac-mini]
+    environment:
+      name: staging
 
     steps:
       - name: Cleanup Docker storage
