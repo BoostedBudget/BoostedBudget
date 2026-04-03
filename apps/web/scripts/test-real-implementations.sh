@@ -23,7 +23,6 @@
 # - useSavingsGoals.test.tsx - Savings goals hook
 # - useBudgetDetail.test.tsx - Budget detail hook
 # - useAvailableCategories.test.tsx - Available categories hook
-# - useRuleTierLimits.test.ts - Rule tier limits hook
 
 set -e
 
@@ -55,7 +54,6 @@ TEST_FILES=(
     "$FRONTEND_DIR/src/features/budgets/hooks/useSavingsGoals.test.tsx"
     "$FRONTEND_DIR/src/features/budgets/hooks/useBudgetDetail.test.tsx"
     "$FRONTEND_DIR/src/features/budgets/hooks/useAvailableCategories.test.tsx"
-    "$FRONTEND_DIR/src/features/rules/hooks/useRuleTierLimits.test.ts"
 )
 
 # Preload files for real implementation tests (absolute paths)

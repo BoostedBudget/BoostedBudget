@@ -8,7 +8,6 @@
 # Files that use this config:
 # - src/features/dashboard/widgets/registry.test.ts (tests real registry)
 # - src/features/dashboard/context/DashboardContext.test.tsx (tests real context)
-# - src/features/rules/hooks/useRuleTierLimits.test.ts (tests real hook)
 # - src/features/budgets/hooks/useSavingsGoals.test.tsx (tests real hook with API mocks)
 
 [test]

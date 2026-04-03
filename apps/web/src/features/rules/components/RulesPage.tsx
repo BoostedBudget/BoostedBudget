@@ -3,7 +3,7 @@
  * Issue #39: Rule Builder UI
  *
  * Main page for viewing and managing automation rules.
- * Supports card and table views with tier limit display.
+ * Supports card and table views.
  */
 
 import { useCallback, useState } from 'react'
@@ -24,7 +24,6 @@ import {
 import type { AutomationRule } from '@boostedbudget/api-client/models'
 import { ListViewToggle } from '@/shared/components/ListViewToggle'
 import type { ListView } from '@/shared/components/ListViewToggle'
-import { useRuleTierLimits } from '../hooks/useRuleTierLimits'
 import { STORAGE_KEY_LIST_VIEW } from '../constants'
 import { RuleCard } from './RuleCard'
 import { RuleTable } from './RuleTable'
@@ -109,9 +108,6 @@ export function RulesPage() {
   })
   const deleteMutation = useDeleteAutomationRule()
   const testMutation = useTestAutomationRule()
-
-  // Tier limits (simplified - all tiers have unlimited rules)
-  const tierLimits = useRuleTierLimits({ currentRuleCount: rules.length })
 
   // Handlers
   const handleCreateRule = useCallback(() => {
@@ -230,7 +226,7 @@ export function RulesPage() {
         <div className="rules-page__title-row">
           <h1 className="rules-page__title">Automation Rules</h1>
           <span className="rules-page__tier-display">
-            {tierLimits.rulesCountDisplay}
+            {rules.length} {rules.length === 1 ? 'rule' : 'rules'}
           </span>
         </div>
 
@@ -243,7 +239,6 @@ export function RulesPage() {
           <button
             type="button"
             onClick={handleCreateRule}
-            disabled={tierLimits.isAtLimit}
             className="rules-page__create-btn"
             aria-label="Create new rule"
           >
@@ -252,22 +247,6 @@ export function RulesPage() {
           </button>
         </div>
       </header>
-
-      {tierLimits.shouldShowUpgradeBanner && (
-        <div className="rules-page__upgrade-banner">
-          <p>
-            You've reached your rule limit. Upgrade to create more automation
-            rules.
-          </p>
-          <button
-            type="button"
-            onClick={() => navigate('/pricing')}
-            className="rules-page__upgrade-btn"
-          >
-            Upgrade Now
-          </button>
-        </div>
-      )}
 
       <div className="rules-page__content">
         {view === 'cards' ? (

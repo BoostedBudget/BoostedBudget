@@ -314,13 +314,11 @@ func main() {
 
 		// Issue #37: Rule Scheduler Manager with providers
 		ruleSchedulerManager = workers.NewRuleSchedulerManager(appLogger)
-		subscriptionLimitAdapter := workers.NewSubscriptionLimitAdapter()
 
 		// Create and register CronTriggerProvider
 		cronProvider := workers.NewCronTriggerProvider(
 			automationRuleRepo,
 			ruleExecutionService,
-			subscriptionLimitAdapter,
 			15*time.Minute, // Refresh interval for picking up new/updated rules
 			appLogger,
 		)
@@ -330,7 +328,6 @@ func main() {
 		manualProvider := workers.NewManualTriggerProvider(
 			automationRuleRepo,
 			ruleExecutionService,
-			subscriptionLimitAdapter,
 			appLogger,
 		)
 		ruleSchedulerManager.RegisterProvider(manualProvider)

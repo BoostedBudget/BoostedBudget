@@ -39,7 +39,6 @@ preload = [
   "./src/test/mocks/sonner.ts",
   "./src/test/mocks/automation-rules-api.ts",
   "./src/test/mocks/react-router.ts",
-  "./src/test/mocks/rule-tier-limits.ts",
   "./src/test/mocks/budgets-wrapper.ts",
   "./src/test/mocks/shared-charts.ts",
   "./src/test/mocks/net-worth-hooks.ts",
