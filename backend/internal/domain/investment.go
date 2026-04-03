@@ -121,6 +121,7 @@ type HoldingSyncResult struct {
 	SecuritiesUpserted int
 	HoldingsReplaced   int
 	AccountsProcessed  int
+	Errors             []string // accounts skipped due to unmapped securities
 }
 
 // InvestmentTransactionSyncResult contains the results of an investment transaction sync.
