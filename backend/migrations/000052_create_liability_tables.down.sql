@@ -1,5 +1,5 @@
 -- Rollback: Create liability tables
--- Issue #N: Plaid Liabilities
+-- Issue #910: Plaid Liabilities
 
 -- Remove column from linked_items first
 DO $$
