@@ -169,6 +169,12 @@ func (m *MockLinkedItemRepository) UpdateInvestmentsLastSyncedDate(ctx context.C
 	return args.Error(0)
 }
 
+// UpdateLiabilitiesLastSyncedAt - Issue #910: Plaid Liabilities
+func (m *MockLinkedItemRepository) UpdateLiabilitiesLastSyncedAt(ctx context.Context, id string, t time.Time) error {
+	args := m.Called(ctx, id, t)
+	return args.Error(0)
+}
+
 // MockJobQueue mocks the JobQueue interface
 type MockJobQueue struct {
 	mock.Mock

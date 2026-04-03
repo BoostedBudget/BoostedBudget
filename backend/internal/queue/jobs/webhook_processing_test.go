@@ -52,6 +52,17 @@ func (m *MockWebhookInvestmentSyncService) ProcessWebhook(ctx context.Context, w
 	return args.Error(0)
 }
 
+// MockWebhookLiabilitySyncService mocks LiabilitySyncService for webhook tests.
+// Issue #910: Plaid Liabilities
+type MockWebhookLiabilitySyncService struct {
+	mock.Mock
+}
+
+func (m *MockWebhookLiabilitySyncService) ProcessWebhook(ctx context.Context, webhook *domain.WebhookEvent) error {
+	args := m.Called(ctx, webhook)
+	return args.Error(0)
+}
+
 // MockItemErrorService mocks ItemErrorService for webhook tests
 type MockItemErrorService struct {
 	mock.Mock
@@ -390,9 +401,9 @@ func TestWebhookProcessingWorker_Work_UnknownWebhookType(t *testing.T) {
 	mockItemErrorSvc.AssertNotCalled(t, "ProcessWebhook")
 }
 
-// TestWebhookProcessingWorker_Work_LiabilitiesWebhook_LoggedAndAcknowledged verifies
-// LIABILITIES webhook is logged and acknowledged (Phase 2 #241, processing deferred)
-func TestWebhookProcessingWorker_Work_LiabilitiesWebhook_LoggedAndAcknowledged(t *testing.T) {
+// TestWebhookProcessingWorker_Work_LiabilitiesWebhook_RoutedToLiabilitySyncService verifies
+// LIABILITIES webhook is routed to LiabilitySyncService.ProcessWebhook (Issue #910).
+func TestWebhookProcessingWorker_Work_LiabilitiesWebhook_RoutedToLiabilitySyncService(t *testing.T) {
 	ctx := context.Background()
 	webhookID := uuid.New().String()
 	itemID := "plaid-item-liabilities-123"
@@ -407,13 +418,16 @@ func TestWebhookProcessingWorker_Work_LiabilitiesWebhook_LoggedAndAcknowledged(t
 
 	mockRepo := new(MockWebhookRepository)
 	mockSyncSvc := new(MockWebhookTransactionSyncService)
+	mockLiabilitySvc := new(MockWebhookLiabilitySyncService)
 	mockItemErrorSvc := new(MockItemErrorService)
 
 	mockRepo.On("GetByID", ctx, webhookID).Return(webhook, nil)
+	mockLiabilitySvc.On("ProcessWebhook", ctx, webhook).Return(nil)
 
 	worker := NewWebhookProcessingWorker(WebhookProcessingWorkerDeps{
 		WebhookRepo:        mockRepo,
 		TransactionSyncSvc: mockSyncSvc,
+		LiabilitySyncSvc:   mockLiabilitySvc,
 		ItemErrorSvc:       mockItemErrorSvc,
 		Logger:             newTestWebhookLogger(),
 	})
@@ -426,9 +440,9 @@ func TestWebhookProcessingWorker_Work_LiabilitiesWebhook_LoggedAndAcknowledged(t
 
 	err := worker.Work(ctx, job)
 
-	// Should succeed without error (logged, processing deferred)
 	require.NoError(t, err)
 	mockRepo.AssertExpectations(t)
+	mockLiabilitySvc.AssertExpectations(t)
 	mockSyncSvc.AssertNotCalled(t, "ProcessWebhook")
 	mockItemErrorSvc.AssertNotCalled(t, "ProcessWebhook")
 }

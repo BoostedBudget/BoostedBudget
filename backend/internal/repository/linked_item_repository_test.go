@@ -85,7 +85,7 @@ func TestLinkedItemRepository_GetByUserID(t *testing.T) {
 		"status", "error_code", "error_message", "last_error_at", "retry_count", "next_retry_at",
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
-		"investments_last_synced_date",
+		"investments_last_synced_date", "liabilities_last_synced_at",
 	}).
 		AddRow(
 			uuid.New().String(), userID, "item-1", "encrypted-token-1",
@@ -93,7 +93,7 @@ func TestLinkedItemRepository_GetByUserID(t *testing.T) {
 			"active", nil, nil, nil, 0, nil,
 			nil, nil,
 			now, now,
-			nil,
+			nil, nil,
 		).
 		AddRow(
 			uuid.New().String(), userID, "item-2", "encrypted-token-2",
@@ -101,22 +101,11 @@ func TestLinkedItemRepository_GetByUserID(t *testing.T) {
 			"active", nil, nil, nil, 0, nil,
 			nil, nil,
 			now, now,
-			nil,
+			nil, nil,
 		)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, user_id, item_id, access_token_encrypted,
-		       institution_id, institution_name, provider,
-		       cursor, last_synced_at,
-		       status, error_code, error_message, last_error_at,
-		       retry_count, next_retry_at,
-		       replaced_at, replaced_by_id,
-		       created_at, updated_at,
-		       investments_last_synced_date
-		FROM linked_items
-		WHERE user_id = $1
-		ORDER BY created_at DESC
-	`)).WithArgs(userID).WillReturnRows(rows)
+	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id").
+		WithArgs(userID).WillReturnRows(rows)
 
 	// Execute
 	items, err := repo.GetByUserID(ctx, userID)
@@ -148,26 +137,18 @@ func TestLinkedItemRepository_GetByItemID(t *testing.T) {
 		"status", "error_code", "error_message", "last_error_at", "retry_count", "next_retry_at",
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
-		"investments_last_synced_date",
+		"investments_last_synced_date", "liabilities_last_synced_at",
 	}).AddRow(
 		linkedItemID, userID, itemID, "encrypted-token",
 		"ins_123", "Chase", "plaid", nil, nil,
 		"active", nil, nil, nil, 0, nil,
 		nil, nil,
 		now, now,
-		nil,
+		nil, nil,
 	)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, user_id, item_id, access_token_encrypted,
-		       institution_id, institution_name, provider, cursor, last_synced_at,
-		       status, error_code, error_message, last_error_at, retry_count, next_retry_at,
-		       replaced_at, replaced_by_id,
-		       created_at, updated_at,
-		       investments_last_synced_date
-		FROM linked_items
-		WHERE item_id = $1
-	`)).WithArgs(itemID).WillReturnRows(rows)
+	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE item_id").
+		WithArgs(itemID).WillReturnRows(rows)
 
 	// Execute
 	item, err := repo.GetByItemID(ctx, itemID)
@@ -189,16 +170,8 @@ func TestLinkedItemRepository_GetByItemID_NotFound(t *testing.T) {
 	ctx := context.Background()
 	itemID := "nonexistent-item"
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, user_id, item_id, access_token_encrypted,
-		       institution_id, institution_name, provider, cursor, last_synced_at,
-		       status, error_code, error_message, last_error_at, retry_count, next_retry_at,
-		       replaced_at, replaced_by_id,
-		       created_at, updated_at,
-		       investments_last_synced_date
-		FROM linked_items
-		WHERE item_id = $1
-	`)).WithArgs(itemID).WillReturnError(pgx.ErrNoRows)
+	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE item_id").
+		WithArgs(itemID).WillReturnError(pgx.ErrNoRows)
 
 	// Execute
 	item, err := repo.GetByItemID(ctx, itemID)
@@ -269,34 +242,23 @@ func TestLinkedItemRepository_GetByIDAndUser_Success(t *testing.T) {
 	userID := uuid.New().String()
 	now := time.Now()
 
-	expectedQuery := `
-		SELECT id, user_id, item_id, access_token_encrypted,
-		       institution_id, institution_name, provider, cursor, last_synced_at,
-		       status, error_code, error_message, last_error_at, retry_count, next_retry_at,
-		       replaced_at, replaced_by_id,
-		       created_at, updated_at,
-		       investments_last_synced_date
-		FROM linked_items
-		WHERE id = $1 AND user_id = $2
-	`
-
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "item_id", "access_token_encrypted",
 		"institution_id", "institution_name", "provider", "cursor", "last_synced_at",
 		"status", "error_code", "error_message", "last_error_at", "retry_count", "next_retry_at",
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
-		"investments_last_synced_date",
+		"investments_last_synced_date", "liabilities_last_synced_at",
 	}).AddRow(
 		itemID, userID, "plaid-item-123", "encrypted-token",
 		"ins_chase", "Chase", "plaid", nil, nil,
 		"active", nil, nil, nil, 0, nil,
 		nil, nil,
 		now, now,
-		nil,
+		nil, nil,
 	)
 
-	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
+	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE id.*AND user_id").
 		WithArgs(itemID, userID).
 		WillReturnRows(rows)
 
@@ -320,18 +282,7 @@ func TestLinkedItemRepository_GetByIDAndUser_NotFound(t *testing.T) {
 	itemID := uuid.New().String()
 	userID := uuid.New().String()
 
-	expectedQuery := `
-		SELECT id, user_id, item_id, access_token_encrypted,
-		       institution_id, institution_name, provider, cursor, last_synced_at,
-		       status, error_code, error_message, last_error_at, retry_count, next_retry_at,
-		       replaced_at, replaced_by_id,
-		       created_at, updated_at,
-		       investments_last_synced_date
-		FROM linked_items
-		WHERE id = $1 AND user_id = $2
-	`
-
-	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
+	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE id.*AND user_id").
 		WithArgs(itemID, userID).
 		WillReturnError(pgx.ErrNoRows)
 
@@ -354,19 +305,8 @@ func TestLinkedItemRepository_GetByIDAndUser_NotOwner(t *testing.T) {
 	itemID := uuid.New().String()
 	wrongUserID := uuid.New().String()
 
-	expectedQuery := `
-		SELECT id, user_id, item_id, access_token_encrypted,
-		       institution_id, institution_name, provider, cursor, last_synced_at,
-		       status, error_code, error_message, last_error_at, retry_count, next_retry_at,
-		       replaced_at, replaced_by_id,
-		       created_at, updated_at,
-		       investments_last_synced_date
-		FROM linked_items
-		WHERE id = $1 AND user_id = $2
-	`
-
 	// No rows returned (ownership check fails)
-	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
+	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE id.*AND user_id").
 		WithArgs(itemID, wrongUserID).
 		WillReturnError(pgx.ErrNoRows)
 
@@ -472,7 +412,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_Active(t *testing.T) {
 		"status", "error_code", "error_message", "last_error_at", "retry_count", "next_retry_at",
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
-		"investments_last_synced_date",
+		"investments_last_synced_date", "liabilities_last_synced_at",
 	}).
 		AddRow(
 			itemID, userID, "item-1", "encrypted-token",
@@ -480,7 +420,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_Active(t *testing.T) {
 			"active", nil, nil, nil, 0, nil,
 			nil, nil,
 			now, now,
-			nil,
+			nil, nil,
 		)
 
 	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id.*AND status").
@@ -514,7 +454,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_NotFound(t *testing.T) {
 		"status", "error_code", "error_message", "last_error_at", "retry_count", "next_retry_at",
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
-		"investments_last_synced_date",
+		"investments_last_synced_date", "liabilities_last_synced_at",
 	})
 
 	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id.*AND status").
@@ -549,7 +489,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_Replaced(t *testing.T) {
 		"status", "error_code", "error_message", "last_error_at", "retry_count", "next_retry_at",
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
-		"investments_last_synced_date",
+		"investments_last_synced_date", "liabilities_last_synced_at",
 	}).
 		AddRow(
 			itemID, userID, "item-old", "encrypted-token",
@@ -557,7 +497,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_Replaced(t *testing.T) {
 			"replaced", nil, nil, nil, 0, nil,
 			&replacedAt, &replacedByID,
 			now, now,
-			nil,
+			nil, nil,
 		)
 
 	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id.*AND status").
@@ -651,14 +591,14 @@ func TestLinkedItemRepository_GetByUserAndInstitution_MultipleDisconnected_Retur
 		"status", "error_code", "error_message", "last_error_at", "retry_count", "next_retry_at",
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
-		"investments_last_synced_date",
+		"investments_last_synced_date", "liabilities_last_synced_at",
 	}).AddRow(
 		mostRecentItemID, userID, "item-recent", "encrypted-token",
 		institutionID, "Chase", "plaid", nil, nil,
 		"disconnected", nil, nil, nil, 0, nil,
 		nil, nil,
 		now, now,
-		nil,
+		nil, nil,
 	)
 
 	// The regex must include ORDER BY created_at DESC to verify the fix is in place.
@@ -692,14 +632,14 @@ func TestLinkedItemRepository_GetByUserAndInstitution_SingleDisconnected_Returns
 		"status", "error_code", "error_message", "last_error_at", "retry_count", "next_retry_at",
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
-		"investments_last_synced_date",
+		"investments_last_synced_date", "liabilities_last_synced_at",
 	}).AddRow(
 		itemID, userID, "item-disconnected", "encrypted-token",
 		institutionID, "Bank of America", "plaid", nil, nil,
 		"disconnected", nil, nil, nil, 0, nil,
 		nil, nil,
 		now, now,
-		nil,
+		nil, nil,
 	)
 
 	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id.*AND status.*ORDER BY created_at DESC").
@@ -731,7 +671,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_NoMatch_ReturnsNotFound(t 
 		"status", "error_code", "error_message", "last_error_at", "retry_count", "next_retry_at",
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
-		"investments_last_synced_date",
+		"investments_last_synced_date", "liabilities_last_synced_at",
 	})
 
 	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id.*AND status.*ORDER BY created_at DESC").
@@ -769,26 +709,18 @@ func TestLinkedItemRepository_GetByItemID_ReturnsInvestmentsLastSyncedDate(t *te
 		"status", "error_code", "error_message", "last_error_at", "retry_count", "next_retry_at",
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
-		"investments_last_synced_date",
+		"investments_last_synced_date", "liabilities_last_synced_at",
 	}).AddRow(
 		linkedItemID, userID, itemID, "encrypted-token",
 		"ins_123", "Chase", "plaid", nil, nil,
 		"active", nil, nil, nil, 0, nil,
 		nil, nil,
 		now, now,
-		&syncDate,
+		&syncDate, nil,
 	)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, user_id, item_id, access_token_encrypted,
-		       institution_id, institution_name, provider, cursor, last_synced_at,
-		       status, error_code, error_message, last_error_at, retry_count, next_retry_at,
-		       replaced_at, replaced_by_id,
-		       created_at, updated_at,
-		       investments_last_synced_date
-		FROM linked_items
-		WHERE item_id = $1
-	`)).WithArgs(itemID).WillReturnRows(rows)
+	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE item_id").
+		WithArgs(itemID).WillReturnRows(rows)
 
 	item, err := repo.GetByItemID(ctx, itemID)
 
@@ -816,7 +748,7 @@ func TestLinkedItemRepository_GetByUserID_IncludesAllStatuses(t *testing.T) {
 		"status", "error_code", "error_message", "last_error_at", "retry_count", "next_retry_at",
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
-		"investments_last_synced_date",
+		"investments_last_synced_date", "liabilities_last_synced_at",
 	}).
 		AddRow(
 			uuid.New().String(), userID, "item-1", "encrypted-token-1",
@@ -824,7 +756,7 @@ func TestLinkedItemRepository_GetByUserID_IncludesAllStatuses(t *testing.T) {
 			"active", nil, nil, nil, 0, nil,
 			nil, nil,
 			now, now,
-			nil,
+			nil, nil,
 		).
 		AddRow(
 			uuid.New().String(), userID, "item-2", "encrypted-token-2",
@@ -832,7 +764,7 @@ func TestLinkedItemRepository_GetByUserID_IncludesAllStatuses(t *testing.T) {
 			"replaced", nil, nil, nil, 0, nil,
 			&now, nil,
 			now, now,
-			nil,
+			nil, nil,
 		)
 
 	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id").

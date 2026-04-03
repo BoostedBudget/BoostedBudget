@@ -63,6 +63,10 @@ type LinkedItem struct {
 	// NULL means never synced — uses 2-year lookback on first sync.
 	InvestmentsLastSyncedDate *time.Time `json:"investments_last_synced_date,omitempty" db:"investments_last_synced_date"`
 
+	// Liabilities sync tracking (Issue #910)
+	// NULL means never synced.
+	LiabilitiesLastSyncedAt *time.Time `json:"liabilities_last_synced_at,omitempty" db:"liabilities_last_synced_at"`
+
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }

@@ -9,9 +9,13 @@ const (
 	EventWebhookReceived  = "webhook_received"
 
 	// Plaid investment sync events (Issue #659)
-	EventInvestmentHoldingsSynced      = "investment_holdings_synced"
-	EventInvestmentTransactionsSynced  = "investment_transactions_synced"
-	EventInvestmentSyncFailed          = "investment_sync_failed"
+	EventInvestmentHoldingsSynced     = "investment_holdings_synced"
+	EventInvestmentTransactionsSynced = "investment_transactions_synced"
+	EventInvestmentSyncFailed         = "investment_sync_failed"
+
+	// Plaid liability sync events (Issue #910)
+	EventLiabilitiesSynced   = "liabilities_synced"
+	EventLiabilitySyncFailed = "liability_sync_failed"
 
 	// Paddle payment events
 	EventSubscriptionCreated    = "subscription_created"

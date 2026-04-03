@@ -152,6 +152,12 @@ type PlaidService interface {
 	// Uses offset/count pagination (not cursor-based). Caller handles the pagination loop.
 	// Issue #659: Plaid Investments
 	InvestmentsTransactionsGet(ctx context.Context, accessToken, startDate, endDate string, offset, count int32) (*plaid.InvestmentsTransactionsGetResponse, error)
+
+	// LiabilitiesGet fetches current liability data for all accounts in a linked item.
+	// Returns a full snapshot (no cursor/delta) of credit, mortgage, and student loan liabilities.
+	// Callers should replace existing data, not merge.
+	// Issue #910: Plaid Liabilities
+	LiabilitiesGet(ctx context.Context, accessToken string) (*plaid.LiabilitiesGetResponse, error)
 }
 
 // plaidService implements PlaidService with a configured Plaid API client
@@ -605,6 +611,23 @@ func (s *plaidService) InvestmentsTransactionsGet(ctx context.Context, accessTok
 		Execute()
 	if err != nil {
 		return nil, fmt.Errorf("plaid InvestmentsTransactionsGet failed: %w", err)
+	}
+	return &resp, nil
+}
+
+// LiabilitiesGet calls Plaid /liabilities/get.
+// Returns full liability snapshot: credit card, mortgage, and student loan data.
+// Issue #910: Plaid Liabilities
+func (s *plaidService) LiabilitiesGet(ctx context.Context, accessToken string) (*plaid.LiabilitiesGetResponse, error) {
+	if accessToken == "" {
+		return nil, fmt.Errorf("access token cannot be empty")
+	}
+	request := plaid.NewLiabilitiesGetRequest(accessToken)
+	resp, _, err := s.client.PlaidApi.LiabilitiesGet(ctx).
+		LiabilitiesGetRequest(*request).
+		Execute()
+	if err != nil {
+		return nil, fmt.Errorf("plaid LiabilitiesGet failed: %w", err)
 	}
 	return &resp, nil
 }

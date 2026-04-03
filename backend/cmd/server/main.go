@@ -248,9 +248,12 @@ func main() {
 		adminUserRepo := repository.NewAdminUserRepository(db)                   // Issue #639: Admin user management
 		systemHealthRepo := repository.NewSystemHealthRepository(db)             // Issue #640: System health monitoring
 		deadLetterJobRepo := repository.NewDeadLetterJobRepository(db)           // Issue #640: Dead letter queue metrics
-		securityRepo := repository.NewSecurityRepository(db)                      // Issue #659: Plaid Investments
-		holdingRepo := repository.NewHoldingRepository(db)                        // Issue #659: Plaid Investments
-		investmentTxnRepo := repository.NewInvestmentTransactionRepository(db)   // Issue #659: Plaid Investments
+		securityRepo := repository.NewSecurityRepository(db)                           // Issue #659: Plaid Investments
+		holdingRepo := repository.NewHoldingRepository(db)                             // Issue #659: Plaid Investments
+		investmentTxnRepo := repository.NewInvestmentTransactionRepository(db)        // Issue #659: Plaid Investments
+		creditLiabilityRepo := repository.NewCreditLiabilityRepository(db)            // Issue #910: Plaid Liabilities
+		mortgageLiabilityRepo := repository.NewMortgageLiabilityRepository(db)        // Issue #910: Plaid Liabilities
+		studentLoanLiabilityRepo := repository.NewStudentLoanLiabilityRepository(db)  // Issue #910: Plaid Liabilities
 
 		// Create mock audit logger (will be replaced with real implementation later)
 		auditLogger := &mockAuditLogger{}
@@ -590,6 +593,23 @@ func main() {
 					investmentSyncService.SetAnalytics(phClient)
 				}
 
+				// Issue #910: Initialize LiabilitySyncService for credit, mortgage, student loan liabilities
+				liabilitySyncService := services.NewLiabilitySyncService(
+					webhookRepo,
+					linkedItemRepo,
+					accountRepo,
+					creditLiabilityRepo,
+					mortgageLiabilityRepo,
+					studentLoanLiabilityRepo,
+					plaidService,
+					encryptionService,
+					appLogger,
+				)
+				appLogger.Info("Liability sync service initialized")
+				if phClient != nil {
+					liabilitySyncService.SetAnalytics(phClient)
+				}
+
 				// Issue #573/629: Initialize River queue for async job processing
 				logger := slog.Default()
 				riverConfig := riverqueue.DefaultConfig()
@@ -676,10 +696,12 @@ func main() {
 
 				// Create WebhookProcessingWorker with all dependencies
 				// Issue #659: InvestmentSyncSvc added for HOLDINGS and INVESTMENTS_TRANSACTIONS routing
+				// Issue #910: LiabilitySyncSvc added for LIABILITIES routing
 				webhookProcessingWorker := jobs.NewWebhookProcessingWorker(jobs.WebhookProcessingWorkerDeps{
 					WebhookRepo:        webhookRepo,
 					TransactionSyncSvc: transactionSyncService,
 					InvestmentSyncSvc:  investmentSyncService,
+					LiabilitySyncSvc:   liabilitySyncService,
 					ItemErrorSvc:       itemErrorService,
 					Logger:             logger,
 				})
