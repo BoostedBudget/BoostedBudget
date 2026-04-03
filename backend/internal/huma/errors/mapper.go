@@ -136,20 +136,6 @@ func MapError(err error) error {
 		return huma.Error403Forbidden("You are not allowed to update this field")
 	case errors.Is(err, repository.ErrNotificationAccessDenied):
 		return huma.Error403Forbidden("Access denied to this notification")
-	case errors.Is(err, domain.ErrAutomationRuleLimitExceeded):
-		return huma.Error403Forbidden("Automation rule limit exceeded for your subscription tier. Upgrade to add more rules.")
-	case errors.Is(err, domain.ErrEventTriggersNotAllowed):
-		return huma.Error403Forbidden("Event-based triggers require a premium subscription. Upgrade to enable real-time rule execution.")
-
-	// ================================
-	// 429 Too Many Requests - Rate/execution limits
-	// ================================
-
-	case errors.Is(err, domain.ErrExecutionLimitExceeded):
-		return huma.NewError(429, "Daily rule execution limit exceeded for your subscription tier. Try again tomorrow or upgrade.")
-	case errors.Is(err, domain.ErrExecutionIntervalNotMet):
-		return huma.NewError(429, "Minimum execution interval not met for your subscription tier.")
-
 	// ================================
 	// 400 Bad Request - Validation errors
 	// ================================

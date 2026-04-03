@@ -181,16 +181,6 @@ export interface RuleFormErrors {
 // API Helper Types
 // =============================================================================
 
-export interface RuleTierLimits {
-  ruleLimit: number | null // null = unlimited
-  isUnlimited: boolean
-  currentRuleCount: number
-  isAtLimit: boolean
-  canUseEventTriggers: boolean
-  shouldShowUpgradeBanner: boolean
-  rulesCountDisplay: string // e.g., "1/1 rules used" or "5 rules"
-}
-
 // =============================================================================
 // List View Types
 // =============================================================================

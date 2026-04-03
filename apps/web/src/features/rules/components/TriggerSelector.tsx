@@ -4,11 +4,10 @@
  *
  * Component for selecting trigger type (schedule or event).
  * Integrates CronBuilder for scheduled triggers.
- * Disables event triggers for free tier users.
  */
 
 import { useCallback } from 'react'
-import { Calendar, Zap, Crown } from 'lucide-react'
+import { Calendar, Zap } from 'lucide-react'
 import { CronBuilder } from './CronBuilder'
 import {
   TRIGGER_TYPE_LABELS,
@@ -25,8 +24,6 @@ export interface TriggerSelectorProps {
   config: TriggerFormState
   /** Called when configuration changes */
   onChange: (config: TriggerFormState) => void
-  /** Whether user can use event triggers (false for free tier) */
-  canUseEventTriggers: boolean
   /** Disable all controls */
   disabled?: boolean
   /** Additional CSS class */
@@ -49,7 +46,6 @@ export interface TriggerSelectorProps {
  *     <TriggerSelector
  *       config={config}
  *       onChange={setConfig}
- *       canUseEventTriggers={tier !== 'free'}
  *     />
  *   )
  * }
@@ -58,14 +54,12 @@ export interface TriggerSelectorProps {
 export function TriggerSelector({
   config,
   onChange,
-  canUseEventTriggers,
   disabled = false,
   className = '',
 }: TriggerSelectorProps) {
   const handleTypeChange = useCallback(
     (newType: TriggerType) => {
       if (disabled) return
-      if (newType === 'event' && !canUseEventTriggers) return
 
       if (newType === 'schedule') {
         onChange({
@@ -80,7 +74,7 @@ export function TriggerSelector({
         })
       }
     },
-    [config, onChange, canUseEventTriggers, disabled]
+    [config, onChange, disabled]
   )
 
   const handleCronChange = useCallback(
@@ -116,7 +110,7 @@ export function TriggerSelector({
   )
 
   return (
-    <div className={`trigger-selector ${className}`.trim()}>
+    <div className={`trigger-selector${className ? ` ${className}` : ''}`}>
       {/* Trigger Type Radio Group */}
       <fieldset
         className="trigger-selector__fieldset"
@@ -151,18 +145,14 @@ export function TriggerSelector({
           </label>
 
           {/* Event Option */}
-          <label
-            className={`trigger-selector__option ${
-              !canUseEventTriggers ? 'trigger-selector__option--disabled' : ''
-            }`}
-          >
+          <label className="trigger-selector__option">
             <input
               type="radio"
               name="trigger-type"
               value="event"
               checked={config.type === 'event'}
               onChange={() => handleTypeChange('event')}
-              disabled={disabled || !canUseEventTriggers}
+              disabled={disabled}
               className="trigger-selector__radio"
             />
             <div className="trigger-selector__option-content">
@@ -171,12 +161,6 @@ export function TriggerSelector({
                 <span className="trigger-selector__option-label">
                   {TRIGGER_TYPE_LABELS.event}
                 </span>
-                {!canUseEventTriggers && (
-                  <span className="trigger-selector__premium-badge">
-                    <Crown className="trigger-selector__crown-icon" aria-hidden="true" />
-                    Premium
-                  </span>
-                )}
               </div>
               <p className="trigger-selector__option-description">
                 {TRIGGER_TYPE_DESCRIPTIONS.event}
