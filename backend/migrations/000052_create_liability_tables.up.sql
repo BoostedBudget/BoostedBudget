@@ -1,5 +1,5 @@
 -- Create liability tables for Plaid Liabilities product
--- Issue #N: Plaid Liabilities: Credit, Mortgage, Student Loan
+-- Issue #910: Plaid Liabilities: Credit, Mortgage, Student Loan
 --
 -- Tables created in dependency order:
 --   1. credit_liabilities (one-to-one with accounts for credit cards)
@@ -51,8 +51,8 @@ END $$;
 ALTER TABLE credit_liabilities VALIDATE CONSTRAINT fk_credit_liabilities_account_id;
 
 -- Indexes for credit_liabilities
-CREATE INDEX IF NOT EXISTS idx_credit_liabilities_user_id    ON credit_liabilities(user_id);
-CREATE INDEX IF NOT EXISTS idx_credit_liabilities_account_id ON credit_liabilities(account_id);
+-- Note: account_id index is implicit from UNIQUE(account_id) constraint above
+CREATE INDEX IF NOT EXISTS idx_credit_liabilities_user_id ON credit_liabilities(user_id);
 
 -- Trigger to auto-update updated_at
 DO $$
@@ -91,7 +91,10 @@ CREATE TABLE IF NOT EXISTS credit_liability_aprs (
 
     -- Timestamps
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+
+    -- Plaid returns at most one APR entry per apr_type per account
+    CONSTRAINT unique_credit_liability_apr_type UNIQUE (credit_liability_id, rate_type)
 );
 
 -- Foreign key constraints (NOT VALID for zero-downtime, then VALIDATE)
@@ -188,8 +191,8 @@ END $$;
 ALTER TABLE mortgage_liabilities VALIDATE CONSTRAINT fk_mortgage_liabilities_account_id;
 
 -- Indexes for mortgage_liabilities
-CREATE INDEX IF NOT EXISTS idx_mortgage_liabilities_user_id    ON mortgage_liabilities(user_id);
-CREATE INDEX IF NOT EXISTS idx_mortgage_liabilities_account_id ON mortgage_liabilities(account_id);
+-- Note: account_id index is implicit from UNIQUE(account_id) constraint above
+CREATE INDEX IF NOT EXISTS idx_mortgage_liabilities_user_id ON mortgage_liabilities(user_id);
 
 -- Trigger to auto-update updated_at
 DO $$
@@ -294,8 +297,8 @@ END $$;
 ALTER TABLE student_loan_liabilities VALIDATE CONSTRAINT fk_student_loan_liabilities_account_id;
 
 -- Indexes for student_loan_liabilities
-CREATE INDEX IF NOT EXISTS idx_student_loan_liabilities_user_id    ON student_loan_liabilities(user_id);
-CREATE INDEX IF NOT EXISTS idx_student_loan_liabilities_account_id ON student_loan_liabilities(account_id);
+-- Note: account_id index is implicit from UNIQUE(account_id) constraint above
+CREATE INDEX IF NOT EXISTS idx_student_loan_liabilities_user_id ON student_loan_liabilities(user_id);
 
 -- Trigger to auto-update updated_at
 DO $$
