@@ -99,7 +99,9 @@ func (s *investmentSyncService) ProcessWebhook(ctx context.Context, webhook *dom
 	if webhook.ItemID == nil || *webhook.ItemID == "" {
 		errorMsg := "webhook missing item_id — cannot process investment webhook"
 		webhook.ProcessingError = &errorMsg
-		_ = s.webhookRepo.Update(ctx, webhook)
+		if updateErr := s.webhookRepo.Update(ctx, webhook); updateErr != nil {
+			s.logger.Error("failed to update webhook processing state", "webhook_id", webhook.ID, "error", updateErr)
+		}
 		return errors.New(errorMsg)
 	}
 
@@ -113,13 +115,21 @@ func (s *investmentSyncService) ProcessWebhook(ctx context.Context, webhook *dom
 	if err != nil {
 		errorMsg := fmt.Sprintf("linked item not found for item_id %s: %v", *webhook.ItemID, err)
 		webhook.ProcessingError = &errorMsg
-		_ = s.webhookRepo.Update(ctx, webhook)
+		if updateErr := s.webhookRepo.Update(ctx, webhook); updateErr != nil {
+			s.logger.Error("failed to update webhook processing state", "webhook_id", webhook.ID, "error", updateErr)
+		}
 		return fmt.Errorf("failed to get linked item: %w", err)
 	}
 
 	switch webhook.WebhookType {
 	case "HOLDINGS":
-		_, err = s.SyncHoldings(ctx, linkedItem)
+		var holdingResult *domain.HoldingSyncResult
+		holdingResult, err = s.SyncHoldings(ctx, linkedItem)
+		if err == nil && holdingResult != nil && len(holdingResult.Errors) > 0 {
+			// Partial failure: some accounts skipped due to unmapped securities.
+			// Existing holdings are preserved but not updated — trigger retry.
+			err = fmt.Errorf("holdings sync partial failure: %v", holdingResult.Errors)
+		}
 	case "INVESTMENTS_TRANSACTIONS":
 		_, err = s.SyncInvestmentTransactions(ctx, linkedItem)
 	default:
@@ -133,7 +143,9 @@ func (s *investmentSyncService) ProcessWebhook(ctx context.Context, webhook *dom
 		if plaidErr.ErrorType != domain.PlaidErrorPermanent {
 			webhook.RetryCount++
 		}
-		_ = s.webhookRepo.Update(ctx, webhook)
+		if updateErr := s.webhookRepo.Update(ctx, webhook); updateErr != nil {
+			s.logger.Error("failed to update webhook processing state", "webhook_id", webhook.ID, "error", updateErr)
+		}
 		if s.analytics != nil {
 			s.analytics.Capture(linkedItem.UserID, phclient.EventInvestmentSyncFailed, map[string]interface{}{
 				"error_type":   fmt.Sprintf("%d", plaidErr.ErrorType),
@@ -199,14 +211,16 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 		plaidHoldings := holdingsByAccount[plaidAccountID] // empty if account was liquidated
 
 		domainHoldings := make([]domain.Holding, 0, len(plaidHoldings))
+		skippedAny := false
 		for _, ph := range plaidHoldings {
 			internalSecurityID, ok := securityMap[ph.SecurityId]
 			if !ok {
-				s.logger.Warn("security not in map, skipping holding",
+				s.logger.Warn("security not in map, skipping account holdings replace",
 					"plaid_security_id", ph.SecurityId,
 					"plaid_account_id", plaidAccountID,
 				)
-				continue
+				skippedAny = true
+				break
 			}
 
 			h := domain.Holding{
@@ -227,6 +241,11 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 			}
 
 			domainHoldings = append(domainHoldings, h)
+		}
+
+		if skippedAny {
+			result.Errors = append(result.Errors, fmt.Sprintf("account %s: skipped replace due to unmapped security", plaidAccountID))
+			continue
 		}
 
 		if err := s.holdingRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, domainHoldings); err != nil {
@@ -264,8 +283,8 @@ func (s *investmentSyncService) SyncInvestmentTransactions(ctx context.Context, 
 		return nil, fmt.Errorf("failed to decrypt access token: %w", err)
 	}
 
-	now := time.Now()
-	endDate := now.Format("2006-01-02")
+	now := time.Now().UTC()
+	endDate := now.Format("2006-01-02") // Today in YYYY-MM-DD format
 
 	var startDate string
 	if linkedItem.InvestmentsLastSyncedDate != nil {
@@ -347,6 +366,7 @@ func (s *investmentSyncService) SyncInvestmentTransactions(ctx context.Context, 
 	}
 
 	// Update investments_last_synced_date ONLY on full success (all pages processed)
+	// Truncate now to midnight UTC (endDate already in this format)
 	today := now.Truncate(24 * time.Hour)
 	if err := s.linkedItemRepo.UpdateInvestmentsLastSyncedDate(ctx, linkedItem.ID, today); err != nil {
 		// Non-fatal: data is stored; log warning and continue

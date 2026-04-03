@@ -88,11 +88,21 @@ CREATE TABLE IF NOT EXISTS holdings (
 );
 
 -- Foreign key constraints (NOT VALID for zero-downtime, then VALIDATE)
-ALTER TABLE holdings ADD CONSTRAINT fk_holdings_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE NOT VALID;
+-- Wrapped in DO blocks for idempotency (re-running after partial failure won't error)
+DO $$ BEGIN
+    ALTER TABLE holdings ADD CONSTRAINT fk_holdings_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE NOT VALID;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 ALTER TABLE holdings VALIDATE CONSTRAINT fk_holdings_user_id;
-ALTER TABLE holdings ADD CONSTRAINT fk_holdings_account_id FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE NOT VALID;
+DO $$ BEGIN
+    ALTER TABLE holdings ADD CONSTRAINT fk_holdings_account_id FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE NOT VALID;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 ALTER TABLE holdings VALIDATE CONSTRAINT fk_holdings_account_id;
-ALTER TABLE holdings ADD CONSTRAINT fk_holdings_security_id FOREIGN KEY (security_id) REFERENCES securities(id) ON DELETE RESTRICT NOT VALID;
+DO $$ BEGIN
+    ALTER TABLE holdings ADD CONSTRAINT fk_holdings_security_id FOREIGN KEY (security_id) REFERENCES securities(id) ON DELETE RESTRICT NOT VALID;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 ALTER TABLE holdings VALIDATE CONSTRAINT fk_holdings_security_id;
 
 -- Indexes for holdings
@@ -152,11 +162,21 @@ CREATE TABLE IF NOT EXISTS investment_transactions (
 );
 
 -- Foreign key constraints (NOT VALID for zero-downtime, then VALIDATE)
-ALTER TABLE investment_transactions ADD CONSTRAINT fk_inv_txn_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE NOT VALID;
+-- Wrapped in DO blocks for idempotency (re-running after partial failure won't error)
+DO $$ BEGIN
+    ALTER TABLE investment_transactions ADD CONSTRAINT fk_inv_txn_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE NOT VALID;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 ALTER TABLE investment_transactions VALIDATE CONSTRAINT fk_inv_txn_user_id;
-ALTER TABLE investment_transactions ADD CONSTRAINT fk_inv_txn_account_id FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE NOT VALID;
+DO $$ BEGIN
+    ALTER TABLE investment_transactions ADD CONSTRAINT fk_inv_txn_account_id FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE NOT VALID;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 ALTER TABLE investment_transactions VALIDATE CONSTRAINT fk_inv_txn_account_id;
-ALTER TABLE investment_transactions ADD CONSTRAINT fk_inv_txn_security_id FOREIGN KEY (security_id) REFERENCES securities(id) ON DELETE RESTRICT NOT VALID;
+DO $$ BEGIN
+    ALTER TABLE investment_transactions ADD CONSTRAINT fk_inv_txn_security_id FOREIGN KEY (security_id) REFERENCES securities(id) ON DELETE RESTRICT NOT VALID;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 ALTER TABLE investment_transactions VALIDATE CONSTRAINT fk_inv_txn_security_id;
 
 -- Indexes for investment_transactions
@@ -165,6 +185,7 @@ CREATE INDEX IF NOT EXISTS idx_inv_txn_account_id ON investment_transactions(acc
 CREATE INDEX IF NOT EXISTS idx_inv_txn_security_id ON investment_transactions(security_id);
 CREATE INDEX IF NOT EXISTS idx_inv_txn_date ON investment_transactions(date);
 CREATE INDEX IF NOT EXISTS idx_inv_txn_user_date ON investment_transactions(user_id, date DESC);
+CREATE INDEX IF NOT EXISTS idx_inv_txn_account_date ON investment_transactions(account_id, date DESC);
 
 -- Comments
 COMMENT ON TABLE investment_transactions IS 'Investment account transactions (buys, sells, dividends, fees) from Plaid.';

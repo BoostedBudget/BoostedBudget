@@ -471,7 +471,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_FirstSync_NoLastSynced
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 
-	expectedStartDate := time.Now().AddDate(-2, 0, 0).Format("2006-01-02")
+	expectedStartDate := time.Now().UTC().AddDate(-2, 0, 0).Format("2006-01-02")
 
 	txn := makePlaidCashTxn("txn-001", plaidAccountID, 500.0, "2024-01-15")
 	txnResp := plaid.NewInvestmentsTransactionsGetResponse(
@@ -1041,6 +1041,127 @@ func TestInvestmentSyncService_ProcessWebhook_UnsupportedType(t *testing.T) {
 	assert.Contains(t, err.Error(), "unsupported investment webhook type")
 	// Webhook should NOT be marked as processed
 	assert.False(t, webhook.Processed)
+}
+
+// ============================================================================
+// Issue #659: C3 Fix - Holdings data loss when security unmapped
+// ============================================================================
+
+// TestInvestmentSyncService_SyncHoldings_UnmappedSecurity_SkipsAccountReplace verifies
+// that when ANY security in an account's holdings fails to resolve, the entire account
+// replace is skipped (preserving existing holdings) rather than deleting them.
+// RED: currently fails because the implementation still calls ReplaceForAccount even
+// when some holdings were skipped due to missing security mapping.
+func TestInvestmentSyncService_SyncHoldings_UnmappedSecurity_SkipsAccountReplace(t *testing.T) {
+	svc, deps := setupInvestmentSyncService(t)
+	ctx := context.Background()
+
+	plaidAccountID := "plaid-acct-001"
+	internalAccountID := uuid.New().String()
+	plaidSecurityID := "plaid-sec-001"
+	unknownSecurityID := "plaid-sec-UNKNOWN"
+	internalSecurityID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItem := makeLinkedItem("item-001", userID)
+
+	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok", nil)
+
+	// Two holdings: one with a known security, one with an unknown security
+	holdingsResp := plaid.NewInvestmentsHoldingsGetResponse(
+		[]plaid.AccountBase{},
+		[]plaid.Holding{
+			makePlaidHolding(plaidAccountID, plaidSecurityID, 10.0, 165.0, 1650.0, 1500.0),
+			makePlaidHolding(plaidAccountID, unknownSecurityID, 5.0, 50.0, 250.0, 200.0),
+		},
+		[]plaid.Security{
+			makePlaidSecurity(plaidSecurityID, "Apple Inc.", "AAPL"),
+			makePlaidSecurity(unknownSecurityID, "Unknown Corp", "UNK"),
+		},
+		makeMinimalPlaidItem(),
+		"req-001",
+	)
+	deps.plaidSvc.On("InvestmentsHoldingsGet", ctx, "tok").Return(holdingsResp, nil)
+
+	// Only one security in map — the unknown security ID is missing
+	deps.securityRepo.On("UpsertBatch", ctx, mock.Anything).Return(map[string]string{
+		plaidSecurityID: internalSecurityID,
+		// unknownSecurityID is intentionally absent from the map
+	}, nil)
+
+	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
+	}, nil)
+
+	result, err := svc.SyncHoldings(ctx, linkedItem)
+
+	// Should succeed (not a hard error) but the account replace is skipped
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	// ReplaceForAccount must NOT be called — existing holdings are preserved
+	deps.holdingRepo.AssertNotCalled(t, "ReplaceForAccount")
+	// Error is recorded in result
+	assert.Len(t, result.Errors, 1)
+}
+
+// TestInvestmentSyncService_ProcessWebhook_HoldingsPartialFailure verifies that when
+// SyncHoldings has unmapped securities (result.Errors non-empty), ProcessWebhook returns
+// an error so the job worker triggers a retry rather than marking the webhook as processed.
+func TestInvestmentSyncService_ProcessWebhook_HoldingsPartialFailure(t *testing.T) {
+	svc, deps := setupInvestmentSyncService(t)
+	ctx := context.Background()
+
+	itemID := "item-partial-001"
+	userID := uuid.New().String()
+	linkedItem := makeLinkedItem(itemID, userID)
+
+	plaidAccountID := "plaid-acct-partial"
+	internalAccountID := uuid.New().String()
+	plaidSecurityID := "plaid-sec-known"
+	unknownSecurityID := "plaid-sec-unknown"
+	internalSecurityID := uuid.New().String()
+	holdingsCode := "DEFAULT_UPDATE"
+
+	webhook := &domain.WebhookEvent{
+		ID:          "wh-partial",
+		WebhookType: "HOLDINGS",
+		WebhookCode: &holdingsCode,
+		ItemID:      &itemID,
+	}
+
+	deps.webhookRepo.On("Update", ctx, mock.Anything).Return(nil)
+	deps.linkedItemRepo.On("GetByItemID", ctx, itemID).Return(linkedItem, nil)
+	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok-partial", nil)
+
+	holdingsResp := plaid.NewInvestmentsHoldingsGetResponse(
+		[]plaid.AccountBase{},
+		[]plaid.Holding{
+			makePlaidHolding(plaidAccountID, plaidSecurityID, 10.0, 100.0, 1000.0, 900.0),
+			makePlaidHolding(plaidAccountID, unknownSecurityID, 5.0, 50.0, 250.0, 200.0),
+		},
+		[]plaid.Security{
+			makePlaidSecurity(plaidSecurityID, "Known Corp", "KNW"),
+			makePlaidSecurity(unknownSecurityID, "Unknown Corp", "UNK"),
+		},
+		makeMinimalPlaidItem(),
+		"req-partial",
+	)
+	deps.plaidSvc.On("InvestmentsHoldingsGet", ctx, "tok-partial").Return(holdingsResp, nil)
+	deps.securityRepo.On("UpsertBatch", ctx, mock.Anything).Return(map[string]string{
+		plaidSecurityID: internalSecurityID,
+		// unknownSecurityID absent — will trigger skip
+	}, nil)
+	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
+	}, nil)
+
+	err := svc.ProcessWebhook(ctx, webhook)
+
+	// ProcessWebhook must return an error so the job retries
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "partial failure")
+	// Webhook must NOT be marked as processed
+	assert.False(t, webhook.Processed)
+	deps.holdingRepo.AssertNotCalled(t, "ReplaceForAccount")
 }
 
 // TestInvestmentSyncService_ProcessWebhook_NilWebhook verifies that nil input returns an error.
