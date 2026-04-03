@@ -14,9 +14,7 @@ import {
   useCreateAutomationRule,
   useUpdateAutomationRule,
   useGetAutomationRuleByID,
-  useGetAutomationRules,
 } from '@boostedbudget/api-client/endpoints/automation-rules/automation-rules'
-import { useRuleTierLimits } from '../hooks/useRuleTierLimits'
 import {
   RULE_TYPE_LABELS,
   RULE_TYPE_DESCRIPTIONS,
@@ -108,13 +106,6 @@ export function RuleBuilder() {
   // Mutations
   const createMutation = useCreateAutomationRule()
   const updateMutation = useUpdateAutomationRule()
-
-  // Fetch rules for tier limits display
-  const { data: rulesData } = useGetAutomationRules()
-  const currentRuleCount = rulesData?.length ?? 0
-
-  // Tier limits (simplified - all tiers have unlimited rules)
-  const tierLimits = useRuleTierLimits({ currentRuleCount })
 
   // Form state
   const [name, setName] = useState('')
@@ -470,7 +461,6 @@ export function RuleBuilder() {
           <TriggerSelector
             config={triggerConfig}
             onChange={setTriggerConfig}
-            canUseEventTriggers={tierLimits.canUseEventTriggers}
           />
         </section>
 

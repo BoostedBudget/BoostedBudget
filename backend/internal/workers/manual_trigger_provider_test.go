@@ -19,20 +19,20 @@ import (
 // ============================================================================
 
 func TestManualProvider_Name(t *testing.T) {
-	provider := NewManualTriggerProvider(nil, nil, nil, nil)
+	provider := NewManualTriggerProvider(nil, nil, nil)
 
 	assert.Equal(t, "manual", provider.Name())
 }
 
 func TestManualProvider_SupportsManualTrigger(t *testing.T) {
-	provider := NewManualTriggerProvider(nil, nil, nil, nil)
+	provider := NewManualTriggerProvider(nil, nil, nil)
 
 	// Manual provider DOES support manual triggering
 	assert.True(t, provider.SupportsManualTrigger())
 }
 
 func TestManualProvider_Start(t *testing.T) {
-	provider := NewManualTriggerProvider(nil, nil, nil, nil)
+	provider := NewManualTriggerProvider(nil, nil, nil)
 
 	// Start is a no-op for manual provider
 	err := provider.Start(context.Background())
@@ -40,7 +40,7 @@ func TestManualProvider_Start(t *testing.T) {
 }
 
 func TestManualProvider_Stop(t *testing.T) {
-	provider := NewManualTriggerProvider(nil, nil, nil, nil)
+	provider := NewManualTriggerProvider(nil, nil, nil)
 
 	// Stop is a no-op for manual provider
 	err := provider.Stop(context.Background())
@@ -50,7 +50,6 @@ func TestManualProvider_Stop(t *testing.T) {
 func TestManualProvider_TriggerRule_Success(t *testing.T) {
 	mockRepo := new(MockRuleRepository)
 	mockExecutor := new(MockRuleExecutor)
-	mockSub := new(MockSubscriptionService)
 
 	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
 
@@ -64,12 +63,9 @@ func TestManualProvider_TriggerRule_Success(t *testing.T) {
 	mockRepo.On("IncrementExecutionCount", mock.Anything, "rule-1").Return(nil)
 	mockRepo.On("UpdateLastSuccessful", mock.Anything, "rule-1").Return(nil)
 
-	mockSub.On("CheckDailyExecutionLimit", mock.Anything, "user-1").Return(true, 10, nil)
-	mockSub.On("IncrementDailyExecutions", mock.Anything, "user-1").Return(nil)
-
 	mockExecutor.On("ExecuteRule", mock.Anything, rule, mock.Anything).Return(execution, nil)
 
-	provider := NewManualTriggerProvider(mockRepo, mockExecutor, mockSub, nil)
+	provider := NewManualTriggerProvider(mockRepo, mockExecutor, nil)
 
 	result, err := provider.TriggerRule(context.Background(), "rule-1", nil)
 
@@ -79,13 +75,11 @@ func TestManualProvider_TriggerRule_Success(t *testing.T) {
 
 	mockRepo.AssertExpectations(t)
 	mockExecutor.AssertExpectations(t)
-	mockSub.AssertExpectations(t)
 }
 
 func TestManualProvider_TriggerRule_WithUserData(t *testing.T) {
 	mockRepo := new(MockRuleRepository)
 	mockExecutor := new(MockRuleExecutor)
-	mockSub := new(MockSubscriptionService)
 
 	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
 
@@ -99,16 +93,13 @@ func TestManualProvider_TriggerRule_WithUserData(t *testing.T) {
 	mockRepo.On("IncrementExecutionCount", mock.Anything, "rule-1").Return(nil)
 	mockRepo.On("UpdateLastSuccessful", mock.Anything, "rule-1").Return(nil)
 
-	mockSub.On("CheckDailyExecutionLimit", mock.Anything, "user-1").Return(true, 10, nil)
-	mockSub.On("IncrementDailyExecutions", mock.Anything, "user-1").Return(nil)
-
 	// Capture the trigger data passed to ExecuteRule
 	var capturedTriggerData map[string]interface{}
 	mockExecutor.On("ExecuteRule", mock.Anything, rule, mock.Anything).Run(func(args mock.Arguments) {
 		capturedTriggerData = args.Get(2).(map[string]interface{})
 	}).Return(execution, nil)
 
-	provider := NewManualTriggerProvider(mockRepo, mockExecutor, mockSub, nil)
+	provider := NewManualTriggerProvider(mockRepo, mockExecutor, nil)
 
 	userData := map[string]interface{}{
 		"custom_field": "custom_value",
@@ -132,11 +123,10 @@ func TestManualProvider_TriggerRule_WithUserData(t *testing.T) {
 func TestManualProvider_TriggerRule_RuleNotFound(t *testing.T) {
 	mockRepo := new(MockRuleRepository)
 	mockExecutor := new(MockRuleExecutor)
-	mockSub := new(MockSubscriptionService)
 
 	mockRepo.On("GetByID", mock.Anything, "rule-unknown").Return(nil, domain.ErrAutomationRuleNotFound)
 
-	provider := NewManualTriggerProvider(mockRepo, mockExecutor, mockSub, nil)
+	provider := NewManualTriggerProvider(mockRepo, mockExecutor, nil)
 
 	result, err := provider.TriggerRule(context.Background(), "rule-unknown", nil)
 
@@ -148,14 +138,13 @@ func TestManualProvider_TriggerRule_RuleNotFound(t *testing.T) {
 func TestManualProvider_TriggerRule_RuleDisabled(t *testing.T) {
 	mockRepo := new(MockRuleRepository)
 	mockExecutor := new(MockRuleExecutor)
-	mockSub := new(MockSubscriptionService)
 
 	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
 	rule.Enabled = false
 
 	mockRepo.On("GetByID", mock.Anything, "rule-1").Return(rule, nil)
 
-	provider := NewManualTriggerProvider(mockRepo, mockExecutor, mockSub, nil)
+	provider := NewManualTriggerProvider(mockRepo, mockExecutor, nil)
 
 	result, err := provider.TriggerRule(context.Background(), "rule-1", nil)
 
@@ -164,29 +153,9 @@ func TestManualProvider_TriggerRule_RuleDisabled(t *testing.T) {
 	assert.Equal(t, ErrRuleDisabled, err)
 }
 
-func TestManualProvider_TriggerRule_ExecutionLimitExceeded(t *testing.T) {
-	mockRepo := new(MockRuleRepository)
-	mockExecutor := new(MockRuleExecutor)
-	mockSub := new(MockSubscriptionService)
-
-	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
-
-	mockRepo.On("GetByID", mock.Anything, "rule-1").Return(rule, nil)
-	mockSub.On("CheckDailyExecutionLimit", mock.Anything, "user-1").Return(false, 0, nil)
-
-	provider := NewManualTriggerProvider(mockRepo, mockExecutor, mockSub, nil)
-
-	result, err := provider.TriggerRule(context.Background(), "rule-1", nil)
-
-	assert.Error(t, err)
-	assert.Nil(t, result)
-	assert.Equal(t, ErrExecutionLimitExceeded, err)
-}
-
 func TestManualProvider_TriggerRule_ExecutorError(t *testing.T) {
 	mockRepo := new(MockRuleRepository)
 	mockExecutor := new(MockRuleExecutor)
-	mockSub := new(MockSubscriptionService)
 
 	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
 
@@ -199,12 +168,9 @@ func TestManualProvider_TriggerRule_ExecutorError(t *testing.T) {
 	mockRepo.On("GetByID", mock.Anything, "rule-1").Return(rule, nil)
 	mockRepo.On("IncrementExecutionCount", mock.Anything, "rule-1").Return(nil)
 
-	mockSub.On("CheckDailyExecutionLimit", mock.Anything, "user-1").Return(true, 10, nil)
-	mockSub.On("IncrementDailyExecutions", mock.Anything, "user-1").Return(nil)
-
 	mockExecutor.On("ExecuteRule", mock.Anything, rule, mock.Anything).Return(execution, assert.AnError)
 
-	provider := NewManualTriggerProvider(mockRepo, mockExecutor, mockSub, nil)
+	provider := NewManualTriggerProvider(mockRepo, mockExecutor, nil)
 
 	result, err := provider.TriggerRule(context.Background(), "rule-1", nil)
 
@@ -215,12 +181,11 @@ func TestManualProvider_TriggerRule_ExecutorError(t *testing.T) {
 func TestManualProvider_TriggerRule_ContextCancelled(t *testing.T) {
 	mockRepo := new(MockRuleRepository)
 	mockExecutor := new(MockRuleExecutor)
-	mockSub := new(MockSubscriptionService)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
-	provider := NewManualTriggerProvider(mockRepo, mockExecutor, mockSub, nil)
+	provider := NewManualTriggerProvider(mockRepo, mockExecutor, nil)
 
 	result, err := provider.TriggerRule(ctx, "rule-1", nil)
 
@@ -231,7 +196,6 @@ func TestManualProvider_TriggerRule_ContextCancelled(t *testing.T) {
 func TestManualProvider_TriggerRule_UpdatesExecutionStats(t *testing.T) {
 	mockRepo := new(MockRuleRepository)
 	mockExecutor := new(MockRuleExecutor)
-	mockSub := new(MockSubscriptionService)
 
 	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
 
@@ -245,12 +209,9 @@ func TestManualProvider_TriggerRule_UpdatesExecutionStats(t *testing.T) {
 	mockRepo.On("IncrementExecutionCount", mock.Anything, "rule-1").Return(nil)
 	mockRepo.On("UpdateLastSuccessful", mock.Anything, "rule-1").Return(nil)
 
-	mockSub.On("CheckDailyExecutionLimit", mock.Anything, "user-1").Return(true, 10, nil)
-	mockSub.On("IncrementDailyExecutions", mock.Anything, "user-1").Return(nil)
-
 	mockExecutor.On("ExecuteRule", mock.Anything, rule, mock.Anything).Return(execution, nil)
 
-	provider := NewManualTriggerProvider(mockRepo, mockExecutor, mockSub, nil)
+	provider := NewManualTriggerProvider(mockRepo, mockExecutor, nil)
 
 	_, err := provider.TriggerRule(context.Background(), "rule-1", nil)
 	require.NoError(t, err)
@@ -263,7 +224,6 @@ func TestManualProvider_TriggerRule_UpdatesExecutionStats(t *testing.T) {
 func TestManualProvider_TriggerRule_FailedExecution_NoLastSuccessful(t *testing.T) {
 	mockRepo := new(MockRuleRepository)
 	mockExecutor := new(MockRuleExecutor)
-	mockSub := new(MockSubscriptionService)
 
 	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
 
@@ -276,12 +236,9 @@ func TestManualProvider_TriggerRule_FailedExecution_NoLastSuccessful(t *testing.
 	mockRepo.On("GetByID", mock.Anything, "rule-1").Return(rule, nil)
 	mockRepo.On("IncrementExecutionCount", mock.Anything, "rule-1").Return(nil)
 
-	mockSub.On("CheckDailyExecutionLimit", mock.Anything, "user-1").Return(true, 10, nil)
-	mockSub.On("IncrementDailyExecutions", mock.Anything, "user-1").Return(nil)
-
 	mockExecutor.On("ExecuteRule", mock.Anything, rule, mock.Anything).Return(execution, nil)
 
-	provider := NewManualTriggerProvider(mockRepo, mockExecutor, mockSub, nil)
+	provider := NewManualTriggerProvider(mockRepo, mockExecutor, nil)
 
 	result, err := provider.TriggerRule(context.Background(), "rule-1", nil)
 	require.NoError(t, err)
@@ -294,7 +251,6 @@ func TestManualProvider_TriggerRule_FailedExecution_NoLastSuccessful(t *testing.
 func TestManualProvider_TriggerRule_VerifiesUserOwnership(t *testing.T) {
 	mockRepo := new(MockRuleRepository)
 	mockExecutor := new(MockRuleExecutor)
-	mockSub := new(MockSubscriptionService)
 
 	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
 
@@ -308,27 +264,19 @@ func TestManualProvider_TriggerRule_VerifiesUserOwnership(t *testing.T) {
 	mockRepo.On("IncrementExecutionCount", mock.Anything, "rule-1").Return(nil)
 	mockRepo.On("UpdateLastSuccessful", mock.Anything, "rule-1").Return(nil)
 
-	// Subscription check is for the rule's user
-	mockSub.On("CheckDailyExecutionLimit", mock.Anything, "user-1").Return(true, 10, nil)
-	mockSub.On("IncrementDailyExecutions", mock.Anything, "user-1").Return(nil)
-
 	mockExecutor.On("ExecuteRule", mock.Anything, rule, mock.Anything).Return(execution, nil)
 
-	provider := NewManualTriggerProvider(mockRepo, mockExecutor, mockSub, nil)
+	provider := NewManualTriggerProvider(mockRepo, mockExecutor, nil)
 
-	// The provider uses the rule's UserID, not the caller's
+	// The provider uses the rule's UserID for execution
 	result, err := provider.TriggerRule(context.Background(), "rule-1", nil)
 	require.NoError(t, err)
 	assert.NotNil(t, result)
-
-	// Verify the subscription check was for the correct user
-	mockSub.AssertCalled(t, "CheckDailyExecutionLimit", mock.Anything, "user-1")
 }
 
 func TestManualProvider_TriggerRule_MergesTriggerDataCorrectly(t *testing.T) {
 	mockRepo := new(MockRuleRepository)
 	mockExecutor := new(MockRuleExecutor)
-	mockSub := new(MockSubscriptionService)
 
 	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
 
@@ -341,16 +289,13 @@ func TestManualProvider_TriggerRule_MergesTriggerDataCorrectly(t *testing.T) {
 	mockRepo.On("GetByID", mock.Anything, "rule-1").Return(rule, nil)
 	mockRepo.On("IncrementExecutionCount", mock.Anything, "rule-1").Return(nil)
 	mockRepo.On("UpdateLastSuccessful", mock.Anything, "rule-1").Return(nil)
-
-	mockSub.On("CheckDailyExecutionLimit", mock.Anything, "user-1").Return(true, 10, nil)
-	mockSub.On("IncrementDailyExecutions", mock.Anything, "user-1").Return(nil)
 
 	var capturedTriggerData map[string]interface{}
 	mockExecutor.On("ExecuteRule", mock.Anything, rule, mock.Anything).Run(func(args mock.Arguments) {
 		capturedTriggerData = args.Get(2).(map[string]interface{})
 	}).Return(execution, nil)
 
-	provider := NewManualTriggerProvider(mockRepo, mockExecutor, mockSub, nil)
+	provider := NewManualTriggerProvider(mockRepo, mockExecutor, nil)
 
 	userData := map[string]interface{}{
 		"account_id":  "acc-123",
@@ -378,7 +323,6 @@ func TestManualProvider_TriggerRule_MergesTriggerDataCorrectly(t *testing.T) {
 func TestManualProvider_TriggerRule_HandlesEmptyTriggerData(t *testing.T) {
 	mockRepo := new(MockRuleRepository)
 	mockExecutor := new(MockRuleExecutor)
-	mockSub := new(MockSubscriptionService)
 
 	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
 
@@ -392,15 +336,12 @@ func TestManualProvider_TriggerRule_HandlesEmptyTriggerData(t *testing.T) {
 	mockRepo.On("IncrementExecutionCount", mock.Anything, "rule-1").Return(nil)
 	mockRepo.On("UpdateLastSuccessful", mock.Anything, "rule-1").Return(nil)
 
-	mockSub.On("CheckDailyExecutionLimit", mock.Anything, "user-1").Return(true, 10, nil)
-	mockSub.On("IncrementDailyExecutions", mock.Anything, "user-1").Return(nil)
-
 	var capturedTriggerData map[string]interface{}
 	mockExecutor.On("ExecuteRule", mock.Anything, rule, mock.Anything).Run(func(args mock.Arguments) {
 		capturedTriggerData = args.Get(2).(map[string]interface{})
 	}).Return(execution, nil)
 
-	provider := NewManualTriggerProvider(mockRepo, mockExecutor, mockSub, nil)
+	provider := NewManualTriggerProvider(mockRepo, mockExecutor, nil)
 
 	// nil trigger data should still work
 	_, err := provider.TriggerRule(context.Background(), "rule-1", nil)
@@ -414,16 +355,12 @@ func TestManualProvider_TriggerRule_HandlesEmptyTriggerData(t *testing.T) {
 func TestManualProvider_TriggerRule_SerializesTriggerDataForExecution(t *testing.T) {
 	mockRepo := new(MockRuleRepository)
 	mockExecutor := new(MockRuleExecutor)
-	mockSub := new(MockSubscriptionService)
 
 	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
 
 	mockRepo.On("GetByID", mock.Anything, "rule-1").Return(rule, nil)
 	mockRepo.On("IncrementExecutionCount", mock.Anything, "rule-1").Return(nil)
 	mockRepo.On("UpdateLastSuccessful", mock.Anything, "rule-1").Return(nil)
-
-	mockSub.On("CheckDailyExecutionLimit", mock.Anything, "user-1").Return(true, 10, nil)
-	mockSub.On("IncrementDailyExecutions", mock.Anything, "user-1").Return(nil)
 
 	var capturedTriggerData map[string]interface{}
 	mockExecutor.On("ExecuteRule", mock.Anything, rule, mock.Anything).Run(func(args mock.Arguments) {
@@ -434,7 +371,7 @@ func TestManualProvider_TriggerRule_SerializesTriggerDataForExecution(t *testing
 		Status: domain.ExecutionStatusCompleted,
 	}, nil)
 
-	provider := NewManualTriggerProvider(mockRepo, mockExecutor, mockSub, nil)
+	provider := NewManualTriggerProvider(mockRepo, mockExecutor, nil)
 
 	complexData := map[string]interface{}{
 		"nested": map[string]interface{}{

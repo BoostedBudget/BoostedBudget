@@ -1,6 +1,5 @@
 // Package domain contains domain models for the automation rules engine.
 // Issue #35: Rules Engine Core - supports transfer suggestions, budget alerts, and category rollovers.
-// Subject to subscription tier limits (free: 1 rule, premium_lite: 5, premium: 15, premium+: unlimited).
 // This is SEPARATE from categorization rules (Issue #346) which handle transaction auto-categorization.
 package domain
 
@@ -295,7 +294,6 @@ type SavingsGoalAction struct {
 // =============================================================================
 
 // AutomationRule represents a user-defined automation rule.
-// Subject to subscription tier limits (Issue #35).
 type AutomationRule struct {
 	ID               string                    `json:"id" db:"id"`
 	UserID           string                    `json:"user_id" db:"user_id"`
@@ -679,10 +677,6 @@ type RuleExecutionsResponse struct {
 var (
 	ErrAutomationRuleNotFound      = errors.New("automation rule not found")
 	ErrAutomationRuleAlreadyExists = errors.New("automation rule with this name already exists")
-	ErrAutomationRuleLimitExceeded = errors.New("automation rule limit exceeded for subscription tier")
-	ErrExecutionLimitExceeded      = errors.New("daily execution limit exceeded for subscription tier")
-	ErrExecutionIntervalNotMet     = errors.New("minimum execution interval not met for subscription tier")
-	ErrEventTriggersNotAllowed     = errors.New("event-based triggers not allowed for subscription tier (upgrade to premium)")
 	ErrTransferSuggestionNotFound  = errors.New("transfer suggestion not found")
 	ErrRuleExecutionNotFound       = errors.New("rule execution not found")
 )
