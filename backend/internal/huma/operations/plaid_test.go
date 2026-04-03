@@ -63,6 +63,10 @@ func (m *mockPlaidServiceForPlaid) InvestmentsTransactionsGet(ctx context.Contex
 	return nil, nil
 }
 
+func (m *mockPlaidServiceForPlaid) LiabilitiesGet(ctx context.Context, accessToken string) (*plaid.LiabilitiesGetResponse, error) {
+	return nil, nil
+}
+
 // mockAccountServiceForPlaid is a mock implementation of services.AccountService
 type mockAccountServiceForPlaid struct {
 	accounts      []domain.Account

@@ -162,6 +162,11 @@ func (m *MockLinkedItemRepository) UpdateInvestmentsLastSyncedDate(ctx context.C
 	return args.Error(0)
 }
 
+func (m *MockLinkedItemRepository) UpdateLiabilitiesLastSyncedAt(ctx context.Context, id string, t time.Time) error {
+	args := m.Called(ctx, id, t)
+	return args.Error(0)
+}
+
 // MockTransactionRepository is a mock for TransactionRepository
 type MockTransactionRepository struct {
 	mock.Mock

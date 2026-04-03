@@ -57,6 +57,13 @@ type InvestmentSyncService interface {
 	ProcessWebhook(ctx context.Context, webhook *domain.WebhookEvent) error
 }
 
+// LiabilitySyncService defines the methods needed to process LIABILITIES webhooks.
+// Issue #910: Plaid Liabilities — Credit, Mortgage, Student Loans.
+type LiabilitySyncService interface {
+	// ProcessWebhook routes LIABILITIES webhooks to SyncLiabilities.
+	ProcessWebhook(ctx context.Context, webhook *domain.WebhookEvent) error
+}
+
 // WebhookProcessingWorker processes webhook events from the queue.
 type WebhookProcessingWorker struct {
 	river.WorkerDefaults[WebhookProcessingArgs]
@@ -64,6 +71,7 @@ type WebhookProcessingWorker struct {
 	webhookRepo        WebhookRepository
 	transactionSyncSvc TransactionSyncService
 	investmentSyncSvc  InvestmentSyncService
+	liabilitySyncSvc   LiabilitySyncService
 	itemErrorSvc       ItemErrorService
 	logger             *slog.Logger
 }
@@ -73,6 +81,7 @@ type WebhookProcessingWorkerDeps struct {
 	WebhookRepo        WebhookRepository
 	TransactionSyncSvc TransactionSyncService
 	InvestmentSyncSvc  InvestmentSyncService
+	LiabilitySyncSvc   LiabilitySyncService
 	ItemErrorSvc       ItemErrorService
 	Logger             *slog.Logger
 }
@@ -87,6 +96,7 @@ func NewWebhookProcessingWorker(deps WebhookProcessingWorkerDeps) *WebhookProces
 		webhookRepo:        deps.WebhookRepo,
 		transactionSyncSvc: deps.TransactionSyncSvc,
 		investmentSyncSvc:  deps.InvestmentSyncSvc,
+		liabilitySyncSvc:   deps.LiabilitySyncSvc,
 		itemErrorSvc:       deps.ItemErrorSvc,
 		logger:             logger,
 	}
@@ -150,12 +160,8 @@ func (w *WebhookProcessingWorker) Work(ctx context.Context, job *river.Job[Webho
 	case "ITEM":
 		err = w.processItemWebhook(ctx, webhook)
 	case "LIABILITIES":
-		// Phase 2 (#241): Deferred to follow-up issue. Logged and acknowledged.
-		w.logger.Info("liabilities webhook received, processing deferred",
-			"job_id", job.ID,
-			"webhook_id", args.WebhookID,
-		)
-		return nil
+		// Issue #910: Plaid Liabilities — full sync via LiabilitySyncService.
+		err = w.processLiabilitiesWebhook(ctx, webhook)
 	case "HOLDINGS", "INVESTMENTS_TRANSACTIONS":
 		// Issue #659: Plaid Investments — routed to InvestmentSyncService.
 		err = w.processInvestmentWebhook(ctx, webhook)
@@ -197,6 +203,12 @@ func (w *WebhookProcessingWorker) processTransactionsWebhook(ctx context.Context
 // Issue #659: Plaid Investments
 func (w *WebhookProcessingWorker) processInvestmentWebhook(ctx context.Context, webhook *domain.WebhookEvent) error {
 	return w.investmentSyncSvc.ProcessWebhook(ctx, webhook)
+}
+
+// processLiabilitiesWebhook handles LIABILITIES webhook processing.
+// Issue #910: Plaid Liabilities
+func (w *WebhookProcessingWorker) processLiabilitiesWebhook(ctx context.Context, webhook *domain.WebhookEvent) error {
+	return w.liabilitySyncSvc.ProcessWebhook(ctx, webhook)
 }
 
 // processItemWebhook handles ITEM webhook processing (errors, status changes)

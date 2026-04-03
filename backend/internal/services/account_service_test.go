@@ -93,6 +93,14 @@ func (m *MockPlaidService) InvestmentsTransactionsGet(ctx context.Context, acces
 	return args.Get(0).(*plaid.InvestmentsTransactionsGetResponse), args.Error(1)
 }
 
+func (m *MockPlaidService) LiabilitiesGet(ctx context.Context, accessToken string) (*plaid.LiabilitiesGetResponse, error) {
+	args := m.Called(ctx, accessToken)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*plaid.LiabilitiesGetResponse), args.Error(1)
+}
+
 type MockEncryptionService struct {
 	mock.Mock
 }
@@ -229,6 +237,11 @@ func (m *MockLinkedItemRepository) MarkAllUserItemsDisconnected(ctx context.Cont
 
 func (m *MockLinkedItemRepository) UpdateInvestmentsLastSyncedDate(ctx context.Context, id string, date time.Time) error {
 	args := m.Called(ctx, id, date)
+	return args.Error(0)
+}
+
+func (m *MockLinkedItemRepository) UpdateLiabilitiesLastSyncedAt(ctx context.Context, id string, t time.Time) error {
+	args := m.Called(ctx, id, t)
 	return args.Error(0)
 }
 
