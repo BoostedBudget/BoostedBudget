@@ -46,6 +46,11 @@ func (r *studentLoanLiabilityRepository) ReplaceForAccount(ctx context.Context, 
 		return err
 	}
 
+	// nil means delete-only (clear stale data when Plaid no longer reports this liability)
+	if liability == nil {
+		return tx.Commit(ctx)
+	}
+
 	if liability.ID == "" {
 		liability.ID = uuid.New().String()
 	}

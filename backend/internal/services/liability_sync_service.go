@@ -165,66 +165,97 @@ func (s *liabilitySyncService) SyncLiabilities(ctx context.Context, linkedItem *
 	result := &domain.LiabilitySyncResult{}
 	liabilities := resp.Liabilities
 
-	// Process credit liabilities
+	// Build per-category maps: plaid_account_id → Plaid liability struct.
+	// This allows O(1) lookup when iterating internal accounts.
+	creditMap := make(map[string]plaid.CreditCardLiability, len(liabilities.Credit))
 	for _, pc := range liabilities.Credit {
-		plaidAccountID := pc.AccountId.Get()
-		if plaidAccountID == nil || *plaidAccountID == "" {
-			continue
+		if id := pc.AccountId.Get(); id != nil && *id != "" {
+			creditMap[*id] = pc
 		}
-		internalAccountID, ok := accountMap[*plaidAccountID]
-		if !ok {
-			s.logger.Warn("no internal account for credit liability, skipping",
-				"plaid_account_id", *plaidAccountID,
-			)
-			continue
-		}
-
-		credit := mapPlaidCreditLiability(pc, linkedItem.UserID, internalAccountID)
-		if err := s.creditRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, credit); err != nil {
-			return result, fmt.Errorf("failed to replace credit liability for account %s: %w", internalAccountID, err)
-		}
-		result.CreditProcessed++
-		result.AccountsProcessed++
 	}
 
-	// Process mortgage liabilities
+	mortgageMap := make(map[string]plaid.MortgageLiability, len(liabilities.Mortgage))
 	for _, pm := range liabilities.Mortgage {
-		internalAccountID, ok := accountMap[pm.AccountId]
-		if !ok {
-			s.logger.Warn("no internal account for mortgage liability, skipping",
-				"plaid_account_id", pm.AccountId,
-			)
-			continue
+		if pm.AccountId != "" {
+			mortgageMap[pm.AccountId] = pm
 		}
-
-		mortgage := mapPlaidMortgageLiability(pm, linkedItem.UserID, internalAccountID)
-		if err := s.mortgageRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, mortgage); err != nil {
-			return result, fmt.Errorf("failed to replace mortgage liability for account %s: %w", internalAccountID, err)
-		}
-		result.MortgageProcessed++
-		result.AccountsProcessed++
 	}
 
-	// Process student loan liabilities
+	studentMap := make(map[string]plaid.StudentLoan, len(liabilities.Student))
 	for _, ps := range liabilities.Student {
-		plaidAccountID := ps.AccountId.Get()
-		if plaidAccountID == nil || *plaidAccountID == "" {
-			continue
+		if id := ps.AccountId.Get(); id != nil && *id != "" {
+			studentMap[*id] = ps
 		}
-		internalAccountID, ok := accountMap[*plaidAccountID]
-		if !ok {
-			s.logger.Warn("no internal account for student loan liability, skipping",
-				"plaid_account_id", *plaidAccountID,
-			)
-			continue
+	}
+
+	// Surface Plaid accounts with no matching internal account (Medium Codex finding #910).
+	for plaidID := range creditMap {
+		if _, ok := accountMap[plaidID]; !ok {
+			msg := fmt.Sprintf("credit liability: no internal account for plaid_account_id=%s", plaidID)
+			result.Errors = append(result.Errors, msg)
+			s.logger.Warn("no internal account for credit liability", "plaid_account_id", plaidID)
+		}
+	}
+	for plaidID := range mortgageMap {
+		if _, ok := accountMap[plaidID]; !ok {
+			msg := fmt.Sprintf("mortgage liability: no internal account for plaid_account_id=%s", plaidID)
+			result.Errors = append(result.Errors, msg)
+			s.logger.Warn("no internal account for mortgage liability", "plaid_account_id", plaidID)
+		}
+	}
+	for plaidID := range studentMap {
+		if _, ok := accountMap[plaidID]; !ok {
+			msg := fmt.Sprintf("student loan liability: no internal account for plaid_account_id=%s", plaidID)
+			result.Errors = append(result.Errors, msg)
+			s.logger.Warn("no internal account for student loan liability", "plaid_account_id", plaidID)
+		}
+	}
+
+	// For each internal account, replace or clear each liability category atomically.
+	// Passing nil to ReplaceForAccount triggers a delete-only operation, which ensures
+	// stale rows are removed when Plaid no longer reports that liability type (High Codex finding #910).
+	for plaidAccountID, internalAccountID := range accountMap {
+		// Credit
+		if pc, ok := creditMap[plaidAccountID]; ok {
+			credit := mapPlaidCreditLiability(pc, linkedItem.UserID, internalAccountID)
+			if err := s.creditRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, credit); err != nil {
+				return result, fmt.Errorf("failed to replace credit liability for account %s: %w", internalAccountID, err)
+			}
+			result.CreditProcessed++
+			result.AccountsProcessed++
+		} else {
+			if err := s.creditRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, nil); err != nil {
+				return result, fmt.Errorf("failed to clear credit liability for account %s: %w", internalAccountID, err)
+			}
 		}
 
-		student := mapPlaidStudentLoan(ps, linkedItem.UserID, internalAccountID)
-		if err := s.studentLoanRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, student); err != nil {
-			return result, fmt.Errorf("failed to replace student loan liability for account %s: %w", internalAccountID, err)
+		// Mortgage
+		if pm, ok := mortgageMap[plaidAccountID]; ok {
+			mortgage := mapPlaidMortgageLiability(pm, linkedItem.UserID, internalAccountID)
+			if err := s.mortgageRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, mortgage); err != nil {
+				return result, fmt.Errorf("failed to replace mortgage liability for account %s: %w", internalAccountID, err)
+			}
+			result.MortgageProcessed++
+			result.AccountsProcessed++
+		} else {
+			if err := s.mortgageRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, nil); err != nil {
+				return result, fmt.Errorf("failed to clear mortgage liability for account %s: %w", internalAccountID, err)
+			}
 		}
-		result.StudentLoansProcessed++
-		result.AccountsProcessed++
+
+		// Student loan
+		if ps, ok := studentMap[plaidAccountID]; ok {
+			student := mapPlaidStudentLoan(ps, linkedItem.UserID, internalAccountID)
+			if err := s.studentLoanRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, student); err != nil {
+				return result, fmt.Errorf("failed to replace student loan liability for account %s: %w", internalAccountID, err)
+			}
+			result.StudentLoansProcessed++
+			result.AccountsProcessed++
+		} else {
+			if err := s.studentLoanRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, nil); err != nil {
+				return result, fmt.Errorf("failed to clear student loan liability for account %s: %w", internalAccountID, err)
+			}
+		}
 	}
 
 	// Update liabilities_last_synced_at — non-fatal on failure
