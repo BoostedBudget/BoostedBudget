@@ -157,6 +157,11 @@ func (m *MockLinkedItemRepository) MarkAllUserItemsDisconnected(ctx context.Cont
 	return args.Error(0)
 }
 
+func (m *MockLinkedItemRepository) UpdateInvestmentsLastSyncedDate(ctx context.Context, id string, date time.Time) error {
+	args := m.Called(ctx, id, date)
+	return args.Error(0)
+}
+
 // MockTransactionRepository is a mock for TransactionRepository
 type MockTransactionRepository struct {
 	mock.Mock

@@ -77,6 +77,22 @@ func (m *MockPlaidService) AccountsGet(ctx context.Context, accessToken string) 
 	return args.Get(0).(*plaid.AccountsGetResponse), args.Error(1)
 }
 
+func (m *MockPlaidService) InvestmentsHoldingsGet(ctx context.Context, accessToken string) (*plaid.InvestmentsHoldingsGetResponse, error) {
+	args := m.Called(ctx, accessToken)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*plaid.InvestmentsHoldingsGetResponse), args.Error(1)
+}
+
+func (m *MockPlaidService) InvestmentsTransactionsGet(ctx context.Context, accessToken, startDate, endDate string, offset, count int32) (*plaid.InvestmentsTransactionsGetResponse, error) {
+	args := m.Called(ctx, accessToken, startDate, endDate, offset, count)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*plaid.InvestmentsTransactionsGetResponse), args.Error(1)
+}
+
 type MockEncryptionService struct {
 	mock.Mock
 }
@@ -208,6 +224,11 @@ func (m *MockLinkedItemRepository) GetActiveItemsByUserID(ctx context.Context, u
 
 func (m *MockLinkedItemRepository) MarkAllUserItemsDisconnected(ctx context.Context, userID string) error {
 	args := m.Called(ctx, userID)
+	return args.Error(0)
+}
+
+func (m *MockLinkedItemRepository) UpdateInvestmentsLastSyncedDate(ctx context.Context, id string, date time.Time) error {
+	args := m.Called(ctx, id, date)
 	return args.Error(0)
 }
 
@@ -1812,15 +1833,16 @@ func (m *MockJobQueue) EnqueueManyTx(ctx context.Context, tx pgx.Tx, jobs []queu
 // Auto-Sync Tests (Issue #658: Auto-sync after Plaid account linking)
 // ===========================================================================
 
-// TestAccountService_LinkAccounts_EnqueuesSyncJob tests that a PlaidSyncJob is enqueued
-// after successful account linking with a 5-second delay.
+// TestAccountService_LinkAccounts_EnqueuesSyncJob tests that all three sync jobs are
+// enqueued after successful account linking: plaid_sync, investment_holdings_sync, and
+// investment_transactions_sync.
 // Issue #658: Auto-sync transactions after Plaid account linking
+// Issue #659: Investment sync after linking
 func TestAccountService_LinkAccounts_EnqueuesSyncJob(t *testing.T) {
 	// This test verifies that:
-	// 1. A PlaidSyncJob is enqueued after successful account linking
-	// 2. The job has a 5-second delay
-	// 3. The job has the correct user_id and item_id
-	// 4. Uniqueness options are applied to prevent duplicate syncs
+	// 1. plaid_sync job is enqueued (transaction sync)
+	// 2. investment_holdings_sync job is enqueued (Issue #659)
+	// 3. investment_transactions_sync job is enqueued (Issue #659)
 
 	// Setup mocks
 	mockJobQueue := &MockJobQueue{}
@@ -1840,10 +1862,20 @@ func TestAccountService_LinkAccounts_EnqueuesSyncJob(t *testing.T) {
 		return job.Kind() == "plaid_sync"
 	}), mock.Anything).Return(&queue.JobResult{ID: 123, Kind: "plaid_sync"}, nil)
 
+	// Mock: Enqueue should be called with investment_holdings_sync job (Issue #659)
+	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		return job.Kind() == "investment_holdings_sync"
+	}), mock.Anything).Return(&queue.JobResult{ID: 124, Kind: "investment_holdings_sync"}, nil)
+
+	// Mock: Enqueue should be called with investment_transactions_sync job (Issue #659)
+	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		return job.Kind() == "investment_transactions_sync"
+	}), mock.Anything).Return(&queue.JobResult{ID: 125, Kind: "investment_transactions_sync"}, nil)
+
 	// Call enqueueInitialSync directly
 	service.enqueueInitialSync(ctx, linkedItemID, userID)
 
-	// Assert: Enqueue was called
+	// Assert: All three Enqueue calls were made
 	mockJobQueue.AssertExpectations(t)
 }
 
@@ -2283,7 +2315,7 @@ func TestAccountService_LinkAccounts_Relink_NewItemHasEmptyCursor(t *testing.T) 
 func TestAccountService_LinkAccounts_Relink_EnqueuesSyncJob(t *testing.T) {
 	// Given: Re-link creates new linked_item
 	// When: Processing completes
-	// Then: PlaidSyncJob should be enqueued for the new item (not old item)
+	// Then: All sync jobs should be enqueued for the new item (not old item)
 
 	mockJobQueue := &MockJobQueue{}
 
@@ -2296,17 +2328,25 @@ func TestAccountService_LinkAccounts_Relink_EnqueuesSyncJob(t *testing.T) {
 	newLinkedItemID := uuid.New().String()
 	userID := uuid.New().String()
 
-	// Mock: Enqueue called with new item's ID
+	// Mock: All three sync jobs enqueued with new item's ID
 	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
 		return job.Kind() == "plaid_sync"
 	}), mock.Anything).Return(&queue.JobResult{ID: 123, Kind: "plaid_sync"}, nil)
+
+	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		return job.Kind() == "investment_holdings_sync"
+	}), mock.Anything).Return(&queue.JobResult{ID: 124, Kind: "investment_holdings_sync"}, nil)
+
+	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		return job.Kind() == "investment_transactions_sync"
+	}), mock.Anything).Return(&queue.JobResult{ID: 125, Kind: "investment_transactions_sync"}, nil)
 
 	// Execute: Enqueue sync for new item
 	service.enqueueInitialSync(ctx, newLinkedItemID, userID)
 
 	// Assert
 	mockJobQueue.AssertExpectations(t)
-	t.Log("✓ Sync job enqueued for new linked_item")
+	t.Log("✓ All sync jobs enqueued for new linked_item")
 }
 
 // TestAccountService_LinkAccounts_MultipleAccounts_AllLinked tests multi-account handling

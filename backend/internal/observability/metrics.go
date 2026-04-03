@@ -67,4 +67,34 @@ var (
 		Name: "dead_letter_queue_size",
 		Help: "Current number of jobs in the dead letter queue.",
 	})
+
+	// InvestmentHoldingsSyncDuration tracks how long holdings sync operations take.
+	// Issue #659: Plaid Investments
+	InvestmentHoldingsSyncDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "investment_holdings_sync_duration_seconds",
+		Help:    "Duration of Plaid investment holdings sync operations in seconds.",
+		Buckets: prometheus.DefBuckets,
+	})
+
+	// InvestmentTransactionsSyncDuration tracks how long investment transaction sync operations take.
+	// Issue #659: Plaid Investments
+	InvestmentTransactionsSyncDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "investment_transactions_sync_duration_seconds",
+		Help:    "Duration of Plaid investment transactions sync operations in seconds.",
+		Buckets: prometheus.DefBuckets,
+	})
+
+	// InvestmentHoldingsSynced counts holdings replaced per sync by outcome.
+	// Issue #659: Plaid Investments
+	InvestmentHoldingsSynced = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "investment_holdings_synced_total",
+		Help: "Total number of investment holdings synced by outcome (replaced/cleared).",
+	}, []string{"outcome"})
+
+	// InvestmentTransactionsSynced counts investment transactions processed by action.
+	// Issue #659: Plaid Investments
+	InvestmentTransactionsSynced = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "investment_transactions_synced_total",
+		Help: "Total number of investment transactions processed by action (inserted/skipped).",
+	}, []string{"action"})
 )
