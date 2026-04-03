@@ -260,6 +260,18 @@ func (s *liabilitySyncService) SyncLiabilities(ctx context.Context, linkedItem *
 // Plaid → Domain Mapping Helpers
 // ============================================================================
 
+// parseDate parses a Plaid date string (YYYY-MM-DD) and returns a pointer to time.Time,
+// or nil if the string is empty or parsing fails.
+func parseDate(dateStr *string) *time.Time {
+	if dateStr == nil || *dateStr == "" {
+		return nil
+	}
+	if t, err := time.Parse("2006-01-02", *dateStr); err == nil {
+		return &t
+	}
+	return nil
+}
+
 func mapPlaidCreditLiability(pc plaid.CreditCardLiability, userID, accountID string) *domain.CreditLiability {
 	credit := &domain.CreditLiability{
 		UserID:    userID,
@@ -273,15 +285,11 @@ func mapPlaidCreditLiability(pc plaid.CreditCardLiability, userID, accountID str
 	if v := pc.LastPaymentAmount.Get(); v != nil {
 		credit.LastPaymentAmount = v
 	}
-	if v := pc.LastPaymentDate.Get(); v != nil && *v != "" {
-		if t, err := time.Parse("2006-01-02", *v); err == nil {
-			credit.LastPaymentDate = &t
-		}
+	if v := pc.LastPaymentDate.Get(); v != nil {
+		credit.LastPaymentDate = parseDate(v)
 	}
-	if v := pc.LastStatementIssueDate.Get(); v != nil && *v != "" {
-		if t, err := time.Parse("2006-01-02", *v); err == nil {
-			credit.LastStatementIssueDate = &t
-		}
+	if v := pc.LastStatementIssueDate.Get(); v != nil {
+		credit.LastStatementIssueDate = parseDate(v)
 	}
 	if v := pc.LastStatementBalance.Get(); v != nil {
 		credit.LastStatementBalance = v
@@ -289,10 +297,8 @@ func mapPlaidCreditLiability(pc plaid.CreditCardLiability, userID, accountID str
 	if v := pc.MinimumPaymentAmount.Get(); v != nil {
 		credit.MinimumPaymentAmount = v
 	}
-	if v := pc.NextPaymentDueDate.Get(); v != nil && *v != "" {
-		if t, err := time.Parse("2006-01-02", *v); err == nil {
-			credit.NextPaymentDueDate = &t
-		}
+	if v := pc.NextPaymentDueDate.Get(); v != nil {
+		credit.NextPaymentDueDate = parseDate(v)
 	}
 
 	credit.APRs = mapPlaidAPRs(pc.Aprs)
@@ -349,10 +355,8 @@ func mapPlaidMortgageLiability(pm plaid.MortgageLiability, userID, accountID str
 	if v := pm.LastPaymentAmount.Get(); v != nil {
 		mortgage.LastPaymentAmount = v
 	}
-	if v := pm.LastPaymentDate.Get(); v != nil && *v != "" {
-		if t, err := time.Parse("2006-01-02", *v); err == nil {
-			mortgage.LastPaymentDate = &t
-		}
+	if v := pm.LastPaymentDate.Get(); v != nil {
+		mortgage.LastPaymentDate = parseDate(v)
 	}
 	if v := pm.LoanTypeDescription.Get(); v != nil {
 		mortgage.LoanTypeDescription = v
@@ -360,23 +364,17 @@ func mapPlaidMortgageLiability(pm plaid.MortgageLiability, userID, accountID str
 	if v := pm.LoanTerm.Get(); v != nil {
 		mortgage.LoanTerm = v
 	}
-	if v := pm.MaturityDate.Get(); v != nil && *v != "" {
-		if t, err := time.Parse("2006-01-02", *v); err == nil {
-			mortgage.MaturityDate = &t
-		}
+	if v := pm.MaturityDate.Get(); v != nil {
+		mortgage.MaturityDate = parseDate(v)
 	}
 	if v := pm.NextMonthlyPayment.Get(); v != nil {
 		mortgage.NextMonthlyPayment = v
 	}
-	if v := pm.NextPaymentDueDate.Get(); v != nil && *v != "" {
-		if t, err := time.Parse("2006-01-02", *v); err == nil {
-			mortgage.NextPaymentDueDate = &t
-		}
+	if v := pm.NextPaymentDueDate.Get(); v != nil {
+		mortgage.NextPaymentDueDate = parseDate(v)
 	}
-	if v := pm.OriginationDate.Get(); v != nil && *v != "" {
-		if t, err := time.Parse("2006-01-02", *v); err == nil {
-			mortgage.OriginationDate = &t
-		}
+	if v := pm.OriginationDate.Get(); v != nil {
+		mortgage.OriginationDate = parseDate(v)
 	}
 	if v := pm.OriginationPrincipalAmount.Get(); v != nil {
 		mortgage.OriginationPrincipalAmount = v
@@ -425,10 +423,8 @@ func mapPlaidStudentLoan(ps plaid.StudentLoan, userID, accountID string) *domain
 	if v := ps.AccountNumber.Get(); v != nil {
 		student.AccountNumber = v
 	}
-	if v := ps.ExpectedPayoffDate.Get(); v != nil && *v != "" {
-		if t, err := time.Parse("2006-01-02", *v); err == nil {
-			student.ExpectedPayoffDate = &t
-		}
+	if v := ps.ExpectedPayoffDate.Get(); v != nil {
+		student.ExpectedPayoffDate = parseDate(v)
 	}
 	if v := ps.Guarantor.Get(); v != nil {
 		student.Guarantor = v
@@ -439,15 +435,11 @@ func mapPlaidStudentLoan(ps plaid.StudentLoan, userID, accountID string) *domain
 	if v := ps.LastPaymentAmount.Get(); v != nil {
 		student.LastPaymentAmount = v
 	}
-	if v := ps.LastPaymentDate.Get(); v != nil && *v != "" {
-		if t, err := time.Parse("2006-01-02", *v); err == nil {
-			student.LastPaymentDate = &t
-		}
+	if v := ps.LastPaymentDate.Get(); v != nil {
+		student.LastPaymentDate = parseDate(v)
 	}
-	if v := ps.LastStatementIssueDate.Get(); v != nil && *v != "" {
-		if t, err := time.Parse("2006-01-02", *v); err == nil {
-			student.LastStatementIssueDate = &t
-		}
+	if v := ps.LastStatementIssueDate.Get(); v != nil {
+		student.LastStatementIssueDate = parseDate(v)
 	}
 	if v := ps.LoanName.Get(); v != nil {
 		student.LoanName = v
@@ -457,24 +449,18 @@ func mapPlaidStudentLoan(ps plaid.StudentLoan, userID, accountID string) *domain
 	if v := ps.LoanStatus.Type.Get(); v != nil {
 		student.LoanStatusType = v
 	}
-	if v := ps.LoanStatus.EndDate.Get(); v != nil && *v != "" {
-		if t, err := time.Parse("2006-01-02", *v); err == nil {
-			student.LoanStatusEndDate = &t
-		}
+	if v := ps.LoanStatus.EndDate.Get(); v != nil {
+		student.LoanStatusEndDate = parseDate(v)
 	}
 
 	if v := ps.MinimumPaymentAmount.Get(); v != nil {
 		student.MinimumPaymentAmount = v
 	}
-	if v := ps.NextPaymentDueDate.Get(); v != nil && *v != "" {
-		if t, err := time.Parse("2006-01-02", *v); err == nil {
-			student.NextPaymentDueDate = &t
-		}
+	if v := ps.NextPaymentDueDate.Get(); v != nil {
+		student.NextPaymentDueDate = parseDate(v)
 	}
-	if v := ps.OriginationDate.Get(); v != nil && *v != "" {
-		if t, err := time.Parse("2006-01-02", *v); err == nil {
-			student.OriginationDate = &t
-		}
+	if v := ps.OriginationDate.Get(); v != nil {
+		student.OriginationDate = parseDate(v)
 	}
 	if v := ps.OriginationPrincipalAmount.Get(); v != nil {
 		student.OriginationPrincipalAmount = v
@@ -487,10 +473,8 @@ func mapPlaidStudentLoan(ps plaid.StudentLoan, userID, accountID string) *domain
 	}
 
 	// Flatten pslf_status
-	if v := ps.PslfStatus.EstimatedEligibilityDate.Get(); v != nil && *v != "" {
-		if t, err := time.Parse("2006-01-02", *v); err == nil {
-			student.PSLFEstimatedEligibilityDate = &t
-		}
+	if v := ps.PslfStatus.EstimatedEligibilityDate.Get(); v != nil {
+		student.PSLFEstimatedEligibilityDate = parseDate(v)
 	}
 	if v := ps.PslfStatus.PaymentsMade.Get(); v != nil {
 		n := int(*v)
