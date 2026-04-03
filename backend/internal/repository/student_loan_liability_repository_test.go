@@ -107,6 +107,28 @@ func TestStudentLoanLiabilityRepository_ReplaceForAccount_Success(t *testing.T) 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestStudentLoanLiabilityRepository_ReplaceForAccount_NilDeletesOnly verifies that passing nil
+// performs a delete-only operation and commits without an INSERT.
+func TestStudentLoanLiabilityRepository_ReplaceForAccount_NilDeletesOnly(t *testing.T) {
+	mock, repo := setupStudentLoanLiabilityMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	accountID := uuid.New().String()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM student_loan_liabilities`)).
+		WithArgs(accountID, userID).
+		WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	mock.ExpectCommit()
+
+	err := repo.ReplaceForAccount(ctx, accountID, userID, nil)
+
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // TestStudentLoanLiabilityRepository_ReplaceForAccount_RollbackOnError verifies rollback on failure.
 func TestStudentLoanLiabilityRepository_ReplaceForAccount_RollbackOnError(t *testing.T) {
 	mock, repo := setupStudentLoanLiabilityMockDB(t)

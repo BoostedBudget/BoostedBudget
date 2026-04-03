@@ -355,6 +355,8 @@ func TestLiabilitySyncService_ProcessWebhook_Success(t *testing.T) {
 	}, nil)
 
 	deps.creditRepo.On("ReplaceForAccount", ctx, internalAccountID, userID, mock.Anything).Return(nil)
+	deps.mortgageRepo.On("ReplaceForAccount", ctx, internalAccountID, userID, (*domain.MortgageLiability)(nil)).Return(nil)
+	deps.studentLoanRepo.On("ReplaceForAccount", ctx, internalAccountID, userID, (*domain.StudentLoanLiability)(nil)).Return(nil)
 	deps.linkedItemRepo.On("UpdateLiabilitiesLastSyncedAt", ctx, linkedItem.ID, mock.Anything).Return(nil)
 
 	err := svc.ProcessWebhook(ctx, webhook)
@@ -444,6 +446,8 @@ func TestLiabilitySyncService_SyncLiabilities_CreditHappyPath(t *testing.T) {
 			len(l.APRs) == 1 &&
 			l.APRs[0].RateType == "purchase"
 	})).Return(nil)
+	deps.mortgageRepo.On("ReplaceForAccount", ctx, internalAccountID, userID, (*domain.MortgageLiability)(nil)).Return(nil)
+	deps.studentLoanRepo.On("ReplaceForAccount", ctx, internalAccountID, userID, (*domain.StudentLoanLiability)(nil)).Return(nil)
 	deps.linkedItemRepo.On("UpdateLiabilitiesLastSyncedAt", ctx, linkedItem.ID, mock.Anything).Return(nil)
 
 	result, err := svc.SyncLiabilities(ctx, linkedItem)
@@ -480,9 +484,11 @@ func TestLiabilitySyncService_SyncLiabilities_MortgageHappyPath(t *testing.T) {
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 
+	deps.creditRepo.On("ReplaceForAccount", ctx, internalAccountID, userID, (*domain.CreditLiability)(nil)).Return(nil)
 	deps.mortgageRepo.On("ReplaceForAccount", ctx, internalAccountID, userID, mock.MatchedBy(func(l *domain.MortgageLiability) bool {
 		return l.UserID == userID && l.AccountID == internalAccountID
 	})).Return(nil)
+	deps.studentLoanRepo.On("ReplaceForAccount", ctx, internalAccountID, userID, (*domain.StudentLoanLiability)(nil)).Return(nil)
 	deps.linkedItemRepo.On("UpdateLiabilitiesLastSyncedAt", ctx, linkedItem.ID, mock.Anything).Return(nil)
 
 	result, err := svc.SyncLiabilities(ctx, linkedItem)
@@ -518,6 +524,8 @@ func TestLiabilitySyncService_SyncLiabilities_StudentLoanHappyPath(t *testing.T)
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 
+	deps.creditRepo.On("ReplaceForAccount", ctx, internalAccountID, userID, (*domain.CreditLiability)(nil)).Return(nil)
+	deps.mortgageRepo.On("ReplaceForAccount", ctx, internalAccountID, userID, (*domain.MortgageLiability)(nil)).Return(nil)
 	deps.studentLoanRepo.On("ReplaceForAccount", ctx, internalAccountID, userID, mock.MatchedBy(func(l *domain.StudentLoanLiability) bool {
 		return l.UserID == userID &&
 			l.AccountID == internalAccountID &&
@@ -534,12 +542,14 @@ func TestLiabilitySyncService_SyncLiabilities_StudentLoanHappyPath(t *testing.T)
 	deps.studentLoanRepo.AssertExpectations(t)
 }
 
-// TestLiabilitySyncService_SyncLiabilities_UnmappedAccountSkipped verifies that
-// liabilities for unknown plaid account IDs are silently skipped.
+// TestLiabilitySyncService_SyncLiabilities_UnmappedAccountSkipped verifies that Plaid accounts
+// with no matching internal account are recorded in result.Errors, while each internal account
+// still gets nil-cleared for all liability categories.
 func TestLiabilitySyncService_SyncLiabilities_UnmappedAccountSkipped(t *testing.T) {
 	svc, deps := setupLiabilitySyncService(t)
 	ctx := context.Background()
 
+	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", "user-001")
 	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok", nil)
 
@@ -551,19 +561,25 @@ func TestLiabilitySyncService_SyncLiabilities_UnmappedAccountSkipped(t *testing.
 	)
 	deps.plaidSvc.On("LiabilitiesGet", ctx, "tok").Return(resp, nil)
 
-	// Only one known account, but its ID doesn't match the liability
+	// Internal account has a different Plaid ID than what Plaid returned
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
-		{ID: uuid.New().String(), PlaidAccountID: "some-other-account", UserID: "user-001"},
+		{ID: internalAccountID, PlaidAccountID: "some-other-account", UserID: "user-001"},
 	}, nil)
 
+	// All 3 categories get nil-cleared for the internal account (no matching Plaid data)
+	deps.creditRepo.On("ReplaceForAccount", ctx, internalAccountID, "user-001", (*domain.CreditLiability)(nil)).Return(nil)
+	deps.mortgageRepo.On("ReplaceForAccount", ctx, internalAccountID, "user-001", (*domain.MortgageLiability)(nil)).Return(nil)
+	deps.studentLoanRepo.On("ReplaceForAccount", ctx, internalAccountID, "user-001", (*domain.StudentLoanLiability)(nil)).Return(nil)
 	deps.linkedItemRepo.On("UpdateLiabilitiesLastSyncedAt", ctx, linkedItem.ID, mock.Anything).Return(nil)
 
 	result, err := svc.SyncLiabilities(ctx, linkedItem)
 	require.NoError(t, err)
-	// Account skipped — nothing processed
+	// No data processed (unmatched Plaid account)
 	assert.Equal(t, 0, result.CreditProcessed)
 	assert.Equal(t, 0, result.AccountsProcessed)
-	deps.creditRepo.AssertNotCalled(t, "ReplaceForAccount")
+	// Unmatched Plaid account surfaces in errors
+	require.Len(t, result.Errors, 1)
+	assert.Contains(t, result.Errors[0], "unknown-plaid-account")
 }
 
 // TestLiabilitySyncService_SyncLiabilities_MixedTypes verifies all three liability
@@ -596,9 +612,19 @@ func TestLiabilitySyncService_SyncLiabilities_MixedTypes(t *testing.T) {
 		{ID: slAcctID, PlaidAccountID: plaidSLID, UserID: userID},
 	}, nil)
 
+	// Each account gets its matching category replaced and the other two cleared (nil).
 	deps.creditRepo.On("ReplaceForAccount", ctx, ccAcctID, userID, mock.Anything).Return(nil)
+	deps.creditRepo.On("ReplaceForAccount", ctx, mortAcctID, userID, (*domain.CreditLiability)(nil)).Return(nil)
+	deps.creditRepo.On("ReplaceForAccount", ctx, slAcctID, userID, (*domain.CreditLiability)(nil)).Return(nil)
+
+	deps.mortgageRepo.On("ReplaceForAccount", ctx, ccAcctID, userID, (*domain.MortgageLiability)(nil)).Return(nil)
 	deps.mortgageRepo.On("ReplaceForAccount", ctx, mortAcctID, userID, mock.Anything).Return(nil)
+	deps.mortgageRepo.On("ReplaceForAccount", ctx, slAcctID, userID, (*domain.MortgageLiability)(nil)).Return(nil)
+
+	deps.studentLoanRepo.On("ReplaceForAccount", ctx, ccAcctID, userID, (*domain.StudentLoanLiability)(nil)).Return(nil)
+	deps.studentLoanRepo.On("ReplaceForAccount", ctx, mortAcctID, userID, (*domain.StudentLoanLiability)(nil)).Return(nil)
 	deps.studentLoanRepo.On("ReplaceForAccount", ctx, slAcctID, userID, mock.Anything).Return(nil)
+
 	deps.linkedItemRepo.On("UpdateLiabilitiesLastSyncedAt", ctx, linkedItem.ID, mock.Anything).Return(nil)
 
 	result, err := svc.SyncLiabilities(ctx, linkedItem)
@@ -612,8 +638,8 @@ func TestLiabilitySyncService_SyncLiabilities_MixedTypes(t *testing.T) {
 	deps.studentLoanRepo.AssertExpectations(t)
 }
 
-// TestLiabilitySyncService_SyncLiabilities_EmptyArrayClearsData verifies that an
-// empty credit array (not nil) still calls ReplaceForAccount (which deletes existing data).
+// TestLiabilitySyncService_SyncLiabilities_EmptyArrayClearsData verifies that empty Plaid arrays
+// still trigger nil-clear calls for each internal account, removing any stale liability rows.
 func TestLiabilitySyncService_SyncLiabilities_EmptyArrayClearsData(t *testing.T) {
 	svc, deps := setupLiabilitySyncService(t)
 	ctx := context.Background()
@@ -625,7 +651,7 @@ func TestLiabilitySyncService_SyncLiabilities_EmptyArrayClearsData(t *testing.T)
 
 	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok", nil)
 
-	// Empty credit array — account had credit card but no longer does
+	// All arrays empty — Plaid no longer reports any liabilities for this item
 	resp := makePlaidLiabilitiesResponse(
 		[]plaid.CreditCardLiability{},
 		[]plaid.MortgageLiability{},
@@ -637,13 +663,19 @@ func TestLiabilitySyncService_SyncLiabilities_EmptyArrayClearsData(t *testing.T)
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 
+	// Empty arrays must still delete any stale rows for the internal account
+	deps.creditRepo.On("ReplaceForAccount", ctx, internalAccountID, userID, (*domain.CreditLiability)(nil)).Return(nil)
+	deps.mortgageRepo.On("ReplaceForAccount", ctx, internalAccountID, userID, (*domain.MortgageLiability)(nil)).Return(nil)
+	deps.studentLoanRepo.On("ReplaceForAccount", ctx, internalAccountID, userID, (*domain.StudentLoanLiability)(nil)).Return(nil)
 	deps.linkedItemRepo.On("UpdateLiabilitiesLastSyncedAt", ctx, linkedItem.ID, mock.Anything).Return(nil)
 
 	result, err := svc.SyncLiabilities(ctx, linkedItem)
 	require.NoError(t, err)
-	// Nothing in the response arrays, so no ReplaceForAccount calls
 	assert.Equal(t, 0, result.CreditProcessed)
-	deps.creditRepo.AssertNotCalled(t, "ReplaceForAccount")
+	assert.Equal(t, 0, result.AccountsProcessed)
+	deps.creditRepo.AssertExpectations(t)
+	deps.mortgageRepo.AssertExpectations(t)
+	deps.studentLoanRepo.AssertExpectations(t)
 }
 
 // TestLiabilitySyncService_SyncLiabilities_UpdatesLastSyncedAt verifies that

@@ -136,6 +136,31 @@ func TestCreditLiabilityRepository_ReplaceForAccount_RollbackOnError(t *testing.
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestCreditLiabilityRepository_ReplaceForAccount_NilDeletesOnly verifies that passing nil
+// liability performs a delete-only operation (no INSERT) and commits the transaction.
+func TestCreditLiabilityRepository_ReplaceForAccount_NilDeletesOnly(t *testing.T) {
+	mock, repo := setupCreditLiabilityMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	accountID := uuid.New().String()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM credit_liability_aprs`)).
+		WithArgs(accountID, userID).
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM credit_liabilities`)).
+		WithArgs(accountID, userID).
+		WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	mock.ExpectCommit()
+
+	err := repo.ReplaceForAccount(ctx, accountID, userID, nil)
+
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // TestCreditLiabilityRepository_GetByUserID verifies retrieval of credit liabilities for a user.
 func TestCreditLiabilityRepository_GetByUserID(t *testing.T) {
 	mock, repo := setupCreditLiabilityMockDB(t)
