@@ -48,11 +48,6 @@ type RuleExecutionService interface {
 	// Issue #38: Rules API Endpoints - Test endpoint.
 	TestRule(ctx context.Context, rule *domain.AutomationRule, triggerData map[string]interface{}) (*domain.RuleTestResult, error)
 
-	// SetUserGetter sets the user getter for tier checking.
-	SetUserGetter(getter UserGetter)
-
-	// SetSubscriptionChecker sets the subscription checker for limit enforcement.
-	SetSubscriptionChecker(checker SubscriptionChecker)
 }
 
 // ruleExecutionService implements RuleExecutionService.
@@ -62,8 +57,6 @@ type ruleExecutionService struct {
 	ruleRepo            repository.AutomationRulesRepository
 	savingsGoalRepo     repository.SavingsGoalRepository
 	notificationService NotificationService
-	userGetter          UserGetter
-	subscriptionChecker SubscriptionChecker
 	analytics           phclient.Analytics
 }
 
@@ -85,16 +78,6 @@ func NewRuleExecutionService(
 		ruleRepo:            ruleRepo,
 		notificationService: notificationService,
 	}
-}
-
-// SetUserGetter sets the user getter for tier checking.
-func (s *ruleExecutionService) SetUserGetter(getter UserGetter) {
-	s.userGetter = getter
-}
-
-// SetSubscriptionChecker sets the subscription checker for limit enforcement.
-func (s *ruleExecutionService) SetSubscriptionChecker(checker SubscriptionChecker) {
-	s.subscriptionChecker = checker
 }
 
 // SetAnalytics sets the analytics client for event capture.

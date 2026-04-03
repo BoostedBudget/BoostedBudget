@@ -23,7 +23,6 @@ import {
 } from '@/test/mocks/automation-rules-api'
 import { mockUseGetUserProfile } from '@/test/mocks/profile-api'
 import { mockUseGetSubscriptionTiers } from '@/test/mocks/subscription-api'
-import { mockUseRuleTierLimits } from '@/test/mocks/rule-tier-limits'
 import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
 
 const mockRules: AutomationRule[] = [
@@ -73,7 +72,7 @@ const mockRules: AutomationRule[] = [
   } as any,
 ]
 
-// Mock user data with premium tier (15 rule limit)
+// Mock user data with premium tier
 const mockUser = {
   id: 'user-1',
   email: 'test@example.com',
@@ -110,7 +109,6 @@ describe('RulesPage', () => {
     mockRefetchAutomationRules.mockClear()
     mockUseGetUserProfile.mockClear()
     mockUseGetSubscriptionTiers.mockClear()
-    mockUseRuleTierLimits.mockClear()
     localStorage.clear()
 
     // Configure automation rules mock
@@ -137,18 +135,6 @@ describe('RulesPage', () => {
       refetch: () => Promise.resolve(),
     })
 
-    // Configure tier limits to match test data:
-    // - mockRules has 2 items
-    // - mockUser has subscription_tier: 'premium' (15 rule limit)
-    mockUseRuleTierLimits.mockReturnValue({
-      ruleLimit: 15,
-      isUnlimited: false,
-      currentRuleCount: 2,
-      isAtLimit: false,
-      canUseEventTriggers: true,
-      shouldShowUpgradeBanner: false,
-      rulesCountDisplay: '2/15 rules used',
-    })
   })
 
   it('should render page title', async () => {
@@ -159,12 +145,12 @@ describe('RulesPage', () => {
     })
   })
 
-  it('should render tier limit display', async () => {
+  it('should render rule count display', async () => {
     renderWithProviders(<RulesPage />)
 
-    // With 2 rules and premium tier (15 limit), should show "2/15 rules"
+    // With 2 rules loaded, should show "2 rules"
     await waitFor(() => {
-      expect(screen.getByText(/2\/15 rules/i)).toBeInTheDocument()
+      expect(screen.getByText(/2 rules/i)).toBeInTheDocument()
     })
   })
 

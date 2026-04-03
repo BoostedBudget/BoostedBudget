@@ -36,7 +36,6 @@ export type {
 } from './components'
 
 // Hooks
-export { useRuleTierLimits } from './hooks/useRuleTierLimits'
 export { useRuleForm } from './hooks/useRuleForm'
 
 // Types

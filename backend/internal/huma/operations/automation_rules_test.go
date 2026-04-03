@@ -9,7 +9,6 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
-	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/maxnussbaum/BoostedBudget/internal/workers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -86,11 +85,6 @@ func (m *MockAutomationRuleService) GetRulesByType(ctx context.Context, userID s
 	return args.Get(0).([]*domain.AutomationRule), args.Error(1)
 }
 
-func (m *MockAutomationRuleService) TierAllowsEventTriggers(ctx context.Context, userID string) (bool, error) {
-	args := m.Called(ctx, userID)
-	return args.Bool(0), args.Error(1)
-}
-
 // MockRuleExecutionService implements services.RuleExecutionService for testing.
 // Issue #38: Rules API Endpoints.
 type MockRuleExecutionService struct {
@@ -132,14 +126,6 @@ func (m *MockRuleExecutionService) TestRule(ctx context.Context, rule *domain.Au
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*domain.RuleTestResult), args.Error(1)
-}
-
-func (m *MockRuleExecutionService) SetUserGetter(getter services.UserGetter) {
-	m.Called(getter)
-}
-
-func (m *MockRuleExecutionService) SetSubscriptionChecker(checker services.SubscriptionChecker) {
-	m.Called(checker)
 }
 
 // ============================================================================
