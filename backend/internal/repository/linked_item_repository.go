@@ -104,6 +104,11 @@ type LinkedItemRepository interface {
 	// have been synced. Called after a successful investment transactions sync.
 	// Issue #659: Plaid Investments
 	UpdateInvestmentsLastSyncedDate(ctx context.Context, id string, date time.Time) error
+
+	// UpdateLiabilitiesLastSyncedAt updates the timestamp through which liabilities
+	// have been synced. Called after a successful liabilities sync.
+	// Issue #910: Plaid Liabilities
+	UpdateLiabilitiesLastSyncedAt(ctx context.Context, id string, t time.Time) error
 }
 
 // linkedItemRepository implements LinkedItemRepository using PostgreSQL
@@ -118,7 +123,7 @@ const linkedItemSelectCols = `id, user_id, item_id, access_token_encrypted,
        status, error_code, error_message, last_error_at, retry_count, next_retry_at,
        replaced_at, replaced_by_id,
        created_at, updated_at,
-       investments_last_synced_date`
+       investments_last_synced_date, liabilities_last_synced_at`
 
 // NewLinkedItemRepository creates a new LinkedItemRepository instance
 func NewLinkedItemRepository(db DB) LinkedItemRepository {
@@ -195,6 +200,7 @@ func (r *linkedItemRepository) GetByID(ctx context.Context, id string) (*domain.
 		&item.CreatedAt,
 		&item.UpdatedAt,
 		&item.InvestmentsLastSyncedDate,
+		&item.LiabilitiesLastSyncedAt,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -242,6 +248,7 @@ func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) (
 			&item.CreatedAt,
 			&item.UpdatedAt,
 			&item.InvestmentsLastSyncedDate,
+			&item.LiabilitiesLastSyncedAt,
 		)
 		if err != nil {
 			return nil, err
@@ -285,6 +292,7 @@ func (r *linkedItemRepository) GetByItemID(ctx context.Context, itemID string) (
 		&item.CreatedAt,
 		&item.UpdatedAt,
 		&item.InvestmentsLastSyncedDate,
+		&item.LiabilitiesLastSyncedAt,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -430,6 +438,7 @@ func (r *linkedItemRepository) GetByIDAndUser(ctx context.Context, id, userID st
 		&item.CreatedAt,
 		&item.UpdatedAt,
 		&item.InvestmentsLastSyncedDate,
+		&item.LiabilitiesLastSyncedAt,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -512,6 +521,7 @@ func (r *linkedItemRepository) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, 
 		&item.CreatedAt,
 		&item.UpdatedAt,
 		&item.InvestmentsLastSyncedDate,
+		&item.LiabilitiesLastSyncedAt,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -554,6 +564,7 @@ func (r *linkedItemRepository) GetByUserAndInstitution(ctx context.Context, user
 		&item.CreatedAt,
 		&item.UpdatedAt,
 		&item.InvestmentsLastSyncedDate,
+		&item.LiabilitiesLastSyncedAt,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -585,7 +596,7 @@ func (r *linkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays
 		       li.status, li.error_code, li.error_message, li.last_error_at, li.retry_count, li.next_retry_at,
 		       li.replaced_at, li.replaced_by_id,
 		       li.cleanup_notified_at, li.cleanup_scheduled_at,
-		       li.created_at, li.updated_at, li.investments_last_synced_date
+		       li.created_at, li.updated_at, li.investments_last_synced_date, li.liabilities_last_synced_at
 		FROM linked_items li
 		WHERE li.cleanup_scheduled_at IS NULL
 		  AND li.status NOT IN ('replaced', 'disconnected')
@@ -640,6 +651,7 @@ func (r *linkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays
 			&item.CreatedAt,
 			&item.UpdatedAt,
 			&item.InvestmentsLastSyncedDate,
+			&item.LiabilitiesLastSyncedAt,
 		)
 		if err != nil {
 			return nil, err
@@ -665,7 +677,7 @@ func (r *linkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]do
 		       status, error_code, error_message, last_error_at, retry_count, next_retry_at,
 		       replaced_at, replaced_by_id,
 		       cleanup_notified_at, cleanup_scheduled_at,
-		       created_at, updated_at, investments_last_synced_date
+		       created_at, updated_at, investments_last_synced_date, liabilities_last_synced_at
 		FROM linked_items
 		WHERE cleanup_scheduled_at IS NOT NULL
 		  AND cleanup_scheduled_at < NOW()
@@ -705,6 +717,7 @@ func (r *linkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]do
 			&item.CreatedAt,
 			&item.UpdatedAt,
 			&item.InvestmentsLastSyncedDate,
+			&item.LiabilitiesLastSyncedAt,
 		)
 		if err != nil {
 			return nil, err
@@ -816,6 +829,7 @@ func (r *linkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userI
 			&item.CreatedAt,
 			&item.UpdatedAt,
 			&item.InvestmentsLastSyncedDate,
+			&item.LiabilitiesLastSyncedAt,
 		)
 		if err != nil {
 			return nil, err
@@ -838,6 +852,20 @@ func (r *linkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userI
 func (r *linkedItemRepository) UpdateInvestmentsLastSyncedDate(ctx context.Context, id string, date time.Time) error {
 	query := `UPDATE linked_items SET investments_last_synced_date = $1 WHERE id = $2`
 	ct, err := r.db.Exec(ctx, query, date, id)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrLinkedItemNotFound
+	}
+	return nil
+}
+
+// UpdateLiabilitiesLastSyncedAt updates the liabilities last synced timestamp.
+// Called after a successful liabilities sync (Issue #910).
+func (r *linkedItemRepository) UpdateLiabilitiesLastSyncedAt(ctx context.Context, id string, t time.Time) error {
+	query := `UPDATE linked_items SET liabilities_last_synced_at = $1 WHERE id = $2`
+	ct, err := r.db.Exec(ctx, query, t, id)
 	if err != nil {
 		return err
 	}
