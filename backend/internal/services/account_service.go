@@ -43,6 +43,24 @@ func plaidSyncUniqueOpts() *queue.UniqueOpts {
 	}
 }
 
+// investmentHoldingsSyncJobArgs is a local struct for enqueueing investment holdings sync jobs.
+// This mirrors jobs.InvestmentHoldingsSyncArgs to avoid import cycle (Issue #659).
+type investmentHoldingsSyncJobArgs struct {
+	UserID string `json:"user_id"`
+	ItemID string `json:"item_id"`
+}
+
+func (investmentHoldingsSyncJobArgs) Kind() string { return "investment_holdings_sync" }
+
+// investmentTransactionsSyncJobArgs is a local struct for enqueueing investment transactions sync jobs.
+// This mirrors jobs.InvestmentTransactionsSyncArgs to avoid import cycle (Issue #659).
+type investmentTransactionsSyncJobArgs struct {
+	UserID string `json:"user_id"`
+	ItemID string `json:"item_id"`
+}
+
+func (investmentTransactionsSyncJobArgs) Kind() string { return "investment_transactions_sync" }
+
 // itemCleanupJobArgs is a local struct for enqueueing item cleanup jobs.
 // This mirrors jobs.ItemCleanupArgs to avoid import cycle (services → jobs → services).
 // The JSON structure must match jobs.ItemCleanupArgs exactly for River to deserialize correctly.
@@ -753,45 +771,44 @@ func (s *accountService) SetJobQueue(jq queue.JobQueue) {
 	s.jobQueue = jq
 }
 
-// enqueueInitialSync enqueues a PlaidSyncJob to sync transactions after account linking.
+// enqueueInitialSync enqueues sync jobs for transactions and investments after account linking.
 // Issue #658: Auto-sync transactions after Plaid account linking
+// Issue #659: Auto-sync investments after Plaid account linking
 //
 // This method is non-blocking: if the job queue fails, we log a warning but don't
 // fail the account linking operation. The user will still have their accounts linked,
 // and transactions will be synced when webhooks arrive.
-//
-// Parameters:
-//   - linkedItemID: The internal UUID of the LinkedItem to sync
-//   - userID: The internal UUID of the user who owns the linked item
 func (s *accountService) enqueueInitialSync(ctx context.Context, linkedItemID, userID string) {
-	// Guard against nil jobQueue (backward compatibility)
 	if s.jobQueue == nil {
 		return
 	}
 
-	syncJob := plaidSyncJobArgs{
-		UserID: userID,
-		ItemID: linkedItemID,
-	}
-
-	// Enqueue with 5-second delay to give Plaid time to prepare data
-	// Use uniqueness options to prevent duplicate syncs
-	_, err := s.jobQueue.Enqueue(ctx, syncJob,
-		queue.WithDelay(5*time.Second),
+	opts := []queue.EnqueueOption{
+		queue.WithDelay(5 * time.Second),
 		queue.WithUnique(*plaidSyncUniqueOpts()),
 		queue.WithTags("initial_sync"),
-	)
+	}
+
+	s.enqueueJob(ctx, plaidSyncJobArgs{UserID: userID, ItemID: linkedItemID}, linkedItemID, userID, opts)
+	s.enqueueJob(ctx, investmentHoldingsSyncJobArgs{UserID: userID, ItemID: linkedItemID}, linkedItemID, userID, opts)
+	s.enqueueJob(ctx, investmentTransactionsSyncJobArgs{UserID: userID, ItemID: linkedItemID}, linkedItemID, userID, opts)
+}
+
+// enqueueJob enqueues a single job and logs success or failure.
+func (s *accountService) enqueueJob(ctx context.Context, job queue.Job, linkedItemID, userID string, opts []queue.EnqueueOption) {
+	_, err := s.jobQueue.Enqueue(ctx, job, opts...)
 	if err != nil {
-		// Log but don't fail - account linking should succeed even if queue fails
 		s.logger.Warn("failed to enqueue initial sync job",
 			"linked_item_id", linkedItemID,
 			"user_id", userID,
+			"job_kind", job.Kind(),
 			"error", err,
 		)
 	} else {
 		s.logger.Info("enqueued initial sync job",
 			"linked_item_id", linkedItemID,
 			"user_id", userID,
+			"job_kind", job.Kind(),
 		)
 	}
 }

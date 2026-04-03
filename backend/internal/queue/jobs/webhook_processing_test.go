@@ -41,6 +41,17 @@ func (m *MockWebhookTransactionSyncService) ProcessWebhook(ctx context.Context, 
 	return args.Error(0)
 }
 
+// MockWebhookInvestmentSyncService mocks InvestmentSyncService for webhook tests.
+// Issue #659: Plaid Investments
+type MockWebhookInvestmentSyncService struct {
+	mock.Mock
+}
+
+func (m *MockWebhookInvestmentSyncService) ProcessWebhook(ctx context.Context, webhook *domain.WebhookEvent) error {
+	args := m.Called(ctx, webhook)
+	return args.Error(0)
+}
+
 // MockItemErrorService mocks ItemErrorService for webhook tests
 type MockItemErrorService struct {
 	mock.Mock
@@ -422,9 +433,9 @@ func TestWebhookProcessingWorker_Work_LiabilitiesWebhook_LoggedAndAcknowledged(t
 	mockItemErrorSvc.AssertNotCalled(t, "ProcessWebhook")
 }
 
-// TestWebhookProcessingWorker_Work_HoldingsWebhook_LoggedAndAcknowledged verifies
-// HOLDINGS webhook is logged and acknowledged (Phase 2 #241, deferred to #659)
-func TestWebhookProcessingWorker_Work_HoldingsWebhook_LoggedAndAcknowledged(t *testing.T) {
+// TestWebhookProcessingWorker_Work_HoldingsWebhook_RoutedToInvestmentSyncService verifies
+// HOLDINGS webhook is routed to InvestmentSyncService.ProcessWebhook (Issue #659).
+func TestWebhookProcessingWorker_Work_HoldingsWebhook_RoutedToInvestmentSyncService(t *testing.T) {
 	ctx := context.Background()
 	webhookID := uuid.New().String()
 	itemID := "plaid-item-holdings-456"
@@ -439,13 +450,16 @@ func TestWebhookProcessingWorker_Work_HoldingsWebhook_LoggedAndAcknowledged(t *t
 
 	mockRepo := new(MockWebhookRepository)
 	mockSyncSvc := new(MockWebhookTransactionSyncService)
+	mockInvestmentSvc := new(MockWebhookInvestmentSyncService)
 	mockItemErrorSvc := new(MockItemErrorService)
 
 	mockRepo.On("GetByID", ctx, webhookID).Return(webhook, nil)
+	mockInvestmentSvc.On("ProcessWebhook", ctx, webhook).Return(nil)
 
 	worker := NewWebhookProcessingWorker(WebhookProcessingWorkerDeps{
 		WebhookRepo:        mockRepo,
 		TransactionSyncSvc: mockSyncSvc,
+		InvestmentSyncSvc:  mockInvestmentSvc,
 		ItemErrorSvc:       mockItemErrorSvc,
 		Logger:             newTestWebhookLogger(),
 	})
@@ -458,11 +472,100 @@ func TestWebhookProcessingWorker_Work_HoldingsWebhook_LoggedAndAcknowledged(t *t
 
 	err := worker.Work(ctx, job)
 
-	// Should succeed without error (logged, deferred to #659)
 	require.NoError(t, err)
 	mockRepo.AssertExpectations(t)
+	mockInvestmentSvc.AssertExpectations(t)
 	mockSyncSvc.AssertNotCalled(t, "ProcessWebhook")
 	mockItemErrorSvc.AssertNotCalled(t, "ProcessWebhook")
+}
+
+// TestWebhookProcessingWorker_Work_InvestmentTransactionsWebhook_Success verifies
+// INVESTMENTS_TRANSACTIONS webhook is routed to InvestmentSyncService.ProcessWebhook (Issue #659).
+func TestWebhookProcessingWorker_Work_InvestmentTransactionsWebhook_Success(t *testing.T) {
+	ctx := context.Background()
+	webhookID := uuid.New().String()
+	itemID := "plaid-item-inv-txn-789"
+
+	webhook := &domain.WebhookEvent{
+		ID:          webhookID,
+		WebhookType: "INVESTMENTS_TRANSACTIONS",
+		WebhookCode: stringPtr("DEFAULT_UPDATE"),
+		ItemID:      &itemID,
+		Processed:   false,
+	}
+
+	mockRepo := new(MockWebhookRepository)
+	mockSyncSvc := new(MockWebhookTransactionSyncService)
+	mockInvestmentSvc := new(MockWebhookInvestmentSyncService)
+	mockItemErrorSvc := new(MockItemErrorService)
+
+	mockRepo.On("GetByID", ctx, webhookID).Return(webhook, nil)
+	mockInvestmentSvc.On("ProcessWebhook", ctx, webhook).Return(nil)
+
+	worker := NewWebhookProcessingWorker(WebhookProcessingWorkerDeps{
+		WebhookRepo:        mockRepo,
+		TransactionSyncSvc: mockSyncSvc,
+		InvestmentSyncSvc:  mockInvestmentSvc,
+		ItemErrorSvc:       mockItemErrorSvc,
+		Logger:             newTestWebhookLogger(),
+	})
+
+	job := newTestWebhookProcessingJob(WebhookProcessingArgs{
+		WebhookID:   webhookID,
+		WebhookType: "INVESTMENTS_TRANSACTIONS",
+		ItemID:      itemID,
+	})
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockRepo.AssertExpectations(t)
+	mockInvestmentSvc.AssertExpectations(t)
+	mockSyncSvc.AssertNotCalled(t, "ProcessWebhook")
+	mockItemErrorSvc.AssertNotCalled(t, "ProcessWebhook")
+}
+
+// TestWebhookProcessingWorker_Work_InvestmentTransactionsWebhook_Error verifies
+// processing errors from InvestmentSyncService are propagated for retry.
+func TestWebhookProcessingWorker_Work_InvestmentTransactionsWebhook_Error(t *testing.T) {
+	ctx := context.Background()
+	webhookID := uuid.New().String()
+	itemID := "plaid-item-inv-txn-789"
+
+	webhook := &domain.WebhookEvent{
+		ID:          webhookID,
+		WebhookType: "INVESTMENTS_TRANSACTIONS",
+		WebhookCode: stringPtr("DEFAULT_UPDATE"),
+		ItemID:      &itemID,
+		Processed:   false,
+	}
+
+	mockRepo := new(MockWebhookRepository)
+	mockSyncSvc := new(MockWebhookTransactionSyncService)
+	mockInvestmentSvc := new(MockWebhookInvestmentSyncService)
+	mockItemErrorSvc := new(MockItemErrorService)
+
+	mockRepo.On("GetByID", ctx, webhookID).Return(webhook, nil)
+	mockInvestmentSvc.On("ProcessWebhook", ctx, webhook).Return(errors.New("investment sync failed"))
+
+	worker := NewWebhookProcessingWorker(WebhookProcessingWorkerDeps{
+		WebhookRepo:        mockRepo,
+		TransactionSyncSvc: mockSyncSvc,
+		InvestmentSyncSvc:  mockInvestmentSvc,
+		ItemErrorSvc:       mockItemErrorSvc,
+		Logger:             newTestWebhookLogger(),
+	})
+
+	job := newTestWebhookProcessingJob(WebhookProcessingArgs{
+		WebhookID:   webhookID,
+		WebhookType: "INVESTMENTS_TRANSACTIONS",
+		ItemID:      itemID,
+	})
+
+	err := worker.Work(ctx, job)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "webhook processing failed")
 }
 
 func TestWebhookProcessingUniqueOpts(t *testing.T) {

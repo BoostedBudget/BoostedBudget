@@ -59,6 +59,10 @@ type LinkedItem struct {
 	CleanupNotifiedAt  *time.Time `json:"cleanup_notified_at,omitempty" db:"cleanup_notified_at"`   // When user was notified
 	CleanupScheduledAt *time.Time `json:"cleanup_scheduled_at,omitempty" db:"cleanup_scheduled_at"` // When cleanup will execute
 
+	// Investment sync tracking (Issue #659)
+	// NULL means never synced — uses 2-year lookback on first sync.
+	InvestmentsLastSyncedDate *time.Time `json:"investments_last_synced_date,omitempty" db:"investments_last_synced_date"`
+
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }

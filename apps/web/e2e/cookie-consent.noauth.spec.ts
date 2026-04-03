@@ -79,10 +79,9 @@ test.describe('Cookie Consent Banner', () => {
     // Wait for details to appear
     await page.waitForTimeout(300);
 
-    // Verify detailed options are visible
+    // Verify detailed options are visible (no Advertising Cookies — not rendered by the component)
     await expect(page.locator('label:has-text("Necessary Cookies")')).toBeVisible();
     await expect(page.locator('label:has-text("Analytics Cookies")')).toBeVisible();
-    await expect(page.locator('label:has-text("Advertising Cookies")')).toBeVisible();
 
     // Verify Save Preferences button is visible
     await expect(page.locator('button:has-text("Save Preferences")')).toBeVisible();
