@@ -6,7 +6,7 @@ export function PrivacyPolicy() {
     <div className="privacy-policy">
       <div className="privacy-policy-container">
         <h1>Privacy Policy</h1>
-        <p className="last-updated">Last Updated: March 29, 2026</p>
+        <p className="last-updated">Last Updated: April 4, 2026</p>
 
         <section>
           <h2>1. Introduction</h2>
@@ -32,6 +32,12 @@ export function PrivacyPolicy() {
             <li><strong>Authentication Tokens:</strong> Encrypted access tokens for third-party financial institutions</li>
             <li><strong>Usage Data:</strong> Application usage statistics, feature interactions, error logs</li>
           </ul>
+          <p>
+            Sensitive personal and financial fields stored in our application database are encrypted at the
+            application level before storage. For technical details, see Section 4.2. Note: third-party
+            processors (such as Plaid, Clerk, and Paddle) handle data under their own security practices
+            as described in Section 5.
+          </p>
 
           <h3>2.2 Automatically Collected Information</h3>
           <ul>
@@ -81,12 +87,60 @@ export function PrivacyPolicy() {
           </p>
 
           <h3>4.2 Security Measures</h3>
+
+          <h4>Application-Level Encryption</h4>
+          <p>
+            Sensitive personal and financial fields stored in our application database are encrypted using{' '}
+            <strong>AES-256-GCM</strong> (Advanced Encryption Standard with Galois/Counter Mode) before
+            being written to disk. This provides defense-in-depth: even in the unlikely event of
+            unauthorized database access, those fields remain unreadable without the encryption key. Each
+            encryption operation uses a unique random value, so identical data produces different encrypted
+            outputs — preventing pattern analysis. The encrypted categories are listed in "What We Encrypt"
+            below; not every attribute in our system falls under this layer.
+          </p>
+
+          <h4>What We Encrypt</h4>
+          <p>The following categories of data are protected by application-level encryption:</p>
           <ul>
-            <li><strong>Encryption:</strong> Data encrypted in transit (TLS 1.3) and at rest (AES-256)</li>
+            <li>Personal identifiers (email addresses, user IDs, customer IDs)</li>
+            <li>Financial account information (account numbers, institution names, account masks)</li>
+            <li>Physical addresses (property addresses on mortgages, servicer addresses on student loans)</li>
+            <li>Transaction metadata and external identifiers</li>
+            <li>Webhook payloads from financial and payment integrations</li>
+            <li>Audit log details (change records, IP addresses)</li>
+          </ul>
+
+          <h4>Display Masking</h4>
+          <p>
+            When sensitive data is shown in the app, we apply display masking to limit exposure.
+            Examples: email addresses appear as <code>u***@example.com</code>, account numbers as{' '}
+            <code>****9012</code>, and street numbers in physical addresses are hidden.
+          </p>
+
+          <h4>Encrypted Lookups (Blind Indexes)</h4>
+          <p>
+            Because encrypted values cannot be searched directly, we use deterministic HMAC-SHA256 blind
+            indexes stored in separate columns for fields that require equality lookups (such as email and
+            account identifiers). This allows us to find your records without storing plaintext in queryable columns.
+          </p>
+
+          <h4>Encryption in Transit</h4>
+          <p>
+            Data in transit between your browser and our service is protected by HTTPS/TLS.
+          </p>
+
+          <h4>Key Management</h4>
+          <p>
+            Encryption keys are stored separately from encrypted data. The key used to derive lookup
+            indexes is cryptographically derived from — but distinct from — the key used for field
+            encryption, providing separation between the two operations.
+          </p>
+
+          <h4>Additional Controls</h4>
+          <ul>
             <li><strong>Access Controls:</strong> Role-based access, principle of least privilege</li>
             <li><strong>Authentication:</strong> Clerk-powered authentication with industry-standard security</li>
-            <li><strong>Token Protection:</strong> Financial institution tokens encrypted with dedicated encryption keys</li>
-            <li><strong>Audit Logging:</strong> All data access and modifications are logged for security monitoring</li>
+            <li><strong>Audit Logging:</strong> Security-relevant administrative actions and certain data modifications are logged for monitoring</li>
             <li><strong>Regular Security Audits:</strong> Periodic security assessments and vulnerability scanning</li>
           </ul>
         </section>
