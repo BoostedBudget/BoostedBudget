@@ -36,6 +36,7 @@ type LinkedItem struct {
 	UserID               string     `json:"user_id" db:"user_id"`
 	ItemID               string     `json:"item_id" db:"item_id"` // Provider's item/connection ID
 	AccessTokenEncrypted string     `json:"-" db:"access_token_encrypted"` // Never expose in JSON
+	AccessToken          string     `json:"-" db:"-"` // Plaintext access token (populated by repo on read, never stored)
 	InstitutionID        string     `json:"institution_id,omitempty" db:"institution_id"`
 	InstitutionName      string     `json:"institution_name,omitempty" db:"institution_name"`
 	Provider             string     `json:"provider" db:"provider"` // plaid, teller, finicity, yodlee, manual
@@ -79,7 +80,7 @@ func (l *LinkedItem) Validate() error {
 	if l.ItemID == "" {
 		return errors.New("item_id is required")
 	}
-	if l.AccessTokenEncrypted == "" {
+	if l.AccessToken == "" && l.AccessTokenEncrypted == "" {
 		return errors.New("access_token is required")
 	}
 	return nil

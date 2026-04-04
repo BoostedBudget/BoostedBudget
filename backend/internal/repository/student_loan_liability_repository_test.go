@@ -4,21 +4,43 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+// studentLoanTestEncSvc is a simple prefix-based mock encryption service for testing.
+type studentLoanTestEncSvc struct{}
+
+func (t *studentLoanTestEncSvc) Encrypt(p string) (string, error) { return "ENC$" + p, nil }
+func (t *studentLoanTestEncSvc) Decrypt(c string) (string, error) {
+	if strings.HasPrefix(c, "ENC$") {
+		return strings.TrimPrefix(c, "ENC$"), nil
+	}
+	return c, nil
+}
+
+func newStudentLoanTestEncryptor(t *testing.T) *appcrypto.FieldEncryptor {
+	t.Helper()
+	key := []byte("12345678901234567890123456789012") // 32 bytes
+	enc, err := appcrypto.NewFieldEncryptor(&studentLoanTestEncSvc{}, key)
+	require.NoError(t, err)
+	return enc
+}
+
 func setupStudentLoanLiabilityMockDB(t *testing.T) (pgxmock.PgxPoolIface, StudentLoanLiabilityRepository) {
 	t.Helper()
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	return mock, NewStudentLoanLiabilityRepository(mock)
+	enc := newStudentLoanTestEncryptor(t)
+	return mock, NewStudentLoanLiabilityRepository(mock, enc)
 }
 
 func makeStudentLoanLiability(userID, accountID string) *domain.StudentLoanLiability {
@@ -164,11 +186,12 @@ func TestStudentLoanLiabilityRepository_GetByUserID(t *testing.T) {
 	accountID := uuid.New().String()
 	now := time.Now()
 
-	acctNum := "SL-001"
+	// The mock DB returns encrypted values; repo should decrypt them.
+	encAcctNum := "ENC$SL-001"
+	encLoanName := "ENC$Stafford Loan"
 	rate := 4.5
 	isOverdue := false
 	lastPayment := 350.00
-	loanName := "Stafford Loan"
 	minPayment := 300.00
 
 	rows := pgxmock.NewRows([]string{
@@ -189,12 +212,12 @@ func TestStudentLoanLiabilityRepository_GetByUserID(t *testing.T) {
 		"ytd_interest_paid", "ytd_principal_paid",
 		"synced_at", "created_at", "updated_at",
 	}).AddRow(
-		uuid.New().String(), userID, accountID, &acctNum,
+		uuid.New().String(), userID, accountID, &encAcctNum,
 		[]string{"2020-09-01"}, &now, nil,
 		&rate, &isOverdue,
 		&lastPayment, &now,
 		nil, nil,
-		&loanName, nil, nil,
+		&encLoanName, nil, nil,
 		&minPayment, &now,
 		nil, nil,
 		nil, nil,
@@ -217,6 +240,11 @@ func TestStudentLoanLiabilityRepository_GetByUserID(t *testing.T) {
 	require.Len(t, liabilities, 1)
 	assert.Equal(t, userID, liabilities[0].UserID)
 	assert.Equal(t, accountID, liabilities[0].AccountID)
+	// Verify decryption of PII fields
+	require.NotNil(t, liabilities[0].AccountNumber)
+	assert.Equal(t, "SL-001", *liabilities[0].AccountNumber)
+	require.NotNil(t, liabilities[0].LoanName)
+	assert.Equal(t, "Stafford Loan", *liabilities[0].LoanName)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -269,7 +297,8 @@ func TestStudentLoanLiabilityRepository_GetByAccountID(t *testing.T) {
 	accountID := uuid.New().String()
 	now := time.Now()
 
-	acctNum := "SL-002"
+	// The mock DB returns encrypted values; repo should decrypt them.
+	encAcctNum := "ENC$SL-002"
 	rate := 5.0
 	isOverdue := true
 	lastPayment := 400.00
@@ -292,7 +321,7 @@ func TestStudentLoanLiabilityRepository_GetByAccountID(t *testing.T) {
 		"ytd_interest_paid", "ytd_principal_paid",
 		"synced_at", "created_at", "updated_at",
 	}).AddRow(
-		uuid.New().String(), userID, accountID, &acctNum,
+		uuid.New().String(), userID, accountID, &encAcctNum,
 		[]string(nil), nil, nil,
 		&rate, &isOverdue,
 		&lastPayment, &now,
@@ -319,6 +348,9 @@ func TestStudentLoanLiabilityRepository_GetByAccountID(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, liability)
 	assert.Equal(t, accountID, liability.AccountID)
+	// Verify decryption: "ENC$SL-002" → "SL-002"
+	require.NotNil(t, liability.AccountNumber)
+	assert.Equal(t, "SL-002", *liability.AccountNumber)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

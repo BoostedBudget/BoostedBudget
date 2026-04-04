@@ -65,7 +65,6 @@ type transactionSyncService struct {
 	profileRepo               repository.ProfileRepository          // For fetching user subscription tier (historical depth)
 	balanceSnapshotRepo       repository.BalanceSnapshotRepository  // Issue #353: For storing balance snapshots
 	plaidService              PlaidService
-	encryptionService         EncryptionService
 	subscriptionService       *SubscriptionService          // For tier-based historical depth limit
 	ruleApplicationService    RuleApplicationService        // Issue #346: Apply categorization rules to new transactions
 	budgetSyncService         BudgetSyncService             // Issue #494: Sync budget amounts after transaction sync
@@ -81,7 +80,6 @@ func NewTransactionSyncService(
 	profileRepo repository.ProfileRepository,
 	balanceSnapshotRepo repository.BalanceSnapshotRepository,
 	plaidService PlaidService,
-	encryptionService EncryptionService,
 	subscriptionService *SubscriptionService,
 	ruleApplicationService RuleApplicationService,
 	budgetSyncService BudgetSyncService,               // Issue #494: Sync budget amounts
@@ -100,7 +98,6 @@ func NewTransactionSyncService(
 		profileRepo:               profileRepo,
 		balanceSnapshotRepo:       balanceSnapshotRepo,
 		plaidService:              plaidService,
-		encryptionService:         encryptionService,
 		subscriptionService:       subscriptionService,
 		ruleApplicationService:    ruleApplicationService,
 		budgetSyncService:         budgetSyncService,
@@ -110,7 +107,6 @@ func NewTransactionSyncService(
 
 // ProcessWebhook processes a single TRANSACTIONS webhook event
 func (s *transactionSyncService) ProcessWebhook(ctx context.Context, webhook *domain.WebhookEvent) error {
-	// Validate webhook is not nil
 	if webhook == nil {
 		return errors.New("webhook event is nil")
 	}
@@ -215,11 +211,8 @@ func (s *transactionSyncService) SyncTransactions(
 		s.logger.Info("re-sync using cursor", "item_id", linkedItem.ID)
 	}
 
-	// Step 3: Decrypt access token
-	accessToken, err := s.encryptionService.Decrypt(linkedItem.AccessTokenEncrypted)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt access token: %w", err)
-	}
+	// Step 3: Get plaintext access token (populated by repo layer on read)
+	accessToken := linkedItem.AccessToken
 
 	// Step 4: Initialize result aggregation
 	result := &domain.TransactionSyncResult{

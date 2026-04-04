@@ -473,7 +473,6 @@ func TestAccountService_LinkAccounts_Success(t *testing.T) {
 	// Given: All dependencies mocked with successful responses
 	mockPlaid := new(MockPlaidService)
 	mockSubscription := &SubscriptionService{} // Will need actual implementation
-	mockEncryption := new(MockEncryptionService)
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
 	mockAccountRepo := new(MockAccountRepository)
 	mockUserRepo := new(MockUserRepository)
@@ -495,15 +494,13 @@ func TestAccountService_LinkAccounts_Success(t *testing.T) {
 	// Mock current account count (user has 2 accounts, limit is 8)
 	mockAccountRepo.On("CountByUserID", ctx, userID).Return(2, nil)
 
-	// Mock encryption of access token
+	// AccessToken is now stored directly; repo layer handles encryption on write
 	accessToken := "access-sandbox-token-abc123"
-	encryptedToken := "encrypted-base64-token"
-	mockEncryption.On("Encrypt", accessToken).Return(encryptedToken, nil)
 
-	// Mock linked item creation
+	// Mock linked item creation — service sets AccessToken, repo encrypts on write
 	mockLinkedItemRepo.On("Create", ctx, mock.MatchedBy(func(item *domain.LinkedItem) bool {
 		return item.UserID == userID &&
-			item.AccessTokenEncrypted == encryptedToken &&
+			item.AccessToken == accessToken &&
 			item.InstitutionName == institutionName
 	})).Return(nil)
 
@@ -517,7 +514,6 @@ func TestAccountService_LinkAccounts_Success(t *testing.T) {
 	_ = NewAccountService(
 		mockPlaid,
 		mockSubscription,
-		mockEncryption,
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -676,7 +672,6 @@ func TestAccountService_GetAccounts(t *testing.T) {
 	// Setup mocks
 	mockAccountRepo := new(MockAccountRepository)
 	mockPlaidService := new(MockPlaidService)
-	mockEncryptionService := new(MockEncryptionService)
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
 	mockUserRepo := new(MockUserRepository)
 
@@ -684,7 +679,6 @@ func TestAccountService_GetAccounts(t *testing.T) {
 	service := NewAccountService(
 		mockPlaidService,
 		nil, // SubscriptionService not needed for GetAccounts
-		mockEncryptionService,
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -744,7 +738,6 @@ func TestAccountService_GetAccounts_Empty(t *testing.T) {
 	// Setup mocks
 	mockAccountRepo := new(MockAccountRepository)
 	mockPlaidService := new(MockPlaidService)
-	mockEncryptionService := new(MockEncryptionService)
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
 	mockUserRepo := new(MockUserRepository)
 
@@ -752,7 +745,6 @@ func TestAccountService_GetAccounts_Empty(t *testing.T) {
 	service := NewAccountService(
 		mockPlaidService,
 		nil,
-		mockEncryptionService,
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -792,7 +784,6 @@ func TestAccountService_GetAccounts_WithInternalUUID(t *testing.T) {
 	// Setup mocks
 	mockAccountRepo := new(MockAccountRepository)
 	mockPlaidService := new(MockPlaidService)
-	mockEncryptionService := new(MockEncryptionService)
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
 	mockUserRepo := new(MockUserRepository)
 
@@ -800,7 +791,6 @@ func TestAccountService_GetAccounts_WithInternalUUID(t *testing.T) {
 	service := NewAccountService(
 		mockPlaidService,
 		nil,
-		mockEncryptionService,
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -1185,33 +1175,30 @@ func TestDeleteAccount_EnqueueErrorDoesNotFailDeletion(t *testing.T) {
 func TestDisconnectInstitution_Success(t *testing.T) {
 	// Setup mocks
 	mockLinkedItemRepo := &MockLinkedItemRepository{}
-	mockEncryptionSvc := &MockEncryptionService{}
 	mockPlaidService := &MockPlaidService{}
 
 	service := &accountService{
 		linkedItemRepo: mockLinkedItemRepo,
-		encryptionSvc:  mockEncryptionSvc,
 		plaidService:   mockPlaidService,
 	}
 
 	ctx := context.Background()
 	linkedItemID := uuid.New().String()
 	userID := uuid.New().String()
-	encryptedToken := "encrypted-token-123"
 	accessToken := "access-sandbox-test-token"
 
+	// AccessToken is populated by the repository layer (repo-layer encryption)
 	linkedItem := &domain.LinkedItem{
-		ID:                   linkedItemID,
-		UserID:               userID,
-		ItemID:               "plaid-item-123",
-		AccessTokenEncrypted: encryptedToken,
-		InstitutionID:        "ins_123",
-		InstitutionName:      "Chase",
+		ID:              linkedItemID,
+		UserID:          userID,
+		ItemID:          "plaid-item-123",
+		AccessToken:     accessToken,
+		InstitutionID:   "ins_123",
+		InstitutionName: "Chase",
 	}
 
 	// Mock all steps
 	mockLinkedItemRepo.On("GetByIDAndUser", ctx, linkedItemID, userID).Return(linkedItem, nil)
-	mockEncryptionSvc.On("Decrypt", encryptedToken).Return(accessToken, nil)
 	mockPlaidService.On("RemoveItem", ctx, accessToken).Return(nil)
 	mockLinkedItemRepo.On("DeleteByUser", ctx, linkedItemID, userID).Return(nil)
 
@@ -1221,7 +1208,6 @@ func TestDisconnectInstitution_Success(t *testing.T) {
 	// Assert
 	require.NoError(t, err, "DisconnectInstitution should succeed")
 	mockLinkedItemRepo.AssertExpectations(t)
-	mockEncryptionSvc.AssertExpectations(t)
 	mockPlaidService.AssertExpectations(t)
 }
 
@@ -1249,76 +1235,34 @@ func TestDisconnectInstitution_LinkedItemNotFound(t *testing.T) {
 	mockLinkedItemRepo.AssertExpectations(t)
 }
 
-// TestDisconnectInstitution_DecryptionError tests when decryption fails
-func TestDisconnectInstitution_DecryptionError(t *testing.T) {
-	// Setup mocks
-	mockLinkedItemRepo := &MockLinkedItemRepository{}
-	mockEncryptionSvc := &MockEncryptionService{}
-
-	service := &accountService{
-		linkedItemRepo: mockLinkedItemRepo,
-		encryptionSvc:  mockEncryptionSvc,
-	}
-
-	ctx := context.Background()
-	linkedItemID := uuid.New().String()
-	userID := uuid.New().String()
-	encryptedToken := "encrypted-token-123"
-
-	linkedItem := &domain.LinkedItem{
-		ID:                   linkedItemID,
-		UserID:               userID,
-		ItemID:               "plaid-item-123",
-		AccessTokenEncrypted: encryptedToken,
-		InstitutionID:        "ins_123",
-		InstitutionName:      "Chase",
-	}
-
-	// Mock linked item found but decryption fails
-	mockLinkedItemRepo.On("GetByIDAndUser", ctx, linkedItemID, userID).Return(linkedItem, nil)
-	mockEncryptionSvc.On("Decrypt", encryptedToken).Return("", assert.AnError)
-
-	// Execute
-	err := service.DisconnectInstitution(ctx, linkedItemID, userID)
-
-	// Assert
-	require.Error(t, err, "DisconnectInstitution should return decryption error")
-	assert.Contains(t, err.Error(), "failed to decrypt access token")
-	mockLinkedItemRepo.AssertExpectations(t)
-	mockEncryptionSvc.AssertExpectations(t)
-}
-
 // TestDisconnectInstitution_PlaidFailureButDatabaseSucceeds tests when Plaid fails but DB deletion succeeds
 func TestDisconnectInstitution_PlaidFailureButDatabaseSucceeds(t *testing.T) {
 	// Setup mocks
 	mockLinkedItemRepo := &MockLinkedItemRepository{}
-	mockEncryptionSvc := &MockEncryptionService{}
 	mockPlaidService := &MockPlaidService{}
 
 	service := &accountService{
 		linkedItemRepo: mockLinkedItemRepo,
-		encryptionSvc:  mockEncryptionSvc,
 		plaidService:   mockPlaidService,
 	}
 
 	ctx := context.Background()
 	linkedItemID := uuid.New().String()
 	userID := uuid.New().String()
-	encryptedToken := "encrypted-token-123"
 	accessToken := "access-sandbox-test-token"
 
+	// AccessToken is populated by the repository layer (repo-layer encryption)
 	linkedItem := &domain.LinkedItem{
-		ID:                   linkedItemID,
-		UserID:               userID,
-		ItemID:               "plaid-item-123",
-		AccessTokenEncrypted: encryptedToken,
-		InstitutionID:        "ins_123",
-		InstitutionName:      "Chase",
+		ID:              linkedItemID,
+		UserID:          userID,
+		ItemID:          "plaid-item-123",
+		AccessToken:     accessToken,
+		InstitutionID:   "ins_123",
+		InstitutionName: "Chase",
 	}
 
 	// Mock Plaid removal fails but database deletion succeeds
 	mockLinkedItemRepo.On("GetByIDAndUser", ctx, linkedItemID, userID).Return(linkedItem, nil)
-	mockEncryptionSvc.On("Decrypt", encryptedToken).Return(accessToken, nil)
 	mockPlaidService.On("RemoveItem", ctx, accessToken).Return(assert.AnError)
 	mockLinkedItemRepo.On("DeleteByUser", ctx, linkedItemID, userID).Return(nil)
 
@@ -1328,7 +1272,6 @@ func TestDisconnectInstitution_PlaidFailureButDatabaseSucceeds(t *testing.T) {
 	// Assert - Should succeed even if Plaid fails (we still clean up database)
 	require.NoError(t, err, "DisconnectInstitution should succeed even if Plaid fails")
 	mockLinkedItemRepo.AssertExpectations(t)
-	mockEncryptionSvc.AssertExpectations(t)
 	mockPlaidService.AssertExpectations(t)
 }
 
@@ -1336,33 +1279,30 @@ func TestDisconnectInstitution_PlaidFailureButDatabaseSucceeds(t *testing.T) {
 func TestDisconnectInstitution_DatabaseDeletionError(t *testing.T) {
 	// Setup mocks
 	mockLinkedItemRepo := &MockLinkedItemRepository{}
-	mockEncryptionSvc := &MockEncryptionService{}
 	mockPlaidService := &MockPlaidService{}
 
 	service := &accountService{
 		linkedItemRepo: mockLinkedItemRepo,
-		encryptionSvc:  mockEncryptionSvc,
 		plaidService:   mockPlaidService,
 	}
 
 	ctx := context.Background()
 	linkedItemID := uuid.New().String()
 	userID := uuid.New().String()
-	encryptedToken := "encrypted-token-123"
 	accessToken := "access-sandbox-test-token"
 
+	// AccessToken is populated by the repository layer (repo-layer encryption)
 	linkedItem := &domain.LinkedItem{
-		ID:                   linkedItemID,
-		UserID:               userID,
-		ItemID:               "plaid-item-123",
-		AccessTokenEncrypted: encryptedToken,
-		InstitutionID:        "ins_123",
-		InstitutionName:      "Chase",
+		ID:              linkedItemID,
+		UserID:          userID,
+		ItemID:          "plaid-item-123",
+		AccessToken:     accessToken,
+		InstitutionID:   "ins_123",
+		InstitutionName: "Chase",
 	}
 
 	// Mock database deletion fails
 	mockLinkedItemRepo.On("GetByIDAndUser", ctx, linkedItemID, userID).Return(linkedItem, nil)
-	mockEncryptionSvc.On("Decrypt", encryptedToken).Return(accessToken, nil)
 	mockPlaidService.On("RemoveItem", ctx, accessToken).Return(nil)
 	mockLinkedItemRepo.On("DeleteByUser", ctx, linkedItemID, userID).Return(assert.AnError)
 
@@ -1372,7 +1312,6 @@ func TestDisconnectInstitution_DatabaseDeletionError(t *testing.T) {
 	// Assert
 	require.Error(t, err, "DisconnectInstitution should return database deletion error")
 	mockLinkedItemRepo.AssertExpectations(t)
-	mockEncryptionSvc.AssertExpectations(t)
 	mockPlaidService.AssertExpectations(t)
 }
 
@@ -2865,7 +2804,6 @@ func TestLinkAccounts_Integration_DisconnectedRelink_FullFlow(t *testing.T) {
 	publicToken := "public-sandbox-integration-test"
 	accessToken := "access-sandbox-integration-test"
 	plaidItemID := "plaid-item-integration-test"
-	encryptedToken := "encrypted-integration-test-token"
 	newItemID := uuid.New().String()
 	oldItemID := uuid.New().String()
 	oldAccount1ID := uuid.New().String()
@@ -2895,9 +2833,6 @@ func TestLinkAccounts_Integration_DisconnectedRelink_FullFlow(t *testing.T) {
 	mockPlaidSvc := &MockPlaidService{}
 	mockPlaidSvc.On("GetClient").Return(plaidClient)
 
-	mockEncryptionSvc := &MockEncryptionService{}
-	mockEncryptionSvc.On("Encrypt", accessToken).Return(encryptedToken, nil)
-
 	mockLinkedItemRepo := &MockLinkedItemRepository{}
 	mockAccountRepo := &MockAccountRepository{}
 	mockUserRepo := &MockUserRepository{}
@@ -2926,9 +2861,10 @@ func TestLinkAccounts_Integration_DisconnectedRelink_FullFlow(t *testing.T) {
 		Return(disconnectedItem, nil)
 
 	// Step 8: create new linked item — use Run to set ID so replaced_by_id can be verified
+	// AccessToken is set by service; repo layer handles encryption on write
 	mockLinkedItemRepo.On("Create", ctx, mock.MatchedBy(func(item *domain.LinkedItem) bool {
 		return item.UserID == userID &&
-			item.AccessTokenEncrypted == encryptedToken &&
+			item.AccessToken == accessToken &&
 			item.Status == domain.LinkedItemStatusActive &&
 			item.Cursor == nil
 	})).Run(func(args mock.Arguments) {
@@ -2970,7 +2906,6 @@ func TestLinkAccounts_Integration_DisconnectedRelink_FullFlow(t *testing.T) {
 	svc := NewAccountService(
 		mockPlaidSvc,
 		newTestSubscriptionService(t),
-		mockEncryptionSvc,
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -2997,7 +2932,6 @@ func TestLinkAccounts_Integration_DisconnectedRelink_FullFlow(t *testing.T) {
 	mockAccountRepo.AssertExpectations(t)
 	mockUserRepo.AssertExpectations(t)
 	mockPlaidSvc.AssertExpectations(t)
-	mockEncryptionSvc.AssertExpectations(t)
 	mockUserAccountSvc.AssertExpectations(t)
 }
 
@@ -3013,7 +2947,6 @@ func TestLinkAccounts_Integration_ActiveTakesPrecedence(t *testing.T) {
 	publicToken := "public-sandbox-active-test"
 	accessToken := "access-sandbox-active-test"
 	plaidItemID := "plaid-item-active-test"
-	encryptedToken := "encrypted-active-test-token"
 	newItemID := uuid.New().String()
 	activeItemID := uuid.New().String()
 	oldAccountID := uuid.New().String()
@@ -3034,9 +2967,6 @@ func TestLinkAccounts_Integration_ActiveTakesPrecedence(t *testing.T) {
 
 	mockPlaidSvc := &MockPlaidService{}
 	mockPlaidSvc.On("GetClient").Return(plaidClient)
-
-	mockEncryptionSvc := &MockEncryptionService{}
-	mockEncryptionSvc.On("Encrypt", accessToken).Return(encryptedToken, nil)
 
 	mockLinkedItemRepo := &MockLinkedItemRepository{}
 	mockAccountRepo := &MockAccountRepository{}
@@ -3084,7 +3014,6 @@ func TestLinkAccounts_Integration_ActiveTakesPrecedence(t *testing.T) {
 	svc := NewAccountService(
 		mockPlaidSvc,
 		newTestSubscriptionService(t),
-		mockEncryptionSvc,
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -3105,7 +3034,6 @@ func TestLinkAccounts_Integration_ActiveTakesPrecedence(t *testing.T) {
 	mockAccountRepo.AssertExpectations(t)
 	mockUserRepo.AssertExpectations(t)
 	mockPlaidSvc.AssertExpectations(t)
-	mockEncryptionSvc.AssertExpectations(t)
 	mockUserAccountSvc.AssertExpectations(t)
 }
 
@@ -3121,7 +3049,6 @@ func TestLinkAccounts_Integration_FreshLink_NoExistingItem(t *testing.T) {
 	publicToken := "public-sandbox-fresh-test"
 	accessToken := "access-sandbox-fresh-test"
 	plaidItemID := "plaid-item-fresh-test"
-	encryptedToken := "encrypted-fresh-test-token"
 	newItemID := uuid.New().String()
 	userAccountID := uuid.New().String()
 
@@ -3138,9 +3065,6 @@ func TestLinkAccounts_Integration_FreshLink_NoExistingItem(t *testing.T) {
 
 	mockPlaidSvc := &MockPlaidService{}
 	mockPlaidSvc.On("GetClient").Return(plaidClient)
-
-	mockEncryptionSvc := &MockEncryptionService{}
-	mockEncryptionSvc.On("Encrypt", accessToken).Return(encryptedToken, nil)
 
 	mockLinkedItemRepo := &MockLinkedItemRepository{}
 	mockAccountRepo := &MockAccountRepository{}
@@ -3176,7 +3100,6 @@ func TestLinkAccounts_Integration_FreshLink_NoExistingItem(t *testing.T) {
 	svc := NewAccountService(
 		mockPlaidSvc,
 		newTestSubscriptionService(t),
-		mockEncryptionSvc,
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -3201,7 +3124,6 @@ func TestLinkAccounts_Integration_FreshLink_NoExistingItem(t *testing.T) {
 	mockAccountRepo.AssertExpectations(t)
 	mockUserRepo.AssertExpectations(t)
 	mockPlaidSvc.AssertExpectations(t)
-	mockEncryptionSvc.AssertExpectations(t)
 	mockUserAccountSvc.AssertExpectations(t)
 }
 
@@ -3217,7 +3139,6 @@ func TestLinkAccounts_Integration_DisconnectedRelink_ErrorPropagates(t *testing.
 	publicToken := "public-sandbox-error-test"
 	accessToken := "access-sandbox-error-test"
 	plaidItemID := "plaid-item-error-test"
-	encryptedToken := "encrypted-error-test-token"
 
 	plaidAccounts := []map[string]interface{}{
 		{
@@ -3232,9 +3153,6 @@ func TestLinkAccounts_Integration_DisconnectedRelink_ErrorPropagates(t *testing.
 
 	mockPlaidSvc := &MockPlaidService{}
 	mockPlaidSvc.On("GetClient").Return(plaidClient)
-
-	mockEncryptionSvc := &MockEncryptionService{}
-	mockEncryptionSvc.On("Encrypt", accessToken).Return(encryptedToken, nil)
 
 	mockLinkedItemRepo := &MockLinkedItemRepository{}
 	mockAccountRepo := &MockAccountRepository{}
@@ -3256,7 +3174,6 @@ func TestLinkAccounts_Integration_DisconnectedRelink_ErrorPropagates(t *testing.
 	svc := NewAccountService(
 		mockPlaidSvc,
 		newTestSubscriptionService(t),
-		mockEncryptionSvc,
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -3279,5 +3196,4 @@ func TestLinkAccounts_Integration_DisconnectedRelink_ErrorPropagates(t *testing.
 	mockAccountRepo.AssertExpectations(t)
 	mockUserRepo.AssertExpectations(t)
 	mockPlaidSvc.AssertExpectations(t)
-	mockEncryptionSvc.AssertExpectations(t)
 }

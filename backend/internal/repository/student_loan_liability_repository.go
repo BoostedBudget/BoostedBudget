@@ -2,9 +2,11 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -23,12 +25,143 @@ type StudentLoanLiabilityRepository interface {
 }
 
 type studentLoanLiabilityRepository struct {
-	db DB
+	db  DB
+	enc *appcrypto.FieldEncryptor
 }
 
 // NewStudentLoanLiabilityRepository creates a new StudentLoanLiabilityRepository instance.
-func NewStudentLoanLiabilityRepository(db DB) StudentLoanLiabilityRepository {
-	return &studentLoanLiabilityRepository{db: db}
+func NewStudentLoanLiabilityRepository(db DB, enc *appcrypto.FieldEncryptor) StudentLoanLiabilityRepository {
+	return &studentLoanLiabilityRepository{db: db, enc: enc}
+}
+
+// encryptedStudentLoanPIIFields holds the encrypted PII strings for a write operation.
+type encryptedStudentLoanPIIFields struct {
+	accountNumber       *string
+	servicerStreet      *string
+	servicerCity        *string
+	servicerRegion      *string
+	servicerPostal      *string
+	servicerCountry     *string
+	paymentReferenceNum *string
+	guarantor           *string
+	loanName            *string
+	sequenceNumber      *string
+}
+
+// encryptStudentLoanPIIFields encrypts all PII fields before writing to the database.
+func (r *studentLoanLiabilityRepository) encryptStudentLoanPIIFields(liability *domain.StudentLoanLiability) (encryptedStudentLoanPIIFields, error) {
+	if r.enc == nil {
+		return encryptedStudentLoanPIIFields{
+			accountNumber:       liability.AccountNumber,
+			servicerStreet:      liability.ServicerAddressStreet,
+			servicerCity:        liability.ServicerAddressCity,
+			servicerRegion:      liability.ServicerAddressRegion,
+			servicerPostal:      liability.ServicerAddressPostalCode,
+			servicerCountry:     liability.ServicerAddressCountry,
+			paymentReferenceNum: liability.PaymentReferenceNumber,
+			guarantor:           liability.Guarantor,
+			loanName:            liability.LoanName,
+			sequenceNumber:      liability.SequenceNumber,
+		}, nil
+	}
+
+	var (
+		fields encryptedStudentLoanPIIFields
+		err    error
+	)
+
+	fields.accountNumber, err = r.enc.EncryptNullableString(liability.AccountNumber)
+	if err != nil {
+		return fields, fmt.Errorf("encrypt account_number: %w", err)
+	}
+	fields.servicerStreet, err = r.enc.EncryptNullableString(liability.ServicerAddressStreet)
+	if err != nil {
+		return fields, fmt.Errorf("encrypt servicer_address_street: %w", err)
+	}
+	fields.servicerCity, err = r.enc.EncryptNullableString(liability.ServicerAddressCity)
+	if err != nil {
+		return fields, fmt.Errorf("encrypt servicer_address_city: %w", err)
+	}
+	fields.servicerRegion, err = r.enc.EncryptNullableString(liability.ServicerAddressRegion)
+	if err != nil {
+		return fields, fmt.Errorf("encrypt servicer_address_region: %w", err)
+	}
+	fields.servicerPostal, err = r.enc.EncryptNullableString(liability.ServicerAddressPostalCode)
+	if err != nil {
+		return fields, fmt.Errorf("encrypt servicer_address_postal_code: %w", err)
+	}
+	fields.servicerCountry, err = r.enc.EncryptNullableString(liability.ServicerAddressCountry)
+	if err != nil {
+		return fields, fmt.Errorf("encrypt servicer_address_country: %w", err)
+	}
+	fields.paymentReferenceNum, err = r.enc.EncryptNullableString(liability.PaymentReferenceNumber)
+	if err != nil {
+		return fields, fmt.Errorf("encrypt payment_reference_number: %w", err)
+	}
+	fields.guarantor, err = r.enc.EncryptNullableString(liability.Guarantor)
+	if err != nil {
+		return fields, fmt.Errorf("encrypt guarantor: %w", err)
+	}
+	fields.loanName, err = r.enc.EncryptNullableString(liability.LoanName)
+	if err != nil {
+		return fields, fmt.Errorf("encrypt loan_name: %w", err)
+	}
+	fields.sequenceNumber, err = r.enc.EncryptNullableString(liability.SequenceNumber)
+	if err != nil {
+		return fields, fmt.Errorf("encrypt sequence_number: %w", err)
+	}
+
+	return fields, nil
+}
+
+// decryptStudentLoanPIIFields decrypts all PII fields on a scanned student loan liability.
+func (r *studentLoanLiabilityRepository) decryptStudentLoanPIIFields(sl *domain.StudentLoanLiability) error {
+	if r.enc == nil {
+		return nil
+	}
+
+	var err error
+	sl.AccountNumber, err = r.enc.DecryptNullableString(sl.AccountNumber)
+	if err != nil {
+		return fmt.Errorf("decrypt account_number: %w", err)
+	}
+	sl.ServicerAddressStreet, err = r.enc.DecryptNullableString(sl.ServicerAddressStreet)
+	if err != nil {
+		return fmt.Errorf("decrypt servicer_address_street: %w", err)
+	}
+	sl.ServicerAddressCity, err = r.enc.DecryptNullableString(sl.ServicerAddressCity)
+	if err != nil {
+		return fmt.Errorf("decrypt servicer_address_city: %w", err)
+	}
+	sl.ServicerAddressRegion, err = r.enc.DecryptNullableString(sl.ServicerAddressRegion)
+	if err != nil {
+		return fmt.Errorf("decrypt servicer_address_region: %w", err)
+	}
+	sl.ServicerAddressPostalCode, err = r.enc.DecryptNullableString(sl.ServicerAddressPostalCode)
+	if err != nil {
+		return fmt.Errorf("decrypt servicer_address_postal_code: %w", err)
+	}
+	sl.ServicerAddressCountry, err = r.enc.DecryptNullableString(sl.ServicerAddressCountry)
+	if err != nil {
+		return fmt.Errorf("decrypt servicer_address_country: %w", err)
+	}
+	sl.PaymentReferenceNumber, err = r.enc.DecryptNullableString(sl.PaymentReferenceNumber)
+	if err != nil {
+		return fmt.Errorf("decrypt payment_reference_number: %w", err)
+	}
+	sl.Guarantor, err = r.enc.DecryptNullableString(sl.Guarantor)
+	if err != nil {
+		return fmt.Errorf("decrypt guarantor: %w", err)
+	}
+	sl.LoanName, err = r.enc.DecryptNullableString(sl.LoanName)
+	if err != nil {
+		return fmt.Errorf("decrypt loan_name: %w", err)
+	}
+	sl.SequenceNumber, err = r.enc.DecryptNullableString(sl.SequenceNumber)
+	if err != nil {
+		return fmt.Errorf("decrypt sequence_number: %w", err)
+	}
+	return nil
 }
 
 // ReplaceForAccount atomically replaces the student loan liability for an account.
@@ -59,22 +192,26 @@ func (r *studentLoanLiabilityRepository) ReplaceForAccount(ctx context.Context, 
 	liability.CreatedAt = now
 	liability.UpdatedAt = now
 
+	enc, err := r.encryptStudentLoanPIIFields(liability)
+	if err != nil {
+		return err
+	}
+
 	_, err = tx.Exec(ctx,
 		`INSERT INTO student_loan_liabilities (id, user_id, account_id, account_number, disbursement_dates, expected_payoff_date, guarantor, interest_rate_percentage, is_overdue, last_payment_amount, last_payment_date, last_statement_issue_date, last_statement_balance, loan_name, loan_status_type, loan_status_end_date, minimum_payment_amount, next_payment_due_date, origination_date, origination_principal_amount, outstanding_interest_amount, payment_reference_number, pslf_estimated_eligibility_date, pslf_payments_made, pslf_payments_remaining, repayment_plan_type, repayment_plan_description, sequence_number, servicer_address_street, servicer_address_city, servicer_address_region, servicer_address_postal_code, servicer_address_country, ytd_interest_paid, ytd_principal_paid, synced_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38)`,
 		liability.ID, liability.UserID, liability.AccountID,
-		liability.AccountNumber, liability.DisbursementDates, liability.ExpectedPayoffDate,
-		liability.Guarantor, liability.InterestRatePercentage, liability.IsOverdue,
+		enc.accountNumber, liability.DisbursementDates, liability.ExpectedPayoffDate,
+		enc.guarantor, liability.InterestRatePercentage, liability.IsOverdue,
 		liability.LastPaymentAmount, liability.LastPaymentDate,
 		liability.LastStatementIssueDate, liability.LastStatementBalance,
-		liability.LoanName, liability.LoanStatusType, liability.LoanStatusEndDate,
+		enc.loanName, liability.LoanStatusType, liability.LoanStatusEndDate,
 		liability.MinimumPaymentAmount, liability.NextPaymentDueDate,
 		liability.OriginationDate, liability.OriginationPrincipalAmount,
-		liability.OutstandingInterestAmount, liability.PaymentReferenceNumber,
+		liability.OutstandingInterestAmount, enc.paymentReferenceNum,
 		liability.PSLFEstimatedEligibilityDate, liability.PSLFPaymentsMade, liability.PSLFPaymentsRemaining,
 		liability.RepaymentPlanType, liability.RepaymentPlanDescription,
-		liability.SequenceNumber,
-		liability.ServicerAddressStreet, liability.ServicerAddressCity,
-		liability.ServicerAddressRegion, liability.ServicerAddressPostalCode, liability.ServicerAddressCountry,
+		enc.sequenceNumber,
+		enc.servicerStreet, enc.servicerCity, enc.servicerRegion, enc.servicerPostal, enc.servicerCountry,
 		liability.YTDInterestPaid, liability.YTDPrincipalPaid,
 		liability.SyncedAt, liability.CreatedAt, liability.UpdatedAt)
 	if err != nil {
@@ -137,6 +274,9 @@ func (r *studentLoanLiabilityRepository) GetByUserID(ctx context.Context, userID
 		); err != nil {
 			return nil, err
 		}
+		if err := r.decryptStudentLoanPIIFields(&sl); err != nil {
+			return nil, err
+		}
 		liabilities = append(liabilities, sl)
 	}
 
@@ -196,6 +336,10 @@ func (r *studentLoanLiabilityRepository) GetByAccountID(ctx context.Context, acc
 		&sl.YTDInterestPaid, &sl.YTDPrincipalPaid,
 		&sl.SyncedAt, &sl.CreatedAt, &sl.UpdatedAt,
 	); err != nil {
+		return nil, err
+	}
+
+	if err := r.decryptStudentLoanPIIFields(sl); err != nil {
 		return nil, err
 	}
 

@@ -3,11 +3,13 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -48,12 +50,13 @@ type UserIdentityRepository interface {
 
 // userIdentityRepository implements UserIdentityRepository using PostgreSQL
 type userIdentityRepository struct {
-	db DB
+	db  DB
+	enc *appcrypto.FieldEncryptor
 }
 
 // NewUserIdentityRepository creates a new UserIdentityRepository instance
-func NewUserIdentityRepository(db DB) UserIdentityRepository {
-	return &userIdentityRepository{db: db}
+func NewUserIdentityRepository(db DB, enc *appcrypto.FieldEncryptor) UserIdentityRepository {
+	return &userIdentityRepository{db: db, enc: enc}
 }
 
 // GetByClerkID retrieves an identity by Clerk user ID
@@ -87,6 +90,18 @@ func (r *userIdentityRepository) GetByClerkID(ctx context.Context, clerkUserID s
 	if err != nil {
 		return nil, err
 	}
+
+	decryptedEmail, err := r.enc.DecryptString(identity.Email)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt email: %w", err)
+	}
+	identity.Email = decryptedEmail
+
+	decryptedProviderUserID, err := r.enc.DecryptString(identity.ProviderUserID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt provider_user_id: %w", err)
+	}
+	identity.ProviderUserID = decryptedProviderUserID
 
 	return &identity, nil
 }
@@ -129,6 +144,19 @@ func (r *userIdentityRepository) GetByUserID(ctx context.Context, userID string)
 		if err != nil {
 			return nil, err
 		}
+
+		decryptedEmail, err := r.enc.DecryptString(identity.Email)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt email: %w", err)
+		}
+		identity.Email = decryptedEmail
+
+		decryptedProviderUserID, err := r.enc.DecryptString(identity.ProviderUserID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt provider_user_id: %w", err)
+		}
+		identity.ProviderUserID = decryptedProviderUserID
+
 		identities = append(identities, &identity)
 	}
 
@@ -151,6 +179,16 @@ func (r *userIdentityRepository) Create(ctx context.Context, identity *domain.Us
 	identity.CreatedAt = now
 	identity.UpdatedAt = now
 
+	encryptedEmail, err := r.enc.EncryptString(identity.Email)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt email: %w", err)
+	}
+
+	encryptedProviderUserID, err := r.enc.EncryptString(identity.ProviderUserID)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt provider_user_id: %w", err)
+	}
+
 	query := `
 		INSERT INTO user_identities (
 			id, user_id, clerk_user_id, provider, provider_user_id,
@@ -163,13 +201,13 @@ func (r *userIdentityRepository) Create(ctx context.Context, identity *domain.Us
 		)
 	`
 
-	_, err := r.db.Exec(ctx, query,
+	_, err = r.db.Exec(ctx, query,
 		identity.ID,
 		identity.UserID,
 		identity.ClerkUserID,
 		identity.Provider,
-		identity.ProviderUserID,
-		identity.Email,
+		encryptedProviderUserID,
+		encryptedEmail,
 		identity.EmailVerified,
 		identity.IsPrimary,
 		identity.CreatedAt,
@@ -202,6 +240,16 @@ func (r *userIdentityRepository) CreateTx(ctx context.Context, tx pgx.Tx, identi
 	identity.CreatedAt = now
 	identity.UpdatedAt = now
 
+	encryptedEmail, err := r.enc.EncryptString(identity.Email)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt email: %w", err)
+	}
+
+	encryptedProviderUserID, err := r.enc.EncryptString(identity.ProviderUserID)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt provider_user_id: %w", err)
+	}
+
 	query := `
 		INSERT INTO user_identities (
 			id, user_id, clerk_user_id, provider, provider_user_id,
@@ -214,13 +262,13 @@ func (r *userIdentityRepository) CreateTx(ctx context.Context, tx pgx.Tx, identi
 		)
 	`
 
-	_, err := tx.Exec(ctx, query,
+	_, err = tx.Exec(ctx, query,
 		identity.ID,
 		identity.UserID,
 		identity.ClerkUserID,
 		identity.Provider,
-		identity.ProviderUserID,
-		identity.Email,
+		encryptedProviderUserID,
+		encryptedEmail,
 		identity.EmailVerified,
 		identity.IsPrimary,
 		identity.CreatedAt,
@@ -256,11 +304,8 @@ func (r *userIdentityRepository) UpdateLastUsed(ctx context.Context, clerkUserID
 	if err != nil {
 		return err
 	}
-
-	// Check if any rows were affected
 	if ct.RowsAffected() == 0 {
 		return ErrIdentityNotFound
 	}
-
 	return nil
 }

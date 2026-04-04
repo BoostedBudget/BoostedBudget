@@ -2,9 +2,11 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -23,12 +25,86 @@ type MortgageLiabilityRepository interface {
 }
 
 type mortgageLiabilityRepository struct {
-	db DB
+	db  DB
+	enc *appcrypto.FieldEncryptor
 }
 
 // NewMortgageLiabilityRepository creates a new MortgageLiabilityRepository instance.
-func NewMortgageLiabilityRepository(db DB) MortgageLiabilityRepository {
-	return &mortgageLiabilityRepository{db: db}
+func NewMortgageLiabilityRepository(db DB, enc *appcrypto.FieldEncryptor) MortgageLiabilityRepository {
+	return &mortgageLiabilityRepository{db: db, enc: enc}
+}
+
+// encryptMortgagePIIFields encrypts all PII fields on the liability before writing to the database.
+// Returns encrypted copies of the nullable string fields.
+func (r *mortgageLiabilityRepository) encryptMortgagePIIFields(liability *domain.MortgageLiability) (
+	accountNumber, street, city, region, postal, country *string, err error,
+) {
+	if r.enc == nil {
+		return liability.AccountNumber,
+			liability.PropertyAddressStreet, liability.PropertyAddressCity,
+			liability.PropertyAddressRegion, liability.PropertyAddressPostalCode, liability.PropertyAddressCountry,
+			nil
+	}
+
+	accountNumber, err = r.enc.EncryptNullableString(liability.AccountNumber)
+	if err != nil {
+		return nil, nil, nil, nil, nil, nil, fmt.Errorf("encrypt account_number: %w", err)
+	}
+	street, err = r.enc.EncryptNullableString(liability.PropertyAddressStreet)
+	if err != nil {
+		return nil, nil, nil, nil, nil, nil, fmt.Errorf("encrypt property_address_street: %w", err)
+	}
+	city, err = r.enc.EncryptNullableString(liability.PropertyAddressCity)
+	if err != nil {
+		return nil, nil, nil, nil, nil, nil, fmt.Errorf("encrypt property_address_city: %w", err)
+	}
+	region, err = r.enc.EncryptNullableString(liability.PropertyAddressRegion)
+	if err != nil {
+		return nil, nil, nil, nil, nil, nil, fmt.Errorf("encrypt property_address_region: %w", err)
+	}
+	postal, err = r.enc.EncryptNullableString(liability.PropertyAddressPostalCode)
+	if err != nil {
+		return nil, nil, nil, nil, nil, nil, fmt.Errorf("encrypt property_address_postal_code: %w", err)
+	}
+	country, err = r.enc.EncryptNullableString(liability.PropertyAddressCountry)
+	if err != nil {
+		return nil, nil, nil, nil, nil, nil, fmt.Errorf("encrypt property_address_country: %w", err)
+	}
+	return accountNumber, street, city, region, postal, country, nil
+}
+
+// decryptMortgagePIIFields decrypts all PII fields on a scanned mortgage liability.
+func (r *mortgageLiabilityRepository) decryptMortgagePIIFields(ml *domain.MortgageLiability) error {
+	if r.enc == nil {
+		return nil
+	}
+
+	var err error
+	ml.AccountNumber, err = r.enc.DecryptNullableString(ml.AccountNumber)
+	if err != nil {
+		return fmt.Errorf("decrypt account_number: %w", err)
+	}
+	ml.PropertyAddressStreet, err = r.enc.DecryptNullableString(ml.PropertyAddressStreet)
+	if err != nil {
+		return fmt.Errorf("decrypt property_address_street: %w", err)
+	}
+	ml.PropertyAddressCity, err = r.enc.DecryptNullableString(ml.PropertyAddressCity)
+	if err != nil {
+		return fmt.Errorf("decrypt property_address_city: %w", err)
+	}
+	ml.PropertyAddressRegion, err = r.enc.DecryptNullableString(ml.PropertyAddressRegion)
+	if err != nil {
+		return fmt.Errorf("decrypt property_address_region: %w", err)
+	}
+	ml.PropertyAddressPostalCode, err = r.enc.DecryptNullableString(ml.PropertyAddressPostalCode)
+	if err != nil {
+		return fmt.Errorf("decrypt property_address_postal_code: %w", err)
+	}
+	ml.PropertyAddressCountry, err = r.enc.DecryptNullableString(ml.PropertyAddressCountry)
+	if err != nil {
+		return fmt.Errorf("decrypt property_address_country: %w", err)
+	}
+	return nil
 }
 
 // ReplaceForAccount atomically replaces the mortgage liability for an account.
@@ -59,10 +135,15 @@ func (r *mortgageLiabilityRepository) ReplaceForAccount(ctx context.Context, acc
 	liability.CreatedAt = now
 	liability.UpdatedAt = now
 
+	encAccountNumber, encStreet, encCity, encRegion, encPostal, encCountry, err := r.encryptMortgagePIIFields(liability)
+	if err != nil {
+		return err
+	}
+
 	_, err = tx.Exec(ctx,
 		`INSERT INTO mortgage_liabilities (id, user_id, account_id, account_number, current_late_fee, escrow_balance, has_pmi, has_prepayment_penalty, interest_rate_percentage, interest_rate_type, last_payment_amount, last_payment_date, loan_type_description, loan_term, maturity_date, next_monthly_payment, next_payment_due_date, origination_date, origination_principal_amount, past_due_amount, property_address_street, property_address_city, property_address_region, property_address_postal_code, property_address_country, ytd_interest_paid, ytd_principal_paid, synced_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)`,
 		liability.ID, liability.UserID, liability.AccountID,
-		liability.AccountNumber, liability.CurrentLateFee, liability.EscrowBalance,
+		encAccountNumber, liability.CurrentLateFee, liability.EscrowBalance,
 		liability.HasPMI, liability.HasPrepaymentPenalty,
 		liability.InterestRatePercentage, liability.InterestRateType,
 		liability.LastPaymentAmount, liability.LastPaymentDate,
@@ -70,8 +151,7 @@ func (r *mortgageLiabilityRepository) ReplaceForAccount(ctx context.Context, acc
 		liability.NextMonthlyPayment, liability.NextPaymentDueDate,
 		liability.OriginationDate, liability.OriginationPrincipalAmount,
 		liability.PastDueAmount,
-		liability.PropertyAddressStreet, liability.PropertyAddressCity,
-		liability.PropertyAddressRegion, liability.PropertyAddressPostalCode, liability.PropertyAddressCountry,
+		encStreet, encCity, encRegion, encPostal, encCountry,
 		liability.YTDInterestPaid, liability.YTDPrincipalPaid,
 		liability.SyncedAt, liability.CreatedAt, liability.UpdatedAt)
 	if err != nil {
@@ -126,6 +206,9 @@ func (r *mortgageLiabilityRepository) GetByUserID(ctx context.Context, userID st
 		); err != nil {
 			return nil, err
 		}
+		if err := r.decryptMortgagePIIFields(&ml); err != nil {
+			return nil, err
+		}
 		liabilities = append(liabilities, ml)
 	}
 
@@ -177,6 +260,10 @@ func (r *mortgageLiabilityRepository) GetByAccountID(ctx context.Context, accoun
 		&ml.YTDInterestPaid, &ml.YTDPrincipalPaid,
 		&ml.SyncedAt, &ml.CreatedAt, &ml.UpdatedAt,
 	); err != nil {
+		return nil, err
+	}
+
+	if err := r.decryptMortgagePIIFields(ml); err != nil {
 		return nil, err
 	}
 

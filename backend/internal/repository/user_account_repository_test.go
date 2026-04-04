@@ -20,7 +20,7 @@ func setupUserAccountMockDB(t *testing.T) (pgxmock.PgxPoolIface, UserAccountRepo
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 
-	repo := NewUserAccountRepository(mock)
+	repo := NewUserAccountRepository(mock, newTestFieldEncryptor(t))
 	return mock, repo
 }
 
@@ -56,17 +56,19 @@ func TestUserAccountRepository_Create_Success(t *testing.T) {
 
 	mock.ExpectExec(regexp.QuoteMeta(`
 		INSERT INTO user_accounts
-		(id, user_id, institution_id, mask, account_name_hint,
+		(id, user_id, institution_id, institution_id_blind_idx, mask, mask_blind_idx, account_name_hint,
 		 nickname, custom_color, custom_icon, custom_emoji,
 		 display_order, is_hidden, primary_type, primary_subtype,
 		 created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 	`)).WithArgs(
 		userAccount.ID,
 		userAccount.UserID,
-		userAccount.InstitutionID,
-		userAccount.Mask,
-		userAccount.AccountNameHint,
+		pgxmock.AnyArg(), // institution_id (encrypted by repo)
+		pgxmock.AnyArg(), // institution_id_blind_idx
+		pgxmock.AnyArg(), // mask (encrypted by repo)
+		pgxmock.AnyArg(), // mask_blind_idx
+		pgxmock.AnyArg(), // account_name_hint (encrypted by repo)
 		userAccount.Nickname,
 		userAccount.CustomColor,
 		userAccount.CustomIcon,
@@ -104,16 +106,17 @@ func TestUserAccountRepository_Create_DuplicateConstraint(t *testing.T) {
 	// Simulate unique constraint violation on (user_id, institution_id, mask)
 	mock.ExpectExec(regexp.QuoteMeta(`
 		INSERT INTO user_accounts
-		(id, user_id, institution_id, mask, account_name_hint,
+		(id, user_id, institution_id, institution_id_blind_idx, mask, mask_blind_idx, account_name_hint,
 		 nickname, custom_color, custom_icon, custom_emoji,
 		 display_order, is_hidden, primary_type, primary_subtype,
 		 created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 	`)).WithArgs(
 		pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
 		pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
 		pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
-		pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+		pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
 	).WillReturnError(errors.New("duplicate key value violates unique constraint \"unique_user_account_identity\""))
 
 	// Execute
@@ -400,8 +403,8 @@ func TestUserAccountRepository_FindByInstitutionAndMask_ExactMatch(t *testing.T)
 		       display_order, is_hidden, primary_type, primary_subtype,
 		       created_at, updated_at
 		FROM user_accounts
-		WHERE user_id = $1 AND institution_id = $2 AND mask = $3
-	`)).WithArgs(userID, institutionID, mask).WillReturnRows(rows)
+		WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx = $3
+	`)).WithArgs(userID, pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnRows(rows)
 
 	// Execute
 	ua, err := repo.FindByInstitutionAndMask(ctx, userID, institutionID, &mask)
@@ -430,8 +433,8 @@ func TestUserAccountRepository_FindByInstitutionAndMask_NoMatch_DifferentInstitu
 		       display_order, is_hidden, primary_type, primary_subtype,
 		       created_at, updated_at
 		FROM user_accounts
-		WHERE user_id = $1 AND institution_id = $2 AND mask = $3
-	`)).WithArgs(userID, institutionID, mask).WillReturnError(pgx.ErrNoRows)
+		WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx = $3
+	`)).WithArgs(userID, pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnError(pgx.ErrNoRows)
 
 	// Execute
 	ua, err := repo.FindByInstitutionAndMask(ctx, userID, institutionID, &mask)
@@ -458,8 +461,8 @@ func TestUserAccountRepository_FindByInstitutionAndMask_NoMatch_DifferentMask(t 
 		       display_order, is_hidden, primary_type, primary_subtype,
 		       created_at, updated_at
 		FROM user_accounts
-		WHERE user_id = $1 AND institution_id = $2 AND mask = $3
-	`)).WithArgs(userID, institutionID, mask).WillReturnError(pgx.ErrNoRows)
+		WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx = $3
+	`)).WithArgs(userID, pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnError(pgx.ErrNoRows)
 
 	// Execute
 	ua, err := repo.FindByInstitutionAndMask(ctx, userID, institutionID, &mask)
@@ -486,8 +489,8 @@ func TestUserAccountRepository_FindByInstitutionAndMask_NullMask(t *testing.T) {
 		       display_order, is_hidden, primary_type, primary_subtype,
 		       created_at, updated_at
 		FROM user_accounts
-		WHERE user_id = $1 AND institution_id = $2 AND mask IS NULL
-	`)).WithArgs(userID, institutionID).WillReturnError(pgx.ErrNoRows)
+		WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx IS NULL
+	`)).WithArgs(userID, pgxmock.AnyArg()).WillReturnError(pgx.ErrNoRows)
 
 	// Execute
 	ua, err := repo.FindByInstitutionAndMask(ctx, userID, institutionID, nil)
@@ -526,8 +529,8 @@ func TestUserAccountRepository_FindByInstitutionAndMask_NullMask_Match(t *testin
 		       display_order, is_hidden, primary_type, primary_subtype,
 		       created_at, updated_at
 		FROM user_accounts
-		WHERE user_id = $1 AND institution_id = $2 AND mask IS NULL
-	`)).WithArgs(userID, institutionID).WillReturnRows(rows)
+		WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx IS NULL
+	`)).WithArgs(userID, pgxmock.AnyArg()).WillReturnRows(rows)
 
 	// Execute
 	ua, err := repo.FindByInstitutionAndMask(ctx, userID, institutionID, nil)
@@ -559,16 +562,17 @@ func TestUserAccountRepository_Create_DatabaseError(t *testing.T) {
 
 	mock.ExpectExec(regexp.QuoteMeta(`
 		INSERT INTO user_accounts
-		(id, user_id, institution_id, mask, account_name_hint,
+		(id, user_id, institution_id, institution_id_blind_idx, mask, mask_blind_idx, account_name_hint,
 		 nickname, custom_color, custom_icon, custom_emoji,
 		 display_order, is_hidden, primary_type, primary_subtype,
 		 created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 	`)).WithArgs(
 		pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
 		pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
 		pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
-		pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+		pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
 	).WillReturnError(errors.New("connection refused"))
 
 	// Execute

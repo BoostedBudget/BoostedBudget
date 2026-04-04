@@ -3,11 +3,13 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -82,12 +84,13 @@ type ProfileRepository interface {
 
 // profileRepository implements ProfileRepository using PostgreSQL
 type profileRepository struct {
-	db DB
+	db  DB
+	enc *appcrypto.FieldEncryptor
 }
 
 // NewProfileRepository creates a new ProfileRepository instance
-func NewProfileRepository(db DB) ProfileRepository {
-	return &profileRepository{db: db}
+func NewProfileRepository(db DB, enc *appcrypto.FieldEncryptor) ProfileRepository {
+	return &profileRepository{db: db, enc: enc}
 }
 
 const userSelectQuery = `
@@ -117,7 +120,23 @@ func (r *profileRepository) queryUser(ctx context.Context, query string, args ..
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrUserNotFound
 	}
-	return &user, err
+	if err != nil {
+		return nil, err
+	}
+
+	decryptedClerkUserID, err := r.enc.DecryptString(user.ClerkUserID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt clerk_user_id: %w", err)
+	}
+	user.ClerkUserID = decryptedClerkUserID
+
+	decryptedEmail, err := r.enc.DecryptString(user.Email)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt email: %w", err)
+	}
+	user.Email = decryptedEmail
+
+	return &user, nil
 }
 
 // queryUsers is a helper that scans multiple users from a query
@@ -143,6 +162,19 @@ func (r *profileRepository) queryUsers(ctx context.Context, query string, args .
 		); err != nil {
 			return nil, err
 		}
+
+		decryptedClerkUserID, err := r.enc.DecryptString(user.ClerkUserID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt clerk_user_id: %w", err)
+		}
+		user.ClerkUserID = decryptedClerkUserID
+
+		decryptedEmail, err := r.enc.DecryptString(user.Email)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt email: %w", err)
+		}
+		user.Email = decryptedEmail
+
 		users = append(users, &user)
 	}
 	return users, rows.Err()
@@ -150,7 +182,8 @@ func (r *profileRepository) queryUsers(ctx context.Context, query string, args .
 
 // GetUserByClerkID retrieves a user by their Clerk user ID
 func (r *profileRepository) GetUserByClerkID(ctx context.Context, clerkUserID string) (*domain.User, error) {
-	return r.queryUser(ctx, userSelectQuery+" WHERE clerk_user_id = $1 AND is_deleted = FALSE", clerkUserID)
+	blindIdx := r.enc.BlindIndex(clerkUserID)
+	return r.queryUser(ctx, userSelectQuery+" WHERE clerk_user_id_blind_idx = $1 AND is_deleted = FALSE", blindIdx)
 }
 
 // GetUserByID retrieves a user by their internal UUID
@@ -175,6 +208,18 @@ func (r *profileRepository) CreateUser(ctx context.Context, user *domain.User) e
 	user.CreatedAt = now
 	user.UpdatedAt = now
 
+	encryptedEmail, err := r.enc.EncryptString(user.Email)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt email: %w", err)
+	}
+	emailBlindIdx := r.enc.BlindIndex(strings.ToLower(strings.TrimSpace(user.Email)))
+
+	encryptedClerkUserID, err := r.enc.EncryptString(user.ClerkUserID)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt clerk_user_id: %w", err)
+	}
+	clerkUserIDBlindIdx := r.enc.BlindIndex(user.ClerkUserID)
+
 	query := `
 		INSERT INTO users (
 			id, clerk_user_id, email, email_verified,
@@ -182,21 +227,23 @@ func (r *profileRepository) CreateUser(ctx context.Context, user *domain.User) e
 			trial_started_at, trial_ends_at, had_trial,
 			paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted,
 			deletion_requested_at, deletion_scheduled_at,
-			created_at, updated_at, last_login_at
+			created_at, updated_at, last_login_at,
+			email_blind_idx, clerk_user_id_blind_idx
 		) VALUES (
 			$1, $2, $3, $4,
 			$5, $6, $7, $8,
 			$9, $10, $11,
 			$12, $13, $14, $15, $16,
 			$17, $18,
-			$19, $20, $21
+			$19, $20, $21,
+			$22, $23
 		)
 	`
 
-	_, err := r.db.Exec(ctx, query,
+	_, err = r.db.Exec(ctx, query,
 		user.ID,
-		user.ClerkUserID,
-		user.Email,
+		encryptedClerkUserID,
+		encryptedEmail,
 		user.EmailVerified,
 		user.SubscriptionTier,
 		user.SubscriptionStatus,
@@ -215,6 +262,8 @@ func (r *profileRepository) CreateUser(ctx context.Context, user *domain.User) e
 		user.CreatedAt,
 		user.UpdatedAt,
 		user.LastLoginAt,
+		emailBlindIdx,
+		clerkUserIDBlindIdx,
 	)
 
 	return r.checkDuplicateError(err)
@@ -226,7 +275,7 @@ func (r *profileRepository) checkDuplicateError(err error) error {
 		return nil
 	}
 	if (strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint")) &&
-		strings.Contains(err.Error(), "email") {
+		(strings.Contains(err.Error(), "unique_users_email_blind") || strings.Contains(err.Error(), "email")) {
 		return ErrDuplicateEmail
 	}
 	return err
@@ -242,6 +291,18 @@ func (r *profileRepository) CreateUserTx(ctx context.Context, tx pgx.Tx, user *d
 	user.CreatedAt = now
 	user.UpdatedAt = now
 
+	encryptedEmail, err := r.enc.EncryptString(user.Email)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt email: %w", err)
+	}
+	emailBlindIdx := r.enc.BlindIndex(strings.ToLower(strings.TrimSpace(user.Email)))
+
+	encryptedClerkUserID, err := r.enc.EncryptString(user.ClerkUserID)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt clerk_user_id: %w", err)
+	}
+	clerkUserIDBlindIdx := r.enc.BlindIndex(user.ClerkUserID)
+
 	query := `
 		INSERT INTO users (
 			id, clerk_user_id, email, email_verified,
@@ -249,24 +310,27 @@ func (r *profileRepository) CreateUserTx(ctx context.Context, tx pgx.Tx, user *d
 			trial_started_at, trial_ends_at, had_trial,
 			paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted,
 			deletion_requested_at, deletion_scheduled_at,
-			created_at, updated_at, last_login_at
+			created_at, updated_at, last_login_at,
+			email_blind_idx, clerk_user_id_blind_idx
 		) VALUES (
 			$1, $2, $3, $4,
 			$5, $6, $7, $8,
 			$9, $10, $11,
 			$12, $13, $14, $15, $16,
 			$17, $18,
-			$19, $20, $21
+			$19, $20, $21,
+			$22, $23
 		)
 	`
 
-	_, err := tx.Exec(ctx, query,
-		user.ID, user.ClerkUserID, user.Email, user.EmailVerified,
+	_, err = tx.Exec(ctx, query,
+		user.ID, encryptedClerkUserID, encryptedEmail, user.EmailVerified,
 		user.SubscriptionTier, user.SubscriptionStatus, user.SubscriptionStartedAt, user.SubscriptionEndsAt,
 		user.TrialStartedAt, user.TrialEndsAt, user.HadTrial,
 		user.PaddleCustomerID, user.PaddleSubscriptionID, user.PrimaryRegion, user.IsActive, user.IsDeleted,
 		user.DeletionRequestedAt, user.DeletionScheduledAt,
 		user.CreatedAt, user.UpdatedAt, user.LastLoginAt,
+		emailBlindIdx, clerkUserIDBlindIdx,
 	)
 	return r.checkDuplicateError(err)
 }
@@ -277,17 +341,24 @@ func (r *profileRepository) CreateUserTx(ctx context.Context, tx pgx.Tx, user *d
 func (r *profileRepository) UpdateUser(ctx context.Context, user *domain.User) error {
 	user.UpdatedAt = time.Now()
 
+	encryptedEmail, err := r.enc.EncryptString(user.Email)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt email: %w", err)
+	}
+	emailBlindIdx := r.enc.BlindIndex(strings.ToLower(strings.TrimSpace(user.Email)))
+
 	query := `
 		UPDATE users
 		SET email = $1,
 		    email_verified = $2,
 		    primary_region = $3,
-		    updated_at = $4
-		WHERE id = $5
+		    updated_at = $4,
+		    email_blind_idx = $5
+		WHERE id = $6
 	`
 
 	ct, err := r.db.Exec(ctx, query,
-		user.Email, user.EmailVerified, user.PrimaryRegion, user.UpdatedAt, user.ID,
+		encryptedEmail, user.EmailVerified, user.PrimaryRegion, user.UpdatedAt, emailBlindIdx, user.ID,
 	)
 
 	if err != nil {
@@ -304,14 +375,16 @@ func (r *profileRepository) UpdateUser(ctx context.Context, user *domain.User) e
 func (r *profileRepository) UpdateLastLogin(ctx context.Context, clerkUserID string) error {
 	now := time.Now()
 
+	blindIdx := r.enc.BlindIndex(clerkUserID)
+
 	query := `
 		UPDATE users
 		SET last_login_at = $1,
 		    updated_at = $2
-		WHERE clerk_user_id = $3
+		WHERE clerk_user_id_blind_idx = $3
 	`
 
-	ct, err := r.db.Exec(ctx, query, now, now, clerkUserID)
+	ct, err := r.db.Exec(ctx, query, now, now, blindIdx)
 	if err != nil {
 		return err
 	}
@@ -526,19 +599,34 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 		return err
 	}
 
-	// Step 10: Mark user as deleted
+	// Step 10: Mark user as deleted — encrypt the tombstone values and clear blind indexes
+	deletedEmail := fmt.Sprintf("deleted_%s@deleted.local", userID)
+	deletedClerkUserID := fmt.Sprintf("deleted_%s", userID)
+
+	encryptedDeletedEmail, err := r.enc.EncryptString(deletedEmail)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt deleted email: %w", err)
+	}
+
+	encryptedDeletedClerkUserID, err := r.enc.EncryptString(deletedClerkUserID)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt deleted clerk_user_id: %w", err)
+	}
+
 	_, err = tx.Exec(ctx, `
 		UPDATE users
 		SET is_deleted = TRUE,
 		    is_active = FALSE,
-		    email = CONCAT('deleted_', id, '@deleted.local'),
-		    clerk_user_id = CONCAT('deleted_', id),
+		    email = $1,
+		    clerk_user_id = $2,
 		    paddle_customer_id = NULL,
+		    email_blind_idx = NULL,
+		    clerk_user_id_blind_idx = NULL,
 		    deletion_requested_at = NULL,
 		    deletion_scheduled_at = NULL,
-		    updated_at = $1
-		WHERE id = $2
-	`, now, userID)
+		    updated_at = $3
+		WHERE id = $4
+	`, encryptedDeletedEmail, encryptedDeletedClerkUserID, now, userID)
 	if err != nil {
 		return err
 	}
@@ -642,7 +730,7 @@ func (r *profileRepository) GetUsersWithActivePaddleSubscriptions(ctx context.Co
 		return nil, err
 	}
 	if users == nil {
-		users = []*domain.User{}
+		return []*domain.User{}, nil
 	}
 	return users, nil
 }

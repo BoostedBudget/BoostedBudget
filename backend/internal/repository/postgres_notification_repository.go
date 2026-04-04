@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -20,12 +21,13 @@ var (
 
 // notificationRepository implements NotificationRepository using PostgreSQL
 type notificationRepository struct {
-	db DB
+	db  DB
+	enc *appcrypto.FieldEncryptor
 }
 
 // NewNotificationRepository creates a new NotificationRepository instance
-func NewNotificationRepository(db DB) NotificationRepository {
-	return &notificationRepository{db: db}
+func NewNotificationRepository(db DB, enc *appcrypto.FieldEncryptor) NotificationRepository {
+	return &notificationRepository{db: db, enc: enc}
 }
 
 // Create creates a new notification in the database
@@ -45,6 +47,11 @@ func (r *notificationRepository) Create(ctx context.Context, notification *domai
 		return fmt.Errorf("invalid notification: %w", err)
 	}
 
+	encActionURL, err := r.enc.EncryptNullableString(notification.ActionURL)
+	if err != nil {
+		return fmt.Errorf("encrypt action_url: %w", err)
+	}
+
 	query := `
 		INSERT INTO notifications
 		(id, user_id, type, title, message, action_url, action_label,
@@ -52,13 +59,13 @@ func (r *notificationRepository) Create(ctx context.Context, notification *domai
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 	`
 
-	_, err := r.db.Exec(ctx, query,
+	_, err = r.db.Exec(ctx, query,
 		notification.ID,
 		notification.UserID,
 		notification.Type,
 		notification.Title,
 		notification.Message,
-		notification.ActionURL,
+		encActionURL,
 		notification.ActionLabel,
 		notification.Read,
 		notification.SentEmail,
@@ -84,6 +91,11 @@ func (r *notificationRepository) Update(ctx context.Context, notification *domai
 	// Update timestamp
 	notification.UpdatedAt = time.Now()
 
+	encActionURL, err := r.enc.EncryptNullableString(notification.ActionURL)
+	if err != nil {
+		return fmt.Errorf("encrypt action_url: %w", err)
+	}
+
 	query := `
 		UPDATE notifications
 		SET type = $2,
@@ -103,7 +115,7 @@ func (r *notificationRepository) Update(ctx context.Context, notification *domai
 		notification.Type,
 		notification.Title,
 		notification.Message,
-		notification.ActionURL,
+		encActionURL,
 		notification.ActionLabel,
 		notification.Read,
 		notification.SentEmail,
@@ -119,6 +131,16 @@ func (r *notificationRepository) Update(ctx context.Context, notification *domai
 		return ErrNotificationNotFound
 	}
 
+	return nil
+}
+
+// decryptNotification decrypts the encrypted fields on a Notification in place.
+func (r *notificationRepository) decryptNotification(n *domain.Notification) error {
+	var err error
+	n.ActionURL, err = r.enc.DecryptNullableString(n.ActionURL)
+	if err != nil {
+		return fmt.Errorf("decrypt action_url: %w", err)
+	}
 	return nil
 }
 
@@ -159,6 +181,9 @@ func (r *notificationRepository) GetByUserID(ctx context.Context, userID string,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan notification: %w", err)
+		}
+		if err := r.decryptNotification(&n); err != nil {
+			return nil, fmt.Errorf("failed to decrypt notification: %w", err)
 		}
 		notifications = append(notifications, n)
 	}
@@ -265,6 +290,9 @@ func (r *notificationRepository) GetUnsentEmails(ctx context.Context, limit int)
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan notification: %w", err)
+		}
+		if err := r.decryptNotification(&n); err != nil {
+			return nil, fmt.Errorf("failed to decrypt notification: %w", err)
 		}
 		notifications = append(notifications, n)
 	}
