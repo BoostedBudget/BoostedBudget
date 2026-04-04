@@ -71,6 +71,9 @@ type Config struct {
 	DeletionWorkerInterval  string
 	DeletionTokenSecret     string
 
+	// Retention Configuration (#930: 6-month read-only period before auto-deletion)
+	RetentionPeriodMonths int // env: RETENTION_PERIOD_MONTHS, default: 6
+
 	// Frontend URL (for cancellation links)
 	FrontendURL string
 
@@ -152,6 +155,9 @@ func Load() (*Config, error) {
 		DeletionGracePeriodDays: getEnvAsInt("DELETION_GRACE_PERIOD_DAYS", 30),
 		DeletionWorkerInterval:  getEnv("DELETION_WORKER_INTERVAL", "1h"),
 		DeletionTokenSecret:     getEnv("DELETION_TOKEN_SECRET", ""),
+
+		// Retention Configuration (#930)
+		RetentionPeriodMonths: getEnvAsInt("RETENTION_PERIOD_MONTHS", 6),
 
 		// Frontend URL
 		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),

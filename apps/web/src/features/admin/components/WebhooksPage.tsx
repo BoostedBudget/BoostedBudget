@@ -25,7 +25,6 @@ const EVENT_TYPE_OPTIONS = [
   { value: 'subscription.activated', label: 'subscription.activated' },
   { value: 'subscription.updated', label: 'subscription.updated' },
   { value: 'subscription.canceled', label: 'subscription.canceled' },
-  { value: 'subscription.paused', label: 'subscription.paused' },
   { value: 'subscription.past_due', label: 'subscription.past_due' },
   { value: 'subscription.resumed', label: 'subscription.resumed' },
   { value: 'subscription.trialing', label: 'subscription.trialing' },

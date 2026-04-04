@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { UserTag } from '../types'
 import { useCreateTag } from '@boostedbudget/api-client/endpoints/tags/tags'
+import { ReadOnlyGuard } from '@/auth'
 import './TagEditor.css'
 
 interface TagEditorProps {
@@ -52,11 +53,7 @@ export function TagEditor({
     }
   }
 
-  const handleShowCreateForm = () => {
-    setIsCreating(true)
-  }
-
-  const handleCancelCreate = () => {
+  const resetCreateForm = () => {
     setIsCreating(false)
     setNewTagName('')
     setNewTagColor('#6B7280')
@@ -75,10 +72,8 @@ export function TagEditor({
 
       onTagCreated?.(newTag as UserTag)
       onChange([...selectedTags, newTag.name])
-      setIsCreating(false)
+      resetCreateForm()
       setIsDropdownOpen(false)
-      setNewTagName('')
-      setNewTagColor('#6B7280')
     } catch (error) {
       console.error('Failed to create tag:', error)
     }
@@ -115,15 +110,17 @@ export function TagEditor({
       </div>
 
       <div className="tag-editor__add-container">
-        <button
-          type="button"
-          className="tag-editor__add-button"
-          onClick={toggleDropdown}
-          disabled={disabled}
-          aria-label="Add tag"
-        >
-          + Add tag
-        </button>
+        <ReadOnlyGuard message="Resubscribe to add tags">
+          <button
+            type="button"
+            className="tag-editor__add-button"
+            onClick={toggleDropdown}
+            disabled={disabled}
+            aria-label="Add tag"
+          >
+            + Add tag
+          </button>
+        </ReadOnlyGuard>
 
         {isDropdownOpen && (
           <ul className="tag-editor__dropdown" role="listbox">
@@ -160,17 +157,19 @@ export function TagEditor({
                   aria-label="Color"
                 />
                 <div className="tag-editor__create-actions">
+                  <ReadOnlyGuard message="Resubscribe to create tags">
+                    <button
+                      type="button"
+                      onClick={handleCreateTag}
+                      disabled={!newTagName.trim()}
+                      className="tag-editor__create-button"
+                    >
+                      Create
+                    </button>
+                  </ReadOnlyGuard>
                   <button
                     type="button"
-                    onClick={handleCreateTag}
-                    disabled={!newTagName.trim()}
-                    className="tag-editor__create-button"
-                  >
-                    Create
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleCancelCreate}
+                    onClick={resetCreateForm}
                     className="tag-editor__cancel-button"
                   >
                     Cancel
@@ -180,7 +179,7 @@ export function TagEditor({
             ) : (
               <li
                 className="tag-editor__option tag-editor__create-option"
-                onClick={handleShowCreateForm}
+                onClick={() => setIsCreating(true)}
               >
                 + Create new tag
               </li>

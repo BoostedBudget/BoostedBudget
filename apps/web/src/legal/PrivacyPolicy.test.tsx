@@ -29,10 +29,10 @@ describe('PrivacyPolicy', () => {
     expect(screen.getAllByText(/legal obligation/i).length).toBeGreaterThan(0)
   })
 
-  it('renders 24-month passive retention for cancelled accounts (Section 8.4)', () => {
+  it('renders 6-month passive retention for cancelled accounts (Section 8.4)', () => {
     renderWithRouter(<PrivacyPolicy />)
     expect(screen.getByText(/cancelled accounts/i)).toBeInTheDocument()
-    expect(screen.getAllByText(/24 months/i).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/6 months/i).length).toBeGreaterThan(0)
   })
 
   it('renders household member deletion cross-reference (Section 8.5)', () => {

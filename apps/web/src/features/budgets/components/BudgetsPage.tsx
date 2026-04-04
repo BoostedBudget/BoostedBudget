@@ -30,6 +30,7 @@ import { ListViewToggle } from '@/shared/components/ListViewToggle'
 import type { ListView } from '@/shared/components/ListViewToggle'
 import type { FilterOption } from '@/shared/components/ColumnFilterDropdown'
 import { STORAGE_KEY_LIST_VIEW } from '../constants'
+import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
 import { computeBudgetMetrics, type Budget, type BudgetWithMetrics, type SavingsGoal } from '../types'
 import './BudgetsPage.css'
 
@@ -279,15 +280,17 @@ export function BudgetsPage() {
         <div className="budgets-page__section-header">
           <h2>Active Budgets</h2>
           {activeBudgets.length > 0 && (
-            <button
-              type="button"
-              onClick={openBudgetDialog}
-              className="budgets-page__create-button"
-              aria-label="Create budget"
-            >
-              <PlusIcon className="h-5 w-5" />
-              <span>Create Budget</span>
-            </button>
+            <ReadOnlyGuard>
+              <button
+                type="button"
+                onClick={openBudgetDialog}
+                className="budgets-page__create-button"
+                aria-label="Create budget"
+              >
+                <PlusIcon className="h-5 w-5" />
+                <span>Create Budget</span>
+              </button>
+            </ReadOnlyGuard>
           )}
         </div>
         {activeBudgets.length === 0 ? (
@@ -296,10 +299,12 @@ export function BudgetsPage() {
             title="No active budgets"
             description="Create one to start tracking your spending."
             action={
-              <Button onClick={openBudgetDialog}>
-                <PlusIcon className="h-5 w-5" />
-                Create your first budget
-              </Button>
+              <ReadOnlyGuard>
+                <Button onClick={openBudgetDialog}>
+                  <PlusIcon className="h-5 w-5" />
+                  Create your first budget
+                </Button>
+              </ReadOnlyGuard>
             }
           />
         ) : view === 'table' ? (
@@ -358,15 +363,17 @@ export function BudgetsPage() {
         <div className="budgets-page__section-header">
           <h2>Savings Goals</h2>
           {(activeGoals.length > 0 || completedGoals.length > 0) && (
-            <button
-              type="button"
-              onClick={openGoalDialog}
-              className="budgets-page__create-button"
-              aria-label="Create savings goal"
-            >
-              <PlusIcon className="h-5 w-5" />
-              <span>Create Goal</span>
-            </button>
+            <ReadOnlyGuard>
+              <button
+                type="button"
+                onClick={openGoalDialog}
+                className="budgets-page__create-button"
+                aria-label="Create savings goal"
+              >
+                <PlusIcon className="h-5 w-5" />
+                <span>Create Goal</span>
+              </button>
+            </ReadOnlyGuard>
           )}
         </div>
         {activeGoals.length === 0 && completedGoals.length === 0 ? (
@@ -375,10 +382,12 @@ export function BudgetsPage() {
             title="No savings goals yet"
             description="Create one to track your progress."
             action={
-              <Button onClick={openGoalDialog}>
-                <PlusIcon className="h-5 w-5" />
-                Create your first goal
-              </Button>
+              <ReadOnlyGuard>
+                <Button onClick={openGoalDialog}>
+                  <PlusIcon className="h-5 w-5" />
+                  Create your first goal
+                </Button>
+              </ReadOnlyGuard>
             }
           />
         ) : (

@@ -213,6 +213,9 @@ func main() {
 	// Issue #762: Declare Paddle reconciliation worker
 	var paddleReconciliationWorker *jobs.PaddleReconciliationWorker
 
+	// Issue #930: Declare retention cleanup check worker
+	var retentionCleanupCheckWorker *jobs.RetentionCleanupCheckWorker
+
 	// Issue #37: Declare rule scheduler manager at package scope for graceful shutdown
 	var ruleSchedulerManager *workers.RuleSchedulerManager
 
@@ -413,6 +416,16 @@ func main() {
 				Logger:      appLogger,
 			})
 			appLogger.Info("Scheduled deletion check worker created (River)")
+
+			// Issue #930: Create retention cleanup check worker
+			// Note: EmailService is nil in MVP — notice emails are skipped until Phase 3 email templates
+			retentionCleanupCheckWorker = jobs.NewRetentionCleanupCheckWorker(jobs.RetentionCleanupCheckWorkerDeps{
+				ProfileRepo:     profileRepo,
+				DeletionService: deletionService,
+				RetentionMonths: cfg.RetentionPeriodMonths,
+				Logger:          appLogger,
+			})
+			appLogger.Info("Retention cleanup check worker created (River)")
 		} else {
 			appLogger.Warn("Deletion services disabled (requires DELETION_TOKEN_SECRET)")
 		}
@@ -520,6 +533,7 @@ func main() {
 
 				// Issue #679, #680: Create TrialService for trial management
 				trialService = services.NewTrialService(tierConfig, profileRepo, plaidCleanupService)
+				trialService.SetRetentionMonths(cfg.RetentionPeriodMonths) // #930: Propagate retention period from config
 				appLogger.Info("Trial service initialized")
 
 				// Issue #679: Wire trial service to registration service for auto-grant on signup
@@ -693,6 +707,22 @@ func main() {
 					appLogger.Info("Paddle reconciliation periodic job configured (daily)")
 				}
 
+				// Issue #930: Retention cleanup check (daily) — warns and auto-deletes inactive/cancelled accounts
+				if retentionCleanupCheckWorker != nil {
+					periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+						river.PeriodicInterval(24*time.Hour),
+						func() (river.JobArgs, *river.InsertOpts) {
+							return jobs.RetentionCleanupCheckArgs{
+								TriggerSource: "periodic",
+							}, &river.InsertOpts{
+								Queue: "low",
+							}
+						},
+						&river.PeriodicJobOpts{RunOnStart: false},
+					))
+					appLogger.Info("Retention cleanup check periodic job configured (daily)")
+				}
+
 				if len(periodicJobs) > 0 {
 					riverConfig.PeriodicJobs = periodicJobs
 				}
@@ -800,6 +830,12 @@ func main() {
 					appLogger.Info("Paddle reconciliation worker registered with River")
 				}
 
+				// Issue #930: Register retention cleanup check worker
+				if retentionCleanupCheckWorker != nil {
+					river.AddWorker(riverWorkers, retentionCleanupCheckWorker)
+					appLogger.Info("Retention cleanup check worker registered with River")
+				}
+
 				// Issue #45, #46: Register Paddle subscription webhook worker
 				if subscriptionWebhookWorker != nil {
 					river.AddWorker(riverWorkers, subscriptionWebhookWorker)
@@ -878,14 +914,20 @@ func main() {
 		)
 
 		// Apply Huma Clerk middleware for authenticated Huma routes
+		// #930: Pass profileRepo so the middleware stores subscription_status in context
 		humaClerkMiddleware := humamiddleware.NewClerkMiddleware(
 			cfg.ClerkSecretKey,
 			identityRepo,
 			registrationService,
 			appLogger,
+			profileRepo,
 		)
 		humaAPI.UseMiddleware(humaClerkMiddleware)
 		appLogger.Info("Huma Clerk middleware applied")
+
+		// #930: Apply read-only enforcement middleware — blocks mutations for inactive/cancelled subscriptions
+		humaAPI.UseMiddleware(humamiddleware.NewReadOnlyMiddleware())
+		appLogger.Info("Huma read-only enforcement middleware applied")
 
 		// Load admin email config and create AdminService (Issue #309)
 		adminEmailConfig, err := config.LoadAdminEmailConfig()

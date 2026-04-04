@@ -402,7 +402,8 @@ func TestReconciliation_BothMismatch_AutoFix(t *testing.T) {
 	mockPaddle.On("GetSubscription", ctx, "sub_111").Return(pausedHousehold2Sub, nil)
 
 	subID := "sub_111"
-	mockRepo.On("UpdateSubscriptionFromPaddle", ctx, "user-1", "household_2", "paused", (*time.Time)(nil), (*time.Time)(nil), &subID).Return(nil)
+	// #930: paused maps to cancelled
+	mockRepo.On("UpdateSubscriptionFromPaddle", ctx, "user-1", "household_2", "cancelled", (*time.Time)(nil), (*time.Time)(nil), &subID).Return(nil)
 
 	worker := newTestWorker(PaddleReconciliationWorkerDeps{
 		ProfileRepo: mockRepo,

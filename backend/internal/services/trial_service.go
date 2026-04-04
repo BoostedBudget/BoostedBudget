@@ -29,6 +29,9 @@ type TrialRepository interface {
 
 	// GetUsersWithExpiringTrials returns users whose trial ends within N days
 	GetUsersWithExpiringTrials(ctx context.Context, withinDays int) ([]*domain.User, error)
+
+	// SetRetentionDates starts the retention clock (#930)
+	SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error
 }
 
 // PlaidCleanupForTrial defines the Plaid cleanup methods needed by TrialService
@@ -41,10 +44,11 @@ type PlaidCleanupForTrial interface {
 // TrialService handles trial management for users
 // Issue #679: Implement trial service and auto-grant logic
 type TrialService struct {
-	tierConfig   *config.TierConfig
-	repo         TrialRepository
-	plaidCleanup PlaidCleanupForTrial
-	logger       *slog.Logger
+	tierConfig      *config.TierConfig
+	repo            TrialRepository
+	plaidCleanup    PlaidCleanupForTrial
+	retentionMonths int // #930: Months before auto-deletion after trial expiry
+	logger          *slog.Logger
 }
 
 // NewTrialService creates a new TrialService
@@ -54,10 +58,19 @@ func NewTrialService(
 	plaidCleanup PlaidCleanupForTrial,
 ) *TrialService {
 	return &TrialService{
-		tierConfig:   tierConfig,
-		repo:         repo,
-		plaidCleanup: plaidCleanup,
-		logger:       slog.Default(),
+		tierConfig:      tierConfig,
+		repo:            repo,
+		plaidCleanup:    plaidCleanup,
+		retentionMonths: 6,
+		logger:          slog.Default(),
+	}
+}
+
+// SetRetentionMonths configures the retention period (default: 6).
+// #930: Called from main.go to propagate RetentionPeriodMonths config.
+func (s *TrialService) SetRetentionMonths(months int) {
+	if months > 0 {
+		s.retentionMonths = months
 	}
 }
 
@@ -160,6 +173,12 @@ func (s *TrialService) ExpireTrial(ctx context.Context, userID string) error {
 	err = s.repo.UpdateSubscriptionStatus(ctx, userID, string(domain.SubscriptionStatusInactive))
 	if err != nil {
 		return fmt.Errorf("failed to update subscription status: %w", err)
+	}
+
+	// #930: Start 6-month retention clock — data preserved read-only until auto-deletion
+	now := time.Now()
+	if retErr := s.repo.SetRetentionDates(ctx, userID, now, now.AddDate(0, s.retentionMonths, 0)); retErr != nil {
+		s.logger.Warn("failed to set retention dates on trial expiry", "user_id", userID, "error", retErr)
 	}
 
 	// Disconnect all Plaid items (preserves transaction history)

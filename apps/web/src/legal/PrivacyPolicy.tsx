@@ -272,9 +272,10 @@ export function PrivacyPolicy() {
           <h3>8.4 Cancelled Accounts (No Deletion Request)</h3>
           <p>
             If you cancel your subscription but do not request account deletion, we may retain your
-            account data in read-only mode for up to <strong>24 months</strong> to allow reactivation.
-            After that period, we will delete or anonymize your data unless a longer retention period
-            is legally required. You may request deletion at any time per Section 8.2.
+            account data in read-only mode for up to <strong>6 months</strong> to allow reactivation.
+            We will notify you by email at 30 days and 7 days before your data is scheduled for
+            permanent deletion. After the retention period, we will delete your data unless a longer
+            retention period is legally required. You may request deletion at any time per Section 8.2.
           </p>
 
           <h3>8.5 Removed Household Members</h3>

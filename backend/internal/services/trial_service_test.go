@@ -51,6 +51,11 @@ func (m *mockTrialRepository) GetUsersWithExpiringTrials(ctx context.Context, wi
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
+// #930: SetRetentionDates stub — allows mock to satisfy updated TrialRepository interface
+func (m *mockTrialRepository) SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error {
+	return m.Called(ctx, userID, startedAt, expiresAt).Error(0)
+}
+
 // mockPlaidCleanupService is a mock for Plaid cleanup
 type mockPlaidCleanupService struct {
 	mock.Mock
@@ -215,6 +220,7 @@ func TestTrialService_ExpireTrial_Success(t *testing.T) {
 
 	repo.On("GetUserByID", ctx, userID).Return(user, nil)
 	repo.On("UpdateSubscriptionStatus", ctx, userID, "inactive").Return(nil)
+	repo.On("SetRetentionDates", ctx, userID, mock.Anything, mock.Anything).Return(nil)
 	plaidCleanup.On("DisconnectAllUserItems", ctx, userID).Return(nil)
 
 	err := service.ExpireTrial(ctx, userID)
@@ -238,6 +244,7 @@ func TestTrialService_ExpireTrial_DisconnectsPlaidItems(t *testing.T) {
 
 	repo.On("GetUserByID", ctx, userID).Return(user, nil)
 	repo.On("UpdateSubscriptionStatus", ctx, userID, "inactive").Return(nil)
+	repo.On("SetRetentionDates", ctx, userID, mock.Anything, mock.Anything).Return(nil)
 	plaidCleanup.On("DisconnectAllUserItems", ctx, userID).Return(nil)
 
 	err := service.ExpireTrial(ctx, userID)

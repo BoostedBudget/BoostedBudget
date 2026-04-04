@@ -1,6 +1,7 @@
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { Link } from 'react-router'
 import { useAuth } from '@clerk/react-router'
+import { ReadOnlyGuard } from '@/auth'
 import { PlusIcon, PencilIcon, ArrowPathIcon } from '@heroicons/react/24/outline'
 import { LightbulbIcon, Landmark, Plus } from 'lucide-react'
 import { Alert } from '@/components/ui/alert'
@@ -58,13 +59,12 @@ function DashboardContent() {
   const { showHint, dismissHint } = useDashboardOnboarding()
   const [catalogOpen, setCatalogOpen] = useState(false)
 
-  // Fetch account types for filter - useMemo to prevent infinite re-renders
-  const dashboardFilters = useMemo(() => ({
+  // Fetch account types for filter
+  const { accountTypes } = useDashboardData({
     startDate: filters.startDate,
     endDate: filters.endDate,
     accountTypes: filters.accountTypes,
-  }), [filters.startDate, filters.endDate, filters.accountTypes])
-  const { accountTypes } = useDashboardData(dashboardFilters)
+  })
 
   const handleAccountTypeChange = useCallback((types: string[]) => {
     setFilters({ accountTypes: types.length > 0 ? types : undefined })
@@ -80,8 +80,6 @@ function DashboardContent() {
     setIsEditing(false)
   }, [resetToDefault, setIsEditing])
 
-  // Issue #470: Save pending changes immediately when exiting edit mode
-  // This ensures changes are persisted before the user can navigate away
   const handleExitEditMode = useCallback(async () => {
     await saveNow()
     setIsEditing(false)
@@ -166,33 +164,39 @@ function DashboardContent() {
 
             {isEditing && (
               <>
-                <Button
-                  onClick={() => setCatalogOpen(true)}
-                  className="gap-1.5"
-                >
-                  <PlusIcon className="h-4 w-4" />
-                  Add Widget
-                </Button>
-                <Button
-                  onClick={handleResetLayout}
-                  variant="outline"
-                  className="gap-1.5"
-                >
-                  <ArrowPathIcon className="h-4 w-4" />
-                  Reset
-                </Button>
+                <ReadOnlyGuard message="Resubscribe to customize your dashboard">
+                  <Button
+                    onClick={() => setCatalogOpen(true)}
+                    className="gap-1.5"
+                  >
+                    <PlusIcon className="h-4 w-4" />
+                    Add Widget
+                  </Button>
+                </ReadOnlyGuard>
+                <ReadOnlyGuard message="Resubscribe to customize your dashboard">
+                  <Button
+                    onClick={handleResetLayout}
+                    variant="outline"
+                    className="gap-1.5"
+                  >
+                    <ArrowPathIcon className="h-4 w-4" />
+                    Reset
+                  </Button>
+                </ReadOnlyGuard>
               </>
             )}
 
             {/* Issue #470: Use handleExitEditMode to save on Done click */}
-            <Button
-              onClick={() => isEditing ? handleExitEditMode() : setIsEditing(true)}
-              variant={isEditing ? 'default' : 'outline'}
-              className="gap-1.5"
-            >
-              <PencilIcon className="h-4 w-4" />
-              {isEditing ? 'Done' : 'Edit'}
-            </Button>
+            <ReadOnlyGuard message="Resubscribe to customize your dashboard">
+              <Button
+                onClick={() => isEditing ? handleExitEditMode() : setIsEditing(true)}
+                variant={isEditing ? 'default' : 'outline'}
+                className="gap-1.5"
+              >
+                <PencilIcon className="h-4 w-4" />
+                {isEditing ? 'Done' : 'Edit'}
+              </Button>
+            </ReadOnlyGuard>
           </div>
         </div>
 
@@ -204,12 +208,14 @@ function DashboardContent() {
               title="Welcome to BoostedBudget!"
               description="Connect your first bank account to start tracking your finances"
               action={
-                <Button asChild>
-                  <Link to="/accounts">
-                    <Plus className="h-4 w-4" />
-                    Connect Bank Account
-                  </Link>
-                </Button>
+                <ReadOnlyGuard message="Resubscribe to connect bank accounts">
+                  <Button asChild>
+                    <Link to="/accounts">
+                      <Plus className="h-4 w-4" />
+                      Connect Bank Account
+                    </Link>
+                  </Button>
+                </ReadOnlyGuard>
               }
             />
           </div>

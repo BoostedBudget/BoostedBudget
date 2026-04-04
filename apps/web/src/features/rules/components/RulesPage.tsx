@@ -25,6 +25,7 @@ import type { AutomationRule } from '@boostedbudget/api-client/models'
 import { ListViewToggle } from '@/shared/components/ListViewToggle'
 import type { ListView } from '@/shared/components/ListViewToggle'
 import { STORAGE_KEY_LIST_VIEW } from '../constants'
+import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
 import { RuleCard } from './RuleCard'
 import { RuleTable } from './RuleTable'
 import './RulesPage.css'
@@ -210,10 +211,12 @@ export function RulesPage() {
           title="No automation rules yet"
           description="Create your first automation rule to automatically manage your budgets, transfers, and savings."
           action={
-            <Button onClick={handleCreateRule}>
-              <Plus />
-              Create Your First Rule
-            </Button>
+            <ReadOnlyGuard>
+              <Button onClick={handleCreateRule}>
+                <Plus />
+                Create Your First Rule
+              </Button>
+            </ReadOnlyGuard>
           }
         />
       </div>
@@ -236,15 +239,17 @@ export function RulesPage() {
             onChange={handleViewChange}
             storageKey={STORAGE_KEY_LIST_VIEW}
           />
-          <button
-            type="button"
-            onClick={handleCreateRule}
-            className="rules-page__create-btn"
-            aria-label="Create new rule"
-          >
-            <Plus aria-hidden="true" />
-            Create Rule
-          </button>
+          <ReadOnlyGuard>
+            <button
+              type="button"
+              onClick={handleCreateRule}
+              className="rules-page__create-btn"
+              aria-label="Create new rule"
+            >
+              <Plus aria-hidden="true" />
+              Create Rule
+            </button>
+          </ReadOnlyGuard>
         </div>
       </header>
 
