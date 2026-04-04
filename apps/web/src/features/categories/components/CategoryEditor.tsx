@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { CustomCategory } from '../types'
 import { useCreateCategory } from '@boostedbudget/api-client/endpoints/categories/categories'
+import { ReadOnlyGuard } from '@/auth'
 import './CategoryEditor.css'
 
 interface CategoryEditorProps {
@@ -46,11 +47,7 @@ export function CategoryEditor({
     }
   }
 
-  const handleShowCreateForm = () => {
-    setIsCreating(true)
-  }
-
-  const handleCancelCreate = () => {
+  const resetCreateForm = () => {
     setIsCreating(false)
     setNewCategoryName('')
     setNewCategoryColor('#6B7280')
@@ -69,10 +66,8 @@ export function CategoryEditor({
 
       onCategoryCreated?.(newCategory as unknown as CustomCategory)
       onChange([newCategory.name])
-      setIsCreating(false)
+      resetCreateForm()
       setIsDropdownOpen(false)
-      setNewCategoryName('')
-      setNewCategoryColor('#6B7280')
     } catch (error) {
       console.error('Failed to create category:', error)
     }
@@ -105,15 +100,17 @@ export function CategoryEditor({
       </div>
 
       <div className="category-editor__dropdown-container">
-        <button
-          type="button"
-          className="category-editor__change-button"
-          onClick={toggleDropdown}
-          disabled={disabled}
-          aria-label="Change category"
-        >
-          Change
-        </button>
+        <ReadOnlyGuard message="Resubscribe to change categories">
+          <button
+            type="button"
+            className="category-editor__change-button"
+            onClick={toggleDropdown}
+            disabled={disabled}
+            aria-label="Change category"
+          >
+            Change
+          </button>
+        </ReadOnlyGuard>
 
         {isDropdownOpen && (
           <ul className="category-editor__dropdown" role="listbox">
@@ -170,17 +167,19 @@ export function CategoryEditor({
                   aria-label="Color"
                 />
                 <div className="category-editor__create-actions">
+                  <ReadOnlyGuard message="Resubscribe to create categories">
+                    <button
+                      type="button"
+                      onClick={handleCreateCategory}
+                      disabled={!newCategoryName.trim()}
+                      className="category-editor__create-button"
+                    >
+                      Create
+                    </button>
+                  </ReadOnlyGuard>
                   <button
                     type="button"
-                    onClick={handleCreateCategory}
-                    disabled={!newCategoryName.trim()}
-                    className="category-editor__create-button"
-                  >
-                    Create
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleCancelCreate}
+                    onClick={resetCreateForm}
                     className="category-editor__cancel-button"
                   >
                     Cancel
@@ -190,7 +189,7 @@ export function CategoryEditor({
             ) : (
               <li
                 className="category-editor__option category-editor__create-option"
-                onClick={handleShowCreateForm}
+                onClick={() => setIsCreating(true)}
               >
                 + Create new category
               </li>
