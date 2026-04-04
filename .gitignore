@@ -373,3 +373,4 @@ dogfood-output/
 # Git worktrees
 .worktrees/
 .worktrees/
+.worktrees
