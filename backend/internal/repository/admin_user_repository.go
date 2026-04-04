@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -26,12 +28,13 @@ type AdminUserRepository interface {
 
 // adminUserRepository implements AdminUserRepository using PostgreSQL
 type adminUserRepository struct {
-	db DB
+	db  DB
+	enc *appcrypto.FieldEncryptor
 }
 
 // NewAdminUserRepository creates a new AdminUserRepository instance
-func NewAdminUserRepository(db DB) AdminUserRepository {
-	return &adminUserRepository{db: db}
+func NewAdminUserRepository(db DB, enc *appcrypto.FieldEncryptor) AdminUserRepository {
+	return &adminUserRepository{db: db, enc: enc}
 }
 
 // ListUsers returns a paginated list of users with aggregated counts
@@ -106,6 +109,13 @@ func (r *adminUserRepository) ListUsers(ctx context.Context, filters domain.Admi
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to scan user: %w", err)
 		}
+
+		decryptedEmail, err := r.enc.DecryptString(user.Email)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to decrypt email: %w", err)
+		}
+		user.Email = decryptedEmail
+
 		users = append(users, user)
 	}
 
@@ -184,6 +194,12 @@ func (r *adminUserRepository) GetUserDetail(ctx context.Context, userID string) 
 		return nil, fmt.Errorf("failed to get user detail: %w", err)
 	}
 
+	decryptedEmail, err := r.enc.DecryptString(detail.Email)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt email: %w", err)
+	}
+	detail.Email = decryptedEmail
+
 	return &detail, nil
 }
 
@@ -198,8 +214,8 @@ func (r *adminUserRepository) UpdateUserTier(ctx context.Context, userID string,
 
 	// Update the user table and retrieve clerk_user_id for the Clerk metadata sync
 	updateQuery := `
-		UPDATE users 
-		SET manual_tier_override = $1, manual_tier_ends_at = $2, updated_at = NOW() 
+		UPDATE users
+		SET manual_tier_override = $1, manual_tier_ends_at = $2, updated_at = NOW()
 		WHERE id = $3 AND is_deleted = FALSE
 		RETURNING clerk_user_id
 	`
@@ -210,6 +226,12 @@ func (r *adminUserRepository) UpdateUserTier(ctx context.Context, userID string,
 			return "", ErrUserNotFound
 		}
 		return "", fmt.Errorf("failed to update user tier: %w", err)
+	}
+
+	// Decrypt the returned clerk_user_id (it is encrypted in the DB)
+	clerkUserID, err = r.enc.DecryptString(clerkUserID)
+	if err != nil {
+		return "", fmt.Errorf("failed to decrypt clerk_user_id: %w", err)
 	}
 
 	// Insert into audit_logs using the correct column names
@@ -230,7 +252,12 @@ func (r *adminUserRepository) UpdateUserTier(ctx context.Context, userID string,
 		return "", fmt.Errorf("failed to marshal audit details: %w", err)
 	}
 
-	_, err = tx.Exec(ctx, auditQuery, userID, detailsBytes)
+	encryptedChanges, err := r.enc.EncryptJSON(json.RawMessage(detailsBytes))
+	if err != nil {
+		return "", fmt.Errorf("failed to encrypt audit changes: %w", err)
+	}
+
+	_, err = tx.Exec(ctx, auditQuery, userID, encryptedChanges)
 	if err != nil {
 		return "", fmt.Errorf("failed to create audit log: %w", err)
 	}
@@ -249,8 +276,8 @@ func (r *adminUserRepository) buildFilterClause(filters domain.AdminUserFilters)
 	argIndex := 1
 
 	if filters.Search != "" {
-		clause += fmt.Sprintf(" AND u.email ILIKE $%d", argIndex)
-		args = append(args, "%"+filters.Search+"%")
+		clause += fmt.Sprintf(" AND u.email_blind_idx = $%d", argIndex)
+		args = append(args, r.enc.BlindIndex(strings.ToLower(strings.TrimSpace(filters.Search))))
 		argIndex++
 	}
 

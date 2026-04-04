@@ -154,7 +154,6 @@ type LinkAccountsResult struct {
 type accountService struct {
 	plaidService    PlaidService
 	subscriptionSvc *SubscriptionService
-	encryptionSvc   EncryptionService
 	linkedItemRepo  repository.LinkedItemRepository
 	accountRepo     repository.AccountRepository
 	userRepo        repository.ProfileRepository
@@ -192,7 +191,6 @@ func WithUserAccountService(uaSvc UserAccountService) AccountServiceOption {
 func NewAccountService(
 	plaidService PlaidService,
 	subscriptionSvc *SubscriptionService,
-	encryptionSvc EncryptionService,
 	linkedItemRepo repository.LinkedItemRepository,
 	accountRepo repository.AccountRepository,
 	userRepo repository.ProfileRepository,
@@ -202,7 +200,6 @@ func NewAccountService(
 	svc := &accountService{
 		plaidService:    plaidService,
 		subscriptionSvc: subscriptionSvc,
-		encryptionSvc:   encryptionSvc,
 		linkedItemRepo:  linkedItemRepo,
 		accountRepo:     accountRepo,
 		userRepo:        userRepo,
@@ -312,12 +309,6 @@ func (s *accountService) LinkAccounts(
 			limitCheck.Limit)
 	}
 
-	// Step 6: Encrypt access token
-	encryptedToken, err := s.encryptionSvc.Encrypt(accessToken)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encrypt access token: %w", err)
-	}
-
 	// Step 7: Issue #171 - Check for re-link (existing active item at same institution)
 	var existingLinkedItem *domain.LinkedItem
 	existingLinkedItem, err = s.linkedItemRepo.GetByUserAndInstitution(
@@ -346,13 +337,13 @@ func (s *accountService) LinkAccounts(
 
 	// Step 8: Create new linked item (stores access token and links accounts)
 	linkedItem := &domain.LinkedItem{
-		UserID:               user.ID,
-		ItemID:               itemID,
-		AccessTokenEncrypted: encryptedToken,
-		InstitutionID:        institutionID,
-		InstitutionName:      institutionName,
-		Provider:             "plaid",                       // Set provider to avoid database constraint violation (Issue #305)
-		Status:               domain.LinkedItemStatusActive, // Issue #171: Explicitly set active status
+		UserID:          user.ID,
+		ItemID:          itemID,
+		AccessToken:     accessToken,
+		InstitutionID:   institutionID,
+		InstitutionName: institutionName,
+		Provider:        "plaid",                       // Set provider to avoid database constraint violation (Issue #305)
+		Status:          domain.LinkedItemStatusActive, // Issue #171: Explicitly set active status
 	}
 
 	// Create linked item
@@ -618,17 +609,11 @@ func (s *accountService) DisconnectInstitution(ctx context.Context, linkedItemID
 		return err // Returns ErrLinkedItemNotFound if not found or not owned
 	}
 
-	// Step 2: Decrypt the Plaid access token
-	accessToken, err := s.encryptionSvc.Decrypt(linkedItem.AccessTokenEncrypted)
-	if err != nil {
-		return fmt.Errorf("failed to decrypt access token: %w", err)
-	}
-
 	// Step 3: Call Plaid to remove the item (stops monthly billing)
 	// This is critical for cost control per Issue #226
 	// Log the error but continue - access token may already be invalid
 	// We still want to clean up our database even if Plaid call fails
-	if err := s.plaidService.RemoveItem(ctx, accessToken); err != nil {
+	if err := s.plaidService.RemoveItem(ctx, linkedItem.AccessToken); err != nil {
 		if s.logger != nil {
 			s.logger.Warn("plaid RemoveItem failed for item",
 				"item_id", linkedItemID,

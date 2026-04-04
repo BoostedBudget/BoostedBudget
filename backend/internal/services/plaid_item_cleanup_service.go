@@ -77,17 +77,10 @@ type plaidServiceForCleanup interface {
 	RemoveItem(ctx context.Context, accessToken string) error
 }
 
-// encryptionServiceForCleanup is a minimal interface for the encryption operations
-// needed by PlaidItemCleanupService.
-type encryptionServiceForCleanup interface {
-	Decrypt(ciphertext string) (string, error)
-}
-
 // plaidItemCleanupService implements PlaidItemCleanupService
 type plaidItemCleanupService struct {
 	linkedItemRepo linkedItemRepoForCleanup
 	plaidService   plaidServiceForCleanup
-	encryptionSvc  encryptionServiceForCleanup
 	logger         *slog.Logger
 }
 
@@ -95,18 +88,15 @@ type plaidItemCleanupService struct {
 // Parameters:
 //   - linkedItemRepo: Repository for querying linked items
 //   - plaidService: Service for calling Plaid API
-//   - encryptionSvc: Service for decrypting access tokens
 //
 // Returns the cleanup service ready to use.
 func NewPlaidItemCleanupService(
 	linkedItemRepo linkedItemRepoForCleanup,
 	plaidService plaidServiceForCleanup,
-	encryptionSvc encryptionServiceForCleanup,
 ) PlaidItemCleanupService {
 	return &plaidItemCleanupService{
 		linkedItemRepo: linkedItemRepo,
 		plaidService:   plaidService,
-		encryptionSvc:  encryptionSvc,
 		logger:         slog.Default(),
 	}
 }
@@ -179,16 +169,10 @@ func (s *plaidItemCleanupService) RemoveItem(ctx context.Context, linkedItemID s
 }
 
 // removeItemInternal handles the actual Plaid /item/remove call for a single item.
-// Returns error if decryption fails or Plaid API fails.
+// Returns error if Plaid API fails.
 func (s *plaidItemCleanupService) removeItemInternal(ctx context.Context, item *domain.LinkedItem) error {
-	// Decrypt the access token
-	accessToken, err := s.encryptionSvc.Decrypt(item.AccessTokenEncrypted)
-	if err != nil {
-		return fmt.Errorf("failed to decrypt access token for item %s: %w", item.ID, err)
-	}
-
-	// Call Plaid /item/remove
-	if err := s.plaidService.RemoveItem(ctx, accessToken); err != nil {
+	// Call Plaid /item/remove using the plaintext access token populated by the repo layer
+	if err := s.plaidService.RemoveItem(ctx, item.AccessToken); err != nil {
 		return fmt.Errorf("plaid RemoveItem failed for item %s: %w", item.ID, err)
 	}
 

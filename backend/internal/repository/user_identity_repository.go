@@ -3,11 +3,13 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -48,26 +50,28 @@ type UserIdentityRepository interface {
 
 // userIdentityRepository implements UserIdentityRepository using PostgreSQL
 type userIdentityRepository struct {
-	db DB
+	db  DB
+	enc *appcrypto.FieldEncryptor
 }
 
 // NewUserIdentityRepository creates a new UserIdentityRepository instance
-func NewUserIdentityRepository(db DB) UserIdentityRepository {
-	return &userIdentityRepository{db: db}
+func NewUserIdentityRepository(db DB, enc *appcrypto.FieldEncryptor) UserIdentityRepository {
+	return &userIdentityRepository{db: db, enc: enc}
 }
 
 // GetByClerkID retrieves an identity by Clerk user ID
 func (r *userIdentityRepository) GetByClerkID(ctx context.Context, clerkUserID string) (*domain.UserIdentity, error) {
+	blindIdx := r.enc.BlindIndex(clerkUserID)
 	query := `
 		SELECT id, user_id, clerk_user_id, provider, provider_user_id,
 		       email, email_verified, is_primary,
 		       created_at, updated_at, last_used_at
 		FROM user_identities
-		WHERE clerk_user_id = $1
+		WHERE clerk_user_id_blind_idx = $1
 	`
 
 	var identity domain.UserIdentity
-	err := r.db.QueryRow(ctx, query, clerkUserID).Scan(
+	err := r.db.QueryRow(ctx, query, blindIdx).Scan(
 		&identity.ID,
 		&identity.UserID,
 		&identity.ClerkUserID,
@@ -87,6 +91,24 @@ func (r *userIdentityRepository) GetByClerkID(ctx context.Context, clerkUserID s
 	if err != nil {
 		return nil, err
 	}
+
+	decryptedClerkUserID, err := r.enc.DecryptString(identity.ClerkUserID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt clerk_user_id: %w", err)
+	}
+	identity.ClerkUserID = decryptedClerkUserID
+
+	decryptedEmail, err := r.enc.DecryptString(identity.Email)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt email: %w", err)
+	}
+	identity.Email = decryptedEmail
+
+	decryptedProviderUserID, err := r.enc.DecryptString(identity.ProviderUserID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt provider_user_id: %w", err)
+	}
+	identity.ProviderUserID = decryptedProviderUserID
 
 	return &identity, nil
 }
@@ -129,6 +151,25 @@ func (r *userIdentityRepository) GetByUserID(ctx context.Context, userID string)
 		if err != nil {
 			return nil, err
 		}
+
+		decryptedClerkUserID, err := r.enc.DecryptString(identity.ClerkUserID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt clerk_user_id: %w", err)
+		}
+		identity.ClerkUserID = decryptedClerkUserID
+
+		decryptedEmail, err := r.enc.DecryptString(identity.Email)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt email: %w", err)
+		}
+		identity.Email = decryptedEmail
+
+		decryptedProviderUserID, err := r.enc.DecryptString(identity.ProviderUserID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt provider_user_id: %w", err)
+		}
+		identity.ProviderUserID = decryptedProviderUserID
+
 		identities = append(identities, &identity)
 	}
 
@@ -151,30 +192,47 @@ func (r *userIdentityRepository) Create(ctx context.Context, identity *domain.Us
 	identity.CreatedAt = now
 	identity.UpdatedAt = now
 
+	encryptedClerkUserID, err := r.enc.EncryptString(identity.ClerkUserID)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt clerk_user_id: %w", err)
+	}
+	clerkUserIDBlindIdx := r.enc.BlindIndex(identity.ClerkUserID)
+
+	encryptedEmail, err := r.enc.EncryptString(identity.Email)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt email: %w", err)
+	}
+
+	encryptedProviderUserID, err := r.enc.EncryptString(identity.ProviderUserID)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt provider_user_id: %w", err)
+	}
+
 	query := `
 		INSERT INTO user_identities (
 			id, user_id, clerk_user_id, provider, provider_user_id,
 			email, email_verified, is_primary,
-			created_at, updated_at, last_used_at
+			created_at, updated_at, last_used_at, clerk_user_id_blind_idx
 		) VALUES (
 			$1, $2, $3, $4, $5,
 			$6, $7, $8,
-			$9, $10, $11
+			$9, $10, $11, $12
 		)
 	`
 
-	_, err := r.db.Exec(ctx, query,
+	_, err = r.db.Exec(ctx, query,
 		identity.ID,
 		identity.UserID,
-		identity.ClerkUserID,
+		encryptedClerkUserID,
 		identity.Provider,
-		identity.ProviderUserID,
-		identity.Email,
+		encryptedProviderUserID,
+		encryptedEmail,
 		identity.EmailVerified,
 		identity.IsPrimary,
 		identity.CreatedAt,
 		identity.UpdatedAt,
 		identity.LastUsedAt,
+		clerkUserIDBlindIdx,
 	)
 
 	if err != nil {
@@ -202,30 +260,47 @@ func (r *userIdentityRepository) CreateTx(ctx context.Context, tx pgx.Tx, identi
 	identity.CreatedAt = now
 	identity.UpdatedAt = now
 
+	encryptedClerkUserID, err := r.enc.EncryptString(identity.ClerkUserID)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt clerk_user_id: %w", err)
+	}
+	clerkUserIDBlindIdx := r.enc.BlindIndex(identity.ClerkUserID)
+
+	encryptedEmail, err := r.enc.EncryptString(identity.Email)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt email: %w", err)
+	}
+
+	encryptedProviderUserID, err := r.enc.EncryptString(identity.ProviderUserID)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt provider_user_id: %w", err)
+	}
+
 	query := `
 		INSERT INTO user_identities (
 			id, user_id, clerk_user_id, provider, provider_user_id,
 			email, email_verified, is_primary,
-			created_at, updated_at, last_used_at
+			created_at, updated_at, last_used_at, clerk_user_id_blind_idx
 		) VALUES (
 			$1, $2, $3, $4, $5,
 			$6, $7, $8,
-			$9, $10, $11
+			$9, $10, $11, $12
 		)
 	`
 
-	_, err := tx.Exec(ctx, query,
+	_, err = tx.Exec(ctx, query,
 		identity.ID,
 		identity.UserID,
-		identity.ClerkUserID,
+		encryptedClerkUserID,
 		identity.Provider,
-		identity.ProviderUserID,
-		identity.Email,
+		encryptedProviderUserID,
+		encryptedEmail,
 		identity.EmailVerified,
 		identity.IsPrimary,
 		identity.CreatedAt,
 		identity.UpdatedAt,
 		identity.LastUsedAt,
+		clerkUserIDBlindIdx,
 	)
 
 	if err != nil {
@@ -244,23 +319,21 @@ func (r *userIdentityRepository) CreateTx(ctx context.Context, tx pgx.Tx, identi
 // UpdateLastUsed updates the last_used_at and updated_at timestamps for an identity
 func (r *userIdentityRepository) UpdateLastUsed(ctx context.Context, clerkUserID string) error {
 	now := time.Now()
+	blindIdx := r.enc.BlindIndex(clerkUserID)
 
 	query := `
 		UPDATE user_identities
 		SET last_used_at = $1,
 		    updated_at = $2
-		WHERE clerk_user_id = $3
+		WHERE clerk_user_id_blind_idx = $3
 	`
 
-	ct, err := r.db.Exec(ctx, query, now, now, clerkUserID)
+	ct, err := r.db.Exec(ctx, query, now, now, blindIdx)
 	if err != nil {
 		return err
 	}
-
-	// Check if any rows were affected
 	if ct.RowsAffected() == 0 {
 		return ErrIdentityNotFound
 	}
-
 	return nil
 }

@@ -4,21 +4,43 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+// mortgageTestEncSvc is a simple prefix-based mock encryption service for testing.
+type mortgageTestEncSvc struct{}
+
+func (t *mortgageTestEncSvc) Encrypt(p string) (string, error) { return "ENC$" + p, nil }
+func (t *mortgageTestEncSvc) Decrypt(c string) (string, error) {
+	if strings.HasPrefix(c, "ENC$") {
+		return strings.TrimPrefix(c, "ENC$"), nil
+	}
+	return c, nil
+}
+
+func newMortgageTestEncryptor(t *testing.T) *appcrypto.FieldEncryptor {
+	t.Helper()
+	key := []byte("12345678901234567890123456789012") // 32 bytes
+	enc, err := appcrypto.NewFieldEncryptor(&mortgageTestEncSvc{}, key)
+	require.NoError(t, err)
+	return enc
+}
+
 func setupMortgageLiabilityMockDB(t *testing.T) (pgxmock.PgxPoolIface, MortgageLiabilityRepository) {
 	t.Helper()
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	return mock, NewMortgageLiabilityRepository(mock)
+	enc := newMortgageTestEncryptor(t)
+	return mock, NewMortgageLiabilityRepository(mock, enc)
 }
 
 func makeMortgageLiability(userID, accountID string) *domain.MortgageLiability {
@@ -155,7 +177,9 @@ func TestMortgageLiabilityRepository_GetByUserID(t *testing.T) {
 	accountID := uuid.New().String()
 	now := time.Now()
 
-	acctNum := "MORT-001"
+	// The mock DB returns "ENC$MORT-001" (as if read from DB after encryption).
+	// The repo should decrypt it back to "MORT-001".
+	encAcctNum := "ENC$MORT-001"
 	rate := 3.75
 	rateType := "fixed"
 	lastPayment := 1800.00
@@ -175,7 +199,7 @@ func TestMortgageLiabilityRepository_GetByUserID(t *testing.T) {
 		"ytd_interest_paid", "ytd_principal_paid",
 		"synced_at", "created_at", "updated_at",
 	}).AddRow(
-		uuid.New().String(), userID, accountID, &acctNum,
+		uuid.New().String(), userID, accountID, &encAcctNum,
 		nil, nil, nil, nil,
 		&rate, &rateType,
 		&lastPayment, &now,
@@ -199,6 +223,9 @@ func TestMortgageLiabilityRepository_GetByUserID(t *testing.T) {
 	require.Len(t, liabilities, 1)
 	assert.Equal(t, userID, liabilities[0].UserID)
 	assert.Equal(t, accountID, liabilities[0].AccountID)
+	// Verify decryption: the repo should have decrypted "ENC$MORT-001" → "MORT-001"
+	require.NotNil(t, liabilities[0].AccountNumber)
+	assert.Equal(t, "MORT-001", *liabilities[0].AccountNumber)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -247,7 +274,8 @@ func TestMortgageLiabilityRepository_GetByAccountID(t *testing.T) {
 	accountID := uuid.New().String()
 	now := time.Now()
 
-	acctNum := "MORT-002"
+	// The mock DB returns encrypted values; repo should decrypt them.
+	encAcctNum := "ENC$MORT-002"
 	rate := 4.25
 	rateType := "variable"
 	lastPayment := 2000.00
@@ -266,7 +294,7 @@ func TestMortgageLiabilityRepository_GetByAccountID(t *testing.T) {
 		"ytd_interest_paid", "ytd_principal_paid",
 		"synced_at", "created_at", "updated_at",
 	}).AddRow(
-		uuid.New().String(), userID, accountID, &acctNum,
+		uuid.New().String(), userID, accountID, &encAcctNum,
 		nil, nil, nil, nil,
 		&rate, &rateType,
 		&lastPayment, &now,
@@ -289,6 +317,9 @@ func TestMortgageLiabilityRepository_GetByAccountID(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, liability)
 	assert.Equal(t, accountID, liability.AccountID)
+	// Verify decryption: "ENC$MORT-002" → "MORT-002"
+	require.NotNil(t, liability.AccountNumber)
+	assert.Equal(t, "MORT-002", *liability.AccountNumber)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

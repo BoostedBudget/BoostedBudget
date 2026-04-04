@@ -30,7 +30,6 @@ type TrialGranter interface {
 type AdminHandler struct {
 	plaidService          services.PlaidService
 	linkedItemRepo        repository.LinkedItemRepository
-	encryptionService     services.EncryptionService
 	trialService          TrialGranter
 	adminService          services.AdminService
 	adminUserService      services.AdminUserService
@@ -43,11 +42,9 @@ type AdminHandler struct {
 }
 
 // NewAdminHandler creates a new AdminHandler with required dependencies.
-// The trialService, adminService, adminUserService, and systemHealthService parameters can be nil if not needed.
 func NewAdminHandler(
 	plaidService services.PlaidService,
 	linkedItemRepo repository.LinkedItemRepository,
-	encryptionService services.EncryptionService,
 	trialService TrialGranter,
 	adminService services.AdminService,
 	adminUserService services.AdminUserService,
@@ -58,7 +55,6 @@ func NewAdminHandler(
 	return &AdminHandler{
 		plaidService:        plaidService,
 		linkedItemRepo:      linkedItemRepo,
-		encryptionService:   encryptionService,
 		trialService:        trialService,
 		adminService:        adminService,
 		adminUserService:    adminUserService,
@@ -248,14 +244,8 @@ func (h *AdminHandler) FireWebhook(ctx context.Context, input *FireWebhookInput)
 		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to fetch linked item: %w", err))
 	}
 
-	// 2. Decrypt access token
-	accessToken, err := h.encryptionService.Decrypt(linkedItem.AccessTokenEncrypted)
-	if err != nil {
-		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to decrypt access token: %w", err))
-	}
-
-	// 3. Fire webhook via Plaid service
-	response, err := h.plaidService.FireWebhook(ctx, accessToken, input.Body.WebhookCode)
+	// 2. Fire webhook via Plaid service using plaintext access token from repo layer
+	response, err := h.plaidService.FireWebhook(ctx, linkedItem.AccessToken, input.Body.WebhookCode)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to fire webhook: %w", err))
 	}
