@@ -9,6 +9,7 @@ import { AccountCard } from './AccountCard'
 import { AccountTable, type SortColumn as AccountSortColumn, type SortDirection } from './components/AccountTable'
 import type { FilterOption } from '@/shared/components/ColumnFilterDropdown'
 import { UpgradeBanner } from './UpgradeBanner'
+import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
 import { AccountCustomizationModal } from './components/AccountCustomizationModal'
 import { ListViewToggle } from '@/shared/components/ListViewToggle'
 import type { ListView } from '@/shared/components/ListViewToggle'
@@ -346,10 +347,12 @@ export function AccountsPage() {
             onChange={setView}
             storageKey={STORAGE_KEY_LIST_VIEW}
           />
-          <PlaidLinkButton
-            onSuccess={handleAccountsLinked}
-            disabled={isAtLimit}
-          />
+          <ReadOnlyGuard>
+            <PlaidLinkButton
+              onSuccess={handleAccountsLinked}
+              disabled={isAtLimit}
+            />
+          </ReadOnlyGuard>
         </div>
       </div>
 
@@ -361,10 +364,12 @@ export function AccountsPage() {
           title="Connect your first bank account"
           description="Link your bank to automatically track balances, transactions, and spending — all in one place."
           action={
-            <PlaidLinkButton
-              onSuccess={handleAccountsLinked}
-              disabled={isAtLimit}
-            />
+            <ReadOnlyGuard>
+              <PlaidLinkButton
+                onSuccess={handleAccountsLinked}
+                disabled={isAtLimit}
+              />
+            </ReadOnlyGuard>
           }
           className="mt-8"
         />

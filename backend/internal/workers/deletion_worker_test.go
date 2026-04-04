@@ -119,6 +119,32 @@ func (m *MockProfileRepoForWorker) GetUsersWithActivePaddleSubscriptions(ctx con
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
+// Retention tracking stubs (#930)
+func (m *MockProfileRepoForWorker) GetSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) {
+	return "", nil
+}
+func (m *MockProfileRepoForWorker) SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error {
+	return nil
+}
+func (m *MockProfileRepoForWorker) ClearRetentionDates(ctx context.Context, userID string) error {
+	return nil
+}
+func (m *MockProfileRepoForWorker) SetRetentionNotice30dSent(ctx context.Context, userID string) error {
+	return nil
+}
+func (m *MockProfileRepoForWorker) SetRetentionNotice7dSent(ctx context.Context, userID string) error {
+	return nil
+}
+func (m *MockProfileRepoForWorker) GetUsersNeedingRetention30dNotice(ctx context.Context) ([]*domain.User, error) {
+	return nil, nil
+}
+func (m *MockProfileRepoForWorker) GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error) {
+	return nil, nil
+}
+func (m *MockProfileRepoForWorker) GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error) {
+	return nil, nil
+}
+
 // TestWorker_FindsScheduledUsers tests that worker finds users scheduled for deletion
 func TestWorker_FindsScheduledUsers(t *testing.T) {
 	ctx := context.Background()
